@@ -36,13 +36,13 @@ import {
   ControlApiError,
   createApplyRun,
   extractRunId,
-  getInstallation,
+  getCapsule,
   getRun,
   getRunCostInfo,
   getRunLogs,
   listDeployments,
   listProviderConnections,
-  planInstallation,
+  planCapsule,
   type ProviderConnection,
   type ProviderResolution,
   type Run,
@@ -60,7 +60,7 @@ import {
   inputNamesFromLogs,
   isTerminalRunStatus,
 } from "../../lib/run-logs.ts";
-import { launchUrlFromOutputs } from "../../lib/installations-ui.ts";
+import { launchUrlFromOutputs } from "../../lib/capsules-ui.ts";
 import {
   diagnosticSeverityLabel,
   operationLabel,
@@ -574,16 +574,16 @@ function Inner() {
     }
   });
   const [providerConnectionsForRun] = createResource(
-    () => run.latest?.spaceId ?? null,
+    () => run.latest?.workspaceId ?? null,
     listProviderConnections,
   );
   // The owning app, for the plain-language summary sentence + back link.
-  const installationId = () => run.latest?.installationId ?? null;
-  const [installation] = createResource(installationId, getInstallation);
-  const appName = () => installation.latest?.name;
+  const capsuleId = () => run.latest?.capsuleId ?? null;
+  const [capsule] = createResource(capsuleId, getCapsule);
+  const appName = () => capsule.latest?.name;
   const appliedRunDeploymentKey = createMemo(() => {
     const r = run.latest;
-    const id = installationId();
+    const id = capsuleId();
     if (!id || !r || r.type !== "apply" || r.status !== "succeeded") {
       return undefined;
     }
@@ -717,9 +717,9 @@ function Inner() {
   });
 
   const retryPlan = createAction(async () => {
-    const instId = run.latest?.installationId;
+    const instId = run.latest?.capsuleId;
     if (!instId) return;
-    const envelope = await planInstallation(instId);
+    const envelope = await planCapsule(instId);
     const newRunId = extractRunId(envelope);
     if (newRunId) navigate(`/runs/${newRunId}`);
   });
@@ -863,10 +863,10 @@ function Inner() {
     const out: KVItem[] = [
       { label: t("run.details.runId"), value: <code>{r.id}</code> },
     ];
-    if (r.installationId) {
+    if (r.capsuleId) {
       out.push({
-        label: t("run.details.installation"),
-        value: <code>{r.installationId}</code>,
+        label: t("run.details.capsule"),
+        value: <code>{r.capsuleId}</code>,
       });
     }
     if (r.sourceSnapshotId) {
@@ -926,7 +926,7 @@ function Inner() {
         subtitle={appName() ? `${appName()}` : undefined}
         actions={
           <Show
-            when={installationId()}
+            when={capsuleId()}
             fallback={
               <Button variant="ghost" href="/">
                 {t("app.backToList")}
@@ -1037,7 +1037,7 @@ function Inner() {
                     when={
                       r().status === "failed" &&
                       isReviewRun(r()) &&
-                      r().installationId
+                      r().capsuleId
                     }
                   >
                     <Button
@@ -1054,7 +1054,7 @@ function Inner() {
                     when={
                       r().status === "succeeded" &&
                       (r().type === "apply" || r().type === "destroy_apply") &&
-                      installationId()
+                      capsuleId()
                     }
                   >
                     {(id) => (
@@ -1095,7 +1095,7 @@ function Inner() {
                       disabled={deploy.busy()}
                       onClick={() => {
                         setNeedsConfirm(false);
-                        const id = installationId();
+                        const id = capsuleId();
                         if (id) navigate(`/services/${encodeURIComponent(id)}`);
                       }}
                     >

@@ -3,15 +3,15 @@ import { expect, test } from "bun:test";
 import {
   TAKOSUMI_ACCOUNTS_PRIVACY_REQUESTS_PATH,
   type TakosumiSubject,
-  takosumiAccountsInstallationBillingUsageReportsPath,
-  takosumiAccountsInstallationDeploymentPlanRunsPath,
-  takosumiAccountsInstallationEventsPath,
-  takosumiAccountsInstallationPath,
+  takosumiAccountsCapsuleBillingUsageReportsPath,
+  takosumiAccountsCapsuleDeploymentPlanRunsPath,
+  takosumiAccountsCapsuleEventsPath,
+  takosumiAccountsCapsulePath,
   takosumiAccountsPrivacyRequestCompletePath,
   takosumiAccountsPrivacyRequestPath,
 } from "@takosjp/takosumi-accounts-contract";
 import {
-  type AccountsInstallationExportBundle,
+  type AccountsCapsuleExportBundle,
   type ServiceBindingMaterialKind,
   type ServiceBindingMaterializationResult,
   createAccountsHandler as createRawAccountsHandler,
@@ -32,7 +32,7 @@ import { appendLedgerEvent } from "../../../../accounts/service/src/installation
 import { serviceGrantMaterialRecordsFromValue } from "../../../../accounts/service/src/installation-lifecycle-shared.ts";
 import type {
   ApplyRunResponse,
-  GetInstallationResponse,
+  GetCapsuleResponse,
   ListDeploymentsResponse,
   PlanRunResponse,
 } from "@takosumi/internal/deploy-control-api";
@@ -42,8 +42,8 @@ import {
 } from "../../../../accounts/service/src/store.ts";
 import { handleUserInfo } from "../../../../accounts/service/src/oidc-routes.ts";
 import {
-  type InstallationRoute,
-  matchInstallationRoute,
+  type CapsuleRoute,
+  matchCapsuleRoute,
 } from "../../../../accounts/service/src/route-matchers.ts";
 
 const textEncoder = new TextEncoder();
@@ -81,7 +81,7 @@ function createAccountsHandler(options: TestAccountsHandlerOptions = {}) {
       options,
     });
     if (seeded) return seeded;
-    return await handler(await withTestAppInstallationAuth(request, store));
+    return await handler(await withTestAppCapsuleAuth(request, store));
   };
 }
 
@@ -104,9 +104,9 @@ function deployControlOperationsStub(
     createApplyRun: reject(
       "createApplyRun",
     ) as DeployControlOperations["createApplyRun"],
-    getInstallation: reject(
-      "getInstallation",
-    ) as DeployControlOperations["getInstallation"],
+    getCapsule: reject(
+      "getCapsule",
+    ) as DeployControlOperations["getCapsule"],
     listDeployments: reject(
       "listDeployments",
     ) as DeployControlOperations["listDeployments"],
@@ -134,11 +134,11 @@ function seedAccountSession(
   return sessionId;
 }
 
-function seedOwnedSpace(
+function seedOwnedWorkspace(
   store: InMemoryAccountsStore,
   subject: TakosumiSubject = "tsub_owner",
   accountId = "acct_1",
-  spaceId = "space_1",
+  workspaceId = "space_1",
 ): void {
   const now = Date.now();
   store.saveLedgerAccount({
@@ -147,8 +147,8 @@ function seedOwnedSpace(
     createdAt: now,
     updatedAt: now,
   });
-  store.saveSpace({
-    spaceId,
+  store.saveWorkspace({
+    workspaceId,
     accountId,
     kind: "personal",
     createdAt: now,
@@ -161,16 +161,16 @@ function accountSessionHeaders(sessionId: string): HeadersInit {
 }
 
 /**
- * Minimal control-plane operations for the billing-checkout Space-ownership
- * gate: `canAccessSpace` calls `spaces.getSpace(id)` and short-circuits when
+ * Minimal control-plane operations for the billing-checkout Workspace-ownership
+ * gate: `canAccessWorkspace` calls `spaces.getWorkspace(id)` and short-circuits when
  * `space.ownerUserId === subject`. Only that one accessor is exercised here.
  */
-async function withTestAppInstallationAuth(
+async function withTestAppCapsuleAuth(
   request: Request,
   store: AccountsStore,
 ): Promise<Request> {
   if (request.headers.has("authorization")) return request;
-  const subject = await appInstallationAuthSubjectForTest(request, store);
+  const subject = await appCapsuleAuthSubjectForTest(request, store);
   if (!subject) return request;
   const sessionId = await seedGenericAccountSession(store, subject);
   const headers = new Headers(request.headers);
@@ -178,7 +178,7 @@ async function withTestAppInstallationAuth(
   return new Request(request, { headers });
 }
 
-async function appInstallationAuthSubjectForTest(
+async function appCapsuleAuthSubjectForTest(
   request: Request,
   store: AccountsStore,
 ): Promise<TakosumiSubject | undefined> {
@@ -190,12 +190,12 @@ async function appInstallationAuthSubjectForTest(
     const body = await jsonRecordForTest(request.clone());
     return testSubjectValue(body?.createdBySubject);
   }
-  const route = matchInstallationRoute(url.pathname);
+  const route = matchCapsuleRoute(url.pathname);
   if (route) {
-    if (!testInstallationRouteNeedsAccountBearer(route.kind, request.method)) {
+    if (!testCapsuleRouteNeedsAccountBearer(route.kind, request.method)) {
       return undefined;
     }
-    const installation = await store.findAppInstallation(route.installationId);
+    const installation = await store.findAppCapsule(route.capsuleId);
     if (!installation) return undefined;
     // Round 2: with the createdBySubject access fallback removed, tests that
     // exercise per-installation handlers must seed the LedgerAccount as well
@@ -211,8 +211,8 @@ async function appInstallationAuthSubjectForTest(
   }
 }
 
-function testInstallationRouteNeedsAccountBearer(
-  kind: InstallationRoute["kind"],
+function testCapsuleRouteNeedsAccountBearer(
+  kind: CapsuleRoute["kind"],
   method: string,
 ): boolean {
   if (kind === "billing-usage-reports") return false;
@@ -307,9 +307,9 @@ async function maybeSeedLegacyProjectionFixtureForTest(input: {
   }
   const body = await jsonRecordForTest(input.request.clone());
   if (!body) return undefined;
-  const installationId = testStringValue(body.installationId);
+  const capsuleId = testStringValue(body.capsuleId);
   if (
-    !installationId ||
+    !capsuleId ||
     body.expected !== undefined ||
     body.planRunId !== undefined ||
     body.plan_run_id !== undefined
@@ -319,7 +319,7 @@ async function maybeSeedLegacyProjectionFixtureForTest(input: {
 
   const source = testRecordValue(body.source) ?? {};
   const accountId = testStringValue(body.accountId);
-  const spaceId = testStringValue(body.spaceId);
+  const workspaceId = testStringValue(body.workspaceId);
   const appId = testStringValue(body.appId);
   const sourceGitUrl =
     testStringValue(source.gitUrl) ?? testStringValue(source.url);
@@ -330,12 +330,12 @@ async function maybeSeedLegacyProjectionFixtureForTest(input: {
   const artifactDigest =
     testStringValue(source.artifactDigest) ??
     testStringValue(body.artifactDigest);
-  const mode = testInstallationModeValue(body.mode);
-  const status = testInstallationStatusValue(body.status) ?? "installing";
+  const mode = testCapsuleModeValue(body.mode);
+  const status = testCapsuleStatusValue(body.status) ?? "installing";
   const createdBySubject = testSubjectValue(body.createdBySubject);
   if (
     !accountId ||
-    !spaceId ||
+    !workspaceId ||
     !appId ||
     !sourceGitUrl ||
     !sourceRef ||
@@ -354,13 +354,13 @@ async function maybeSeedLegacyProjectionFixtureForTest(input: {
   const now = Date.now();
   const bindings = testServiceBindingMaterialRecordsFromValue({
     value: body.serviceBindings,
-    installationId,
+    capsuleId,
     now,
   });
   if (bindings instanceof Response) return bindings;
   const grants = testServiceGrantMaterialRecordsFromValue({
     value: body.serviceGrants,
-    installationId,
+    capsuleId,
     now,
   });
   if (grants instanceof Response) return grants;
@@ -372,7 +372,7 @@ async function maybeSeedLegacyProjectionFixtureForTest(input: {
   if (confirm instanceof Response) return confirm;
   const oidcClient = await testOidcClientFromValue({
     value: body.oidcClients ?? body.oidcClient,
-    installationId,
+    capsuleId,
     issuer: testStringValue(input.options.issuer) ?? testIssuer,
     bindings,
     now,
@@ -381,7 +381,7 @@ async function maybeSeedLegacyProjectionFixtureForTest(input: {
 
   let runtimeBinding = testRuntimeBindingFromValue({
     value: body.runtimeTarget,
-    installationId,
+    capsuleId,
     mode,
     now,
   });
@@ -392,9 +392,9 @@ async function maybeSeedLegacyProjectionFixtureForTest(input: {
     input.options.sharedCellRuntime
   ) {
     runtimeBinding = await input.options.sharedCellRuntime({
-      installationId,
+      capsuleId,
       accountId,
-      spaceId,
+      workspaceId,
       appId,
       createdBySubject,
       now,
@@ -410,9 +410,9 @@ async function maybeSeedLegacyProjectionFixtureForTest(input: {
   }
 
   const installation = {
-    installationId,
+    capsuleId,
     accountId,
-    spaceId,
+    workspaceId,
     appId,
     sourceGitUrl,
     sourceRef,
@@ -440,7 +440,7 @@ async function maybeSeedLegacyProjectionFixtureForTest(input: {
       const updated = {
         ...binding,
         configRef: testBindingRef(
-          installationId,
+          capsuleId,
           binding.name,
           "oidc-client",
           oidcClient.client.clientId,
@@ -457,7 +457,7 @@ async function maybeSeedLegacyProjectionFixtureForTest(input: {
       if (binding.kind !== "auth.bootstrap_token") return binding;
       const updated = {
         ...binding,
-        configRef: testBindingRef(installationId, binding.name, "launch-token"),
+        configRef: testBindingRef(capsuleId, binding.name, "launch-token"),
         secretRefs: [],
         updatedAt: now,
       };
@@ -503,17 +503,17 @@ async function maybeSeedLegacyProjectionFixtureForTest(input: {
   }
 
   await ensureLedgerAccountForTest(input.store, accountId, createdBySubject);
-  if (!(await input.store.findSpace(spaceId))) {
-    await input.store.saveSpace({
-      spaceId,
+  if (!(await input.store.findWorkspace(workspaceId))) {
+    await input.store.saveWorkspace({
+      workspaceId,
       accountId,
-      kind: testSpaceKindValue(body.spaceKind) ?? "personal",
+      kind: testWorkspaceKindValue(body.spaceKind) ?? "personal",
       displayName: testStringValue(body.spaceDisplayName),
       createdAt: now,
       updatedAt: now,
     });
   }
-  await input.store.saveAppInstallation(installation);
+  await input.store.saveAppCapsule(installation);
   if (runtimeBinding) await input.store.saveRuntimeBinding(runtimeBinding);
   for (const binding of materializedBindings) {
     await input.store.saveServiceBindingMaterial(binding);
@@ -524,14 +524,14 @@ async function maybeSeedLegacyProjectionFixtureForTest(input: {
   if (oidcClient) await input.store.saveOidcClient(oidcClient.client);
 
   await appendLedgerEvent(input.store, {
-    installationId,
+    capsuleId,
     eventType: "installation.created",
-    payload: { appId, accountId, spaceId, mode, status },
+    payload: { appId, accountId, workspaceId, mode, status },
     now,
   });
   if (confirm) {
     await appendLedgerEvent(input.store, {
-      installationId,
+      capsuleId,
       eventType: "installation.approved",
       payload: confirm,
       now,
@@ -539,7 +539,7 @@ async function maybeSeedLegacyProjectionFixtureForTest(input: {
   }
   if (oidcClient) {
     await appendLedgerEvent(input.store, {
-      installationId,
+      capsuleId,
       eventType: "oidc_client.registered",
       payload: {
         clientId: oidcClient.client.clientId,
@@ -556,7 +556,7 @@ async function maybeSeedLegacyProjectionFixtureForTest(input: {
   }
   if (runtimeBindingAutoAssigned && runtimeBinding) {
     await appendLedgerEvent(input.store, {
-      installationId,
+      capsuleId,
       eventType: "runtime_target.assigned",
       payload: {
         runtimeTargetId: runtimeBinding.runtimeBindingId,
@@ -569,7 +569,7 @@ async function maybeSeedLegacyProjectionFixtureForTest(input: {
   }
   for (const binding of materializedEvents) {
     await appendLedgerEvent(input.store, {
-      installationId,
+      capsuleId,
       eventType: "service_binding.materialized",
       payload: {
         serviceBinding: binding.name,
@@ -587,7 +587,7 @@ async function maybeSeedLegacyProjectionFixtureForTest(input: {
     grants,
     runtimeBinding,
     oidcClient: oidcClient?.client,
-    eventsUrl: `/v1/installation-projections/${installationId}/events`,
+    eventsUrl: `/v1/installation-projections/${capsuleId}/events`,
   });
   return testJson(
     {
@@ -597,7 +597,7 @@ async function maybeSeedLegacyProjectionFixtureForTest(input: {
         : {}),
     },
     202,
-    { location: `/v1/installation-projections/${installationId}` },
+    { location: `/v1/installation-projections/${capsuleId}` },
   );
 }
 
@@ -651,7 +651,7 @@ function testStringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
-function testInstallationModeValue(
+function testCapsuleModeValue(
   value: unknown,
 ): "shared-cell" | "dedicated" | "self-hosted" | undefined {
   return value === "shared-cell" ||
@@ -661,7 +661,7 @@ function testInstallationModeValue(
     : undefined;
 }
 
-function testInstallationStatusValue(
+function testCapsuleStatusValue(
   value: unknown,
 ): "installing" | "ready" | "failed" | "suspended" | "exported" | undefined {
   return value === "installing" ||
@@ -673,7 +673,7 @@ function testInstallationStatusValue(
     : undefined;
 }
 
-function testSpaceKindValue(
+function testWorkspaceKindValue(
   value: unknown,
 ): "personal" | "team" | "org" | undefined {
   return value === "personal" || value === "team" || value === "org"
@@ -691,12 +691,12 @@ const testServiceBindingMaterialKinds = new Set<string>([
 
 function testServiceBindingMaterialRecordsFromValue(input: {
   value: unknown;
-  installationId: string;
+  capsuleId: string;
   now: number;
 }):
   | readonly {
       bindingId: string;
-      installationId: string;
+      capsuleId: string;
       name: string;
       kind: ServiceBindingMaterialKind;
       configRef: string;
@@ -741,13 +741,13 @@ function testServiceBindingMaterialRecordsFromValue(input: {
       bindingId:
         testStringValue(record.serviceBindingId) ??
         testStringValue(record.bindingId) ??
-        `bind_${input.installationId}_${index}`,
-      installationId: input.installationId,
+        `bind_${input.capsuleId}_${index}`,
+      capsuleId: input.capsuleId,
       name,
       kind: kind as ServiceBindingMaterialKind,
       configRef:
         testStringValue(record.configRef) ??
-        `config://${input.installationId}/${name}`,
+        `config://${input.capsuleId}/${name}`,
       secretRefs: [],
       createdAt: input.now,
       updatedAt: input.now,
@@ -781,12 +781,12 @@ const testServiceGrantMaterialCapabilities = new Set<string>([
 
 function testServiceGrantMaterialRecordsFromValue(input: {
   value: unknown;
-  installationId: string;
+  capsuleId: string;
   now: number;
 }):
   | readonly {
       grantId: string;
-      installationId: string;
+      capsuleId: string;
       capability: string;
       scope: Record<string, unknown>;
       grantedAt: number;
@@ -820,8 +820,8 @@ function testServiceGrantMaterialRecordsFromValue(input: {
       grantId:
         testStringValue(record.serviceGrantId) ??
         testStringValue(record.grantId) ??
-        `grant_${input.installationId}_${index}`,
-      installationId: input.installationId,
+        `grant_${input.capsuleId}_${index}`,
+      capsuleId: input.capsuleId,
       capability,
       scope: testRecordValue(record.scope) ?? {},
       grantedAt: input.now,
@@ -879,7 +879,7 @@ async function testConfirmFromValue(input: {
 
 async function testOidcClientFromValue(input: {
   value: unknown;
-  installationId: string;
+  capsuleId: string;
   issuer: string;
   bindings: readonly { name: string; kind: ServiceBindingMaterialKind }[];
   now: number;
@@ -888,7 +888,7 @@ async function testOidcClientFromValue(input: {
       binding: string;
       client: {
         clientId: string;
-        installationId: string;
+        capsuleId: string;
         namespacePath: string;
         issuerUrl: string;
         redirectUris: readonly string[];
@@ -970,7 +970,7 @@ async function testOidcClientFromValue(input: {
     binding,
     client: {
       clientId: testStringValue(value.clientId) ?? `toc_${crypto.randomUUID()}`,
-      installationId: input.installationId,
+      capsuleId: input.capsuleId,
       namespacePath:
         testStringValue(value.servicePath) ??
         testStringValue(value.service_path) ??
@@ -990,13 +990,13 @@ async function testOidcClientFromValue(input: {
 
 function testRuntimeBindingFromValue(input: {
   value: unknown;
-  installationId: string;
+  capsuleId: string;
   mode: "shared-cell" | "dedicated" | "self-hosted";
   now: number;
 }):
   | {
       runtimeBindingId: string;
-      installationId: string;
+      capsuleId: string;
       mode: "shared-cell" | "dedicated" | "self-hosted";
       targetType: "shared-cell" | "dedicated" | "self-hosted";
       targetId: string;
@@ -1020,8 +1020,8 @@ function testRuntimeBindingFromValue(input: {
     runtimeBindingId:
       testStringValue(value.runtimeTargetId) ??
       testStringValue(value.runtimeBindingId) ??
-      `rtb_${input.installationId}`,
-    installationId: input.installationId,
+      `rtb_${input.capsuleId}`,
+    capsuleId: input.capsuleId,
     mode: input.mode,
     targetType,
     targetId,
@@ -1045,13 +1045,13 @@ function testBindingDeclarations(
 }
 
 function testBindingRef(
-  installationId: string,
+  capsuleId: string,
   binding: string,
   ...segments: string[]
 ): string {
   const tail = segments.map((segment) => encodeURIComponent(segment)).join("/");
   return `takosumi-accounts://installations/${encodeURIComponent(
-    installationId,
+    capsuleId,
   )}/service-bindings/${encodeURIComponent(binding)}/${tail}`;
 }
 
@@ -1092,14 +1092,14 @@ async function testPermissionDigest(input: {
 }
 
 async function testMaterializePermissionDigest(input: {
-  installationId: string;
+  capsuleId: string;
   region: string;
   plan?: Record<string, unknown>;
   cutover?: Record<string, unknown>;
 }): Promise<string> {
   return await testSha256HexDigest({
     operation: "materialize",
-    installationId: input.installationId,
+    capsuleId: input.capsuleId,
     mode: "dedicated",
     region: input.region,
     plan: input.plan ?? {},
@@ -1109,7 +1109,7 @@ async function testMaterializePermissionDigest(input: {
 
 async function testRevisionPermissionDigest(input: {
   operation: "deployment" | "rollback";
-  installationId: string;
+  capsuleId: string;
   appId: string;
   sourceGitUrl: string;
   sourceRef: string;
@@ -1121,7 +1121,7 @@ async function testRevisionPermissionDigest(input: {
 }): Promise<string> {
   return await testSha256HexDigest({
     operation: input.operation,
-    installationId: input.installationId,
+    capsuleId: input.capsuleId,
     appId: input.appId,
     source: {
       gitUrl: input.sourceGitUrl
@@ -1257,7 +1257,7 @@ test("accounts handler deletes existing sessions outside the pre-GA email allowl
 test("accounts handler proxies installation PlanRun to deployControl", async () => {
   const createPlanRunCalls: unknown[] = [];
   const store = new InMemoryAccountsStore();
-  seedOwnedSpace(store, "tsub_owner", "acct_space_1", "space_1");
+  seedOwnedWorkspace(store, "tsub_owner", "acct_space_1", "space_1");
   const sessionId = seedAccountSession(store, "tsub_owner");
   const handler = createAccountsHandler({
     issuer: "https://accounts.example.test",
@@ -1271,7 +1271,7 @@ test("accounts handler proxies installation PlanRun to deployControl", async () 
           return Promise.resolve({
             planRun: {
               id: "plan_core_apply",
-              spaceId: "space_core",
+              workspaceId: "space_core",
               source: {
                 kind: "git",
                 url: "https://github.com/example/hello",
@@ -1312,7 +1312,7 @@ test("accounts handler proxies installation PlanRun to deployControl", async () 
           "content-type": "application/json",
         },
         body: JSON.stringify({
-          spaceId: "space_1",
+          workspaceId: "space_1",
           source: {
             kind: "git",
             url: "https://github.com/example/hello",
@@ -1331,7 +1331,7 @@ test("accounts handler proxies installation PlanRun to deployControl", async () 
   // The facade calls the typed createPlanRun with the normalized request body.
   expect(createPlanRunCalls.length).toEqual(1);
   expect(createPlanRunCalls[0]).toEqual({
-    spaceId: "space_1",
+    workspaceId: "space_1",
     source: {
       kind: "git",
       url: "https://github.com/example/hello",
@@ -1345,7 +1345,7 @@ test("accounts handler applies installation through space deployControl when con
   const getPlanRunCalls: string[] = [];
   const createApplyRunCalls: unknown[] = [];
   const store = new InMemoryAccountsStore();
-  seedOwnedSpace(store, "tsub_core_apply", "acct_core_apply", "space_core");
+  seedOwnedWorkspace(store, "tsub_core_apply", "acct_core_apply", "space_core");
   const handler = createAccountsHandler({
     issuer: "https://accounts.example.test",
     store,
@@ -1356,7 +1356,7 @@ test("accounts handler applies installation through space deployControl when con
           return Promise.resolve({
             planRun: {
               id: "plan_core_apply",
-              spaceId: "space_core",
+              workspaceId: "space_core",
               source: {
                 kind: "git",
                 url: "https://github.com/example/hello",
@@ -1388,7 +1388,7 @@ test("accounts handler applies installation through space deployControl when con
           return Promise.resolve({
             installation: {
               id: "inst_core_apply",
-              spaceId: "space_core",
+              workspaceId: "space_core",
               appId: "example.hello",
               currentDeploymentId: "dep_core_apply",
               status: "ready",
@@ -1396,7 +1396,7 @@ test("accounts handler applies installation through space deployControl when con
             },
             deployment: {
               id: "dep_core_apply",
-              installationId: "inst_core_apply",
+              capsuleId: "inst_core_apply",
               source: {
                 kind: "git",
                 url: "https://github.com/example/hello",
@@ -1428,7 +1428,7 @@ test("accounts handler applies installation through space deployControl when con
       method: "POST",
       body: JSON.stringify({
         accountId: "acct_core_apply",
-        spaceId: "space_core",
+        workspaceId: "space_core",
         planRunId: "plan_core_apply",
         planArtifactDigest: "sha256:abc",
         expected: {
@@ -1464,7 +1464,7 @@ test("accounts handler applies installation through space deployControl when con
   expect(body.installation.launch_url).toEqual("https://hello.example.test");
   expect(body.installation.launch.url).toEqual("https://hello.example.test");
   expect(body.launch.url).toEqual("https://hello.example.test");
-  expect(store.findAppInstallation("inst_core_apply")?.sourceCommit).toEqual(
+  expect(store.findAppCapsule("inst_core_apply")?.sourceCommit).toEqual(
     "0123456789abcdef0123456789abcdef01234567",
   );
   const ownerSession = seedAccountSession(
@@ -1485,7 +1485,7 @@ test("accounts handler applies installation through space deployControl when con
   );
   expect(
     store
-      .listInstallationEvents("inst_core_apply")
+      .listCapsuleEvents("inst_core_apply")
       .map((event) => event.eventType),
   ).toEqual(["installation.created", "installation.activated-http-domain"]);
   // The facade reviews the reviewed PlanRun then applies it through the typed
@@ -1499,7 +1499,7 @@ test("accounts handler applies installation through space deployControl when con
 
 test("accounts handler projects space-direct apply responses without deployment source fields", async () => {
   const store = new InMemoryAccountsStore();
-  seedOwnedSpace(store, "tsub_space_direct", "acct_space_direct", "space_core");
+  seedOwnedWorkspace(store, "tsub_space_direct", "acct_space_direct", "space_core");
   const handler = createAccountsHandler({
     issuer: "https://accounts.example.test",
     store,
@@ -1510,7 +1510,7 @@ test("accounts handler projects space-direct apply responses without deployment 
           return Promise.resolve({
             planRun: {
               id: "plan_space_direct",
-              spaceId: "space_core",
+              workspaceId: "space_core",
               source: {
                 kind: "git",
                 url: "https://github.com/example/space-direct",
@@ -1542,8 +1542,8 @@ test("accounts handler projects space-direct apply responses without deployment 
             applyRun: {
               id: "apply_space_direct",
               planRunId: "plan_space_direct",
-              spaceId: "space_core",
-              installationId: "inst_space_direct",
+              workspaceId: "space_core",
+              capsuleId: "inst_space_direct",
               deploymentId: "dep_space_direct",
               operation: "create",
               runnerProfileId: "cloudflare-default",
@@ -1555,7 +1555,7 @@ test("accounts handler projects space-direct apply responses without deployment 
             },
             installation: {
               id: "inst_space_direct",
-              spaceId: "space_core",
+              workspaceId: "space_core",
               name: "space direct",
               slug: "space-direct",
               status: "active",
@@ -1568,7 +1568,7 @@ test("accounts handler projects space-direct apply responses without deployment 
             },
             deployment: {
               id: "dep_space_direct",
-              installationId: "inst_space_direct",
+              capsuleId: "inst_space_direct",
               status: "active",
               outputsPublic: {
                 url: "https://space-direct.example.test",
@@ -1585,7 +1585,7 @@ test("accounts handler projects space-direct apply responses without deployment 
       method: "POST",
       body: JSON.stringify({
         accountId: "acct_space_direct",
-        spaceId: "space_core",
+        workspaceId: "space_core",
         appId: "example.space-direct",
         status: "installing",
         planRunId: "plan_space_direct",
@@ -1618,7 +1618,7 @@ test("accounts handler projects space-direct apply responses without deployment 
   expect(body.installation.launch_url).toEqual(
     "https://space-direct.example.test",
   );
-  const stored = store.findAppInstallation("inst_space_direct");
+  const stored = store.findAppCapsule("inst_space_direct");
   expect(stored?.sourceGitUrl).toEqual(
     "https://github.com/example/space-direct",
   );
@@ -1631,7 +1631,7 @@ test("accounts handler projects space-direct apply responses without deployment 
 test("accounts handler validates installation facade request before space deployControl apply", async () => {
   let dispatched = false;
   const store = new InMemoryAccountsStore();
-  seedOwnedSpace(
+  seedOwnedWorkspace(
     store,
     "tsub_core_preflight",
     "acct_core_preflight",
@@ -1661,7 +1661,7 @@ test("accounts handler validates installation facade request before space deploy
       method: "POST",
       body: JSON.stringify({
         accountId: "acct_core_preflight",
-        spaceId: "space_core",
+        workspaceId: "space_core",
         source: {
           kind: "git",
           url: "https://github.com/example/hello",
@@ -1680,7 +1680,7 @@ test("accounts handler validates installation facade request before space deploy
 
 test("accounts handler applies local source through space deployControl with local expected guard", async () => {
   const store = new InMemoryAccountsStore();
-  seedOwnedSpace(store, "tsub_core_local", "acct_core_local", "space_core");
+  seedOwnedWorkspace(store, "tsub_core_local", "acct_core_local", "space_core");
   const getPlanRunCalls: string[] = [];
   const createApplyRunCalls: unknown[] = [];
   const handler = createAccountsHandler({
@@ -1693,7 +1693,7 @@ test("accounts handler applies local source through space deployControl with loc
           return Promise.resolve({
             planRun: {
               id: "plan_core_local",
-              spaceId: "space_core",
+              workspaceId: "space_core",
               source: {
                 kind: "local",
                 path: "/workspace/example-local",
@@ -1726,7 +1726,7 @@ test("accounts handler applies local source through space deployControl with loc
           return Promise.resolve({
             installation: {
               id: "inst_core_local",
-              spaceId: "space_core",
+              workspaceId: "space_core",
               appId: "example.local",
               currentDeploymentId: "dep_core_local",
               status: "ready",
@@ -1734,7 +1734,7 @@ test("accounts handler applies local source through space deployControl with loc
             },
             deployment: {
               id: "dep_core_local",
-              installationId: "inst_core_local",
+              capsuleId: "inst_core_local",
               source: {
                 kind: "local",
                 url: "/workspace/example-local",
@@ -1757,7 +1757,7 @@ test("accounts handler applies local source through space deployControl with loc
       method: "POST",
       body: JSON.stringify({
         accountId: "acct_core_local",
-        spaceId: "space_core",
+        workspaceId: "space_core",
         planRunId: "plan_core_local",
         planArtifactDigest:
           "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -1791,10 +1791,10 @@ test("accounts handler applies local source through space deployControl with loc
   const body = await response.json();
   expect(body.installation.id).toEqual("inst_core_local");
   expect(body.installation.status).toEqual("ready");
-  expect(store.findAppInstallation("inst_core_local")?.sourceRef).toEqual(
+  expect(store.findAppCapsule("inst_core_local")?.sourceRef).toEqual(
     "local",
   );
-  expect(store.findAppInstallation("inst_core_local")?.sourceCommit).toEqual(
+  expect(store.findAppCapsule("inst_core_local")?.sourceCommit).toEqual(
     "working-tree",
   );
   expect(getPlanRunCalls).toEqual(["plan_core_local"]);
@@ -1807,7 +1807,7 @@ test("accounts handler applies local source through space deployControl with loc
 test("raw accounts handler requires account bearer for installation PlanRun", async () => {
   const store = new InMemoryAccountsStore();
   const now = Date.now();
-  seedOwnedSpace(store, "tsub_auth_owner", "acct_auth_dry_run", "space_auth");
+  seedOwnedWorkspace(store, "tsub_auth_owner", "acct_auth_dry_run", "space_auth");
   const ownerSession = seedAccountSession(
     store,
     "tsub_auth_owner",
@@ -1838,7 +1838,7 @@ test("raw accounts handler requires account bearer for installation PlanRun", as
           return Promise.resolve({
             planRun: {
               id: "plan_dashboard_apply",
-              spaceId: request.spaceId,
+              workspaceId: request.workspaceId,
               source: {
                 kind: "git",
                 url: "https://github.com/example/hello",
@@ -1869,7 +1869,7 @@ test("raw accounts handler requires account bearer for installation PlanRun", as
     },
   });
   const body = JSON.stringify({
-    spaceId: "space_auth",
+    workspaceId: "space_auth",
     source: {
       kind: "git",
       url: "https://github.com/example/hello",
@@ -1929,9 +1929,9 @@ test("raw accounts handler requires account bearer for installation PlanRun", as
 
   // New-user external prefill flow: a write-scoped owner can PlanRun a space
   // that does NOT exist yet (it is created later at install time with this
-  // spaceId). Previously this 404'd after `/install?git=...` sent cold visitors
+  // workspaceId). Previously this 404'd after `/install?git=...` sent cold visitors
   // through sign-in and into `/new`.
-  const freshSpace = await handler(
+  const freshWorkspace = await handler(
     new Request(`${testIssuer}/v1/installation-projections/plan-runs`, {
       method: "POST",
       headers: {
@@ -1939,7 +1939,7 @@ test("raw accounts handler requires account bearer for installation PlanRun", as
         "content-type": "application/json",
       },
       body: JSON.stringify({
-        spaceId: "space_not_created_yet",
+        workspaceId: "space_not_created_yet",
         source: {
           kind: "git",
           url: "https://github.com/example/hello",
@@ -1948,7 +1948,7 @@ test("raw accounts handler requires account bearer for installation PlanRun", as
       }),
     }),
   );
-  expect(freshSpace.status).toEqual(201);
+  expect(freshWorkspace.status).toEqual(201);
 });
 
 test("accounts handler does not launch-gate installation PlanRun when platform readiness access is closed", async () => {
@@ -1973,7 +1973,7 @@ test("accounts handler does not launch-gate installation PlanRun when platform r
       {
         method: "POST",
         body: JSON.stringify({
-          spaceId: "space_1",
+          workspaceId: "space_1",
           source: {
             kind: "git",
             url: "https://github.com/example/hello",
@@ -2186,7 +2186,7 @@ test("accounts handler keeps documented closed-gate exceptions reachable", async
 
 test("accounts reference operator distribution exposes Accounts and OIDC routes", async () => {
   const store = new InMemoryAccountsStore();
-  seedOwnedSpace(store, "tsub_operator", "acct_operator", "space_operator");
+  seedOwnedWorkspace(store, "tsub_operator", "acct_operator", "space_operator");
   const sessionId = seedAccountSession(
     store,
     "tsub_operator",
@@ -2241,7 +2241,7 @@ test("accounts reference operator distribution exposes Accounts and OIDC routes"
 
 test("accounts handler rejects installation PlanRun when deployControl is not configured", async () => {
   const store = new InMemoryAccountsStore();
-  seedOwnedSpace(store, "tsub_owner", "acct_space_1", "space_1");
+  seedOwnedWorkspace(store, "tsub_owner", "acct_space_1", "space_1");
   const sessionId = seedAccountSession(store, "tsub_owner");
   const handler = createAccountsHandler({
     issuer: "https://accounts.example.test",
@@ -2257,7 +2257,7 @@ test("accounts handler rejects installation PlanRun when deployControl is not co
           ...accountSessionHeaders(sessionId),
           "content-type": "application/json",
         },
-        body: JSON.stringify({ spaceId: "space_1" }),
+        body: JSON.stringify({ workspaceId: "space_1" }),
       },
     ),
   );
@@ -2266,7 +2266,7 @@ test("accounts handler rejects installation PlanRun when deployControl is not co
   const body = await response.json();
   expect(body.error.code).toEqual("feature_unavailable");
   expect(body.error.message).toEqual(
-    "Installation PlanRun is temporarily unavailable.",
+    "Capsule PlanRun is temporarily unavailable.",
   );
 });
 
@@ -4274,7 +4274,7 @@ test("accounts handler does not launch-gate passkey flows when platform readines
   expect(store.findPasskeyCredential("credential-1")).toEqual(undefined);
 });
 
-test("accounts handler manages AppInstallation lifecycle records", async () => {
+test("accounts handler manages AppCapsule lifecycle records", async () => {
   const store = new InMemoryAccountsStore();
   const handler = createAccountsHandler({ store });
   const permissionDigest = await testPermissionDigest({
@@ -4286,9 +4286,9 @@ test("accounts handler manages AppInstallation lifecycle records", async () => {
     new Request("https://accounts.example.test/v1/installation-projections", {
       method: "POST",
       body: JSON.stringify({
-        installationId: "inst_1",
+        capsuleId: "inst_1",
         accountId: "acct_1",
-        spaceId: "space_1",
+        workspaceId: "space_1",
         spaceKind: "personal",
         appId: "takos.chat",
         source: {
@@ -4369,20 +4369,20 @@ test("accounts handler manages AppInstallation lifecycle records", async () => {
     "tsub_owner",
   );
   expect(
-    store.listServiceBindingMaterialsForInstallation("inst_1").length,
+    store.listServiceBindingMaterialsForCapsule("inst_1").length,
   ).toEqual(2);
-  expect(store.findOidcClientForInstallation("inst_1")?.issuerUrl).toEqual(
+  expect(store.findOidcClientForCapsule("inst_1")?.issuerUrl).toEqual(
     "https://accounts.example.test",
   );
   const storedAuthBinding = store
-    .listServiceBindingMaterialsForInstallation("inst_1")
+    .listServiceBindingMaterialsForCapsule("inst_1")
     .find((binding) => binding.name === "auth");
   expect(storedAuthBinding?.configRef ?? "").toContain(
     "takosumi-accounts://installations/inst_1/service-bindings/auth/oidc-client/",
   );
   expect(storedAuthBinding?.secretRefs).toEqual([]);
   expect(
-    store.listInstallationEvents("inst_1").map((event) => event.eventType),
+    store.listCapsuleEvents("inst_1").map((event) => event.eventType),
   ).toEqual([
     "installation.created",
     "installation.approved",
@@ -4392,7 +4392,7 @@ test("accounts handler manages AppInstallation lifecycle records", async () => {
   const ownerSession = seedAccountSession(store, "tsub_owner");
   const initialEventsResponse = await handler(
     new Request(
-      `${testIssuer}${takosumiAccountsInstallationEventsPath("inst_1")}`,
+      `${testIssuer}${takosumiAccountsCapsuleEventsPath("inst_1")}`,
       { headers: accountSessionHeaders(ownerSession) },
     ),
   );
@@ -4432,10 +4432,10 @@ test("accounts handler manages AppInstallation lifecycle records", async () => {
   // intentionally a no-op across all stores.
   expect(
     store.findRuntimeBinding(
-      store.findAppInstallation("inst_1")?.runtimeBindingId ?? "",
+      store.findAppCapsule("inst_1")?.runtimeBindingId ?? "",
     )?.targetId,
   ).toEqual("tokyo-cell-01");
-  expect(store.listServiceGrantMaterialsForInstallation("inst_1")).toEqual([]);
+  expect(store.listServiceGrantMaterialsForCapsule("inst_1")).toEqual([]);
 
   const eventsResponse = await handler(
     new Request(
@@ -4468,9 +4468,9 @@ test("accounts handler validates install approval confirmation", async () => {
     new Request("https://accounts.example.test/v1/installation-projections", {
       method: "POST",
       body: JSON.stringify({
-        installationId: "inst_confirm_cost",
+        capsuleId: "inst_confirm_cost",
         accountId: "acct_1",
-        spaceId: "space_1",
+        workspaceId: "space_1",
         appId: "example.db",
         source: {
           gitUrl: "https://github.com/example/db",
@@ -4502,9 +4502,9 @@ test("accounts handler validates install approval confirmation", async () => {
     new Request("https://accounts.example.test/v1/installation-projections", {
       method: "POST",
       body: JSON.stringify({
-        installationId: "inst_confirm_mismatch",
+        capsuleId: "inst_confirm_mismatch",
         accountId: "acct_1",
-        spaceId: "space_1",
+        workspaceId: "space_1",
         appId: "example.db",
         source: {
           gitUrl: "https://github.com/example/db",
@@ -4543,9 +4543,9 @@ test("accounts handler requires account-session ownership for installation reads
     new Request("https://accounts.example.test/v1/installation-projections", {
       method: "POST",
       body: JSON.stringify({
-        installationId: "inst_tenant_read",
+        capsuleId: "inst_tenant_read",
         accountId: "acct_tenant_read",
-        spaceId: "space_tenant_read",
+        workspaceId: "space_tenant_read",
         appId: "takos.chat",
         source: {
           gitUrl: "https://github.com/takos/takos",
@@ -4635,9 +4635,9 @@ test("raw accounts handler requires account bearer for installation writes", asy
     store,
   });
   const createBody = {
-    installationId: "inst_auth_write",
+    capsuleId: "inst_auth_write",
     accountId: "acct_auth_write",
-    spaceId: "space_auth_write",
+    workspaceId: "space_auth_write",
     appId: "takos.chat",
     source: {
       gitUrl: "https://github.com/takos/takos",
@@ -4789,9 +4789,9 @@ test("accounts handler rejects removed serviceId aliases in install OIDC client 
     new Request("https://accounts.example.test/v1/installation-projections", {
       method: "POST",
       body: JSON.stringify({
-        installationId: "inst_oidc_alias_create",
+        capsuleId: "inst_oidc_alias_create",
         accountId: "acct_1",
-        spaceId: "space_1",
+        workspaceId: "space_1",
         appId: "takos.chat",
         source: {
           gitUrl: "https://github.com/takos/takos",
@@ -4817,7 +4817,7 @@ test("accounts handler rejects removed serviceId aliases in install OIDC client 
   expect(body.error.message).toEqual(
     "oidcClients entries use servicePath; serviceId/service_id are not accepted",
   );
-  expect(store.findAppInstallation("inst_oidc_alias_create")).toEqual(
+  expect(store.findAppCapsule("inst_oidc_alias_create")).toEqual(
     undefined,
   );
 });
@@ -4839,10 +4839,10 @@ test("accounts handler accepts billing usage reports from scoped installation to
     createdAt: now,
     updatedAt: now,
   });
-  store.saveAppInstallation({
-    installationId: "inst_usage",
+  store.saveAppCapsule({
+    capsuleId: "inst_usage",
     accountId: "acct_1",
-    spaceId: "space_1",
+    workspaceId: "space_1",
     appId: "example.app",
     sourceGitUrl: "https://github.com/example/app",
     sourceRef: "main",
@@ -4859,9 +4859,9 @@ test("accounts handler accepts billing usage reports from scoped installation to
     clientId: "client_usage",
     subject: "pairwise_subject",
     takosumiSubject: "tsub_owner",
-    installationId: "inst_usage",
+    capsuleId: "inst_usage",
     appId: "example.app",
-    spaceId: "space_1",
+    workspaceId: "space_1",
     role: "owner",
     scope: "openid billing.usage.report",
     expiresAt: now + 5 * 60 * 1000,
@@ -4894,11 +4894,11 @@ test("accounts handler accepts billing usage reports from scoped installation to
   expect(body.usage_report.status).toEqual("accepted");
   expect(
     store
-      .listBillingUsageRecordsForInstallation("inst_usage")
+      .listBillingUsageRecordsForCapsule("inst_usage")
       .map((record) => record.meter),
   ).toEqual(["agent.compute.seconds"]);
   expect(
-    store.listInstallationEvents("inst_usage").map((event) => event.eventType),
+    store.listCapsuleEvents("inst_usage").map((event) => event.eventType),
   ).toEqual(["billing.usage_reported"]);
 
   const duplicate = await handler(
@@ -4926,10 +4926,10 @@ test("accounts handler accepts billing usage reports from scoped installation to
   expect(duplicateBody.duplicate).toEqual(true);
   expect(duplicateBody.usage_report.id).toEqual("usage_report_123");
   expect(
-    store.listBillingUsageRecordsForInstallation("inst_usage").length,
+    store.listBillingUsageRecordsForCapsule("inst_usage").length,
   ).toEqual(1);
   expect(
-    store.listInstallationEvents("inst_usage").map((event) => event.eventType),
+    store.listCapsuleEvents("inst_usage").map((event) => event.eventType),
   ).toEqual(["billing.usage_reported"]);
 
   const internalBackendMeter = await handler(
@@ -4951,7 +4951,7 @@ test("accounts handler accepts billing usage reports from scoped installation to
 
   expect(internalBackendMeter.status).toEqual(400);
   expect(
-    store.listBillingUsageRecordsForInstallation("inst_usage").length,
+    store.listBillingUsageRecordsForCapsule("inst_usage").length,
   ).toEqual(1);
 
   const conflictingIdempotency = await handler(
@@ -4985,10 +4985,10 @@ test("accounts handler accepts billing usage reports from scoped installation to
     createdAt: now,
     updatedAt: now,
   });
-  store.saveAppInstallation({
-    installationId: "inst_usage_2",
+  store.saveAppCapsule({
+    capsuleId: "inst_usage_2",
     accountId: "acct_1",
-    spaceId: "space_1",
+    workspaceId: "space_1",
     appId: "example.app",
     sourceGitUrl: "https://github.com/example/app",
     sourceRef: "main",
@@ -5003,7 +5003,7 @@ test("accounts handler accepts billing usage reports from scoped installation to
   });
   store.saveServiceGrantMaterial({
     grantId: "grant_usage_2",
-    installationId: "inst_usage_2",
+    capsuleId: "inst_usage_2",
     capability: "billing.usage.report",
     scope: {},
     grantedAt: now,
@@ -5012,14 +5012,14 @@ test("accounts handler accepts billing usage reports from scoped installation to
     clientId: "client_usage_2",
     subject: "pairwise_subject_2",
     takosumiSubject: "tsub_owner",
-    installationId: "inst_usage_2",
+    capsuleId: "inst_usage_2",
     appId: "example.app",
-    spaceId: "space_1",
+    workspaceId: "space_1",
     role: "owner",
     scope: "openid billing.usage.report",
     expiresAt: now + 5 * 60 * 1000,
   });
-  const crossInstallationReportId = await handler(
+  const crossCapsuleReportId = await handler(
     new Request(
       "https://accounts.example.test/v1/installation-projections/inst_usage_2/billing/usage-reports",
       {
@@ -5036,15 +5036,15 @@ test("accounts handler accepts billing usage reports from scoped installation to
     ),
   );
 
-  expect(crossInstallationReportId.status).toEqual(409);
-  expect((await crossInstallationReportId.json()).error.code).toEqual(
+  expect(crossCapsuleReportId.status).toEqual(409);
+  expect((await crossCapsuleReportId.json()).error.code).toEqual(
     "usage_report_id_conflict",
   );
 });
 
 test("accounts handler no longer gates installation access tokens on ServiceGrantMaterial revocation (AC1)", async () => {
   // AC1 retirement: the dead `tokenScopesRemainGranted` grant-scope guard was
-  // removed because `listServiceGrantMaterialsForInstallation` is a no-op on the durable
+  // removed because `listServiceGrantMaterialsForCapsule` is a no-op on the durable
   // (D1 / Postgres) stores, so the guard rejected valid tokens on durable
   // stores while accepting them in-memory. Token authorization is now a
   // consistent absence across stores: an installation access token is gated by
@@ -5061,10 +5061,10 @@ test("accounts handler no longer gates installation access tokens on ServiceGran
     createdAt: now,
     updatedAt: now,
   });
-  store.saveAppInstallation({
-    installationId: "inst_usage",
+  store.saveAppCapsule({
+    capsuleId: "inst_usage",
     accountId: "acct_1",
-    spaceId: "space_1",
+    workspaceId: "space_1",
     appId: "example.app",
     sourceGitUrl: "https://github.com/example/app",
     sourceRef: "main",
@@ -5079,7 +5079,7 @@ test("accounts handler no longer gates installation access tokens on ServiceGran
   });
   store.saveServiceGrantMaterial({
     grantId: "grant_usage",
-    installationId: "inst_usage",
+    capsuleId: "inst_usage",
     capability: "billing.usage.report",
     scope: {},
     grantedAt: now,
@@ -5089,9 +5089,9 @@ test("accounts handler no longer gates installation access tokens on ServiceGran
     clientId: "client_usage",
     subject: "pairwise_subject",
     takosumiSubject: "tsub_owner",
-    installationId: "inst_usage",
+    capsuleId: "inst_usage",
     appId: "example.app",
-    spaceId: "space_1",
+    workspaceId: "space_1",
     role: "owner",
     scope: "openid billing.usage.report",
     expiresAt: now + 5 * 60 * 1000,
@@ -5117,7 +5117,7 @@ test("accounts handler no longer gates installation access tokens on ServiceGran
   expect((await response.json()).usage_report.id).toEqual("usage_report_123");
   expect(
     store
-      .listBillingUsageRecordsForInstallation("inst_usage")
+      .listBillingUsageRecordsForCapsule("inst_usage")
       .map((record) => record.meter),
   ).toEqual(["agent.compute.seconds"]);
 });
@@ -5136,9 +5136,9 @@ test("accounts handler auto-assigns shared-cell RuntimeBinding from warm pool", 
     new Request("https://accounts.example.test/v1/installation-projections", {
       method: "POST",
       body: JSON.stringify({
-        installationId: "inst_shared_auto",
+        capsuleId: "inst_shared_auto",
         accountId: "acct_1",
-        spaceId: "space_1",
+        workspaceId: "space_1",
         appId: "takos.chat",
         source: {
           gitUrl: "https://github.com/takos/takos",
@@ -5168,7 +5168,7 @@ test("accounts handler auto-assigns shared-cell RuntimeBinding from warm pool", 
   ).toEqual("shared-cell://tokyo-cell-01/namespaces/inst_shared_auto");
   expect(
     store
-      .listInstallationEvents("inst_shared_auto")
+      .listCapsuleEvents("inst_shared_auto")
       .map((event) => event.eventType),
   ).toEqual(["installation.created", "runtime_target.assigned"]);
 
@@ -5176,9 +5176,9 @@ test("accounts handler auto-assigns shared-cell RuntimeBinding from warm pool", 
     new Request("https://accounts.example.test/v1/installation-projections", {
       method: "POST",
       body: JSON.stringify({
-        installationId: "inst_shared_exhausted",
+        capsuleId: "inst_shared_exhausted",
         accountId: "acct_1",
-        spaceId: "space_1",
+        workspaceId: "space_1",
         appId: "takos.chat",
         source: {
           gitUrl: "https://github.com/takos/takos",
@@ -5198,16 +5198,16 @@ test("accounts handler auto-assigns shared-cell RuntimeBinding from warm pool", 
   );
 });
 
-test("accounts handler records AppInstallation deployment and rollback revisions", async () => {
+test("accounts handler records AppCapsule deployment and rollback revisions", async () => {
   const store = new InMemoryAccountsStore();
   const handler = createAccountsHandler({ store });
   const createResponse = await handler(
     new Request("https://accounts.example.test/v1/installation-projections", {
       method: "POST",
       body: JSON.stringify({
-        installationId: "inst_revision",
+        capsuleId: "inst_revision",
         accountId: "acct_1",
-        spaceId: "space_1",
+        workspaceId: "space_1",
         appId: "takos.chat",
         source: {
           gitUrl: "https://github.com/takos/takos.git",
@@ -5280,7 +5280,7 @@ test("accounts handler records AppInstallation deployment and rollback revisions
   expect((await deploymentResponse.json()).error.code).toEqual(
     "deploy_control_required",
   );
-  expect(store.findAppInstallation("inst_revision")?.sourceCommit).toEqual(
+  expect(store.findAppCapsule("inst_revision")?.sourceCommit).toEqual(
     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   );
   const rollbackResponse = await handler(
@@ -5321,10 +5321,10 @@ test("accounts handler records AppInstallation deployment and rollback revisions
 test("accounts handler brokers deployment and rollback through space deployControl", async () => {
   const store = new InMemoryAccountsStore();
   const now = Date.now();
-  store.saveAppInstallation({
-    installationId: "inst_core_revision",
+  store.saveAppCapsule({
+    capsuleId: "inst_core_revision",
     accountId: "acct_1",
-    spaceId: "space_1",
+    workspaceId: "space_1",
     appId: "takos.chat",
     sourceGitUrl: "https://github.com/takos/takos.git",
     sourceRef: "v1.2.3",
@@ -5348,12 +5348,12 @@ test("accounts handler brokers deployment and rollback through space deployContr
     store,
     deployControl: {
       operations: deployControlOperationsStub({
-        getInstallation: (id) => {
-          dispatchLog.push({ op: "getInstallation", id });
+        getCapsule: (id) => {
+          dispatchLog.push({ op: "getCapsule", id });
           return Promise.resolve({
             installation: {
               id: "inst_core_revision",
-              spaceId: "space_1",
+              workspaceId: "space_1",
               appId: "takos.chat",
               source: {
                 kind: "git",
@@ -5367,7 +5367,7 @@ test("accounts handler brokers deployment and rollback through space deployContr
               createdAt: now,
               updatedAt: now,
             },
-          } as unknown as GetInstallationResponse);
+          } as unknown as GetCapsuleResponse);
         },
         createPlanRun: (request) => {
           dispatchLog.push({
@@ -5394,9 +5394,10 @@ test("accounts handler brokers deployment and rollback through space deployContr
           return Promise.resolve({
             planRun: {
               id: `plan_${ref.replace(/[^0-9a-z]/gi, "")}`,
-              spaceId: "space_1",
-              installationId: "inst_core_revision",
+              workspaceId: "space_1",
+              capsuleId: "inst_core_revision",
               installationCurrentDeploymentId: "dep_old",
+              capsuleCurrentStateVersionId: "sv_old",
               source,
               operation: "update",
               runnerProfileId: "cloudflare-default",
@@ -5419,7 +5420,7 @@ test("accounts handler brokers deployment and rollback through space deployContr
               updatedAt: now,
               finishedAt: now,
             },
-            currentDeploymentId: "dep_old",
+            currentStateVersionId: "sv_old",
           } as unknown as PlanRunResponse);
         },
         getPlanRun: (planRunId) => {
@@ -5433,8 +5434,8 @@ test("accounts handler brokers deployment and rollback through space deployContr
           return Promise.resolve({
             planRun: {
               id: planRunId,
-              spaceId: "space_1",
-              installationId: "inst_core_revision",
+              workspaceId: "space_1",
+              capsuleId: "inst_core_revision",
               installationCurrentDeploymentId: rollbackPlan
                 ? "dep_new"
                 : "dep_old",
@@ -5493,8 +5494,8 @@ test("accounts handler brokers deployment and rollback through space deployContr
             applyRun: {
               id: rollbackApply ? "apply_rollback" : "apply_new",
               planRunId,
-              spaceId: "space_1",
-              installationId: "inst_core_revision",
+              workspaceId: "space_1",
+              capsuleId: "inst_core_revision",
               deploymentId,
               operation: "update",
               runnerProfileId: "cloudflare-default",
@@ -5505,7 +5506,7 @@ test("accounts handler brokers deployment and rollback through space deployContr
             },
             installation: {
               id: "inst_core_revision",
-              spaceId: "space_1",
+              workspaceId: "space_1",
               appId: "takos.chat",
               currentDeploymentId: deploymentId,
               status: "ready",
@@ -5514,7 +5515,7 @@ test("accounts handler brokers deployment and rollback through space deployContr
             },
             deployment: {
               id: deploymentId,
-              installationId: "inst_core_revision",
+              capsuleId: "inst_core_revision",
               source,
               planDigest: digest,
               sourceCommit: commit,
@@ -5533,13 +5534,13 @@ test("accounts handler brokers deployment and rollback through space deployContr
             },
           } as unknown as ApplyRunResponse);
         },
-        listDeployments: (installationId) => {
-          dispatchLog.push({ op: "listDeployments", id: installationId });
+        listDeployments: (capsuleId) => {
+          dispatchLog.push({ op: "listDeployments", id: capsuleId });
           return Promise.resolve({
             deployments: [
               {
                 id: "dep_old",
-                installationId: "inst_core_revision",
+                capsuleId: "inst_core_revision",
                 planRunId: "plan_v123",
                 applyRunId: "apply_old",
                 source: {
@@ -5578,7 +5579,7 @@ test("accounts handler brokers deployment and rollback through space deployContr
   );
   expect(planRunResponse.status).toEqual(200);
   const planRun = await planRunResponse.json();
-  expect(planRun.expected.currentDeploymentId).toEqual("dep_old");
+  expect(planRun.expected.currentStateVersionId).toEqual("sv_old");
   expect(planRun.expected.sourceCommit).toEqual(
     "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   );
@@ -5597,7 +5598,7 @@ test("accounts handler brokers deployment and rollback through space deployContr
           },
           expected: {
             planRunId: planRun.expected.planRunId,
-            installationId: "inst_core_revision",
+            capsuleId: "inst_core_revision",
             runnerProfileId: planRun.expected.runnerProfileId,
             sourceDigest: planRun.expected.sourceDigest,
             variablesDigest: planRun.expected.variablesDigest,
@@ -5606,7 +5607,7 @@ test("accounts handler brokers deployment and rollback through space deployContr
             planArtifactDigest: planRun.expected.planArtifactDigest,
             sourceCommit: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             providerLockDigest: planRun.expected.providerLockDigest,
-            currentDeploymentId: "dep_old",
+            currentStateVersionId: "sv_old",
           },
           confirm: {
             permissionDigest: planRun.expected.permissionDigest,
@@ -5636,7 +5637,7 @@ test("accounts handler brokers deployment and rollback through space deployContr
           planRunId: "plan_v123",
           expected: {
             planRunId: "plan_v123",
-            installationId: "inst_core_revision",
+            capsuleId: "inst_core_revision",
             runnerProfileId: "cloudflare-default",
             sourceDigest: "sha256:source-plan_v123",
             variablesDigest: "sha256:variables-plan_v123",
@@ -5645,7 +5646,7 @@ test("accounts handler brokers deployment and rollback through space deployContr
             planArtifactDigest: "sha256:app-v123",
             sourceCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             providerLockDigest: "sha256:lock-v1.2.3",
-            currentDeploymentId: "dep_new",
+            currentStateVersionId: "sv_new",
           },
           reason: "operator rollback ghp_abcdefghijklmnopqrstuvwxyz",
         }),
@@ -5668,7 +5669,7 @@ test("accounts handler brokers deployment and rollback through space deployContr
   expect(
     dispatchLog.map((call) => (call.id ? `${call.op}:${call.id}` : call.op)),
   ).toEqual([
-    "getInstallation:inst_core_revision",
+    "getCapsule:inst_core_revision",
     "createPlanRun",
     "getPlanRun:plan_v124",
     "createApplyRun",
@@ -5680,7 +5681,7 @@ test("accounts handler brokers deployment and rollback through space deployContr
   expect(dispatchLog[6].body?.planRunId).toEqual("plan_v123");
 });
 
-test("accounts handler rejects invalid AppInstallation revision mutations", async () => {
+test("accounts handler rejects invalid AppCapsule revision mutations", async () => {
   const store = new InMemoryAccountsStore();
   const handler = createAccountsHandler({
     store,
@@ -5690,9 +5691,9 @@ test("accounts handler rejects invalid AppInstallation revision mutations", asyn
     new Request("https://accounts.example.test/v1/installation-projections", {
       method: "POST",
       body: JSON.stringify({
-        installationId: "inst_revision_guard",
+        capsuleId: "inst_revision_guard",
         accountId: "acct_1",
-        spaceId: "space_1",
+        workspaceId: "space_1",
         appId: "takos.chat",
         source: {
           gitUrl: "https://github.com/takos/takos.git",
@@ -5791,7 +5792,7 @@ test("accounts handler rejects invalid AppInstallation revision mutations", asyn
   }));
   const meteredDigest = await testRevisionPermissionDigest({
     operation: "deployment",
-    installationId: "inst_revision_guard",
+    capsuleId: "inst_revision_guard",
     appId: "takos.chat",
     sourceGitUrl: "https://github.com/takos/takos.git",
     sourceRef: "v1.2.4",
@@ -5841,12 +5842,12 @@ test("accounts handler rejects invalid AppInstallation revision mutations", asyn
   expect((await sourceMismatch.json()).error.code).toEqual("source_mismatch");
 });
 
-test("accounts handler does not launch-gate AppInstallation creation when platform readiness access is closed", async () => {
-  // Generic Installation create is platform surface, not a platform-readiness
+test("accounts handler does not launch-gate AppCapsule creation when platform readiness access is closed", async () => {
+  // Generic Capsule create is platform surface, not a platform-readiness
   // surface: the launch gate no longer applies. An authorized create proceeds
   // and is persisted even while the platform readiness is closed.
   const store = new InMemoryAccountsStore();
-  seedOwnedSpace(store, "tsub_owner", "acct_1", "space_1");
+  seedOwnedWorkspace(store, "tsub_owner", "acct_1", "space_1");
   const handler = createAccountsHandler({
     store,
     platformAccess: { status: "closed" },
@@ -5856,9 +5857,9 @@ test("accounts handler does not launch-gate AppInstallation creation when platfo
     new Request("https://accounts.example.test/v1/installation-projections", {
       method: "POST",
       body: JSON.stringify({
-        installationId: "inst_open_platform",
+        capsuleId: "inst_open_platform",
         accountId: "acct_1",
-        spaceId: "space_1",
+        workspaceId: "space_1",
         appId: "example.app",
         source: {
           gitUrl: "https://github.com/example/app",
@@ -5876,7 +5877,7 @@ test("accounts handler does not launch-gate AppInstallation creation when platfo
   expect(response.status).toEqual(202);
   const body = await response.text();
   expect(body.includes("launch_readiness_not_complete")).toEqual(false);
-  expect(store.findAppInstallation("inst_open_platform")?.appId).toEqual(
+  expect(store.findAppCapsule("inst_open_platform")?.appId).toEqual(
     "example.app",
   );
 });
@@ -5902,7 +5903,7 @@ test("accounts handler does not expose retired installation projection import ro
   );
 
   expect(response.status).toEqual(404);
-  expect(matchInstallationRoute("/v1/installation-projections/import")).toEqual(
+  expect(matchCapsuleRoute("/v1/installation-projections/import")).toEqual(
     null,
   );
 });
@@ -5991,9 +5992,9 @@ test("accounts handler lets operator materialize drill bypass only the readiness
     new Request("https://accounts.example.test/v1/installation-projections", {
       method: "POST",
       body: JSON.stringify({
-        installationId: "inst_materialize_drill",
+        capsuleId: "inst_materialize_drill",
         accountId: "acct_materialize_drill",
-        spaceId: "space_materialize_drill",
+        workspaceId: "space_materialize_drill",
         appId: "example.materialize-drill",
         source: {
           gitUrl: "https://github.com/example/materialize-drill",
@@ -6015,7 +6016,7 @@ test("accounts handler lets operator materialize drill bypass only the readiness
     confirm: {
       costAck: true,
       permissionDigest: await testMaterializePermissionDigest({
-        installationId: "inst_materialize_drill",
+        capsuleId: "inst_materialize_drill",
         region: "tokyo",
       }),
     },
@@ -6093,7 +6094,7 @@ test("accounts handler lets operator materialize drill bypass only the readiness
   expect(cancelBody.event.type).toEqual("installation.materialize-failed");
   expect(
     store
-      .listInstallationEvents("inst_materialize_drill")
+      .listCapsuleEvents("inst_materialize_drill")
       .map((event) => event.eventType),
   ).toEqual([
     "installation.created",
@@ -6113,9 +6114,9 @@ test("accounts handler allows authenticated owner export while platform readines
     new Request("https://accounts.example.test/v1/installation-projections", {
       method: "POST",
       body: JSON.stringify({
-        installationId: "inst_closed_export",
+        capsuleId: "inst_closed_export",
         accountId: "acct_closed_export",
-        spaceId: "space_closed_export",
+        workspaceId: "space_closed_export",
         appId: "example.closed-export",
         source: {
           gitUrl: "https://github.com/example/closed-export",
@@ -6158,7 +6159,7 @@ test("accounts handler mirrors control deploy projection and exports after apply
   const sessionId = seedAccountSession(store, "tsub_owner");
   const operations = {
     spaces: {
-      getSpace: async (id: string) => ({
+      getWorkspace: async (id: string) => ({
         id,
         handle: "owner",
         displayName: "Owner",
@@ -6171,7 +6172,7 @@ test("accounts handler mirrors control deploy projection and exports after apply
     deployUpload: async () => ({
       installation: {
         id: "inst_control_export",
-        spaceId: "space_control_export",
+        workspaceId: "space_control_export",
         name: "hello",
         slug: "hello",
         installConfigId: "cfg_control_export",
@@ -6184,8 +6185,8 @@ test("accounts handler mirrors control deploy projection and exports after apply
       installConfigId: "cfg_control_export",
       run: {
         id: "plan_control_export",
-        spaceId: "space_control_export",
-        installationId: "inst_control_export",
+        workspaceId: "space_control_export",
+        capsuleId: "inst_control_export",
         type: "plan" as const,
         status: "succeeded" as const,
         sourceSnapshotId: "snap_control_export",
@@ -6199,8 +6200,8 @@ test("accounts handler mirrors control deploy projection and exports after apply
     getPlanRun: async () => ({
       planRun: {
         id: "plan_control_export",
-        spaceId: "space_control_export",
-        installationId: "inst_control_export",
+        workspaceId: "space_control_export",
+        capsuleId: "inst_control_export",
         sourceSnapshotId: "snap_control_export",
         source: {
           kind: "git" as const,
@@ -6230,7 +6231,7 @@ test("accounts handler mirrors control deploy projection and exports after apply
     getSourceSnapshot: async () => ({
       id: "snap_control_export",
       origin: "upload" as const,
-      spaceId: "space_control_export",
+      workspaceId: "space_control_export",
       url: "upload://space_control_export",
       ref: "upload",
       resolvedCommit:
@@ -6245,8 +6246,8 @@ test("accounts handler mirrors control deploy projection and exports after apply
     }),
     getRun: async () => ({
       id: "apply_control_export",
-      spaceId: "space_control_export",
-      installationId: "inst_control_export",
+      workspaceId: "space_control_export",
+      capsuleId: "inst_control_export",
       type: "apply" as const,
       status: "succeeded" as const,
       planDigest: `sha256:${"d".repeat(64)}`,
@@ -6265,14 +6266,14 @@ test("accounts handler mirrors control deploy projection and exports after apply
       method: "POST",
       headers: accountSessionHeaders(sessionId),
       body: JSON.stringify({
-        spaceId: "space_control_export",
+        workspaceId: "space_control_export",
         name: "hello",
         snapshotId: "snap_control_export",
       }),
     }),
   );
   expect(deployResponse.status).toEqual(200);
-  expect(store.findAppInstallation("inst_control_export")?.status).toEqual(
+  expect(store.findAppCapsule("inst_control_export")?.status).toEqual(
     "installing",
   );
 
@@ -6305,7 +6306,7 @@ test("accounts handler mirrors control deploy projection and exports after apply
     ),
   );
   expect(pollResponse.status).toEqual(200);
-  expect(store.findAppInstallation("inst_control_export")?.status).toEqual(
+  expect(store.findAppCapsule("inst_control_export")?.status).toEqual(
     "ready",
   );
 
@@ -6392,7 +6393,7 @@ test("accounts handler does not launch-gate core OAuth and PAT issuance when pla
   }
 });
 
-test("accounts handler completes AppInstallation ready suspended exported lifecycle", async () => {
+test("accounts handler completes AppCapsule ready suspended exported lifecycle", async () => {
   const store = new InMemoryAccountsStore();
   const handler = createAccountsHandler({ store });
 
@@ -6400,9 +6401,9 @@ test("accounts handler completes AppInstallation ready suspended exported lifecy
     new Request("https://accounts.example.test/v1/installation-projections", {
       method: "POST",
       body: JSON.stringify({
-        installationId: "inst_lifecycle",
+        capsuleId: "inst_lifecycle",
         accountId: "acct_lifecycle",
-        spaceId: "space_lifecycle",
+        workspaceId: "space_lifecycle",
         appId: "example.lifecycle",
         source: {
           gitUrl: "https://github.com/example/lifecycle",
@@ -6487,9 +6488,9 @@ test("accounts handler records uninstall for already terminal installations", as
     new Request("https://accounts.example.test/v1/installation-projections", {
       method: "POST",
       body: JSON.stringify({
-        installationId: "inst_failed_uninstall",
+        capsuleId: "inst_failed_uninstall",
         accountId: "acct_failed_uninstall",
-        spaceId: "space_failed_uninstall",
+        workspaceId: "space_failed_uninstall",
         appId: "example.failed-uninstall",
         source: {
           gitUrl: "https://github.com/example/failed-uninstall",
@@ -6515,12 +6516,12 @@ test("accounts handler records uninstall for already terminal installations", as
   expect((await uninstallResponse.json()).error.code).toEqual(
     "destroy_plan_required",
   );
-  expect(store.findAppInstallation("inst_failed_uninstall")?.status).toEqual(
+  expect(store.findAppCapsule("inst_failed_uninstall")?.status).toEqual(
     "failed",
   );
 });
 
-test("accounts handler accepts AppInstallation materialize requests idempotently", async () => {
+test("accounts handler accepts AppCapsule materialize requests idempotently", async () => {
   const store = new InMemoryAccountsStore();
   const handler = createAccountsHandler({ store });
 
@@ -6528,9 +6529,9 @@ test("accounts handler accepts AppInstallation materialize requests idempotently
     new Request("https://accounts.example.test/v1/installation-projections", {
       method: "POST",
       body: JSON.stringify({
-        installationId: "inst_materialize_request",
+        capsuleId: "inst_materialize_request",
         accountId: "acct_materialize",
-        spaceId: "space_materialize",
+        workspaceId: "space_materialize",
         appId: "example.materialize",
         source: {
           gitUrl: "https://github.com/example/materialize",
@@ -6649,7 +6650,7 @@ test("accounts handler accepts AppInstallation materialize requests idempotently
   };
   const materializeCutover = { strategy: "blue-green", drainSeconds: 30 };
   const materializePermissionDigest = await testMaterializePermissionDigest({
-    installationId: "inst_materialize_request",
+    capsuleId: "inst_materialize_request",
     region: "tokyo",
     plan: materializePlan,
     cutover: materializeCutover,
@@ -6675,7 +6676,7 @@ test("accounts handler accepts AppInstallation materialize requests idempotently
   expect(acceptedResponse.status).toEqual(202);
   const accepted = await acceptedResponse.json();
   expect(accepted.operationId).toContain("op_");
-  expect(accepted.installationId).toEqual("inst_materialize_request");
+  expect(accepted.capsuleId).toEqual("inst_materialize_request");
   expect(accepted.fromMode).toEqual("shared-cell");
   expect(accepted.toMode).toEqual("dedicated");
   expect(typeof accepted.preserveDigest).toEqual("string");
@@ -6734,7 +6735,7 @@ test("accounts handler accepts AppInstallation materialize requests idempotently
           confirm: {
             costAck: true,
             permissionDigest: await testMaterializePermissionDigest({
-              installationId: "inst_materialize_request",
+              capsuleId: "inst_materialize_request",
               region: "osaka",
             }),
           },
@@ -6759,7 +6760,7 @@ test("accounts handler accepts AppInstallation materialize requests idempotently
           confirm: {
             costAck: true,
             permissionDigest: await testMaterializePermissionDigest({
-              installationId: "inst_materialize_request",
+              capsuleId: "inst_materialize_request",
               region: "tokyo",
             }),
           },
@@ -6770,7 +6771,7 @@ test("accounts handler accepts AppInstallation materialize requests idempotently
   expect(conflictingResponse.status).toEqual(409);
   expect(
     store
-      .listInstallationEvents("inst_materialize_request")
+      .listCapsuleEvents("inst_materialize_request")
       .map((event) => event.eventType),
   ).toEqual([
     "installation.created",
@@ -6778,7 +6779,7 @@ test("accounts handler accepts AppInstallation materialize requests idempotently
     "service_binding.materialized",
     "installation.materialize-requested",
   ]);
-  expect(store.findAppInstallation("inst_materialize_request")?.mode).toEqual(
+  expect(store.findAppCapsule("inst_materialize_request")?.mode).toEqual(
     "shared-cell",
   );
 
@@ -6869,7 +6870,7 @@ test("accounts handler accepts AppInstallation materialize requests idempotently
   expect(repeatedCompleteResponse.status).toEqual(409);
 });
 
-test("accounts handler records AppInstallation materialize operation failures", async () => {
+test("accounts handler records AppCapsule materialize operation failures", async () => {
   const store = new InMemoryAccountsStore();
   const handler = createAccountsHandler({ store });
 
@@ -6877,9 +6878,9 @@ test("accounts handler records AppInstallation materialize operation failures", 
     new Request("https://accounts.example.test/v1/installation-projections", {
       method: "POST",
       body: JSON.stringify({
-        installationId: "inst_materialize_failure",
+        capsuleId: "inst_materialize_failure",
         accountId: "acct_materialize_failure",
-        spaceId: "space_materialize_failure",
+        workspaceId: "space_materialize_failure",
         appId: "example.materialize-failure",
         source: {
           gitUrl: "https://github.com/example/materialize-failure",
@@ -6907,7 +6908,7 @@ test("accounts handler records AppInstallation materialize operation failures", 
           confirm: {
             costAck: true,
             permissionDigest: await testMaterializePermissionDigest({
-              installationId: "inst_materialize_failure",
+              capsuleId: "inst_materialize_failure",
               region: "tokyo",
             }),
           },
@@ -6944,14 +6945,14 @@ test("accounts handler records AppInstallation materialize operation failures", 
   expect(JSON.stringify(failedBody)).not.toContain("statuspass");
   expect(JSON.stringify(failedBody)).not.toContain("sk-status-raw");
   const storedFailedEventsText = JSON.stringify(
-    store.listInstallationEvents("inst_materialize_failure"),
+    store.listCapsuleEvents("inst_materialize_failure"),
   );
   expect(storedFailedEventsText).not.toContain("materialize-status-token");
   expect(storedFailedEventsText).not.toContain("statuspass");
   expect(storedFailedEventsText).not.toContain("sk-status-raw");
   expect(
     store
-      .listInstallationEvents("inst_materialize_failure")
+      .listCapsuleEvents("inst_materialize_failure")
       .map((event) => event.eventType),
   ).toEqual([
     "installation.created",
@@ -6969,9 +6970,9 @@ test("accounts handler can close materialize operation before cutover without fa
     new Request("https://accounts.example.test/v1/installation-projections", {
       method: "POST",
       body: JSON.stringify({
-        installationId: "inst_materialize_cancel",
+        capsuleId: "inst_materialize_cancel",
         accountId: "acct_materialize_cancel",
-        spaceId: "space_materialize_cancel",
+        workspaceId: "space_materialize_cancel",
         appId: "example.materialize-cancel",
         source: {
           gitUrl: "https://github.com/example/materialize-cancel",
@@ -6999,7 +7000,7 @@ test("accounts handler can close materialize operation before cutover without fa
           confirm: {
             costAck: true,
             permissionDigest: await testMaterializePermissionDigest({
-              installationId: "inst_materialize_cancel",
+              capsuleId: "inst_materialize_cancel",
               region: "tokyo",
             }),
           },
@@ -7032,15 +7033,15 @@ test("accounts handler can close materialize operation before cutover without fa
   expect(cancelBody.event.payload.reason).toEqual(
     "materialize canceled before cutover",
   );
-  expect(store.findAppInstallation("inst_materialize_cancel")?.status).toEqual(
+  expect(store.findAppCapsule("inst_materialize_cancel")?.status).toEqual(
     "ready",
   );
-  expect(store.findAppInstallation("inst_materialize_cancel")?.mode).toEqual(
+  expect(store.findAppCapsule("inst_materialize_cancel")?.mode).toEqual(
     "shared-cell",
   );
   expect(
     store
-      .listInstallationEvents("inst_materialize_cancel")
+      .listCapsuleEvents("inst_materialize_cancel")
       .map((event) => event.eventType),
   ).toEqual([
     "installation.created",
@@ -7137,9 +7138,9 @@ test("accounts handler runs configured materialize worker and swaps runtime bind
     new Request("https://accounts.example.test/v1/installation-projections", {
       method: "POST",
       body: JSON.stringify({
-        installationId: "inst_materialize_worker",
+        capsuleId: "inst_materialize_worker",
         accountId: "acct_materialize_worker",
-        spaceId: "space_materialize_worker",
+        workspaceId: "space_materialize_worker",
         appId: "example.materialize-worker",
         source: {
           gitUrl: "https://github.com/example/materialize-worker",
@@ -7203,7 +7204,7 @@ test("accounts handler runs configured materialize worker and swaps runtime bind
           confirm: {
             costAck: true,
             permissionDigest: await testMaterializePermissionDigest({
-              installationId: "inst_materialize_worker",
+              capsuleId: "inst_materialize_worker",
               region: "tokyo",
               plan: { compute: "small" },
               cutover: { strategy: "blue-green" },
@@ -7230,7 +7231,7 @@ test("accounts handler runs configured materialize worker and swaps runtime bind
   expect(captured.oidcIssuer).toEqual("https://accounts.example.test");
   expect(captured.bindingNames).toEqual(["auth", "domain"]);
   expect(
-    store.findAppInstallation("inst_materialize_worker")?.runtimeBindingId,
+    store.findAppCapsule("inst_materialize_worker")?.runtimeBindingId,
   ).toEqual("rtb_materialize_worker_dedicated");
   expect(
     store.findRuntimeBinding("rtb_materialize_worker_dedicated")?.targetType,
@@ -7265,9 +7266,9 @@ test("accounts handler rejects materialize worker continuity mismatch before cut
     new Request("https://accounts.example.test/v1/installation-projections", {
       method: "POST",
       body: JSON.stringify({
-        installationId: "inst_materialize_mismatch",
+        capsuleId: "inst_materialize_mismatch",
         accountId: "acct_materialize_mismatch",
-        spaceId: "space_materialize_mismatch",
+        workspaceId: "space_materialize_mismatch",
         appId: "example.materialize-mismatch",
         source: {
           gitUrl: "https://github.com/example/materialize-mismatch",
@@ -7303,7 +7304,7 @@ test("accounts handler rejects materialize worker continuity mismatch before cut
           confirm: {
             costAck: true,
             permissionDigest: await testMaterializePermissionDigest({
-              installationId: "inst_materialize_mismatch",
+              capsuleId: "inst_materialize_mismatch",
               region: "tokyo",
               plan: { compute: "small" },
               cutover: { strategy: "blue-green" },
@@ -7319,11 +7320,11 @@ test("accounts handler rejects materialize worker continuity mismatch before cut
   expect(body.error).toEqual(
     "materialize worker continuity sourceDataNamespace mismatch",
   );
-  expect(store.findAppInstallation("inst_materialize_mismatch")?.mode).toEqual(
+  expect(store.findAppCapsule("inst_materialize_mismatch")?.mode).toEqual(
     "shared-cell",
   );
   expect(
-    store.findAppInstallation("inst_materialize_mismatch")?.runtimeBindingId,
+    store.findAppCapsule("inst_materialize_mismatch")?.runtimeBindingId,
   ).toEqual("rtb_materialize_mismatch_shared");
 });
 
@@ -7340,9 +7341,9 @@ test("accounts handler keeps shared-cell runtime ready when materialize worker f
     new Request("https://accounts.example.test/v1/installation-projections", {
       method: "POST",
       body: JSON.stringify({
-        installationId: "inst_materialize_worker_failure",
+        capsuleId: "inst_materialize_worker_failure",
         accountId: "acct_materialize_worker_failure",
-        spaceId: "space_materialize_worker_failure",
+        workspaceId: "space_materialize_worker_failure",
         appId: "example.materialize-worker-failure",
         source: {
           gitUrl: "https://github.com/example/materialize-worker-failure",
@@ -7378,7 +7379,7 @@ test("accounts handler keeps shared-cell runtime ready when materialize worker f
           confirm: {
             costAck: true,
             permissionDigest: await testMaterializePermissionDigest({
-              installationId: "inst_materialize_worker_failure",
+              capsuleId: "inst_materialize_worker_failure",
               region: "tokyo",
               plan: { compute: "small" },
               cutover: { strategy: "blue-green" },
@@ -7396,13 +7397,13 @@ test("accounts handler keeps shared-cell runtime ready when materialize worker f
   expect(body.event.payload.error).toEqual("materialize worker failed");
   expect(JSON.stringify(body)).not.toContain("copy failed");
   expect(
-    store.findAppInstallation("inst_materialize_worker_failure")?.mode,
+    store.findAppCapsule("inst_materialize_worker_failure")?.mode,
   ).toEqual("shared-cell");
   expect(
-    store.findAppInstallation("inst_materialize_worker_failure")?.status,
+    store.findAppCapsule("inst_materialize_worker_failure")?.status,
   ).toEqual("ready");
   expect(
-    store.findAppInstallation("inst_materialize_worker_failure")
+    store.findAppCapsule("inst_materialize_worker_failure")
       ?.runtimeBindingId,
   ).toEqual("rtb_materialize_worker_failure_shared");
 });
@@ -7415,9 +7416,9 @@ test("accounts handler rejects operation completion without request event", asyn
     new Request("https://accounts.example.test/v1/installation-projections", {
       method: "POST",
       body: JSON.stringify({
-        installationId: "inst_missing_operation",
+        capsuleId: "inst_missing_operation",
         accountId: "acct_missing_operation",
-        spaceId: "space_missing_operation",
+        workspaceId: "space_missing_operation",
         appId: "example.missing-operation",
         source: {
           gitUrl: "https://github.com/example/missing-operation",
@@ -7449,7 +7450,7 @@ test("accounts handler rejects operation completion without request event", asyn
   expect((await exportedResponse.json()).error.code).toEqual(
     "operation_not_found",
   );
-  expect(store.findAppInstallation("inst_missing_operation")?.status).toEqual(
+  expect(store.findAppCapsule("inst_missing_operation")?.status).toEqual(
     "ready",
   );
 
@@ -7470,12 +7471,12 @@ test("accounts handler rejects operation completion without request event", asyn
   expect((await failedResponse.json()).error.code).toEqual(
     "operation_not_found",
   );
-  expect(store.findAppInstallation("inst_missing_operation")?.status).toEqual(
+  expect(store.findAppCapsule("inst_missing_operation")?.status).toEqual(
     "ready",
   );
 });
 
-test("accounts handler accepts AppInstallation export requests and exposes pending operation", async () => {
+test("accounts handler accepts AppCapsule export requests and exposes pending operation", async () => {
   const store = new InMemoryAccountsStore();
   const handler = createAccountsHandler({
     store,
@@ -7486,9 +7487,9 @@ test("accounts handler accepts AppInstallation export requests and exposes pendi
     new Request("https://accounts.example.test/v1/installation-projections", {
       method: "POST",
       body: JSON.stringify({
-        installationId: "inst_export_request",
+        capsuleId: "inst_export_request",
         accountId: "acct_export",
-        spaceId: "space_export",
+        workspaceId: "space_export",
         appId: "example.export",
         source: {
           gitUrl: "https://github.com/example/export",
@@ -7696,7 +7697,7 @@ test("accounts handler accepts AppInstallation export requests and exposes pendi
 
   expect(
     store
-      .listInstallationEvents("inst_export_request")
+      .listCapsuleEvents("inst_export_request")
       .map((event) => event.eventType),
   ).toEqual([
     "installation.created",
@@ -7714,9 +7715,9 @@ test("accounts handler rejects data export without age encryption", async () => 
     new Request("https://accounts.example.test/v1/installation-projections", {
       method: "POST",
       body: JSON.stringify({
-        installationId: "inst_export_plain_data",
+        capsuleId: "inst_export_plain_data",
         accountId: "acct_export_plain_data",
-        spaceId: "space_export_plain_data",
+        workspaceId: "space_export_plain_data",
         appId: "example.export-plain-data",
         source: {
           gitUrl: "https://github.com/example/export-plain-data",
@@ -7754,7 +7755,7 @@ test("accounts handler rejects data export without age encryption", async () => 
   expect(body.error.message).toEqual(
     "export includeData requires age encryption",
   );
-  expect(store.listInstallationEvents("inst_export_plain_data").length).toEqual(
+  expect(store.listCapsuleEvents("inst_export_plain_data").length).toEqual(
     1,
   );
 });
@@ -7767,9 +7768,9 @@ test("accounts handler rejects malformed export request fields", async () => {
     new Request("https://accounts.example.test/v1/installation-projections", {
       method: "POST",
       body: JSON.stringify({
-        installationId: "inst_export_malformed",
+        capsuleId: "inst_export_malformed",
         accountId: "acct_export_malformed",
-        spaceId: "space_export_malformed",
+        workspaceId: "space_export_malformed",
         appId: "example.export-malformed",
         source: {
           gitUrl: "https://github.com/example/export-malformed",
@@ -7865,7 +7866,7 @@ test("accounts handler rejects malformed export request fields", async () => {
     expect(body.error.message).toEqual(testCase.message);
   }
 
-  expect(store.listInstallationEvents("inst_export_malformed").length).toEqual(
+  expect(store.listCapsuleEvents("inst_export_malformed").length).toEqual(
     1,
   );
 });
@@ -7908,9 +7909,9 @@ test("accounts handler runs configured export worker and closes operation", asyn
     new Request("https://accounts.example.test/v1/installation-projections", {
       method: "POST",
       body: JSON.stringify({
-        installationId: "inst_export_worker",
+        capsuleId: "inst_export_worker",
         accountId: "acct_export_worker",
-        spaceId: "space_export_worker",
+        workspaceId: "space_export_worker",
         appId: "example.export-worker",
         source: {
           gitUrl: "https://github.com/example/export-worker",
@@ -7986,7 +7987,7 @@ test("accounts handler runs configured export worker and closes operation", asyn
   expect(captured.operationId).toEqual(exported.operationId);
   expect(captured.requestIncludeData).toEqual(false);
   expect(captured.bundleKind).toEqual(
-    "takosumi.accounts.installation-export-bundle@v1",
+    "takosumi.accounts.capsule-export-bundle@v1",
   );
   expect(captured.sourceCommit).toEqual(
     "0123456789abcdef0123456789abcdef01234567",
@@ -7999,7 +8000,7 @@ test("accounts handler runs configured export worker and closes operation", asyn
     "service_binding.materialized",
     "installation.export-requested",
   ]);
-  expect(store.findAppInstallation("inst_export_worker")?.status).toEqual(
+  expect(store.findAppCapsule("inst_export_worker")?.status).toEqual(
     "exported",
   );
 
@@ -8057,9 +8058,9 @@ test("accounts handler records configured export worker failures", async () => {
     new Request("https://accounts.example.test/v1/installation-projections", {
       method: "POST",
       body: JSON.stringify({
-        installationId: "inst_export_worker_failure",
+        capsuleId: "inst_export_worker_failure",
         accountId: "acct_export_worker_failure",
-        spaceId: "space_export_worker_failure",
+        workspaceId: "space_export_worker_failure",
         appId: "example.export-worker-failure",
         source: {
           gitUrl: "https://github.com/example/export-worker-failure",
@@ -8097,7 +8098,7 @@ test("accounts handler records configured export worker failures", async () => {
   expect(body.event.payload.error).toEqual("export worker failed");
   expect(JSON.stringify(body)).not.toContain("archive upload failed");
   expect(
-    store.findAppInstallation("inst_export_worker_failure")?.status,
+    store.findAppCapsule("inst_export_worker_failure")?.status,
   ).toEqual("failed");
 
   const operationResponse = await handler(
@@ -8112,9 +8113,9 @@ test("accounts handler records configured export worker failures", async () => {
   expect(JSON.stringify(operationBody)).not.toContain("archive upload failed");
 });
 
-test("accounts handler moves AppInstallation through materialize and export lifecycle", async () => {
+test("accounts handler moves AppCapsule through materialize and export lifecycle", async () => {
   const sourceStore = new InMemoryAccountsStore();
-  let exportedBundle: AccountsInstallationExportBundle | undefined;
+  let exportedBundle: AccountsCapsuleExportBundle | undefined;
   const sourceHandler = createAccountsHandler({
     issuer: "https://accounts.source.test",
     store: sourceStore,
@@ -8185,9 +8186,9 @@ test("accounts handler moves AppInstallation through materialize and export life
     new Request("https://accounts.source.test/v1/installation-projections", {
       method: "POST",
       body: JSON.stringify({
-        installationId: "inst_lifecycle",
+        capsuleId: "inst_lifecycle",
         accountId: "acct_source",
-        spaceId: "space_source",
+        workspaceId: "space_source",
         appId: "takos.chat",
         source: {
           gitUrl: "https://github.com/takos/takos",
@@ -8243,7 +8244,7 @@ test("accounts handler moves AppInstallation through materialize and export life
           confirm: {
             costAck: true,
             permissionDigest: await testMaterializePermissionDigest({
-              installationId: "inst_lifecycle",
+              capsuleId: "inst_lifecycle",
               region: "tokyo",
               plan: { compute: "small", database: "small" },
               cutover: { strategy: "blue-green", drainSeconds: 30 },
@@ -8263,7 +8264,7 @@ test("accounts handler moves AppInstallation through materialize and export life
   // in its private `runtime_target` field (= not part of envelope), so
   // this test asserts via the in-memory ledger.
   const lifecycleRtb =
-    sourceStore.findAppInstallation("inst_lifecycle")?.runtimeBindingId;
+    sourceStore.findAppCapsule("inst_lifecycle")?.runtimeBindingId;
   expect(
     sourceStore.findRuntimeBinding(lifecycleRtb ?? "")?.targetType,
   ).toEqual("dedicated");
@@ -8271,7 +8272,7 @@ test("accounts handler moves AppInstallation through materialize and export life
     "dedicated://tokyo/inst_lifecycle",
   );
   expect(materialized.event.type).toEqual("installation.materialize-succeeded");
-  expect(sourceStore.findAppInstallation("inst_lifecycle")?.mode).toEqual(
+  expect(sourceStore.findAppCapsule("inst_lifecycle")?.mode).toEqual(
     "dedicated",
   );
 
@@ -8316,7 +8317,7 @@ test("accounts handler moves AppInstallation through materialize and export life
     "installation.materialize-succeeded",
     "installation.export-requested",
   ]);
-  expect(sourceStore.findAppInstallation("inst_lifecycle")?.status).toEqual(
+  expect(sourceStore.findAppCapsule("inst_lifecycle")?.status).toEqual(
     "exported",
   );
 
@@ -8332,8 +8333,8 @@ test("accounts handler moves AppInstallation through materialize and export life
           bundle: exportedBundle,
           targetIssuer: "https://accounts.target.test",
           targetAccountId: "acct_target",
-          targetSpaceId: "space_target",
-          targetInstallationId: "inst_lifecycle_imported",
+          targetWorkspaceId: "space_target",
+          targetCapsuleId: "inst_lifecycle_imported",
           createdBySubject: "tsub_target",
         }),
       },
@@ -8342,7 +8343,7 @@ test("accounts handler moves AppInstallation through materialize and export life
   expect(importResponse.status).toEqual(404);
 });
 
-test("accounts handler records AppInstallation export operation failures", async () => {
+test("accounts handler records AppCapsule export operation failures", async () => {
   const store = new InMemoryAccountsStore();
   const handler = createAccountsHandler({ store });
 
@@ -8350,9 +8351,9 @@ test("accounts handler records AppInstallation export operation failures", async
     new Request("https://accounts.example.test/v1/installation-projections", {
       method: "POST",
       body: JSON.stringify({
-        installationId: "inst_export_failure",
+        capsuleId: "inst_export_failure",
         accountId: "acct_export_failure",
-        spaceId: "space_export_failure",
+        workspaceId: "space_export_failure",
         appId: "example.export-failure",
         source: {
           gitUrl: "https://github.com/example/export-failure",
@@ -8430,9 +8431,9 @@ test("accounts handler materializes launch token binding config", async () => {
     new Request("https://accounts.example.test/v1/installation-projections", {
       method: "POST",
       body: JSON.stringify({
-        installationId: "inst_launch_binding",
+        capsuleId: "inst_launch_binding",
         accountId: "acct_1",
-        spaceId: "space_1",
+        workspaceId: "space_1",
         appId: "takos.chat",
         source: {
           gitUrl: "https://github.com/takos/takos",
@@ -8461,7 +8462,7 @@ test("accounts handler materializes launch token binding config", async () => {
   // envelope. The materialize route still saves the binding in the
   // ledger so we assert via the in-memory store.
   const launchBinding = store
-    .listServiceBindingMaterialsForInstallation("inst_launch_binding")
+    .listServiceBindingMaterialsForCapsule("inst_launch_binding")
     .find((b) => b.name === "bootstrap");
   expect(launchBinding?.configRef).toEqual(
     [
@@ -8472,7 +8473,7 @@ test("accounts handler materializes launch token binding config", async () => {
   expect(launchBinding?.secretRefs).toEqual([]);
   expect(
     store
-      .listInstallationEvents("inst_launch_binding")
+      .listCapsuleEvents("inst_launch_binding")
       .map((event) => event.eventType),
   ).toEqual(["installation.created", "service_binding.materialized"]);
 });
@@ -8495,9 +8496,9 @@ test("accounts handler connects shared-cell runtime binding to launch token boot
     new Request("https://accounts.example.test/v1/installation-projections", {
       method: "POST",
       body: JSON.stringify({
-        installationId: "inst_shared_launch",
+        capsuleId: "inst_shared_launch",
         accountId: "acct_1",
-        spaceId: "space_1",
+        workspaceId: "space_1",
         appId: "takos.chat",
         source: {
           gitUrl: "https://github.com/takos/takos",
@@ -8529,7 +8530,7 @@ test("accounts handler connects shared-cell runtime binding to launch token boot
     store.findRuntimeBinding("rtb_inst_shared_launch_shared_cell")?.targetId,
   ).toEqual("shared-cell://tokyo-cell-01/namespaces/inst_shared_launch");
   const sharedLaunchBinding = store
-    .listServiceBindingMaterialsForInstallation("inst_shared_launch")
+    .listServiceBindingMaterialsForCapsule("inst_shared_launch")
     .find((b) => b.name === "bootstrap");
   expect(sharedLaunchBinding?.configRef).toEqual(
     [
@@ -8539,7 +8540,7 @@ test("accounts handler connects shared-cell runtime binding to launch token boot
   );
   expect(
     store
-      .listInstallationEvents("inst_shared_launch")
+      .listCapsuleEvents("inst_shared_launch")
       .map((event) => event.eventType),
   ).toEqual([
     "installation.created",
@@ -8561,14 +8562,14 @@ test("accounts handler isolates shared-cell namespaces and launch tokens", async
       pairwiseSubjectSecret: launchPairwiseSubjectSecret,
     },
   });
-  async function createSharedInstall(installationId: string): Promise<unknown> {
+  async function createSharedInstall(capsuleId: string): Promise<unknown> {
     const response = await handler(
       new Request("https://accounts.example.test/v1/installation-projections", {
         method: "POST",
         body: JSON.stringify({
-          installationId,
+          capsuleId,
           accountId: "acct_1",
-          spaceId: "space_1",
+          workspaceId: "space_1",
           appId: "takos.chat",
           source: {
             gitUrl: "https://github.com/takos/takos",
@@ -8599,9 +8600,9 @@ test("accounts handler isolates shared-cell namespaces and launch tokens", async
   // Wave 6 (Phase E SQL drift fix): `runtime_target` was removed from
   // the envelope; assert via the in-memory ledger.
   const sharedABinding =
-    store.findAppInstallation("inst_shared_a")?.runtimeBindingId;
+    store.findAppCapsule("inst_shared_a")?.runtimeBindingId;
   const sharedBBinding =
-    store.findAppInstallation("inst_shared_b")?.runtimeBindingId;
+    store.findAppCapsule("inst_shared_b")?.runtimeBindingId;
   expect(store.findRuntimeBinding(sharedABinding ?? "")?.targetId).toEqual(
     "shared-cell://tokyo-cell-01/namespaces/inst_shared_a",
   );
@@ -8616,7 +8617,7 @@ test("accounts handler isolates shared-cell namespaces and launch tokens", async
   ]);
   expect(
     store
-      .listInstallationEvents("inst_shared_b")
+      .listCapsuleEvents("inst_shared_b")
       .map((event) => event.eventType),
   ).toEqual([
     "installation.created",
@@ -8659,24 +8660,24 @@ test("accounts handler isolates per-installation data oidc grants and billing", 
     }): ServiceBindingMaterializationResult | undefined => {
       if (binding.kind === "storage.sql") {
         return {
-          configRef: `takosumi-accounts://installations/${installation.installationId}/service-bindings/${binding.name}/postgres/main`,
+          configRef: `takosumi-accounts://installations/${installation.capsuleId}/service-bindings/${binding.name}/postgres/main`,
           secretRefs: [
-            `takosumi-accounts://installations/${installation.installationId}/service-bindings/${binding.name}/secrets/password`,
+            `takosumi-accounts://installations/${installation.capsuleId}/service-bindings/${binding.name}/secrets/password`,
           ],
           env: {
             DATABASE_HOST: "db.example.test",
-            DATABASE_NAME: installation.installationId,
+            DATABASE_NAME: installation.capsuleId,
           },
         };
       }
       if (binding.kind === "storage.object") {
         return {
-          configRef: `takosumi-accounts://installations/${installation.installationId}/service-bindings/${binding.name}/object-store/main`,
+          configRef: `takosumi-accounts://installations/${installation.capsuleId}/service-bindings/${binding.name}/object-store/main`,
           secretRefs: [
-            `takosumi-accounts://installations/${installation.installationId}/service-bindings/${binding.name}/secrets/access-key`,
+            `takosumi-accounts://installations/${installation.capsuleId}/service-bindings/${binding.name}/secrets/access-key`,
           ],
           env: {
-            BLOB_BUCKET: `${installation.installationId}-objects`,
+            BLOB_BUCKET: `${installation.capsuleId}-objects`,
           },
         };
       }
@@ -8685,7 +8686,7 @@ test("accounts handler isolates per-installation data oidc grants and billing", 
   });
 
   async function createIsolatedInstall(input: {
-    installationId: string;
+    capsuleId: string;
     billingAccountId: string;
     serviceGrantId: string;
   }): Promise<{
@@ -8698,7 +8699,7 @@ test("accounts handler isolates per-installation data oidc grants and billing", 
       id: string;
       installation_id: string;
       capability: string;
-      scope: { installationId?: string };
+      scope: { capsuleId?: string };
       granted_at: string;
       revoked_at: string | null;
     }[];
@@ -8707,9 +8708,9 @@ test("accounts handler isolates per-installation data oidc grants and billing", 
       new Request("https://accounts.example.test/v1/installation-projections", {
         method: "POST",
         body: JSON.stringify({
-          installationId: input.installationId,
+          capsuleId: input.capsuleId,
           accountId: "acct_1",
-          spaceId: "space_1",
+          workspaceId: "space_1",
           billingAccountId: input.billingAccountId,
           appId: "takos.chat",
           source: {
@@ -8725,17 +8726,17 @@ test("accounts handler isolates per-installation data oidc grants and billing", 
             {
               name: "auth",
               kind: "identity.oidc",
-              configRef: `takosumi-deploy-control://installable-app/takos.chat/service-bindings/auth/${input.installationId}`,
+              configRef: `takosumi-deploy-control://installable-app/takos.chat/service-bindings/auth/${input.capsuleId}`,
             },
             {
               name: "database",
               kind: "storage.sql",
-              configRef: `takosumi-deploy-control://installable-app/takos.chat/service-bindings/database/${input.installationId}`,
+              configRef: `takosumi-deploy-control://installable-app/takos.chat/service-bindings/database/${input.capsuleId}`,
             },
             {
               name: "blob",
               kind: "storage.object",
-              configRef: `takosumi-deploy-control://installable-app/takos.chat/service-bindings/blob/${input.installationId}`,
+              configRef: `takosumi-deploy-control://installable-app/takos.chat/service-bindings/blob/${input.capsuleId}`,
             },
           ],
           oidcClients: [
@@ -8743,7 +8744,7 @@ test("accounts handler isolates per-installation data oidc grants and billing", 
               serviceBinding: "auth",
               namespacePath: "takosumi.identity.oidc",
               redirectUris: [
-                `https://${input.installationId}.example.test/auth/oidc/callback`,
+                `https://${input.capsuleId}.example.test/auth/oidc/callback`,
               ],
               allowedScopes: ["openid", "profile"],
               subjectMode: "pairwise",
@@ -8753,7 +8754,7 @@ test("accounts handler isolates per-installation data oidc grants and billing", 
             {
               serviceGrantId: input.serviceGrantId,
               capability: "files:read",
-              scope: { installationId: input.installationId },
+              scope: { capsuleId: input.capsuleId },
             },
           ],
         }),
@@ -8764,22 +8765,22 @@ test("accounts handler isolates per-installation data oidc grants and billing", 
   }
 
   const first = await createIsolatedInstall({
-    installationId: "inst_iso_a",
+    capsuleId: "inst_iso_a",
     billingAccountId: "billing_inst_a",
     serviceGrantId: "grant_inst_a_files",
   });
   const second = await createIsolatedInstall({
-    installationId: "inst_iso_b",
+    capsuleId: "inst_iso_b",
     billingAccountId: "billing_inst_b",
     serviceGrantId: "grant_inst_b_files",
   });
 
   expect(first.installation.billing_account_id).toEqual("billing_inst_a");
   expect(second.installation.billing_account_id).toEqual("billing_inst_b");
-  expect(store.findAppInstallation("inst_iso_a")?.billingAccountId).toEqual(
+  expect(store.findAppCapsule("inst_iso_a")?.billingAccountId).toEqual(
     "billing_inst_a",
   );
-  expect(store.findAppInstallation("inst_iso_b")?.billingAccountId).toEqual(
+  expect(store.findAppCapsule("inst_iso_b")?.billingAccountId).toEqual(
     "billing_inst_b",
   );
   expect(store.findBillingAccount("billing_inst_a")?.stripeCustomerId).toEqual(
@@ -8797,8 +8798,8 @@ test("accounts handler isolates per-installation data oidc grants and billing", 
   // Wave 6 (Phase E SQL drift fix): `runtime_target` / `service_bindings` /
   // `service_grants` were removed from the envelope. Per-isolation
   // assertions move to the in-memory ledger.
-  const isoARtb = store.findAppInstallation("inst_iso_a")?.runtimeBindingId;
-  const isoBRtb = store.findAppInstallation("inst_iso_b")?.runtimeBindingId;
+  const isoARtb = store.findAppCapsule("inst_iso_a")?.runtimeBindingId;
+  const isoBRtb = store.findAppCapsule("inst_iso_b")?.runtimeBindingId;
   expect(store.findRuntimeBinding(isoARtb ?? "")?.targetId).toEqual(
     "shared-cell://tokyo-cell-01/namespaces/inst_iso_a",
   );
@@ -8815,10 +8816,10 @@ test("accounts handler isolates per-installation data oidc grants and billing", 
     "https://inst_iso_b.example.test/auth/oidc/callback",
   ]);
   const isoADbBinding = store
-    .listServiceBindingMaterialsForInstallation("inst_iso_a")
+    .listServiceBindingMaterialsForCapsule("inst_iso_a")
     .find((b) => b.name === "database");
   const isoBDbBinding = store
-    .listServiceBindingMaterialsForInstallation("inst_iso_b")
+    .listServiceBindingMaterialsForCapsule("inst_iso_b")
     .find((b) => b.name === "database");
   expect(isoADbBinding?.configRef).toEqual(
     "takosumi-accounts://installations/inst_iso_a/service-bindings/database/postgres/main",
@@ -8827,10 +8828,10 @@ test("accounts handler isolates per-installation data oidc grants and billing", 
     "takosumi-accounts://installations/inst_iso_b/service-bindings/database/postgres/main",
   );
   const isoABlobBinding = store
-    .listServiceBindingMaterialsForInstallation("inst_iso_a")
+    .listServiceBindingMaterialsForCapsule("inst_iso_a")
     .find((b) => b.name === "blob");
   const isoBBlobBinding = store
-    .listServiceBindingMaterialsForInstallation("inst_iso_b")
+    .listServiceBindingMaterialsForCapsule("inst_iso_b")
     .find((b) => b.name === "blob");
   expect(isoABlobBinding?.configRef).toEqual(
     "takosumi-accounts://installations/inst_iso_a/service-bindings/blob/object-store/main",
@@ -8840,10 +8841,10 @@ test("accounts handler isolates per-installation data oidc grants and billing", 
   );
   expect(first.service_binding_env.BLOB_BUCKET).toEqual("inst_iso_a-objects");
   expect(second.service_binding_env.BLOB_BUCKET).toEqual("inst_iso_b-objects");
-  expect(store.listServiceGrantMaterialsForInstallation("inst_iso_a")).toEqual(
+  expect(store.listServiceGrantMaterialsForCapsule("inst_iso_a")).toEqual(
     [],
   );
-  expect(store.listServiceGrantMaterialsForInstallation("inst_iso_b")).toEqual(
+  expect(store.listServiceGrantMaterialsForCapsule("inst_iso_b")).toEqual(
     [],
   );
 });
@@ -8862,9 +8863,9 @@ test("accounts handler materializes configured provider env bindings", async () 
       seenDeclarations.push({ name: binding.name, declaration });
       if (binding.kind === "storage.sql") {
         return {
-          configRef: `takosumi-accounts://installations/${installation.installationId}/service-bindings/${binding.name}/postgres/db-main`,
+          configRef: `takosumi-accounts://installations/${installation.capsuleId}/service-bindings/${binding.name}/postgres/db-main`,
           secretRefs: [
-            `takosumi-accounts://installations/${installation.installationId}/service-bindings/${binding.name}/secrets/password`,
+            `takosumi-accounts://installations/${installation.capsuleId}/service-bindings/${binding.name}/secrets/password`,
           ],
           env: {
             DATABASE_HOST: "db.example.test",
@@ -8875,9 +8876,9 @@ test("accounts handler materializes configured provider env bindings", async () 
       }
       if (binding.kind === "storage.object") {
         return {
-          configRef: `takosumi-accounts://installations/${installation.installationId}/service-bindings/${binding.name}/object-store/blob-main`,
+          configRef: `takosumi-accounts://installations/${installation.capsuleId}/service-bindings/${binding.name}/object-store/blob-main`,
           secretRefs: [
-            `takosumi-accounts://installations/${installation.installationId}/service-bindings/${binding.name}/secrets/secret-key`,
+            `takosumi-accounts://installations/${installation.capsuleId}/service-bindings/${binding.name}/secrets/secret-key`,
           ],
           env: {
             BLOB_ENDPOINT: "https://objects.example.test",
@@ -8892,9 +8893,9 @@ test("accounts handler materializes configured provider env bindings", async () 
     new Request("https://accounts.example.test/v1/installation-projections", {
       method: "POST",
       body: JSON.stringify({
-        installationId: "inst_materialized",
+        capsuleId: "inst_materialized",
         accountId: "acct_1",
-        spaceId: "space_1",
+        workspaceId: "space_1",
         appId: "takos.chat",
         source: {
           gitUrl: "https://github.com/takos/takos",
@@ -8945,7 +8946,7 @@ test("accounts handler materializes configured provider env bindings", async () 
   // envelope; assert via the in-memory ledger.
   expect(
     store
-      .listServiceBindingMaterialsForInstallation("inst_materialized")
+      .listServiceBindingMaterialsForCapsule("inst_materialized")
       .map((b) => b.configRef),
   ).toEqual([
     "takosumi-accounts://installations/inst_materialized/service-bindings/db/postgres/db-main",
@@ -8953,7 +8954,7 @@ test("accounts handler materializes configured provider env bindings", async () 
   ]);
   expect(
     store
-      .listInstallationEvents("inst_materialized")
+      .listCapsuleEvents("inst_materialized")
       .map((event) => event.eventType),
   ).toEqual([
     "installation.created",
@@ -8977,9 +8978,9 @@ test("accounts handler rejects secret-bearing service binding env material", asy
     }): ServiceBindingMaterializationResult | undefined => {
       if (binding.kind !== "storage.sql") return undefined;
       return {
-        configRef: `takosumi-accounts://installations/${installation.installationId}/service-bindings/${binding.name}/postgres/db-main`,
+        configRef: `takosumi-accounts://installations/${installation.capsuleId}/service-bindings/${binding.name}/postgres/db-main`,
         secretRefs: [
-          `takosumi-accounts://installations/${installation.installationId}/service-bindings/${binding.name}/secrets/password`,
+          `takosumi-accounts://installations/${installation.capsuleId}/service-bindings/${binding.name}/secrets/password`,
         ],
         env: {
           DATABASE_URL:
@@ -8993,9 +8994,9 @@ test("accounts handler rejects secret-bearing service binding env material", asy
     new Request("https://accounts.example.test/v1/installation-projections", {
       method: "POST",
       body: JSON.stringify({
-        installationId: "inst_secret_env_rejected",
+        capsuleId: "inst_secret_env_rejected",
         accountId: "acct_1",
-        spaceId: "space_1",
+        workspaceId: "space_1",
         appId: "takos.chat",
         source: {
           gitUrl: "https://github.com/takos/takos",
@@ -9030,9 +9031,9 @@ test("accounts handler rejects internal ServiceBindingMaterial secretRefs in pub
     new Request("https://accounts.example.test/v1/installation-projections", {
       method: "POST",
       body: JSON.stringify({
-        installationId: "inst_bad_empty_refs",
+        capsuleId: "inst_bad_empty_refs",
         accountId: "acct_1",
-        spaceId: "space_1",
+        workspaceId: "space_1",
         appId: "takos.chat",
         source: {
           gitUrl: "https://github.com/takos/takos",
@@ -9066,9 +9067,9 @@ test("accounts handler rejects ServiceBindingMaterial secret handles in public r
     new Request("https://accounts.example.test/v1/installation-projections", {
       method: "POST",
       body: JSON.stringify({
-        installationId: "inst_bad",
+        capsuleId: "inst_bad",
         accountId: "acct_1",
-        spaceId: "space_1",
+        workspaceId: "space_1",
         appId: "takos.chat",
         source: {
           gitUrl: "https://github.com/takos/takos",
@@ -9102,9 +9103,9 @@ test("accounts handler rejects ServiceGrantMaterial records outside the catalog 
     new Request("https://accounts.example.test/v1/installation-projections", {
       method: "POST",
       body: JSON.stringify({
-        installationId: "inst_bad_grant",
+        capsuleId: "inst_bad_grant",
         accountId: "acct_1",
-        spaceId: "space_1",
+        workspaceId: "space_1",
         appId: "takos.chat",
         source: {
           gitUrl: "https://github.com/takos/takos",
@@ -9131,7 +9132,7 @@ test("accounts handler rejects ServiceGrantMaterial records outside the catalog 
 
 test("ServiceGrantMaterial parser redacts secret-shaped scope metadata", () => {
   const records = serviceGrantMaterialRecordsFromValue({
-    installationId: "inst_scope_redaction",
+    capsuleId: "inst_scope_redaction",
     now: Date.parse("2026-06-17T00:00:00.000Z"),
     value: [
       {
@@ -9192,7 +9193,7 @@ test("accounts handler omits HSTS for non-HTTPS issuers", async () => {
   expect(response.headers.get("x-content-type-options")).toEqual("nosniff");
 });
 
-test("accounts handler paginates AppInstallation list via cursor and limit", async () => {
+test("accounts handler paginates AppCapsule list via cursor and limit", async () => {
   const store = new InMemoryAccountsStore();
   const now = Date.now();
   store.saveLedgerAccount({
@@ -9201,8 +9202,8 @@ test("accounts handler paginates AppInstallation list via cursor and limit", asy
     createdAt: now,
     updatedAt: now,
   });
-  store.saveSpace({
-    spaceId: "space_page",
+  store.saveWorkspace({
+    workspaceId: "space_page",
     accountId: "acct_page",
     kind: "personal",
     createdAt: now,
@@ -9210,10 +9211,10 @@ test("accounts handler paginates AppInstallation list via cursor and limit", asy
   });
   const session = seedAccountSession(store, "tsub_page_owner");
   for (let i = 0; i < 5; i += 1) {
-    store.saveAppInstallation({
-      installationId: `inst_page_${i}`,
+    store.saveAppCapsule({
+      capsuleId: `inst_page_${i}`,
       accountId: "acct_page",
-      spaceId: "space_page",
+      workspaceId: "space_page",
       appId: `example.page-${i}`,
       sourceGitUrl: `https://github.com/example/page-${i}`,
       sourceRef: "v1.0.0",
@@ -9249,8 +9250,8 @@ test("accounts handler paginates AppInstallation list via cursor and limit", asy
   expect(secondPage.status).toEqual(200);
   const secondBody = await secondPage.json();
   expect(secondBody.installations.length).toEqual(2);
-  // The serialized envelope exposes `id` (not `installationId`) for the
-  // account-plane wire shape (see `serializeAppInstallation`).
+  // The serialized envelope exposes `id` (not `capsuleId`) for the
+  // account-plane wire shape (see `serializeAppCapsule`).
   expect(secondBody.installations[0].id).toEqual("inst_page_2");
 
   const malformedCursor = await handler(
@@ -9284,9 +9285,9 @@ test("accounts handler signs export download redirects", async () => {
     new Request("https://accounts.example.test/v1/installation-projections", {
       method: "POST",
       body: JSON.stringify({
-        installationId: "inst_signed_download",
+        capsuleId: "inst_signed_download",
         accountId: "acct_signed_download",
-        spaceId: "space_signed_download",
+        workspaceId: "space_signed_download",
         appId: "example.signed",
         source: {
           gitUrl: "https://github.com/example/signed",
@@ -9356,9 +9357,9 @@ test("accounts handler signs export download redirects", async () => {
     new Request("https://accounts.example.test/v1/installation-projections", {
       method: "POST",
       body: JSON.stringify({
-        installationId: "inst_insecure_download",
+        capsuleId: "inst_insecure_download",
         accountId: "acct_insecure_download",
-        spaceId: "space_insecure_download",
+        workspaceId: "space_insecure_download",
         appId: "example.signed",
         source: {
           gitUrl: "https://github.com/example/signed",
@@ -9442,17 +9443,17 @@ test("accounts handler rate-limits OIDC authorize bursts per IP", async () => {
   expect(typeof limited?.headers.get("retry-after")).toEqual("string");
 });
 
-async function createReadyLaunchInstallation(
+async function createReadyLaunchCapsule(
   handler: (request: Request) => Promise<Response>,
-  installationId: string,
+  capsuleId: string,
 ): Promise<void> {
   const response = await handler(
     new Request("https://accounts.example.test/v1/installation-projections", {
       method: "POST",
       body: JSON.stringify({
-        installationId,
+        capsuleId,
         accountId: "acct_1",
-        spaceId: "space_1",
+        workspaceId: "space_1",
         appId: "takos.chat",
         source: {
           gitUrl: "https://github.com/takos/takos",
@@ -9669,9 +9670,9 @@ test("handleUserInfo emits a flat space_memberships claim from the token's space
     clientId: "takos-docs",
     scope: "openid profile",
     subject: "tsub_membership",
-    installationId: "inst-membership",
+    capsuleId: "inst-membership",
     appId: "takos-docs",
-    spaceId: "space-membership",
+    workspaceId: "space-membership",
     role: "member",
     expiresAt: Date.now() + 60_000,
   });
@@ -9701,7 +9702,7 @@ test("the consolidated /v1/connections edge is gone (Connections are /api/v1/con
   // The former account-plane connections edge no longer exists; every method on
   // `/v1/connections` (and item subroutes) falls through to the generic 404.
   for (const [method, path] of [
-    ["GET", "/v1/connections?spaceId=space_conn_gone"],
+    ["GET", "/v1/connections?workspaceId=space_conn_gone"],
     ["POST", "/v1/connections"],
     ["POST", "/v1/connections/conn_x/test"],
     ["DELETE", "/v1/connections/conn_x"],

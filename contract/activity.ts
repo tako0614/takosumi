@@ -1,13 +1,13 @@
 /**
  * Activity audit ledger contract.
  *
- * Activity is the Space-scoped audit trail surfaced in the dashboard's Activity
+ * Activity is the Workspace-scoped audit trail surfaced in the dashboard's Activity
  * view. One {@link ActivityEvent} records a single state-changing action
- * inside a Space — an Installation created, a plan / apply / destroy run reaching
+ * inside a Workspace — an Capsule created, a plan / apply / destroy run reaching
  * a milestone, a Dependency added, stale propagation, a RunGroup created — keyed
- * by the Space so the dashboard can list a Space's recent activity.
+ * by the Workspace so the dashboard can list a Workspace's recent activity.
  *
- * This is the PUBLIC, Space-level audit trail. It is distinct from the public
+ * This is the PUBLIC, Workspace-level audit trail. It is distinct from the public
  * run-level `RunAuditEvent` projection (the per-run policy / lease / dispatch
  * trace carried inside a Run response); the two never share a type.
  *
@@ -19,8 +19,8 @@
 
 import { INTERNAL_V1_PREFIX } from "./api-surface.ts";
 
-export const SPACE_ACTIVITY_PATH = (spaceId: string): string =>
-  `${INTERNAL_V1_PREFIX}/spaces/${encodeURIComponent(spaceId)}/activity`;
+export const SPACE_ACTIVITY_PATH = (workspaceId: string): string =>
+  `${INTERNAL_V1_PREFIX}/spaces/${encodeURIComponent(workspaceId)}/activity`;
 
 /** Default page size for an Activity listing when no limit is given. */
 export const ACTIVITY_DEFAULT_LIMIT = 100;
@@ -28,10 +28,10 @@ export const ACTIVITY_DEFAULT_LIMIT = 100;
 export const ACTIVITY_MAX_LIMIT = 500;
 
 /**
- * One Space-scoped audit-trail entry (`audit_events` row).
+ * One Workspace-scoped audit-trail entry (`audit_events` row).
  *
  *   - `id`         — service-assigned event id.
- *   - `spaceId`    — the owning Space (the listing key).
+ *   - `workspaceId`    — the owning Workspace (the listing key).
  *   - `actorId`    — the principal that triggered the action, when known.
  *   - `action`     — a dotted action verb (`installation.created`,
  *                    `run.plan_created`, `run.approved`, `run.applied`,
@@ -49,6 +49,8 @@ export const ACTIVITY_MAX_LIMIT = 500;
  */
 export interface ActivityEvent {
   readonly id: string;
+  readonly workspaceId: string;
+  /** @deprecated Use workspaceId. */
   readonly spaceId: string;
   readonly actorId?: string;
   readonly action: string;
@@ -59,7 +61,7 @@ export interface ActivityEvent {
   readonly createdAt: string;
 }
 
-/** The body of an Activity listing (`GET /internal/v1/spaces/:spaceId/activity`). */
+/** The body of an Activity listing (`GET /internal/v1/spaces/:workspaceId/activity`). */
 export interface ListActivityResponse {
   readonly events: readonly ActivityEvent[];
 }

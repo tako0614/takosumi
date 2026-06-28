@@ -551,7 +551,7 @@ export function releaseBaseEnv(
       ? { TAKOSUMI_APPLY_RUN_ID: release.activation.applyRunId }
       : {}),
     ...(release.activation?.installationId
-      ? { TAKOSUMI_INSTALLATION_ID: release.activation.installationId }
+      ? { TAKOSUMI_CAPSULE_ID: release.activation.installationId }
       : {}),
     ...(release.activation?.deploymentId
       ? { TAKOSUMI_DEPLOYMENT_ID: release.activation.deploymentId }

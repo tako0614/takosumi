@@ -153,13 +153,13 @@ test("source_sync consumer mints ONLY source-phase git creds for a private repo"
   expect(mintEvents).toHaveLength(1);
   expect(mintEvents[0]).toMatchObject({
     runId: run.id,
-    spaceId: "space_1",
+    workspaceId: "space_1",
     sourceId: source.id,
     connectionId: conn.id,
     phase: "source",
     capabilities: ["source"],
   });
-  expect(mintEvents[0]?.installationId).toBeUndefined();
+  expect(mintEvents[0]?.capsuleId).toBeUndefined();
   expect(JSON.stringify(mintEvents)).not.toContain("ghp_super_secret");
 });
 

@@ -1,21 +1,21 @@
 import { expect, test } from "bun:test";
 
-import { InstallationsService } from "../../../../core/domains/installations/mod.ts";
-import { DEFAULT_CAPSULE_INSTALL_CONFIG_ID } from "../../../../core/domains/installations/official_seed.ts";
+import { CapsulesService } from "../../../../core/domains/capsules/mod.ts";
+import { DEFAULT_CAPSULE_INSTALL_CONFIG_ID } from "../../../../core/domains/capsules/official_seed.ts";
 import { InMemoryOpenTofuDeploymentStore } from "../../../../core/domains/deploy-control/store.ts";
 import type {
   OpenTofuDeploymentStore,
   StoredSource,
 } from "../../../../core/domains/deploy-control/store.ts";
 import type { InstallConfig } from "takosumi-contract/installations";
-import type { Space } from "takosumi-contract/spaces";
+import type { Workspace as Space } from "takosumi-contract/workspaces";
 
 function build() {
   const store = new InMemoryOpenTofuDeploymentStore();
   let counter = 0;
   const newId = (prefix: string) =>
     `${prefix}_test${(counter += 1).toString().padStart(8, "0")}`;
-  const service = new InstallationsService({
+  const service = new CapsulesService({
     store,
     newId,
     now: () => new Date("2026-06-06T00:00:00.000Z"),

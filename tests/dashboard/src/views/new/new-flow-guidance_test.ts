@@ -71,7 +71,7 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).not.toContain("catalogEntryMatchesQuery");
     expect(newAppViewSource).toContain("function dedupeCatalogConfigs");
     expect(newAppViewSource).toContain("function catalogConfigPriority");
-    expect(newAppViewSource).toContain("config.spaceId === undefined");
+    expect(newAppViewSource).toContain("config.workspaceId === undefined");
     expect(newAppViewSource).toContain('config.id.startsWith("cfg-official-")');
     expect(newAppViewSource).toContain("config.catalog?.source");
     expect(newAppViewSource).not.toContain("const primaryCatalog = createMemo");
@@ -192,7 +192,7 @@ describe("/new flow guidance", () => {
     const officialSeedSource = readFileSync(
       resolve(
         here,
-        "../../../../../core/domains/installations/official_seed.ts",
+        "../../../../../core/domains/capsules/official_seed.ts",
       ),
       "utf8",
     );
@@ -209,7 +209,7 @@ describe("/new flow guidance", () => {
     expect(controlApiSource).toContain("listStarterCatalogInstallConfigs");
     expect(newAppViewSource).toContain("listStarterCatalogInstallConfigs");
     expect(newAppViewSource).not.toContain(
-      "createResource(spaceId, listInstallConfigs)",
+      "createResource(workspaceId, listInstallConfigs)",
     );
   });
 

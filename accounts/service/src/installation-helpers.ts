@@ -1,18 +1,18 @@
 import {
   canonicalJson,
-  takosumiAccountsInstallationEventsPath,
-  takosumiAccountsInstallationExportDownloadPath,
-  takosumiAccountsInstallationMaterializeDigest,
+  takosumiAccountsCapsuleEventsPath,
+  takosumiAccountsCapsuleExportDownloadPath,
+  takosumiAccountsCapsuleMaterializeDigest,
 } from "@takosjp/takosumi-accounts-contract";
 import {
   type ServiceBindingMaterialKind,
   type ServiceBindingMaterialRecord,
   type ServiceGrantMaterialRecord,
-  buildInstallationEvent,
-  type InstallationEventRecord,
-  type InstallationRecord,
+  buildCapsuleEvent,
+  type CapsuleEventRecord,
+  type CapsuleRecord,
   type RuntimeBindingRecord,
-  transitionAppInstallationStatus,
+  transitionAppCapsuleStatus,
 } from "./ledger.ts";
 import type {
   AccountsStore,
@@ -21,7 +21,7 @@ import type {
 } from "./store.ts";
 import { sha256HexText, sha256Text } from "./encoding.ts";
 import { errorJson, isRecord, json, stringValue } from "./http-helpers.ts";
-import { publicInstallationOperationErrorMessage } from "./installation-operation-errors.ts";
+import { publicCapsuleOperationErrorMessage } from "./installation-operation-errors.ts";
 import { redactPublicRecord } from "./public-redaction.ts";
 
 export const installationMaterializeRequestedEvent =
@@ -36,7 +36,7 @@ export const installationExportFailedEvent = "installation.export-failed";
 export const installationUninstalledEvent = "installation.uninstalled";
 export const installationActivatedHttpDomainEvent =
   "installation.activated-http-domain";
-export const inFlightInstallationOperationEvents = new Set([
+export const inFlightCapsuleOperationEvents = new Set([
   installationMaterializeRequestedEvent,
   installationExportRequestedEvent,
 ]);
@@ -132,7 +132,7 @@ export function serviceGrantMaterialApprovalPayload(
   };
 }
 
-export async function appInstallationPermissionDigest(input: {
+export async function appCapsulePermissionDigest(input: {
   bindings: readonly ServiceBindingMaterialRecord[];
   grants: readonly ServiceGrantMaterialRecord[];
 }): Promise<string> {
@@ -146,8 +146,8 @@ export async function appInstallationPermissionDigest(input: {
   );
 }
 
-export function appInstallationMaterializeDigest(input: {
-  installationId: string;
+export function appCapsuleMaterializeDigest(input: {
+  capsuleId: string;
   mode: "dedicated";
   region: string;
   plan: Record<string, unknown>;
@@ -155,7 +155,7 @@ export function appInstallationMaterializeDigest(input: {
 }): Promise<string> {
   // Delegate to the contract so the server verifies the materialize permission
   // digest against the exact function the dashboard SPA uses to produce it.
-  return takosumiAccountsInstallationMaterializeDigest(input);
+  return takosumiAccountsCapsuleMaterializeDigest(input);
 }
 
 /**
@@ -173,12 +173,12 @@ const APPEND_LEDGER_EVENT_BASE_BACKOFF_MS = 10;
 export async function appendLedgerEvent(
   store: AccountsStore,
   input: {
-    installationId: string;
+    capsuleId: string;
     eventType: string;
     payload?: Record<string, unknown>;
     now: number;
   },
-): Promise<InstallationEventRecord> {
+): Promise<CapsuleEventRecord> {
   // F7 fix: wrap the read-then-write hash-chain logic in a retry loop.
   //
   // Backend serialization differs and is described accurately here because
@@ -190,7 +190,7 @@ export async function appendLedgerEvent(
   //   caught below, and retries against the refreshed tail. This path is
   //   genuinely serialized per installation.
   //
-  // - D1 has NO per-installation serialization. `appendInstallationEvent`
+  // - D1 has NO per-installation serialization. `appendCapsuleEvent`
   //   persists via `INSERT OR REPLACE` keyed on the event's own random
   //   `eventId` (`evt_<uuid>`, minted per call). It is therefore NOT
   //   idempotent-by-eventId in the IGNORE/DO-NOTHING sense the old comment
@@ -201,12 +201,12 @@ export async function appendLedgerEvent(
   //   catches the common case and retries, but a loser's already-persisted
   //   forked row is not removed, and under sustained same-installation
   //   contention all retries can fail — we then throw and the forked event
-  //   remains, making `verifyInstallationEventHashChain` return false until
+  //   remains, making `verifyCapsuleEventHashChain` return false until
   //   the chain is repaired out of band. The event's content-addressed
   //   `eventHash` still makes tampering detectable; what D1 lacks is an
   //   atomic single-writer guarantee. Fully closing this requires a
   //   store-level conditional append keyed on
-  //   (installationId, previousEventHash), which lives in the store
+  //   (capsuleId, previousEventHash), which lives in the store
   //   implementations, not in this helper.
   //
   // On every retry we refetch the chain tail so the new event is computed
@@ -219,17 +219,17 @@ export async function appendLedgerEvent(
         APPEND_LEDGER_EVENT_BASE_BACKOFF_MS * 2 ** (attempt - 1);
       await sleep(backoffMs);
     }
-    const events = await store.listInstallationEvents(input.installationId);
+    const events = await store.listCapsuleEvents(input.capsuleId);
     const previousEventHash = events.at(-1)?.eventHash;
-    const event = await buildInstallationEvent({
-      installationId: input.installationId,
+    const event = await buildCapsuleEvent({
+      capsuleId: input.capsuleId,
       eventType: input.eventType,
       payload: input.payload,
       previousEventHash,
       createdAt: input.now,
     });
     try {
-      await store.appendInstallationEvent(event);
+      await store.appendCapsuleEvent(event);
     } catch (error) {
       // Most likely: postgres FOR UPDATE NOWAIT lost the race (55P03).
       // Save the error and retry; if we exhaust retries we re-raise.
@@ -243,7 +243,7 @@ export async function appendLedgerEvent(
     // NOT key this on "is our event the list tail": several events in a
     // single operation can share the same millisecond `createdAt`, so
     // tail ordering is ambiguous and would yield spurious fork errors.
-    const refreshed = await store.listInstallationEvents(input.installationId);
+    const refreshed = await store.listCapsuleEvents(input.capsuleId);
     const ours = refreshed.find((e) => e.eventId === event.eventId);
     const sibling = refreshed.find(
       (e) =>
@@ -254,7 +254,7 @@ export async function appendLedgerEvent(
       return event;
     }
     lastError = new Error(
-      `installation event chain forked for ${input.installationId}; ` +
+      `installation event chain forked for ${input.capsuleId}; ` +
         (ours
           ? `event ${event.eventId} shares previousEventHash with ${sibling?.eventId}`
           : `event ${event.eventId} was not observed after write`),
@@ -273,7 +273,7 @@ function sleep(ms: number): Promise<void> {
 }
 
 export function activatedHttpDomainProjectionFromEvents(
-  events: readonly InstallationEventRecord[],
+  events: readonly CapsuleEventRecord[],
 ): ActivatedHttpDomainProjection | undefined {
   for (let i = events.length - 1; i >= 0; i--) {
     const event = events[i];
@@ -378,12 +378,12 @@ export function requiredIdempotencyKey(request: Request): string | Response {
 }
 
 export async function installationOperationId(input: {
-  installationId: string;
+  capsuleId: string;
   operation: "materialize" | "export";
   idempotencyKey: string;
 }): Promise<string> {
   const digest = await sha256Text(
-    `takosumi-accounts-operation:${input.operation}:${input.installationId}:${input.idempotencyKey}`,
+    `takosumi-accounts-operation:${input.operation}:${input.capsuleId}:${input.idempotencyKey}`,
   );
   return `op_${digest.slice("sha256:".length, "sha256:".length + 26)}`;
 }
@@ -395,10 +395,10 @@ export async function installationOperationRequestDigest(
 }
 
 export function findIdempotentOperationEvent(input: {
-  events: readonly InstallationEventRecord[];
+  events: readonly CapsuleEventRecord[];
   eventType: string;
   idempotencyKey: string;
-}): InstallationEventRecord | undefined {
+}): CapsuleEventRecord | undefined {
   return input.events.find(
     (event) =>
       event.eventType === input.eventType &&
@@ -407,7 +407,7 @@ export function findIdempotentOperationEvent(input: {
 }
 
 export function idempotencyRequestConflict(
-  event: InstallationEventRecord,
+  event: CapsuleEventRecord,
   requestDigest: string,
 ): Response | undefined {
   const existingDigest = stringValue(event.payload.requestDigest);
@@ -427,20 +427,20 @@ export function idempotencyRequestConflict(
   );
 }
 
-export function findInFlightInstallationOperation(
-  events: readonly InstallationEventRecord[],
-): InstallationEventRecord | undefined {
+export function findInFlightCapsuleOperation(
+  events: readonly CapsuleEventRecord[],
+): CapsuleEventRecord | undefined {
   return events.find((event) => {
-    if (!inFlightInstallationOperationEvents.has(event.eventType)) {
+    if (!inFlightCapsuleOperationEvents.has(event.eventType)) {
       return false;
     }
-    return !isInstallationOperationClosed(events, event);
+    return !isCapsuleOperationClosed(events, event);
   });
 }
 
-export function isInstallationOperationClosed(
-  events: readonly InstallationEventRecord[],
-  requestEvent: InstallationEventRecord,
+export function isCapsuleOperationClosed(
+  events: readonly CapsuleEventRecord[],
+  requestEvent: CapsuleEventRecord,
 ): boolean {
   const operationId = stringValue(requestEvent.payload.operationId);
   if (!operationId) return false;
@@ -469,10 +469,10 @@ export function isInstallationOperationClosed(
 }
 
 export function findOperationEvent(input: {
-  events: readonly InstallationEventRecord[];
+  events: readonly CapsuleEventRecord[];
   operationId: string;
   eventTypes: readonly string[];
-}): InstallationEventRecord | undefined {
+}): CapsuleEventRecord | undefined {
   const eventTypes = new Set(input.eventTypes);
   return input.events.find(
     (event) =>
@@ -501,16 +501,16 @@ export function operationClosedEventTypes(
 }
 
 export function installationEventsTrackingUrl(
-  installationId: string,
+  capsuleId: string,
   eventTypes: readonly string[],
 ): string {
-  return `${takosumiAccountsInstallationEventsPath(installationId)}?types=${eventTypes
+  return `${takosumiAccountsCapsuleEventsPath(capsuleId)}?types=${eventTypes
     .map(encodeURIComponent)
     .join(",")}`;
 }
 
 export function exportOperationBody(
-  installationId: string,
+  capsuleId: string,
   operationId: string,
   options: {
     status?: "preparing" | "exported" | "failed";
@@ -524,15 +524,15 @@ export function exportOperationBody(
   return {
     operationId,
     status,
-    trackingUrl: installationEventsTrackingUrl(installationId, [
+    trackingUrl: installationEventsTrackingUrl(capsuleId, [
       installationExportRequestedEvent,
       installationExportedEvent,
       installationExportFailedEvent,
     ]),
     downloadUrl:
       status === "exported" && options.downloadUrl
-        ? takosumiAccountsInstallationExportDownloadPath(
-            installationId,
+        ? takosumiAccountsCapsuleExportDownloadPath(
+            capsuleId,
             operationId,
           )
         : null,
@@ -546,9 +546,9 @@ export function exportOperationBody(
 }
 
 export function exportOperationBodyFromEvents(input: {
-  installationId: string;
+  capsuleId: string;
   operationId: string;
-  events: readonly InstallationEventRecord[];
+  events: readonly CapsuleEventRecord[];
 }): Record<string, unknown> {
   const completed = findOperationEvent({
     events: input.events,
@@ -556,7 +556,7 @@ export function exportOperationBodyFromEvents(input: {
     eventTypes: [installationExportedEvent],
   });
   if (completed) {
-    return exportOperationBody(input.installationId, input.operationId, {
+    return exportOperationBody(input.capsuleId, input.operationId, {
       status: "exported",
       downloadUrl: stringValue(completed.payload.downloadUrl) ?? null,
       downloadExpiresAt:
@@ -570,37 +570,37 @@ export function exportOperationBodyFromEvents(input: {
     eventTypes: [installationExportFailedEvent],
   });
   if (failed) {
-    return exportOperationBody(input.installationId, input.operationId, {
+    return exportOperationBody(input.capsuleId, input.operationId, {
       status: "failed",
       downloadUrl: null,
       downloadExpiresAt: null,
-      error: publicInstallationOperationErrorMessage(
+      error: publicCapsuleOperationErrorMessage(
         failed.payload.error,
         "export failed",
       ),
     });
   }
-  return exportOperationBody(input.installationId, input.operationId);
+  return exportOperationBody(input.capsuleId, input.operationId);
 }
 
 export async function appendExportOperationCompletion(input: {
   store: AccountsStore;
-  installation: InstallationRecord;
+  installation: CapsuleRecord;
   operationId: string;
   downloadUrl: string;
   downloadExpiresAt?: string;
   archiveDigest?: string;
-}): Promise<InstallationEventRecord> {
+}): Promise<CapsuleEventRecord> {
   const now = Date.now();
-  const updated = transitionAppInstallationStatus(
+  const updated = transitionAppCapsuleStatus(
     input.installation,
     "exported",
     now,
   );
-  await input.store.saveAppInstallation(updated);
+  await input.store.saveAppCapsule(updated);
   if (updated.status !== input.installation.status) {
     await appendLedgerEvent(input.store, {
-      installationId: input.installation.installationId,
+      capsuleId: input.installation.capsuleId,
       eventType: "installation.status_changed",
       payload: {
         from: input.installation.status,
@@ -611,7 +611,7 @@ export async function appendExportOperationCompletion(input: {
     });
   }
   return await appendLedgerEvent(input.store, {
-    installationId: input.installation.installationId,
+    capsuleId: input.installation.capsuleId,
     eventType: installationExportedEvent,
     payload: {
       operationId: input.operationId,
@@ -628,20 +628,20 @@ export async function appendExportOperationCompletion(input: {
 
 export async function appendExportOperationFailure(input: {
   store: AccountsStore;
-  installation: InstallationRecord;
+  installation: CapsuleRecord;
   operationId: string;
   error: string;
-}): Promise<InstallationEventRecord> {
+}): Promise<CapsuleEventRecord> {
   const now = Date.now();
-  const updated = transitionAppInstallationStatus(
+  const updated = transitionAppCapsuleStatus(
     input.installation,
     "failed",
     now,
   );
-  await input.store.saveAppInstallation(updated);
+  await input.store.saveAppCapsule(updated);
   if (updated.status !== input.installation.status) {
     await appendLedgerEvent(input.store, {
-      installationId: input.installation.installationId,
+      capsuleId: input.installation.capsuleId,
       eventType: "installation.status_changed",
       payload: {
         from: input.installation.status,
@@ -652,7 +652,7 @@ export async function appendExportOperationFailure(input: {
     });
   }
   return await appendLedgerEvent(input.store, {
-    installationId: input.installation.installationId,
+    capsuleId: input.installation.capsuleId,
     eventType: installationExportFailedEvent,
     payload: {
       operationId: input.operationId,
@@ -666,7 +666,7 @@ export async function appendExportOperationFailure(input: {
 }
 
 export function installationEnvelope(input: {
-  installation: InstallationRecord;
+  installation: CapsuleRecord;
   // Wave 6 (Phase E SQL drift fix): ServiceBindingMaterial / ServiceGrantMaterial / RuntimeBinding
   // are no longer public concepts and the backing tables were dropped.
   // The fields below are accepted for caller-API compatibility but are
@@ -706,7 +706,7 @@ export function installationEnvelope(input: {
     : [];
   return {
     installation: {
-      ...serializeAppInstallation(input.installation),
+      ...serializeAppCapsule(input.installation),
       launch_url: input.activatedHttpDomain?.url ?? null,
       deployment_outputs: deploymentOutputs,
       launch,
@@ -722,13 +722,13 @@ export function installationEnvelope(input: {
   };
 }
 
-export function serializeAppInstallation(
-  installation: InstallationRecord,
+export function serializeAppCapsule(
+  installation: CapsuleRecord,
 ): Record<string, unknown> {
   return {
-    id: installation.installationId,
+    id: installation.capsuleId,
     account_id: installation.accountId,
-    space_id: installation.spaceId,
+    space_id: installation.workspaceId,
     capsule_id: installation.appId,
     source: {
       type: "git",
@@ -754,7 +754,7 @@ export function serializeRuntimeBinding(
 ): Record<string, unknown> {
   return {
     id: runtimeBinding.runtimeBindingId,
-    installation_id: runtimeBinding.installationId,
+    installation_id: runtimeBinding.capsuleId,
     mode: runtimeBinding.mode,
     target_type: runtimeBinding.targetType,
     target_id: runtimeBinding.targetId,
@@ -768,7 +768,7 @@ export function serializeOidcClient(
 ): Record<string, unknown> {
   return {
     client_id: client.clientId,
-    installation_id: client.installationId,
+    installation_id: client.capsuleId,
     servicePath: client.namespacePath,
     // Existing Accounts API consumers may still read namespacePath.
     namespacePath: client.namespacePath,
@@ -787,7 +787,7 @@ export function serializeServiceBindingMaterial(
 ): Record<string, unknown> {
   return {
     id: binding.bindingId,
-    installation_id: binding.installationId,
+    installation_id: binding.capsuleId,
     name: binding.name,
     kind: binding.kind,
     config_ref: binding.configRef,
@@ -802,7 +802,7 @@ export function serializeServiceGrantMaterial(
 ): Record<string, unknown> {
   return {
     id: grant.grantId,
-    installation_id: grant.installationId,
+    installation_id: grant.capsuleId,
     capability: grant.capability,
     scope: redactPublicRecord(grant.scope),
     granted_at: new Date(grant.grantedAt).toISOString(),
@@ -817,7 +817,7 @@ export function serializeBillingUsageRecord(
 ): Record<string, unknown> {
   return {
     id: record.usageReportId,
-    installation_id: record.installationId,
+    installation_id: record.capsuleId,
     billing_account_id: record.billingAccountId,
     meter: record.meter,
     quantity: record.quantity,
@@ -838,22 +838,22 @@ export function serializeBillingUsageRecord(
   };
 }
 
-export function serializeInstallationEvent(
-  event: InstallationEventRecord,
+export function serializeCapsuleEvent(
+  event: CapsuleEventRecord,
 ): Record<string, unknown> {
   return {
     id: event.eventId,
-    installation_id: event.installationId,
+    installation_id: event.capsuleId,
     type: event.eventType,
-    payload: serializeInstallationEventPayload(event),
+    payload: serializeCapsuleEventPayload(event),
     previous_event_hash: event.previousEventHash ?? null,
     event_hash: event.eventHash,
     created_at: new Date(event.createdAt).toISOString(),
   };
 }
 
-function serializeInstallationEventPayload(
-  event: InstallationEventRecord,
+function serializeCapsuleEventPayload(
+  event: CapsuleEventRecord,
 ): Record<string, unknown> {
   const payload = omitPublicEventSecretReferenceKeys(
     redactPublicRecord(event.payload),
@@ -861,8 +861,8 @@ function serializeInstallationEventPayload(
   if (event.eventType === installationExportedEvent) {
     const operationId = stringValue(event.payload.operationId);
     if (operationId) {
-      payload.downloadUrl = takosumiAccountsInstallationExportDownloadPath(
-        event.installationId,
+      payload.downloadUrl = takosumiAccountsCapsuleExportDownloadPath(
+        event.capsuleId,
         operationId,
       );
     } else if ("downloadUrl" in payload) {

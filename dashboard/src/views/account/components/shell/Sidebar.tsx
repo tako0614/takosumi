@@ -16,7 +16,7 @@ import {
 } from "lucide-solid";
 import { Show } from "solid-js";
 import Wordmark from "../brand/Wordmark.tsx";
-import SpaceSwitcher from "./SpaceSwitcher.tsx";
+import WorkspaceSwitcher from "./WorkspaceSwitcher.tsx";
 import { t } from "../../../../i18n/index.ts";
 import type { MessageKey } from "../../../../i18n/index.ts";
 import {
@@ -44,7 +44,7 @@ const MANAGE: NavItem[] = [
   { href: "/connections", labelKey: "nav.connections", icon: Plug },
   {
     href: "/advanced/workspace",
-    labelKey: "nav.spaceSettings",
+    labelKey: "nav.workspaceSettings",
     icon: Settings,
   },
 ];
@@ -78,7 +78,7 @@ export default function Sidebar() {
       </Show>
       <Show when={!takosEmbedded()}>
         <div class="sidebar-workspace">
-          <SpaceSwitcher />
+          <WorkspaceSwitcher />
         </div>
       </Show>
       <nav class="sidebar-nav" aria-label={t("nav.primary")}>

@@ -5,7 +5,7 @@ import {
 } from "./account-session.ts";
 import {
   subjectCanAccessAccount,
-  subjectCanAccessInstallation,
+  subjectCanAccessCapsule,
 } from "./installation-routes.ts";
 import type { AccountsStore } from "./store.ts";
 import {
@@ -16,7 +16,7 @@ import {
   takosumiSubjectValue,
 } from "./http-helpers.ts";
 
-export async function requireAppInstallationCreateWriteAccess(input: {
+export async function requireAppCapsuleCreateWriteAccess(input: {
   request: Request;
   store: AccountsStore;
 }): Promise<Response | undefined> {
@@ -46,7 +46,7 @@ export async function requireAppInstallationCreateWriteAccess(input: {
   });
 }
 
-export async function requireInstallationPlanRunWriteAccess(input: {
+export async function requireCapsulePlanRunWriteAccess(input: {
   request: Request;
   store: AccountsStore;
 }): Promise<Response | undefined> {
@@ -58,18 +58,18 @@ export async function requireInstallationPlanRunWriteAccess(input: {
   if (!bearer.ok) return bearer.response;
   const body = await readJsonObject(input.request.clone());
   if (!body) return errorJson("invalid_request", "invalid request", 400);
-  const spaceId =
-    stringValue(body.spaceId) ??
+  const workspaceId =
+    stringValue(body.workspaceId) ??
     stringValue(body.space_id) ??
     stringValue(body.space);
-  if (!spaceId) {
-    return errorJson("invalid_request", "spaceId is required", 400);
+  if (!workspaceId) {
+    return errorJson("invalid_request", "workspaceId is required", 400);
   }
-  const space = await input.store.findSpace(spaceId);
+  const space = await input.store.findWorkspace(workspaceId);
   // A not-yet-created space is allowed for any write-scoped subject: this is the
   // New-user external prefill case: open `/install?git=...`, sign in, land on
   // `/new` with a Git source summary, then explicitly request compatibility /
-  // planning. The space may be created later at install time with this spaceId. A
+  // planning. The space may be created later at install time with this workspaceId. A
   // PlanRun is a read-only OpenTofu dry-run of the git module, and ownership is
   // enforced at install create. An EXISTING space owned by someone else is
   // still rejected so a subject cannot plan against another account's space.
@@ -86,10 +86,10 @@ export async function requireInstallationPlanRunWriteAccess(input: {
   return undefined;
 }
 
-export async function requireAppInstallationAccountAccess(input: {
+export async function requireAppCapsuleAccountAccess(input: {
   request: Request;
   store: AccountsStore;
-  installationId: string;
+  capsuleId: string;
   scope: AccountsBearerRequiredScope;
 }): Promise<Response | undefined> {
   const bearer = await requireAccountsBearer({
@@ -98,13 +98,13 @@ export async function requireAppInstallationAccountAccess(input: {
     scope: input.scope,
   });
   if (!bearer.ok) return bearer.response;
-  const installation = await input.store.findAppInstallation(
-    input.installationId,
+  const installation = await input.store.findAppCapsule(
+    input.capsuleId,
   );
   if (!installation)
     return errorJson("installation_not_found", "installation not found", 404);
   if (
-    !(await subjectCanAccessInstallation(
+    !(await subjectCanAccessCapsule(
       input.store,
       bearer.auth.subject,
       installation,

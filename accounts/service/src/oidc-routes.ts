@@ -92,7 +92,7 @@ function generateRefreshToken(): string {
 
 type ResolvedOidcClient = {
   clientId: string;
-  installationId?: string;
+  capsuleId?: string;
   issuerUrl?: string;
   redirectUris: readonly string[];
   allowedScopes?: readonly string[];
@@ -122,7 +122,7 @@ async function resolveOidcClient(input: {
   if (!dynamicClient) return undefined;
   return {
     clientId: dynamicClient.clientId,
-    installationId: dynamicClient.installationId,
+    capsuleId: dynamicClient.capsuleId,
     issuerUrl: dynamicClient.issuerUrl,
     redirectUris: dynamicClient.redirectUris,
     allowedScopes: dynamicClient.allowedScopes,
@@ -229,15 +229,15 @@ async function resolveOidcAuthorizationSubject(input: {
       record: {
         subject: string;
         takosumiSubject?: TakosumiSubject;
-        installationId?: string;
+        capsuleId?: string;
         appId?: string;
-        spaceId?: string;
+        workspaceId?: string;
         role?: string;
       };
     }
   | { ok: false; status: number; error: string; errorDescription: string }
 > {
-  if (!input.client?.installationId) {
+  if (!input.client?.capsuleId) {
     return {
       ok: true,
       record: {
@@ -255,8 +255,8 @@ async function resolveOidcAuthorizationSubject(input: {
         "per-installation OIDC clients require pairwiseSubjectSecret",
     };
   }
-  const installation = await input.store.findAppInstallation(
-    input.client.installationId,
+  const installation = await input.store.findAppCapsule(
+    input.client.capsuleId,
   );
   if (!installation) {
     return {
@@ -269,16 +269,16 @@ async function resolveOidcAuthorizationSubject(input: {
   const pairwiseSubject = await derivePairwiseSubject({
     secret: input.flow.pairwiseSubjectSecret,
     takosumiSubject: input.sessionSubject,
-    clientId: `${installation.appId}:${installation.installationId}:${input.client.clientId}`,
+    clientId: `${installation.appId}:${installation.capsuleId}:${input.client.clientId}`,
   });
   return {
     ok: true,
     record: {
       subject: pairwiseSubject,
       takosumiSubject: input.sessionSubject,
-      installationId: installation.installationId,
+      capsuleId: installation.capsuleId,
       appId: installation.appId,
-      spaceId: installation.spaceId,
+      workspaceId: installation.workspaceId,
       role:
         installation.createdBySubject === input.sessionSubject
           ? "owner"
@@ -398,9 +398,9 @@ export async function handleAuthorize(input: {
     scope,
     subject: subject.record.subject,
     takosumiSubject: subject.record.takosumiSubject,
-    installationId: subject.record.installationId,
+    capsuleId: subject.record.capsuleId,
     appId: subject.record.appId,
-    spaceId: subject.record.spaceId,
+    workspaceId: subject.record.workspaceId,
     role: subject.record.role,
     nonce: input.url.searchParams.get("nonce") ?? undefined,
     codeChallenge,
@@ -490,9 +490,9 @@ export async function handleToken(input: {
       scope: record.scope,
       subject: record.subject,
       takosumiSubject: record.takosumiSubject,
-      installationId: record.installationId,
+      capsuleId: record.capsuleId,
       appId: record.appId,
-      spaceId: record.spaceId,
+      workspaceId: record.workspaceId,
       role: record.role,
       expiresAt: Date.now() + REFRESH_TOKEN_TTL_MS,
     });
@@ -509,9 +509,9 @@ export async function handleToken(input: {
     scope: record.scope,
     subject: record.subject,
     takosumiSubject: record.takosumiSubject,
-    installationId: record.installationId,
+    capsuleId: record.capsuleId,
     appId: record.appId,
-    spaceId: record.spaceId,
+    workspaceId: record.workspaceId,
     role: record.role,
     nonce: record.nonce,
     refreshToken,
@@ -603,9 +603,9 @@ async function handleRefreshToken(input: {
     scope: record.scope,
     subject: record.subject,
     takosumiSubject: record.takosumiSubject,
-    installationId: record.installationId,
+    capsuleId: record.capsuleId,
     appId: record.appId,
-    spaceId: record.spaceId,
+    workspaceId: record.workspaceId,
     role: record.role,
     expiresAt: Date.now() + REFRESH_TOKEN_TTL_MS,
   });
@@ -619,9 +619,9 @@ async function handleRefreshToken(input: {
     scope: record.scope,
     subject: record.subject,
     takosumiSubject: record.takosumiSubject,
-    installationId: record.installationId,
+    capsuleId: record.capsuleId,
     appId: record.appId,
-    spaceId: record.spaceId,
+    workspaceId: record.workspaceId,
     role: record.role,
     refreshToken: newRefreshToken,
     chainRefreshToken: newRefreshToken,
@@ -647,9 +647,9 @@ async function issueTokenResponse(input: {
   scope: string;
   subject: string;
   takosumiSubject?: TakosumiSubject;
-  installationId?: string;
+  capsuleId?: string;
   appId?: string;
-  spaceId?: string;
+  workspaceId?: string;
   role?: string;
   nonce?: string;
   refreshToken?: string;
@@ -663,11 +663,11 @@ async function issueTokenResponse(input: {
   const account = input.takosumiSubject
     ? await input.store.findAccount(input.takosumiSubject)
     : undefined;
-  const takosumiClaims = input.installationId
+  const takosumiClaims = input.capsuleId
     ? {
-        installation_id: input.installationId,
+        installation_id: input.capsuleId,
         ...(input.appId ? { app_id: input.appId } : {}),
-        ...(input.spaceId ? { space_id: input.spaceId } : {}),
+        ...(input.workspaceId ? { space_id: input.workspaceId } : {}),
         ...(input.role ? { role: input.role } : {}),
       }
     : undefined;
@@ -696,9 +696,9 @@ async function issueTokenResponse(input: {
     scope: input.scope,
     subject: input.subject,
     takosumiSubject: input.takosumiSubject,
-    installationId: input.installationId,
+    capsuleId: input.capsuleId,
     appId: input.appId,
-    spaceId: input.spaceId,
+    workspaceId: input.workspaceId,
     role: input.role,
     expiresAt: (issuedAt + expiresIn) * 1000,
   });
@@ -778,11 +778,11 @@ export async function handleUserInfo(input: {
       aud: record.clientId,
       scope: record.scope,
     };
-    if (record.installationId) {
+    if (record.capsuleId) {
       body.takosumi = {
-        installation_id: record.installationId,
+        installation_id: record.capsuleId,
         ...(record.appId ? { app_id: record.appId } : {}),
-        ...(record.spaceId ? { space_id: record.spaceId } : {}),
+        ...(record.workspaceId ? { space_id: record.workspaceId } : {}),
         ...(record.role ? { role: record.role } : {}),
       };
       // Emit a flat `space_memberships` claim that bundled apps
@@ -790,8 +790,8 @@ export async function handleUserInfo(input: {
       // membership checks. The token record binds a single accessible
       // space, so the claim is a one-element array derived from it. Apps
       // keep reading the nested `takosumi.space_id` as a fallback.
-      if (record.spaceId) {
-        body.space_memberships = [record.spaceId];
+      if (record.workspaceId) {
+        body.space_memberships = [record.workspaceId];
       }
     }
     return json(body);
@@ -995,12 +995,12 @@ function introspectionBody(record: TokenRecord): Record<string, unknown> {
     client_id: record.clientId,
     sub: record.subject,
     scope: record.scope,
-    ...(record.installationId
+    ...(record.capsuleId
       ? {
           takosumi: {
-            installation_id: record.installationId,
+            installation_id: record.capsuleId,
             ...(record.appId ? { app_id: record.appId } : {}),
-            ...(record.spaceId ? { space_id: record.spaceId } : {}),
+            ...(record.workspaceId ? { space_id: record.workspaceId } : {}),
             ...(record.role ? { role: record.role } : {}),
           },
         }

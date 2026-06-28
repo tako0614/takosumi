@@ -64,8 +64,8 @@ import {
   SourcesService,
 } from "./domains/sources/mod.ts";
 import { deployUpload } from "./domains/deploy-control/upload_deploy.ts";
-import { InstallationsService } from "./domains/installations/mod.ts";
-import { SpacesService } from "./domains/spaces/mod.ts";
+import { CapsulesService } from "./domains/capsules/mod.ts";
+import { WorkspacesService } from "./domains/workspaces/mod.ts";
 import { ConnectionsService } from "./domains/connections/mod.ts";
 import { DependenciesService } from "./domains/dependencies/mod.ts";
 import { OutputSharesService } from "./domains/output-shares/mod.ts";
@@ -84,7 +84,7 @@ import {
 import {
   type OfficialCatalogSource,
   seedOfficialInstallConfigs,
-} from "./domains/installations/official_seed.ts";
+} from "./domains/capsules/official_seed.ts";
 import type {
   CreateSourceRequest,
   CreateSourceResponse,
@@ -435,12 +435,12 @@ export interface TakosumiOperations {
    * Spaces domain service (Core Specification §4): Space identity + handle
    * uniqueness over the same shared ledger.
    */
-  readonly spaces: SpacesService;
+  readonly spaces: WorkspacesService;
   /**
    * Installations domain service (Core Specification §5 / §11): Installation /
    * InstallConfig / InstallationProviderEnvBindingSet over the same shared ledger.
    */
-  readonly installations: InstallationsService;
+  readonly installations: CapsulesService;
   /**
    * Space membership facade backing the account-plane `/api/v1/spaces/:id/
    * members` surface. Delegates to the membership domain's
@@ -451,7 +451,9 @@ export interface TakosumiOperations {
   readonly members: {
     listMembers(spaceId: string): Promise<readonly SpaceMember[]>;
     upsertMember(input: {
-      readonly spaceId: string;
+      readonly workspaceId: string;
+      /** @deprecated Use workspaceId. */
+      readonly spaceId?: string;
       readonly accountId: string;
       readonly roles?: readonly SpaceMemberRole[];
       readonly status?: SpaceMemberStatus;
@@ -473,7 +475,7 @@ export interface TakosumiOperations {
    * `/api/v1/spaces/:id/graph` projection; delegates to
    * `dependencies.listBySpace`.
    */
-  listDependenciesBySpace(spaceId: string): Promise<readonly Dependency[]>;
+  listDependenciesByWorkspace(spaceId: string): Promise<readonly Dependency[]>;
   /**
    * OutputShares domain service (Core Specification §18): the cross-Space output
    * sharing grants over the same shared ledger.
@@ -490,13 +492,13 @@ export interface TakosumiOperations {
    */
   readonly activity: ActivityService;
   /** Space billing + credit ledger facade (Core Specification §28). */
-  getSpaceBilling(spaceId: string): Promise<{
+  getWorkspaceBilling(spaceId: string): Promise<{
     readonly billing: {
       readonly settings: BillingSettings;
       readonly balance?: CreditBalance;
     };
   }>;
-  listSpaceUsage(
+  listWorkspaceUsage(
     spaceId: string,
     params?: PageParams,
   ): Promise<{
@@ -511,14 +513,14 @@ export interface TakosumiOperations {
     spaceId: string,
     input: ReconcileInvoiceUsageInput,
   ): Promise<InvoiceUsageReconciliation>;
-  listSpaceCreditReservations(spaceId: string): Promise<{
+  listWorkspaceCreditReservations(spaceId: string): Promise<{
     readonly creditReservations: readonly CreditReservation[];
   }>;
-  topUpSpaceCredits(
+  topUpWorkspaceCredits(
     spaceId: string,
     input: { readonly usdMicros?: number; readonly credits?: number },
   ): Promise<{ readonly balance: CreditBalance }>;
-  changeSpaceSubscription(
+  changeWorkspaceSubscription(
     spaceId: string,
     input: { readonly billingSettings: BillingSettings },
   ): Promise<{ readonly billing: { readonly settings: BillingSettings } }>;
@@ -528,12 +530,16 @@ export interface TakosumiOperations {
    */
   readonly backups: BackupsService;
   recordUploadArchive(input: {
-    readonly spaceId: string;
+    readonly workspaceId: string;
+    /** @deprecated Use workspaceId. */
+    readonly spaceId?: string;
     readonly bytes: Uint8Array;
     readonly path?: string;
   }): Promise<SourceSnapshot>;
   recordArtifactSnapshot(input: {
-    readonly spaceId: string;
+    readonly workspaceId: string;
+    /** @deprecated Use workspaceId. */
+    readonly spaceId?: string;
     readonly url: string;
     readonly digest: string;
     readonly path?: string;
@@ -547,7 +553,7 @@ export interface TakosumiOperations {
    * InstallConfig -> Source, picks the latest SourceSnapshot, and dispatches
    * with installation state scope.
    */
-  createInstallationPlan(
+  createCapsulePlan(
     installationId: string,
     options?: {
       readonly compatibilityReportId?: string;
@@ -555,7 +561,7 @@ export interface TakosumiOperations {
     },
   ): Promise<PlanRunResponse>;
   /** Installation-driven destroy-plan: always lands waiting_approval (spec §23). */
-  createInstallationDestroyPlan(
+  createCapsuleDestroyPlan(
     installationId: string,
     options?: {
       readonly runnerProfileId?: string;
@@ -566,12 +572,14 @@ export interface TakosumiOperations {
    * read-only plan that detects state drift. Never parks waiting_approval and can
    * never be applied; emits `installation.drift_detected` on a non-empty summary.
    */
-  createInstallationDriftCheck(
+  createCapsuleDriftCheck(
     installationId: string,
   ): Promise<PlanRunResponse>;
   getPlanRun(id: string): Promise<PlanRunResponse>;
   createApplyRun(request: CreateApplyRunRequest): Promise<ApplyRunResponse>;
   getApplyRun(id: string): Promise<ApplyRunResponse>;
+  getCapsule(id: string): Promise<GetInstallationResponse>;
+  /** @deprecated transient alias for {@link getCapsule}. */
   getInstallation(id: string): Promise<GetInstallationResponse>;
   listDeployments(
     installationId: string,
@@ -647,7 +655,9 @@ export interface TakosumiOperations {
     readonly cloudflare?: {
       start(input: {
         readonly subject: string;
-        readonly spaceId: string;
+        readonly workspaceId: string;
+        /** @deprecated Use workspaceId. */
+        readonly spaceId?: string;
         readonly displayName?: string;
         readonly successRedirectUri?: string;
       }): Promise<ConnectionOAuthStartResponse>;
@@ -848,13 +858,13 @@ export async function createTakosumiService(
   // Spaces + Installations domains (Core Specification §4 / §5 / §11): Space /
   // Installation / InstallConfig / InstallationProviderEnvBindingSet over the SAME shared
   // ledger as the controller and Source service.
-  const spacesService = new SpacesService({ store: sharedOpenTofuStore });
+  const spacesService = new WorkspacesService({ store: sharedOpenTofuStore });
   const connectionsService = new ConnectionsService({
     store: sharedOpenTofuStore,
     allowOperatorBackedProviderEnvs:
       options.allowOperatorBackedProviderEnvs === true,
   });
-  const installationsService = new InstallationsService({
+  const installationsService = new CapsulesService({
     store: sharedOpenTofuStore,
     activity: activityService,
   });
@@ -1048,7 +1058,7 @@ export async function createTakosumiService(
     membershipSpaceStore: context.stores.space.spaces,
     membershipLedgerStore: context.stores.space.memberships,
     resolveSpace: async (spaceId) => {
-      const space = await spacesService.getSpace(spaceId);
+      const space = await spacesService.getWorkspace(spaceId);
       return {
         ownerUserId: space.ownerUserId,
         displayName: space.displayName,
@@ -1063,23 +1073,23 @@ export async function createTakosumiService(
     members,
     connections: connectionsService,
     dependencies: dependenciesService,
-    listDependenciesBySpace: (spaceId) =>
-      dependenciesService.listBySpace(spaceId),
+    listDependenciesByWorkspace: (spaceId) =>
+      dependenciesService.listByWorkspace(spaceId),
     outputShares: outputSharesService,
     runGroups: runGroupsService,
     activity: activityService,
-    getSpaceBilling: (spaceId) => opentofuController.getSpaceBilling(spaceId),
-    listSpaceUsage: (spaceId, params) =>
+    getWorkspaceBilling: (spaceId) => opentofuController.getSpaceBilling(spaceId),
+    listWorkspaceUsage: (spaceId, params) =>
       opentofuController.listSpaceUsage(spaceId, params),
     recordMeteredUsage: (spaceId, input) =>
       opentofuController.recordMeteredUsage(spaceId, input),
     reconcileInvoiceUsage: (spaceId, input) =>
       opentofuController.reconcileInvoiceUsage(spaceId, input),
-    listSpaceCreditReservations: (spaceId) =>
+    listWorkspaceCreditReservations: (spaceId) =>
       opentofuController.listSpaceCreditReservations(spaceId),
-    topUpSpaceCredits: (spaceId, input) =>
+    topUpWorkspaceCredits: (spaceId, input) =>
       opentofuController.topUpSpaceCredits(spaceId, input),
-    changeSpaceSubscription: (spaceId, input) =>
+    changeWorkspaceSubscription: (spaceId, input) =>
       opentofuController.changeSpaceSubscription(spaceId, input),
     backups: backupsService,
     recordUploadArchive: async (input) => {
@@ -1092,7 +1102,7 @@ export async function createTakosumiService(
       return await recordUploadArchive({
         controller: opentofuController,
         writeSourceArchive: options.writeSourceArchive,
-        spaceId: input.spaceId,
+        spaceId: input.workspaceId ?? input.spaceId ?? "",
         bytes: input.bytes,
         ...(input.path ? { path: input.path } : {}),
       });
@@ -1107,7 +1117,7 @@ export async function createTakosumiService(
       return await recordArtifactSnapshotFromUrl({
         controller: opentofuController,
         writeSourceArchive: options.writeSourceArchive,
-        spaceId: input.spaceId,
+        spaceId: input.workspaceId ?? input.spaceId ?? "",
         request: {
           url: input.url,
           digest: input.digest,
@@ -1123,7 +1133,7 @@ export async function createTakosumiService(
       ),
     listRunnerProfiles: () => opentofuController.listRunnerProfiles(),
     createPlanRun: (request) => opentofuController.createPlanRun(request),
-    createInstallationPlan: (installationId, options) =>
+    createCapsulePlan: (installationId, options) =>
       opentofuController.createInstallationPlan(
         installationId,
         {},
@@ -1138,7 +1148,7 @@ export async function createTakosumiService(
             }
           : {},
       ),
-    createInstallationDestroyPlan: (installationId, options) =>
+    createCapsuleDestroyPlan: (installationId, options) =>
       opentofuController.createInstallationDestroyPlan(
         installationId,
         {},
@@ -1146,11 +1156,12 @@ export async function createTakosumiService(
           ? { runnerProfileId: options.runnerProfileId }
           : {},
       ),
-    createInstallationDriftCheck: (installationId) =>
+    createCapsuleDriftCheck: (installationId) =>
       opentofuController.createInstallationDriftCheck(installationId),
     getPlanRun: (id) => opentofuController.getPlanRun(id),
     createApplyRun: (request) => opentofuController.createApplyRun(request),
     getApplyRun: (id) => opentofuController.getApplyRun(id),
+    getCapsule: (id) => opentofuController.getInstallation(id),
     getInstallation: (id) => opentofuController.getInstallation(id),
     listDeployments: (installationId, params) =>
       opentofuController.listDeployments(installationId, params),
@@ -1185,6 +1196,7 @@ export async function createTakosumiService(
       await opentofuController.deleteConnection(connectionId);
       if (connection.spaceId) {
         await activityService.record({
+          workspaceId: connection.spaceId,
           spaceId: connection.spaceId,
           actorId: "dashboard-session",
           action: "connection.revoked",
@@ -1215,7 +1227,7 @@ export async function createTakosumiService(
                   ),
                   principal: { actor: "dashboard-session" },
                   body: {
-                    spaceId: input.spaceId,
+                    spaceId: input.workspaceId ?? input.spaceId ?? "",
                     // Sign the authenticated subject INTO the OAuth state so the
                     // cross-site callback can authorize without a session cookie.
                     subject: input.subject,

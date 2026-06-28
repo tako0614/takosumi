@@ -6,7 +6,7 @@ import { Encrypter } from "age-encryption";
 import {
   type AccountsHandler,
   type AccountsJsonWebKey,
-  type AppInstallationExportWorker,
+  type AppCapsuleExportWorker,
   createAccountsHandler,
   createEphemeralAccountsHandler,
   type ControlPlaneOperations,
@@ -476,7 +476,7 @@ function parseSharedCellRuntime(
   if (!cellId) return undefined;
   return (input) =>
     sharedCellRuntimeBinding({
-      installationId: input.installationId,
+      capsuleId: input.capsuleId,
       cellId,
       now: input.now,
     });
@@ -552,7 +552,7 @@ async function seedLocalSubstrateAccount(
     "sess_local_substrate";
   const accountId =
     optionalString(env.TAKOSUMI_ACCOUNTS_LOCAL_DEV_ACCOUNT_ID) ?? "acct_local";
-  const spaceId =
+  const workspaceId =
     optionalString(env.TAKOSUMI_ACCOUNTS_LOCAL_DEV_SPACE_ID) ?? "space_local";
   await store.saveAccount({
     subject,
@@ -573,8 +573,8 @@ async function seedLocalSubstrateAccount(
     createdAt: now,
     updatedAt: now,
   });
-  await store.saveSpace({
-    spaceId,
+  await store.saveWorkspace({
+    workspaceId,
     accountId,
     kind: "personal",
     displayName: "Local substrate",
@@ -1018,7 +1018,7 @@ function parseServiceGraphMaterials(
 function parseR2ExportWorker(
   env: CloudflareWorkerEnv,
   issuer: string,
-): AppInstallationExportWorker | undefined {
+): AppCapsuleExportWorker | undefined {
   const bucket = env.TAKOSUMI_ACCOUNTS_EXPORTS;
   const secret = optionalString(env.TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET);
   const baseUrl =
@@ -1048,7 +1048,7 @@ function parseR2ExportWorker(
       "TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_TTL_MS must be greater than zero",
     );
   }
-  return createR2InstallationExportWorker({
+  return createR2CapsuleExportWorker({
     bucket,
     downloadBaseUrl: validateExportDownloadBaseUrl(
       baseUrl,
@@ -1059,13 +1059,13 @@ function parseR2ExportWorker(
   });
 }
 
-export function createR2InstallationExportWorker(options: {
+export function createR2CapsuleExportWorker(options: {
   readonly bucket: R2Bucket;
   readonly downloadBaseUrl: string;
   readonly downloadSecret: string;
   readonly ttlMs?: number;
   readonly now?: () => Date;
-}): AppInstallationExportWorker {
+}): AppCapsuleExportWorker {
   const ttlMs = options.ttlMs ?? defaultExportDownloadTtlMs;
   const downloadBaseUrl = exportDownloadUrl(
     options.downloadBaseUrl,
@@ -1085,12 +1085,12 @@ export function createR2InstallationExportWorker(options: {
     const now = options.now?.() ?? new Date();
     const downloadExpiresAt = new Date(now.getTime() + ttlMs).toISOString();
     const objectKey = r2ExportObjectKey(
-      input.installation.installationId,
+      input.installation.capsuleId,
       input.operationId,
       encrypted,
     );
     const document = {
-      kind: "takosumi.accounts.cloudflare-r2-installation-export@v1",
+      kind: "takosumi.accounts.cloudflare-r2-capsule-export@v1",
       version: "v1",
       exportedAt: now.toISOString(),
       operationId: input.operationId,
@@ -1114,9 +1114,9 @@ export function createR2InstallationExportWorker(options: {
           : "application/json; charset=utf-8",
       },
       customMetadata: {
-        installationId: input.installation.installationId,
+        capsuleId: input.installation.capsuleId,
         accountId: input.installation.accountId,
-        spaceId: input.installation.spaceId,
+        workspaceId: input.installation.workspaceId,
         operationId: input.operationId,
         format: input.request.format,
         encryption: input.request.encryption.method,
@@ -1245,13 +1245,13 @@ function safeDecodeURIComponent(
 }
 
 function r2ExportObjectKey(
-  installationId: string,
+  capsuleId: string,
   operationId: string,
   encrypted = false,
 ): string {
   return [
     "installation-exports",
-    objectKeySegment(installationId),
+    objectKeySegment(capsuleId),
     objectKeySegment(operationId),
     encrypted ? "takos-export.json.age" : "takos-export.json",
   ].join("/");

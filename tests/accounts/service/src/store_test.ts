@@ -151,7 +151,7 @@ test("InMemoryAccountsStore persists billing usage records per installation", ()
   const store = new InMemoryAccountsStore();
   store.saveBillingUsageRecord({
     usageReportId: "usage_report_1",
-    installationId: "inst_1",
+    capsuleId: "inst_1",
     billingAccountId: "bill_1",
     meter: "agent.compute.seconds",
     quantity: 12.5,
@@ -166,7 +166,7 @@ test("InMemoryAccountsStore persists billing usage records per installation", ()
   });
   store.saveBillingUsageRecord({
     usageReportId: "usage_report_2",
-    installationId: "inst_2",
+    capsuleId: "inst_2",
     billingAccountId: "bill_1",
     meter: "agent.compute.seconds",
     quantity: 1,
@@ -177,7 +177,7 @@ test("InMemoryAccountsStore persists billing usage records per installation", ()
   });
 
   expect(
-    store.listBillingUsageRecordsForInstallation("inst_1").map((record) => ({
+    store.listBillingUsageRecordsForCapsule("inst_1").map((record) => ({
       id: record.usageReportId,
       meter: record.meter,
       requestDigest: record.requestDigest,
@@ -267,7 +267,7 @@ test("InMemoryAccountsStore validates ServiceBindingMaterial records before savi
     () =>
       store.saveServiceBindingMaterial({
         bindingId: "bind_launch",
-        installationId: "inst_1",
+        capsuleId: "inst_1",
         name: "launch",
         kind: "auth.bootstrap_token",
         configRef: "takosumi-accounts://inst_1/launch-token/kid",
@@ -301,7 +301,7 @@ test("InMemoryAccountsStore persists billing webhook event status", () => {
   expect(store.findBillingWebhookEvent("evt_missing")).toEqual(undefined);
 });
 
-test("InMemoryAccountsStore persists AppInstallation ledger records", () => {
+test("InMemoryAccountsStore persists AppCapsule ledger records", () => {
   const store = new InMemoryAccountsStore();
   store.saveLedgerAccount({
     accountId: "acct_1",
@@ -310,17 +310,17 @@ test("InMemoryAccountsStore persists AppInstallation ledger records", () => {
     createdAt: 1000,
     updatedAt: 1000,
   });
-  store.saveSpace({
-    spaceId: "space_1",
+  store.saveWorkspace({
+    workspaceId: "space_1",
     accountId: "acct_1",
     kind: "personal",
     createdAt: 1000,
     updatedAt: 1000,
   });
-  store.saveAppInstallation({
-    installationId: "inst_1",
+  store.saveAppCapsule({
+    capsuleId: "inst_1",
     accountId: "acct_1",
-    spaceId: "space_1",
+    workspaceId: "space_1",
     appId: "takos.chat",
     sourceGitUrl: "https://github.com/takos/takos",
     sourceRef: "v1.2.3",
@@ -336,7 +336,7 @@ test("InMemoryAccountsStore persists AppInstallation ledger records", () => {
   });
   store.saveServiceBindingMaterial({
     bindingId: "bind_auth",
-    installationId: "inst_1",
+    capsuleId: "inst_1",
     name: "auth",
     kind: "identity.oidc",
     configRef: "config://inst_1/auth",
@@ -346,7 +346,7 @@ test("InMemoryAccountsStore persists AppInstallation ledger records", () => {
   });
   store.saveServiceGrantMaterial({
     grantId: "grant_1",
-    installationId: "inst_1",
+    capsuleId: "inst_1",
     capability: "deploy.intent.write",
     scope: { pathPrefix: "deployments/" },
     grantedAt: 1000,
@@ -355,17 +355,17 @@ test("InMemoryAccountsStore persists AppInstallation ledger records", () => {
   expect(store.findLedgerAccount("acct_1")?.billingAccountId).toEqual(
     "billing-1",
   );
-  expect(store.listSpacesForAccount("acct_1")[0]?.spaceId).toEqual("space_1");
+  expect(store.listWorkspacesForAccount("acct_1")[0]?.workspaceId).toEqual("space_1");
   expect(
-    store.listAppInstallationsForSpace("space_1")[0]?.installationId,
+    store.listAppCapsulesForWorkspace("space_1")[0]?.capsuleId,
   ).toEqual("inst_1");
   expect(
-    store.listAppInstallationsForSpace("space_1")[0]?.billingAccountId,
+    store.listAppCapsulesForWorkspace("space_1")[0]?.billingAccountId,
   ).toEqual("billing-inst-1");
   expect(
-    store.listServiceBindingMaterialsForInstallation("inst_1")[0]?.kind,
+    store.listServiceBindingMaterialsForCapsule("inst_1")[0]?.kind,
   ).toEqual("identity.oidc");
-  expect(store.listServiceGrantMaterialsForInstallation("inst_1")).toEqual([]);
+  expect(store.listServiceGrantMaterialsForCapsule("inst_1")).toEqual([]);
 });
 
 test("InMemoryAccountsStore lists spaces by legal owner across accounts", () => {
@@ -388,48 +388,48 @@ test("InMemoryAccountsStore lists spaces by legal owner across accounts", () => 
     createdAt: 1002,
     updatedAt: 1002,
   });
-  store.saveSpace({
-    spaceId: "space_a",
+  store.saveWorkspace({
+    workspaceId: "space_a",
     accountId: "acct_owned_a",
     kind: "personal",
     createdAt: 1000,
     updatedAt: 1000,
   });
-  store.saveSpace({
-    spaceId: "space_b",
+  store.saveWorkspace({
+    workspaceId: "space_b",
     accountId: "acct_owned_b",
     kind: "org",
     createdAt: 1001,
     updatedAt: 1001,
   });
-  store.saveSpace({
-    spaceId: "space_foreign",
+  store.saveWorkspace({
+    workspaceId: "space_foreign",
     accountId: "acct_foreign",
     kind: "org",
     createdAt: 1002,
     updatedAt: 1002,
   });
 
-  const owned = store.listSpacesForOwner("tsub_owner");
-  const ids = [...owned].map((s) => s.spaceId).sort();
+  const owned = store.listWorkspacesForOwner("tsub_owner");
+  const ids = [...owned].map((s) => s.workspaceId).sort();
   expect(ids).toEqual(["space_a", "space_b"]);
   expect(ids).not.toContain("space_foreign");
-  expect(store.listSpacesForOwner("tsub_nobody")).toEqual([]);
+  expect(store.listWorkspacesForOwner("tsub_nobody")).toEqual([]);
 });
 
-test("InMemoryAccountsStore appends InstallationEvent records in order", () => {
+test("InMemoryAccountsStore appends CapsuleEvent records in order", () => {
   const store = new InMemoryAccountsStore();
-  store.appendInstallationEvent({
+  store.appendCapsuleEvent({
     eventId: "evt_1",
-    installationId: "inst_1",
+    capsuleId: "inst_1",
     eventType: "installation.created",
     payload: {},
     eventHash: "sha256:first",
     createdAt: 1000,
   });
-  store.appendInstallationEvent({
+  store.appendCapsuleEvent({
     eventId: "evt_2",
-    installationId: "inst_1",
+    capsuleId: "inst_1",
     eventType: "installation.status_changed",
     payload: { to: "ready" },
     previousEventHash: "sha256:first",
@@ -438,7 +438,7 @@ test("InMemoryAccountsStore appends InstallationEvent records in order", () => {
   });
 
   expect(
-    store.listInstallationEvents("inst_1").map((event) => event.eventId),
+    store.listCapsuleEvents("inst_1").map((event) => event.eventId),
   ).toEqual(["evt_1", "evt_2"]);
 });
 
@@ -461,7 +461,7 @@ test("InMemoryAccountsStore consumes launch token jtis once", () => {
   const store = new InMemoryAccountsStore();
   const record = {
     jti: "lt_1",
-    installationId: "inst_1",
+    capsuleId: "inst_1",
     subject: "tsub_test" as const,
     audience: "takos.chat",
     expiresAt: Date.now() + 60_000,
@@ -475,9 +475,9 @@ test("InMemoryAccountsStore consumes launch token jtis once", () => {
 test("InMemoryAccountsStore prunes expired and used launch tokens", () => {
   const store = new InMemoryAccountsStore();
   const base = {
-    installationId: "inst_1",
+    capsuleId: "inst_1",
     accountId: "acct_1",
-    spaceId: "space_1",
+    workspaceId: "space_1",
     appId: "takos.chat",
     subject: "tsub_test" as const,
     redirectUri: "https://takos.example.test/_takosumi/launch",
@@ -486,14 +486,14 @@ test("InMemoryAccountsStore prunes expired and used launch tokens", () => {
   };
   store.saveLaunchToken({
     ...base,
-    installationId: "inst_expired",
+    capsuleId: "inst_expired",
     tokenHash: "sha256:expired",
     jti: "lt_expired",
     expiresAt: 2_000,
   });
   store.saveLaunchToken({
     ...base,
-    installationId: "inst_used",
+    capsuleId: "inst_used",
     tokenHash: "sha256:used",
     jti: "lt_used",
     expiresAt: 10_000,
@@ -501,7 +501,7 @@ test("InMemoryAccountsStore prunes expired and used launch tokens", () => {
   });
   store.saveLaunchToken({
     ...base,
-    installationId: "inst_active",
+    capsuleId: "inst_active",
     tokenHash: "sha256:active",
     jti: "lt_active",
     expiresAt: 10_000,
@@ -514,7 +514,7 @@ test("InMemoryAccountsStore prunes expired and used launch tokens", () => {
   expect(
     store.consumeLaunchToken({
       tokenHash: "sha256:expired",
-      installationId: "inst_expired",
+      capsuleId: "inst_expired",
       redirectUri: base.redirectUri,
       consumedAt: 4_000,
     }),
@@ -522,7 +522,7 @@ test("InMemoryAccountsStore prunes expired and used launch tokens", () => {
   expect(
     store.consumeLaunchToken({
       tokenHash: "sha256:active",
-      installationId: "inst_active",
+      capsuleId: "inst_active",
       redirectUri: base.redirectUri,
       consumedAt: 4_000,
     }).ok,
@@ -533,7 +533,7 @@ test("InMemoryAccountsStore indexes OIDC clients by installation", () => {
   const store = new InMemoryAccountsStore();
   store.saveOidcClient({
     clientId: "toc_client",
-    installationId: "inst_1",
+    capsuleId: "inst_1",
     namespacePath: "takosumi.identity.oidc",
     issuerUrl: "https://accounts.example.test",
     redirectUris: ["http://localhost:8787/auth/oidc/callback"],
@@ -545,8 +545,8 @@ test("InMemoryAccountsStore indexes OIDC clients by installation", () => {
     updatedAt: 1000,
   });
 
-  expect(store.findOidcClient("toc_client")?.installationId).toEqual("inst_1");
-  expect(store.findOidcClientForInstallation("inst_1")?.clientId).toEqual(
+  expect(store.findOidcClient("toc_client")?.capsuleId).toEqual("inst_1");
+  expect(store.findOidcClientForCapsule("inst_1")?.clientId).toEqual(
     "toc_client",
   );
 });

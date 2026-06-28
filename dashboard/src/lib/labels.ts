@@ -22,15 +22,15 @@ function label(
 
 /** Capsule lifecycle status: pending/active/stale/error/disabled/destroyed. */
 const INSTALLATION: Record<string, MessageKey> = {
-  pending: "status.installation.pending",
-  needs_attention: "status.installation.needsAttention",
-  active: "status.installation.active",
-  stale: "status.installation.stale",
-  error: "status.installation.error",
-  disabled: "status.installation.disabled",
-  destroyed: "status.installation.destroyed",
+  pending: "status.capsule.pending",
+  needs_attention: "status.capsule.needsAttention",
+  active: "status.capsule.active",
+  stale: "status.capsule.stale",
+  error: "status.capsule.error",
+  disabled: "status.capsule.disabled",
+  destroyed: "status.capsule.destroyed",
 };
-export const installationStatusLabel = (status?: string) =>
+export const capsuleStatusLabel = (status?: string) =>
   label(INSTALLATION, status);
 
 /** Run status (spec §19). */
@@ -113,7 +113,7 @@ export function operationLabel(operation: string | undefined): string {
 
 // --- tones (UI colour treatment per status) -----------------------------------
 
-export function installationTone(status: string | undefined): Tone {
+export function capsuleTone(status: string | undefined): Tone {
   switch (status) {
     case "active":
       return "ok";

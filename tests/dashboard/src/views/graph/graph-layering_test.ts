@@ -10,35 +10,35 @@ import { extractRunId } from "../../../../../dashboard/src/lib/control-api.ts";
 import type {
   GraphEdge,
   GraphNode,
-  InstallationStatus,
-  SpaceGraph,
+  CapsuleStatus,
+  WorkspaceGraph,
 } from "../../../../../dashboard/src/lib/control-api.ts";
 
 function node(id: string, name = id): GraphNode {
   return {
-    installationId: id,
+    capsuleId: id,
     name,
     environment: "production",
-    status: "active" as InstallationStatus,
+    status: "active" as CapsuleStatus,
   };
 }
 
 function edge(producer: string, consumer: string): GraphEdge {
   return {
     id: `dep_${producer}_${consumer}`,
-    producerInstallationId: producer,
-    consumerInstallationId: consumer,
+    producerCapsuleId: producer,
+    consumerCapsuleId: consumer,
     outputs: {},
   };
 }
 
 function ids(nodes: readonly GraphNode[]): string[] {
-  return nodes.map((n) => n.installationId).sort();
+  return nodes.map((n) => n.capsuleId).sort();
 }
 
 describe("layerGraph", () => {
   test("roots with no edges land on layer 0", () => {
-    const graph: SpaceGraph = { nodes: [node("a"), node("b")], edges: [] };
+    const graph: WorkspaceGraph = { nodes: [node("a"), node("b")], edges: [] };
     const result = layerGraph(graph);
     expect(result.layers.length).toEqual(1);
     expect(ids(result.layers[0]!)).toEqual(["a", "b"]);
@@ -47,7 +47,7 @@ describe("layerGraph", () => {
 
   test("a depends-on chain lays out in producer->consumer order", () => {
     // core <- gateway <- talk : core layer 0, gateway 1, talk 2.
-    const graph: SpaceGraph = {
+    const graph: WorkspaceGraph = {
       nodes: [node("talk"), node("gateway"), node("core")],
       edges: [edge("core", "gateway"), edge("gateway", "talk")],
     };
@@ -61,7 +61,7 @@ describe("layerGraph", () => {
   test("a node sits one layer below its DEEPEST producer (diamond)", () => {
     //   core(0) -> a(1), core(0) -> b(1), a+b -> sink
     // sink depends on a(1) and b(1) so sink is layer 2.
-    const graph: SpaceGraph = {
+    const graph: WorkspaceGraph = {
       nodes: [node("core"), node("a"), node("b"), node("sink")],
       edges: [
         edge("core", "a"),
@@ -77,7 +77,7 @@ describe("layerGraph", () => {
   });
 
   test("producersByConsumer maps consumer -> producer names", () => {
-    const graph: SpaceGraph = {
+    const graph: WorkspaceGraph = {
       nodes: [node("core", "Core"), node("talk", "Talk")],
       edges: [edge("core", "talk")],
     };
@@ -87,7 +87,7 @@ describe("layerGraph", () => {
   });
 
   test("a cycle is reported in `cyclic` rather than hanging", () => {
-    const graph: SpaceGraph = {
+    const graph: WorkspaceGraph = {
       nodes: [node("x"), node("y")],
       edges: [edge("x", "y"), edge("y", "x")],
     };

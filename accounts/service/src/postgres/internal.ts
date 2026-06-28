@@ -7,11 +7,11 @@ import { drizzle, type PgRemoteDatabase } from "drizzle-orm/pg-proxy";
 import type {
   ServiceBindingMaterialRecord,
   ServiceGrantMaterialRecord,
-  InstallationEventRecord,
-  InstallationRecord,
+  CapsuleEventRecord,
+  CapsuleRecord,
   LedgerAccountRecord,
-  SpaceKind,
-  SpaceRecord,
+  WorkspaceKind,
+  WorkspaceRecord,
 } from "../ledger.ts";
 import {
   isServiceBindingMaterialKind,
@@ -283,16 +283,16 @@ export interface LedgerAccountRow {
   updated_at: TimeValue;
 }
 
-export interface SpaceRow {
+export interface WorkspaceRow {
   space_id: string;
   account_id: string;
-  kind: SpaceKind;
+  kind: WorkspaceKind;
   display_name: string | null;
   created_at: TimeValue;
   updated_at: TimeValue;
 }
 
-export interface AppInstallationRow {
+export interface AppCapsuleRow {
   installation_id: string;
   account_id: string;
   space_id: string;
@@ -303,12 +303,12 @@ export interface AppInstallationRow {
   source_path: string | null;
   plan_digest: string;
   artifact_digest: string | null;
-  mode: InstallationRecord["mode"];
+  mode: CapsuleRecord["mode"];
   // Wave 6 dropped the `runtime_binding_id` column. The select clause in
-  // `appInstallationSelect()` no longer reads it; `runtimeBindingId` on
-  // the decoded `InstallationRecord` is always `undefined`.
+  // `appCapsuleSelect()` no longer reads it; `runtimeBindingId` on
+  // the decoded `CapsuleRecord` is always `undefined`.
   billing_account_id: string | null;
-  status: InstallationRecord["status"];
+  status: CapsuleRecord["status"];
   created_by_subject: TakosumiSubject;
   created_at: TimeValue;
   updated_at: TimeValue;
@@ -334,7 +334,7 @@ export interface ServiceGrantMaterialRow {
   revoked_at: TimeValue | null;
 }
 
-export interface InstallationEventRow {
+export interface CapsuleEventRow {
   event_id: string;
   installation_id: string;
   event_type: string;
@@ -468,7 +468,7 @@ export function billingWebhookEventFromRow(
 export function billingUsageFromRow(row: BillingUsageRow): BillingUsageRecord {
   return {
     usageReportId: row.usage_report_id,
-    installationId: row.installation_id,
+    capsuleId: row.installation_id,
     billingAccountId: row.billing_account_id,
     meter: row.meter,
     quantity: Number(row.quantity),
@@ -515,9 +515,9 @@ export function authorizationCodeFromRow(
     scope: row.scope,
     subject: row.subject,
     takosumiSubject: optional(row.takosumi_subject),
-    installationId: optional(row.installation_id),
+    capsuleId: optional(row.installation_id),
     appId: optional(row.app_id),
-    spaceId: optional(row.space_id),
+    workspaceId: optional(row.space_id),
     role: optional(row.role),
     nonce: optional(row.nonce),
     codeChallenge: optional(row.code_challenge),
@@ -532,9 +532,9 @@ export function tokenFromRow(row: TokenRow): TokenRecord {
     scope: row.scope,
     subject: row.subject,
     takosumiSubject: optional(row.takosumi_subject),
-    installationId: optional(row.installation_id),
+    capsuleId: optional(row.installation_id),
     appId: optional(row.app_id),
-    spaceId: optional(row.space_id),
+    workspaceId: optional(row.space_id),
     role: optional(row.role),
     expiresAt: millis(row.expires_at),
   };
@@ -561,9 +561,9 @@ export function launchTokenFromRow(row: LaunchTokenRow): LaunchTokenRecord {
   return {
     tokenHash: row.token_hash,
     jti: row.jti,
-    installationId: row.installation_id,
+    capsuleId: row.installation_id,
     accountId: row.account_id,
-    spaceId: row.space_id,
+    workspaceId: row.space_id,
     appId: row.app_id,
     subject: row.subject,
     redirectUri: row.redirect_uri,
@@ -577,7 +577,7 @@ export function launchTokenFromRow(row: LaunchTokenRow): LaunchTokenRecord {
 export function oidcClientFromRow(row: OidcClientRow): OidcClientRecord {
   return {
     clientId: row.client_id,
-    installationId: row.installation_id,
+    capsuleId: row.installation_id,
     namespacePath: row.service_id,
     issuerUrl: row.issuer_url,
     redirectUris: row.redirect_uris,
@@ -602,9 +602,9 @@ export function ledgerAccountFromRow(
   };
 }
 
-export function spaceFromRow(row: SpaceRow): SpaceRecord {
+export function spaceFromRow(row: WorkspaceRow): WorkspaceRecord {
   return {
-    spaceId: row.space_id,
+    workspaceId: row.space_id,
     accountId: row.account_id,
     kind: row.kind,
     displayName: optional(row.display_name),
@@ -613,13 +613,13 @@ export function spaceFromRow(row: SpaceRow): SpaceRecord {
   };
 }
 
-export function appInstallationFromRow(
-  row: AppInstallationRow,
-): InstallationRecord {
+export function appCapsuleFromRow(
+  row: AppCapsuleRow,
+): CapsuleRecord {
   return {
-    installationId: row.installation_id,
+    capsuleId: row.installation_id,
     accountId: row.account_id,
-    spaceId: row.space_id,
+    workspaceId: row.space_id,
     appId: row.app_id,
     sourceGitUrl: row.source_git_url,
     sourceRef: row.source_ref,
@@ -629,7 +629,7 @@ export function appInstallationFromRow(
     artifactDigest: optional(row.artifact_digest),
     mode: row.mode,
     // Wave 6 dropped `runtime_binding_id`; we no longer read it.
-    // `InstallationRecord.runtimeBindingId` stays optional for the
+    // `CapsuleRecord.runtimeBindingId` stays optional for the
     // in-memory store, but the postgres-backed read path always
     // yields `undefined` here.
     billingAccountId: optional(row.billing_account_id),
@@ -650,7 +650,7 @@ export function serviceBindingMaterialFromRow(
   }
   return {
     bindingId: row.binding_id,
-    installationId: row.installation_id,
+    capsuleId: row.installation_id,
     name: row.name,
     kind: row.kind,
     configRef: row.config_ref,
@@ -670,7 +670,7 @@ export function serviceGrantMaterialFromRow(
   }
   return {
     grantId: row.grant_id,
-    installationId: row.installation_id,
+    capsuleId: row.installation_id,
     capability: row.capability,
     scope: objectJson<Record<string, unknown>>(row.scope),
     grantedAt: millis(row.granted_at),
@@ -679,11 +679,11 @@ export function serviceGrantMaterialFromRow(
 }
 
 export function installationEventFromRow(
-  row: InstallationEventRow,
-): InstallationEventRecord {
+  row: CapsuleEventRow,
+): CapsuleEventRecord {
   return {
     eventId: row.event_id,
-    installationId: row.installation_id,
+    capsuleId: row.installation_id,
     eventType: row.event_type,
     payload: objectJson<Record<string, unknown>>(row.payload),
     previousEventHash: optional(row.previous_event_hash),

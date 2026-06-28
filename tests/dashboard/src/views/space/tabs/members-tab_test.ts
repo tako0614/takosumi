@@ -14,7 +14,7 @@ import { readFileSync } from "node:fs";
 
 const source = readFileSync(
   new URL(
-    "../../../../../../dashboard/src/views/space/tabs/MembersTab.tsx",
+    "../../../../../../dashboard/src/views/workspace/tabs/MembersTab.tsx",
     import.meta.url,
   ),
   "utf8",
@@ -59,8 +59,8 @@ describe("MembersTab access-control surface", () => {
   test("the spaceId comes from the settings container, never from a body", () => {
     // The tab receives the globally-selected Space via props; mutations pass it
     // as the path segment plus the member's accountId only.
-    expect(source).toMatch(/setMemberRole\(props\.spaceId, member\.accountId/);
-    expect(source).toMatch(/removeMember\(props\.spaceId, member\.accountId\)/);
+    expect(source).toMatch(/setMemberRole\(props\.workspaceId, member\.accountId/);
+    expect(source).toMatch(/removeMember\(props\.workspaceId, member\.accountId\)/);
   });
 
   test("invites by verified email, not by handle/account subject", () => {

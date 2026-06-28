@@ -13,7 +13,7 @@ import type {
   Installation,
 } from "@takosumi/internal/deploy-control-api";
 import type { SourceSnapshot } from "takosumi-contract/sources";
-import type { Space } from "takosumi-contract/spaces";
+import type { Workspace as Space } from "takosumi-contract/workspaces";
 import {
   CredentialBundle,
   PhaseMintBundle,
@@ -206,6 +206,7 @@ export async function seedInstallationModel(
   await store.putInstallConfig(installConfig);
   const installation: Installation = {
     id: options.installationId ?? "inst_fixture",
+    workspaceId: spaceId,
     spaceId,
     name,
     slug: name,

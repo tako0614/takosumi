@@ -10,11 +10,11 @@ import {
 import type {
   ServiceBindingMaterialRecord,
   ServiceGrantMaterialRecord,
-  InstallationEventRecord,
-  InstallationRecord,
+  CapsuleEventRecord,
+  CapsuleRecord,
   LedgerAccountRecord,
   RuntimeBindingRecord,
-  SpaceRecord,
+  WorkspaceRecord,
 } from "./ledger.ts";
 import {
   assertValidServiceBindingMaterialRecord,
@@ -596,7 +596,7 @@ export class D1AccountsStore implements AccountsStore {
     const indexes: readonly D1IndexEntry[] = [
       {
         name: "billing_usage_by_installation",
-        key: record.installationId,
+        key: record.capsuleId,
         sortKey: record.reportedAt,
       },
       {
@@ -622,7 +622,7 @@ export class D1AccountsStore implements AccountsStore {
     );
     if (
       existing &&
-      (existing.installationId !== record.installationId ||
+      (existing.capsuleId !== record.capsuleId ||
         existing.billingAccountId !== record.billingAccountId)
     ) {
       throw new TypeError(
@@ -631,7 +631,7 @@ export class D1AccountsStore implements AccountsStore {
     }
     // Same owner (or a row that vanished after the failed claim): perform the
     // ordinary upsert, which deletes and reinserts the secondary index rows.
-    // For a same-owner re-report the index key (installationId) is unchanged,
+    // For a same-owner re-report the index key (capsuleId) is unchanged,
     // so the index rewrite is effectively a no-op beyond the sortKey refresh.
     await this.#put(
       "billing_usage_records",
@@ -647,10 +647,10 @@ export class D1AccountsStore implements AccountsStore {
     return this.#get("billing_usage_records", usageReportId);
   }
 
-  listBillingUsageRecordsForInstallation(
-    installationId: string,
+  listBillingUsageRecordsForCapsule(
+    capsuleId: string,
   ): Promise<readonly BillingUsageRecord[]> {
-    return this.#listByIndex("billing_usage_by_installation", installationId);
+    return this.#listByIndex("billing_usage_by_installation", capsuleId);
   }
 
   listBillingUsageRecordsForBillingAccount(
@@ -699,7 +699,7 @@ export class D1AccountsStore implements AccountsStore {
         [
           {
             name: "billing_usage_by_installation",
-            key: existing.installationId,
+            key: existing.capsuleId,
             sortKey: existing.reportedAt,
           },
           {
@@ -876,7 +876,7 @@ export class D1AccountsStore implements AccountsStore {
   async saveLaunchToken(record: LaunchTokenRecord): Promise<void> {
     const existing = await this.#listByIndex<LaunchTokenRecord>(
       "launch_tokens_by_installation",
-      record.installationId,
+      record.capsuleId,
     );
     for (const token of existing) {
       if (token.usedAt === undefined && token.expiresAt > record.createdAt) {
@@ -898,7 +898,7 @@ export class D1AccountsStore implements AccountsStore {
 
   async consumeLaunchToken(input: {
     tokenHash: string;
-    installationId: string;
+    capsuleId: string;
     redirectUri: string;
     consumedAt: number;
   }): Promise<LaunchTokenConsumeResult> {
@@ -917,7 +917,7 @@ export class D1AccountsStore implements AccountsStore {
       "launch_tokens",
       input.tokenHash,
     );
-    if (!record || record.installationId !== input.installationId) {
+    if (!record || record.capsuleId !== input.capsuleId) {
       return { ok: false, reason: "not_found" };
     }
     if (record.redirectUri !== input.redirectUri) {
@@ -982,12 +982,12 @@ export class D1AccountsStore implements AccountsStore {
   async #saveOidcClient(record: OidcClientRecord): Promise<void> {
     await this.#deleteIndexEntries(
       "oidc_clients_by_installation",
-      record.installationId,
+      record.capsuleId,
     );
     await this.#put("oidc_clients", record.clientId, record, [
       {
         name: "oidc_clients_by_installation",
-        key: record.installationId,
+        key: record.capsuleId,
         sortKey: record.createdAt,
       },
     ]);
@@ -997,13 +997,13 @@ export class D1AccountsStore implements AccountsStore {
     return this.#get("oidc_clients", clientId);
   }
 
-  async findOidcClientForInstallation(
-    installationId: string,
+  async findOidcClientForCapsule(
+    capsuleId: string,
   ): Promise<OidcClientRecord | undefined> {
     return (
       await this.#listByIndex<OidcClientRecord>(
         "oidc_clients_by_installation",
-        installationId,
+        capsuleId,
       )
     )[0];
   }
@@ -1384,8 +1384,8 @@ export class D1AccountsStore implements AccountsStore {
     return this.#get("ledger_accounts", accountId);
   }
 
-  saveSpace(record: SpaceRecord): Promise<void> {
-    return this.#put("spaces", record.spaceId, record, [
+  saveWorkspace(record: WorkspaceRecord): Promise<void> {
+    return this.#put("spaces", record.workspaceId, record, [
       {
         name: "spaces_by_account",
         key: record.accountId,
@@ -1394,20 +1394,20 @@ export class D1AccountsStore implements AccountsStore {
     ]);
   }
 
-  findSpace(spaceId: string): Promise<SpaceRecord | undefined> {
-    return this.#get("spaces", spaceId);
+  findWorkspace(workspaceId: string): Promise<WorkspaceRecord | undefined> {
+    return this.#get("spaces", workspaceId);
   }
 
-  listSpacesForAccount(accountId: string): Promise<readonly SpaceRecord[]> {
+  listWorkspacesForAccount(accountId: string): Promise<readonly WorkspaceRecord[]> {
     return this.#listByIndex("spaces_by_account", accountId);
   }
 
-  async listSpacesForOwner(
+  async listWorkspacesForOwner(
     subject: TakosumiSubject,
-  ): Promise<readonly SpaceRecord[]> {
+  ): Promise<readonly WorkspaceRecord[]> {
     // KV-index store: resolve the subject's legally-owned ledger accounts via
     // the `ledger_accounts_by_owner` index, then collect each account's spaces
-    // via `spaces_by_account`, deduplicating by spaceId.
+    // via `spaces_by_account`, deduplicating by workspaceId.
     let ownedAccounts = await this.#listByIndex<LedgerAccountRecord>(
       "ledger_accounts_by_owner",
       subject,
@@ -1432,14 +1432,14 @@ export class D1AccountsStore implements AccountsStore {
         );
       }
     }
-    const byId = new Map<string, SpaceRecord>();
+    const byId = new Map<string, WorkspaceRecord>();
     for (const account of ownedAccounts) {
-      const spaces = await this.#listByIndex<SpaceRecord>(
+      const spaces = await this.#listByIndex<WorkspaceRecord>(
         "spaces_by_account",
         account.accountId,
       );
       for (const space of spaces) {
-        byId.set(space.spaceId, space);
+        byId.set(space.workspaceId, space);
       }
     }
     return [...byId.values()];
@@ -1450,7 +1450,7 @@ export class D1AccountsStore implements AccountsStore {
    * every `ledger_accounts` document and (re)writes its by-owner index entry
    * keyed on `legalOwnerSubject`. Needed because the index is written only on
    * `saveLedgerAccount`, so ledger accounts persisted before the index existed
-   * have no entry; `listSpacesForOwner` invokes this lazily when its by-owner
+   * have no entry; `listWorkspacesForOwner` invokes this lazily when its by-owner
    * lookup is empty so legacy org owners no longer degrade to direct-owner
    * spaces. Idempotent: `#refreshIndexEntries` deletes and rewrites the
    * document's index rows, so re-running it on an already-indexed store is a
@@ -1472,11 +1472,11 @@ export class D1AccountsStore implements AccountsStore {
     return accounts.length > 0;
   }
 
-  saveAppInstallation(record: InstallationRecord): Promise<void> {
+  saveAppCapsule(record: CapsuleRecord): Promise<void> {
     const indexes: D1IndexEntry[] = [
       {
         name: "installations_by_space",
-        key: record.spaceId,
+        key: record.workspaceId,
         sortKey: record.createdAt,
       },
     ];
@@ -1489,27 +1489,27 @@ export class D1AccountsStore implements AccountsStore {
     }
     return this.#put(
       "app_installations",
-      record.installationId,
+      record.capsuleId,
       record,
       indexes,
     );
   }
 
-  findAppInstallation(
-    installationId: string,
-  ): Promise<InstallationRecord | undefined> {
-    return this.#get("app_installations", installationId);
+  findAppCapsule(
+    capsuleId: string,
+  ): Promise<CapsuleRecord | undefined> {
+    return this.#get("app_installations", capsuleId);
   }
 
-  listAppInstallationsForSpace(
-    spaceId: string,
-  ): Promise<readonly InstallationRecord[]> {
-    return this.#listByIndex("installations_by_space", spaceId);
+  listAppCapsulesForWorkspace(
+    workspaceId: string,
+  ): Promise<readonly CapsuleRecord[]> {
+    return this.#listByIndex("installations_by_space", workspaceId);
   }
 
-  listAppInstallationsForBillingAccount(
+  listAppCapsulesForBillingAccount(
     billingAccountId: string,
-  ): Promise<readonly InstallationRecord[]> {
+  ): Promise<readonly CapsuleRecord[]> {
     return this.#listByIndex(
       "installations_by_billing_account",
       billingAccountId,
@@ -1539,18 +1539,18 @@ export class D1AccountsStore implements AccountsStore {
     return this.#put("service_binding_materials", record.bindingId, record, [
       {
         name: "service_binding_materials_by_installation",
-        key: record.installationId,
+        key: record.capsuleId,
         sortKey: record.createdAt,
       },
     ]);
   }
 
-  listServiceBindingMaterialsForInstallation(
-    installationId: string,
+  listServiceBindingMaterialsForCapsule(
+    capsuleId: string,
   ): Promise<readonly ServiceBindingMaterialRecord[]> {
     return this.#listByIndex(
       "service_binding_materials_by_installation",
-      installationId,
+      capsuleId,
     );
   }
 
@@ -1571,25 +1571,25 @@ export class D1AccountsStore implements AccountsStore {
     return Promise.resolve(undefined);
   }
 
-  listServiceGrantMaterialsForInstallation(
-    installationId: string,
+  listServiceGrantMaterialsForCapsule(
+    capsuleId: string,
   ): Promise<readonly ServiceGrantMaterialRecord[]> {
-    void installationId;
+    void capsuleId;
     return Promise.resolve([]);
   }
 
-  async appendInstallationEvent(
-    record: InstallationEventRecord,
+  async appendCapsuleEvent(
+    record: CapsuleEventRecord,
   ): Promise<void> {
     // SECURITY (audit hash-chain fork): D1 has no per-installation row lock, so
     // two concurrent appends that read the same chain tail would each INSERT a
     // successor sharing previousEventHash, forking the tamper-evident ledger.
-    // Key the event document by its CHAIN POSITION (installationId,
+    // Key the event document by its CHAIN POSITION (capsuleId,
     // previousEventHash) and insert with INSERT OR IGNORE, so only one successor
     // per position can win. The loser gets inserted === false and we throw;
     // appendLedgerEvent's retry loop then re-reads the advanced tail and
     // re-appends. (Postgres achieves the same via FOR UPDATE NOWAIT.)
-    const chainKey = `${record.installationId}::${record.previousEventHash ?? "<genesis>"}`;
+    const chainKey = `${record.capsuleId}::${record.previousEventHash ?? "<genesis>"}`;
     const inserted = await this.#putIfAbsentWithIndexes(
       "installation_events",
       chainKey,
@@ -1597,7 +1597,7 @@ export class D1AccountsStore implements AccountsStore {
       [
         {
           name: "installation_events_by_installation",
-          key: record.installationId,
+          key: record.capsuleId,
           sortKey: record.createdAt,
         },
       ],
@@ -1605,18 +1605,18 @@ export class D1AccountsStore implements AccountsStore {
     if (!inserted) {
       throw new Error(
         `installation event chain position already claimed for ` +
-          `${record.installationId} (previousEventHash=` +
+          `${record.capsuleId} (previousEventHash=` +
           `${record.previousEventHash ?? "<genesis>"}); concurrent appender won`,
       );
     }
   }
 
-  listInstallationEvents(
-    installationId: string,
-  ): Promise<readonly InstallationEventRecord[]> {
+  listCapsuleEvents(
+    capsuleId: string,
+  ): Promise<readonly CapsuleEventRecord[]> {
     return this.#listByIndex(
       "installation_events_by_installation",
-      installationId,
+      capsuleId,
     );
   }
 
@@ -1803,7 +1803,7 @@ function launchTokenIndexes(
   return [
     {
       name: "launch_tokens_by_installation",
-      key: record.installationId,
+      key: record.capsuleId,
       sortKey: record.createdAt,
     },
   ];

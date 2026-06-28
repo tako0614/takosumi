@@ -62,7 +62,7 @@ export function formatAccountsTokenRevoke(
   ].join("\n");
 }
 
-export function formatInstallationsList(
+export function formatCapsulesList(
   response: unknown,
   asJson: boolean,
 ): string {
@@ -72,7 +72,7 @@ export function formatInstallationsList(
       ? response.installations
       : [];
   if (installations.length === 0) return "No installations found.";
-  const lines = ["Installations:"];
+  const lines = ["Capsules:"];
   for (const value of installations) {
     if (!isRecord(value)) continue;
     lines.push(
@@ -87,17 +87,17 @@ export function formatInstallationsList(
   return lines.join("\n");
 }
 
-export function formatInstallationInspect(
+export function formatCapsuleInspect(
   response: unknown,
   asJson: boolean,
 ): string {
   if (asJson) return JSON.stringify(response, null, 2);
   if (!isRecord(response) || !isRecord(response.installation)) {
-    return "Installation response is missing installation details.";
+    return "Capsule response is missing installation details.";
   }
   const installation = response.installation;
   const lines = [
-    `Installation ${stringValue(installation.id) ?? "unknown"}`,
+    `Capsule ${stringValue(installation.id) ?? "unknown"}`,
     `  status: ${stringValue(installation.status) ?? "unknown"}`,
     `  capsule: ${stringValue(installation.capsule_id) ?? "unknown-capsule"}`,
     `  mode: ${stringValue(installation.mode) ?? "unknown-mode"}`,
@@ -158,35 +158,35 @@ export function formatInstallationInspect(
   return lines.join("\n");
 }
 
-export function formatInstallationStatus(
+export function formatCapsuleStatus(
   response: unknown,
   asJson: boolean,
 ): string {
   if (asJson) return JSON.stringify(response, null, 2);
   if (!isRecord(response) || !isRecord(response.installation)) {
-    return "Installation status response is missing installation details.";
+    return "Capsule status response is missing installation details.";
   }
   const installation = response.installation;
   return [
-    `Installation ${stringValue(installation.id) ?? "unknown"}`,
+    `Capsule ${stringValue(installation.id) ?? "unknown"}`,
     `  status: ${stringValue(installation.status) ?? "unknown"}`,
   ].join("\n");
 }
 
-export function formatInstallationUninstall(
+export function formatCapsuleUninstall(
   response: unknown,
   asJson: boolean,
 ): string {
   if (asJson) return JSON.stringify(response, null, 2);
   if (!isRecord(response) || !isRecord(response.installation)) {
-    return "Installation uninstall response is missing installation details.";
+    return "Capsule uninstall response is missing installation details.";
   }
   const installation = response.installation;
   const revokedServiceGrants = Array.isArray(response.revoked_service_grants)
     ? response.revoked_service_grants
     : [];
   const lines = [
-    `Installation ${stringValue(installation.id) ?? "unknown"}`,
+    `Capsule ${stringValue(installation.id) ?? "unknown"}`,
     `  status: ${stringValue(installation.status) ?? "unknown"}`,
     `  revoked service grants: ${revokedServiceGrants.length}`,
   ];
@@ -196,7 +196,7 @@ export function formatInstallationUninstall(
   return lines.join("\n");
 }
 
-export function formatInstallationOperation(
+export function formatCapsuleOperation(
   response: unknown,
   asJson: boolean,
   label: "Materialize" | "Export",
@@ -207,8 +207,8 @@ export function formatInstallationOperation(
   }
   const operationId = stringValue(response.operationId) ?? "unknown";
   const lines = [`${label} operation ${operationId}`];
-  const installationId = stringValue(response.installationId);
-  if (installationId) lines.push(`  installation: ${installationId}`);
+  const capsuleId = stringValue(response.capsuleId);
+  if (capsuleId) lines.push(`  installation: ${capsuleId}`);
   const status = stringValue(response.status);
   if (status) lines.push(`  status: ${status}`);
   const fromMode = stringValue(response.fromMode);

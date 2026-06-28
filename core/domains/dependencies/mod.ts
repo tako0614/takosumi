@@ -57,9 +57,15 @@ import {
  * service-assigned `id` / `createdAt`.
  */
 export interface CreateDependencyRequest {
-  readonly spaceId: string;
-  readonly producerInstallationId: string;
-  readonly consumerInstallationId: string;
+  readonly workspaceId: string;
+  /** @deprecated Use workspaceId. */
+  readonly spaceId?: string;
+  readonly producerCapsuleId: string;
+  /** @deprecated Use producerCapsuleId. */
+  readonly producerInstallationId?: string;
+  readonly consumerCapsuleId: string;
+  /** @deprecated Use consumerCapsuleId. */
+  readonly consumerInstallationId?: string;
   readonly mode: DependencyMode;
   readonly outputs: Readonly<Record<string, DependencyOutputMapping>>;
   readonly visibility: DependencyVisibility;
@@ -126,24 +132,35 @@ export class DependenciesService {
   async createDependency(
     request: CreateDependencyRequest,
   ): Promise<Dependency> {
-    requireNonEmptyString(request.spaceId, "spaceId");
-    requireNonEmptyString(
-      request.producerInstallationId,
-      "producerInstallationId",
-    );
-    requireNonEmptyString(
-      request.consumerInstallationId,
-      "consumerInstallationId",
-    );
+    // Accept both the new Workspace/Capsule field names and the transient
+    // deprecated Space/Installation names until the rename converges, then work
+    // with a fully-populated request so the helpers stay name-stable.
+    const workspaceId = request.workspaceId ?? request.spaceId ?? "";
+    const producerCapsuleId =
+      request.producerCapsuleId ?? request.producerInstallationId ?? "";
+    const consumerCapsuleId =
+      request.consumerCapsuleId ?? request.consumerInstallationId ?? "";
+    const req: CreateDependencyRequest = {
+      ...request,
+      workspaceId,
+      spaceId: workspaceId,
+      producerCapsuleId,
+      producerInstallationId: producerCapsuleId,
+      consumerCapsuleId,
+      consumerInstallationId: consumerCapsuleId,
+    };
+    requireNonEmptyString(workspaceId, "workspaceId");
+    requireNonEmptyString(producerCapsuleId, "producerCapsuleId");
+    requireNonEmptyString(consumerCapsuleId, "consumerCapsuleId");
     // Mode/visibility gate (spec §15 / §18). Only three combinations are
     // executable: variable_injection+space, remote_state+space, and
     // published_output+cross_space. Everything else (notably
     // cross_space+variable_injection, which would cross a Space boundary without
     // a grant) is rejected.
-    assertSupportedModeVisibility(request.mode, request.visibility);
+    assertSupportedModeVisibility(req.mode, req.visibility);
     // No self-edge: an Installation depending on itself is the smallest cycle
     // and never has a producer OutputSnapshot to consume. Applies to all modes.
-    if (request.producerInstallationId === request.consumerInstallationId) {
+    if (producerCapsuleId === consumerCapsuleId) {
       throw new OpenTofuControllerError(
         "invalid_argument",
         "a dependency cannot connect an installation to itself (self-edge)",
@@ -154,51 +171,51 @@ export class DependenciesService {
     // this — a bare `terraform_remote_state` read needs no name mapping — but a
     // non-empty remote_state mapping is still validated below.
     if (
-      request.mode !== "remote_state" &&
-      Object.keys(request.outputs).length === 0
+      req.mode !== "remote_state" &&
+      Object.keys(req.outputs).length === 0
     ) {
       throw new OpenTofuControllerError(
         "invalid_argument",
         "dependency outputs mapping must declare at least one producer->consumer output",
       );
     }
-    validateOutputMappings(request.outputs);
+    validateOutputMappings(req.outputs);
 
     const producer = await this.#store.getInstallation(
-      request.producerInstallationId,
+      producerCapsuleId,
     );
     if (!producer) {
       throw new OpenTofuControllerError(
         "not_found",
-        `producer installation ${request.producerInstallationId} not found`,
+        `producer installation ${producerCapsuleId} not found`,
       );
     }
     const consumer = await this.#store.getInstallation(
-      request.consumerInstallationId,
+      consumerCapsuleId,
     );
     if (!consumer) {
       throw new OpenTofuControllerError(
         "not_found",
-        `consumer installation ${request.consumerInstallationId} not found`,
+        `consumer installation ${consumerCapsuleId} not found`,
       );
     }
     // The consumer always belongs to the request Space (a Dependency is the
     // consumer's edge; its spaceId is the consumer Space).
-    if (consumer.spaceId !== request.spaceId) {
+    if (consumer.spaceId !== workspaceId) {
       throw new OpenTofuControllerError(
         "failed_precondition",
         `dependency consumer (${consumer.spaceId}) must belong to space ` +
-          `${request.spaceId}`,
+          `${workspaceId}`,
       );
     }
-    if (request.visibility === "space") {
+    if (req.visibility === "space") {
       // Same-Space invariant (variable_injection / remote_state): the producer
       // must also belong to the request Space.
-      if (producer.spaceId !== request.spaceId) {
+      if (producer.spaceId !== workspaceId) {
         throw new OpenTofuControllerError(
           "failed_precondition",
           `dependency producer (${producer.spaceId}) and consumer ` +
-            `(${consumer.spaceId}) must both belong to space ${request.spaceId}`,
+            `(${consumer.spaceId}) must both belong to space ${workspaceId}`,
         );
       }
     } else {
@@ -212,7 +229,7 @@ export class DependenciesService {
             `${producer.spaceId}; use a space-visibility dependency instead`,
         );
       }
-      await this.#assertActiveShareCovers(producer, consumer, request.outputs);
+      await this.#assertActiveShareCovers(producer, consumer, req.outputs);
     }
 
     // Cycle prevention is a check-then-write: list the Space's existing edges,
@@ -222,12 +239,13 @@ export class DependenciesService {
     // with a cycle. Serialize this critical section per Space under the
     // `space-graph:{spaceId}` lease when a coordination seam is injected; when
     // omitted, JS run-to-completion serializes it within a single isolate.
-    const created = await this.#withSpaceGraphLease(request.spaceId, () =>
-      this.#commitEdge(request),
+    const created = await this.#withSpaceGraphLease(workspaceId, () =>
+      this.#commitEdge(req),
     );
     // Activity (§27 / §34): a Dependency edge was added. Edge ids + output
     // mapping names only — no values.
     await this.#activity.record({
+      workspaceId: created.spaceId,
       spaceId: created.spaceId,
       action: "dependency.created",
       targetType: "dependency",
@@ -266,14 +284,21 @@ export class DependenciesService {
    * new edge. Runs inside {@link DependenciesService.#withSpaceGraphLease}.
    */
   async #commitEdge(request: CreateDependencyRequest): Promise<Dependency> {
-    const existing = await this.#store.listDependenciesBySpace(request.spaceId);
+    // `createDependency` normalizes the request so the new required field names
+    // are always populated; read those to stay free of the deprecated optionals.
+    const workspaceId = request.workspaceId ?? request.spaceId ?? "";
+    const producerCapsuleId =
+      request.producerCapsuleId ?? request.producerInstallationId ?? "";
+    const consumerCapsuleId =
+      request.consumerCapsuleId ?? request.consumerInstallationId ?? "";
+    const existing = await this.#store.listDependenciesBySpace(workspaceId);
     const edges: readonly GraphEdge[] = existing.map((dep) => ({
       from: dep.producerInstallationId,
       to: dep.consumerInstallationId,
     }));
     const candidate: GraphEdge = {
-      from: request.producerInstallationId,
-      to: request.consumerInstallationId,
+      from: producerCapsuleId,
+      to: consumerCapsuleId,
     };
     const cycle = detectCycle(edges, candidate);
     if (cycle !== undefined) {
@@ -286,9 +311,12 @@ export class DependenciesService {
 
     const dependency: Dependency = {
       id: this.#newId("dep"),
-      spaceId: request.spaceId,
-      producerInstallationId: request.producerInstallationId,
-      consumerInstallationId: request.consumerInstallationId,
+      workspaceId,
+      spaceId: workspaceId,
+      producerCapsuleId,
+      producerInstallationId: producerCapsuleId,
+      consumerCapsuleId,
+      consumerInstallationId: consumerCapsuleId,
       mode: request.mode,
       outputs: request.outputs,
       visibility: request.visibility,
@@ -307,17 +335,19 @@ export class DependenciesService {
    * does not cover a mapped name, is a typed `failed_precondition`.
    */
   async #assertActiveShareCovers(
-    producer: { readonly id: string; readonly spaceId: string },
-    consumer: { readonly spaceId: string },
+    producer: { readonly id: string; readonly workspaceId: string },
+    consumer: { readonly workspaceId: string },
     outputs: Readonly<Record<string, DependencyOutputMapping>>,
   ): Promise<void> {
-    const shares = await this.#store.listOutputSharesToSpace(consumer.spaceId);
+    const shares = await this.#store.listOutputSharesToSpace(
+      consumer.workspaceId,
+    );
     // Only ACTIVE shares from THIS producer in THIS producer Space count.
     const covered = new Set<string>();
     for (const share of shares) {
       if (
         share.status !== "active" ||
-        share.fromSpaceId !== producer.spaceId ||
+        share.fromSpaceId !== producer.workspaceId ||
         share.producerInstallationId !== producer.id
       )
         continue;
@@ -335,7 +365,7 @@ export class DependenciesService {
       throw new OpenTofuControllerError(
         "failed_precondition",
         `output_share_required: no active OutputShare from space ` +
-          `${producer.spaceId} to space ${consumer.spaceId} covers ` +
+          `${producer.workspaceId} to space ${consumer.workspaceId} covers ` +
           `${missing.join(", ")} for producer installation ${producer.id}`,
       );
     }
@@ -347,15 +377,22 @@ export class DependenciesService {
    * consumers) and edges where it is the CONSUMER (`asConsumer`, its upstream
    * producers). Spec §14.
    */
+  async listForCapsule(
+    capsuleId: string,
+  ): Promise<InstallationDependencies> {
+    requireNonEmptyString(capsuleId, "capsuleId");
+    const [asProducer, asConsumer] = await Promise.all([
+      this.#store.listDependenciesForProducer(capsuleId),
+      this.#store.listDependenciesForConsumer(capsuleId),
+    ]);
+    return { asProducer, asConsumer };
+  }
+
+  /** @deprecated transient alias for {@link listForCapsule}. */
   async listForInstallation(
     installationId: string,
   ): Promise<InstallationDependencies> {
-    requireNonEmptyString(installationId, "installationId");
-    const [asProducer, asConsumer] = await Promise.all([
-      this.#store.listDependenciesForProducer(installationId),
-      this.#store.listDependenciesForConsumer(installationId),
-    ]);
-    return { asProducer, asConsumer };
+    return await this.listForCapsule(installationId);
   }
 
   /** Deletes a Dependency edge. Returns whether a row was removed. */
@@ -367,6 +404,7 @@ export class DependenciesService {
     if (removed && existing) {
       // Activity (§27 / §34): a Dependency edge was removed.
       await this.#activity.record({
+        workspaceId: existing.spaceId,
         spaceId: existing.spaceId,
         action: "dependency.deleted",
         targetType: "dependency",
@@ -391,9 +429,16 @@ export class DependenciesService {
    * projection (spec §14): the account-plane `/api/v1/spaces/:id/graph`
    * route pairs these edges with the Space's Installations to render the DAG.
    */
+  async listByWorkspace(
+    workspaceId: string,
+  ): Promise<readonly Dependency[]> {
+    requireNonEmptyString(workspaceId, "workspaceId");
+    return await this.#store.listDependenciesBySpace(workspaceId);
+  }
+
+  /** @deprecated transient alias for {@link listByWorkspace}. */
   async listBySpace(spaceId: string): Promise<readonly Dependency[]> {
-    requireNonEmptyString(spaceId, "spaceId");
-    return await this.#store.listDependenciesBySpace(spaceId);
+    return await this.listByWorkspace(spaceId);
   }
 }
 

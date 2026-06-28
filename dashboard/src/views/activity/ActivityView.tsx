@@ -9,7 +9,7 @@ import { createResource, For, Match, Show, Switch } from "solid-js";
 import { ScrollText } from "lucide-solid";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
-import { currentSpaceId } from "../../lib/space-state.ts";
+import { currentWorkspaceId } from "../../lib/workspace-state.ts";
 import {
   type ActivityEvent,
   type ControlApiError,
@@ -153,8 +153,8 @@ function ActivityRow(props: { event: ActivityEvent }) {
 }
 
 function Inner() {
-  const spaceId = () => (currentSpaceId() ? currentSpaceId() : null);
-  const [events] = createResource(spaceId, (id) =>
+  const workspaceId = () => (currentWorkspaceId() ? currentWorkspaceId() : null);
+  const [events] = createResource(workspaceId, (id) =>
     listActivity(id, ACTIVITY_LIMIT),
   );
 
@@ -166,12 +166,12 @@ function Inner() {
       />
 
       <Show
-        when={spaceId()}
+        when={workspaceId()}
         fallback={
           <EmptyState
             icon={<ScrollText size={28} />}
-            title={t("space.select")}
-            message={t("space.selectMessage")}
+            title={t("workspace.select")}
+            message={t("workspace.selectMessage")}
           />
         }
       >

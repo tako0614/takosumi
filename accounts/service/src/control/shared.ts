@@ -1,6 +1,6 @@
 /**
  * Shared substrate for the session-authed `/api/v1` control surface: response
- * projections, the Space access gate, page-param parsing, controller-error
+ * projections, the Workspace access gate, page-param parsing, controller-error
  * mapping, and the dispatch context type. Extracted from `control-routes.ts`
  * (P3 god-file split) so per-resource `control/<resource>.ts` modules import
  * cross-cutting helpers from one place.
@@ -47,15 +47,15 @@ import type {
   PublicCapsuleCompatibilityReportResponse,
 } from "takosumi-contract/capsules";
 import type { ListProvidersResponse } from "takosumi-contract/providers";
-import type { Space, SpaceType } from "takosumi-contract/spaces";
+import type { Workspace, WorkspaceType } from "takosumi-contract/workspaces";
 import type {
-  InstallationProviderEnvBindingSet,
+  CapsuleProviderEnvBindingSet,
   InstallConfig,
-  Installation,
+  Capsule,
   OutputAllowlistEntry,
   PolicyConfig,
   PublicInstallConfig,
-  PublicInstallation,
+  PublicCapsule,
 } from "takosumi-contract/installations";
 import type {
   Dependency,
@@ -66,11 +66,11 @@ import type {
 import type { ActivityEvent } from "takosumi-contract/activity";
 import type { Page, PageParams } from "takosumi-contract/pagination";
 import type {
-  InstallationProviderConnectionBinding,
-  InstallationProviderConnectionBindings,
-  InstallationProviderEnvBinding,
-  InstallationProviderEnvBindings,
-  InstallationProviderConnectionSet,
+  CapsuleProviderConnectionBinding,
+  CapsuleProviderConnectionBindings,
+  CapsuleProviderEnvBinding,
+  CapsuleProviderEnvBindings,
+  CapsuleProviderConnectionSet,
   ProviderConnection,
 } from "takosumi-contract/connections";
 import type {
@@ -80,7 +80,7 @@ import type {
 import type {
   OutputShare,
   OutputShareEntry,
-} from "takosumi-contract/output-snapshots";
+} from "takosumi-contract/outputs";
 import type { PublicDeployment } from "takosumi-contract/deployments";
 import type {
   BackupRecord,
@@ -105,19 +105,19 @@ import type {
 import type { JsonValue } from "takosumi-contract";
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 import type {
-  AppInstallationMode,
-  AppInstallationStatus,
-  InstallationRecord,
-  SpaceKind,
+  AppCapsuleMode,
+  AppCapsuleStatus,
+  CapsuleRecord,
+  WorkspaceKind,
 } from "../ledger.ts";
 import type { SharedCellRuntimeAllocator } from "../runtime.ts";
 import type { AccountsStore } from "../store.ts";
 import type {
   ControlPlaneOperations,
   RunGroupWithRunsLike,
-  ControlSpaceRole,
+  ControlWorkspaceRole,
   ControlMembershipStatus,
-  PublicSpaceMember,
+  PublicWorkspaceMember,
   MembershipActor,
 } from "../control-operations.ts";
 import {
@@ -148,15 +148,15 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-type PublicInstallationInput = PublicInstallation &
-  Partial<Pick<Installation, "installType" | "currentOutputSnapshotId">>;
+type PublicCapsuleInput = PublicCapsule &
+  Partial<Pick<Capsule, "installType" | "currentOutputId">>;
 
-export function publicInstallation(
-  installation: PublicInstallationInput,
-): PublicInstallation {
+export function publicCapsule(
+  installation: PublicCapsuleInput,
+): PublicCapsule {
   const {
     installType: _installType,
-    currentOutputSnapshotId: _currentOutputSnapshotId,
+    currentOutputId: _currentOutputId,
     ...publicRecord
   } = installation;
   return publicRecord;
@@ -165,8 +165,8 @@ export function publicInstallation(
 /**
  * Public projection of a Deployment for the account-plane session surface. It
  * keeps the allowlist-projected `outputsPublic` map (sensitive outputs never
- * enter the ledger row) and drops the `outputSnapshotId` pointer to the raw
- * encrypted OutputSnapshot, so the dashboard read never exposes a handle to the
+ * enter the ledger row) and drops the `outputId` pointer to the raw
+ * encrypted Output, so the dashboard read never exposes a handle to the
  * un-projected output envelope. The raw envelope is reachable only through the
  * explicit OutputShare flow, not this read.
  */
@@ -290,7 +290,7 @@ interface PublicPlanActionResponse {
 
 interface PublicApplyActionResponse {
   readonly run: PublicRun;
-  readonly installation?: PublicInstallation;
+  readonly installation?: PublicCapsule;
   readonly deployment?: PublicDeployment;
 }
 
@@ -319,7 +319,7 @@ export async function publicApplyActionResponse(
   return {
     run: await publicRun(operations, run),
     ...(response.installation
-      ? { installation: publicInstallation(response.installation) }
+      ? { installation: publicCapsule(response.installation) }
       : {}),
     ...(response.deployment
       ? { deployment: publicDeployment(response.deployment) }
@@ -405,19 +405,19 @@ export function parseControlPageParams(
 
 export async function resolveProviderConnectionBindings(
   operations: ControlPlaneOperations,
-  spaceId: string,
-  bindings: InstallationProviderConnectionBindings,
+  workspaceId: string,
+  bindings: CapsuleProviderConnectionBindings,
 ): Promise<
-  | { readonly ok: true; readonly bindings: InstallationProviderEnvBindings }
+  | { readonly ok: true; readonly bindings: CapsuleProviderEnvBindings }
   | { readonly ok: false; readonly message: string }
 > {
   const visibleById = new Map<string, ProviderConnection>();
   for (const connection of await operations.connections.listProviderConnections(
-    spaceId,
+    workspaceId,
   )) {
-    if (connection.spaceId !== undefined) visibleById.set(connection.id, connection);
+    if (connection.workspaceId !== undefined) visibleById.set(connection.id, connection);
   }
-  const resolved: InstallationProviderEnvBinding[] = [];
+  const resolved: CapsuleProviderEnvBinding[] = [];
   for (const [index, binding] of bindings.entries()) {
     if (!visibleById.has(binding.connectionId)) {
       return {
@@ -435,28 +435,28 @@ export async function resolveProviderConnectionBindings(
   return { ok: true, bindings: resolved };
 }
 
-// --- Space authorization ---------------------------------------------------
+// --- Workspace authorization ---------------------------------------------------
 
-type SpaceAccessResult =
+type WorkspaceAccessResult =
   | { readonly ok: true }
   | {
       readonly ok: false;
       readonly response: Response;
     };
 
-export async function requireSpaceAccess(input: {
+export async function requireWorkspaceAccess(input: {
   readonly operations: ControlPlaneOperations;
   readonly store: AccountsStore;
   readonly subject: string;
-  readonly spaceId: string;
-  readonly space?: Space;
-}): Promise<SpaceAccessResult> {
+  readonly workspaceId: string;
+  readonly space?: Workspace;
+}): Promise<WorkspaceAccessResult> {
   if (
-    await canAccessSpace({
+    await canAccessWorkspace({
       operations: input.operations,
       store: input.store,
       subject: input.subject,
-      spaceId: input.spaceId,
+      workspaceId: input.workspaceId,
       ...(input.space ? { space: input.space } : {}),
     })
   ) {
@@ -466,27 +466,27 @@ export async function requireSpaceAccess(input: {
     ok: false,
     response: errorJson(
       "forbidden",
-      "The authenticated session cannot access this Space.",
+      "The authenticated session cannot access this Workspace.",
       403,
     ),
   };
 }
 
-export async function canAccessSpace(input: {
+export async function canAccessWorkspace(input: {
   readonly operations: ControlPlaneOperations;
   readonly store: AccountsStore;
   readonly subject: string;
-  readonly spaceId: string;
-  readonly space?: Space;
+  readonly workspaceId: string;
+  readonly space?: Workspace;
 }): Promise<boolean> {
   const space =
-    input.space ?? (await input.operations.spaces.getSpace(input.spaceId));
+    input.space ?? (await input.operations.spaces.getWorkspace(input.workspaceId));
   if (space.ownerUserId === input.subject) return true;
 
-  const ledgerSpace = await input.store.findSpace(input.spaceId);
-  if (!ledgerSpace) return false;
+  const ledgerWorkspace = await input.store.findWorkspace(input.workspaceId);
+  if (!ledgerWorkspace) return false;
   const ledgerAccount = await input.store.findLedgerAccount(
-    ledgerSpace.accountId,
+    ledgerWorkspace.accountId,
   );
   return ledgerAccount?.legalOwnerSubject === input.subject;
 }

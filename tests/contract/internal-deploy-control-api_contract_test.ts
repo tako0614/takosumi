@@ -65,7 +65,7 @@ test("Deploy Control API v1 request and response DTO top-level shapes are frozen
     "runnerProfiles",
   ]);
   expect(Object.keys(fixtures.createPlanRunRequest)).toEqual([
-    "spaceId",
+    "workspaceId",
     "source",
     "runnerProfileId",
     "variables",
@@ -80,11 +80,11 @@ test("Deploy Control API v1 request and response DTO top-level shapes are frozen
   ]);
   expect(Object.keys(fixtures.applyRunResponse)).toEqual([
     "applyRun",
-    "installation",
+    "capsule",
     "deployment",
   ]);
-  expect(Object.keys(fixtures.getInstallationResponse)).toEqual([
-    "installation",
+  expect(Object.keys(fixtures.getCapsuleResponse)).toEqual([
+    "capsule",
   ]);
   expect(Object.keys(fixtures.listDeploymentsResponse)).toEqual([
     "deployments",

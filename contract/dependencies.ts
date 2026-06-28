@@ -2,17 +2,17 @@
  * Dependency DAG contract (`installation_dependencies` /
  * `dependency_snapshots`).
  *
- * Installations within a Space form a DAG: a Dependency edge connects a
- * producer Installation's outputs to a consumer Installation's inputs.
+ * Capsules within a Workspace form a DAG: a Dependency edge connects a
+ * producer Capsule's outputs to a consumer Capsule's inputs.
  * The canonical store is the D1 ledger, not the filesystem.
  *
  * Modes:
  *   - `variable_injection` (standard): Takosumi reads the producer
- *     OutputSnapshot and generates the consumer's `.auto.tfvars.json`.
- *   - `remote_state`: same-Space only; the plan-pinned producer StateSnapshot
+ *     Output and generates the consumer's `.auto.tfvars.json`.
+ *   - `remote_state`: same-Workspace only; the plan-pinned producer StateVersion
  *     is materialized read-only at `/work/deps/<name>.tfstate` for
  *     `terraform_remote_state`.
- *   - `published_output`: cross-Space via an OutputShare, then injected as
+ *   - `published_output`: cross-Workspace via an OutputShare, then injected as
  *     variables.
  */
 
@@ -20,10 +20,10 @@ import type { OutputValueType } from "./installations.ts";
 import { INTERNAL_V1_PREFIX } from "./api-surface.ts";
 
 export const INSTALLATION_DEPENDENCIES_PATH = (
-  installationId: string,
+  capsuleId: string,
 ): string =>
   `${INTERNAL_V1_PREFIX}/installations/${
-    encodeURIComponent(installationId)
+    encodeURIComponent(capsuleId)
   }/dependencies`;
 export const DEPENDENCY_PATH = (dependencyId: string): string =>
   `${INTERNAL_V1_PREFIX}/dependencies/${encodeURIComponent(dependencyId)}`;
@@ -45,8 +45,14 @@ export interface DependencyOutputMapping {
 
 export interface Dependency {
   readonly id: string;
+  readonly workspaceId: string;
+  /** @deprecated Use workspaceId. */
   readonly spaceId: string;
+  readonly producerCapsuleId: string;
+  readonly consumerCapsuleId: string;
+  /** @deprecated Use producerCapsuleId. */
   readonly producerInstallationId: string;
+  /** @deprecated Use consumerCapsuleId. */
   readonly consumerInstallationId: string;
   readonly mode: DependencyMode;
   readonly outputs: Readonly<Record<string, DependencyOutputMapping>>;
@@ -86,17 +92,21 @@ export interface SealedDependencyValues {
  */
 export interface DependencySnapshotEntry {
   readonly dependencyId: string;
+  readonly producerCapsuleId?: string;
+  /** @deprecated Use producerCapsuleId. */
   readonly producerInstallationId: string;
   readonly producerStateGeneration: number;
   /**
-   * Pinned StateSnapshot for `remote_state` edges. Variable-injection and
+   * Pinned StateVersion for `remote_state` edges. Variable-injection and
    * published-output edges may omit these because they pin output values instead
    * of state bytes.
    */
+  readonly producerStateVersionId?: string;
+  /** @deprecated Use producerStateVersionId. */
   readonly producerStateSnapshotId?: string;
   readonly producerStateObjectKey?: string;
   readonly producerStateDigest?: string;
-  readonly producerOutputSnapshotId: string;
+  readonly producerOutputId: string;
   readonly producerOutputDigest: string;
   /**
    * `sha256:<hex>` over the FULL plaintext value map — the non-sensitive entries

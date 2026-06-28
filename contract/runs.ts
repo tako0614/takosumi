@@ -1,14 +1,14 @@
 /**
  * Run + RunGroup contract (`runs` / `run_groups`).
  *
- * A Run is ONE execution ledger row. Most rows execute against an Installation;
- * `source_sync` rows are Source-scoped before any Installation exists.
+ * A Run is ONE execution ledger row. Most rows execute against an Capsule;
+ * `source_sync` rows are Source-scoped before any Capsule exists.
  * Destroy is 2-phase (`destroy_plan` -> approval -> `destroy_apply`,
  * invariant 16). Apply-kind runs only ever execute a saved plan after
  * verifying plan digest / source snapshot / dependency snapshot / state
  * generation (invariants 6-10).
  *
- * A RunGroup orders multiple Runs across the dependency DAG (e.g. a Space
+ * A RunGroup orders multiple Runs across the dependency DAG (e.g. a Workspace
  * update after stale propagation); `graphJson` records the planned order.
  */
 
@@ -76,6 +76,8 @@ export interface RunPlanResource {
 
 export interface RunApplyExpectedGuard {
   readonly reviewedPlanId: string;
+  readonly capsuleId?: string;
+  /** @deprecated Use capsuleId. */
   readonly installationId?: string;
   readonly currentApplyLedgerId?: string | null;
   readonly runnerId: string;
@@ -101,11 +103,17 @@ export interface RunServiceDataRestoreResult {
 export interface Run {
   readonly id: string;
   readonly runGroupId?: string;
+  readonly workspaceId: string;
+  /** @deprecated Use workspaceId. */
   readonly spaceId: string;
   /** Present for Source-scoped rows such as `source_sync`. */
   readonly sourceId?: string;
-  /** Required for Installation-bound rows; absent for Source-scoped rows. */
+  /** Required for Capsule-bound rows; absent for Source-scoped rows. */
+  readonly capsuleId?: string;
+  /** @deprecated Use capsuleId. */
   readonly installationId?: string;
+  /** @deprecated Retired Deployment ledger pointer. */
+  readonly installationCurrentDeploymentId?: string;
   readonly environment?: string;
   readonly type: RunType;
   readonly status: RunStatus;
@@ -133,7 +141,11 @@ export interface Run {
   readonly backupId?: string;
   readonly restoreStateGeneration?: number;
   readonly restoreServiceData?: boolean;
+  readonly restoredStateVersionId?: string;
+  readonly restoredFromStateVersionId?: string;
+  /** @deprecated Use restoredStateVersionId. */
   readonly restoredStateSnapshotId?: string;
+  /** @deprecated Use restoredFromStateVersionId. */
   readonly restoredFromStateSnapshotId?: string;
   readonly restoredServiceData?: RunServiceDataRestoreResult;
   readonly errorCode?: string;
@@ -201,11 +213,11 @@ export interface RunEventsResponse {
  * USD balance / a billing-plan limit). It carries no cost formula and no
  * secret material — only counts already recorded on the run's billing audit.
  *
- *   - `billingMode`        — the Space's billing mode at plan time
+ *   - `billingMode`        — the Workspace's billing mode at plan time
  *                            (`disabled` / `showback` / `enforce`).
  *   - `estimatedUsdMicros` — the USD amount the controller estimated this plan
  *                            would consume on apply, in micros.
- *   - `availableUsdMicros` — the Space's available USD balance observed when
+ *   - `availableUsdMicros` — the Workspace's available USD balance observed when
  *                            a reservation was attempted, in micros, when known.
  *   - `reservationStatus`  — `reserved` when credits were held, or
  *                            `insufficient_credits` when the reservation could
@@ -264,7 +276,9 @@ export type RunGroupStatus =
 
 export interface RunGroup {
   readonly id: string;
-  readonly spaceId: string;
+  readonly workspaceId?: string;
+  /** @deprecated Use workspaceId. */
+  readonly spaceId?: string;
   readonly type: RunGroupType;
   readonly status: RunGroupStatus;
   /** JSON-encoded DAG-ordered plan of member runs. */

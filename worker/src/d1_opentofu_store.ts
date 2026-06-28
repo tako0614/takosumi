@@ -58,7 +58,7 @@ import type {
   SourceSyncRun,
 } from "takosumi-contract/sources";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
-import type { Space } from "takosumi-contract/spaces";
+import type { Workspace as Space } from "takosumi-contract/workspaces";
 import type { InstallationProviderEnvBindingSet } from "takosumi-contract/connections";
 import type {
   Dependency,
@@ -66,8 +66,8 @@ import type {
 } from "takosumi-contract/dependencies";
 import type {
   OutputShare,
-  OutputSnapshot,
-} from "takosumi-contract/output-snapshots";
+  Output as OutputSnapshot,
+} from "takosumi-contract/outputs";
 import type { ArtifactRecord, Run, RunGroup } from "takosumi-contract/runs";
 import type { ActivityEvent } from "takosumi-contract/activity";
 import {
@@ -228,7 +228,7 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     await this.#putRun({
       id: run.id,
       runGroupId: null,
-      spaceId: run.spaceId,
+      spaceId: run.workspaceId ?? run.spaceId,
       installationId: run.installationId ?? null,
       environment: run.installationContext?.environment ?? null,
       type: planRunType(run),
@@ -252,7 +252,7 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     await this.#putRun({
       id: run.id,
       runGroupId: null,
-      spaceId: run.spaceId,
+      spaceId: run.workspaceId ?? run.spaceId,
       installationId: run.installationId ?? null,
       environment: null,
       type: applyRunType(run),
@@ -1920,8 +1920,10 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     await this.#drizzleUpsert(schema.credentialMintEvents, {
       id: event.id,
       runId: event.runId,
-      spaceId: event.spaceId,
-      installationId: event.installationId,
+      // Physical columns space_id / installation_id are frozen; the contract
+      // type renamed to workspaceId / capsuleId.
+      spaceId: event.workspaceId,
+      installationId: event.capsuleId,
       sourceId: event.sourceId,
       connectionId: event.connectionId ?? event.providerEnvId ?? "",
       phase: event.phase,
@@ -1952,8 +1954,10 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
   async putSecurityFinding(finding: SecurityFinding): Promise<SecurityFinding> {
     await this.#drizzleUpsert(schema.securityFindings, {
       id: finding.id,
-      spaceId: finding.spaceId,
-      installationId: finding.installationId ?? null,
+      // Physical columns space_id / installation_id are frozen; the contract
+      // type renamed to workspaceId / capsuleId.
+      spaceId: finding.workspaceId,
+      installationId: finding.capsuleId ?? null,
       runId: finding.runId ?? null,
       severity: finding.severity,
       type: finding.type,
@@ -2430,7 +2434,7 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
       return {
         settled: false,
         attempt: existing,
-        balance: await this.getCreditBalance(existing.spaceId),
+        balance: await this.getCreditBalance(existing.workspaceId ?? existing.spaceId),
         skippedReason: "already_succeeded",
       };
     }
@@ -2476,7 +2480,7 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
         return {
           settled: false,
           attempt: await this.#billingAutoRechargeAttemptById(next.id),
-          balance: await this.getCreditBalance(next.spaceId),
+          balance: await this.getCreditBalance(next.workspaceId ?? next.spaceId),
           skippedReason: "already_succeeded",
         };
       }
@@ -2529,7 +2533,7 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
         return {
           settled: false,
           attempt: await this.#billingAutoRechargeAttemptById(next.id),
-          balance: await this.getCreditBalance(next.spaceId),
+          balance: await this.getCreditBalance(next.workspaceId ?? next.spaceId),
           skippedReason: "already_succeeded",
         };
       }
@@ -2538,7 +2542,7 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     return {
       settled: true,
       attempt: next,
-      balance: await this.getCreditBalance(next.spaceId),
+      balance: await this.getCreditBalance(next.workspaceId ?? next.spaceId),
     };
   }
 
@@ -2573,7 +2577,7 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
         .insert(schema.usageEvents)
         .values({
           id: normalized.id,
-          spaceId: normalized.spaceId,
+          spaceId: normalized.workspaceId ?? normalized.spaceId,
           installationId: normalized.installationId ?? null,
           runId: normalized.runId ?? null,
           meterId: normalized.meterId ?? null,
@@ -2609,7 +2613,7 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     if (existing) {
       return {
         usageEvent: existing,
-        balance: await this.getCreditBalance(existing.spaceId),
+        balance: await this.getCreditBalance(existing.workspaceId ?? existing.spaceId),
         inserted: false,
       };
     }
@@ -2686,7 +2690,7 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
       if (raced && isD1UsageEventIdempotencyError(error)) {
         return {
           usageEvent: raced,
-          balance: await this.getCreditBalance(raced.spaceId),
+          balance: await this.getCreditBalance(raced.workspaceId ?? raced.spaceId),
           inserted: false,
         };
       }
@@ -2698,7 +2702,7 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     if (!recorded) return undefined;
     return {
       usageEvent: recorded,
-      balance: await this.getCreditBalance(recorded.spaceId),
+      balance: await this.getCreditBalance(recorded.workspaceId ?? recorded.spaceId),
       inserted: recorded.id === normalized.id,
     };
   }
@@ -3038,7 +3042,7 @@ function d1UpsertRunStmt(
   const values = {
     id: run.id,
     runGroupId: generic.runGroupId ?? null,
-    spaceId: run.spaceId,
+    spaceId: run.workspaceId ?? run.spaceId,
     sourceId: generic.sourceId ?? null,
     installationId: run.installationId ?? null,
     environment: generic.environment ?? null,
@@ -3116,6 +3120,7 @@ function d1InstallationStateGuardStmt(
       .select({
         id: schema.installations.id,
         spaceId: schema.installations.spaceId,
+        projectId: schema.installations.projectId,
         name: schema.installations.name,
         slug: schema.installations.slug,
         sourceId: schema.installations.sourceId,
@@ -3176,8 +3181,14 @@ function isD1RunLeaseLostError(error: unknown): boolean {
 }
 
 function isD1InstallationStateGuardError(error: unknown): boolean {
+  // P4: the ledger table is physically `capsules`; the conflicting-insert guard
+  // (see d1InstallationStateGuardStmt) trips the `capsules.id` primary-key
+  // constraint. The pre-rename `installations.id` form is matched too so the
+  // guard keeps working on a database that has not yet applied the rename.
   return error instanceof Error
-    ? error.message.includes("UNIQUE constraint failed: installations.id") ||
+    ? error.message.includes("UNIQUE constraint failed: capsules.id") ||
+        error.message.includes("constraint failed: capsules.id") ||
+        error.message.includes("UNIQUE constraint failed: installations.id") ||
         error.message.includes("constraint failed: installations.id")
     : false;
 }
@@ -3212,8 +3223,8 @@ function d1UpsertStateSnapshotStmt(
     .insert(schema.stateSnapshots)
     .values({
       id: snapshot.id,
-      spaceId: snapshot.spaceId,
-      installationId: snapshot.installationId,
+      spaceId: snapshot.workspaceId ?? snapshot.spaceId,
+      installationId: snapshot.capsuleId ?? snapshot.installationId,
       environment: snapshot.environment,
       generation: snapshot.generation,
       objectKey: snapshot.objectKey,
@@ -3245,7 +3256,7 @@ function d1UpsertOutputSnapshotStmt(
   const values = {
     id: snapshot.id,
     spaceId: snapshot.spaceId,
-    installationId: snapshot.installationId,
+    installationId: snapshot.capsuleId ?? snapshot.installationId,
     stateGeneration: snapshot.stateGeneration,
     recordJson: snapshot,
     createdAt: snapshot.createdAt,
@@ -3317,6 +3328,8 @@ function stateSnapshotFromDrizzleRow(row: {
 }): StateSnapshot {
   return {
     id: row.id,
+    workspaceId: row.spaceId,
+    capsuleId: row.installationId,
     spaceId: row.spaceId,
     installationId: row.installationId,
     environment: row.environment,
@@ -3394,6 +3407,7 @@ function creditBalanceFromRow(row: {
   readonly updatedAt: string;
 }): CreditBalance {
   return normalizeCreditBalance({
+    workspaceId: row.spaceId,
     spaceId: row.spaceId,
     ...(row.availableUsdMicros !== null && row.availableUsdMicros !== undefined
       ? { availableUsdMicros: row.availableUsdMicros }
@@ -3424,6 +3438,7 @@ function normalizeCreditReservation(
     legacyCreditsToUsdMicros(reservation.estimatedCredits);
   return {
     ...reservation,
+    workspaceId: reservation.workspaceId ?? reservation.spaceId ?? "",
     estimatedUsdMicros,
     estimatedCredits: usdMicrosToLegacyCredits(estimatedUsdMicros),
   };
@@ -3505,6 +3520,7 @@ function usageEventFromRow(row: {
 }): UsageEvent {
   return {
     id: row.id,
+    workspaceId: row.spaceId,
     spaceId: row.spaceId,
     ...(row.installationId ? { installationId: row.installationId } : {}),
     ...(row.runId ? { runId: row.runId } : {}),
@@ -3575,15 +3591,28 @@ export async function ensureD1OpenTofuLedgerSchema(
   db: D1Database,
 ): Promise<void> {
   const statements = [
-    `create table if not exists spaces (
+    `create table if not exists workspaces (
       id text primary key,
       handle text not null,
       record_json text not null,
       created_at text not null,
       updated_at text not null
     )`,
-    `create unique index if not exists spaces_handle_unique
-      on spaces (handle)`,
+    `create unique index if not exists workspaces_handle_unique
+      on workspaces (handle)`,
+    `create table if not exists projects (
+      id text primary key,
+      workspace_id text not null,
+      name text not null,
+      slug text not null,
+      record_json text not null,
+      created_at text not null,
+      updated_at text not null
+    )`,
+    `create unique index if not exists projects_workspace_slug_unique
+      on projects (workspace_id, slug)`,
+    `create index if not exists projects_workspace_idx
+      on projects (workspace_id)`,
     `create table if not exists sources (
       id text primary key,
       space_id text not null,
@@ -3648,16 +3677,17 @@ export async function ensureD1OpenTofuLedgerSchema(
       on install_configs (space_id)`,
     `create index if not exists install_configs_install_type_idx
       on install_configs (install_type)`,
-    `create table if not exists installations (
+    `create table if not exists capsules (
       id text primary key,
       space_id text not null,
+      project_id text,
       name text not null,
       slug text not null,
       source_id text,
       install_type text not null,
       install_config_id text not null,
       environment text not null,
-      current_deployment_id text,
+      current_state_version_id text,
       current_state_generation integer not null default 0,
       current_output_snapshot_id text,
       status text not null,
@@ -3665,12 +3695,14 @@ export async function ensureD1OpenTofuLedgerSchema(
       created_at text not null,
       updated_at text not null
     )`,
-    `create unique index if not exists installations_space_name_environment_unique
-      on installations (space_id, name, environment)`,
-    `create index if not exists installations_space_idx
-      on installations (space_id)`,
-    `create index if not exists installations_current_deployment_idx
-      on installations (current_deployment_id)`,
+    `create unique index if not exists capsules_space_name_environment_unique
+      on capsules (space_id, name, environment)`,
+    `create index if not exists capsules_space_idx
+      on capsules (space_id)`,
+    `create index if not exists capsules_project_idx
+      on capsules (project_id)`,
+    `create index if not exists capsules_current_state_version_idx
+      on capsules (current_state_version_id)`,
     `create table if not exists capsule_compatibility_reports (
       id text primary key,
       source_id text,
@@ -3735,7 +3767,7 @@ export async function ensureD1OpenTofuLedgerSchema(
       plan_run_id text primary key,
       inputs_json text not null
     )`,
-    `create table if not exists state_snapshots (
+    `create table if not exists state_versions (
       id text primary key,
       space_id text not null,
       installation_id text not null,
@@ -3746,10 +3778,10 @@ export async function ensureD1OpenTofuLedgerSchema(
       created_by_run_id text not null,
       created_at text not null
     )`,
-    `create unique index if not exists state_snapshots_installation_environment_generation_unique
-      on state_snapshots (installation_id, environment, generation)`,
-    `create index if not exists state_snapshots_installation_idx
-      on state_snapshots (installation_id)`,
+    `create unique index if not exists state_versions_installation_environment_generation_unique
+      on state_versions (installation_id, environment, generation)`,
+    `create index if not exists state_versions_installation_idx
+      on state_versions (installation_id)`,
     `create table if not exists deployments (
       id text primary key,
       space_id text not null,
@@ -3808,7 +3840,7 @@ export async function ensureD1OpenTofuLedgerSchema(
     )`,
     `create index if not exists dependency_snapshots_run_idx
       on dependency_snapshots (run_id)`,
-    `create table if not exists output_snapshots (
+    `create table if not exists outputs (
       id text primary key,
       space_id text not null,
       installation_id text not null,
@@ -3816,8 +3848,8 @@ export async function ensureD1OpenTofuLedgerSchema(
       record_json text not null,
       created_at text not null
     )`,
-    `create index if not exists output_snapshots_installation_idx
-      on output_snapshots (installation_id)`,
+    `create index if not exists outputs_installation_idx
+      on outputs (installation_id)`,
     `create table if not exists output_shares (
       id text primary key,
       from_space_id text not null,
@@ -4040,13 +4072,24 @@ export async function ensureD1OpenTofuLedgerSchema(
 
 /**
  * Final-name table renames applied before the ensure-DDL in
- * {@link ensureD1OpenTofuLedgerSchema}. Empty until the 17-noun rename (P4)
- * populates it with entries such as `{ from: "spaces", to: "workspaces" }`.
+ * {@link ensureD1OpenTofuLedgerSchema}. P4 17-noun rename: a pre-existing
+ * (populated) ledger table is renamed to its final name BEFORE the
+ * `create table if not exists <final>` ensure-DDL would otherwise create an
+ * empty final-name table beside it. Guarded so the pass is a no-op on fresh
+ * databases (no source table) and on already-renamed databases (target exists).
+ * Column-level renames + the project_id add + value-translation + record_json
+ * blob-key rewrites are then applied by the versioned migration
+ * `d1_opentofu_workspace_capsule_rename` (version 17).
  */
 const D1_OPEN_TOFU_PRE_CREATE_RENAMES: readonly {
   readonly from: string;
   readonly to: string;
-}[] = [];
+}[] = [
+  { from: "spaces", to: "workspaces" },
+  { from: "installations", to: "capsules" },
+  { from: "state_snapshots", to: "state_versions" },
+  { from: "output_snapshots", to: "outputs" },
+];
 
 async function applyD1PreCreateRenames(db: D1Database): Promise<void> {
   await applyD1GuardedTableRenames(db, D1_OPEN_TOFU_PRE_CREATE_RENAMES);
@@ -4113,6 +4156,11 @@ secret_blobs blob_json compatibility shape -> canonical secret_blobs columns
 installations.current_output_snapshot_id nullable output snapshot pointer
 `,
     async apply(db) {
+      // P4: on a fresh post-rename DB the ledger table is created as `capsules`
+      // (already carrying current_output_snapshot_id), so the legacy
+      // `installations` table is absent — skip rather than ALTER a missing table.
+      // (checksumSource is unchanged so already-migrated ledgers stay stable.)
+      if (!(await d1TableExists(db, "installations"))) return;
       await ensureD1Column(
         db,
         "installations",
@@ -4504,7 +4552,251 @@ provider_envs renamed aside to provider_envs_retired (non-destructive)
       ]);
     },
   },
+  {
+    version: 17,
+    name: "d1_opentofu_workspace_capsule_rename",
+    checksumSource: `
+P4 17-noun rename (table renames applied by applyD1PreCreateRenames before ensure-DDL):
+  spaces -> workspaces, installations -> capsules,
+  state_snapshots -> state_versions, output_snapshots -> outputs.
+capsules.current_deployment_id renamed to current_state_version_id (guarded).
+capsules.project_id added (nullable, Workspace-owned Project pointer).
+projects table + one default Project (prj_default_<workspaceId>) backfilled per Workspace;
+capsules.project_id backfilled to the default Project.
+retire_deployment_tracking value-translation: capsules.current_state_version_id set from the
+  highest-generation StateVersion per (capsule, environment); the column previously held a
+  retired deployments.id.
+record_json blob-key rewrites (rename-aside, replacement semantics):
+  capsules: spaceId->workspaceId, currentOutputSnapshotId->currentOutputId,
+            currentDeploymentId->currentStateVersionId (value from the translated column),
+            projectId set from the column;
+  state_versions/outputs: spaceId->workspaceId, installationId->capsuleId;
+  output_shares: fromSpaceId->fromWorkspaceId, toSpaceId->toWorkspaceId,
+                 producerInstallationId->producerCapsuleId.
+stale pre-rename named indexes dropped (the canonical new-name indexes are (re)created by the
+  ensure-DDL index tail).
+`,
+    async apply(db) {
+      // 1. capsules column moves (the table itself was renamed by the
+      //    pre-create rename; on a fresh DB the ensure-DDL already created the
+      //    final column shape so each step below is a guarded no-op).
+      await renameD1ColumnIfNeeded(
+        db,
+        "capsules",
+        "current_deployment_id",
+        "current_state_version_id",
+      );
+      if (await d1TableExists(db, "capsules")) {
+        await ensureD1Column(db, "capsules", "project_id", "text");
+        // The pre-create rename can move `installations` -> `capsules` before the
+        // historical column-add migrations (e.g. v2's current_output_snapshot_id,
+        // which guards on the now-absent `installations` name) get a chance to
+        // run, so re-assert the canonical nullable pointer columns here.
+        await ensureD1Column(
+          db,
+          "capsules",
+          "current_state_version_id",
+          "text",
+        );
+        await ensureD1Column(
+          db,
+          "capsules",
+          "current_output_snapshot_id",
+          "text",
+        );
+      }
+
+      // 2. projects table (also created by the ensure-DDL table pass; defensive).
+      await db
+        .prepare(
+          `create table if not exists projects (
+            id text primary key,
+            workspace_id text not null,
+            name text not null,
+            slug text not null,
+            record_json text not null,
+            created_at text not null,
+            updated_at text not null
+          )`,
+        )
+        .run();
+
+      // 3. Backfill one default Project per Workspace, then point every
+      //    pre-Project Capsule at its Workspace's default Project.
+      if (await d1TableExists(db, "workspaces")) {
+        await db
+          .prepare(
+            `insert into projects (id, workspace_id, name, slug, record_json, created_at, updated_at)
+             select
+               'prj_default_' || w.id,
+               w.id,
+               'Default',
+               'default',
+               json_object(
+                 'id', 'prj_default_' || w.id,
+                 'workspaceId', w.id,
+                 'name', 'Default',
+                 'slug', 'default',
+                 'projectJson', json_object(),
+                 'createdAt', w.created_at,
+                 'updatedAt', w.updated_at
+               ),
+               w.created_at,
+               w.updated_at
+             from workspaces w
+             where not exists (
+               select 1 from projects p where p.id = 'prj_default_' || w.id
+             )`,
+          )
+          .run();
+      }
+      if (await d1TableExists(db, "capsules")) {
+        await db
+          .prepare(
+            `update capsules set project_id = 'prj_default_' || space_id
+             where project_id is null
+               and exists (
+                 select 1 from projects p
+                 where p.id = 'prj_default_' || capsules.space_id
+               )`,
+          )
+          .run();
+      }
+
+      // 4. retire_deployment_tracking value-translation: rewrite the pointer that
+      //    used to be a deployments.id into the highest-generation StateVersion id
+      //    for the Capsule's current environment.
+      if (
+        (await d1TableExists(db, "capsules")) &&
+        (await d1TableExists(db, "state_versions"))
+      ) {
+        await db
+          .prepare(
+            `update capsules set current_state_version_id = (
+               select sv.id from state_versions sv
+               where sv.installation_id = capsules.id
+                 and sv.environment = capsules.environment
+               order by sv.generation desc limit 1
+             )
+             where exists (
+               select 1 from state_versions sv
+               where sv.installation_id = capsules.id
+                 and sv.environment = capsules.environment
+             )`,
+          )
+          .run();
+      }
+
+      // 5. record_json blob-key rewrites (so getCapsule / getStateVersion /
+      //    getOutput deserialize the renamed contract fields).
+      await renameD1JsonKey(db, "capsules", "spaceId", "workspaceId");
+      await renameD1JsonKey(
+        db,
+        "capsules",
+        "currentOutputSnapshotId",
+        "currentOutputId",
+      );
+      if (await d1TableExists(db, "capsules")) {
+        // currentStateVersionId carries the value-translated column (not the old
+        // currentDeploymentId value); set it from the column, then drop the
+        // stale key.
+        await db
+          .prepare(
+            `update capsules
+             set record_json = json_set(
+               record_json, '$.currentStateVersionId', current_state_version_id
+             )
+             where current_state_version_id is not null`,
+          )
+          .run();
+        await db
+          .prepare(
+            `update capsules
+             set record_json = json_remove(record_json, '$.currentDeploymentId')
+             where json_extract(record_json, '$.currentDeploymentId') is not null`,
+          )
+          .run();
+        await db
+          .prepare(
+            `update capsules
+             set record_json = json_set(record_json, '$.projectId', project_id)
+             where project_id is not null`,
+          )
+          .run();
+      }
+      // state_versions is stored columnar (no record_json blob), so it carries
+      // no JSON keys to rewrite — only outputs / output_shares / capsules do.
+      await renameD1JsonKey(db, "outputs", "spaceId", "workspaceId");
+      await renameD1JsonKey(db, "outputs", "installationId", "capsuleId");
+      await renameD1JsonKey(db, "output_shares", "fromSpaceId", "fromWorkspaceId");
+      await renameD1JsonKey(db, "output_shares", "toSpaceId", "toWorkspaceId");
+      await renameD1JsonKey(
+        db,
+        "output_shares",
+        "producerInstallationId",
+        "producerCapsuleId",
+      );
+
+      // 6. Drop stale pre-rename named indexes carried over by the table rename;
+      //    the ensure-DDL index tail recreates the canonical new-name indexes.
+      for (const indexName of [
+        "spaces_handle_unique",
+        "installations_space_name_environment_unique",
+        "installations_space_idx",
+        "installations_current_deployment_idx",
+        "state_snapshots_installation_environment_generation_unique",
+        "state_snapshots_installation_idx",
+        "output_snapshots_installation_idx",
+      ]) {
+        await db.prepare(`drop index if exists ${indexName}`).run();
+      }
+    },
+  },
 ] as const satisfies readonly D1OpenTofuSchemaMigration[];
+
+/**
+ * P4 helper: rename a D1 column only when the legacy column exists and the
+ * target does not (idempotent on fresh / already-migrated databases, no-op when
+ * the table is absent).
+ */
+async function renameD1ColumnIfNeeded(
+  db: D1Database,
+  table: string,
+  from: string,
+  to: string,
+): Promise<void> {
+  if (!(await d1TableExists(db, table))) return;
+  const columns = await d1ColumnNames(db, table);
+  if (columns.has(from) && !columns.has(to)) {
+    await db.prepare(`alter table ${table} rename column ${from} to ${to}`).run();
+  }
+}
+
+/**
+ * P4 helper: rename a top-level key inside a JSON text column (replacement
+ * semantics — set the new key from the old value, then drop the old key). Only
+ * rows that actually carry the legacy key are touched, so it is idempotent and a
+ * no-op once converged (or when the table is absent).
+ */
+async function renameD1JsonKey(
+  db: D1Database,
+  table: string,
+  fromKey: string,
+  toKey: string,
+  column = "record_json",
+): Promise<void> {
+  if (!(await d1TableExists(db, table))) return;
+  await db
+    .prepare(
+      `update ${table}
+       set ${column} = json_remove(
+         json_set(${column}, '$.${toKey}', json_extract(${column}, '$.${fromKey}')),
+         '$.${fromKey}'
+       )
+       where json_extract(${column}, '$.${fromKey}') is not null`,
+    )
+    .run();
+}
 
 async function ensureD1SchemaMigrationLedger(db: D1Database): Promise<void> {
   await db
@@ -4798,6 +5090,15 @@ const D1_OPEN_TOFU_CANONICAL_INDEX_STATEMENTS = [
 
 async function ensureD1OpenTofuCanonicalIndexes(db: D1Database): Promise<void> {
   for (const statement of D1_OPEN_TOFU_CANONICAL_INDEX_STATEMENTS) {
+    // P4: this historical index-parity pass names the pre-rename tables
+    // (spaces / installations / state_snapshots / output_snapshots). On a fresh
+    // post-rename DB those tables are created under their final names, so the
+    // legacy-named target is absent — skip it rather than CREATE INDEX on a
+    // missing table. The canonical NEW-name indexes are created by the
+    // ensure-DDL index tail. (The statement strings — and thus this migration's
+    // checksumSource — are unchanged, so already-migrated ledgers stay stable.)
+    const tableName = parseD1CreateIndexTable(statement);
+    if (!(await d1TableExists(db, tableName))) continue;
     const indexName = parseD1CreateIndexName(statement);
     await db.prepare(`drop index if exists ${indexName}`).run();
     await db.prepare(statement).run();
@@ -4810,6 +5111,14 @@ function parseD1CreateIndexName(statement: string): string {
   );
   if (!match) {
     throw new Error(`Unable to parse D1 index name from: ${statement}`);
+  }
+  return match[1];
+}
+
+function parseD1CreateIndexTable(statement: string): string {
+  const match = /\bon\s+([a-z_][a-z0-9_]*)\s*\(/i.exec(statement);
+  if (!match) {
+    throw new Error(`Unable to parse D1 index target table from: ${statement}`);
   }
   return match[1];
 }

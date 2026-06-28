@@ -11,7 +11,8 @@ export type {
   OperatorImplementationApplyResult,
   OperatorImplementationDeploymentContext,
   OperatorImplementationDestroyContext,
-  OperatorImplementationInstallationContext,
+  OperatorImplementationCapsuleContext,
+  OperatorImplementationCapsuleContext as OperatorImplementationInstallationContext,
 } from "takosumi-contract/reference/implementation";
 import type { OperatorImplementation } from "takosumi-contract/reference/implementation";
 

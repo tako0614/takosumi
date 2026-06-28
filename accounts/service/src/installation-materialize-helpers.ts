@@ -1,12 +1,12 @@
 import type {
   ServiceBindingMaterialKind,
-  AppInstallationMode,
-  AppInstallationStatus,
-  InstallationRecord,
+  AppCapsuleMode,
+  AppCapsuleStatus,
+  CapsuleRecord,
   RuntimeBindingRecord,
 } from "./ledger.ts";
 import type { AccountsStore } from "./store.ts";
-import { collectInstallationExportBundle } from "./export-bundle.ts";
+import { collectCapsuleExportBundle } from "./export-bundle.ts";
 import { exportDownloadUrl } from "./export-download-url.ts";
 import {
   appendExportOperationCompletion,
@@ -23,8 +23,8 @@ import {
   nullableString,
   operationClosedEventTypes,
   operationRequestedEventType,
-  serializeAppInstallation,
-  serializeInstallationEvent,
+  serializeAppCapsule,
+  serializeCapsuleEvent,
   serializeRuntimeBinding,
 } from "./installation-helpers.ts";
 import {
@@ -36,20 +36,20 @@ import {
   stringValue,
 } from "./http-helpers.ts";
 import type {
-  AppInstallationExportRequest,
-  AppInstallationExportWorker,
-  AppInstallationExportWorkerResult,
-  AppInstallationMaterializeContinuityEvidence,
-  AppInstallationMaterializeRequest,
-  AppInstallationMaterializeWorker,
-  AppInstallationMaterializeWorkerResult,
+  AppCapsuleExportRequest,
+  AppCapsuleExportWorker,
+  AppCapsuleExportWorkerResult,
+  AppCapsuleMaterializeContinuityEvidence,
+  AppCapsuleMaterializeRequest,
+  AppCapsuleMaterializeWorker,
+  AppCapsuleMaterializeWorkerResult,
 } from "./mod.ts";
-import { publicInstallationOperationErrorMessage } from "./installation-operation-errors.ts";
+import { publicCapsuleOperationErrorMessage } from "./installation-operation-errors.ts";
 
 export function runtimeBindingFromValue(input: {
   value: unknown;
-  installationId: string;
-  mode: AppInstallationMode;
+  capsuleId: string;
+  mode: AppCapsuleMode;
   now: number;
 }): RuntimeBindingRecord | undefined {
   if (input.value === undefined) return undefined;
@@ -65,7 +65,7 @@ export function runtimeBindingFromValue(input: {
   return {
     runtimeBindingId:
       stringValue(input.value.runtimeTargetId) ?? `rtb_${crypto.randomUUID()}`,
-    installationId: input.installationId,
+    capsuleId: input.capsuleId,
     mode: input.mode,
     targetType,
     targetId,
@@ -75,7 +75,7 @@ export function runtimeBindingFromValue(input: {
 }
 
 export function materializeAcceptedBody(input: {
-  installation: InstallationRecord;
+  installation: CapsuleRecord;
   operationId: string;
   region: string;
   preserve?: Record<string, unknown>;
@@ -83,7 +83,7 @@ export function materializeAcceptedBody(input: {
 }): Record<string, unknown> {
   return {
     operationId: input.operationId,
-    installationId: input.installation.installationId,
+    capsuleId: input.installation.capsuleId,
     fromMode: input.installation.mode,
     toMode: "dedicated",
     region: input.region,
@@ -91,7 +91,7 @@ export function materializeAcceptedBody(input: {
     ...(input.preserveDigest ? { preserveDigest: input.preserveDigest } : {}),
     etaSeconds: 600,
     trackingUrl: installationEventsTrackingUrl(
-      input.installation.installationId,
+      input.installation.capsuleId,
       [
         installationMaterializeRequestedEvent,
         installationMaterializeSucceededEvent,
@@ -103,16 +103,16 @@ export function materializeAcceptedBody(input: {
 
 export async function materializePreservationSnapshot(input: {
   store: AccountsStore;
-  installation: InstallationRecord;
+  installation: CapsuleRecord;
 }): Promise<Record<string, unknown>> {
   const runtimeBinding = input.installation.runtimeBindingId
     ? await input.store.findRuntimeBinding(input.installation.runtimeBindingId)
     : undefined;
-  const bindings = await input.store.listServiceBindingMaterialsForInstallation(
-    input.installation.installationId,
+  const bindings = await input.store.listServiceBindingMaterialsForCapsule(
+    input.installation.capsuleId,
   );
-  const oidcClient = await input.store.findOidcClientForInstallation(
-    input.installation.installationId,
+  const oidcClient = await input.store.findOidcClientForCapsule(
+    input.installation.capsuleId,
   );
   return {
     source: {
@@ -169,16 +169,16 @@ export function isMaterializePreservedBindingKind(
   );
 }
 
-export async function completeAppInstallationMaterializeWithWorker(input: {
+export async function completeAppCapsuleMaterializeWithWorker(input: {
   store: AccountsStore;
-  installation: InstallationRecord;
+  installation: CapsuleRecord;
   operationId: string;
-  requestPayload: AppInstallationMaterializeRequest;
+  requestPayload: AppCapsuleMaterializeRequest;
   preserve: Record<string, unknown>;
   preserveDigest: string;
-  materializeWorker: AppInstallationMaterializeWorker;
+  materializeWorker: AppCapsuleMaterializeWorker;
 }): Promise<Record<string, unknown>> {
-  let result: AppInstallationMaterializeWorkerResult;
+  let result: AppCapsuleMaterializeWorkerResult;
   try {
     result = await input.materializeWorker({
       installation: input.installation,
@@ -210,7 +210,7 @@ export async function completeAppInstallationMaterializeWithWorker(input: {
   const now = Date.now();
   const runtimeBinding = runtimeBindingFromValue({
     value: result.runtimeTarget,
-    installationId: input.installation.installationId,
+    capsuleId: input.installation.capsuleId,
     mode: "dedicated",
     now,
   });
@@ -236,7 +236,7 @@ export async function completeAppInstallationMaterializeWithWorker(input: {
     });
   }
 
-  const updated: InstallationRecord = {
+  const updated: CapsuleRecord = {
     ...input.installation,
     mode: "dedicated",
     runtimeBindingId: runtimeBinding.runtimeBindingId,
@@ -244,9 +244,9 @@ export async function completeAppInstallationMaterializeWithWorker(input: {
     updatedAt: now,
   };
   await input.store.saveRuntimeBinding(runtimeBinding);
-  await input.store.saveAppInstallation(updated);
+  await input.store.saveAppCapsule(updated);
   const event = await appendLedgerEvent(input.store, {
-    installationId: input.installation.installationId,
+    capsuleId: input.installation.capsuleId,
     eventType: installationMaterializeSucceededEvent,
     payload: {
       operationId: input.operationId,
@@ -267,25 +267,25 @@ export async function completeAppInstallationMaterializeWithWorker(input: {
       preserveDigest: input.preserveDigest,
     }),
     status: "ready",
-    installation: serializeAppInstallation(updated),
+    installation: serializeAppCapsule(updated),
     runtime_target: serializeRuntimeBinding(runtimeBinding),
-    event: serializeInstallationEvent(event),
+    event: serializeCapsuleEvent(event),
   };
 }
 
 export async function materializeOperationFailedBody(input: {
   store: AccountsStore;
-  installation: InstallationRecord;
+  installation: CapsuleRecord;
   operationId: string;
   error: string;
 }): Promise<Record<string, unknown>> {
   const now = Date.now();
-  const error = publicInstallationOperationErrorMessage(
+  const error = publicCapsuleOperationErrorMessage(
     input.error,
     "materialize failed",
   );
   const event = await appendLedgerEvent(input.store, {
-    installationId: input.installation.installationId,
+    capsuleId: input.installation.capsuleId,
     eventType: installationMaterializeFailedEvent,
     payload: {
       operationId: input.operationId,
@@ -299,12 +299,12 @@ export async function materializeOperationFailedBody(input: {
   });
   return {
     operationId: input.operationId,
-    installationId: input.installation.installationId,
+    capsuleId: input.installation.capsuleId,
     fromMode: input.installation.mode,
     toMode: "dedicated",
     status: "failed",
     trackingUrl: installationEventsTrackingUrl(
-      input.installation.installationId,
+      input.installation.capsuleId,
       [
         installationMaterializeRequestedEvent,
         installationMaterializeSucceededEvent,
@@ -312,14 +312,14 @@ export async function materializeOperationFailedBody(input: {
       ],
     ),
     error,
-    event: serializeInstallationEvent(event),
+    event: serializeCapsuleEvent(event),
   };
 }
 
 export function validateMaterializeContinuity(input: {
   preserve: Record<string, unknown>;
   runtimeBinding: RuntimeBindingRecord;
-  evidence?: AppInstallationMaterializeContinuityEvidence;
+  evidence?: AppCapsuleMaterializeContinuityEvidence;
 }): string | undefined {
   if (!input.evidence || !isPlainRecord(input.evidence)) {
     return "materialize worker did not return continuity evidence";
@@ -380,16 +380,16 @@ export function normalizeContinuityBindings(
     .sort((a, b) => String(a.name).localeCompare(String(b.name)));
 }
 
-export async function completeAppInstallationExportWithWorker(input: {
+export async function completeAppCapsuleExportWithWorker(input: {
   store: AccountsStore;
-  installation: InstallationRecord;
+  installation: CapsuleRecord;
   operationId: string;
-  requestPayload: AppInstallationExportRequest;
-  exportWorker: AppInstallationExportWorker;
+  requestPayload: AppCapsuleExportRequest;
+  exportWorker: AppCapsuleExportWorker;
 }): Promise<Record<string, unknown>> {
-  const bundle = await collectInstallationExportBundle({
+  const bundle = await collectCapsuleExportBundle({
     store: input.store,
-    installationId: input.installation.installationId,
+    capsuleId: input.installation.capsuleId,
   });
   if (!bundle) {
     return exportOperationFailedBody({
@@ -400,7 +400,7 @@ export async function completeAppInstallationExportWithWorker(input: {
     });
   }
 
-  let result: AppInstallationExportWorkerResult;
+  let result: AppCapsuleExportWorkerResult;
   try {
     result = await input.exportWorker({
       installation: input.installation,
@@ -464,7 +464,7 @@ export async function completeAppInstallationExportWithWorker(input: {
   });
   return {
     ...exportOperationBody(
-      input.installation.installationId,
+      input.installation.capsuleId,
       input.operationId,
       {
         status: "exported",
@@ -473,17 +473,17 @@ export async function completeAppInstallationExportWithWorker(input: {
         archiveDigest: archiveDigest ?? null,
       },
     ),
-    event: serializeInstallationEvent(event),
+    event: serializeCapsuleEvent(event),
   };
 }
 
 export async function exportOperationFailedBody(input: {
   store: AccountsStore;
-  installation: InstallationRecord;
+  installation: CapsuleRecord;
   operationId: string;
   error: string;
 }): Promise<Record<string, unknown>> {
-  const error = publicInstallationOperationErrorMessage(
+  const error = publicCapsuleOperationErrorMessage(
     input.error,
     "export failed",
   );
@@ -495,7 +495,7 @@ export async function exportOperationFailedBody(input: {
   });
   return {
     ...exportOperationBody(
-      input.installation.installationId,
+      input.installation.capsuleId,
       input.operationId,
       {
         status: "failed",
@@ -504,15 +504,15 @@ export async function exportOperationFailedBody(input: {
         error,
       },
     ),
-    event: serializeInstallationEvent(event),
+    event: serializeCapsuleEvent(event),
   };
 }
 
 export async function materializeCompletionFromStatusPatch(input: {
   body: Record<string, unknown>;
-  installation: InstallationRecord;
-  requestedMode: AppInstallationMode;
-  status: AppInstallationStatus;
+  installation: CapsuleRecord;
+  requestedMode: AppCapsuleMode;
+  status: AppCapsuleStatus;
   store: AccountsStore;
   now: number;
 }): Promise<
@@ -543,8 +543,8 @@ export async function materializeCompletionFromStatusPatch(input: {
       409,
     );
   }
-  const events = await input.store.listInstallationEvents(
-    input.installation.installationId,
+  const events = await input.store.listCapsuleEvents(
+    input.installation.capsuleId,
   );
   const requested = findOperationEvent({
     events,
@@ -586,7 +586,7 @@ export async function materializeCompletionFromStatusPatch(input: {
   }
   const runtimeBinding = runtimeBindingFromValue({
     value: input.body.runtimeTarget,
-    installationId: input.installation.installationId,
+    capsuleId: input.installation.capsuleId,
     mode: input.requestedMode,
     now: input.now,
   });
@@ -615,11 +615,11 @@ export async function materializeCompletionFromStatusPatch(input: {
 
 export async function validateOperationCompletionFromStatusPatch(input: {
   store: AccountsStore;
-  installationId: string;
+  capsuleId: string;
   operation: "materialize" | "export";
   operationId: string;
 }): Promise<void | Response> {
-  const events = await input.store.listInstallationEvents(input.installationId);
+  const events = await input.store.listCapsuleEvents(input.capsuleId);
   const requested = findOperationEvent({
     events,
     operationId: input.operationId,

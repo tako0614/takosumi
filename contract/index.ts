@@ -1,7 +1,16 @@
 export { API_V1_PREFIX, isApiV1Path } from "./api-surface.ts";
 export * from "./sources.ts";
 export * from "./redaction.ts";
-export * from "./spaces.ts";
+export * from "./workspaces.ts";
+/** @deprecated `Space` is renamed to `Workspace` (`./workspaces.ts`). */
+export type {
+  Workspace as Space,
+  WorkspaceType as SpaceType,
+  CapsuleFullName as InstallationFullName,
+} from "./workspaces.ts";
+/** @deprecated `formatInstallationFullName` is renamed to `formatCapsuleFullName`. */
+export { formatCapsuleFullName as formatInstallationFullName } from "./workspaces.ts";
+export type { Project, PublicProject } from "./projects.ts";
 export type {
   BackupConfig,
   InstallConfigCatalogDefault,
@@ -13,14 +22,17 @@ export type {
   InstallConfigCatalogText,
   InstallBuildConfig,
   InstallPrebuiltArtifactConfig,
-  InstallationStatus,
   NormalizationConfig,
   OutputAllowlistEntry,
   OutputValueType,
   PolicyConfig,
   PublicInstallConfig as InstallConfig,
-  PublicInstallation as Installation,
   TrustLevel,
+} from "./installations.ts";
+/** @deprecated use `Capsule` / `CapsuleStatus` / `PublicCapsule`. */
+export type {
+  CapsuleStatus as InstallationStatus,
+  PublicCapsule as Installation,
 } from "./installations.ts";
 export type {
   DeployRequest,
@@ -28,6 +40,10 @@ export type {
 } from "./deploy.ts";
 export { DEPLOY_PATH } from "./deploy.ts";
 export type {
+  Capsule,
+  CapsuleStatus,
+  InstallType,
+  PublicCapsule,
   CapsuleCompatibility,
   CapsuleCompatibilityLevel,
   CapsuleDataSourceSummary,
@@ -67,17 +83,24 @@ export type {
 export * from "./activity.ts";
 export * from "./pagination.ts";
 export type {
+  Output,
+  PublicOutput,
   OutputShare,
   OutputShareEntry,
   OutputShareStatus,
-  PublicOutputSnapshot,
-  PublicOutputSnapshot as OutputSnapshot,
-} from "./output-snapshots.ts";
+} from "./outputs.ts";
+/** @deprecated `OutputSnapshot` is renamed to `Output` (`./outputs.ts`). */
+export type {
+  PublicOutput as PublicOutputSnapshot,
+  PublicOutput as OutputSnapshot,
+} from "./outputs.ts";
+export type { StateVersion } from "./state-versions.ts";
+/** @deprecated retired Deployment ledger; kept read-only for audit. */
 export type {
   DeploymentStatus,
   PublicDeployment,
   PublicDeployment as Deployment,
-  StateSnapshot,
+  StateVersion as StateSnapshot,
 } from "./deployments.ts";
 export * from "./backups.ts";
 export * from "./billing.ts";

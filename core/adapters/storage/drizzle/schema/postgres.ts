@@ -27,7 +27,30 @@ export const spaces = pgTable(
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
   },
-  (table) => [uniqueIndex("takosumi_spaces_handle_unique").on(table.handle)],
+  (table) => [
+    uniqueIndex("takosumi_workspaces_handle_unique").on(table.handle),
+  ],
+);
+
+// P4 17-noun rename: NEW Workspace-owned Project grouping.
+export const projects = pgTable(
+  names.projects,
+  {
+    id: text("id").primaryKey(),
+    workspaceId: text("workspace_id").notNull(),
+    name: text("name").notNull(),
+    slug: text("slug").notNull(),
+    projectJson: json("project_json").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("takosumi_projects_workspace_slug_unique").on(
+      table.workspaceId,
+      table.slug,
+    ),
+    index("takosumi_projects_workspace_idx").on(table.workspaceId),
+  ],
 );
 
 export const sources = pgTable(
@@ -125,26 +148,32 @@ export const installations = pgTable(
   {
     id: text("id").primaryKey(),
     spaceId: text("space_id").notNull(),
+    projectId: text("project_id"),
     name: text("name").notNull(),
     environment: text("environment").notNull(),
-    // Nullable: upload-origin installations (takosumi deploy) have no Source.
+    // Nullable: upload-origin capsules (takosumi deploy) have no Source.
     sourceId: text("source_id"),
     installConfigId: text("install_config_id").notNull(),
-    currentDeploymentId: text("current_deployment_id"),
+    // current_deployment_id physically renamed to current_state_version_id
+    // (retired-Deployment value-translation target); property keeps the old name.
+    currentDeploymentId: text("current_state_version_id"),
     status: text("status").notNull(),
     installationJson: json("installation_json").notNull(),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [
-    uniqueIndex(
-      "takosumi_opentofu_installations_space_name_environment_unique",
-    ).on(table.spaceId, table.name, table.environment),
-    index("takosumi_opentofu_installations_space_idx").on(table.spaceId),
-    index("takosumi_opentofu_installations_current_deployment_idx").on(
+    uniqueIndex("takosumi_capsules_space_name_environment_unique").on(
+      table.spaceId,
+      table.name,
+      table.environment,
+    ),
+    index("takosumi_capsules_space_idx").on(table.spaceId),
+    index("takosumi_capsules_project_idx").on(table.projectId),
+    index("takosumi_capsules_current_state_version_idx").on(
       table.currentDeploymentId,
     ),
-    index("takosumi_opentofu_installations_created_at_idx").on(table.createdAt),
+    index("takosumi_capsules_created_at_idx").on(table.createdAt),
   ],
 );
 
@@ -242,7 +271,7 @@ export const outputSnapshots = pgTable(
     createdAt: text("created_at").notNull(),
   },
   (table) => [
-    index("takosumi_output_snapshots_installation_idx").on(
+    index("takosumi_outputs_installation_idx").on(
       table.installationId,
       table.stateGeneration,
     ),
@@ -329,9 +358,9 @@ export const stateSnapshots = pgTable(
   },
   (table) => [
     uniqueIndex(
-      "takosumi_state_snapshots_installation_environment_generation_un",
+      "takosumi_state_versions_installation_environment_generation_un",
     ).on(table.installationId, table.environment, table.generation),
-    index("takosumi_state_snapshots_installation_idx").on(
+    index("takosumi_state_versions_installation_idx").on(
       table.installationId,
       table.environment,
       table.generation,

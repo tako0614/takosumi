@@ -1,7 +1,7 @@
 /**
  * Source domain contract.
  *
- * A Source is a Space-scoped registration of a Git repository that Takosumi can
+ * A Source is a Workspace-scoped registration of a Git repository that Takosumi can
  * resolve to an immutable archive snapshot. Takosumi core is GitHub-agnostic: it
  * knows only a {@link GitAddress} (`{ url, ref, path, credentialId }`) and never
  * a forge-specific manifest. There is no custom manifest in user repos; every
@@ -36,11 +36,13 @@ export type SourceStatus = "active" | "disabled" | "error";
 /**
  * Public Source record. NEVER carries the hook secret or any
  * credential value. `defaultRef` / `defaultPath` seed the {@link GitAddress}
- * used by source-sync and Installation planning when the request does not
+ * used by source-sync and Capsule planning when the request does not
  * override them.
  */
 export interface Source {
   readonly id: string;
+  readonly workspaceId: string;
+  /** @deprecated Use workspaceId. */
   readonly spaceId: string;
   readonly name: string;
   readonly url: string;
@@ -63,7 +65,7 @@ export interface Source {
  *                `takosumi deploy` (the `wrangler deploy`-style path). There is
  *                no {@link Source} row and no git clone; the worker archives the
  *                uploaded bytes and records the snapshot. Downstream (Capsule
- *                Gate / plan / apply / Deployment / OutputSnapshot / DAG) is
+ *                Gate / plan / apply / Deployment / Output / DAG) is
  *                origin-agnostic because it only consumes the digest-pinned
  *                archive artifact, never git directly.
  *   - `artifact` — fetched from a user-supplied HTTPS artifact URL, digest
@@ -88,15 +90,17 @@ export type SourceSnapshotOrigin = "git" | "upload" | "artifact";
  * URL; `ref = "artifact"` and `resolvedCommit = archiveDigest`.
  *
  * The archive bytes live in R2_SOURCE under
- * `spaces/{spaceId}/sources/{sourceId}/snapshots/{snapshotId}/source.tar.zst`
- * for git, `spaces/{spaceId}/uploads/{snapshotId}/source.tar.zst` for upload,
- * and `spaces/{spaceId}/artifact-snapshots/{snapshotId}/source.tar.zst` for
+ * `spaces/{workspaceId}/sources/{sourceId}/snapshots/{snapshotId}/source.tar.zst`
+ * for git, `spaces/{workspaceId}/uploads/{snapshotId}/source.tar.zst` for upload,
+ * and `spaces/{workspaceId}/artifact-snapshots/{snapshotId}/source.tar.zst` for
  * externally prepared artifacts.
  */
 export interface SourceSnapshot {
   readonly id: string;
   readonly origin: SourceSnapshotOrigin;
-  /** Owning Space. Always present (derived from the Source for `git`). */
+  /** Owning Workspace. Always present (derived from the Source for `git`). */
+  readonly workspaceId: string;
+  /** @deprecated Use workspaceId. */
   readonly spaceId: string;
   /** Registered Source. Present for `git`, absent for `upload`. */
   readonly sourceId?: string;
@@ -119,6 +123,8 @@ export interface SourceSnapshot {
 export interface SourceSyncRun {
   readonly id: string;
   readonly kind: "source_sync";
+  readonly workspaceId: string;
+  /** @deprecated Use workspaceId. */
   readonly spaceId: string;
   readonly sourceId: string;
   /** The {@link GitAddress} this run resolved (path included). */
@@ -249,12 +255,12 @@ export const SOURCE_HOOK_PATH = (id: string): string =>
  * R2_SOURCE, computes the digest, and records a `SourceSnapshot(origin=upload)`.
  * No Source row and no Runner git clone are involved.
  */
-export const SPACE_UPLOADS_PATH = (spaceId: string): string =>
-  `${API_V1_PREFIX}/spaces/${encodeURIComponent(spaceId)}/uploads`;
+export const SPACE_UPLOADS_PATH = (workspaceId: string): string =>
+  `${API_V1_PREFIX}/spaces/${encodeURIComponent(workspaceId)}/uploads`;
 
 /** INTERNAL upload ingest seam path (`/internal/v1`, reached in-process). */
-export const INTERNAL_SPACE_UPLOADS_PATH = (spaceId: string): string =>
-  `${INTERNAL_V1_PREFIX}/spaces/${encodeURIComponent(spaceId)}/uploads`;
+export const INTERNAL_SPACE_UPLOADS_PATH = (workspaceId: string): string =>
+  `${INTERNAL_V1_PREFIX}/spaces/${encodeURIComponent(workspaceId)}/uploads`;
 
 /**
  * Digest-pinned prepared artifact ingest for CI/source-side build pipelines.
@@ -262,19 +268,21 @@ export const INTERNAL_SPACE_UPLOADS_PATH = (spaceId: string): string =>
  * `sha256:` digest; Takosumi fetches the artifact, verifies the digest, stores
  * it as a SourceSnapshot archive, and records `origin = "artifact"`.
  */
-export const SPACE_ARTIFACT_SNAPSHOTS_PATH = (spaceId: string): string =>
-  `${API_V1_PREFIX}/spaces/${encodeURIComponent(spaceId)}/artifact-snapshots`;
+export const SPACE_ARTIFACT_SNAPSHOTS_PATH = (workspaceId: string): string =>
+  `${API_V1_PREFIX}/spaces/${encodeURIComponent(workspaceId)}/artifact-snapshots`;
 
 /** INTERNAL artifact ingest seam path (`/internal/v1`, reached in-process). */
 export const INTERNAL_SPACE_ARTIFACT_SNAPSHOTS_PATH = (
-  spaceId: string,
+  workspaceId: string,
 ): string =>
   `${INTERNAL_V1_PREFIX}/spaces/${encodeURIComponent(
-    spaceId,
+    workspaceId,
   )}/artifact-snapshots`;
 
 export interface CreateSourceRequest {
-  readonly spaceId: string;
+  readonly workspaceId?: string;
+  /** @deprecated Use workspaceId. */
+  readonly spaceId?: string;
   readonly name: string;
   readonly url: string;
   /** Defaults to `"main"` when omitted. */

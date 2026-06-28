@@ -3,12 +3,12 @@ import { readFile, writeFile } from "node:fs/promises";
 import {
   type TakosumiSubject,
   TAKOSUMI_ACCOUNTS_INSTALLATIONS_PATH,
-  takosumiAccountsInstallationExportOperationPath,
-  takosumiAccountsInstallationPlanRunsPath,
-  takosumiAccountsInstallationExportPath,
-  takosumiAccountsInstallationMaterializePath,
-  takosumiAccountsInstallationPath,
-  takosumiAccountsInstallationStatusPath,
+  takosumiAccountsCapsuleExportOperationPath,
+  takosumiAccountsCapsulePlanRunsPath,
+  takosumiAccountsCapsuleExportPath,
+  takosumiAccountsCapsuleMaterializePath,
+  takosumiAccountsCapsulePath,
+  takosumiAccountsCapsuleStatusPath,
 } from "@takosjp/takosumi-accounts-contract";
 import {
   installationsExportHelpText,
@@ -22,9 +22,9 @@ import {
   installationsUninstallHelpText,
 } from "./cli-help.ts";
 import {
-  type InstallationImportPlan,
-  parseAccountsInstallationExportBundleInput,
-  planInstallationImport,
+  type CapsuleImportPlan,
+  parseAccountsCapsuleExportBundleInput,
+  planCapsuleImport,
   TAKOSUMI_MATERIALIZE_DRILL_TOKEN_HEADER,
 } from "@takosjp/takosumi-accounts-service";
 import {
@@ -38,11 +38,11 @@ import {
 import { materializeApprovalDigest } from "./cli-util.ts";
 import { isSha256Digest } from "./cli-platform-readiness.ts";
 import {
-  formatInstallationInspect,
-  formatInstallationOperation,
-  formatInstallationsList,
-  formatInstallationStatus,
-  formatInstallationUninstall,
+  formatCapsuleInspect,
+  formatCapsuleOperation,
+  formatCapsulesList,
+  formatCapsuleStatus,
+  formatCapsuleUninstall,
 } from "./cli-format.ts";
 import {
   AccountsApiError,
@@ -72,7 +72,7 @@ const installationImportModes = [
 const DEFAULT_IMPORT_INSTALL_CONFIG_ID = "cfg-default-opentofu-capsule";
 const DEFAULT_IMPORT_ENVIRONMENT = "production";
 
-export async function runInstallationsList(
+export async function runCapsulesList(
   args: string[],
   io: CliIo,
 ): Promise<number> {
@@ -81,21 +81,21 @@ export async function runInstallationsList(
     io.stdout(installationsListHelpText());
     return 0;
   }
-  const spaceId =
+  const workspaceId =
     optionalStringOption(options, "space") ?? process.env.TAKOS_SPACE_ID;
-  if (!spaceId) {
+  if (!workspaceId) {
     io.stderr("--space or TAKOS_SPACE_ID is required");
     return 2;
   }
   try {
     const response = await requestAccountsApi({
       path: `${TAKOSUMI_ACCOUNTS_INSTALLATIONS_PATH}?space_id=${encodeURIComponent(
-        spaceId,
+        workspaceId,
       )}`,
       options,
     });
     io.stdout(
-      formatInstallationsList(response, booleanOption(options, "json")),
+      formatCapsulesList(response, booleanOption(options, "json")),
     );
     return 0;
   } catch (error) {
@@ -104,27 +104,27 @@ export async function runInstallationsList(
   }
 }
 
-export async function runInstallationsInspect(
+export async function runCapsulesInspect(
   args: string[],
   io: CliIo,
 ): Promise<number> {
-  const [installationId, ...rest] = args;
+  const [capsuleId, ...rest] = args;
   const options = parseOptions(rest);
   if (options.help) {
     io.stdout(installationsInspectHelpText());
     return 0;
   }
-  if (!installationId || installationId.startsWith("--")) {
+  if (!capsuleId || capsuleId.startsWith("--")) {
     io.stderr("installation id is required");
     return 2;
   }
   try {
     const response = await requestAccountsApi({
-      path: takosumiAccountsInstallationPath(installationId),
+      path: takosumiAccountsCapsulePath(capsuleId),
       options,
     });
     io.stdout(
-      formatInstallationInspect(response, booleanOption(options, "json")),
+      formatCapsuleInspect(response, booleanOption(options, "json")),
     );
     return 0;
   } catch (error) {
@@ -133,17 +133,17 @@ export async function runInstallationsInspect(
   }
 }
 
-export async function runInstallationsUninstall(
+export async function runCapsulesUninstall(
   args: string[],
   io: CliIo,
 ): Promise<number> {
-  const [installationId, ...rest] = args;
+  const [capsuleId, ...rest] = args;
   const options = parseOptions(rest);
   if (options.help) {
     io.stdout(installationsUninstallHelpText());
     return 0;
   }
-  if (!installationId || installationId.startsWith("--")) {
+  if (!capsuleId || capsuleId.startsWith("--")) {
     io.stderr("installation id is required");
     return 2;
   }
@@ -151,12 +151,12 @@ export async function runInstallationsUninstall(
   try {
     const response = await requestAccountsApi({
       method: "DELETE",
-      path: takosumiAccountsInstallationPath(installationId),
+      path: takosumiAccountsCapsulePath(capsuleId),
       body: reason ? { reason } : undefined,
       options,
     });
     io.stdout(
-      formatInstallationUninstall(response, booleanOption(options, "json")),
+      formatCapsuleUninstall(response, booleanOption(options, "json")),
     );
     return 0;
   } catch (error) {
@@ -165,17 +165,17 @@ export async function runInstallationsUninstall(
   }
 }
 
-export async function runInstallationsStatus(
+export async function runCapsulesStatus(
   args: string[],
   io: CliIo,
 ): Promise<number> {
-  const [installationId, ...rest] = args;
+  const [capsuleId, ...rest] = args;
   const options = parseOptions(rest);
   if (options.help) {
     io.stdout(installationsStatusHelpText());
     return 0;
   }
-  if (!installationId || installationId.startsWith("--")) {
+  if (!capsuleId || capsuleId.startsWith("--")) {
     io.stderr("installation id is required");
     return 2;
   }
@@ -184,7 +184,7 @@ export async function runInstallationsStatus(
     io.stderr("--status is required");
     return 2;
   }
-  if (!isInstallationStatus(status)) {
+  if (!isCapsuleStatus(status)) {
     io.stderr(`--status must be one of: ${installationStatuses.join(", ")}`);
     return 2;
   }
@@ -198,12 +198,12 @@ export async function runInstallationsStatus(
   try {
     const response = await requestAccountsApi({
       method: "PATCH",
-      path: takosumiAccountsInstallationStatusPath(installationId),
+      path: takosumiAccountsCapsuleStatusPath(capsuleId),
       body,
       options,
     });
     io.stdout(
-      formatInstallationStatus(response, booleanOption(options, "json")),
+      formatCapsuleStatus(response, booleanOption(options, "json")),
     );
     return 0;
   } catch (error) {
@@ -212,17 +212,17 @@ export async function runInstallationsStatus(
   }
 }
 
-export async function runInstallationsMaterialize(
+export async function runCapsulesMaterialize(
   args: string[],
   io: CliIo,
 ): Promise<number> {
-  const [installationId, ...rest] = args;
+  const [capsuleId, ...rest] = args;
   const options = parseOptions(rest);
   if (options.help) {
     io.stdout(installationsMaterializeHelpText());
     return 0;
   }
-  if (!installationId || installationId.startsWith("--")) {
+  if (!capsuleId || capsuleId.startsWith("--")) {
     io.stderr("installation id is required");
     return 2;
   }
@@ -280,7 +280,7 @@ export async function runInstallationsMaterialize(
   const permissionDigest =
     explicitPermissionDigest ??
     (await materializeApprovalDigest({
-      installationId,
+      capsuleId,
       mode,
       region,
       plan,
@@ -306,14 +306,14 @@ export async function runInstallationsMaterialize(
   try {
     const response = await requestAccountsApi({
       method: "POST",
-      path: takosumiAccountsInstallationMaterializePath(installationId),
+      path: takosumiAccountsCapsuleMaterializePath(capsuleId),
       body,
       idempotencyKey: installationIdempotencyKey(options),
       extraHeaders,
       options,
     });
     io.stdout(
-      formatInstallationOperation(
+      formatCapsuleOperation(
         response,
         booleanOption(options, "json"),
         "Materialize",
@@ -362,17 +362,17 @@ function kebabCaseForMessage(key: string): string {
   return key.replace(/[A-Z]/g, (letter) => `-${letter.toLowerCase()}`);
 }
 
-export async function runInstallationsExport(
+export async function runCapsulesExport(
   args: string[],
   io: CliIo,
 ): Promise<number> {
-  const [installationId, ...rest] = args;
+  const [capsuleId, ...rest] = args;
   const options = parseOptions(rest);
   if (options.help) {
     io.stdout(installationsExportHelpText());
     return 0;
   }
-  if (!installationId || installationId.startsWith("--")) {
+  if (!capsuleId || capsuleId.startsWith("--")) {
     io.stderr("installation id is required");
     return 2;
   }
@@ -417,13 +417,13 @@ export async function runInstallationsExport(
   try {
     const response = await requestAccountsApi({
       method: "POST",
-      path: takosumiAccountsInstallationExportPath(installationId),
+      path: takosumiAccountsCapsuleExportPath(capsuleId),
       body,
       idempotencyKey: installationIdempotencyKey(options),
       options,
     });
     io.stdout(
-      formatInstallationOperation(
+      formatCapsuleOperation(
         response,
         booleanOption(options, "json"),
         "Export",
@@ -436,17 +436,17 @@ export async function runInstallationsExport(
   }
 }
 
-export async function runInstallationsExportOperation(
+export async function runCapsulesExportOperation(
   args: string[],
   io: CliIo,
 ): Promise<number> {
-  const [installationId, operationId, ...rest] = args;
+  const [capsuleId, operationId, ...rest] = args;
   const options = parseOptions(rest);
   if (options.help) {
     io.stdout(installationsExportOperationHelpText());
     return 0;
   }
-  if (!installationId || installationId.startsWith("--")) {
+  if (!capsuleId || capsuleId.startsWith("--")) {
     io.stderr("installation id is required");
     return 2;
   }
@@ -456,14 +456,14 @@ export async function runInstallationsExportOperation(
   }
   try {
     const response = await requestAccountsApi({
-      path: takosumiAccountsInstallationExportOperationPath(
-        installationId,
+      path: takosumiAccountsCapsuleExportOperationPath(
+        capsuleId,
         operationId,
       ),
       options,
     });
     io.stdout(
-      formatInstallationOperation(
+      formatCapsuleOperation(
         response,
         booleanOption(options, "json"),
         "Export",
@@ -476,7 +476,7 @@ export async function runInstallationsExportOperation(
   }
 }
 
-export async function runInstallationsImportPlan(
+export async function runCapsulesImportPlan(
   args: string[],
   io: CliIo,
 ): Promise<number> {
@@ -486,7 +486,7 @@ export async function runInstallationsImportPlan(
     return 0;
   }
   try {
-    const plan = await buildInstallationImportPlanFromOptions(options);
+    const plan = await buildCapsuleImportPlanFromOptions(options);
     await writeOrPrintJson({
       value: plan,
       outFile: optionalStringOption(options, "outFile"),
@@ -500,7 +500,7 @@ export async function runInstallationsImportPlan(
   }
 }
 
-export async function runInstallationsImportApply(
+export async function runCapsulesImportApply(
   args: string[],
   io: CliIo,
 ): Promise<number> {
@@ -510,7 +510,7 @@ export async function runInstallationsImportApply(
     return 0;
   }
   try {
-    const plan = await loadInstallationImportPlan(options);
+    const plan = await loadCapsuleImportPlan(options);
     const deployControlPlanRequest =
       await targetDeployControlPlanRequestForImportApply({
         plan,
@@ -518,7 +518,7 @@ export async function runInstallationsImportApply(
       });
     const planRunResponse = await requestAccountsApi({
       method: "POST",
-      path: takosumiAccountsInstallationPlanRunsPath(),
+      path: takosumiAccountsCapsulePlanRunsPath(),
       body: deployControlPlanRequest,
       options,
     });
@@ -572,10 +572,10 @@ export async function runInstallationsImportApply(
       : undefined;
     io.stdout(
       [
-        "Installation import apply submitted",
+        "Capsule import apply submitted",
         `  planRunId: ${String(projectionRequest.planRunId)}`,
         ...(installation && typeof installation.id === "string"
-          ? [`  installationId: ${installation.id}`]
+          ? [`  capsuleId: ${installation.id}`]
           : []),
       ].join("\n"),
     );
@@ -587,7 +587,7 @@ export async function runInstallationsImportApply(
 }
 
 async function targetDeployControlPlanRequestForImportApply(input: {
-  plan: InstallationImportPlan;
+  plan: CapsuleImportPlan;
   options: Record<string, string | boolean>;
 }): Promise<Record<string, unknown>> {
   const request = await withImportVariablesFromOptions(
@@ -603,7 +603,7 @@ async function targetDeployControlPlanRequestForImportApply(input: {
     request,
     input.options,
   );
-  if (stringValue(requestWithRequiredProviders.installationId)) {
+  if (stringValue(requestWithRequiredProviders.capsuleId)) {
     return requestWithRequiredProviders;
   }
   const source = importPlanRecord(
@@ -622,15 +622,15 @@ async function targetDeployControlPlanRequestForImportApply(input: {
         "a data-bearing export/archive restore flow before import-apply.",
     );
   }
-  const targetSpaceId = stringField(
+  const targetWorkspaceId = stringField(
     requestWithRequiredProviders,
-    "spaceId",
+    "workspaceId",
     "deployControlPlanRequest",
   );
   const sourceId = await createTargetSourceForImportApply({
     plan: input.plan,
     source,
-    targetSpaceId,
+    targetWorkspaceId,
     options: input.options,
   });
   const sourceSync = await requestAccountsApi({
@@ -644,15 +644,15 @@ async function targetDeployControlPlanRequestForImportApply(input: {
     options: input.options,
     label: "source sync",
   });
-  const installationId = await createTargetInstallationForImportApply({
+  const capsuleId = await createTargetCapsuleForImportApply({
     plan: input.plan,
     sourceId,
-    targetSpaceId,
+    targetWorkspaceId,
     options: input.options,
   });
   return {
     ...requestWithRequiredProviders,
-    installationId,
+    capsuleId,
     operation: "create",
   };
 }
@@ -804,9 +804,9 @@ function importApplyRequiredProviderAddress(provider: string): string {
 }
 
 async function createTargetSourceForImportApply(input: {
-  plan: InstallationImportPlan;
+  plan: CapsuleImportPlan;
   source: Record<string, unknown>;
-  targetSpaceId: string;
+  targetWorkspaceId: string;
   options: Record<string, string | boolean>;
 }): Promise<string> {
   const sourceUrl = stringField(
@@ -818,7 +818,7 @@ async function createTargetSourceForImportApply(input: {
     method: "POST",
     path: "/api/v1/sources",
     body: {
-      spaceId: input.targetSpaceId,
+      workspaceId: input.targetWorkspaceId,
       name: importApplyName(input.plan, "source"),
       url: sourceUrl,
       ...(stringValue(input.source.ref)
@@ -839,10 +839,10 @@ async function createTargetSourceForImportApply(input: {
   return stringField(source, "id", "source");
 }
 
-async function createTargetInstallationForImportApply(input: {
-  plan: InstallationImportPlan;
+async function createTargetCapsuleForImportApply(input: {
+  plan: CapsuleImportPlan;
   sourceId: string;
-  targetSpaceId: string;
+  targetWorkspaceId: string;
   options: Record<string, string | boolean>;
 }): Promise<string> {
   const installConfigId =
@@ -851,7 +851,7 @@ async function createTargetInstallationForImportApply(input: {
   const environment =
     optionalStringOption(input.options, "environment") ??
     DEFAULT_IMPORT_ENVIRONMENT;
-  const path = `/api/v1/spaces/${encodeURIComponent(input.targetSpaceId)}/installations`;
+  const path = `/api/v1/spaces/${encodeURIComponent(input.targetWorkspaceId)}/installations`;
   const providerConnections = importApplyProviderConnections(input.options);
   const body = {
     name: importApplyName(input.plan, "installation"),
@@ -868,47 +868,47 @@ async function createTargetInstallationForImportApply(input: {
       options: input.options,
     });
   } catch (error) {
-    const duplicateInstallationId =
-      duplicateInstallationIdFromAccountsError(error);
-    if (!duplicateInstallationId) throw error;
+    const duplicateCapsuleId =
+      duplicateCapsuleIdFromAccountsError(error);
+    if (!duplicateCapsuleId) throw error;
     if (providerConnections.length > 0) {
-      await putTargetInstallationProviderConnections({
-        installationId: duplicateInstallationId,
+      await putTargetCapsuleProviderConnections({
+        capsuleId: duplicateCapsuleId,
         providerConnections,
         options: input.options,
       });
     }
-    return duplicateInstallationId;
+    return duplicateCapsuleId;
   }
   const installation = importPlanRecord(
     importPlanRecord(created, "installation create response").installation,
     "installation",
   );
-  const installationId = stringField(installation, "id", "installation");
+  const capsuleId = stringField(installation, "id", "installation");
   if (providerConnections.length > 0) {
-    await putTargetInstallationProviderConnections({
-      installationId,
+    await putTargetCapsuleProviderConnections({
+      capsuleId,
       providerConnections,
       options: input.options,
     });
   }
-  return installationId;
+  return capsuleId;
 }
 
-async function putTargetInstallationProviderConnections(input: {
-  installationId: string;
+async function putTargetCapsuleProviderConnections(input: {
+  capsuleId: string;
   providerConnections: readonly Record<string, string>[];
   options: Record<string, string | boolean>;
 }): Promise<void> {
   await requestAccountsApi({
     method: "PUT",
-    path: `/api/v1/installations/${encodeURIComponent(input.installationId)}/provider-connections`,
+    path: `/api/v1/installations/${encodeURIComponent(input.capsuleId)}/provider-connections`,
     body: { connections: input.providerConnections },
     options: input.options,
   });
 }
 
-function duplicateInstallationIdFromAccountsError(
+function duplicateCapsuleIdFromAccountsError(
   error: unknown,
 ): string | undefined {
   if (!(error instanceof AccountsApiError) || error.status !== 409) {
@@ -925,7 +925,7 @@ function duplicateInstallationIdFromAccountsError(
   if (stringValue(details?.reason) !== "duplicate_installation") {
     return undefined;
   }
-  return stringValue(details?.installationId);
+  return stringValue(details?.capsuleId);
 }
 
 async function waitForImportApplyRun(input: {
@@ -981,7 +981,7 @@ function isTerminalImportApplyRunStatus(status: string): boolean {
 }
 
 function importApplyName(
-  plan: InstallationImportPlan,
+  plan: CapsuleImportPlan,
   suffix: "source" | "installation",
 ): string {
   const request = importPlanRecord(
@@ -1005,25 +1005,25 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function loadInstallationImportPlan(
+async function loadCapsuleImportPlan(
   options: Record<string, string | boolean>,
-): Promise<InstallationImportPlan> {
+): Promise<CapsuleImportPlan> {
   const planFile = optionalStringOption(options, "planFile");
   if (planFile) {
-    return parseInstallationImportPlan(
+    return parseCapsuleImportPlan(
       parseJsonFile(await readFile(planFile, "utf8"), planFile),
     );
   }
-  return await buildInstallationImportPlanFromOptions(options);
+  return await buildCapsuleImportPlanFromOptions(options);
 }
 
-async function buildInstallationImportPlanFromOptions(
+async function buildCapsuleImportPlanFromOptions(
   options: Record<string, string | boolean>,
-): Promise<InstallationImportPlan> {
+): Promise<CapsuleImportPlan> {
   const bundleFile = optionalStringOption(options, "bundleFile");
   const targetIssuer = optionalStringOption(options, "targetIssuer");
   const targetAccountId = optionalStringOption(options, "targetAccount");
-  const targetSpaceId = optionalStringOption(options, "targetSpace");
+  const targetWorkspaceId = optionalStringOption(options, "targetWorkspace");
   const createdBySubject = optionalStringOption(options, "createdBySubject");
   if (!bundleFile) {
     throw new Error("--bundle-file is required");
@@ -1034,28 +1034,28 @@ async function buildInstallationImportPlanFromOptions(
   if (!targetAccountId) {
     throw new Error("--target-account is required");
   }
-  if (!targetSpaceId) {
-    throw new Error("--target-space is required");
+  if (!targetWorkspaceId) {
+    throw new Error("--target-workspace is required");
   }
   if (!createdBySubject || !createdBySubject.startsWith("tsub_")) {
     throw new Error("--created-by-subject must be a tsub_ subject");
   }
   const mode = optionalStringOption(options, "mode") ?? "self-hosted";
-  if (!isInstallationImportMode(mode)) {
+  if (!isCapsuleImportMode(mode)) {
     throw new Error(
       "--mode must be one of: shared-cell, dedicated, self-hosted",
     );
   }
-  const bundle = parseAccountsInstallationExportBundleInput(
+  const bundle = parseAccountsCapsuleExportBundleInput(
     parseJsonFile(await readFile(bundleFile, "utf8"), bundleFile),
   );
-  const plan = planInstallationImport({
+  const plan = planCapsuleImport({
     bundle,
     targetIssuer,
     targetAccountId,
-    targetSpaceId,
+    targetWorkspaceId,
     createdBySubject: createdBySubject as TakosumiSubject,
-    targetInstallationId: optionalStringOption(options, "targetInstallationId"),
+    targetCapsuleId: optionalStringOption(options, "targetCapsuleId"),
     mode,
   });
   return {
@@ -1068,7 +1068,7 @@ async function buildInstallationImportPlanFromOptions(
 }
 
 function projectionCreateRequestFromImportPlan(input: {
-  plan: InstallationImportPlan;
+  plan: CapsuleImportPlan;
   expected: Record<string, unknown>;
   planRunId: string;
 }): Record<string, unknown> {
@@ -1081,7 +1081,7 @@ function projectionCreateRequestFromImportPlan(input: {
     planRunId: input.planRunId,
     expected: input.expected,
   };
-  delete request.installationId;
+  delete request.capsuleId;
   const source = importPlanRecord(request.source, "accounts projection source");
   if (!stringValue(source.url) && stringValue(source.gitUrl)) {
     request.source = { ...source, url: stringValue(source.gitUrl) };
@@ -1089,11 +1089,11 @@ function projectionCreateRequestFromImportPlan(input: {
   return request;
 }
 
-function parseInstallationImportPlan(value: unknown): InstallationImportPlan {
+function parseCapsuleImportPlan(value: unknown): CapsuleImportPlan {
   const record = importPlanRecord(value, "installation import plan");
-  if (record.kind !== "takosumi.accounts.installation-import-plan@v1") {
+  if (record.kind !== "takosumi.accounts.capsule-import-plan@v1") {
     throw new Error(
-      "installation import plan kind must be takosumi.accounts.installation-import-plan@v1",
+      "installation import plan kind must be takosumi.accounts.capsule-import-plan@v1",
     );
   }
   if (!isRecord(record.deployControlPlanRequest)) {
@@ -1106,7 +1106,7 @@ function parseInstallationImportPlan(value: unknown): InstallationImportPlan {
       "installation import plan requires accountsProjectionRequestTemplate",
     );
   }
-  return record as unknown as InstallationImportPlan;
+  return record as unknown as CapsuleImportPlan;
 }
 
 function assertApplyExpectedGuard(expected: Record<string, unknown>): void {
@@ -1174,7 +1174,7 @@ function parseJsonFile(text: string, file: string): unknown {
   }
 }
 
-function isInstallationStatus(
+function isCapsuleStatus(
   value: string,
 ): value is (typeof installationStatuses)[number] {
   return installationStatuses.includes(
@@ -1182,7 +1182,7 @@ function isInstallationStatus(
   );
 }
 
-function isInstallationImportMode(
+function isCapsuleImportMode(
   value: string,
 ): value is (typeof installationImportModes)[number] {
   return installationImportModes.includes(

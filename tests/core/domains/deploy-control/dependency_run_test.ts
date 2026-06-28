@@ -352,9 +352,7 @@ test("consumer plan injects the producer output and pins a DependencySnapshot", 
   const entry = snapshot!.dependencies[0]!;
   expect(entry.producerInstallationId).toEqual("inst_producer");
   expect(entry.producerStateGeneration).toEqual(1);
-  expect(entry.producerOutputSnapshotId).toEqual(
-    producer.currentOutputSnapshotId,
-  );
+  expect(entry.producerOutputId).toEqual(producer.currentOutputSnapshotId);
   expect(entry.values).toEqual({ base_domain: "shota.example.com" });
   expect(entry.valuesDigest).toEqual(
     await stableJsonDigest({ base_domain: "shota.example.com" }),

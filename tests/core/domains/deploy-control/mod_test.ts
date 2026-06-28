@@ -494,7 +494,7 @@ test("PlanRun rejects installation operations outside the requested space", asyn
       source: SOURCE,
       requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
     }),
-  ).rejects.toThrow(/belongs to space space_a/);
+  ).rejects.toThrow(/belongs to workspace space_a/);
 });
 
 test("PlanRun requires an existing Installation regardless of operation", async () => {
@@ -516,7 +516,7 @@ test("PlanRun requires an existing Installation regardless of operation", async 
       source: SOURCE,
       requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
     }),
-  ).rejects.toThrow(/plan requires an existing installationId/);
+  ).rejects.toThrow(/plan requires an existing capsuleId/);
 
   await expect(
     controller.createPlanRun({
@@ -525,7 +525,7 @@ test("PlanRun requires an existing Installation regardless of operation", async 
       source: SOURCE,
       requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
     }),
-  ).rejects.toThrow(/plan requires an existing installationId/);
+  ).rejects.toThrow(/plan requires an existing capsuleId/);
 
   // A missing installationId target is a typed not_found (the id is consulted
   // before any operation-specific handling).

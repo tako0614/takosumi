@@ -50,7 +50,7 @@ import type {
   InstallConfig,
   Installation,
 } from "@takosumi/internal/deploy-control-api";
-import type { OutputSnapshot } from "takosumi-contract/output-snapshots";
+import type { Output as OutputSnapshot } from "takosumi-contract/outputs";
 import type { Run } from "takosumi-contract/runs";
 import type { SourceSnapshot } from "takosumi-contract/sources";
 import { OpenTofuControllerError } from "../deploy-control/errors.ts";
@@ -128,10 +128,14 @@ export type ServiceDataBackupRunnerResult =
     };
 
 export interface CreateBackupRequest {
-  readonly spaceId: string;
+  readonly workspaceId: string;
+  /** @deprecated Use workspaceId. */
+  readonly spaceId?: string;
   /** Optional run id that triggered the backup (operator / scheduled flows). */
   readonly createdByRunId?: string;
-  /** Optional Installation context for Installation-scoped backup Runs. */
+  /** Optional Capsule context for Capsule-scoped backup Runs. */
+  readonly capsuleId?: string;
+  /** @deprecated Use capsuleId. */
   readonly installationId?: string;
   readonly environment?: string;
 }
@@ -199,8 +203,19 @@ export class BackupsService {
    * records the pointer, and emits a Space Activity event. Returns the
    * {@link BackupRecord}.
    */
-  async createBackup(request: CreateBackupRequest): Promise<BackupRecord> {
-    const spaceId = request.spaceId.trim();
+  async createBackup(rawRequest: CreateBackupRequest): Promise<BackupRecord> {
+    // Accept both the new Workspace/Capsule field names and the transient
+    // deprecated Space/Installation names until the rename converges.
+    const workspaceId = (rawRequest.workspaceId ?? rawRequest.spaceId ?? "")
+      .trim();
+    const capsuleId = rawRequest.capsuleId ?? rawRequest.installationId;
+    const request: CreateBackupRequest = {
+      ...rawRequest,
+      workspaceId,
+      spaceId: workspaceId,
+      ...(capsuleId ? { capsuleId, installationId: capsuleId } : {}),
+    };
+    const spaceId = workspaceId;
     if (spaceId.length === 0) {
       throw new OpenTofuControllerError(
         "invalid_argument",
@@ -264,6 +279,7 @@ export class BackupsService {
 
       const record: BackupRecord = {
         id: backupId,
+        workspaceId: spaceId,
         spaceId,
         ...(request.installationId
           ? { installationId: request.installationId }
@@ -296,6 +312,7 @@ export class BackupsService {
       // Activity (§27 / §34): a control backup was created. Pointer metadata only
       // (ids / digest / size) — never bundle contents.
       await this.#activity.record({
+        workspaceId: spaceId,
         spaceId,
         action: "backup.created",
         targetType: "backup",
@@ -341,6 +358,7 @@ export class BackupsService {
   }): Promise<void> {
     await this.#store.putBackupRun({
       id: input.runId,
+      workspaceId: input.spaceId,
       spaceId: input.spaceId,
       ...(input.request.installationId
         ? { installationId: input.request.installationId }
@@ -513,8 +531,8 @@ export class BackupsService {
         // the pointer to the R2_STATE object).
         stateSnapshots.push({
           id: snapshot.id,
-          spaceId: snapshot.spaceId,
-          installationId: snapshot.installationId,
+          spaceId: (snapshot.workspaceId ?? snapshot.spaceId),
+          installationId: (snapshot.capsuleId ?? snapshot.installationId),
           environment: snapshot.environment,
           generation: snapshot.generation,
           objectKey: snapshot.objectKey,
@@ -1369,9 +1387,11 @@ function restoreTargetFromBundle(
   if (!latest) return {};
   return {
     restoreTarget: {
+      capsuleId: latest.installationId,
       installationId: latest.installationId,
       environment: latest.environment,
       stateGeneration: latest.generation,
+      stateVersionId: latest.id,
       stateSnapshotId: latest.id,
     },
   };

@@ -1,5 +1,5 @@
 /**
- * Deploy-control App-Installation projection sync: mirrors a deploy/apply/run
+ * Deploy-control App-Capsule projection sync: mirrors a deploy/apply/run
  * outcome into the accounts ledger's app-installation projection rows + events.
  * Extracted from `control-routes.ts` (P3 god-file split); shared by the deploy,
  * capsule, and run control handlers.
@@ -46,15 +46,15 @@ import type {
   PublicCapsuleCompatibilityReportResponse,
 } from "takosumi-contract/capsules";
 import type { ListProvidersResponse } from "takosumi-contract/providers";
-import type { Space, SpaceType } from "takosumi-contract/spaces";
+import type { Workspace, WorkspaceType } from "takosumi-contract/workspaces";
 import type {
-  InstallationProviderEnvBindingSet,
+  CapsuleProviderEnvBindingSet,
   InstallConfig,
-  Installation,
+  Capsule,
   OutputAllowlistEntry,
   PolicyConfig,
   PublicInstallConfig,
-  PublicInstallation,
+  PublicCapsule,
 } from "takosumi-contract/installations";
 import type {
   Dependency,
@@ -65,11 +65,11 @@ import type {
 import type { ActivityEvent } from "takosumi-contract/activity";
 import type { Page, PageParams } from "takosumi-contract/pagination";
 import type {
-  InstallationProviderConnectionBinding,
-  InstallationProviderConnectionBindings,
-  InstallationProviderEnvBinding,
-  InstallationProviderEnvBindings,
-  InstallationProviderConnectionSet,
+  CapsuleProviderConnectionBinding,
+  CapsuleProviderConnectionBindings,
+  CapsuleProviderEnvBinding,
+  CapsuleProviderEnvBindings,
+  CapsuleProviderConnectionSet,
   ProviderConnection,
 } from "takosumi-contract/connections";
 import type {
@@ -79,7 +79,7 @@ import type {
 import type {
   OutputShare,
   OutputShareEntry,
-} from "takosumi-contract/output-snapshots";
+} from "takosumi-contract/outputs";
 import type { PublicDeployment } from "takosumi-contract/deployments";
 import type {
   BackupRecord,
@@ -104,25 +104,25 @@ import type {
 import type { JsonValue } from "takosumi-contract";
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 import type {
-  AppInstallationMode,
-  AppInstallationStatus,
-  InstallationRecord,
-  SpaceKind,
+  AppCapsuleMode,
+  AppCapsuleStatus,
+  CapsuleRecord,
+  WorkspaceKind,
 } from "../ledger.ts";
 import type { SharedCellRuntimeAllocator } from "../runtime.ts";
 import type { AccountsStore } from "../store.ts";
 import type {
   ControlPlaneOperations,
   RunGroupWithRunsLike,
-  ControlSpaceRole,
+  ControlWorkspaceRole,
   ControlMembershipStatus,
-  PublicSpaceMember,
+  PublicWorkspaceMember,
   MembershipActor,
 } from "../control-operations.ts";
 import { errorJson } from "../http-helpers.ts";
 import { appendLedgerEvent } from "../installation-ledger-events.ts";
 import { base64UrlEncodeBytes } from "../encoding.ts";
-import { canTransitionAppInstallationStatus } from "../ledger.ts";
+import { canTransitionAppCapsuleStatus } from "../ledger.ts";
 
 interface DeployControlProjectionSource {
   readonly sourceGitUrl: string;
@@ -139,7 +139,7 @@ export async function syncDeployControlProjectionFromDeploy(input: {
   readonly sessionSubject: TakosumiSubject;
   readonly deployResponse: DeployResponse;
   readonly projectionMode?: Extract<
-    AppInstallationMode,
+    AppCapsuleMode,
     "self-hosted" | "shared-cell"
   >;
   readonly sharedCellRuntime?: SharedCellRuntimeAllocator;
@@ -147,7 +147,7 @@ export async function syncDeployControlProjectionFromDeploy(input: {
   const planRunId =
     input.deployResponse.planRun?.id ?? input.deployResponse.run.id;
   const { planRun } = await input.operations.getPlanRun(planRunId);
-  return await upsertDeployControlInstallationProjection({
+  return await upsertDeployControlCapsuleProjection({
     operations: input.operations,
     store: input.store,
     sessionSubject: input.sessionSubject,
@@ -169,13 +169,13 @@ export async function syncDeployControlProjectionFromApply(input: {
 }): Promise<Response | undefined> {
   const installation =
     input.response.installation ??
-    (input.planRun.installationId
+    (input.planRun.capsuleId
       ? await input.operations.installations
-          .getInstallation(input.planRun.installationId)
+          .getCapsule(input.planRun.capsuleId)
           .catch(() => undefined)
       : undefined);
   if (!installation) return undefined;
-  return await upsertDeployControlInstallationProjection({
+  return await upsertDeployControlCapsuleProjection({
     operations: input.operations,
     store: input.store,
     sessionSubject: input.sessionSubject,
@@ -194,14 +194,14 @@ export async function syncDeployControlProjectionStatusFromRun(input: {
 }): Promise<void> {
   if (
     (input.run.type !== "apply" && input.run.type !== "destroy_apply") ||
-    !input.run.installationId
+    !input.run.capsuleId
   ) {
     return;
   }
   const requestedStatus = projectionStatusFromRun(input.run);
   if (requestedStatus === "installing") return;
-  const installation = await input.store.findAppInstallation(
-    input.run.installationId,
+  const installation = await input.store.findAppCapsule(
+    input.run.capsuleId,
   );
   if (!installation) return;
   await saveProjectionStatusChange({
@@ -212,16 +212,16 @@ export async function syncDeployControlProjectionStatusFromRun(input: {
   });
 }
 
-async function upsertDeployControlInstallationProjection(input: {
+async function upsertDeployControlCapsuleProjection(input: {
   readonly operations: ControlPlaneOperations;
   readonly store: AccountsStore;
   readonly sessionSubject: TakosumiSubject;
-  readonly installation: PublicInstallation;
+  readonly installation: PublicCapsule;
   readonly planRun: PublicPlanRun;
   readonly fallbackRun?: Run;
-  readonly requestedStatus: AppInstallationStatus;
+  readonly requestedStatus: AppCapsuleStatus;
   readonly projectionMode?: Extract<
-    AppInstallationMode,
+    AppCapsuleMode,
     "self-hosted" | "shared-cell"
   >;
   readonly sharedCellRuntime?: SharedCellRuntimeAllocator;
@@ -232,7 +232,7 @@ async function upsertDeployControlInstallationProjection(input: {
     fallbackRun: input.fallbackRun,
   });
   if (!source) return undefined;
-  const existing = await input.store.findAppInstallation(input.installation.id);
+  const existing = await input.store.findAppCapsule(input.installation.id);
   if (existing?.status === "ready" && input.requestedStatus === "installing") {
     return undefined;
   }
@@ -243,7 +243,7 @@ async function upsertDeployControlInstallationProjection(input: {
       operations: input.operations,
       store: input.store,
       sessionSubject: input.sessionSubject,
-      spaceId: input.installation.spaceId,
+      workspaceId: input.installation.workspaceId,
       now,
     }));
   if (!accountId) return undefined;
@@ -260,9 +260,9 @@ async function upsertDeployControlInstallationProjection(input: {
       );
     }
     runtimeBinding = await input.sharedCellRuntime({
-      installationId: input.installation.id,
+      capsuleId: input.installation.id,
       accountId,
-      spaceId: input.installation.spaceId,
+      workspaceId: input.installation.workspaceId,
       appId: input.installation.name,
       createdBySubject: input.sessionSubject,
       now,
@@ -275,7 +275,7 @@ async function upsertDeployControlInstallationProjection(input: {
       );
     }
     if (
-      runtimeBinding.installationId !== input.installation.id ||
+      runtimeBinding.capsuleId !== input.installation.id ||
       runtimeBinding.mode !== "shared-cell" ||
       runtimeBinding.targetType !== "shared-cell"
     ) {
@@ -287,10 +287,10 @@ async function upsertDeployControlInstallationProjection(input: {
     }
     runtimeBindingId = runtimeBinding.runtimeBindingId;
   }
-  const record: InstallationRecord = {
-    installationId: input.installation.id,
+  const record: CapsuleRecord = {
+    capsuleId: input.installation.id,
     accountId,
-    spaceId: input.installation.spaceId,
+    workspaceId: input.installation.workspaceId,
     appId: input.installation.name,
     sourceGitUrl: source.sourceGitUrl,
     sourceRef: source.sourceRef,
@@ -308,16 +308,16 @@ async function upsertDeployControlInstallationProjection(input: {
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
   };
-  await input.store.saveAppInstallation(record);
+  await input.store.saveAppCapsule(record);
   if (runtimeBinding) await input.store.saveRuntimeBinding(runtimeBinding);
   if (!existing) {
     await appendLedgerEvent(input.store, {
-      installationId: record.installationId,
+      capsuleId: record.capsuleId,
       eventType: "installation.created",
       payload: {
         appId: record.appId,
         accountId: record.accountId,
-        spaceId: record.spaceId,
+        workspaceId: record.workspaceId,
         mode: record.mode,
         status: record.status,
       },
@@ -328,7 +328,7 @@ async function upsertDeployControlInstallationProjection(input: {
   if (record.status !== existing.status) {
     await appendProjectionStatusChangedEvent({
       store: input.store,
-      installationId: record.installationId,
+      capsuleId: record.capsuleId,
       from: existing.status,
       to: record.status,
       reason: "deploy-control projection sync",
@@ -340,8 +340,8 @@ async function upsertDeployControlInstallationProjection(input: {
 
 export async function saveProjectionStatusChange(input: {
   readonly store: AccountsStore;
-  readonly installation: InstallationRecord;
-  readonly requestedStatus: AppInstallationStatus;
+  readonly installation: CapsuleRecord;
+  readonly requestedStatus: AppCapsuleStatus;
   readonly reason: string;
 }): Promise<void> {
   const status = nextProjectionStatus(
@@ -350,14 +350,14 @@ export async function saveProjectionStatusChange(input: {
   );
   if (status === input.installation.status) return;
   const now = Date.now();
-  await input.store.saveAppInstallation({
+  await input.store.saveAppCapsule({
     ...input.installation,
     status,
     updatedAt: now,
   });
   await appendProjectionStatusChangedEvent({
     store: input.store,
-    installationId: input.installation.installationId,
+    capsuleId: input.installation.capsuleId,
     from: input.installation.status,
     to: status,
     reason: input.reason,
@@ -367,14 +367,14 @@ export async function saveProjectionStatusChange(input: {
 
 async function appendProjectionStatusChangedEvent(input: {
   readonly store: AccountsStore;
-  readonly installationId: string;
-  readonly from: AppInstallationStatus;
-  readonly to: AppInstallationStatus;
+  readonly capsuleId: string;
+  readonly from: AppCapsuleStatus;
+  readonly to: AppCapsuleStatus;
   readonly reason: string;
   readonly now: number;
 }): Promise<void> {
   await appendLedgerEvent(input.store, {
-    installationId: input.installationId,
+    capsuleId: input.capsuleId,
     eventType: "installation.status_changed",
     payload: {
       from: input.from,
@@ -389,13 +389,13 @@ async function ensureProjectionLedgerScope(input: {
   readonly operations: ControlPlaneOperations;
   readonly store: AccountsStore;
   readonly sessionSubject: TakosumiSubject;
-  readonly spaceId: string;
+  readonly workspaceId: string;
   readonly now: number;
 }): Promise<string | undefined> {
-  const existingSpace = await input.store.findSpace(input.spaceId);
-  if (existingSpace) {
+  const existingWorkspace = await input.store.findWorkspace(input.workspaceId);
+  if (existingWorkspace) {
     const existingAccount = await input.store.findLedgerAccount(
-      existingSpace.accountId,
+      existingWorkspace.accountId,
     );
     if (
       existingAccount &&
@@ -405,13 +405,13 @@ async function ensureProjectionLedgerScope(input: {
     }
     if (!existingAccount) {
       await input.store.saveLedgerAccount({
-        accountId: existingSpace.accountId,
+        accountId: existingWorkspace.accountId,
         legalOwnerSubject: input.sessionSubject,
         createdAt: input.now,
         updatedAt: input.now,
       });
     }
-    return existingSpace.accountId;
+    return existingWorkspace.accountId;
   }
   const accountId = await projectionAccountIdForSubject(input.sessionSubject);
   const existingAccount = await input.store.findLedgerAccount(accountId);
@@ -424,18 +424,18 @@ async function ensureProjectionLedgerScope(input: {
     });
   }
   const space = await input.operations.spaces
-    .getSpace(input.spaceId)
+    .getWorkspace(input.workspaceId)
     .catch(() => undefined);
-  await input.store.saveSpace({
-    spaceId: input.spaceId,
+  await input.store.saveWorkspace({
+    workspaceId: input.workspaceId,
     accountId,
-    kind: ledgerSpaceKind(space?.type),
+    kind: ledgerWorkspaceKind(space?.type),
     ...(space?.displayName ? { displayName: space.displayName } : {}),
     createdAt: input.now,
     updatedAt: input.now,
   });
-  const confirmedSpace = await input.store.findSpace(input.spaceId);
-  return confirmedSpace?.accountId === accountId ? accountId : undefined;
+  const confirmedWorkspace = await input.store.findWorkspace(input.workspaceId);
+  return confirmedWorkspace?.accountId === accountId ? accountId : undefined;
 }
 
 async function projectionSourceFromPlanRun(input: {
@@ -508,7 +508,7 @@ async function projectionSourceFromPlanRun(input: {
 
 function projectionStatusFromDeploy(
   deployResponse: DeployResponse,
-): AppInstallationStatus {
+): AppCapsuleStatus {
   if (
     deployResponse.status === "failed" ||
     deployResponse.run.status === "failed" ||
@@ -530,14 +530,14 @@ function projectionStatusFromDeploy(
 
 export function deployProjectionModeValue(
   value: unknown,
-): Extract<AppInstallationMode, "self-hosted" | "shared-cell"> | undefined {
+): Extract<AppCapsuleMode, "self-hosted" | "shared-cell"> | undefined {
   if (value === "self-hosted" || value === "shared-cell") return value;
   return undefined;
 }
 
 function projectionStatusFromRunStatus(
   status: Run["status"],
-): AppInstallationStatus {
+): AppCapsuleStatus {
   if (status === "succeeded") return "ready";
   if (status === "failed" || status === "cancelled" || status === "expired") {
     return "failed";
@@ -545,7 +545,7 @@ function projectionStatusFromRunStatus(
   return "installing";
 }
 
-function projectionStatusFromRun(run: Run): AppInstallationStatus {
+function projectionStatusFromRun(run: Run): AppCapsuleStatus {
   if (run.type === "destroy_apply" && run.status === "succeeded") {
     return "suspended";
   }
@@ -553,13 +553,13 @@ function projectionStatusFromRun(run: Run): AppInstallationStatus {
 }
 
 function nextProjectionStatus(
-  existing: AppInstallationStatus | undefined,
-  requested: AppInstallationStatus,
-): AppInstallationStatus {
+  existing: AppCapsuleStatus | undefined,
+  requested: AppCapsuleStatus,
+): AppCapsuleStatus {
   if (!existing) return requested;
   if (existing === requested) return existing;
   if (existing === "ready" && requested === "failed") return existing;
-  if (canTransitionAppInstallationStatus(existing, requested)) return requested;
+  if (canTransitionAppCapsuleStatus(existing, requested)) return requested;
   return existing;
 }
 
@@ -573,6 +573,6 @@ async function projectionAccountIdForSubject(
   return `acct_${base64UrlEncodeBytes(new Uint8Array(digest)).slice(0, 32)}`;
 }
 
-function ledgerSpaceKind(type: SpaceType | undefined): SpaceKind {
+function ledgerWorkspaceKind(type: WorkspaceType | undefined): WorkspaceKind {
   return type === "organization" ? "org" : "personal";
 }

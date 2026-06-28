@@ -7,9 +7,9 @@
  */
 
 import type {
-  CreateInstallationRequest,
-  InstallationsService,
-} from "../domains/installations/mod.ts";
+  CreateCapsuleRequest,
+  CapsulesService,
+} from "../domains/capsules/mod.ts";
 import type {
   InstallConfig,
   Installation,
@@ -37,7 +37,7 @@ import { OpenTofuControllerError } from "../domains/deploy-control/errors.ts";
 import {
   DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
   defaultCapsuleOutputAllowlist,
-} from "../domains/installations/official_seed.ts";
+} from "../domains/capsules/official_seed.ts";
 import { pageSorted } from "takosumi-contract/pagination";
 import {
   TAKOSUMI_API_INSTALLATION_DEPLOYMENTS_ROUTE,
@@ -68,7 +68,7 @@ interface PatchInstallationRequest {
 }
 
 interface CreateInstallationRouteRequest extends Omit<
-  CreateInstallationRequest,
+  CreateCapsuleRequest,
   "spaceId"
 > {
   readonly modulePath?: string;
@@ -184,7 +184,7 @@ export const DEPLOY_CONTROL_INSTALLATION_ENDPOINTS: readonly DeployControlEndpoi
       operationId: "createInstallation",
       openapi: {
         pathParams: ["spaceId"],
-        requestSchema: "CreateInstallationRequest",
+        requestSchema: "CreateCapsuleRequest",
         okStatus: "201",
         okSchema: "InstallationResponse",
       },
@@ -439,9 +439,9 @@ export function mountDeployControlInstallationRoutes(
                 })
               ).id
             : request.installConfigId;
-        const installation = await installations!.createInstallation({
+        const installation = await installations!.createCapsule({
           ...request,
-          spaceId: id,
+          workspaceId: id,
           installConfigId,
         });
         return c.json({ installation: publicInstallation(installation) }, 201);
@@ -459,7 +459,7 @@ export function mountDeployControlInstallationRoutes(
         ensureSpacePermission(principal, id);
         const page = parsePageParams(c);
         if (page.kind === "invalid") return page.response;
-        const result = await installations!.listInstallationsPage(
+        const result = await installations!.listCapsulesPage(
           id,
           page.value,
         );
@@ -485,7 +485,7 @@ export function mountDeployControlInstallationRoutes(
       param: INSTALLATION_ID_PARAM,
       handler: async ({ c, principal, id }) => {
         const response = await controller.getInstallation(id);
-        ensureSpacePermission(principal, response.installation.spaceId);
+        ensureSpacePermission(principal, response.capsule.workspaceId);
         return c.json(response, 200);
       },
     }),
@@ -501,7 +501,7 @@ export function mountDeployControlInstallationRoutes(
       enforceBody: true,
       handler: async ({ c, principal, id }) => {
         const existing = await controller.getInstallation(id);
-        ensureSpacePermission(principal, existing.installation.spaceId);
+        ensureSpacePermission(principal, existing.capsule.workspaceId);
         const body = await readJsonBody<PatchInstallationRequest>(
           c,
           "installationPatch",
@@ -526,7 +526,7 @@ export function mountDeployControlInstallationRoutes(
             400,
           );
         }
-        const installation = await installations!.patchInstallationStatus(
+        const installation = await installations!.patchCapsuleStatus(
           id,
           body.status,
         );
@@ -542,7 +542,7 @@ export function mountDeployControlInstallationRoutes(
       param: INSTALLATION_ID_PARAM,
       handler: async ({ c, principal, id }) => {
         const existing = await controller.getInstallation(id);
-        ensureSpacePermission(principal, existing.installation.spaceId);
+        ensureSpacePermission(principal, existing.capsule.workspaceId);
         const response = await controller.createInstallationDestroyPlan(id, {
           actor: principal.actor,
         });
@@ -561,7 +561,7 @@ export function mountDeployControlInstallationRoutes(
       param: INSTALLATION_ID_PARAM,
       handler: async ({ c, principal, id }) => {
         const installation = await controller.getInstallation(id);
-        ensureSpacePermission(principal, installation.installation.spaceId);
+        ensureSpacePermission(principal, installation.capsule.workspaceId);
         const page = parsePageParams(c);
         if (page.kind === "invalid") return page.response;
         return c.json(await controller.listDeployments(id, page.value), 200);
@@ -671,7 +671,7 @@ export function mountDeployControlInstallationRoutes(
       param: INSTALLATION_ID_PARAM,
       handler: async ({ c, principal, id }) => {
         const installation = await controller.getInstallation(id);
-        ensureSpacePermission(principal, installation.installation.spaceId);
+        ensureSpacePermission(principal, installation.capsule.workspaceId);
         const body = await readOptionalJsonBody<InstallationPlanRouteRequest>(
           c,
           "installationPlan",
@@ -715,7 +715,7 @@ export function mountDeployControlInstallationRoutes(
       param: INSTALLATION_ID_PARAM,
       handler: async ({ c, principal, id }) => {
         const installation = await controller.getInstallation(id);
-        ensureSpacePermission(principal, installation.installation.spaceId);
+        ensureSpacePermission(principal, installation.capsule.workspaceId);
         const body = await readOptionalJsonBody<InstallationPlanRouteRequest>(
           c,
           "installationDestroyPlan",
@@ -745,7 +745,7 @@ export function mountDeployControlInstallationRoutes(
       param: INSTALLATION_ID_PARAM,
       handler: async ({ c, principal, id }) => {
         const installation = await controller.getInstallation(id);
-        ensureSpacePermission(principal, installation.installation.spaceId);
+        ensureSpacePermission(principal, installation.capsule.workspaceId);
         const response = await controller.createInstallationDriftCheck(id, {
           actor: principal.actor,
         });
@@ -759,7 +759,7 @@ export function mountDeployControlInstallationRoutes(
 }
 
 async function createScopedInstallConfigForInstallation(input: {
-  readonly installations: InstallationsService;
+  readonly installations: CapsulesService;
   readonly spaceId: string;
   readonly baseInstallConfigId: string;
   readonly installationName: string;

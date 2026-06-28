@@ -1,6 +1,6 @@
 import { stringValue } from "./http-helpers.ts";
 
-const publicInstallationOperationErrorMessages = new Set([
+const publicCapsuleOperationErrorMessages = new Set([
   "materialize worker failed",
   "materialize worker returned mismatched preserveDigest",
   "materialize worker did not return a dedicated runtime target",
@@ -20,12 +20,12 @@ const publicInstallationOperationErrorMessages = new Set([
   "export worker returned an invalid downloadExpiresAt",
 ]);
 
-export function publicInstallationOperationErrorMessage(
+export function publicCapsuleOperationErrorMessage(
   value: unknown,
   fallback: string,
 ): string {
   const message = stringValue(value);
-  return message && publicInstallationOperationErrorMessages.has(message)
+  return message && publicCapsuleOperationErrorMessages.has(message)
     ? message
     : fallback;
 }

@@ -20,8 +20,8 @@
  *
  * Authorization: every handler requires an authenticated account session or
  * PAT (anonymous -> 401) and then enforces that the bearer subject owns the
- * target deploy-control Space (`Space.ownerUserId`) or owns the accounts-ledger
- * account that contains that Space.
+ * target deploy-control Workspace (`Workspace.ownerUserId`) or owns the accounts-ledger
+ * account that contains that Workspace.
  */
 
 import { isApiV1Path, API_V1_PREFIX } from "takosumi-contract";
@@ -65,11 +65,11 @@ import { handleBilling } from "./control/billing.ts";
 export type {
   ControlPlaneOperations,
   RunGroupWithRunsLike,
-  ControlSpaceRole,
+  ControlWorkspaceRole,
   ControlMembershipStatus,
-  PublicSpaceMember,
+  PublicWorkspaceMember,
 } from "./control-operations.ts";
-export { canAccessSpace } from "./control/shared.ts";
+export { canAccessWorkspace } from "./control/shared.ts";
 
 /** A per-resource request handler. Returns `undefined` to fall through to 404. */
 type ControlResourceHandler = (
@@ -174,7 +174,7 @@ export async function handleControlRoute(
   // Authn gate: every other control route requires a live account session or a
   // scoped personal access token. The dashboard presents the HttpOnly
   // `takosumi_session` cookie; automation callers present a `takpat_*` bearer.
-  // Space authorization is enforced per route below after the target Space is
+  // Workspace authorization is enforced per route below after the target Workspace is
   // known.
   const bearer = await requireAccountsBearer({
     request,

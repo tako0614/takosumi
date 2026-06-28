@@ -261,8 +261,8 @@ export async function genericEnvProviderConnectionBody(
 ): Promise<Record<string, unknown>> {
   const provider = optionalStringOption(options, "provider");
   if (!provider) throw new TypeError("--provider is required");
-  const spaceId = optionalStringOption(options, "space");
-  if (!spaceId) throw new TypeError("--space is required");
+  const workspaceId = optionalStringOption(options, "space");
+  if (!workspaceId) throw new TypeError("--space is required");
   const values = await optionalValuesFromOptions(options);
   const files = await filesFromOptions(options);
   if (Object.keys(values).length === 0 && files.length === 0) {
@@ -273,7 +273,7 @@ export async function genericEnvProviderConnectionBody(
   const scopeHints = await scopeHintsFromOptions(options);
   return {
     provider,
-    spaceId,
+    workspaceId,
     kind: "generic_env_provider",
     authMethod: "static_secret",
     scope: "space",
@@ -301,7 +301,7 @@ function connectionBody(
   }
   if (optionalStringOption(options, "space")) {
     throw new TypeError(
-      "operator CLI does not create Space-owned Provider Connection backing material",
+      "operator CLI does not create Workspace-owned Provider Connection backing material",
     );
   }
   const displayName = optionalStringOption(options, "displayName");

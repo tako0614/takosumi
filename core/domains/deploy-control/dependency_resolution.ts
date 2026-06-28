@@ -36,7 +36,7 @@ import type {
   Installation,
   StateSnapshot,
 } from "@takosumi/internal/deploy-control-api";
-import type { OutputSnapshot } from "takosumi-contract/output-snapshots";
+import type { Output as OutputSnapshot } from "takosumi-contract/outputs";
 import type {
   DependencySnapshotEntry,
   DependencySnapshotMode,
@@ -165,12 +165,14 @@ export class DependencyResolutionService {
         const values: Record<string, JsonValue> = {};
         entries.push({
           dependencyId: dependency.id,
+          producerCapsuleId: producer.id,
           producerInstallationId: producer.id,
           producerStateGeneration: stateSnapshot.generation,
+          producerStateVersionId: stateSnapshot.id,
           producerStateSnapshotId: stateSnapshot.id,
           producerStateObjectKey: stateSnapshot.objectKey,
           producerStateDigest: stateSnapshot.digest,
-          producerOutputSnapshotId: "",
+          producerOutputId: "",
           producerOutputDigest: "",
           valuesDigest: await stableJsonDigest(values),
           values,
@@ -269,9 +271,10 @@ export class DependencyResolutionService {
       }
       entries.push({
         dependencyId: dependency.id,
+        producerCapsuleId: producer.id,
         producerInstallationId: producer.id,
         producerStateGeneration: producer.currentStateGeneration,
-        producerOutputSnapshotId: outputSnapshot?.id ?? "",
+        producerOutputId: outputSnapshot?.id ?? "",
         producerOutputDigest: outputSnapshot?.outputDigest ?? "",
         valuesDigest,
         values: cleartextValues,
@@ -305,7 +308,7 @@ export class DependencyResolutionService {
     producer: Installation,
     consumer: Installation,
   ): Promise<ShareCoverage> {
-    const shares = await this.#store.listOutputSharesToSpace(consumer.spaceId);
+    const shares = await this.#store.listOutputSharesToSpace((consumer.workspaceId ?? consumer.spaceId));
     const coverage = new Map<
       string,
       { readonly outputName: string; readonly sensitive: boolean }
@@ -359,8 +362,8 @@ export class DependencyResolutionService {
       await this.#sensitiveOutputResolver.resolve({
         outputSnapshot: input.outputSnapshot,
         outputName: input.producerOutputName,
-        fromSpaceId: input.producer.spaceId,
-        toSpaceId: input.consumer.spaceId,
+        fromSpaceId: (input.producer.workspaceId ?? input.producer.spaceId),
+        toSpaceId: (input.consumer.workspaceId ?? input.consumer.spaceId),
         producerInstallationId: input.producer.id,
       });
     if (!resolved) return undefined;

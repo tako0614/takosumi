@@ -7,12 +7,12 @@ import { createMemo, createResource, For, Match, Show, Switch } from "solid-js";
 import { Activity } from "lucide-solid";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
-import { currentSpaceId } from "../../lib/space-state.ts";
+import { currentWorkspaceId } from "../../lib/workspace-state.ts";
 import {
   type ControlApiError,
-  listInstallations,
+  listCapsules,
   listRuns,
-  type Installation,
+  type Capsule,
   type Run,
   type RunStatus,
 } from "../../lib/control-api.ts";
@@ -34,7 +34,7 @@ interface RunHistoryRow {
   readonly runId: string;
   readonly status: RunStatus;
   readonly operation: string;
-  readonly installationId?: string;
+  readonly capsuleId?: string;
   readonly serviceName?: string;
   readonly createdAt: string;
   readonly errorCode?: string;
@@ -45,43 +45,43 @@ export default function RunsListView() {
 }
 
 function Inner() {
-  const spaceId = () => currentSpaceId() || null;
-  const [runs] = createResource(spaceId, (id) => listRuns(id, RUN_LIST_LIMIT));
-  const [installations] = createResource(spaceId, listInstallations);
-  const installationNames = createMemo(() => {
+  const workspaceId = () => currentWorkspaceId() || null;
+  const [runs] = createResource(workspaceId, (id) => listRuns(id, RUN_LIST_LIMIT));
+  const [capsules] = createResource(workspaceId, listCapsules);
+  const capsuleNames = createMemo(() => {
     const map = new Map<string, string>();
-    for (const installation of installations() ?? []) {
-      map.set(installation.id, installation.name);
+    for (const capsule of capsules() ?? []) {
+      map.set(capsule.id, capsule.name);
     }
     return map;
   });
   const rows = createMemo(() =>
-    rowsFromRuns(runs() ?? [], installations() ?? [], installationNames()),
+    rowsFromRuns(runs() ?? [], capsules() ?? [], capsuleNames()),
   );
 
   return (
     <AppShell>
       <PageHeader title={t("runList.title")} subtitle={t("runList.subtitle")} />
       <Show
-        when={spaceId()}
+        when={workspaceId()}
         fallback={
           <EmptyState
             icon={<Activity size={28} />}
-            title={t("space.select")}
-            message={t("space.selectMessage")}
+            title={t("workspace.select")}
+            message={t("workspace.selectMessage")}
           />
         }
       >
         <Switch>
-          <Match when={runs.loading || installations.loading}>
+          <Match when={runs.loading || capsules.loading}>
             <Card>
               <Skeleton variant="row" count={6} />
             </Card>
           </Match>
-          <Match when={runs.error || installations.error}>
+          <Match when={runs.error || capsules.error}>
             <Toast tone="error">
               {t("common.fetchFailed", {
-                message: errorMessage(runs.error ?? installations.error),
+                message: errorMessage(runs.error ?? capsules.error),
               })}
             </Toast>
           </Match>
@@ -148,24 +148,24 @@ function RunHistoryRowView(props: { readonly row: RunHistoryRow }) {
 
 function rowsFromRuns(
   runs: readonly Run[],
-  installations: readonly Installation[],
+  capsules: readonly Capsule[],
   names: ReadonlyMap<string, string>,
 ): readonly RunHistoryRow[] {
   const fallbackNames = new Map(
-    installations.map((installation) => [installation.id, installation.name]),
+    capsules.map((capsule) => [capsule.id, capsule.name]),
   );
   return [...runs]
     .map((run): RunHistoryRow => {
-      const installationId = run.installationId;
+      const capsuleId = run.capsuleId;
       return {
         runId: run.id,
         status: run.status,
         operation: run.type,
-        ...(installationId ? { installationId } : {}),
-        ...(installationId
+        ...(capsuleId ? { capsuleId } : {}),
+        ...(capsuleId
           ? {
               serviceName:
-                names.get(installationId) ?? fallbackNames.get(installationId),
+                names.get(capsuleId) ?? fallbackNames.get(capsuleId),
             }
           : {}),
         createdAt: run.createdAt,

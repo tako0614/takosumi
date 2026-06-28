@@ -565,11 +565,27 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
       indexes: [["run_id"]],
     },
     {
-      name: "takosumi_spaces",
+      name: "takosumi_workspaces",
       domain: "deploy",
       columns: ["id", "handle", "space_json", "created_at", "updated_at"],
       primaryKey: ["id"],
       uniqueConstraints: [["handle"]],
+    },
+    {
+      name: "takosumi_projects",
+      domain: "deploy",
+      columns: [
+        "id",
+        "workspace_id",
+        "name",
+        "slug",
+        "project_json",
+        "created_at",
+        "updated_at",
+      ],
+      primaryKey: ["id"],
+      uniqueConstraints: [["workspace_id", "slug"]],
+      indexes: [["workspace_id"]],
     },
     {
       name: "takosumi_install_configs",
@@ -587,16 +603,17 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
       indexes: [["space_id"], ["install_type"]],
     },
     {
-      name: "takosumi_opentofu_installations",
+      name: "takosumi_capsules",
       domain: "deploy",
       columns: [
         "id",
         "space_id",
+        "project_id",
         "name",
         "environment",
         "source_id",
         "install_config_id",
-        "current_deployment_id",
+        "current_state_version_id",
         "status",
         "installation_json",
         "created_at",
@@ -604,7 +621,12 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
       ],
       primaryKey: ["id"],
       uniqueConstraints: [["space_id", "name", "environment"]],
-      indexes: [["space_id"], ["current_deployment_id"], ["created_at"]],
+      indexes: [
+        ["space_id"],
+        ["project_id"],
+        ["current_state_version_id"],
+        ["created_at"],
+      ],
     },
     {
       name: "takosumi_opentofu_deployments",
@@ -648,7 +670,7 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
       indexes: [["installation_id", "environment"]],
     },
     {
-      name: "takosumi_state_snapshots",
+      name: "takosumi_state_versions",
       domain: "deploy",
       columns: [
         "id",
@@ -694,7 +716,7 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
     {
       // Projected outputs captured after a successful apply (§16). The raw
       // envelope stays an encrypted artifact; only the projection enters the DB.
-      name: "takosumi_output_snapshots",
+      name: "takosumi_outputs",
       domain: "deploy",
       columns: [
         "id",
@@ -3044,5 +3066,181 @@ alter table if exists takosumi_provider_catalog rename to takosumi_provider_cata
 alter table if exists takosumi_provider_envs rename to takosumi_provider_envs_retired;`,
       down: `alter table if exists takosumi_provider_envs_retired rename to takosumi_provider_envs;
 alter table if exists takosumi_provider_catalog_retired rename to takosumi_provider_catalog;`,
+    },
+    {
+      id: "deploy.workspace_capsule_rename",
+      version: 57,
+      domain: "deploy",
+      description:
+        "P4 17-noun rename (structural): rename the deploy-control ledger tables takosumi_spaces -> takosumi_workspaces, takosumi_opentofu_installations -> takosumi_capsules, takosumi_state_snapshots -> takosumi_state_versions, takosumi_output_snapshots -> takosumi_outputs, with their canonical named indexes. On takosumi_capsules, rename current_deployment_id -> current_state_version_id (the retired-Deployment pointer is value-translated by deploy.retire_deployment_tracking) and add the nullable Workspace-owned project_id. Create the new takosumi_projects table. Rename-aside / additive only; `down` reverses every rename and drops the added column / table.",
+      sql: `alter table if exists takosumi_spaces rename to takosumi_workspaces;
+alter index if exists takosumi_spaces_handle_unique rename to takosumi_workspaces_handle_unique;
+alter table if exists takosumi_opentofu_installations rename to takosumi_capsules;
+alter table if exists takosumi_capsules rename column current_deployment_id to current_state_version_id;
+alter table if exists takosumi_capsules add column if not exists project_id text;
+alter index if exists takosumi_opentofu_installations_space_name_environment_unique rename to takosumi_capsules_space_name_environment_unique;
+alter index if exists takosumi_opentofu_installations_space_idx rename to takosumi_capsules_space_idx;
+alter index if exists takosumi_opentofu_installations_current_deployment_idx rename to takosumi_capsules_current_state_version_idx;
+alter index if exists takosumi_opentofu_installations_created_at_idx rename to takosumi_capsules_created_at_idx;
+create index if not exists takosumi_capsules_project_idx on takosumi_capsules (project_id);
+alter table if exists takosumi_state_snapshots rename to takosumi_state_versions;
+alter index if exists takosumi_state_snapshots_installation_environment_generation_un rename to takosumi_state_versions_installation_environment_generation_un;
+alter index if exists takosumi_state_snapshots_installation_idx rename to takosumi_state_versions_installation_idx;
+alter table if exists takosumi_output_snapshots rename to takosumi_outputs;
+alter index if exists takosumi_output_snapshots_installation_idx rename to takosumi_outputs_installation_idx;
+create table if not exists takosumi_projects (
+  id           text   primary key,
+  workspace_id text   not null,
+  name         text   not null,
+  slug         text   not null,
+  project_json jsonb  not null,
+  created_at   text   not null,
+  updated_at   text   not null
+);
+create unique index if not exists takosumi_projects_workspace_slug_unique
+  on takosumi_projects (workspace_id, slug);
+create index if not exists takosumi_projects_workspace_idx
+  on takosumi_projects (workspace_id);`,
+      down: `drop index if exists takosumi_projects_workspace_idx;
+drop index if exists takosumi_projects_workspace_slug_unique;
+drop table if exists takosumi_projects;
+alter index if exists takosumi_outputs_installation_idx rename to takosumi_output_snapshots_installation_idx;
+alter table if exists takosumi_outputs rename to takosumi_output_snapshots;
+alter index if exists takosumi_state_versions_installation_idx rename to takosumi_state_snapshots_installation_idx;
+alter index if exists takosumi_state_versions_installation_environment_generation_un rename to takosumi_state_snapshots_installation_environment_generation_un;
+alter table if exists takosumi_state_versions rename to takosumi_state_snapshots;
+drop index if exists takosumi_capsules_project_idx;
+alter index if exists takosumi_capsules_created_at_idx rename to takosumi_opentofu_installations_created_at_idx;
+alter index if exists takosumi_capsules_current_state_version_idx rename to takosumi_opentofu_installations_current_deployment_idx;
+alter index if exists takosumi_capsules_space_idx rename to takosumi_opentofu_installations_space_idx;
+alter index if exists takosumi_capsules_space_name_environment_unique rename to takosumi_opentofu_installations_space_name_environment_unique;
+alter table if exists takosumi_capsules drop column if exists project_id;
+alter table if exists takosumi_capsules rename column current_state_version_id to current_deployment_id;
+alter table if exists takosumi_capsules rename to takosumi_opentofu_installations;
+alter index if exists takosumi_workspaces_handle_unique rename to takosumi_spaces_handle_unique;
+alter table if exists takosumi_workspaces rename to takosumi_spaces;`,
+    },
+    {
+      id: "deploy.projects_default_backfill",
+      version: 58,
+      domain: "deploy",
+      description:
+        "P4 backfill: create one default Project (prj_default_<workspaceId>, slug `default`) per Workspace, then point every pre-Project Capsule at its Workspace's default Project (capsules.project_id, joined on the kept space_id column). `down` clears the backfilled project_id and deletes the default Projects.",
+      sql: `insert into takosumi_projects (id, workspace_id, name, slug, project_json, created_at, updated_at)
+  select
+    'prj_default_' || w.id,
+    w.id,
+    'Default',
+    'default',
+    jsonb_build_object(
+      'id', 'prj_default_' || w.id,
+      'workspaceId', w.id,
+      'name', 'Default',
+      'slug', 'default',
+      'projectJson', jsonb_build_object(),
+      'createdAt', w.created_at,
+      'updatedAt', w.updated_at
+    ),
+    w.created_at,
+    w.updated_at
+  from takosumi_workspaces w
+  on conflict (id) do nothing;
+update takosumi_capsules c
+  set project_id = 'prj_default_' || c.space_id
+  where c.project_id is null
+    and exists (
+      select 1 from takosumi_projects p where p.id = 'prj_default_' || c.space_id
+    );`,
+      down: `update takosumi_capsules
+  set project_id = null
+  where starts_with(project_id, 'prj_default_');
+delete from takosumi_projects where starts_with(id, 'prj_default_');`,
+    },
+    {
+      id: "deploy.workspace_capsule_blob_key_rewrite",
+      version: 59,
+      domain: "deploy",
+      description:
+        "P4 record_json blob-key rewrite (reversible): rename the renamed-noun keys inside the stored JSON envelopes so getCapsule / getStateVersion / getOutput / OutputShare reads deserialize the new contract fields. takosumi_capsules.installation_json: spaceId->workspaceId, currentOutputSnapshotId->currentOutputId. takosumi_state_versions / takosumi_outputs snapshot_json: spaceId->workspaceId, installationId->capsuleId. takosumi_output_shares.share_json: fromSpaceId->fromWorkspaceId, toSpaceId->toWorkspaceId, producerInstallationId->producerCapsuleId. (currentDeploymentId->currentStateVersionId is handled by deploy.retire_deployment_tracking because the value is translated, not copied.) `down` reverses each key rename.",
+      sql: `update takosumi_capsules set installation_json =
+  (installation_json - 'spaceId') || jsonb_build_object('workspaceId', installation_json->'spaceId')
+  where installation_json ? 'spaceId';
+update takosumi_capsules set installation_json =
+  (installation_json - 'currentOutputSnapshotId') || jsonb_build_object('currentOutputId', installation_json->'currentOutputSnapshotId')
+  where installation_json ? 'currentOutputSnapshotId';
+update takosumi_state_versions set snapshot_json =
+  (snapshot_json - 'spaceId') || jsonb_build_object('workspaceId', snapshot_json->'spaceId')
+  where snapshot_json ? 'spaceId';
+update takosumi_state_versions set snapshot_json =
+  (snapshot_json - 'installationId') || jsonb_build_object('capsuleId', snapshot_json->'installationId')
+  where snapshot_json ? 'installationId';
+update takosumi_outputs set snapshot_json =
+  (snapshot_json - 'spaceId') || jsonb_build_object('workspaceId', snapshot_json->'spaceId')
+  where snapshot_json ? 'spaceId';
+update takosumi_outputs set snapshot_json =
+  (snapshot_json - 'installationId') || jsonb_build_object('capsuleId', snapshot_json->'installationId')
+  where snapshot_json ? 'installationId';
+update takosumi_output_shares set share_json =
+  (share_json - 'fromSpaceId') || jsonb_build_object('fromWorkspaceId', share_json->'fromSpaceId')
+  where share_json ? 'fromSpaceId';
+update takosumi_output_shares set share_json =
+  (share_json - 'toSpaceId') || jsonb_build_object('toWorkspaceId', share_json->'toSpaceId')
+  where share_json ? 'toSpaceId';
+update takosumi_output_shares set share_json =
+  (share_json - 'producerInstallationId') || jsonb_build_object('producerCapsuleId', share_json->'producerInstallationId')
+  where share_json ? 'producerInstallationId';`,
+      down: `update takosumi_output_shares set share_json =
+  (share_json - 'producerCapsuleId') || jsonb_build_object('producerInstallationId', share_json->'producerCapsuleId')
+  where share_json ? 'producerCapsuleId';
+update takosumi_output_shares set share_json =
+  (share_json - 'toWorkspaceId') || jsonb_build_object('toSpaceId', share_json->'toWorkspaceId')
+  where share_json ? 'toWorkspaceId';
+update takosumi_output_shares set share_json =
+  (share_json - 'fromWorkspaceId') || jsonb_build_object('fromSpaceId', share_json->'fromWorkspaceId')
+  where share_json ? 'fromWorkspaceId';
+update takosumi_outputs set snapshot_json =
+  (snapshot_json - 'capsuleId') || jsonb_build_object('installationId', snapshot_json->'capsuleId')
+  where snapshot_json ? 'capsuleId';
+update takosumi_outputs set snapshot_json =
+  (snapshot_json - 'workspaceId') || jsonb_build_object('spaceId', snapshot_json->'workspaceId')
+  where snapshot_json ? 'workspaceId';
+update takosumi_state_versions set snapshot_json =
+  (snapshot_json - 'capsuleId') || jsonb_build_object('installationId', snapshot_json->'capsuleId')
+  where snapshot_json ? 'capsuleId';
+update takosumi_state_versions set snapshot_json =
+  (snapshot_json - 'workspaceId') || jsonb_build_object('spaceId', snapshot_json->'workspaceId')
+  where snapshot_json ? 'workspaceId';
+update takosumi_capsules set installation_json =
+  (installation_json - 'currentOutputId') || jsonb_build_object('currentOutputSnapshotId', installation_json->'currentOutputId')
+  where installation_json ? 'currentOutputId';
+update takosumi_capsules set installation_json =
+  (installation_json - 'workspaceId') || jsonb_build_object('spaceId', installation_json->'workspaceId')
+  where installation_json ? 'workspaceId';`,
+    },
+    {
+      id: "deploy.retire_deployment_tracking",
+      version: 60,
+      domain: "deploy",
+      description:
+        "P4 retire-Deployment value-translation (forward-only data): the Takosumi Deployment ledger is retired — a successful apply Run + StateVersion + Output is the record. Rewrite takosumi_capsules.current_state_version_id (which carried a retired takosumi_opentofu_deployments id) to the id of the highest-generation StateVersion for the Capsule's current environment, and reflect that into installation_json (drop currentDeploymentId, set currentStateVersionId from the translated column, set projectId from the column). Forward-only: the original deployment id is intentionally not recoverable; the retired takosumi_opentofu_deployments table is kept read-only for audit.",
+      sql: `update takosumi_capsules c
+  set current_state_version_id = (
+    select sv.id from takosumi_state_versions sv
+    where sv.installation_id = c.id and sv.environment = c.environment
+    order by sv.generation desc
+    limit 1
+  )
+  where exists (
+    select 1 from takosumi_state_versions sv
+    where sv.installation_id = c.id and sv.environment = c.environment
+  );
+update takosumi_capsules
+  set installation_json = (installation_json - 'currentDeploymentId')
+    || (case when current_state_version_id is not null
+          then jsonb_build_object('currentStateVersionId', to_jsonb(current_state_version_id))
+          else '{}'::jsonb end)
+    || (case when project_id is not null
+          then jsonb_build_object('projectId', to_jsonb(project_id))
+          else '{}'::jsonb end);`,
     },
   ]);

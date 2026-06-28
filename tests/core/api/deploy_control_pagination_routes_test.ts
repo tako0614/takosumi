@@ -10,8 +10,8 @@ import { expect, test } from "bun:test";
 import { createApiApp } from "../../../core/api/app.ts";
 import { OpenTofuDeploymentController } from "../../../core/domains/deploy-control/mod.ts";
 import { InMemoryOpenTofuDeploymentStore } from "../../../core/domains/deploy-control/store.ts";
-import { InstallationsService } from "../../../core/domains/installations/mod.ts";
-import { officialInstallConfigs } from "../../../core/domains/installations/official_seed.ts";
+import { CapsulesService } from "../../../core/domains/capsules/mod.ts";
+import { officialInstallConfigs } from "../../../core/domains/capsules/official_seed.ts";
 import type { Connection } from "takosumi-contract/connections";
 import type {
   Installation,
@@ -76,7 +76,7 @@ async function makeApp(seed: (store: InMemoryOpenTofuDeploymentStore) => Promise
   const store = new InMemoryOpenTofuDeploymentStore();
   await seed(store);
   const controller = new OpenTofuDeploymentController({ store });
-  const installationsService = new InstallationsService({ store });
+  const installationsService = new CapsulesService({ store });
   const app = await createApiApp({
     registerDeployControlInternalRoutes: true,
     deployControlInternalRouteOptions: {
@@ -254,7 +254,7 @@ test("GET /internal/v1/install-configs caps the official+scoped union at 100 and
   expect(seen).toHaveLength(total);
   expect(new Set(seen).size).toBe(total); // no dupes
   // Merge-sorted by (createdAt, id) across the union: fixture rows first, then
-  // the built-in official fallback configs created by InstallationsService.
+  // the built-in official fallback configs created by CapsulesService.
   const fixtureIds = Array.from(
     { length: official + scoped },
     (_, i) => `cfg_${String(i).padStart(4, "0")}`,

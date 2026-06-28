@@ -31,7 +31,7 @@ export type TakosumiActorContext = ActorContext;
 
 export interface InternalSpaceRequest extends Partial<SpaceCreateRequest> {
   actor: TakosumiActorContext;
-  spaceId?: string;
+  workspaceId?: string;
 }
 
 export interface InternalSpaceSummary
@@ -41,7 +41,7 @@ export interface InternalSpaceSummary
 
 export interface InternalGroupRequest extends Partial<GroupCreateRequest> {
   actor: TakosumiActorContext;
-  spaceId: string;
+  workspaceId: string;
   groupId?: string;
 }
 

@@ -22,7 +22,7 @@ const newAppViewSource = readFileSync(
 const connectionsTabSource = readFileSync(
   resolve(
     here,
-    "../../../../../dashboard/src/views/space/tabs/ConnectionsTab.tsx",
+    "../../../../../dashboard/src/views/workspace/tabs/ConnectionsTab.tsx",
   ),
   "utf8",
 );
@@ -52,12 +52,12 @@ const accountViewSource = readFileSync(
 const spaceSettingsViewSource = readFileSync(
   resolve(
     here,
-    "../../../../../dashboard/src/views/space/SpaceSettingsView.tsx",
+    "../../../../../dashboard/src/views/workspace/WorkspaceSettingsView.tsx",
   ),
   "utf8",
 );
 const installationsServiceSource = readFileSync(
-  resolve(here, "../../../../../core/domains/installations/mod.ts"),
+  resolve(here, "../../../../../core/domains/capsules/mod.ts"),
   "utf8",
 );
 const controlRoutesSource = readFileSync(
@@ -80,7 +80,7 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).toContain("name: name().trim()");
     expect(newAppViewSource).toContain("const providerConnectionsHref = () =>");
     expect(newAppViewSource).not.toContain(
-      'href="/space/settings/connections"',
+      'href="/workspace/settings/connections"',
     );
     expect(
       newAppViewSource.match(/href=\{providerConnectionsHref\(\)\}/g) ?? [],
@@ -245,15 +245,15 @@ describe("/new Provider Connections return context", () => {
   });
 
   test("/new retry still saves Provider Connections after a partial install create", () => {
-    const createIndex = newAppViewSource.indexOf("await createInstallation({");
+    const createIndex = newAppViewSource.indexOf("await createCapsule({");
     const setCreatedIndex = newAppViewSource.indexOf(
-      "setCreatedInstallationId(installationId);",
+      "setCreatedCapsuleId(capsuleId);",
     );
     const payloadIndex = newAppViewSource.indexOf(
       "const providerConnectionsForRun = providerConnectionsPayload();",
     );
     const saveIndex = newAppViewSource.indexOf(
-      "await putInstallationProviderConnectionSet(",
+      "await putCapsuleProviderConnectionSet(",
     );
     const doneIndex = newAppViewSource.indexOf('setStepInstall("done");');
 
@@ -264,7 +264,7 @@ describe("/new Provider Connections return context", () => {
     expect(saveIndex).toBeGreaterThan(setCreatedIndex);
     expect(doneIndex).toBeGreaterThan(saveIndex);
     expect(
-      newAppViewSource.match(/await putInstallationProviderConnectionSet\(/g) ??
+      newAppViewSource.match(/await putCapsuleProviderConnectionSet\(/g) ??
         [],
     ).toHaveLength(1);
   });
@@ -297,9 +297,9 @@ describe("/new Provider Connections return context", () => {
     expect(controlApiSource).toContain('"duplicate_installation"');
     expect(newAppViewSource).toContain("error?.isDuplicateService");
     expect(installationsServiceSource).toContain(
-      'reason: "duplicate_installation"',
+      'reason: "duplicate_capsule"',
     );
-    expect(installationsServiceSource).toContain("installationId: existing.id");
+    expect(installationsServiceSource).toContain("capsuleId: existing.id");
     expect(controlSharedSource).toContain("error.details");
     expect(controlSharedSource).toContain("function isRecord");
     // The thin shell still routes through the resource dispatch table.

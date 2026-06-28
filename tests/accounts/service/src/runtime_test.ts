@@ -7,7 +7,7 @@ import {
 
 test("sharedCellRuntimeBinding creates per-installation namespace targets", () => {
   const binding = sharedCellRuntimeBinding({
-    installationId: "inst_1",
+    capsuleId: "inst_1",
     cellId: "tokyo-cell-01",
     now: 1_000,
   });
@@ -27,33 +27,33 @@ test("InMemorySharedCellWarmPool allocates warm capacity once per installation",
   ]);
 
   const first = pool.allocate({
-    installationId: "inst_a",
+    capsuleId: "inst_a",
     accountId: "acct_1",
-    spaceId: "space_1",
+    workspaceId: "space_1",
     appId: "takos.chat",
     createdBySubject: "tsub_owner",
     now: 1_000,
   });
   const repeat = pool.allocate({
-    installationId: "inst_a",
+    capsuleId: "inst_a",
     accountId: "acct_1",
-    spaceId: "space_1",
+    workspaceId: "space_1",
     appId: "takos.chat",
     createdBySubject: "tsub_owner",
     now: 2_000,
   });
   const second = pool.allocate({
-    installationId: "inst_b",
+    capsuleId: "inst_b",
     accountId: "acct_1",
-    spaceId: "space_1",
+    workspaceId: "space_1",
     appId: "takos.chat",
     createdBySubject: "tsub_owner",
     now: 3_000,
   });
   const exhausted = pool.allocate({
-    installationId: "inst_c",
+    capsuleId: "inst_c",
     accountId: "acct_1",
-    spaceId: "space_1",
+    workspaceId: "space_1",
     appId: "takos.chat",
     createdBySubject: "tsub_owner",
     now: 4_000,

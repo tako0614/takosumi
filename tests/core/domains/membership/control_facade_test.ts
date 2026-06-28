@@ -24,7 +24,7 @@ import {
   type ControlPlaneOperations,
   handleControlRoute,
 } from "../../../../accounts/service/src/control-routes.ts";
-import type { Space } from "takosumi-contract/spaces";
+import type { Workspace as Space } from "takosumi-contract/workspaces";
 
 import {
   createInMemoryMembershipDomainDependencies,
@@ -82,10 +82,10 @@ function harness(options: { spaceId: string; spaceOwner: string }): Harness {
 
   const operations = {
     spaces: {
-      listSpaces: async () => [space(options.spaceId)],
-      getSpace: async (id: string) => space(id),
-      createSpace: async () => space(options.spaceId),
-      updateSpace: async (id: string) => space(id),
+      listWorkspaces: async () => [space(options.spaceId)],
+      getWorkspace: async (id: string) => space(id),
+      createWorkspace: async () => space(options.spaceId),
+      updateWorkspace: async (id: string) => space(id),
     },
     members,
   } as unknown as ControlPlaneOperations;

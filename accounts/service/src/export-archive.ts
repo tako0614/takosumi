@@ -7,7 +7,7 @@
 // metadata path and let the operator wire a substrate-appropriate
 // archive worker (e.g. R2 object PUT) instead.
 //
-// REQUIRES A WRITABLE WORKING DIRECTORY. `writeInstallationExportTarZst`
+// REQUIRES A WRITABLE WORKING DIRECTORY. `writeCapsuleExportTarZst`
 // creates a temp dir and the metadata-only worker `mkdir`s
 // `options.outputDirectory`; both must be writable (e.g. a tmpfs scratch
 // mount), so this module does not run on a fully read-only container
@@ -29,52 +29,52 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type { AccountsInstallationExportBundle } from "./export-bundle.ts";
+import type { AccountsCapsuleExportBundle } from "./export-bundle.ts";
 import { sha256HexBytes } from "./installation-helpers.ts";
 import type {
-  AppInstallationExportWorker,
-  AppInstallationExportWorkerInput,
+  AppCapsuleExportWorker,
+  AppCapsuleExportWorkerInput,
 } from "./mod.ts";
 import { exportDownloadUrl } from "./export-download-url.ts";
 
 const archiveRoot = "takos-export";
 const dataRoot = `${archiveRoot}/data`;
 const dataManifestKind =
-  "takosumi.accounts.installation-export-data-manifest@v1";
+  "takosumi.accounts.capsule-export-data-manifest@v1";
 
-export interface InstallationExportArchiveFile {
+export interface CapsuleExportArchiveFile {
   readonly path: string;
   readonly content: string | Uint8Array;
 }
 
-export interface InstallationExportArchiveDataFile {
+export interface CapsuleExportArchiveDataFile {
   readonly path: string;
   readonly content: string | Uint8Array;
   readonly mediaType?: string;
 }
 
-export interface WriteInstallationExportArchiveInput {
-  readonly bundle: AccountsInstallationExportBundle;
+export interface WriteCapsuleExportArchiveInput {
+  readonly bundle: AccountsCapsuleExportBundle;
   readonly outputPath: string;
-  readonly dataFiles?: readonly InstallationExportArchiveDataFile[];
+  readonly dataFiles?: readonly CapsuleExportArchiveDataFile[];
   readonly artifactDescriptorContent?: string;
-  readonly encryption?: InstallationExportArchiveEncryption;
+  readonly encryption?: CapsuleExportArchiveEncryption;
   readonly tarExecutable?: string;
   readonly zstdExecutable?: string;
   readonly ageExecutable?: string;
 }
 
-export interface InstallationExportArchiveEncryption {
+export interface CapsuleExportArchiveEncryption {
   readonly method: "none" | "age";
   readonly recipients?: readonly string[];
 }
 
-export interface MetadataOnlyInstallationExportWorkerOptions {
+export interface MetadataOnlyCapsuleExportWorkerOptions {
   readonly outputDirectory: string;
   readonly downloadBaseUrl?: string;
-  readonly uploader?: InstallationExportArchiveUploader;
-  readonly dataProvider?: InstallationExportDataProvider;
-  readonly artifactDescriptorProvider?: InstallationExportArtifactDescriptorProvider;
+  readonly uploader?: CapsuleExportArchiveUploader;
+  readonly dataProvider?: CapsuleExportDataProvider;
+  readonly artifactDescriptorProvider?: CapsuleExportArtifactDescriptorProvider;
   readonly objectKeyPrefix?: string;
   readonly ttlMs?: number;
   readonly tarExecutable?: string;
@@ -83,7 +83,7 @@ export interface MetadataOnlyInstallationExportWorkerOptions {
   readonly now?: () => Date;
 }
 
-export interface InstallationExportArchiveUploadInput {
+export interface CapsuleExportArchiveUploadInput {
   readonly filePath: string;
   readonly objectKey: string;
   readonly contentType: string;
@@ -92,37 +92,37 @@ export interface InstallationExportArchiveUploadInput {
   readonly metadata: Record<string, string>;
 }
 
-export interface InstallationExportArchiveUploadResult {
+export interface CapsuleExportArchiveUploadResult {
   readonly downloadUrl: string;
   readonly downloadExpiresAt: string;
   readonly archiveDigest?: string;
 }
 
-export type InstallationExportArchiveUploader = (
-  input: InstallationExportArchiveUploadInput,
+export type CapsuleExportArchiveUploader = (
+  input: CapsuleExportArchiveUploadInput,
 ) =>
-  | InstallationExportArchiveUploadResult
-  | Promise<InstallationExportArchiveUploadResult>;
+  | CapsuleExportArchiveUploadResult
+  | Promise<CapsuleExportArchiveUploadResult>;
 
-export type InstallationExportDataProvider = (
-  input: AppInstallationExportWorkerInput,
+export type CapsuleExportDataProvider = (
+  input: AppCapsuleExportWorkerInput,
 ) =>
-  | readonly InstallationExportArchiveDataFile[]
-  | Promise<readonly InstallationExportArchiveDataFile[]>;
+  | readonly CapsuleExportArchiveDataFile[]
+  | Promise<readonly CapsuleExportArchiveDataFile[]>;
 
-export type InstallationExportArtifactDescriptorProvider = (
-  input: AppInstallationExportWorkerInput,
+export type CapsuleExportArtifactDescriptorProvider = (
+  input: AppCapsuleExportWorkerInput,
 ) => string | undefined | Promise<string | undefined>;
 
-export interface BuildInstallationExportArchiveFilesOptions {
+export interface BuildCapsuleExportArchiveFilesOptions {
   readonly artifactDescriptorContent?: string;
 }
 
-export async function buildInstallationExportArchiveFiles(
-  bundle: AccountsInstallationExportBundle,
-  dataFiles: readonly InstallationExportArchiveDataFile[] = [],
-  options: BuildInstallationExportArchiveFilesOptions = {},
-): Promise<readonly InstallationExportArchiveFile[]> {
+export async function buildCapsuleExportArchiveFiles(
+  bundle: AccountsCapsuleExportBundle,
+  dataFiles: readonly CapsuleExportArchiveDataFile[] = [],
+  options: BuildCapsuleExportArchiveFilesOptions = {},
+): Promise<readonly CapsuleExportArchiveFile[]> {
   const normalizedDataFiles = await normalizeDataFiles(dataFiles);
   return [
     {
@@ -163,15 +163,15 @@ export async function buildInstallationExportArchiveFiles(
   ];
 }
 
-export async function writeInstallationExportTarZst(
-  input: WriteInstallationExportArchiveInput,
+export async function writeCapsuleExportTarZst(
+  input: WriteCapsuleExportArchiveInput,
 ): Promise<void> {
   const encryption = normalizeArchiveEncryption(input.encryption);
   const tempRoot = await mkdtemp(join(tmpdir(), "takosumi-accounts-export-"));
   try {
     await materializeArchiveTree({
       root: tempRoot,
-      files: await buildInstallationExportArchiveFiles(
+      files: await buildCapsuleExportArchiveFiles(
         input.bundle,
         input.dataFiles ?? [],
         { artifactDescriptorContent: input.artifactDescriptorContent },
@@ -218,12 +218,12 @@ export async function writeInstallationExportTarZst(
   }
 }
 
-export function createMetadataOnlyInstallationExportWorker(
-  options: MetadataOnlyInstallationExportWorkerOptions,
-): AppInstallationExportWorker {
+export function createMetadataOnlyCapsuleExportWorker(
+  options: MetadataOnlyCapsuleExportWorkerOptions,
+): AppCapsuleExportWorker {
   const uploader =
     options.uploader ??
-    createHttpDirectoryInstallationExportArchiveUploader({
+    createHttpDirectoryCapsuleExportArchiveUploader({
       downloadBaseUrl: requiredDownloadBaseUrl(options.downloadBaseUrl),
       outputDirectory: options.outputDirectory,
     });
@@ -249,7 +249,7 @@ export function createMetadataOnlyInstallationExportWorker(
     const artifactDescriptorContent = options.artifactDescriptorProvider
       ? await options.artifactDescriptorProvider(input)
       : undefined;
-    await writeInstallationExportTarZst({
+    await writeCapsuleExportTarZst({
       bundle: input.bundle,
       outputPath,
       dataFiles,
@@ -269,9 +269,9 @@ export function createMetadataOnlyInstallationExportWorker(
       contentEncoding: encrypted ? "age" : undefined,
       downloadExpiresAt,
       metadata: {
-        installationId: input.installation.installationId,
+        capsuleId: input.installation.capsuleId,
         accountId: input.installation.accountId,
-        spaceId: input.installation.spaceId,
+        workspaceId: input.installation.workspaceId,
         operationId: input.operationId,
         format: input.request.format,
         encryption: input.request.encryption.method,
@@ -285,10 +285,10 @@ export function createMetadataOnlyInstallationExportWorker(
   };
 }
 
-export function createHttpDirectoryInstallationExportArchiveUploader(options: {
+export function createHttpDirectoryCapsuleExportArchiveUploader(options: {
   readonly downloadBaseUrl: string;
   readonly outputDirectory?: string;
-}): InstallationExportArchiveUploader {
+}): CapsuleExportArchiveUploader {
   const downloadBaseUrl = normalizedHttpDirectoryUrl(options.downloadBaseUrl);
   return async (input) => {
     if (options.outputDirectory) {
@@ -306,7 +306,7 @@ export function createHttpDirectoryInstallationExportArchiveUploader(options: {
 }
 
 function normalizeArchiveEncryption(
-  value: InstallationExportArchiveEncryption | undefined,
+  value: CapsuleExportArchiveEncryption | undefined,
 ): { method: "none" } | { method: "age"; recipients: readonly string[] } {
   if (!value || value.method === "none") return { method: "none" };
   const recipients = value.recipients ?? [];
@@ -320,7 +320,7 @@ function normalizeArchiveEncryption(
 
 async function materializeArchiveTree(input: {
   root: string;
-  files: readonly InstallationExportArchiveFile[];
+  files: readonly CapsuleExportArchiveFile[];
 }): Promise<void> {
   for (const file of input.files) {
     const path = join(input.root, file.path);
@@ -364,7 +364,7 @@ interface NormalizedDataArchiveFile {
 }
 
 async function normalizeDataFiles(
-  files: readonly InstallationExportArchiveDataFile[],
+  files: readonly CapsuleExportArchiveDataFile[],
 ): Promise<readonly NormalizedDataArchiveFile[]> {
   const seen = new Set<string>();
   const normalized = await Promise.all(
@@ -425,7 +425,7 @@ function normalizeDataArchivePath(path: string): string {
 
 function dataArchiveFiles(
   dataFiles: readonly NormalizedDataArchiveFile[],
-): readonly InstallationExportArchiveFile[] {
+): readonly CapsuleExportArchiveFile[] {
   if (dataFiles.length === 0) {
     return [
       {
@@ -461,8 +461,8 @@ function dataArchiveFiles(
 }
 
 function artifactDescriptorArchiveContent(
-  bundle: AccountsInstallationExportBundle,
-  options: BuildInstallationExportArchiveFilesOptions,
+  bundle: AccountsCapsuleExportBundle,
+  options: BuildCapsuleExportArchiveFilesOptions,
 ): string {
   if (options.artifactDescriptorContent !== undefined) {
     return textWithTrailingNewline(options.artifactDescriptorContent);
@@ -478,12 +478,12 @@ function textWithTrailingNewline(value: string): string {
 }
 
 function installationProjection(
-  bundle: AccountsInstallationExportBundle,
+  bundle: AccountsCapsuleExportBundle,
 ): Record<string, unknown> {
   return {
-    installationId: bundle.installation.installationId,
+    capsuleId: bundle.installation.capsuleId,
     accountId: bundle.installation.accountId,
-    spaceId: bundle.installation.spaceId,
+    workspaceId: bundle.installation.workspaceId,
     appId: bundle.installation.appId,
     mode: bundle.installation.mode,
     status: bundle.installation.status,
@@ -502,7 +502,7 @@ function installationProjection(
 }
 
 function oidcServiceBindingTemplate(
-  bundle: AccountsInstallationExportBundle,
+  bundle: AccountsCapsuleExportBundle,
 ): Record<string, unknown> {
   const serviceBinding = bundle.serviceBindings.find(
     (entry) => entry.kind === "identity.oidc",
@@ -510,7 +510,7 @@ function oidcServiceBindingTemplate(
   return {
     kind: "takosumi.accounts.oidc-service-binding-template@v1",
     version: "v1",
-    installationId: bundle.installation.installationId,
+    capsuleId: bundle.installation.capsuleId,
     sourceIssuer: bundle.oidcClient?.issuerUrl ?? null,
     oidcClient: bundle.oidcClient
       ? {
@@ -566,14 +566,14 @@ function prefixedObjectKey(
   return segments.length > 0 ? `${segments.join("/")}/${fileName}` : fileName;
 }
 
-function restoreGuide(bundle: AccountsInstallationExportBundle): string {
-  return `# Restore ${bundle.installation.installationId}
+function restoreGuide(bundle: AccountsCapsuleExportBundle): string {
+  return `# Restore ${bundle.installation.capsuleId}
 
 This archive contains a canonical \`takos-export/bundle.json\` payload for Takosumi Accounts import.
 OIDC service-binding metadata is also available at \`takos-export/oidc/service-binding-template.json\`.
 
 Restore this bundle through a Takosumi deploy-control restore/apply flow on the
-target Space, then let the target account plane create its Installation
+target Workspace, then let the target account plane create its Capsule
 projection from that deploy-control ledger entry. The account-plane import
 route is fail-closed until it is wired to that restore flow. Operators may use
 \`takosumi internal installations import-plan --bundle-file takos-export/bundle.json\`

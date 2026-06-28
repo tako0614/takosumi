@@ -1,5 +1,5 @@
 /**
- * Graph view — the Space dependency DAG, rendered structurally as topological
+ * Graph view — the Workspace dependency DAG, rendered structurally as topological
  * LAYERS (producers above consumers) with no graph/d3 layout dependency. A
  * cycle (which the backend forbids) is surfaced as a remaining-nodes block
  * rather than hanging. Reached from the Capsule list and Workspace settings.
@@ -9,14 +9,14 @@ import { createMemo, createResource, For, Match, Show, Switch } from "solid-js";
 import { Network } from "lucide-solid";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
-import { currentSpaceId } from "../../lib/space-state.ts";
+import { currentWorkspaceId } from "../../lib/workspace-state.ts";
 import {
   type ControlApiError,
-  getSpaceGraph,
+  getWorkspaceGraph,
   type GraphNode,
 } from "../../lib/control-api.ts";
 import { layerGraph } from "./graph-layering.ts";
-import { installationStatusLabel, installationTone } from "../../lib/labels.ts";
+import { capsuleStatusLabel, capsuleTone } from "../../lib/labels.ts";
 import { t } from "../../i18n/index.ts";
 import {
   Badge,
@@ -35,18 +35,18 @@ function NodeBox(props: {
   node: GraphNode;
   producers: ReadonlyMap<string, readonly string[]>;
 }) {
-  const deps = () => props.producers.get(props.node.installationId) ?? [];
+  const deps = () => props.producers.get(props.node.capsuleId) ?? [];
   return (
     <Card hover class="wb-graph-node">
       <div class="wb-graph-node-head">
         <a
           class="wb-graph-node-name"
-          href={`/services/${encodeURIComponent(props.node.installationId)}`}
+          href={`/services/${encodeURIComponent(props.node.capsuleId)}`}
         >
           {props.node.name}
         </a>
-        <Badge tone={installationTone(props.node.status)}>
-          {installationStatusLabel(props.node.status)}
+        <Badge tone={capsuleTone(props.node.status)}>
+          {capsuleStatusLabel(props.node.status)}
         </Badge>
       </div>
       <Show when={deps().length > 0}>
@@ -59,8 +59,8 @@ function NodeBox(props: {
 }
 
 function Inner() {
-  const spaceId = () => (currentSpaceId() ? currentSpaceId() : null);
-  const [graph] = createResource(spaceId, getSpaceGraph);
+  const workspaceId = () => (currentWorkspaceId() ? currentWorkspaceId() : null);
+  const [graph] = createResource(workspaceId, getWorkspaceGraph);
   const layered = createMemo(() => {
     const g = graph();
     return g ? layerGraph(g) : undefined;
@@ -79,12 +79,12 @@ function Inner() {
       />
 
       <Show
-        when={spaceId()}
+        when={workspaceId()}
         fallback={
           <EmptyState
             icon={<Network size={28} />}
-            title={t("space.select")}
-            message={t("space.selectMessage")}
+            title={t("workspace.select")}
+            message={t("workspace.selectMessage")}
           />
         }
       >

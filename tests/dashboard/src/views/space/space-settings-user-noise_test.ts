@@ -7,15 +7,15 @@ import { ja } from "../../../../../dashboard/src/i18n/ja.ts";
 const viewRoot = resolve(import.meta.dir, "../../../../../dashboard/src/views");
 
 const spaceSettingsSource = readFileSync(
-  resolve(viewRoot, "space/SpaceSettingsView.tsx"),
+  resolve(viewRoot, "workspace/WorkspaceSettingsView.tsx"),
   "utf8",
 );
 const generalTabSource = readFileSync(
-  resolve(viewRoot, "space/tabs/GeneralTab.tsx"),
+  resolve(viewRoot, "workspace/tabs/GeneralTab.tsx"),
   "utf8",
 );
 const connectionsTabSource = readFileSync(
-  resolve(viewRoot, "space/tabs/ConnectionsTab.tsx"),
+  resolve(viewRoot, "workspace/tabs/ConnectionsTab.tsx"),
   "utf8",
 );
 const userMenuSource = readFileSync(
@@ -33,21 +33,21 @@ describe("Workspace settings user-facing noise", () => {
     expect(spaceSettingsSource).not.toContain(
       'href: "/advanced/workspace/shares"',
     );
-    expect(en["spaceSettings.subtitle"]).not.toContain("recovery");
-    expect(en["spaceSettings.subtitle"]).not.toContain("sharing");
-    expect(ja["spaceSettings.subtitle"]).not.toContain("復元");
-    expect(ja["spaceSettings.subtitle"]).not.toContain("共有");
+    expect(en["workspaceSettings.subtitle"]).not.toContain("recovery");
+    expect(en["workspaceSettings.subtitle"]).not.toContain("sharing");
+    expect(ja["workspaceSettings.subtitle"]).not.toContain("復元");
+    expect(ja["workspaceSettings.subtitle"]).not.toContain("共有");
   });
 
   test("does not expose policy JSON editing on the general settings form", () => {
     expect(generalTabSource).toContain(
-      "updateSpace(current.id, { displayName })",
+      "updateWorkspace(current.id, { displayName })",
     );
     expect(generalTabSource).not.toContain("policyDraft");
     expect(generalTabSource).not.toContain("Textarea");
     expect(generalTabSource).not.toContain("wc-policy-editor");
     expect(generalTabSource).not.toContain(
-      '"spaceSettings.general.policyAdvanced"',
+      '"workspaceSettings.general.policyAdvanced"',
     );
   });
 

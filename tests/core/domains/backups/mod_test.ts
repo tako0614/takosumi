@@ -407,6 +407,7 @@ test("control bundle carries state-snapshot metadata + output projection only", 
   });
   await store.putSecurityFinding({
     id: "finding_1",
+    workspaceId: "space_1",
     spaceId: "space_1",
     severity: "warning",
     type: "policy",
@@ -689,9 +690,11 @@ test("installation-scoped backup records the latest restore target generation", 
   });
 
   expect(record.restoreTarget).toEqual({
+    capsuleId: seeded.installation.id,
     installationId: seeded.installation.id,
     environment: seeded.installation.environment,
     stateGeneration: 2,
+    stateVersionId: "st_2",
     stateSnapshotId: "st_2",
   });
 });

@@ -644,14 +644,14 @@ function isOperatorBillingPath(pathname: string): boolean {
 }
 
 export interface OperatorBillingOperations {
-  getSpaceBilling(spaceId: string): Promise<{
+  getWorkspaceBilling(workspaceId: string): Promise<{
     readonly billing: {
       readonly settings: BillingSettings;
       readonly balance?: unknown;
     };
   }>;
-  changeSpaceSubscription(
-    spaceId: string,
+  changeWorkspaceSubscription(
+    workspaceId: string,
     input: { readonly billingSettings: BillingSettings },
   ): Promise<{ readonly billing: { readonly settings: BillingSettings } }>;
 }
@@ -672,7 +672,7 @@ export async function handleOperatorBillingRequest(
     }
     const auth = requireDeployControlBearer(request, env);
     if (auth) return auth;
-    const result = await operations.getSpaceBilling(billingSpaceId);
+    const result = await operations.getWorkspaceBilling(billingSpaceId);
     if (request.method === "HEAD") return new Response(null, { status: 200 });
     return Response.json(result, { status: 200 });
   }
@@ -697,7 +697,7 @@ export async function handleOperatorBillingRequest(
     );
   }
   return Response.json(
-    await operations.changeSpaceSubscription(subscriptionSpaceId, {
+    await operations.changeWorkspaceSubscription(subscriptionSpaceId, {
       billingSettings: billingSettings.value,
     }),
     { status: 200 },

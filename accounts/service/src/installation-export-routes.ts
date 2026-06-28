@@ -4,13 +4,13 @@
  * Pure-move decomposition of the former installation-lifecycle-routes
  * god-file; behavior is identical to the prior single-file handlers.
  */
-import { takosumiAccountsInstallationExportOperationPath } from "@takosjp/takosumi-accounts-contract";
+import { takosumiAccountsCapsuleExportOperationPath } from "@takosjp/takosumi-accounts-contract";
 import type { AccountsStore } from "./store.ts";
 import {
   exportOperationBody,
   exportOperationBodyFromEvents,
   findIdempotentOperationEvent,
-  findInFlightInstallationOperation,
+  findInFlightCapsuleOperation,
   findOperationEvent,
   idempotencyRequestConflict,
   installationExportFailedEvent,
@@ -19,10 +19,10 @@ import {
   installationOperationId,
   installationOperationRequestDigest,
   requiredIdempotencyKey,
-  serializeInstallationEvent,
+  serializeCapsuleEvent,
 } from "./installation-helpers.ts";
-import { completeAppInstallationExportWithWorker } from "./installation-materialize-helpers.ts";
-import { publicInstallationOperationErrorMessage } from "./installation-operation-errors.ts";
+import { completeAppCapsuleExportWithWorker } from "./installation-materialize-helpers.ts";
+import { publicCapsuleOperationErrorMessage } from "./installation-operation-errors.ts";
 import {
   errorJson,
   isPlainRecord,
@@ -32,8 +32,8 @@ import {
   stringValue,
 } from "./http-helpers.ts";
 import type {
-  AppInstallationExportRequest,
-  AppInstallationExportWorker,
+  AppCapsuleExportRequest,
+  AppCapsuleExportWorker,
 } from "./mod.ts";
 import {
   exportDownloadUrl,
@@ -42,11 +42,11 @@ import {
 } from "./export-download-url.ts";
 import { appendLedgerEvent } from "./installation-ledger-events.ts";
 
-export async function handleRequestAppInstallationExport(input: {
-  installationId: string;
+export async function handleRequestAppCapsuleExport(input: {
+  capsuleId: string;
   request: Request;
   store: AccountsStore;
-  exportWorker?: AppInstallationExportWorker;
+  exportWorker?: AppCapsuleExportWorker;
 }): Promise<Response> {
   const idempotencyKey = requiredIdempotencyKey(input.request);
   if (idempotencyKey instanceof Response) return idempotencyKey;
@@ -110,7 +110,7 @@ export async function handleRequestAppInstallationExport(input: {
       400,
     );
   }
-  const requestPayload: AppInstallationExportRequest = {
+  const requestPayload: AppCapsuleExportRequest = {
     includeData,
     format: "bundle",
     encryption: {
@@ -122,18 +122,18 @@ export async function handleRequestAppInstallationExport(input: {
   const requestDigest =
     await installationOperationRequestDigest(requestPayload);
 
-  const installation = await input.store.findAppInstallation(
-    input.installationId,
+  const installation = await input.store.findAppCapsule(
+    input.capsuleId,
   );
   if (!installation)
     return errorJson("installation_not_found", "installation not found", 404);
 
   const operationId = await installationOperationId({
-    installationId: input.installationId,
+    capsuleId: input.capsuleId,
     operation: "export",
     idempotencyKey,
   });
-  const events = await input.store.listInstallationEvents(input.installationId);
+  const events = await input.store.listCapsuleEvents(input.capsuleId);
   const existing = findIdempotentOperationEvent({
     events,
     eventType: installationExportRequestedEvent,
@@ -146,20 +146,20 @@ export async function handleRequestAppInstallationExport(input: {
       stringValue(existing.payload.operationId) ?? operationId;
     return json(
       exportOperationBodyFromEvents({
-        installationId: input.installationId,
+        capsuleId: input.capsuleId,
         operationId: existingOperationId,
         events,
       }),
       202,
       {
-        location: takosumiAccountsInstallationExportOperationPath(
-          input.installationId,
+        location: takosumiAccountsCapsuleExportOperationPath(
+          input.capsuleId,
           existingOperationId,
         ),
       },
     );
   }
-  const inFlight = findInFlightInstallationOperation(events);
+  const inFlight = findInFlightCapsuleOperation(events);
   if (inFlight) {
     return errorJson(
       "installation_locked",
@@ -180,7 +180,7 @@ export async function handleRequestAppInstallationExport(input: {
 
   const now = Date.now();
   const event = await appendLedgerEvent(input.store, {
-    installationId: input.installationId,
+    capsuleId: input.capsuleId,
     eventType: installationExportRequestedEvent,
     payload: {
       operationId,
@@ -190,12 +190,12 @@ export async function handleRequestAppInstallationExport(input: {
     },
     now,
   });
-  const location = takosumiAccountsInstallationExportOperationPath(
-    input.installationId,
+  const location = takosumiAccountsCapsuleExportOperationPath(
+    input.capsuleId,
     operationId,
   );
   if (input.exportWorker) {
-    const workerBody = await completeAppInstallationExportWithWorker({
+    const workerBody = await completeAppCapsuleExportWithWorker({
       store: input.store,
       installation,
       operationId,
@@ -206,25 +206,25 @@ export async function handleRequestAppInstallationExport(input: {
   }
   return json(
     {
-      ...exportOperationBody(input.installationId, operationId),
-      event: serializeInstallationEvent(event),
+      ...exportOperationBody(input.capsuleId, operationId),
+      event: serializeCapsuleEvent(event),
     },
     202,
     { location },
   );
 }
 
-export async function handleGetAppInstallationExportOperation(input: {
-  installationId: string;
+export async function handleGetAppCapsuleExportOperation(input: {
+  capsuleId: string;
   operationId: string;
   store: AccountsStore;
 }): Promise<Response> {
-  const installation = await input.store.findAppInstallation(
-    input.installationId,
+  const installation = await input.store.findAppCapsule(
+    input.capsuleId,
   );
   if (!installation)
     return errorJson("installation_not_found", "installation not found", 404);
-  const events = await input.store.listInstallationEvents(input.installationId);
+  const events = await input.store.listCapsuleEvents(input.capsuleId);
   const event = events.find(
     (entry) =>
       entry.eventType === installationExportRequestedEvent &&
@@ -243,7 +243,7 @@ export async function handleGetAppInstallationExportOperation(input: {
   });
   if (completed) {
     return json(
-      exportOperationBody(input.installationId, input.operationId, {
+      exportOperationBody(input.capsuleId, input.operationId, {
         status: "exported",
         downloadUrl: stringValue(completed.payload.downloadUrl) ?? null,
         downloadExpiresAt:
@@ -259,22 +259,22 @@ export async function handleGetAppInstallationExportOperation(input: {
   });
   if (failed) {
     return json(
-      exportOperationBody(input.installationId, input.operationId, {
+      exportOperationBody(input.capsuleId, input.operationId, {
         status: "failed",
         downloadUrl: null,
         downloadExpiresAt: null,
-        error: publicInstallationOperationErrorMessage(
+        error: publicCapsuleOperationErrorMessage(
           failed.payload.error,
           "export failed",
         ),
       }),
     );
   }
-  return json(exportOperationBody(input.installationId, input.operationId));
+  return json(exportOperationBody(input.capsuleId, input.operationId));
 }
 
-export async function handleDownloadAppInstallationExport(input: {
-  installationId: string;
+export async function handleDownloadAppCapsuleExport(input: {
+  capsuleId: string;
   operationId: string;
   store: AccountsStore;
   /**
@@ -284,12 +284,12 @@ export async function handleDownloadAppInstallationExport(input: {
    */
   exportDownloadSigningSecret?: string | Uint8Array;
 }): Promise<Response> {
-  const installation = await input.store.findAppInstallation(
-    input.installationId,
+  const installation = await input.store.findAppCapsule(
+    input.capsuleId,
   );
   if (!installation)
     return errorJson("installation_not_found", "installation not found", 404);
-  const events = await input.store.listInstallationEvents(input.installationId);
+  const events = await input.store.listCapsuleEvents(input.capsuleId);
   const event = events.find(
     (entry) =>
       entry.eventType === installationExportRequestedEvent &&
@@ -309,7 +309,7 @@ export async function handleDownloadAppInstallationExport(input: {
   if (failed) {
     return errorJson(
       "export_failed",
-      publicInstallationOperationErrorMessage(
+      publicCapsuleOperationErrorMessage(
         failed.payload.error,
         "export failed",
       ),

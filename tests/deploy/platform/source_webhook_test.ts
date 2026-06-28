@@ -533,13 +533,13 @@ function makeOperatorBillingOps(): {
   }[] = [];
   return {
     ops: {
-      getSpaceBilling: async (spaceId) => ({
+      getWorkspaceBilling: async (spaceId) => ({
         billing: {
           settings: { mode: "showback", provider: "manual" },
           balance: { spaceId, availableCredits: 0, reservedCredits: 0 },
         },
       }),
-      changeSpaceSubscription: async (spaceId, input) => {
+      changeWorkspaceSubscription: async (spaceId, input) => {
         subscriptionCalls.push({
           spaceId,
           billingSettings: input.billingSettings,

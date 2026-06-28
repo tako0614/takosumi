@@ -229,8 +229,8 @@ test("account session control routes execute plan and apply through the real Ope
     digest: FIXTURE_ARCHIVE_DIGEST,
   });
   expect(runner.planJobs[0]!.stateScope).toEqual({
-    spaceId: "space_test",
-    installationId: seeded.installation.id,
+    workspaceId: "space_test",
+    capsuleId: seeded.installation.id,
     environment: "preview",
     generation: 0,
   });
@@ -272,8 +272,8 @@ test("account session control routes execute plan and apply through the real Ope
   expect(runner.applyJobs).toHaveLength(1);
   expect(runner.applyJobs[0]!.planRun.id).toEqual(planBody.run.id);
   expect(runner.applyJobs[0]!.stateScope).toEqual({
-    spaceId: "space_test",
-    installationId: seeded.installation.id,
+    workspaceId: "space_test",
+    capsuleId: seeded.installation.id,
     environment: "preview",
     generation: 1,
   });
@@ -281,7 +281,7 @@ test("account session control routes execute plan and apply through the real Ope
   const runBody = await controlJson<{
     readonly run: {
       readonly id: string;
-      readonly installationId?: string;
+      readonly capsuleId?: string;
       readonly status: string;
     };
   }>(
@@ -296,7 +296,7 @@ test("account session control routes execute plan and apply through the real Ope
   );
   expect(runBody.run).toMatchObject({
     id: applyBody.run.id,
-    installationId: seeded.installation.id,
+    capsuleId: seeded.installation.id,
     status: "succeeded",
   });
 });

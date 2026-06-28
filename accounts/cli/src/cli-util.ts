@@ -24,7 +24,7 @@ export async function sha256Hex(value: string): Promise<string> {
 }
 
 export async function materializeApprovalDigest(input: {
-  installationId: string;
+  capsuleId: string;
   mode: "dedicated";
   region: string;
   plan: Record<string, unknown>;
@@ -33,7 +33,7 @@ export async function materializeApprovalDigest(input: {
   return `sha256:${await sha256Hex(
     canonicalJson({
       operation: "materialize",
-      installationId: input.installationId,
+      capsuleId: input.capsuleId,
       mode: input.mode,
       region: input.region,
       plan: input.plan,

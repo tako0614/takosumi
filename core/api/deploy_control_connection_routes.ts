@@ -692,6 +692,7 @@ export function mountDeployControlConnectionRoutes(
         // secret blob is deleted.
         if (dependencies.activityService && connection.spaceId) {
           await dependencies.activityService.record({
+            workspaceId: connection.workspaceId ?? connection.spaceId,
             spaceId: connection.spaceId,
             actorId: principal.actor,
             action: "connection.revoked",
@@ -718,6 +719,7 @@ async function recordConnectionCreatedActivity(
   const activityService = ctx.dependencies.activityService;
   if (!activityService || !connection.spaceId) return;
   await activityService.record({
+    workspaceId: connection.workspaceId ?? connection.spaceId,
     spaceId: connection.spaceId,
     actorId,
     action: "connection.created",

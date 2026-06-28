@@ -1,5 +1,5 @@
 /**
- * Shared Installation-presentation helpers (list + detail).
+ * Shared Capsule-presentation helpers (list + detail).
  */
 import { type MessageKey, t } from "../i18n/index.ts";
 import type { ActivityEvent } from "./control-api.ts";
@@ -7,12 +7,12 @@ import type { ActivityEvent } from "./control-api.ts";
 export const PENDING_NEEDS_ATTENTION_AFTER_MS = 30 * 60 * 1000;
 
 /**
- * Presentation status for an Installation, folding the read-time `freshness`
+ * Presentation status for an Capsule, folding the read-time `freshness`
  * field into the status vocabulary: an `active` app whose freshness is `stale`
  * presents as `stale` (再デプロイが必要). Compatible with both the
  * stored-`stale` backend and the derived-freshness backend.
  */
-export function effectiveInstallationStatus(
+export function effectiveCapsuleStatus(
   inst: {
     readonly status: string;
     readonly freshness?: "fresh" | "stale";
@@ -40,13 +40,13 @@ export function needsAttention(
     readonly pendingNeedsAttentionAfterMs?: number;
   } = {},
 ): boolean {
-  const status = effectiveInstallationStatus(inst, options);
+  const status = effectiveCapsuleStatus(inst, options);
   return (
     status === "error" || status === "stale" || status === "needs_attention"
   );
 }
 
-/** True when a setup-like Installation has stayed pending long enough that it
+/** True when a setup-like Capsule has stayed pending long enough that it
  * should stop looking like normal progress in user-facing screens. */
 export function pendingNeedsAttention(
   inst: {
@@ -68,8 +68,8 @@ export function pendingNeedsAttention(
   return Math.max(0, now - updatedAt) >= threshold;
 }
 
-/** True when the Installation belongs in the primary service launcher. */
-export function isVisibleServiceInstallation(inst: {
+/** True when the Capsule belongs in the primary service launcher. */
+export function isVisibleServiceCapsule(inst: {
   readonly status: string;
 }): boolean {
   return inst.status !== "destroyed";
@@ -214,7 +214,7 @@ function humanizeOutputKey(name: string): string {
     .replace(/\bApi\b/gu, "API");
 }
 
-/** Human-readable stale reason recorded on an `installation.stale` event. */
+/** Human-readable stale reason recorded on an `capsule.stale` event. */
 export function staleReasonFromActivity(
   event: ActivityEvent,
 ): string | undefined {

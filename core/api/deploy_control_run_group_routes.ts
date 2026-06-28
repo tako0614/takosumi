@@ -93,7 +93,7 @@ export function mountDeployControlRunGroupRoutes(
       param: { param: "spaceId", pattern: SPACE_ID_PATTERN },
       handler: async ({ c, principal, id }) => {
         ensureSpacePermission(principal, id);
-        const result = await runGroupsService!.createSpaceUpdate(id);
+        const result = await runGroupsService!.createWorkspaceUpdate(id);
         return c.json(result, 201);
       },
     }),
@@ -107,7 +107,7 @@ export function mountDeployControlRunGroupRoutes(
       param: { param: "spaceId", pattern: SPACE_ID_PATTERN },
       handler: async ({ c, principal, id }) => {
         ensureSpacePermission(principal, id);
-        const result = await runGroupsService!.createSpaceDriftCheck(id);
+        const result = await runGroupsService!.createWorkspaceDriftCheck(id);
         return c.json(result, 201);
       },
     }),
@@ -127,7 +127,10 @@ export function mountDeployControlRunGroupRoutes(
             `run group ${id} not found`,
           );
         }
-        ensureSpacePermission(principal, result.runGroup.spaceId);
+        ensureSpacePermission(
+          principal,
+          result.runGroup.workspaceId ?? result.runGroup.spaceId,
+        );
         return c.json(result, 200);
       },
     }),
@@ -148,7 +151,10 @@ export function mountDeployControlRunGroupRoutes(
             `run group ${id} not found`,
           );
         }
-        ensureSpacePermission(principal, existing.runGroup.spaceId);
+        ensureSpacePermission(
+          principal,
+          existing.runGroup.workspaceId ?? existing.runGroup.spaceId,
+        );
         const result = await runGroupsService!.approveRunGroup(id);
         return c.json(result, 200);
       },

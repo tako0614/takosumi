@@ -4,10 +4,10 @@
  * Pure-move decomposition of the former installation-lifecycle-routes
  * god-file; behavior is identical to the prior single-file handlers.
  */
-import { takosumiAccountsInstallationEventsPath } from "@takosjp/takosumi-accounts-contract";
+import { takosumiAccountsCapsuleEventsPath } from "@takosjp/takosumi-accounts-contract";
 import {
-  type InstallationRecord,
-  transitionAppInstallationStatus,
+  type CapsuleRecord,
+  transitionAppCapsuleStatus,
 } from "./ledger.ts";
 import type { AccountsStore } from "./store.ts";
 import {
@@ -22,8 +22,8 @@ import {
   isSha256DigestRef,
   serializeServiceBindingMaterial,
   serializeServiceGrantMaterial,
-  serializeAppInstallation,
-  serializeInstallationEvent,
+  serializeAppCapsule,
+  serializeCapsuleEvent,
 } from "./installation-helpers.ts";
 import {
   materializeCompletionFromStatusPatch,
@@ -33,7 +33,7 @@ import { exportDownloadUrl } from "./export-download-url.ts";
 import { consoleErrorRedacted } from "./redacted-log.ts";
 import {
   errorJson,
-  appInstallationStatusValue,
+  appCapsuleStatusValue,
   isRecord,
   json,
   readJsonObject,
@@ -41,15 +41,15 @@ import {
 } from "./http-helpers.ts";
 import type { DeployControlFacadeOptions } from "./deploy-control-facade.ts";
 import { appendLedgerEvent } from "./installation-ledger-events.ts";
-import { publicInstallationOperationErrorMessage } from "./installation-operation-errors.ts";
+import { publicCapsuleOperationErrorMessage } from "./installation-operation-errors.ts";
 import {
   activatedHttpDomainEventPayload,
   activatedHttpDomainInactiveEventPayload,
   serviceBindingMaterialRecordsFromValue,
   serviceGrantMaterialRecordsFromValue,
-  appInstallationModeValue,
-  appInstallationRevisionConfirmFromValue,
-  appInstallationRevisionPayload,
+  appCapsuleModeValue,
+  appCapsuleRevisionConfirmFromValue,
+  appCapsuleRevisionPayload,
   applyCoreDeploymentForCloudProjection,
   installationRecordFromCoreDeploymentProjection,
   normalizeSourceGitUrl,
@@ -58,17 +58,17 @@ import {
 } from "./installation-lifecycle-shared.ts";
 import { redactPublicString } from "./public-redaction.ts";
 
-export async function handleUpdateAppInstallationStatus(input: {
-  installationId: string;
+export async function handleUpdateAppCapsuleStatus(input: {
+  capsuleId: string;
   request: Request;
   store: AccountsStore;
 }): Promise<Response> {
   const body = await readJsonObject(input.request);
   if (!body) return errorJson("invalid_request", "invalid request", 400);
-  const status = appInstallationStatusValue(body.status);
+  const status = appCapsuleStatusValue(body.status);
   if (!status) return errorJson("invalid_request", "invalid request", 400);
   const requestedMode =
-    body.mode === undefined ? undefined : appInstallationModeValue(body.mode);
+    body.mode === undefined ? undefined : appCapsuleModeValue(body.mode);
   if (body.mode !== undefined && !requestedMode) {
     return errorJson("invalid_request", "invalid request", 400);
   }
@@ -86,8 +86,8 @@ export async function handleUpdateAppInstallationStatus(input: {
       400,
     );
   }
-  const installation = await input.store.findAppInstallation(
-    input.installationId,
+  const installation = await input.store.findAppCapsule(
+    input.capsuleId,
   );
   if (!installation)
     return errorJson("installation_not_found", "installation not found", 404);
@@ -95,7 +95,7 @@ export async function handleUpdateAppInstallationStatus(input: {
   let updated;
   const now = Date.now();
   try {
-    updated = transitionAppInstallationStatus(installation, status, now);
+    updated = transitionAppCapsuleStatus(installation, status, now);
   } catch (error) {
     consoleErrorRedacted("installation_status_conflict", error);
     return errorJson(
@@ -108,7 +108,7 @@ export async function handleUpdateAppInstallationStatus(input: {
   if (updated.status === "exported" && statusOperationId) {
     const exportCompletion = await validateOperationCompletionFromStatusPatch({
       store: input.store,
-      installationId: input.installationId,
+      capsuleId: input.capsuleId,
       operation: "export",
       operationId: statusOperationId,
     });
@@ -117,7 +117,7 @@ export async function handleUpdateAppInstallationStatus(input: {
   if (failedOperation && statusOperationId) {
     const failedCompletion = await validateOperationCompletionFromStatusPatch({
       store: input.store,
-      installationId: input.installationId,
+      capsuleId: input.capsuleId,
       operation: failedOperation,
       operationId: statusOperationId,
     });
@@ -188,7 +188,7 @@ export async function handleUpdateAppInstallationStatus(input: {
     const operationId = stringValue(body.operationId);
     if (operationId) {
       const closed = findOperationEvent({
-        events: await input.store.listInstallationEvents(input.installationId),
+        events: await input.store.listCapsuleEvents(input.capsuleId),
         operationId,
         eventTypes: [
           installationMaterializeSucceededEvent,
@@ -204,14 +204,14 @@ export async function handleUpdateAppInstallationStatus(input: {
       }
     }
   }
-  await input.store.saveAppInstallation(updated);
+  await input.store.saveAppCapsule(updated);
   if (runtimeBinding) await input.store.saveRuntimeBinding(runtimeBinding);
   let exportedEvent;
   let failedOperationEvent;
   if (updated.status !== installation.status) {
     const publicReason = publicOptionalString(body.reason);
     await appendLedgerEvent(input.store, {
-      installationId: input.installationId,
+      capsuleId: input.capsuleId,
       eventType: "installation.status_changed",
       payload: {
         from: installation.status,
@@ -222,7 +222,7 @@ export async function handleUpdateAppInstallationStatus(input: {
     });
     if (updated.status === "exported") {
       exportedEvent = await appendLedgerEvent(input.store, {
-        installationId: input.installationId,
+        capsuleId: input.capsuleId,
         eventType: installationExportedEvent,
         payload: {
           operationId: stringValue(body.operationId) ?? null,
@@ -242,16 +242,16 @@ export async function handleUpdateAppInstallationStatus(input: {
       failedOperation === "materialize"
         ? "materialize worker failed"
         : "export failed";
-    const failureReason = publicInstallationOperationErrorMessage(
+    const failureReason = publicCapsuleOperationErrorMessage(
       body.reason,
       fallback,
     );
-    const failureError = publicInstallationOperationErrorMessage(
+    const failureError = publicCapsuleOperationErrorMessage(
       body.error ?? body.reason,
       fallback,
     );
     failedOperationEvent = await appendLedgerEvent(input.store, {
-      installationId: input.installationId,
+      capsuleId: input.capsuleId,
       eventType:
         failedOperation === "materialize"
           ? installationMaterializeFailedEvent
@@ -268,7 +268,7 @@ export async function handleUpdateAppInstallationStatus(input: {
   }
   if (requestedMode && requestedMode !== installation.mode) {
     materializeSucceededEvent = await appendLedgerEvent(input.store, {
-      installationId: input.installationId,
+      capsuleId: input.capsuleId,
       eventType: installationMaterializeSucceededEvent,
       payload: {
         operationId: stringValue(body.operationId),
@@ -282,13 +282,13 @@ export async function handleUpdateAppInstallationStatus(input: {
     });
   }
   return json({
-    installation: serializeAppInstallation(updated),
+    installation: serializeAppCapsule(updated),
     ...(exportedEvent
-      ? { event: serializeInstallationEvent(exportedEvent) }
+      ? { event: serializeCapsuleEvent(exportedEvent) }
       : materializeSucceededEvent
-        ? { event: serializeInstallationEvent(materializeSucceededEvent) }
+        ? { event: serializeCapsuleEvent(materializeSucceededEvent) }
         : failedOperationEvent
-          ? { event: serializeInstallationEvent(failedOperationEvent) }
+          ? { event: serializeCapsuleEvent(failedOperationEvent) }
           : {}),
   });
 }
@@ -298,21 +298,21 @@ function publicOptionalString(value: unknown): string | undefined {
   return text === undefined ? undefined : redactPublicString(text);
 }
 
-export async function handleUninstallAppInstallation(input: {
-  installationId: string;
+export async function handleUninstallAppCapsule(input: {
+  capsuleId: string;
   request: Request;
   store: AccountsStore;
 }): Promise<Response> {
   void input;
   return errorJson(
     "destroy_plan_required",
-    "Installation removal must use the Takosumi deploy-control destroy-plan flow.",
+    "Capsule removal must use the Takosumi deploy-control destroy-plan flow.",
     410,
   );
 }
 
-export async function handleUpdateAppInstallationRevision(input: {
-  installationId: string;
+export async function handleUpdateAppCapsuleRevision(input: {
+  capsuleId: string;
   operation: "deployment" | "rollback";
   request: Request;
   store: AccountsStore;
@@ -320,27 +320,27 @@ export async function handleUpdateAppInstallationRevision(input: {
 }): Promise<Response> {
   const body = await readJsonObject(input.request);
   if (!body) return errorJson("invalid_request", "invalid request", 400);
-  const installation = await input.store.findAppInstallation(
-    input.installationId,
+  const installation = await input.store.findAppCapsule(
+    input.capsuleId,
   );
   if (!installation)
     return errorJson("installation_not_found", "installation not found", 404);
   if (installation.status !== "ready") {
     return errorJson(
       "state_conflict",
-      `${input.operation} requires a ready Installation projection`,
+      `${input.operation} requires a ready Capsule projection`,
       409,
     );
   }
   if (!input.deployControl) {
     return errorJson(
       "deploy_control_required",
-      "Installation projection revision requires the Takosumi deploy-control ledger.",
+      "Capsule projection revision requires the Takosumi deploy-control ledger.",
       503,
     );
   }
   return await handleCoreDeployControlBackedRevision({
-    installationId: input.installationId,
+    capsuleId: input.capsuleId,
     operation: input.operation,
     body,
     store: input.store,
@@ -350,12 +350,12 @@ export async function handleUpdateAppInstallationRevision(input: {
 }
 
 async function handleCoreDeployControlBackedRevision(input: {
-  installationId: string;
+  capsuleId: string;
   operation: "deployment" | "rollback";
   body: Record<string, unknown>;
   store: AccountsStore;
   deployControl: DeployControlFacadeOptions;
-  installation: InstallationRecord;
+  installation: CapsuleRecord;
 }): Promise<Response> {
   const now = Date.now();
   const source = isRecord(input.body.source) ? input.body.source : undefined;
@@ -366,7 +366,7 @@ async function handleCoreDeployControlBackedRevision(input: {
   if (input.operation === "rollback") {
     const coreRollback = await rollbackCoreDeploymentForCloudProjection({
       deployControl: input.deployControl,
-      installationId: input.installationId,
+      capsuleId: input.capsuleId,
       deploymentId:
         stringValue(input.body.deploymentId) ??
         stringValue(input.body.deployment_id),
@@ -382,14 +382,14 @@ async function handleCoreDeployControlBackedRevision(input: {
       projection: coreRollback,
       now,
     });
-    await input.store.saveAppInstallation(updated);
+    await input.store.saveAppCapsule(updated);
     const event = await appendLedgerEvent(input.store, {
-      installationId: input.installationId,
+      capsuleId: input.capsuleId,
       eventType: "installation.rolled_back",
       payload: {
         reason: publicOptionalString(input.body.reason),
-        previous: appInstallationRevisionPayload(input.installation),
-        next: appInstallationRevisionPayload(updated),
+        previous: appCapsuleRevisionPayload(input.installation),
+        next: appCapsuleRevisionPayload(updated),
         coreDeployment: {
           id: coreRollback.deploymentId,
           rollback:
@@ -402,7 +402,7 @@ async function handleCoreDeployControlBackedRevision(input: {
       now,
     });
     await appendLedgerEvent(input.store, {
-      installationId: input.installationId,
+      capsuleId: input.capsuleId,
       eventType: installationActivatedHttpDomainEvent,
       payload: coreRollback.activatedHttpDomain
         ? activatedHttpDomainEventPayload(coreRollback.activatedHttpDomain)
@@ -482,20 +482,20 @@ async function handleCoreDeployControlBackedRevision(input: {
 
   const requestedBindings = serviceBindingMaterialRecordsFromValue({
     value: input.body.serviceBindings,
-    installationId: input.installationId,
+    capsuleId: input.capsuleId,
     now,
   });
   if (requestedBindings instanceof Response) return requestedBindings;
   const requestedGrants = serviceGrantMaterialRecordsFromValue({
     value: input.body.serviceGrants,
-    installationId: input.installationId,
+    capsuleId: input.capsuleId,
     now,
   });
   if (requestedGrants instanceof Response) return requestedGrants;
-  const confirmResult = await appInstallationRevisionConfirmFromValue({
+  const confirmResult = await appCapsuleRevisionConfirmFromValue({
     value: input.body.confirm,
     operation: input.operation,
-    installationId: input.installationId,
+    capsuleId: input.capsuleId,
     appId: input.installation.appId,
     sourceGitUrl,
     sourceRef,
@@ -510,7 +510,7 @@ async function handleCoreDeployControlBackedRevision(input: {
 
   const coreDeploy = await applyCoreDeploymentForCloudProjection({
     deployControl: input.deployControl,
-    installationId: input.installationId,
+    capsuleId: input.capsuleId,
     source,
     expected,
   });
@@ -529,15 +529,15 @@ async function handleCoreDeployControlBackedRevision(input: {
     },
     now,
   });
-  await input.store.saveAppInstallation(updated);
+  await input.store.saveAppCapsule(updated);
   const event = await appendLedgerEvent(input.store, {
-    installationId: input.installationId,
+    capsuleId: input.capsuleId,
     eventType: "installation.deployed",
     payload: {
       reason: publicOptionalString(input.body.reason),
       confirm: confirmResult,
-      previous: appInstallationRevisionPayload(input.installation),
-      next: appInstallationRevisionPayload(updated),
+      previous: appCapsuleRevisionPayload(input.installation),
+      next: appCapsuleRevisionPayload(updated),
       requestedServiceBindings: requestedBindings.map(
         serializeServiceBindingMaterial,
       ),
@@ -549,7 +549,7 @@ async function handleCoreDeployControlBackedRevision(input: {
     now,
   });
   await appendLedgerEvent(input.store, {
-    installationId: input.installationId,
+    capsuleId: input.capsuleId,
     eventType: installationActivatedHttpDomainEvent,
     payload: coreDeploy.activatedHttpDomain
       ? activatedHttpDomainEventPayload(coreDeploy.activatedHttpDomain)

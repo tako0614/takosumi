@@ -17,18 +17,18 @@ import {
 import type { JSX } from "solid-js";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
-import { currentSpaceId } from "../../lib/space-state.ts";
+import { currentWorkspaceId } from "../../lib/workspace-state.ts";
 import {
   type ControlApiError,
-  type Installation,
-  listInstallations,
+  type Capsule,
+  listCapsules,
   listInstallConfigs,
 } from "../../lib/control-api.ts";
 import {
-  effectiveInstallationStatus,
-  isVisibleServiceInstallation,
-} from "../../lib/installations-ui.ts";
-import { installationStatusLabel, installationTone } from "../../lib/labels.ts";
+  effectiveCapsuleStatus,
+  isVisibleServiceCapsule,
+} from "../../lib/capsules-ui.ts";
+import { capsuleStatusLabel, capsuleTone } from "../../lib/labels.ts";
 import { relativeTime, t } from "../../i18n/index.ts";
 import {
   Button,
@@ -56,13 +56,13 @@ function serviceKindIcon(kind: string | undefined): JSX.Element {
 
 function Inner() {
   const navigate = useNavigate();
-  const spaceId = () => (currentSpaceId() ? currentSpaceId() : null);
+  const workspaceId = () => (currentWorkspaceId() ? currentWorkspaceId() : null);
 
-  const [installations] = createResource(spaceId, listInstallations);
+  const [capsules] = createResource(workspaceId, listCapsules);
   const visible = createMemo(() =>
-    (installations() ?? []).filter(isVisibleServiceInstallation),
+    (capsules() ?? []).filter(isVisibleServiceCapsule),
   );
-  const [installConfigs] = createResource(spaceId, (id) =>
+  const [installConfigs] = createResource(workspaceId, (id) =>
     listInstallConfigs(id),
   );
   const kindByConfigId = createMemo(() => {
@@ -73,7 +73,7 @@ function Inner() {
     }
     return map;
   });
-  const open = (inst: Installation) =>
+  const open = (inst: Capsule) =>
     navigate(`/services/${encodeURIComponent(inst.id)}`);
 
   return (
@@ -87,23 +87,23 @@ function Inner() {
         </Button>
       </div>
       <Show
-        when={spaceId()}
-        fallback={<Toast tone="neutral">{t("space.selectMessage")}</Toast>}
+        when={workspaceId()}
+        fallback={<Toast tone="neutral">{t("workspace.selectMessage")}</Toast>}
       >
         <Switch>
-          <Match when={installations.loading}>
+          <Match when={capsules.loading}>
             <div class="av-service-rows">
               <Skeleton variant="row" count={5} />
             </div>
           </Match>
-          <Match when={installations.error}>
+          <Match when={capsules.error}>
             <Toast tone="error">
               {t("common.fetchFailed", {
-                message: (installations.error as ControlApiError).message,
+                message: (capsules.error as ControlApiError).message,
               })}
             </Toast>
           </Match>
-          <Match when={installations()}>
+          <Match when={capsules()}>
             <Show when={visible().length > 0} fallback={<ServicesEmpty />}>
               <ul class="av-service-rows">
                 <For each={visible()}>
@@ -121,9 +121,9 @@ function Inner() {
                         </span>
                         <span class="av-service-row-name">{inst.name}</span>
                         <StatusBadge
-                          status={effectiveInstallationStatus(inst)}
-                          label={installationStatusLabel}
-                          tone={installationTone}
+                          status={effectiveCapsuleStatus(inst)}
+                          label={capsuleStatusLabel}
+                          tone={capsuleTone}
                         />
                         <span class="av-service-row-time">
                           {relativeTime(inst.updatedAt)}

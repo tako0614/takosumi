@@ -42,6 +42,8 @@ export interface Group {
 
 export interface SpaceMembership {
   readonly id: string;
+  readonly workspaceId: SpaceId;
+  /** @deprecated Use workspaceId. */
   readonly spaceId: SpaceId;
   readonly accountId: AccountId;
   readonly roles: readonly SpaceRole[];

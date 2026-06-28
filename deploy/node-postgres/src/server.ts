@@ -12,7 +12,7 @@ import type {
   AccountsHandler,
   AccountsJsonWebKey,
   ControlPlaneOperations,
-  AppInstallationExportWorker,
+  AppCapsuleExportWorker,
   DeployControlFacadeOptions,
   JsonWebKeySet,
   PostgresQueryClient,
@@ -26,8 +26,8 @@ import {
   verifyExportDownloadUrl,
 } from "@takosjp/takosumi-accounts-service";
 import {
-  createHttpDirectoryInstallationExportArchiveUploader,
-  createMetadataOnlyInstallationExportWorker,
+  createHttpDirectoryCapsuleExportArchiveUploader,
+  createMetadataOnlyCapsuleExportWorker,
 } from "../../../accounts/service/src/export-archive.ts";
 import pgModule from "pg";
 import {
@@ -329,15 +329,15 @@ async function buildAccountsHandler(
  */
 function buildExportWorker(
   config: NodeAccountsExportDownloadConfig | undefined,
-): AppInstallationExportWorker | undefined {
+): AppCapsuleExportWorker | undefined {
   if (!config) return undefined;
   // The base uploader copies the archive into `outputDirectory` and returns
   // an unsigned `<baseUrl>/<objectKey>` URL; we then HMAC-sign it.
-  const baseUploader = createHttpDirectoryInstallationExportArchiveUploader({
+  const baseUploader = createHttpDirectoryCapsuleExportArchiveUploader({
     downloadBaseUrl: config.baseUrl,
     outputDirectory: config.outputDirectory,
   });
-  return createMetadataOnlyInstallationExportWorker({
+  return createMetadataOnlyCapsuleExportWorker({
     outputDirectory: config.outputDirectory,
     downloadBaseUrl: config.baseUrl,
     ...(config.ttlMs !== undefined ? { ttlMs: config.ttlMs } : {}),

@@ -45,15 +45,15 @@ import type {
   PublicCapsuleCompatibilityReportResponse,
 } from "takosumi-contract/capsules";
 import type { ListProvidersResponse } from "takosumi-contract/providers";
-import type { Space, SpaceType } from "takosumi-contract/spaces";
+import type { Workspace, WorkspaceType } from "takosumi-contract/workspaces";
 import type {
-  InstallationProviderEnvBindingSet,
+  CapsuleProviderEnvBindingSet,
   InstallConfig,
-  Installation,
+  Capsule,
   OutputAllowlistEntry,
   PolicyConfig,
   PublicInstallConfig,
-  PublicInstallation,
+  PublicCapsule,
 } from "takosumi-contract/installations";
 import type {
   Dependency,
@@ -64,11 +64,11 @@ import type {
 import type { ActivityEvent } from "takosumi-contract/activity";
 import type { Page, PageParams } from "takosumi-contract/pagination";
 import type {
-  InstallationProviderConnectionBinding,
-  InstallationProviderConnectionBindings,
-  InstallationProviderEnvBinding,
-  InstallationProviderEnvBindings,
-  InstallationProviderConnectionSet,
+  CapsuleProviderConnectionBinding,
+  CapsuleProviderConnectionBindings,
+  CapsuleProviderEnvBinding,
+  CapsuleProviderEnvBindings,
+  CapsuleProviderConnectionSet,
   ProviderConnection,
 } from "takosumi-contract/connections";
 import type {
@@ -78,7 +78,7 @@ import type {
 import type {
   OutputShare,
   OutputShareEntry,
-} from "takosumi-contract/output-snapshots";
+} from "takosumi-contract/outputs";
 import type { PublicDeployment } from "takosumi-contract/deployments";
 import type {
   BackupRecord,
@@ -103,19 +103,19 @@ import type {
 import type { JsonValue } from "takosumi-contract";
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 import type {
-  AppInstallationMode,
-  AppInstallationStatus,
-  InstallationRecord,
-  SpaceKind,
+  AppCapsuleMode,
+  AppCapsuleStatus,
+  CapsuleRecord,
+  WorkspaceKind,
 } from "../ledger.ts";
 import type { SharedCellRuntimeAllocator } from "../runtime.ts";
 import type { AccountsStore } from "../store.ts";
 import type {
   ControlPlaneOperations,
   RunGroupWithRunsLike,
-  ControlSpaceRole,
+  ControlWorkspaceRole,
   ControlMembershipStatus,
-  PublicSpaceMember,
+  PublicWorkspaceMember,
   MembershipActor,
 } from "../control-operations.ts";
 import {
@@ -128,7 +128,7 @@ import {
 } from "../http-helpers.ts";
 import {
   type ControlDispatchContext,
-  canAccessSpace,
+  canAccessWorkspace,
   controlPlaneUnavailable,
   controllerErrorCode,
   controllerErrorResponse,
@@ -139,10 +139,10 @@ import {
   publicCompatibilityReportResponse,
   publicDeployResponse,
   publicDeployment,
-  publicInstallation,
+  publicCapsule,
   publicPlanActionResponse,
   publicRun,
-  requireSpaceAccess,
+  requireWorkspaceAccess,
   resolveProviderConnectionBindings,
 } from "./shared.ts";
 import {
@@ -161,8 +161,8 @@ import {
   outputAllowlistValue,
   outputShareEntries,
   outputShareSensitivePolicy,
-  parseInstallationProviderConnectionBinding,
-  parseInstallationProviderConnectionBindings,
+  parseCapsuleProviderConnectionBinding,
+  parseCapsuleProviderConnectionBindings,
   parseLimit,
   spaceTypeValue,
   stringRecord,
@@ -171,12 +171,12 @@ import {
 import {
   DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
   defaultCapsuleOutputAllowlist,
-} from "../../../../core/domains/installations/official_seed.ts";
+} from "../../../../core/domains/capsules/official_seed.ts";
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import { decodeCursor, pageSorted } from "takosumi-contract/pagination";
 import { appendLedgerEvent } from "../installation-ledger-events.ts";
 import { base64UrlEncodeBytes } from "../encoding.ts";
-import { canTransitionAppInstallationStatus } from "../ledger.ts";
+import { canTransitionAppCapsuleStatus } from "../ledger.ts";
 
 export async function handleProviders(
   ctx: ControlDispatchContext,
@@ -199,7 +199,7 @@ export async function handleProviderConnections(
 ): Promise<Response | undefined> {
   const { request, url, operations, store } = ctx;
   // /api/v1/provider-connections?workspaceId=
-  // (legacy-compatible: ?spaceId=)
+  // (legacy-compatible: ?workspaceId=)
   if (segments.length === 1 && segments[0] === "provider-connections") {
     if (method !== "GET") return methodNotAllowed("GET");
     return await listProviderConnections(
@@ -218,27 +218,27 @@ async function listProviderConnections(
   sessionSubject: string,
   url: URL,
 ): Promise<Response> {
-  const spaceId =
+  const workspaceId =
     stringValue(url.searchParams.get("workspaceId") ?? undefined) ??
     stringValue(url.searchParams.get("workspace_id") ?? undefined) ??
-    stringValue(url.searchParams.get("spaceId") ?? undefined) ??
+    stringValue(url.searchParams.get("workspaceId") ?? undefined) ??
     stringValue(url.searchParams.get("space_id") ?? undefined);
-  if (!spaceId) {
+  if (!workspaceId) {
     return errorJson(
       "invalid_request",
       "workspaceId query parameter is required",
       400,
     );
   }
-  const auth = await requireSpaceAccess({
+  const auth = await requireWorkspaceAccess({
     operations,
     store,
-    spaceId,
+    workspaceId,
     subject: sessionSubject,
   });
   if (!auth.ok) return auth.response;
   const providerConnections = (
-    await operations.connections.listProviderConnections(spaceId)
-  ).filter((connection) => connection.spaceId !== undefined);
+    await operations.connections.listProviderConnections(workspaceId)
+  ).filter((connection) => connection.workspaceId !== undefined);
   return json({ providerConnections });
 }

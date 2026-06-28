@@ -196,7 +196,7 @@ test("real flows emit Activity events; listing is space-scoped and newest-first"
   const spaceId = await createSpace(app, "acme");
   const otherSpaceId = await createSpace(app, "other");
 
-  // Creating an Installation emits installation.created.
+  // Creating an Installation emits capsule.created.
   const installationId = await createInstallation(store, app, spaceId, "shop");
 
   // Planning emits run.plan_created.
@@ -212,21 +212,21 @@ test("real flows emit Activity events; listing is space-scoped and newest-first"
   const actions = body.events.map((e) => e.action);
 
   // Both flows are recorded for the Space.
-  expect(actions).toContain("installation.created");
+  expect(actions).toContain("capsule.created");
   expect(actions).toContain("run.plan_created");
 
   // Newest-first: the plan (created after the installation) sorts ahead of it.
   const planIndex = actions.indexOf("run.plan_created");
-  const installIndex = actions.indexOf("installation.created");
+  const installIndex = actions.indexOf("capsule.created");
   expect(planIndex).toBeLessThan(installIndex);
 
   // Every event is scoped to this Space; none leak run output values.
   for (const event of body.events) {
     expect(event.spaceId).toBe(spaceId);
   }
-  // The installation.created event carries non-secret context only.
-  const created = body.events.find((e) => e.action === "installation.created")!;
-  expect(created.targetType).toBe("installation");
+  // The capsule.created event carries non-secret context only.
+  const created = body.events.find((e) => e.action === "capsule.created")!;
+  expect(created.targetType).toBe("capsule");
   expect(created.targetId).toBe(installationId);
   expect(created.metadata.name).toBe("shop");
 
@@ -240,7 +240,7 @@ test("?limit bounds the page; invalid limits are rejected 400", async () => {
   const { app, store } = await harness();
   const spaceId = await createSpace(app, "acme");
 
-  // Three installations => at least three installation.created events.
+  // Three installations => at least three capsule.created events.
   await createInstallation(store, app, spaceId, "one");
   await createInstallation(store, app, spaceId, "two");
   await createInstallation(store, app, spaceId, "three");

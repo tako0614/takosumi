@@ -28,7 +28,7 @@ const launchTokenConsumptions = installationV1.table(
   "launch_token_consumptions",
   {
     jti: text("jti").primaryKey(),
-    installationId: text("installation_id").notNull(),
+    capsuleId: text("installation_id").notNull(),
     subject: text("subject").notNull(),
     audience: text("audience").notNull(),
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
@@ -39,9 +39,9 @@ const launchTokenConsumptions = installationV1.table(
 const launchTokens = installationV1.table("launch_tokens", {
   tokenHash: text("token_hash").primaryKey(),
   jti: text("jti").notNull(),
-  installationId: text("installation_id").notNull(),
+  capsuleId: text("installation_id").notNull(),
   accountId: text("account_id").notNull(),
-  spaceId: text("space_id").notNull(),
+  workspaceId: text("space_id").notNull(),
   appId: text("app_id").notNull(),
   subject: text("subject").notNull(),
   redirectUri: text("redirect_uri").notNull(),
@@ -81,9 +81,9 @@ function launchTokenSelection() {
   return {
     token_hash: launchTokens.tokenHash,
     jti: launchTokens.jti,
-    installation_id: launchTokens.installationId,
+    installation_id: launchTokens.capsuleId,
     account_id: launchTokens.accountId,
-    space_id: launchTokens.spaceId,
+    space_id: launchTokens.workspaceId,
     app_id: launchTokens.appId,
     subject: launchTokens.subject,
     redirect_uri: launchTokens.redirectUri,
@@ -104,7 +104,7 @@ export async function consumeLaunchTokenJti(
       .insert(launchTokenConsumptions)
       .values({
         jti: record.jti,
-        installationId: record.installationId,
+        capsuleId: record.capsuleId,
         subject: record.subject,
         audience: record.audience,
         expiresAt: toDate(record.expiresAt),
@@ -127,7 +127,7 @@ export async function saveLaunchToken(
       .set({ usedAt: toDate(record.createdAt) })
       .where(
         and(
-          eq(launchTokens.installationId, record.installationId),
+          eq(launchTokens.capsuleId, record.capsuleId),
           isNull(launchTokens.usedAt),
           gt(launchTokens.expiresAt, toDate(record.createdAt)),
         ),
@@ -136,9 +136,9 @@ export async function saveLaunchToken(
   const values = {
     tokenHash: record.tokenHash,
     jti: record.jti,
-    installationId: record.installationId,
+    capsuleId: record.capsuleId,
     accountId: record.accountId,
-    spaceId: record.spaceId,
+    workspaceId: record.workspaceId,
     appId: record.appId,
     subject: record.subject,
     redirectUri: record.redirectUri,
@@ -156,9 +156,9 @@ export async function saveLaunchToken(
         target: launchTokens.tokenHash,
         set: {
           jti: values.jti,
-          installationId: values.installationId,
+          capsuleId: values.capsuleId,
           accountId: values.accountId,
-          spaceId: values.spaceId,
+          workspaceId: values.workspaceId,
           appId: values.appId,
           subject: values.subject,
           redirectUri: values.redirectUri,
@@ -175,7 +175,7 @@ export async function consumeLaunchToken(
   client: PostgresQueryClient,
   input: {
     tokenHash: string;
-    installationId: string;
+    capsuleId: string;
     redirectUri: string;
     consumedAt: number;
   },
@@ -188,7 +188,7 @@ export async function consumeLaunchToken(
       .where(
         and(
           eq(launchTokens.tokenHash, input.tokenHash),
-          eq(launchTokens.installationId, input.installationId),
+          eq(launchTokens.capsuleId, input.capsuleId),
         ),
       ),
   );
@@ -211,7 +211,7 @@ export async function consumeLaunchToken(
       .where(
         and(
           eq(launchTokens.tokenHash, input.tokenHash),
-          eq(launchTokens.installationId, input.installationId),
+          eq(launchTokens.capsuleId, input.capsuleId),
           isNull(launchTokens.usedAt),
         ),
       )

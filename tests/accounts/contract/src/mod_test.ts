@@ -5,9 +5,9 @@ import {
   canonicalJson,
   normalizeIssuer,
   sha256HexText,
-  takosumiAccountsInstallationMaterializeDigest,
+  takosumiAccountsCapsuleMaterializeDigest,
   TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH,
-  TAKOSUMI_ACCOUNTS_INSTALLATION_EXPORT_BUNDLE_KIND,
+  TAKOSUMI_ACCOUNTS_CAPSULE_EXPORT_BUNDLE_KIND,
   TAKOSUMI_ACCOUNTS_PASSKEY_AUTHENTICATE_COMPLETE_PATH,
   TAKOSUMI_ACCOUNTS_PASSKEY_AUTHENTICATE_OPTIONS_PATH,
   TAKOSUMI_ACCOUNTS_PASSKEY_REGISTER_COMPLETE_PATH,
@@ -17,18 +17,18 @@ import {
   TAKOSUMI_ACCOUNTS_UPSTREAM_AUTHORIZE_PATH,
   TAKOSUMI_ACCOUNTS_UPSTREAM_CALLBACK_PATH,
   takosumiAccountsAccountTokenRevokePath,
-  takosumiAccountsInstallationBillingUsageReportsPath,
-  takosumiAccountsInstallationDeploymentPlanRunsPath,
-  takosumiAccountsInstallationDeploymentsPath,
-  takosumiAccountsInstallationPlanRunsPath,
-  takosumiAccountsInstallationEventsPath,
-  takosumiAccountsInstallationExportDownloadPath,
-  takosumiAccountsInstallationExportOperationPath,
-  takosumiAccountsInstallationExportPath,
-  takosumiAccountsInstallationMaterializePath,
-  takosumiAccountsInstallationPath,
-  takosumiAccountsInstallationRollbackPath,
-  takosumiAccountsInstallationStatusPath,
+  takosumiAccountsCapsuleBillingUsageReportsPath,
+  takosumiAccountsCapsuleDeploymentPlanRunsPath,
+  takosumiAccountsCapsuleDeploymentsPath,
+  takosumiAccountsCapsulePlanRunsPath,
+  takosumiAccountsCapsuleEventsPath,
+  takosumiAccountsCapsuleExportDownloadPath,
+  takosumiAccountsCapsuleExportOperationPath,
+  takosumiAccountsCapsuleExportPath,
+  takosumiAccountsCapsuleMaterializePath,
+  takosumiAccountsCapsulePath,
+  takosumiAccountsCapsuleRollbackPath,
+  takosumiAccountsCapsuleStatusPath,
 } from "../../../../accounts/contract/src/mod.ts";
 
 test("normalizeIssuer removes trailing slashes", () => {
@@ -112,67 +112,67 @@ test("optional Accounts HTTP path constants are exported from the contract", () 
   );
 });
 
-test("export bundle kind is stable for portable Installation projection exports", () => {
-  expect(TAKOSUMI_ACCOUNTS_INSTALLATION_EXPORT_BUNDLE_KIND).toEqual(
-    "takosumi.accounts.installation-export-bundle@v1",
+test("export bundle kind is stable for portable Capsule projection exports", () => {
+  expect(TAKOSUMI_ACCOUNTS_CAPSULE_EXPORT_BUNDLE_KIND).toEqual(
+    "takosumi.accounts.capsule-export-bundle@v1",
   );
 });
 
-test("Installation projection path helpers expose the Accounts route surface", () => {
-  expect(takosumiAccountsInstallationPlanRunsPath()).toEqual(
+test("Capsule projection path helpers expose the Accounts route surface", () => {
+  expect(takosumiAccountsCapsulePlanRunsPath()).toEqual(
     "/v1/installation-projections/plan-runs",
   );
-  expect(takosumiAccountsInstallationPath("inst_1")).toEqual(
+  expect(takosumiAccountsCapsulePath("inst_1")).toEqual(
     "/v1/installation-projections/inst_1",
   );
-  expect(takosumiAccountsInstallationStatusPath("inst_1")).toEqual(
+  expect(takosumiAccountsCapsuleStatusPath("inst_1")).toEqual(
     "/v1/installation-projections/inst_1/status",
   );
-  expect(takosumiAccountsInstallationDeploymentsPath("inst_1")).toEqual(
+  expect(takosumiAccountsCapsuleDeploymentsPath("inst_1")).toEqual(
     "/v1/installation-projections/inst_1/deployments",
   );
-  expect(takosumiAccountsInstallationDeploymentPlanRunsPath("inst_1")).toEqual(
+  expect(takosumiAccountsCapsuleDeploymentPlanRunsPath("inst_1")).toEqual(
     "/v1/installation-projections/inst_1/deployments/plan-runs",
   );
-  expect(takosumiAccountsInstallationRollbackPath("inst_1")).toEqual(
+  expect(takosumiAccountsCapsuleRollbackPath("inst_1")).toEqual(
     "/v1/installation-projections/inst_1/rollback",
   );
-  expect(takosumiAccountsInstallationMaterializePath("inst_1")).toEqual(
+  expect(takosumiAccountsCapsuleMaterializePath("inst_1")).toEqual(
     "/v1/installation-projections/inst_1/materialize",
   );
-  expect(takosumiAccountsInstallationExportPath("inst_1")).toEqual(
+  expect(takosumiAccountsCapsuleExportPath("inst_1")).toEqual(
     "/v1/installation-projections/inst_1/export",
   );
   expect(
-    takosumiAccountsInstallationExportOperationPath("inst_1", "op_1"),
+    takosumiAccountsCapsuleExportOperationPath("inst_1", "op_1"),
   ).toEqual("/v1/installation-projections/inst_1/exports/op_1");
   expect(
-    takosumiAccountsInstallationExportDownloadPath("inst_1", "op_1"),
+    takosumiAccountsCapsuleExportDownloadPath("inst_1", "op_1"),
   ).toEqual("/v1/installation-projections/inst_1/exports/op_1/download");
-  expect(takosumiAccountsInstallationEventsPath("inst_1")).toEqual(
+  expect(takosumiAccountsCapsuleEventsPath("inst_1")).toEqual(
     "/v1/installation-projections/inst_1/events",
   );
-  expect(takosumiAccountsInstallationBillingUsageReportsPath("inst_1")).toEqual(
+  expect(takosumiAccountsCapsuleBillingUsageReportsPath("inst_1")).toEqual(
     "/v1/installation-projections/inst_1/billing/usage-reports",
   );
-  expect(takosumiAccountsInstallationPath("inst/one")).toEqual(
+  expect(takosumiAccountsCapsulePath("inst/one")).toEqual(
     "/v1/installation-projections/inst%2Fone",
   );
   expect(
-    takosumiAccountsInstallationExportOperationPath("inst/one", "op/one"),
+    takosumiAccountsCapsuleExportOperationPath("inst/one", "op/one"),
   ).toEqual("/v1/installation-projections/inst%2Fone/exports/op%2Fone");
   expect(
-    takosumiAccountsInstallationExportDownloadPath("inst/one", "op/one"),
+    takosumiAccountsCapsuleExportDownloadPath("inst/one", "op/one"),
   ).toEqual(
     "/v1/installation-projections/inst%2Fone/exports/op%2Fone/download",
   );
   assertThrows(
-    () => takosumiAccountsInstallationPath(""),
+    () => takosumiAccountsCapsulePath(""),
     TypeError,
-    "installationId is required",
+    "capsuleId is required",
   );
   assertThrows(
-    () => takosumiAccountsInstallationExportOperationPath("inst_1", ""),
+    () => takosumiAccountsCapsuleExportOperationPath("inst_1", ""),
     TypeError,
     "operationId is required",
   );
@@ -198,22 +198,22 @@ test("materialize permission digest is the canonical form the server verifies", 
   // Pinned golden: the materialize endpoint recomputes this exact digest and
   // rejects the request on any byte mismatch. The server now derives it from
   // this same builder, so a change here is a deliberate, breaking change.
-  const digest = await takosumiAccountsInstallationMaterializeDigest({
-    installationId: "inst_1",
+  const digest = await takosumiAccountsCapsuleMaterializeDigest({
+    capsuleId: "inst_1",
     mode: "dedicated",
     region: "default",
     plan: {},
     cutover: {},
   });
   expect(digest).toEqual(
-    "sha256:94a00d4f8b3ecc85eaaa9ed56d8ec922d2f8a876c29518d42b7b2d8d78d64394",
+    "sha256:18bce8c57b56afe3a805546ba2a7d0f85f7ade80c94abcabca091bfbd51a3527",
   );
   // The digest is sha256(canonicalJson(operation envelope)); recompute it the
   // long way to lock the envelope shape the server expects.
   const expected = await sha256HexText(
     canonicalJson({
       operation: "materialize",
-      installationId: "inst_1",
+      capsuleId: "inst_1",
       mode: "dedicated",
       region: "default",
       plan: {},

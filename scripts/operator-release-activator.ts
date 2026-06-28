@@ -422,7 +422,7 @@ function runReleaseCommand(
     TAKOSUMI_RELEASE_RUN_ID: releaseRunId,
     TAKOSUMI_APPLY_RUN_ID: payload.applyRunId,
     ...(payload.installation?.id
-      ? { TAKOSUMI_INSTALLATION_ID: payload.installation.id }
+      ? { TAKOSUMI_CAPSULE_ID: payload.installation.id }
       : {}),
     ...(payload.deployment?.id
       ? { TAKOSUMI_DEPLOYMENT_ID: payload.deployment.id }

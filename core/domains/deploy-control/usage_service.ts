@@ -47,7 +47,7 @@ import {
   usageMeterNameLeaksInternalWorkersBackend,
   usdMicrosToLegacyCredits,
 } from "takosumi-contract/billing";
-import type { Space } from "takosumi-contract/spaces";
+import type { Workspace as Space } from "takosumi-contract/workspaces";
 import type { PageParams } from "takosumi-contract/pagination";
 import type { BillingService } from "./billing_service.ts";
 import type { OpenTofuDeploymentStore } from "./store.ts";
@@ -342,6 +342,7 @@ function normalizeMeteredUsageEvent(
   }
   return {
     id: newIdForUsage(),
+    workspaceId: spaceId,
     spaceId,
     ...(input.installationId ? { installationId: input.installationId } : {}),
     ...(input.runId ? { runId: input.runId } : {}),

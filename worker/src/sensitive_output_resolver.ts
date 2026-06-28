@@ -1,5 +1,5 @@
 import type { JsonValue } from "takosumi-contract";
-import type { OutputSnapshot } from "takosumi-contract/output-snapshots";
+import type { Output as OutputSnapshot } from "takosumi-contract/outputs";
 import type {
   SensitiveOutputResolver,
   SensitiveOutputValue,

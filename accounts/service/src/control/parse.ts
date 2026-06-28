@@ -46,15 +46,15 @@ import type {
   PublicCapsuleCompatibilityReportResponse,
 } from "takosumi-contract/capsules";
 import type { ListProvidersResponse } from "takosumi-contract/providers";
-import type { Space, SpaceType } from "takosumi-contract/spaces";
+import type { Workspace, WorkspaceType } from "takosumi-contract/workspaces";
 import type {
-  InstallationProviderEnvBindingSet,
+  CapsuleProviderEnvBindingSet,
   InstallConfig,
-  Installation,
+  Capsule,
   OutputAllowlistEntry,
   PolicyConfig,
   PublicInstallConfig,
-  PublicInstallation,
+  PublicCapsule,
 } from "takosumi-contract/installations";
 import type {
   Dependency,
@@ -65,11 +65,11 @@ import type {
 import type { ActivityEvent } from "takosumi-contract/activity";
 import type { Page, PageParams } from "takosumi-contract/pagination";
 import type {
-  InstallationProviderConnectionBinding,
-  InstallationProviderConnectionBindings,
-  InstallationProviderEnvBinding,
-  InstallationProviderEnvBindings,
-  InstallationProviderConnectionSet,
+  CapsuleProviderConnectionBinding,
+  CapsuleProviderConnectionBindings,
+  CapsuleProviderEnvBinding,
+  CapsuleProviderEnvBindings,
+  CapsuleProviderConnectionSet,
   ProviderConnection,
 } from "takosumi-contract/connections";
 import type {
@@ -79,7 +79,7 @@ import type {
 import type {
   OutputShare,
   OutputShareEntry,
-} from "takosumi-contract/output-snapshots";
+} from "takosumi-contract/outputs";
 import type { PublicDeployment } from "takosumi-contract/deployments";
 import type {
   BackupRecord,
@@ -208,10 +208,10 @@ export function isJsonValue(value: unknown): value is JsonValue {
   return Object.values(value).every(isJsonValue);
 }
 
-export function parseInstallationProviderConnectionBindings(value: unknown):
+export function parseCapsuleProviderConnectionBindings(value: unknown):
   | {
       readonly ok: true;
-      readonly bindings: InstallationProviderConnectionBindings;
+      readonly bindings: CapsuleProviderConnectionBindings;
     }
   | {
       readonly ok: false;
@@ -220,9 +220,9 @@ export function parseInstallationProviderConnectionBindings(value: unknown):
   if (!Array.isArray(value)) {
     return { ok: false, message: "connections must be an array" };
   }
-  const connections: InstallationProviderConnectionBinding[] = [];
+  const connections: CapsuleProviderConnectionBinding[] = [];
   for (const [index, item] of value.entries()) {
-    const parsed = parseInstallationProviderConnectionBinding(item);
+    const parsed = parseCapsuleProviderConnectionBinding(item);
     if (!parsed.ok) {
       return {
         ok: false,
@@ -234,10 +234,10 @@ export function parseInstallationProviderConnectionBindings(value: unknown):
   return { ok: true, bindings: connections };
 }
 
-export function parseInstallationProviderConnectionBinding(value: unknown):
+export function parseCapsuleProviderConnectionBinding(value: unknown):
   | {
       readonly ok: true;
-      readonly binding: InstallationProviderConnectionBinding;
+      readonly binding: CapsuleProviderConnectionBinding;
     }
   | {
       readonly ok: false;
@@ -386,7 +386,7 @@ export function isGoogleCloudProvider(provider: string): boolean {
   return normalized === "gcp" || normalized === "google";
 }
 
-export function spaceTypeValue(value: unknown): SpaceType | undefined {
+export function spaceTypeValue(value: unknown): WorkspaceType | undefined {
   return value === "personal" || value === "organization" ? value : undefined;
 }
 

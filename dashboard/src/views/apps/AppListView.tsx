@@ -12,30 +12,30 @@ import { Box, Database, Globe, LayoutGrid, Plus, Sparkles } from "lucide-solid";
 import type { JSX } from "solid-js";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
-import { currentSpaceId, setCurrentSpaceId } from "../../lib/space-state.ts";
+import { currentWorkspaceId, setCurrentWorkspaceId } from "../../lib/workspace-state.ts";
 import {
   type ControlApiError,
-  createSpace,
+  createWorkspace,
   getDeployment,
-  type Installation,
-  type Space,
-  listInstallations,
+  type Capsule,
+  type Workspace,
+  listCapsules,
   listInstallConfigs,
 } from "../../lib/control-api.ts";
 import {
   type AppSurface,
   appSurfacesFromOutputs,
   isUrlString,
-  isVisibleServiceInstallation,
+  isVisibleServiceCapsule,
   needsAttention,
-} from "../../lib/installations-ui.ts";
+} from "../../lib/capsules-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { Button, Toast } from "../../components/ui/index.ts";
 import { createAction } from "../account/lib/action.tsx";
 
 /** One launcher tile: a declared surface belonging to a service. */
 interface AppTile {
-  readonly inst: Installation;
+  readonly inst: Capsule;
   readonly surface: AppSurface;
   readonly key: string;
 }
@@ -72,17 +72,17 @@ function appIconColor(index: number): readonly [string, string] {
 
 function Inner() {
   const navigate = useNavigate();
-  const spaceId = () => (currentSpaceId() ? currentSpaceId() : null);
+  const workspaceId = () => (currentWorkspaceId() ? currentWorkspaceId() : null);
 
-  const [installations] = createResource(spaceId, listInstallations);
-  const visibleInstallations = createMemo(() =>
-    (installations() ?? []).filter(isVisibleServiceInstallation),
+  const [capsules] = createResource(workspaceId, listCapsules);
+  const visibleCapsules = createMemo(() =>
+    (capsules() ?? []).filter(isVisibleServiceCapsule),
   );
 
-  // Map each Installation to a type-specific icon via its install config's
+  // Map each Capsule to a type-specific icon via its install config's
   // catalog kind (site / storage / worker) — the fallback when a surface
   // declares no image or icon of its own.
-  const [installConfigs] = createResource(spaceId, (id) =>
+  const [installConfigs] = createResource(workspaceId, (id) =>
     listInstallConfigs(id),
   );
   const kindByConfigId = createMemo(() => {
@@ -93,24 +93,24 @@ function Inner() {
     }
     return map;
   });
-  const iconForInstallation = (inst: Installation): JSX.Element =>
+  const iconForCapsule = (inst: Capsule): JSX.Element =>
     serviceKindIcon(kindByConfigId().get(inst.installConfigId));
 
   // Declared app surfaces per service, read from its current Deployment's
   // public outputs. A service with no app metadata contributes no tiles.
-  const [surfacesByInstallation] = createResource(
-    visibleInstallations,
+  const [surfacesByCapsule] = createResource(
+    visibleCapsules,
     async (list) => {
       const map = new Map<string, AppSurface[]>();
       await Promise.all(
         list
           .filter(
-            (inst): inst is Installation & { currentDeploymentId: string } =>
-              Boolean(inst.currentDeploymentId),
+            (inst): inst is Capsule & { currentStateVersionId: string } =>
+              Boolean(inst.currentStateVersionId),
           )
           .map(async (inst) => {
             try {
-              const deployment = await getDeployment(inst.currentDeploymentId);
+              const deployment = await getDeployment(inst.currentStateVersionId);
               const surfaces = appSurfacesFromOutputs(deployment.outputsPublic);
               if (surfaces.length > 0) map.set(inst.id, surfaces);
             } catch {
@@ -123,10 +123,10 @@ function Inner() {
   );
 
   const appTiles = createMemo<AppTile[]>(() => {
-    const map = surfacesByInstallation();
+    const map = surfacesByCapsule();
     if (!map) return [];
     const tiles: AppTile[] = [];
-    for (const inst of visibleInstallations()) {
+    for (const inst of visibleCapsules()) {
       const surfaces = map.get(inst.id);
       if (!surfaces) continue;
       surfaces.forEach((surface, i) =>
@@ -136,25 +136,25 @@ function Inner() {
     return tiles;
   });
 
-  const createFirstWorkspace = createAction(async (): Promise<Space> => {
-    const space = await createSpace({
+  const createFirstWorkspace = createAction(async (): Promise<Workspace> => {
+    const workspace = await createWorkspace({
       handle: defaultWorkspaceHandle(),
-      displayName: t("space.defaultName"),
+      displayName: t("workspace.defaultName"),
       type: "personal",
     });
-    setCurrentSpaceId(space.id);
-    window.dispatchEvent(new Event("takosumi:spaces-changed"));
+    setCurrentWorkspaceId(workspace.id);
+    window.dispatchEvent(new Event("takosumi:workspaces-changed"));
     navigate("/new");
-    return space;
+    return workspace;
   });
 
-  const openDetail = (inst: Installation) =>
+  const openDetail = (inst: Capsule) =>
     navigate(`/services/${encodeURIComponent(inst.id)}`);
 
   return (
     <AppShell>
       <Show
-        when={spaceId()}
+        when={workspaceId()}
         fallback={
           <NoWorkspaceStartPanel
             busy={createFirstWorkspace.busy()}
@@ -164,23 +164,23 @@ function Inner() {
         }
       >
         <Switch>
-          <Match when={installations.loading}>
+          <Match when={capsules.loading}>
             <LauncherSkeleton />
           </Match>
-          <Match when={installations.error}>
+          <Match when={capsules.error}>
             <Toast tone="error">
               {t("common.fetchFailed", {
-                message: (installations.error as ControlApiError).message,
+                message: (capsules.error as ControlApiError).message,
               })}
             </Toast>
           </Match>
-          <Match when={installations()}>
+          <Match when={capsules()}>
             <Show
-              when={visibleInstallations().length > 0}
+              when={visibleCapsules().length > 0}
               fallback={<WorkspaceStartPanel />}
             >
               <Switch>
-                <Match when={surfacesByInstallation.loading}>
+                <Match when={surfacesByCapsule.loading}>
                   <LauncherSkeleton />
                 </Match>
                 <Match when={appTiles().length === 0}>
@@ -190,7 +190,7 @@ function Inner() {
                   <AppLauncher
                     tiles={appTiles()}
                     openDetail={openDetail}
-                    iconFor={iconForInstallation}
+                    iconFor={iconForCapsule}
                   />
                 </Match>
               </Switch>
@@ -224,11 +224,11 @@ function NoWorkspaceStartPanel(props: {
   readonly onCreate: () => void;
 }) {
   return (
-    <section class="av-start" aria-label={t("space.start.aria")}>
+    <section class="av-start" aria-label={t("workspace.start.aria")}>
       <div class="av-start-copy">
-        <span class="av-start-kicker">{t("space.start.kicker")}</span>
-        <h2 class="av-start-title">{t("space.start.title")}</h2>
-        <p class="av-start-sub">{t("space.start.body")}</p>
+        <span class="av-start-kicker">{t("workspace.start.kicker")}</span>
+        <h2 class="av-start-title">{t("workspace.start.title")}</h2>
+        <p class="av-start-sub">{t("workspace.start.body")}</p>
       </div>
       <Button
         variant="primary"
@@ -237,7 +237,7 @@ function NoWorkspaceStartPanel(props: {
         icon={<Plus size={18} />}
         onClick={props.onCreate}
       >
-        {props.busy ? t("space.start.creating") : t("space.start.create")}
+        {props.busy ? t("workspace.start.creating") : t("workspace.start.create")}
       </Button>
       <Show when={props.error}>
         {(message) => <Toast tone="error">{message()}</Toast>}
@@ -248,8 +248,8 @@ function NoWorkspaceStartPanel(props: {
 
 function AppLauncher(props: {
   readonly tiles: readonly AppTile[];
-  readonly openDetail: (inst: Installation) => void;
-  readonly iconFor: (inst: Installation) => JSX.Element;
+  readonly openDetail: (inst: Capsule) => void;
+  readonly iconFor: (inst: Capsule) => JSX.Element;
 }) {
   return (
     <ul class="av-launcher">

@@ -191,7 +191,7 @@ export class RunCredentialBroker {
         return { ...bundle.env };
       }
       const perAlias = await vault!.mintForInstallationProviderEnvBindings(
-        planRun.spaceId,
+        (planRun.workspaceId ?? planRun.spaceId),
         providerEntries,
         { phase },
       );
@@ -271,8 +271,8 @@ export class RunCredentialBroker {
       await this.#store.putCredentialMintEvent({
         id: this.#newId("credmint"),
         runId: auditRunId,
-        spaceId: planRun.spaceId,
-        ...(installationId ? { installationId } : {}),
+        workspaceId: planRun.workspaceId,
+        ...(installationId ? { capsuleId: installationId } : {}),
         providerEnvId: entry.providerEnvId,
         ...(entry.connectionId ? { connectionId: entry.connectionId } : {}),
         phase,

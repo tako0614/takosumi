@@ -84,7 +84,9 @@ export interface PlatformTraceContext {
 
 export interface PlatformContext {
   readonly tenantId: string;
-  readonly spaceId: string;
+  readonly workspaceId?: string;
+  /** @deprecated Use workspaceId. */
+  readonly spaceId?: string;
   readonly secrets: secretStore.SecretStorePort;
   readonly observability: ObservabilitySink;
   readonly kms: kms.KmsPort;

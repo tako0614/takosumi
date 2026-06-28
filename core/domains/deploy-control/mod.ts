@@ -169,7 +169,7 @@ import type {
   CreateRestoreRequest,
   ServiceDataBackupPointer,
 } from "takosumi-contract/backups";
-import type { OutputSnapshot } from "takosumi-contract/output-snapshots";
+import type { Output as OutputSnapshot } from "takosumi-contract/outputs";
 import type { SensitiveOutputResolver } from "../output-shares/mod.ts";
 import type {
   Dependency,
@@ -1708,8 +1708,8 @@ export async function checkApplyExpected(
 // compared in both directions, and absent optional fields read as `undefined`.
 const APPLY_EXPECTED_GUARD_KEYS = [
   "planRunId",
-  "installationId",
-  "currentDeploymentId",
+  "capsuleId",
+  "currentStateVersionId",
   "runnerProfileId",
   "sourceDigest",
   "variablesDigest",
@@ -1746,22 +1746,21 @@ export function applyExpectedGuardFromPlanRun(
       "PlanRun has no planArtifact; apply requires an immutable plan artifact",
     );
   }
-  if (
-    planRun.installationId &&
-    planRun.installationCurrentDeploymentId === undefined
-  ) {
+  // TOCTOU pin: the Capsule's current StateVersion at plan time (Deployment
+  // ledger retired). Mirrors the prior currentDeployment guard — present (string
+  // or null), never undefined, whenever the plan targets an existing Capsule.
+  const capsuleId = planRun.capsuleId ?? planRun.installationId;
+  if (capsuleId && planRun.capsuleCurrentStateVersionId === undefined) {
     throw new OpenTofuControllerError(
       "failed_precondition",
-      "PlanRun has no installation current Deployment guard",
+      "PlanRun has no capsule current StateVersion guard",
     );
   }
   return {
     planRunId: planRun.id,
-    ...(planRun.installationId
-      ? { installationId: planRun.installationId }
-      : {}),
-    ...(planRun.installationId
-      ? { currentDeploymentId: planRun.installationCurrentDeploymentId ?? null }
+    ...(capsuleId ? { capsuleId } : {}),
+    ...(capsuleId
+      ? { currentStateVersionId: planRun.capsuleCurrentStateVersionId ?? null }
       : {}),
     runnerProfileId: planRun.runnerProfileId,
     sourceDigest: planRun.sourceDigest,
@@ -1895,8 +1894,14 @@ function isJsonValue(value: unknown): value is JsonValue {
 export function stateObjectKeyForScope(scope: DispatchStateScope): string {
   const seg = (value: string) => value.replace(/[^a-zA-Z0-9._-]+/g, "_");
   const generation = String(scope.generation).padStart(8, "0");
-  return `spaces/${seg(scope.spaceId)}/installations/${seg(
-    scope.installationId,
+  // Physical R2_STATE key prefix is frozen (`spaces/.../installations/...`) and
+  // must stay in lockstep with the OpenTofuRunnerObject DO writer; only the
+  // logical vocabulary renamed. Read canonical ids, falling back to the
+  // deprecated mirror during the rename.
+  const workspaceId = scope.workspaceId ?? scope.spaceId ?? "";
+  const capsuleId = scope.capsuleId ?? scope.installationId ?? "";
+  return `spaces/${seg(workspaceId)}/installations/${seg(
+    capsuleId,
   )}/envs/${seg(scope.environment)}/states/${generation}.tfstate.enc`;
 }
 
@@ -1944,7 +1949,8 @@ export function syntheticUploadSource(
 ): Source {
   return {
     id: `upload:${installation.id}`,
-    spaceId: installation.spaceId,
+    workspaceId: installation.workspaceId,
+    spaceId: (installation.workspaceId ?? installation.spaceId),
     name: `${installation.name}-upload`,
     url: snapshot.url,
     defaultRef: snapshot.ref,

@@ -8,20 +8,20 @@ import { afterEach, test } from "bun:test";
 import {
   type CloudflareWorkerEnv,
   createCloudflareWorker,
-  createR2InstallationExportWorker,
+  createR2CapsuleExportWorker,
   parseLoginEmailAllowlist,
   type R2Bucket,
   type R2ObjectBody,
   type R2PutOptions,
 } from "../../../../deploy/accounts-cloudflare/src/handler.ts";
 import {
-  buildInstallationExportBundle,
+  buildCapsuleExportBundle,
   type ControlPlaneOperations,
   D1AccountsStore,
   registerSessionHashSaltConfig,
   type D1Result,
   type D1Value,
-  type InstallationRecord,
+  type CapsuleRecord,
 } from "@takosjp/takosumi-accounts-service";
 import type {
   D1Database,
@@ -455,15 +455,15 @@ test("Cloudflare Accounts Worker requires a session hash salt outside local subs
 
 test("Cloudflare Accounts Worker writes metadata exports to R2 with signed downloads", async () => {
   const bucket = new MemoryR2Bucket();
-  const exportWorker = createR2InstallationExportWorker({
+  const exportWorker = createR2CapsuleExportWorker({
     bucket,
     downloadBaseUrl: "https://accounts.example",
     downloadSecret: "download-secret",
     ttlMs: 60_000,
     now: () => new Date("2999-05-17T00:00:00.000Z"),
   });
-  const installation = sampleInstallation();
-  const bundle = buildInstallationExportBundle({ installation });
+  const installation = sampleCapsule();
+  const bundle = buildCapsuleExportBundle({ installation });
 
   const result = await exportWorker({
     installation,
@@ -508,14 +508,14 @@ test("Cloudflare Accounts Worker writes metadata exports to R2 with signed downl
   const body = (await response.json()) as {
     kind?: string;
     operationId?: string;
-    bundle?: { installation?: { installationId?: string } };
+    bundle?: { installation?: { capsuleId?: string } };
   };
   assert.equal(
     body.kind,
-    "takosumi.accounts.cloudflare-r2-installation-export@v1",
+    "takosumi.accounts.cloudflare-r2-capsule-export@v1",
   );
   assert.equal(body.operationId, "op_export_1");
-  assert.equal(body.bundle?.installation?.installationId, "inst_export");
+  assert.equal(body.bundle?.installation?.capsuleId, "inst_export");
 
   const downloadEnv = createEnv(new InitOnlyD1Database(), {
     TAKOSUMI_ACCOUNTS_EXPORTS: bucket,
@@ -575,7 +575,7 @@ test("Cloudflare Accounts Worker writes metadata exports to R2 with signed downl
   );
 
   const expiredBucket = new MemoryR2Bucket();
-  const expiredExportWorker = createR2InstallationExportWorker({
+  const expiredExportWorker = createR2CapsuleExportWorker({
     bucket: expiredBucket,
     downloadBaseUrl: "https://accounts.example",
     downloadSecret: "download-secret",
@@ -639,17 +639,17 @@ test("Cloudflare Accounts Worker writes metadata exports to R2 with signed downl
     createdAt: now,
     updatedAt: now,
   });
-  await routeStore.saveSpace({
-    spaceId: "space_route_export",
+  await routeStore.saveWorkspace({
+    workspaceId: "space_route_export",
     accountId: "acct_route_export",
     kind: "personal",
     createdAt: now,
     updatedAt: now,
   });
-  await routeStore.saveAppInstallation({
-    installationId: "inst_route_export",
+  await routeStore.saveAppCapsule({
+    capsuleId: "inst_route_export",
     accountId: "acct_route_export",
-    spaceId: "space_route_export",
+    workspaceId: "space_route_export",
     appId: "example.route-export",
     sourceGitUrl: "https://github.com/example/route-export",
     sourceRef: "v1.0.0",
@@ -735,10 +735,10 @@ test("Cloudflare Accounts Worker writes metadata exports to R2 with signed downl
   );
   assert.equal(routedDownloadResponse.status, 200);
   const routedDownload = (await routedDownloadResponse.json()) as {
-    bundle?: { installation?: { installationId?: string } };
+    bundle?: { installation?: { capsuleId?: string } };
   };
   assert.equal(
-    routedDownload.bundle?.installation?.installationId,
+    routedDownload.bundle?.installation?.capsuleId,
     "inst_route_export",
   );
 });
@@ -747,15 +747,15 @@ test("Cloudflare Accounts Worker writes age-encrypted metadata exports to R2", a
   const identity = await generateIdentity();
   const recipient = await identityToRecipient(identity);
   const bucket = new MemoryR2Bucket();
-  const exportWorker = createR2InstallationExportWorker({
+  const exportWorker = createR2CapsuleExportWorker({
     bucket,
     downloadBaseUrl: "https://accounts.example",
     downloadSecret: "download-secret",
     ttlMs: 60_000,
     now: () => new Date("2999-05-17T00:00:00.000Z"),
   });
-  const installation = sampleInstallation();
-  const bundle = buildInstallationExportBundle({ installation });
+  const installation = sampleCapsule();
+  const bundle = buildCapsuleExportBundle({ installation });
 
   const result = await exportWorker({
     installation,
@@ -785,7 +785,7 @@ test("Cloudflare Accounts Worker writes age-encrypted metadata exports to R2", a
   assert.equal(
     new TextDecoder()
       .decode(bucket.puts[0]?.body ?? new Uint8Array())
-      .includes("takosumi.accounts.cloudflare-r2-installation-export@v1"),
+      .includes("takosumi.accounts.cloudflare-r2-capsule-export@v1"),
     false,
     "age ciphertext must not include plaintext JSON markers",
   );
@@ -811,25 +811,25 @@ test("Cloudflare Accounts Worker writes age-encrypted metadata exports to R2", a
     kind?: string;
     operationId?: string;
     request?: { encryption?: { method?: string } };
-    bundle?: { installation?: { installationId?: string } };
+    bundle?: { installation?: { capsuleId?: string } };
   };
   assert.equal(
     document.kind,
-    "takosumi.accounts.cloudflare-r2-installation-export@v1",
+    "takosumi.accounts.cloudflare-r2-capsule-export@v1",
   );
   assert.equal(document.operationId, "op_export_age");
   assert.equal(document.request?.encryption?.method, "age");
-  assert.equal(document.bundle?.installation?.installationId, "inst_export");
+  assert.equal(document.bundle?.installation?.capsuleId, "inst_export");
 });
 
 test("Cloudflare R2 metadata export refuses data-bearing archive modes", async () => {
-  const exportWorker = createR2InstallationExportWorker({
+  const exportWorker = createR2CapsuleExportWorker({
     bucket: new MemoryR2Bucket(),
     downloadBaseUrl: "https://accounts.example",
     downloadSecret: "download-secret",
   });
-  const installation = sampleInstallation();
-  const bundle = buildInstallationExportBundle({ installation });
+  const installation = sampleCapsule();
+  const bundle = buildCapsuleExportBundle({ installation });
 
   await assert.rejects(async () => {
     await exportWorker({
@@ -849,7 +849,7 @@ test("Cloudflare R2 metadata export refuses data-bearing archive modes", async (
 test("Cloudflare R2 metadata export rejects non-HTTPS public download bases", () => {
   assert.throws(
     () =>
-      createR2InstallationExportWorker({
+      createR2CapsuleExportWorker({
         bucket: new MemoryR2Bucket(),
         downloadBaseUrl: "http://downloads.example.test/accounts/exports",
         downloadSecret: "download-secret",
@@ -1148,7 +1148,7 @@ test("Cloudflare Accounts Worker wires shared-cell runtime from the runtime cell
   const sessionId = await seedD1AccountSession(store);
   const operations = {
     spaces: {
-      getSpace: async (id: string) => ({
+      getWorkspace: async (id: string) => ({
         id,
         handle: id,
         displayName: id,
@@ -1159,13 +1159,13 @@ test("Cloudflare Accounts Worker wires shared-cell runtime from the runtime cell
       }),
     },
     deployUpload: async (req: {
-      readonly spaceId: string;
+      readonly workspaceId: string;
       readonly name: string;
       readonly snapshotId: string;
     }) => ({
       installation: {
         id: "inst_upload",
-        spaceId: req.spaceId,
+        workspaceId: req.workspaceId,
         name: req.name,
         slug: req.name,
         installConfigId: "cfg_upload",
@@ -1178,8 +1178,8 @@ test("Cloudflare Accounts Worker wires shared-cell runtime from the runtime cell
       installConfigId: "cfg_upload",
       run: {
         id: "plan_upload",
-        spaceId: req.spaceId,
-        installationId: "inst_upload",
+        workspaceId: req.workspaceId,
+        capsuleId: "inst_upload",
         type: "plan",
         status: "succeeded",
         sourceSnapshotId: req.snapshotId,
@@ -1193,8 +1193,8 @@ test("Cloudflare Accounts Worker wires shared-cell runtime from the runtime cell
     getPlanRun: async (id: string) => ({
       planRun: {
         id,
-        spaceId: "space_route_export",
-        installationId: "inst_upload",
+        workspaceId: "space_route_export",
+        capsuleId: "inst_upload",
         sourceSnapshotId: "snap_upload",
         status: "succeeded",
         operation: "create",
@@ -1208,7 +1208,7 @@ test("Cloudflare Accounts Worker wires shared-cell runtime from the runtime cell
     getSourceSnapshot: async (id: string) => ({
       id,
       origin: "upload",
-      spaceId: "space_route_export",
+      workspaceId: "space_route_export",
       url: "upload://space_route_export",
       ref: "upload",
       resolvedCommit:
@@ -1239,7 +1239,7 @@ test("Cloudflare Accounts Worker wires shared-cell runtime from the runtime cell
         "content-type": "application/json",
       },
       body: JSON.stringify({
-        spaceId: "space_route_export",
+        workspaceId: "space_route_export",
         name: "hello",
         snapshotId: "snap_upload",
         projectionMode: "shared-cell",
@@ -1249,7 +1249,7 @@ test("Cloudflare Accounts Worker wires shared-cell runtime from the runtime cell
   );
 
   assert.equal(response.status, 200, await response.clone().text());
-  const installation = await store.findAppInstallation("inst_upload");
+  const installation = await store.findAppCapsule("inst_upload");
   assert.equal(installation?.mode, "shared-cell");
   assert.equal(installation?.runtimeBindingId, "rtb_inst_upload_shared_cell");
 });
@@ -1758,11 +1758,11 @@ function numberValue(value: D1Value): number {
   return value;
 }
 
-function sampleInstallation(): InstallationRecord {
+function sampleCapsule(): CapsuleRecord {
   return {
-    installationId: "inst_export",
+    capsuleId: "inst_export",
     accountId: "acct_export",
-    spaceId: "space_export",
+    workspaceId: "space_export",
     appId: "example.export",
     sourceGitUrl: "https://github.com/example/export",
     sourceRef: "main",

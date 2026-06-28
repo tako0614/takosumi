@@ -6,11 +6,10 @@
  * Secret / Run / Plan / Apply / Destroy / StateVersion / Output / Runner /
  * AuditEvent / Operator.
  *
- * This facade still exports some compatibility DTO names used by the current
- * dashboard and operator tooling (Space / Installation / Deployment /
- * OutputSnapshot / RunGroup / Provider Catalog). Treat those as implementation
- * compatibility aliases while the wire surface migrates; do not introduce them
- * as new public product nouns.
+ * This facade exports those canonical names plus transient deprecated aliases
+ * (Space / Installation / Deployment / OutputSnapshot / StateSnapshot) used by
+ * the current dashboard and operator tooling while the wire surface migrates; do
+ * not introduce the deprecated names as new public product nouns.
  *
  * Internal in-process compatibility DTOs for the account-plane workload seam live in
  * `internal-deploy-control-api.ts` and are intentionally not re-exported here.
@@ -20,6 +19,10 @@ export * from "./activity.ts";
 export * from "./backups.ts";
 export * from "./billing.ts";
 export type {
+  CapsuleProviderConnectionBinding,
+  CapsuleProviderConnectionBindings,
+  CapsuleProviderConnectionSet,
+  // @deprecated pre-rename binding alias names.
   InstallationProviderConnectionBinding,
   InstallationProviderConnectionBindings,
   InstallationProviderConnectionSet,
@@ -42,6 +45,8 @@ export type {
 } from "./provider-resolution.ts";
 export { PUBLIC_PROVIDER_RESOLUTION_STATUSES as PROVIDER_RESOLUTION_STATUSES } from "./provider-resolution.ts";
 export type {
+  Capsule,
+  CapsuleStatus,
   CapsuleCompatibility,
   CapsuleCompatibilityLevel,
   CapsuleDataSourceSummary,
@@ -50,11 +55,21 @@ export type {
   CapsuleGateResult,
   CapsuleProviderRequirement,
   CapsuleProvisionerSummary,
+  PublicCapsule,
   PublicCapsuleCompatibilityReport as CapsuleCompatibilityReport,
   PublicCapsuleCompatibilityReportResponse as CapsuleCompatibilityReportResponse,
   CapsuleResourceSummary,
   CreateSourceCompatibilityCheckRequest,
 } from "./capsules.ts";
+export type { Project, PublicProject } from "./projects.ts";
+export type { StateVersion } from "./state-versions.ts";
+export type {
+  Output,
+  PublicOutput,
+  OutputShare,
+  OutputShareEntry,
+  OutputShareStatus,
+} from "./outputs.ts";
 export * from "./connections.ts";
 export * from "./dependencies.ts";
 export type {
@@ -62,11 +77,12 @@ export type {
   TakosumiApiErrorEnvelope,
   TakosumiApiErrorHttpStatus,
 } from "./deploy-control-errors.ts";
+/** @deprecated retired Deployment ledger projection; kept for audit reads. */
 export type {
   DeploymentStatus,
   PublicDeployment,
   PublicDeployment as Deployment,
-  StateSnapshot,
+  StateVersion as StateSnapshot,
 } from "./deployments.ts";
 export type {
   BackupConfig,
@@ -80,22 +96,20 @@ export type {
   InstallConfigSourceKind,
   InstallBuildConfig,
   InstallPrebuiltArtifactConfig,
-  InstallationStatus,
+  CapsuleStatus as InstallationStatus,
   NormalizationConfig,
   OutputAllowlistEntry,
   OutputValueType,
   PolicyConfig,
   PublicInstallConfig as InstallConfig,
-  PublicInstallation as Installation,
+  PublicCapsule as Installation,
   TrustLevel,
 } from "./installations.ts";
+/** @deprecated `OutputSnapshot` is renamed to `Output`. */
 export type {
-  OutputShare,
-  OutputShareEntry,
-  OutputShareStatus,
-  PublicOutputSnapshot,
-  PublicOutputSnapshot as OutputSnapshot,
-} from "./output-snapshots.ts";
+  PublicOutput as PublicOutputSnapshot,
+  PublicOutput as OutputSnapshot,
+} from "./outputs.ts";
 export * from "./providers.ts";
 export type {
   ArtifactRecord,
@@ -115,4 +129,12 @@ export type {
 } from "./runs.ts";
 export * from "./security.ts";
 export * from "./sources.ts";
-export * from "./spaces.ts";
+export * from "./workspaces.ts";
+/** @deprecated `Space` is renamed to `Workspace`. */
+export type {
+  Workspace as Space,
+  WorkspaceType as SpaceType,
+  CapsuleFullName as InstallationFullName,
+} from "./workspaces.ts";
+/** @deprecated `formatInstallationFullName` is renamed to `formatCapsuleFullName`. */
+export { formatCapsuleFullName as formatInstallationFullName } from "./workspaces.ts";

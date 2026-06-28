@@ -8,7 +8,7 @@
  * `/api/v1/*` remains the product control API for Workspaces, Capsules, Runs,
  * Connections, and related resources.
  *
- * Unlike the account-plane `/v1/installation-projections` routes (snake_case wire
+ * Unlike the account-plane `/v1/capsule-projections` routes (snake_case wire
  * shape for identity/billing/export projections), the `/api/v1/*` routes
  * pass the deploy-control contract types through `JSON.stringify` UNCHANGED, so
  * the wire shape is the camelCase contract shape. The exported DTOs below are
@@ -24,8 +24,8 @@ import type {
   CreditReservation as ContractCreditReservation,
   Dependency as ContractDependency,
   InstallConfig as ContractInstallConfig,
-  Installation as ContractInstallation,
-  InstallationProviderConnectionSet as ContractInstallationProviderConnectionSet,
+  Capsule as ContractCapsule,
+  CapsuleProviderConnectionSet as ContractCapsuleProviderConnectionSet,
   JsonValue as ContractJsonValue,
   OutputShare as ContractOutputShare,
   ProviderListing as ContractProviderListing,
@@ -37,7 +37,7 @@ import type {
   RunLogsResponse as ContractRunLogsResponse,
   Source as ContractSource,
   SourceSnapshot as ContractSourceSnapshot,
-  Space as ContractSpace,
+  Workspace as ContractWorkspace,
   UsageEvent as ContractUsageEvent,
 } from "takosumi-contract";
 
@@ -222,7 +222,7 @@ const BASE = "/api/v1";
 // Wire shapes (local mirror of the deploy-control contract — see module header)
 // ===========================================================================
 
-export type SpaceType = "personal" | "organization";
+export type WorkspaceType = "personal" | "organization";
 
 export interface PolicyConfig {
   readonly allowedProviders?: readonly string[];
@@ -234,11 +234,11 @@ export interface PolicyConfig {
   readonly quota?: Readonly<Record<string, number>>;
 }
 
-export interface Space {
+export interface Workspace {
   readonly id: string;
   readonly handle: string;
   readonly displayName: string;
-  readonly type: SpaceType;
+  readonly type: WorkspaceType;
   readonly ownerUserId: string;
   readonly billingAccountId?: string;
   readonly billingSettings?: BillingSettings;
@@ -274,7 +274,7 @@ export type BillingSettings =
     };
 
 export interface CreditBalance {
-  readonly spaceId: string;
+  readonly workspaceId: string;
   readonly availableUsdMicros?: number;
   readonly reservedUsdMicros?: number;
   readonly monthlyIncludedUsdMicros?: number;
@@ -288,7 +288,9 @@ export interface CreditBalance {
 
 export interface CreditReservation {
   readonly id: string;
-  readonly spaceId: string;
+  // Rename convergence: contract carries both as optional during transition.
+  readonly workspaceId?: string;
+  readonly spaceId?: string;
   readonly runId: string;
   readonly estimatedCredits: number;
   readonly status: "reserved" | "captured" | "released" | "expired";
@@ -299,14 +301,14 @@ export interface CreditReservation {
 
 export interface BackupRecord {
   readonly id: string;
-  readonly spaceId: string;
-  readonly installationId?: string;
+  readonly workspaceId: string;
+  readonly capsuleId?: string;
   readonly environment?: string;
   readonly restoreTarget?: {
-    readonly installationId: string;
+    readonly capsuleId: string;
     readonly environment: string;
     readonly stateGeneration: number;
-    readonly stateSnapshotId: string;
+    readonly stateVersionId: string;
   };
   readonly objectKey: string;
   readonly digest: string;
@@ -337,8 +339,10 @@ export type UsageEventKind =
 
 export interface UsageEvent {
   readonly id: string;
-  readonly spaceId: string;
-  readonly installationId?: string;
+  // Rename convergence: contract carries both as optional during transition.
+  readonly workspaceId?: string;
+  readonly spaceId?: string;
+  readonly capsuleId?: string;
   readonly runId?: string;
   readonly kind: UsageEventKind;
   readonly quantity: number;
@@ -349,14 +353,14 @@ export interface UsageEvent {
   readonly createdAt: string;
 }
 
-export interface SpaceBilling {
+export interface WorkspaceBilling {
   readonly settings: BillingSettings;
   readonly balance?: CreditBalance;
 }
 
 export type TrustLevel = "official" | "trusted" | "space" | "raw";
 
-export type InstallationStatus =
+export type CapsuleStatus =
   | "pending"
   | "active"
   | "stale"
@@ -364,23 +368,23 @@ export type InstallationStatus =
   | "disabled"
   | "destroyed";
 
-export interface Installation {
+export interface Capsule {
   readonly id: string;
-  readonly spaceId: string;
+  readonly workspaceId: string;
   readonly name: string;
   readonly slug: string;
   readonly sourceId?: string;
   readonly installConfigId: string;
   readonly environment: string;
-  readonly currentDeploymentId?: string;
+  readonly currentStateVersionId?: string;
   readonly currentStateGeneration: number;
-  readonly status: InstallationStatus;
+  readonly status: CapsuleStatus;
   /**
    * Read-time DERIVED freshness relative to producer Dependencies (spec §24).
    * Newer backends stop STORING `status: "stale"` and surface this field
    * instead; older backends omit it. Views must treat
    * `status === "stale" || freshness === "stale"` as the stale presentation
-   * (see `effectiveInstallationStatus` in installations-ui.ts) so the
+   * (see `effectiveCapsuleStatus` in capsules-ui.ts) so the
    * dashboard renders correctly against both.
    */
   readonly freshness?: "fresh" | "stale";
@@ -388,22 +392,22 @@ export interface Installation {
   readonly updatedAt: string;
 }
 
-export interface InstallationProviderConnectionBinding {
+export interface CapsuleProviderConnectionBinding {
   readonly provider: string;
   readonly alias?: string;
   readonly connectionId: string;
   readonly region?: string;
 }
 
-export type InstallationProviderConnectionBindings =
-  readonly InstallationProviderConnectionBinding[];
+export type CapsuleProviderConnectionBindings =
+  readonly CapsuleProviderConnectionBinding[];
 
-export interface InstallationProviderConnectionSet {
+export interface CapsuleProviderConnectionSet {
   readonly id: string;
-  readonly spaceId: string;
-  readonly installationId: string;
+  readonly workspaceId: string;
+  readonly capsuleId: string;
   readonly environment: string;
-  readonly bindings: InstallationProviderConnectionBindings;
+  readonly bindings: CapsuleProviderConnectionBindings;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -412,7 +416,7 @@ export type ProviderResolution = ContractProviderResolution;
 
 export interface InstallConfig {
   readonly id: string;
-  readonly spaceId?: string;
+  readonly workspaceId?: string;
   readonly name: string;
   readonly sourceKind: "generic_capsule" | "first_party_capsule";
   readonly trustLevel: TrustLevel;
@@ -467,7 +471,11 @@ export interface DependencyOutputMapping {
 
 export interface Dependency {
   readonly id: string;
-  readonly spaceId: string;
+  readonly workspaceId: string;
+  // Rename convergence: contract keeps `producer/consumerInstallationId`
+  // canonical, the `*CapsuleId` aliases optional. Read with `?? *InstallationId`.
+  readonly producerCapsuleId?: string;
+  readonly consumerCapsuleId?: string;
   readonly producerInstallationId: string;
   readonly consumerInstallationId: string;
   readonly mode: DependencyMode;
@@ -477,22 +485,22 @@ export interface Dependency {
 }
 
 /** `GET /api/v1/workspaces/:id/graph` projection. */
-export interface SpaceGraph {
+export interface WorkspaceGraph {
   readonly nodes: readonly GraphNode[];
   readonly edges: readonly GraphEdge[];
 }
 
 export interface GraphNode {
-  readonly installationId: string;
+  readonly capsuleId: string;
   readonly name: string;
   readonly environment: string;
-  readonly status: InstallationStatus;
+  readonly status: CapsuleStatus;
 }
 
 export interface GraphEdge {
   readonly id: string;
-  readonly producerInstallationId: string;
-  readonly consumerInstallationId: string;
+  readonly producerCapsuleId: string;
+  readonly consumerCapsuleId: string;
   readonly outputs: Readonly<Record<string, DependencyOutputMapping>>;
 }
 
@@ -538,7 +546,7 @@ export interface RunPlanResource {
 
 export interface RunApplyExpectedGuard {
   readonly reviewedPlanId: string;
-  readonly installationId?: string;
+  readonly capsuleId?: string;
   readonly currentApplyLedgerId?: string | null;
   readonly runnerId: string;
   readonly sourceDigest: string;
@@ -562,9 +570,9 @@ export interface RunServiceDataRestoreResult {
 export interface Run {
   readonly id: string;
   readonly runGroupId?: string;
-  readonly spaceId: string;
+  readonly workspaceId: string;
   readonly sourceId?: string;
-  readonly installationId?: string;
+  readonly capsuleId?: string;
   readonly environment?: string;
   readonly type: RunType;
   readonly status: RunStatus;
@@ -585,8 +593,8 @@ export interface Run {
   readonly backupId?: string;
   readonly restoreStateGeneration?: number;
   readonly restoreServiceData?: boolean;
-  readonly restoredStateSnapshotId?: string;
-  readonly restoredFromStateSnapshotId?: string;
+  readonly restoredStateVersionId?: string;
+  readonly restoredFromStateVersionId?: string;
   readonly restoredServiceData?: RunServiceDataRestoreResult;
   readonly errorCode?: string;
   readonly createdBy: string;
@@ -635,7 +643,7 @@ export interface RunLogs {
  */
 export interface RunCostInfo {
   readonly runId: string;
-  /** The Space's billing mode at plan time. */
+  /** The Workspace's billing mode at plan time. */
   readonly billingMode: "disabled" | "showback" | "enforce";
   /** USD amount the controller estimated this plan would consume on apply. */
   readonly estimatedUsdMicros: number;
@@ -669,7 +677,7 @@ export type RunGroupStatus =
 export interface RunGroupWithRuns {
   readonly runGroup: {
     readonly id: string;
-    readonly spaceId: string;
+    readonly workspaceId: string;
     readonly status?: RunGroupStatus;
     readonly type?: string;
   };
@@ -678,7 +686,7 @@ export interface RunGroupWithRuns {
 
 export interface Source {
   readonly id: string;
-  readonly spaceId: string;
+  readonly workspaceId: string;
   readonly name: string;
   readonly url: string;
   readonly defaultRef: string;
@@ -694,7 +702,7 @@ export type SourceSnapshotOrigin = "git" | "upload" | "artifact";
 export interface SourceSnapshot {
   readonly id: string;
   readonly origin: SourceSnapshotOrigin;
-  readonly spaceId: string;
+  readonly workspaceId: string;
   readonly sourceId?: string;
   readonly url: string;
   readonly ref: string;
@@ -720,7 +728,9 @@ export type DeploymentStatus =
  * `outputSnapshotId` pointer and returns ONLY the allowlist-projected
  * `outputsPublic` map (sensitive outputs never enter the ledger row), so the
  * dashboard read never exposes a handle to the un-projected output envelope.
- * Mirror of `takosumi-contract/deployments.PublicDeployment`.
+ * Mirror of `takosumi-contract/deployments.PublicDeployment` — the RETIRED
+ * Deployment ledger deliberately keeps the legacy `spaceId` / `installationId`
+ * field names (kept read-only for audit; not part of the 17-noun rename).
  */
 export interface PublicDeployment {
   readonly id: string;
@@ -744,6 +754,11 @@ export interface OutputShareEntry {
 
 export interface OutputShare {
   readonly id: string;
+  // Rename convergence: contract keeps `from/toSpaceId` + `producerInstallationId`
+  // canonical, the new aliases optional. Read with `?? <legacy>`.
+  readonly fromWorkspaceId?: string;
+  readonly toWorkspaceId?: string;
+  readonly producerCapsuleId?: string;
   readonly fromSpaceId: string;
   readonly toSpaceId: string;
   readonly producerInstallationId: string;
@@ -756,7 +771,7 @@ export interface OutputShare {
 
 export interface ActivityEvent {
   readonly id: string;
-  readonly spaceId: string;
+  readonly workspaceId: string;
   readonly actorId?: string;
   readonly action: string;
   readonly targetType: string;
@@ -792,11 +807,11 @@ export type ProviderConnectionMaterialization = "oauth" | "secret";
  * Unified Provider Connection credential record (mirrors the collapsed contract
  * `ProviderConnection`). The former separate `Connection` / `ProviderConnection`
  * / `ProviderEnv` shapes are one row now; `Connection` is kept as an alias for
- * call sites that read the operator/space connection listing.
+ * call sites that read the operator/workspace connection listing.
  */
 export interface Connection {
   readonly id: string;
-  readonly spaceId?: string;
+  readonly workspaceId?: string;
   readonly provider: string;
   readonly providerSource: string;
   readonly kind?: string;
@@ -872,8 +887,8 @@ export interface CapsuleCompatibilityResult {
 type AssertAssignable<Expected, Actual extends Expected> = true;
 
 type _ContractResponseAssignableToDashboardMirrors = [
-  AssertAssignable<Space, ContractSpace>,
-  AssertAssignable<Installation, ContractInstallation>,
+  AssertAssignable<Workspace, ContractWorkspace>,
+  AssertAssignable<Capsule, ContractCapsule>,
   AssertAssignable<InstallConfig, ContractInstallConfig>,
   AssertAssignable<Dependency, ContractDependency>,
   AssertAssignable<Run, ContractRun>,
@@ -891,8 +906,8 @@ type _ContractResponseAssignableToDashboardMirrors = [
   AssertAssignable<RunCostInfo, ContractRunCostInfo>,
   AssertAssignable<BackupRecord, ContractBackupRecord>,
   AssertAssignable<
-    InstallationProviderConnectionSet,
-    ContractInstallationProviderConnectionSet
+    CapsuleProviderConnectionSet,
+    ContractCapsuleProviderConnectionSet
   >,
 ];
 
@@ -900,28 +915,42 @@ type _ContractResponseAssignableToDashboardMirrors = [
 // Typed methods (one per route the dashboard calls)
 // ===========================================================================
 
-// --- Spaces ----------------------------------------------------------------
+// --- Workspaces ----------------------------------------------------------------
 
-export async function listSpaces(): Promise<readonly Space[]> {
-  const body = await controlFetch<{ spaces?: readonly Space[] }>(
-    `${BASE}/workspaces`,
-  );
-  return body.spaces ?? [];
+// NOTE (rename convergence): the dashboard hits the account-plane control
+// routes, which still emit the legacy `{ spaces } / { space } / { installation }`
+// response envelope keys (and read legacy `spaceId` request-body keys). The
+// reads below prefer the new `workspaces / workspace / capsule(s)` envelope key
+// and fall back to the legacy key so the SPA works against both the pre- and
+// post-convergence backend; the create bodies send both id keys for the same
+// reason. Drop the legacy halves once the backend envelope/body keys converge.
+type WorkspaceListEnvelope = {
+  readonly workspaces?: readonly Workspace[];
+  readonly spaces?: readonly Workspace[];
+};
+type WorkspaceEnvelope = {
+  readonly workspace?: Workspace;
+  readonly space?: Workspace;
+};
+
+export async function listWorkspaces(): Promise<readonly Workspace[]> {
+  const body = await controlFetch<WorkspaceListEnvelope>(`${BASE}/workspaces`);
+  return body.workspaces ?? body.spaces ?? [];
 }
 
-export async function listSpacesIncludingArchived(): Promise<readonly Space[]> {
-  const body = await controlFetch<{ spaces?: readonly Space[] }>(
+export async function listWorkspacesIncludingArchived(): Promise<readonly Workspace[]> {
+  const body = await controlFetch<WorkspaceListEnvelope>(
     `${BASE}/workspaces${query({ includeArchived: "true" })}`,
   );
-  return body.spaces ?? [];
+  return body.workspaces ?? body.spaces ?? [];
 }
 
-export async function createSpace(input: {
+export async function createWorkspace(input: {
   readonly handle: string;
   readonly displayName?: string;
-  readonly type?: SpaceType;
-}): Promise<Space> {
-  const body = await controlFetch<{ space: Space }>(`${BASE}/workspaces`, {
+  readonly type?: WorkspaceType;
+}): Promise<Workspace> {
+  const body = await controlFetch<WorkspaceEnvelope>(`${BASE}/workspaces`, {
     method: "POST",
     body: {
       handle: input.handle,
@@ -929,53 +958,53 @@ export async function createSpace(input: {
       type: input.type ?? "personal",
     },
   });
-  return body.space;
+  return (body.workspace ?? body.space)!;
 }
 
-export async function getSpace(spaceId: string): Promise<Space> {
-  const body = await controlFetch<{ space: Space }>(
-    `${BASE}/workspaces/${encodeURIComponent(spaceId)}`,
+export async function getWorkspace(workspaceId: string): Promise<Workspace> {
+  const body = await controlFetch<WorkspaceEnvelope>(
+    `${BASE}/workspaces/${encodeURIComponent(workspaceId)}`,
   );
-  return body.space;
+  return (body.workspace ?? body.space)!;
 }
 
-export async function updateSpace(
-  spaceId: string,
+export async function updateWorkspace(
+  workspaceId: string,
   input: {
     readonly displayName?: string;
     readonly policy?: PolicyConfig;
     readonly archived?: boolean;
   },
-): Promise<Space> {
-  const body = await controlFetch<{ space: Space }>(
-    `${BASE}/workspaces/${encodeURIComponent(spaceId)}`,
+): Promise<Workspace> {
+  const body = await controlFetch<WorkspaceEnvelope>(
+    `${BASE}/workspaces/${encodeURIComponent(workspaceId)}`,
     { method: "PATCH", body: input },
   );
-  return body.space;
+  return (body.workspace ?? body.space)!;
 }
 
-export async function getSpaceBilling(spaceId: string): Promise<SpaceBilling> {
-  const body = await controlFetch<{ billing: SpaceBilling }>(
-    `${BASE}/workspaces/${encodeURIComponent(spaceId)}/billing`,
+export async function getWorkspaceBilling(workspaceId: string): Promise<WorkspaceBilling> {
+  const body = await controlFetch<{ billing: WorkspaceBilling }>(
+    `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/billing`,
   );
   return body.billing;
 }
 
-export async function listSpaceUsage(
-  spaceId: string,
+export async function listWorkspaceUsage(
+  workspaceId: string,
 ): Promise<readonly UsageEvent[]> {
   return await fetchAllPages<UsageEvent>(
-    `${BASE}/workspaces/${encodeURIComponent(spaceId)}/usage`,
+    `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/usage`,
     (body) => (body.usageEvents as readonly UsageEvent[]) ?? [],
   );
 }
 
-export async function listSpaceCreditReservations(
-  spaceId: string,
+export async function listWorkspaceCreditReservations(
+  workspaceId: string,
 ): Promise<readonly CreditReservation[]> {
   const body = await controlFetch<{
     creditReservations?: readonly CreditReservation[];
-  }>(`${BASE}/workspaces/${encodeURIComponent(spaceId)}/credit-reservations`);
+  }>(`${BASE}/workspaces/${encodeURIComponent(workspaceId)}/credit-reservations`);
   return body.creditReservations ?? [];
 }
 
@@ -1010,45 +1039,45 @@ export async function listBillingPlans(): Promise<
   return body.plans ?? [];
 }
 
-// --- Members (Space membership / roles) ------------------------------------
+// --- Members (Workspace membership / roles) ------------------------------------
 //
 // Backs the Members screen over the session-authed
 // `/api/v1/workspaces/:id/members[/:subject]` routes (see
-// accounts/service/src/control-routes.ts). The Space is resolved
+// accounts/service/src/control-routes.ts). The Workspace is resolved
 // server-side and the membership-ROLE gate is enforced by the backend
 // (list = any active member; add/invite = owner/admin; role change + remove =
-// owner-only with a last-owner guard). These client fns never send the spaceId
+// owner-only with a last-owner guard). These client fns never send the workspaceId
 // in a body — it is always a path segment the server re-resolves and gates.
 
-export type ControlSpaceRole = "owner" | "admin" | "member" | "viewer";
+export type ControlWorkspaceRole = "owner" | "admin" | "member" | "viewer";
 export type ControlMembershipStatus = "active" | "invited" | "suspended";
 
 /**
- * Public projection of one Space membership (mirror of the deploy-control
- * `PublicSpaceMember`). `accountId` is the member's account subject — the same
+ * Public projection of one Workspace membership (mirror of the deploy-control
+ * `PublicWorkspaceMember`). `accountId` is the member's account subject — the same
  * value the session `/v1/account/session/me` returns for the signed-in caller —
  * so the view can match the caller against the roster to decide which mutation
  * controls to show. Carries no credential / email / PII beyond the handle.
  */
-export interface PublicSpaceMember {
+export interface PublicWorkspaceMember {
   readonly id: string;
-  readonly spaceId: string;
+  readonly workspaceId: string;
   readonly accountId: string;
-  readonly roles: readonly ControlSpaceRole[];
+  readonly roles: readonly ControlWorkspaceRole[];
   readonly status: ControlMembershipStatus;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
 
 /**
- * Lists a Space's members (`GET /api/v1/workspaces/:id/members`). Any active
- * member of the Space may read the roster; the backend gates this server-side.
+ * Lists a Workspace's members (`GET /api/v1/workspaces/:id/members`). Any active
+ * member of the Workspace may read the roster; the backend gates this server-side.
  */
 export async function listMembers(
-  spaceId: string,
-): Promise<readonly PublicSpaceMember[]> {
-  const body = await controlFetch<{ members?: readonly PublicSpaceMember[] }>(
-    `${BASE}/workspaces/${encodeURIComponent(spaceId)}/members`,
+  workspaceId: string,
+): Promise<readonly PublicWorkspaceMember[]> {
+  const body = await controlFetch<{ members?: readonly PublicWorkspaceMember[] }>(
+    `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/members`,
   );
   return body.members ?? [];
 }
@@ -1060,15 +1089,15 @@ export async function listMembers(
  * account plane can resolve a verified email to a Takosumi subject.
  */
 export async function inviteMember(
-  spaceId: string,
+  workspaceId: string,
   input: {
     readonly email?: string;
     readonly accountId?: string;
-    readonly role?: ControlSpaceRole;
+    readonly role?: ControlWorkspaceRole;
   },
-): Promise<PublicSpaceMember> {
-  const body = await controlFetch<{ member: PublicSpaceMember }>(
-    `${BASE}/workspaces/${encodeURIComponent(spaceId)}/members`,
+): Promise<PublicWorkspaceMember> {
+  const body = await controlFetch<{ member: PublicWorkspaceMember }>(
+    `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/members`,
     {
       method: "POST",
       body: {
@@ -1084,15 +1113,15 @@ export async function inviteMember(
 /**
  * Changes a member's role set (`PATCH /api/v1/workspaces/:id/members/:subject`).
  * Owner-only. The backend's last-owner guard rejects demoting the sole
- * remaining owner with 403, so a Space is never left unmanaged.
+ * remaining owner with 403, so a Workspace is never left unmanaged.
  */
 export async function setMemberRole(
-  spaceId: string,
+  workspaceId: string,
   subject: string,
-  roles: ControlSpaceRole | readonly ControlSpaceRole[],
-): Promise<PublicSpaceMember> {
-  const body = await controlFetch<{ member: PublicSpaceMember }>(
-    `${BASE}/workspaces/${encodeURIComponent(spaceId)}/members/${encodeURIComponent(subject)}`,
+  roles: ControlWorkspaceRole | readonly ControlWorkspaceRole[],
+): Promise<PublicWorkspaceMember> {
+  const body = await controlFetch<{ member: PublicWorkspaceMember }>(
+    `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/members/${encodeURIComponent(subject)}`,
     { method: "PATCH", body: { roles } },
   );
   return body.member;
@@ -1105,79 +1134,82 @@ export async function setMemberRole(
  * last-owner guard rejects removing the sole remaining owner with 403.
  */
 export async function removeMember(
-  spaceId: string,
+  workspaceId: string,
   subject: string,
-): Promise<PublicSpaceMember> {
-  const body = await controlFetch<{ member: PublicSpaceMember }>(
-    `${BASE}/workspaces/${encodeURIComponent(spaceId)}/members/${encodeURIComponent(subject)}`,
+): Promise<PublicWorkspaceMember> {
+  const body = await controlFetch<{ member: PublicWorkspaceMember }>(
+    `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/members/${encodeURIComponent(subject)}`,
     { method: "DELETE" },
   );
   return body.member;
 }
 
-// --- Installations ---------------------------------------------------------
+// --- Capsules ---------------------------------------------------------
 
-export async function listInstallations(
-  spaceId: string,
-): Promise<readonly Installation[]> {
-  return await fetchAllPages<Installation>(
-    `${BASE}/workspaces/${encodeURIComponent(spaceId)}/capsules`,
-    (body) => (body.installations as readonly Installation[]) ?? [],
+export async function listCapsules(
+  workspaceId: string,
+): Promise<readonly Capsule[]> {
+  return await fetchAllPages<Capsule>(
+    `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/capsules`,
+    // Legacy backend emits `{ installations }`; prefer the new `capsules` key.
+    (body) =>
+      ((body.capsules ?? body.installations) as readonly Capsule[]) ?? [],
   );
 }
 
-export async function getInstallation(id: string): Promise<Installation> {
-  const body = await controlFetch<{ installation: Installation }>(
-    `${BASE}/capsules/${encodeURIComponent(id)}`,
-  );
-  return body.installation;
+export async function getCapsule(id: string): Promise<Capsule> {
+  const body = await controlFetch<{
+    capsule?: Capsule;
+    installation?: Capsule;
+  }>(`${BASE}/capsules/${encodeURIComponent(id)}`);
+  return (body.capsule ?? body.installation)!;
 }
 
-export async function createInstallation(input: {
-  readonly spaceId: string;
+export async function createCapsule(input: {
+  readonly workspaceId: string;
   readonly name: string;
   readonly environment: string;
   readonly sourceId: string;
   readonly installConfigId: string;
   readonly vars?: Readonly<Record<string, ContractJsonValue>>;
-}): Promise<Installation> {
-  const body = await controlFetch<{ installation: Installation }>(
-    `${BASE}/workspaces/${encodeURIComponent(input.spaceId)}/capsules`,
-    {
-      method: "POST",
-      body: {
-        name: input.name,
-        environment: input.environment,
-        sourceId: input.sourceId,
-        installConfigId: input.installConfigId,
-        ...(input.vars && Object.keys(input.vars).length > 0
-          ? { vars: input.vars }
-          : {}),
-      },
+}): Promise<Capsule> {
+  const body = await controlFetch<{
+    capsule?: Capsule;
+    installation?: Capsule;
+  }>(`${BASE}/workspaces/${encodeURIComponent(input.workspaceId)}/capsules`, {
+    method: "POST",
+    body: {
+      name: input.name,
+      environment: input.environment,
+      sourceId: input.sourceId,
+      installConfigId: input.installConfigId,
+      ...(input.vars && Object.keys(input.vars).length > 0
+        ? { vars: input.vars }
+        : {}),
     },
-  );
-  return body.installation;
+  });
+  return (body.capsule ?? body.installation)!;
 }
 
-export async function getInstallationProviderConnectionSet(
-  installationId: string,
-): Promise<InstallationProviderConnectionSet | null> {
+export async function getCapsuleProviderConnectionSet(
+  capsuleId: string,
+): Promise<CapsuleProviderConnectionSet | null> {
   const body = await controlFetch<{
-    providerConnectionSet: InstallationProviderConnectionSet | null;
+    providerConnectionSet: CapsuleProviderConnectionSet | null;
   }>(
-    `${BASE}/capsules/${encodeURIComponent(installationId)}/provider-connections`,
+    `${BASE}/capsules/${encodeURIComponent(capsuleId)}/provider-connections`,
   );
   return body.providerConnectionSet;
 }
 
-export async function putInstallationProviderConnectionSet(
-  installationId: string,
-  connections: InstallationProviderConnectionBindings,
-): Promise<InstallationProviderConnectionSet> {
+export async function putCapsuleProviderConnectionSet(
+  capsuleId: string,
+  connections: CapsuleProviderConnectionBindings,
+): Promise<CapsuleProviderConnectionSet> {
   const body = await controlFetch<{
-    providerConnectionSet: InstallationProviderConnectionSet;
+    providerConnectionSet: CapsuleProviderConnectionSet;
   }>(
-    `${BASE}/capsules/${encodeURIComponent(installationId)}/provider-connections`,
+    `${BASE}/capsules/${encodeURIComponent(capsuleId)}/provider-connections`,
     { method: "PUT", body: { connections } },
   );
   return body.providerConnectionSet;
@@ -1186,12 +1218,12 @@ export async function putInstallationProviderConnectionSet(
 // --- Capsule configs -------------------------------------------------------
 
 export async function listInstallConfigs(
-  spaceId?: string,
+  workspaceId?: string,
   options: { readonly view?: "starter-catalog" } = {},
 ): Promise<readonly InstallConfig[]> {
   return await fetchAllPages<InstallConfig>(
     `${BASE}/capsule-configs${query({
-      workspaceId: spaceId,
+      workspaceId: workspaceId,
       view: options.view,
     })}`,
     (body) => (body.installConfigs as readonly InstallConfig[]) ?? [],
@@ -1199,15 +1231,15 @@ export async function listInstallConfigs(
 }
 
 export async function listStarterCatalogInstallConfigs(
-  spaceId?: string,
+  workspaceId?: string,
 ): Promise<readonly InstallConfig[]> {
-  return await listInstallConfigs(spaceId, { view: "starter-catalog" });
+  return await listInstallConfigs(workspaceId, { view: "starter-catalog" });
 }
 
 // --- OpenTofu Capsule compatibility ---------------------------------------
 
 export async function checkCapsuleCompatibility(input: {
-  readonly spaceId: string;
+  readonly workspaceId: string;
   readonly sourceId?: string;
   readonly gitUrl: string;
   readonly ref: string;
@@ -1225,7 +1257,7 @@ export async function checkCapsuleCompatibility(input: {
     input.sourceId ??
     (
       await createSource({
-        spaceId: input.spaceId,
+        workspaceId: input.workspaceId,
         name: input.name,
         url: input.gitUrl,
         defaultRef: input.ref,
@@ -1270,7 +1302,7 @@ export async function checkCapsuleCompatibility(input: {
     body: {
       sourceSnapshotId: snapshot.id,
       // Gate the pre-install check against the selected InstallConfig's policy
-      // when one is supplied (the install view passes the Space's resolved
+      // when one is supplied (the install view passes the Workspace's resolved
       // profile), otherwise fall back to the instance-wide default policy.
       ...(input.installConfigId
         ? { installConfigId: input.installConfigId }
@@ -1321,48 +1353,48 @@ export async function checkCapsuleCompatibility(input: {
 
 // --- Graph -----------------------------------------------------------------
 
-export async function getSpaceGraph(spaceId: string): Promise<SpaceGraph> {
-  return await controlFetch<SpaceGraph>(
-    `${BASE}/workspaces/${encodeURIComponent(spaceId)}/graph`,
+export async function getWorkspaceGraph(workspaceId: string): Promise<WorkspaceGraph> {
+  return await controlFetch<WorkspaceGraph>(
+    `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/graph`,
   );
 }
 
 // --- Backups ---------------------------------------------------------------
 
-export async function createSpaceBackup(
-  spaceId: string,
+export async function createWorkspaceBackup(
+  workspaceId: string,
 ): Promise<BackupRecord> {
   const body = await controlFetch<{ backup: BackupRecord }>(
-    `${BASE}/workspaces/${encodeURIComponent(spaceId)}/backups`,
+    `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/backups`,
     { method: "POST" },
   );
   return body.backup;
 }
 
-export async function createInstallationBackup(
-  installationId: string,
+export async function createCapsuleBackup(
+  capsuleId: string,
 ): Promise<BackupRecord> {
   const body = await controlFetch<{ backup: BackupRecord }>(
-    `${BASE}/capsules/${encodeURIComponent(installationId)}/backups`,
+    `${BASE}/capsules/${encodeURIComponent(capsuleId)}/backups`,
     { method: "POST" },
   );
   return body.backup;
 }
 
-export async function listSpaceBackups(
-  spaceId: string,
+export async function listWorkspaceBackups(
+  workspaceId: string,
 ): Promise<readonly BackupRecord[]> {
   return await fetchAllPages<BackupRecord>(
-    `${BASE}/workspaces/${encodeURIComponent(spaceId)}/backups`,
+    `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/backups`,
     (body) => (body.backups as readonly BackupRecord[]) ?? [],
   );
 }
 
 export async function createBackupRestore(
-  spaceId: string,
+  workspaceId: string,
   backupId: string,
   input: {
-    readonly installationId: string;
+    readonly capsuleId: string;
     readonly environment: string;
     readonly stateGeneration: number;
     readonly expectedBackupDigest: string;
@@ -1370,10 +1402,11 @@ export async function createBackupRestore(
   },
 ): Promise<Run> {
   const body = await controlFetch<{ run: Run }>(
-    `${BASE}/workspaces/${encodeURIComponent(spaceId)}/backups/${encodeURIComponent(backupId)}/restores`,
+    `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/backups/${encodeURIComponent(backupId)}/restores`,
     {
       method: "POST",
-      body: input,
+      // Legacy backend reads `installationId`; send both until converged.
+      body: { ...input, installationId: input.capsuleId },
     },
   );
   return body.run;
@@ -1382,20 +1415,22 @@ export async function createBackupRestore(
 // --- Dependencies ----------------------------------------------------------
 
 export async function createDependency(
-  consumerInstallationId: string,
+  consumerCapsuleId: string,
   input: {
-    readonly producerInstallationId: string;
+    readonly producerCapsuleId: string;
     readonly mode?: DependencyMode;
     readonly outputs?: Readonly<Record<string, DependencyOutputMapping>>;
     readonly visibility?: DependencyVisibility;
   },
 ): Promise<Dependency> {
   const body = await controlFetch<{ dependency: Dependency }>(
-    `${BASE}/capsules/${encodeURIComponent(consumerInstallationId)}/dependencies`,
+    `${BASE}/capsules/${encodeURIComponent(consumerCapsuleId)}/dependencies`,
     {
       method: "POST",
       body: {
-        producerInstallationId: input.producerInstallationId,
+        producerCapsuleId: input.producerCapsuleId,
+        // Legacy backend reads `producerInstallationId`; send both until converged.
+        producerInstallationId: input.producerCapsuleId,
         ...(input.mode ? { mode: input.mode } : {}),
         ...(input.outputs ? { outputs: input.outputs } : {}),
         ...(input.visibility ? { visibility: input.visibility } : {}),
@@ -1415,30 +1450,30 @@ export async function deleteDependency(dependencyId: string): Promise<void> {
 // --- Activity --------------------------------------------------------------
 
 export async function listActivity(
-  spaceId: string,
+  workspaceId: string,
   limit?: number,
 ): Promise<readonly ActivityEvent[]> {
   const body = await controlFetch<{ events?: readonly ActivityEvent[] }>(
-    `${BASE}/workspaces/${encodeURIComponent(spaceId)}/activity${query({ limit })}`,
+    `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/activity${query({ limit })}`,
   );
   return body.events ?? [];
 }
 
 export async function listRuns(
-  spaceId: string,
+  workspaceId: string,
   limit?: number,
 ): Promise<readonly Run[]> {
   const body = await controlFetch<{ runs?: readonly Run[] }>(
-    `${BASE}/workspaces/${encodeURIComponent(spaceId)}/runs${query({ limit })}`,
+    `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/runs${query({ limit })}`,
   );
   return body.runs ?? [];
 }
 
 // --- Sources ---------------------------------------------------------------
 
-export async function listSources(spaceId: string): Promise<readonly Source[]> {
+export async function listSources(workspaceId: string): Promise<readonly Source[]> {
   return await fetchAllPages<Source>(
-    `${BASE}/sources${query({ workspaceId: spaceId })}`,
+    `${BASE}/sources${query({ workspaceId: workspaceId })}`,
     (body) => (body.sources as readonly Source[]) ?? [],
   );
 }
@@ -1449,7 +1484,7 @@ export interface CreateSourceResult {
 }
 
 export async function createSource(input: {
-  readonly spaceId: string;
+  readonly workspaceId: string;
   readonly name: string;
   readonly url: string;
   readonly defaultRef?: string;
@@ -1459,7 +1494,9 @@ export async function createSource(input: {
   return await controlFetch<CreateSourceResult>(`${BASE}/sources`, {
     method: "POST",
     body: {
-      spaceId: input.spaceId,
+      workspaceId: input.workspaceId,
+      // Legacy backend reads `spaceId`; send both until converged.
+      spaceId: input.workspaceId,
       name: input.name,
       url: input.url,
       ...(input.defaultRef ? { defaultRef: input.defaultRef } : {}),
@@ -1569,13 +1606,13 @@ export async function waitForLatestSourceSnapshot(
 
 // --- Runs ------------------------------------------------------------------
 
-/** Create a plan run for an Installation. Returns the opaque Run envelope. */
-export async function planInstallation(
-  installationId: string,
+/** Create a plan run for an Capsule. Returns the opaque Run envelope. */
+export async function planCapsule(
+  capsuleId: string,
   options: { readonly compatibilityReportId?: string } = {},
 ): Promise<unknown> {
   return await controlFetch<unknown>(
-    `${BASE}/capsules/${encodeURIComponent(installationId)}/plan`,
+    `${BASE}/capsules/${encodeURIComponent(capsuleId)}/plan`,
     {
       method: "POST",
       body: options.compatibilityReportId
@@ -1585,11 +1622,11 @@ export async function planInstallation(
   );
 }
 
-export async function destroyPlanInstallation(
-  installationId: string,
+export async function destroyPlanCapsule(
+  capsuleId: string,
 ): Promise<unknown> {
   return await controlFetch<unknown>(
-    `${BASE}/capsules/${encodeURIComponent(installationId)}/destroy-plan`,
+    `${BASE}/capsules/${encodeURIComponent(capsuleId)}/destroy-plan`,
     { method: "POST" },
   );
 }
@@ -1663,26 +1700,26 @@ export async function createApplyRun(
 // --- Deployments -----------------------------------------------------------
 
 /**
- * Lists an Installation's Deployment ledger (current + past) for the dashboard
+ * Lists an Capsule's Deployment ledger (current + past) for the dashboard
  * session (`GET /api/v1/capsules/:id/state-versions`). The backend
- * resolves the Installation's owning Space and space-permission gates first;
+ * resolves the Capsule's owning Workspace and workspace-permission gates first;
  * each row carries only the allowlist-projected `outputsPublic` (no sensitive
  * outputs, no raw output-snapshot pointer). Rows arrive newest-first.
  */
 export async function listDeployments(
-  installationId: string,
+  capsuleId: string,
 ): Promise<readonly PublicDeployment[]> {
   return await fetchAllPages<PublicDeployment>(
-    `${BASE}/capsules/${encodeURIComponent(installationId)}/state-versions`,
+    `${BASE}/capsules/${encodeURIComponent(capsuleId)}/state-versions`,
     (body) => (body.deployments as readonly PublicDeployment[]) ?? [],
   );
 }
 
 /**
  * Reads one Deployment ledger record by id (`GET
- * /api/v1/state-versions/:id`). Space-permission gated server-side; the
+ * /api/v1/state-versions/:id`). Workspace-permission gated server-side; the
  * returned record is the public projection (outputsPublic only, no
- * outputSnapshotId, no sensitive values).
+ * outputId, no sensitive values).
  */
 export async function getDeployment(
   deploymentId: string,
@@ -1696,7 +1733,7 @@ export async function getDeployment(
 /**
  * Creates a rollback PLAN run for a Deployment ("この状態に戻す" —
  * `POST /api/v1/state-versions/:id/rollback-plan`): re-plans the Deployment's
- * Installation pinned to that Deployment's source snapshot. The plan then flows
+ * Capsule pinned to that Deployment's source snapshot. The plan then flows
  * through the normal approve -> apply path, so the response is the public Run
  * envelope (`{ run: { id, ... } }`) and the caller navigates to the Run
  * screen (extract the id with {@link extractRunId}).
@@ -1712,11 +1749,11 @@ export async function createDeploymentRollbackPlan(
 
 // --- RunGroups -------------------------------------------------------------
 
-export async function createSpacePlanUpdate(
-  spaceId: string,
+export async function createWorkspacePlanUpdate(
+  workspaceId: string,
 ): Promise<RunGroupWithRuns> {
   return await controlFetch<RunGroupWithRuns>(
-    `${BASE}/workspaces/${encodeURIComponent(spaceId)}/plan-update`,
+    `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/plan-update`,
     { method: "POST" },
   );
 }
@@ -1737,32 +1774,32 @@ export async function approveRunGroup(id: string): Promise<RunGroupWithRuns> {
 // --- Connections -----------------------------------------------------------
 
 export async function listConnections(
-  spaceId: string,
+  workspaceId: string,
 ): Promise<readonly Connection[]> {
   return await fetchAllPages<Connection>(
-    `${BASE}/connections${query({ workspaceId: spaceId })}`,
+    `${BASE}/connections${query({ workspaceId: workspaceId })}`,
     (body) => (body.connections as readonly Connection[]) ?? [],
   );
 }
 
 export async function listProviderConnections(
-  spaceId: string,
+  workspaceId: string,
 ): Promise<readonly ProviderConnection[]> {
   const body = await controlFetch<{
     providerConnections?: readonly ProviderConnection[];
-  }>(`${BASE}/provider-connections${query({ workspaceId: spaceId })}`);
+  }>(`${BASE}/provider-connections${query({ workspaceId: workspaceId })}`);
   return body.providerConnections ?? [];
 }
 
 /**
- * Registers a Space-owned provider-credential Connection. `values` are
+ * Registers a Workspace-owned provider-credential Connection. `values` are
  * write-only credential material (e.g. `{ CLOUDFLARE_API_TOKEN }`) and must be
  * cleared from caller memory immediately after this resolves; the returned
  * {@link Connection} projection carries no secret values. The backend forces
- * `scope: "space"`, so this creates only a Space-owned ProviderConnection.
+ * `scope: "space"`, so this creates only a Workspace-owned ProviderConnection.
  */
 export async function createConnection(input: {
-  readonly spaceId: string;
+  readonly workspaceId: string;
   readonly provider: string;
   readonly kind?: string;
   readonly displayName?: string;
@@ -1774,7 +1811,9 @@ export async function createConnection(input: {
     {
       method: "POST",
       body: {
-        spaceId: input.spaceId,
+        workspaceId: input.workspaceId,
+        // Legacy backend reads `spaceId`; send both until converged.
+        spaceId: input.workspaceId,
         provider: input.provider,
         ...(input.kind ? { kind: input.kind } : {}),
         ...(input.displayName ? { displayName: input.displayName } : {}),
@@ -1787,7 +1826,7 @@ export async function createConnection(input: {
 }
 
 export async function createSourceHttpsTokenConnection(input: {
-  readonly spaceId: string;
+  readonly workspaceId: string;
   readonly displayName?: string;
   readonly repoUrl?: string;
   readonly username?: string;
@@ -1802,7 +1841,9 @@ export async function createSourceHttpsTokenConnection(input: {
     {
       method: "POST",
       body: {
-        spaceId: input.spaceId,
+        workspaceId: input.workspaceId,
+        // Legacy backend reads `spaceId`; send both until converged.
+        spaceId: input.workspaceId,
         provider: "source_git_https_token",
         kind: "source_git_https_token",
         ...(input.displayName ? { displayName: input.displayName } : {}),
@@ -1815,7 +1856,7 @@ export async function createSourceHttpsTokenConnection(input: {
 }
 
 /**
- * Re-verifies a Space-owned Connection's stored credential
+ * Re-verifies a Workspace-owned Connection's stored credential
  * (`POST /api/v1/connections/:id/test`). Returns the backend's verification
  * projection (status etc.); secret values never round-trip.
  */
@@ -1827,7 +1868,7 @@ export async function testConnection(connectionId: string): Promise<unknown> {
 }
 
 /**
- * Revokes a Space-owned Connection (`POST /api/v1/connections/:id/revoke`,
+ * Revokes a Workspace-owned Connection (`POST /api/v1/connections/:id/revoke`,
  * 204). The sealed credential blob is deleted server-side.
  */
 export async function revokeConnection(connectionId: string): Promise<void> {
@@ -1852,7 +1893,7 @@ export interface CloudflareOAuthStart {
  * deep-link path (so no dead OAuth button is ever shown).
  */
 export async function startCloudflareOAuth(input: {
-  readonly spaceId: string;
+  readonly workspaceId: string;
   readonly displayName?: string;
 }): Promise<CloudflareOAuthStart> {
   return await controlFetch<CloudflareOAuthStart>(
@@ -1860,7 +1901,9 @@ export async function startCloudflareOAuth(input: {
     {
       method: "POST",
       body: {
-        spaceId: input.spaceId,
+        workspaceId: input.workspaceId,
+        // Legacy backend reads `spaceId`; send both until converged.
+        spaceId: input.workspaceId,
         ...(input.displayName ? { displayName: input.displayName } : {}),
       },
     },
@@ -1889,18 +1932,18 @@ export async function listProviderCatalogEntries(): Promise<
 // --- OutputShares ----------------------------------------------------------
 
 export async function listOutputShares(
-  spaceId: string,
+  workspaceId: string,
 ): Promise<readonly OutputShare[]> {
   return await fetchAllPages<OutputShare>(
-    `${BASE}/output-shares${query({ workspaceId: spaceId })}`,
+    `${BASE}/output-shares${query({ workspaceId: workspaceId })}`,
     (body) => (body.shares as readonly OutputShare[]) ?? [],
   );
 }
 
 export async function createOutputShare(input: {
-  readonly fromSpaceId: string;
-  readonly toSpaceId: string;
-  readonly producerInstallationId: string;
+  readonly fromWorkspaceId: string;
+  readonly toWorkspaceId: string;
+  readonly producerCapsuleId: string;
   readonly outputs: readonly {
     readonly name: string;
     readonly alias?: string;
@@ -1915,7 +1958,14 @@ export async function createOutputShare(input: {
     `${BASE}/output-shares`,
     {
       method: "POST",
-      body: input,
+      // Legacy backend reads `fromSpaceId / toSpaceId / producerInstallationId`;
+      // send both until converged.
+      body: {
+        ...input,
+        fromSpaceId: input.fromWorkspaceId,
+        toSpaceId: input.toWorkspaceId,
+        producerInstallationId: input.producerCapsuleId,
+      },
     },
   );
   return body.share;

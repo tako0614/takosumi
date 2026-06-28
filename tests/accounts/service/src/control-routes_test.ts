@@ -6,8 +6,8 @@ import {
   isControlRoutePath,
 } from "../../../../accounts/service/src/control-routes.ts";
 import {
-  maybeEnsurePersonalSpaceForSession,
-  personalSpaceHandle,
+  maybeEnsurePersonalWorkspaceForSession,
+  personalWorkspaceHandle,
 } from "../../../../accounts/service/src/control-personal-space.ts";
 import { ACCOUNT_SESSION_COOKIE_NAME } from "../../../../accounts/service/src/account-session.ts";
 import { InMemoryAccountsStore } from "../../../../accounts/service/src/store.ts";
@@ -70,9 +70,9 @@ function seedPersonalAccessToken(
   });
 }
 
-function seedLedgerSpace(
+function seedLedgerWorkspace(
   store: InMemoryAccountsStore,
-  input: { subject: string; accountId: string; spaceId: string },
+  input: { subject: string; accountId: string; workspaceId: string },
 ): void {
   const now = Date.now();
   store.saveLedgerAccount({
@@ -81,8 +81,8 @@ function seedLedgerSpace(
     createdAt: now,
     updatedAt: now,
   });
-  store.saveSpace({
-    spaceId: input.spaceId,
+  store.saveWorkspace({
+    workspaceId: input.workspaceId,
     accountId: input.accountId,
     kind: "personal",
     createdAt: now,
@@ -113,16 +113,16 @@ function fakeOperations(
     createdAt: "2026-01-01T00:00:00Z",
     updatedAt: "2026-01-01T00:00:00Z",
   });
-  const installation = (id: string, spaceId: string) => ({
+  const installation = (id: string, workspaceId: string) => ({
     id,
-    spaceId,
+    workspaceId,
     name: "app",
     slug: "app",
     sourceId: "src_x",
     installType: "opentofu_module" as const,
     installConfigId: "cfg_x",
     environment: "prod",
-    currentOutputSnapshotId: "osnap_secret_1",
+    currentOutputId: "osnap_secret_1",
     currentStateGeneration: 0,
     status: "ready" as const,
     createdAt: "2026-01-01T00:00:00Z",
@@ -130,29 +130,29 @@ function fakeOperations(
   });
   const base: ControlPlaneOperations = {
     spaces: {
-      listSpaces: async () => {
-        record("listSpaces");
+      listWorkspaces: async () => {
+        record("listWorkspaces");
         return [space("space_a")];
       },
-      listSpacesByOwner: async (ownerUserId) => {
-        record("listSpacesByOwner", ownerUserId);
-        // The fixture Space is owned by `tsub_ctrl`; other subjects own none
-        // directly (they reach Spaces only via the ledger legal-owner branch).
+      listWorkspacesByOwner: async (ownerUserId) => {
+        record("listWorkspacesByOwner", ownerUserId);
+        // The fixture Workspace is owned by `tsub_ctrl`; other subjects own none
+        // directly (they reach Workspaces only via the ledger legal-owner branch).
         return ownerUserId === "tsub_ctrl" ? [space("space_a")] : [];
       },
-      getSpace: async (id) => {
-        record("getSpace", id);
+      getWorkspace: async (id) => {
+        record("getWorkspace", id);
         return space(id);
       },
-      createSpace: async (req) => {
-        record("createSpace", req);
+      createWorkspace: async (req) => {
+        record("createWorkspace", req);
         return { ...space("space_new"), handle: req.handle, type: req.type };
       },
-      updateSpace: async (id, patch) => {
-        record("updateSpace", id, patch);
-        const baseSpace = space(id);
+      updateWorkspace: async (id, patch) => {
+        record("updateWorkspace", id, patch);
+        const baseWorkspace = space(id);
         return {
-          ...baseSpace,
+          ...baseWorkspace,
           ...(patch.displayName ? { displayName: patch.displayName } : {}),
           ...(patch.policy ? { policy: patch.policy } : {}),
           ...(patch.archived === true
@@ -163,21 +163,21 @@ function fakeOperations(
       },
     },
     installations: {
-      getInstallation: async (id) => {
-        record("getInstallation", id);
+      getCapsule: async (id) => {
+        record("getCapsule", id);
         return installation(id, "space_a");
       },
-      listInstallations: async (spaceId) => {
-        record("listInstallations", spaceId);
-        return [installation("inst_1", spaceId)];
+      listCapsules: async (workspaceId) => {
+        record("listCapsules", workspaceId);
+        return [installation("inst_1", workspaceId)];
       },
-      listInstallationsPage: async (spaceId, params) => {
-        record("listInstallationsPage", spaceId, params);
-        return { items: [installation("inst_1", spaceId)] };
+      listCapsulesPage: async (workspaceId, params) => {
+        record("listCapsulesPage", workspaceId, params);
+        return { items: [installation("inst_1", workspaceId)] };
       },
-      createInstallation: async (req) => {
-        record("createInstallation", req);
-        return installation("inst_new", req.spaceId);
+      createCapsule: async (req) => {
+        record("createCapsule", req);
+        return installation("inst_new", req.workspaceId);
       },
       putInstallConfig: async (config) => {
         record("putInstallConfig", config);
@@ -198,31 +198,31 @@ function fakeOperations(
           updatedAt: "2026-01-01T00:00:00Z",
         };
       },
-      listInstallConfigs: async (spaceId) => {
-        record("listInstallConfigs", spaceId);
+      listInstallConfigs: async (workspaceId) => {
+        record("listInstallConfigs", workspaceId);
         return [];
       },
-      patchInstallationStatus: async (id, status) => {
-        record("patchInstallationStatus", id, status);
+      patchCapsuleStatus: async (id, status) => {
+        record("patchCapsuleStatus", id, status);
         return { ...installation(id, "space_a"), status };
       },
-      putInstallationProviderEnvBindingSet: async (profile) => {
-        record("putInstallationProviderEnvBindingSet", profile);
+      putCapsuleProviderEnvBindingSet: async (profile) => {
+        record("putCapsuleProviderEnvBindingSet", profile);
         return profile;
       },
-      getInstallationProviderEnvBindingSetByInstallation: async (
-        installationId,
+      getCapsuleProviderEnvBindingSetByCapsule: async (
+        capsuleId,
         environment,
       ) => {
         record(
-          "getInstallationProviderEnvBindingSetByInstallation",
-          installationId,
+          "getCapsuleProviderEnvBindingSetByCapsule",
+          capsuleId,
           environment,
         );
         return {
           id: "dpf_1",
-          spaceId: "space_a",
-          installationId,
+          workspaceId: "space_a",
+          capsuleId,
           environment,
           bindings: [
             {
@@ -241,9 +241,9 @@ function fakeOperations(
         record("createDependency", req);
         return {
           id: "dep_1",
-          spaceId: req.spaceId,
-          producerInstallationId: req.producerInstallationId,
-          consumerInstallationId: req.consumerInstallationId,
+          workspaceId: req.workspaceId,
+          producerCapsuleId: req.producerCapsuleId,
+          consumerCapsuleId: req.consumerCapsuleId,
           mode: req.mode,
           outputs: req.outputs,
           visibility: req.visibility,
@@ -254,24 +254,24 @@ function fakeOperations(
         record("getDependency", id);
         return {
           id,
-          spaceId: "space_a",
-          producerInstallationId: "inst_1",
-          consumerInstallationId: "inst_2",
+          workspaceId: "space_a",
+          producerCapsuleId: "inst_1",
+          consumerCapsuleId: "inst_2",
           mode: "variable_injection",
           outputs: {},
           visibility: "space",
           createdAt: "2026-01-01T00:00:00Z",
         };
       },
-      listForInstallation: async (installationId) => {
-        record("listForInstallation", installationId);
+      listForCapsule: async (capsuleId) => {
+        record("listForCapsule", capsuleId);
         return {
           asProducer: [
             {
               id: "dep_downstream",
-              spaceId: "space_a",
-              producerInstallationId: installationId,
-              consumerInstallationId: "inst_consumer",
+              workspaceId: "space_a",
+              producerCapsuleId: capsuleId,
+              consumerCapsuleId: "inst_consumer",
               mode: "variable_injection",
               outputs: {},
               visibility: "space",
@@ -286,14 +286,14 @@ function fakeOperations(
         return true;
       },
     },
-    listDependenciesBySpace: async (spaceId) => {
-      record("listDependenciesBySpace", spaceId);
+    listDependenciesByWorkspace: async (workspaceId) => {
+      record("listDependenciesByWorkspace", workspaceId);
       return [
         {
           id: "dep_1",
-          spaceId,
-          producerInstallationId: "inst_1",
-          consumerInstallationId: "inst_2",
+          workspaceId,
+          producerCapsuleId: "inst_1",
+          consumerCapsuleId: "inst_2",
           mode: "variable_injection",
           outputs: { db_url: { from: "url", to: "db_url", required: true } },
           visibility: "space",
@@ -302,24 +302,24 @@ function fakeOperations(
       ];
     },
     runGroups: {
-      createSpaceUpdate: async (spaceId) => {
-        record("createSpaceUpdate", spaceId);
-        return { runGroup: { id: "rg_1", spaceId }, runs: [] };
+      createWorkspaceUpdate: async (workspaceId) => {
+        record("createWorkspaceUpdate", workspaceId);
+        return { runGroup: { id: "rg_1", workspaceId }, runs: [] };
       },
-      createSpaceDriftCheck: async (spaceId, options) => {
-        record("createSpaceDriftCheck", spaceId, options);
+      createWorkspaceDriftCheck: async (workspaceId, options) => {
+        record("createWorkspaceDriftCheck", workspaceId, options);
         return {
-          runGroup: { id: "rg_drift", spaceId, type: "space_drift_check" },
+          runGroup: { id: "rg_drift", workspaceId, type: "space_drift_check" },
           runs: [],
         };
       },
       getRunGroup: async (id) => {
         record("getRunGroup", id);
-        return { runGroup: { id, spaceId: "space_a" }, runs: [] };
+        return { runGroup: { id, workspaceId: "space_a" }, runs: [] };
       },
       approveRunGroup: async (id) => {
         record("approveRunGroup", id);
-        return { runGroup: { id, spaceId: "space_a" }, runs: [] };
+        return { runGroup: { id, workspaceId: "space_a" }, runs: [] };
       },
     },
     activity: {
@@ -331,8 +331,8 @@ function fakeOperations(
           createdAt: "2026-01-01T00:00:00Z",
         };
       },
-      list: async (spaceId, limit) => {
-        record("activityList", spaceId, limit);
+      list: async (workspaceId, limit) => {
+        record("activityList", workspaceId, limit);
         return [];
       },
     },
@@ -341,22 +341,22 @@ function fakeOperations(
         record("createBackup", input);
         return {
           id: "bkp_1",
-          spaceId: input.spaceId,
-          objectKey: `spaces/${input.spaceId}/backups/bkp_1/control.json.zst.enc`,
+          workspaceId: input.workspaceId,
+          objectKey: `spaces/${input.workspaceId}/backups/bkp_1/control.json.zst.enc`,
           digest:
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           sizeBytes: 128,
           createdAt: "2026-01-01T00:00:00Z",
         };
       },
-      listBackups: async (spaceId) => {
-        record("listBackups", spaceId);
+      listBackups: async (workspaceId) => {
+        record("listBackups", workspaceId);
         return {
           backups: [
             {
               id: "bkp_1",
-              spaceId,
-              objectKey: `spaces/${spaceId}/backups/bkp_1/control.json.zst.enc`,
+              workspaceId,
+              objectKey: `spaces/${workspaceId}/backups/bkp_1/control.json.zst.enc`,
               digest:
                 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
               sizeBytes: 128,
@@ -366,11 +366,11 @@ function fakeOperations(
         };
       },
     },
-    createRestoreRun: async (spaceId, backupId, request, context) => {
-      record("createRestoreRun", spaceId, backupId, request, context);
+    createRestoreRun: async (workspaceId, backupId, request, context) => {
+      record("createRestoreRun", workspaceId, backupId, request, context);
       return {
         id: "restore_1",
-        spaceId,
+        workspaceId,
         type: "restore",
         status: "waiting_approval",
         backupId,
@@ -388,13 +388,13 @@ function fakeOperations(
       return {
         id: "snap_upload",
         origin: "upload",
-        spaceId: input.spaceId,
-        url: `https://uploads.takosumi.com/${input.spaceId}`,
+        workspaceId: input.workspaceId,
+        url: `https://uploads.takosumi.com/${input.workspaceId}`,
         ref: "upload",
         resolvedCommit:
           "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         path: input.path ?? ".",
-        archiveObjectKey: `spaces/${input.spaceId}/uploads/snap_upload/source.tar.zst`,
+        archiveObjectKey: `spaces/${input.workspaceId}/uploads/snap_upload/source.tar.zst`,
         archiveDigest:
           "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         archiveSizeBytes: input.bytes.byteLength,
@@ -407,13 +407,13 @@ function fakeOperations(
       return {
         id: "snap_artifact",
         origin: "artifact",
-        spaceId: input.spaceId,
+        workspaceId: input.workspaceId,
         url: input.url,
         ref: "artifact",
         resolvedCommit:
           "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         path: input.path ?? ".",
-        archiveObjectKey: `spaces/${input.spaceId}/artifact-snapshots/snap_artifact/source.tar.zst`,
+        archiveObjectKey: `spaces/${input.workspaceId}/artifact-snapshots/snap_artifact/source.tar.zst`,
         archiveDigest: input.digest,
         archiveSizeBytes: 128,
         fetchedByRunId: "artifact",
@@ -425,7 +425,7 @@ function fakeOperations(
       return {
         id,
         origin: "upload",
-        spaceId: "space_a",
+        workspaceId: "space_a",
         url: "upload://space_a",
         ref: "upload",
         resolvedCommit:
@@ -444,7 +444,7 @@ function fakeOperations(
       return {
         installation: {
           id: "inst_upload",
-          spaceId: req.spaceId,
+          workspaceId: req.workspaceId,
           name: req.name,
           slug: req.name,
           installConfigId: "cfg_upload",
@@ -457,8 +457,8 @@ function fakeOperations(
         installConfigId: "cfg_upload",
         run: {
           id: "plan_upload",
-          spaceId: req.spaceId,
-          installationId: "inst_upload",
+          workspaceId: req.workspaceId,
+          capsuleId: "inst_upload",
           type: "plan",
           status: "succeeded",
           sourceSnapshotId: req.snapshotId,
@@ -470,13 +470,13 @@ function fakeOperations(
         created: true,
       };
     },
-    getSpaceBilling: async (spaceId) => {
-      record("getSpaceBilling", spaceId);
+    getWorkspaceBilling: async (workspaceId) => {
+      record("getWorkspaceBilling", workspaceId);
       return {
         billing: {
           settings: { mode: "showback", provider: "manual" },
           balance: {
-            spaceId,
+            workspaceId,
             availableCredits: 120,
             reservedCredits: 8,
             monthlyIncludedCredits: 100,
@@ -486,13 +486,13 @@ function fakeOperations(
         },
       };
     },
-    listSpaceUsage: async (spaceId) => {
-      record("listSpaceUsage", spaceId);
+    listWorkspaceUsage: async (workspaceId) => {
+      record("listWorkspaceUsage", workspaceId);
       return {
         usageEvents: [
           {
             id: "use_1",
-            spaceId,
+            workspaceId,
             kind: "runner_minute",
             quantity: 2,
             credits: 3,
@@ -503,13 +503,13 @@ function fakeOperations(
         ],
       };
     },
-    listSpaceCreditReservations: async (spaceId) => {
-      record("listSpaceCreditReservations", spaceId);
+    listWorkspaceCreditReservations: async (workspaceId) => {
+      record("listWorkspaceCreditReservations", workspaceId);
       return {
         creditReservations: [
           {
             id: "cres_1",
-            spaceId,
+            workspaceId,
             runId: "plan_1",
             estimatedCredits: 28,
             status: "reserved",
@@ -520,11 +520,11 @@ function fakeOperations(
         ],
       };
     },
-    topUpSpaceCredits: async (spaceId, input) => {
-      record("topUpSpaceCredits", spaceId, input);
+    topUpWorkspaceCredits: async (workspaceId, input) => {
+      record("topUpWorkspaceCredits", workspaceId, input);
       return {
         balance: {
-          spaceId,
+          workspaceId,
           availableCredits: input.credits,
           reservedCredits: 0,
           monthlyIncludedCredits: 0,
@@ -533,8 +533,8 @@ function fakeOperations(
         },
       };
     },
-    changeSpaceSubscription: async (spaceId, input) => {
-      record("changeSpaceSubscription", spaceId, input);
+    changeWorkspaceSubscription: async (workspaceId, input) => {
+      record("changeWorkspaceSubscription", workspaceId, input);
       return { billing: { settings: input.billingSettings } };
     },
     connections: {
@@ -548,9 +548,9 @@ function fakeOperations(
         record("createOutputShare", req);
         return {
           id: "oshare_1",
-          fromSpaceId: req.fromSpaceId,
-          toSpaceId: req.toSpaceId,
-          producerInstallationId: req.producerInstallationId,
+          fromWorkspaceId: req.fromWorkspaceId,
+          toWorkspaceId: req.toWorkspaceId,
+          producerCapsuleId: req.producerCapsuleId,
           outputs: req.outputs.map((output) => ({
             name: output.name,
             ...(output.alias ? { alias: output.alias } : {}),
@@ -560,29 +560,29 @@ function fakeOperations(
           createdAt: "2026-01-01T00:00:00Z",
         };
       },
-      listForSpace: async (spaceId) => {
-        record("listOutputShares", spaceId);
+      listForWorkspace: async (workspaceId) => {
+        record("listOutputShares", workspaceId);
         return [
           {
             id: "oshare_1",
-            fromSpaceId: spaceId,
-            toSpaceId: "space_b",
-            producerInstallationId: "inst_1",
+            fromWorkspaceId: workspaceId,
+            toWorkspaceId: "space_b",
+            producerCapsuleId: "inst_1",
             outputs: [{ name: "domain", sensitive: false }],
             status: "active",
             createdAt: "2026-01-01T00:00:00Z",
           },
         ];
       },
-      listForSpacePage: async (spaceId) => {
-        record("listOutputShares", spaceId);
+      listForWorkspacePage: async (workspaceId) => {
+        record("listOutputShares", workspaceId);
         return {
           items: [
             {
               id: "oshare_1",
-              fromSpaceId: spaceId,
-              toSpaceId: "space_b",
-              producerInstallationId: "inst_1",
+              fromWorkspaceId: workspaceId,
+              toWorkspaceId: "space_b",
+              producerCapsuleId: "inst_1",
               outputs: [{ name: "domain", sensitive: false }],
               status: "active",
               createdAt: "2026-01-01T00:00:00Z",
@@ -594,9 +594,9 @@ function fakeOperations(
         record("getOutputShare", id);
         return {
           id,
-          fromSpaceId: "space_a",
-          toSpaceId: "space_b",
-          producerInstallationId: "inst_1",
+          fromWorkspaceId: "space_a",
+          toWorkspaceId: "space_b",
+          producerCapsuleId: "inst_1",
           outputs: [{ name: "domain", sensitive: false }],
           status: "active",
           createdAt: "2026-01-01T00:00:00Z",
@@ -606,9 +606,9 @@ function fakeOperations(
         record("approveOutputShare", id);
         return {
           id,
-          fromSpaceId: "space_a",
-          toSpaceId: "space_b",
-          producerInstallationId: "inst_1",
+          fromWorkspaceId: "space_a",
+          toWorkspaceId: "space_b",
+          producerCapsuleId: "inst_1",
           outputs: [{ name: "domain", sensitive: false }],
           status: "active",
           createdAt: "2026-01-01T00:00:00Z",
@@ -618,9 +618,9 @@ function fakeOperations(
         record("revokeOutputShare", id);
         return {
           id,
-          fromSpaceId: "space_a",
-          toSpaceId: "space_b",
-          producerInstallationId: "inst_1",
+          fromWorkspaceId: "space_a",
+          toWorkspaceId: "space_b",
+          producerCapsuleId: "inst_1",
           outputs: [{ name: "domain", sensitive: false }],
           status: "revoked",
           createdAt: "2026-01-01T00:00:00Z",
@@ -628,8 +628,8 @@ function fakeOperations(
         };
       },
     },
-    listConnections: async (spaceId) => {
-      record("listConnections", spaceId);
+    listConnections: async (workspaceId) => {
+      record("listConnections", workspaceId);
       return { connections: [] };
     },
     listOperatorConnections: async () => {
@@ -640,7 +640,7 @@ function fakeOperations(
       record("getConnection", connectionId);
       return {
         id: connectionId,
-        spaceId: "space_a",
+        workspaceId: "space_a",
         provider: "cloudflare",
         kind: "cloudflare_api_token",
         authMethod: "static_secret",
@@ -657,7 +657,7 @@ function fakeOperations(
       return {
         connection: {
           id: "conn_new",
-          spaceId: request.spaceId ?? "space_a",
+          workspaceId: request.workspaceId ?? "space_a",
           provider: request.provider,
           kind: request.kind ?? "generic_env_provider",
           authMethod: request.authMethod,
@@ -680,42 +680,42 @@ function fakeOperations(
     revokeConnection: async (connectionId) => {
       record("revokeConnection", connectionId);
     },
-    createInstallationPlan: async (installationId, options) => {
-      record("createInstallationPlan", { installationId, options });
+    createCapsulePlan: async (capsuleId, options) => {
+      record("createCapsulePlan", { capsuleId, options });
       return { planRun: { id: "plan_1" } } as unknown as Awaited<
-        ReturnType<ControlPlaneOperations["createInstallationPlan"]>
+        ReturnType<ControlPlaneOperations["createCapsulePlan"]>
       >;
     },
-    createInstallationDestroyPlan: async (installationId, options) => {
-      record("createInstallationDestroyPlan", { installationId, options });
+    createCapsuleDestroyPlan: async (capsuleId, options) => {
+      record("createCapsuleDestroyPlan", { capsuleId, options });
       return { planRun: { id: "plan_destroy" } } as unknown as Awaited<
-        ReturnType<ControlPlaneOperations["createInstallationDestroyPlan"]>
+        ReturnType<ControlPlaneOperations["createCapsuleDestroyPlan"]>
       >;
     },
-    createInstallationDriftCheck: async (installationId) => {
-      record("createInstallationDriftCheck", installationId);
+    createCapsuleDriftCheck: async (capsuleId) => {
+      record("createCapsuleDriftCheck", capsuleId);
       return { planRun: { id: "plan_drift" } } as unknown as Awaited<
-        ReturnType<ControlPlaneOperations["createInstallationDriftCheck"]>
+        ReturnType<ControlPlaneOperations["createCapsuleDriftCheck"]>
       >;
     },
     getRun: async (id) => {
       record("getRun", id);
       return {
         id,
-        spaceId: "space_a",
+        workspaceId: "space_a",
         type: "plan",
         status: "succeeded",
         createdBy: "test",
         createdAt: "2026-01-01T00:00:00Z",
       } as unknown as Awaited<ReturnType<ControlPlaneOperations["getRun"]>>;
     },
-    listRuns: async (spaceId, options) => {
-      record("listRuns", spaceId, options);
+    listRuns: async (workspaceId, options) => {
+      record("listRuns", workspaceId, options);
       return [
         {
           id: "apply_1",
-          spaceId,
-          installationId: "inst_1",
+          workspaceId,
+          capsuleId: "inst_1",
           type: "apply",
           status: "succeeded",
           createdBy: "test",
@@ -723,8 +723,8 @@ function fakeOperations(
         },
         {
           id: "plan_1",
-          spaceId,
-          installationId: "inst_1",
+          workspaceId,
+          capsuleId: "inst_1",
           type: "plan",
           status: "waiting_approval",
           createdBy: "test",
@@ -734,7 +734,7 @@ function fakeOperations(
     },
     approveRun: async (id, input) => {
       record("approveRun", id, input);
-      return { id, spaceId: "space_a", status: "queued" } as unknown as Awaited<
+      return { id, workspaceId: "space_a", status: "queued" } as unknown as Awaited<
         ReturnType<ControlPlaneOperations["approveRun"]>
       >;
     },
@@ -742,7 +742,7 @@ function fakeOperations(
       record("cancelRun", id);
       return {
         id,
-        spaceId: "space_a",
+        workspaceId: "space_a",
         status: "canceled",
       } as unknown as Awaited<ReturnType<ControlPlaneOperations["cancelRun"]>>;
     },
@@ -777,8 +777,8 @@ function fakeOperations(
       return {
         planRun: {
           id,
-          spaceId: "space_a",
-          installationId: "inst_upload",
+          workspaceId: "space_a",
+          capsuleId: "inst_upload",
           sourceSnapshotId: "snap_upload",
           status: "succeeded",
           operation: "create",
@@ -805,7 +805,7 @@ function fakeOperations(
         applyRun: {
           id: "apply_1",
           planRunId: req.planRunId,
-          spaceId: "space_a",
+          workspaceId: "space_a",
           status: "queued",
         },
       } as unknown as Awaited<
@@ -826,7 +826,7 @@ function fakeOperations(
       return {
         source: {
           id,
-          spaceId: "space_a",
+          workspaceId: "space_a",
           name: "repo",
           url: "https://example.test/r.git",
           defaultRef: "main",
@@ -842,7 +842,7 @@ function fakeOperations(
       return {
         source: {
           id,
-          spaceId: "space_a",
+          workspaceId: "space_a",
           name: patch.name ?? "repo",
           url: "https://example.test/r.git",
           defaultRef: patch.defaultRef ?? "main",
@@ -858,8 +858,8 @@ function fakeOperations(
         },
       };
     },
-    listSources: async (spaceId) => {
-      record("listSources", spaceId);
+    listSources: async (workspaceId) => {
+      record("listSources", workspaceId);
       return { sources: [] } as unknown as Awaited<
         ReturnType<ControlPlaneOperations["listSources"]>
       >;
@@ -875,7 +875,7 @@ function fakeOperations(
           {
             id: "snap_1",
             origin: "git",
-            spaceId: "space_a",
+            workspaceId: "space_a",
             sourceId,
             url: "https://example.test/r.git",
             ref: "main",
@@ -1003,12 +1003,12 @@ test("GET /api/v1/spaces serves the session control surface", async () => {
   const body = (await response!.json()) as { spaces: unknown[] };
   expect(body.spaces.length).toEqual(1);
   // The session list scopes the read to the caller's own spaces; it must NOT
-  // load every tenant's Space via the all-spaces `listSpaces` path.
-  expect(operations.calls.listSpacesByOwner).toBeDefined();
-  expect(operations.calls.listSpaces).toBeUndefined();
-  // GET /spaces also synchronously ensures the first-login personal Space so
+  // load every tenant's Workspace via the all-spaces `listWorkspaces` path.
+  expect(operations.calls.listWorkspacesByOwner).toBeDefined();
+  expect(operations.calls.listWorkspaces).toBeUndefined();
+  // GET /spaces also synchronously ensures the first-login personal Workspace so
   // an OAuth redirect cannot land the dashboard in an empty Workspace race.
-  const createCall = operations.calls.createSpace?.[0] as
+  const createCall = operations.calls.createWorkspace?.[0] as
     | { ownerUserId?: string; type?: string }
     | undefined;
   expect(createCall?.ownerUserId).toEqual("tsub_ctrl");
@@ -1032,10 +1032,10 @@ test("GET /api/v1/spaces accepts a personal access token bearer", async () => {
   expect(response?.status).toEqual(200);
   const body = (await response!.json()) as { spaces: unknown[] };
   expect(body.spaces.length).toEqual(1);
-  expect(operations.calls.listSpacesByOwner).toEqual(["tsub_ctrl"]);
+  expect(operations.calls.listWorkspacesByOwner).toEqual(["tsub_ctrl"]);
   // PAT callers are automation clients; they should not trigger the
-  // session-cookie first-login personal Space hook.
-  expect(operations.calls.createSpace).toBeUndefined();
+  // session-cookie first-login personal Workspace hook.
+  expect(operations.calls.createWorkspace).toBeUndefined();
   expect(typeof store.findPersonalAccessToken(token)?.lastUsedAt).toEqual(
     "number",
   );
@@ -1059,7 +1059,7 @@ test("mutation routes reject read-only personal access tokens", async () => {
   expect(response?.status).toEqual(403);
   const body = (await response!.json()) as { error: { code: string } };
   expect(body.error.code).toEqual("insufficient_scope");
-  expect(operations.calls.createSpace).toBeUndefined();
+  expect(operations.calls.createWorkspace).toBeUndefined();
 });
 
 test("GET /api/v1/workspaces aliases the final Workspace route", async () => {
@@ -1078,7 +1078,7 @@ test("GET /api/v1/workspaces aliases the final Workspace route", async () => {
   expect(response?.status).toEqual(200);
   const body = (await response!.json()) as { spaces: unknown[] };
   expect(body.spaces.length).toEqual(1);
-  expect(operations.calls.listSpacesByOwner).toBeDefined();
+  expect(operations.calls.listWorkspacesByOwner).toBeDefined();
 });
 
 test("GET /api/v1/workspaces hides archived Workspaces unless requested", async () => {
@@ -1102,7 +1102,7 @@ test("GET /api/v1/workspaces hides archived Workspaces unless requested", async 
   };
   const operations = fakeOperations({
     spaces: {
-      listSpacesByOwner: async () => [active, archived],
+      listWorkspacesByOwner: async () => [active, archived],
     },
   });
 
@@ -1157,8 +1157,8 @@ test("PATCH /api/v1/workspaces/:id archives a non-last Workspace", async () => {
   };
   const operations = fakeOperations({
     spaces: {
-      listSpacesByOwner: async () => [active, target],
-      getSpace: async (id) => (id === "space_target" ? target : active),
+      listWorkspacesByOwner: async () => [active, target],
+      getWorkspace: async (id) => (id === "space_target" ? target : active),
     },
   });
   const { request: req, url } = request(
@@ -1178,7 +1178,7 @@ test("PATCH /api/v1/workspaces/:id archives a non-last Workspace", async () => {
   };
   expect(body.space.id).toEqual("space_target");
   expect(body.space.archivedAt).toEqual("2026-01-02T00:00:00Z");
-  expect(operations.calls.updateSpace?.[1]).toEqual({ archived: true });
+  expect(operations.calls.updateWorkspace?.[1]).toEqual({ archived: true });
 });
 
 test("PATCH /api/v1/workspaces/:id rejects archiving the last active Workspace", async () => {
@@ -1196,7 +1196,7 @@ test("PATCH /api/v1/workspaces/:id rejects archiving the last active Workspace",
     operations,
   });
   expect(response?.status).toEqual(409);
-  expect(operations.calls.updateSpace).toBeUndefined();
+  expect(operations.calls.updateWorkspace).toBeUndefined();
 });
 
 test("GET /api/v1/workspaces/:id/capsules aliases the final Capsule list route", async () => {
@@ -1217,7 +1217,7 @@ test("GET /api/v1/workspaces/:id/capsules aliases the final Capsule list route",
   expect(response?.status).toEqual(200);
   const body = (await response!.json()) as { installations: unknown[] };
   expect(body.installations.length).toEqual(1);
-  expect(operations.calls.listInstallationsPage?.[0]).toEqual("space_a");
+  expect(operations.calls.listCapsulesPage?.[0]).toEqual("space_a");
 });
 
 test("GET /api/v1/workspaces/:id/runs lists the Workspace Run ledger", async () => {
@@ -1256,13 +1256,13 @@ test("anonymous /api/v1 requests are 401", async () => {
   });
   expect(response?.status).toEqual(401);
   await response?.body?.cancel();
-  expect(operations.calls.listSpaces).toBeUndefined();
+  expect(operations.calls.listWorkspaces).toBeUndefined();
 });
 
 test("GET /api/v1/spaces/:id a session cannot access is 403", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store, { subject: "tsub_outsider" });
-  // The Space is owned by a DIFFERENT subject; the outsider session is denied.
+  // The Workspace is owned by a DIFFERENT subject; the outsider session is denied.
   const operations = fakeOperations();
   const { request: req, url } = request("GET", "/api/v1/spaces/space_other", {
     cookie,
@@ -1369,11 +1369,11 @@ test("GET /api/v1/spaces returns spaces for a session", async () => {
   expect(response?.status).toEqual(200);
   const body = (await response!.json()) as { spaces: unknown[] };
   expect(body.spaces.length).toEqual(1);
-  expect(operations.calls.listSpacesByOwner).toBeDefined();
-  expect(operations.calls.listSpaces).toBeUndefined();
+  expect(operations.calls.listWorkspacesByOwner).toBeDefined();
+  expect(operations.calls.listWorkspaces).toBeUndefined();
 });
 
-test("POST /api/v1/spaces/:id/uploads records an upload snapshot for an owned Space", async () => {
+test("POST /api/v1/spaces/:id/uploads records an upload snapshot for an owned Workspace", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
@@ -1396,7 +1396,7 @@ test("POST /api/v1/spaces/:id/uploads records an upload snapshot for an owned Sp
   const body = (await response!.json()) as { snapshot: { id: string } };
   expect(body.snapshot.id).toEqual("snap_upload");
   expect(operations.calls.recordUploadArchive).toEqual([
-    { spaceId: "space_a", bytes: [1, 2, 3], path: "deploy" },
+    { workspaceId: "space_a", bytes: [1, 2, 3], path: "deploy" },
   ]);
 });
 
@@ -1433,7 +1433,7 @@ test("POST /api/v1/spaces/:id/artifact-snapshots records a prepared artifact sna
   });
   expect(operations.calls.recordArtifactSnapshot).toEqual([
     {
-      spaceId: "space_a",
+      workspaceId: "space_a",
       url: "https://artifacts.example.com/app/source.tar.zst",
       digest:
         "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
@@ -1450,7 +1450,7 @@ test("POST /api/v1/deploy deploys an uploaded snapshot through the public facade
       listProviderConnections: async () => [
         {
           id: "conn_cf",
-          spaceId: "space_a",
+          workspaceId: "space_a",
           provider: "cloudflare",
           providerSource: "registry.opentofu.org/cloudflare/cloudflare",
           kind: "cloudflare_api_token",
@@ -1468,7 +1468,7 @@ test("POST /api/v1/deploy deploys an uploaded snapshot through the public facade
   const { request: req, url } = request("POST", "/api/v1/deploy", {
     cookie,
     body: {
-      spaceId: "space_a",
+      workspaceId: "space_a",
       name: "hello",
       environment: "preview",
       snapshotId: "snap_upload",
@@ -1499,7 +1499,7 @@ test("POST /api/v1/deploy deploys an uploaded snapshot through the public facade
   expect(body.installation.id).toEqual("inst_upload");
   expect(operations.calls.deployUpload).toEqual([
     {
-      spaceId: "space_a",
+      workspaceId: "space_a",
       name: "hello",
       environment: "preview",
       snapshotId: "snap_upload",
@@ -1519,16 +1519,16 @@ test("POST /api/v1/deploy deploys an uploaded snapshot through the public facade
       autoApprove: true,
     },
   ]);
-  const projection = await store.findAppInstallation("inst_upload");
+  const projection = await store.findAppCapsule("inst_upload");
   expect(projection?.status).toEqual("installing");
-  expect(projection?.spaceId).toEqual("space_a");
+  expect(projection?.workspaceId).toEqual("space_a");
   expect(projection?.createdBySubject).toEqual("tsub_ctrl");
   expect(projection?.sourceGitUrl).toEqual("upload://space_a");
   expect(projection?.sourceRef).toEqual("upload");
   expect(projection?.sourceCommit).toEqual(
     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   );
-  const events = await store.listInstallationEvents("inst_upload");
+  const events = await store.listCapsuleEvents("inst_upload");
   expect(events.map((event) => event.eventType)).toEqual([
     "installation.created",
   ]);
@@ -1541,7 +1541,7 @@ test("POST /api/v1/deploy can create a shared-cell projection with a RuntimeBind
   const { request: req, url } = request("POST", "/api/v1/deploy", {
     cookie,
     body: {
-      spaceId: "space_a",
+      workspaceId: "space_a",
       name: "hello",
       snapshotId: "snap_upload",
       projectionMode: "shared-cell",
@@ -1552,12 +1552,12 @@ test("POST /api/v1/deploy can create a shared-cell projection with a RuntimeBind
     url,
     store,
     operations,
-    sharedCellRuntime: async ({ installationId, now }) => ({
-      runtimeBindingId: `rtb_${installationId}_shared_cell`,
-      installationId,
+    sharedCellRuntime: async ({ capsuleId, now }) => ({
+      runtimeBindingId: `rtb_${capsuleId}_shared_cell`,
+      capsuleId,
       mode: "shared-cell",
       targetType: "shared-cell",
-      targetId: `shared-cell://tokyo-cell-01/namespaces/${installationId}`,
+      targetId: `shared-cell://tokyo-cell-01/namespaces/${capsuleId}`,
       createdAt: now,
       updatedAt: now,
     }),
@@ -1566,12 +1566,12 @@ test("POST /api/v1/deploy can create a shared-cell projection with a RuntimeBind
   expect(response?.status).toEqual(200);
   expect(operations.calls.deployUpload).toEqual([
     {
-      spaceId: "space_a",
+      workspaceId: "space_a",
       name: "hello",
       snapshotId: "snap_upload",
     },
   ]);
-  const projection = await store.findAppInstallation("inst_upload");
+  const projection = await store.findAppCapsule("inst_upload");
   expect(projection?.mode).toEqual("shared-cell");
   expect(projection?.runtimeBindingId).toEqual("rtb_inst_upload_shared_cell");
   const runtimeBinding = projection?.runtimeBindingId
@@ -1589,8 +1589,8 @@ test("GET /api/v1/runs/:id syncs a succeeded apply into an export-ready projecti
     getRun: async (id) =>
       ({
         id,
-        spaceId: "space_a",
-        installationId: "inst_upload",
+        workspaceId: "space_a",
+        capsuleId: "inst_upload",
         type: "apply",
         status: "succeeded",
         planDigest: `sha256:${"d".repeat(64)}`,
@@ -1601,7 +1601,7 @@ test("GET /api/v1/runs/:id syncs a succeeded apply into an export-ready projecti
   const deploy = request("POST", "/api/v1/deploy", {
     cookie,
     body: {
-      spaceId: "space_a",
+      workspaceId: "space_a",
       name: "hello",
       snapshotId: "snap_upload",
     },
@@ -1613,7 +1613,7 @@ test("GET /api/v1/runs/:id syncs a succeeded apply into an export-ready projecti
     operations,
   });
   expect(deployResponse?.status).toEqual(200);
-  expect((await store.findAppInstallation("inst_upload"))?.status).toEqual(
+  expect((await store.findAppCapsule("inst_upload"))?.status).toEqual(
     "installing",
   );
 
@@ -1625,9 +1625,9 @@ test("GET /api/v1/runs/:id syncs a succeeded apply into an export-ready projecti
     operations,
   });
   expect(pollResponse?.status).toEqual(200);
-  const projection = await store.findAppInstallation("inst_upload");
+  const projection = await store.findAppCapsule("inst_upload");
   expect(projection?.status).toEqual("ready");
-  const events = await store.listInstallationEvents("inst_upload");
+  const events = await store.listCapsuleEvents("inst_upload");
   expect(events.map((event) => event.eventType)).toEqual([
     "installation.created",
     "installation.status_changed",
@@ -1641,7 +1641,7 @@ test("POST /api/v1/deploy rejects internal resolver bindings", async () => {
   const { request: req, url } = request("POST", "/api/v1/deploy", {
     cookie,
     body: {
-      spaceId: "space_a",
+      workspaceId: "space_a",
       name: "hello",
       snapshotId: "snap_upload",
       providerEnvBindings: [
@@ -1668,19 +1668,19 @@ test("POST /api/v1/deploy rejects internal resolver bindings", async () => {
 test("GET /api/v1/spaces unions directly-owned + legal-owner spaces, excludes foreign", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie, subject } = seedSession(store);
-  // (B) An org Space whose deploy-control owner is someone else, but whose
+  // (B) An org Workspace whose deploy-control owner is someone else, but whose
   // accounts ledger account is LEGALLY OWNED by the session subject -> visible.
-  seedLedgerSpace(store, {
+  seedLedgerWorkspace(store, {
     subject,
     accountId: "acct_org",
-    spaceId: "space_org",
+    workspaceId: "space_org",
   });
-  // A foreign Space: different ledger account, legally owned by another subject
+  // A foreign Workspace: different ledger account, legally owned by another subject
   // -> must be absent. (Also never directly owned by the session subject.)
-  seedLedgerSpace(store, {
+  seedLedgerWorkspace(store, {
     subject: "tsub_foreign",
     accountId: "acct_foreign",
-    spaceId: "space_foreign",
+    workspaceId: "space_foreign",
   });
 
   const spaceRecord = (id: string, ownerUserId: string) => ({
@@ -1692,19 +1692,19 @@ test("GET /api/v1/spaces unions directly-owned + legal-owner spaces, excludes fo
     createdAt: "2026-01-01T00:00:00Z",
     updatedAt: "2026-01-01T00:00:00Z",
   });
-  let listSpacesByOwnerCalled = false;
+  let listWorkspacesByOwnerCalled = false;
   const operations = fakeOperations({
     spaces: {
-      // (A) Direct owner: only the personal Space the subject owns directly.
-      listSpacesByOwner: async () => {
-        listSpacesByOwnerCalled = true;
+      // (A) Direct owner: only the personal Workspace the subject owns directly.
+      listWorkspacesByOwner: async () => {
+        listWorkspacesByOwnerCalled = true;
         return [spaceRecord("space_a", subject)];
       },
       // Per-id fetch is bounded to the subject's own ledger spaces; the org
-      // Space is owned (deploy-control) by another subject but is reachable via
+      // Workspace is owned (deploy-control) by another subject but is reachable via
       // the legal-owner branch. A foreign-space fetch would still be excluded
       // because the route only fetches ledger spaces owned by the subject.
-      getSpace: async (id) => {
+      getWorkspace: async (id) => {
         if (id === "space_org") return spaceRecord("space_org", "tsub_other");
         if (id === "space_foreign") {
           return spaceRecord("space_foreign", "tsub_foreign");
@@ -1727,8 +1727,8 @@ test("GET /api/v1/spaces unions directly-owned + legal-owner spaces, excludes fo
   expect(ids).toEqual(["space_a", "space_org"]);
   expect(ids).not.toContain("space_foreign");
   // The all-tenants load-all path must never run for a session list.
-  expect(operations.calls.listSpaces).toBeUndefined();
-  expect(listSpacesByOwnerCalled).toEqual(true);
+  expect(operations.calls.listWorkspaces).toBeUndefined();
+  expect(listWorkspacesByOwnerCalled).toEqual(true);
 });
 
 test("GET /api/v1/spaces/:id/billing returns billing settings and balance", async () => {
@@ -1756,7 +1756,7 @@ test("GET /api/v1/spaces/:id/billing returns billing settings and balance", asyn
   expect(body.billing.settings.mode).toEqual("showback");
   expect(body.billing.balance.availableCredits).toEqual(120);
   expect(body.billing.balance.reservedCredits).toEqual(8);
-  expect(operations.calls.getSpaceBilling).toEqual(["space_a"]);
+  expect(operations.calls.getWorkspaceBilling).toEqual(["space_a"]);
 });
 
 test("GET /api/v1/spaces/:id/usage returns usage events", async () => {
@@ -1775,7 +1775,7 @@ test("GET /api/v1/spaces/:id/usage returns usage events", async () => {
   expect(response?.status).toEqual(200);
   const body = (await response!.json()) as { usageEvents: unknown[] };
   expect(body.usageEvents.length).toEqual(1);
-  expect(operations.calls.listSpaceUsage).toEqual(["space_a"]);
+  expect(operations.calls.listWorkspaceUsage).toEqual(["space_a"]);
 });
 
 test("GET /api/v1/spaces/:id/credit-reservations returns reservation history", async () => {
@@ -1796,10 +1796,10 @@ test("GET /api/v1/spaces/:id/credit-reservations returns reservation history", a
   expect(response?.status).toEqual(200);
   const body = (await response!.json()) as { creditReservations: unknown[] };
   expect(body.creditReservations.length).toEqual(1);
-  expect(operations.calls.listSpaceCreditReservations).toEqual(["space_a"]);
+  expect(operations.calls.listWorkspaceCreditReservations).toEqual(["space_a"]);
 });
 
-test("GET /api/v1/spaces/:id/backups lists Space backups", async () => {
+test("GET /api/v1/spaces/:id/backups lists Workspace backups", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
@@ -1820,7 +1820,7 @@ test("GET /api/v1/spaces/:id/backups lists Space backups", async () => {
   expect(operations.calls.listBackups).toEqual(["space_a"]);
 });
 
-test("POST /api/v1/spaces/:id/backups creates a Space backup", async () => {
+test("POST /api/v1/spaces/:id/backups creates a Workspace backup", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
@@ -1836,9 +1836,9 @@ test("POST /api/v1/spaces/:id/backups creates a Space backup", async () => {
     operations,
   });
   expect(response?.status).toEqual(201);
-  const body = (await response!.json()) as { backup: { spaceId: string } };
-  expect(body.backup.spaceId).toEqual("space_a");
-  expect(operations.calls.createBackup).toEqual([{ spaceId: "space_a" }]);
+  const body = (await response!.json()) as { backup: { workspaceId: string } };
+  expect(body.backup.workspaceId).toEqual("space_a");
+  expect(operations.calls.createBackup).toEqual([{ workspaceId: "space_a" }]);
 });
 
 test("POST /api/v1/spaces/:id/backups/:backupId/restores creates a restore Run", async () => {
@@ -1851,7 +1851,7 @@ test("POST /api/v1/spaces/:id/backups/:backupId/restores creates a restore Run",
     {
       cookie,
       body: {
-        installationId: "inst_1",
+        capsuleId: "inst_1",
         environment: "prod",
         stateGeneration: 0,
         expectedBackupDigest: `sha256:${"a".repeat(64)}`,
@@ -1869,7 +1869,7 @@ test("POST /api/v1/spaces/:id/backups/:backupId/restores creates a restore Run",
     "space_a",
     "bkp_1",
     {
-      installationId: "inst_1",
+      capsuleId: "inst_1",
       environment: "prod",
       stateGeneration: 0,
       expectedBackupDigest: `sha256:${"a".repeat(64)}`,
@@ -1903,8 +1903,8 @@ test("session surface refuses billing mutations (operator-only, spec §32)", asy
     expect(response?.status, path).toEqual(404);
     await response?.body?.cancel();
   }
-  expect(operations.calls.topUpSpaceCredits).toBeUndefined();
-  expect(operations.calls.changeSpaceSubscription).toBeUndefined();
+  expect(operations.calls.topUpWorkspaceCredits).toBeUndefined();
+  expect(operations.calls.changeWorkspaceSubscription).toBeUndefined();
 });
 
 test("GET /api/v1/spaces filters out spaces the session cannot access", async () => {
@@ -1928,9 +1928,9 @@ test("GET /api/v1/spaces filters out spaces the session cannot access", async ()
   };
   const operations = fakeOperations({
     spaces: {
-      listSpaces: async () => [visible, hidden],
-      getSpace: async (id) => (id === "space_b" ? hidden : visible),
-      createSpace: async (req) => ({
+      listWorkspaces: async () => [visible, hidden],
+      getWorkspace: async (id) => (id === "space_b" ? hidden : visible),
+      createWorkspace: async (req) => ({
         ...visible,
         id: "space_new",
         handle: req.handle,
@@ -1954,7 +1954,7 @@ test("GET /api/v1/spaces filters out spaces the session cannot access", async ()
   expect(body.spaces.map((space) => space.id)).toEqual(["space_a"]);
 });
 
-test("PATCH /api/v1/spaces/:id updates display name and policy after Space access", async () => {
+test("PATCH /api/v1/spaces/:id updates display name and policy after Workspace access", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
@@ -1978,7 +1978,7 @@ test("PATCH /api/v1/spaces/:id updates display name and policy after Space acces
   expect(response?.status).toEqual(200);
   const body = (await response!.json()) as { space: { displayName: string } };
   expect(body.space.displayName).toEqual("Shota Lab");
-  expect(operations.calls.updateSpace).toEqual([
+  expect(operations.calls.updateWorkspace).toEqual([
     "space_a",
     {
       displayName: "Shota Lab",
@@ -1986,6 +1986,7 @@ test("PATCH /api/v1/spaces/:id updates display name and policy after Space acces
     },
   ]);
   expect(operations.calls.activityRecord?.[0]).toEqual({
+    workspaceId: "space_a",
     spaceId: "space_a",
     actorId: "tsub_ctrl",
     action: "space.updated",
@@ -2013,7 +2014,7 @@ test("PATCH /api/v1/spaces/:id rejects policy that is not a JSON object", async 
     operations,
   });
   expect(response?.status).toEqual(400);
-  expect(operations.calls.updateSpace).toBeUndefined();
+  expect(operations.calls.updateWorkspace).toBeUndefined();
 });
 
 test("space-scoped control route rejects a non-member session before dispatch", async () => {
@@ -2021,8 +2022,8 @@ test("space-scoped control route rejects a non-member session before dispatch", 
   const { cookie } = seedSession(store);
   const operations = fakeOperations({
     spaces: {
-      listSpaces: async () => [],
-      getSpace: async (id) => ({
+      listWorkspaces: async () => [],
+      getWorkspace: async (id) => ({
         id,
         handle: "other",
         displayName: "Other",
@@ -2031,7 +2032,7 @@ test("space-scoped control route rejects a non-member session before dispatch", 
         createdAt: "2026-01-01T00:00:00Z",
         updatedAt: "2026-01-01T00:00:00Z",
       }),
-      createSpace: async (req) => ({
+      createWorkspace: async (req) => ({
         id: "space_new",
         handle: req.handle,
         displayName: req.displayName,
@@ -2054,8 +2055,8 @@ test("space-scoped control route rejects a non-member session before dispatch", 
     operations,
   });
   expect(response?.status).toEqual(403);
-  expect(operations.calls.listInstallations).toBeUndefined();
-  expect(operations.calls.listInstallationsPage).toBeUndefined();
+  expect(operations.calls.listCapsules).toBeUndefined();
+  expect(operations.calls.listCapsulesPage).toBeUndefined();
 });
 
 test("PATCH /api/v1/spaces/:id rejects a non-member session before dispatch", async () => {
@@ -2063,7 +2064,7 @@ test("PATCH /api/v1/spaces/:id rejects a non-member session before dispatch", as
   const { cookie } = seedSession(store);
   const operations = fakeOperations({
     spaces: {
-      getSpace: async (id) => ({
+      getWorkspace: async (id) => ({
         id,
         handle: "other",
         displayName: "Other",
@@ -2085,16 +2086,16 @@ test("PATCH /api/v1/spaces/:id rejects a non-member session before dispatch", as
     operations,
   });
   expect(response?.status).toEqual(403);
-  expect(operations.calls.updateSpace).toBeUndefined();
+  expect(operations.calls.updateWorkspace).toBeUndefined();
 });
 
-test("installation-scoped control route rejects when its Space is inaccessible", async () => {
+test("installation-scoped control route rejects when its Workspace is inaccessible", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations({
     spaces: {
-      listSpaces: async () => [],
-      getSpace: async (id) => ({
+      listWorkspaces: async () => [],
+      getWorkspace: async (id) => ({
         id,
         handle: "other",
         displayName: "Other",
@@ -2103,7 +2104,7 @@ test("installation-scoped control route rejects when its Space is inaccessible",
         createdAt: "2026-01-01T00:00:00Z",
         updatedAt: "2026-01-01T00:00:00Z",
       }),
-      createSpace: async (req) => ({
+      createWorkspace: async (req) => ({
         id: "space_new",
         handle: req.handle,
         displayName: req.displayName,
@@ -2114,9 +2115,9 @@ test("installation-scoped control route rejects when its Space is inaccessible",
       }),
     },
     installations: {
-      getInstallation: async (id) => ({
+      getCapsule: async (id) => ({
         id,
-        spaceId: "space_b",
+        workspaceId: "space_b",
         name: "app",
         slug: "app",
         sourceId: "src_x",
@@ -2128,14 +2129,14 @@ test("installation-scoped control route rejects when its Space is inaccessible",
         createdAt: "2026-01-01T00:00:00Z",
         updatedAt: "2026-01-01T00:00:00Z",
       }),
-      listInstallations: async () => [],
-      listInstallationsPage: async () => ({ items: [] }),
-      createInstallation: async () => {
+      listCapsules: async () => [],
+      listCapsulesPage: async () => ({ items: [] }),
+      createCapsule: async () => {
         throw new Error("unexpected");
       },
       listInstallConfigs: async () => [],
-      putInstallationProviderEnvBindingSet: async (profile) => profile,
-      getInstallationProviderEnvBindingSetByInstallation: async () => undefined,
+      putCapsuleProviderEnvBindingSet: async (profile) => profile,
+      getCapsuleProviderEnvBindingSetByCapsule: async () => undefined,
     },
   });
   const { request: req, url } = request(
@@ -2150,16 +2151,16 @@ test("installation-scoped control route rejects when its Space is inaccessible",
     operations,
   });
   expect(response?.status).toEqual(403);
-  expect(operations.calls.createInstallationPlan).toBeUndefined();
+  expect(operations.calls.createCapsulePlan).toBeUndefined();
 });
 
-test("POST /api/v1/spaces/:id/installations rejects a Source from another inaccessible Space", async () => {
+test("POST /api/v1/spaces/:id/installations rejects a Source from another inaccessible Workspace", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations({
     spaces: {
-      listSpaces: async () => [],
-      getSpace: async (id) => ({
+      listWorkspaces: async () => [],
+      getWorkspace: async (id) => ({
         id,
         handle: id === "space_a" ? "mine" : "other",
         displayName: id === "space_a" ? "Mine" : "Other",
@@ -2168,7 +2169,7 @@ test("POST /api/v1/spaces/:id/installations rejects a Source from another inacce
         createdAt: "2026-01-01T00:00:00Z",
         updatedAt: "2026-01-01T00:00:00Z",
       }),
-      createSpace: async (req) => ({
+      createWorkspace: async (req) => ({
         id: "space_new",
         handle: req.handle,
         displayName: req.displayName,
@@ -2181,7 +2182,7 @@ test("POST /api/v1/spaces/:id/installations rejects a Source from another inacce
     getSource: async (id) => ({
       source: {
         id,
-        spaceId: "space_b",
+        workspaceId: "space_b",
         name: "foreign",
         url: "https://example.test/foreign.git",
         defaultRef: "main",
@@ -2212,16 +2213,16 @@ test("POST /api/v1/spaces/:id/installations rejects a Source from another inacce
     operations,
   });
   expect(response?.status).toEqual(403);
-  expect(operations.calls.createInstallation).toBeUndefined();
+  expect(operations.calls.createCapsule).toBeUndefined();
 });
 
-test("POST /api/v1/sources rejects an authConnectionId from another inaccessible Space", async () => {
+test("POST /api/v1/sources rejects an authConnectionId from another inaccessible Workspace", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations({
     spaces: {
-      listSpaces: async () => [],
-      getSpace: async (id) => ({
+      listWorkspaces: async () => [],
+      getWorkspace: async (id) => ({
         id,
         handle: id === "space_a" ? "mine" : "other",
         displayName: id === "space_a" ? "Mine" : "Other",
@@ -2230,7 +2231,7 @@ test("POST /api/v1/sources rejects an authConnectionId from another inaccessible
         createdAt: "2026-01-01T00:00:00Z",
         updatedAt: "2026-01-01T00:00:00Z",
       }),
-      createSpace: async (req) => ({
+      createWorkspace: async (req) => ({
         id: "space_new",
         handle: req.handle,
         displayName: req.displayName,
@@ -2242,7 +2243,7 @@ test("POST /api/v1/sources rejects an authConnectionId from another inaccessible
     },
     getConnection: async (connectionId) => ({
       id: connectionId,
-      spaceId: "space_b",
+      workspaceId: "space_b",
       provider: "git",
       kind: "source_git_https_token",
       authMethod: "static_secret",
@@ -2256,7 +2257,7 @@ test("POST /api/v1/sources rejects an authConnectionId from another inaccessible
   const { request: req, url } = request("POST", "/api/v1/sources", {
     cookie,
     body: {
-      spaceId: "space_a",
+      workspaceId: "space_a",
       name: "repo",
       url: "https://example.test/repo.git",
       authConnectionId: "conn_foreign",
@@ -2272,13 +2273,13 @@ test("POST /api/v1/sources rejects an authConnectionId from another inaccessible
   expect(operations.calls.createSource).toBeUndefined();
 });
 
-test("POST /api/v1/output-shares rejects a producer from another inaccessible Space", async () => {
+test("POST /api/v1/output-shares rejects a producer from another inaccessible Workspace", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations({
     spaces: {
-      listSpaces: async () => [],
-      getSpace: async (id) => ({
+      listWorkspaces: async () => [],
+      getWorkspace: async (id) => ({
         id,
         handle: id === "space_a" ? "mine" : "other",
         displayName: id === "space_a" ? "Mine" : "Other",
@@ -2287,7 +2288,7 @@ test("POST /api/v1/output-shares rejects a producer from another inaccessible Sp
         createdAt: "2026-01-01T00:00:00Z",
         updatedAt: "2026-01-01T00:00:00Z",
       }),
-      createSpace: async (req) => ({
+      createWorkspace: async (req) => ({
         id: "space_new",
         handle: req.handle,
         displayName: req.displayName,
@@ -2298,9 +2299,9 @@ test("POST /api/v1/output-shares rejects a producer from another inaccessible Sp
       }),
     },
     installations: {
-      getInstallation: async (id) => ({
+      getCapsule: async (id) => ({
         id,
-        spaceId: "space_b",
+        workspaceId: "space_b",
         name: "foreign",
         slug: "foreign",
         sourceId: "src_foreign",
@@ -2312,22 +2313,22 @@ test("POST /api/v1/output-shares rejects a producer from another inaccessible Sp
         createdAt: "2026-01-01T00:00:00Z",
         updatedAt: "2026-01-01T00:00:00Z",
       }),
-      listInstallations: async () => [],
-      listInstallationsPage: async () => ({ items: [] }),
-      createInstallation: async () => {
+      listCapsules: async () => [],
+      listCapsulesPage: async () => ({ items: [] }),
+      createCapsule: async () => {
         throw new Error("unexpected");
       },
       listInstallConfigs: async () => [],
-      putInstallationProviderEnvBindingSet: async (profile) => profile,
-      getInstallationProviderEnvBindingSetByInstallation: async () => undefined,
+      putCapsuleProviderEnvBindingSet: async (profile) => profile,
+      getCapsuleProviderEnvBindingSetByCapsule: async () => undefined,
     },
   });
   const { request: req, url } = request("POST", "/api/v1/output-shares", {
     cookie,
     body: {
-      fromSpaceId: "space_a",
-      toSpaceId: "space_b",
-      producerInstallationId: "inst_foreign",
+      fromWorkspaceId: "space_a",
+      toWorkspaceId: "space_b",
+      producerCapsuleId: "inst_foreign",
       outputs: [{ name: "domain" }],
     },
   });
@@ -2341,13 +2342,13 @@ test("POST /api/v1/output-shares rejects a producer from another inaccessible Sp
   expect(operations.calls.createOutputShare).toBeUndefined();
 });
 
-test("GET /api/v1/provider-connections rejects an inaccessible Space before dispatch", async () => {
+test("GET /api/v1/provider-connections rejects an inaccessible Workspace before dispatch", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations({
     spaces: {
-      listSpaces: async () => [],
-      getSpace: async (id) => ({
+      listWorkspaces: async () => [],
+      getWorkspace: async (id) => ({
         id,
         handle: "other",
         displayName: "Other",
@@ -2356,7 +2357,7 @@ test("GET /api/v1/provider-connections rejects an inaccessible Space before disp
         createdAt: "2026-01-01T00:00:00Z",
         updatedAt: "2026-01-01T00:00:00Z",
       }),
-      createSpace: async (req) => ({
+      createWorkspace: async (req) => ({
         id: "space_new",
         handle: req.handle,
         displayName: req.displayName,
@@ -2382,19 +2383,19 @@ test("GET /api/v1/provider-connections rejects an inaccessible Space before disp
   expect(operations.calls.listProviderConnections).toBeUndefined();
 });
 
-test("GET /api/v1/provider-connections returns the Space's provider connections and never echoes secrets", async () => {
+test("GET /api/v1/provider-connections returns the Workspace's provider connections and never echoes secrets", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   // After the credential-model collapse a Provider Connection IS the unified
-  // credential record; the session surface lists the Space-scoped rows directly
+  // credential record; the session surface lists the Workspace-scoped rows directly
   // (raw connection ids, no `pcn_` hashing) and never the sealed secret material
   // nor operator-scoped credentials.
   const operations = fakeOperations({
     connections: {
       listProviderConnections: async () => [
         {
-          // Operator-scoped credential (no spaceId): must stay internal and is
-          // filtered out of the Space listing.
+          // Operator-scoped credential (no workspaceId): must stay internal and is
+          // filtered out of the Workspace listing.
           id: "conn_operator_secret",
           provider: "cloudflare",
           providerSource: "registry.opentofu.org/cloudflare/cloudflare",
@@ -2409,12 +2410,12 @@ test("GET /api/v1/provider-connections returns the Space's provider connections 
         },
         {
           id: "conn_space_secret",
-          spaceId: "space_a",
+          workspaceId: "space_a",
           provider: "cloudflare",
           providerSource: "registry.opentofu.org/cloudflare/cloudflare",
           kind: "cloudflare_api_token",
           scope: "space",
-          displayName: "Space secret",
+          displayName: "Workspace secret",
           materialization: "secret",
           status: "verified",
           envNames: ["CLOUDFLARE_API_TOKEN"],
@@ -2423,7 +2424,7 @@ test("GET /api/v1/provider-connections returns the Space's provider connections 
         },
         {
           id: "conn_space_secret_2",
-          spaceId: "space_a",
+          workspaceId: "space_a",
           provider: "cloudflare",
           providerSource: "registry.opentofu.org/cloudflare/cloudflare",
           kind: "cloudflare_api_token",
@@ -2451,7 +2452,7 @@ test("GET /api/v1/provider-connections returns the Space's provider connections 
   });
   expect(response?.status).toEqual(200);
   const raw = await response!.text();
-  // Operator-scoped credentials never leak into the Space listing.
+  // Operator-scoped credentials never leak into the Workspace listing.
   expect(raw.includes("conn_operator_secret")).toEqual(false);
   // No sealed secret material is ever projected onto the public record.
   expect(raw.includes("secretRef")).toEqual(false);
@@ -2471,9 +2472,9 @@ test("GET /api/v1/provider-connections returns the Space's provider connections 
     "provider",
     "providerSource",
     "scope",
-    "spaceId",
     "status",
     "updatedAt",
+    "workspaceId",
   ]);
   // The ready state is the ConnectionStatus "verified" (NOT a "ready" alias).
   expect(body.providerConnections.map((item) => item.status)).toEqual([
@@ -2503,18 +2504,18 @@ test("GET /api/v1/spaces/:id/gateway-coverages is not an OSS public route", asyn
   expect(operations.calls.getGatewayCoverageStatus).toBeUndefined();
 });
 
-test("accounts-ledger Space owner can access a Space even when ownerUserId is not the session subject", async () => {
+test("accounts-ledger Workspace owner can access a Workspace even when ownerUserId is not the session subject", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie, subject } = seedSession(store);
-  seedLedgerSpace(store, {
+  seedLedgerWorkspace(store, {
     subject,
     accountId: "acct_ctrl",
-    spaceId: "space_ledger",
+    workspaceId: "space_ledger",
   });
   const operations = fakeOperations({
     spaces: {
-      listSpaces: async () => [],
-      getSpace: async (id) => ({
+      listWorkspaces: async () => [],
+      getWorkspace: async (id) => ({
         id,
         handle: "ledger",
         displayName: "Ledger",
@@ -2523,7 +2524,7 @@ test("accounts-ledger Space owner can access a Space even when ownerUserId is no
         createdAt: "2026-01-01T00:00:00Z",
         updatedAt: "2026-01-01T00:00:00Z",
       }),
-      createSpace: async (req) => ({
+      createWorkspace: async (req) => ({
         id: "space_new",
         handle: req.handle,
         displayName: req.displayName,
@@ -2546,7 +2547,7 @@ test("accounts-ledger Space owner can access a Space even when ownerUserId is no
     operations,
   });
   expect(response?.status).toEqual(200);
-  expect(operations.calls.listInstallationsPage?.[0]).toEqual("space_ledger");
+  expect(operations.calls.listCapsulesPage?.[0]).toEqual("space_ledger");
 });
 
 test("POST /api/v1/spaces uses the session subject as ownerUserId", async () => {
@@ -2555,7 +2556,7 @@ test("POST /api/v1/spaces uses the session subject as ownerUserId", async () => 
   const operations = fakeOperations();
   const { request: req, url } = request("POST", "/api/v1/spaces", {
     cookie,
-    body: { handle: "myspace", displayName: "My Space", type: "personal" },
+    body: { handle: "myspace", displayName: "My Workspace", type: "personal" },
   });
   const response = await handleControlRoute({
     request: req,
@@ -2564,7 +2565,7 @@ test("POST /api/v1/spaces uses the session subject as ownerUserId", async () => 
     operations,
   });
   expect(response?.status).toEqual(201);
-  const createCall = operations.calls.createSpace?.[0] as {
+  const createCall = operations.calls.createWorkspace?.[0] as {
     ownerUserId: string;
     handle: string;
   };
@@ -2592,11 +2593,11 @@ test("GET /api/v1/spaces/:id/installations lists installations", async () => {
   expect(body.installations.length).toEqual(1);
   const installation = body.installations[0] as {
     installType?: string;
-    currentOutputSnapshotId?: string;
+    currentOutputId?: string;
   };
   expect(installation.installType).toBeUndefined();
-  expect(installation.currentOutputSnapshotId).toBeUndefined();
-  expect(operations.calls.listInstallationsPage?.[0]).toEqual("space_a");
+  expect(installation.currentOutputId).toBeUndefined();
+  expect(operations.calls.listCapsulesPage?.[0]).toEqual("space_a");
 });
 
 test("POST /api/v1/spaces/:id/installations creates an installation", async () => {
@@ -2624,14 +2625,14 @@ test("POST /api/v1/spaces/:id/installations creates an installation", async () =
   });
   expect(response?.status).toEqual(201);
   const body = (await response!.json()) as {
-    installation: { installType?: string; currentOutputSnapshotId?: string };
+    installation: { installType?: string; currentOutputId?: string };
   };
   expect(body.installation.installType).toBeUndefined();
-  expect(body.installation.currentOutputSnapshotId).toBeUndefined();
-  const createCall = operations.calls.createInstallation?.[0] as {
-    spaceId: string;
+  expect(body.installation.currentOutputId).toBeUndefined();
+  const createCall = operations.calls.createCapsule?.[0] as {
+    workspaceId: string;
   };
-  expect(createCall.spaceId).toEqual("space_a");
+  expect(createCall.workspaceId).toEqual("space_a");
 });
 
 test("POST /api/v1/spaces/:id/installations stores per-install vars in a scoped InstallConfig", async () => {
@@ -2661,20 +2662,20 @@ test("POST /api/v1/spaces/:id/installations stores per-install vars in a scoped 
   expect(response?.status).toEqual(201);
   const config = operations.calls.putInstallConfig?.[0] as {
     id: string;
-    spaceId: string;
+    workspaceId: string;
     internal?: unknown;
     variableMapping: Record<string, unknown>;
     outputAllowlist: Record<string, unknown>;
   };
   expect(config.id.startsWith("icfg_")).toEqual(true);
-  expect(config.spaceId).toEqual("space_a");
+  expect(config.workspaceId).toEqual("space_a");
   expect(config.internal).toEqual({ reason: "per_install_overrides" });
   expect(config.variableMapping).toEqual({ project_name: "takos-space-a" });
   expect(config.outputAllowlist).toEqual({
     url: { from: "url", type: "url" },
     worker_name: { from: "worker_name", type: "string" },
   });
-  const createCall = operations.calls.createInstallation?.[0] as {
+  const createCall = operations.calls.createCapsule?.[0] as {
     installConfigId: string;
   };
   expect(createCall.installConfigId).toEqual(config.id);
@@ -2710,21 +2711,21 @@ test("POST /api/v1/spaces/:id/installations stores runnerId and outputAllowlist 
   expect(response?.status).toEqual(201);
   const config = operations.calls.putInstallConfig?.[0] as {
     id: string;
-    spaceId: string;
+    workspaceId: string;
     internal?: unknown;
     runnerId?: string;
     variableMapping: Record<string, unknown>;
     outputAllowlist: Record<string, unknown>;
   };
   expect(config.id.startsWith("icfg_")).toEqual(true);
-  expect(config.spaceId).toEqual("space_a");
+  expect(config.workspaceId).toEqual("space_a");
   expect(config.internal).toEqual({ reason: "per_install_overrides" });
   expect(config.runnerId).toEqual("generic-opentofu-provider");
   expect(config.variableMapping).toEqual({});
   expect(config.outputAllowlist).toEqual({
     takos_app: { from: "takos_app", type: "json", required: true },
   });
-  const createCall = operations.calls.createInstallation?.[0] as {
+  const createCall = operations.calls.createCapsule?.[0] as {
     installConfigId: string;
   };
   expect(createCall.installConfigId).toEqual(config.id);
@@ -2791,7 +2792,7 @@ test("POST /api/v1/spaces/:id/installations rejects non-JSON vars", async () => 
   });
   expect(response?.status).toEqual(400);
   expect(operations.calls.putInstallConfig).toBeUndefined();
-  expect(operations.calls.createInstallation).toBeUndefined();
+  expect(operations.calls.createCapsule).toBeUndefined();
 });
 
 test("GET /api/v1/spaces/:id/graph projects nodes + edges", async () => {
@@ -2809,17 +2810,17 @@ test("GET /api/v1/spaces/:id/graph projects nodes + edges", async () => {
   });
   expect(response?.status).toEqual(200);
   const body = (await response!.json()) as {
-    nodes: Array<{ installationId: string; name: string; status: string }>;
+    nodes: Array<{ capsuleId: string; name: string; status: string }>;
     edges: Array<{
       id: string;
-      producerInstallationId: string;
+      producerCapsuleId: string;
       outputs: unknown;
     }>;
   };
-  expect(body.nodes[0]?.installationId).toEqual("inst_1");
+  expect(body.nodes[0]?.capsuleId).toEqual("inst_1");
   expect(body.nodes[0]?.name).toEqual("app");
   expect(body.edges[0]?.id).toEqual("dep_1");
-  expect(body.edges[0]?.producerInstallationId).toEqual("inst_1");
+  expect(body.edges[0]?.producerCapsuleId).toEqual("inst_1");
 });
 
 test("GET /api/v1/installations/:id reads one installation", async () => {
@@ -2837,14 +2838,14 @@ test("GET /api/v1/installations/:id reads one installation", async () => {
   });
   expect(response?.status).toEqual(200);
   const body = (await response!.json()) as {
-    installation: { installType?: string; currentOutputSnapshotId?: string };
+    installation: { installType?: string; currentOutputId?: string };
   };
   expect(body.installation.installType).toBeUndefined();
-  expect(body.installation.currentOutputSnapshotId).toBeUndefined();
-  expect(operations.calls.getInstallation?.[0]).toEqual("inst_1");
+  expect(body.installation.currentOutputId).toBeUndefined();
+  expect(operations.calls.getCapsule?.[0]).toEqual("inst_1");
 });
 
-test("POST /api/v1/installations/:id/backups creates an Installation-context backup", async () => {
+test("POST /api/v1/installations/:id/backups creates an Capsule-context backup", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
@@ -2861,14 +2862,14 @@ test("POST /api/v1/installations/:id/backups creates an Installation-context bac
   });
   expect(response?.status).toEqual(201);
   const body = (await response!.json()) as {
-    backup: { spaceId: string; installationId?: string; environment?: string };
+    backup: { workspaceId: string; capsuleId?: string; environment?: string };
   };
-  expect(body.backup.spaceId).toEqual("space_a");
-  expect(operations.calls.getInstallation?.[0]).toEqual("inst_1");
+  expect(body.backup.workspaceId).toEqual("space_a");
+  expect(operations.calls.getCapsule?.[0]).toEqual("inst_1");
   expect(operations.calls.createBackup).toEqual([
     {
-      spaceId: "space_a",
-      installationId: "inst_1",
+      workspaceId: "space_a",
+      capsuleId: "inst_1",
       environment: "prod",
     },
   ]);
@@ -2901,7 +2902,7 @@ test("GET /api/v1/installations/:id/provider-connections reads provider connecti
     "conn_cf_gateway",
   );
   expect(
-    operations.calls.getInstallationProviderEnvBindingSetByInstallation,
+    operations.calls.getCapsuleProviderEnvBindingSetByCapsule,
   ).toEqual(["inst_1", "prod"]);
 });
 
@@ -2913,7 +2914,7 @@ test("PUT /api/v1/installations/:id/provider-connections saves provider connecti
       listProviderConnections: async () => [
         {
           id: "conn_cf",
-          spaceId: "space_a",
+          workspaceId: "space_a",
           provider: "cloudflare",
           providerSource: "registry.opentofu.org/cloudflare/cloudflare",
           kind: "cloudflare_api_token",
@@ -2927,7 +2928,7 @@ test("PUT /api/v1/installations/:id/provider-connections saves provider connecti
         },
         {
           id: "conn_aws",
-          spaceId: "space_a",
+          workspaceId: "space_a",
           provider: "aws",
           providerSource: "registry.opentofu.org/hashicorp/aws",
           kind: "generic_env_provider",
@@ -2971,7 +2972,7 @@ test("PUT /api/v1/installations/:id/provider-connections saves provider connecti
     operations,
   });
   expect(response?.status).toEqual(200);
-  const saved = operations.calls.putInstallationProviderEnvBindingSet?.[0] as {
+  const saved = operations.calls.putCapsuleProviderEnvBindingSet?.[0] as {
     bindings: readonly {
       provider: string;
       alias?: string;
@@ -3008,8 +3009,8 @@ test("POST /api/v1/installations/:id/plan returns 201", async () => {
   expect(response?.status).toEqual(201);
   const body = (await response!.json()) as { run: { id: string } };
   expect(body.run.id).toEqual("plan_1");
-  expect(operations.calls.createInstallationPlan?.[0]).toEqual({
-    installationId: "inst_1",
+  expect(operations.calls.createCapsulePlan?.[0]).toEqual({
+    capsuleId: "inst_1",
     options: undefined,
   });
   expect(operations.calls.getRun).toContain("plan_1");
@@ -3036,8 +3037,8 @@ test("POST /api/v1/installations/:id/plan forwards a preflight compatibility rep
   });
 
   expect(response?.status).toEqual(201);
-  expect(operations.calls.createInstallationPlan?.[0]).toEqual({
-    installationId: "inst_1",
+  expect(operations.calls.createCapsulePlan?.[0]).toEqual({
+    capsuleId: "inst_1",
     options: { compatibilityReportId: "caprep_ready" },
   });
 });
@@ -3049,8 +3050,8 @@ test("GET /api/v1/runs/:id projects provider resolutions to provider connections
     getRun: async (id) =>
       ({
         id,
-        spaceId: "space_a",
-        installationId: "inst_1",
+        workspaceId: "space_a",
+        capsuleId: "inst_1",
         type: "plan",
         status: "succeeded",
         createdBy: "test",
@@ -3121,8 +3122,8 @@ test("GET /api/v1/runs/:id does not expose legacy operator-backed ownership voca
     getRun: async (id) =>
       ({
         id,
-        spaceId: "space_a",
-        installationId: "inst_1",
+        workspaceId: "space_a",
+        capsuleId: "inst_1",
         type: "plan",
         status: "succeeded",
         createdBy: "test",
@@ -3189,7 +3190,7 @@ test("GET /api/v1/runs/:id returns source_sync runs for dashboard polling", asyn
       requestedRunId = id;
       return {
         id,
-        spaceId: "space_a",
+        workspaceId: "space_a",
         type: "source_sync",
         status: "running",
         sourceSnapshotId: "snap_pending",
@@ -3209,13 +3210,13 @@ test("GET /api/v1/runs/:id returns source_sync runs for dashboard polling", asyn
   });
   expect(response?.status).toEqual(200);
   const body = (await response!.json()) as {
-    run: { id: string; type: string; status: string; spaceId: string };
+    run: { id: string; type: string; status: string; workspaceId: string };
   };
   expect(body.run).toMatchObject({
     id: "ssr_1",
     type: "source_sync",
     status: "running",
-    spaceId: "space_a",
+    workspaceId: "space_a",
   });
   expect(requestedRunId).toEqual("ssr_1");
 });
@@ -3230,17 +3231,17 @@ test("GET /api/v1/runs/:id syncs succeeded destroy_apply runs into suspended pro
     createdAt: now,
     updatedAt: now,
   });
-  store.saveSpace({
-    spaceId: "space_a",
+  store.saveWorkspace({
+    workspaceId: "space_a",
     accountId: "acct_destroy_sync",
     kind: "personal",
     createdAt: now,
     updatedAt: now,
   });
-  store.saveAppInstallation({
-    installationId: "inst_destroy_sync",
+  store.saveAppCapsule({
+    capsuleId: "inst_destroy_sync",
     accountId: "acct_destroy_sync",
-    spaceId: "space_a",
+    workspaceId: "space_a",
     appId: "destroy-sync",
     sourceGitUrl: "https://github.com/example/destroy-sync",
     sourceRef: "main",
@@ -3256,8 +3257,8 @@ test("GET /api/v1/runs/:id syncs succeeded destroy_apply runs into suspended pro
     getRun: async (id) =>
       ({
         id,
-        spaceId: "space_a",
-        installationId: "inst_destroy_sync",
+        workspaceId: "space_a",
+        capsuleId: "inst_destroy_sync",
         type: "destroy_apply",
         status: "succeeded",
         sourceSnapshotId: "snap_destroy",
@@ -3276,9 +3277,9 @@ test("GET /api/v1/runs/:id syncs succeeded destroy_apply runs into suspended pro
   });
 
   expect(response?.status).toEqual(200);
-  const projection = store.findAppInstallation("inst_destroy_sync");
+  const projection = store.findAppCapsule("inst_destroy_sync");
   expect(projection?.status).toEqual("suspended");
-  const events = store.listInstallationEvents("inst_destroy_sync");
+  const events = store.listCapsuleEvents("inst_destroy_sync");
   expect(events.map((event) => event.eventType)).toContain(
     "installation.status_changed",
   );
@@ -3302,8 +3303,8 @@ test("POST /api/v1/installations/:id/destroy-plan returns 201", async () => {
   expect(response?.status).toEqual(201);
   const body = (await response!.json()) as { run: { id: string } };
   expect(body.run.id).toEqual("plan_destroy");
-  expect(operations.calls.createInstallationDestroyPlan?.[0]).toEqual({
-    installationId: "inst_1",
+  expect(operations.calls.createCapsuleDestroyPlan?.[0]).toEqual({
+    capsuleId: "inst_1",
     options: undefined,
   });
   expect(operations.calls.getRun).toContain("plan_destroy");
@@ -3329,13 +3330,13 @@ test("POST /api/v1/installations/:id/destroy-plan forwards runnerId to internal 
     operations,
   });
   expect(response?.status).toEqual(201);
-  expect(operations.calls.createInstallationDestroyPlan?.[0]).toEqual({
-    installationId: "inst_1",
+  expect(operations.calls.createCapsuleDestroyPlan?.[0]).toEqual({
+    capsuleId: "inst_1",
     options: { runnerProfileId: "generic-opentofu-provider" },
   });
 });
 
-test("Installation session routes patch status, delete via destroy-plan, drift-check, and list dependencies", async () => {
+test("Capsule session routes patch status, delete via destroy-plan, drift-check, and list dependencies", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
@@ -3351,7 +3352,7 @@ test("Installation session routes patch status, delete via destroy-plan, drift-c
     operations,
   });
   expect(patchResp?.status).toEqual(200);
-  expect(operations.calls.patchInstallationStatus).toEqual(["inst_1", "stale"]);
+  expect(operations.calls.patchCapsuleStatus).toEqual(["inst_1", "stale"]);
 
   const deleteRoute = request("DELETE", "/api/v1/installations/inst_1", {
     cookie,
@@ -3363,8 +3364,8 @@ test("Installation session routes patch status, delete via destroy-plan, drift-c
     operations,
   });
   expect(deleteResp?.status).toEqual(202);
-  expect(operations.calls.createInstallationDestroyPlan?.[0]).toEqual({
-    installationId: "inst_1",
+  expect(operations.calls.createCapsuleDestroyPlan?.[0]).toEqual({
+    capsuleId: "inst_1",
     options: undefined,
   });
 
@@ -3378,7 +3379,7 @@ test("Installation session routes patch status, delete via destroy-plan, drift-c
     operations,
   });
   expect(driftResp?.status).toEqual(201);
-  expect(operations.calls.createInstallationDriftCheck?.[0]).toEqual("inst_1");
+  expect(operations.calls.createCapsuleDriftCheck?.[0]).toEqual("inst_1");
 
   const dependencies = request(
     "GET",
@@ -3392,17 +3393,17 @@ test("Installation session routes patch status, delete via destroy-plan, drift-c
     operations,
   });
   expect(dependenciesResp?.status).toEqual(200);
-  expect(operations.calls.listForInstallation?.[0]).toEqual("inst_1");
+  expect(operations.calls.listForCapsule?.[0]).toEqual("inst_1");
 });
 
 test("DELETE /api/v1/installations/:id abandons unapplied upload-origin projections", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const now = Date.now();
-  store.saveAppInstallation({
-    installationId: "inst_upload_pending",
+  store.saveAppCapsule({
+    capsuleId: "inst_upload_pending",
     accountId: "acct_upload_pending",
-    spaceId: "space_a",
+    workspaceId: "space_a",
     appId: "upload-pending",
     sourceGitUrl: "upload://space_a/snap_upload_pending",
     sourceRef: "upload",
@@ -3415,9 +3416,9 @@ test("DELETE /api/v1/installations/:id abandons unapplied upload-origin projecti
     updatedAt: now,
   });
   const baseOperations = fakeOperations();
-  const uploadInstallation = {
+  const uploadCapsule = {
     id: "inst_upload_pending",
-    spaceId: "space_a",
+    workspaceId: "space_a",
     name: "upload-pending",
     slug: "upload-pending",
     installType: "opentofu_module",
@@ -3431,23 +3432,23 @@ test("DELETE /api/v1/installations/:id abandons unapplied upload-origin projecti
   const operations = fakeOperations({
     installations: {
       ...baseOperations.installations,
-      getInstallation: async () =>
-        uploadInstallation as unknown as Awaited<
-          ReturnType<ControlPlaneOperations["installations"]["getInstallation"]>
+      getCapsule: async () =>
+        uploadCapsule as unknown as Awaited<
+          ReturnType<ControlPlaneOperations["installations"]["getCapsule"]>
         >,
-      patchInstallationStatus: async (id, status) =>
+      patchCapsuleStatus: async (id, status) =>
         ({
-          ...uploadInstallation,
+          ...uploadCapsule,
           id,
           status,
           updatedAt: "2026-01-02T00:00:00Z",
         }) as unknown as Awaited<
           ReturnType<
-            ControlPlaneOperations["installations"]["patchInstallationStatus"]
+            ControlPlaneOperations["installations"]["patchCapsuleStatus"]
           >
         >,
     },
-    createInstallationDestroyPlan: async () => {
+    createCapsuleDestroyPlan: async () => {
       const error = new Error(
         "installation inst_upload_pending is upload-origin; a plan requires a pinned upload SourceSnapshot (deploy a new upload via takosumi deploy)",
       ) as Error & { code: string };
@@ -3477,12 +3478,12 @@ test("DELETE /api/v1/installations/:id abandons unapplied upload-origin projecti
   expect(body.abandoned).toEqual(true);
   expect(body.installation.status).toEqual("error");
   expect(body.projectionStatus).toEqual("failed");
-  expect(store.findAppInstallation("inst_upload_pending")?.status).toEqual(
+  expect(store.findAppCapsule("inst_upload_pending")?.status).toEqual(
     "failed",
   );
   expect(
     store
-      .listInstallationEvents("inst_upload_pending")
+      .listCapsuleEvents("inst_upload_pending")
       .map((event) => event.eventType),
   ).toContain("installation.status_changed");
 });
@@ -3491,10 +3492,10 @@ test("DELETE /api/v1/installations/:id abandons unapplied projections when destr
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const now = Date.now();
-  store.saveAppInstallation({
-    installationId: "inst_pending_provider",
+  store.saveAppCapsule({
+    capsuleId: "inst_pending_provider",
     accountId: "acct_pending_provider",
-    spaceId: "space_a",
+    workspaceId: "space_a",
     appId: "pending-provider",
     sourceGitUrl: "https://github.com/example/infra.git",
     sourceRef: "main",
@@ -3507,9 +3508,9 @@ test("DELETE /api/v1/installations/:id abandons unapplied projections when destr
     updatedAt: now,
   });
   const baseOperations = fakeOperations();
-  const pendingInstallation = {
+  const pendingCapsule = {
     id: "inst_pending_provider",
-    spaceId: "space_a",
+    workspaceId: "space_a",
     sourceId: "src_pending_provider",
     name: "pending-provider",
     slug: "pending-provider",
@@ -3524,23 +3525,23 @@ test("DELETE /api/v1/installations/:id abandons unapplied projections when destr
   const operations = fakeOperations({
     installations: {
       ...baseOperations.installations,
-      getInstallation: async () =>
-        pendingInstallation as unknown as Awaited<
-          ReturnType<ControlPlaneOperations["installations"]["getInstallation"]>
+      getCapsule: async () =>
+        pendingCapsule as unknown as Awaited<
+          ReturnType<ControlPlaneOperations["installations"]["getCapsule"]>
         >,
-      patchInstallationStatus: async (id, status) =>
+      patchCapsuleStatus: async (id, status) =>
         ({
-          ...pendingInstallation,
+          ...pendingCapsule,
           id,
           status,
           updatedAt: "2026-01-02T00:00:00Z",
         }) as unknown as Awaited<
           ReturnType<
-            ControlPlaneOperations["installations"]["patchInstallationStatus"]
+            ControlPlaneOperations["installations"]["patchCapsuleStatus"]
           >
         >,
     },
-    createInstallationDestroyPlan: async () => {
+    createCapsuleDestroyPlan: async () => {
       const error = new Error(
         "Provider Env conn_missing status blocked is not ready",
       ) as Error & { code: string };
@@ -3570,12 +3571,12 @@ test("DELETE /api/v1/installations/:id abandons unapplied projections when destr
   expect(body.abandoned).toEqual(true);
   expect(body.installation.status).toEqual("error");
   expect(body.projectionStatus).toEqual("failed");
-  expect(store.findAppInstallation("inst_pending_provider")?.status).toEqual(
+  expect(store.findAppCapsule("inst_pending_provider")?.status).toEqual(
     "failed",
   );
 });
 
-test("POST /api/v1/installations/:id/dependencies derives spaceId from the consumer", async () => {
+test("POST /api/v1/installations/:id/dependencies derives workspaceId from the consumer", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
@@ -3585,7 +3586,7 @@ test("POST /api/v1/installations/:id/dependencies derives spaceId from the consu
     {
       cookie,
       body: {
-        producerInstallationId: "inst_1",
+        producerCapsuleId: "inst_1",
         outputs: { db: { from: "url", to: "db", required: true } },
       },
     },
@@ -3598,13 +3599,13 @@ test("POST /api/v1/installations/:id/dependencies derives spaceId from the consu
   });
   expect(response?.status).toEqual(201);
   const dep = operations.calls.createDependency?.[0] as {
-    consumerInstallationId: string;
-    spaceId: string;
+    consumerCapsuleId: string;
+    workspaceId: string;
     mode: string;
     visibility: string;
   };
-  expect(dep.consumerInstallationId).toEqual("inst_2");
-  expect(dep.spaceId).toEqual("space_a");
+  expect(dep.consumerCapsuleId).toEqual("inst_2");
+  expect(dep.workspaceId).toEqual("space_a");
   expect(dep.mode).toEqual("variable_injection");
   expect(dep.visibility).toEqual("space");
 });
@@ -3632,14 +3633,14 @@ test("GET /api/v1/capsule-configs merges official + scoped", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
-  operations.installations.listInstallConfigs = async (spaceId) => {
+  operations.installations.listInstallConfigs = async (workspaceId) => {
     operations.calls.listInstallConfigs ??= [];
-    operations.calls.listInstallConfigs.push(spaceId);
-    if (spaceId === "space_a") {
+    operations.calls.listInstallConfigs.push(workspaceId);
+    if (workspaceId === "space_a") {
       return [
         {
           id: "icfg_internal",
-          spaceId: "space_a",
+          workspaceId: "space_a",
           name: "takos-config",
           internal: { reason: "per_install_overrides" },
           sourceKind: "generic_capsule",
@@ -3654,7 +3655,7 @@ test("GET /api/v1/capsule-configs merges official + scoped", async () => {
         },
         {
           id: "icfg_0123456789abcdef",
-          spaceId: "space_a",
+          workspaceId: "space_a",
           name: "legacy-config",
           sourceKind: "generic_capsule",
           installType: "opentofu_module",
@@ -3731,7 +3732,7 @@ test("GET /api/v1/capsule-configs merges official + scoped", async () => {
   expect(getBody.installConfig.sourceKind).toEqual("generic_capsule");
   expect(getBody.installConfig.installType).toBeUndefined();
 
-  const legacy = request("GET", "/api/v1/install-configs?spaceId=space_a", {
+  const legacy = request("GET", "/api/v1/install-configs?workspaceId=space_a", {
     cookie,
   });
   const legacyResp = await handleControlRoute({
@@ -3749,14 +3750,14 @@ test("GET /api/v1/capsule-configs starter catalog hides scoped configs", async (
   const operations = fakeOperations();
   const officialCreatedAt = "2026-01-01T00:00:00Z";
   const scopedCreatedAt = "2026-01-02T00:00:00Z";
-  operations.installations.listInstallConfigs = async (spaceId) => {
+  operations.installations.listInstallConfigs = async (workspaceId) => {
     operations.calls.listInstallConfigs ??= [];
-    operations.calls.listInstallConfigs.push(spaceId);
-    if (spaceId === "space_a") {
+    operations.calls.listInstallConfigs.push(workspaceId);
+    if (workspaceId === "space_a") {
       return [
         {
           id: "cfg_scoped_e2e",
-          spaceId: "space_a",
+          workspaceId: "space_a",
           name: "ts-e2e-browser-functional-config",
           sourceKind: "generic_capsule",
           installType: "opentofu_module",
@@ -3847,16 +3848,16 @@ test("GET /api/v1/capsule-configs starter catalog hides scoped configs", async (
   });
   expect(response?.status).toEqual(200);
   const body = (await response!.json()) as {
-    installConfigs: Array<{ id: string; spaceId?: string; catalog?: unknown }>;
+    installConfigs: Array<{ id: string; workspaceId?: string; catalog?: unknown }>;
   };
   expect(body.installConfigs.map((config) => config.id)).toEqual([
     "cfg-default-opentofu-capsule",
     "cfg-official-cloudflare-hello-worker",
   ]);
-  expect(body.installConfigs.some((config) => config.spaceId)).toBe(false);
+  expect(body.installConfigs.some((config) => config.workspaceId)).toBe(false);
 });
 
-test("Sources: GET requires spaceId, POST + sync return 201", async () => {
+test("Sources: GET requires workspaceId, POST + sync return 201", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
@@ -3919,7 +3920,7 @@ test("Sources: GET requires spaceId, POST + sync return 201", async () => {
   const create = request("POST", "/api/v1/sources", {
     cookie,
     body: {
-      spaceId: "space_a",
+      workspaceId: "space_a",
       name: "repo",
       url: "https://example.test/r.git",
       authConnectionId: "conn_git",
@@ -3964,7 +3965,7 @@ test("Sources: GET requires spaceId, POST + sync return 201", async () => {
   expect(snapshotsBody.snapshots[0]).toMatchObject({
     id: "snap_1",
     origin: "git",
-    spaceId: "space_a",
+    workspaceId: "space_a",
     sourceId: "src_x",
   });
 
@@ -4202,7 +4203,7 @@ test("RunGroups: plan-update, drift-check, get, approve", async () => {
     operations,
   });
   expect(updateResp?.status).toEqual(201);
-  expect(operations.calls.createSpaceUpdate?.[0]).toEqual("space_a");
+  expect(operations.calls.createWorkspaceUpdate?.[0]).toEqual("space_a");
 
   const drift = request("POST", "/api/v1/spaces/space_a/drift-check", {
     cookie,
@@ -4215,7 +4216,7 @@ test("RunGroups: plan-update, drift-check, get, approve", async () => {
     operations,
   });
   expect(driftResp?.status).toEqual(201);
-  expect(operations.calls.createSpaceDriftCheck).toEqual([
+  expect(operations.calls.createWorkspaceDriftCheck).toEqual([
     "space_a",
     { limit: 25 },
   ]);
@@ -4241,7 +4242,7 @@ test("RunGroups: plan-update, drift-check, get, approve", async () => {
   expect(approveResp?.status).toEqual(200);
 });
 
-test("Connections: requires spaceId; provider-connections is Space-gated", async () => {
+test("Connections: requires workspaceId; provider-connections is Workspace-gated", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
@@ -4293,7 +4294,7 @@ test("Connections: requires spaceId; provider-connections is Space-gated", async
   expect(operations.calls.listProviderConnections).toBeDefined();
 });
 
-test("Connections create: registers a Space-owned connection; token never echoed", async () => {
+test("Connections create: registers a Workspace-owned connection; token never echoed", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
@@ -4301,7 +4302,7 @@ test("Connections create: registers a Space-owned connection; token never echoed
   const create = request("POST", "/api/v1/connections", {
     cookie,
     body: {
-      spaceId: "space_a",
+      workspaceId: "space_a",
       provider: "cloudflare",
       displayName: "本番 Cloudflare",
       // caller tries to widen to Gateway-backed operator coverage; ignore it.
@@ -4320,19 +4321,19 @@ test("Connections create: registers a Space-owned connection; token never echoed
   });
   expect(response?.status).toEqual(201);
 
-  // The facade was called with a Space-scoped cloudflare_api_token request.
+  // The facade was called with a Workspace-scoped cloudflare_api_token request.
   const passed = operations.calls.createConnection?.[0] as {
-    spaceId?: string;
+    workspaceId?: string;
     provider?: string;
     kind?: string;
     scope?: string;
     scopeHints?: { accountId?: string };
     values?: Record<string, string>;
   };
-  expect(passed.spaceId).toEqual("space_a");
+  expect(passed.workspaceId).toEqual("space_a");
   expect(passed.provider).toEqual("cloudflare");
   expect(passed.kind).toEqual("cloudflare_api_token");
-  // Forced Space scope regardless of the caller-supplied `scope: "operator"`.
+  // Forced Workspace scope regardless of the caller-supplied `scope: "operator"`.
   expect(passed.scope).toEqual("space");
   expect(passed.scopeHints?.accountId).toEqual("acct_dashboard");
   // The write-only token reaches the facade…
@@ -4346,7 +4347,7 @@ test("Connections create: registers a Space-owned connection; token never echoed
   expect(text).not.toContain("CLOUDFLARE_API_TOKEN");
 });
 
-test("Connections create: registers a Space-owned source Git HTTPS token; token never echoed", async () => {
+test("Connections create: registers a Workspace-owned source Git HTTPS token; token never echoed", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
@@ -4354,7 +4355,7 @@ test("Connections create: registers a Space-owned source Git HTTPS token; token 
   const create = request("POST", "/api/v1/connections", {
     cookie,
     body: {
-      spaceId: "space_a",
+      workspaceId: "space_a",
       provider: "ignored-provider",
       kind: "source_git_https_token",
       displayName: "private source",
@@ -4377,14 +4378,14 @@ test("Connections create: registers a Space-owned source Git HTTPS token; token 
   expect(response?.status).toEqual(201);
 
   const passed = operations.calls.createConnection?.[0] as {
-    spaceId?: string;
+    workspaceId?: string;
     provider?: string;
     kind?: string;
     scope?: string;
     scopeHints?: { repoUrl?: string; username?: string };
     values?: Record<string, string>;
   };
-  expect(passed.spaceId).toEqual("space_a");
+  expect(passed.workspaceId).toEqual("space_a");
   expect(passed.provider).toEqual("source_git_https_token");
   expect(passed.kind).toEqual("source_git_https_token");
   expect(passed.scope).toEqual("space");
@@ -4414,7 +4415,7 @@ test("Connections create: normalizes Google Cloud to service-account JSON driver
   const create = request("POST", "/api/v1/connections", {
     cookie,
     body: {
-      spaceId: "space_a",
+      workspaceId: "space_a",
       provider: "gcp",
       displayName: "Google Cloud",
       values: {
@@ -4432,14 +4433,14 @@ test("Connections create: normalizes Google Cloud to service-account JSON driver
   expect(response?.status).toEqual(201);
 
   const passed = operations.calls.createConnection?.[0] as {
-    spaceId?: string;
+    workspaceId?: string;
     provider?: string;
     kind?: string;
     scope?: string;
     scopeHints?: { gcpProjectId?: string };
     values?: Record<string, string>;
   };
-  expect(passed.spaceId).toEqual("space_a");
+  expect(passed.workspaceId).toEqual("space_a");
   expect(passed.provider).toEqual("google");
   expect(passed.kind).toEqual("gcp_service_account_json");
   expect(passed.scope).toEqual("space");
@@ -4460,7 +4461,7 @@ test("Connections create: registers arbitrary OpenTofu provider env values", asy
   const create = request("POST", "/api/v1/connections", {
     cookie,
     body: {
-      spaceId: "space_a",
+      workspaceId: "space_a",
       provider,
       displayName: "Snowflake",
       values: {
@@ -4479,13 +4480,13 @@ test("Connections create: registers arbitrary OpenTofu provider env values", asy
   expect(response?.status).toEqual(201);
 
   const passed = operations.calls.createConnection?.[0] as {
-    spaceId?: string;
+    workspaceId?: string;
     provider?: string;
     kind?: string;
     scope?: string;
     values?: Record<string, string>;
   };
-  expect(passed.spaceId).toEqual("space_a");
+  expect(passed.workspaceId).toEqual("space_a");
   expect(passed.provider).toEqual(provider);
   expect(passed.kind).toEqual("generic_env_provider");
   expect(passed.scope).toEqual("space");
@@ -4505,7 +4506,7 @@ test("Connections create: forwards generic env credential files without echoing 
   const create = request("POST", "/api/v1/connections", {
     cookie,
     body: {
-      spaceId: "space_a",
+      workspaceId: "space_a",
       provider,
       kind: "generic_env_provider",
       displayName: "Env file provider",
@@ -4566,7 +4567,7 @@ test("Connections create: rejects credential files for fixed provider helpers", 
   const create = request("POST", "/api/v1/connections", {
     cookie,
     body: {
-      spaceId: "space_a",
+      workspaceId: "space_a",
       provider: "cloudflare",
       values: {
         CLOUDFLARE_API_TOKEN: "cf-secret",
@@ -4602,7 +4603,7 @@ test("Connections create: known non-Cloudflare providers are explicit generic en
   const create = request("POST", "/api/v1/connections", {
     cookie,
     body: {
-      spaceId: "space_a",
+      workspaceId: "space_a",
       provider: "aws",
       displayName: "AWS production",
       values: {
@@ -4643,7 +4644,7 @@ test("Connections create: honors explicit generic env for guided providers", asy
   const create = request("POST", "/api/v1/connections", {
     cookie,
     body: {
-      spaceId: "space_a",
+      workspaceId: "space_a",
       provider: "cloudflare",
       kind: "generic_env_provider",
       values: {
@@ -4679,26 +4680,26 @@ test("Connections create: honors explicit generic env for guided providers", asy
   expect(text).not.toContain("cloudflare.example.test");
 });
 
-test("Connections create: requires spaceId and values", async () => {
+test("Connections create: requires workspaceId and values", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
 
-  const noSpace = request("POST", "/api/v1/connections", {
+  const noWorkspace = request("POST", "/api/v1/connections", {
     cookie,
     body: { provider: "cloudflare", values: { CLOUDFLARE_API_TOKEN: "t" } },
   });
-  const noSpaceResp = await handleControlRoute({
-    request: noSpace.request,
-    url: noSpace.url,
+  const noWorkspaceResp = await handleControlRoute({
+    request: noWorkspace.request,
+    url: noWorkspace.url,
     store,
     operations,
   });
-  expect(noSpaceResp?.status).toEqual(400);
+  expect(noWorkspaceResp?.status).toEqual(400);
 
   const noValues = request("POST", "/api/v1/connections", {
     cookie,
-    body: { spaceId: "space_a", provider: "cloudflare", values: {} },
+    body: { workspaceId: "space_a", provider: "cloudflare", values: {} },
   });
   const noValuesResp = await handleControlRoute({
     request: noValues.request,
@@ -4711,7 +4712,7 @@ test("Connections create: requires spaceId and values", async () => {
   const noProvider = request("POST", "/api/v1/connections", {
     cookie,
     body: {
-      spaceId: "space_a",
+      workspaceId: "space_a",
       values: { CLOUDFLARE_API_TOKEN: "t" },
     },
   });
@@ -4732,7 +4733,7 @@ test("Connections create: requires spaceId and values", async () => {
   const sourceNoToken = request("POST", "/api/v1/connections", {
     cookie,
     body: {
-      spaceId: "space_a",
+      workspaceId: "space_a",
       kind: "source_git_https_token",
       values: { OTHER_SECRET: "not-a-git-token" },
     },
@@ -4749,12 +4750,12 @@ test("Connections create: requires spaceId and values", async () => {
   expect(operations.calls.createConnection).toBeUndefined();
 });
 
-test("Connections create: another Space is forbidden (no connection minted)", async () => {
+test("Connections create: another Workspace is forbidden (no connection minted)", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations({
     spaces: {
-      getSpace: async (id) => ({
+      getWorkspace: async (id) => ({
         id,
         handle: "other",
         displayName: "Other",
@@ -4768,7 +4769,7 @@ test("Connections create: another Space is forbidden (no connection minted)", as
   const create = request("POST", "/api/v1/connections", {
     cookie,
     body: {
-      spaceId: "space_b",
+      workspaceId: "space_b",
       provider: "cloudflare",
       values: { CLOUDFLARE_API_TOKEN: "secret" },
     },
@@ -4791,7 +4792,7 @@ test("Cloudflare OAuth: 501 when the operator has not wired the helper", async (
 
   const start = request("POST", "/api/v1/connections/cloudflare/oauth/start", {
     cookie,
-    body: { spaceId: "space_a" },
+    body: { workspaceId: "space_a" },
   });
   const startResp = await handleControlRoute({
     request: start.request,
@@ -4815,7 +4816,7 @@ test("Cloudflare OAuth: 501 when the operator has not wired the helper", async (
   expect(callbackResp?.status).toEqual(501);
 });
 
-test("POST /api/v1/connections/:id/test resolves the Space and re-verifies the connection", async () => {
+test("POST /api/v1/connections/:id/test resolves the Workspace and re-verifies the connection", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
@@ -4833,7 +4834,7 @@ test("POST /api/v1/connections/:id/test resolves the Space and re-verifies the c
   expect(response?.status).toEqual(200);
   const body = (await response!.json()) as { status: string };
   expect(body.status).toEqual("verified");
-  // Ownership is resolved from the Connection's spaceId before the test runs.
+  // Ownership is resolved from the Connection's workspaceId before the test runs.
   expect(operations.calls.getConnection).toEqual(["conn_abc"]);
   expect(operations.calls.testConnection).toEqual(["conn_abc"]);
 });
@@ -4870,7 +4871,7 @@ test("POST /api/v1/connections/:id/revoke accepts the raw connection id as the p
       getConnectionCalls.push(id);
       return {
         id,
-        spaceId: "space_a",
+        workspaceId: "space_a",
         provider: "cloudflare",
         providerSource: "registry.opentofu.org/cloudflare/cloudflare",
         kind: "cloudflare_api_token",
@@ -4933,17 +4934,17 @@ test("POST /api/v1/connections/:id/revoke 404s (non-disclosing) for an unknown c
   expect(operations.calls.revokeConnection).toBeUndefined();
 });
 
-test("POST /api/v1/connections/:id/revoke 404s (non-disclosing) for a Space the caller does not own", async () => {
+test("POST /api/v1/connections/:id/revoke 404s (non-disclosing) for a Workspace the caller does not own", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
-  // The Connection belongs to a Space owned by a different subject -> the
+  // The Connection belongs to a Workspace owned by a different subject -> the
   // ownership gate must answer a non-disclosing connection_not_found, and the
   // revoke must never run.
   const operations = fakeOperations({
     getConnection: async (connectionId) =>
       ({
         id: connectionId,
-        spaceId: "space_foreign",
+        workspaceId: "space_foreign",
         provider: "cloudflare",
         kind: "cloudflare_api_token",
         authMethod: "static_secret",
@@ -4953,7 +4954,7 @@ test("POST /api/v1/connections/:id/revoke 404s (non-disclosing) for a Space the 
         updatedAt: "2026-01-01T00:00:00Z",
       }) as unknown as ReturnType<ControlPlaneOperations["getConnection"]>,
     spaces: {
-      getSpace: async (id) => ({
+      getWorkspace: async (id) => ({
         id,
         handle: id,
         displayName: id,
@@ -4981,7 +4982,7 @@ test("POST /api/v1/connections/:id/revoke 404s (non-disclosing) for a Space the 
   expect(operations.calls.revokeConnection).toBeUndefined();
 });
 
-test("Cloudflare OAuth: start authorizes and callback redirects to /connections, minting a Space-owned connection", async () => {
+test("Cloudflare OAuth: start authorizes and callback redirects to /connections, minting a Workspace-owned connection", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie, subject } = seedSession(store);
   // Record the subject the cookie-gated start signed into the state, then the
@@ -4996,13 +4997,13 @@ test("Cloudflare OAuth: start authorizes and callback redirects to /connections,
           return {
             authorizationUrl:
               "https://dash.cloudflare.com/oauth2/auth?client_id=cf&state=signed&space=" +
-              encodeURIComponent(input.spaceId),
+              encodeURIComponent(input.workspaceId),
             state: "signed",
           };
         },
         complete: async () => ({
           request: {
-            spaceId: "space_a",
+            workspaceId: "space_a",
             provider: "cloudflare",
             kind: "generic_env_provider" as const,
             authMethod: "static_secret" as const,
@@ -5016,7 +5017,7 @@ test("Cloudflare OAuth: start authorizes and callback redirects to /connections,
 
   const start = request("POST", "/api/v1/connections/cloudflare/oauth/start", {
     cookie,
-    body: { spaceId: "space_a" },
+    body: { workspaceId: "space_a" },
   });
   const startResp = await handleControlRoute({
     request: start.request,
@@ -5053,12 +5054,12 @@ test("Cloudflare OAuth: start authorizes and callback redirects to /connections,
   // The minted token never rides the redirect query.
   expect(location).not.toContain("minted-oauth-token");
 
-  // A Space-owned connection was created from the OAuth result.
+  // A Workspace-owned connection was created from the OAuth result.
   const passed = operations.calls.createConnection?.[0] as {
-    spaceId?: string;
+    workspaceId?: string;
     scope?: string;
   };
-  expect(passed.spaceId).toEqual("space_a");
+  expect(passed.workspaceId).toEqual("space_a");
   expect(passed.scope).toEqual("space");
   expect(operations.calls.testConnection).toEqual(["conn_new"]);
 });
@@ -5078,7 +5079,7 @@ test("Cloudflare OAuth callback without the session cookie still completes (cros
         start: async () => ({ authorizationUrl: "https://x", state: "signed" }),
         complete: async () => ({
           request: {
-            spaceId: "space_a",
+            workspaceId: "space_a",
             provider: "cloudflare",
             kind: "generic_env_provider" as const,
             authMethod: "static_secret" as const,
@@ -5114,7 +5115,7 @@ test("Cloudflare OAuth callback without the session cookie still completes (cros
 
 test("Cloudflare OAuth callback: an unsigned state (no subject) is refused", async () => {
   // A forged/legacy callback whose state carries no signed subject must not be
-  // trusted to mint a Connection, even though the spaceId looks owned.
+  // trusted to mint a Connection, even though the workspaceId looks owned.
   const store = new InMemoryAccountsStore();
   seedSession(store, { subject: "tsub_ctrl" });
   const operations = fakeOperations({
@@ -5123,7 +5124,7 @@ test("Cloudflare OAuth callback: an unsigned state (no subject) is refused", asy
         start: async () => ({ authorizationUrl: "https://x", state: "signed" }),
         complete: async () => ({
           request: {
-            spaceId: "space_a",
+            workspaceId: "space_a",
             provider: "cloudflare",
             kind: "generic_env_provider" as const,
             authMethod: "static_secret" as const,
@@ -5150,14 +5151,14 @@ test("Cloudflare OAuth callback: an unsigned state (no subject) is refused", asy
   expect(operations.calls.createConnection).toBeUndefined();
 });
 
-test("Cloudflare OAuth callback: a Space the signed subject does not own is not minted", async () => {
+test("Cloudflare OAuth callback: a Workspace the signed subject does not own is not minted", async () => {
   const store = new InMemoryAccountsStore();
   // Present a cookie too, to prove the gate is the SIGNED subject, not the
-  // cookie: the signed subject does not own the Space, so the mint is refused.
+  // cookie: the signed subject does not own the Workspace, so the mint is refused.
   const { cookie } = seedSession(store);
   const operations = fakeOperations({
     spaces: {
-      getSpace: async (id) => ({
+      getWorkspace: async (id) => ({
         id,
         handle: "other",
         displayName: "Other",
@@ -5172,8 +5173,8 @@ test("Cloudflare OAuth callback: a Space the signed subject does not own is not 
         start: async () => ({ authorizationUrl: "https://x", state: "s" }),
         complete: async () => ({
           request: {
-            // The signed state resolves to a Space owned by someone else.
-            spaceId: "space_b",
+            // The signed state resolves to a Workspace owned by someone else.
+            workspaceId: "space_b",
             provider: "cloudflare",
             kind: "generic_env_provider" as const,
             authMethod: "static_secret" as const,
@@ -5203,13 +5204,13 @@ test("Cloudflare OAuth callback: a Space the signed subject does not own is not 
   expect(operations.calls.createConnection).toBeUndefined();
 });
 
-test("OutputShares: list, create, approve, and revoke are Space-gated", async () => {
+test("OutputShares: list, create, approve, and revoke are Workspace-gated", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie, subject } = seedSession(store);
-  seedLedgerSpace(store, {
+  seedLedgerWorkspace(store, {
     subject,
     accountId: "acct_to",
-    spaceId: "space_b",
+    workspaceId: "space_b",
   });
   const operations = fakeOperations();
 
@@ -5228,9 +5229,9 @@ test("OutputShares: list, create, approve, and revoke are Space-gated", async ()
   const create = request("POST", "/api/v1/output-shares", {
     cookie,
     body: {
-      fromSpaceId: "space_a",
-      toSpaceId: "space_b",
-      producerInstallationId: "inst_1",
+      fromWorkspaceId: "space_a",
+      toWorkspaceId: "space_b",
+      producerCapsuleId: "inst_1",
       outputs: [{ name: "domain", alias: "base_domain", sensitive: true }],
       sensitivePolicy: { allow: true, reason: "approved by both spaces" },
     },
@@ -5297,17 +5298,17 @@ test("controller errors map to their HTTP status (not_found -> 404)", async () =
   const { cookie } = seedSession(store);
   const operations = fakeOperations({
     installations: {
-      getInstallation: async () => {
+      getCapsule: async () => {
         throw Object.assign(new Error("nope"), { code: "not_found" });
       },
-      listInstallations: async () => [],
-      listInstallationsPage: async () => ({ items: [] }),
-      createInstallation: async () => {
+      listCapsules: async () => [],
+      listCapsulesPage: async () => ({ items: [] }),
+      createCapsule: async () => {
         throw new Error("unused");
       },
       listInstallConfigs: async () => [],
-      putInstallationProviderEnvBindingSet: async (profile) => profile,
-      getInstallationProviderEnvBindingSetByInstallation: async () => undefined,
+      putCapsuleProviderEnvBindingSet: async (profile) => profile,
+      getCapsuleProviderEnvBindingSetByCapsule: async () => undefined,
     },
   });
   const { request: req, url } = request(
@@ -5340,45 +5341,45 @@ test("unknown control subpath is 404 after the session gate", async () => {
   expect(response?.status).toEqual(404);
 });
 
-// --- personalSpaceHandle derivation ---------------------------------------
+// --- personalWorkspaceHandle derivation ---------------------------------------
 
-test("personalSpaceHandle prefers displayName, then email, then fallback", () => {
+test("personalWorkspaceHandle prefers displayName, then email, then fallback", () => {
   expect(
-    personalSpaceHandle({ subject: "tsub_x", displayName: "Shota Tomiyama" }),
+    personalWorkspaceHandle({ subject: "tsub_x", displayName: "Shota Tomiyama" }),
   ).toEqual("shota-tomiyama");
   expect(
-    personalSpaceHandle({ subject: "tsub_x", email: "alice.dev@example.com" }),
+    personalWorkspaceHandle({ subject: "tsub_x", email: "alice.dev@example.com" }),
   ).toEqual("alice-dev");
   // Unusable displayName ("!") falls through to email.
   expect(
-    personalSpaceHandle({
+    personalWorkspaceHandle({
       subject: "tsub_x",
       displayName: "!",
       email: "bob@x.io",
     }),
   ).toEqual("bob");
   // No usable candidate -> u-<short subject>.
-  const fallback = personalSpaceHandle({ subject: "tsub_AbCdEf123" });
+  const fallback = personalWorkspaceHandle({ subject: "tsub_AbCdEf123" });
   expect(fallback.startsWith("u-")).toEqual(true);
   expect(/^[a-z0-9][a-z0-9-]{1,38}$/.test(fallback)).toEqual(true);
 });
 
-test("personalSpaceHandle clamps to the 39-char handle rule", () => {
+test("personalWorkspaceHandle clamps to the 39-char handle rule", () => {
   const long = "x".repeat(80);
-  const handle = personalSpaceHandle({ subject: "tsub_x", displayName: long });
+  const handle = personalWorkspaceHandle({ subject: "tsub_x", displayName: long });
   expect(handle.length).toBeLessThanOrEqual(39);
   expect(/^[a-z0-9][a-z0-9-]{1,38}$/.test(handle)).toEqual(true);
 });
 
-// --- ensurePersonalSpace fire-and-forget hook -----------------------------
+// --- ensurePersonalWorkspace fire-and-forget hook -----------------------------
 
-test("maybeEnsurePersonalSpaceForSession creates a space for a live session", async () => {
+test("maybeEnsurePersonalWorkspaceForSession creates a space for a live session", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store, { displayName: "Shota" });
   const operations = fakeOperations();
   const { request: req } = request("GET", "/v1/account/session/me", { cookie });
-  await maybeEnsurePersonalSpaceForSession({ request: req, store, operations });
-  const createCall = operations.calls.createSpace?.[0] as {
+  await maybeEnsurePersonalWorkspaceForSession({ request: req, store, operations });
+  const createCall = operations.calls.createWorkspace?.[0] as {
     handle: string;
     type: string;
     ownerUserId: string;
@@ -5388,16 +5389,16 @@ test("maybeEnsurePersonalSpaceForSession creates a space for a live session", as
   expect(createCall.ownerUserId).toEqual("tsub_ctrl");
 });
 
-test("maybeEnsurePersonalSpaceForSession swallows a handle-collision error", async () => {
+test("maybeEnsurePersonalWorkspaceForSession swallows a handle-collision error", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store, { displayName: "Shota" });
   const operations = fakeOperations({
     spaces: {
-      listSpaces: async () => [],
-      getSpace: async () => {
+      listWorkspaces: async () => [],
+      getWorkspace: async () => {
         throw new Error("unused");
       },
-      createSpace: async () => {
+      createWorkspace: async () => {
         throw Object.assign(new Error("taken"), {
           code: "failed_precondition",
         });
@@ -5406,20 +5407,20 @@ test("maybeEnsurePersonalSpaceForSession swallows a handle-collision error", asy
   });
   const { request: req } = request("GET", "/v1/account/session/me", { cookie });
   // Must NOT throw.
-  await maybeEnsurePersonalSpaceForSession({ request: req, store, operations });
+  await maybeEnsurePersonalWorkspaceForSession({ request: req, store, operations });
 });
 
-test("maybeEnsurePersonalSpaceForSession is a no-op without a session", async () => {
+test("maybeEnsurePersonalWorkspaceForSession is a no-op without a session", async () => {
   const store = new InMemoryAccountsStore();
   const operations = fakeOperations();
   const { request: req } = request("GET", "/v1/account/session/me");
-  await maybeEnsurePersonalSpaceForSession({ request: req, store, operations });
-  expect(operations.calls.createSpace).toBeUndefined();
+  await maybeEnsurePersonalWorkspaceForSession({ request: req, store, operations });
+  expect(operations.calls.createWorkspace).toBeUndefined();
 });
 
 // --- POST /api/v1/runs/:runId/apply (§31 GUI deploy) ----------------------
 
-test("POST /api/v1/runs/:id/apply applies a succeeded plan for an owned Space", async () => {
+test("POST /api/v1/runs/:id/apply applies a succeeded plan for an owned Workspace", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
@@ -5466,12 +5467,12 @@ test("POST /api/v1/runs/:id/apply projects installation and deployment handles",
         applyRun: {
           id: "apply_1",
           planRunId: req.planRunId,
-          spaceId: "space_a",
+          workspaceId: "space_a",
           status: "queued",
         },
         installation: {
           id: "inst_1",
-          spaceId: "space_a",
+          workspaceId: "space_a",
           name: "app",
           slug: "app",
           sourceId: "src_x",
@@ -5480,7 +5481,7 @@ test("POST /api/v1/runs/:id/apply projects installation and deployment handles",
           environment: "prod",
           currentDeploymentId: "dep_1",
           currentStateGeneration: 4,
-          currentOutputSnapshotId: "osnap_secret_1",
+          currentOutputId: "osnap_secret_1",
           status: "active",
           createdAt: "2026-01-01T00:00:00Z",
           updatedAt: "2026-01-01T00:00:00Z",
@@ -5505,7 +5506,7 @@ test("POST /api/v1/runs/:id/apply projects installation and deployment handles",
     deployment?: Record<string, unknown>;
   };
   expect(body.installation?.installType).toBeUndefined();
-  expect(body.installation?.currentOutputSnapshotId).toBeUndefined();
+  expect(body.installation?.currentOutputId).toBeUndefined();
   expect(body.deployment?.outputSnapshotId).toBeUndefined();
   expect(JSON.stringify(body)).not.toContain("osnap_secret_1");
 });
@@ -5533,14 +5534,14 @@ test("POST /api/v1/runs/:id/apply forwards confirmDestructive for a destructive 
   expect(applyArg.confirmDestructive).toEqual(true);
 });
 
-test("POST /api/v1/runs/:id/apply rejects a plan from another inaccessible Space", async () => {
+test("POST /api/v1/runs/:id/apply rejects a plan from another inaccessible Workspace", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations({
     spaces: {
-      listSpaces: async () => [],
-      // The plan's owning Space (space_b) is owned by a different subject.
-      getSpace: async (id) => ({
+      listWorkspaces: async () => [],
+      // The plan's owning Workspace (space_b) is owned by a different subject.
+      getWorkspace: async (id) => ({
         id,
         handle: "other",
         displayName: "Other",
@@ -5554,7 +5555,7 @@ test("POST /api/v1/runs/:id/apply rejects a plan from another inaccessible Space
       ({
         planRun: {
           id,
-          spaceId: "space_b",
+          workspaceId: "space_b",
           status: "succeeded",
           operation: "create",
           runnerProfileId: "rp_default",
@@ -5581,7 +5582,7 @@ test("POST /api/v1/runs/:id/apply rejects a plan from another inaccessible Space
     operations,
   });
   expect(response?.status).toEqual(403);
-  // The plan was resolved (to learn its Space, space_b) but the gate rejects
+  // The plan was resolved (to learn its Workspace, space_b) but the gate rejects
   // before any apply is created.
   expect(operations.calls.createApplyRun).toBeUndefined();
 });
@@ -5690,30 +5691,30 @@ test("POST /api/v1/plan-runs/:id/apply is not a public compatibility route", asy
   expect(operations.calls.createApplyRun).toBeUndefined();
 });
 
-test("maybeEnsurePersonalSpaceForSession is a no-op without an operations facade", async () => {
+test("maybeEnsurePersonalWorkspaceForSession is a no-op without an operations facade", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const { request: req } = request("GET", "/v1/account/session/me", { cookie });
   // No operations -> returns quietly.
-  await maybeEnsurePersonalSpaceForSession({ request: req, store });
+  await maybeEnsurePersonalWorkspaceForSession({ request: req, store });
 });
 
 // --- Deployments / outputs / rollback (§30 GUI deploy) ---------------------
 
 /**
  * A Deployment ledger row whose `outputsPublic` is the allowlist projection.
- * `outputSnapshotId` points at the raw (un-projected) encrypted OutputSnapshot
+ * `outputSnapshotId` points at the raw (un-projected) encrypted Output
  * and MUST be projected out of every session-surface read.
  */
 function deploymentRow(
   id: string,
-  spaceId: string,
-  installationId = "inst_1",
+  workspaceId: string,
+  capsuleId = "inst_1",
 ): Record<string, unknown> {
   return {
     id,
-    spaceId,
-    installationId,
+    workspaceId,
+    capsuleId,
     environment: "production",
     applyRunId: "apply_1",
     sourceSnapshotId: "snap_1",
@@ -5732,22 +5733,22 @@ function deploymentRow(
  * which facade method was reached.
  */
 function deploymentOperations(
-  spaceId: string,
+  workspaceId: string,
   overrides: Parameters<typeof fakeOperations>[0] = {},
 ): ReturnType<typeof fakeOperations> {
   const operations = fakeOperations(overrides);
   const calls = operations.calls;
-  operations.listDeployments = async (installationId: string) => {
-    calls.listDeployments = [installationId];
+  operations.listDeployments = async (capsuleId: string) => {
+    calls.listDeployments = [capsuleId];
     return {
-      deployments: [deploymentRow("dep_1", spaceId, installationId)],
+      deployments: [deploymentRow("dep_1", workspaceId, capsuleId)],
     } as unknown as Awaited<
       ReturnType<ControlPlaneOperations["listDeployments"]>
     >;
   };
   operations.getDeployment = async (id: string) => {
     calls.getDeployment = [id];
-    return deploymentRow(id, spaceId) as unknown as Awaited<
+    return deploymentRow(id, workspaceId) as unknown as Awaited<
       ReturnType<ControlPlaneOperations["getDeployment"]>
     >;
   };
@@ -5756,10 +5757,10 @@ function deploymentOperations(
     return {
       planRun: {
         id: "plan_rollback",
-        spaceId,
+        workspaceId,
         status: "queued",
         operation: "update",
-        installationId: "inst_1",
+        capsuleId: "inst_1",
         rolledBackFromDeploymentId: deploymentId,
       },
     } as unknown as Awaited<
@@ -5769,11 +5770,11 @@ function deploymentOperations(
   return operations;
 }
 
-function otherSpaceSpaces(): NonNullable<
+function otherWorkspaceWorkspaces(): NonNullable<
   Parameters<typeof fakeOperations>[0]
 >["spaces"] {
   return {
-    getSpace: async (id) => ({
+    getWorkspace: async (id) => ({
       id,
       handle: "other",
       displayName: "Other",
@@ -5785,7 +5786,7 @@ function otherSpaceSpaces(): NonNullable<
   };
 }
 
-test("GET /api/v1/installations/:id/deployments lists deployments for an owned Space", async () => {
+test("GET /api/v1/installations/:id/deployments lists deployments for an owned Workspace", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = deploymentOperations("space_a");
@@ -5805,10 +5806,10 @@ test("GET /api/v1/installations/:id/deployments lists deployments for an owned S
     deployments: Array<Record<string, unknown>>;
   };
   expect(body.deployments.length).toEqual(1);
-  // The Installation's Space was resolved server-side for the gate.
-  expect(operations.calls.getInstallation).toEqual(["inst_1"]);
+  // The Capsule's Workspace was resolved server-side for the gate.
+  expect(operations.calls.getCapsule).toEqual(["inst_1"]);
   expect(operations.calls.listDeployments).toEqual(["inst_1"]);
-  // The raw OutputSnapshot pointer is projected out of every row.
+  // The raw Output pointer is projected out of every row.
   expect(body.deployments[0]!.outputSnapshotId).toBeUndefined();
   expect(body.deployments[0]!.outputsPublic).toEqual({
     launch_url: "https://app.example.test",
@@ -5835,7 +5836,7 @@ test("GET /api/v1/capsules/:id/state-versions aliases the final StateVersion lis
     deployments: Array<Record<string, unknown>>;
   };
   expect(body.deployments.length).toEqual(1);
-  expect(operations.calls.getInstallation).toEqual(["inst_1"]);
+  expect(operations.calls.getCapsule).toEqual(["inst_1"]);
   expect(operations.calls.listDeployments).toEqual(["inst_1"]);
 });
 
@@ -5863,13 +5864,13 @@ test("GET /api/v1/state-versions/:id aliases the final StateVersion read route",
 test("GET /api/v1/installations/:id/deployments rejects a non-member session with 403", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
-  // The Installation belongs to space_b, owned by a different subject.
+  // The Capsule belongs to space_b, owned by a different subject.
   const operations = deploymentOperations("space_b", {
-    spaces: otherSpaceSpaces(),
+    spaces: otherWorkspaceWorkspaces(),
     installations: {
-      getInstallation: async (id) => ({
+      getCapsule: async (id) => ({
         id,
-        spaceId: "space_b",
+        workspaceId: "space_b",
         name: "inst",
         environment: "production",
         sourceId: "src_1",
@@ -5910,26 +5911,26 @@ test("GET /api/v1/deployments/:id returns only the public outputs projection", a
     operations,
   });
   expect(response?.status).toEqual(200);
-  // The Deployment was resolved server-side to learn its Space for the gate.
+  // The Deployment was resolved server-side to learn its Workspace for the gate.
   expect(operations.calls.getDeployment).toEqual(["dep_1"]);
   const body = (await response!.json()) as {
     deployment: Record<string, unknown>;
   };
-  // Public outputsPublic is present; the raw OutputSnapshot pointer is gone.
+  // Public outputsPublic is present; the raw Output pointer is gone.
   expect(body.deployment.outputsPublic).toEqual({
     launch_url: "https://app.example.test",
   });
   expect(body.deployment.outputSnapshotId).toBeUndefined();
-  // No raw OutputSnapshot handle leaks into the serialized response.
+  // No raw Output handle leaks into the serialized response.
   expect(JSON.stringify(body)).not.toContain("osnap_secret_1");
 });
 
-test("GET /api/v1/deployments/:id rejects a deployment in another Space with 403", async () => {
+test("GET /api/v1/deployments/:id rejects a deployment in another Workspace with 403", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   // The Deployment belongs to space_b, owned by a different subject.
   const operations = deploymentOperations("space_b", {
-    spaces: otherSpaceSpaces(),
+    spaces: otherWorkspaceWorkspaces(),
   });
   const { request: req, url } = request(
     "GET",
@@ -5943,12 +5944,12 @@ test("GET /api/v1/deployments/:id rejects a deployment in another Space with 403
     operations,
   });
   expect(response?.status).toEqual(403);
-  // The Deployment was resolved (to learn its Space) but the gate rejects; no
+  // The Deployment was resolved (to learn its Workspace) but the gate rejects; no
   // projection is returned, so nothing could leak.
   expect(operations.calls.getDeployment).toEqual(["dep_other"]);
 });
 
-test("POST /api/v1/deployments/:id/rollback-plan creates a rollback plan for an owned Space", async () => {
+test("POST /api/v1/deployments/:id/rollback-plan creates a rollback plan for an owned Workspace", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = deploymentOperations("space_a");
@@ -5964,7 +5965,7 @@ test("POST /api/v1/deployments/:id/rollback-plan creates a rollback plan for an 
     operations,
   });
   expect(response?.status).toEqual(201);
-  // The Deployment's Space was resolved server-side for the gate first.
+  // The Deployment's Workspace was resolved server-side for the gate first.
   expect(operations.calls.getDeployment).toEqual(["dep_1"]);
   expect(operations.calls.createDeploymentRollbackPlan).toEqual(["dep_1"]);
   const body = (await response!.json()) as { run: { id: string } };
@@ -5972,11 +5973,11 @@ test("POST /api/v1/deployments/:id/rollback-plan creates a rollback plan for an 
   expect(body.run.id).toEqual("plan_rollback");
 });
 
-test("POST /api/v1/deployments/:id/rollback-plan rejects a deployment in another Space with 403", async () => {
+test("POST /api/v1/deployments/:id/rollback-plan rejects a deployment in another Workspace with 403", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = deploymentOperations("space_b", {
-    spaces: otherSpaceSpaces(),
+    spaces: otherWorkspaceWorkspaces(),
   });
   const { request: req, url } = request(
     "POST",
@@ -6051,11 +6052,11 @@ test("POST /api/v1/deployments/:id/rollback-plan rejects an unknown leaf and the
   ).toEqual(405);
 });
 
-// --- Members (Space membership / roles) ------------------------------------
+// --- Members (Workspace membership / roles) ------------------------------------
 
 type MemberRow = {
   id: string;
-  spaceId: string;
+  workspaceId: string;
   accountId: string;
   roles: string[];
   status: "active" | "invited" | "suspended";
@@ -6065,13 +6066,13 @@ type MemberRow = {
 
 /**
  * A `fakeOperations` whose `members` facade is backed by an in-memory roster.
- * `spaceOwner` controls the namespace gate (`requireSpaceAccess`): when it
+ * `spaceOwner` controls the namespace gate (`requireWorkspaceAccess`): when it
  * equals the session subject the namespace gate passes, so a 403 there isolates
  * the membership ROLE gate. The roster seeds the per-account roles the route
  * reads to decide the role/last-owner gate.
  */
 function memberOperations(options: {
-  spaceId: string;
+  workspaceId: string;
   spaceOwner: string;
   roster: MemberRow[];
 }): ControlPlaneOperations & {
@@ -6081,7 +6082,7 @@ function memberOperations(options: {
   const roster = options.roster;
   const base = fakeOperations({
     spaces: {
-      getSpace: async (id) => ({
+      getWorkspace: async (id) => ({
         id,
         handle: "team",
         displayName: "Team",
@@ -6093,21 +6094,21 @@ function memberOperations(options: {
     },
   });
   const members: NonNullable<ControlPlaneOperations["members"]> = {
-    listMembers: async (spaceId) => {
-      base.calls.listMembers = [spaceId];
-      return roster.filter((member) => member.spaceId === spaceId);
+    listMembers: async (workspaceId) => {
+      base.calls.listMembers = [workspaceId];
+      return roster.filter((member) => member.workspaceId === workspaceId);
     },
     upsertMember: async (input) => {
       base.calls.upsertMember = [input];
       const now = "2026-02-02T00:00:00Z";
       const existing = roster.find(
         (member) =>
-          member.spaceId === input.spaceId &&
+          member.workspaceId === input.workspaceId &&
           member.accountId === input.accountId,
       );
       const next: MemberRow = {
         id: existing?.id ?? `mem_${input.accountId}`,
-        spaceId: input.spaceId,
+        workspaceId: input.workspaceId,
         accountId: input.accountId,
         roles: [...(input.roles ?? existing?.roles ?? ["member"])],
         status: input.status ?? existing?.status ?? "active",
@@ -6129,11 +6130,11 @@ function memberRow(
   accountId: string,
   roles: string[],
   status: "active" | "invited" | "suspended" = "active",
-  spaceId = "space_a",
+  workspaceId = "space_a",
 ): MemberRow {
   return {
     id: `mem_${accountId}`,
-    spaceId,
+    workspaceId,
     accountId,
     roles,
     status,
@@ -6148,7 +6149,7 @@ test("GET /api/v1/spaces/:id/members lists members for an active member", async 
   // The session subject is a plain MEMBER (not owner/admin); list is still
   // visible to any active member.
   const operations = memberOperations({
-    spaceId: "space_a",
+    workspaceId: "space_a",
     spaceOwner: "tsub_ctrl",
     roster: [
       memberRow("tsub_owner", ["owner"]),
@@ -6169,7 +6170,7 @@ test("GET /api/v1/spaces/:id/members lists members for an active member", async 
   expect(response?.status).toEqual(200);
   const body = (await response!.json()) as { members: MemberRow[] };
   expect(body.members.length).toEqual(2);
-  // The spaceId was resolved server-side for the membership read.
+  // The workspaceId was resolved server-side for the membership read.
   expect(operations.calls.listMembers).toEqual(["space_a"]);
 });
 
@@ -6177,7 +6178,7 @@ test("POST /api/v1/spaces/:id/members lets an owner add a member", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = memberOperations({
-    spaceId: "space_a",
+    workspaceId: "space_a",
     spaceOwner: "tsub_ctrl",
     roster: [memberRow("tsub_ctrl", ["owner"])],
   });
@@ -6197,11 +6198,11 @@ test("POST /api/v1/spaces/:id/members lets an owner add a member", async () => {
   expect(body.member.accountId).toEqual("tsub_new");
   expect(body.member.roles).toEqual(["member"]);
   expect(body.member.status).toEqual("active");
-  // The spaceId in the upsert is the server-resolved path value, never client body.
+  // The workspaceId in the upsert is the server-resolved path value, never client body.
   const upsertArg = (
     operations.calls.upsertMember as [Record<string, unknown>]
   )[0];
-  expect(upsertArg.spaceId).toEqual("space_a");
+  expect(upsertArg.workspaceId).toEqual("space_a");
   expect(upsertArg.accountId).toEqual("tsub_new");
 });
 
@@ -6217,7 +6218,7 @@ test("POST /api/v1/spaces/:id/members resolves a verified email to an account", 
     updatedAt: now,
   });
   const operations = memberOperations({
-    spaceId: "space_a",
+    workspaceId: "space_a",
     spaceOwner: "tsub_ctrl",
     roster: [memberRow("tsub_ctrl", ["owner"])],
   });
@@ -6254,7 +6255,7 @@ test("POST /api/v1/spaces/:id/members rejects an email that is not verified", as
     updatedAt: now,
   });
   const operations = memberOperations({
-    spaceId: "space_a",
+    workspaceId: "space_a",
     spaceOwner: "tsub_ctrl",
     roster: [memberRow("tsub_ctrl", ["owner"])],
   });
@@ -6277,7 +6278,7 @@ test("POST /api/v1/spaces/:id/members lets an admin add a member", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = memberOperations({
-    spaceId: "space_a",
+    workspaceId: "space_a",
     spaceOwner: "tsub_ctrl",
     roster: [
       memberRow("tsub_owner", ["owner"]),
@@ -6301,10 +6302,10 @@ test("POST /api/v1/spaces/:id/members lets an admin add a member", async () => {
 test("POST /api/v1/spaces/:id/members forbids a non-owner/admin member with 403", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
-  // Namespace gate passes (the session subject owns the namespace Space), so a
+  // Namespace gate passes (the session subject owns the namespace Workspace), so a
   // 403 here isolates the membership ROLE gate: a plain member cannot add.
   const operations = memberOperations({
-    spaceId: "space_a",
+    workspaceId: "space_a",
     spaceOwner: "tsub_ctrl",
     roster: [
       memberRow("tsub_owner", ["owner"]),
@@ -6331,7 +6332,7 @@ test("POST /api/v1/spaces/:id/members forbids an admin granting owner with 403",
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = memberOperations({
-    spaceId: "space_a",
+    workspaceId: "space_a",
     spaceOwner: "tsub_ctrl",
     roster: [
       memberRow("tsub_owner", ["owner"]),
@@ -6353,13 +6354,13 @@ test("POST /api/v1/spaces/:id/members forbids an admin granting owner with 403",
   expect(operations.calls.upsertMember).toBeUndefined();
 });
 
-test("members routes reject a session in another Space with 403 (namespace gate)", async () => {
+test("members routes reject a session in another Workspace with 403 (namespace gate)", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
-  // The namespace Space is owned by a DIFFERENT subject; the namespace gate
-  // (requireSpaceAccess) rejects before any membership read.
+  // The namespace Workspace is owned by a DIFFERENT subject; the namespace gate
+  // (requireWorkspaceAccess) rejects before any membership read.
   const operations = memberOperations({
-    spaceId: "space_b",
+    workspaceId: "space_b",
     spaceOwner: "tsub_other",
     roster: [memberRow("tsub_other", ["owner"], "active", "space_b")],
   });
@@ -6388,7 +6389,7 @@ test("members routes reject a session in another Space with 403 (namespace gate)
 test("members routes are 401 for an anonymous session", async () => {
   const store = new InMemoryAccountsStore();
   const operations = memberOperations({
-    spaceId: "space_a",
+    workspaceId: "space_a",
     spaceOwner: "tsub_ctrl",
     roster: [memberRow("tsub_ctrl", ["owner"])],
   });
@@ -6417,7 +6418,7 @@ test("PATCH /api/v1/spaces/:id/members/:subject lets an owner change a role", as
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = memberOperations({
-    spaceId: "space_a",
+    workspaceId: "space_a",
     spaceOwner: "tsub_ctrl",
     roster: [
       memberRow("tsub_ctrl", ["owner"]),
@@ -6448,7 +6449,7 @@ test("PATCH /api/v1/spaces/:id/members/:subject forbids an admin (owner-only) wi
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = memberOperations({
-    spaceId: "space_a",
+    workspaceId: "space_a",
     spaceOwner: "tsub_ctrl",
     roster: [
       memberRow("tsub_owner", ["owner"]),
@@ -6476,7 +6477,7 @@ test("PATCH /api/v1/spaces/:id/members/:subject refuses to demote the last owner
   const { cookie } = seedSession(store);
   // The owner tries to demote themselves while they are the SOLE owner.
   const operations = memberOperations({
-    spaceId: "space_a",
+    workspaceId: "space_a",
     spaceOwner: "tsub_ctrl",
     roster: [
       memberRow("tsub_ctrl", ["owner"]),
@@ -6503,7 +6504,7 @@ test("PATCH /api/v1/spaces/:id/members/:subject can demote an owner when another
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = memberOperations({
-    spaceId: "space_a",
+    workspaceId: "space_a",
     spaceOwner: "tsub_ctrl",
     roster: [
       memberRow("tsub_ctrl", ["owner"]),
@@ -6530,7 +6531,7 @@ test("DELETE /api/v1/spaces/:id/members/:subject lets an owner soft-remove a mem
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = memberOperations({
-    spaceId: "space_a",
+    workspaceId: "space_a",
     spaceOwner: "tsub_ctrl",
     roster: [
       memberRow("tsub_ctrl", ["owner"]),
@@ -6563,7 +6564,7 @@ test("DELETE /api/v1/spaces/:id/members/:subject forbids a non-owner with 403", 
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = memberOperations({
-    spaceId: "space_a",
+    workspaceId: "space_a",
     spaceOwner: "tsub_ctrl",
     roster: [
       memberRow("tsub_owner", ["owner"]),
@@ -6590,7 +6591,7 @@ test("DELETE /api/v1/spaces/:id/members/:subject refuses to remove the last owne
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = memberOperations({
-    spaceId: "space_a",
+    workspaceId: "space_a",
     spaceOwner: "tsub_ctrl",
     roster: [
       memberRow("tsub_ctrl", ["owner"]),
@@ -6616,7 +6617,7 @@ test("members routes 503 when no membership facade is wired", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   // A facade WITHOUT the optional `members` field (the namespace gate still
-  // passes because the session subject owns the namespace Space).
+  // passes because the session subject owns the namespace Workspace).
   const operations = fakeOperations();
   const { request: req, url } = request(
     "GET",
@@ -6641,7 +6642,7 @@ test("POST /api/v1/spaces/:id/members forbids an admin from demoting an existing
   // overwrites the owner's role to `member` must be rejected (owner-only), the
   // same way the PATCH path restricts it.
   const operations = memberOperations({
-    spaceId: "space_a",
+    workspaceId: "space_a",
     spaceOwner: "tsub_ctrl",
     roster: [
       memberRow("tsub_owner", ["owner"]),
@@ -6673,9 +6674,9 @@ test("POST /api/v1/spaces/:id/members refuses to strip the last owner", async ()
   const { cookie } = seedSession(store);
   // The caller is the SOLE owner and POSTs their own subject with a lower role.
   // The last-owner guard must block this on the ADD path too, otherwise the
-  // Space is orphaned.
+  // Workspace is orphaned.
   const operations = memberOperations({
-    spaceId: "space_a",
+    workspaceId: "space_a",
     spaceOwner: "tsub_ctrl",
     roster: [
       memberRow("tsub_ctrl", ["owner"]),
@@ -6704,7 +6705,7 @@ test("POST /api/v1/spaces/:id/members lets an owner re-add a co-owner with a low
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = memberOperations({
-    spaceId: "space_a",
+    workspaceId: "space_a",
     spaceOwner: "tsub_ctrl",
     roster: [
       memberRow("tsub_ctrl", ["owner"]),
@@ -6738,7 +6739,7 @@ test("namespace owner can bootstrap the first member when the ledger is empty", 
   // subject IS the namespace owner (`spaceOwner`), so the implicit owner row
   // lets them add the first real member.
   const operations = memberOperations({
-    spaceId: "space_a",
+    workspaceId: "space_a",
     spaceOwner: "tsub_ctrl",
     roster: [],
   });
@@ -6763,7 +6764,7 @@ test("namespace owner sees the implicit owner row when the ledger is empty", asy
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = memberOperations({
-    spaceId: "space_a",
+    workspaceId: "space_a",
     spaceOwner: "tsub_ctrl",
     roster: [],
   });
@@ -6791,13 +6792,13 @@ test("a non-owner namespace member cannot bootstrap members against an empty led
   // The session subject is NOT the namespace owner; the namespace gate passes
   // only because the accounts-ledger owner matches. With an empty membership
   // ledger and no implicit row for THIS subject, the mutation gate forbids them.
-  seedLedgerSpace(store, {
+  seedLedgerWorkspace(store, {
     subject: "tsub_ctrl",
     accountId: "acct_a",
-    spaceId: "space_a",
+    workspaceId: "space_a",
   });
   const operations = memberOperations({
-    spaceId: "space_a",
+    workspaceId: "space_a",
     spaceOwner: "tsub_namespace_owner",
     roster: [],
   });

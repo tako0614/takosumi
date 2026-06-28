@@ -14,7 +14,7 @@ import { InMemoryOpenTofuDeploymentStore } from "../../../../core/domains/deploy
 import type { OpenTofuDeploymentStore } from "../../../../core/domains/deploy-control/store.ts";
 import { OpenTofuControllerError } from "../../../../core/domains/deploy-control/errors.ts";
 import { seedInstallationModel } from "../../../helpers/deploy-control/model_fixture.ts";
-import type { OutputSnapshot } from "takosumi-contract/output-snapshots";
+import type { Output as OutputSnapshot } from "takosumi-contract/outputs";
 import {
   type CreateOutputShareRequest,
   OutputSharesService,

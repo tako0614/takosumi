@@ -100,7 +100,7 @@ export class RunGroupsService {
    * records the order + the per-member run id. An empty member set is a typed
    * `failed_precondition` (`nothing_to_update`).
    */
-  async createSpaceUpdate(spaceId: string): Promise<RunGroupWithRuns> {
+  async createWorkspaceUpdate(spaceId: string): Promise<RunGroupWithRuns> {
     requireNonEmptyString(spaceId, "spaceId");
     const installations = await this.#store.listInstallations(spaceId);
     const edges = (await this.#store.listDependenciesBySpace(spaceId)).map(
@@ -176,6 +176,7 @@ export class RunGroupsService {
     // Activity (§27 / §34): a space_update RunGroup was created. Member ids +
     // run ids only.
     await this.#activity.record({
+      workspaceId: spaceId,
       spaceId,
       ...(this.#actor ? { actorId: this.#actor } : {}),
       action: "run_group.created",
@@ -198,7 +199,7 @@ export class RunGroupsService {
    * §19 Run projection. Only `active` Installations are checked; an empty active
    * set is a typed `failed_precondition` (`nothing_to_drift_check`).
    */
-  async createSpaceDriftCheck(
+  async createWorkspaceDriftCheck(
     spaceId: string,
     options: CreateSpaceDriftCheckOptions = {},
   ): Promise<RunGroupWithRuns> {
@@ -259,6 +260,7 @@ export class RunGroupsService {
     };
     await this.#store.putRunGroup(runGroup);
     await this.#activity.record({
+      workspaceId: spaceId,
       spaceId,
       ...(this.#actor ? { actorId: this.#actor } : {}),
       action: "run_group.created",
@@ -280,6 +282,19 @@ export class RunGroupsService {
    * states. The returned `runGroup.status` is recomputed (it does not trust the
    * persisted snapshot).
    */
+  /** @deprecated transient alias for {@link createWorkspaceUpdate}. */
+  async createSpaceUpdate(spaceId: string): Promise<RunGroupWithRuns> {
+    return await this.createWorkspaceUpdate(spaceId);
+  }
+
+  /** @deprecated transient alias for {@link createWorkspaceDriftCheck}. */
+  async createSpaceDriftCheck(
+    spaceId: string,
+    options: CreateSpaceDriftCheckOptions = {},
+  ): Promise<RunGroupWithRuns> {
+    return await this.createWorkspaceDriftCheck(spaceId, options);
+  }
+
   async getRunGroup(id: string): Promise<RunGroupWithRuns | undefined> {
     requireNonEmptyString(id, "runGroupId");
     const stored = await this.#store.getRunGroup(id);

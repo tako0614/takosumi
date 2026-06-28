@@ -37,11 +37,11 @@ export {
   TAKOSUMI_ACCOUNTS_UPSTREAM_CALLBACK_PATH,
 } from "@takosjp/takosumi-accounts-contract";
 
-import type { AccountsInstallationExportBundle } from "./export-bundle.ts";
+import type { AccountsCapsuleExportBundle } from "./export-bundle.ts";
 import type {
   ServiceBindingMaterialKind,
   ServiceBindingMaterialRecord,
-  InstallationRecord,
+  CapsuleRecord,
 } from "./ledger.ts";
 import {
   type AccountsStore,
@@ -51,21 +51,21 @@ import {
 import type { SharedCellRuntimeAllocator } from "./runtime.ts";
 import type { UpstreamOAuthProvider } from "./upstream.ts";
 import {
-  handleCreateAppInstallation,
-  handleDownloadAppInstallationExport,
-  handlePlanAppInstallationDeployment,
-  handleGetAppInstallationExportOperation,
-  handleReportInstallationBillingUsage,
-  handleRequestAppInstallationExport,
-  handleRequestAppInstallationMaterialize,
-  handleUninstallAppInstallation,
-  handleUpdateAppInstallationRevision,
-  handleUpdateAppInstallationStatus,
+  handleCreateAppCapsule,
+  handleDownloadAppCapsuleExport,
+  handlePlanAppCapsuleDeployment,
+  handleGetAppCapsuleExportOperation,
+  handleReportCapsuleBillingUsage,
+  handleRequestAppCapsuleExport,
+  handleRequestAppCapsuleMaterialize,
+  handleUninstallAppCapsule,
+  handleUpdateAppCapsuleRevision,
+  handleUpdateAppCapsuleStatus,
 } from "./installation-lifecycle-routes.ts";
 import {
-  handleGetAppInstallation,
-  handleListAppInstallations,
-  handleListInstallationEvents,
+  handleGetAppCapsule,
+  handleListAppCapsules,
+  handleListCapsuleEvents,
 } from "./installation-routes.ts";
 import { signEs256Jwt } from "./jwt.ts";
 import {
@@ -124,12 +124,12 @@ export {
   isRetiredUpstreamOAuthProviderId,
 } from "./upstream-oauth-routes.ts";
 import {
-  type InstallationRoute,
+  type CapsuleRoute,
   matchAccountTokenRevokeRoute,
-  matchInstallationRoute,
+  matchCapsuleRoute,
 } from "./route-matchers.ts";
 import {
-  handleInstallationPlanRunFacade,
+  handleCapsulePlanRunFacade,
   type DeployControlFacadeOptions,
 } from "./deploy-control-facade.ts";
 import {
@@ -137,7 +137,7 @@ import {
   handleControlRoute,
   isControlRoutePath,
 } from "./control-routes.ts";
-import { maybeEnsurePersonalSpaceForSession } from "./control-personal-space.ts";
+import { maybeEnsurePersonalWorkspaceForSession } from "./control-personal-space.ts";
 import {
   isServiceGraphMaterialResolveContext,
   resolveTakosumiServiceGraphMaterial,
@@ -146,19 +146,19 @@ import {
 import {
   platformAccessBlocked,
   type PlatformAccessPolicy,
-  platformGuardedInstallationMutation,
+  platformGuardedCapsuleMutation,
 } from "./platform-access-policy.ts";
 import {
-  requireAppInstallationAccountAccess,
-  requireAppInstallationCreateWriteAccess,
-  requireInstallationPlanRunWriteAccess,
+  requireAppCapsuleAccountAccess,
+  requireAppCapsuleCreateWriteAccess,
+  requireCapsulePlanRunWriteAccess,
 } from "./installation-auth.ts";
 
 export {
   requestDeploymentApply,
   requestDeploymentPlanRun,
-  requestInstallationApply,
-  requestInstallationPlanRun,
+  requestCapsuleApply,
+  requestCapsulePlanRun,
   requestRollback,
 } from "./deploy-control-facade.ts";
 export type {
@@ -184,7 +184,7 @@ export * from "./identity.ts";
 export * from "./jwt.ts";
 // `ledger.ts` re-export is intentionally selective: the v1 contract reset
 // (Wave 6) removed `RuntimeBindingRecord` / `ServiceBindingMaterialRecord` / `ServiceGrantMaterialRecord`
-// / `InstallationEventRecord` / `AppInstallationLedgerStore` from the public
+// / `CapsuleEventRecord` / `AppCapsuleLedgerStore` from the public
 // surface. They remain `@internal` to `accounts-service` for ledger storage
 // only and are not re-exported from the package barrel.
 export {
@@ -192,26 +192,26 @@ export {
   assertValidServiceBindingMaterialDeclaration,
   assertValidServiceBindingMaterialRecord,
   assertValidServiceGrantMaterialRecord,
-  buildInstallationEvent,
-  canTransitionAppInstallationStatus,
+  buildCapsuleEvent,
+  canTransitionAppCapsuleStatus,
   isServiceBindingMaterialKind,
   isServiceGrantMaterialCapability,
   isValidBindingName,
-  transitionAppInstallationStatus,
+  transitionAppCapsuleStatus,
   validateServiceBindingMaterialDeclaration,
   validateServiceBindingMaterialRecord,
   validateServiceGrantMaterialRecord,
-  verifyInstallationEventHashChain,
+  verifyCapsuleEventHashChain,
 } from "./ledger.ts";
 export type {
   ServiceBindingMaterialKind,
   ServiceGrantMaterialCapability,
-  AppInstallationMode,
-  AppInstallationStatus,
-  InstallationRecord,
+  AppCapsuleMode,
+  AppCapsuleStatus,
+  CapsuleRecord,
   LedgerAccountRecord,
-  SpaceKind,
-  SpaceRecord,
+  WorkspaceKind,
+  WorkspaceRecord,
   ValidationIssue,
 } from "./ledger.ts";
 export * from "./runtime.ts";
@@ -253,15 +253,15 @@ export interface AccountsHandlerOptions {
   controlPlaneOperations?: ControlPlaneOperations;
   bindingMaterializer?: ServiceBindingMaterializer;
   sharedCellRuntime?: SharedCellRuntimeAllocator;
-  materializeWorker?: AppInstallationMaterializeWorker;
-  exportWorker?: AppInstallationExportWorker;
+  materializeWorker?: AppCapsuleMaterializeWorker;
+  exportWorker?: AppCapsuleExportWorker;
   platformAccess?: PlatformAccessPolicy;
   loginEmailAllowlist?: LoginEmailAllowlist;
   serviceGraphMaterialResolver?: ServiceGraphMaterialResolverHttpOptions;
   /**
    * Operator-only token that lets the dedicated-materialize readiness drill
    * request materialization while hosted platform access is still closed. This
-   * bypasses only the launch-readiness gate; account session, Installation
+   * bypasses only the launch-readiness gate; account session, Capsule
    * ownership, idempotency, cost acknowledgement, and permission digest checks
    * still run normally.
    */
@@ -296,8 +296,8 @@ export interface EphemeralAccountsHandlerOptions {
   controlPlaneOperations?: ControlPlaneOperations;
   bindingMaterializer?: ServiceBindingMaterializer;
   sharedCellRuntime?: SharedCellRuntimeAllocator;
-  materializeWorker?: AppInstallationMaterializeWorker;
-  exportWorker?: AppInstallationExportWorker;
+  materializeWorker?: AppCapsuleMaterializeWorker;
+  exportWorker?: AppCapsuleExportWorker;
   platformAccess?: PlatformAccessPolicy;
   loginEmailAllowlist?: LoginEmailAllowlist;
   serviceGraphMaterialResolver?: ServiceGraphMaterialResolverHttpOptions;
@@ -327,7 +327,7 @@ export interface ServiceGraphMaterialResolverHttpOptions {
   readonly token: string;
   readonly billingPortalUrl?: string;
   readonly internalUrl?: string;
-  readonly allowDeployControlInstallations?: boolean;
+  readonly allowDeployControlCapsules?: boolean;
 }
 
 export interface AccountsServerOptions extends AccountsHandlerOptions {
@@ -349,7 +349,7 @@ export interface OidcClientRegistration {
 }
 
 export interface ServiceBindingMaterializerInput {
-  installation: InstallationRecord;
+  installation: CapsuleRecord;
   binding: ServiceBindingMaterialRecord;
   declaration?: Record<string, unknown>;
   issuer: string;
@@ -368,7 +368,7 @@ export type ServiceBindingMaterializer = (
   | undefined
   | Promise<ServiceBindingMaterializationResult | undefined>;
 
-export interface AppInstallationMaterializeRequest {
+export interface AppCapsuleMaterializeRequest {
   readonly mode: "dedicated";
   readonly region: string;
   readonly plan: Record<string, unknown>;
@@ -379,33 +379,33 @@ export interface AppInstallationMaterializeRequest {
   };
 }
 
-export interface AppInstallationMaterializeWorkerInput {
-  readonly installation: InstallationRecord;
+export interface AppCapsuleMaterializeWorkerInput {
+  readonly installation: CapsuleRecord;
   readonly operationId: string;
-  readonly request: AppInstallationMaterializeRequest;
+  readonly request: AppCapsuleMaterializeRequest;
   readonly preserve: Record<string, unknown>;
   readonly preserveDigest: string;
 }
 
-export interface AppInstallationMaterializeWorkerResult {
+export interface AppCapsuleMaterializeWorkerResult {
   readonly runtimeTarget: {
     readonly runtimeTargetId?: string;
     readonly targetType?: "dedicated";
     readonly targetId: string;
   };
-  readonly continuity: AppInstallationMaterializeContinuityEvidence;
+  readonly continuity: AppCapsuleMaterializeContinuityEvidence;
   readonly preserveDigest?: string;
   readonly reason?: string;
 }
 
-interface AppInstallationConfirmRecord {
+interface AppCapsuleConfirmRecord {
   readonly permissionDigest: string;
   readonly costAck: boolean;
   readonly approvalRequired?: boolean;
   readonly expiresAt?: string;
 }
 
-export interface AppInstallationMaterializeContinuityEvidence {
+export interface AppCapsuleMaterializeContinuityEvidence {
   readonly sourceDataNamespace: string | null;
   readonly oidcClient: Record<string, unknown> | null;
   readonly preservedServiceBindings: readonly {
@@ -422,13 +422,13 @@ export interface AppInstallationMaterializeContinuityEvidence {
   };
 }
 
-export type AppInstallationMaterializeWorker = (
-  input: AppInstallationMaterializeWorkerInput,
+export type AppCapsuleMaterializeWorker = (
+  input: AppCapsuleMaterializeWorkerInput,
 ) =>
-  | AppInstallationMaterializeWorkerResult
-  | Promise<AppInstallationMaterializeWorkerResult>;
+  | AppCapsuleMaterializeWorkerResult
+  | Promise<AppCapsuleMaterializeWorkerResult>;
 
-export interface AppInstallationExportRequest {
+export interface AppCapsuleExportRequest {
   readonly includeData: boolean;
   readonly format: "bundle";
   readonly encryption: {
@@ -438,24 +438,24 @@ export interface AppInstallationExportRequest {
   readonly scope: Record<string, unknown>;
 }
 
-export interface AppInstallationExportWorkerInput {
-  readonly installation: InstallationRecord;
+export interface AppCapsuleExportWorkerInput {
+  readonly installation: CapsuleRecord;
   readonly operationId: string;
-  readonly request: AppInstallationExportRequest;
-  readonly bundle: AccountsInstallationExportBundle;
+  readonly request: AppCapsuleExportRequest;
+  readonly bundle: AccountsCapsuleExportBundle;
 }
 
-export interface AppInstallationExportWorkerResult {
+export interface AppCapsuleExportWorkerResult {
   readonly downloadUrl: string;
   readonly downloadExpiresAt?: string;
   readonly archiveDigest?: string;
 }
 
-export type AppInstallationExportWorker = (
-  input: AppInstallationExportWorkerInput,
+export type AppCapsuleExportWorker = (
+  input: AppCapsuleExportWorkerInput,
 ) =>
-  | AppInstallationExportWorkerResult
-  | Promise<AppInstallationExportWorkerResult>;
+  | AppCapsuleExportWorkerResult
+  | Promise<AppCapsuleExportWorkerResult>;
 
 export interface UpstreamOAuthOptions {
   subjectSecret: string | Uint8Array | CryptoKey;
@@ -638,7 +638,7 @@ export function createAccountsHandler(
       if (!isServiceGraphMaterialResolveContext(body)) {
         return errorJson(
           "invalid_request",
-          "request body must contain installationId plus sourceRef or kind",
+          "request body must contain capsuleId plus sourceRef or kind",
           400,
         );
       }
@@ -647,8 +647,8 @@ export function createAccountsHandler(
         issuer,
         internalUrl: options.serviceGraphMaterialResolver.internalUrl,
         billingPortalUrl: options.serviceGraphMaterialResolver.billingPortalUrl,
-        allowDeployControlInstallations:
-          options.serviceGraphMaterialResolver.allowDeployControlInstallations,
+        allowDeployControlCapsules:
+          options.serviceGraphMaterialResolver.allowDeployControlCapsules,
         context: body,
       });
       if (Array.isArray(material)) {
@@ -730,13 +730,13 @@ export function createAccountsHandler(
 
     if (url.pathname === TAKOSUMI_ACCOUNTS_SESSION_ME_PATH) {
       if (request.method === "GET") {
-        // First-login personal-Space hook (spec §4). The dashboard hits this
+        // First-login personal-Workspace hook (spec §4). The dashboard hits this
         // route first after sign-in; fire-and-forget the idempotent ensure so
-        // a personal Space exists without coupling it to the OAuth seam. Never
+        // a personal Workspace exists without coupling it to the OAuth seam. Never
         // awaited on the response path: a failure here must not affect the
         // session read. `request.clone()` keeps the body/headers intact for the
         // response handler (this is a GET, so only headers).
-        void maybeEnsurePersonalSpaceForSession({
+        void maybeEnsurePersonalWorkspaceForSession({
           request: request.clone(),
           store,
           operations: options.controlPlaneOperations,
@@ -913,7 +913,7 @@ export function createAccountsHandler(
 
     if (url.pathname === TAKOSUMI_ACCOUNTS_INSTALLATION_PLAN_RUNS_PATH) {
       if (request.method !== "POST") return methodNotAllowed("POST");
-      const authBlocked = await requireInstallationPlanRunWriteAccess({
+      const authBlocked = await requireCapsulePlanRunWriteAccess({
         request: request.clone(),
         store,
       });
@@ -921,11 +921,11 @@ export function createAccountsHandler(
       if (!options.deployControl) {
         return errorJson(
           "feature_unavailable",
-          "Installation PlanRun is temporarily unavailable.",
+          "Capsule PlanRun is temporarily unavailable.",
           503,
         );
       }
-      return await handleInstallationPlanRunFacade({
+      return await handleCapsulePlanRunFacade({
         request,
         deployControl: options.deployControl,
       });
@@ -935,12 +935,12 @@ export function createAccountsHandler(
       if (request.method === "POST") {
         const limited = installationsLimiter.consume(request);
         if (limited) return limited;
-        const authBlocked = await requireAppInstallationCreateWriteAccess({
+        const authBlocked = await requireAppCapsuleCreateWriteAccess({
           request: request.clone(),
           store,
         });
         if (authBlocked) return authBlocked;
-        return await handleCreateAppInstallation({
+        return await handleCreateAppCapsule({
           request,
           store,
           issuer,
@@ -951,12 +951,12 @@ export function createAccountsHandler(
         });
       }
       if (request.method === "GET") {
-        return await handleListAppInstallations({ request, url, store });
+        return await handleListAppCapsules({ request, url, store });
       }
       return methodNotAllowed("GET, POST");
     }
 
-    const installationRoute = matchInstallationRoute(url.pathname);
+    const installationRoute = matchCapsuleRoute(url.pathname);
     if (installationRoute) {
       const materializeDrillAllowed =
         installationRoute.kind === "materialize" &&
@@ -966,7 +966,7 @@ export function createAccountsHandler(
           token: options.materializeDrillToken,
         });
       if (
-        platformGuardedInstallationMutation(
+        platformGuardedCapsuleMutation(
           installationRoute.kind,
           request.method,
         ) &&
@@ -980,10 +980,10 @@ export function createAccountsHandler(
         request.method,
       );
       if (accountAccess) {
-        const authBlocked = await requireAppInstallationAccountAccess({
+        const authBlocked = await requireAppCapsuleAccountAccess({
           request,
           store,
-          installationId: installationRoute.installationId,
+          capsuleId: installationRoute.capsuleId,
           scope: accountAccess,
         });
         if (authBlocked) return authBlocked;
@@ -992,8 +992,8 @@ export function createAccountsHandler(
         installationRoute.kind === "installation" &&
         request.method === "GET"
       ) {
-        return await handleGetAppInstallation({
-          installationId: installationRoute.installationId,
+        return await handleGetAppCapsule({
+          capsuleId: installationRoute.capsuleId,
           request,
           store,
         });
@@ -1002,22 +1002,22 @@ export function createAccountsHandler(
         installationRoute.kind === "installation" &&
         request.method === "DELETE"
       ) {
-        return await handleUninstallAppInstallation({
-          installationId: installationRoute.installationId,
+        return await handleUninstallAppCapsule({
+          capsuleId: installationRoute.capsuleId,
           request,
           store,
         });
       }
       if (installationRoute.kind === "status" && request.method === "PATCH") {
-        const authBlocked = await requireAppInstallationAccountAccess({
+        const authBlocked = await requireAppCapsuleAccountAccess({
           request,
           store,
-          installationId: installationRoute.installationId,
+          capsuleId: installationRoute.capsuleId,
           scope: "write",
         });
         if (authBlocked) return authBlocked;
-        return await handleUpdateAppInstallationStatus({
-          installationId: installationRoute.installationId,
+        return await handleUpdateAppCapsuleStatus({
+          capsuleId: installationRoute.capsuleId,
           request,
           store,
         });
@@ -1026,8 +1026,8 @@ export function createAccountsHandler(
         installationRoute.kind === "deployment-plan-run" &&
         request.method === "POST"
       ) {
-        return await handlePlanAppInstallationDeployment({
-          installationId: installationRoute.installationId,
+        return await handlePlanAppCapsuleDeployment({
+          capsuleId: installationRoute.capsuleId,
           request,
           store,
           deployControl: options.deployControl,
@@ -1037,8 +1037,8 @@ export function createAccountsHandler(
         installationRoute.kind === "deployment" &&
         request.method === "POST"
       ) {
-        return await handleUpdateAppInstallationRevision({
-          installationId: installationRoute.installationId,
+        return await handleUpdateAppCapsuleRevision({
+          capsuleId: installationRoute.capsuleId,
           operation: "deployment",
           request,
           store,
@@ -1046,8 +1046,8 @@ export function createAccountsHandler(
         });
       }
       if (installationRoute.kind === "rollback" && request.method === "POST") {
-        return await handleUpdateAppInstallationRevision({
-          installationId: installationRoute.installationId,
+        return await handleUpdateAppCapsuleRevision({
+          capsuleId: installationRoute.capsuleId,
           operation: "rollback",
           request,
           store,
@@ -1058,16 +1058,16 @@ export function createAccountsHandler(
         installationRoute.kind === "materialize" &&
         request.method === "POST"
       ) {
-        return await handleRequestAppInstallationMaterialize({
-          installationId: installationRoute.installationId,
+        return await handleRequestAppCapsuleMaterialize({
+          capsuleId: installationRoute.capsuleId,
           request,
           store,
           materializeWorker: options.materializeWorker,
         });
       }
       if (installationRoute.kind === "export" && request.method === "POST") {
-        return await handleRequestAppInstallationExport({
-          installationId: installationRoute.installationId,
+        return await handleRequestAppCapsuleExport({
+          capsuleId: installationRoute.capsuleId,
           request,
           store,
           exportWorker: options.exportWorker,
@@ -1077,8 +1077,8 @@ export function createAccountsHandler(
         installationRoute.kind === "export-operation" &&
         request.method === "GET"
       ) {
-        return await handleGetAppInstallationExportOperation({
-          installationId: installationRoute.installationId,
+        return await handleGetAppCapsuleExportOperation({
+          capsuleId: installationRoute.capsuleId,
           operationId: installationRoute.operationId,
           store,
         });
@@ -1087,16 +1087,16 @@ export function createAccountsHandler(
         installationRoute.kind === "export-download" &&
         request.method === "GET"
       ) {
-        return await handleDownloadAppInstallationExport({
-          installationId: installationRoute.installationId,
+        return await handleDownloadAppCapsuleExport({
+          capsuleId: installationRoute.capsuleId,
           operationId: installationRoute.operationId,
           store,
           exportDownloadSigningSecret: options.exportDownloadSigningSecret,
         });
       }
       if (installationRoute.kind === "events" && request.method === "GET") {
-        return await handleListInstallationEvents({
-          installationId: installationRoute.installationId,
+        return await handleListCapsuleEvents({
+          capsuleId: installationRoute.capsuleId,
           request,
           url,
           store,
@@ -1106,8 +1106,8 @@ export function createAccountsHandler(
         installationRoute.kind === "billing-usage-reports" &&
         request.method === "POST"
       ) {
-        return await handleReportInstallationBillingUsage({
-          installationId: installationRoute.installationId,
+        return await handleReportCapsuleBillingUsage({
+          capsuleId: installationRoute.capsuleId,
           request,
           store,
         });
@@ -1119,7 +1119,7 @@ export function createAccountsHandler(
         const limited = launchConsumeLimiter.consume(request);
         if (limited) return limited;
         return await handleConsumeLaunchToken({
-          installationId: installationRoute.installationId,
+          capsuleId: installationRoute.capsuleId,
           request,
           store,
         });
@@ -1431,7 +1431,7 @@ function requirePrivacyOperationsAccess(input: {
 }
 
 function installationRouteAccountAccess(
-  route: InstallationRoute,
+  route: CapsuleRoute,
   method: string,
 ): "read" | "write" | undefined {
   if (route.kind === "billing-usage-reports") return undefined;

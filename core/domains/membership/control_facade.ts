@@ -44,7 +44,9 @@ export interface MembershipControlActor {
 
 /** The mutation a control-route handler delegates to the membership facade. */
 export interface MembershipControlUpsertInput {
-  readonly spaceId: string;
+  readonly workspaceId: string;
+  /** @deprecated Use workspaceId. */
+  readonly spaceId?: string;
   readonly accountId: string;
   readonly roles?: readonly SpaceMembership["roles"][number][];
   readonly status?: SpaceMembership["status"];
@@ -144,6 +146,7 @@ export function createMembershipControlFacade(
       const stamp = now().toISOString();
       await deps.membershipLedgerStore.upsert({
         id: ownerLedger?.id ?? `membership_${spaceId}_${ownerUserId}`,
+        workspaceId: spaceId,
         spaceId,
         accountId: ownerUserId,
         roles: ["owner"],
@@ -159,9 +162,10 @@ export function createMembershipControlFacade(
     upsertMember: async (input) => {
       // Self-bootstrap so the REAL domain path matches what the route layer
       // (which gates on the namespace owner) already assumes.
-      await ensureBootstrap(input.spaceId);
+      const workspaceId = input.workspaceId ?? input.spaceId ?? "";
+      await ensureBootstrap(workspaceId);
       const result = await memberships.upsertSpaceMembership({
-        spaceId: input.spaceId,
+        spaceId: workspaceId,
         accountId: input.accountId,
         ...(input.roles ? { roles: input.roles } : {}),
         ...(input.status ? { status: input.status } : {}),

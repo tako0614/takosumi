@@ -97,6 +97,7 @@ export class MembershipSpaceCommandService {
 
     await this.dependencies.memberships.upsert({
       id: createId("membership", this.dependencies.idGenerator),
+      workspaceId: space.id,
       spaceId: space.id,
       accountId: command.actor.actorAccountId,
       roles: ["owner"],
@@ -293,6 +294,7 @@ export class MembershipRoleEntitlementService {
     const now = currentTime(this.dependencies.clock);
     const membership: SpaceMembership = {
       id: existing?.id ?? createId("membership", this.dependencies.idGenerator),
+      workspaceId: command.spaceId,
       spaceId: command.spaceId,
       accountId: command.accountId,
       roles: command.roles ?? existing?.roles ?? ["member"],

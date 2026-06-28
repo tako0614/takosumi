@@ -1,5 +1,5 @@
 /**
- * Installation lifecycle routes — thin composition barrel.
+ * Capsule lifecycle routes — thin composition barrel.
  *
  * The former ~3900-LOC god-file was decomposed (pure moves) into focused
  * sibling modules, each owning one handler family plus its family-local
@@ -16,19 +16,19 @@
  * append helper is re-exported through installation-ledger-events.ts. This
  * module is the stable lifecycle route entrypoint.
  */
-export { handleCreateAppInstallation } from "./installation-create-import-routes.ts";
+export { handleCreateAppCapsule } from "./installation-create-import-routes.ts";
 export {
-  handleUninstallAppInstallation,
-  handleUpdateAppInstallationRevision,
-  handleUpdateAppInstallationStatus,
+  handleUninstallAppCapsule,
+  handleUpdateAppCapsuleRevision,
+  handleUpdateAppCapsuleStatus,
 } from "./installation-status-routes.ts";
 export {
-  handlePlanAppInstallationDeployment,
-  handleReportInstallationBillingUsage,
-  handleRequestAppInstallationMaterialize,
+  handlePlanAppCapsuleDeployment,
+  handleReportCapsuleBillingUsage,
+  handleRequestAppCapsuleMaterialize,
 } from "./installation-plan-materialize-routes.ts";
 export {
-  handleDownloadAppInstallationExport,
-  handleGetAppInstallationExportOperation,
-  handleRequestAppInstallationExport,
+  handleDownloadAppCapsuleExport,
+  handleGetAppCapsuleExportOperation,
+  handleRequestAppCapsuleExport,
 } from "./installation-export-routes.ts";

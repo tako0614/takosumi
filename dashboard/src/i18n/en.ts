@@ -50,8 +50,8 @@ export const en: Record<keyof typeof ja, string> = {
   "nav.manage": "Manage",
   "nav.accountSection": "Account",
   "nav.notifications": "Notifications",
-  "nav.spaceSettings": "Workspace settings",
-  "nav.spaceSettingsShort": "Settings",
+  "nav.workspaceSettings": "Workspace settings",
+  "nav.workspaceSettingsShort": "Settings",
   "nav.account": "Account",
   "nav.docs": "Docs",
   "nav.backToTakos": "Back to Takos",
@@ -66,20 +66,20 @@ export const en: Record<keyof typeof ja, string> = {
   "theme.light": "Light",
   "theme.dark": "Dark",
 
-  // --- space switcher -------------------------------------------------------
-  "space.label": "Workspace",
-  "space.loadFailed": "Failed to load workspaces — {message}",
-  "space.none": "No workspaces",
-  "space.select": "Select a workspace",
-  "space.selectMessage": "Pick a workspace from the switcher in the top bar.",
-  "space.defaultName": "My workspace",
-  "space.start.aria": "Start workspace",
-  "space.start.kicker": "No workspace yet",
-  "space.start.title": "Create your workspace to start",
-  "space.start.body":
+  // --- workspace switcher -------------------------------------------------------
+  "workspace.label": "Workspace",
+  "workspace.loadFailed": "Failed to load workspaces — {message}",
+  "workspace.none": "No workspaces",
+  "workspace.select": "Select a workspace",
+  "workspace.selectMessage": "Pick a workspace from the switcher in the top bar.",
+  "workspace.defaultName": "My workspace",
+  "workspace.start.aria": "Start workspace",
+  "workspace.start.kicker": "No workspace yet",
+  "workspace.start.title": "Create your workspace to start",
+  "workspace.start.body":
     "Takosumi keeps your services, deploy history, and settings inside a workspace.",
-  "space.start.create": "Create workspace",
-  "space.start.creating": "Creating workspace...",
+  "workspace.start.create": "Create workspace",
+  "workspace.start.creating": "Creating workspace...",
 
   // --- auth -----------------------------------------------------------------
   "auth.signIn": "Sign in",
@@ -131,15 +131,15 @@ export const en: Record<keyof typeof ja, string> = {
   "notFound.goHome": "Go home",
 
   // --- status labels ----------------------------------------------------
-  "status.installation.pending": "Setting up",
-  "status.installation.needsAttention": "Needs attention",
+  "status.capsule.pending": "Setting up",
+  "status.capsule.needsAttention": "Needs attention",
   // `active` = the last apply succeeded and the state generation advanced; it
   // is NOT a verified-reachable signal, so say "Deployed", not "Running".
-  "status.installation.active": "Deployed",
-  "status.installation.stale": "Redeploy needed",
-  "status.installation.error": "Error",
-  "status.installation.disabled": "Disabled",
-  "status.installation.destroyed": "Deleted",
+  "status.capsule.active": "Deployed",
+  "status.capsule.stale": "Redeploy needed",
+  "status.capsule.error": "Error",
+  "status.capsule.disabled": "Disabled",
+  "status.capsule.destroyed": "Deleted",
   "status.run.queued": "Queued",
   "status.run.running": "Running",
   "status.run.waiting_approval": "Waiting for approval",
@@ -208,7 +208,7 @@ export const en: Record<keyof typeof ja, string> = {
   "services.empty.body": "Services you add will appear here.",
 
   // --- Service detail ------------------------------------------------------
-  "app.installationSub": "Service",
+  "app.capsuleSub": "Service",
   "app.tab.overview": "Overview",
   "app.tab.deploys": "Updates",
   "app.tab.settings": "Settings",
@@ -364,7 +364,7 @@ export const en: Record<keyof typeof ja, string> = {
   "run.details.runId": "Execution ID",
   "run.details.type": "Type",
   "run.details.policy": "Safety check",
-  "run.details.installation": "Service",
+  "run.details.capsule": "Service",
   "run.details.sourceSnapshot": "Source version",
   "run.details.dependencySnapshot": "Pinned connected inputs",
   "run.details.baseGeneration": "Previous state",
@@ -549,7 +549,7 @@ export const en: Record<keyof typeof ja, string> = {
   "new.step.sync": "Fetch content",
   "new.step.create": "Create service",
   "new.step.plan": "Review changes",
-  "new.error.spaceRequired": "Select a workspace.",
+  "new.error.workspaceRequired": "Select a workspace.",
   "new.error.urlRequired": "Enter an install link.",
   "new.error.nameRequired": "Enter a name.",
   "new.error.nameInvalid":
@@ -566,34 +566,34 @@ export const en: Record<keyof typeof ja, string> = {
   "new.error.notRunnable":
     "This service cannot be added yet. Resolve the listed items, then check again.",
 
-  // --- space settings ---------------------------------------------------------
-  "spaceSettings.title": "Team settings",
-  "spaceSettings.subtitle":
+  // --- workspace settings ---------------------------------------------------------
+  "workspaceSettings.title": "Team settings",
+  "workspaceSettings.subtitle":
     "Manage the workspace name, members, connections, and usage controls.",
-  "spaceSettings.tab.general": "General",
-  "spaceSettings.tab.members": "Members",
-  "spaceSettings.tab.connections": "Connections",
-  "spaceSettings.tab.billing": "Billing",
-  "spaceSettings.tab.usageQuota": "Usage / quota",
-  "spaceSettings.tab.backups": "Backups",
-  "spaceSettings.tab.shares": "Shared values",
-  "spaceSettings.general.displayName": "Display name",
-  "spaceSettings.general.handle": "Handle",
-  "spaceSettings.general.type": "Type",
-  "spaceSettings.general.owner": "Owner",
-  "spaceSettings.general.updated": "Updated",
-  "spaceSettings.general.advancedDetails": "Advanced details",
-  "spaceSettings.general.policyAdvanced": "Policy JSON (advanced)",
-  "spaceSettings.general.saved": "Workspace settings saved.",
-  "spaceSettings.general.archive": "Archive workspace",
-  "spaceSettings.general.archiveConfirm":
+  "workspaceSettings.tab.general": "General",
+  "workspaceSettings.tab.members": "Members",
+  "workspaceSettings.tab.connections": "Connections",
+  "workspaceSettings.tab.billing": "Billing",
+  "workspaceSettings.tab.usageQuota": "Usage / quota",
+  "workspaceSettings.tab.backups": "Backups",
+  "workspaceSettings.tab.shares": "Shared values",
+  "workspaceSettings.general.displayName": "Display name",
+  "workspaceSettings.general.handle": "Handle",
+  "workspaceSettings.general.type": "Type",
+  "workspaceSettings.general.owner": "Owner",
+  "workspaceSettings.general.updated": "Updated",
+  "workspaceSettings.general.advancedDetails": "Advanced details",
+  "workspaceSettings.general.policyAdvanced": "Policy JSON (advanced)",
+  "workspaceSettings.general.saved": "Workspace settings saved.",
+  "workspaceSettings.general.archive": "Archive workspace",
+  "workspaceSettings.general.archiveConfirm":
     "This workspace will be hidden from the normal switcher. You can still inspect it through the admin API.",
-  "spaceSettings.general.archived": "Workspace archived.",
-  "spaceSettings.general.archiveLastError":
+  "workspaceSettings.general.archived": "Workspace archived.",
+  "workspaceSettings.general.archiveLastError":
     "You cannot archive the last workspace.",
-  "spaceSettings.general.nameRequired": "Enter a display name.",
-  "spaceSettings.general.policyObject": "Policy JSON must be an object.",
-  "spaceSettings.general.policyInvalid": "Policy JSON is not valid JSON.",
+  "workspaceSettings.general.nameRequired": "Enter a display name.",
+  "workspaceSettings.general.policyObject": "Policy JSON must be an object.",
+  "workspaceSettings.general.policyInvalid": "Policy JSON is not valid JSON.",
 
   // --- members ---------------------------------------------------------------
   "members.role.owner": "Owner",
@@ -772,7 +772,7 @@ export const en: Record<keyof typeof ja, string> = {
   // --- shared values -------------------------------------------------------------
   "shares.subtitle": "Manage public values another workspace can use.",
   "shares.create.title": "Create a share",
-  "shares.create.toSpace": "Target workspace",
+  "shares.create.toWorkspace": "Target workspace",
   "shares.create.producer": "Source service",
   "shares.create.selectPlaceholder": "Select",
   "shares.create.outputs": "Shared values",
@@ -787,7 +787,7 @@ export const en: Record<keyof typeof ja, string> = {
   "shares.error.outputsRequired": "Enter at least one value name to share.",
   "shares.error.reasonRequired": "Enter a reason for sharing sensitive values.",
   "shares.col.direction": "Direction",
-  "shares.col.installation": "Service",
+  "shares.col.capsule": "Service",
   "shares.col.outputs": "Shared values",
   "shares.col.status": "Status",
   "shares.approve": "Approve",

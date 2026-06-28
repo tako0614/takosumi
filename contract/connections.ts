@@ -192,6 +192,8 @@ export interface CloudflarePermissionGroup {
  */
 export interface ProviderConnection {
   readonly id: string;
+  readonly workspaceId?: string;
+  /** @deprecated Use workspaceId. */
   readonly spaceId?: string;
   readonly provider: string;
   readonly providerSource: string;
@@ -218,9 +220,9 @@ export interface ListProviderConnectionsResponse {
 
 /**
  * Provider-address (or alias) -> Provider Connection mapping for one
- * Installation/Capsule. The single binding shape; replaces the former
- * `InstallationProviderConnectionBinding` (connectionId) and
- * `InstallationProviderEnvBinding` (envId) pair (they always pointed at the same
+ * Capsule. The single binding shape; replaces the former
+ * `CapsuleProviderConnectionBinding` (connectionId) and
+ * `CapsuleProviderEnvBinding` (envId) pair (they always pointed at the same
  * row, since `ProviderEnv.id == Connection.id`).
  */
 export interface ProviderBinding {
@@ -232,10 +234,14 @@ export interface ProviderBinding {
 
 export type ProviderBindings = readonly ProviderBinding[];
 
-/** One binding set per (installation, environment). */
+/** One binding set per (capsule, environment). */
 export interface ProviderBindingSet {
   readonly id: string;
+  readonly workspaceId: string;
+  /** @deprecated Use workspaceId. */
   readonly spaceId: string;
+  readonly capsuleId: string;
+  /** @deprecated Use capsuleId. */
   readonly installationId: string;
   readonly environment: string;
   readonly bindings: ProviderBindings;
@@ -244,19 +250,35 @@ export interface ProviderBindingSet {
 }
 
 /** @deprecated migration-debt alias for {@link ProviderBinding}. */
-export type InstallationProviderConnectionBinding = ProviderBinding;
+export type CapsuleProviderConnectionBinding = ProviderBinding;
 /** @deprecated migration-debt alias for {@link ProviderBindings}. */
-export type InstallationProviderConnectionBindings = ProviderBindings;
+export type CapsuleProviderConnectionBindings = ProviderBindings;
 /** @deprecated migration-debt alias for {@link ProviderBindingSet}. */
-export type InstallationProviderConnectionSet = ProviderBindingSet;
+export type CapsuleProviderConnectionSet = ProviderBindingSet;
 /** @deprecated migration-debt alias for {@link ProviderBinding}. */
-export type InstallationProviderEnvBinding = ProviderBinding;
+export type CapsuleProviderEnvBinding = ProviderBinding;
 /** @deprecated migration-debt alias for {@link ProviderBindings}. */
-export type InstallationProviderEnvBindings = ProviderBindings;
+export type CapsuleProviderEnvBindings = ProviderBindings;
 /** @deprecated migration-debt alias for {@link ProviderBindingSet}. */
+export type CapsuleProviderEnvBindingSet = ProviderBindingSet;
+
+// --- transient deprecated `Installation*` binding aliases (pre-rename names) ---
+/** @deprecated use {@link CapsuleProviderConnectionBinding}. */
+export type InstallationProviderConnectionBinding = ProviderBinding;
+/** @deprecated use {@link CapsuleProviderConnectionBindings}. */
+export type InstallationProviderConnectionBindings = ProviderBindings;
+/** @deprecated use {@link CapsuleProviderConnectionSet}. */
+export type InstallationProviderConnectionSet = ProviderBindingSet;
+/** @deprecated use {@link CapsuleProviderEnvBinding}. */
+export type InstallationProviderEnvBinding = ProviderBinding;
+/** @deprecated use {@link CapsuleProviderEnvBindings}. */
+export type InstallationProviderEnvBindings = ProviderBindings;
+/** @deprecated use {@link CapsuleProviderEnvBindingSet}. */
 export type InstallationProviderEnvBindingSet = ProviderBindingSet;
 
 export interface CreateConnectionRequest {
+  readonly workspaceId?: string;
+  /** @deprecated Use workspaceId. */
   readonly spaceId?: string;
   readonly provider: string;
   readonly kind?: ProviderConnectionKind;
@@ -281,6 +303,8 @@ export interface CreateConnectionFile {
 }
 
 export interface ConnectionOAuthStartRequest {
+  readonly workspaceId?: string;
+  /** @deprecated Use workspaceId. */
   readonly spaceId?: string;
   readonly displayName?: string;
   readonly scope?: ConnectionScopeKind;
@@ -297,6 +321,8 @@ export interface ConnectionOAuthStartResponse {
 }
 
 export interface GcpImpersonationConnectionRequest {
+  readonly workspaceId?: string;
+  /** @deprecated Use workspaceId. */
   readonly spaceId?: string;
   readonly displayName?: string;
   readonly scope?: ConnectionScopeKind;

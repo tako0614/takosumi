@@ -96,6 +96,13 @@ export const TAKOSUMI_SPACE_ROUTE =
   `${INTERNAL_V1_PREFIX}/spaces/:spaceId` as const;
 export const TAKOSUMI_SPACE_INSTALLATIONS_ROUTE =
   `${INTERNAL_V1_PREFIX}/spaces/:spaceId/installations` as const;
+// Project routes (Workspace / Project / Capsule final model). Additive: the
+// `:spaceId` segment keeps the current Workspace path until the coordinated
+// route-path convergence flips `/spaces` -> `/workspaces`.
+export const TAKOSUMI_PROJECTS_ROUTE =
+  `${INTERNAL_V1_PREFIX}/spaces/:spaceId/projects` as const;
+export const TAKOSUMI_PROJECT_ROUTE =
+  `${INTERNAL_V1_PREFIX}/projects/:projectId` as const;
 /** Installation read / patch / delete. */
 export const TAKOSUMI_API_INSTALLATION_ROUTE =
   `${INTERNAL_V1_PREFIX}/installations/:installationId` as const;

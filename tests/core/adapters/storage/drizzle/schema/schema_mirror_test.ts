@@ -243,18 +243,24 @@ test("D1 Drizzle schema mirrors critical live D1 tables", () => {
     },
   );
 
-  expect(getTableName(d1Schema.installations)).toBe("installations");
+  // P4: physical table `installations` -> `capsules`; the Drizzle export stays
+  // `installations`. space_id / slug / install_type / current_output_snapshot_id
+  // are KEPT physical (deferred to convergence); the genuinely-moved columns are
+  // project_id (added) and current_state_version_id (renamed from
+  // current_deployment_id).
+  expect(getTableName(d1Schema.installations)).toBe("capsules");
   expect(columnsOf(d1Schema.installations)).toEqual([
     pk("id"),
     nn("space_id"),
+    nullable("project_id"),
     nn("name"),
     nn("slug"),
-    // Nullable: upload-origin installations (takosumi deploy) have no Source.
+    // Nullable: upload-origin capsules (takosumi deploy) have no Source.
     nullable("source_id"),
     nn("install_type"),
     nn("install_config_id"),
     nn("environment"),
-    nullable("current_deployment_id"),
+    nullable("current_state_version_id"),
     defaulted("current_state_generation"),
     nullable("current_output_snapshot_id"),
     nn("status"),
@@ -262,6 +268,22 @@ test("D1 Drizzle schema mirrors critical live D1 tables", () => {
     nn("created_at"),
     nn("updated_at"),
   ]);
+
+  expect(getTableName(d1Schema.projects)).toBe("projects");
+  expect(columnsOf(d1Schema.projects)).toEqual([
+    pk("id"),
+    nn("workspace_id"),
+    nn("name"),
+    nn("slug"),
+    nn("record_json"),
+    nn("created_at"),
+    nn("updated_at"),
+  ]);
+  expect(sqliteUniqueIndexesOf(d1Schema.projects)).toContainEqual({
+    name: "projects_workspace_slug_unique",
+    columns: ["workspace_id", "slug"],
+    unique: true,
+  });
 
   expect(getTableName(d1Schema.capsuleCompatibilityReports)).toBe(
     "capsule_compatibility_reports",
@@ -298,7 +320,7 @@ test("D1 Drizzle schema mirrors critical live D1 tables", () => {
     defaulted("created_at"),
   ]);
 
-  expect(getTableName(d1Schema.stateSnapshots)).toBe("state_snapshots");
+  expect(getTableName(d1Schema.stateSnapshots)).toBe("state_versions");
   expect(columnsOf(d1Schema.stateSnapshots)).toEqual([
     pk("id"),
     nn("space_id"),
@@ -528,7 +550,7 @@ test("Worker D1 bootstrap records canonical schema migration ledger", async () =
     .all<D1SchemaMigrationRow>();
   const rows = migrationRows.results ?? [];
   expect(rows.map((row) => row.version)).toEqual([
-    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
   ]);
   expect(rows.map((row) => row.name)).toEqual([
     "d1_opentofu_connections_and_secret_blobs_shape",
@@ -547,6 +569,7 @@ test("Worker D1 bootstrap records canonical schema migration ledger", async () =
     "d1_opentofu_billing_usd_micros",
     "d1_opentofu_billing_auto_recharge_attempts",
     "d1_opentofu_provider_credential_collapse",
+    "d1_opentofu_workspace_capsule_rename",
   ]);
   for (const row of rows) {
     expect(row.checksum).toMatch(/^sha256:[0-9a-f]{64}$/);
@@ -714,17 +737,22 @@ test("Worker D1 bootstrap additively migrates older ledger tables", async () => 
     .run();
   await db
     .prepare(
+      // Seeded at the v16 (pre-P4-rename) shape — the realistic state a live
+      // ledger is in when the v17 rename runs: source_id already nullable (v12),
+      // current_output_snapshot_id already present (v2). The boot path renames
+      // this table aside to `capsules` and column-moves it (v17).
       `create table installations (
       id text primary key,
       space_id text not null,
       name text not null,
       slug text not null,
-      source_id text not null,
+      source_id text,
       install_type text not null,
       install_config_id text not null,
       environment text not null,
       current_deployment_id text,
       current_state_generation integer not null default 0,
+      current_output_snapshot_id text,
       status text not null,
       record_json text not null,
       created_at text not null,
@@ -889,11 +917,20 @@ test("Worker D1 bootstrap additively migrates older ledger tables", async () => 
   expect(await liveD1ColumnsOf(db, "connections")).toContainEqual(
     nn("connection_json"),
   );
-  expect(await liveD1ColumnsOf(db, "installations")).toContainEqual(
+  // P4: the seeded `installations` table is renamed aside to `capsules` and
+  // column-moved (current_deployment_id -> current_state_version_id, project_id
+  // added) by the v17 migration.
+  expect(await liveD1ColumnsOf(db, "capsules")).toContainEqual(
     nullable("current_output_snapshot_id"),
   );
-  expect(await liveD1ColumnsOf(db, "installations")).toContainEqual(
+  expect(await liveD1ColumnsOf(db, "capsules")).toContainEqual(
     nullable("source_id"),
+  );
+  expect(await liveD1ColumnsOf(db, "capsules")).toContainEqual(
+    nullable("current_state_version_id"),
+  );
+  expect(await liveD1ColumnsOf(db, "capsules")).toContainEqual(
+    nullable("project_id"),
   );
   expect(await liveD1ColumnsOf(db, "source_snapshots")).toContainEqual(
     nullable("source_id"),
@@ -994,20 +1031,30 @@ test("Postgres Drizzle schema mirrors critical migration catalog tables", () => 
     unique: true,
   });
 
-  expect(getTableName(postgresSchema.installations)).toBe(
-    "takosumi_opentofu_installations",
-  );
+  expect(getTableName(postgresSchema.installations)).toBe("takosumi_capsules");
   expect(columnsOf(postgresSchema.installations)).toEqual([
     pk("id"),
     nn("space_id"),
+    nullable("project_id"),
     nn("name"),
     nn("environment"),
-    // Nullable: upload-origin installations (takosumi deploy) have no Source.
+    // Nullable: upload-origin capsules (takosumi deploy) have no Source.
     nullable("source_id"),
     nn("install_config_id"),
-    nullable("current_deployment_id"),
+    nullable("current_state_version_id"),
     nn("status"),
     nn("installation_json"),
+    nn("created_at"),
+    nn("updated_at"),
+  ]);
+
+  expect(getTableName(postgresSchema.projects)).toBe("takosumi_projects");
+  expect(columnsOf(postgresSchema.projects)).toEqual([
+    pk("id"),
+    nn("workspace_id"),
+    nn("name"),
+    nn("slug"),
+    nn("project_json"),
     nn("created_at"),
     nn("updated_at"),
   ]);
@@ -1046,7 +1093,7 @@ test("Postgres Drizzle schema mirrors critical migration catalog tables", () => 
   ]);
 
   expect(getTableName(postgresSchema.stateSnapshots)).toBe(
-    "takosumi_state_snapshots",
+    "takosumi_state_versions",
   );
   expect(columnsOf(postgresSchema.stateSnapshots)).toEqual([
     pk("id"),

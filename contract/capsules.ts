@@ -1,9 +1,23 @@
 /**
- * OpenTofu Capsule compatibility contract.
+ * Capsule ledger record + OpenTofu Capsule compatibility contract
+ * (`capsules` / compatibility reports).
  *
- * A Capsule is not a Takosumi-specific source manifest. It is the normalized
- * view of a plain Git-hosted OpenTofu configuration that can be called as a
- * child module from a Takosumi generated root.
+ * A Capsule is the OpenTofu execution unit directly under a Workspace / Project
+ * (`@workspace/name`): one Capsule = one generated root + one OpenTofu tfstate +
+ * outputs. The App/Environment/InstallProfile lanes model is retired;
+ * `environment` is a column on the Capsule (UNIQUE(project_id, name,
+ * environment)).
+ *
+ * The compatibility report is not a Takosumi-specific source manifest; it is the
+ * normalized view of a plain Git-hosted OpenTofu configuration that can be called
+ * as a child module from a Takosumi generated root. A SourceSnapshot is
+ * normalized as an OpenTofu Capsule before plan / apply. InstallConfig (see
+ * `./installations.ts`) is the service-side DB record describing Capsule
+ * execution policy. User repos carry NO Takosumi manifest.
+ *
+ * (The Capsule ledger record was formerly `Installation`. The transient
+ * `Installation` alias is re-exported from `./installations.ts` until the rename
+ * converges.)
  */
 
 import type { PublicRun, Run } from "./runs.ts";
@@ -12,6 +26,88 @@ import type {
   ProviderResolution,
   PublicProviderResolution,
 } from "./provider-resolution.ts";
+
+export type {
+  CapsuleProviderEnvBinding,
+  CapsuleProviderEnvBindings,
+  CapsuleProviderEnvBindingSet,
+} from "./connections.ts";
+
+// ---------------------------------------------------------------------------
+// Capsule ledger record
+// ---------------------------------------------------------------------------
+
+/**
+ * Internal compatibility discriminator. `core` is the Workspace base Capsule
+ * emitting shared outputs. `opentofu_root` is retained only so old direct-root
+ * ledger rows can be read; new InstallConfigs are rejected at the domain-service
+ * boundary.
+ */
+export type InstallType =
+  | "core"
+  | "opentofu_module"
+  | "opentofu_root"
+  | "app_source";
+
+export type CapsuleStatus =
+  | "pending"
+  | "active"
+  | "stale"
+  | "error"
+  | "disabled"
+  | "destroyed";
+
+/**
+ * Capsule ledger record.
+ * 1 Capsule = generated root + tfstate + outputs; `currentStateGeneration` is
+ * the generation guard cursor. The latest `currentOutputId` is an internal
+ * ledger pointer to the encrypted raw output envelope and is projected out of
+ * public Capsule reads; dashboard output reads go through Output projections or
+ * OutputShare instead.
+ */
+export interface Capsule {
+  readonly id: string;
+  readonly workspaceId: string;
+  /** @deprecated Use workspaceId. */
+  readonly spaceId?: string;
+  /**
+   * Owning Project. Capsules live under a Project; a default Project
+   * (`prj_default`) is backfilled per Workspace for pre-Project rows.
+   */
+  readonly projectId?: string;
+  readonly name: string;
+  readonly slug: string;
+  /**
+   * Registered git {@link Source} this Capsule tracks. Absent for no-git
+   * Capsules created by `takosumi deploy`, which deploy an upload/artifact
+   * SourceSnapshot directly with no Source. A git Source is an optional
+   * attachment (the `wrangler deploy` vs Workers-Builds relationship), not a
+   * precondition for a Capsule to exist.
+   */
+  readonly sourceId?: string;
+  readonly installType: InstallType;
+  readonly installConfigId: string;
+  readonly environment: string;
+  readonly currentStateVersionId?: string;
+  readonly currentStateGeneration: number;
+  readonly currentOutputId?: string;
+  /** @deprecated Use currentOutputId. */
+  readonly currentOutputSnapshotId?: string;
+  /** @deprecated Retired Deployment ledger pointer. */
+  readonly currentDeploymentId?: string;
+  readonly compatibilityReportId?: string;
+  readonly compatibilityStatus?: CapsuleCompatibilityLevel;
+  readonly status: CapsuleStatus;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+/** Public Capsule projection returned by `/api` and dashboard session routes. */
+export type PublicCapsule = Omit<Capsule, "installType" | "currentOutputId">;
+
+// ---------------------------------------------------------------------------
+// Capsule compatibility report
+// ---------------------------------------------------------------------------
 
 export type CapsuleCompatibilityLevel =
   | "ready"
@@ -57,6 +153,8 @@ export interface CapsuleProvisionerSummary {
 export interface CapsuleCompatibilityReport {
   readonly id: string;
   readonly sourceId?: string;
+  readonly capsuleId?: string;
+  /** @deprecated Use capsuleId. */
   readonly installationId?: string;
   readonly sourceSnapshotId: string;
   readonly level: CapsuleCompatibilityLevel;
@@ -85,15 +183,19 @@ export interface CreateSourceCompatibilityCheckRequest {
   readonly sourceSnapshotId?: string;
   /** Safe relative OpenTofu module path inside the SourceSnapshot archive. */
   readonly modulePath?: string;
+  readonly capsuleId?: string;
+  /** @deprecated Use capsuleId. */
   readonly installationId?: string;
+  /** @deprecated Use workspace-scoped Source/Capsule identity. */
+  readonly spaceId?: string;
   /**
    * Curated InstallConfig to gate the pre-install compatibility check against,
-   * used when no Installation exists yet (e.g. the dashboard's "選んで入れる"
+   * used when no Capsule exists yet (e.g. the dashboard's "選んで入れる"
    * catalog deep-link). Its bounded policy (`allowedResourceTypes` …) is merged
-   * with the Space policy as a ceiling and applied to the Capsule Gate, so a
+   * with the Workspace policy as a ceiling and applied to the Capsule Gate, so a
    * vetted first-party module is gated by its own minimal allowlist WITHOUT
-   * widening the instance-wide default allowlist. Ignored when `installationId`
-   * is also present (the Installation's own InstallConfig wins).
+   * widening the instance-wide default allowlist. Ignored when `capsuleId` is
+   * also present (the Capsule's own InstallConfig wins).
    */
   readonly installConfigId?: string;
 }

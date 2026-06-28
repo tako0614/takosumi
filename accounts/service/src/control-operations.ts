@@ -47,15 +47,15 @@ import type {
   PublicCapsuleCompatibilityReportResponse,
 } from "takosumi-contract/capsules";
 import type { ListProvidersResponse } from "takosumi-contract/providers";
-import type { Space, SpaceType } from "takosumi-contract/spaces";
+import type { Workspace, WorkspaceType } from "takosumi-contract/workspaces";
 import type {
-  InstallationProviderEnvBindingSet,
+  CapsuleProviderEnvBindingSet,
   InstallConfig,
-  Installation,
+  Capsule,
   OutputAllowlistEntry,
   PolicyConfig,
   PublicInstallConfig,
-  PublicInstallation,
+  PublicCapsule,
 } from "takosumi-contract/installations";
 import type {
   Dependency,
@@ -66,11 +66,11 @@ import type {
 import type { ActivityEvent } from "takosumi-contract/activity";
 import type { Page, PageParams } from "takosumi-contract/pagination";
 import type {
-  InstallationProviderConnectionBinding,
-  InstallationProviderConnectionBindings,
-  InstallationProviderEnvBinding,
-  InstallationProviderEnvBindings,
-  InstallationProviderConnectionSet,
+  CapsuleProviderConnectionBinding,
+  CapsuleProviderConnectionBindings,
+  CapsuleProviderEnvBinding,
+  CapsuleProviderEnvBindings,
+  CapsuleProviderConnectionSet,
   ProviderConnection,
 } from "takosumi-contract/connections";
 import type {
@@ -80,7 +80,7 @@ import type {
 import type {
   OutputShare,
   OutputShareEntry,
-} from "takosumi-contract/output-snapshots";
+} from "takosumi-contract/outputs";
 import type { PublicDeployment } from "takosumi-contract/deployments";
 import type {
   BackupRecord,
@@ -105,7 +105,7 @@ import type {
 import type { JsonValue } from "takosumi-contract";
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 
-// --- Membership (Space members / roles) ------------------------------------
+// --- Membership (Workspace members / roles) ------------------------------------
 //
 // Structural mirror of the in-process membership domain
 // (`core/domains/membership`). The control routes describe the membership
@@ -113,23 +113,23 @@ import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 // accounts/service never imports back into `core/`; the host's wired
 // `TakosumiOperations` facade supplies the concrete service.
 
-/** A Space member's role. Mirrors the membership domain's `SpaceRole`. */
-export type ControlSpaceRole = "owner" | "admin" | "member" | "viewer";
+/** A Workspace member's role. Mirrors the membership domain's `WorkspaceRole`. */
+export type ControlWorkspaceRole = "owner" | "admin" | "member" | "viewer";
 
 /** A member's lifecycle status. Mirrors the membership domain's `MembershipStatus`. */
 export type ControlMembershipStatus = "active" | "invited" | "suspended";
 
 /**
- * Public projection of one Space membership for the dashboard session surface.
+ * Public projection of one Workspace membership for the dashboard session surface.
  * It carries the member's account id, roles, status, and timestamps — no
  * credential, email, or other PII beyond the account handle the caller already
  * addresses.
  */
-export interface PublicSpaceMember {
+export interface PublicWorkspaceMember {
   readonly id: string;
-  readonly spaceId: string;
+  readonly workspaceId: string;
   readonly accountId: string;
-  readonly roles: readonly ControlSpaceRole[];
+  readonly roles: readonly ControlWorkspaceRole[];
   readonly status: ControlMembershipStatus;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -151,31 +151,31 @@ export interface MembershipActor {
  * convenience for the same-origin dashboard only.
  */
 export interface ControlPlaneOperations {
-  // --- Spaces (§4) ---
+  // --- Workspaces (§4) ---
   readonly spaces: {
-    listSpaces(): Promise<readonly Space[]>;
-    listSpacesByOwner(ownerUserId: string): Promise<readonly Space[]>;
-    getSpace(id: string): Promise<Space>;
-    createSpace(request: {
+    listWorkspaces(): Promise<readonly Workspace[]>;
+    listWorkspacesByOwner(ownerUserId: string): Promise<readonly Workspace[]>;
+    getWorkspace(id: string): Promise<Workspace>;
+    createWorkspace(request: {
       readonly handle: string;
       readonly displayName: string;
-      readonly type: SpaceType;
+      readonly type: WorkspaceType;
       readonly ownerUserId: string;
-    }): Promise<Space>;
-    updateSpace(
+    }): Promise<Workspace>;
+    updateWorkspace(
       id: string,
       patch: {
         readonly displayName?: string;
         readonly policy?: PolicyConfig;
         readonly archived?: boolean;
       },
-    ): Promise<Space>;
+    ): Promise<Workspace>;
   };
-  // --- Members (membership domain: Space members + roles) ---
+  // --- Members (membership domain: Workspace members + roles) ---
   //
   // Backed in-process by the membership domain's
-  // `MembershipRoleEntitlementService` (`listSpaceMemberships` /
-  // `upsertSpaceMembership`). The control surface resolves the Space server-side
+  // `MembershipRoleEntitlementService` (`listWorkspaceMemberships` /
+  // `upsertWorkspaceMembership`). The control surface resolves the Workspace server-side
   // and enforces the role gate BEFORE calling these; the service's own
   // owner/admin gate is a defense-in-depth backstop. The membership domain has
   // no hard-delete and no invitation/notification machinery, so:
@@ -184,79 +184,79 @@ export interface ControlPlaneOperations {
   //   - `removeMember` is a SOFT remove (`status: "suspended"`), since the
   //     membership store exposes no delete.
   readonly members?: {
-    /** Lists a Space's memberships (membership domain `listSpaceMemberships`). */
-    listMembers(spaceId: string): Promise<readonly PublicSpaceMember[]>;
+    /** Lists a Workspace's memberships (membership domain `listWorkspaceMemberships`). */
+    listMembers(workspaceId: string): Promise<readonly PublicWorkspaceMember[]>;
     /**
-     * Adds or updates one Space membership (membership domain
-     * `upsertSpaceMembership`). Used for invite/add and for role changes; a
+     * Adds or updates one Workspace membership (membership domain
+     * `upsertWorkspaceMembership`). Used for invite/add and for role changes; a
      * `status: "suspended"` upsert is the soft-remove path. Returns the upserted
      * membership projection.
      */
     upsertMember(input: {
-      readonly spaceId: string;
+      readonly workspaceId: string;
       readonly accountId: string;
-      readonly roles?: readonly ControlSpaceRole[];
+      readonly roles?: readonly ControlWorkspaceRole[];
       readonly status?: ControlMembershipStatus;
       readonly actor: MembershipActor;
-    }): Promise<PublicSpaceMember>;
+    }): Promise<PublicWorkspaceMember>;
   };
-  // --- Installations + InstallConfigs (§5 / §11) ---
+  // --- Capsules + InstallConfigs (§5 / §11) ---
   readonly installations: {
-    getInstallation(id: string): Promise<Installation>;
-    listInstallations(spaceId: string): Promise<readonly Installation[]>;
-    listInstallationsPage(
-      spaceId: string,
+    getCapsule(id: string): Promise<Capsule>;
+    listCapsules(workspaceId: string): Promise<readonly Capsule[]>;
+    listCapsulesPage(
+      workspaceId: string,
       params: PageParams,
-    ): Promise<Page<Installation>>;
-    createInstallation(request: {
-      readonly spaceId: string;
+    ): Promise<Page<Capsule>>;
+    createCapsule(request: {
+      readonly workspaceId: string;
       readonly name: string;
       readonly environment: string;
       readonly sourceId: string;
       readonly installConfigId: string;
-    }): Promise<Installation>;
+    }): Promise<Capsule>;
     putInstallConfig(config: InstallConfig): Promise<InstallConfig>;
     getInstallConfig(id: string): Promise<InstallConfig>;
-    listInstallConfigs(spaceId?: string): Promise<readonly InstallConfig[]>;
-    patchInstallationStatus(
+    listInstallConfigs(workspaceId?: string): Promise<readonly InstallConfig[]>;
+    patchCapsuleStatus(
       id: string,
-      status: Installation["status"],
-    ): Promise<Installation>;
-    putInstallationProviderEnvBindingSet(
-      profile: InstallationProviderEnvBindingSet,
-    ): Promise<InstallationProviderEnvBindingSet>;
-    getInstallationProviderEnvBindingSetByInstallation(
-      installationId: string,
+      status: Capsule["status"],
+    ): Promise<Capsule>;
+    putCapsuleProviderEnvBindingSet(
+      profile: CapsuleProviderEnvBindingSet,
+    ): Promise<CapsuleProviderEnvBindingSet>;
+    getCapsuleProviderEnvBindingSetByCapsule(
+      capsuleId: string,
       environment: string,
-    ): Promise<InstallationProviderEnvBindingSet | undefined>;
+    ): Promise<CapsuleProviderEnvBindingSet | undefined>;
   };
   // --- Dependencies (§14 / §15) ---
   readonly dependencies: {
     createDependency(request: {
-      readonly spaceId: string;
-      readonly producerInstallationId: string;
-      readonly consumerInstallationId: string;
+      readonly workspaceId: string;
+      readonly producerCapsuleId: string;
+      readonly consumerCapsuleId: string;
       readonly mode: DependencyMode;
       readonly outputs: Readonly<Record<string, DependencyOutputMapping>>;
       readonly visibility: DependencyVisibility;
     }): Promise<Dependency>;
     getDependency(id: string): Promise<Dependency | undefined>;
-    listForInstallation(installationId: string): Promise<{
+    listForCapsule(capsuleId: string): Promise<{
       readonly asProducer: readonly Dependency[];
       readonly asConsumer: readonly Dependency[];
     }>;
     deleteDependency(id: string): Promise<boolean>;
   };
   /**
-   * Space-wide dependency edge listing for the graph projection. Added to the
-   * facade in M10 (mirrors the store's `listDependenciesBySpace`).
+   * Workspace-wide dependency edge listing for the graph projection. Added to the
+   * facade in M10 (mirrors the store's `listDependenciesByWorkspace`).
    */
-  listDependenciesBySpace(spaceId: string): Promise<readonly Dependency[]>;
+  listDependenciesByWorkspace(workspaceId: string): Promise<readonly Dependency[]>;
   // --- RunGroups (§19 / §24) ---
   readonly runGroups: {
-    createSpaceUpdate(spaceId: string): Promise<RunGroupWithRunsLike>;
-    createSpaceDriftCheck(
-      spaceId: string,
+    createWorkspaceUpdate(workspaceId: string): Promise<RunGroupWithRunsLike>;
+    createWorkspaceDriftCheck(
+      workspaceId: string,
       options?: { readonly limit?: number },
     ): Promise<RunGroupWithRunsLike>;
     getRunGroup(id: string): Promise<RunGroupWithRunsLike | undefined>;
@@ -267,34 +267,34 @@ export interface ControlPlaneOperations {
     record?(
       event: Omit<ActivityEvent, "id" | "createdAt">,
     ): Promise<ActivityEvent | undefined>;
-    list(spaceId: string, limit?: number): Promise<readonly ActivityEvent[]>;
+    list(workspaceId: string, limit?: number): Promise<readonly ActivityEvent[]>;
   };
   // --- Backups (§29) ---
   readonly backups: {
     createBackup(input: {
-      readonly spaceId: string;
+      readonly workspaceId: string;
       readonly createdByRunId?: string;
-      readonly installationId?: string;
+      readonly capsuleId?: string;
       readonly environment?: string;
     }): Promise<BackupRecord>;
     listBackups(
-      spaceId: string,
+      workspaceId: string,
       params?: PageParams,
     ): Promise<ListBackupsResponse>;
   };
   createRestoreRun(
-    spaceId: string,
+    workspaceId: string,
     backupId: string,
     request: CreateRestoreRequest,
     context?: { readonly actor?: string },
   ): Promise<Run>;
   recordUploadArchive(input: {
-    readonly spaceId: string;
+    readonly workspaceId: string;
     readonly bytes: Uint8Array;
     readonly path?: string;
   }): Promise<SourceSnapshot>;
   recordArtifactSnapshot(input: {
-    readonly spaceId: string;
+    readonly workspaceId: string;
     readonly url: string;
     readonly digest: string;
     readonly path?: string;
@@ -302,52 +302,52 @@ export interface ControlPlaneOperations {
   getSourceSnapshot(id: string): Promise<SourceSnapshot>;
   deployUpload(request: InternalDeployRequest): Promise<DeployResponse>;
   // --- Billing (§28) ---
-  getSpaceBilling(spaceId: string): Promise<{
+  getWorkspaceBilling(workspaceId: string): Promise<{
     readonly billing: {
       readonly settings: BillingSettings;
       readonly balance?: CreditBalance;
     };
   }>;
-  listSpaceUsage(
-    spaceId: string,
+  listWorkspaceUsage(
+    workspaceId: string,
     params?: PageParams,
   ): Promise<{
     readonly usageEvents: readonly UsageEvent[];
     readonly nextCursor?: string;
   }>;
-  listSpaceCreditReservations(spaceId: string): Promise<{
+  listWorkspaceCreditReservations(workspaceId: string): Promise<{
     readonly creditReservations: readonly CreditReservation[];
   }>;
-  topUpSpaceCredits(
-    spaceId: string,
+  topUpWorkspaceCredits(
+    workspaceId: string,
     input: { readonly usdMicros?: number; readonly credits?: number },
   ): Promise<{ readonly balance: CreditBalance }>;
-  changeSpaceSubscription(
-    spaceId: string,
+  changeWorkspaceSubscription(
+    workspaceId: string,
     input: { readonly billingSettings: BillingSettings },
   ): Promise<{ readonly billing: { readonly settings: BillingSettings } }>;
   // --- Connections (§9) ---
   readonly connections: {
     listProviderConnections(
-      spaceId?: string,
+      workspaceId?: string,
     ): Promise<readonly ProviderConnection[]>;
     getProviderConnection?(id: string): Promise<ProviderConnection>;
   };
   // --- OutputShares (§18) ---
   readonly outputShares: {
     createShare(request: {
-      readonly fromSpaceId: string;
-      readonly toSpaceId: string;
-      readonly producerInstallationId: string;
+      readonly fromWorkspaceId: string;
+      readonly toWorkspaceId: string;
+      readonly producerCapsuleId: string;
       readonly outputs: readonly {
         readonly name: string;
         readonly alias?: string;
         readonly sensitive?: boolean;
       }[];
     }): Promise<OutputShare>;
-    listForSpace(spaceId: string): Promise<readonly OutputShare[]>;
-    listForSpacePage(
-      spaceId: string,
+    listForWorkspace(workspaceId: string): Promise<readonly OutputShare[]>;
+    listForWorkspacePage(
+      workspaceId: string,
       params: PageParams,
     ): Promise<Page<OutputShare>>;
     getShare(id: string): Promise<OutputShare | undefined>;
@@ -355,14 +355,14 @@ export interface ControlPlaneOperations {
     revokeShare(id: string): Promise<OutputShare>;
   };
   listConnections(
-    spaceId: string,
+    workspaceId: string,
     params?: PageParams,
   ): Promise<ListConnectionsResponse>;
   listOperatorConnections(): Promise<ListConnectionsResponse>;
   getConnection(connectionId: string): Promise<Connection>;
   /**
-   * Registers a Space-owned provider credential Connection (§9). The control
-   * surface only ever builds Space-scoped requests here (guided-token / OAuth /
+   * Registers a Workspace-owned provider credential Connection (§9). The control
+   * surface only ever builds Workspace-scoped requests here (guided-token / OAuth /
    * generic-env helper paths); the response is the public {@link Connection}
    * projection, which carries NO secret `values`.
    */
@@ -372,16 +372,16 @@ export interface ControlPlaneOperations {
   /**
    * Re-verifies a Connection's stored credential with the provider (§30
    * `POST /internal/v1/connections/:id/test`). The control surface resolves the
-   * Connection's owning Space (via {@link getConnection}) and space-permission
+   * Connection's owning Workspace (via {@link getConnection}) and space-permission
    * gates BEFORE calling this; the response carries no secret values.
    */
   testConnection(connectionId: string): Promise<TestConnectionResponse>;
   /**
    * Revokes a Connection and deletes its sealed secret blob (§30
    * `POST /internal/v1/connections/:id/revoke`). The control surface resolves the
-   * Connection's owning Space (via {@link getConnection}) and space-permission
+   * Connection's owning Workspace (via {@link getConnection}) and space-permission
    * gates BEFORE calling this. The wiring records the §27 / §34
-   * `connection.revoked` Space activity, mirroring the deploy-control route.
+   * `connection.revoked` Workspace activity, mirroring the deploy-control route.
    */
   revokeConnection(connectionId: string): Promise<void>;
   /**
@@ -390,7 +390,7 @@ export interface ControlPlaneOperations {
    * generic-env provider); absent otherwise, so the dashboard falls back to the guided-token
    * deep-link path and never shows a dead OAuth button. `start` returns the
    * provider authorize URL + signed state; `complete` exchanges the callback
-   * code and yields a Space-owned `generic_env_provider` create request.
+   * code and yields a Workspace-owned `generic_env_provider` create request.
    */
   readonly connectionOAuth?: {
     readonly cloudflare?: {
@@ -402,14 +402,14 @@ export interface ControlPlaneOperations {
        */
       start(input: {
         readonly subject: string;
-        readonly spaceId: string;
+        readonly workspaceId: string;
         readonly displayName?: string;
         readonly successRedirectUri?: string;
       }): Promise<ConnectionOAuthStartResponse>;
       /**
        * Verifies the signed state and returns BOTH the connection-create
        * request and the `subject` that was signed in at `start` time. The
-       * callback authorizes the Space against that `subject`; `subject` is
+       * callback authorizes the Workspace against that `subject`; `subject` is
        * absent only for legacy/unsigned states, which the callback rejects.
        */
       complete(input: {
@@ -424,28 +424,28 @@ export interface ControlPlaneOperations {
   };
   // --- Runs (§6.8 / §19 / §23) ---
   listRuns(
-    spaceId: string,
+    workspaceId: string,
     options?: { readonly limit?: number },
   ): Promise<readonly Run[]>;
-  createInstallationPlan(
-    installationId: string,
+  createCapsulePlan(
+    capsuleId: string,
     options?: {
       readonly compatibilityReportId?: string;
       readonly runnerProfileId?: string;
     },
   ): Promise<PlanRunResponse>;
-  createInstallationDestroyPlan(
-    installationId: string,
+  createCapsuleDestroyPlan(
+    capsuleId: string,
     options?: {
       readonly runnerProfileId?: string;
     },
   ): Promise<PlanRunResponse>;
-  createInstallationDriftCheck(
-    installationId: string,
+  createCapsuleDriftCheck(
+    capsuleId: string,
   ): Promise<PlanRunResponse>;
   /**
    * Reads the internal PlanRun projection by id. The control surface uses it to
-   * resolve a plan run's owning Space (for the apply space-permission gate) and
+   * resolve a plan run's owning Workspace (for the apply space-permission gate) and
    * the reviewed plan fields the apply guard is built from.
    */
   getPlanRun(id: string): Promise<PlanRunResponse>;
@@ -458,26 +458,26 @@ export interface ControlPlaneOperations {
   createApplyRun(request: CreateApplyRunRequest): Promise<ApplyRunResponse>;
   // --- Deployments (§21 / §30) ---
   /**
-   * Lists an Installation's Deployment ledger (§30 `GET
+   * Lists an Capsule's Deployment ledger (§30 `GET
    * /internal/v1/installations/:id/deployments`). The control surface resolves the
-   * Installation's owning Space first and space-permission gates before calling
+   * Capsule's owning Workspace first and space-permission gates before calling
    * this; the returned `Deployment` rows only carry the allowlist-projected
    * `outputsPublic` map (sensitive outputs never enter the ledger row).
    */
   listDeployments(
-    installationId: string,
+    capsuleId: string,
     params?: PageParams,
   ): Promise<ListDeploymentsResponse>;
   /**
    * Reads one Deployment ledger record by id (§30 `GET /internal/v1/deployments/:id`).
-   * Used by the control surface to resolve a Deployment's owning Space (for the
+   * Used by the control surface to resolve a Deployment's owning Workspace (for the
    * space-permission gate) and to project its public fields. A missing id is a
    * typed `not_found`.
    */
   getDeployment(id: string): Promise<Deployment>;
   /**
    * Creates a rollback PLAN run for a Deployment (§30 `POST
-   * /internal/v1/deployments/:id/rollback-plan`): re-plans the Deployment's Installation
+   * /internal/v1/deployments/:id/rollback-plan`): re-plans the Deployment's Capsule
    * pinned to that Deployment's source snapshot. The plan then flows through the
    * normal approve/apply path, so the response is a `PlanRunResponse`.
    */
@@ -493,7 +493,7 @@ export interface ControlPlaneOperations {
   /**
    * Reads a plan / destroy_plan Run's public cost projection (`GET
    * /api/v1/runs/:id/cost`). The control surface resolves the Run's owning
-   * Space first and space-permission gates before calling this. The returned
+   * Workspace first and space-permission gates before calling this. The returned
    * {@link RunCostInfo} carries only the billing reservation values the
    * controller already computed at plan time (estimated / available credits,
    * reservation status, credit-shortfall + plan-limit reasons) — no cost is
@@ -503,7 +503,7 @@ export interface ControlPlaneOperations {
   // --- Sources (§6) ---
   createSource(request: CreateSourceRequest): Promise<CreateSourceResponse>;
   listSources(
-    spaceId: string,
+    workspaceId: string,
     params?: PageParams,
   ): Promise<ListSourcesResponse>;
   getSource(id: string): Promise<SourceResponse>;
@@ -531,6 +531,6 @@ export interface ControlPlaneOperations {
 
 /** Loose RunGroup-with-runs projection (avoids importing the service type). */
 export interface RunGroupWithRunsLike {
-  readonly runGroup: { readonly id: string; readonly spaceId: string };
+  readonly runGroup: { readonly id: string; readonly workspaceId?: string };
   readonly runs: readonly Run[];
 }

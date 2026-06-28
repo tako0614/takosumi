@@ -150,6 +150,7 @@ export class SourcesService {
     const nowIso = this.#now().toISOString();
     const stored: StoredSource = {
       id,
+      workspaceId: request.spaceId,
       spaceId: request.spaceId,
       name: request.name,
       url: request.url.trim(),
@@ -301,6 +302,7 @@ export class SourcesService {
     const run: SourceSyncRun = {
       id: runId,
       kind: "source_sync",
+      workspaceId: stored.spaceId,
       spaceId: stored.spaceId,
       sourceId,
       url: stored.url,
@@ -402,6 +404,7 @@ export class SourcesService {
     const nowIso = this.#now().toISOString();
     const runningRun: Run = {
       id: runId,
+      workspaceId: spaceId,
       spaceId,
       ...(input.sourceId ? { sourceId: input.sourceId } : {}),
       type: "compatibility_check",
@@ -513,6 +516,7 @@ export class SourcesService {
     const snapshot: SourceSnapshot = {
       id: snapshotId,
       origin: "upload",
+      workspaceId: input.spaceId,
       spaceId: input.spaceId,
       url: `https://uploads.takosumi.com/${input.spaceId}`,
       ref: "upload",
@@ -552,6 +556,7 @@ export class SourcesService {
     const snapshot: SourceSnapshot = {
       id: snapshotId,
       origin: "artifact",
+      workspaceId: input.spaceId,
       spaceId: input.spaceId,
       url: input.url.trim(),
       ref: "artifact",

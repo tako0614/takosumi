@@ -33,7 +33,7 @@ import type {
   SourceSnapshot,
   SourceSyncRun,
 } from "takosumi-contract/sources";
-import type { Space } from "takosumi-contract/spaces";
+import type { Workspace as Space } from "takosumi-contract/workspaces";
 import type { InstallationProviderEnvBindingSet } from "takosumi-contract/connections";
 import type { OutputAllowlistEntry } from "takosumi-contract/installations";
 import type {
@@ -55,8 +55,8 @@ import {
 } from "takosumi-contract/pagination";
 import type {
   OutputShare,
-  OutputSnapshot,
-} from "takosumi-contract/output-snapshots";
+  Output as OutputSnapshot,
+} from "takosumi-contract/outputs";
 import {
   RUN_LIST_DEFAULT_LIMIT,
   RUN_LIST_MAX_LIMIT,
@@ -1206,7 +1206,8 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     );
   }
 
-  putInstallation(installation: Installation): Promise<Installation> {
+  putInstallation(installationInput: Installation): Promise<Installation> {
+    const installation = normalizeInstallation(installationInput);
     for (const existing of this.#installations.values()) {
       if (
         existing.id !== installation.id &&
@@ -1289,7 +1290,7 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
         }),
       );
     }
-    const updated: Installation = { ...existing, ...patch };
+    const updated = normalizeInstallation({ ...existing, ...patch });
     this.#installations.set(id, updated);
     return Promise.resolve(updated);
   }
@@ -1362,7 +1363,10 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     if (input.planRunApplied) {
       this.#planRuns.set(input.planRunApplied.id, input.planRunApplied);
     }
-    const updated: Installation = { ...existing, ...installationPatch.patch };
+    const updated = normalizeInstallation({
+      ...existing,
+      ...installationPatch.patch,
+    });
     this.#installations.set(installationPatch.id, updated);
     return Promise.resolve({ installation: updated });
   }
@@ -1396,7 +1400,10 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
         }),
       );
     }
-    const updated: Installation = { ...existing, ...installationPatch.patch };
+    const updated = normalizeInstallation({
+      ...existing,
+      ...installationPatch.patch,
+    });
     this.#stateSnapshots.set(input.stateSnapshot.id, input.stateSnapshot);
     this.#backupRuns.set(input.restoreRunTerminal.id, input.restoreRunTerminal);
     this.#runLeases.delete(input.restoreRunTerminal.id);
@@ -1644,8 +1651,20 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
   }
 
   putStateSnapshot(snapshot: StateSnapshot): Promise<StateSnapshot> {
-    this.#stateSnapshots.set(snapshot.id, snapshot);
-    return Promise.resolve(snapshot);
+    // Populate both the canonical (workspaceId/capsuleId) and the transient
+    // deprecated (spaceId/installationId) names so the installationId-keyed
+    // filters resolve a snapshot written with only the new field names.
+    const workspaceId = snapshot.workspaceId ?? snapshot.spaceId ?? "";
+    const capsuleId = snapshot.capsuleId ?? snapshot.installationId ?? "";
+    const normalized: StateSnapshot = {
+      ...snapshot,
+      workspaceId,
+      spaceId: workspaceId,
+      capsuleId,
+      installationId: capsuleId,
+    };
+    this.#stateSnapshots.set(normalized.id, normalized);
+    return Promise.resolve(normalized);
   }
 
   listStateSnapshots(
@@ -1910,7 +1929,7 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     const limit = clampActivityLimit(options.limit);
     return Promise.resolve(
       Array.from(this.#securityFindings.values())
-        .filter((row) => row.spaceId === spaceId)
+        .filter((row) => row.workspaceId === spaceId)
         .filter((row) =>
           options.runId === undefined ? true : row.runId === options.runId,
         )
@@ -1924,7 +1943,7 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
 
   putCreditBalance(balance: CreditBalance): Promise<CreditBalance> {
     const normalized = normalizeCreditBalance(balance);
-    this.#creditBalances.set(balance.spaceId, normalized);
+    this.#creditBalances.set(billingScopeKey(balance), normalized);
     return Promise.resolve(normalized);
   }
 
@@ -2024,6 +2043,7 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     const monthlyIncludedUsdMicros =
       creditBalanceMonthlyIncludedUsdMicros(existing);
     const next: CreditBalance = {
+      workspaceId: spaceId,
       spaceId,
       availableUsdMicros,
       reservedUsdMicros,
@@ -2177,7 +2197,7 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
         settled: false,
         attempt: normalizeBillingAutoRechargeAttempt(existing),
         balance: normalizeCreditBalance(
-          this.#creditBalances.get(existing.spaceId),
+          this.#creditBalances.get(billingScopeKey(existing)),
         ),
         skippedReason: "already_succeeded",
       });
@@ -2201,7 +2221,7 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     }
     const chargedUsdMicros = next.chargedUsdMicros ?? next.requestedUsdMicros;
     const existingBalance = normalizeCreditBalance(
-      this.#creditBalances.get(next.spaceId),
+      this.#creditBalances.get(billingScopeKey(next)),
     );
     const availableUsdMicros =
       creditBalanceAvailableUsdMicros(existingBalance) + chargedUsdMicros;
@@ -2211,7 +2231,8 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     const monthlyIncludedUsdMicros =
       creditBalanceMonthlyIncludedUsdMicros(existingBalance);
     const balance = normalizeCreditBalance({
-      spaceId: next.spaceId,
+      workspaceId: next.workspaceId,
+      spaceId: next.workspaceId,
       availableUsdMicros,
       reservedUsdMicros,
       monthlyIncludedUsdMicros,
@@ -2224,7 +2245,7 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
       purchasedCredits: usdMicrosToLegacyCredits(purchasedUsdMicros),
       updatedAt: input.updatedAt,
     })!;
-    this.#creditBalances.set(next.spaceId, balance);
+    this.#creditBalances.set(billingScopeKey(next), balance);
     return Promise.resolve({ settled: true, attempt: next, balance });
   }
 
@@ -2264,13 +2285,13 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
       return Promise.resolve({
         usageEvent: existing,
         balance: normalizeCreditBalance(
-          this.#creditBalances.get(event.spaceId),
+          this.#creditBalances.get(billingScopeKey(event)),
         ),
         inserted: false,
       });
     }
     const balance = normalizeCreditBalance(
-      this.#creditBalances.get(event.spaceId),
+      this.#creditBalances.get(billingScopeKey(event)),
     );
     const usdMicros = creditAmountUsdMicros(input);
     if (!balance || creditBalanceAvailableUsdMicros(balance) < usdMicros) {
@@ -2285,7 +2306,7 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
       updatedAt: input.updatedAt,
     });
     const normalized = normalizeUsageEvent(event);
-    this.#creditBalances.set(event.spaceId, nextBalance);
+    this.#creditBalances.set(billingScopeKey(event), nextBalance);
     this.#usageEvents.set(event.id, normalized);
     return Promise.resolve({
       usageEvent: normalized,
@@ -2387,6 +2408,41 @@ function runRecordTimestamp(row: StoredRunRecord): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+/**
+ * Backfills the transient dual identity fields on a Capsule so every read
+ * carries BOTH the canonical (`workspaceId` / `currentStateVersionId` /
+ * `currentOutputId`) and the deprecated (`spaceId` / `currentDeploymentId` /
+ * `currentOutputSnapshotId`) names. Callers (tests, older writers) may set only
+ * one side; this keeps reads on either name resolvable during the rename.
+ */
+export function normalizeInstallation(installation: Installation): Installation {
+  // Workspace identity is never independently cleared, so fill both names from
+  // whichever side a writer set. The state-version / output pointers CAN be
+  // cleared (destroy), and the writers patch the legacy `currentDeploymentId` /
+  // `currentOutputSnapshotId` fields, so the canonical `currentStateVersionId` /
+  // `currentOutputId` MIRROR those legacy fields exactly (including a clear).
+  const workspaceId = installation.workspaceId ?? installation.spaceId;
+  return {
+    ...installation,
+    workspaceId,
+    spaceId: workspaceId,
+    currentStateVersionId: installation.currentDeploymentId,
+    currentOutputId: installation.currentOutputSnapshotId,
+  };
+}
+
+/**
+ * Resolves the Workspace identity key for billing records during the Workspace
+ * rename: prefer the canonical `workspaceId`, fall back to the deprecated
+ * `spaceId`. Records always carry one at runtime.
+ */
+function billingScopeKey(scope: {
+  readonly workspaceId?: string;
+  readonly spaceId?: string;
+}): string {
+  return scope.workspaceId ?? scope.spaceId ?? "";
+}
+
 function creditAmountUsdMicros(input: CreditAmountInput): number {
   if (input.usdMicros !== undefined) {
     if (
@@ -2432,6 +2488,7 @@ function normalizeCreditBalance(
   const purchasedUsdMicros = creditBalancePurchasedUsdMicros(balance);
   return {
     ...balance,
+    workspaceId: balance.workspaceId ?? balance.spaceId,
     availableUsdMicros,
     reservedUsdMicros,
     monthlyIncludedUsdMicros,
@@ -2447,6 +2504,7 @@ function normalizeUsageEvent(event: UsageEvent): UsageEvent {
   const usdMicros = usageEventUsdMicros(event);
   return {
     ...event,
+    workspaceId: event.workspaceId ?? event.spaceId ?? "",
     usdMicros,
     credits: usdMicrosToLegacyCredits(usdMicros),
   };
@@ -2460,6 +2518,7 @@ function normalizeCreditReservation(
     legacyCreditsToUsdMicros(reservation.estimatedCredits);
   return {
     ...reservation,
+    workspaceId: reservation.workspaceId ?? reservation.spaceId ?? "",
     estimatedUsdMicros,
     estimatedCredits: usdMicrosToLegacyCredits(estimatedUsdMicros),
   };

@@ -1,5 +1,5 @@
 /**
- * Space billing and USD-denominated usage ledger contract.
+ * Workspace billing and USD-denominated usage ledger contract.
  *
  * New billing code must use `usdMicros` fields: 1 USD = 1,000,000 micros.
  * Older `credits` fields remain as wire/storage compatibility aliases and are
@@ -122,6 +122,8 @@ export interface BillingAccount {
 
 export interface SpaceSubscription {
   readonly id: string;
+  readonly workspaceId: string;
+  /** @deprecated Use workspaceId. */
   readonly spaceId: string;
   readonly billingAccountId: string;
   readonly planId: string;
@@ -155,7 +157,9 @@ export interface BillingPlan {
 }
 
 export interface CreditBalance {
-  readonly spaceId: string;
+  readonly workspaceId: string;
+  /** @deprecated Use workspaceId. */
+  readonly spaceId?: string;
   readonly availableUsdMicros?: number;
   readonly reservedUsdMicros?: number;
   readonly monthlyIncludedUsdMicros?: number;
@@ -173,7 +177,9 @@ export interface CreditBalance {
 
 export interface CreditReservation {
   readonly id: string;
-  readonly spaceId: string;
+  readonly workspaceId: string;
+  /** @deprecated Use workspaceId. */
+  readonly spaceId?: string;
   readonly runId: string;
   readonly estimatedUsdMicros?: number;
   /** @deprecated Use estimatedUsdMicros. */
@@ -192,7 +198,9 @@ export type BillingAutoRechargeAttemptStatus =
 
 export interface BillingAutoRechargeAttempt {
   readonly id: string;
-  readonly spaceId: string;
+  readonly workspaceId: string;
+  /** @deprecated Use workspaceId. */
+  readonly spaceId?: string;
   readonly runId: string;
   readonly billingAccountId: string;
   readonly idempotencyKey: string;
@@ -253,7 +261,11 @@ export type UsageResourceMetadata = Readonly<
 
 export interface UsageEvent {
   readonly id: string;
-  readonly spaceId: string;
+  readonly workspaceId: string;
+  /** @deprecated Use workspaceId. */
+  readonly spaceId?: string;
+  readonly capsuleId?: string;
+  /** @deprecated Use capsuleId. */
   readonly installationId?: string;
   readonly runId?: string;
   readonly meterId?: string;
@@ -378,8 +390,12 @@ export function billingPlanMaxEstimatedUsdMicros(
 
 /** Context handed to {@link BillingEnforcement.reservePlanBilling} at plan time. */
 export interface BillingReservationContext {
-  readonly spaceId: string;
+  readonly workspaceId?: string;
+  /** @deprecated Use workspaceId. */
+  readonly spaceId?: string;
   readonly runId: string;
+  readonly capsuleId?: string;
+  /** @deprecated Use capsuleId. */
   readonly installationId?: string;
   /** The OSS-resolved billing mode (`disabled` | `showback`). */
   readonly mode: BillingMode;
@@ -404,15 +420,21 @@ export interface BillingEnforcementDecision {
 }
 
 export interface BillingReservationCheckContext {
-  readonly spaceId: string;
+  readonly workspaceId?: string;
+  /** @deprecated Use workspaceId. */
+  readonly spaceId?: string;
   readonly planRunId: string;
   readonly now: number;
 }
 
 export interface BillingCaptureContext {
-  readonly spaceId: string;
+  readonly workspaceId?: string;
+  /** @deprecated Use workspaceId. */
+  readonly spaceId?: string;
   readonly planRunId: string;
   readonly applyRunId: string;
+  readonly capsuleId?: string;
+  /** @deprecated Use capsuleId. */
   readonly installationId?: string;
   /** USD micros the OSS controller recorded as the captured usage estimate. */
   readonly capturedUsdMicros: number;
@@ -420,7 +442,9 @@ export interface BillingCaptureContext {
 }
 
 export interface BillingReleaseContext {
-  readonly spaceId: string;
+  readonly workspaceId?: string;
+  /** @deprecated Use workspaceId. */
+  readonly spaceId?: string;
   readonly planRunId: string;
   readonly now: number;
 }
@@ -435,7 +459,7 @@ export interface BillingReleaseContext {
 export interface BillingEnforcement {
   /**
    * Plan-time reservation. Returns blocking `reasons` (e.g. insufficient USD
-   * balance) for an enforce-mode Space; OSS returns `{ reasons: [] }`.
+   * balance) for an enforce-mode Workspace; OSS returns `{ reasons: [] }`.
    */
   reservePlanBilling(
     ctx: BillingReservationContext,
@@ -452,7 +476,9 @@ export interface BillingEnforcement {
 }
 
 export interface QuotaEvaluationContext {
-  readonly spaceId: string;
+  readonly workspaceId?: string;
+  /** @deprecated Use workspaceId. */
+  readonly spaceId?: string;
   readonly estimatedUsdMicros: number;
   readonly planResourceChanges: readonly PlanResourceChange[];
 }

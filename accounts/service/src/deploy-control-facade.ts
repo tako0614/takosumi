@@ -16,8 +16,8 @@ import type {
   DeployControlErrorEnvelope,
   Deployment,
   DeploymentOutput,
-  GetInstallationResponse,
-  Installation,
+  GetCapsuleResponse,
+  Capsule,
   ListDeploymentsResponse,
   OpenTofuModuleSource,
   PlanRun,
@@ -37,17 +37,17 @@ export interface DeployControlOperations {
   createPlanRun(request: CreatePlanRunRequest): Promise<PlanRunResponse>;
   getPlanRun(id: string): Promise<PlanRunResponse>;
   createApplyRun(request: CreateApplyRunRequest): Promise<ApplyRunResponse>;
-  getInstallation(id: string): Promise<GetInstallationResponse>;
-  listDeployments(installationId: string): Promise<ListDeploymentsResponse>;
+  getCapsule(id: string): Promise<GetCapsuleResponse>;
+  listDeployments(capsuleId: string): Promise<ListDeploymentsResponse>;
   /**
-   * Idempotent personal-Space creation for the account-plane first-login hook
-   * (spec §4: "初回ログイン時に個人 Space を自動作成する"). Exposed on the
+   * Idempotent personal-Workspace creation for the account-plane first-login hook
+   * (spec §4: "初回ログイン時に個人 Workspace を自動作成する"). Exposed on the
    * operations facade so the session-me route can call it fire-and-forget after
    * sign-in. The OAuth identity resolver intentionally stays side-effect free;
-   * it does not own Space creation. `handle` must satisfy the spaces handle rule;
+   * it does not own Workspace creation. `handle` must satisfy the spaces handle rule;
    * the account's username/slug if one exists, else `u-<short id>`.
    */
-  ensurePersonalSpace?(
+  ensurePersonalWorkspace?(
     ownerUserId: string,
     handle: string,
   ): Promise<{ readonly id: string }>;
@@ -62,20 +62,20 @@ export interface DeployControlFacadeOptions {
   operations: DeployControlOperations;
 }
 
-export async function handleInstallationPlanRunFacade(input: {
+export async function handleCapsulePlanRunFacade(input: {
   request: Request;
   deployControl: DeployControlFacadeOptions;
 }): Promise<Response> {
   const bodyText = await input.request.text();
   const body = bodyText.length > 0 ? (JSON.parse(bodyText) as unknown) : {};
-  const result = await requestInstallationPlanRun({
+  const result = await requestCapsulePlanRun({
     deployControl: input.deployControl,
     body: isRecord(body) ? body : {},
   });
   return responseFromFacadeResult(result);
 }
 
-export async function requestInstallationPlanRun(input: {
+export async function requestCapsulePlanRun(input: {
   deployControl: DeployControlFacadeOptions;
   body: Record<string, unknown>;
 }): Promise<{ status: number; contentType: string; payload: unknown }> {
@@ -87,7 +87,7 @@ export async function requestInstallationPlanRun(input: {
   return adaptPlanRunResult(plan);
 }
 
-export async function requestInstallationApply(input: {
+export async function requestCapsuleApply(input: {
   deployControl: DeployControlFacadeOptions;
   body: Record<string, unknown>;
 }): Promise<{ status: number; contentType: string; payload: unknown }> {
@@ -127,28 +127,28 @@ export async function requestInstallationApply(input: {
 
 export async function requestDeploymentPlanRun(input: {
   deployControl: DeployControlFacadeOptions;
-  installationId: string;
+  capsuleId: string;
   body: Record<string, unknown>;
 }): Promise<{ status: number; contentType: string; payload: unknown }> {
   const plan = await createPlanRunForFacadeRequest({
     deployControl: input.deployControl,
     body: input.body,
     operation: "update",
-    installationId: input.installationId,
+    capsuleId: input.capsuleId,
   });
   return adaptPlanRunResult(plan);
 }
 
 export async function requestDeploymentApply(input: {
   deployControl: DeployControlFacadeOptions;
-  installationId: string;
+  capsuleId: string;
   body: Record<string, unknown>;
 }): Promise<{ status: number; contentType: string; payload: unknown }> {
   const plan = await resolveReviewedPlanRunForFacadeApply({
     deployControl: input.deployControl,
     body: input.body,
     operation: "update",
-    installationId: input.installationId,
+    capsuleId: input.capsuleId,
   });
   if (plan.status < 200 || plan.status >= 300) return plan;
   const planRun = planRunFromPayload(plan.payload);
@@ -180,7 +180,7 @@ export async function requestDeploymentApply(input: {
 
 export async function requestRollback(input: {
   deployControl: DeployControlFacadeOptions;
-  installationId: string;
+  capsuleId: string;
   body: Record<string, unknown>;
 }): Promise<{ status: number; contentType: string; payload: unknown }> {
   const targetDeploymentId =
@@ -217,7 +217,7 @@ export async function requestRollback(input: {
   const deployments = await requestDeployControlJson<ListDeploymentsResponse>({
     deployControl: input.deployControl,
     method: "GET",
-    path: INSTALLATION_DEPLOYMENTS_PATH(input.installationId),
+    path: INSTALLATION_DEPLOYMENTS_PATH(input.capsuleId),
   });
   if (deployments.status < 200 || deployments.status >= 300) return deployments;
   const target = isRecord(deployments.payload)
@@ -231,15 +231,15 @@ export async function requestRollback(input: {
       contentType: "application/json; charset=utf-8",
       payload: {
         error: "not_found",
-        error_description: `Deployment ${targetDeploymentId} was not found in Installation ${input.installationId}`,
+        error_description: `Deployment ${targetDeploymentId} was not found in Capsule ${input.capsuleId}`,
       },
     };
   }
   const applied = await requestDeploymentApply({
     deployControl: input.deployControl,
-    installationId: input.installationId,
+    capsuleId: input.capsuleId,
     body: {
-      // The Space-direct Deployment no longer carries a `source`; the source
+      // The Workspace-direct Deployment no longer carries a `source`; the source
       // identity comes from the reviewed PlanRun (resolved by planRunId inside
       // requestDeploymentApply), so the rollback apply body only needs the
       // planRunId + the optional expected guard.
@@ -259,7 +259,7 @@ async function resolveReviewedPlanRunForFacadeApply(input: {
   deployControl: DeployControlFacadeOptions;
   body: Record<string, unknown>;
   operation: "create" | "update" | "destroy";
-  installationId?: string;
+  capsuleId?: string;
 }): Promise<{ status: number; contentType: string; payload: unknown }> {
   const planRunId =
     stringValue(input.body.planRunId) ??
@@ -297,13 +297,13 @@ async function resolveReviewedPlanRunForFacadeApply(input: {
       },
     };
   }
-  if (input.installationId && planRun.installationId !== input.installationId) {
+  if (input.capsuleId && planRun.capsuleId !== input.capsuleId) {
     return {
       status: 409,
       contentType: "application/json; charset=utf-8",
       payload: {
         error: "failed_precondition",
-        error_description: `PlanRun ${planRun.id} is not for Installation ${input.installationId}`,
+        error_description: `PlanRun ${planRun.id} is not for Capsule ${input.capsuleId}`,
         planRun,
       },
     };
@@ -315,30 +315,30 @@ async function createPlanRunForFacadeRequest(input: {
   deployControl: DeployControlFacadeOptions;
   body: Record<string, unknown>;
   operation: "create" | "update" | "destroy";
-  installationId?: string;
+  capsuleId?: string;
 }): Promise<{ status: number; contentType: string; payload: unknown }> {
-  const installationId =
-    input.installationId ?? stringValue(input.body.installationId);
-  let installation: Installation | undefined;
-  if (installationId) {
+  const capsuleId =
+    input.capsuleId ?? stringValue(input.body.capsuleId);
+  let installation: Capsule | undefined;
+  if (capsuleId) {
     const installationResult =
-      await requestDeployControlJson<GetInstallationResponse>({
+      await requestDeployControlJson<GetCapsuleResponse>({
         deployControl: input.deployControl,
         method: "GET",
-        path: INSTALLATION_PATH(installationId),
+        path: INSTALLATION_PATH(capsuleId),
       });
     if (installationResult.status < 200 || installationResult.status >= 300) {
       return installationResult;
     }
     installation = isRecord(installationResult.payload)
-      ? (installationResult.payload.installation as Installation | undefined)
+      ? (installationResult.payload.installation as Capsule | undefined)
       : undefined;
   }
 
-  // The Space-direct Installation no longer carries a `source` (its source
+  // The Workspace-direct Capsule no longer carries a `source` (its source
   // identity lives in the control plane behind `sourceId`, not resolvable
   // in-process here). The plan source must therefore come from the request
-  // body; there is no Installation-derived fallback.
+  // body; there is no Capsule-derived fallback.
   const source = openTofuSourceFromRequestSource({
     source: isRecord(input.body.source) ? input.body.source : undefined,
   });
@@ -352,26 +352,26 @@ async function createPlanRunForFacadeRequest(input: {
       },
     };
   }
-  const spaceId =
-    stringValue(input.body.spaceId) ??
+  const workspaceId =
+    stringValue(input.body.workspaceId) ??
     stringValue(input.body.space_id) ??
-    installation?.spaceId;
-  if (!spaceId) {
+    installation?.workspaceId;
+  if (!workspaceId) {
     return {
       status: 400,
       contentType: "application/json; charset=utf-8",
       payload: {
         error: "invalid_request",
-        error_description: "spaceId is required",
+        error_description: "workspaceId is required",
       },
     };
   }
 
   const request: CreatePlanRunRequest = {
-    spaceId,
+    workspaceId,
     source,
     operation: input.operation,
-    ...(installationId ? { installationId } : {}),
+    ...(capsuleId ? { capsuleId } : {}),
     ...((stringValue(input.body.runnerId) ??
     stringValue(input.body.runnerProfileId))
       ? {
@@ -404,7 +404,7 @@ async function createPlanRunForFacadeRequest(input: {
   if (installation && isRecord(response.payload)) {
     response.payload = {
       ...response.payload,
-      currentDeploymentId: installation.currentDeploymentId,
+      currentStateVersionId: installation.currentStateVersionId ?? null,
     };
   }
   return response;
@@ -466,19 +466,19 @@ function applyRequestFromExpectedGuard(input: {
     .resolvedProviderEnvBindingsDigest
     ? requiredExpectedString(expected, "resolvedProviderEnvBindingsDigest")
     : undefined;
-  const installationId = input.planRun.installationId
-    ? requiredExpectedString(expected, "installationId")
+  const capsuleId = input.planRun.capsuleId
+    ? requiredExpectedString(expected, "capsuleId")
     : undefined;
-  const currentDeploymentId = input.planRun.installationId
-    ? requiredExpectedNullableString(expected, "currentDeploymentId")
+  const currentStateVersionId = input.planRun.capsuleId
+    ? requiredExpectedNullableString(expected, "currentStateVersionId")
     : undefined;
   return {
     planRunId: input.planRun.id,
     ...(input.approval ? { approval: input.approval } : {}),
     expected: {
       planRunId: requiredExpectedString(expected, "planRunId"),
-      ...(installationId ? { installationId } : {}),
-      ...(input.planRun.installationId ? { currentDeploymentId } : {}),
+      ...(capsuleId ? { capsuleId } : {}),
+      ...(input.planRun.capsuleId ? { currentStateVersionId } : {}),
       runnerProfileId: requiredExpectedString(expected, "runnerProfileId"),
       sourceDigest: requiredExpectedString(expected, "sourceDigest"),
       variablesDigest: requiredExpectedString(expected, "variablesDigest"),
@@ -579,14 +579,14 @@ function adaptPlanRunResult(input: {
 }): { status: number; contentType: string; payload: unknown } {
   const planRun = planRunFromPayload(input.payload);
   if (!planRun) return input;
-  const currentDeploymentId = isRecord(input.payload)
-    ? (stringValue(input.payload.currentDeploymentId) ??
-      planRun.installationCurrentDeploymentId ??
+  const currentStateVersionId = isRecord(input.payload)
+    ? (stringValue(input.payload.currentStateVersionId) ??
+      planRun.capsuleCurrentStateVersionId ??
       undefined)
     : undefined;
-  const hasInstallationGuard =
-    planRun.installationId !== undefined &&
-    planRun.installationCurrentDeploymentId !== undefined;
+  const hasCapsuleGuard =
+    planRun.capsuleId !== undefined &&
+    planRun.capsuleCurrentStateVersionId !== undefined;
   return {
     ...input,
     payload: {
@@ -599,13 +599,16 @@ function adaptPlanRunResult(input: {
       providerLockDigest: planRun.providerLockDigest,
       expected: {
         planRunId: planRun.id,
-        ...(planRun.installationId
-          ? { installationId: planRun.installationId }
+        ...(planRun.capsuleId
+          ? { capsuleId: planRun.capsuleId }
           : {}),
-        ...(hasInstallationGuard
-          ? { currentDeploymentId: planRun.installationCurrentDeploymentId }
-          : currentDeploymentId
-            ? { currentDeploymentId }
+        ...(hasCapsuleGuard
+          ? {
+              currentStateVersionId:
+                planRun.capsuleCurrentStateVersionId ?? null,
+            }
+          : currentStateVersionId
+            ? { currentStateVersionId }
             : {}),
         runnerProfileId: planRun.runnerProfileId,
         sourceDigest: planRun.sourceDigest,
@@ -641,7 +644,7 @@ function adaptApplyRunResult(input: {
   const response = input.payload as Partial<ApplyRunResponse>;
   if (!response.applyRun) return input;
   const deployment = response.deployment;
-  // The Space-direct Deployment dropped its embedded `source` / `planDigest` /
+  // The Workspace-direct Deployment dropped its embedded `source` / `planDigest` /
   // `sourceCommit` projections (those now live on the reviewed PlanRun and in
   // the control-plane SourceSnapshot, not on the Deployment row). The only
   // public payload still derivable from the Deployment is the launch URL, which
@@ -666,9 +669,9 @@ function adaptApplyRunResult(input: {
 }
 
 /**
- * Projects the Space-direct Deployment's `outputsPublic` map into the legacy
+ * Projects the Workspace-direct Deployment's `outputsPublic` map into the legacy
  * {@link DeploymentOutput} list shape the launch projection consumes. The
- * Space-direct model only retains the public (allowlisted) outputs as a plain
+ * Workspace-direct model only retains the public (allowlisted) outputs as a plain
  * record; sensitivity and typed kinds are no longer carried here, so `kind`
  * mirrors the output name and `sensitive` is always false.
  */
@@ -802,9 +805,9 @@ async function requestDeployControlInProcess(input: {
         const payload = await input.operations.listDeployments(deploymentsId);
         return { status: 200, contentType: JSON_CONTENT_TYPE, payload };
       }
-      const installationId = idFromPath(input.path, INSTALLATION_PATH);
-      if (installationId !== undefined) {
-        const payload = await input.operations.getInstallation(installationId);
+      const capsuleId = idFromPath(input.path, INSTALLATION_PATH);
+      if (capsuleId !== undefined) {
+        const payload = await input.operations.getCapsule(capsuleId);
         return { status: 200, contentType: JSON_CONTENT_TYPE, payload };
       }
     }

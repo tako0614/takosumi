@@ -1,4 +1,4 @@
-// AppInstallation ledger: ledger accounts, spaces, installations, internal
+// AppCapsule ledger: ledger accounts, spaces, installations, internal
 // service binding material records, compatibility grant validation shims, and
 // the append-only event log. Free functions delegate raw queries to a
 // PostgresQueryClient.
@@ -6,11 +6,11 @@
 import type {
   ServiceBindingMaterialRecord,
   ServiceGrantMaterialRecord,
-  InstallationEventRecord,
-  InstallationRecord,
+  CapsuleEventRecord,
+  CapsuleRecord,
   LedgerAccountRecord,
   RuntimeBindingRecord,
-  SpaceRecord,
+  WorkspaceRecord,
 } from "../ledger.ts";
 import { and, asc, eq, sql } from "drizzle-orm";
 import { jsonb, pgSchema, text, timestamp } from "drizzle-orm/pg-core";
@@ -22,10 +22,10 @@ import { LedgerAccountOwnershipConflictError } from "../store.ts";
 import {
   serviceBindingMaterialFromRow,
   type ServiceBindingMaterialRow,
-  appInstallationFromRow,
-  type AppInstallationRow,
+  appCapsuleFromRow,
+  type AppCapsuleRow,
   installationEventFromRow,
-  type InstallationEventRow,
+  type CapsuleEventRow,
   ledgerAccountFromRow,
   type LedgerAccountRow,
   postgresDrizzle,
@@ -33,7 +33,7 @@ import {
   runFirst,
   runQuery,
   spaceFromRow,
-  type SpaceRow,
+  type WorkspaceRow,
   toDate,
 } from "./internal.ts";
 
@@ -48,7 +48,7 @@ const ledgerAccounts = installation.table("ledger_accounts", {
 });
 
 const spaces = installation.table("spaces", {
-  spaceId: text("space_id").primaryKey(),
+  workspaceId: text("space_id").primaryKey(),
   accountId: text("account_id").notNull(),
   kind: text("kind").notNull(),
   displayName: text("display_name"),
@@ -56,10 +56,10 @@ const spaces = installation.table("spaces", {
   updatedAt: timestamp("updated_at", { mode: "date" }).notNull(),
 });
 
-const appInstallations = installation.table("app_installations", {
-  installationId: text("installation_id").primaryKey(),
+const appCapsules = installation.table("app_installations", {
+  capsuleId: text("installation_id").primaryKey(),
   accountId: text("account_id").notNull(),
-  spaceId: text("space_id").notNull(),
+  workspaceId: text("space_id").notNull(),
   appId: text("app_id").notNull(),
   sourceGitUrl: text("source_git_url").notNull(),
   sourceRef: text("source_ref").notNull(),
@@ -79,7 +79,7 @@ const serviceBindingMaterials = installation.table(
   "service_binding_materials",
   {
     bindingId: text("binding_id").primaryKey(),
-    installationId: text("installation_id").notNull(),
+    capsuleId: text("installation_id").notNull(),
     name: text("name").notNull(),
     kind: text("kind").notNull(),
     configRef: text("config_ref").notNull(),
@@ -92,13 +92,13 @@ const serviceBindingMaterials = installation.table(
 const installationEventChainLocks = installation.table(
   "installation_event_chain_locks",
   {
-    installationId: text("installation_id").primaryKey(),
+    capsuleId: text("installation_id").primaryKey(),
   },
 );
 
 const installationEvents = installation.table("installation_events", {
   eventId: text("event_id").primaryKey(),
-  installationId: text("installation_id").notNull(),
+  capsuleId: text("installation_id").notNull(),
   eventType: text("event_type").notNull(),
   payload: jsonb("payload").notNull(),
   previousEventHash: text("previous_event_hash"),
@@ -110,7 +110,7 @@ const installationEvents = installation.table("installation_events", {
 const installationSchema = {
   ledgerAccounts,
   spaces,
-  appInstallations,
+  appCapsules,
   serviceBindingMaterials,
   installationEventChainLocks,
   installationEvents,
@@ -176,16 +176,16 @@ export async function findLedgerAccount(
   return row ? ledgerAccountFromRow(row) : undefined;
 }
 
-export async function saveSpace(
+export async function saveWorkspace(
   client: PostgresQueryClient,
-  record: SpaceRecord,
+  record: WorkspaceRecord,
 ): Promise<void> {
   const values = spaceValues(record);
   await postgresDrizzle(client, installationSchema)
     .insert(spaces)
     .values(values)
     .onConflictDoUpdate({
-      target: spaces.spaceId,
+      target: spaces.workspaceId,
       set: {
         accountId: values.accountId,
         kind: values.kind,
@@ -195,62 +195,62 @@ export async function saveSpace(
     });
 }
 
-export async function findSpace(
+export async function findWorkspace(
   client: PostgresQueryClient,
-  spaceId: string,
-): Promise<SpaceRecord | undefined> {
+  workspaceId: string,
+): Promise<WorkspaceRecord | undefined> {
   const row = await postgresDrizzle(client, installationSchema)
     .select(spaceColumns)
     .from(spaces)
-    .where(eq(spaces.spaceId, spaceId))
+    .where(eq(spaces.workspaceId, workspaceId))
     .limit(1)
-    .then((rows) => rows[0] as SpaceRow | undefined);
+    .then((rows) => rows[0] as WorkspaceRow | undefined);
   return row ? spaceFromRow(row) : undefined;
 }
 
-export async function listSpacesForAccount(
+export async function listWorkspacesForAccount(
   client: PostgresQueryClient,
   accountId: string,
-): Promise<readonly SpaceRecord[]> {
+): Promise<readonly WorkspaceRecord[]> {
   const rows = (await postgresDrizzle(client, installationSchema)
     .select(spaceColumns)
     .from(spaces)
     .where(eq(spaces.accountId, accountId))
-    .orderBy(asc(spaces.createdAt), asc(spaces.spaceId))) as SpaceRow[];
+    .orderBy(asc(spaces.createdAt), asc(spaces.workspaceId))) as WorkspaceRow[];
   return rows.map(spaceFromRow);
 }
 
-export async function listSpacesForOwner(
+export async function listWorkspacesForOwner(
   client: PostgresQueryClient,
   subject: string,
-): Promise<readonly SpaceRecord[]> {
+): Promise<readonly WorkspaceRecord[]> {
   const rows = (await postgresDrizzle(client, installationSchema)
     .select(spaceColumns)
     .from(spaces)
     .innerJoin(ledgerAccounts, eq(spaces.accountId, ledgerAccounts.accountId))
     .where(eq(ledgerAccounts.legalOwnerSubject, subject))
-    .orderBy(asc(spaces.createdAt), asc(spaces.spaceId))) as SpaceRow[];
+    .orderBy(asc(spaces.createdAt), asc(spaces.workspaceId))) as WorkspaceRow[];
   return rows.map(spaceFromRow);
 }
 
-export async function saveAppInstallation(
+export async function saveAppCapsule(
   client: PostgresQueryClient,
-  record: InstallationRecord,
+  record: CapsuleRecord,
 ): Promise<void> {
   // Wave 6 dropped the `runtime_binding_id` column from
   // `installation_v1.app_installations`. The write path no longer
-  // references it. `InstallationRecord.runtimeBindingId` is silently
+  // references it. `CapsuleRecord.runtimeBindingId` is silently
   // ignored when persisting; the in-memory store still tracks it for
   // materialize helper state that has not crossed the Postgres boundary.
-  const values = appInstallationValues(record);
+  const values = appCapsuleValues(record);
   await postgresDrizzle(client, installationSchema)
-    .insert(appInstallations)
+    .insert(appCapsules)
     .values(values)
     .onConflictDoUpdate({
-      target: appInstallations.installationId,
+      target: appCapsules.capsuleId,
       set: {
         accountId: values.accountId,
-        spaceId: values.spaceId,
+        workspaceId: values.workspaceId,
         appId: values.appId,
         sourceGitUrl: values.sourceGitUrl,
         sourceRef: values.sourceRef,
@@ -266,47 +266,47 @@ export async function saveAppInstallation(
     });
 }
 
-export async function findAppInstallation(
+export async function findAppCapsule(
   client: PostgresQueryClient,
-  installationId: string,
-): Promise<InstallationRecord | undefined> {
+  capsuleId: string,
+): Promise<CapsuleRecord | undefined> {
   const row = await postgresDrizzle(client, installationSchema)
-    .select(appInstallationColumns)
-    .from(appInstallations)
-    .where(eq(appInstallations.installationId, installationId))
+    .select(appCapsuleColumns)
+    .from(appCapsules)
+    .where(eq(appCapsules.capsuleId, capsuleId))
     .limit(1)
-    .then((rows) => rows[0] as AppInstallationRow | undefined);
-  return row ? appInstallationFromRow(row) : undefined;
+    .then((rows) => rows[0] as AppCapsuleRow | undefined);
+  return row ? appCapsuleFromRow(row) : undefined;
 }
 
-export async function listAppInstallationsForSpace(
+export async function listAppCapsulesForWorkspace(
   client: PostgresQueryClient,
-  spaceId: string,
-): Promise<readonly InstallationRecord[]> {
+  workspaceId: string,
+): Promise<readonly CapsuleRecord[]> {
   const rows = (await postgresDrizzle(client, installationSchema)
-    .select(appInstallationColumns)
-    .from(appInstallations)
-    .where(eq(appInstallations.spaceId, spaceId))
+    .select(appCapsuleColumns)
+    .from(appCapsules)
+    .where(eq(appCapsules.workspaceId, workspaceId))
     .orderBy(
-      asc(appInstallations.createdAt),
-      asc(appInstallations.installationId),
-    )) as AppInstallationRow[];
-  return rows.map(appInstallationFromRow);
+      asc(appCapsules.createdAt),
+      asc(appCapsules.capsuleId),
+    )) as AppCapsuleRow[];
+  return rows.map(appCapsuleFromRow);
 }
 
-export async function listAppInstallationsForBillingAccount(
+export async function listAppCapsulesForBillingAccount(
   client: PostgresQueryClient,
   billingAccountId: string,
-): Promise<readonly InstallationRecord[]> {
+): Promise<readonly CapsuleRecord[]> {
   const rows = (await postgresDrizzle(client, installationSchema)
-    .select(appInstallationColumns)
-    .from(appInstallations)
-    .where(eq(appInstallations.billingAccountId, billingAccountId))
+    .select(appCapsuleColumns)
+    .from(appCapsules)
+    .where(eq(appCapsules.billingAccountId, billingAccountId))
     .orderBy(
-      asc(appInstallations.createdAt),
-      asc(appInstallations.installationId),
-    )) as AppInstallationRow[];
-  return rows.map(appInstallationFromRow);
+      asc(appCapsules.createdAt),
+      asc(appCapsules.capsuleId),
+    )) as AppCapsuleRow[];
+  return rows.map(appCapsuleFromRow);
 }
 
 export function saveRuntimeBinding(
@@ -317,7 +317,7 @@ export function saveRuntimeBinding(
   // live orchestration entity (shared-cell warm-pool, materialize continuity,
   // dashboard render) but is no longer persisted; INSERT against the dropped
   // table raised "relation does not exist" (production-blocking SQL drift).
-  // No-op shim mirrors the Phase E precedent in `listServiceBindingMaterialsForInstallation`.
+  // No-op shim mirrors the Phase E precedent in `listServiceBindingMaterialsForCapsule`.
   void client;
   void record;
   return Promise.resolve();
@@ -329,7 +329,7 @@ export function findRuntimeBinding(
 ): Promise<RuntimeBindingRecord | undefined> {
   // Wave 6 dropped `installation_v1.runtime_bindings`. Callers (materialize
   // helpers / dashboard / export bundle / lifecycle routes) all guard on
-  // `installation.runtimeBindingId` being set, and `appInstallationFromRow`
+  // `installation.runtimeBindingId` being set, and `appCapsuleFromRow`
   // already returns it as undefined, so this read path is unreachable in
   // production. Returning undefined keeps the contract honest.
   void client;
@@ -353,7 +353,7 @@ export function saveServiceBindingMaterial(
     .onConflictDoUpdate({
       target: serviceBindingMaterials.bindingId,
       set: {
-        installationId: values.installationId,
+        capsuleId: values.capsuleId,
         name: values.name,
         kind: values.kind,
         configRef: values.configRef,
@@ -364,14 +364,14 @@ export function saveServiceBindingMaterial(
     .then(() => {});
 }
 
-export function listServiceBindingMaterialsForInstallation(
+export function listServiceBindingMaterialsForCapsule(
   client: PostgresQueryClient,
-  installationId: string,
+  capsuleId: string,
 ): Promise<readonly ServiceBindingMaterialRecord[]> {
   return postgresDrizzle(client, installationSchema)
     .select(serviceBindingMaterialColumns)
     .from(serviceBindingMaterials)
-    .where(eq(serviceBindingMaterials.installationId, installationId))
+    .where(eq(serviceBindingMaterials.capsuleId, capsuleId))
     .orderBy(
       asc(serviceBindingMaterials.createdAt),
       asc(serviceBindingMaterials.bindingId),
@@ -387,7 +387,7 @@ export function saveServiceGrantMaterial(
 ): Promise<void> {
   // Wave 6 dropped `installation_v1.app_grants`. Validation invariants are
   // still enforced; only the SQL INSERT is removed. Mirrors the Phase E
-  // no-op precedent in `listServiceGrantMaterialsForInstallation`. Validation throws
+  // no-op precedent in `listServiceGrantMaterialsForCapsule`. Validation throws
   // are converted to promise rejections so `assertRejects` tests pass.
   try {
     assertValidServiceGrantMaterialRecord(record);
@@ -409,9 +409,9 @@ export function findServiceGrantMaterial(
   return Promise.resolve(undefined);
 }
 
-export function listServiceGrantMaterialsForInstallation(
+export function listServiceGrantMaterialsForCapsule(
   client: PostgresQueryClient,
-  installationId: string,
+  capsuleId: string,
 ): Promise<readonly ServiceGrantMaterialRecord[]> {
   // Wave 6 dropped `installation_v1.app_grants`. ServiceGrantMaterial is no longer
   // a public concept; the table no longer exists in production schema.
@@ -420,13 +420,13 @@ export function listServiceGrantMaterialsForInstallation(
   // account-plane callers (= envelope serialization, dashboard render path)
   // remain compatible without touching the database.
   void client;
-  void installationId;
+  void capsuleId;
   return Promise.resolve([]);
 }
 
-export async function appendInstallationEvent(
+export async function appendCapsuleEvent(
   client: PostgresQueryClient,
-  record: InstallationEventRecord,
+  record: CapsuleEventRecord,
 ): Promise<void> {
   // F7 fix: serialize concurrent appends per installation by taking a
   // row-level lock on a synthetic chain-lock row. Two concurrent
@@ -453,9 +453,9 @@ export async function appendInstallationEvent(
     // separate "create lock row on installation create" path.
     await postgresDrizzle(client, installationSchema)
       .insert(installationEventChainLocks)
-      .values({ installationId: record.installationId })
+      .values({ capsuleId: record.capsuleId })
       .onConflictDoNothing({
-        target: installationEventChainLocks.installationId,
+        target: installationEventChainLocks.capsuleId,
       });
     // NOWAIT: surface contention immediately rather than blocking for
     // an unbounded lock timeout. Callers handle the lock-not-available
@@ -467,7 +467,7 @@ export async function appendInstallationEvent(
       client,
       `SELECT 1 FROM installation_v1.installation_event_chain_locks
          WHERE installation_id = $1 FOR UPDATE NOWAIT`,
-      [record.installationId],
+      [record.capsuleId],
     );
     await postgresDrizzle(client, installationSchema)
       .insert(installationEvents)
@@ -484,18 +484,18 @@ export async function appendInstallationEvent(
   }
 }
 
-export async function listInstallationEvents(
+export async function listCapsuleEvents(
   client: PostgresQueryClient,
-  installationId: string,
-): Promise<readonly InstallationEventRecord[]> {
+  capsuleId: string,
+): Promise<readonly CapsuleEventRecord[]> {
   const rows = (await postgresDrizzle(client, installationSchema)
     .select(installationEventColumns)
     .from(installationEvents)
-    .where(eq(installationEvents.installationId, installationId))
+    .where(eq(installationEvents.capsuleId, capsuleId))
     .orderBy(
       asc(installationEvents.eventSequence),
       asc(installationEvents.eventId),
-    )) as InstallationEventRow[];
+    )) as CapsuleEventRow[];
   return rows.map(installationEventFromRow);
 }
 
@@ -508,7 +508,7 @@ const ledgerAccountColumns = {
 };
 
 const spaceColumns = {
-  space_id: spaces.spaceId,
+  space_id: spaces.workspaceId,
   account_id: spaces.accountId,
   kind: spaces.kind,
   display_name: spaces.displayName,
@@ -516,28 +516,28 @@ const spaceColumns = {
   updated_at: spaces.updatedAt,
 };
 
-const appInstallationColumns = {
-  installation_id: appInstallations.installationId,
-  account_id: appInstallations.accountId,
-  space_id: appInstallations.spaceId,
-  app_id: appInstallations.appId,
-  source_git_url: appInstallations.sourceGitUrl,
-  source_ref: appInstallations.sourceRef,
-  source_commit: appInstallations.sourceCommit,
-  source_path: appInstallations.sourcePath,
-  plan_digest: appInstallations.planDigest,
-  artifact_digest: appInstallations.artifactDigest,
-  mode: appInstallations.mode,
-  billing_account_id: appInstallations.billingAccountId,
-  status: appInstallations.status,
-  created_by_subject: appInstallations.createdBySubject,
-  created_at: appInstallations.createdAt,
-  updated_at: appInstallations.updatedAt,
+const appCapsuleColumns = {
+  installation_id: appCapsules.capsuleId,
+  account_id: appCapsules.accountId,
+  space_id: appCapsules.workspaceId,
+  app_id: appCapsules.appId,
+  source_git_url: appCapsules.sourceGitUrl,
+  source_ref: appCapsules.sourceRef,
+  source_commit: appCapsules.sourceCommit,
+  source_path: appCapsules.sourcePath,
+  plan_digest: appCapsules.planDigest,
+  artifact_digest: appCapsules.artifactDigest,
+  mode: appCapsules.mode,
+  billing_account_id: appCapsules.billingAccountId,
+  status: appCapsules.status,
+  created_by_subject: appCapsules.createdBySubject,
+  created_at: appCapsules.createdAt,
+  updated_at: appCapsules.updatedAt,
 };
 
 const serviceBindingMaterialColumns = {
   binding_id: serviceBindingMaterials.bindingId,
-  installation_id: serviceBindingMaterials.installationId,
+  installation_id: serviceBindingMaterials.capsuleId,
   name: serviceBindingMaterials.name,
   kind: serviceBindingMaterials.kind,
   config_ref: serviceBindingMaterials.configRef,
@@ -548,7 +548,7 @@ const serviceBindingMaterialColumns = {
 
 const installationEventColumns = {
   event_id: installationEvents.eventId,
-  installation_id: installationEvents.installationId,
+  installation_id: installationEvents.capsuleId,
   event_type: installationEvents.eventType,
   payload: installationEvents.payload,
   previous_event_hash: installationEvents.previousEventHash,
@@ -566,9 +566,9 @@ function ledgerAccountValues(record: LedgerAccountRecord) {
   };
 }
 
-function spaceValues(record: SpaceRecord) {
+function spaceValues(record: WorkspaceRecord) {
   return {
-    spaceId: record.spaceId,
+    workspaceId: record.workspaceId,
     accountId: record.accountId,
     kind: record.kind,
     displayName: record.displayName ?? null,
@@ -577,11 +577,11 @@ function spaceValues(record: SpaceRecord) {
   };
 }
 
-function appInstallationValues(record: InstallationRecord) {
+function appCapsuleValues(record: CapsuleRecord) {
   return {
-    installationId: record.installationId,
+    capsuleId: record.capsuleId,
     accountId: record.accountId,
-    spaceId: record.spaceId,
+    workspaceId: record.workspaceId,
     appId: record.appId,
     sourceGitUrl: record.sourceGitUrl,
     sourceRef: record.sourceRef,
@@ -601,7 +601,7 @@ function appInstallationValues(record: InstallationRecord) {
 function serviceBindingMaterialValues(record: ServiceBindingMaterialRecord) {
   return {
     bindingId: record.bindingId,
-    installationId: record.installationId,
+    capsuleId: record.capsuleId,
     name: record.name,
     kind: record.kind,
     configRef: record.configRef,
@@ -611,10 +611,10 @@ function serviceBindingMaterialValues(record: ServiceBindingMaterialRecord) {
   };
 }
 
-function installationEventValues(record: InstallationEventRecord) {
+function installationEventValues(record: CapsuleEventRecord) {
   return {
     eventId: record.eventId,
-    installationId: record.installationId,
+    capsuleId: record.capsuleId,
     eventType: record.eventType,
     payload: record.payload,
     previousEventHash: record.previousEventHash ?? null,

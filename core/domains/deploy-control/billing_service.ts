@@ -42,7 +42,7 @@ import {
   usdFromMicros,
   usdMicrosToLegacyCredits,
 } from "takosumi-contract/billing";
-import type { Space } from "takosumi-contract/spaces";
+import type { Workspace as Space } from "takosumi-contract/workspaces";
 import type { OpenTofuDeploymentStore } from "./store.ts";
 import { OpenTofuControllerError, requireNonEmptyString } from "./errors.ts";
 import type { OpenTofuPlanResult } from "./mod.ts";
@@ -295,6 +295,7 @@ export class BillingService {
     const includedCredits = usdMicrosToLegacyCredits(includedUsdMicros);
     if (!balance) {
       await this.#store.putCreditBalance({
+        workspaceId: spaceId,
         spaceId,
         availableUsdMicros: includedUsdMicros,
         reservedUsdMicros: 0,
@@ -337,7 +338,7 @@ export class BillingService {
     readonly reasons: readonly string[];
     readonly audit?: Readonly<Record<string, JsonValue>>;
   }> {
-    const settings = await this.billingSettingsForSpace(input.planRun.spaceId);
+    const settings = await this.billingSettingsForSpace(input.planRun.workspaceId ?? input.planRun.spaceId);
     if (settings.mode === "disabled") {
       return {
         reasons: [],
@@ -348,7 +349,7 @@ export class BillingService {
         },
       };
     }
-    await this.reconcileSpaceMonthlyCredits(input.planRun.spaceId);
+    await this.reconcileSpaceMonthlyCredits(input.planRun.workspaceId ?? input.planRun.spaceId);
     const estimatedUsdMicros = estimatePlanUsdMicros(
       input.planRun,
       input.result,
@@ -415,7 +416,8 @@ export class BillingService {
   }> {
     const reservation: CreditReservation = {
       id: this.#newId("creditres"),
-      spaceId: input.planRun.spaceId,
+      workspaceId: input.planRun.workspaceId ?? input.planRun.spaceId,
+      spaceId: input.planRun.workspaceId,
       runId: input.planRun.id,
       estimatedUsdMicros: input.estimatedUsdMicros,
       estimatedCredits: input.estimatedCredits,
@@ -440,7 +442,7 @@ export class BillingService {
    * may throw (e.g. expired reservation / insufficient balance) to fail closed.
    */
   async assertApplyBillingReservation(planRun: PlanRun): Promise<void> {
-    const settings = await this.billingSettingsForSpace(planRun.spaceId);
+    const settings = await this.billingSettingsForSpace(planRun.workspaceId ?? planRun.spaceId);
     if (settings.mode === "disabled") return;
     await this.#enforcement.assertReservationSatisfied({
       spaceId: planRun.spaceId,
@@ -467,9 +469,10 @@ export class BillingService {
     const reservedUsdMicros = creditReservationEstimatedUsdMicros(reservation);
     await this.#store.putUsageEvent({
       id: this.#newId("usage"),
-      spaceId: input.planRun.spaceId,
-      ...(input.planRun.installationId
-        ? { installationId: input.planRun.installationId }
+      workspaceId: (input.planRun.workspaceId ?? input.planRun.spaceId),
+      spaceId: input.planRun.workspaceId,
+      ...(input.planRun.capsuleId
+        ? { capsuleId: input.planRun.capsuleId }
         : {}),
       runId: input.applyRun.id,
       kind: "operation",

@@ -41,7 +41,7 @@ import {
 import type { JsonValue } from "takosumi-contract";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
-import { currentSpaceId, setCurrentSpaceId } from "../../lib/space-state.ts";
+import { currentWorkspaceId, setCurrentWorkspaceId } from "../../lib/workspace-state.ts";
 import {
   capsuleNameFromUrl,
   hasInstallPrefillParams,
@@ -58,14 +58,14 @@ import {
 import {
   checkCapsuleCompatibility,
   ControlApiError,
-  createInstallation,
-  createSpace,
+  createCapsule,
+  createWorkspace,
   createSourceHttpsTokenConnection,
   createSource,
   extractRunId,
-  listInstallations,
-  type InstallationProviderConnectionBindings,
-  type Installation,
+  listCapsules,
+  type CapsuleProviderConnectionBindings,
+  type Capsule,
   type CapsuleCompatibilityDiagnostic,
   type CapsuleCompatibilityLevel,
   type CapsuleCompatibilityResult,
@@ -73,8 +73,8 @@ import {
   listProviderConnections,
   listConnections,
   listStarterCatalogInstallConfigs,
-  planInstallation,
-  putInstallationProviderConnectionSet,
+  planCapsule,
+  putCapsuleProviderConnectionSet,
   syncSource,
   testConnection,
   waitForLatestSourceSnapshot,
@@ -82,7 +82,7 @@ import {
   type Connection,
   type ProviderConnection,
   type RunStatus,
-  type Space,
+  type Workspace,
 } from "../../lib/control-api.ts";
 import { locale, t } from "../../i18n/index.ts";
 import {
@@ -303,9 +303,9 @@ function slugInputValue(value: string): string {
   );
 }
 
-function spaceSuffix(value: string | null): string {
+function workspaceSuffix(value: string | null): string {
   return (value ?? "")
-    .replace(/^space_/u, "")
+    .replace(/^workspace_/u, "")
     .replace(/[^a-z0-9-]+/giu, "-")
     .replace(/^-+|-+$/gu, "")
     .slice(0, 6)
@@ -329,7 +329,7 @@ function catalogConfigKey(config: CatalogInstallConfig): string {
 }
 
 function catalogConfigPriority(config: CatalogInstallConfig): number {
-  if (config.spaceId === undefined || config.id.startsWith("cfg-official-")) {
+  if (config.workspaceId === undefined || config.id.startsWith("cfg-official-")) {
     return 0;
   }
   return 1;
@@ -357,10 +357,10 @@ const DEFAULT_CAPSULE_INSTALL_CONFIG_ID = "cfg-default-opentofu-capsule";
 function catalogDefaultInputValue(
   entry: CatalogEntry,
   field: CatalogInputField,
-  spaceId: string | null,
+  workspaceId: string | null,
 ): string {
   const base = slugInputValue(entry.suggestedName);
-  const suffix = spaceSuffix(spaceId);
+  const suffix = workspaceSuffix(workspaceId);
   switch (field.defaultValue) {
     case "service-name":
       return base;
@@ -442,11 +442,11 @@ function NoWorkspaceStartPanel(props: {
   readonly onCreate: () => void;
 }) {
   return (
-    <section class="av-start" aria-label={t("space.start.aria")}>
+    <section class="av-start" aria-label={t("workspace.start.aria")}>
       <div class="av-start-copy">
-        <span class="av-start-kicker">{t("space.start.kicker")}</span>
-        <h2 class="av-start-title">{t("space.start.title")}</h2>
-        <p class="av-start-sub">{t("space.start.body")}</p>
+        <span class="av-start-kicker">{t("workspace.start.kicker")}</span>
+        <h2 class="av-start-title">{t("workspace.start.title")}</h2>
+        <p class="av-start-sub">{t("workspace.start.body")}</p>
       </div>
       <Button
         variant="primary"
@@ -455,7 +455,7 @@ function NoWorkspaceStartPanel(props: {
         icon={<Plus size={18} />}
         onClick={props.onCreate}
       >
-        {props.busy ? t("space.start.creating") : t("space.start.create")}
+        {props.busy ? t("workspace.start.creating") : t("workspace.start.create")}
       </Button>
       <Show when={props.error}>
         {(message) => <Toast tone="error">{message()}</Toast>}
@@ -555,25 +555,25 @@ function Inner() {
     [],
   );
 
-  const spaceId = () => (currentSpaceId() ? currentSpaceId() : null);
-  const [configs] = createResource(spaceId, listStarterCatalogInstallConfigs);
+  const workspaceId = () => (currentWorkspaceId() ? currentWorkspaceId() : null);
+  const [configs] = createResource(workspaceId, listStarterCatalogInstallConfigs);
   const [connections, { refetch: refetchConnections }] = createResource(
-    spaceId,
+    workspaceId,
     listConnections,
   );
   const [providerConnections] = createResource(
-    spaceId,
+    workspaceId,
     listProviderConnections,
   );
-  const createFirstWorkspace = createAction(async (): Promise<Space> => {
-    const space = await createSpace({
+  const createFirstWorkspace = createAction(async (): Promise<Workspace> => {
+    const workspace = await createWorkspace({
       handle: defaultWorkspaceHandle(),
-      displayName: t("space.defaultName"),
+      displayName: t("workspace.defaultName"),
       type: "personal",
     });
-    setCurrentSpaceId(space.id);
-    window.dispatchEvent(new Event("takosumi:spaces-changed"));
-    return space;
+    setCurrentWorkspaceId(workspace.id);
+    window.dispatchEvent(new Event("takosumi:workspaces-changed"));
+    return workspace;
   });
   const configList = createMemo<readonly InstallConfig[]>(
     () => configs() ?? [],
@@ -602,7 +602,7 @@ function Inner() {
     ) ??
     configList().find(
       (config) =>
-        config.sourceKind === "generic_capsule" && config.spaceId === undefined,
+        config.sourceKind === "generic_capsule" && config.workspaceId === undefined,
     ) ??
     configList().find((config) => config.sourceKind === "generic_capsule");
   const ensureConfigSelected = () => {
@@ -628,7 +628,7 @@ function Inner() {
     const key = catalogInputKey(entry.id, field.name);
     return (
       catalogInputValues()[key] ??
-      catalogDefaultInputValue(entry, field, spaceId())
+      catalogDefaultInputValue(entry, field, workspaceId())
     );
   };
   const updateCatalogInputValue = (
@@ -692,11 +692,11 @@ function Inner() {
   const [createdSourceId, setCreatedSourceId] = createSignal<string | null>(
     null,
   );
-  const [createdInstallationId, setCreatedInstallationId] = createSignal<
+  const [createdCapsuleId, setCreatedCapsuleId] = createSignal<
     string | null
   >(null);
-  const [existingInstallation, setExistingInstallation] =
-    createSignal<Installation | null>(null);
+  const [existingCapsule, setExistingCapsule] =
+    createSignal<Capsule | null>(null);
   const [stepSource, setStepSource] = createSignal<StepState>("idle");
   const [stepSync, setStepSync] = createSignal<StepState>("idle");
   const [stepInstall, setStepInstall] = createSignal<StepState>("idle");
@@ -762,7 +762,7 @@ function Inner() {
   });
 
   const validate = (): string | null => {
-    if (!spaceId()) return t("new.error.spaceRequired");
+    if (!workspaceId()) return t("new.error.workspaceRequired");
     if (!gitUrl().trim()) return t("new.error.urlRequired");
     if (!name().trim()) return t("new.error.nameRequired");
     if (!INSTALLATION_NAME_PATTERN.test(name().trim())) {
@@ -801,7 +801,7 @@ function Inner() {
     isTakosOpenTofuCapsule(sourceGitUrl(), sourcePath());
   const defaultProjectName = () => {
     const base = slugInputValue(name() || capsuleNameFromUrl(sourceGitUrl()));
-    const suffix = spaceSuffix(spaceId());
+    const suffix = workspaceSuffix(workspaceId());
     return suffix && base === "takos" ? `${base}-${suffix}` : base;
   };
   const projectNameVariable = () =>
@@ -987,9 +987,9 @@ function Inner() {
   };
   const saveSourceTokenConnection = async () => {
     setSourceTokenError(null);
-    const currentSpaceId = spaceId();
-    if (!currentSpaceId) {
-      setSourceTokenError(t("new.error.spaceRequired"));
+    const currentWorkspaceId = workspaceId();
+    if (!currentWorkspaceId) {
+      setSourceTokenError(t("new.error.workspaceRequired"));
       return;
     }
     const token = sourceToken().trim();
@@ -1000,7 +1000,7 @@ function Inner() {
     setSavingSourceToken(true);
     try {
       const connection = await createSourceHttpsTokenConnection({
-        spaceId: currentSpaceId,
+        workspaceId: currentWorkspaceId,
         displayName: t("new.sourceAccess.defaultDisplayName", {
           name: name().trim() || capsuleNameFromUrl(gitUrl()) || "source",
         }),
@@ -1179,7 +1179,7 @@ function Inner() {
   };
 
   const providerConnectionsPayload =
-    (): InstallationProviderConnectionBindings =>
+    (): CapsuleProviderConnectionBindings =>
       providerRows().map((row) => ({
         provider: row.provider,
         ...(row.alias ? { alias: row.alias } : {}),
@@ -1191,8 +1191,8 @@ function Inner() {
     setCompatibility(null);
     setProviderRows([]);
     setCreatedSourceId(null);
-    setCreatedInstallationId(null);
-    setExistingInstallation(null);
+    setCreatedCapsuleId(null);
+    setExistingCapsule(null);
     setError(null);
   };
   const applyInstallPrefillInput = (next: InstallPrefill) => {
@@ -1233,7 +1233,7 @@ function Inner() {
     for (const field of entry.inputs) {
       defaults[catalogInputKey(entry.id, field.name)] =
         catalogScopeHintValue(entry, field) ??
-        catalogDefaultInputValue(entry, field, spaceId());
+        catalogDefaultInputValue(entry, field, workspaceId());
     }
     setCatalogInputValues(defaults);
     setCatalogInputTouched({});
@@ -1320,18 +1320,18 @@ function Inner() {
     if (!canContinue()) return;
     await runFlow();
   };
-  const findExistingInstallation = async (
-    space: string,
-    installationName: string,
+  const findExistingCapsule = async (
+    workspace: string,
+    capsuleName: string,
     environment: string,
-  ): Promise<Installation | null> => {
-    const installations = await listInstallations(space);
+  ): Promise<Capsule | null> => {
+    const capsules = await listCapsules(workspace);
     return (
-      installations.find(
-        (installation) =>
-          installation.status !== "destroyed" &&
-          installation.name === installationName &&
-          installation.environment === environment,
+      capsules.find(
+        (capsule) =>
+          capsule.status !== "destroyed" &&
+          capsule.name === capsuleName &&
+          capsule.environment === environment,
       ) ?? null
     );
   };
@@ -1354,7 +1354,7 @@ function Inner() {
     const flow = startAbortableFlow();
     try {
       const result = await checkCapsuleCompatibility({
-        spaceId: spaceId()!,
+        workspaceId: workspaceId()!,
         sourceId: createdSourceId() ?? undefined,
         gitUrl: sourceGitUrl(),
         ref: sourceRef(),
@@ -1435,12 +1435,12 @@ function Inner() {
     }
     setBusy(true);
     setError(null);
-    setExistingInstallation(null);
+    setExistingCapsule(null);
     setSyncRequired(false);
     setSourceSyncRunStatus(null);
     startSourceSyncSlowTimer();
     const flow = startAbortableFlow();
-    const space = spaceId()!;
+    const workspace = workspaceId()!;
     const flowInput = {
       name: name().trim(),
       gitUrl: sourceGitUrl(),
@@ -1452,7 +1452,7 @@ function Inner() {
       compatibilityReportId: compatibility()?.reportId,
       vars: installVariables(),
       sourceId: createdSourceId(),
-      installationId: createdInstallationId(),
+      capsuleId: createdCapsuleId(),
       syncDone: stepSync() === "done",
     };
     try {
@@ -1461,7 +1461,7 @@ function Inner() {
       if (!sourceId) {
         setStepSource("running");
         const result = await createSource({
-          spaceId: space,
+          workspaceId: workspace,
           name: flowInput.name,
           url: flowInput.gitUrl,
           defaultRef: flowInput.ref,
@@ -1516,11 +1516,11 @@ function Inner() {
 
       // Step 3 — create the current compatibility record bound to the chosen
       // service-side config. Public UI presents this as Capsule creation.
-      let installationId = flowInput.installationId;
-      if (!installationId) {
+      let capsuleId = flowInput.capsuleId;
+      if (!capsuleId) {
         setStepInstall("running");
-        const existing = await findExistingInstallation(
-          space,
+        const existing = await findExistingCapsule(
+          workspace,
           flowInput.name,
           "production",
         ).catch(() => null);
@@ -1528,11 +1528,11 @@ function Inner() {
         if (existing) {
           setStepInstall(INSTALLATION_DONE);
           setStepPlan("idle");
-          setExistingInstallation(existing);
+          setExistingCapsule(existing);
           return;
         }
-        const installation = await createInstallation({
-          spaceId: space,
+        const capsule = await createCapsule({
+          workspaceId: workspace,
           name: flowInput.name,
           environment: "production",
           sourceId,
@@ -1540,13 +1540,13 @@ function Inner() {
           ...(flowInput.vars ? { vars: flowInput.vars } : {}),
         });
         throwIfStaleFlow(flow);
-        installationId = installation.id;
-        setCreatedInstallationId(installationId);
+        capsuleId = capsule.id;
+        setCreatedCapsuleId(capsuleId);
       } else {
         setStepInstall("running");
       }
-      await putInstallationProviderConnectionSet(
-        installationId,
+      await putCapsuleProviderConnectionSet(
+        capsuleId,
         providerConnectionsForRun,
       );
       throwIfStaleFlow(flow);
@@ -1554,8 +1554,8 @@ function Inner() {
 
       // Step 4 — create the first plan Run, then jump to the run screen.
       setStepPlan("running");
-      const planEnvelope = await planInstallation(
-        installationId,
+      const planEnvelope = await planCapsule(
+        capsuleId,
         flowInput.compatibilityReportId
           ? { compatibilityReportId: flowInput.compatibilityReportId }
           : {},
@@ -1583,14 +1583,14 @@ function Inner() {
       } else if (isDuplicateServiceError(apiError)) {
         setStepInstall(INSTALLATION_DONE);
         setStepPlan("idle");
-        const existing = await findExistingInstallation(
-          space,
+        const existing = await findExistingCapsule(
+          workspace,
           flowInput.name,
           "production",
         ).catch(() => null);
         throwIfStaleFlow(flow);
         if (existing) {
-          setExistingInstallation(existing);
+          setExistingCapsule(existing);
           setError(null);
         } else {
           setError(t("new.error.alreadyExists", { name: flowInput.name }));
@@ -1859,7 +1859,7 @@ function Inner() {
   return (
     <AppShell>
       <Show
-        when={spaceId()}
+        when={workspaceId()}
         fallback={
           <NoWorkspaceStartPanel
             busy={createFirstWorkspace.busy()}
@@ -2381,20 +2381,20 @@ function Inner() {
                     </p>
                   )}
                 </Show>
-                <Show when={existingInstallation()}>
-                  {(installation) => (
+                <Show when={existingCapsule()}>
+                  {(capsule) => (
                     <div class="wb-action-callout" role="status">
                       <strong>{t("new.existing.title")}</strong>
                       <p>
                         {t("new.existing.body", {
-                          name: installation().name,
-                          environment: installation().environment,
+                          name: capsule().name,
+                          environment: capsule().environment,
                         })}
                       </p>
                       <Button
                         variant="secondary"
                         size="sm"
-                        href={`/services/${encodeURIComponent(installation().id)}`}
+                        href={`/services/${encodeURIComponent(capsule().id)}`}
                       >
                         {t("new.existing.open")}
                       </Button>

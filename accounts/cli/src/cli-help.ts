@@ -179,7 +179,7 @@ export function connectionsHelpText(): string {
       "",
       "`--url` に Takosumi platform origin、`--token` に deploy-control bearer を渡します。",
       "credential 値は file からだけ読み、CLI には表示しません。",
-      "set-cloudflare-token は operator-scope、create-generic-env は明示的な Space-scoped Provider Connection を作成します。",
+      "set-cloudflare-token は operator-scope、create-generic-env は明示的な Workspace-scoped Provider Connection を作成します。",
     ].join("\n");
   }
   return [
@@ -195,7 +195,7 @@ export function connectionsHelpText(): string {
     "Use --url with the Takosumi platform origin and --token with the",
     "deploy-control bearer. Credential values are accepted only through files",
     "and are never printed by the CLI. set-cloudflare-token creates operator-scope",
-    "material; create-generic-env creates explicit Space-scoped Provider Connections.",
+    "material; create-generic-env creates explicit Workspace-scoped Provider Connections.",
   ].join("\n");
 }
 
@@ -266,11 +266,11 @@ export function connectionsCreateGenericEnvHelpText(): string {
     return [
       "takosumi connections create-generic-env",
       "",
-      "任意 OpenTofu/Terraform provider 用の Space-scoped Provider Connection を作成します。",
+      "任意 OpenTofu/Terraform provider 用の Workspace-scoped Provider Connection を作成します。",
       "credential値はfileからだけ読み、CLIには表示しません。",
       "",
       "オプション:",
-      "  --space <space-id>      必須。Connection を所有する Space",
+      "  --space <space-id>      必須。Connection を所有する Workspace",
       "  --provider <source>     必須。例: registry.opentofu.org/hashicorp/aws",
       '  --values-file <path>    JSON object。例: {"AWS_REGION":"ap-northeast-1"}',
       '  --files-file <path>     JSON array。例: [{"path":"google.json","content":"...","envName":"GOOGLE_APPLICATION_CREDENTIALS"}]',
@@ -285,11 +285,11 @@ export function connectionsCreateGenericEnvHelpText(): string {
   return [
     "takosumi connections create-generic-env",
     "",
-    "Creates a Space-scoped Provider Connection for any OpenTofu/Terraform provider.",
+    "Creates a Workspace-scoped Provider Connection for any OpenTofu/Terraform provider.",
     "Credential values are read only from files and are never printed by the CLI.",
     "",
     "Options:",
-    "  --space <space-id>      required Space owner",
+    "  --space <space-id>      required Workspace owner",
     "  --provider <source>     required, e.g. registry.opentofu.org/hashicorp/aws",
     '  --values-file <path>    JSON object, e.g. {"AWS_REGION":"ap-northeast-1"}',
     '  --files-file <path>     JSON array, e.g. [{"path":"google.json","content":"...","envName":"GOOGLE_APPLICATION_CREDENTIALS"}]',
@@ -520,7 +520,7 @@ export function launchReadinessMigrateFinalModelHelpText(): string {
     "  --json         Print migration report JSON",
     "",
     "Migrates pre-final-plan readiness evidence names such as",
-    "installation-created, installationId, and spaceId to the final",
+    "installation-created, capsuleId, and workspaceId to the final",
     "Workspace/Capsule/Run/StateVersion evidence schema. Raw evidence is",
     "not printed; pass --out to write the migrated document.",
   ].join("\n");
@@ -811,9 +811,9 @@ export function installationsImportPlanHelpText(): string {
     "  --bundle-file <takos-export/bundle.json>",
     "  --target-issuer <https://self-host.example>",
     "  --target-account <account-id>",
-    "  --target-space <space-id>",
+    "  --target-workspace <workspace-id>",
     "  --created-by-subject <tsub_...>",
-    "  --target-installation-id <installation-id>",
+    "  --target-capsule-id <capsule-id>",
     "  --mode <shared-cell|dedicated|self-hosted>",
     "  --variables-json <json-object>",
     "  --variables-file <path>",
@@ -827,7 +827,7 @@ export function installationsImportApplyHelpText(): string {
     "takosumi internal installations import-apply",
     "",
     "Applies an installation import through the target Accounts/deploy-control",
-    "flow: create/sync the target Git Source, create the target Installation,",
+    "flow: create/sync the target Git Source, create the target Capsule,",
     "create target PlanRun, require it to be succeeded, then create the Accounts",
     "projection using the reviewed expected guard.",
     "This does not call the retired public import route.",
@@ -837,9 +837,9 @@ export function installationsImportApplyHelpText(): string {
     "  --bundle-file <takos-export/bundle.json>",
     "  --target-issuer <https://self-host.example>",
     "  --target-account <account-id>",
-    "  --target-space <space-id>",
+    "  --target-workspace <workspace-id>",
     "  --created-by-subject <tsub_...>",
-    "  --target-installation-id <review-only-installation-id>",
+    "  --target-capsule-id <review-only-capsule-id>",
     "  --mode <shared-cell|dedicated|self-hosted>",
     "  --install-config-id <id>   default: cfg-default-opentofu-capsule",
     "  --environment <name>       default: production",

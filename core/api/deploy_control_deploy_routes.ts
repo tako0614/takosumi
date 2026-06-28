@@ -324,7 +324,7 @@ export function mountDeployControlDeployRoutes(
           );
         }
         const body = await readJsonBody<InternalDeployRequest>(c, "deploy");
-        ensureSpacePermission(principal, body.spaceId);
+        ensureSpacePermission(principal, body.workspaceId ?? body.spaceId);
         const response = await deployUpload(
           { controller, installations },
           body,

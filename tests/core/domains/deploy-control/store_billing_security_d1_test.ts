@@ -13,8 +13,8 @@ test("d1 store persists security findings and billing ledger rows", async () => 
 
   await store.putSecurityFinding({
     id: "sec_1",
-    spaceId: "space_1",
-    installationId: "inst_1",
+    workspaceId: "space_1",
+    capsuleId: "inst_1",
     runId: "run_1",
     severity: "error",
     type: "provider_install_denied",
@@ -24,7 +24,7 @@ test("d1 store persists security findings and billing ledger rows", async () => 
   });
   await store.putSecurityFinding({
     id: "sec_2",
-    spaceId: "space_1",
+    workspaceId: "space_1",
     runId: "run_2",
     severity: "warning",
     type: "policy_warning",
@@ -161,6 +161,7 @@ test("d1 store persists security findings and billing ledger rows", async () => 
   expect(await store.listUsageEvents("space_1")).toEqual([
     {
       id: "usage_1",
+      workspaceId: "space_1",
       spaceId: "space_1",
       installationId: "inst_1",
       runId: "apply_1",

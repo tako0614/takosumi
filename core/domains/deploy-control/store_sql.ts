@@ -47,7 +47,7 @@ import type { PgColumn, PgTable } from "drizzle-orm/pg-core";
 import * as pgSchema from "../../adapters/storage/drizzle/schema/postgres.ts";
 import type { SourceSnapshot, SourceSyncRun } from "takosumi-contract/sources";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
-import type { Space } from "takosumi-contract/spaces";
+import type { Workspace as Space } from "takosumi-contract/workspaces";
 import type { InstallationProviderEnvBindingSet } from "takosumi-contract/connections";
 import type {
   Dependency,
@@ -55,8 +55,8 @@ import type {
 } from "takosumi-contract/dependencies";
 import type {
   OutputShare,
-  OutputSnapshot,
-} from "takosumi-contract/output-snapshots";
+  Output as OutputSnapshot,
+} from "takosumi-contract/outputs";
 import type { ArtifactRecord, Run, RunGroup } from "takosumi-contract/runs";
 import type { ActivityEvent } from "takosumi-contract/activity";
 import {
@@ -138,6 +138,18 @@ const RUN_KIND_RESTORE = "restore";
  * strictly after the cursor, or equal-createdAt with a strictly-greater id. When
  * there is no cursor (first page) the existing filter is returned unchanged.
  */
+/**
+ * Resolves the Workspace identity key during the Workspace rename: prefer the
+ * canonical `workspaceId`, fall back to the deprecated `spaceId`. Billing
+ * records always carry one at runtime.
+ */
+function workspaceKeyOf(scope: {
+  readonly workspaceId?: string;
+  readonly spaceId?: string;
+}): string {
+  return scope.workspaceId ?? scope.spaceId ?? "";
+}
+
 function pgKeysetWhere(
   filter: SQL | undefined,
   createdAtCol: PgColumn,
@@ -228,7 +240,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
           : "plan",
       {
         id: run.id,
-        spaceId: run.spaceId,
+        spaceId: run.workspaceId ?? run.spaceId,
         installationId: run.installationId ?? null,
         createdAt: run.createdAt,
         json: run,
@@ -248,7 +260,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       run.operation === "destroy" ? "destroy_apply" : "apply",
       {
         id: run.id,
-        spaceId: run.spaceId,
+        spaceId: run.workspaceId ?? run.spaceId,
         installationId: run.installationId ?? null,
         createdAt: run.createdAt,
         json: run,
@@ -345,7 +357,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   async putSourceSyncRun(run: SourceSyncRun): Promise<SourceSyncRun> {
     await this.#putRunDrizzle(RUN_KIND_SOURCE_SYNC, {
       id: run.id,
-      spaceId: run.spaceId,
+      spaceId: run.workspaceId ?? run.spaceId,
       sourceId: run.sourceId,
       installationId: null,
       createdAt: run.createdAt,
@@ -366,7 +378,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     }
     await this.#putRunDrizzle(RUN_KIND_COMPATIBILITY_CHECK, {
       id: run.id,
-      spaceId: run.spaceId,
+      spaceId: run.workspaceId ?? run.spaceId,
       sourceId: run.sourceId ?? null,
       installationId: null,
       createdAt: run.createdAt,
@@ -385,7 +397,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     }
     await this.#putRunDrizzle(run.type, {
       id: run.id,
-      spaceId: run.spaceId,
+      spaceId: run.workspaceId ?? run.spaceId,
       installationId: run.installationId ?? null,
       createdAt: run.createdAt,
       json: run,
@@ -2000,8 +2012,10 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     await this.#pgUpsert(pgSchema.credentialMintEvents, {
       id: event.id,
       runId: event.runId,
-      spaceId: event.spaceId,
-      installationId: event.installationId ?? null,
+      // Physical columns space_id / installation_id are frozen; the contract
+      // type renamed to workspaceId / capsuleId.
+      spaceId: event.workspaceId,
+      installationId: event.capsuleId ?? null,
       sourceId: event.sourceId ?? null,
       connectionId: event.connectionId ?? event.providerEnvId ?? "",
       phase: event.phase,
@@ -2030,8 +2044,10 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
   async putSecurityFinding(finding: SecurityFinding): Promise<SecurityFinding> {
     await this.#pgUpsert(pgSchema.securityFindings, {
       id: finding.id,
-      spaceId: finding.spaceId,
-      installationId: finding.installationId ?? null,
+      // Physical columns space_id / installation_id are frozen; the contract
+      // type renamed to workspaceId / capsuleId.
+      spaceId: finding.workspaceId,
+      installationId: finding.capsuleId ?? null,
       runId: finding.runId ?? null,
       severity: finding.severity,
       type: finding.type,
@@ -2555,10 +2571,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
           return {
             settled: false,
             attempt: existing,
-            balance: await billingCreditBalanceForSpace(
-              transaction,
-              existing.spaceId,
-            ),
+            balance: await billingCreditBalanceForSpace(transaction, workspaceKeyOf(existing)),
             skippedReason: "already_succeeded",
           };
         }
@@ -2630,10 +2643,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
         return {
           settled: true,
           attempt: next,
-          balance: await billingCreditBalanceForSpace(
-            transaction,
-            next.spaceId,
-          ),
+          balance: await billingCreditBalanceForSpace(transaction, workspaceKeyOf(next)),
         };
       },
     );
@@ -2716,7 +2726,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     if (existing) {
       return {
         usageEvent: existing,
-        balance: await this.getCreditBalance(existing.spaceId),
+        balance: await this.getCreditBalance(workspaceKeyOf(existing)),
         inserted: false,
       };
     }
@@ -2792,10 +2802,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
             if (!raced) return undefined;
             return {
               usageEvent: usageEventFromRow(raced),
-              balance: await billingCreditBalanceForSpace(
-                transaction,
-                normalized.spaceId,
-              ),
+              balance: await billingCreditBalanceForSpace(transaction, workspaceKeyOf(normalized)),
               inserted: false,
             };
           }
@@ -2833,10 +2840,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
           );
           return {
             usageEvent: normalized,
-            balance: await billingCreditBalanceForSpace(
-              transaction,
-              normalized.spaceId,
-            ),
+            balance: await billingCreditBalanceForSpace(transaction, workspaceKeyOf(normalized)),
             inserted: true,
           };
         },
@@ -2848,7 +2852,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       if (raced && isSqlUsageEventIdempotencyConflict(error)) {
         return {
           usageEvent: raced,
-          balance: await this.getCreditBalance(raced.spaceId),
+          balance: await this.getCreditBalance(workspaceKeyOf(raced)),
           inserted: false,
         };
       }
@@ -3109,6 +3113,7 @@ function creditBalanceFromRow(row: {
   readonly updatedAt: string;
 }): CreditBalance {
   return normalizeCreditBalance({
+    workspaceId: row.spaceId,
     spaceId: row.spaceId,
     ...(row.availableUsdMicros !== null && row.availableUsdMicros !== undefined
       ? { availableUsdMicros: row.availableUsdMicros }
@@ -3139,6 +3144,7 @@ function normalizeCreditReservation(
     legacyCreditsToUsdMicros(reservation.estimatedCredits);
   return {
     ...reservation,
+    workspaceId: reservation.workspaceId ?? reservation.spaceId ?? "",
     estimatedUsdMicros,
     estimatedCredits: usdMicrosToLegacyCredits(estimatedUsdMicros),
   };
@@ -3192,7 +3198,7 @@ function billingAutoRechargeAttemptSqlParams(
 ): readonly (string | number | null)[] {
   return [
     attempt.id,
-    attempt.spaceId,
+    workspaceKeyOf(attempt),
     attempt.runId,
     attempt.billingAccountId,
     attempt.idempotencyKey,
@@ -3328,6 +3334,7 @@ function usageEventFromRow(row: {
 }): UsageEvent {
   return {
     id: row.id,
+    workspaceId: row.spaceId,
     spaceId: row.spaceId,
     ...(row.installationId ? { installationId: row.installationId } : {}),
     ...(row.runId ? { runId: row.runId } : {}),
@@ -3387,7 +3394,7 @@ function artifactRecordFromRow(row: {
 function installationValues(installation: Installation) {
   return {
     id: installation.id,
-    spaceId: installation.spaceId,
+    spaceId: installation.workspaceId ?? installation.spaceId,
     name: installation.name,
     environment: installation.environment,
     sourceId: installation.sourceId ?? null,
@@ -3443,7 +3450,7 @@ async function pgUpsertRun(
   const values = {
     id: run.id,
     kind,
-    spaceId: run.spaceId,
+    spaceId: run.workspaceId ?? run.spaceId,
     sourceId: null,
     installationId:
       "installationId" in run ? (run.installationId ?? null) : null,
@@ -3481,7 +3488,7 @@ async function pgUpdateTerminalRunWithLease(
 ): Promise<boolean> {
   const values = {
     kind,
-    spaceId: run.spaceId,
+    spaceId: run.workspaceId ?? run.spaceId,
     sourceId: "sourceId" in run ? (run.sourceId ?? null) : null,
     installationId:
       "installationId" in run ? (run.installationId ?? null) : null,
@@ -3553,8 +3560,8 @@ async function pgUpsertStateSnapshot(
     .insert(pgSchema.stateSnapshots)
     .values({
       id: snapshot.id,
-      spaceId: snapshot.spaceId,
-      installationId: snapshot.installationId,
+      spaceId: snapshot.workspaceId ?? snapshot.spaceId,
+      installationId: snapshot.capsuleId ?? snapshot.installationId,
       environment: snapshot.environment,
       generation: snapshot.generation,
       snapshotJson: snapshot,
@@ -3568,7 +3575,7 @@ async function pgUpsertStateSnapshot(
       ],
       set: {
         id: snapshot.id,
-        spaceId: snapshot.spaceId,
+        spaceId: snapshot.workspaceId ?? snapshot.spaceId,
         snapshotJson: snapshot,
         createdAt: snapshot.createdAt,
       },
@@ -3583,8 +3590,8 @@ async function pgUpsertOutputSnapshot(
     .insert(pgSchema.outputSnapshots)
     .values({
       id: snapshot.id,
-      spaceId: snapshot.spaceId,
-      installationId: snapshot.installationId,
+      spaceId: snapshot.workspaceId ?? snapshot.spaceId,
+      installationId: snapshot.capsuleId ?? snapshot.installationId,
       stateGeneration: snapshot.stateGeneration,
       snapshotJson: snapshot,
       createdAt: snapshot.createdAt,
@@ -3593,8 +3600,8 @@ async function pgUpsertOutputSnapshot(
       target: pgSchema.outputSnapshots.id,
       set: {
         id: snapshot.id,
-        spaceId: snapshot.spaceId,
-        installationId: snapshot.installationId,
+        spaceId: snapshot.workspaceId ?? snapshot.spaceId,
+        installationId: snapshot.capsuleId ?? snapshot.installationId,
         stateGeneration: snapshot.stateGeneration,
         snapshotJson: snapshot,
         createdAt: snapshot.createdAt,

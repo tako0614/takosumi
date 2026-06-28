@@ -88,7 +88,7 @@ test("D1AccountsStore initializes lazily and persists indexed records", async ()
 
   await store.saveServiceBindingMaterial({
     bindingId: "bind_auth",
-    installationId: "inst_1",
+    capsuleId: "inst_1",
     name: "auth",
     kind: "identity.oidc",
     configRef:
@@ -100,7 +100,7 @@ test("D1AccountsStore initializes lazily and persists indexed records", async ()
     updatedAt: 1_500,
   });
   expect(
-    (await store.listServiceBindingMaterialsForInstallation("inst_1")).map(
+    (await store.listServiceBindingMaterialsForCapsule("inst_1")).map(
       (binding) => ({
         id: binding.bindingId,
         name: binding.name,
@@ -140,7 +140,7 @@ test("D1AccountsStore consumes one-shot records", async () => {
 
   const jti = {
     jti: "lt_1",
-    installationId: "inst_1",
+    capsuleId: "inst_1",
     subject: "tsub_test" as const,
     audience: "takos.chat",
     expiresAt: Date.now() + 60_000,
@@ -186,7 +186,7 @@ test("D1AccountsStore persists PAT metadata and billing usage indexes", async ()
 
   await store.saveBillingUsageRecord({
     usageReportId: "usage_report_1",
-    installationId: "inst_1",
+    capsuleId: "inst_1",
     billingAccountId: "bill_1",
     meter: "agent.compute.seconds",
     quantity: 12.5,
@@ -196,7 +196,7 @@ test("D1AccountsStore persists PAT metadata and billing usage indexes", async ()
     reportedAt: 3_000,
   });
   expect(
-    (await store.listBillingUsageRecordsForInstallation("inst_1")).map(
+    (await store.listBillingUsageRecordsForCapsule("inst_1")).map(
       (record) => ({
         id: record.usageReportId,
         meter: record.meter,
@@ -236,7 +236,7 @@ test("D1AccountsStore indexes OIDC clients and installation events", async () =>
 
   await store.saveOidcClient({
     clientId: "toc_client",
-    installationId: "inst_1",
+    capsuleId: "inst_1",
     namespacePath: "takosumi.identity.oidc",
     issuerUrl: "https://accounts.example.test",
     redirectUris: ["http://localhost:8787/auth/oidc/callback"],
@@ -248,24 +248,24 @@ test("D1AccountsStore indexes OIDC clients and installation events", async () =>
     updatedAt: 1000,
   });
 
-  expect((await store.findOidcClient("toc_client"))?.installationId).toEqual(
+  expect((await store.findOidcClient("toc_client"))?.capsuleId).toEqual(
     "inst_1",
   );
   expect(
-    (await store.findOidcClientForInstallation("inst_1"))?.clientId,
+    (await store.findOidcClientForCapsule("inst_1"))?.clientId,
   ).toEqual("toc_client");
 
-  await store.appendInstallationEvent({
+  await store.appendCapsuleEvent({
     eventId: "evt_1",
-    installationId: "inst_1",
+    capsuleId: "inst_1",
     eventType: "installation.created",
     payload: {},
     eventHash: "sha256:first",
     createdAt: 1000,
   });
-  await store.appendInstallationEvent({
+  await store.appendCapsuleEvent({
     eventId: "evt_2",
-    installationId: "inst_1",
+    capsuleId: "inst_1",
     eventType: "installation.status_changed",
     payload: { to: "ready" },
     previousEventHash: "sha256:first",
@@ -274,7 +274,7 @@ test("D1AccountsStore indexes OIDC clients and installation events", async () =>
   });
 
   expect(
-    (await store.listInstallationEvents("inst_1")).map(
+    (await store.listCapsuleEvents("inst_1")).map(
       (event) => event.eventId,
     ),
   ).toEqual(["evt_1", "evt_2"]);
@@ -283,9 +283,9 @@ test("D1AccountsStore indexes OIDC clients and installation events", async () =>
 test("D1AccountsStore prunes and consumes launch tokens", async () => {
   const store = new D1AccountsStore(new MemoryD1Database());
   const base = {
-    installationId: "inst_1",
+    capsuleId: "inst_1",
     accountId: "acct_1",
-    spaceId: "space_1",
+    workspaceId: "space_1",
     appId: "takos.chat",
     subject: "tsub_test" as const,
     redirectUri: "https://takos.example.test/_takosumi/launch",
@@ -294,14 +294,14 @@ test("D1AccountsStore prunes and consumes launch tokens", async () => {
   };
   await store.saveLaunchToken({
     ...base,
-    installationId: "inst_expired",
+    capsuleId: "inst_expired",
     tokenHash: "sha256:expired",
     jti: "lt_expired",
     expiresAt: 2_000,
   });
   await store.saveLaunchToken({
     ...base,
-    installationId: "inst_used",
+    capsuleId: "inst_used",
     tokenHash: "sha256:used",
     jti: "lt_used",
     expiresAt: 10_000,
@@ -309,7 +309,7 @@ test("D1AccountsStore prunes and consumes launch tokens", async () => {
   });
   await store.saveLaunchToken({
     ...base,
-    installationId: "inst_active",
+    capsuleId: "inst_active",
     tokenHash: "sha256:active",
     jti: "lt_active",
     expiresAt: 10_000,
@@ -322,7 +322,7 @@ test("D1AccountsStore prunes and consumes launch tokens", async () => {
   expect(
     await store.consumeLaunchToken({
       tokenHash: "sha256:expired",
-      installationId: "inst_expired",
+      capsuleId: "inst_expired",
       redirectUri: base.redirectUri,
       consumedAt: 4_000,
     }),
@@ -331,7 +331,7 @@ test("D1AccountsStore prunes and consumes launch tokens", async () => {
     (
       await store.consumeLaunchToken({
         tokenHash: "sha256:active",
-        installationId: "inst_active",
+        capsuleId: "inst_active",
         redirectUri: base.redirectUri,
         consumedAt: 4_000,
       })
@@ -348,9 +348,9 @@ test("D1AccountsStore launch token consume is atomic across concurrent races (F7
   await store.saveLaunchToken({
     tokenHash: "sha256:race",
     jti: "lt_race",
-    installationId: "inst_race",
+    capsuleId: "inst_race",
     accountId: "acct_race",
-    spaceId: "space_race",
+    workspaceId: "space_race",
     appId: "takos.chat",
     subject: "tsub_test",
     redirectUri: "https://takos.example.test/_takosumi/launch",
@@ -362,13 +362,13 @@ test("D1AccountsStore launch token consume is atomic across concurrent races (F7
   const [first, second] = await Promise.all([
     store.consumeLaunchToken({
       tokenHash: "sha256:race",
-      installationId: "inst_race",
+      capsuleId: "inst_race",
       redirectUri: "https://takos.example.test/_takosumi/launch",
       consumedAt: 2_000,
     }),
     store.consumeLaunchToken({
       tokenHash: "sha256:race",
-      installationId: "inst_race",
+      capsuleId: "inst_race",
       redirectUri: "https://takos.example.test/_takosumi/launch",
       consumedAt: 2_001,
     }),
@@ -571,7 +571,7 @@ test("D1AccountsStore passkey challenge is single-shot and expiry-aware", async 
   );
 });
 
-test("D1AccountsStore listSpacesForOwner backfills the by-owner index for legacy rows", async () => {
+test("D1AccountsStore listWorkspacesForOwner backfills the by-owner index for legacy rows", async () => {
   // The `ledger_accounts_by_owner` index is written only on
   // saveLedgerAccount, so ledger accounts persisted BEFORE the index existed
   // have no index entry. Simulate that pre-index state: save the account +
@@ -588,8 +588,8 @@ test("D1AccountsStore listSpacesForOwner backfills the by-owner index for legacy
     createdAt: 1_000,
     updatedAt: 1_000,
   });
-  await store.saveSpace({
-    spaceId: "space_legacy",
+  await store.saveWorkspace({
+    workspaceId: "space_legacy",
     accountId: "acct_legacy",
     kind: "personal",
     createdAt: 1_000,
@@ -604,9 +604,9 @@ test("D1AccountsStore listSpacesForOwner backfills the by-owner index for legacy
   }
 
   // Sanity: with the index stripped, a raw index lookup would be empty. The
-  // lazy backfill in listSpacesForOwner must still return the legacy space.
-  const spaces = await store.listSpacesForOwner("tsub_owner");
-  expect(spaces.map((space) => space.spaceId)).toEqual(["space_legacy"]);
+  // lazy backfill in listWorkspacesForOwner must still return the legacy space.
+  const spaces = await store.listWorkspacesForOwner("tsub_owner");
+  expect(spaces.map((space) => space.workspaceId)).toEqual(["space_legacy"]);
 
   // The backfill is persistent: the by-owner index is now populated, and a
   // subject who genuinely owns nothing still gets an empty list.
@@ -615,7 +615,7 @@ test("D1AccountsStore listSpacesForOwner backfills the by-owner index for legacy
       (row) => row.indexName === "ledger_accounts_by_owner",
     ),
   ).toEqual(true);
-  expect(await store.listSpacesForOwner("tsub_nobody")).toEqual([]);
+  expect(await store.listWorkspacesForOwner("tsub_nobody")).toEqual([]);
 });
 
 interface DocumentRow {

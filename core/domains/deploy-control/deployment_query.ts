@@ -90,11 +90,13 @@ export class DeploymentQuery {
   }
 
   async getInstallation(id: string): Promise<GetInstallationResponse> {
-    return {
-      installation: this.#publicInstallation(
-        await requireInstallation(this.#store, id),
-      ),
-    };
+    const capsule = this.#publicInstallation(
+      await requireInstallation(this.#store, id),
+    );
+    // Emit both the canonical `capsule` and the transient deprecated
+    // `installation` alias until the rename converges, so older read sites that
+    // still dereference `.installation` keep working.
+    return { capsule, installation: capsule };
   }
 
   /**

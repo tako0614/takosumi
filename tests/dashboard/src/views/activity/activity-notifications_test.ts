@@ -79,9 +79,9 @@ describe("History and notifications", () => {
   });
 
   test("topbar badge counts current Workspace services needing attention", () => {
-    expect(topBarSource).toContain("currentSpaceId");
-    expect(topBarSource).toContain("listInstallations(spaceId)");
-    expect(topBarSource).toContain("isVisibleServiceInstallation(inst)");
+    expect(topBarSource).toContain("currentWorkspaceId");
+    expect(topBarSource).toContain("listCapsules(workspaceId)");
+    expect(topBarSource).toContain("isVisibleServiceCapsule(inst)");
     expect(topBarSource).toContain("needsAttention(inst)");
     expect(topBarSource).not.toContain("loadNotificationFeed");
     expect(topBarSource).not.toContain("listSpaces");

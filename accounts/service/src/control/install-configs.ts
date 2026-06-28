@@ -45,15 +45,15 @@ import type {
   PublicCapsuleCompatibilityReportResponse,
 } from "takosumi-contract/capsules";
 import type { ListProvidersResponse } from "takosumi-contract/providers";
-import type { Space, SpaceType } from "takosumi-contract/spaces";
+import type { Workspace, WorkspaceType } from "takosumi-contract/workspaces";
 import type {
-  InstallationProviderEnvBindingSet,
+  CapsuleProviderEnvBindingSet,
   InstallConfig,
-  Installation,
+  Capsule,
   OutputAllowlistEntry,
   PolicyConfig,
   PublicInstallConfig,
-  PublicInstallation,
+  PublicCapsule,
 } from "takosumi-contract/installations";
 import type {
   Dependency,
@@ -64,11 +64,11 @@ import type {
 import type { ActivityEvent } from "takosumi-contract/activity";
 import type { Page, PageParams } from "takosumi-contract/pagination";
 import type {
-  InstallationProviderConnectionBinding,
-  InstallationProviderConnectionBindings,
-  InstallationProviderEnvBinding,
-  InstallationProviderEnvBindings,
-  InstallationProviderConnectionSet,
+  CapsuleProviderConnectionBinding,
+  CapsuleProviderConnectionBindings,
+  CapsuleProviderEnvBinding,
+  CapsuleProviderEnvBindings,
+  CapsuleProviderConnectionSet,
   ProviderConnection,
 } from "takosumi-contract/connections";
 import type {
@@ -78,7 +78,7 @@ import type {
 import type {
   OutputShare,
   OutputShareEntry,
-} from "takosumi-contract/output-snapshots";
+} from "takosumi-contract/outputs";
 import type { PublicDeployment } from "takosumi-contract/deployments";
 import type {
   BackupRecord,
@@ -103,19 +103,19 @@ import type {
 import type { JsonValue } from "takosumi-contract";
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 import type {
-  AppInstallationMode,
-  AppInstallationStatus,
-  InstallationRecord,
-  SpaceKind,
+  AppCapsuleMode,
+  AppCapsuleStatus,
+  CapsuleRecord,
+  WorkspaceKind,
 } from "../ledger.ts";
 import type { SharedCellRuntimeAllocator } from "../runtime.ts";
 import type { AccountsStore } from "../store.ts";
 import type {
   ControlPlaneOperations,
   RunGroupWithRunsLike,
-  ControlSpaceRole,
+  ControlWorkspaceRole,
   ControlMembershipStatus,
-  PublicSpaceMember,
+  PublicWorkspaceMember,
   MembershipActor,
 } from "../control-operations.ts";
 import {
@@ -128,7 +128,7 @@ import {
 } from "../http-helpers.ts";
 import {
   type ControlDispatchContext,
-  canAccessSpace,
+  canAccessWorkspace,
   controlPlaneUnavailable,
   controllerErrorCode,
   controllerErrorResponse,
@@ -139,10 +139,10 @@ import {
   publicCompatibilityReportResponse,
   publicDeployResponse,
   publicDeployment,
-  publicInstallation,
+  publicCapsule,
   publicPlanActionResponse,
   publicRun,
-  requireSpaceAccess,
+  requireWorkspaceAccess,
   resolveProviderConnectionBindings,
 } from "./shared.ts";
 import {
@@ -161,8 +161,8 @@ import {
   outputAllowlistValue,
   outputShareEntries,
   outputShareSensitivePolicy,
-  parseInstallationProviderConnectionBinding,
-  parseInstallationProviderConnectionBindings,
+  parseCapsuleProviderConnectionBinding,
+  parseCapsuleProviderConnectionBindings,
   parseLimit,
   spaceTypeValue,
   stringRecord,
@@ -171,12 +171,12 @@ import {
 import {
   DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
   defaultCapsuleOutputAllowlist,
-} from "../../../../core/domains/installations/official_seed.ts";
+} from "../../../../core/domains/capsules/official_seed.ts";
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import { decodeCursor, pageSorted } from "takosumi-contract/pagination";
 import { appendLedgerEvent } from "../installation-ledger-events.ts";
 import { base64UrlEncodeBytes } from "../encoding.ts";
-import { canTransitionAppInstallationStatus } from "../ledger.ts";
+import { canTransitionAppCapsuleStatus } from "../ledger.ts";
 
 export async function handleInstallConfigs(
   ctx: ControlDispatchContext,
@@ -199,11 +199,11 @@ export async function handleInstallConfigs(
     const installConfigId = decodeURIComponent(segments[1] ?? "");
     const config =
       await operations.installations.getInstallConfig(installConfigId);
-    if (config.spaceId !== undefined) {
-      const auth = await requireSpaceAccess({
+    if (config.workspaceId !== undefined) {
+      const auth = await requireWorkspaceAccess({
         operations,
         store,
-        spaceId: config.spaceId,
+        workspaceId: config.workspaceId,
         subject: ctx.session.subject,
       });
       if (!auth.ok) return auth.response;
@@ -268,7 +268,7 @@ function parseInstallConfigListView(
 }
 
 function isStarterCatalogInstallConfig(config: InstallConfig): boolean {
-  if (config.spaceId !== undefined) return false;
+  if (config.workspaceId !== undefined) return false;
   if (config.id === DEFAULT_CAPSULE_INSTALL_CONFIG_ID) return true;
   return (
     config.trustLevel === "official" && config.catalog?.source !== undefined
@@ -281,37 +281,37 @@ async function listInstallConfigs(
   sessionSubject: string,
   url: URL,
 ): Promise<Response> {
-  const spaceId =
+  const workspaceId =
     stringValue(url.searchParams.get("workspaceId") ?? undefined) ??
     stringValue(url.searchParams.get("workspace_id") ?? undefined) ??
-    stringValue(url.searchParams.get("spaceId") ?? undefined) ??
+    stringValue(url.searchParams.get("workspaceId") ?? undefined) ??
     stringValue(url.searchParams.get("space_id") ?? undefined);
   const page = parseControlPageParams(url);
   if (!page.ok) return page.response;
   const view = parseInstallConfigListView(url);
   if (!view.ok) return view.response;
-  // Without a spaceId only built-in shared configs (spaceId-less configs) are
-  // returned; with one, built-ins plus that Space's own configs —
+  // Without a workspaceId only built-in shared configs (workspaceId-less configs) are
+  // returned; with one, built-ins plus that Workspace's own configs —
   // mirroring the §30 `/api/v1/capsule-configs` projection. The official +
   // scoped union is a small set, so it is materialized, merge-sorted by
   // (createdAt, id), and bounded with the in-memory keyset pager.
   const official = (await operations.installations.listInstallConfigs()).filter(
     (config) =>
-      config.spaceId === undefined && isSelectableInstallConfig(config),
+      config.workspaceId === undefined && isSelectableInstallConfig(config),
   );
-  if (spaceId !== undefined) {
-    const auth = await requireSpaceAccess({
+  if (workspaceId !== undefined) {
+    const auth = await requireWorkspaceAccess({
       operations,
       store,
-      spaceId,
+      workspaceId,
       subject: sessionSubject,
     });
     if (!auth.ok) return auth.response;
   }
   const scoped =
-    spaceId === undefined
+    workspaceId === undefined
       ? []
-      : (await operations.installations.listInstallConfigs(spaceId)).filter(
+      : (await operations.installations.listInstallConfigs(workspaceId)).filter(
           isSelectableInstallConfig,
         );
   const merged = (
@@ -331,7 +331,7 @@ async function listInstallConfigs(
 
 function isSelectableInstallConfig(config: InstallConfig): boolean {
   if (config.internal?.reason === "per_install_overrides") return false;
-  if (config.spaceId !== undefined && /^icfg_[0-9a-f]{16}$/iu.test(config.id)) {
+  if (config.workspaceId !== undefined && /^icfg_[0-9a-f]{16}$/iu.test(config.id)) {
     return false;
   }
   return true;

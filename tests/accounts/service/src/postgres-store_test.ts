@@ -475,9 +475,9 @@ test("PostgresAccountsStore consumes authorization codes with DELETE RETURNING m
     scope: "openid",
     subject: "sub_pairwise",
     takosumiSubject: "tsub_owner",
-    installationId: "inst_1",
+    capsuleId: "inst_1",
     appId: "app.demo",
-    spaceId: "space_1",
+    workspaceId: "space_1",
     role: "owner",
     nonce: "nonce-1",
     codeChallenge: "challenge",
@@ -496,7 +496,7 @@ test("PostgresAccountsStore writes billing usage metadata as jsonb", async () =>
 
   await store.saveBillingUsageRecord({
     usageReportId: "usage_report_1",
-    installationId: "inst_1",
+    capsuleId: "inst_1",
     billingAccountId: "bill_1",
     meter: "agent.compute.seconds",
     quantity: 12.5,
@@ -534,7 +534,7 @@ test("PostgresAccountsStore rejects a cross-owner billing usage conflict", async
     () =>
       store.saveBillingUsageRecord({
         usageReportId: "usage_report_1",
-        installationId: "inst_other",
+        capsuleId: "inst_other",
         billingAccountId: "bill_other",
         meter: "agent.compute.seconds",
         quantity: 99,
@@ -573,13 +573,13 @@ test("PostgresAccountsStore maps billing usage records", async () => {
   ]);
   const store = new PostgresAccountsStore(client);
 
-  const records = await store.listBillingUsageRecordsForInstallation("inst_1");
+  const records = await store.listBillingUsageRecordsForCapsule("inst_1");
 
   expect(client.calls[0].sql).toContain('"installation_id" = $1');
   expect(records).toEqual([
     {
       usageReportId: "usage_report_1",
-      installationId: "inst_1",
+      capsuleId: "inst_1",
       billingAccountId: "bill_1",
       meter: "agent.compute.seconds",
       quantity: 12.5,
@@ -665,7 +665,7 @@ test("PostgresAccountsStore reports launch token jti insert conflicts", async ()
   const store = new PostgresAccountsStore(client);
   const record = {
     jti: "lt_1",
-    installationId: "inst_1",
+    capsuleId: "inst_1",
     subject: "tsub_owner" as const,
     audience: "app.demo",
     expiresAt: 2_000,
@@ -707,10 +707,10 @@ test("PostgresAccountsStore does not write retired service import storage", asyn
   const client = new RecordingPostgresClient();
   const store = new PostgresAccountsStore(client);
 
-  await store.saveAppInstallation({
-    installationId: "inst_1",
+  await store.saveAppCapsule({
+    capsuleId: "inst_1",
     accountId: "acct_1",
-    spaceId: "space_1",
+    workspaceId: "space_1",
     appId: "app.demo",
     sourceGitUrl: "https://git.example.test/app.git",
     sourceRef: "main",
@@ -739,7 +739,7 @@ test("PostgresAccountsStore validates ServiceBindingMaterial records before writ
     () =>
       store.saveServiceBindingMaterial({
         bindingId: "bind_launch",
-        installationId: "inst_1",
+        capsuleId: "inst_1",
         name: "launch",
         kind: "auth.bootstrap_token",
         configRef: "takosumi-accounts://inst_1/launch-token/kid",
@@ -759,7 +759,7 @@ test("PostgresAccountsStore persists service binding material records", async ()
 
   await store.saveServiceBindingMaterial({
     bindingId: "bind_auth",
-    installationId: "inst_1",
+    capsuleId: "inst_1",
     name: "auth",
     kind: "identity.oidc",
     configRef:
@@ -794,11 +794,11 @@ test("PostgresAccountsStore persists service binding material records", async ()
   ]);
 
   expect(
-    await store.listServiceBindingMaterialsForInstallation("inst_1"),
+    await store.listServiceBindingMaterialsForCapsule("inst_1"),
   ).toEqual([
     {
       bindingId: "bind_auth",
-      installationId: "inst_1",
+      capsuleId: "inst_1",
       name: "auth",
       kind: "identity.oidc",
       configRef:
@@ -816,11 +816,11 @@ test("PostgresAccountsStore persists service binding material records", async ()
   expect(client.calls[1].sql).toContain("order by");
 });
 
-test("PostgresAccountsStore orders InstallationEvents by append sequence", async () => {
+test("PostgresAccountsStore orders CapsuleEvents by append sequence", async () => {
   const client = new RecordingPostgresClient();
   const store = new PostgresAccountsStore(client);
 
-  await store.listInstallationEvents("inst_1");
+  await store.listCapsuleEvents("inst_1");
 
   expect(client.calls[0].sql).toContain('order by "installation_v1"');
   expect(client.calls[0].sql).toContain('"event_sequence" asc');
@@ -897,9 +897,9 @@ test("PostgresAccountsStore serializes installation event appends with a row loc
   const client = new RecordingPostgresClient();
   const store = new PostgresAccountsStore(client);
 
-  await store.appendInstallationEvent({
+  await store.appendCapsuleEvent({
     eventId: "evt_1",
-    installationId: "inst_1",
+    capsuleId: "inst_1",
     eventType: "installation.created",
     payload: {},
     eventHash: "sha256:first",

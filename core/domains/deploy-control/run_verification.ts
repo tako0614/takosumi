@@ -127,8 +127,8 @@ export class RunVerificationService {
       );
     }
     const stateScope: DispatchStateScope = {
-      spaceId: ctx.spaceId,
-      installationId: ctx.installationId,
+      workspaceId: ctx.workspaceId ?? ctx.spaceId,
+      capsuleId: ctx.capsuleId ?? ctx.installationId,
       environment: ctx.environment,
       generation,
     };
@@ -312,7 +312,7 @@ export class RunVerificationService {
     if (!ctx) return;
     const base = planRun.baseStateGeneration ?? 0;
     const latest = await this.#store.getLatestStateSnapshot(
-      ctx.installationId,
+      (ctx.capsuleId ?? ctx.installationId),
       ctx.environment,
     );
     const current = latest?.generation ?? 0;

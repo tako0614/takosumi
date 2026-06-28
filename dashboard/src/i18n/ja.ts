@@ -53,8 +53,8 @@ export const ja = {
   "nav.manage": "管理",
   "nav.accountSection": "アカウント",
   "nav.notifications": "通知",
-  "nav.spaceSettings": "ワークスペース設定",
-  "nav.spaceSettingsShort": "設定",
+  "nav.workspaceSettings": "ワークスペース設定",
+  "nav.workspaceSettingsShort": "設定",
   "nav.account": "アカウント",
   "nav.docs": "ドキュメント",
   "nav.backToTakos": "Takos に戻る",
@@ -69,21 +69,21 @@ export const ja = {
   "theme.light": "ライト",
   "theme.dark": "ダーク",
 
-  // --- space switcher -------------------------------------------------------
-  "space.label": "ワークスペース",
-  "space.loadFailed": "ワークスペースの取得に失敗しました — {message}",
-  "space.none": "ワークスペースがありません",
-  "space.select": "ワークスペースを選択してください",
-  "space.selectMessage":
+  // --- workspace switcher -------------------------------------------------------
+  "workspace.label": "ワークスペース",
+  "workspace.loadFailed": "ワークスペースの取得に失敗しました — {message}",
+  "workspace.none": "ワークスペースがありません",
+  "workspace.select": "ワークスペースを選択してください",
+  "workspace.selectMessage":
     "右上のワークスペース選択からワークスペースを選ぶと表示されます。",
-  "space.defaultName": "自分のワークスペース",
-  "space.start.aria": "ワークスペースの開始",
-  "space.start.kicker": "ワークスペースがありません",
-  "space.start.title": "ワークスペースを作成して始める",
-  "space.start.body":
+  "workspace.defaultName": "自分のワークスペース",
+  "workspace.start.aria": "ワークスペースの開始",
+  "workspace.start.kicker": "ワークスペースがありません",
+  "workspace.start.title": "ワークスペースを作成して始める",
+  "workspace.start.body":
     "サービス、デプロイ履歴、設定はワークスペースにまとめて保存されます。",
-  "space.start.create": "ワークスペースを作成",
-  "space.start.creating": "作成中...",
+  "workspace.start.create": "ワークスペースを作成",
+  "workspace.start.creating": "作成中...",
 
   // --- auth -----------------------------------------------------------------
   "auth.signIn": "サインイン",
@@ -135,15 +135,15 @@ export const ja = {
   "notFound.goHome": "ホームへ",
 
   // --- status labels ----------------------------------------------------
-  "status.installation.pending": "準備中",
-  "status.installation.needsAttention": "確認が必要",
+  "status.capsule.pending": "準備中",
+  "status.capsule.needsAttention": "確認が必要",
   // `active` = 直近の apply が成功し state generation が前進した状態。readiness
   // 検証ではない（health probe は別）ので「稼働中」とは言わず実態どおりにする。
-  "status.installation.active": "デプロイ済み",
-  "status.installation.stale": "再デプロイが必要",
-  "status.installation.error": "エラー",
-  "status.installation.disabled": "無効",
-  "status.installation.destroyed": "削除済み",
+  "status.capsule.active": "デプロイ済み",
+  "status.capsule.stale": "再デプロイが必要",
+  "status.capsule.error": "エラー",
+  "status.capsule.disabled": "無効",
+  "status.capsule.destroyed": "削除済み",
   "status.run.queued": "待機中",
   "status.run.running": "実行中",
   "status.run.waiting_approval": "承認待ち",
@@ -212,7 +212,7 @@ export const ja = {
   "services.empty.body": "サービスを追加するとここに表示されます。",
 
   // --- Service detail ------------------------------------------------------
-  "app.installationSub": "サービス",
+  "app.capsuleSub": "サービス",
   "app.tab.overview": "概要",
   "app.tab.deploys": "更新",
   "app.tab.settings": "設定",
@@ -367,7 +367,7 @@ export const ja = {
   "run.details.runId": "実行 ID",
   "run.details.type": "種別",
   "run.details.policy": "安全確認",
-  "run.details.installation": "サービス",
+  "run.details.capsule": "サービス",
   "run.details.sourceSnapshot": "取得元のバージョン",
   "run.details.dependencySnapshot": "連携入力の固定情報",
   "run.details.baseGeneration": "元の状態",
@@ -552,7 +552,7 @@ export const ja = {
   "new.step.sync": "内容を取得",
   "new.step.create": "サービスを作成",
   "new.step.plan": "変更を確認",
-  "new.error.spaceRequired": "ワークスペースを選択してください。",
+  "new.error.workspaceRequired": "ワークスペースを選択してください。",
   "new.error.urlRequired": "インストールリンクを入力してください。",
   "new.error.nameRequired": "名前を入力してください。",
   "new.error.nameInvalid":
@@ -569,35 +569,35 @@ export const ja = {
   "new.error.notRunnable":
     "この確認結果ではまだ追加できません。表示された手直し内容を解消してから、もう一度確認してください。",
 
-  // --- space settings ---------------------------------------------------------
-  "spaceSettings.title": "チーム設定",
-  "spaceSettings.subtitle":
+  // --- workspace settings ---------------------------------------------------------
+  "workspaceSettings.title": "チーム設定",
+  "workspaceSettings.subtitle":
     "ワークスペース名、メンバー、接続、使用量設定を管理します。",
-  "spaceSettings.tab.general": "一般",
-  "spaceSettings.tab.members": "メンバー",
-  "spaceSettings.tab.connections": "接続",
-  "spaceSettings.tab.billing": "お支払い",
-  "spaceSettings.tab.usageQuota": "使用量 / 上限",
-  "spaceSettings.tab.backups": "バックアップ",
-  "spaceSettings.tab.shares": "共有値",
-  "spaceSettings.general.displayName": "表示名",
-  "spaceSettings.general.handle": "ハンドル",
-  "spaceSettings.general.type": "種別",
-  "spaceSettings.general.owner": "オーナー",
-  "spaceSettings.general.updated": "更新日時",
-  "spaceSettings.general.advancedDetails": "詳細情報",
-  "spaceSettings.general.policyAdvanced": "ポリシー JSON（詳細）",
-  "spaceSettings.general.saved": "ワークスペース設定を保存しました。",
-  "spaceSettings.general.archive": "ワークスペースをアーカイブ",
-  "spaceSettings.general.archiveConfirm":
+  "workspaceSettings.tab.general": "一般",
+  "workspaceSettings.tab.members": "メンバー",
+  "workspaceSettings.tab.connections": "接続",
+  "workspaceSettings.tab.billing": "お支払い",
+  "workspaceSettings.tab.usageQuota": "使用量 / 上限",
+  "workspaceSettings.tab.backups": "バックアップ",
+  "workspaceSettings.tab.shares": "共有値",
+  "workspaceSettings.general.displayName": "表示名",
+  "workspaceSettings.general.handle": "ハンドル",
+  "workspaceSettings.general.type": "種別",
+  "workspaceSettings.general.owner": "オーナー",
+  "workspaceSettings.general.updated": "更新日時",
+  "workspaceSettings.general.advancedDetails": "詳細情報",
+  "workspaceSettings.general.policyAdvanced": "ポリシー JSON（詳細）",
+  "workspaceSettings.general.saved": "ワークスペース設定を保存しました。",
+  "workspaceSettings.general.archive": "ワークスペースをアーカイブ",
+  "workspaceSettings.general.archiveConfirm":
     "このワークスペースを通常の一覧から外します。あとから管理用APIで確認できます。",
-  "spaceSettings.general.archived": "ワークスペースをアーカイブしました。",
-  "spaceSettings.general.archiveLastError":
+  "workspaceSettings.general.archived": "ワークスペースをアーカイブしました。",
+  "workspaceSettings.general.archiveLastError":
     "最後のワークスペースはアーカイブできません。",
-  "spaceSettings.general.nameRequired": "表示名を入力してください。",
-  "spaceSettings.general.policyObject":
+  "workspaceSettings.general.nameRequired": "表示名を入力してください。",
+  "workspaceSettings.general.policyObject":
     "ポリシー JSON は object にしてください。",
-  "spaceSettings.general.policyInvalid":
+  "workspaceSettings.general.policyInvalid":
     "ポリシー JSON が正しい JSON ではありません。",
 
   // --- members ---------------------------------------------------------------
@@ -781,7 +781,7 @@ export const ja = {
   // --- shared values -------------------------------------------------------------
   "shares.subtitle": "別のワークスペースから使える公開値を管理します。",
   "shares.create.title": "共有を作成",
-  "shares.create.toSpace": "共有先ワークスペース",
+  "shares.create.toWorkspace": "共有先ワークスペース",
   "shares.create.producer": "共有元サービス",
   "shares.create.selectPlaceholder": "選択してください",
   "shares.create.outputs": "共有する値",
@@ -797,7 +797,7 @@ export const ja = {
     "共有する値の名前を 1 つ以上入力してください。",
   "shares.error.reasonRequired": "機微な値を共有する理由を入力してください。",
   "shares.col.direction": "方向",
-  "shares.col.installation": "サービス",
+  "shares.col.capsule": "サービス",
   "shares.col.outputs": "共有する値",
   "shares.col.status": "状態",
   "shares.approve": "承認",

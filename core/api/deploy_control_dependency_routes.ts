@@ -86,14 +86,17 @@ export function mountDeployControlDependencyRoutes(
       handler: async ({ c, principal, id }) => {
         // The consumer is the path Installation; its Space gates the write.
         const consumer = await controller.getInstallation(id);
-        ensureSpacePermission(principal, consumer.installation.spaceId);
+        ensureSpacePermission(principal, consumer.capsule.workspaceId);
         const body = await readJsonBody<
-          Omit<CreateDependencyRequest, "spaceId" | "consumerInstallationId">
+          Omit<
+            CreateDependencyRequest,
+            "workspaceId" | "spaceId" | "consumerCapsuleId" | "consumerInstallationId"
+          >
         >(c, "dependencyCreate");
         const dependency = await dependenciesService!.createDependency({
           ...body,
-          spaceId: consumer.installation.spaceId,
-          consumerInstallationId: id,
+          workspaceId: consumer.capsule.workspaceId,
+          consumerCapsuleId: id,
         });
         return c.json({ dependency }, 201);
       },
@@ -108,8 +111,8 @@ export function mountDeployControlDependencyRoutes(
       param: { id: "installationId" },
       handler: async ({ c, principal, id }) => {
         const installation = await controller.getInstallation(id);
-        ensureSpacePermission(principal, installation.installation.spaceId);
-        return c.json(await dependenciesService!.listForInstallation(id), 200);
+        ensureSpacePermission(principal, installation.capsule.workspaceId);
+        return c.json(await dependenciesService!.listForCapsule(id), 200);
       },
     }),
   );

@@ -106,7 +106,10 @@ export function mountDeployControlOutputShareRoutes(
         );
         // The grant is authorized by the GRANTING (from) Space: only a principal
         // with permission on fromSpaceId may share that Space's outputs.
-        ensureSpacePermission(principal, body.fromSpaceId);
+        ensureSpacePermission(
+          principal,
+          body.fromWorkspaceId ?? body.fromSpaceId ?? "",
+        );
         const share = await outputSharesService!.createShare(body);
         return c.json({ share }, 201);
       },
@@ -136,10 +139,8 @@ export function mountDeployControlOutputShareRoutes(
       // Listing is gated on the queried Space: the principal must be able to
       // access the Space whose grants (granted OR received) it is reading.
       ensureSpacePermission(auth.principal, spaceId);
-      const { items, nextCursor } = await outputSharesService.listForSpacePage(
-        spaceId,
-        page.value,
-      );
+      const { items, nextCursor } =
+        await outputSharesService.listForWorkspacePage(spaceId, page.value);
       return c.json(
         {
           shares: items,

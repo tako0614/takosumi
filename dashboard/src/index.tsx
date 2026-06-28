@@ -55,21 +55,21 @@ const NotificationsView = lazy(
 const CloudResourcesView = lazy(
   () => import("./views/cloud/CloudResourcesView.tsx"),
 );
-const SpaceSettingsView = lazy(
-  () => import("./views/space/SpaceSettingsView.tsx"),
+const WorkspaceSettingsView = lazy(
+  () => import("./views/workspace/WorkspaceSettingsView.tsx"),
 );
 const AccountView = lazy(() => import("./views/account/AccountView.tsx"));
 
 function ConnectionsView() {
-  return <SpaceSettingsView standaloneTab="connections" />;
+  return <WorkspaceSettingsView standaloneTab="connections" />;
 }
 
 function BillingView() {
-  return <SpaceSettingsView standaloneTab="billing" />;
+  return <WorkspaceSettingsView standaloneTab="billing" />;
 }
 
 function AdvancedWorkspaceView() {
-  return <SpaceSettingsView />;
+  return <WorkspaceSettingsView />;
 }
 
 // --- redirects ---------------------------------------------------------------

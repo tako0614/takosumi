@@ -1,6 +1,6 @@
 /**
  * RunGroup view (`/run-groups/:id`) — a grouped update: multiple Runs ordered
- * across the dependency DAG (e.g. a Space update after stale propagation).
+ * across the dependency DAG (e.g. a Workspace update after stale propagation).
  * Shows the group status + ordered member list and offers a one-shot
  * "approve all" (`POST /api/v1/run-groups/:id/approve`).
  */
@@ -171,7 +171,7 @@ function RunGroupMemberRow(props: { readonly run: Run }) {
     <li class="wa-run-group-row">
       <div class="wa-run-group-main">
         <Show
-          when={run().installationId}
+          when={run().capsuleId}
           fallback={<span class="muted">{t("common.unknown")}</span>}
         >
           {(id) => (

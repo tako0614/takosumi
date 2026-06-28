@@ -41,7 +41,7 @@ import type {
   DependencySnapshot,
 } from "takosumi-contract/dependencies";
 import type { OutputAllowlistEntry } from "takosumi-contract/installations";
-import type { OutputSnapshot } from "takosumi-contract/output-snapshots";
+import type { Output as OutputSnapshot } from "takosumi-contract/outputs";
 import type { Run } from "takosumi-contract/runs";
 import type {
   Source,
@@ -209,6 +209,19 @@ import type {
  */
 type RunSerialized = <T>(key: string, work: () => Promise<T>) => Promise<T>;
 
+/**
+ * Activity input accepting either the canonical `workspaceId` or the deprecated
+ * `spaceId` during the Workspace rename. {@link RunEngine.#recordActivity}
+ * normalizes both onto the persisted dual fields.
+ */
+type RecordActivityArgs = Omit<
+  RecordActivityInput,
+  "workspaceId" | "spaceId"
+> & {
+  readonly workspaceId?: string;
+  readonly spaceId?: string;
+};
+
 /** Shared dependencies the controller injects into its single RunEngine. */
 export interface RunEngineDependencies {
   readonly store: OpenTofuDeploymentStore;
@@ -317,7 +330,7 @@ export class RunEngine {
     return this.#shouldProcessRun(status, heartbeatAt);
   }
 
-  recordActivity(event: RecordActivityInput): Promise<void> {
+  recordActivity(event: RecordActivityArgs): Promise<void> {
     return this.#recordActivity(event);
   }
 
@@ -368,33 +381,37 @@ export class RunEngine {
     internal: PlanRunInternalContext = {},
   ): Promise<PlanRunResponse> {
     await this.#seededProfiles;
-    requireNonEmptyString(request.spaceId, "spaceId");
+    const workspaceId = request.workspaceId ?? request.spaceId;
+    requireNonEmptyString(workspaceId, "workspaceId");
+    const requestCapsuleId = request.capsuleId ?? request.installationId;
     validateSource(request.source);
     const profile = await this.#requireRunnerProfile(
       request.runnerProfileId ?? this.#defaultRunnerProfileId,
     );
     const operation =
-      request.operation ?? (request.installationId ? "update" : "create");
+      request.operation ?? (requestCapsuleId ? "update" : "create");
     validateOperation(operation);
     const installation =
-      request.installationId !== undefined
-        ? await this.#requireInstallation(request.installationId)
+      requestCapsuleId !== undefined
+        ? await this.#requireInstallation(requestCapsuleId)
         : undefined;
     if (!installation) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        "plan requires an existing installationId (create the Installation first)",
+        "plan requires an existing capsuleId (create the Capsule first)",
       );
     }
-    if (installation.spaceId !== request.spaceId) {
+    if (installation.workspaceId !== workspaceId) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        `installation ${installation.id} belongs to space ${installation.spaceId}, not ${request.spaceId}`,
+        `capsule ${installation.id} belongs to workspace ${installation.workspaceId}, not ${workspaceId}`,
       );
     }
     const installationContext: PlanRunInstallationContext =
       internal.installationContext ?? {
+        workspaceId: installation.workspaceId,
         spaceId: installation.spaceId,
+        capsuleId: installation.id,
         installationId: installation.id,
         environment: installation.environment,
       };
@@ -459,9 +476,13 @@ export class RunEngine {
       internal.baseStateGeneration ?? installation.currentStateGeneration;
     let planRun: PlanRun = {
       id: this.#newId("plan"),
-      spaceId: request.spaceId,
-      installationId: request.installationId,
-      installationCurrentDeploymentId: installation.currentDeploymentId ?? null,
+      workspaceId,
+      spaceId: workspaceId,
+      ...(requestCapsuleId
+        ? { capsuleId: requestCapsuleId, installationId: requestCapsuleId }
+        : {}),
+      capsuleCurrentStateVersionId: installation.currentStateVersionId ?? null,
+      installationCurrentDeploymentId: installation.currentDeploymentId,
       source: request.source,
       sourceDigest,
       operation,
@@ -597,7 +618,7 @@ export class RunEngine {
       await this.#enqueueRun({
         action: "plan",
         runId: planRun.id,
-        spaceId: planRun.spaceId,
+        spaceId: (planRun.workspaceId ?? planRun.spaceId),
       });
       const dispatched = await this.#store.getPlanRun(planRun.id);
       return { planRun: publicPlanRun(dispatched ?? planRun) };
@@ -795,7 +816,9 @@ export class RunEngine {
       ...(compatibilityReport ? { compatibilityReport } : {}),
     });
     const installationContext: PlanRunInstallationContext = {
+      workspaceId: installation.workspaceId,
       spaceId: installation.spaceId,
+      capsuleId: installation.id,
       installationId: installation.id,
       environment: installation.environment,
     };
@@ -1616,7 +1639,7 @@ export class RunEngine {
     }
     const restoredSource = (
       await this.#store.listStateSnapshots(
-        snapshot.installationId,
+        (snapshot.capsuleId ?? snapshot.installationId),
         snapshot.environment,
       )
     ).find(
@@ -1725,12 +1748,14 @@ export class RunEngine {
     const profile = await this.#requireRunnerProfile(planRun.runnerProfileId);
     const now = this.#now();
     const approval = redactRunApproval(request.approval);
+    const applyCapsuleId = planRun.capsuleId ?? planRun.installationId;
     const applyRun: ApplyRun = {
       id: this.#newId("apply"),
       planRunId: planRun.id,
+      workspaceId: planRun.workspaceId,
       spaceId: planRun.spaceId,
-      ...(planRun.installationId
-        ? { installationId: planRun.installationId }
+      ...(applyCapsuleId
+        ? { capsuleId: applyCapsuleId, installationId: applyCapsuleId }
         : {}),
       operation: planRun.operation,
       runnerProfileId: profile.id,
@@ -1762,7 +1787,7 @@ export class RunEngine {
     await this.#enqueueRun({
       action: "apply",
       runId: applyRun.id,
-      spaceId: applyRun.spaceId,
+      spaceId: (applyRun.workspaceId ?? applyRun.spaceId),
     });
     const dispatched = await this.getApplyRun(applyRun.id);
     return dispatched;
@@ -2012,7 +2037,9 @@ export class RunEngine {
     }
     const restoredState: StateSnapshot = {
       id: this.#newId("state"),
+      workspaceId: installation.workspaceId,
       spaceId: installation.spaceId,
+      capsuleId: installation.id,
       installationId: installation.id,
       environment,
       generation: nextGeneration,
@@ -2540,10 +2567,14 @@ export class RunEngine {
   }): StateSnapshot | undefined {
     const scope = input.envDispatch.stateScope;
     if (!scope) return undefined;
+    const workspaceId = scope.workspaceId ?? scope.spaceId ?? "";
+    const capsuleId = scope.capsuleId ?? scope.installationId ?? "";
     return {
       id: this.#newId("state"),
-      spaceId: scope.spaceId,
-      installationId: scope.installationId,
+      workspaceId,
+      spaceId: scope.spaceId ?? workspaceId,
+      capsuleId,
+      installationId: scope.installationId ?? capsuleId,
       environment: scope.environment,
       generation: input.generation,
       objectKey: stateObjectKeyForScope(scope),
@@ -2598,17 +2629,20 @@ export class RunEngine {
     });
     const snapshot: OutputSnapshot = {
       id: this.#newId("out"),
-      spaceId: input.installation.spaceId,
+      workspaceId: input.installation.workspaceId,
+      spaceId: (input.installation.workspaceId ?? input.installation.spaceId),
+      capsuleId: input.installation.id,
       installationId: input.installation.id,
       stateGeneration: input.stateGeneration,
       rawOutputArtifactKey:
         input.result.rawOutputsKey ??
         rawOutputArtifactKey({
-          spaceId: input.installation.spaceId,
+          spaceId: (input.installation.workspaceId ?? input.installation.spaceId),
           installationId: input.installation.id,
           runId: input.applyRun.id,
         }),
       publicOutputs,
+      workspaceOutputs: spaceOutputs,
       spaceOutputs,
       outputDigest,
       createdAt: new Date(input.now).toISOString(),
@@ -2642,7 +2676,7 @@ export class RunEngine {
     )
       return;
     const edges = await this.#store.listDependenciesBySpace(
-      input.installation.spaceId,
+      (input.installation.workspaceId ?? input.installation.spaceId),
     );
     if (edges.length === 0) return;
     const changedOutputNames = changedOutputNamesBetween(
@@ -2706,9 +2740,13 @@ export class RunEngine {
    * path. The {@link ActivityService} already swallows store errors; this is the
    * controller-side belt-and-suspenders.
    */
-  async #recordActivity(event: RecordActivityInput): Promise<void> {
+  async #recordActivity(event: RecordActivityArgs): Promise<void> {
+    // Dual-write the renamed Workspace identity during the rename: every caller
+    // may pass either the canonical `workspaceId` or the deprecated `spaceId`;
+    // the persisted ActivityEvent carries both so readers on either name resolve.
+    const workspaceId = event.workspaceId ?? event.spaceId ?? "";
     try {
-      await this.#activity.record(event);
+      await this.#activity.record({ ...event, workspaceId, spaceId: workspaceId });
     } catch (error) {
       log.warn("service.deploy_control.activity_record_failed", {
         action: event.action,
@@ -2732,7 +2770,7 @@ export class RunEngine {
   ): Promise<readonly ResolvedInstallationProviderEnvBinding[] | undefined> {
     const ctx = planRun.installationContext;
     if (!ctx) return undefined;
-    const installation = await this.#store.getInstallation(ctx.installationId);
+    const installation = await this.#store.getInstallation((ctx.capsuleId ?? ctx.installationId));
     if (!installation) {
       throw new OpenTofuControllerError(
         "failed_precondition",
@@ -2816,7 +2854,8 @@ export class RunEngine {
         "backup digest guard did not match",
       );
     }
-    const installationId = request.installationId ?? backup.installationId;
+    const installationId =
+      request.capsuleId ?? backup.capsuleId ?? backup.installationId;
     if (!installationId) {
       throw new OpenTofuControllerError(
         "invalid_argument",
@@ -2844,7 +2883,9 @@ export class RunEngine {
     const now = new Date(this.#now()).toISOString();
     const run: Run = {
       id: this.#newId("restore"),
+      workspaceId: installation.workspaceId,
       spaceId,
+      capsuleId: installation.id,
       installationId: installation.id,
       environment,
       type: "restore",
@@ -3609,7 +3650,7 @@ export class RunEngine {
       );
       if (!persisted.won) return persisted.run;
       await this.#recordRunnerMinuteUsage({
-        spaceId: updated.spaceId,
+        spaceId: (updated.workspaceId ?? updated.spaceId),
         runId: updated.id,
         installationId: updated.installationId,
         startedAt: running.startedAt,
@@ -4001,7 +4042,7 @@ export class RunEngine {
     runnerProfile?: RunnerProfile,
   ): Promise<PolicyConfig | undefined> {
     const [space, installConfig] = await Promise.all([
-      this.#store.getSpace(installation.spaceId),
+      this.#store.getSpace((installation.workspaceId ?? installation.spaceId)),
       this.#store.getInstallConfig(installation.installConfigId),
     ]);
     return withDefaultProviderSupplyChainPolicy(
@@ -4025,6 +4066,7 @@ export class RunEngine {
     const quantity = durationMs / 60_000;
     await this.#store.putUsageEvent({
       id: this.#newId("usage"),
+      workspaceId: input.spaceId,
       spaceId: input.spaceId,
       ...(input.installationId ? { installationId: input.installationId } : {}),
       runId: input.runId,
@@ -4075,7 +4117,7 @@ export class RunEngine {
   }): Record<string, string> {
     return {
       ...this.#metricTags,
-      space_id: input.run.spaceId,
+      space_id: input.run.workspaceId,
       capsule_id: input.run.installationId ?? "unbound",
       operationKind: input.operationKind,
       status: input.status,
@@ -4319,7 +4361,7 @@ export class RunEngine {
       );
       if (runnerDispatched && failed.finishedAt !== undefined) {
         await this.#recordRunnerMinuteUsage({
-          spaceId: failed.spaceId,
+          spaceId: failed.workspaceId,
           runId: failed.id,
           installationId: failed.installationId,
           startedAt,
@@ -4579,7 +4621,7 @@ export class RunEngine {
     }
     const deployment: Deployment = {
       id: this.#newId("dep"),
-      spaceId: planRun.spaceId,
+      spaceId: planRun.workspaceId,
       installationId: installation.id,
       environment: installation.environment,
       applyRunId: applyRun.id,
@@ -5014,7 +5056,7 @@ export class RunEngine {
       now,
     } = input;
     await this.#recordRunnerMinuteUsage({
-      spaceId: completed.spaceId,
+      spaceId: completed.workspaceId,
       runId: completed.id,
       installationId: completed.installationId,
       startedAt,
@@ -5276,7 +5318,7 @@ export class RunEngine {
         await this.#store.putPlanRun(appliedPlan);
       }
       await this.#recordRunnerMinuteUsage({
-        spaceId: completed.spaceId,
+        spaceId: completed.workspaceId,
         runId: completed.id,
         installationId: completed.installationId,
         startedAt,
@@ -5329,7 +5371,7 @@ export class RunEngine {
       );
       if (runnerDispatched && failed.finishedAt !== undefined) {
         await this.#recordRunnerMinuteUsage({
-          spaceId: failed.spaceId,
+          spaceId: failed.workspaceId,
           runId: failed.id,
           installationId: failed.installationId,
           startedAt,

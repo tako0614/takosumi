@@ -17,7 +17,7 @@ const sidebarSource = read("views/account/components/shell/Sidebar.tsx");
 const mobileTabsSource = read("views/account/components/shell/MobileTabs.tsx");
 const topBarSource = read("views/account/components/shell/TopBar.tsx");
 const spaceSwitcherSource = read(
-  "views/account/components/shell/SpaceSwitcher.tsx",
+  "views/account/components/shell/WorkspaceSwitcher.tsx",
 );
 const userMenuSource = read("views/account/components/auth/UserMenu.tsx");
 const shellCssSource = read("styles/shell.css");
@@ -52,13 +52,13 @@ describe("dashboard shell navigation layout", () => {
     expect(sidebarSource).toContain('href: "/connections"');
     expect(sidebarSource).toContain('labelKey: "nav.connections"');
     expect(sidebarSource).toContain('href: "/advanced/workspace"');
-    expect(sidebarSource).toContain('labelKey: "nav.spaceSettings"');
+    expect(sidebarSource).toContain('labelKey: "nav.workspaceSettings"');
     // Billing is a sidebar item, Cloud-only.
     expect(sidebarSource).toContain("isTakosumiCloudRuntime");
     expect(sidebarSource).toContain('href="/billing"');
     expect(sidebarSource).toContain('t("nav.billing")');
     // The workspace switcher moved out of the profile menu into the sidebar.
-    expect(sidebarSource).toContain("SpaceSwitcher");
+    expect(sidebarSource).toContain("WorkspaceSwitcher");
     // Runs / notifications are NOT first-class sidebar items.
     expect(sidebarSource).not.toContain('href: "/runs"');
     expect(sidebarSource).not.toContain('href: "/notifications"');
@@ -83,19 +83,19 @@ describe("dashboard shell navigation layout", () => {
     expect(topBarSource).toContain("<UserMenu />");
     expect(topBarSource).not.toContain("Wordmark");
     expect(topBarSource).not.toContain("topbar-brand");
-    expect(topBarSource).not.toContain("SpaceSwitcher");
+    expect(topBarSource).not.toContain("WorkspaceSwitcher");
   });
 
   test("profile menu keeps account + history; connections/settings/billing/switcher moved to the sidebar", () => {
     expect(userMenuSource).toContain('href="/runs"');
     expect(userMenuSource).toContain('href="/account"');
     expect(userMenuSource).toContain("dashboardDocsHref");
-    expect(userMenuSource).not.toContain("SpaceSwitcher");
+    expect(userMenuSource).not.toContain("WorkspaceSwitcher");
     expect(userMenuSource).not.toContain('href="/connections"');
     expect(userMenuSource).not.toContain('href="/advanced/workspace"');
     expect(userMenuSource).not.toContain('href="/billing"');
     // Switcher stays read/select only (no inline space creation).
-    expect(spaceSwitcherSource).toContain("loadedSpaces().length > 1");
+    expect(spaceSwitcherSource).toContain("loadedWorkspaces().length > 1");
     expect(spaceSwitcherSource).not.toContain("createSpace");
     // Management vocabulary parity. Keys are flat with dots, so assert direct
     // access — toHaveProperty would treat "a.b" as a nested path.
@@ -103,9 +103,9 @@ describe("dashboard shell navigation layout", () => {
     expect(ja["nav.connections"]).toBeTruthy();
     expect(en["nav.primary"]).toBeTruthy();
     expect(ja["nav.primary"]).toBeTruthy();
-    expect(en["nav.spaceSettings"]).toBeTruthy();
-    expect(ja["nav.spaceSettings"]).toBeTruthy();
-    expect(en["spaceSettings.title"]).toBe("Team settings");
-    expect(ja["spaceSettings.title"]).toBe("チーム設定");
+    expect(en["nav.workspaceSettings"]).toBeTruthy();
+    expect(ja["nav.workspaceSettings"]).toBeTruthy();
+    expect(en["workspaceSettings.title"]).toBe("Team settings");
+    expect(ja["workspaceSettings.title"]).toBe("チーム設定");
   });
 });

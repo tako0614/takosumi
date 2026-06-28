@@ -4,7 +4,7 @@
  * Unlike the dashboard, the CLI can read the operator's local working
  * directory: it tars the OpenTofu Capsule, uploads it to the control plane as an
  * upload SourceSnapshot, then asks `/api/v1/deploy` to resolve/create the
- * Installation and plan the snapshot. The heavy work (Capsule Gate / plan /
+ * Capsule and plan the snapshot. The heavy work (Capsule Gate / plan /
  * apply) stays server-side in the runner; the CLI only bundles, uploads, and
  * follows the resulting Run.
  */
@@ -18,10 +18,10 @@ import { DEPLOY_PATH } from "takosumi-contract/deploy";
 import { SPACE_UPLOADS_PATH } from "takosumi-contract/sources";
 import { API_V1_PREFIX } from "takosumi-contract/api-surface";
 import type {
-  InstallationProviderConnectionBinding,
-  InstallationProviderConnectionBindings,
+  CapsuleProviderConnectionBinding,
+  CapsuleProviderConnectionBindings,
 } from "takosumi-contract/connections";
-import type { Space } from "takosumi-contract/spaces";
+import type { Workspace } from "takosumi-contract/workspaces";
 
 interface UploadSnapshot {
   readonly id: string;
@@ -73,8 +73,8 @@ export async function runDeploy(
   const { dir, flags } = splitDirArgs(args);
   const space = requireFlag(flags, "space", "--space @space");
   const name =
-    optionalStringOption(flags, "name") ?? defaultNameFromSpace(space);
-  const targetSpace = await resolveTargetSpace(flags, space);
+    optionalStringOption(flags, "name") ?? defaultNameFromWorkspace(space);
+  const targetWorkspace = await resolveTargetWorkspace(flags, space);
   const environment = optionalStringOption(flags, "environment");
   const vars = collectVars(flags);
   const providerConnections = collectProviderConnections(flags);
@@ -82,11 +82,11 @@ export async function runDeploy(
   io.stdout(`packaging ${dir} …`);
   const archive = await tarZstd(dir);
 
-  io.stdout(`uploading ${archive.byteLength} bytes to ${targetSpace.label} …`);
+  io.stdout(`uploading ${archive.byteLength} bytes to ${targetWorkspace.label} …`);
   const uploadBody = (await requestDeployControl({
     options: flags,
     method: "POST",
-    path: SPACE_UPLOADS_PATH(targetSpace.spaceId),
+    path: SPACE_UPLOADS_PATH(targetWorkspace.workspaceId),
     binary: archive,
   })) as { snapshot: UploadSnapshot };
   const snapshot = uploadBody.snapshot;
@@ -97,7 +97,7 @@ export async function runDeploy(
     method: "POST",
     path: DEPLOY_PATH,
     body: {
-      spaceId: targetSpace.spaceId,
+      workspaceId: targetWorkspace.workspaceId,
       name,
       ...(environment ? { environment } : {}),
       snapshotId: snapshot.id,
@@ -346,10 +346,10 @@ function collectVars(
 
 function collectProviderConnections(
   flags: Record<string, string | boolean>,
-): InstallationProviderConnectionBindings {
+): CapsuleProviderConnectionBindings {
   const raw = optionalStringOption(flags, "provider");
   if (!raw) return [];
-  const connections: InstallationProviderConnectionBinding[] = [];
+  const connections: CapsuleProviderConnectionBinding[] = [];
   for (const pair of raw.split(",")) {
     const [providerRaw, ...targetParts] = pair.split("=");
     const provider = providerRaw?.trim();
@@ -376,29 +376,29 @@ function requireFlag(
   return value.replace(/^@/, "");
 }
 
-async function resolveTargetSpace(
+async function resolveTargetWorkspace(
   flags: Record<string, string | boolean>,
   space: string,
-): Promise<{ spaceId: string; label: string }> {
+): Promise<{ workspaceId: string; label: string }> {
   if (space.startsWith("space_")) {
-    return { spaceId: space, label: space };
+    return { workspaceId: space, label: space };
   }
   const handle = space.replace(/^@/, "");
   const body = (await requestDeployControl({
     options: flags,
     path: `${API_V1_PREFIX}/spaces`,
-  })) as { spaces?: readonly Space[] };
+  })) as { spaces?: readonly Workspace[] };
   const spaces = Array.isArray(body.spaces) ? body.spaces : [];
   const match = spaces.find((candidate) => candidate.handle === handle);
   if (!match) {
     throw new Error(
-      `space @${handle} was not found in the authenticated session; pass --space space_... or create/join that Space`,
+      `space @${handle} was not found in the authenticated session; pass --space space_... or create/join that Workspace`,
     );
   }
-  return { spaceId: match.id, label: `@${match.handle}` };
+  return { workspaceId: match.id, label: `@${match.handle}` };
 }
 
-function defaultNameFromSpace(space: string): string {
+function defaultNameFromWorkspace(space: string): string {
   void space;
   return "app";
 }

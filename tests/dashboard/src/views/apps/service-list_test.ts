@@ -13,8 +13,8 @@ const appViewsCssSource = read("styles/app-views.css");
 
 describe("ServiceListView (/services)", () => {
   test("lists every visible service as a row that opens its detail", () => {
-    expect(serviceListSource).toContain("isVisibleServiceInstallation");
-    expect(serviceListSource).toContain("listInstallations");
+    expect(serviceListSource).toContain("isVisibleServiceCapsule");
+    expect(serviceListSource).toContain("listCapsules");
     expect(serviceListSource).toContain('class="av-service-rows"');
     expect(serviceListSource).toContain('class="av-service-row"');
     expect(serviceListSource).toContain(
@@ -22,7 +22,7 @@ describe("ServiceListView (/services)", () => {
     );
     // Technical surface: status + last-updated, unlike the copy-free launcher.
     expect(serviceListSource).toContain("StatusBadge");
-    expect(serviceListSource).toContain("effectiveInstallationStatus");
+    expect(serviceListSource).toContain("effectiveCapsuleStatus");
     expect(serviceListSource).toContain("relativeTime");
   });
 

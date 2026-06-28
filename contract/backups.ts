@@ -3,7 +3,7 @@
  *
  * A {@link BackupRecord} is the ledger pointer to one sealed control-backup
  * bundle written to the R2_BACKUPS bucket. The bundle is a compressed JSON
- * export of a Space's control ledger (spaces / sources / source snapshots /
+ * export of a Workspace's control ledger (spaces / sources / source snapshots /
  * install configs / installations / dependencies / deployments /
  * state-snapshot metadata / output-snapshot projections / run groups /
  * activity / connection PUBLIC records), then sealed with the at-rest
@@ -11,12 +11,12 @@
  * contains secret material:
  * no connection blobs, no hook secret hashes, no raw state bytes, no raw output
  * values — only public ledger metadata + the projected `publicOutputs` /
- * `spaceOutputs`.
+ * `workspaceOutputs`.
  *
  * Service data backup (messages / files / posts / etc.) is represented as a
- * separate sealed `service-data.tar.zst.enc` archive when Installations opt
+ * separate sealed `service-data.tar.zst.enc` archive when Capsules opt
  * into a `BackupConfig` mode. The control path records metadata + pointers from
- * an isolated backup runner or the Installation's projected OpenTofu output.
+ * an isolated backup runner or the Capsule's projected OpenTofu output.
  *
  * Canonical R2_BACKUPS keys:
  *   - `control.json.zst.enc`
@@ -28,68 +28,68 @@
 import { INTERNAL_V1_PREFIX } from "./api-surface.ts";
 import type { Run } from "./runs.ts";
 
-/** Object-key prefix for a Space's control backups in R2_BACKUPS. */
-export const BACKUPS_KEY_PREFIX = (spaceId: string): string =>
-  `spaces/${spaceId}/backups`;
+/** Object-key prefix for a Workspace's control backups in R2_BACKUPS. */
+export const BACKUPS_KEY_PREFIX = (workspaceId: string): string =>
+  `spaces/${workspaceId}/backups`;
 
 /**
  * Full object key for one control-backup bundle in R2_BACKUPS.
  *
  */
 export const CONTROL_BACKUP_OBJECT_KEY = (
-  spaceId: string,
+  workspaceId: string,
   backupId: string,
-): string => `${BACKUPS_KEY_PREFIX(spaceId)}/${backupId}/control.json.zst.enc`;
+): string => `${BACKUPS_KEY_PREFIX(workspaceId)}/${backupId}/control.json.zst.enc`;
 
 /** Full object key for exported encrypted state snapshots in R2_BACKUPS. */
 export const STATE_BACKUP_OBJECT_KEY = (
-  spaceId: string,
+  workspaceId: string,
   backupId: string,
-): string => `${BACKUPS_KEY_PREFIX(spaceId)}/${backupId}/state.tar.zst.enc`;
+): string => `${BACKUPS_KEY_PREFIX(workspaceId)}/${backupId}/state.tar.zst.enc`;
 
 /** Full object key for the standalone backup artifact inventory. */
 export const ARTIFACTS_MANIFEST_OBJECT_KEY = (
-  spaceId: string,
+  workspaceId: string,
   backupId: string,
 ): string =>
-  `${BACKUPS_KEY_PREFIX(spaceId)}/${backupId}/artifacts.manifest.json`;
+  `${BACKUPS_KEY_PREFIX(workspaceId)}/${backupId}/artifacts.manifest.json`;
 
 /**
  * Full object key for the service-data backup archive/pointer bundle.
  */
 export const SERVICE_DATA_BACKUP_OBJECT_KEY = (
-  spaceId: string,
+  workspaceId: string,
   backupId: string,
 ): string =>
-  `${BACKUPS_KEY_PREFIX(spaceId)}/${backupId}/service-data.tar.zst.enc`;
+  `${BACKUPS_KEY_PREFIX(workspaceId)}/${backupId}/service-data.tar.zst.enc`;
 
 /** Content type of the sealed control-backup object as stored in R2. */
 export const CONTROL_BACKUP_CONTENT_TYPE = "application/octet-stream" as const;
 
-/** Path of the Space-scoped control-backup REST surface. */
-export const SPACE_BACKUPS_PATH = (spaceId: string): string =>
-  `${INTERNAL_V1_PREFIX}/spaces/${encodeURIComponent(spaceId)}/backups`;
+/** Path of the Workspace-scoped control-backup REST surface. */
+export const SPACE_BACKUPS_PATH = (workspaceId: string): string =>
+  `${INTERNAL_V1_PREFIX}/spaces/${encodeURIComponent(workspaceId)}/backups`;
 
-/** Path of the Space-scoped destructive restore trigger REST surface. */
+/** Path of the Workspace-scoped destructive restore trigger REST surface. */
 export const SPACE_BACKUP_RESTORES_PATH = (
-  spaceId: string,
+  workspaceId: string,
   backupId: string,
 ): string =>
-  `${SPACE_BACKUPS_PATH(spaceId)}/${encodeURIComponent(backupId)}/restores`;
+  `${SPACE_BACKUPS_PATH(workspaceId)}/${encodeURIComponent(backupId)}/restores`;
 
-/** Path of the Installation-scoped backup trigger REST surface. */
-export const INSTALLATION_BACKUPS_PATH = (installationId: string): string =>
+/** Path of the Capsule-scoped backup trigger REST surface. */
+export const INSTALLATION_BACKUPS_PATH = (capsuleId: string): string =>
   `${INTERNAL_V1_PREFIX}/installations/${encodeURIComponent(
-    installationId,
+    capsuleId,
   )}/backups`;
 
 /**
  * Ledger pointer to one sealed control-backup bundle.
  *
  *   - `id`            — service-assigned backup id (`bkp_…`).
- *   - `spaceId`       — the owning Space (the listing key).
+ *   - `workspaceId`       — the owning Workspace (the listing key).
  *   - `objectKey`     — R2_BACKUPS key of the sealed bundle
- *                       (`spaces/{spaceId}/backups/{backupId}/control.json.zst.enc`).
+ *                       (`spaces/{workspaceId}/backups/{backupId}/control.json.zst.enc`).
  *   - `digest`        — `sha256:<hex>` over the SEALED bytes written to R2.
  *   - `sizeBytes`     — length of the sealed object in bytes.
  *   - `createdByRunId`— optional run id that triggered the backup (operator /
@@ -99,7 +99,11 @@ export const INSTALLATION_BACKUPS_PATH = (installationId: string): string =>
  */
 export interface BackupRecord {
   readonly id: string;
+  readonly workspaceId: string;
+  /** @deprecated Use workspaceId. */
   readonly spaceId: string;
+  readonly capsuleId?: string;
+  /** @deprecated Use capsuleId. */
   readonly installationId?: string;
   readonly environment?: string;
   readonly restoreTarget?: BackupRestoreTarget;
@@ -115,10 +119,14 @@ export interface BackupRecord {
 
 /** Public pointer to the state generation this backup can restore. */
 export interface BackupRestoreTarget {
-  readonly installationId: string;
+  readonly capsuleId: string;
+  /** @deprecated Use capsuleId. */
+  readonly installationId?: string;
   readonly environment: string;
   readonly stateGeneration: number;
-  readonly stateSnapshotId: string;
+  readonly stateVersionId: string;
+  /** @deprecated Use stateVersionId. */
+  readonly stateSnapshotId?: string;
 }
 
 /** Pointer to a backup object, when present. */
@@ -143,18 +151,18 @@ export interface CreateBackupResponse {
   readonly backup: BackupRecord;
 }
 
-/** Body of `POST .../spaces/:spaceId/backups/:backupId/restores`. */
+/** Body of `POST .../spaces/:workspaceId/backups/:backupId/restores`. */
 export interface CreateRestoreRequest {
   /**
-   * Target Installation to restore. Optional only when the BackupRecord was
-   * created from an Installation-scoped backup and already carries it.
+   * Target Capsule to restore. Optional only when the BackupRecord was
+   * created from an Capsule-scoped backup and already carries it.
    */
-  readonly installationId?: string;
+  readonly capsuleId?: string;
   readonly environment?: string;
   /**
-   * Backup-time StateSnapshot generation to restore from. The controller
+   * Backup-time StateVersion generation to restore from. The controller
    * verifies that the selected snapshot exists and writes it as a NEW current
-   * StateSnapshot generation after approval.
+   * StateVersion generation after approval.
    */
   readonly stateGeneration: number;
   /** Optional client-side guard over BackupRecord.digest. */

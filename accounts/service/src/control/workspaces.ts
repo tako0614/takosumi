@@ -46,15 +46,15 @@ import type {
   PublicCapsuleCompatibilityReportResponse,
 } from "takosumi-contract/capsules";
 import type { ListProvidersResponse } from "takosumi-contract/providers";
-import type { Space, SpaceType } from "takosumi-contract/spaces";
+import type { Workspace, WorkspaceType } from "takosumi-contract/workspaces";
 import type {
-  InstallationProviderEnvBindingSet,
+  CapsuleProviderEnvBindingSet,
   InstallConfig,
-  Installation,
+  Capsule,
   OutputAllowlistEntry,
   PolicyConfig,
   PublicInstallConfig,
-  PublicInstallation,
+  PublicCapsule,
 } from "takosumi-contract/installations";
 import type {
   Dependency,
@@ -65,11 +65,11 @@ import type {
 import type { ActivityEvent } from "takosumi-contract/activity";
 import type { Page, PageParams } from "takosumi-contract/pagination";
 import type {
-  InstallationProviderConnectionBinding,
-  InstallationProviderConnectionBindings,
-  InstallationProviderEnvBinding,
-  InstallationProviderEnvBindings,
-  InstallationProviderConnectionSet,
+  CapsuleProviderConnectionBinding,
+  CapsuleProviderConnectionBindings,
+  CapsuleProviderEnvBinding,
+  CapsuleProviderEnvBindings,
+  CapsuleProviderConnectionSet,
   ProviderConnection,
 } from "takosumi-contract/connections";
 import type {
@@ -79,7 +79,7 @@ import type {
 import type {
   OutputShare,
   OutputShareEntry,
-} from "takosumi-contract/output-snapshots";
+} from "takosumi-contract/outputs";
 import type { PublicDeployment } from "takosumi-contract/deployments";
 import type {
   BackupRecord,
@@ -104,19 +104,19 @@ import type {
 import type { JsonValue } from "takosumi-contract";
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 import type {
-  AppInstallationMode,
-  AppInstallationStatus,
-  InstallationRecord,
-  SpaceKind,
+  AppCapsuleMode,
+  AppCapsuleStatus,
+  CapsuleRecord,
+  WorkspaceKind,
 } from "../ledger.ts";
 import type { SharedCellRuntimeAllocator } from "../runtime.ts";
 import type { AccountsStore } from "../store.ts";
 import type {
   ControlPlaneOperations,
   RunGroupWithRunsLike,
-  ControlSpaceRole,
+  ControlWorkspaceRole,
   ControlMembershipStatus,
-  PublicSpaceMember,
+  PublicWorkspaceMember,
   MembershipActor,
 } from "../control-operations.ts";
 import {
@@ -129,7 +129,7 @@ import {
 } from "../http-helpers.ts";
 import {
   type ControlDispatchContext,
-  canAccessSpace,
+  canAccessWorkspace,
   controlPlaneUnavailable,
   controllerErrorCode,
   controllerErrorResponse,
@@ -140,10 +140,10 @@ import {
   publicCompatibilityReportResponse,
   publicDeployResponse,
   publicDeployment,
-  publicInstallation,
+  publicCapsule,
   publicPlanActionResponse,
   publicRun,
-  requireSpaceAccess,
+  requireWorkspaceAccess,
   resolveProviderConnectionBindings,
 } from "./shared.ts";
 import {
@@ -162,8 +162,8 @@ import {
   outputAllowlistValue,
   outputShareEntries,
   outputShareSensitivePolicy,
-  parseInstallationProviderConnectionBinding,
-  parseInstallationProviderConnectionBindings,
+  parseCapsuleProviderConnectionBinding,
+  parseCapsuleProviderConnectionBindings,
   parseLimit,
   spaceTypeValue,
   stringRecord,
@@ -172,13 +172,13 @@ import {
 import {
   DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
   defaultCapsuleOutputAllowlist,
-} from "../../../../core/domains/installations/official_seed.ts";
+} from "../../../../core/domains/capsules/official_seed.ts";
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import { decodeCursor, pageSorted } from "takosumi-contract/pagination";
-import { maybeEnsurePersonalSpaceForSession } from "../control-personal-space.ts";
+import { maybeEnsurePersonalWorkspaceForSession } from "../control-personal-space.ts";
 import { appendLedgerEvent } from "../installation-ledger-events.ts";
 import { base64UrlEncodeBytes } from "../encoding.ts";
-import { canTransitionAppInstallationStatus } from "../ledger.ts";
+import { canTransitionAppCapsuleStatus } from "../ledger.ts";
 
 export async function handleWorkspaces(
   ctx: ControlDispatchContext,
@@ -189,62 +189,62 @@ export async function handleWorkspaces(
   // GET/POST /api/v1/workspaces (legacy-compatible: /api/v1/spaces)
   if (segments.length === 1 && segments[0] === "spaces") {
     if (method === "GET") {
-      await maybeEnsurePersonalSpaceForSession({
+      await maybeEnsurePersonalWorkspaceForSession({
         request: request.clone(),
         store,
         operations,
       });
-      return await listSpaces(operations, store, ctx.session.subject, url);
+      return await listWorkspaces(operations, store, ctx.session.subject, url);
     }
     if (method === "POST") {
-      return await createSpace(request, operations, ctx.session.subject);
+      return await createWorkspace(request, operations, ctx.session.subject);
     }
     return methodNotAllowed("GET, POST");
   }
   // /api/v1/workspaces/:workspaceId ; /api/v1/workspaces/:workspaceId/...
-  // (legacy-compatible: /api/v1/spaces/:spaceId)
+  // (legacy-compatible: /api/v1/spaces/:workspaceId)
   if (segments[0] === "spaces" && segments.length >= 2) {
-    const spaceId = decodeURIComponent(segments[1] ?? "");
-    const auth = await requireSpaceAccess({
+    const workspaceId = decodeURIComponent(segments[1] ?? "");
+    const auth = await requireWorkspaceAccess({
       operations,
       store,
-      spaceId,
+      workspaceId,
       subject: ctx.session.subject,
     });
     if (!auth.ok) return auth.response;
     if (segments.length === 2) {
       if (method === "GET")
-        return json({ space: await operations.spaces.getSpace(spaceId) });
+        return json({ space: await operations.spaces.getWorkspace(workspaceId) });
       if (method === "PATCH")
-        return await updateSpace(
+        return await updateWorkspace(
           request,
           operations,
           store,
           ctx.session.subject,
-          spaceId,
+          workspaceId,
         );
       return methodNotAllowed("GET, PATCH");
     }
     const leaf = segments[2];
     if (leaf === "members") {
-      // /api/v1/workspaces/:workspaceId/members[/:subject]. The Space is already
+      // /api/v1/workspaces/:workspaceId/members[/:subject]. The Workspace is already
       // resolved server-side and namespace-gated above; the member handlers add
       // the membership-ROLE gate (list = any member; mutate = owner/admin;
       // role-change + remove = owner-only with a last-owner guard).
       if (segments.length === 3) {
         if (method === "GET") {
-          return await listSpaceMembers(
+          return await listWorkspaceMembers(
             operations,
-            spaceId,
+            workspaceId,
             ctx.session.subject,
           );
         }
         if (method === "POST") {
-          return await addSpaceMember(
+          return await addWorkspaceMember(
             request,
             store,
             operations,
-            spaceId,
+            workspaceId,
             ctx.session.subject,
           );
         }
@@ -253,18 +253,18 @@ export async function handleWorkspaces(
       if (segments.length === 4) {
         const targetSubject = decodeURIComponent(segments[3] ?? "");
         if (method === "PATCH") {
-          return await changeSpaceMemberRole(
+          return await changeWorkspaceMemberRole(
             request,
             operations,
-            spaceId,
+            workspaceId,
             ctx.session.subject,
             targetSubject,
           );
         }
         if (method === "DELETE") {
-          return await removeSpaceMember(
+          return await removeWorkspaceMember(
             operations,
-            spaceId,
+            workspaceId,
             ctx.session.subject,
             targetSubject,
           );
@@ -274,37 +274,37 @@ export async function handleWorkspaces(
     }
     if (leaf === "uploads" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
-      return await uploadSpaceArchive(request, url, operations, spaceId);
+      return await uploadWorkspaceArchive(request, url, operations, workspaceId);
     }
     if (leaf === "artifact-snapshots" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
-      return await createSpaceArtifactSnapshot(request, operations, spaceId);
+      return await createWorkspaceArtifactSnapshot(request, operations, workspaceId);
     }
     if (leaf === "installations" && segments.length === 3) {
       if (method === "GET")
-        return await listSpaceInstallations(operations, spaceId, url);
+        return await listWorkspaceCapsules(operations, workspaceId, url);
       if (method === "POST") {
-        return await createInstallation(
+        return await createCapsule(
           request,
           operations,
           store,
           ctx.session.subject,
-          spaceId,
+          workspaceId,
         );
       }
       return methodNotAllowed("GET, POST");
     }
     if (leaf === "graph" && segments.length === 3) {
       if (method !== "GET") return methodNotAllowed("GET");
-      return await spaceGraph(operations, spaceId);
+      return await spaceGraph(operations, workspaceId);
     }
     if (leaf === "runs" && segments.length === 3) {
       if (method !== "GET") return methodNotAllowed("GET");
-      return await spaceRuns(operations, spaceId, url);
+      return await spaceRuns(operations, workspaceId, url);
     }
     if (leaf === "activity" && segments.length === 3) {
       if (method !== "GET") return methodNotAllowed("GET");
-      return await spaceActivity(operations, spaceId, url);
+      return await spaceActivity(operations, workspaceId, url);
     }
     if (leaf === "backups" && segments.length === 3) {
       if (method === "GET") {
@@ -312,13 +312,13 @@ export async function handleWorkspaces(
         if (!page.ok) return page.response;
         return json(
           (await operations.backups.listBackups(
-            spaceId,
+            workspaceId,
             page.params,
           )) satisfies ListBackupsResponse,
         );
       }
       if (method === "POST") {
-        const backup = await operations.backups.createBackup({ spaceId });
+        const backup = await operations.backups.createBackup({ workspaceId });
         return jsonStatus({ backup } satisfies CreateBackupResponse, 201);
       }
       return methodNotAllowed("GET, POST");
@@ -333,24 +333,24 @@ export async function handleWorkspaces(
       return await createRestoreRun(
         request,
         operations,
-        spaceId,
+        workspaceId,
         backupId,
         ctx.session.subject,
       );
     }
     if (leaf === "billing" && segments.length === 3) {
       if (method !== "GET") return methodNotAllowed("GET");
-      return json(await operations.getSpaceBilling(spaceId));
+      return json(await operations.getWorkspaceBilling(workspaceId));
     }
     if (leaf === "usage" && segments.length === 3) {
       if (method !== "GET") return methodNotAllowed("GET");
       const page = parseControlPageParams(url);
       if (!page.ok) return page.response;
-      return json(await operations.listSpaceUsage(spaceId, page.params));
+      return json(await operations.listWorkspaceUsage(workspaceId, page.params));
     }
     if (leaf === "credit-reservations" && segments.length === 3) {
       if (method !== "GET") return methodNotAllowed("GET");
-      return json(await operations.listSpaceCreditReservations(spaceId));
+      return json(await operations.listWorkspaceCreditReservations(workspaceId));
     }
     // NOTE: `credits/top-up` and `subscription/change` are intentionally NOT
     // on this session surface. Billing mode is operator-selected and credits
@@ -359,7 +359,7 @@ export async function handleWorkspaces(
     // (core/api/deploy_control_billing_routes.ts).
     if (leaf === "plan-update" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
-      return await spacePlanUpdate(operations, spaceId);
+      return await spacePlanUpdate(operations, workspaceId);
     }
     if (leaf === "drift-check" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
@@ -375,8 +375,8 @@ export async function handleWorkspaces(
           ? rawLimit
           : undefined;
       return jsonStatus(
-        await operations.runGroups.createSpaceDriftCheck(
-          spaceId,
+        await operations.runGroups.createWorkspaceDriftCheck(
+          workspaceId,
           limit !== undefined ? { limit } : {},
         ),
         201,
@@ -390,26 +390,26 @@ export async function handleWorkspaces(
 /** 64 MiB cap on a single local Capsule upload archive. */
 const DEFAULT_UPLOAD_MAX_BYTES = 64 * 1024 * 1024;
 
-// --- Spaces ----------------------------------------------------------------
+// --- Workspaces ----------------------------------------------------------------
 
-async function listSpaces(
+async function listWorkspaces(
   operations: ControlPlaneOperations,
   store: AccountsStore,
   sessionSubject: string,
   url: URL,
 ): Promise<Response> {
   // Scope the read to the caller's own spaces instead of loading every tenant's
-  // Space and filtering per row. This reproduces `canAccessSpace`'s accept set
+  // Workspace and filtering per row. This reproduces `canAccessWorkspace`'s accept set
   // as a UNION of two scoped queries:
-  //   (A) deploy-control Spaces the subject directly owns (ownerUserId), and
-  //   (B) Spaces whose account is legally owned by the subject (the accounts
+  //   (A) deploy-control Workspaces the subject directly owns (ownerUserId), and
+  //   (B) Workspaces whose account is legally owned by the subject (the accounts
   //       ledger's `legalOwnerSubject`), fetched individually so we never read
-  //       another tenant's Space.
+  //       another tenant's Workspace.
   const includeArchived = parseBooleanQuery(url, "includeArchived") === true;
   const visible = (
-    await listSpacesForSession(operations, store, sessionSubject)
+    await listWorkspacesForSession(operations, store, sessionSubject)
   )
-    .filter((space) => includeArchived || !isArchivedSpace(space))
+    .filter((space) => includeArchived || !isArchivedWorkspace(space))
     .sort(
       (a, b) =>
         a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
@@ -417,28 +417,28 @@ async function listSpaces(
   return json({ spaces: visible });
 }
 
-async function listSpacesForSession(
+async function listWorkspacesForSession(
   operations: ControlPlaneOperations,
   store: AccountsStore,
   sessionSubject: string,
-): Promise<readonly Space[]> {
-  const byId = new Map<string, Space>();
-  for (const space of await operations.spaces.listSpacesByOwner(
+): Promise<readonly Workspace[]> {
+  const byId = new Map<string, Workspace>();
+  for (const space of await operations.spaces.listWorkspacesByOwner(
     sessionSubject,
   )) {
     byId.set(space.id, space);
   }
-  for (const ledgerSpace of await store.listSpacesForOwner(
+  for (const ledgerWorkspace of await store.listWorkspacesForOwner(
     sessionSubject as TakosumiSubject,
   )) {
-    if (byId.has(ledgerSpace.spaceId)) continue;
+    if (byId.has(ledgerWorkspace.workspaceId)) continue;
     try {
       byId.set(
-        ledgerSpace.spaceId,
-        await operations.spaces.getSpace(ledgerSpace.spaceId),
+        ledgerWorkspace.workspaceId,
+        await operations.spaces.getWorkspace(ledgerWorkspace.workspaceId),
       );
     } catch {
-      // The deploy-control Space may not exist (or is mid-creation); skip it.
+      // The deploy-control Workspace may not exist (or is mid-creation); skip it.
     }
   }
   return [...byId.values()].sort(
@@ -447,7 +447,7 @@ async function listSpacesForSession(
   );
 }
 
-function isArchivedSpace(space: Space): boolean {
+function isArchivedWorkspace(space: Workspace): boolean {
   return typeof space.archivedAt === "string" && space.archivedAt.length > 0;
 }
 
@@ -459,7 +459,7 @@ function parseBooleanQuery(url: URL, name: string): boolean | undefined {
   return undefined;
 }
 
-async function createSpace(
+async function createWorkspace(
   request: Request,
   operations: ControlPlaneOperations,
   sessionSubject: string,
@@ -476,7 +476,7 @@ async function createSpace(
   // dashboard never supplies it. The membership ledger seeds no row here; the
   // member handlers grant the namespace owner an implicit active-owner row (see
   // `effectiveMembers`) so they can bootstrap the first membership.
-  const space = await operations.spaces.createSpace({
+  const space = await operations.spaces.createWorkspace({
     handle,
     displayName: displayName ?? handle,
     type,
@@ -485,12 +485,12 @@ async function createSpace(
   return jsonStatus({ space }, 201);
 }
 
-async function updateSpace(
+async function updateWorkspace(
   request: Request,
   operations: ControlPlaneOperations,
   store: AccountsStore,
   sessionSubject: string,
-  spaceId: string,
+  workspaceId: string,
 ): Promise<Response> {
   const body = await readJsonObject(request);
   if (!body) return errorJson("invalid_request", "invalid request", 400);
@@ -531,11 +531,11 @@ async function updateSpace(
   }
   if (patch.archived === true) {
     const [target, spaces] = await Promise.all([
-      operations.spaces.getSpace(spaceId),
-      listSpacesForSession(operations, store, sessionSubject),
+      operations.spaces.getWorkspace(workspaceId),
+      listWorkspacesForSession(operations, store, sessionSubject),
     ]);
-    const activeSpaces = spaces.filter((space) => !isArchivedSpace(space));
-    if (!isArchivedSpace(target) && activeSpaces.length <= 1) {
+    const activeWorkspaces = spaces.filter((space) => !isArchivedWorkspace(space));
+    if (!isArchivedWorkspace(target) && activeWorkspaces.length <= 1) {
       return errorJson(
         "failed_precondition",
         "cannot archive the last active workspace",
@@ -543,13 +543,14 @@ async function updateSpace(
       );
     }
   }
-  const space = await operations.spaces.updateSpace(spaceId, patch);
+  const space = await operations.spaces.updateWorkspace(workspaceId, patch);
   await operations.activity.record?.({
-    spaceId,
+    workspaceId,
+    spaceId: workspaceId,
     actorId: sessionSubject,
     action: "space.updated",
     targetType: "space",
-    targetId: spaceId,
+    targetId: workspaceId,
     metadata: {
       fields: Object.keys(patch).sort(),
       ...(patch.policy !== undefined
@@ -561,50 +562,50 @@ async function updateSpace(
   return json({ space });
 }
 
-// --- Members (Space membership / roles) ------------------------------------
+// --- Members (Workspace membership / roles) ------------------------------------
 //
-// The Space is resolved server-side and namespace-gated by `requireSpaceAccess`
+// The Workspace is resolved server-side and namespace-gated by `requireWorkspaceAccess`
 // in dispatch BEFORE these run. On top of that namespace gate, every member
 // handler enforces the membership-ROLE gate from the membership ledger itself:
 //
-//   - list:        any active member of the Space (member 可),
+//   - list:        any active member of the Workspace (member 可),
 //   - add/invite:  owner or admin only; a POST that overwrites an EXISTING
 //                  active owner is owner-only and last-owner-guarded (same as
 //                  the PATCH path) so POST cannot escalate or orphan,
 //   - role change: owner only,
 //   - remove:      owner only, and the LAST remaining owner can never be removed
-//                  or demoted (last-owner guard) so a Space is never left
+//                  or demoted (last-owner guard) so a Workspace is never left
 //                  unmanaged.
 //
-// The spaces domain seeds NO membership row when a Space is created, so the
+// The spaces domain seeds NO membership row when a Workspace is created, so the
 // roster starts empty. To keep the mutation gate aligned with the namespace
-// gate (which already trusts `Space.ownerUserId`) and to let the namespace owner
+// gate (which already trusts `Workspace.ownerUserId`) and to let the namespace owner
 // bootstrap the first membership, every handler reads the roster via
 // `effectiveMembers`, which adds an IMPLICIT active owner row for the namespace
 // owner whenever the ledger has no active row for them. The first real
 // `upsertMember` the owner performs persists a concrete row.
 //
 // `targetSubject` / the session subject are matched against the membership
-// ledger's `accountId`; the spaceId is never taken from the client body.
+// ledger's `accountId`; the workspaceId is never taken from the client body.
 
-const MEMBER_ROLES: readonly ControlSpaceRole[] = [
+const MEMBER_ROLES: readonly ControlWorkspaceRole[] = [
   "owner",
   "admin",
   "member",
   "viewer",
 ];
 
-function controlRoleValue(value: unknown): ControlSpaceRole | undefined {
+function controlRoleValue(value: unknown): ControlWorkspaceRole | undefined {
   return typeof value === "string" &&
     (MEMBER_ROLES as readonly string[]).includes(value)
-    ? (value as ControlSpaceRole)
+    ? (value as ControlWorkspaceRole)
     : undefined;
 }
 
 function membersUnavailable(): Response {
   return errorJson(
     "feature_unavailable",
-    "Space membership management is not available.",
+    "Workspace membership management is not available.",
     503,
   );
 }
@@ -614,24 +615,24 @@ function memberForbidden(description: string): Response {
 }
 
 /** True when the membership has an active owner role. */
-function isActiveOwner(member: PublicSpaceMember): boolean {
+function isActiveOwner(member: PublicWorkspaceMember): boolean {
   return member.status === "active" && member.roles.includes("owner");
 }
 
-/** The caller's membership in the Space, matched by session subject. */
+/** The caller's membership in the Workspace, matched by session subject. */
 function findCaller(
-  members: readonly PublicSpaceMember[],
+  members: readonly PublicWorkspaceMember[],
   subject: string,
-): PublicSpaceMember | undefined {
+): PublicWorkspaceMember | undefined {
   return members.find((member) => member.accountId === subject);
 }
 
 /**
- * The membership ledger does not seed a row when a Space is created (the spaces
- * domain records only `Space.ownerUserId`), so a brand-new Space starts with an
+ * The membership ledger does not seed a row when a Workspace is created (the spaces
+ * domain records only `Workspace.ownerUserId`), so a brand-new Workspace starts with an
  * EMPTY roster. To let the namespace owner bootstrap the first membership and to
- * keep the mutation gate aligned with the namespace gate (`canAccessSpace`,
- * which already trusts `Space.ownerUserId`), synthesize an implicit ACTIVE owner
+ * keep the mutation gate aligned with the namespace gate (`canAccessWorkspace`,
+ * which already trusts `Workspace.ownerUserId`), synthesize an implicit ACTIVE owner
  * row for the namespace owner whenever the ledger has no active row for them.
  *
  * This is read-only: it does not write to the ledger. The first real
@@ -639,10 +640,10 @@ function findCaller(
  * owner row exists for the namespace owner, the synthetic row is not added.
  */
 function withImplicitNamespaceOwner(
-  members: readonly PublicSpaceMember[],
-  spaceId: string,
+  members: readonly PublicWorkspaceMember[],
+  workspaceId: string,
   ownerUserId: string,
-): readonly PublicSpaceMember[] {
+): readonly PublicWorkspaceMember[] {
   const existing = members.find((member) => member.accountId === ownerUserId);
   // Only synthesize when the namespace owner has NO active row. A suspended /
   // invited row for the owner is left as-is (the owner explicitly changed it),
@@ -650,25 +651,25 @@ function withImplicitNamespaceOwner(
   if (existing && existing.status === "active") return members;
   if (existing) {
     // Replace a non-active owner row with the implicit active-owner view so the
-    // namespace owner is never locked out of their own Space.
+    // namespace owner is never locked out of their own Workspace.
     return members.map((member) =>
       member.accountId === ownerUserId
-        ? implicitOwner(spaceId, ownerUserId)
+        ? implicitOwner(workspaceId, ownerUserId)
         : member,
     );
   }
-  return [implicitOwner(spaceId, ownerUserId), ...members];
+  return [implicitOwner(workspaceId, ownerUserId), ...members];
 }
 
 /** The synthetic active-owner projection for a namespace owner with no row. */
 function implicitOwner(
-  spaceId: string,
+  workspaceId: string,
   ownerUserId: string,
-): PublicSpaceMember {
+): PublicWorkspaceMember {
   const now = new Date(0).toISOString();
   return {
     id: `implicit-owner:${ownerUserId}`,
-    spaceId,
+    workspaceId,
     accountId: ownerUserId,
     roles: ["owner"],
     status: "active",
@@ -678,45 +679,45 @@ function implicitOwner(
 }
 
 /**
- * Resolves the Space's namespace owner (`Space.ownerUserId`) server-side and
+ * Resolves the Workspace's namespace owner (`Workspace.ownerUserId`) server-side and
  * returns the effective member roster (ledger rows + the implicit namespace
- * owner). The Space is already namespace-gated by `requireSpaceAccess` in
+ * owner). The Workspace is already namespace-gated by `requireWorkspaceAccess` in
  * dispatch; we re-read it here only to learn the owner subject, never from the
  * client body.
  */
 async function effectiveMembers(
   operations: ControlPlaneOperations,
-  spaceId: string,
-): Promise<readonly PublicSpaceMember[]> {
-  const members = await operations.members!.listMembers(spaceId);
-  const space = await operations.spaces.getSpace(spaceId);
-  return withImplicitNamespaceOwner(members, spaceId, space.ownerUserId);
+  workspaceId: string,
+): Promise<readonly PublicWorkspaceMember[]> {
+  const members = await operations.members!.listMembers(workspaceId);
+  const space = await operations.spaces.getWorkspace(workspaceId);
+  return withImplicitNamespaceOwner(members, workspaceId, space.ownerUserId);
 }
 
-async function listSpaceMembers(
+async function listWorkspaceMembers(
   operations: ControlPlaneOperations,
-  spaceId: string,
+  workspaceId: string,
   subject: string,
 ): Promise<Response> {
   if (!operations.members) return membersUnavailable();
-  const members = await effectiveMembers(operations, spaceId);
-  // List is member-visible: the caller must be an active member of THIS Space.
-  // The namespace gate (requireSpaceAccess) already passed, but membership is a
+  const members = await effectiveMembers(operations, workspaceId);
+  // List is member-visible: the caller must be an active member of THIS Workspace.
+  // The namespace gate (requireWorkspaceAccess) already passed, but membership is a
   // separate ledger — a namespace owner who is not a recorded member still sees
-  // the roster (they own the Space via the implicit owner row), otherwise an
+  // the roster (they own the Workspace via the implicit owner row), otherwise an
   // active member must be present.
   const caller = findCaller(members, subject);
   if (caller && caller.status !== "active") {
-    return memberForbidden("Your membership in this Space is not active.");
+    return memberForbidden("Your membership in this Workspace is not active.");
   }
   return json({ members });
 }
 
-async function addSpaceMember(
+async function addWorkspaceMember(
   request: Request,
   store: AccountsStore,
   operations: ControlPlaneOperations,
-  spaceId: string,
+  workspaceId: string,
   subject: string,
 ): Promise<Response> {
   if (!operations.members) return membersUnavailable();
@@ -744,10 +745,10 @@ async function addSpaceMember(
       400,
     );
   }
-  // Mutation gate: only an active owner/admin of this Space may add members. The
-  // roster includes the implicit namespace-owner row so the Space owner can
+  // Mutation gate: only an active owner/admin of this Workspace may add members. The
+  // roster includes the implicit namespace-owner row so the Workspace owner can
   // always bootstrap the first membership.
-  const members = await effectiveMembers(operations, spaceId);
+  const members = await effectiveMembers(operations, workspaceId);
   const caller = findCaller(members, subject);
   if (!caller || caller.status !== "active") {
     return memberForbidden("Only an active member can manage members.");
@@ -759,18 +760,18 @@ async function addSpaceMember(
   if (role === "owner" && !caller.roles.includes("owner")) {
     return memberForbidden("Only an owner can grant the owner role.");
   }
-  // The membership store is keyed by `spaceId:accountId` and `upsertMember`
+  // The membership store is keyed by `workspaceId:accountId` and `upsertMember`
   // OVERWRITES, so a POST against an EXISTING member is a role change in
   // disguise. Route an existing-active-owner upsert through the SAME gates the
-  // dedicated PATCH path (`changeSpaceMemberRole`) enforces, otherwise an admin
+  // dedicated PATCH path (`changeWorkspaceMemberRole`) enforces, otherwise an admin
   // could demote a sitting owner and either role could strip the last owner —
-  // privilege escalation / Space orphaning straight through POST. This also
+  // privilege escalation / Workspace orphaning straight through POST. This also
   // covers the implicit namespace-owner row (active owner), so a POST can never
   // silently strip the namespace owner who has no ledger row yet.
   const target = findCaller(members, accountId);
   if (target && isActiveOwner(target)) {
     // Changing an existing active OWNER's role is owner-only (admins cannot
-    // touch an owner), matching `changeSpaceMemberRole`.
+    // touch an owner), matching `changeWorkspaceMemberRole`.
     if (!caller.roles.includes("owner")) {
       return memberForbidden(
         "Only an owner can change an existing owner's role.",
@@ -784,7 +785,7 @@ async function addSpaceMember(
     }
   }
   const member = await operations.members.upsertMember({
-    spaceId,
+    workspaceId,
     accountId,
     roles: [role],
     status: "active",
@@ -800,10 +801,10 @@ async function resolveVerifiedMemberEmail(
   return (await store.findAccountByVerifiedEmail(email))?.subject;
 }
 
-async function changeSpaceMemberRole(
+async function changeWorkspaceMemberRole(
   request: Request,
   operations: ControlPlaneOperations,
-  spaceId: string,
+  workspaceId: string,
   subject: string,
   targetSubject: string,
 ): Promise<Response> {
@@ -818,7 +819,7 @@ async function changeSpaceMemberRole(
       400,
     );
   }
-  const members = await effectiveMembers(operations, spaceId);
+  const members = await effectiveMembers(operations, workspaceId);
   const caller = findCaller(members, subject);
   // Role change is owner-only.
   if (!caller || !isActiveOwner(caller)) {
@@ -828,7 +829,7 @@ async function changeSpaceMemberRole(
   if (!target) {
     return errorJson("not_found", "member not found", 404);
   }
-  // Last-owner guard: demoting the sole remaining owner would leave the Space
+  // Last-owner guard: demoting the sole remaining owner would leave the Workspace
   // unmanaged. Reject if the target is currently the only active owner and the
   // new role set drops the owner role.
   if (
@@ -841,7 +842,7 @@ async function changeSpaceMemberRole(
     );
   }
   const member = await operations.members.upsertMember({
-    spaceId,
+    workspaceId,
     accountId: targetSubject,
     roles,
     status: "active",
@@ -850,14 +851,14 @@ async function changeSpaceMemberRole(
   return json({ member });
 }
 
-async function removeSpaceMember(
+async function removeWorkspaceMember(
   operations: ControlPlaneOperations,
-  spaceId: string,
+  workspaceId: string,
   subject: string,
   targetSubject: string,
 ): Promise<Response> {
   if (!operations.members) return membersUnavailable();
-  const members = await effectiveMembers(operations, spaceId);
+  const members = await effectiveMembers(operations, workspaceId);
   const caller = findCaller(members, subject);
   // Remove is owner-only.
   if (!caller || !isActiveOwner(caller)) {
@@ -877,7 +878,7 @@ async function removeSpaceMember(
   // membership is suspended (its roles are preserved for audit but it no longer
   // grants access).
   const member = await operations.members.upsertMember({
-    spaceId,
+    workspaceId,
     accountId: targetSubject,
     roles: target.roles,
     status: "suspended",
@@ -886,8 +887,8 @@ async function removeSpaceMember(
   return json({ member });
 }
 
-/** Active owners in the Space (used by the last-owner guard). */
-function activeOwnerCount(members: readonly PublicSpaceMember[]): number {
+/** Active owners in the Workspace (used by the last-owner guard). */
+function activeOwnerCount(members: readonly PublicWorkspaceMember[]): number {
   return members.filter(isActiveOwner).length;
 }
 
@@ -898,10 +899,10 @@ function activeOwnerCount(members: readonly PublicSpaceMember[]): number {
  */
 function parseRolesField(
   value: unknown,
-): readonly ControlSpaceRole[] | undefined {
+): readonly ControlWorkspaceRole[] | undefined {
   const raw = Array.isArray(value) ? value : value === undefined ? [] : [value];
   if (raw.length === 0) return undefined;
-  const roles: ControlSpaceRole[] = [];
+  const roles: ControlWorkspaceRole[] = [];
   for (const entry of raw) {
     const role = controlRoleValue(entry);
     if (!role) return undefined;
@@ -911,7 +912,7 @@ function parseRolesField(
 }
 
 /** Builds the membership-service actor from the caller's membership. */
-function actorFor(caller: PublicSpaceMember): MembershipActor {
+function actorFor(caller: PublicWorkspaceMember): MembershipActor {
   return {
     actorAccountId: caller.accountId,
     roles: [...caller.roles],
@@ -919,29 +920,29 @@ function actorFor(caller: PublicSpaceMember): MembershipActor {
   };
 }
 
-// --- Installations ---------------------------------------------------------
+// --- Capsules ---------------------------------------------------------
 
-async function listSpaceInstallations(
+async function listWorkspaceCapsules(
   operations: ControlPlaneOperations,
-  spaceId: string,
+  workspaceId: string,
   url: URL,
 ): Promise<Response> {
   const page = parseControlPageParams(url);
   if (!page.ok) return page.response;
   const { items, nextCursor } =
-    await operations.installations.listInstallationsPage(spaceId, page.params);
+    await operations.installations.listCapsulesPage(workspaceId, page.params);
   return json({
-    installations: items.map(publicInstallation),
+    installations: items.map(publicCapsule),
     ...(nextCursor !== undefined ? { nextCursor } : {}),
   });
 }
 
-async function createInstallation(
+async function createCapsule(
   request: Request,
   operations: ControlPlaneOperations,
   store: AccountsStore,
   sessionSubject: string,
-  spaceId: string,
+  workspaceId: string,
 ): Promise<Response> {
   const body = await readJsonObject(request);
   if (!body) return errorJson("invalid_request", "invalid request", 400);
@@ -983,17 +984,17 @@ async function createInstallation(
     );
   }
   const { source } = await operations.getSource(sourceId);
-  if (source.spaceId !== spaceId) {
-    const auth = await requireSpaceAccess({
+  if (source.workspaceId !== workspaceId) {
+    const auth = await requireWorkspaceAccess({
       operations,
       store,
-      spaceId: source.spaceId,
+      workspaceId: source.workspaceId,
       subject: sessionSubject,
     });
     if (!auth.ok) return auth.response;
     return errorJson(
       "invalid_request",
-      "sourceId must belong to the target Space.",
+      "sourceId must belong to the target Workspace.",
       400,
     );
   }
@@ -1006,10 +1007,10 @@ async function createInstallation(
   ) {
     const baseConfig =
       await operations.installations.getInstallConfig(installConfigId);
-    if (baseConfig.spaceId !== undefined && baseConfig.spaceId !== spaceId) {
+    if (baseConfig.workspaceId !== undefined && baseConfig.workspaceId !== workspaceId) {
       return errorJson(
         "invalid_request",
-        "installConfigId is not available to the target Space.",
+        "installConfigId is not available to the target Workspace.",
         400,
       );
     }
@@ -1017,7 +1018,7 @@ async function createInstallation(
     const config = await operations.installations.putInstallConfig({
       ...baseConfig,
       id: `icfg_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`,
-      spaceId,
+      workspaceId,
       name: `${name}-config`,
       internal: { reason: "per_install_overrides" },
       variableMapping: { ...baseConfig.variableMapping, ...(vars ?? {}) },
@@ -1030,14 +1031,14 @@ async function createInstallation(
     });
     resolvedInstallConfigId = config.id;
   }
-  const installation = await operations.installations.createInstallation({
-    spaceId,
+  const installation = await operations.installations.createCapsule({
+    workspaceId,
     name,
     environment,
     sourceId,
     installConfigId: resolvedInstallConfigId,
   });
-  return jsonStatus({ installation: publicInstallation(installation) }, 201);
+  return jsonStatus({ installation: publicCapsule(installation) }, 201);
 }
 
 function scopedCloneOutputAllowlist(
@@ -1054,7 +1055,7 @@ function scopedCloneOutputAllowlist(
 async function createRestoreRun(
   request: Request,
   operations: ControlPlaneOperations,
-  spaceId: string,
+  workspaceId: string,
   backupId: string,
   actor: string,
 ): Promise<Response> {
@@ -1068,18 +1069,18 @@ async function createRestoreRun(
       400,
     );
   }
-  const installationId = stringValue(body.installationId);
+  const capsuleId = stringValue(body.capsuleId);
   const environment = stringValue(body.environment);
   const expectedBackupDigest = stringValue(body.expectedBackupDigest);
   const restoreRequest: CreateRestoreRequest = {
     stateGeneration: Number(stateGeneration),
-    ...(installationId ? { installationId } : {}),
+    ...(capsuleId ? { capsuleId } : {}),
     ...(environment ? { environment } : {}),
     ...(expectedBackupDigest ? { expectedBackupDigest } : {}),
     ...(body.restoreServiceData === true ? { restoreServiceData: true } : {}),
   };
   const run = await operations.createRestoreRun(
-    spaceId,
+    workspaceId,
     backupId,
     restoreRequest,
     {
@@ -1093,22 +1094,22 @@ async function createRestoreRun(
 
 async function spaceGraph(
   operations: ControlPlaneOperations,
-  spaceId: string,
+  workspaceId: string,
 ): Promise<Response> {
   const [installations, edges] = await Promise.all([
-    operations.installations.listInstallations(spaceId),
-    operations.listDependenciesBySpace(spaceId),
+    operations.installations.listCapsules(workspaceId),
+    operations.listDependenciesByWorkspace(workspaceId),
   ]);
   const nodes = installations.map((installation) => ({
-    installationId: installation.id,
+    capsuleId: installation.id,
     name: installation.name,
     environment: installation.environment,
     status: installation.status,
   }));
   const graphEdges = edges.map((edge) => ({
     id: edge.id,
-    producerInstallationId: edge.producerInstallationId,
-    consumerInstallationId: edge.consumerInstallationId,
+    producerCapsuleId: edge.producerCapsuleId,
+    consumerCapsuleId: edge.consumerCapsuleId,
     outputs: edge.outputs,
   }));
   return json({ nodes, edges: graphEdges });
@@ -1118,7 +1119,7 @@ async function spaceGraph(
 
 async function spaceRuns(
   operations: ControlPlaneOperations,
-  spaceId: string,
+  workspaceId: string,
   url: URL,
 ): Promise<Response> {
   const limit = parseLimit(url.searchParams.get("limit"));
@@ -1129,7 +1130,7 @@ async function spaceRuns(
       400,
     );
   }
-  const runs = await operations.listRuns(spaceId, limit ? { limit } : {});
+  const runs = await operations.listRuns(workspaceId, limit ? { limit } : {});
   return json({
     runs: await Promise.all(runs.map((run) => publicRun(operations, run))),
   } satisfies ListRunsResponse);
@@ -1137,7 +1138,7 @@ async function spaceRuns(
 
 async function spaceActivity(
   operations: ControlPlaneOperations,
-  spaceId: string,
+  workspaceId: string,
   url: URL,
 ): Promise<Response> {
   const limit = parseLimit(url.searchParams.get("limit"));
@@ -1148,15 +1149,15 @@ async function spaceActivity(
       400,
     );
   }
-  const events = await operations.activity.list(spaceId, limit);
+  const events = await operations.activity.list(workspaceId, limit);
   return json({ events });
 }
 
-async function uploadSpaceArchive(
+async function uploadWorkspaceArchive(
   request: Request,
   url: URL,
   operations: ControlPlaneOperations,
-  spaceId: string,
+  workspaceId: string,
 ): Promise<Response> {
   const bytes = new Uint8Array(await request.arrayBuffer());
   if (bytes.byteLength === 0) {
@@ -1172,17 +1173,17 @@ async function uploadSpaceArchive(
   }
   const path = stringValue(url.searchParams.get("path") ?? undefined);
   const snapshot = await operations.recordUploadArchive({
-    spaceId,
+    workspaceId,
     bytes,
     ...(path ? { path } : {}),
   });
   return jsonStatus({ snapshot }, 201);
 }
 
-async function createSpaceArtifactSnapshot(
+async function createWorkspaceArtifactSnapshot(
   request: Request,
   operations: ControlPlaneOperations,
-  spaceId: string,
+  workspaceId: string,
 ): Promise<Response> {
   const body = await readJsonObject(request);
   if (!body) {
@@ -1215,7 +1216,7 @@ async function createSpaceArtifactSnapshot(
     ...(path ? { path } : {}),
   };
   const snapshot = await operations.recordArtifactSnapshot({
-    spaceId,
+    workspaceId,
     url: artifactRequest.url,
     digest: artifactRequest.digest,
     ...(artifactRequest.path ? { path: artifactRequest.path } : {}),
@@ -1225,7 +1226,7 @@ async function createSpaceArtifactSnapshot(
 
 async function spacePlanUpdate(
   operations: ControlPlaneOperations,
-  spaceId: string,
+  workspaceId: string,
 ): Promise<Response> {
-  return jsonStatus(await operations.runGroups.createSpaceUpdate(spaceId), 201);
+  return jsonStatus(await operations.runGroups.createWorkspaceUpdate(workspaceId), 201);
 }

@@ -159,7 +159,7 @@ export interface AuditEvent {
   readonly severity?: "info" | "warning" | "critical";
   readonly action?: string;
   readonly actor?: ActorContext;
-  readonly spaceId?: string;
+  readonly workspaceId?: string;
   readonly groupId?: string;
   readonly targetType?: string;
   readonly target?: string;
@@ -187,7 +187,7 @@ export interface MetricEvent {
   readonly value: number;
   readonly unit?: string;
   readonly tags?: Record<string, string>;
-  readonly spaceId?: string;
+  readonly workspaceId?: string;
   readonly groupId?: string;
   readonly actor?: ActorContext;
   readonly payload?: JsonObject;
@@ -199,7 +199,7 @@ export interface MetricEvent {
 export interface MetricEventQuery {
   readonly name?: string;
   readonly kind?: MetricKind;
-  readonly spaceId?: string;
+  readonly workspaceId?: string;
   readonly groupId?: string;
   readonly since?: string;
   readonly until?: string;
@@ -225,7 +225,7 @@ export interface TraceSpanEvent {
   readonly startTime: string;
   readonly endTime: string;
   readonly attributes?: Record<string, string | number | boolean>;
-  readonly spaceId?: string;
+  readonly workspaceId?: string;
   readonly groupId?: string;
   readonly requestId?: string;
   readonly correlationId?: string;
@@ -237,7 +237,7 @@ export interface TraceSpanQuery {
   readonly name?: string;
   readonly kind?: TraceSpanKind;
   readonly status?: TraceSpanStatus;
-  readonly spaceId?: string;
+  readonly workspaceId?: string;
   readonly groupId?: string;
   readonly since?: string;
   readonly until?: string;
