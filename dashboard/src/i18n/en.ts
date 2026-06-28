@@ -71,7 +71,8 @@ export const en: Record<keyof typeof ja, string> = {
   "workspace.loadFailed": "Failed to load workspaces — {message}",
   "workspace.none": "No workspaces",
   "workspace.select": "Select a workspace",
-  "workspace.selectMessage": "Pick a workspace from the switcher in the top bar.",
+  "workspace.selectMessage":
+    "Pick a workspace from the switcher in the top bar.",
   "workspace.defaultName": "My workspace",
   "workspace.start.aria": "Start workspace",
   "workspace.start.kicker": "No workspace yet",
@@ -217,6 +218,8 @@ export const en: Record<keyof typeof ja, string> = {
   "app.backToList": "Back to list",
   "app.outputs.title": "Public links",
   "app.outputs.subtitle": "Visible screens and addresses appear here.",
+  "app.outputs.deletedSubtitle":
+    "This service has been deleted. Previous addresses are shown as records only.",
   "app.outputs.empty": "Links appear after a deploy.",
   "app.outputs.none": "This service has no public link.",
   "app.outputs.valuesTitle": "Other values",
