@@ -311,7 +311,8 @@ AI Gateway REST API and Unified Billing for the default operator-paid sandbox,
 use direct/BYOK `openai_compatible` profiles when Takosumi intentionally owns
 provider-specific keys, or use `type: "workers_ai_binding"` for the base
 Cloudflare Workers AI binding. Any launch claim for external upstreams must run
-`smoke:cloud-extensions` with `--require-ai-upstream-profile`.
+the Takosumi Cloud private `smoke:cloud-extensions` command with
+`--require-ai-upstream-profile`.
 
 AI Gateway billing readiness is proven through the usage ledger, not response
 headers. The platform strips internal usage headers before returning the
