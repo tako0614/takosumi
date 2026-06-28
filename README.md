@@ -85,7 +85,8 @@ with nothing from `takosumi-cloud/` present.
 
 Run the local control-plane service directly when you want to exercise the `/api/v1` contract from curl or tests.
 The CLI is documented separately in [docs/reference/cli.md](docs/reference/cli.md): the standard product flow is still
-dashboard Git URL install, while `takosumi deploy` is the advanced local-upload helper.
+dashboard Git URL install. The retired `takosumi deploy` / `takosumi plan`
+local-upload helpers now fail closed and do not create public Capsules.
 
 ```bash
 bun install
@@ -96,8 +97,9 @@ PORT=8788 bun core/index.ts
 ```
 
 Dashboard install / plan / apply go through the [`/api`](docs/reference/deploy-control-api.md) control plane against a
-registered Git Source. `takosumi deploy` uses the same Run ledger for local upload snapshots before they are pushed to
-Git.
+registered Git Source. App source, build outputs, container images, and release
+artifacts are modeled by the Git-hosted OpenTofu module and its ordinary
+variables, not by a Takosumi-owned upload/build path.
 
 ## Workspace
 

@@ -71,7 +71,7 @@ closed Takosumi Cloud operator modules
 | Workspace          | User/team isolation boundary for projects, secrets, state, runs, and audit |
 | Project            | One service, product, or infrastructure group                              |
 | Capsule            | One OpenTofu/Terraform module execution unit                               |
-| Source             | Git URL/ref/commit/path, tarball, template, or local upload                |
+| Source             | Git URL/ref/commit/path for a plain OpenTofu/Terraform module              |
 | ProviderConnection | Stored provider credential configuration                                   |
 | CredentialRecipe   | How to materialize a provider credential as env/file/pre-run output        |
 | ProviderBinding    | Mapping from provider name/alias to ProviderConnection                     |
@@ -81,6 +81,8 @@ closed Takosumi Cloud operator modules
 | Output             | Captured OpenTofu output value                                             |
 | Runner             | Local/docker/remote/operator/cloud execution worker                        |
 | AuditEvent         | Actor/action/target/result evidence                                        |
+
+Upload/prepared-source snapshots are internal/operator compatibility only; they are not a public Source kind and do not create new public Capsules.
 
 This is the live public model. The retired `Space` / `Installation` /
 `StateSnapshot` / `OutputSnapshot` / `ProviderEnv` / `Deployment` /
@@ -92,36 +94,39 @@ StateVersion, Output, and AuditEvent. A few internal helpers (such as the
 `SourceSnapshot` archive type and `InstallConfig` service-side config record)
 keep descriptive names that are not public product nouns.
 
-## Source And First-Deploy Fast Path
+## Git Source And Run Input Model
 
-Takosumi plans and applies against immutable `SourceSnapshot` archives. A
-snapshot can come from:
+Takosumi's standard path is deliberately simple: run the OpenTofu/Terraform
+module that lives in Git.
 
 ```text
-git      source_sync runner clone -> deterministic tar.zst archive
-upload   direct local archive upload from takosumi deploy
-artifact HTTPS prepared archive + sha256 digest verification
+Git URL + ref/tag/commit + module path
+  -> checkout
+  -> tofu init
+  -> tofu plan
+  -> tofu apply
 ```
 
-`artifact` snapshots are for CI/source-side build pipelines. The caller provides
-an HTTPS `source.tar.zst` URL and `sha256:` digest; Takosumi fetches it, rejects
-redirects and embedded credentials, verifies the digest, stores the archive in
-R2_SOURCE, and records `origin = "artifact"`. The downstream Capsule Gate,
-plan, apply, state, output, and audit paths consume it like any other
-SourceSnapshot.
+The runner may persist an immutable `SourceSnapshot` archive for reproducible
+plan/apply, but that snapshot is a copy of the Git module bytes selected by the
+source ref. Legacy upload/prepared-source archive paths can still exist for
+operator tooling and stored compatibility rows; they are not the product model
+for installing apps.
+For webhook or scheduled source polling, the runner still resolves the ref with
+Git. If the resolved commit matches an existing SourceSnapshot for the same
+Source/ref/path, Takosumi reuses the existing archive object rather than
+cloning, archiving, and storing duplicate bytes.
 
-For Capsules whose source already contains a deployable artifact, an
-InstallConfig may set:
+Takosumi does not fetch, build, or interpret deployable application artifacts.
+If an OpenTofu module needs an image reference, version, release tag, object key,
+or any other app-specific value, it declares a normal Terraform variable and the
+install/deploy request passes that value through `variableMapping` / `vars`.
+Takosumi does not reserve those variable names or assign semantics to them.
 
-```yaml
-prebuiltArtifact:
-  path: dist/worker.js
-```
-
-The runner executes no build commands for this setting. It validates that the
-path resolves inside the restored SourceSnapshot and exposes the absolute path
-as `TF_VAR_artifact_path` during plan/apply. `build` and `prebuiltArtifact` are
-mutually exclusive.
+Legacy `build` / `prebuiltArtifact` fields remain compatibility-only for stored
+pre-v1 / first-party row readability and are not the final public Capsule
+contract. New generated-root dispatch does not run them or pass them to the
+runner.
 
 ## Provider Connections
 
@@ -292,7 +297,7 @@ run tofu init/validate/plan/apply/destroy
 stream redacted logs
 capture state
 capture outputs
-upload artifacts
+record run evidence
 delete temporary credential files
 ```
 
@@ -379,7 +384,7 @@ other app resources; the command remains an opaque argv.
 
 When no activator is configured, the OpenTofu apply can still succeed, but
 Takosumi records `release_activation.pending` instead of silently implying that
-post-apply commands, artifact upload, or app initialization ran.
+post-apply commands, app publication, or app initialization ran.
 
 ## Security
 

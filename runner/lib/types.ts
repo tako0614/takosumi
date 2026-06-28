@@ -49,7 +49,7 @@ export interface RunWorkspace {
   readonly moduleInfoPath: string;
   // Generated-root workspace dirs. `generatedRootDir` is where tofu runs (it
   // holds the generated root module + child `template-module`); `artifactDir`
-  // receives the build artifact.
+  // receives runner-produced backup/provider-snapshot metadata artifacts.
   readonly generatedRootDir: string;
   readonly templateModuleDir: string;
   readonly artifactDir: string;
@@ -68,19 +68,6 @@ export interface GeneratedRoot {
 export interface GeneratedRootModuleFile {
   readonly path: string;
   readonly text: string;
-}
-
-/** Optional credential-free build phase that runs before plan. */
-export interface BuildSpec {
-  readonly runtime: "bun";
-  readonly commands: readonly string[];
-  /** File/dir relative to the source root; copied to /work/artifact. */
-  readonly artifactPath: string;
-}
-
-export interface PrebuiltArtifactSpec {
-  /** File/dir relative to the restored source root. */
-  readonly path: string;
 }
 
 export interface BackupSpec {

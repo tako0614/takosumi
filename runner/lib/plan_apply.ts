@@ -1,18 +1,27 @@
 // runner/lib/plan_apply.ts
 //
-// Plan / apply / destroy / compatibility-check pipelines + build phase + generated-root workspace.
+// Plan / apply / destroy / compatibility-check pipelines + generated-root workspace.
+// The build/prebuilt-artifact hooks below are legacy first-party compatibility,
+// not the standard Git OpenTofu Capsule path.
 //
 // Pure code-motion out of runner/entrypoint.ts (P3 god-file split). No
 // behavior change; see runner/entrypoint.ts for the re-exported public surface.
-import { cp, mkdir, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
+import {
+  cp,
+  mkdir,
+  readFile,
+  readdir,
+  realpath,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import type {
   JsonRecord,
   OpenTofuModuleSource,
   RunWorkspace,
   GeneratedRoot,
-  BuildSpec,
-  PrebuiltArtifactSpec,
   CommandContext,
   PlanResponseOptions,
 } from "./types.ts";
@@ -20,7 +29,6 @@ import {
   CAPSULE_COMPATIBILITY_MAX_FILES,
   CAPSULE_COMPATIBILITY_MAX_FILE_BYTES,
   CAPSULE_COMPATIBILITY_MAX_TOTAL_BYTES,
-  ARTIFACT_PATH_TF_VAR,
 } from "./constants.ts";
 import {
   isRecord,
@@ -33,29 +41,21 @@ import {
   assertRealPathInsideSourceRoot,
   resolveModulePath,
 } from "./util.ts";
-import {
-  redactRunnerOutput,
-  redactBuildOutput,
-} from "./redaction.ts";
+import { redactRunnerOutput } from "./redaction.ts";
 import {
   readOpenTofuPlanJson,
   readOpenTofuOutputsIn,
   runCommand,
   commandFailurePayload,
 } from "./exec.ts";
-import {
-  assertSafeRelativePath,
-} from "./policy.ts";
+import { assertSafeRelativePath } from "./policy.ts";
 import {
   commandContextFromRequest,
   prepareProviderCredentialFiles,
   buildPhaseEnv,
   assertCommandEnvHasNoProviderCredentials,
 } from "./credentials.ts";
-import {
-  ensureSourceAvailable,
-  gitRevParseHead,
-} from "./source_sync.ts";
+import { ensureSourceAvailable, gitRevParseHead } from "./source_sync.ts";
 import {
   writePlanJsonArtifact,
   workspaceForRun,
@@ -66,8 +66,7 @@ import {
   parseOperation,
   parseSource,
   parseGeneratedRoot,
-  parseBuild,
-  parsePrebuiltArtifact,
+  assertNoLegacyArtifactDispatch,
   parseRunnerProfile,
   parseRequiredProviders,
   parseProviderInstallationPolicy,
@@ -86,7 +85,48 @@ import {
   resourceChangesFromPlanJson,
 } from "./providers.ts";
 
-export async function runPlan(runId: string, request: unknown): Promise<JsonRecord> {
+interface RunnerPhaseTiming {
+  readonly phase: string;
+  readonly startedAt: string;
+  readonly finishedAt: string;
+  readonly durationMs: number;
+}
+
+class RunnerPhaseTimer {
+  readonly #timings: RunnerPhaseTiming[] = [];
+
+  async measure<T>(phase: string, run: () => Promise<T>): Promise<T> {
+    const startedAtMs = Date.now();
+    try {
+      return await run();
+    } finally {
+      const finishedAtMs = Date.now();
+      this.#timings.push({
+        phase,
+        startedAt: new Date(startedAtMs).toISOString(),
+        finishedAt: new Date(finishedAtMs).toISOString(),
+        durationMs: Math.max(0, finishedAtMs - startedAtMs),
+      });
+    }
+  }
+
+  json(): readonly RunnerPhaseTiming[] {
+    return this.#timings;
+  }
+}
+
+function withPhaseTimings(
+  payload: JsonRecord,
+  timer: RunnerPhaseTimer,
+): JsonRecord {
+  const phaseTimings = timer.json();
+  return phaseTimings.length > 0 ? { ...payload, phaseTimings } : payload;
+}
+
+export async function runPlan(
+  runId: string,
+  request: unknown,
+): Promise<JsonRecord> {
   const generatedRoot = parseGeneratedRoot(request);
   if (generatedRoot) {
     return await runGeneratedRootPlan(runId, request, generatedRoot);
@@ -104,24 +144,13 @@ export async function runGeneratedRootPlan(
   generatedRoot: GeneratedRoot,
 ): Promise<JsonRecord> {
   const operation = parseOperation(request);
-  const build = parseBuild(request);
-  const prebuiltArtifact = parsePrebuiltArtifact(request);
-  if (build && prebuiltArtifact) {
-    throw new Error("build and prebuiltArtifact are mutually exclusive");
-  }
+  assertNoLegacyArtifactDispatch(request);
   const source = parseSource(request);
   const runnerProfile = parseRunnerProfile(request);
   const commandContext = commandContextFromRequest(request, runnerProfile);
 
   const workspace = await prepareGeneratedRootWorkspace(runId);
-  let buildLog = "";
   let sourceCommit: string | undefined;
-  if (build) {
-    const built = await runBuildPhase(runId, workspace, source, build);
-    if ("failure" in built) return built.failure;
-    buildLog = built.buildLog;
-    sourceCommit = built.sourceCommit;
-  }
 
   if (generatedRoot.moduleFiles) {
     await materializeGeneratedRootFromFiles(workspace, generatedRoot);
@@ -150,13 +179,8 @@ export async function runGeneratedRootPlan(
     );
   }
   await restoreUploadedState(workspace, workspace.generatedRootDir);
-  const planContext = await withRequestArtifactPathVar(
-    commandContext,
-    workspace,
-    { build, prebuiltArtifact },
-  );
   const preparedCredentials = await prepareProviderCredentialFiles(
-    planContext,
+    commandContext,
     workspace,
   );
   try {
@@ -181,7 +205,6 @@ export async function runGeneratedRootPlan(
       {
         operation,
         commandContext: preparedCredentials.context,
-        buildLog,
         requiredProviders,
         ...(parseProviderInstallationPolicy(request)
           ? {
@@ -199,7 +222,6 @@ export async function runGeneratedRootPlan(
   }
 }
 
-
 // Shared init+plan+show pipeline for generated-root lanes. `moduleDir` is the
 // tofu root, normally /work/generated-root.
 export async function initPlanAndBuildResponse(
@@ -209,6 +231,7 @@ export async function initPlanAndBuildResponse(
   options: PlanResponseOptions,
 ): Promise<JsonRecord> {
   const { operation } = options;
+  const timer = new RunnerPhaseTimer();
   const strictMirrorInit = await prepareStrictProviderMirrorInit(
     workspace,
     options.commandContext,
@@ -217,41 +240,49 @@ export async function initPlanAndBuildResponse(
   );
   const commandContext =
     strictMirrorInit?.commandContext ?? options.commandContext;
-  const init = await runCommand(["tofu", "init", "-input=false", "-no-color"], {
-    cwd: moduleDir,
-    context: commandContext,
-  });
+  const init = await timer.measure("tofu_init", () =>
+    runCommand(["tofu", "init", "-input=false", "-no-color"], {
+      cwd: moduleDir,
+      context: commandContext,
+    }),
+  );
   if (init.exitCode !== 0) {
-    return mergeBuildLog(
-      commandFailurePayload(runId, "plan", init, commandContext),
-      options.buildLog,
+    return withPhaseTimings(
+      mergeBuildLog(
+        commandFailurePayload(runId, "plan", init, commandContext),
+        options.buildLog,
+      ),
+      timer,
     );
   }
-  const plan = await runCommand(
-    [
-      "tofu",
-      "plan",
-      ...(operation === "destroy" ? ["-destroy"] : []),
-      "-input=false",
-      "-no-color",
-      "-out",
-      workspace.planPath,
-    ],
-    { cwd: moduleDir, context: commandContext },
+  const plan = await timer.measure("tofu_plan", () =>
+    runCommand(
+      [
+        "tofu",
+        "plan",
+        ...(operation === "destroy" ? ["-destroy"] : []),
+        "-input=false",
+        "-no-color",
+        "-out",
+        workspace.planPath,
+      ],
+      { cwd: moduleDir, context: commandContext },
+    ),
   );
   if (plan.exitCode !== 0) {
-    return mergeBuildLog(
-      commandFailurePayload(runId, "plan", plan, commandContext),
-      options.buildLog,
+    return withPhaseTimings(
+      mergeBuildLog(
+        commandFailurePayload(runId, "plan", plan, commandContext),
+        options.buildLog,
+      ),
+      timer,
     );
   }
 
   const planBytes = await readFile(workspace.planPath);
   const planDigest = await digestBytes(planBytes);
-  const planJson = await readOpenTofuPlanJson(
-    moduleDir,
-    workspace,
-    commandContext,
+  const planJson = await timer.measure("tofu_plan_json", () =>
+    readOpenTofuPlanJson(moduleDir, workspace, commandContext),
   );
   if (planJson) await writePlanJsonArtifact(workspace, planJson);
   const providerLockDigest = await digestFileIfExists(
@@ -266,36 +297,39 @@ export async function initPlanAndBuildResponse(
     requiredProviders,
     strictMirrorInit?.attestation,
   );
-  return {
-    runId,
-    action: "plan",
-    status: "succeeded",
-    exitCode: 0,
-    planDigest,
-    planArtifact: {
-      kind: "runner-local",
-      ref: `runner-local://${runId}/tfplan`,
-      digest: planDigest,
-      contentType: "application/vnd.opentofu.plan",
-      sizeBytes: planBytes.byteLength,
+  return withPhaseTimings(
+    {
+      runId,
+      action: "plan",
+      status: "succeeded",
+      exitCode: 0,
+      planDigest,
+      planArtifact: {
+        kind: "runner-local",
+        ref: `runner-local://${runId}/tfplan`,
+        digest: planDigest,
+        contentType: "application/vnd.opentofu.plan",
+        sizeBytes: planBytes.byteLength,
+      },
+      requiredProviders,
+      providerInstallation,
+      ...(planJson ? { summary: summaryFromPlanJson(planJson) } : {}),
+      ...(planJson
+        ? { planResourceChanges: resourceChangesFromPlanJson(planJson) }
+        : {}),
+      ...(providerLockDigest ? { providerLockDigest } : {}),
+      ...(options.extra ?? {}),
+      stdout: redactRunnerOutput(
+        [options.buildLog, init.stdout, plan.stdout].filter(Boolean).join("\n"),
+        commandContext.redactionValues,
+      ),
+      stderr: redactRunnerOutput(
+        [init.stderr, plan.stderr].filter(Boolean).join("\n"),
+        commandContext.redactionValues,
+      ),
     },
-    requiredProviders,
-    providerInstallation,
-    ...(planJson ? { summary: summaryFromPlanJson(planJson) } : {}),
-    ...(planJson
-      ? { planResourceChanges: resourceChangesFromPlanJson(planJson) }
-      : {}),
-    ...(providerLockDigest ? { providerLockDigest } : {}),
-    ...(options.extra ?? {}),
-    stdout: redactRunnerOutput(
-      [options.buildLog, init.stdout, plan.stdout].filter(Boolean).join("\n"),
-      commandContext.redactionValues,
-    ),
-    stderr: redactRunnerOutput(
-      [init.stderr, plan.stderr].filter(Boolean).join("\n"),
-      commandContext.redactionValues,
-    ),
-  };
+    timer,
+  );
 }
 
 export function mergeBuildLog(
@@ -320,11 +354,7 @@ export async function runReviewedPlanApply(
   const commandContext = commandContextFromRequest(request, runnerProfile);
   const workspace = workspaceForRun(runId);
   const planArtifact = parsePlanArtifact(request);
-  const build = parseBuild(request);
-  const prebuiltArtifact = parsePrebuiltArtifact(request);
-  if (build && prebuiltArtifact) {
-    throw new Error("build and prebuiltArtifact are mutually exclusive");
-  }
+  assertNoLegacyArtifactDispatch(request);
   await verifyPlanArtifact(workspace.planPath, planArtifact);
   if (!generatedRoot) {
     throw new Error("generatedRoot is required for OpenTofu apply runs");
@@ -336,13 +366,9 @@ export async function runReviewedPlanApply(
     commandContext,
     generatedRoot,
   );
-  const applyBaseContext = await withRequestArtifactPathVar(
-    commandContext,
-    workspace,
-    { build, prebuiltArtifact },
-  );
+  const timer = new RunnerPhaseTimer();
   const preparedCredentials = await prepareProviderCredentialFiles(
-    applyBaseContext,
+    commandContext,
     workspace,
   );
   try {
@@ -369,45 +395,54 @@ export async function runReviewedPlanApply(
     const applyContext =
       strictMirrorInit?.commandContext ?? preparedCredentials.context;
 
-    const init = await runCommand(
-      ["tofu", "init", "-input=false", "-no-color"],
-      {
+    const init = await timer.measure("tofu_init", () =>
+      runCommand(["tofu", "init", "-input=false", "-no-color"], {
         cwd: moduleDir,
         context: applyContext,
-      },
+      }),
     );
     if (init.exitCode !== 0) {
-      return commandFailurePayload(runId, action, init, applyContext);
+      return withPhaseTimings(
+        commandFailurePayload(runId, action, init, applyContext),
+        timer,
+      );
     }
     const providerInstallation = await providerInstallationEvidence(
       moduleDir,
       parseRequiredProviders(request),
       strictMirrorInit?.attestation,
     );
-    const result = await runCommand(
-      ["tofu", "apply", "-input=false", "-no-color", workspace.planPath],
-      { cwd: moduleDir, context: applyContext },
+    const result = await timer.measure("tofu_apply", () =>
+      runCommand(
+        ["tofu", "apply", "-input=false", "-no-color", workspace.planPath],
+        { cwd: moduleDir, context: applyContext },
+      ),
     );
     const outputs =
       action === "apply" && result.exitCode === 0
-        ? await readOpenTofuOutputsIn(moduleDir, applyContext)
+        ? await timer.measure("tofu_output", () =>
+            readOpenTofuOutputsIn(moduleDir, applyContext),
+          )
         : undefined;
-    return {
-      runId,
-      action,
-      status: result.exitCode === 0 ? "succeeded" : "failed",
-      exitCode: result.exitCode,
-      providerInstallation,
-      ...(outputs ? { outputs } : {}),
-      stdout: redactRunnerOutput(
-        [init.stdout, result.stdout].filter(Boolean).join("\n"),
-        applyContext.redactionValues,
-      ),
-      stderr: redactRunnerOutput(
-        [init.stderr, result.stderr].filter(Boolean).join("\n"),
-        applyContext.redactionValues,
-      ),
-    };
+    return withPhaseTimings(
+      {
+        runId,
+        action,
+        status: result.exitCode === 0 ? "succeeded" : "failed",
+        exitCode: result.exitCode,
+        providerInstallation,
+        ...(outputs ? { outputs } : {}),
+        stdout: redactRunnerOutput(
+          [init.stdout, result.stdout].filter(Boolean).join("\n"),
+          applyContext.redactionValues,
+        ),
+        stderr: redactRunnerOutput(
+          [init.stderr, result.stderr].filter(Boolean).join("\n"),
+          applyContext.redactionValues,
+        ),
+      },
+      timer,
+    );
   } finally {
     await preparedCredentials.cleanup();
   }
@@ -446,146 +481,6 @@ export async function restoreGeneratedRootApplyWorkspace(
   }
   await restoreUploadedState(workspace, workspace.generatedRootDir);
   return workspace.generatedRootDir;
-}
-
-// BUILD phase: clone/materialize the user source, run build.commands with a
-// CREDENTIAL-FREE env, then copy the declared artifact into /work/artifact.
-export async function runBuildPhase(
-  runId: string,
-  workspace: RunWorkspace,
-  source: OpenTofuModuleSource,
-  build: BuildSpec,
-): Promise<
-  | { readonly buildLog: string; readonly sourceCommit: string | undefined }
-  | { readonly failure: JsonRecord }
-> {
-  const buildContext: CommandContext = { env: buildPhaseEnv() };
-  // Hard invariant: the build phase env must carry no provider credential.
-  assertCommandEnvHasNoProviderCredentials(buildContext.env);
-  await ensureSourceAvailable(source, workspace.sourceRoot, buildContext);
-  const sourceCommit =
-    source.kind === "git"
-      ? await gitRevParseHead(workspace.sourceRoot, buildContext)
-      : undefined;
-  const logs: string[] = [];
-  for (const command of build.commands) {
-    const result = await runCommand(["bash", "-lc", command], {
-      cwd: workspace.sourceRoot,
-      context: buildContext,
-    });
-    logs.push(
-      redactBuildOutput(`$ ${command}\n${result.stdout}\n${result.stderr}`),
-    );
-    if (result.exitCode !== 0) {
-      return {
-        failure: {
-          runId,
-          action: "plan",
-          status: "failed",
-          exitCode: result.exitCode,
-          phase: "build",
-          stdout: logs.join("\n"),
-          stderr: redactBuildOutput(
-            `build command failed (${result.exitCode}): ${command}\n${result.stderr}`,
-          ),
-        },
-      };
-    }
-  }
-  await copyBuildArtifact(workspace, build);
-  return { buildLog: logs.join("\n"), sourceCommit };
-}
-
-export async function copyBuildArtifact(
-  workspace: RunWorkspace,
-  build: BuildSpec,
-): Promise<void> {
-  const artifactSource = resolve(workspace.sourceRoot, build.artifactPath);
-  const normalizedRoot = resolve(workspace.sourceRoot);
-  if (
-    artifactSource !== normalizedRoot &&
-    !artifactSource.startsWith(`${normalizedRoot}/`)
-  ) {
-    throw new Error("build.artifactPath must stay inside source root");
-  }
-  await assertRealPathInsideSourceRoot(
-    artifactSource,
-    workspace.sourceRoot,
-    "build artifact path",
-  );
-  await mkdir(workspace.artifactDir, { recursive: true });
-  const destination = join(workspace.artifactDir, build.artifactPath);
-  await mkdir(join(destination, ".."), { recursive: true });
-  await cp(artifactSource, destination, { recursive: true });
-}
-
-// Expose the well-known TF_VAR_artifact_path input pointing at the copied
-// artifact so a generated root may wire `var.artifact_path`.
-export function withArtifactPathVar(
-  context: CommandContext,
-  workspace: RunWorkspace,
-  build: BuildSpec,
-): CommandContext {
-  return withArtifactPathValue(
-    context,
-    join(workspace.artifactDir, build.artifactPath),
-  );
-}
-
-export async function withRequestArtifactPathVar(
-  context: CommandContext,
-  workspace: RunWorkspace,
-  requestArtifact: {
-    readonly build?: BuildSpec;
-    readonly prebuiltArtifact?: PrebuiltArtifactSpec;
-  },
-): Promise<CommandContext> {
-  if (requestArtifact.build) {
-    return withArtifactPathVar(context, workspace, requestArtifact.build);
-  }
-  if (requestArtifact.prebuiltArtifact) {
-    return withArtifactPathValue(
-      context,
-      await resolvePrebuiltArtifactPath(
-        workspace,
-        requestArtifact.prebuiltArtifact,
-      ),
-    );
-  }
-  return context;
-}
-
-export async function resolvePrebuiltArtifactPath(
-  workspace: RunWorkspace,
-  artifact: PrebuiltArtifactSpec,
-): Promise<string> {
-  const artifactSource = resolve(workspace.sourceRoot, artifact.path);
-  const normalizedRoot = resolve(workspace.sourceRoot);
-  if (
-    artifactSource !== normalizedRoot &&
-    !artifactSource.startsWith(`${normalizedRoot}/`)
-  ) {
-    throw new Error("prebuiltArtifact.path must stay inside source root");
-  }
-  await assertRealPathInsideSourceRoot(
-    artifactSource,
-    workspace.sourceRoot,
-    "prebuilt artifact path",
-  );
-  return artifactSource;
-}
-
-export function withArtifactPathValue(
-  context: CommandContext,
-  artifactPath: string,
-): CommandContext {
-  return {
-    ...context,
-    env: {
-      ...context.env,
-      [ARTIFACT_PATH_TF_VAR]: artifactPath,
-    },
-  };
 }
 
 // Fresh per-run workspace for a generated-root plan. Preserve a SourceSnapshot
@@ -661,27 +556,43 @@ export async function runCompatibilityCheck(
   await assertDirectory(moduleRoot, "compatibility module root");
   const context: CommandContext = { env: buildPhaseEnv() };
   assertCommandEnvHasNoProviderCredentials(context.env);
-  const init = await runCommand(["tofu", "init", "-input=false", "-no-color"], {
-    cwd: moduleRoot,
+  const timer = new RunnerPhaseTimer();
+  const providerInit = await prepareStrictProviderMirrorInit(
+    workspace,
     context,
-  });
+    [],
+    undefined,
+  );
+  const commandContext = providerInit?.commandContext ?? context;
+  const init = await timer.measure("tofu_init", () =>
+    runCommand(["tofu", "init", "-input=false", "-no-color"], {
+      cwd: moduleRoot,
+      context: commandContext,
+    }),
+  );
   if (init.exitCode !== 0) {
-    return commandFailurePayload(runId, "compatibility_check", init, context);
+    return withPhaseTimings(
+      commandFailurePayload(runId, "compatibility_check", init, commandContext),
+      timer,
+    );
   }
   const files = await readCapsuleCompatibilityFiles(moduleRoot);
   const providerLockDigest = await digestFileIfExists(
     join(moduleRoot, ".terraform.lock.hcl"),
   );
-  return {
-    runId,
-    action: "compatibility_check",
-    status: "succeeded",
-    exitCode: 0,
-    files,
-    ...(providerLockDigest ? { providerLockDigest } : {}),
-    stdout: redactRunnerOutput(init.stdout, context.redactionValues),
-    stderr: redactRunnerOutput(init.stderr, context.redactionValues),
-  };
+  return withPhaseTimings(
+    {
+      runId,
+      action: "compatibility_check",
+      status: "succeeded",
+      exitCode: 0,
+      files,
+      ...(providerLockDigest ? { providerLockDigest } : {}),
+      stdout: redactRunnerOutput(init.stdout, commandContext.redactionValues),
+      stderr: redactRunnerOutput(init.stderr, commandContext.redactionValues),
+    },
+    timer,
+  );
 }
 
 export function compatibilityModulePath(request: unknown): string | undefined {

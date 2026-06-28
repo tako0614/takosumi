@@ -340,7 +340,7 @@ test("generateInstallationRoot omits base_url when the binding has none (self-ho
   expect(files["main.tf"]).not.toContain("base_url");
 });
 
-test("generateInstallationRoot app_source threads a generated artifact_path variable", () => {
+test("generateInstallationRoot app_source does not synthesize artifact_path", () => {
   const APP_TEMPLATE: TemplateDefinition = {
     ...R2_TEMPLATE,
     id: "cloudflare-worker-deploy",
@@ -356,14 +356,9 @@ test("generateInstallationRoot app_source threads a generated artifact_path vari
   });
   expect(files["main.tf"]).toEqual(
     [
-      'variable "artifact_path" {',
-      '  default = "/work/artifact"',
-      "}",
-      "",
       'module "app" {',
       '  source = "./template-module"',
       '  service_slug = "talk"',
-      "  artifact_path = var.artifact_path",
       "}",
       "",
     ].join("\n"),
@@ -380,7 +375,7 @@ test("generateInstallationRoot app_source without an artifact_path input emits n
   expect(files["main.tf"]).not.toContain("artifact_path");
 });
 
-test("generateInstallationRoot app_source can combine artifact variable with provider aliases", () => {
+test("generateInstallationRoot app_source treats artifact_path as an ordinary input", () => {
   const APP_TEMPLATE: TemplateDefinition = {
     ...R2_TEMPLATE,
     inputs: {
@@ -389,16 +384,18 @@ test("generateInstallationRoot app_source can combine artifact variable with pro
   };
   const { files } = generateInstallationRoot({
     template: APP_TEMPLATE,
-    inputs: {},
+    inputs: { artifact_path: "oci://registry.example/app@sha256:abc" },
     installType: "app_source",
     providerEnvBindings: [{ provider: "cloudflare", alias: "main" }],
   });
   const main = files["main.tf"]!;
   expect(main).toContain('provider "cloudflare" {');
-  expect(main).toContain('variable "artifact_path" {');
+  expect(main).not.toContain('variable "artifact_path" {');
   expect(main).toContain("    cloudflare = cloudflare.main");
-  expect(main).toContain("  artifact_path = var.artifact_path");
-  // The per-alias credential split is wired alongside the artifact variable.
+  expect(main).toContain(
+    'artifact_path = "oci://registry.example/app@sha256:abc"',
+  );
+  // The per-alias credential split is wired alongside ordinary inputs.
   expect(main).toContain('variable "cloudflare_main_api_token" {');
   expect(main).toContain("  api_token = var.cloudflare_main_api_token");
 });
@@ -450,6 +447,7 @@ test("generateGenericCapsuleRoot wraps arbitrary capsule inputs and outputs", ()
     requiredProviders: ["cloudflare/cloudflare", "hashicorp/aws"],
     inputs: {
       base_domain: "shota.example.com",
+      image_ref: "registry.example.com/app@sha256:abc",
       retries: 3,
       flags: { beta: true, names: ["talk", "files"] },
     },
@@ -467,12 +465,17 @@ test("generateGenericCapsuleRoot wraps arbitrary capsule inputs and outputs", ()
   expect(files["main.tf"]).toContain('module "app"');
   expect(files["main.tf"]).toContain('source = "./template-module"');
   expect(files["main.tf"]).toContain('base_domain = "shota.example.com"');
+  expect(files["main.tf"]).toContain(
+    'image_ref = "registry.example.com/app@sha256:abc"',
+  );
   expect(files["main.tf"]).toContain("retries = 3");
   expect(files["main.tf"]).toContain(
     'flags = jsondecode("{\\"beta\\":true,\\"names\\":[\\"talk\\",\\"files\\"]}")',
   );
   expect(files["main.tf"]).toContain("cloudflare = cloudflare.main");
   expect(files["main.tf"]).toContain("aws = aws.archive");
+  expect(files["main.tf"]).not.toContain("artifact_path");
+  expect(files["main.tf"]).not.toContain("var.artifact_path");
   expect(files["outputs.tf"]).toContain(
     'value = try(module.app.public_url, "")',
   );

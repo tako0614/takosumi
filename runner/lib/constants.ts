@@ -31,14 +31,11 @@ export const BASE_COMMAND_ENV_NAMES = [
   "SSL_CERT_DIR",
   "GIT_SSL_CAINFO",
   "REQUESTS_CA_BUNDLE",
-  // Baked CLI config pointing at the offline provider filesystem mirror +
-  // plugin cache (see runner/tofu.rc). Must be on the tofu process env so init
-  // resolves the mirrored providers from disk with no registry round-trip.
+  // Baked CLI config pointing at the offline provider filesystem mirror (see
+  // runner/tofu.rc). Plan/apply/compatibility phases replace it with a per-run
+  // generated config that also sets an isolated plugin_cache_dir.
   "TF_CLI_CONFIG_FILE",
 ] as const;
-// Well-known tofu input the runner sets when a build phase produced an artifact.
-// A generated root module may wire `var.artifact_path` to consume it.
-export const ARTIFACT_PATH_TF_VAR = "TF_VAR_artifact_path";
 // Default cap for the produced source archive when the runner profile does not
 // pin `resourceLimits.maxSourceArchiveBytes`. Source repos are small modules.
 export const DEFAULT_SOURCE_ARCHIVE_MAX_BYTES = 50 * 1024 * 1024;

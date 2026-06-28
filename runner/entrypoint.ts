@@ -28,8 +28,7 @@ export {
 } from "./lib/policy.ts";
 export {
   parseGeneratedRoot,
-  parseBuild,
-  parsePrebuiltArtifact,
+  assertNoLegacyArtifactDispatch,
 } from "./lib/parsing.ts";
 export { commandContextFromRequest, buildPhaseEnv } from "./lib/credentials.ts";
 export {

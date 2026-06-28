@@ -1,16 +1,14 @@
 import { expect, test } from "bun:test";
 import {
+  assertNoLegacyArtifactDispatch,
   buildPhaseEnv,
-  parseBuild,
   parseGeneratedRoot,
-  parsePrebuiltArtifact,
   resourceChangesFromPlanJson,
 } from "../../../runner/entrypoint.ts";
 import { PROVIDER_CREDENTIAL_ENV_RULES } from "takosumi-contract/provider-env-rules";
 
-// The BUILD phase runs untrusted user commands BEFORE the credentialed tofu
-// phases. Its env must never carry any known provider credential env name,
-// regardless of what is present in the runner's own process env.
+// Credential-free helper commands must never carry known provider credential env
+// names, regardless of what is present in the runner's own process env.
 test("buildPhaseEnv carries no known credential env name", () => {
   const credentialNames = new Set<string>();
   for (const rule of PROVIDER_CREDENTIAL_ENV_RULES) {
@@ -34,8 +32,8 @@ test("buildPhaseEnv carries no known credential env name", () => {
     for (const name of credentialNames) {
       expect(env[name]).toBeUndefined();
     }
-    // Sanity: the build env still carries the non-credential basics so build
-    // tooling (bun/git) works.
+    // Sanity: the helper env still carries non-credential basics so runner
+    // utility commands can execute.
     expect(typeof env.PATH).toBe("string");
     expect(env.PATH.length).toBeGreaterThan(0);
   } finally {
@@ -51,8 +49,9 @@ test("buildPhaseEnv preserves the baked tofu CLI config pointer", () => {
   const prev = Bun.env.TF_CLI_CONFIG_FILE;
   Bun.env.TF_CLI_CONFIG_FILE = "/opt/opentofu/tofu.rc";
   try {
-    // The build phase does not run tofu, but threading TF_CLI_CONFIG_FILE here
-    // is harmless and keeps env construction uniform; assert it is NOT a
+    // Some credential-free helpers do not run tofu, but threading
+    // TF_CLI_CONFIG_FILE here is harmless and keeps env construction uniform;
+    // assert it is NOT a
     // credential and is allowed through.
     const env = buildPhaseEnv();
     expect(env.TF_CLI_CONFIG_FILE).toBe("/opt/opentofu/tofu.rc");
@@ -98,53 +97,22 @@ test("parseGeneratedRoot validates filenames and content", () => {
   ).toThrow();
 });
 
-test("parseBuild requires bun runtime, commands, and a safe artifactPath", () => {
-  expect(parseBuild({})).toBeUndefined();
-  const ok = parseBuild({
-    build: {
-      runtime: "bun",
-      commands: ["bun install", "bun run build"],
-      artifactPath: "dist/worker.js",
-    },
-  });
-  expect(ok).toEqual({
-    runtime: "bun",
-    commands: ["bun install", "bun run build"],
-    artifactPath: "dist/worker.js",
-  });
+test("runner rejects retired app build and prebuilt artifact dispatch", () => {
+  expect(() => assertNoLegacyArtifactDispatch({})).not.toThrow();
   expect(() =>
-    parseBuild({
-      build: { runtime: "node", commands: ["x"], artifactPath: "dist" },
+    assertNoLegacyArtifactDispatch({
+      build: {
+        runtime: "bun",
+        commands: ["bun install", "bun run build"],
+        artifactPath: "dist/worker.js",
+      },
     }),
-  ).toThrow();
+  ).toThrow(/build dispatch is retired/);
   expect(() =>
-    parseBuild({ build: { runtime: "bun", commands: [], artifactPath: "d" } }),
-  ).toThrow();
-  expect(() =>
-    parseBuild({
-      build: { runtime: "bun", commands: ["x"], artifactPath: "/abs" },
-    }),
-  ).toThrow();
-  expect(() =>
-    parseBuild({
-      build: { runtime: "bun", commands: ["x"], artifactPath: "../escape" },
-    }),
-  ).toThrow();
-});
-
-test("parsePrebuiltArtifact requires a safe source-relative path", () => {
-  expect(parsePrebuiltArtifact({})).toBeUndefined();
-  expect(
-    parsePrebuiltArtifact({
+    assertNoLegacyArtifactDispatch({
       prebuiltArtifact: { path: "dist/worker.js" },
     }),
-  ).toEqual({ path: "dist/worker.js" });
-  expect(() =>
-    parsePrebuiltArtifact({ prebuiltArtifact: { path: "/abs" } }),
-  ).toThrow();
-  expect(() =>
-    parsePrebuiltArtifact({ prebuiltArtifact: { path: "../escape" } }),
-  ).toThrow();
+  ).toThrow(/prebuiltArtifact dispatch is retired/);
 });
 
 test("resourceChangesFromPlanJson trims values and keeps sanitized scope metadata", () => {

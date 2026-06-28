@@ -111,7 +111,9 @@ export interface PlanRunInputs {
    */
   readonly generatedRoot?: DispatchGeneratedRoot;
   readonly outputAllowlist?: Readonly<Record<string, OutputAllowlistEntry>>;
+  /** @deprecated Legacy Takosumi-owned build dispatch for stored rows only. */
   readonly build?: DispatchBuildSpec;
+  /** @deprecated Legacy Takosumi-owned artifact path dispatch for stored rows only. */
   readonly prebuiltArtifact?: DispatchPrebuiltArtifactSpec;
   /**
    * At-rest seal of the SENSITIVE-bearing sidecar payload (spec §11 / §18). A
@@ -119,11 +121,10 @@ export interface PlanRunInputs {
    * `variables` AND is baked as a literal into the generic Capsule's generated
    * `main.tf`; either would persist as a cleartext ledger value here. When a
    * sensitive value was injected, the controller seals `{ variables,
-   * generatedRoot, outputAllowlist, build, prebuiltArtifact }` into this blob with the SAME
-   * AES-GCM envelope used for state / plan / dependency-value artifacts and
-   * leaves the cleartext fields empty/absent on the row; it unseals
-   * transparently at plan/apply dispatch. The store only ever sees the
-   * ciphertext.
+   * generatedRoot, outputAllowlist }` into this blob with the SAME AES-GCM
+   * envelope used for state / plan / dependency-value artifacts and leaves the
+   * cleartext fields empty/absent on the row; it unseals transparently at
+   * plan/apply dispatch. The store only ever sees the ciphertext.
    */
   readonly sealed?: SealedDependencyValues;
 }

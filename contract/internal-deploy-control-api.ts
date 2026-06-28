@@ -587,10 +587,10 @@ export interface CreatePlanRunRequest {
    * Built-in first-party module binding path. When `templateId` is present the
    * plan resolves to the same generated-root dispatch shape as any OpenTofu
    * Capsule: bundled module files are carried as `generatedRoot.moduleFiles`
-   * and wired with the supplied `inputs`. The user `source` is then a BUILD
-   * input only (used by the optional build phase, never as the OpenTofu
-   * surface). `requiredProviders` is derived from policy and must not be
-   * supplied explicitly alongside a template binding.
+   * and wired with the supplied `inputs`. Takosumi no longer treats the user
+   * source as an app build input; app release/build values must be ordinary
+   * OpenTofu variables. `requiredProviders` is derived from policy and must not
+   * be supplied explicitly alongside a template binding.
    */
   readonly templateId?: string;
   readonly templateVersion?: string;
@@ -637,9 +637,9 @@ export interface TemplatePublicOutputSpec {
 
 export interface TemplateBuildSpec {
   readonly runtime: "bun";
-  /** Commands run sequentially in the user source checkout, NO credentials. */
+  /** Retired metadata for the old app build phase; not dispatched by new runs. */
   readonly commands: readonly string[];
-  /** File/dir relative to the source root copied to /work/artifact. */
+  /** Historical file/dir relative to the old source root. */
   readonly artifactPath: string;
 }
 
@@ -699,9 +699,12 @@ export interface DispatchGeneratedRoot {
 }
 
 /**
- * Optional build phase threaded onto the dispatch payload. Runs BEFORE plan
- * with NO credentials in the user source checkout; its `artifactPath` is copied
- * to `/work/artifact` for the child module to consume.
+ * Legacy optional build metadata kept for stored rows. New generated-root
+ * dispatch does not thread this payload to the runner.
+ *
+ * @deprecated New app installs should run the Git-hosted OpenTofu/Terraform
+ * module directly. App builds and container/image publishing belong in the app
+ * repo or CI/release pipeline, not in Takosumi dispatch semantics.
  */
 export interface DispatchBuildSpec {
   readonly runtime: "bun";
@@ -710,10 +713,12 @@ export interface DispatchBuildSpec {
 }
 
 /**
- * Prebuilt artifact path threaded onto the dispatch payload. Unlike
- * DispatchBuildSpec, this runs no commands; the runner validates that `path`
- * resolves inside the restored SourceSnapshot and exposes it as
- * `TF_VAR_artifact_path`.
+ * Legacy prepared path metadata kept for stored rows. New generated-root
+ * dispatch does not thread this path to the runner.
+ *
+ * @deprecated New generic Capsule installs should not use a Takosumi-owned
+ * app release artifact path. The OpenTofu/Terraform module should receive any
+ * app-specific values as ordinary variables.
  */
 export interface DispatchPrebuiltArtifactSpec {
   readonly path: string;

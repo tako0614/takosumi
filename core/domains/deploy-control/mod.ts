@@ -27,10 +27,8 @@ import type {
   DeployControlAuditEvent,
   Deployment,
   DeploymentOutput,
-  DispatchBuildSpec,
   DispatchDepState,
   DispatchGeneratedRoot,
-  DispatchPrebuiltArtifactSpec,
   DispatchSourceArchive,
   DispatchStateScope,
   GetInstallationResponse,
@@ -247,7 +245,6 @@ import {
 import { RunVerificationService } from "./run_verification.ts";
 import { validateProjectedServiceExportsFromOutputSnapshot } from "../output-projection/mod.ts";
 import {
-  installConfigBuildSpec,
   type InstallTypePlanContext,
   PlanResolutionService,
   providerEnvBindingsFromResolved,
@@ -324,14 +321,13 @@ export function runEnvironmentFailedRun<R extends PlanRun | ApplyRun>(
 /**
  * Generated-root dispatch fields threaded onto a run job. `generatedRoot` is
  * the canonical path for both built-in first-party modules and generic
- * Capsules; bundled modules are carried as `generatedRoot.moduleFiles`. The optional
- * build phase runs first in the user source checkout with NO credentials.
+ * Capsules; bundled modules are carried as `generatedRoot.moduleFiles`.
+ * Takosumi does not dispatch app build or artifact handling; app release inputs
+ * are ordinary OpenTofu variables owned by the module/app release flow.
  */
 export interface RunTemplateDispatch {
   readonly generatedRoot?: DispatchGeneratedRoot;
   readonly outputAllowlist?: InstallConfig["outputAllowlist"];
-  readonly build?: DispatchBuildSpec;
-  readonly prebuiltArtifact?: DispatchPrebuiltArtifactSpec;
 }
 
 /**
@@ -595,6 +591,18 @@ export interface OpenTofuSourceSyncJob {
     readonly path: string;
   };
   readonly archiveObjectKey: string;
+  /**
+   * Previous immutable SourceSnapshot for the same Source/ref/path. The runner
+   * may resolve the ref with git ls-remote and, when it still points at this
+   * commit, return this archive metadata without cloning/archiving again.
+   */
+  readonly reuseSnapshot?: {
+    readonly id: string;
+    readonly resolvedCommit: string;
+    readonly archiveObjectKey: string;
+    readonly archiveDigest: string;
+    readonly archiveSizeBytes: number;
+  };
   readonly credentials?: {
     readonly env: Readonly<Record<string, string>>;
     readonly files?: readonly {
@@ -609,6 +617,8 @@ export interface OpenTofuSourceSyncResult {
   readonly resolvedCommit: string;
   readonly archiveDigest: string;
   readonly archiveSizeBytes: number;
+  /** Existing archive object key when an unchanged ref reused a SourceSnapshot. */
+  readonly archiveObjectKey?: string;
 }
 
 /**
@@ -809,15 +819,11 @@ export interface GenericRootPlanContext {
   readonly providerEnvBindings: readonly RootInstallationProviderEnvBinding[];
   readonly outputAllowlist: InstallConfig["outputAllowlist"];
   readonly moduleFiles?: readonly OpenTofuCapsuleSourceFile[];
-  readonly build?: DispatchBuildSpec;
-  readonly prebuiltArtifact?: DispatchPrebuiltArtifactSpec;
 }
 
 export interface GenericRootDispatchContext {
   readonly generatedRoot: DispatchGeneratedRoot;
   readonly outputAllowlist: InstallConfig["outputAllowlist"];
-  readonly build?: DispatchBuildSpec;
-  readonly prebuiltArtifact?: DispatchPrebuiltArtifactSpec;
 }
 
 /**
@@ -1528,7 +1534,7 @@ export class OpenTofuDeploymentController {
   /**
    * Records an upload-origin SourceSnapshot. The archive bytes are written to
    * R2_SOURCE by the upload route before this call; this persists the ledger row
-   * for the `takosumi deploy` pipeline.
+   * for the internal upload-compat pipeline.
    */
   async recordUploadSnapshot(input: {
     readonly spaceId: string;
@@ -1542,9 +1548,10 @@ export class OpenTofuDeploymentController {
   }
 
   /**
-   * Records a prepared-artifact SourceSnapshot. The archive bytes are fetched,
-   * digest-verified, and written to R2_SOURCE before this call; this persists the
-   * immutable ledger row for source-side build / CI fast deploy pipelines.
+   * Records a legacy prepared source archive SourceSnapshot. The archive bytes
+   * are fetched, digest-verified, and written to R2_SOURCE before this call; the
+   * row exists for compatibility with internal deploy-control source-archive
+   * ingest, not as a public app artifact/build pipeline.
    */
   async recordArtifactSnapshot(input: {
     readonly spaceId: string;
@@ -1853,10 +1860,7 @@ function deepMergeRequestedJsonDefaults(
   const out: Record<string, JsonValue> = {};
   for (const [key, value] of Object.entries(explicit)) {
     const existing = defaults[key];
-    out[key] =
-      isJsonObject(existing) && isJsonObject(value)
-        ? deepMergeJsonRecords(existing, value)
-        : value;
+    out[key] = requestedJsonValue(existing, value);
   }
   return out;
 }
@@ -1868,12 +1872,19 @@ function deepMergeJsonRecords(
   const out: Record<string, JsonValue> = { ...defaults };
   for (const [key, value] of Object.entries(explicit)) {
     const existing = out[key];
-    out[key] =
-      isJsonObject(existing) && isJsonObject(value)
-        ? deepMergeJsonRecords(existing, value)
-        : value;
+    out[key] = requestedJsonValue(existing, value);
   }
   return out;
+}
+
+function requestedJsonValue(
+  existing: JsonValue | undefined,
+  value: JsonValue,
+): JsonValue {
+  if (value === null && existing !== undefined) return existing;
+  return isJsonObject(existing) && isJsonObject(value)
+    ? deepMergeJsonRecords(existing, value)
+    : value;
 }
 
 function isJsonObject(
@@ -2008,18 +2019,15 @@ function normalizeGitUrlToHttps(url: string): string {
 
 /**
  * Reads generated-root dispatch fields off the persisted plan-run-inputs
- * sidecar. Sidecars carry `generatedRoot` (+ optional build/prebuilt artifact /
- * output allowlist) for built-in modules and generic Capsules. Defensive copies
- * are not needed because the store hands back its own records and the runner job
- * only reads.
+ * sidecar. Sidecars carry `generatedRoot` (+ output allowlist) for built-in
+ * modules and generic Capsules. Defensive copies are not needed because the
+ * store hands back its own records and the runner job only reads.
  */
 export function templateDispatchFromInputs(
   inputs:
     | {
         readonly generatedRoot?: DispatchGeneratedRoot;
         readonly outputAllowlist?: InstallConfig["outputAllowlist"];
-        readonly build?: DispatchBuildSpec;
-        readonly prebuiltArtifact?: DispatchPrebuiltArtifactSpec;
       }
     | undefined,
 ): RunTemplateDispatch {
@@ -2028,10 +2036,6 @@ export function templateDispatchFromInputs(
     ...(inputs.generatedRoot ? { generatedRoot: inputs.generatedRoot } : {}),
     ...(inputs.outputAllowlist
       ? { outputAllowlist: inputs.outputAllowlist }
-      : {}),
-    ...(inputs.build ? { build: inputs.build } : {}),
-    ...(inputs.prebuiltArtifact
-      ? { prebuiltArtifact: inputs.prebuiltArtifact }
       : {}),
   };
 }

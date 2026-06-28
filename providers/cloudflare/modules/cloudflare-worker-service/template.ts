@@ -1,10 +1,10 @@
 /**
- * First-party Capsule module: cloudflare-worker-service.
+ * Legacy Capsule module: cloudflare-worker-service.
  *
- * Deploys a module-syntax Cloudflare Worker (Hono or any bundled module) from a
- * build artifact. Authored as TypeScript catalog data; the `module/` directory
- * is the OpenTofu surface baked into the runner image. Keep this object in sync
- * with `module/main.tf`.
+ * Legacy first-party example for deploying a module-syntax Cloudflare Worker
+ * from a runner-produced JS file. The active Takosumi install model is Git
+ * OpenTofu execution; new generated-root dispatch does not run this build path.
+ * Keep this object in sync with `module/main.tf` for stored row readability.
  */
 
 import type { TemplateDefinition } from "@takosumi/internal/deploy-control-api";
@@ -14,7 +14,7 @@ export const cloudflareWorkerServiceTemplate: TemplateDefinition = {
   name: "Cloudflare Worker Service",
   version: "1.0.0",
   description:
-    "Builds a Bun project and deploys the bundled module to a Cloudflare Worker script.",
+    "Legacy example that deploys a bundled module to a Cloudflare Worker script.",
   source: {
     localModulePath: "/app/templates/cloudflare-worker-service/module",
   },
