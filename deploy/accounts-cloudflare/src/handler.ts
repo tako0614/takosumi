@@ -1058,9 +1058,9 @@ function parseStripeBillingCheckout(
   const rawRedirectAllowlist = optionalString(
     env.TAKOSUMI_ACCOUNTS_BILLING_REDIRECT_ALLOWLIST,
   );
-  const smokeToken = optionalString(
-    env.TAKOSUMI_ACCOUNTS_BILLING_CHECKOUT_SMOKE_TOKEN,
-  );
+  const smokeToken =
+    optionalString(env.TAKOSUMI_ACCOUNTS_BILLING_CHECKOUT_SMOKE_TOKEN) ??
+    optionalString(env.TAKOSUMI_DEPLOY_CONTROL_TOKEN);
   const configured = Boolean(
     stripeSecretKey || rawRedirectAllowlist || smokeToken,
   );
