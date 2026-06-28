@@ -270,7 +270,7 @@ test("Cloudflare Accounts Worker wires Stripe checkout from billing env", async 
     }),
     createEnv(d1, {
       TAKOSUMI_ACCOUNTS_STRIPE_SECRET_KEY: "sk_test_worker",
-      TAKOSUMI_ACCOUNTS_BILLING_CHECKOUT_SMOKE_TOKEN: "smoke_test",
+      TAKOSUMI_DEPLOY_CONTROL_TOKEN: "smoke_test",
       TAKOSUMI_ACCOUNTS_BILLING_REDIRECT_ALLOWLIST: "https://accounts.example",
       TAKOSUMI_BILLING_PLANS: JSON.stringify([
         {
