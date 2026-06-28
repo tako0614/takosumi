@@ -464,6 +464,7 @@ const INTERNAL_PLATFORM_RUNTIME_CELL_PREFIX =
 const INTERNAL_PLATFORM_RUNTIME_CELL_DRILL_SUFFIX = "/drill";
 const INTERNAL_PLATFORM_SPACE_PREFIX = "/internal/platform/spaces/";
 const INTERNAL_PLATFORM_SPACE_BILLING_SUFFIX = "/billing";
+const INTERNAL_PLATFORM_SPACE_CREDITS_TOP_UP_SUFFIX = "/credits/top-up";
 const INTERNAL_PLATFORM_SPACE_SUBSCRIPTION_CHANGE_SUFFIX =
   "/subscription/change";
 
@@ -643,11 +644,15 @@ function parsePlatformRuntimeCellDrillAction(
   return value === "drain" || value === "evacuation" ? value : undefined;
 }
 
-function isOperatorBillingPath(pathname: string): boolean {
+export function isOperatorBillingPath(pathname: string): boolean {
   return (
     spaceIdFromInternalPlatformPath(
       pathname,
       INTERNAL_PLATFORM_SPACE_BILLING_SUFFIX,
+    ) !== undefined ||
+    spaceIdFromInternalPlatformPath(
+      pathname,
+      INTERNAL_PLATFORM_SPACE_CREDITS_TOP_UP_SUFFIX,
     ) !== undefined ||
     spaceIdFromInternalPlatformPath(
       pathname,
@@ -667,6 +672,10 @@ export interface OperatorBillingOperations {
     workspaceId: string,
     input: { readonly billingSettings: BillingSettings },
   ): Promise<{ readonly billing: { readonly settings: BillingSettings } }>;
+  topUpWorkspaceCredits(
+    workspaceId: string,
+    input: { readonly usdMicros?: number; readonly credits?: number },
+  ): Promise<{ readonly balance: unknown }>;
 }
 
 export async function handleOperatorBillingRequest(
@@ -688,6 +697,31 @@ export async function handleOperatorBillingRequest(
     const result = await operations.getWorkspaceBilling(billingSpaceId);
     if (request.method === "HEAD") return new Response(null, { status: 200 });
     return Response.json(result, { status: 200 });
+  }
+
+  const topUpSpaceId = spaceIdFromInternalPlatformPath(
+    url.pathname,
+    INTERNAL_PLATFORM_SPACE_CREDITS_TOP_UP_SUFFIX,
+  );
+  if (topUpSpaceId !== undefined) {
+    if (request.method !== "POST") {
+      return Response.json({ error: "method not allowed" }, { status: 405 });
+    }
+    const auth = requireDeployControlBearer(request, env);
+    if (auth) return auth;
+    const body = await readJsonRecord(request);
+    if (!body.ok) return body.response;
+    return Response.json(
+      await operations.topUpWorkspaceCredits(topUpSpaceId, {
+        ...(typeof body.value.usdMicros === "number"
+          ? { usdMicros: body.value.usdMicros }
+          : {}),
+        ...(typeof body.value.credits === "number"
+          ? { credits: body.value.credits }
+          : {}),
+      }),
+      { status: 200 },
+    );
   }
 
   const subscriptionSpaceId = spaceIdFromInternalPlatformPath(
@@ -1238,6 +1272,7 @@ async function recordPlatformCloudExtensionUsage(
       quantity: meter.quantity,
       usdMicros: usdMicros.value,
       source: "resource_meter",
+      spendRequired: true,
       idempotencyKey: [
         "cloud-extension",
         route.basePath,

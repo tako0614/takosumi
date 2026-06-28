@@ -12,6 +12,7 @@ import {
   handlePlatformMetricsRequest,
   handlePlatformRuntimeCellDrillRequest,
   handleSourceWebhookRequest,
+  isOperatorBillingPath,
   isOidcMetricPath,
   isPlatformCloudExtensionCatalogPath,
   matchPlatformCloudExtensionRoute,
@@ -534,10 +535,18 @@ function makeOperatorBillingOps(): {
     spaceId: string;
     billingSettings: unknown;
   }[];
+  topUpCalls: {
+    spaceId: string;
+    input: { readonly usdMicros?: number; readonly credits?: number };
+  }[];
 } {
   const subscriptionCalls: {
     spaceId: string;
     billingSettings: unknown;
+  }[] = [];
+  const topUpCalls: {
+    spaceId: string;
+    input: { readonly usdMicros?: number; readonly credits?: number };
   }[] = [];
   return {
     ops: {
@@ -554,8 +563,19 @@ function makeOperatorBillingOps(): {
         });
         return { billing: { settings: input.billingSettings } };
       },
+      topUpWorkspaceCredits: async (spaceId, input) => {
+        topUpCalls.push({ spaceId, input });
+        return {
+          balance: {
+            spaceId,
+            availableUsdMicros: input.usdMicros ?? 0,
+            availableCredits: input.credits ?? 0,
+          },
+        };
+      },
     },
     subscriptionCalls,
+    topUpCalls,
   };
 }
 
@@ -580,7 +600,7 @@ test("operator billing route is deploy-control bearer gated", async () => {
 });
 
 test("operator billing route reads and changes Space billing settings", async () => {
-  const { ops, subscriptionCalls } = makeOperatorBillingOps();
+  const { ops, subscriptionCalls, topUpCalls } = makeOperatorBillingOps();
   const env = { TAKOSUMI_DEPLOY_CONTROL_TOKEN: "operator-secret" } as never;
   const headers = {
     authorization: "Bearer operator-secret",
@@ -627,6 +647,41 @@ test("operator billing route reads and changes Space billing settings", async ()
       billingSettings: { mode: "showback", provider: "manual" },
     },
   ]);
+
+  const topUpUrl = new URL(
+    "https://app.takosumi.com/internal/platform/spaces/space_12345678/credits/top-up",
+  );
+  const topUp = await handleOperatorBillingRequest(
+    new Request(topUpUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ usdMicros: 5_000_000 }),
+    }),
+    topUpUrl,
+    env,
+    ops,
+  );
+  expect(topUp?.status).toBe(200);
+  expect((await topUp?.json()).balance).toMatchObject({
+    spaceId: "space_12345678",
+    availableUsdMicros: 5_000_000,
+  });
+  expect(topUpCalls).toEqual([
+    { spaceId: "space_12345678", input: { usdMicros: 5_000_000 } },
+  ]);
+});
+
+test("operator billing path classifier includes top-up routes", () => {
+  expect(
+    isOperatorBillingPath(
+      "/internal/platform/spaces/space_12345678/credits/top-up",
+    ),
+  ).toBe(true);
+  expect(
+    isOperatorBillingPath(
+      "/internal/platform/spaces/not-a-space/credits/top-up",
+    ),
+  ).toBe(false);
 });
 
 test("operator billing route validates settings before mutation", async () => {
@@ -1049,6 +1104,7 @@ test("cloud extension usage headers are priced, recorded, and stripped from clie
         quantity: 1,
         usdMicros: 1_000,
         source: "resource_meter",
+        spendRequired: true,
         createdAt: periodEnd,
       }),
     },
@@ -1124,6 +1180,7 @@ test("cloud extension usage headers price Cloudflare Queue meters", async () => 
         quantity: 1,
         usdMicros: 500,
         source: "resource_meter",
+        spendRequired: true,
         createdAt: periodEnd,
       }),
     },
@@ -1202,6 +1259,7 @@ test("cloud extension usage headers use token Workspace context when the extensi
         quantity: 1,
         usdMicros: 1_000,
         source: "resource_meter",
+        spendRequired: true,
         createdAt: periodEnd,
       }),
     },
@@ -1277,9 +1335,62 @@ test("cloud extension fallback usage records successful extension calls without 
         quantity: 1,
         usdMicros: 1_000,
         source: "resource_meter",
+        spendRequired: true,
       }),
     },
   ]);
+});
+
+test("cloud extension usage spend failure fails closed", async () => {
+  const response = await handlePlatformCloudExtensionRouteRequest(
+    new Request(
+      "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/ts_acc/workers/scripts/api",
+      {
+        method: "PUT",
+        headers: {
+          "x-takosumi-cloud-billing-workspace-id": "space_cloud",
+          "x-takosumi-cloud-billing-installation-id": "inst_cloud",
+        },
+      },
+    ),
+    {
+      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
+      TAKOSUMI_CLOUD_COMPAT: {
+        fetch: async () => Response.json({ success: true }, { status: 201 }),
+      },
+    } as never,
+    {
+      basePath: "/compat/cloudflare/client/v4",
+      bindingName: "TAKOSUMI_CLOUD_COMPAT",
+      fallbackUsage: [
+        {
+          pathTemplate: "/accounts/*/workers/scripts/:resourceId",
+          methods: ["PUT"],
+          meterIdPrefix: "cloudflare:workers_script:",
+          resourceFamily: "cloudflare.workers_script",
+          resourceIdPrefix: "script:",
+          resourceIdParam: "resourceId",
+          kind: "gateway_compute",
+          quantity: 1,
+          operationByMethod: { PUT: "deploy" },
+        },
+      ],
+    },
+    async () => ({
+      authenticated: true,
+      authKind: "session",
+      subject: "tsub_cloud",
+    }),
+    async () => {
+      throw new Error("insufficient credits");
+    },
+  );
+
+  expect(response.status).toBe(502);
+  expect(await response.json()).toEqual({
+    error: "cloud_extension_usage_metering_failed",
+    reason: "usage_record_failed",
+  });
 });
 
 test("cloud extension usage metering fails closed for unknown meters", async () => {
