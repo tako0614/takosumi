@@ -264,6 +264,17 @@ export type UsageResourceMetadata = Readonly<
   Record<string, UsageResourceMetadataValue>
 >;
 
+export function usageResourceMetadataLeaksInternalWorkersBackend(
+  value: UsageResourceMetadata,
+): boolean {
+  return Object.entries(value).some(
+    ([key, metadataValue]) =>
+      usageMeterNameLeaksInternalWorkersBackend(key) ||
+      (typeof metadataValue === "string" &&
+        usageMeterNameLeaksInternalWorkersBackend(metadataValue)),
+  );
+}
+
 export interface UsageEvent {
   readonly id: string;
   readonly workspaceId: string;

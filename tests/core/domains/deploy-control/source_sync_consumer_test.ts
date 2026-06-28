@@ -293,6 +293,31 @@ test("source_sync consumer records the run failed when the runner errors", async
   expect(await store.listSourceSnapshots(source.id)).toHaveLength(0);
 });
 
+test("source_sync retry-exhausted backstop marks a queued run failed", async () => {
+  const { store, sourcesService, controller } = build();
+  const { source } = await sourcesService.createSource({
+    spaceId: "space_1",
+    name: "repo",
+    url: "https://github.com/acme/repo.git",
+  });
+  const { run } = await controller.createSourceSync(source.id);
+
+  const transitioned = await controller.markRunFailed(
+    "source_sync",
+    run.id,
+    "retries-exhausted",
+  );
+
+  expect(transitioned).toBe(true);
+  const failed = await store.getSourceSyncRun(run.id);
+  expect(failed?.status).toBe("failed");
+  expect(failed?.error).toBe("retries-exhausted");
+  expect(await store.listSourceSnapshots(source.id)).toHaveLength(0);
+  expect(
+    await controller.markRunFailed("source_sync", run.id, "retries-exhausted"),
+  ).toBe(false);
+});
+
 test("source_sync consumer is idempotent on an already-succeeded run", async () => {
   const { store, sourcesService, runner, controller } = build();
   const { source } = await sourcesService.createSource({

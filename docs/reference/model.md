@@ -1,6 +1,6 @@
 # Model Reference
 
-Last updated: 2026-06-19
+Last updated: 2026-06-28
 
 Takosumi OSS models OpenTofu/Terraform execution around the existing provider
 ecosystem. It does not model compatibility gateways or managed cloud resources.
@@ -84,6 +84,14 @@ are not public product nouns like ProviderConnection or ProviderBinding.
 Operators may configure a runner-local OpenTofu provider plugin cache to speed
 direct provider installs. It stores provider binaries only; credentials and
 generated run files remain per-run.
+
+The user-facing flow should feel like installing an app, but the model remains
+Git-native and OpenTofu-native. Takosumi can reuse SourceSnapshots, provider
+mirrors, provider plugin caches, warm runner capacity, and clear progress
+phases. It must not decide what a deployable app artifact is. Worker bundles,
+container images, release URLs, object keys, digests, and build pipelines belong
+to the app repo, CI/release pipeline, registry, provider, or ordinary
+OpenTofu/Terraform module variables.
 
 ## Cloud-Only Concepts
 

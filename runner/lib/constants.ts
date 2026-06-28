@@ -34,8 +34,9 @@ export const BASE_COMMAND_ENV_NAMES = [
   "GIT_SSL_CAINFO",
   "REQUESTS_CA_BUNDLE",
   // Baked CLI config pointing at the offline provider filesystem mirror (see
-  // runner/tofu.rc). Plan/apply/compatibility phases replace it with a per-run
-  // generated config that also sets an isolated plugin_cache_dir.
+  // runner/tofu.rc). Plan/apply/compatibility phases replace it with a
+  // generated config that may use a run-local cache or the operator-configured
+  // provider plugin cache for provider binaries only.
   "TF_CLI_CONFIG_FILE",
 ] as const;
 // Default cap for the produced source archive when the runner profile does not

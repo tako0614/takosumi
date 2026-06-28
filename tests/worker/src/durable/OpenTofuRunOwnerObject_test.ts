@@ -148,6 +148,38 @@ test("OpenTofu run owner marks retries exhausted after owner retry budget", asyn
   assert.equal(storage.alarmAt, undefined);
 });
 
+test("OpenTofu run owner marks source_sync retries exhausted after owner retry budget", async () => {
+  const storage = new FakeDoStorage();
+  let now = Date.parse("2026-06-22T08:00:00.000Z");
+  const marked: unknown[] = [];
+  const owner = new OpenTofuRunOwnerObject(
+    { storage },
+    {} as CloudflareWorkerEnv,
+    {
+      now: () => now,
+      dispatch: () => Promise.reject(new Error("source sync crashed")),
+      markRetriesExhausted: (dispatch) => {
+        marked.push(dispatch);
+        return Promise.resolve();
+      },
+    },
+  );
+
+  await start(owner, "source_sync");
+  for (let index = 0; index < 3; index += 1) {
+    await owner.alarm();
+    if (storage.alarmAt !== undefined) now = storage.alarmAt;
+  }
+
+  assert.deepEqual(marked, [
+    { action: "source_sync", runId: "run_1", spaceId: "space_1" },
+  ]);
+  const record = await storage.get<Record<string, unknown>>("run");
+  assert.equal(record?.status, "failed");
+  assert.equal(record?.attempts, 3);
+  assert.equal(storage.alarmAt, undefined);
+});
+
 test("OpenTofu run owner does not echo invalid request details", async () => {
   const owner = new OpenTofuRunOwnerObject(
     { storage: new FakeDoStorage() },
@@ -175,7 +207,7 @@ test("OpenTofu run owner does not echo invalid request details", async () => {
 
 async function start(
   owner: OpenTofuRunOwnerObject,
-  action: "plan" | "apply" | "destroy",
+  action: "plan" | "apply" | "destroy" | "source_sync",
 ): Promise<void> {
   const response = await owner.fetch(
     new Request("https://run-owner/start", {

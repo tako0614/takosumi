@@ -228,7 +228,7 @@ async function markOpenTofuRunRetriesExhausted(
 async function markRunFailedIfNotTerminal(
   controller: {
     markRunFailed: (
-      action: "plan" | "apply" | "restore",
+      action: "plan" | "apply" | "restore" | "source_sync",
       runId: string,
       reason: string,
     ) => Promise<boolean>;
@@ -236,13 +236,7 @@ async function markRunFailedIfNotTerminal(
   run: OpenTofuRunQueueMessage,
   reason: string,
 ): Promise<void> {
-  // source_sync runs own their own terminal recording in the source consumer;
-  // the DLQ backstop only covers plan/apply runs.
-  if (
-    run.action === "source_sync" ||
-    run.action === "backup" ||
-    run.action === "compatibility_check"
-  ) {
+  if (run.action === "backup" || run.action === "compatibility_check") {
     return;
   }
   const action =
@@ -250,7 +244,9 @@ async function markRunFailedIfNotTerminal(
       ? "plan"
       : run.action === "restore"
         ? "restore"
-        : "apply";
+        : run.action === "source_sync"
+          ? "source_sync"
+          : "apply";
   await controller.markRunFailed(action, run.runId, reason);
 }
 

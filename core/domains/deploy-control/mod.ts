@@ -1328,7 +1328,7 @@ export class OpenTofuDeploymentController {
   }
 
   markRunFailed(
-    action: "plan" | "apply" | "restore",
+    action: "plan" | "apply" | "restore" | "source_sync",
     runId: string,
     reason: string,
   ): Promise<boolean> {

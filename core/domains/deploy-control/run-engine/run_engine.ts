@@ -2123,10 +2123,35 @@ export class RunEngine {
    * Returns true when it transitioned the run.
    */
   async markRunFailed(
-    action: "plan" | "apply" | "restore",
+    action: "plan" | "apply" | "restore" | "source_sync",
     runId: string,
     reason: string,
   ): Promise<boolean> {
+    if (action === "source_sync") {
+      const run = await this.#store.getSourceSyncRun(runId);
+      if (!run || run.status === "succeeded" || run.status === "failed") {
+        return false;
+      }
+      const now = this.#now();
+      const finishedAt = new Date(now).toISOString();
+      const failed: SourceSyncRun = {
+        ...run,
+        status: "failed",
+        heartbeatAt: now,
+        finishedAt,
+        updatedAt: finishedAt,
+        error: reason,
+      };
+      const result = await this.#store.transitionRun({
+        id: run.id,
+        kind: "source_sync",
+        expectFrom: [run.status],
+        run: failed,
+        clearLeaseToken: true,
+        heartbeatAt: now,
+      });
+      return result.won;
+    }
     if (action === "plan") {
       const planRun = await this.#store.getPlanRun(runId);
       if (!planRun || isTerminalStatus(planRun.status)) return false;

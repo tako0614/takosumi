@@ -806,8 +806,11 @@ clear app-install progress states
 The provider plugin cache stores provider binaries only. Provider credentials,
 credential files, generated roots, tfplans, tfstate, and outputs stay run-scoped
 or ledger-scoped as defined by the runner/state model. When a runner uses a
-shared OpenTofu plugin cache path, `tofu init` is serialized per cache path to
-avoid cache races; plan/apply execution remains parallel.
+shared OpenTofu plugin cache path, `tofu init` is serialized per cache path
+inside that runner process to avoid cache races; plan/apply execution remains
+parallel. If an operator shares one cache path across independent runner
+processes or containers, the operator must provide the external isolation or
+file lock for that substrate.
 
 ## 11. Runner
 
@@ -1703,7 +1706,7 @@ secrets are injected only into temporary runner environments
 secret values are redacted from logs
 each run uses a temporary workspace
 temporary credential files are deleted after run completion
-provider plugin cache stores provider binaries only and is isolated/serialized by policy
+provider plugin cache stores provider binaries only and is run-local or isolated/serialized by operator policy
 state is isolated by workspace/project/capsule
 apply approval is supported
 destroy protection is supported
