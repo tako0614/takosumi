@@ -27,7 +27,7 @@ export type OpenApiHttpMethod =
  * `@takosjp/takosumi` package version declared in `package.json`.
  * Bump this when the service publishes a new minor/major release.
  */
-export const TAKOSUMI_OPENAPI_VERSION = "0.17.0" as const;
+export const TAKOSUMI_OPENAPI_VERSION = "1.0.0" as const;
 
 export interface OpenApiServer {
   readonly url: string;

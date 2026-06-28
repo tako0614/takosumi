@@ -437,9 +437,9 @@ function buildValidation(
         manifest.checks.restoreRehearsal.evidenceRef,
       TAKOSUMI_RESTORE_REHEARSAL_EVIDENCE_DIGEST:
         manifest.checks.restoreRehearsal.evidenceDigest,
-      TAKOSUMI_PROVIDER_CATALOG_EVIDENCE_REF:
+      TAKOSUMI_PROVIDER_REGISTRY_EVIDENCE_REF:
         manifest.checks.providerCatalog.evidenceRef,
-      TAKOSUMI_PROVIDER_CATALOG_EVIDENCE_DIGEST:
+      TAKOSUMI_PROVIDER_REGISTRY_EVIDENCE_DIGEST:
         manifest.checks.providerCatalog.evidenceDigest,
       TAKOSUMI_COST_ATTRIBUTION_EVIDENCE_REF:
         manifest.checks.costAttribution.evidenceRef,

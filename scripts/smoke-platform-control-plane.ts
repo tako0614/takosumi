@@ -1549,7 +1549,7 @@ async function createSpaceCloudflareConnection(
     body:
       options.cloudflareConnectionMode === "generic-env"
         ? {
-            spaceId,
+            workspaceId: spaceId,
             provider: "cloudflare",
             kind: "generic_env_provider",
             credentialDriver: "generic_env",
@@ -1561,7 +1561,7 @@ async function createSpaceCloudflareConnection(
             },
           }
         : {
-            spaceId,
+            workspaceId: spaceId,
             provider: "cloudflare",
             displayName,
             scopeHints: { accountId: options.cloudflareAccountId },
@@ -1669,7 +1669,7 @@ async function lookupPublicProviderConnectionId(
   }>({
     baseUrl: options.url,
     token: options.accountSessionToken,
-    path: `${API_PREFIX}/provider-connections?spaceId=${encodeURIComponent(spaceId)}`,
+    path: `${API_PREFIX}/provider-connections?workspaceId=${encodeURIComponent(spaceId)}`,
   });
   const match = (response.providerConnections ?? []).find((connection) =>
     isSmokeProviderConnectionMatch(connection, {
@@ -1813,7 +1813,7 @@ async function createSmokeSource(
     method: "POST",
     path: `${API_PREFIX}/sources`,
     body: {
-      spaceId,
+      workspaceId: spaceId,
       name: options.sourceName ?? `${options.appName}-source`,
       url: options.sourceGitUrl,
       defaultRef: options.sourceRef,
@@ -1971,7 +1971,7 @@ async function deploySnapshot(
     path: `${API_PREFIX}/deploy`,
     timeoutMs: options.deployTimeoutSeconds * 1000,
     body: {
-      spaceId: input.spaceId,
+      workspaceId: input.spaceId,
       name: options.appName,
       environment: options.environment,
       snapshotId: input.snapshotId,

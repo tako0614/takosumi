@@ -10,8 +10,21 @@ treated compatibility gateways, managed cloud resources, or Takosumi-provided pr
 the OSS control plane.
 
 Takosumi OSS and Takosumi for Operators do **not** contain Cloudflare Compatibility Gateway, AWS/GCP compatibility APIs,
-S3 gateway, Resource Driver system, Compat Pack system, Managed Edge / Storage / Container, official billing, official
-quota, official usage metering, or official resource backends. Those are Takosumi Cloud-only closed features.
+S3 gateway, Resource Driver system, Compat Pack system, Managed Edge / Storage / Container, AI Gateway, Stripe-enforced
+billing, official quota, official usage metering, or official resource backends. Those live in the closed delta package
+`takosumi-cloud/` (this repo's sibling), which composes **on top of** the OSS Takosumi for Operators control plane.
+
+The dependency direction is **one-way Cloud -> OSS**: `takosumi-cloud/` may depend on this repo, never the reverse, and
+only at two seams. It consumes only the OSS composition root (`takosumi`, at bootstrap) and the public contract
+(`takosumi-contract`); it must never reach into `takosumi/core` or `takosumi/accounts` internals. The OSS platform ships
+and runs with nothing from `takosumi-cloud/` present.
+
+- **Seam A — additive HTTP route proxy (`cloud_extensions`).** OSS exposes an additive route-proxy hook; bound Cloud
+  extensions (e.g. the AI Gateway) proxy their routes to the Cloud worker, and when unbound those routes return 404 so
+  OSS behaves exactly as if Cloud did not exist. Cloud is purely additive and never rewrites or removes OSS routes.
+- **Seam B — in-process composition ports.** The OSS bootstrap accepts optional ports such as `BillingEnforcement` and
+  `QuotaPolicy`. OSS supplies safe no-op / open defaults so it runs standalone; Cloud injects the closed implementations
+  at bootstrap. Ports are typed against the public contract, keeping the dependency one-way.
 
 Takosumi is not a standalone npm-published service. It is one OSS control plane whose handlers are consumed
 **in-process** through `tsconfig` aliases by host workers in two composition contexts: the operator's **Takosumi platform
@@ -38,11 +51,11 @@ The two in-process entry points (consumed by both targets) are:
 
 ## Public Surface
 
-Takosumi's final customer-facing model is **Workspace / Project / Capsule / Source / ProviderConnection /
-CredentialRecipe / ProviderBinding / Secret / Run / Plan / Apply / Destroy / StateVersion / Output / Runner /
-AuditEvent / Operator**. Existing code may still contain Space / Installation / OutputSnapshot / Deployment /
-Provider Catalog / `own_key` / `takos_provided` / Gateway names from the previous architecture. Treat those as migration
-debt unless a change deliberately maps them to the Final Plan model.
+Takosumi's customer-facing model is the **17-noun** vocabulary, current and load-bearing: **Workspace / Project /
+Capsule / Source / ProviderConnection / CredentialRecipe / ProviderBinding / Secret / Run / Plan / Apply / Destroy /
+StateVersion / Output / Runner / AuditEvent / Operator**. The old Space / Installation / OutputSnapshot / StateSnapshot /
+Deployment / Provider Catalog / `own_key` / `takos_provided` / Gateway / Service Graph names are retired; do not
+reintroduce them as product nouns.
 
 - `Workspace`: user/team boundary for projects, provider connections, secrets, state isolation, and audit.
 - `Project`: one product, service, application, or infrastructure group.
@@ -70,22 +83,22 @@ display, identity, and output projection.
 
 ## Core Specification
 
-The product direction is [`docs/final-plan.md`](docs/final-plan.md). The existing core spec is
+The product direction is [`docs/final-plan.md`](docs/final-plan.md). The core spec is
 [`docs/core-spec.md`](docs/core-spec.md), and adoption status lives in [`docs/core-conformance.md`](docs/core-conformance.md).
-Until those files are fully rewritten, treat Space / Installation / Gateway / `takos_provided` wording in them as
-migration debt when it conflicts with the Final Plan.
+The implementation has landed on the Final Plan model; the old Space / Installation / Gateway / `takos_provided` wording
+is retired, not a vocabulary to migrate toward.
 
-Two principles are load-bearing for new work:
+Three principles are load-bearing for new work:
 
 - **GitHub-agnostic**: core knows only a `GitAddress` (`{ url, ref, path, credentialId? }`). Forge-specific identifiers
   (`githubInstallationId`, `githubRepoId`, `githubOwner`, `githubWebhookPayload`) must never enter core types; forge
   integrations are optional adapters outside core.
-- **No in-repo manifest**: user repos stay plain git repos with no required Takosumi metadata file. All install
-  configuration is service-side DB config (`InstallConfig`); repo metadata is read from Git and well-known OpenTofu
-  outputs.
-- **Service Graph is output/projected state, not a manifest**: optional well-known OpenTofu outputs such as
-  `service_exports` may help Takosumi project ServiceExport rows, but Capsule repos must not be required to adopt a
-  Takosumi-specific manifest or DSL. Runtime authority is issued through ServiceGrant, not through output values.
+- **No in-repo manifest**: user repos stay plain git repos with no required Takosumi metadata file. All Capsule
+  configuration is service-side DB config; repo metadata is read from Git and well-known OpenTofu outputs.
+- **No OSS Service Graph**: the Service Graph (ServiceExport / ServiceBinding / ServiceGrant) has been removed from OSS.
+  Runtime service surfaces are projected from a Capsule's `tofu output -json` (deployment outputs) by the consuming
+  product/profile (Takos is one such profile); there is no Takosumi-owned service class or runtime-grant authority in
+  OSS, and Capsule repos still adopt no Takosumi-specific manifest or DSL.
 
 ## Provider Connection / Policy Boundary
 
@@ -104,14 +117,15 @@ allowlist / scope boundary / action policy / dependency policy / output policy /
 sandbox for git clone / build / OpenTofu execution.
 
 Do not add OSS code paths that require Takosumi Gateway, Cloudflare WfP, managed resources, or Takosumi-issued
-provider-compatible endpoints. If code needs that behavior, it belongs to Takosumi Cloud.
+provider-compatible endpoints. If code needs that behavior, it belongs to `takosumi-cloud/` behind Seam A / Seam B.
 
-OSS operator quota/showback machinery should be implemented as a Workspace- or
+OSS operator quota/showback machinery is implemented as a Workspace- or
 Organization-scoped ledger with operator-selected mode: `disabled` (self-host
 default, no billing UI gate) or `showback` (record estimates and usage without
-blocking apply). Official billing, enforced payment gates, usage metering sold
-as a service, and abuse/support workflows are Takosumi Cloud-only closed
-features.
+blocking apply). Official billing, enforced payment gates (the Stripe
+`BillingEnforcement` Seam B port), usage metering sold as a service, and
+abuse/support workflows are Takosumi Cloud-only closed features in
+`takosumi-cloud/`.
 
 ## In-Process Composition
 

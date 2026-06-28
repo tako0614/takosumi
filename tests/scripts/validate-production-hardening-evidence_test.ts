@@ -55,7 +55,7 @@ test("production hardening evidence manifest emits hardening gate env", () => {
       "git+ssh://git@github.com/tako0614/takosumi-private.git@0123456789abcdef0123456789abcdef01234567#evidence/egress.md",
     TAKOSUMI_RESTORE_REHEARSAL_EVIDENCE_REF:
       "git+ssh://git@github.com/tako0614/takosumi-private.git@0123456789abcdef0123456789abcdef01234567#evidence/restore-rehearsal.md",
-    TAKOSUMI_PROVIDER_CATALOG_EVIDENCE_REF:
+    TAKOSUMI_PROVIDER_REGISTRY_EVIDENCE_REF:
       "git+ssh://git@github.com/tako0614/takosumi-private.git@0123456789abcdef0123456789abcdef01234567#evidence/provider-connections.md",
     TAKOSUMI_COST_ATTRIBUTION_EVIDENCE_REF:
       "git+ssh://git@github.com/tako0614/takosumi-private.git@0123456789abcdef0123456789abcdef01234567#evidence/cost-attribution.md",

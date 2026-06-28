@@ -1381,8 +1381,8 @@ export function evaluateProductionHardeningGates(
       env.TAKOSUMI_RESTORE_REHEARSAL_EVIDENCE_DIGEST,
     ),
     providerCatalog: evidenceCheck(
-      env.TAKOSUMI_PROVIDER_CATALOG_EVIDENCE_REF,
-      env.TAKOSUMI_PROVIDER_CATALOG_EVIDENCE_DIGEST,
+      env.TAKOSUMI_PROVIDER_REGISTRY_EVIDENCE_REF,
+      env.TAKOSUMI_PROVIDER_REGISTRY_EVIDENCE_DIGEST,
     ),
     costAttribution: evidenceCheck(
       env.TAKOSUMI_COST_ATTRIBUTION_EVIDENCE_REF,

@@ -446,7 +446,7 @@ export class BillingService {
     if (settings.mode === "disabled") return;
     await this.#enforcement.assertReservationSatisfied({
       spaceId: planRun.spaceId,
-      planRunId: planRun.id,
+      runId: planRun.id,
       now: this.#now(),
     });
   }
@@ -489,7 +489,7 @@ export class BillingService {
     });
     await this.#enforcement.captureRunBilling({
       spaceId: input.planRun.spaceId,
-      planRunId: input.planRun.id,
+      runId: input.planRun.id,
       applyRunId: input.applyRun.id,
       ...(input.planRun.installationId
         ? { installationId: input.planRun.installationId }
@@ -515,7 +515,7 @@ export class BillingService {
     }
     await this.#enforcement.releaseReservation({
       spaceId: planRun.spaceId,
-      planRunId: planRun.id,
+      runId: planRun.id,
       now: this.#now(),
     });
   }

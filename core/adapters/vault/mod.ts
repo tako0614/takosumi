@@ -128,6 +128,22 @@ export class CredentialBundle {
 
 export type RegisterConnectionInput = CreateConnectionRequest;
 
+function workspaceIdForConnectionInput(
+  input: RegisterConnectionInput,
+): string | undefined {
+  if (
+    input.workspaceId !== undefined &&
+    input.spaceId !== undefined &&
+    input.workspaceId !== input.spaceId
+  ) {
+    throw new ConnectionVaultError(
+      "invalid_argument",
+      "workspaceId and spaceId must match when both are supplied",
+    );
+  }
+  return input.workspaceId ?? input.spaceId;
+}
+
 export interface TestConnectionResult {
   readonly status: "verified" | "pending" | "expired";
   readonly detail?: string;
@@ -349,17 +365,18 @@ export class StaticSecretConnectionVault implements ConnectionVault {
   }
 
   async register(input: RegisterConnectionInput): Promise<Connection> {
+    const workspaceId = workspaceIdForConnectionInput(input);
     // spaceId is absent for a global helper connection; when
     // present it must be a real id.
-    if (input.spaceId !== undefined || input.scope === "space") {
-      requireNonEmpty(input.spaceId, "spaceId");
+    if (workspaceId !== undefined || input.scope === "space") {
+      requireNonEmpty(workspaceId, "spaceId");
     }
     // Privilege-escalation guard: a global helper connection has NO owning
     // Space, so a caller-supplied `scope: "operator"` must never win against a
     // present spaceId. A hybrid `{ spaceId, scope: "operator" }` row would
     // otherwise bypass the `scope === "space" && spaceId mismatch` cross-tenant
     // guard at mint time, letting any Space bind another Space's secret.
-    if (input.spaceId !== undefined && input.scope === "operator") {
+    if (workspaceId !== undefined && input.scope === "operator") {
       throw new ConnectionVaultError(
         "invalid_argument",
         "operator-scoped connections must not have an owning space (omit spaceId for scope: operator)",
@@ -456,7 +473,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       cloudPartition,
       secretEnvelopeAad({
         cloudPartition,
-        ...(input.spaceId ? { spaceId: input.spaceId } : {}),
+        ...(workspaceId ? { spaceId: workspaceId } : {}),
         connectionId: id,
         provider: input.provider,
       }),
@@ -467,7 +484,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       input.kind ?? providerConnectionKindFor(input.provider);
     const blob = makeStoredSecretBlob({
       connectionId: id,
-      ...(input.spaceId ? { spaceId: input.spaceId } : {}),
+      ...(workspaceId ? { spaceId: workspaceId } : {}),
       provider: input.provider,
       connectionKind,
       sealed,
@@ -480,11 +497,11 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     const expiresAt = normalizeConnectionExpiresAt(input.expiresAt, now);
     const connection: Connection = {
       id,
-      ...(input.spaceId ? { spaceId: input.spaceId } : {}),
+      ...(workspaceId ? { workspaceId, spaceId: workspaceId } : {}),
       provider: input.provider,
       providerSource: canonicalProviderSource(input.provider),
       kind: connectionKind,
-      scope: input.scope ?? (input.spaceId ? "space" : "operator"),
+      scope: input.scope ?? (workspaceId ? "space" : "operator"),
       ...(input.displayName ? { displayName: input.displayName } : {}),
       status: "pending",
       materialization: input.materialization ?? "secret",
@@ -521,6 +538,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     input: RegisterConnectionInput,
     kind: SourceGitConnectionKind,
   ): Promise<Connection> {
+    const workspaceId = workspaceIdForConnectionInput(input);
     const values = input.values;
     if (
       values === null ||
@@ -574,7 +592,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       cloudPartition,
       secretEnvelopeAad({
         cloudPartition,
-        ...(input.spaceId ? { spaceId: input.spaceId } : {}),
+        ...(workspaceId ? { spaceId: workspaceId } : {}),
         connectionId: id,
         provider: kind,
       }),
@@ -583,7 +601,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     const nowIso = now.toISOString();
     const blob = makeStoredSecretBlob({
       connectionId: id,
-      ...(input.spaceId ? { spaceId: input.spaceId } : {}),
+      ...(workspaceId ? { spaceId: workspaceId } : {}),
       provider: kind,
       connectionKind: kind,
       sealed,
@@ -596,11 +614,11 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     const expiresAt = normalizeConnectionExpiresAt(input.expiresAt, now);
     const connection: Connection = {
       id,
-      ...(input.spaceId ? { spaceId: input.spaceId } : {}),
+      ...(workspaceId ? { workspaceId, spaceId: workspaceId } : {}),
       provider: kind,
       providerSource: canonicalProviderSource(kind),
       kind,
-      scope: input.scope ?? (input.spaceId ? "space" : "operator"),
+      scope: input.scope ?? (workspaceId ? "space" : "operator"),
       ...(input.displayName ? { displayName: input.displayName } : {}),
       status: "pending",
       materialization: "secret",

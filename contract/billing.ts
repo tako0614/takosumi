@@ -423,7 +423,7 @@ export interface BillingReservationCheckContext {
   readonly workspaceId?: string;
   /** @deprecated Use workspaceId. */
   readonly spaceId?: string;
-  readonly planRunId: string;
+  readonly runId: string;
   readonly now: number;
 }
 
@@ -431,7 +431,7 @@ export interface BillingCaptureContext {
   readonly workspaceId?: string;
   /** @deprecated Use workspaceId. */
   readonly spaceId?: string;
-  readonly planRunId: string;
+  readonly runId: string;
   readonly applyRunId: string;
   readonly capsuleId?: string;
   /** @deprecated Use capsuleId. */
@@ -445,7 +445,7 @@ export interface BillingReleaseContext {
   readonly workspaceId?: string;
   /** @deprecated Use workspaceId. */
   readonly spaceId?: string;
-  readonly planRunId: string;
+  readonly runId: string;
   readonly now: number;
 }
 

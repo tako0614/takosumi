@@ -554,7 +554,7 @@ export function releaseBaseEnv(
       ? { TAKOSUMI_CAPSULE_ID: release.activation.installationId }
       : {}),
     ...(release.activation?.deploymentId
-      ? { TAKOSUMI_DEPLOYMENT_ID: release.activation.deploymentId }
+      ? { TAKOSUMI_STATE_VERSION_ID: release.activation.deploymentId }
       : {}),
     TAKOSUMI_OUTPUTS_JSON: JSON.stringify(outputs),
     TAKOSUMI_RELEASE_CONTEXT_JSON: JSON.stringify({

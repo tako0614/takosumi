@@ -1,11 +1,16 @@
 # Takosumi Final Plan
 
-Last updated: 2026-06-19
+Last updated: 2026-06-28
 
-This document is the product direction to use when redesigning Takosumi.
-It supersedes older plans that treated compatibility gateways, managed cloud
-resources, or Takosumi-provided provider endpoints as part of the OSS control
-plane.
+This document is the authoritative Takosumi product direction. The redesign it
+describes is realized: Takosumi OSS is the existing-provider control plane (the
+for-Operators edition is the multi-tenant operator build of that same OSS), and
+the compatibility gateways, managed cloud resources, AI Gateway, and enforced
+official billing live only in the closed `takosumi-cloud` package, which
+composes on top of OSS through two additive seams (an HTTP route proxy and the
+billing/quota ports). It supersedes older plans that treated compatibility
+gateways, managed cloud resources, or Takosumi-provided provider endpoints as
+part of the OSS control plane.
 
 ## 0. Definition
 
@@ -255,16 +260,31 @@ Only Takosumi Cloud has:
 
 ```text
 Cloudflare Compatibility Gateway
+Takosumi AI Gateway
 Takosumi Managed Edge Worker
 Takosumi Managed Object Storage
 Takosumi Managed App DB
 Takosumi Managed Container
 Cloud-only Provider Connection
 official resource backend
-billing/quota/usage
+enforced billing/quota/usage
 ```
 
-Cloudflare compatibility starts as a Takosumi Cloud-only capability.
+These all live in the closed `takosumi-cloud` package, never in OSS. Cloud
+attaches to the OSS platform through two additive seams and never adds a
+Cloud-only concept to the OSS contract:
+
+- an additive HTTP route proxy (`cloud_extensions`): when a Cloud extension is
+  bound, its routes (for example the AI Gateway base path) are proxied to the
+  Cloud worker; when unbound, those routes return 404 and OSS behaves exactly as
+  if Cloud did not exist;
+- the billing/quota ports (`BillingEnforcement` / `QuotaPolicy`): OSS ships
+  no-op defaults that estimate-and-record without ever blocking or charging, and
+  only the Cloud package injects enforcing implementations.
+
+The dependency is one-way (Cloud depends on OSS, never the reverse) and limited
+to the OSS composition root plus the public `takosumi-contract`. Cloudflare
+compatibility is a Takosumi Cloud-only capability.
 
 ### 3.4 Same Manifest, Different Connection
 
@@ -781,7 +801,10 @@ runner pools. Takosumi Cloud operates the official hosted runner pool.
 
 ## 12. Cloudflare Compatibility Gateway
 
-Cloudflare Compatibility Gateway is Takosumi Cloud-only and closed.
+Cloudflare Compatibility Gateway is Takosumi Cloud-only and closed. It lives in
+the `takosumi-cloud` package and is reached only through the additive
+`cloud_extensions` route proxy; OSS exposes no compatibility gateway, no
+provider `base_url` bridge, and no run-key minting routes.
 
 Purpose:
 
@@ -862,7 +885,9 @@ This connection type is not part of OSS Takosumi.
 
 ## 12.1 AI Gateway
 
-Takosumi AI Gateway is also Takosumi Cloud-only and closed. It is an
+Takosumi AI Gateway is also Takosumi Cloud-only and closed. It physically lives
+in the `takosumi-cloud` package (`gateway/ai-gateway/`) and is served only when
+its `cloud_extensions` route is bound; OSS does not ship it. It is an
 OpenAI-compatible runtime API for deployed Capsules, not an OpenTofu provider
 compatibility layer and not an OSS control-plane feature.
 
@@ -890,7 +915,9 @@ injection, not through new provider-compatible gateway APIs.
 
 ## 13. Takosumi Managed Resources
 
-Only Takosumi Cloud provides managed resources:
+Only Takosumi Cloud provides managed resources, and only from the closed
+`takosumi-cloud` package. OSS Takosumi has no managed-resource backend, no
+resource driver system, and no compat-pack system:
 
 ```text
 Takosumi Edge Worker
@@ -1025,7 +1052,10 @@ official resource pools
 
 ### 15.2 Closed Cloud repository
 
-Target shape:
+The closed `takosumi-cloud` package exists and composes on top of the OSS engine
+through the one-way Cloud->OSS seams in §3.3 (additive route proxy + billing/quota
+ports), depending only on the OSS composition root and the public
+`takosumi-contract`. Its full target shape is:
 
 ```text
 takosumi-cloud/
@@ -1068,8 +1098,9 @@ takosumi-cloud/
     metrics/
 ```
 
-Takosumi Cloud imports or vendors the OSS engine and adds closed official
-hosting and Cloud-only features.
+Takosumi Cloud composes on top of the OSS engine (never reaching into OSS
+`core` / `accounts` internals) and adds closed official hosting and Cloud-only
+features.
 
 ## 16. Edition Configuration
 
