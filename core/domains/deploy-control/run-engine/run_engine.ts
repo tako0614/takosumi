@@ -729,15 +729,19 @@ export class RunEngine {
             stored.id,
             internal.sourceSnapshotId,
           )
-        : await this.#resolveLatestSnapshot(stored.id, stored.defaultRef);
+        : await this.#resolveLatestSnapshot(
+            stored.id,
+            stored.defaultRef,
+            stored.defaultPath,
+          );
       if (!resolved) {
         // Typed 409: the Installation cannot plan until a SourceSnapshot exists
         // for its source. Callers run a source_sync first.
         throw new OpenTofuControllerError(
           "failed_precondition",
           `source_sync_required: installation ${installationId} has no ` +
-            `SourceSnapshot for source ${stored.id} ref ${stored.defaultRef}; ` +
-            `run a source sync first`,
+            `SourceSnapshot for source ${stored.id} ref ${stored.defaultRef} ` +
+            `path ${stored.defaultPath}; run a source sync first`,
         );
       }
       snapshot = resolved;
@@ -918,22 +922,23 @@ export class RunEngine {
   }
 
   /**
-   * Picks the LATEST SourceSnapshot for a source, preferring one whose ref
-   * matches the requested ref when any such snapshot exists; otherwise the
-   * newest snapshot for the source. Returns `undefined` when the source has no
-   * snapshot yet.
+   * Picks the latest SourceSnapshot for a Source's current Git ref/path.
+   * Source sync archives the selected subtree, so a same-ref snapshot from a
+   * previous defaultPath is not interchangeable with the current Capsule path.
    */
   async #resolveLatestSnapshot(
     sourceId: string,
     ref: string,
+    path: string,
   ): Promise<SourceSnapshot | undefined> {
     const snapshots = await this.#store.listSourceSnapshots(sourceId);
     if (snapshots.length === 0) return undefined;
     // listSourceSnapshots is ordered oldest-first (fetchedAt asc); the last
-    // ref-matching snapshot is the newest for that ref.
-    const refMatches = snapshots.filter((snap) => snap.ref === ref);
-    const pool = refMatches.length > 0 ? refMatches : snapshots;
-    return pool[pool.length - 1];
+    // ref/path-matching snapshot is the newest archive for that Capsule path.
+    const matches = snapshots.filter(
+      (snap) => snap.ref === ref && snap.path === path,
+    );
+    return matches[matches.length - 1];
   }
 
   async #resolvePlanSourceSnapshotId(
@@ -956,11 +961,12 @@ export class RunEngine {
     const snapshot = await this.#resolveLatestSnapshot(
       source.id,
       source.defaultRef,
+      source.defaultPath,
     );
     if (!snapshot) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        `source_sync_required: installation ${installation.id} has no SourceSnapshot for source ${source.id}; run a source sync first`,
+        `source_sync_required: installation ${installation.id} has no SourceSnapshot for source ${source.id} ref ${source.defaultRef} path ${source.defaultPath}; run a source sync first`,
       );
     }
     return snapshot.id;
