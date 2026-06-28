@@ -64,8 +64,7 @@ function connection(over: Partial<Connection> = {}): Connection {
 
 function resolver(input: {
   readonly resolved:
-    | readonly ResolvedInstallationProviderEnvBinding[]
-    | undefined;
+    readonly ResolvedInstallationProviderEnvBinding[] | undefined;
   readonly credentials: () => RunCredentials | undefined;
   readonly calls?: Array<{ phase: string; auditRunId: string }>;
 }): RunEnvResolver {
@@ -159,31 +158,24 @@ test("RunEnvResolver blocks Cloud-only gateway materialization in OSS", async ()
   ).rejects.toThrow(RunEnvironmentResolutionError);
 });
 
-test("RunEnvResolver fails closed with blocked provider resolution evidence", async () => {
+test("RunEnvResolver treats unresolved installation providers as no-credential providers after policy resolution", async () => {
+  const calls: Array<{ phase: string; auditRunId: string }> = [];
   const subject = resolver({
+    calls,
     resolved: [],
     credentials: () => undefined,
   });
 
-  let thrown: unknown;
-  try {
-    await subject.resolveRunEnvironment({
-      planRun: planRun(),
-      phase: "plan",
-      auditRunId: "plan_1",
-    });
-  } catch (error) {
-    thrown = error;
-  }
-
-  expect(thrown).toBeInstanceOf(RunEnvironmentResolutionError);
-  const error = thrown as RunEnvironmentResolutionError;
-  expect(error.runEnvironment.credentials).toBeUndefined();
-  expect(error.runEnvironment.providerResolutions[0]).toMatchObject({
-    status: "blocked_missing_env",
-    blockedReason: `provider connection is required for provider ${CLOUDFLARE_PROVIDER}`,
+  const result = await subject.resolveRunEnvironment({
+    planRun: planRun(),
+    phase: "plan",
+    auditRunId: "plan_1",
   });
-  expect(error.runEnvironment.runEnvironmentEvidenceDigest).toMatch(/^sha256:/);
+
+  expect(calls).toEqual([{ phase: "plan", auditRunId: "plan_1" }]);
+  expect(result.credentials).toBeUndefined();
+  expect(result.providerResolutions).toEqual([]);
+  expect(result.runEnvironmentEvidenceDigest).toMatch(/^sha256:/);
 });
 
 test("RunEnvResolver does not require Provider Connections for credential-free providers", async () => {

@@ -167,17 +167,11 @@ export class RunEnvResolver {
       );
       const requirement = providerRequirement(planRun, provider);
       if (!match) {
-        if (!providerEnvRule(provider)) continue;
-        resolutions.push({
-          requirement,
-          status: "blocked_missing_env",
-          blockedReason: `provider connection is required for provider ${provider}`,
-          evidence: {
-            kind: "blocked",
-            provider,
-            reason: `provider connection is required for provider ${provider}`,
-          },
-        });
+        // `resolveRunInstallationProviderEnvBindings` has already enforced the
+        // subset of providers whose RunnerProfile requires Takosumi-managed
+        // credential material. Providers still present on PlanRun.requiredProviders
+        // may be optional/no-op for this variable set, or intentionally handled
+        // by a generic runner profile without Takosumi env injection.
         continue;
       }
       resolutions.push(

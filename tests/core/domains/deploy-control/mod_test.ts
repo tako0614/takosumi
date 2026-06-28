@@ -42,6 +42,7 @@ async function seedUpdatableInstallation(
     readonly source?: CreatePlanRunRequest["source"];
     readonly runnerProfileId?: string;
     readonly requiredProviders?: readonly string[];
+    readonly seedProviderConnections?: boolean;
   } = {},
 ): Promise<{
   readonly store: InMemoryOpenTofuDeploymentStore;
@@ -58,7 +59,9 @@ async function seedUpdatableInstallation(
   const requiredProviders = options.requiredProviders ?? [
     "registry.opentofu.org/cloudflare/cloudflare",
   ];
-  await seedProviderConnections(store, installation, requiredProviders);
+  if (options.seedProviderConnections !== false) {
+    await seedProviderConnections(store, installation, requiredProviders);
+  }
   const currentDeploymentId = `dep_seed_${installationId}`;
   await store.putInstallation({
     ...installation,
@@ -1009,6 +1012,72 @@ test("runner profile policy blocks required providers without credential refs", 
 
   expect(planRun.status).toEqual("failed");
   expect(planRun.policy.reasons.join("\n")).toContain("credential reference");
+});
+
+test("generic runner allows optional provider declarations without Provider Connections", async () => {
+  let runnerCalled = false;
+  const genericProfile = createDefaultRunnerProfiles()
+    .map((profile) =>
+      profile.id === "generic-opentofu-provider"
+        ? {
+            ...profile,
+            labels: {
+              ...(profile.labels ?? {}),
+              "takosumi.com/profile-enabled": "true",
+            },
+          }
+        : profile,
+    )
+    .find((profile) => profile.id === "generic-opentofu-provider");
+  if (!genericProfile) throw new Error("generic profile fixture missing");
+  const { store, request } = await seedUpdatableInstallation({
+    runnerProfileId: genericProfile.id,
+    seedProviderConnections: false,
+  });
+  const controller = new OpenTofuDeploymentController({
+    vault: fakeProviderVault() as never,
+    store,
+    now: sequenceNow(37),
+    newId: deterministicIds(),
+    runnerProfiles: [genericProfile],
+    defaultRunnerProfileId: genericProfile.id,
+    runner: {
+      plan: () => {
+        runnerCalled = true;
+        return Promise.resolve({
+          planDigest: PLAN_DIGEST,
+          planArtifact: testPlanArtifact("generic-optional-provider"),
+          sourceCommit: "abc123",
+          providerLockDigest: LOCK_DIGEST,
+          requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
+          providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+          summary: { add: 0, change: 0, destroy: 0 },
+        });
+      },
+      apply: () => Promise.resolve({ outputs: {} }),
+      destroy: () => Promise.resolve({}),
+    },
+  });
+
+  const { planRun } = await controller.createPlanRun(request);
+
+  if (planRun.status !== "succeeded") {
+    throw new Error(
+      `expected generic optional-provider plan to succeed: ${JSON.stringify({
+        status: planRun.status,
+        policy: planRun.policy,
+        diagnostics: planRun.diagnostics,
+        errorCode: planRun.errorCode,
+      })}`,
+    );
+  }
+  expect(planRun.status).toEqual("succeeded");
+  expect(planRun.policy.status).toEqual("passed");
+  expect(planRun.runnerProfileId).toEqual(genericProfile.id);
+  expect(planRun.requiredProviders).toEqual([
+    "registry.opentofu.org/cloudflare/cloudflare",
+  ]);
+  expect(runnerCalled).toBe(true);
 });
 
 test("InstallConfig provider allowlist blocks after RunnerProfile admits provider", async () => {
