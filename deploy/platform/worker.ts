@@ -1277,9 +1277,7 @@ function platformCloudExtensionUsageEnvelope(
   if (rawMeters) {
     return {
       rawMeters,
-      spaceId: safePlatformCloudExtensionContextId(
-        response.headers.get(PLATFORM_CLOUD_EXTENSION_USAGE_SPACE_ID_HEADER),
-      ),
+      spaceId: platformCloudExtensionUsageSpaceId(request, response, session),
       periodStart: isoHeaderValue(
         response.headers.get(PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_START_HEADER),
       ),
@@ -1302,6 +1300,22 @@ function platformCloudExtensionUsageEnvelope(
     periodStart: new Date(periodEndMs - 1).toISOString(),
     periodEnd: new Date(periodEndMs).toISOString(),
   };
+}
+
+function platformCloudExtensionUsageSpaceId(
+  request: Request,
+  response: Response,
+  session: PlatformCloudExtensionSessionContext,
+): string | undefined {
+  return (
+    safePlatformCloudExtensionContextId(
+      response.headers.get(PLATFORM_CLOUD_EXTENSION_USAGE_SPACE_ID_HEADER),
+    ) ??
+    session.spaceId ??
+    safePlatformCloudExtensionContextId(
+      request.headers.get(PLATFORM_CLOUD_EXTENSION_BILLING_WORKSPACE_ID_HEADER),
+    )
+  );
 }
 
 function fallbackPlatformCloudUsageMeter(
