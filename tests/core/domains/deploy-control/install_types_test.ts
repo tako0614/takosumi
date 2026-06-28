@@ -5,13 +5,13 @@
  *   - `core` / `opentofu_module` / `app_source` template-bound configs drive the
  *     §13 `generateInstallationRoot` generated root (installType-aware, with
  *     provider aliases derived from the resolved provider env bindings);
- *   - `app_source` threads the InstallConfig.build onto the dispatch (the build
- *     runs in the Container with ZERO credentials — invariant 3);
+ *   - legacy app build/prebuilt artifact config is not threaded onto new
+ *     generated-root dispatch; app release inputs are ordinary OpenTofu vars;
  *   - legacy `opentofu_root` rows remain readable but fail closed at plan time;
  *     Takosumi v1 requires a generated-root Capsule install type.
  *
  * A recording runner captures the dispatch payload so the generated root files,
- * build spec, provider aliases, and output projection are asserted directly.
+ * provider aliases, and output projection are asserted directly.
  */
 
 import { expect, test } from "bun:test";
@@ -474,7 +474,7 @@ test("provider-using installation fails closed when the connection vault is abse
   expect(runner.planJobs).toHaveLength(0);
 });
 
-test("app_source install threads InstallConfig.build onto the dispatch (build precedence over template build)", async () => {
+test("app_source install ignores legacy InstallConfig.build dispatch", async () => {
   const { runner, controller } = await installTypeFixture({
     installConfig: {
       installType: "app_source",
@@ -507,24 +507,13 @@ test("app_source install threads InstallConfig.build onto the dispatch (build pr
   const { planRun } = await controller.createInstallationPlan("inst_fixture");
   expect(planRun.status).toEqual("succeeded");
 
-  // InstallConfig.build wins over the template's own build (M5 decision); the
-  // build is the standard DispatchBuildSpec (runs in the Container, no creds).
-  expect(runner.planJobs[0]!.build).toEqual({
-    runtime: "bun",
-    commands: ["bun install", "bun run bundle"],
-    artifactPath: "build/worker.js",
-  });
-  // The build phase NEVER carries provider credentials: the provider bundle is
-  // a separate plan-phase dispatch field, not part of DispatchBuildSpec.
-  expect(JSON.stringify(runner.planJobs[0]!.build)).not.toContain(
-    "fixture-provider-token",
-  );
+  expect(runner.planJobs[0]!.build).toBeUndefined();
   expect(runner.planJobs[0]!.credentials).toEqual({
     TF_VAR_cloudflare_main_api_token: "fixture-provider-token",
   });
 });
 
-test("opentofu_module install threads InstallConfig.prebuiltArtifact onto the dispatch", async () => {
+test("opentofu_module install ignores legacy InstallConfig.prebuiltArtifact dispatch", async () => {
   const { runner, controller } = await installTypeFixture({
     installConfig: {
       installType: "opentofu_module",
@@ -537,13 +526,11 @@ test("opentofu_module install threads InstallConfig.prebuiltArtifact onto the di
 
   const { planRun } = await controller.createInstallationPlan("inst_fixture");
   expect(planRun.status).toEqual("succeeded");
-  expect(runner.planJobs[0]!.prebuiltArtifact).toEqual({
-    path: "dist/worker.js",
-  });
+  expect(runner.planJobs[0]!.prebuiltArtifact).toBeUndefined();
   expect(runner.planJobs[0]!.build).toBeUndefined();
 });
 
-test("app_source with build disabled falls back to the template build", async () => {
+test("app_source does not fall back to template build dispatch", async () => {
   const { runner, controller } = await installTypeFixture({
     installConfig: {
       installType: "app_source",
@@ -571,12 +558,7 @@ test("app_source with build disabled falls back to the template build", async ()
 
   const { planRun } = await controller.createInstallationPlan("inst_fixture");
   expect(planRun.status).toEqual("succeeded");
-  // Disabled InstallConfig.build -> the template's own build is used.
-  expect(runner.planJobs[0]!.build).toEqual({
-    runtime: "bun",
-    commands: ["bun install --frozen-lockfile", "bun run build"],
-    artifactPath: "dist/index.js",
-  });
+  expect(runner.planJobs[0]!.build).toBeUndefined();
 });
 
 test("legacy opentofu_root install config fails closed even when it carries a templateBinding", async () => {

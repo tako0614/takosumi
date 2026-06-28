@@ -11,7 +11,8 @@
  *
  * Generated files:
  *   - versions.tf : `terraform { required_providers { ... } }` from
- *                   policy.allowedProviders, with sensible v5-era version pins.
+ *                   policy.allowedProviders, with first-party mirror-aligned
+ *                   version pins.
  *   - main.tf     : `module "app" { source = "./template-module"; <inputs> }`.
  *   - outputs.tf  : passthrough of template.outputs.public:
  *                   `output "<public>" { value = module.app.<from> }`.
@@ -24,8 +25,9 @@
  *
  * `generateInstallationRoot` is the installType-aware entry point. It emits the
  * same three files plus, when the Installation declares provider bindings,
- * provider blocks + a `providers = { ... }` module map; and for `app_source` it
- * threads a generated `artifact_path` variable. Per-connection credential split:
+ * provider blocks + a `providers = { ... }` module map. `app_source` no longer
+ * receives a Takosumi-owned artifact path; release/build values are ordinary
+ * template inputs. Per-connection credential split:
  * a provider with an arg mapping gets one `variable "<provider>_<alias>_<arg>"`
  * { sensitive = true, ephemeral = true }` per credential arg, and its provider
  * block sets that provider argument from the variable. The Vault mints the
@@ -52,8 +54,8 @@ const TEMPLATE_MODULE_SOURCE = "./template-module";
 
 /**
  * Default provider version pins keyed by the trailing `<namespace>/<type>` of a
- * provider rule. Pinned to the v5-era cloudflare provider used by the
- * first-party cloudflare modules. Unknown providers get no version
+ * provider rule. These broad constraints must stay compatible with the exact
+ * versions baked into the runner image mirror. Unknown providers get no version
  * constraint (still listed in required_providers by source).
  */
 const PROVIDER_SOURCE_BY_RULE: Readonly<Record<string, string>> = {
@@ -64,7 +66,7 @@ const PROVIDER_SOURCE_BY_RULE: Readonly<Record<string, string>> = {
 
 const PROVIDER_VERSION_BY_RULE: Readonly<Record<string, string>> = {
   "cloudflare/cloudflare": "~> 5.0",
-  "hashicorp/aws": "~> 5.0",
+  "hashicorp/aws": "~> 6.0",
   "hashicorp/google": "~> 6.0",
 };
 
@@ -78,9 +80,7 @@ export interface GeneratedRootModule extends DispatchGeneratedRoot {
  * and Takosumi v1 plan creation fails closed before dispatch for those rows.
  */
 export type GeneratedRootInstallType =
-  | "core"
-  | "opentofu_module"
-  | "app_source";
+  "core" | "opentofu_module" | "app_source";
 
 /** One OpenTofu provider binding emitted into the generated root. */
 export interface RootInstallationProviderEnvBinding {
@@ -129,10 +129,6 @@ export interface GenerateGenericCapsuleRootInput {
   readonly providerEnvBindings?: ReadonlyArray<RootInstallationProviderEnvBinding>;
 }
 
-/** Module input name an `app_source` template reads the built artifact path from. */
-const ARTIFACT_PATH_INPUT = "artifact_path";
-/** Path the runner copies the credential-free build artifact to (invariant 3). */
-const ARTIFACT_PATH_VALUE = "/work/artifact";
 const GENERIC_CONTROL_OUTPUTS = ["takosumi_release"] as const;
 
 export function generateRootModule(
@@ -153,10 +149,8 @@ export function generateRootModule(
  *
  * - `core` / `opentofu_module`: structurally identical wrappers — the core
  *   module is just value plumbing over the same template-module path.
- * - `app_source`: same wrap, plus a generated `variable "artifact_path"` (default
- *   `/work/artifact`) passed to the module as the `artifact_path` input when the
- *   template declares that input. The build phase produces the artifact in the
- *   Container with ZERO credentials (invariant 3); the deploy module consumes it.
+ * - `app_source`: structurally the same generated-root wrapper; release/build
+ *   values are normal template inputs instead of a Takosumi-owned artifact path.
  *
  * When `providerEnvBindings` is non-empty, provider blocks and a
  * `providers = { ... }` map are emitted.
@@ -164,10 +158,8 @@ export function generateRootModule(
 export function generateInstallationRoot(
   input: GenerateInstallationRootInput,
 ): GeneratedRootModule {
-  const { template, inputs, installType } = input;
+  const { template, inputs } = input;
   const providerEnvBindings = input.providerEnvBindings ?? [];
-  const wantsArtifact =
-    installType === "app_source" && ARTIFACT_PATH_INPUT in template.inputs;
   return {
     files: {
       "versions.tf": renderVersionsTf(template),
@@ -175,7 +167,6 @@ export function generateInstallationRoot(
         template,
         inputs,
         providerEnvBindings,
-        wantsArtifact,
       ),
       "outputs.tf": renderOutputsTf(template),
     },
@@ -280,22 +271,10 @@ function renderInstallationMainTf(
   template: TemplateDefinition,
   inputs: Readonly<Record<string, TemplateInputValue>>,
   providerEnvBindings: ReadonlyArray<RootInstallationProviderEnvBinding>,
-  wantsArtifact: boolean,
 ): string {
   const sections: string[] = [];
 
   appendProviderSections(sections, providerEnvBindings);
-
-  // Generated artifact_path variable for app_source installs.
-  if (wantsArtifact) {
-    sections.push(
-      [
-        `variable ${hclString(ARTIFACT_PATH_INPUT)} {`,
-        `  default = ${hclString(ARTIFACT_PATH_VALUE)}`,
-        "}",
-      ].join("\n"),
-    );
-  }
 
   const moduleLines = [
     'module "app" {',
@@ -306,11 +285,6 @@ function renderInstallationMainTf(
 
   // Emit inputs in the template's declared order for deterministic golden output.
   for (const name of Object.keys(template.inputs)) {
-    if (name === ARTIFACT_PATH_INPUT && wantsArtifact) {
-      // Wired from the generated variable, not from literal inputs.
-      moduleLines.push(`  ${ARTIFACT_PATH_INPUT} = var.${ARTIFACT_PATH_INPUT}`);
-      continue;
-    }
     if (!(name in inputs)) continue;
     moduleLines.push(`  ${name} = ${hclLiteral(inputs[name]!)}`);
   }

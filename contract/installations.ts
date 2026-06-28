@@ -80,7 +80,15 @@ export interface OutputAllowlistEntry {
   readonly required?: boolean;
 }
 
-/** Compatibility app-source build phase config (runs in the Container with no credentials). */
+/**
+ * Legacy app-source build metadata for stored pre-v1 rows. New generated-root
+ * dispatch does not run this in the runner.
+ *
+ * @deprecated New Capsules should keep build/download decisions inside their
+ * Git-hosted OpenTofu/Terraform module or app CI/release flow. Takosumi should
+ * pass only ordinary `variableMapping` / deploy `vars` values and must not
+ * interpret app artifacts.
+ */
 export interface InstallBuildConfig {
   readonly enabled: boolean;
   readonly workingDirectory?: string;
@@ -89,10 +97,13 @@ export interface InstallBuildConfig {
 }
 
 /**
- * Service-side fast path for Capsules whose source already contains the
- * deployable artifact. The runner does not execute build commands; it only
- * validates that `path` stays inside the restored SourceSnapshot and exposes it
- * as `TF_VAR_artifact_path` to the generated root.
+ * Legacy service-side metadata for stored rows that already knew a prepared
+ * file path inside the SourceSnapshot. New generated-root dispatch does not
+ * expose this path to the runner.
+ *
+ * @deprecated Do not use this for new generic Capsule designs. Takosumi OSS
+ * should not decide what an app release artifact is; pass ordinary Capsule
+ * inputs and let the Git-hosted OpenTofu/Terraform module interpret them.
  */
 export interface InstallPrebuiltArtifactConfig {
   readonly path: string;
@@ -281,7 +292,13 @@ export interface InstallConfig {
 /** Public InstallConfig projection returned by `/api` and dashboard session routes. */
 export type PublicInstallConfig = Omit<
   InstallConfig,
-  "installType" | "templateBinding" | "sourceKind" | "runnerId" | "internal"
+  | "installType"
+  | "templateBinding"
+  | "sourceKind"
+  | "runnerId"
+  | "internal"
+  | "build"
+  | "prebuiltArtifact"
 > & {
   readonly sourceKind: PublicInstallConfigSourceKind;
 };

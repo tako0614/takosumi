@@ -222,7 +222,7 @@ async function seededTemplateController(
   return { controller, store, installationId: INSTALLATION_ID };
 }
 
-test("template plan dispatch carries generated root module files and build; never credentials in build", async () => {
+test("template plan dispatch carries generated root module files and no app build payload", async () => {
   const runner = recordingRunner({
     planResourceChanges: [
       {
@@ -278,11 +278,7 @@ test("template plan dispatch carries generated root module files and build; neve
   expect(planJob.generatedRoot!.files["main.tf"]).toContain(
     'appName = "my-worker"',
   );
-  expect(planJob.build).toEqual({
-    runtime: "bun",
-    commands: ["bun install --frozen-lockfile", "bun run build"],
-    artifactPath: "dist/index.js",
-  });
+  expect(planJob.build).toBeUndefined();
   // Credentials are minted for the tofu phase and attached to the dispatch only
   // as generated-root variables, never as shared provider env.
   expect(planJob.credentials).toMatchObject({

@@ -7,9 +7,10 @@
  * A cohesive collaborator pulled out of `OpenTofuDeploymentController`: it owns
  * the install-type plan derivation
  * ({@link PlanResolutionService.resolveInstallTypePlan} — generated-root install
- * type + provider aliases + build override + Cloud-only materialization guard), and the template-backed plan resolution
- * ({@link PlanResolutionService.resolveTemplatePlan} — resolved template, derived
- * required providers, generated root module, build phase).
+ * type + provider aliases + Cloud-only materialization guard), and the
+ * template-backed plan resolution
+ * ({@link PlanResolutionService.resolveTemplatePlan} — resolved template,
+ * derived required providers, generated root module).
  *
  * These transform a plan request into the resolved providers / generated root
  * BEFORE the run is dispatched; the run dispatch + the per-phase credential mint
@@ -30,9 +31,7 @@
 import type { JsonValue } from "takosumi-contract";
 import type {
   CreatePlanRunRequest,
-  DispatchBuildSpec,
   DispatchGeneratedRoot,
-  InstallBuildConfig,
   InstallConfig,
   Installation,
   InstallType,
@@ -60,7 +59,7 @@ import { sameProviderFamily } from "takosumi-contract/provider-env-rules";
  * Install-type wiring for an installation-driven template plan (§13). Carried
  * through the controller's internal plan-creation context so `createPlanRun` can
  * drive `generateInstallationRoot` (installType-aware generated root + provider
- * aliases + the `app_source` build) instead of the raw {@link generateRootModule}.
+ * aliases) instead of the raw {@link generateRootModule}.
  * Public `/api` calls always target an Installation; the low-level compatibility
  * path backfills this context from the Installation row when callers omit it.
  */
@@ -78,8 +77,6 @@ export interface InstallTypePlanContext {
    * invent module input schema for arbitrary OpenTofu Capsules.
    */
   readonly providerInputDefaults: Readonly<Record<string, JsonValue>>;
-  /** InstallConfig.build, when enabled (overrides the template build). */
-  readonly build?: DispatchBuildSpec;
   /**
    * True when a legacy/Cloud-only resolver row attempted to use gateway
    * materialization. OSS Takosumi fails closed instead of rewriting provider
@@ -94,7 +91,6 @@ export interface ResolvedTemplatePlan {
   readonly inputs: Readonly<Record<string, TemplateInputValue>>;
   readonly generatedRoot: DispatchGeneratedRoot;
   readonly requiredProviders: readonly string[];
-  readonly build?: DispatchBuildSpec;
 }
 
 /**
@@ -140,8 +136,8 @@ export class PlanResolutionService {
 
   /**
    * Derives the §13 install-type plan context for a template-bound installation
-   * config: the generated-root install type, the provider aliases from the
-   * installation's resolved provider env bindings, and the build override.
+   * config: the generated-root install type and the provider aliases from the
+   * installation's resolved provider env bindings.
    * Provider Env bindings resolve through the {@link ConnectionsService} so
    * connection changes take effect on the next plan.
    */
@@ -173,9 +169,6 @@ export class PlanResolutionService {
       requiredProvidersFromBindings: requiredProvidersFromResolved(resolved),
       providerInputDefaults,
       usesCloudOnlyGatewayMaterialization,
-      ...(installConfig.build?.enabled
-        ? { build: installConfigBuildSpec(installConfig.build) }
-        : {}),
     };
   }
 
@@ -196,7 +189,7 @@ export class PlanResolutionService {
 
   /**
    * Resolves a template-backed plan request into its resolved template, derived
-   * required providers, generated root module, and optional build phase. Returns
+   * required providers, and generated root module. Returns
    * `undefined` only when the caller should use the generic Capsule generated
    * root path. Throws on a malformed template request
    * (missing version, conflicting requiredProviders, unknown template, invalid
@@ -204,7 +197,7 @@ export class PlanResolutionService {
    *
    * `installTypePlan` is present only for an installation-driven plan (§13). When
    * present the generated root comes from {@link generateInstallationRoot}
-   * (installType-aware, provider aliases, the `app_source` build);
+   * (installType-aware, provider aliases);
    * no installation context = no provider env bindings) the
    * generated root stays on {@link generateRootModule} byte-for-byte.
    */
@@ -241,7 +234,8 @@ export class PlanResolutionService {
     );
     const inputs = validateTemplateInputs(template, request.inputs);
     // Installation-driven (§13): installType-aware generated root with
-    // provider aliases + the app_source artifact_path wiring.
+    // provider aliases. Takosumi does not dispatch app build/artifact handling;
+    // app release inputs must be ordinary OpenTofu variables.
     // Raw template path (no installation context): the byte-stable wrapper.
     const baseGeneratedRoot = installTypePlan
       ? generateInstallationRoot({
@@ -260,10 +254,6 @@ export class PlanResolutionService {
         template.version,
       ),
     };
-    // Build phase precedence: an installation-driven app_source InstallConfig.build
-    // (when enabled) overrides the template's own build; otherwise the template
-    // build is used (§13 / M5 decision: InstallConfig.build takes precedence).
-    const build = installTypePlan?.build ?? templateBuildSpec(template);
     return {
       template,
       inputs,
@@ -276,7 +266,6 @@ export class PlanResolutionService {
       requiredProviders: template.policy.allowedProviders.map(
         canonicalProviderAddress,
       ),
-      ...(build ? { build } : {}),
     };
   }
 }
@@ -320,6 +309,8 @@ function providerInputDefaultsFromResolved(
     if (sameProviderFamily(entry.provider, "cloudflare")) {
       const accountId = nonEmptyString(connection.scopeHints?.accountId);
       if (accountId) {
+        inputs.cloudflare_account_id = accountId;
+        inputs.account_id = accountId;
         mergeObjectInput(inputs, "cloudflare", { account_id: accountId });
       }
     }
@@ -360,32 +351,4 @@ function isJsonObject(value: JsonValue | undefined): value is {
 function isJsonScalar(value: unknown): value is string | number | boolean {
   const t = typeof value;
   return t === "string" || t === "number" || t === "boolean";
-}
-
-/** Maps a TemplateDefinition's optional build into a DispatchBuildSpec. */
-function templateBuildSpec(
-  template: TemplateDefinition,
-): DispatchBuildSpec | undefined {
-  if (!template.build) return undefined;
-  return {
-    runtime: template.build.runtime,
-    commands: [...template.build.commands],
-    artifactPath: template.build.artifactPath,
-  };
-}
-
-/**
- * Maps an enabled InstallConfig.build into the DispatchBuildSpec the runner build
- * phase consumes (M5 decision: same DispatchBuildSpec threading the template
- * build uses; the build runs in the Container with ZERO credentials — invariant
- * 3). `artifactPath` defaults to `dist` when the config omits it.
- */
-export function installConfigBuildSpec(
-  build: InstallBuildConfig,
-): DispatchBuildSpec {
-  return {
-    runtime: "bun",
-    commands: [...build.commands],
-    artifactPath: build.artifactPath ?? "dist",
-  };
 }

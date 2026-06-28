@@ -18,9 +18,7 @@ import type {
   CreatePlanRunRequest,
   Deployment,
   DeploymentOutput,
-  DispatchBuildSpec,
   DispatchGeneratedRoot,
-  DispatchPrebuiltArtifactSpec,
   InstallConfig,
   Installation,
   OpenTofuModuleSource,
@@ -80,7 +78,6 @@ import {
   withPlanLease,
 } from "../installation_lease.ts";
 import {
-  installConfigBuildSpec,
   type InstallTypePlanContext,
   type PlanResolutionService,
   providerEnvBindingsFromResolved,
@@ -586,14 +583,10 @@ export class RunEngine {
     const generatedRoot =
       templatePlan?.generatedRoot ?? genericRootDispatch?.generatedRoot;
     const outputAllowlist = genericRootDispatch?.outputAllowlist;
-    const build = genericRootDispatch?.build ?? templatePlan?.build;
-    const prebuiltArtifact = genericRootDispatch?.prebuiltArtifact;
     if (
       Object.keys(variables).length > 0 ||
       generatedRoot !== undefined ||
-      outputAllowlist !== undefined ||
-      build !== undefined ||
-      prebuiltArtifact !== undefined
+      outputAllowlist !== undefined
     ) {
       // A sensitive dependency-injected value flows into `variables` AND (for a
       // generic Capsule) is baked as a literal into the generated root's
@@ -609,8 +602,6 @@ export class RunEngine {
           variables,
           ...(generatedRoot ? { generatedRoot } : {}),
           ...(outputAllowlist ? { outputAllowlist } : {}),
-          ...(build ? { build } : {}),
-          ...(prebuiltArtifact ? { prebuiltArtifact } : {}),
         },
         sealSidecar,
       );
@@ -762,7 +753,7 @@ export class RunEngine {
         throw new OpenTofuControllerError(
           "failed_precondition",
           `installation ${installationId} has no git Source; a plan requires a ` +
-            `pinned upload/artifact SourceSnapshot (deploy a new upload or artifact via takosumi deploy)`,
+            `pinned upload/artifact SourceSnapshot through the internal upload-compat seam`,
         );
       }
       const pinned = await this.#store.getSourceSnapshot(pinnedSnapshotId);
@@ -952,7 +943,7 @@ export class RunEngine {
       throw new OpenTofuControllerError(
         "failed_precondition",
         `installation ${installation.id} has no git Source; ` +
-          `deploy a new upload or artifact snapshot via takosumi deploy`,
+          `only internal upload-compat callers can plan it without a Git Source`,
       );
     }
     const source = await this.#store.getSource(installation.sourceId);
@@ -1440,10 +1431,6 @@ export class RunEngine {
       genericRootPlan: {
         providerEnvBindings: installTypePlan.providerEnvBindings,
         outputAllowlist: input.installConfig.outputAllowlist,
-        ...(installTypePlan.build ? { build: installTypePlan.build } : {}),
-        ...(input.installConfig.prebuiltArtifact
-          ? { prebuiltArtifact: input.installConfig.prebuiltArtifact }
-          : {}),
       },
     };
   }
@@ -1478,10 +1465,6 @@ export class RunEngine {
         ...(moduleFiles && moduleFiles.length > 0 ? { moduleFiles } : {}),
       },
       outputAllowlist: context.outputAllowlist,
-      ...(context.build ? { build: context.build } : {}),
-      ...(context.prebuiltArtifact
-        ? { prebuiltArtifact: context.prebuiltArtifact }
-        : {}),
     };
   }
 
@@ -1521,12 +1504,6 @@ export class RunEngine {
       {
         providerEnvBindings: providerEnvBindingsFromResolved(resolved),
         outputAllowlist: installConfig.outputAllowlist,
-        ...(installConfig.build?.enabled
-          ? { build: installConfigBuildSpec(installConfig.build) }
-          : {}),
-        ...(installConfig.prebuiltArtifact
-          ? { prebuiltArtifact: installConfig.prebuiltArtifact }
-          : {}),
       },
       compatibilityReport,
       sourceSnapshot,
@@ -2467,7 +2444,7 @@ export class RunEngine {
    * sidecar carries at least one SENSITIVE dependency-injected value — in
    * `variables` and (for a generic Capsule) baked as a literal into the generated
    * `main.tf` — so the WHOLE sealable payload (`variables` / `generatedRoot` /
-   * `outputAllowlist` / `build`) is encrypted into {@link PlanRunInputs.sealed}
+   * `outputAllowlist`) is encrypted into {@link PlanRunInputs.sealed}
    * with the SAME at-rest envelope used for state / plan / dependency-value
    * artifacts, and the cleartext fields are dropped from the row. The store only
    * ever sees ciphertext. A sealer is REQUIRED in that case: missing ⇒ fail closed
@@ -2495,10 +2472,6 @@ export class RunEngine {
         : {}),
       ...(inputs.outputAllowlist
         ? { outputAllowlist: inputs.outputAllowlist as unknown as JsonValue }
-        : {}),
-      ...(inputs.build ? { build: inputs.build as unknown as JsonValue } : {}),
-      ...(inputs.prebuiltArtifact
-        ? { prebuiltArtifact: inputs.prebuiltArtifact as unknown as JsonValue }
         : {}),
     };
     const sealed = await this.#dependencyValueSealer.seal(payload);
@@ -2539,16 +2512,11 @@ export class RunEngine {
       DispatchGeneratedRoot | undefined;
     const outputAllowlist = payload.outputAllowlist as unknown as
       Readonly<Record<string, OutputAllowlistEntry>> | undefined;
-    const build = payload.build as unknown as DispatchBuildSpec | undefined;
-    const prebuiltArtifact = payload.prebuiltArtifact as unknown as
-      DispatchPrebuiltArtifactSpec | undefined;
     return {
       planRunId,
       variables,
       ...(generatedRoot ? { generatedRoot } : {}),
       ...(outputAllowlist ? { outputAllowlist } : {}),
-      ...(build ? { build } : {}),
-      ...(prebuiltArtifact ? { prebuiltArtifact } : {}),
     };
   }
 
@@ -3614,10 +3582,6 @@ export class RunEngine {
             ...(dispatch.generatedRoot
               ? { generatedRoot: dispatch.generatedRoot }
               : {}),
-            ...(dispatch.build ? { build: dispatch.build } : {}),
-            ...(dispatch.prebuiltArtifact
-              ? { prebuiltArtifact: dispatch.prebuiltArtifact }
-              : {}),
             // M2 env dispatch (state scope + source archive). Absent without env ctx.
             ...(envDispatch.stateScope
               ? { stateScope: envDispatch.stateScope }
@@ -4518,10 +4482,6 @@ export class RunEngine {
       ...(dispatch.generatedRoot
         ? { generatedRoot: dispatch.generatedRoot }
         : {}),
-      ...(dispatch.build ? { build: dispatch.build } : {}),
-      ...(dispatch.prebuiltArtifact
-        ? { prebuiltArtifact: dispatch.prebuiltArtifact }
-        : {}),
       // M2 env dispatch (state scope at base+1 + source archive).
       ...(envDispatch.stateScope ? { stateScope: envDispatch.stateScope } : {}),
       ...(envDispatch.sourceArchive
@@ -5185,10 +5145,6 @@ export class RunEngine {
             // Generated-root dispatch: destroy tofu in the reviewed root.
             ...(dispatch.generatedRoot
               ? { generatedRoot: dispatch.generatedRoot }
-              : {}),
-            ...(dispatch.build ? { build: dispatch.build } : {}),
-            ...(dispatch.prebuiltArtifact
-              ? { prebuiltArtifact: dispatch.prebuiltArtifact }
               : {}),
             // M2 env dispatch (state scope at base+1 + source archive).
             ...(envDispatch.stateScope

@@ -734,37 +734,61 @@ inputs:
 
 Outputs-to-inputs is an OSS feature, not a Cloud-only feature.
 
-### 4.5 Source snapshots and fast first deploy
+### 4.5 Git OpenTofu execution and app install experience
 
-Takosumi runs immutable SourceSnapshot archives, not mutable working trees.
+Takosumi's standard install path is Git-native and OpenTofu-native.
 
 ```text
-git:
-  source_sync runner clone -> deterministic tar.zst
-
-upload:
-  takosumi deploy local archive -> SourceSnapshot
-
-artifact:
-  HTTPS prepared archive + sha256 digest -> SourceSnapshot
+Git URL + ref/tag/commit + module path
+  -> checkout
+  -> tofu init
+  -> tofu plan
+  -> tofu apply
 ```
 
-The `artifact` origin exists for source-side build and CI pipelines. A caller can
-prebuild the source outside Takosumi, publish a `tar.zst` archive, and give
-Takosumi the HTTPS URL plus `sha256:` digest. Takosumi verifies and stores that
-archive, then the normal Capsule Gate / plan / apply / state / output pipeline
-runs without a runner git clone or runner build step for the first deploy.
+The runner may create immutable SourceSnapshot archives from the selected Git
+bytes so a reviewed plan can be applied against the same source. Legacy
+upload/prepared-source archive paths may remain for stored compatibility rows
+and operator tooling, but they are not the app install product model.
+When a scheduled sync or webhook resolves the same Git ref/path to a commit
+already captured by a SourceSnapshot, the runner reuses the existing immutable
+archive object after `git ls-remote` instead of cloning, archiving, and writing
+the same bytes again.
 
-When the source archive already contains the deployable artifact, the service
-side InstallConfig may set:
+Takosumi does not fetch, build, or interpret deployable application artifacts.
+It does not know what `dist`, a container image, a Worker bundle, or a release
+asset means. If a module needs an image reference, release tag, version, object
+key, or any other app-specific value, the module declares an ordinary Terraform
+variable and Takosumi passes it through as `variableMapping` / deploy `vars`.
+The module, CI, registry, or provider decides what that value means.
 
-```yaml
-prebuiltArtifact:
-  path: dist/worker.js
+Legacy compatibility fields named `build` and `prebuiltArtifact` may still be
+read from stored pre-v1 / first-party rows for audit/export compatibility, but
+new generated-root dispatch does not run them or pass them to the runner. New
+service/API-created InstallConfigs must not use them: new Capsules pass
+ordinary OpenTofu variables and let the Git-hosted module, CI, registry, or
+provider own any build or release artifact decision.
+
+The user-facing experience still targets app-install simplicity:
+
+```text
+choose app
+choose cloud/provider connection
+press Install
+wait through app-level progress
+open/manage the ready app
 ```
 
-The runner validates the path inside the restored SourceSnapshot and exposes it
-as `TF_VAR_artifact_path`. `build` and `prebuiltArtifact` are mutually exclusive.
+The UI should show friendly phases such as preparing, checking access, planning,
+installing, finishing, and ready. OpenTofu plans, logs, state, provider
+bindings, and audit evidence remain available in details/advanced views instead
+of being the first thing a normal user sees.
+
+First-party apps such as Takos and yurucommu must optimize their own Git-hosted
+OpenTofu modules and release flows. Container builds, image publishing, bundle
+generation, image size, Docker layer cache, and app cold-start work belong in
+those app repos and their CI/release pipelines. Takosumi should not grow
+app-specific build or release logic to hide slow modules.
 
 ## 11. Runner
 
@@ -779,11 +803,11 @@ tofu plan
 tofu apply
 tofu destroy
 log streaming
-artifact upload
 state capture/sync
 output extraction
 temporary env/file injection
 secret cleanup
+phase timing
 ```
 
 Runner types:
@@ -834,6 +858,29 @@ Cloud may also record fallback operation usage at the platform worker when a
 successful Gateway request has verified billing Workspace context but the
 extension did not emit usage headers; this prevents silent free success while
 keeping Workers for Platforms internal.
+
+Billable Cloud extension operations fail closed. A successful Gateway response
+that needs usage metering must resolve a Workspace billing context from the
+verified Cloud token/session or from the Cloud-only billing context headers. If
+that context is missing, the platform returns `402
+cloud_extension_billing_context_required`; if it belongs to a different
+Workspace, it returns `403 cloud_extension_billing_context_mismatch`; if the
+Workspace USD balance is too low, it returns `402
+cloud_extension_insufficient_credits`. Malformed usage headers, unknown meters,
+or price-book misconfiguration remain `502
+cloud_extension_usage_metering_failed` because those are operator/Cloud
+configuration faults, not user payment actions.
+
+For routes that can create billable work before usage headers are emitted
+(create, deploy, delete, runtime execution, or other mutating operations), the
+Cloud extension descriptor must define a generic `fallbackUsage` rule. Matching
+`fallbackUsage` requests are rejected before the bound Cloud service is called
+unless the platform has verified Workspace billing context. Read-only
+management inventory such as resource lists and status/model catalogs is not a
+fallback-billed operation by default; it must remain usable for the dashboard
+without spending user credit. Client-supplied `x-takosumi-cloud-billing-*`
+headers are stripped first and re-created only from the verified session/token
+context or from an account-plane access check.
 
 Initial scope:
 
@@ -1245,8 +1292,12 @@ Takosumi stores logs, state, outputs, and run history.
 ```text
 Connection creation UI
 Project/Capsule creation UI
-Plan result view
-Apply approval
+App install cards
+Install setup
+App-level install progress
+Ready/open/manage result
+Plan result view in details
+Apply approval in details
 Run history
 State versions
 Outputs list
@@ -1422,11 +1473,11 @@ tofu plan
 tofu apply
 tofu destroy
 log streaming
-artifact upload
 state capture
 output capture
 env/file injection
 secret cleanup
+phase timing
 ```
 
 ### Phase 3: Provider Connection / Credential Recipe
@@ -1464,8 +1515,11 @@ Projects
 Capsules
 Connections
 Runs
-Plan result
-Apply approval
+App install cards
+Install progress
+Ready/open/manage result
+Plan result details
+Apply approval details
 State versions
 Outputs
 Secrets

@@ -11,8 +11,6 @@ import type {
   OpenTofuModuleSource,
   GeneratedRoot,
   GeneratedRootModuleFile,
-  BuildSpec,
-  PrebuiltArtifactSpec,
 } from "./types.ts";
 import {
   isRecord,
@@ -132,29 +130,17 @@ export function parseGeneratedRootModuleFiles(
   });
 }
 
-export function parseBuild(request: unknown): BuildSpec | undefined {
-  const build = recordField(request, "build");
-  if (!isRecord(build)) return undefined;
-  if (stringField(build, "runtime") !== "bun") {
-    throw new Error("build.runtime must be 'bun'");
+export function assertNoLegacyArtifactDispatch(request: unknown): void {
+  if (recordField(request, "build") !== undefined) {
+    throw new Error(
+      "build dispatch is retired; run the Git-hosted OpenTofu module and pass app release inputs as ordinary variables",
+    );
   }
-  const commands = stringArray(recordField(build, "commands"));
-  if (commands.length === 0) {
-    throw new Error("build.commands must be a non-empty string array");
+  if (recordField(request, "prebuiltArtifact") !== undefined) {
+    throw new Error(
+      "prebuiltArtifact dispatch is retired; run the Git-hosted OpenTofu module and pass app release inputs as ordinary variables",
+    );
   }
-  const artifactPath = requiredStringField(build, "artifactPath");
-  assertSafeRelativePath(artifactPath, "build.artifactPath");
-  return { runtime: "bun", commands, artifactPath };
-}
-
-export function parsePrebuiltArtifact(
-  request: unknown,
-): PrebuiltArtifactSpec | undefined {
-  const artifact = recordField(request, "prebuiltArtifact");
-  if (!isRecord(artifact)) return undefined;
-  const path = requiredStringField(artifact, "path");
-  assertSafeRelativePath(path, "prebuiltArtifact.path");
-  return { path };
 }
 
 export function parseRunnerProfile(request: unknown): JsonRecord | undefined {

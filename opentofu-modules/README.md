@@ -1,9 +1,9 @@
 # First-party Capsule modules
 
-These are Takosumi's first-party OpenTofu Capsule modules. A user repo may be
-the module source itself, or it may be a **build input** for an app-source
-InstallConfig; in both cases Takosumi plans/applies a Takosumi-generated root
-module that calls a child module.
+These are Takosumi's first-party OpenTofu Capsule modules. The active catalog is
+plain OpenTofu/Terraform child modules: Takosumi plans/applies a generated root
+module that calls the child module and passes ordinary variables. Takosumi does
+not build app source or interpret deployable artifacts.
 
 ## Where modules live
 
@@ -13,8 +13,14 @@ implementation under `providers/<provider>/modules/<id>/`:
 
 - `providers/cloudflare/modules/cloudflare-r2-storage`
 - `providers/cloudflare/modules/cloudflare-static-site`
-- `providers/cloudflare/modules/cloudflare-worker-service`
 - `providers/aws/modules/aws-s3-storage`
+
+`providers/cloudflare/modules/cloudflare-worker-service` remains in the tree
+only so stored legacy rows can resolve their reviewed module files. It is not
+part of the active catalog because it relies on a Takosumi-owned build artifact
+path. New install flows should use Git-hosted OpenTofu modules and ordinary
+module variables instead; new generated-root dispatch does not run that legacy
+build path.
 
 The shared bundled-HCL catalog (`module-files.ts`) and the catalog parity test
 (`module-files_test.ts`) stay here because they cover `core` plus every provider
@@ -43,13 +49,12 @@ policy enforce; `main.tf` is the actual module those inputs flow into.
 
 ## Modules
 
-| id                          | build                 | providers               | outputs.public                                                          |
-| --------------------------- | --------------------- | ----------------------- | ----------------------------------------------------------------------- |
-| `core`                      | —                     | (none)                  | `base_domain`, `public_origin`, `member_issuer`, `service_registry_url` |
-| `cloudflare-r2-storage`     | —                     | `cloudflare/cloudflare` | `bucket_name`, `location`                                               |
-| `cloudflare-worker-service` | bun (`dist/index.js`) | `cloudflare/cloudflare` | `worker_name`, `url`                                                    |
-| `cloudflare-static-site`    | —                     | `cloudflare/cloudflare` | `project_name`, `url`                                                   |
-| `aws-s3-storage`            | —                     | `hashicorp/aws`         | `bucket_name`, `bucket_arn`, `region`                                   |
+| id                       | build | providers               | outputs.public                                                          |
+| ------------------------ | ----- | ----------------------- | ----------------------------------------------------------------------- |
+| `core`                   | —     | (none)                  | `base_domain`, `public_origin`, `member_issuer`, `service_registry_url` |
+| `cloudflare-r2-storage`  | —     | `cloudflare/cloudflare` | `bucket_name`, `location`                                               |
+| `cloudflare-static-site` | —     | `cloudflare/cloudflare` | `project_name`, `url`                                                   |
+| `aws-s3-storage`         | —     | `hashicorp/aws`         | `bucket_name`, `bucket_arn`, `region`                                   |
 
 ## Adding a first-party Capsule module
 
