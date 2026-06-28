@@ -734,9 +734,11 @@ function fakeOperations(
     },
     approveRun: async (id, input) => {
       record("approveRun", id, input);
-      return { id, workspaceId: "space_a", status: "queued" } as unknown as Awaited<
-        ReturnType<ControlPlaneOperations["approveRun"]>
-      >;
+      return {
+        id,
+        workspaceId: "space_a",
+        status: "queued",
+      } as unknown as Awaited<ReturnType<ControlPlaneOperations["approveRun"]>>;
     },
     cancelRun: async (id) => {
       record("cancelRun", id);
@@ -1009,8 +1011,7 @@ test("GET /api/v1/spaces serves the session control surface", async () => {
   // GET /spaces also synchronously ensures the first-login personal Workspace so
   // an OAuth redirect cannot land the dashboard in an empty Workspace race.
   const createCall = operations.calls.createWorkspace?.[0] as
-    | { ownerUserId?: string; type?: string }
-    | undefined;
+    { ownerUserId?: string; type?: string } | undefined;
   expect(createCall?.ownerUserId).toEqual("tsub_ctrl");
   expect(createCall?.type).toEqual("personal");
 });
@@ -1757,6 +1758,36 @@ test("GET /api/v1/spaces/:id/billing returns billing settings and balance", asyn
   expect(body.billing.balance.availableCredits).toEqual(120);
   expect(body.billing.balance.reservedCredits).toEqual(8);
   expect(operations.calls.getWorkspaceBilling).toEqual(["space_a"]);
+});
+
+test("GET /api/v1/billing/plans returns public plan projections", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const { request: req, url } = request("GET", "/api/v1/billing/plans", {
+    cookie,
+  });
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+    publicBillingPlans: [
+      {
+        id: "starter",
+        kind: "subscription",
+        stripePriceId: "price_test_hidden",
+        usdMicros: 3000000,
+        name: { en: "Starter", ja: "Starter" },
+      },
+    ],
+  });
+  expect(response?.status).toEqual(200);
+  const body = (await response!.json()) as {
+    plans: readonly Record<string, unknown>[];
+  };
+  expect(body.plans.map((plan) => plan.id)).toEqual(["starter"]);
+  expect(body.plans[0]).not.toHaveProperty("stripePriceId");
 });
 
 test("GET /api/v1/spaces/:id/usage returns usage events", async () => {
@@ -2901,9 +2932,10 @@ test("GET /api/v1/installations/:id/provider-connections reads provider connecti
   expect(body.providerConnectionSet.bindings[0]?.connectionId).toEqual(
     "conn_cf_gateway",
   );
-  expect(
-    operations.calls.getCapsuleProviderEnvBindingSetByCapsule,
-  ).toEqual(["inst_1", "prod"]);
+  expect(operations.calls.getCapsuleProviderEnvBindingSetByCapsule).toEqual([
+    "inst_1",
+    "prod",
+  ]);
 });
 
 test("PUT /api/v1/installations/:id/provider-connections saves provider connection selections", async () => {
@@ -3478,9 +3510,7 @@ test("DELETE /api/v1/installations/:id abandons unapplied upload-origin projecti
   expect(body.abandoned).toEqual(true);
   expect(body.installation.status).toEqual("error");
   expect(body.projectionStatus).toEqual("failed");
-  expect(store.findAppCapsule("inst_upload_pending")?.status).toEqual(
-    "failed",
-  );
+  expect(store.findAppCapsule("inst_upload_pending")?.status).toEqual("failed");
   expect(
     store
       .listCapsuleEvents("inst_upload_pending")
@@ -3848,7 +3878,11 @@ test("GET /api/v1/capsule-configs starter catalog hides scoped configs", async (
   });
   expect(response?.status).toEqual(200);
   const body = (await response!.json()) as {
-    installConfigs: Array<{ id: string; workspaceId?: string; catalog?: unknown }>;
+    installConfigs: Array<{
+      id: string;
+      workspaceId?: string;
+      catalog?: unknown;
+    }>;
   };
   expect(body.installConfigs.map((config) => config.id)).toEqual([
     "cfg-default-opentofu-capsule",
@@ -5345,10 +5379,16 @@ test("unknown control subpath is 404 after the session gate", async () => {
 
 test("personalWorkspaceHandle prefers displayName, then email, then fallback", () => {
   expect(
-    personalWorkspaceHandle({ subject: "tsub_x", displayName: "Shota Tomiyama" }),
+    personalWorkspaceHandle({
+      subject: "tsub_x",
+      displayName: "Shota Tomiyama",
+    }),
   ).toEqual("shota-tomiyama");
   expect(
-    personalWorkspaceHandle({ subject: "tsub_x", email: "alice.dev@example.com" }),
+    personalWorkspaceHandle({
+      subject: "tsub_x",
+      email: "alice.dev@example.com",
+    }),
   ).toEqual("alice-dev");
   // Unusable displayName ("!") falls through to email.
   expect(
@@ -5366,7 +5406,10 @@ test("personalWorkspaceHandle prefers displayName, then email, then fallback", (
 
 test("personalWorkspaceHandle clamps to the 39-char handle rule", () => {
   const long = "x".repeat(80);
-  const handle = personalWorkspaceHandle({ subject: "tsub_x", displayName: long });
+  const handle = personalWorkspaceHandle({
+    subject: "tsub_x",
+    displayName: long,
+  });
   expect(handle.length).toBeLessThanOrEqual(39);
   expect(/^[a-z0-9][a-z0-9-]{1,38}$/.test(handle)).toEqual(true);
 });
@@ -5378,7 +5421,11 @@ test("maybeEnsurePersonalWorkspaceForSession creates a space for a live session"
   const { cookie } = seedSession(store, { displayName: "Shota" });
   const operations = fakeOperations();
   const { request: req } = request("GET", "/v1/account/session/me", { cookie });
-  await maybeEnsurePersonalWorkspaceForSession({ request: req, store, operations });
+  await maybeEnsurePersonalWorkspaceForSession({
+    request: req,
+    store,
+    operations,
+  });
   const createCall = operations.calls.createWorkspace?.[0] as {
     handle: string;
     type: string;
@@ -5407,14 +5454,22 @@ test("maybeEnsurePersonalWorkspaceForSession swallows a handle-collision error",
   });
   const { request: req } = request("GET", "/v1/account/session/me", { cookie });
   // Must NOT throw.
-  await maybeEnsurePersonalWorkspaceForSession({ request: req, store, operations });
+  await maybeEnsurePersonalWorkspaceForSession({
+    request: req,
+    store,
+    operations,
+  });
 });
 
 test("maybeEnsurePersonalWorkspaceForSession is a no-op without a session", async () => {
   const store = new InMemoryAccountsStore();
   const operations = fakeOperations();
   const { request: req } = request("GET", "/v1/account/session/me");
-  await maybeEnsurePersonalWorkspaceForSession({ request: req, store, operations });
+  await maybeEnsurePersonalWorkspaceForSession({
+    request: req,
+    store,
+    operations,
+  });
   expect(operations.calls.createWorkspace).toBeUndefined();
 });
 

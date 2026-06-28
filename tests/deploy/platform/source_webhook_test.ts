@@ -736,9 +736,9 @@ test("runtime-cell drill route records drain and evacuation events", async () =>
 
 test("platformCloudExtensionRoutes is empty when the env is unset", () => {
   expect(platformCloudExtensionRoutes({})).toEqual([]);
-  expect(platformCloudExtensionRoutes({ TAKOSUMI_CLOUD_EXTENSIONS: "" })).toEqual(
-    [],
-  );
+  expect(
+    platformCloudExtensionRoutes({ TAKOSUMI_CLOUD_EXTENSIONS: "" }),
+  ).toEqual([]);
 });
 
 test("platformCloudExtensionRoutes parses opaque descriptors", () => {
@@ -862,7 +862,9 @@ test("cloud extension route injects verified session context and strips raw cred
           forwarded.push({
             authorization: request.headers.get("authorization"),
             cookie: request.headers.get("cookie"),
-            authenticated: request.headers.get("x-takosumi-cloud-authenticated"),
+            authenticated: request.headers.get(
+              "x-takosumi-cloud-authenticated",
+            ),
             subject: request.headers.get("x-takosumi-cloud-subject"),
             spaceId: request.headers.get("x-takosumi-cloud-space-id"),
           });
@@ -1026,14 +1028,18 @@ test("cloud extension route matcher rejects near-prefixes", () => {
       { basePath: "/gateway/ai/v1", bindingName: "TAKOSUMI_CLOUD_AI" },
     ]),
   });
-  expect(matchPlatformCloudExtensionRoute("/gateway/ai/v1", routes)).toBeDefined();
+  expect(
+    matchPlatformCloudExtensionRoute("/gateway/ai/v1", routes),
+  ).toBeDefined();
   expect(
     matchPlatformCloudExtensionRoute("/gateway/ai/v1/models", routes),
   ).toBeDefined();
   expect(
     matchPlatformCloudExtensionRoute("/gateway/ai/v1-other", routes),
   ).toBeUndefined();
-  expect(matchPlatformCloudExtensionRoute("/gateway/ai", routes)).toBeUndefined();
+  expect(
+    matchPlatformCloudExtensionRoute("/gateway/ai", routes),
+  ).toBeUndefined();
 });
 
 test("cloud extension catalog reports configured extensions without binding names", async () => {
@@ -1048,7 +1054,10 @@ test("cloud extension catalog reports configured extensions without binding name
     ]),
     TAKOSUMI_CLOUD_AI: { fetch: async () => new Response("") },
   } as never;
-  const catalog = platformCloudExtensionCatalog(env, "https://app.takosumi.com");
+  const catalog = platformCloudExtensionCatalog(
+    env,
+    "https://app.takosumi.com",
+  );
   expect(catalog.kind).toBe("takosumi.platform-cloud-extensions@v1");
   expect(catalog.summary).toEqual({ total: 2, configured: 1, missing: 1 });
   expect(catalog.extensions).toEqual([
@@ -1064,9 +1073,9 @@ test("cloud extension catalog reports configured extensions without binding name
 });
 
 test("cloud extension catalog is a stable platform endpoint", async () => {
-  expect(isPlatformCloudExtensionCatalogPath("/__takosumi/cloud/extensions")).toBe(
-    true,
-  );
+  expect(
+    isPlatformCloudExtensionCatalogPath("/__takosumi/cloud/extensions"),
+  ).toBe(true);
   const response = handlePlatformCloudExtensionCatalogRequest(
     new Request("https://app.takosumi.com/__takosumi/cloud/extensions"),
     new URL("https://app.takosumi.com/__takosumi/cloud/extensions"),
