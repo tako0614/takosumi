@@ -23,12 +23,7 @@ import BackupsTab from "./tabs/BackupsTab.tsx";
 import SharesTab from "./tabs/SharesTab.tsx";
 
 type TabId =
-  | "general"
-  | "members"
-  | "connections"
-  | "billing"
-  | "backups"
-  | "shares";
+  "general" | "members" | "connections" | "billing" | "backups" | "shares";
 
 type StandaloneTabId = Extract<TabId, "connections" | "billing">;
 
@@ -36,7 +31,9 @@ interface WorkspaceSettingsViewProps {
   readonly standaloneTab?: StandaloneTabId;
 }
 
-export default function WorkspaceSettingsView(props: WorkspaceSettingsViewProps = {}) {
+export default function WorkspaceSettingsView(
+  props: WorkspaceSettingsViewProps = {},
+) {
   return (
     <Page title={pageTitle(props.standaloneTab)}>
       {(session) => (
@@ -62,7 +59,8 @@ function Inner(props: {
       ? raw
       : "general";
   };
-  const workspaceId = () => (currentWorkspaceId() ? currentWorkspaceId() : null);
+  const workspaceId = () =>
+    currentWorkspaceId() ? currentWorkspaceId() : null;
 
   const tabItems = () => [
     {
@@ -98,6 +96,7 @@ function Inner(props: {
 
       <Show
         when={workspaceId()}
+        keyed
         fallback={
           <EmptyState
             icon={<Settings2 size={28} />}
@@ -110,22 +109,22 @@ function Inner(props: {
           <div class="wa-stack">
             <Switch>
               <Match when={tab() === "general"}>
-                <GeneralTab workspaceId={id()} />
+                <GeneralTab workspaceId={id} />
               </Match>
               <Match when={tab() === "members"}>
-                <MembersTab workspaceId={id()} session={props.session} />
+                <MembersTab workspaceId={id} session={props.session} />
               </Match>
               <Match when={tab() === "connections"}>
-                <ConnectionsTab workspaceId={id()} />
+                <ConnectionsTab workspaceId={id} />
               </Match>
               <Match when={tab() === "billing"}>
-                <BillingTab workspaceId={id()} />
+                <BillingTab workspaceId={id} />
               </Match>
               <Match when={tab() === "backups"}>
-                <BackupsTab workspaceId={id()} />
+                <BackupsTab workspaceId={id} />
               </Match>
               <Match when={tab() === "shares"}>
-                <SharesTab workspaceId={id()} />
+                <SharesTab workspaceId={id} />
               </Match>
             </Switch>
           </div>
