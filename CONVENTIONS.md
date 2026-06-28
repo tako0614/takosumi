@@ -11,8 +11,8 @@ metadata file, component graph, provider selector, or repository metadata field.
 - `Project`: one product, service, application, or infrastructure group.
 - `Capsule`: one OpenTofu/Terraform module execution unit, usually sourced from
   Git URL + ref + path.
-- `Source`: Git URL / branch / ref / commit / module path / tarball / upload
-  input.
+- `Source`: Git URL / branch / ref / commit / module path. Upload or
+  prepared-source archives are internal/operator compatibility only.
 - `ProviderConnection`: provider credential configuration stored in Takosumi and
   resolved into temporary env/file material only while a Run executes.
 - `CredentialRecipe`: provider-specific env/file/pre-run action definition for
@@ -55,12 +55,13 @@ vocabulary.
 
 ## Source And Build
 
-Build recipes stay outside Takosumi. CI or an operator build service calls the
-control-plane API to create a Capsule plan Run from a Git URL / source snapshot,
-module path, variables, provider bindings, output-to-input wiring, and resolved
+Build recipes stay outside Takosumi. CI, release automation, or the app's
+OpenTofu module can publish or reference build artifacts as ordinary variables
+and provider resources. Takosumi creates a Capsule plan Run from a Git Source,
+module path, variables, ProviderBindings, output-to-input wiring, and resolved
 internal execution policy. Apply uses the saved plan and verifies plan digest,
-source identity, provider bindings, and state generation to prevent drift
-between review and execution.
+source identity, ProviderBindings, and state generation to prevent drift between
+review and execution.
 
 ## Test / Source Boundary
 

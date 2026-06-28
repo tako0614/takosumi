@@ -6,8 +6,8 @@ plan/apply/destroy, state capture, and output projection without any cloud API
 keys.
 
 Install it through the standard Takosumi dashboard flow by linking a Git URL
-into `/install?git=...`, or use `takosumi deploy <dir>` only as a local-upload
-helper before pushing the Capsule to Git.
+into `/install?git=...`. The dashboard pre-fills `/new`; the Capsule source is
+the Git URL / ref / module path, not a local upload.
 
 Standard product entry:
 
@@ -15,14 +15,8 @@ Standard product entry:
 https://app.takosumi.com/install?git=https://git.example.com/example/opentofu-basic.git&ref=main&path=.
 ```
 
-The dashboard pre-fills `/new`, runs compatibility review, asks for Provider Connection choices, and creates the plan/apply
-Runs through `/api/v1/*`.
-
-Advanced local upload:
-
-```bash
-takosumi deploy . --space @me --name opentofu-basic
-```
+The dashboard pre-fills `/new`, runs compatibility review, asks for Provider
+Connection choices, and creates the plan/apply Runs through `/api/v1/*`.
 
 Local OpenTofu check:
 

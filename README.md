@@ -44,19 +44,19 @@ The product flow is deliberately small: choose a **Workspace** and **Project**, 
 review a **Run**, then inspect **StateVersions**, **Outputs**, and **AuditEvents**. See [AGENTS.md](AGENTS.md) "Public
 Surface" and [docs/final-plan.md](docs/final-plan.md) for the current model.
 
-| Concept              | Meaning                                                                                                                          |
-| -------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| Concept              | Meaning                                                                                                                         |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
 | `Workspace`          | User/team owner boundary for projects, provider connections, secrets, state isolation, and audit.                               |
-| `Project`            | One product, service, application, or infrastructure group.                                                                       |
+| `Project`            | One product, service, application, or infrastructure group.                                                                     |
 | `Capsule`            | One OpenTofu/Terraform module execution unit, usually sourced from Git URL + ref + path.                                        |
-| `Source`             | Git URL / branch / ref / commit / module path / tarball / upload input.                                                         |
-| `ProviderConnection` | Provider credential configuration stored in Takosumi and resolved into temporary env/file material only while a Run executes.    |
+| `Source`             | Git URL / branch / ref / commit / module path. Upload/prepared-source archives are internal/operator compatibility only.        |
+| `ProviderConnection` | Provider credential configuration stored in Takosumi and resolved into temporary env/file material only while a Run executes.   |
 | `CredentialRecipe`   | Provider-specific env/file/pre-run action definition for running an existing OpenTofu/Terraform provider as-is.                 |
-| `ProviderBinding`    | Provider address or alias to ProviderConnection mapping.                                                                         |
+| `ProviderBinding`    | Provider address or alias to ProviderConnection mapping.                                                                        |
 | `Secret`             | Encrypted backing material; secret values are write-only to APIs and redacted from logs.                                        |
 | `Run`                | One init / validate / plan / apply / destroy / refresh / output execution with source snapshot, provider bindings, and logs.    |
 | `StateVersion`       | Persisted Capsule state generation.                                                                                             |
-| `Output`             | Captured `tofu output -json`, optionally wired into another Capsule's inputs.                                                    |
+| `Output`             | Captured `tofu output -json`, optionally wired into another Capsule's inputs.                                                   |
 | `Runner`             | Local/docker/remote/operator/cloud execution boundary for checkout, OpenTofu execution, state sync, output extraction, cleanup. |
 | `AuditEvent`         | Actor/action/target/result evidence.                                                                                            |
 | `Operator`           | The person or organization running Takosumi for their own users.                                                                |
@@ -70,10 +70,10 @@ Takosumi Cloud.
 
 ## Editions
 
-| Edition                                  | What it is                                                                                                                                                                                                       |
-| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Takosumi OSS / Takosumi for Operators** | This repository: a multi-tenant OpenTofu/Terraform control plane over existing providers — Workspace/team, runner pool, admin console, basic quota, audit. Billing is **showback** or **disabled** and never blocks apply. |
-| **Takosumi Cloud**                       | The closed delta in the sibling `takosumi-cloud/` package, composed **on top of** the OSS for-Operators control plane. It adds the Cloudflare Compatibility Gateway, Managed Resources, the AI Gateway, and Stripe-enforced billing / quota / usage. |
+| Edition                                   | What it is                                                                                                                                                                                                                                           |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Takosumi OSS / Takosumi for Operators** | This repository: a multi-tenant OpenTofu/Terraform control plane over existing providers — Workspace/team, runner pool, admin console, basic quota, audit. Billing is **showback** or **disabled** and never blocks apply.                           |
+| **Takosumi Cloud**                        | The closed delta in the sibling `takosumi-cloud/` package, composed **on top of** the OSS for-Operators control plane. It adds the Cloudflare Compatibility Gateway, Managed Resources, the AI Gateway, and Stripe-enforced billing / quota / usage. |
 
 The dependency direction is **one-way Cloud -> OSS**: `takosumi-cloud/` consumes only the OSS composition root and the
 public contract (`takosumi-contract`), at two seams — an additive HTTP route proxy (Seam A) and in-process composition
@@ -84,9 +84,10 @@ with nothing from `takosumi-cloud/` present.
 ## Local control-plane quickstart
 
 Run the local control-plane service directly when you want to exercise the `/api/v1` contract from curl or tests.
-The CLI is documented separately in [docs/reference/cli.md](docs/reference/cli.md): the standard product flow is still
-dashboard Git URL install. The retired `takosumi deploy` / `takosumi plan`
-local-upload helpers now fail closed and do not create public Capsules.
+The CLI is documented separately in [docs/reference/cli.md](docs/reference/cli.md): the standard product flow is
+dashboard Git URL install and Capsule creation from a Git Source. The retired
+`takosumi deploy` / `takosumi plan` local-upload helpers fail closed and do not
+create public Capsules.
 
 ```bash
 bun install
