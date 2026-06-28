@@ -157,6 +157,17 @@ type SmokeStepTiming = {
   readonly finishedAt: string;
   readonly durationMs: number;
 };
+type SmokeRunTiming = {
+  readonly name: string;
+  readonly runId: string;
+  readonly type: string;
+  readonly createdAt?: string;
+  readonly startedAt?: string;
+  readonly finishedAt?: string;
+  readonly queueMs?: number;
+  readonly executionMs?: number;
+  readonly totalMs?: number;
+};
 
 export interface PlatformControlPlaneSmokeOptions {
   readonly url: string;
@@ -218,6 +229,8 @@ export interface PlatformControlPlaneSmokeResult {
   readonly completedSteps: readonly string[];
   /** Per-checkpoint wall-clock timings for deploy-speed regressions. */
   readonly stepTimings: readonly SmokeStepTiming[];
+  /** Run-ledger timings split queue latency from OpenTofu execution time. */
+  readonly runTimings: readonly SmokeRunTiming[];
   readonly appName: string;
   readonly environment: string;
   readonly connectionId?: string;
@@ -806,6 +819,7 @@ export function dryRunResult(
       finishedAt: generatedAt,
       durationMs: 0,
     })),
+    runTimings: dryRunRunTimings(generatedAt),
     appName: options.appName,
     environment: options.environment,
     ...(options.backupRestoreRehearsal
@@ -894,6 +908,55 @@ export function dryRunResult(
   };
 }
 
+function dryRunRunTimings(timestamp: string): readonly SmokeRunTiming[] {
+  return ["plan", "apply", "destroy_plan", "destroy_apply"].map((name) => ({
+    name,
+    runId: `${name}_dry_run`,
+    type: name,
+    createdAt: timestamp,
+    startedAt: timestamp,
+    finishedAt: timestamp,
+    queueMs: 0,
+    executionMs: 0,
+    totalMs: 0,
+  }));
+}
+
+function smokeRunTiming(name: string, run: RunRecord): SmokeRunTiming {
+  const createdAtMs =
+    typeof run.createdAt === "string" ? Date.parse(run.createdAt) : undefined;
+  const startedAtMs =
+    typeof run.startedAt === "string" ? Date.parse(run.startedAt) : undefined;
+  const finishedAtMs =
+    typeof run.finishedAt === "string" ? Date.parse(run.finishedAt) : undefined;
+  return {
+    name,
+    runId: run.id,
+    type: run.type,
+    createdAt: run.createdAt,
+    startedAt: run.startedAt,
+    finishedAt: run.finishedAt,
+    ...(typeof createdAtMs === "number" &&
+    Number.isFinite(createdAtMs) &&
+    typeof startedAtMs === "number" &&
+    Number.isFinite(startedAtMs)
+      ? { queueMs: Math.max(0, startedAtMs - createdAtMs) }
+      : {}),
+    ...(typeof startedAtMs === "number" &&
+    Number.isFinite(startedAtMs) &&
+    typeof finishedAtMs === "number" &&
+    Number.isFinite(finishedAtMs)
+      ? { executionMs: Math.max(0, finishedAtMs - startedAtMs) }
+      : {}),
+    ...(typeof createdAtMs === "number" &&
+    Number.isFinite(createdAtMs) &&
+    typeof finishedAtMs === "number" &&
+    Number.isFinite(finishedAtMs)
+      ? { totalMs: Math.max(0, finishedAtMs - createdAtMs) }
+      : {}),
+  };
+}
+
 export async function runPlatformControlPlaneSmoke(
   options: PlatformControlPlaneSmokeOptions,
 ): Promise<PlatformControlPlaneSmokeResult> {
@@ -902,6 +965,7 @@ export async function runPlatformControlPlaneSmoke(
   const spaceId = await resolveSpaceId(options);
   const completedSteps: string[] = [];
   const stepTimings: SmokeStepTiming[] = [];
+  const runTimings: SmokeRunTiming[] = [];
   const stepStartedAtMs = new Map<string, number>();
   const stepStartedAt = new Map<string, string>();
   const beginStep = (step: string): void => {
@@ -1010,6 +1074,7 @@ export async function runPlatformControlPlaneSmoke(
     const completedPlan = await ensurePlanReadyForApply(options, planRunId);
     policyStatus = publicPolicyStatus(completedPlan);
     assertRunSucceeded(completedPlan, "plan");
+    runTimings.push(smokeRunTiming("plan", completedPlan));
     completeStep("plan");
     beginStep("apply");
     const applyRun =
@@ -1027,6 +1092,7 @@ export async function runPlatformControlPlaneSmoke(
     const completedApply = await pollRun(options, applyRunId);
     policyStatus = publicPolicyStatus(completedApply);
     assertRunSucceeded(completedApply, "apply");
+    runTimings.push(smokeRunTiming("apply", completedApply));
     completeStep("apply");
     beginStep("deploymentLedgerVerified");
     if (options.verificationMode === "cloudflare-worker") {
@@ -1103,6 +1169,7 @@ export async function runPlatformControlPlaneSmoke(
         `destroy plan ${destroyPlanRunId} ended as ${reviewedDestroyPlan.status}; expected waiting_approval`,
       );
     }
+    runTimings.push(smokeRunTiming("destroy_plan", reviewedDestroyPlan));
     await requestJson({
       baseUrl: options.url,
       token: options.accountSessionToken,
@@ -1121,6 +1188,7 @@ export async function runPlatformControlPlaneSmoke(
     const completedDestroy = await pollRun(options, destroyApplyRunId);
     policyStatus = publicPolicyStatus(completedDestroy);
     assertRunSucceeded(completedDestroy, "destroy apply");
+    runTimings.push(smokeRunTiming("destroy_apply", completedDestroy));
     if (options.verificationMode === "cloudflare-worker") {
       await assertCloudflareWorkerGone(options);
       await assertPublicWorkerUrlGone(options);
@@ -1159,6 +1227,7 @@ export async function runPlatformControlPlaneSmoke(
       steps: requiredSteps(options),
       completedSteps,
       stepTimings,
+      runTimings,
       appName: options.appName,
       environment: options.environment,
       connectionId,
@@ -1245,6 +1314,7 @@ export async function runPlatformControlPlaneSmoke(
     spaceId,
     completedSteps,
     stepTimings,
+    runTimings,
     connectionId,
     providerConnectionId,
     installationId,
@@ -1280,6 +1350,7 @@ function failedResult(
     readonly spaceId: string;
     readonly completedSteps: readonly string[];
     readonly stepTimings: readonly SmokeStepTiming[];
+    readonly runTimings: readonly SmokeRunTiming[];
     readonly connectionId?: string;
     readonly providerConnectionId?: string;
     readonly sourceId?: string;
@@ -1331,6 +1402,7 @@ function failedResult(
     steps: requiredSteps(options),
     completedSteps: input.completedSteps,
     stepTimings: input.stepTimings,
+    runTimings: input.runTimings,
     appName: options.appName,
     environment: options.environment,
     connectionId: input.connectionId,
@@ -4083,6 +4155,7 @@ async function runSelfTest(): Promise<void> {
     spaceId: "space_selftest",
     completedSteps: [],
     stepTimings: [],
+    runTimings: [],
     connectionId: "conn_selftest",
     capsuleGateStatus: "not_reached",
     policyStatus: "not_reached",
@@ -4123,6 +4196,7 @@ async function runSelfTest(): Promise<void> {
         durationMs: 0,
       },
     ],
+    runTimings: [],
     connectionId: "conn_selftest",
     capsuleGateStatus: "not_reached",
     policyStatus: "not_reached",
