@@ -327,7 +327,6 @@ async function markRunRetriesExhausted(
   },
   env: CloudflareWorkerEnv,
 ): Promise<void> {
-  if (dispatch.action === "source_sync") return;
   try {
     const service = await cachedDeployControlService(env);
     await service.operations.controller.markRunFailed(

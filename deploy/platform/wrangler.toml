@@ -110,10 +110,10 @@ class_name = "OpenTofuRunnerObject"
 image = "../../runner/Dockerfile"
 image_build_context = "../.."
 # Custom sizing: the runner image bakes an OpenTofu provider filesystem mirror
-# and each run materializes a per-run workspace (source checkout + build
-# artifact + generated root + tofu provider cache + state). 2 vCPU / 6 GiB RAM
-# headroom for tofu init/plan/apply + the optional Bun build phase; 10 GB disk
-# for the mirror + workspace scratch.
+# and each run materializes a per-run workspace (source checkout,
+# generated-root files, tofu plan/state, and provider binary cache). 2 vCPU /
+# 6 GiB RAM headroom for tofu init/plan/apply; 10 GB disk for the mirror +
+# workspace scratch.
 instance_type = { vcpu = 2, memory_mib = 6144, disk_mb = 10240 }
 max_instances = 10
 

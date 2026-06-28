@@ -8,7 +8,7 @@
  *
  * The deploy-control domain resolves an InstallConfig-backed module by
  * id+version, validates request inputs against it, runs rootgen, and threads the
- * build/generatedRoot payload onto the runner dispatch. The module binding is
+ * generated-root payload onto the runner dispatch. The module binding is
  * service-side configuration, not a user-repo manifest requirement.
  */
 

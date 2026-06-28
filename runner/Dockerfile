@@ -32,8 +32,9 @@ RUN set -eux; \
 # to registry.opentofu.org. The baked tofu.rc (TF_CLI_CONFIG_FILE) wires a
 # provider_installation block whose filesystem_mirror is authoritative for the
 # mirrored providers and `direct { exclude=[...] }` forbids reaching the network
-# for exactly those providers. Runtime-generated per-run CLI configs add an
-# isolated plugin_cache_dir under the run workspace.
+# for exactly those providers. Runtime-generated per-run CLI configs may use a
+# run-local cache or the operator-configured TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR
+# for provider binaries only.
 #
 # Mirror list covers the providers the bundled first-party modules require:
 # cloudflare + random + tls for the Cloudflare modules, and aws for the
@@ -48,7 +49,8 @@ ENV TF_CLI_CONFIG_FILE=/opt/opentofu/tofu.rc
 
 # The baked CLI config. The provider_installation filesystem_mirror serves the
 # mirrored providers from disk and `direct { exclude }` keeps tofu from going to
-# the network for them. Per-run generated configs add the plugin cache.
+# the network for them. Per-run generated configs may add a run-local or
+# operator-configured provider plugin cache.
 COPY runner/tofu.rc ${TF_CLI_CONFIG_FILE}
 
 # Minimal build-time config that pins the provider set to mirror. Lives in its

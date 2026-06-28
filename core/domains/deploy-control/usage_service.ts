@@ -553,6 +553,12 @@ function normalizeUsageResourceMetadata(
         "usage resourceMetadata keys must be non-empty strings",
       );
     }
+    if (usageMeterNameLeaksInternalWorkersBackend(normalizedKey)) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        "usage resourceMetadata must not expose an internal resource backend",
+      );
+    }
     if (!isUsageResourceMetadataValue(metadataValue)) {
       throw new OpenTofuControllerError(
         "invalid_argument",

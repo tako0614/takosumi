@@ -9,9 +9,10 @@
 #   `--network none`. aws is mirrored so the first-party `aws-s3-storage` Capsule
 #   no longer fail-closes under offline init. Any provider NOT in these lists
 #   (e.g. google, not yet mirrored for size) falls through to `direct` and is
-#   fetched from the registry as usual. Runtime-generated per-run CLI configs add
-#   an isolated plugin_cache_dir under the run workspace; this baked fallback
-#   deliberately has no shared mutable plugin cache.
+#   fetched from the registry as usual. Runtime-generated per-run CLI configs
+#   may use a run-local cache or the operator-configured
+#   TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR for provider binaries only; this baked
+#   fallback deliberately has no shared mutable plugin cache.
 
 provider_installation {
   filesystem_mirror {

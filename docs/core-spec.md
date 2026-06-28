@@ -149,8 +149,11 @@ The allowed performance mechanisms are:
 - Use an operator-configured OpenTofu provider plugin cache inside the runner
   container for direct provider installs. The cache stores provider binaries
   only; provider credentials and generated files remain per-run and are deleted
-  after the run. `tofu init` is serialized per shared cache path to avoid cache
-  corruption while keeping plan/apply execution parallel.
+  after the run. Within a runner process, `tofu init` is serialized per shared
+  cache path to avoid cache corruption while keeping plan/apply execution
+  parallel. Sharing the same cache path across independent runner processes or
+  containers is an operator decision and must provide its own isolation or file
+  locking.
 - Keep app/container/bundle build optimization in the app repository, release
   pipeline, registry, or OpenTofu module. A module may accept a URL, digest,
   image tag, or object key as a normal variable, and may verify it with ordinary
@@ -429,7 +432,7 @@ provider credentials are injected only into the run sandbox
 logs are redacted before persistence
 runs use a temporary workspace
 temporary credential files are removed after the run
-provider plugin cache stores provider binaries only and is isolated/serialized by policy
+provider plugin cache stores provider binaries only and is run-local or isolated/serialized by operator policy
 state is isolated per Workspace/Capsule
 apply approval is supported
 destroy protection is supported

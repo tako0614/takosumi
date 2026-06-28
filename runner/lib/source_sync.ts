@@ -615,9 +615,9 @@ export async function handleSourceArchiveArtifactRequest(
 // (deterministic tar.zst produced by a prior source_sync) to this route. We
 // write the bytes, list+validate the archive metadata with the SAME tar-slip
 // hardening used for prepared sources, then extract into /work/source as the
-// source tree for the build/plan phases. The archive already contains the
-// snapshot subtree (source_sync archived `source.path`), so it is extracted at
-// the source root with no path remap.
+// source tree for the generated-root and OpenTofu phases. The archive already
+// contains the snapshot subtree (source_sync archived `source.path`), so it is
+// extracted at the source root with no path remap.
 export async function handleSourceArchiveRestoreRequest(
   runId: string,
   request: Request,

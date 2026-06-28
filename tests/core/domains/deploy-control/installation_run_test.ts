@@ -3108,6 +3108,38 @@ test("resource meter usage reconciliation is idempotent and rejects runner sourc
       idempotencyKey: "operator:bad-runner-source",
     }),
   ).rejects.toThrow("usage event source must be resource_meter");
+  await expect(
+    controller.recordMeteredUsage("space_test", {
+      kind: "gateway_compute",
+      quantity: 1,
+      usdMicros: 1_000,
+      meterId: "cloudflare:workers_script:deploy",
+      resourceFamily: "cloudflare.workers_script",
+      source: "resource_meter",
+      idempotencyKey: "operator:bad-metadata-key",
+      resourceMetadata: {
+        workers_for_platforms_backend: "true",
+      },
+    }),
+  ).rejects.toThrow(
+    "usage resourceMetadata must not expose an internal resource backend",
+  );
+  await expect(
+    controller.recordMeteredUsage("space_test", {
+      kind: "gateway_compute",
+      quantity: 1,
+      usdMicros: 1_000,
+      meterId: "cloudflare:workers_script:deploy",
+      resourceFamily: "cloudflare.workers_script",
+      source: "resource_meter",
+      idempotencyKey: "operator:bad-metadata-value",
+      resourceMetadata: {
+        backend: "workers_for_platforms",
+      },
+    }),
+  ).rejects.toThrow(
+    "usage resourceMetadata must not expose an internal resource backend",
+  );
 });
 
 test("metered usage can atomically spend Workspace USD balance when required", async () => {
