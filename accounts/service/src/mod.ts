@@ -251,6 +251,7 @@ export interface AccountsHandlerOptions {
    * respond 503 after the session gate.
    */
   controlPlaneOperations?: ControlPlaneOperations;
+  publicBillingPlans?: readonly Record<string, unknown>[];
   bindingMaterializer?: ServiceBindingMaterializer;
   sharedCellRuntime?: SharedCellRuntimeAllocator;
   materializeWorker?: AppCapsuleMaterializeWorker;
@@ -294,6 +295,7 @@ export interface EphemeralAccountsHandlerOptions {
   launchTokens?: EphemeralLaunchTokenOptions;
   deployControl?: DeployControlFacadeOptions;
   controlPlaneOperations?: ControlPlaneOperations;
+  publicBillingPlans?: readonly Record<string, unknown>[];
   bindingMaterializer?: ServiceBindingMaterializer;
   sharedCellRuntime?: SharedCellRuntimeAllocator;
   materializeWorker?: AppCapsuleMaterializeWorker;
@@ -453,9 +455,7 @@ export interface AppCapsuleExportWorkerResult {
 
 export type AppCapsuleExportWorker = (
   input: AppCapsuleExportWorkerInput,
-) =>
-  | AppCapsuleExportWorkerResult
-  | Promise<AppCapsuleExportWorkerResult>;
+) => AppCapsuleExportWorkerResult | Promise<AppCapsuleExportWorkerResult>;
 
 export interface UpstreamOAuthOptions {
   subjectSecret: string | Uint8Array | CryptoKey;
@@ -1138,6 +1138,7 @@ export function createAccountsHandler(
         url,
         store,
         operations: options.controlPlaneOperations,
+        publicBillingPlans: options.publicBillingPlans,
         sharedCellRuntime: options.sharedCellRuntime,
       });
       if (controlResponse) return controlResponse;

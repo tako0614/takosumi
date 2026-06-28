@@ -1012,10 +1012,7 @@ async function platformCloudExtensionAuthContext(
     if (!hasAll) {
       return {
         ok: false,
-        response: Response.json(
-          { error: "unauthorized" },
-          { status: 401 },
-        ),
+        response: Response.json({ error: "unauthorized" }, { status: 401 }),
       };
     }
   }
@@ -1165,8 +1162,7 @@ export async function verifyPlatformCloudExtensionPersonalAccessToken(
   env: CloudflareWorkerEnv,
   token: string,
   routeOrIntrospectFetch?:
-    | PlatformCloudExtensionRoute
-    | PlatformCloudExtensionIntrospectFetch,
+    PlatformCloudExtensionRoute | PlatformCloudExtensionIntrospectFetch,
   maybeIntrospectFetch?: PlatformCloudExtensionIntrospectFetch,
 ): Promise<PlatformCloudExtensionSessionContext> {
   const route =

@@ -117,9 +117,7 @@ export interface RestoreRehearsalEvidence extends BaseEvidence {
   readonly target: "staging" | "isolated_recovery" | "production_smoke";
   readonly backupId: string;
   readonly restoreMode:
-    | "validate_only"
-    | "isolated_restore"
-    | "live_smoke_restore";
+    "validate_only" | "isolated_restore" | "live_smoke_restore";
   readonly scopesVerified: readonly string[];
   readonly auditChainVerified: true;
   readonly rtoMinutes: number;

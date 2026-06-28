@@ -68,8 +68,7 @@ export interface NodeAccountsServerConfig {
   readonly clients: readonly OidcClientRegistration[] | undefined;
   readonly platformAccess: PlatformAccessPolicy;
   readonly serviceGraphMaterialResolver:
-    | ServiceGraphMaterialResolverHttpOptions
-    | undefined;
+    ServiceGraphMaterialResolverHttpOptions | undefined;
   readonly loginEmailAllowlist: LoginEmailAllowlist | undefined;
   readonly passkeys: PasskeyHttpOptions | undefined;
   readonly upstreamOAuth: UpstreamOAuthOptions | undefined;

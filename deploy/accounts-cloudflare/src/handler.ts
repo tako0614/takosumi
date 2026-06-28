@@ -428,6 +428,7 @@ async function buildAccountsHandler(
     platformAccess: parsePlatformAccess(env),
     deployControl: parseDeployControl(env, deployControlOperations),
     ...(controlPlaneOperations ? { controlPlaneOperations } : {}),
+    publicBillingPlans: parsePublicBillingPlans(env),
     serviceGraphMaterialResolver: parseServiceGraphMaterials(env),
     exportWorker: parseR2ExportWorker(env, issuer),
     exportDownloadSigningSecret: optionalString(
@@ -806,7 +807,6 @@ function parseClientAuthMethod(
   return raw;
 }
 
-
 function parsePasskeys(
   env: CloudflareWorkerEnv,
 ): PasskeyHttpOptions | undefined {
@@ -1014,6 +1014,28 @@ function parseServiceGraphMaterials(
   };
 }
 
+function parsePublicBillingPlans(
+  env: CloudflareWorkerEnv,
+): readonly Record<string, unknown>[] | undefined {
+  const raw = optionalString(env.TAKOSUMI_BILLING_PLANS);
+  if (!raw) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new TypeError("TAKOSUMI_BILLING_PLANS must be valid JSON");
+  }
+  if (!Array.isArray(parsed)) {
+    throw new TypeError("TAKOSUMI_BILLING_PLANS must be a JSON array");
+  }
+  return parsed.map((entry, index) => {
+    if (!isRecord(entry)) {
+      throw new TypeError(`TAKOSUMI_BILLING_PLANS[${index}] must be an object`);
+    }
+    const { stripePriceId: _stripePriceId, ...publicPlan } = entry;
+    return publicPlan;
+  });
+}
 
 function parseR2ExportWorker(
   env: CloudflareWorkerEnv,

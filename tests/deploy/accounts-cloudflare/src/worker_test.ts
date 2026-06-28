@@ -510,10 +510,7 @@ test("Cloudflare Accounts Worker writes metadata exports to R2 with signed downl
     operationId?: string;
     bundle?: { installation?: { capsuleId?: string } };
   };
-  assert.equal(
-    body.kind,
-    "takosumi.accounts.cloudflare-r2-capsule-export@v1",
-  );
+  assert.equal(body.kind, "takosumi.accounts.cloudflare-r2-capsule-export@v1");
   assert.equal(body.operationId, "op_export_1");
   assert.equal(body.bundle?.installation?.capsuleId, "inst_export");
 

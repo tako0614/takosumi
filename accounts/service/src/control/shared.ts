@@ -77,10 +77,7 @@ import type {
   ProviderResolution,
   PublicProviderResolution,
 } from "takosumi-contract/provider-resolution";
-import type {
-  OutputShare,
-  OutputShareEntry,
-} from "takosumi-contract/outputs";
+import type { OutputShare, OutputShareEntry } from "takosumi-contract/outputs";
 import type { PublicDeployment } from "takosumi-contract/deployments";
 import type {
   BackupRecord,
@@ -142,6 +139,7 @@ export interface ControlDispatchContext {
   readonly store: AccountsStore;
   readonly session: { readonly subject: string };
   readonly sharedCellRuntime?: SharedCellRuntimeAllocator;
+  readonly publicBillingPlans?: readonly Record<string, unknown>[];
 }
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
@@ -151,9 +149,7 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 type PublicCapsuleInput = PublicCapsule &
   Partial<Pick<Capsule, "installType" | "currentOutputId">>;
 
-export function publicCapsule(
-  installation: PublicCapsuleInput,
-): PublicCapsule {
+export function publicCapsule(installation: PublicCapsuleInput): PublicCapsule {
   const {
     installType: _installType,
     currentOutputId: _currentOutputId,
@@ -415,7 +411,8 @@ export async function resolveProviderConnectionBindings(
   for (const connection of await operations.connections.listProviderConnections(
     workspaceId,
   )) {
-    if (connection.workspaceId !== undefined) visibleById.set(connection.id, connection);
+    if (connection.workspaceId !== undefined)
+      visibleById.set(connection.id, connection);
   }
   const resolved: CapsuleProviderEnvBinding[] = [];
   for (const [index, binding] of bindings.entries()) {
@@ -480,7 +477,8 @@ export async function canAccessWorkspace(input: {
   readonly space?: Workspace;
 }): Promise<boolean> {
   const space =
-    input.space ?? (await input.operations.spaces.getWorkspace(input.workspaceId));
+    input.space ??
+    (await input.operations.spaces.getWorkspace(input.workspaceId));
   if (space.ownerUserId === input.subject) return true;
 
   const ledgerWorkspace = await input.store.findWorkspace(input.workspaceId);

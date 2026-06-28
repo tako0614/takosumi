@@ -137,6 +137,7 @@ interface ControlRouteContext {
   readonly store: AccountsStore;
   readonly operations?: ControlPlaneOperations;
   readonly sharedCellRuntime?: SharedCellRuntimeAllocator;
+  readonly publicBillingPlans?: readonly Record<string, unknown>[];
 }
 
 /**
@@ -196,6 +197,7 @@ export async function handleControlRoute(
       store,
       session: { subject: bearer.auth.subject },
       sharedCellRuntime: context.sharedCellRuntime,
+      publicBillingPlans: context.publicBillingPlans,
     });
   } catch (error) {
     return controllerErrorResponse(error);
@@ -240,6 +242,7 @@ interface DispatchInput {
   readonly store: AccountsStore;
   readonly session: { readonly subject: string };
   readonly sharedCellRuntime?: SharedCellRuntimeAllocator;
+  readonly publicBillingPlans?: readonly Record<string, unknown>[];
 }
 
 async function dispatch(input: DispatchInput): Promise<Response> {
@@ -258,6 +261,9 @@ async function dispatch(input: DispatchInput): Promise<Response> {
       session: input.session,
       ...(input.sharedCellRuntime
         ? { sharedCellRuntime: input.sharedCellRuntime }
+        : {}),
+      ...(input.publicBillingPlans
+        ? { publicBillingPlans: input.publicBillingPlans }
         : {}),
     };
     const response = await handler(ctx, segments, method);
