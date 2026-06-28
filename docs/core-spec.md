@@ -126,6 +126,13 @@ or any other app-specific value, it declares a normal Terraform variable and the
 install/deploy request passes that value through `variableMapping` / `vars`.
 Takosumi does not reserve those variable names or assign semantics to them.
 
+Distribution/catalog entries may supply `modulePath` and `variables`. `modulePath`
+is only the repository-relative OpenTofu/Terraform module selector. `variables`
+is a JSON object copied into the OpenTofu variable map for plan/apply. Values
+such as `artifact_url`, `image_digest`, `worker_name`, or
+`enable_cloudflare_resources` remain module-owned inputs; Takosumi records and
+passes them but does not fetch or interpret the referenced artifact.
+
 Legacy `build` / `prebuiltArtifact` fields remain compatibility-only for stored
 pre-v1 / first-party row readability and are not the final public Capsule
 contract. New generated-root dispatch does not run them or pass them to the

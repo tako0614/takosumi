@@ -765,6 +765,15 @@ key, or any other app-specific value, the module declares an ordinary Terraform
 variable and Takosumi passes it through as `variableMapping` / deploy `vars`.
 The module, CI, registry, or provider decides what that value means.
 
+Catalog and distribution profiles may provide `modulePath` and `variables` for
+an app. These are service-side profile fields, not repo-side metadata
+requirements and not app-specific Takosumi logic:
+`modulePath` selects the repository-relative OpenTofu/Terraform module path, and
+`variables` is copied into the ordinary OpenTofu variable map for plan/apply.
+Profiles can therefore express app defaults such as `worker_name`,
+`image_digest`, `artifact_url`, or `enable_cloudflare_resources` without making
+Takosumi fetch, build, validate, or interpret those artifacts.
+
 Legacy compatibility fields named `build` and `prebuiltArtifact` may still be
 read from stored pre-v1 / first-party rows for audit/export compatibility, but
 new generated-root dispatch does not run them or pass them to the runner. New
