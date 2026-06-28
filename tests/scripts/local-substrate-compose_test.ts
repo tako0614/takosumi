@@ -17,12 +17,12 @@ const serviceDockerfilePath = resolve(
   "../../deploy/local-substrate/wrappers/Dockerfile.service",
 );
 const serviceDockerfile = readFileSync(serviceDockerfilePath, "utf8");
-const accountsWorkerDockerfilePath = resolve(
+const miniflareDockerfilePath = resolve(
   import.meta.dir,
-  "../../deploy/local-substrate/wrappers/Dockerfile.takosumi-accounts-worker",
+  "../../deploy/local-substrate/wrappers/Dockerfile.miniflare",
 );
-const accountsWorkerDockerfile = readFileSync(
-  accountsWorkerDockerfilePath,
+const miniflareDockerfile = readFileSync(
+  miniflareDockerfilePath,
   "utf8",
 );
 const cliSmokePath = resolve(
@@ -66,17 +66,25 @@ const appArmorComposePath = resolve(
 );
 const appArmorCompose = readFileSync(appArmorComposePath, "utf8");
 
-test("local-substrate worker builds externalize Cloudflare runtime modules", () => {
+test("local-substrate builds the single composed platform worker", () => {
   const workerBuilds = compose.matchAll(
-    /takosumi-(?:service-)?worker-build:[\s\S]*?--outfile deploy\/cloudflare\/\.wrangler\/dist\/takosumi[^\n]+/g,
+    /takosumi-service-worker-build:[\s\S]*?--outfile deploy\/platform\/\.wrangler\/dist\/takosumi[^\n]+/g,
   );
 
   const blocks = [...workerBuilds].map((match) => match[0]);
-  expect(blocks.length).toBe(2);
-  for (const block of blocks) {
-    expect(block).toContain("--format esm");
-    expect(block).toContain("--external cloudflare:workers");
-  }
+  // ONE build only — the old two-bundle scaffold (a control-plane bundle + a
+  // mislabeled "accounts" bundle, both from worker/src/index.ts) is gone.
+  expect(blocks.length).toBe(1);
+  const [block] = blocks;
+  expect(block).toContain("deploy/platform/worker.ts");
+  expect(block).toContain(
+    "deploy/platform/.wrangler/dist/takosumi-platform-worker.mjs",
+  );
+  expect(block).toContain("--format esm");
+  expect(block).toContain("--external cloudflare:workers");
+  // No stale scaffold output path survives.
+  expect(compose).not.toContain("deploy/cloudflare/.wrangler/dist");
+  expect(compose).not.toContain("worker/src/index.ts");
 });
 
 test("local-substrate dashboard build sees the whole Takosumi workspace", () => {
@@ -102,7 +110,7 @@ test("local-substrate cloud migration prepares core and accounts tables", () => 
     "bun core/scripts/db-migrate.ts --env=production",
   );
   expect(migrateBlock).toContain(
-    "bun accounts/cli/src/main.ts accounts migrate",
+    "bun cli/src/main.ts accounts migrate",
   );
   expect(migrateBlock).toContain(
     "bun deploy/local-substrate/scripts/seed-dev-session.ts",
@@ -127,7 +135,7 @@ test("local-substrate core migration can use installed pg dependency", () => {
 
 test("local-substrate AppArmor path runs migrations outside compose networking", () => {
   expect(upScript).toContain("bun core/scripts/db-migrate.ts --env=production");
-  expect(upScript).toContain("bun accounts/cli/src/main.ts accounts migrate");
+  expect(upScript).toContain("bun cli/src/main.ts accounts migrate");
   expect(upScript).toContain(
     "bun deploy/local-substrate/scripts/seed-dev-session.ts",
   );
@@ -234,9 +242,9 @@ test("local-substrate internal bridge explicitly allows container communication"
   );
 });
 
-test("local-substrate service worker is reachable through the ingress proxy", () => {
+test("local-substrate platform worker is reachable through the ingress proxy", () => {
   expect(compose).toContain('"18788:8788"');
-  expect(accountsWorkerDockerfile).toContain("EXPOSE 8787 8788");
+  expect(miniflareDockerfile).toContain("EXPOSE 8788");
   expect(caddyfile).toContain(
     "service.takosumi.test, service-worker.takosumi.test",
   );

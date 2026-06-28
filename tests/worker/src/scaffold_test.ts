@@ -3,28 +3,27 @@ import { readdir, readFile } from "node:fs/promises";
 import { test } from "bun:test";
 
 const repoRoot = new URL("../../../", import.meta.url);
-const cloudflareRoot = new URL("deploy/cloudflare/", repoRoot);
 const platformRoot = new URL("deploy/platform/", repoRoot);
 const runnerImageRoot = new URL("runner/", repoRoot);
 const workerSrcRoot = new URL("../../../worker/src/", import.meta.url);
 
-test("Cloudflare scaffold wires D1/R2 and the OpenTofu runner container", async () => {
-  const wrangler = await readText(new URL("wrangler.toml", cloudflareRoot));
+test("platform worker wrangler wires D1/R2 and the OpenTofu runner container", async () => {
+  const wrangler = await readText(new URL("wrangler.toml", platformRoot));
   const workerService = await readText(
     new URL("worker_service.ts", workerSrcRoot),
   );
 
   assert.doesNotMatch(wrangler, /TAKOS_WORKLOAD_CONTAINER/);
   assert.doesNotMatch(wrangler, /TAKOS_SERVICE_CONTAINER/);
-  assert.match(wrangler, /no_bundle = true/);
-  assert.match(wrangler, /name = "takosumi-cloudflare"/);
-  assert.match(wrangler, /takosumi-cloudflare-worker\.mjs/);
-  assert.match(wrangler, /bun build --target browser/);
-  assert.match(wrangler, /--external cloudflare:workers/);
+  // The single composed worker: accounts ledger + control-plane ledger.
+  assert.match(wrangler, /name = "takosumi"/);
+  assert.match(wrangler, /main = "worker\.ts"/);
+  assert.match(wrangler, /binding = "TAKOSUMI_ACCOUNTS_DB"/);
   assert.match(wrangler, /binding = "TAKOSUMI_CONTROL_DB"/);
   assert.match(wrangler, /binding = "R2_ARTIFACTS"/);
-  assert.match(wrangler, /R2_ARTIFACTS_BUCKET_NAME = "takos-artifacts"/);
-  assert.match(wrangler, /TAKOSUMI_RUNTIME_MODE = "cloudflare-worker"/);
+  assert.match(wrangler, /binding = "R2_SOURCE"/);
+  assert.match(wrangler, /binding = "R2_STATE"/);
+  assert.match(wrangler, /binding = "R2_BACKUPS"/);
   assert.doesNotMatch(wrangler, /TAKOS_RUNTIME_MODE/);
   assert.match(wrangler, /name = "COORDINATION"/);
   assert.match(wrangler, /binding = "RUN_QUEUE"/);
@@ -36,10 +35,10 @@ test("Cloudflare scaffold wires D1/R2 and the OpenTofu runner container", async 
   assert.match(wrangler, /name = "RUNNER"/);
   assert.match(wrangler, /class_name = "OpenTofuRunnerObject"/);
   assert.match(wrangler, /\[\[containers\]\]/);
-  assert.match(wrangler, /image = "runner\/Dockerfile"/);
+  assert.match(wrangler, /image = "\.\.\/\.\.\/runner\/Dockerfile"/);
   assert.match(wrangler, /image_build_context = "\.\.\/\.\."/);
-  assert.match(wrangler, /new_sqlite_classes = \["CoordinationObject"\]/);
-  assert.match(wrangler, /new_sqlite_classes = \["OpenTofuRunnerObject"\]/);
+  assert.match(wrangler, /new_sqlite_classes = \[[^\]]*"CoordinationObject"/);
+  assert.match(wrangler, /new_sqlite_classes = \[[^\]]*"OpenTofuRunnerObject"/);
   assert.match(wrangler, /new_sqlite_classes = \["OpenTofuRunOwnerObject"\]/);
   assert.match(workerService, /providerEnvRunner: opentofuRunner/);
 });
@@ -60,36 +59,6 @@ test("platform scaffold exposes production hardening evidence gates", async () =
   assert.doesNotMatch(wrangler, /TAKOSUMI_CLOUD_CLOUDFLARE_COMPAT/);
   assert.match(worker, /\/internal\/platform\/hardening-gates/);
   assert.match(worker, /evaluateProductionHardeningGates/);
-});
-
-test("Cloudflare scaffold docs describe internal plan/apply Run routing", async () => {
-  const readme = await readText(new URL("README.md", cloudflareRoot));
-
-  assert.match(readme, /plan/);
-  assert.match(readme, /apply/);
-  assert.match(readme, /destroy/);
-  assert.match(readme, /Cloudflare Containers/);
-  assert.match(readme, /OpenTofu/);
-  assert.match(readme, /\/internal\/v1\/plan-runs/);
-  assert.match(readme, /\/internal\/v1\/apply-runs/);
-  assert.match(readme, /destroy_plan/);
-  assert.match(readme, /destroy_apply/);
-  assert.match(readme, /\/internal\/v1\/\*/);
-  assert.match(readme, /D1/);
-  assert.match(readme, /R2/);
-  assert.match(readme, /r2_object_storage/);
-  assert.match(
-    readme,
-    /spaces\/\{spaceId\}\/installations\/\{installationId\}\/runs\/\{runId\}\/plan\.bin/,
-  );
-  assert.match(readme, /plan\.json\.zst/);
-  assert.match(readme, /R2_STATE/);
-  assert.match(readme, /opentofu-plan-runs\/` objects are accepted only/);
-  assert.match(readme, /does not depend on a still-warm runner-local file/);
-  assert.doesNotMatch(readme, /five public deploy control endpoints/);
-  assert.doesNotMatch(readme, /\/v1\/installations\/dry-run/);
-  assert.doesNotMatch(readme, /\/storage\/healthz checks/);
-  assert.doesNotMatch(readme, /\/queue\/test verifies/);
 });
 
 test("OpenTofu runner image stays isolated from the Worker browser bundle", async () => {

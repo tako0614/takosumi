@@ -41,35 +41,15 @@ run_script() {
 bundle_freshness_gate() {
 	local repo_root
 	repo_root=$(cd "$SUBSTRATE_DIR/../../.." && pwd)
-	# Worker bundle: takosumi-accounts-worker.mjs is bundled from
-	# takosumi/accounts/service/src + worker/src.
-	local worker_bundle="$repo_root/takosumi/deploy/cloudflare/.wrangler/dist/takosumi-accounts-worker.mjs"
-	local worker_sources=(
-		"$repo_root/takosumi/accounts/service/src"
-		"$repo_root/takosumi/worker/src"
-	)
-	if [[ -f "$worker_bundle" ]]; then
-		local newer
-		newer=$(find "${worker_sources[@]}" -type f -newer "$worker_bundle" \
-			\( -name '*.ts' -o -name '*.tsx' \) 2>/dev/null | head -3)
-		if [[ -n "$newer" ]]; then
-			echo "==> [bundle-gate] worker source newer than bundle, auto-rebuilding..."
-			echo "$newer" | sed 's/^/                   /'
-			compose_substrate --profile postgres \
-				run --rm takosumi-worker-build >"$SMOKE_LOG_DIR/bundle-gate-worker.log" 2>&1 || {
-				echo "==> [bundle-gate] worker rebuild FAILED; see $SMOKE_LOG_DIR/bundle-gate-worker.log" >&2
-				exit 1
-			}
-			compose_substrate --profile postgres \
-				up -d --force-recreate takosumi-worker >/dev/null 2>&1
-			sleep 3
-			echo "==> [bundle-gate] worker rebuilt + restarted"
-		fi
-	fi
-	# Takosumi service Worker bundle: takosumi/deploy/cloudflare runs the
-	# service in-process on workerd with D1/R2 bindings.
-	local service_worker_bundle="$repo_root/takosumi/deploy/cloudflare/.wrangler/dist/takosumiflare-worker.mjs"
+	# Composed platform-worker bundle: takosumi-platform-worker.mjs is bundled
+	# from deploy/platform/worker.ts — the single composed entry (accounts plane +
+	# in-process deploy-control plane) that runs in-process on workerd with
+	# D1/R2/DO/queue bindings, the same entry deployed at app.takosumi.com.
+	local service_worker_bundle="$repo_root/takosumi/deploy/platform/.wrangler/dist/takosumi-platform-worker.mjs"
 	local service_worker_sources=(
+		"$repo_root/takosumi/deploy/platform"
+		"$repo_root/takosumi/deploy/accounts-cloudflare/src"
+		"$repo_root/takosumi/accounts/service/src"
 		"$repo_root/takosumi/worker/src"
 		"$repo_root/takosumi/core"
 	)
@@ -78,17 +58,17 @@ bundle_freshness_gate() {
 		service_newer=$(find "${service_worker_sources[@]}" -type f -newer "$service_worker_bundle" \
 			\( -name '*.ts' -o -name '*.tsx' \) 2>/dev/null | head -3)
 		if [[ -n "$service_newer" ]]; then
-			echo "==> [bundle-gate] service worker source newer than bundle, auto-rebuilding..."
+			echo "==> [bundle-gate] platform worker source newer than bundle, auto-rebuilding..."
 			echo "$service_newer" | sed 's/^/                   /'
 			compose_substrate --profile postgres \
 				run --rm takosumi-service-worker-build >"$SMOKE_LOG_DIR/bundle-gate-service-worker.log" 2>&1 || {
-				echo "==> [bundle-gate] service worker rebuild FAILED; see $SMOKE_LOG_DIR/bundle-gate-service-worker.log" >&2
+				echo "==> [bundle-gate] platform worker rebuild FAILED; see $SMOKE_LOG_DIR/bundle-gate-service-worker.log" >&2
 				exit 1
 			}
 			compose_substrate --profile postgres \
 				up -d --force-recreate takosumi-service-worker >/dev/null 2>&1
 			sleep 3
-			echo "==> [bundle-gate] service worker rebuilt + restarted"
+			echo "==> [bundle-gate] platform worker rebuilt + restarted"
 		fi
 	fi
 	# SPA bundle: dashboard/dist/index.html is the Vite build entrypoint.

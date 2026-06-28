@@ -5,13 +5,13 @@
   "license": "AGPL-3.0-only",
   "type": "module",
   "bin": {
-    "takosumi": "accounts/cli/src/main.ts"
+    "takosumi": "cli/src/main.ts"
   },
   "workspaces": [
     "accounts/contract",
     "accounts/service",
-    "accounts/cli",
     "accounts/platform-services",
+    "cli",
     "deploy/node-postgres"
   ],
   "scripts": {
@@ -23,6 +23,7 @@
     "test": "bun test ./tests",
     "test:service": "bun test ./tests/core",
     "test:accounts": "bun test ./tests/accounts ./tests/deploy/node-postgres ./tests/deploy/accounts-cloudflare",
+    "test:cli": "bun test ./tests/cli",
     "test:dashboard-new-flow": "bun test tests/dashboard/src/views/new/provider-connections-return_test.ts tests/dashboard/src/views/new/new-flow-guidance_test.ts",
     "test:scripts": "bun test ./tests/scripts",
     "operator:release-activator": "bun scripts/operator-release-activator.ts",
@@ -58,8 +59,8 @@
     "db:migrate:rollback": "bun core/scripts/db-migrate-down.ts",
     "db:drizzle:generate:d1": "drizzle-kit generate --config drizzle.config.d1.ts",
     "db:drizzle:generate:postgres": "drizzle-kit generate --config drizzle.config.postgres.ts",
-    "accounts": "bun accounts/cli/src/main.ts",
-    "cli": "bun accounts/cli/src/main.ts",
+    "accounts": "bun cli/src/main.ts",
+    "cli": "bun cli/src/main.ts",
     "docs:build": "cd docs && bun run build",
     "docs:dev": "cd docs && bun run dev",
     "website:build": "bash website/build.sh",

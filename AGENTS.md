@@ -131,7 +131,7 @@ cloud profile (the `deploy/local-substrate/` cloud wrapper imports its server). 
 
 The worker / core / providers / runner physical restructure is **done**; this is the current layout. Service domains
 now live under `core/`, provider-specific code under `providers/`, reusable domain libraries under `lib/`, and the
-single CLI under `accounts/cli/`.
+single operator/platform CLI under `cli/` (top-level, not part of the account plane).
 
 ```text
 takosumi/
@@ -154,7 +154,9 @@ takosumi/
 │   ├── graph/          dependency-DAG topo / cycle rejection
 │   ├── policy/         provider / resource / action policy layers
 │   └── rootgen/        generated OpenTofu root module
-├── accounts/           account-plane (contract / service / platform-services / cli)
+├── accounts/           account-plane (contract / service / platform-services)
+├── cli/                operator/platform CLI (`takosumi` bin; accounts migrate / connections / installations /
+│                       deploy / serve / platform readiness + secrets)
 ├── runner/             Dockerfile + entrypoint.ts + tofu.rc + provider mirror (Container runner image)
 ├── opentofu-modules/   provider-agnostic `core` base-installation module + the shared bundled-HCL catalog
 │                       (module-files.ts). Provider-specific Capsule modules live under

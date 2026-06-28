@@ -96,21 +96,6 @@ services:
   takosumi-dashboard-build:
     security_opt:
       - apparmor=unconfined
-  takosumi-worker-build:
-    security_opt:
-      - apparmor=unconfined
-  takosumi-worker:
-    depends_on:
-      oauth-mock:
-        condition: service_started
-      takosumi-service-worker:
-        condition: service_started
-      takosumi-worker-build:
-        condition: service_completed_successfully
-    security_opt:
-      - apparmor=unconfined
-    healthcheck:
-      disable: true
   route-registrar:
     depends_on:
       cloud:

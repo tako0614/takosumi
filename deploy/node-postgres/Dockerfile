@@ -9,8 +9,8 @@ WORKDIR /work
 COPY package.json bun.lock tsconfig.json bunfig.toml /work/
 COPY accounts/contract /work/accounts/contract
 COPY accounts/service /work/accounts/service
-COPY accounts/cli /work/accounts/cli
 COPY accounts/platform-services /work/accounts/platform-services
+COPY cli /work/cli
 COPY deploy/node-postgres/package.json /work/deploy/node-postgres/package.json
 COPY deploy/node-postgres/src /work/deploy/node-postgres/src
 RUN bun install --frozen-lockfile

@@ -3,7 +3,7 @@ import {
   assert,
   assertEquals,
   assertRejects,
-} from "../../../helpers/assert.ts";
+} from "../../helpers/assert.ts";
 import {
   access,
   mkdtemp,
@@ -14,17 +14,17 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join as pathJoin } from "node:path";
-import { main } from "../../../../accounts/cli/src/main.ts";
-import { runAccountsMigrateD1 } from "../../../../accounts/cli/src/cli-accounts-commands.ts";
+import { main } from "../../../cli/src/main.ts";
+import { runAccountsMigrateD1 } from "../../../cli/src/cli-accounts-commands.ts";
 import {
   applyD1AccountsMigrations,
   type D1ExecuteCommand,
-} from "../../../../accounts/cli/src/cli-accounts-db.ts";
+} from "../../../cli/src/cli-accounts-db.ts";
 import {
   integerOption,
   parseOptions,
-} from "../../../../accounts/cli/src/cli-options.ts";
-import { runPlatformSecrets } from "../../../../accounts/cli/src/cli-platform-secrets-commands.ts";
+} from "../../../cli/src/cli-options.ts";
+import { runPlatformSecrets } from "../../../cli/src/cli-platform-secrets-commands.ts";
 
 const textEncoder = new TextEncoder();
 

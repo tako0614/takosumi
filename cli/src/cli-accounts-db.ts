@@ -151,7 +151,10 @@ export async function createAccountsStoreResource(
 export async function loadAccountsMigrations(): Promise<
   readonly AccountsMigration[]
 > {
-  const migrationsDir = new URL("../../service/migrations/", import.meta.url);
+  const migrationsDir = new URL(
+    "../../accounts/service/migrations/",
+    import.meta.url,
+  );
   const entries = [];
   for (const entry of await readdir(migrationsDir, { withFileTypes: true })) {
     if (entry.isFile() && entry.name.endsWith(".sql")) entries.push(entry.name);

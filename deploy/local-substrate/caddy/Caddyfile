@@ -75,17 +75,19 @@ app.takosumi.test {
 	}
 }
 
-# NOTE: the Cloudflare Worker composed-app (takosumi-worker) is NOT given
-# a postgres-profile ingress host. On the postgres profile app.takosumi.test is
-# the Bun+Postgres `cloud` service; the Worker code path is exercised on the
-# `workers` profile (where the worker is primary) — consistent with the deferred
-# workers-profile collapse. Add any future Worker-only host only alongside a
-# matching CoreDNS record so its Pebble ACME challenge can resolve.
+# NOTE: on the postgres profile app.takosumi.test is the Bun+Postgres `cloud`
+# service. The single composed platform worker (deploy/platform/worker.ts, the
+# same entry deployed at app.takosumi.com) is exercised through
+# service-worker.takosumi.test below — as a mirror on the postgres profile and
+# as the primary Worker-backed code path on the `workers` profile. Add any
+# future Worker-only host only alongside a matching CoreDNS record so its Pebble
+# ACME challenge can resolve.
 
 # ===== Phase 1 substrate ===================================================
 # Workers profile local-only probes. app.takosumi.test remains the
-# production-equivalent platform host; service*.takosumi.test exists only so
-# smoke tests can exercise the Worker-backed service path directly.
+# production-equivalent platform host; service*.takosumi.test exposes the
+# composed platform worker directly so smoke tests can exercise the Worker code
+# path.
 service.takosumi.test, service-worker.takosumi.test {
 	reverse_proxy host.docker.internal:18788
 }

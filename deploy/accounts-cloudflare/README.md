@@ -68,7 +68,7 @@ bookkeeping table is created on first contact, but the handler never advances th
 recorded version itself — that is the migration runner's job. The handler reads
 only `version` from this table; the table name and column shape are identical to
 the table the `accounts migrate-d1` runner writes
-(`D1_SCHEMA_MIGRATIONS_TABLE_SQL` in `accounts/cli/src/cli-accounts-db.ts`), so a
+(`D1_SCHEMA_MIGRATIONS_TABLE_SQL` in `cli/src/cli-accounts-db.ts`), so a
 `migrate-d1` run is visible to this gate.
 
 - A brand-new D1 database (no `takosumi_accounts_schema_migrations` rows) is the

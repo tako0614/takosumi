@@ -1,4 +1,4 @@
-# Miniflare runtime for the takosumi Cloudflare Worker.
+# Miniflare runtime for the composed Takosumi platform worker.
 #
 # Pre-installs miniflare so the container can start fast without a fresh
 # npm install on every up.sh. Debian base (not alpine) so the bundled
@@ -7,4 +7,4 @@ FROM node:22-slim
 WORKDIR /app
 RUN npm install --no-fund --no-audit miniflare@3 \
     && npm cache clean --force
-EXPOSE 8787 8788
+EXPOSE 8788

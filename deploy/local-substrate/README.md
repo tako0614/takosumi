@@ -173,7 +173,7 @@ takosumi/deploy/local-substrate/
 ├── wrappers/
 │   ├── cloud.ts                    # composed control-plane service + account-plane
 │   ├── agent.ts                    # runtime-agent (execution plane) over TAKOSUMI_AGENT_URL
-│   └── takosumi-service-worker-runner.mjs # local-only Miniflare D1/R2/Queue/DO runner
+│   └── takosumi-platform-worker-runner.mjs # local-only Miniflare D1/R2/Queue/DO runner for deploy/platform/worker.ts
 ├── route-registrar/
 │   ├── package.json
 │   └── mod.ts                   # preserve Caddy dynamic-route partition

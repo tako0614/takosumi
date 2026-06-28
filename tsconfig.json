@@ -14,7 +14,7 @@
     "paths": {
       "@takosjp/takosumi-accounts-contract": ["./accounts/contract/src/mod.ts"],
       "@takosjp/takosumi-accounts-service": ["./accounts/service/src/mod.ts"],
-      "@takosjp/takosumi-accounts-cli": ["./accounts/cli/src/main.ts"],
+      "@takosjp/takosumi-cli": ["./cli/src/main.ts"],
       "@takosjp/takosumi-platform-services": [
         "./accounts/platform-services/src/mod.ts"
       ],
@@ -108,8 +108,8 @@
     "lib/graph",
     "accounts/contract",
     "accounts/service",
-    "accounts/cli",
     "accounts/platform-services",
+    "cli",
     "deploy/accounts-cloudflare",
     "deploy/node-postgres",
     "shims"

@@ -121,7 +121,7 @@ prepare_app_armor_substrate_prereqs() {
 		sh -c '
 			set -e
 			bun core/scripts/db-migrate.ts --env=production
-			bun accounts/cli/src/main.ts accounts migrate \
+			bun cli/src/main.ts accounts migrate \
 				--database-url "$TAKOSUMI_ACCOUNTS_DATABASE_URL"
 			bun deploy/local-substrate/scripts/seed-dev-session.ts
 		'
