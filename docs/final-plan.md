@@ -699,14 +699,13 @@ FileShare
 
 ```text
 AIEndpoint
-AIModelProvider
-EmbeddingModelProvider
-ModelRoute
-ModelPolicy
 ```
 
-`AIEndpoint` is the first-class user-facing shape. It declares the API surface
-and model policy the application needs.
+`AIEndpoint` is the first-class user-facing shape for v1alpha1. It declares the
+API surface and model policy the application needs. AI model providers,
+embedding providers, routes, and model policy are not separate public
+catch-all resources in v1alpha1; they are expressed through `AIEndpoint`
+preferences and operator-managed TargetPool implementation capabilities.
 
 ```hcl
 resource "takosumi_ai_endpoint" "main" {
@@ -781,6 +780,33 @@ targets:
           openai_chat_completions: native
           openai_embeddings: shim
           vendor.deepseek.responses.v1: native
+```
+
+Equivalent admin HCL with the `takosumi` provider:
+
+```hcl
+resource "takosumi_target_pool" "ai" {
+  name  = "default"
+  space = "prod"
+
+  target = [{
+    name     = "deepseek-main"
+    type     = "ai_provider"
+    ref      = "https://api.deepseek.example/v1"
+    priority = 90
+
+    implementation = [{
+      shape                = "AIEndpoint"
+      implementation       = "deepseek_openai_gateway"
+      native_resource_type = "ai.deepseek_endpoint"
+      interfaces = {
+        openai_chat_completions      = "native"
+        openai_embeddings            = "shim"
+        vendor.deepseek.responses.v1 = "native"
+      }
+    }]
+  }]
+}
 ```
 
 The public interface can be OpenAI-compatible even when the implementation is

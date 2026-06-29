@@ -43,7 +43,9 @@ export const RESOURCE_SHAPE_ENDPOINTS: readonly ApiEndpoint[] = [
   endpoint("GET", "/v1/resources", "listResources"),
   endpoint("DELETE", "/v1/resources/:kind/:name", "deleteResource"),
   endpoint("PUT", "/v1/target-pools/:name", "putTargetPool"),
+  endpoint("GET", "/v1/target-pools/:name", "getTargetPool"),
   endpoint("GET", "/v1/target-pools", "listTargetPools"),
+  endpoint("DELETE", "/v1/target-pools/:name", "deleteTargetPool"),
   endpoint("PUT", "/v1/space-policies/:name", "putSpacePolicy"),
 ] as const;
 
@@ -119,6 +121,26 @@ export function registerResourceShapeRoutes(
     if ("response" in space) return space.response;
     const pools = await service.listTargetPools(space.value);
     return c.json({ targetPools: pools }, 200);
+  });
+
+  app.get("/v1/target-pools/:name", async (c) => {
+    const space = requireQuery(c, "space");
+    if ("response" in space) return space.response;
+    const record = await service.getTargetPool(space.value, c.req.param("name"));
+    if (!record) {
+      return errorResponse(c, {
+        code: "not_found",
+        message: `TargetPool ${c.req.param("name")} was not found in space ${space.value}`,
+      });
+    }
+    return c.json(record, 200);
+  });
+
+  app.delete("/v1/target-pools/:name", async (c) => {
+    const space = requireQuery(c, "space");
+    if ("response" in space) return space.response;
+    await service.deleteTargetPool(space.value, c.req.param("name"));
+    return c.body(null, 204);
   });
 
   app.put("/v1/space-policies/:name", async (c) => {

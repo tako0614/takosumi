@@ -131,6 +131,38 @@ type NativeResourceRef struct {
 	ID   string `json:"id"`
 }
 
+// TargetPoolSpec is the operator/admin configuration that ranks Targets for a
+// Space. Implementation entries are extensible capability evidence; concrete AI
+// provider names live here, not in the provider binary.
+type TargetPoolSpec struct {
+	Targets []TargetPoolEntry `json:"targets"`
+}
+
+type TargetPoolEntry struct {
+	Name            string                     `json:"name"`
+	Type            string                     `json:"type"`
+	Ref             string                     `json:"ref,omitempty"`
+	Region          string                     `json:"region,omitempty"`
+	Priority        int64                      `json:"priority"`
+	Implementations []TargetPoolImplementation `json:"implementations,omitempty"`
+}
+
+type TargetPoolImplementation struct {
+	Shape              string            `json:"shape"`
+	Implementation     string            `json:"implementation"`
+	Interfaces         map[string]string `json:"interfaces"`
+	NativeResourceType string            `json:"nativeResourceType,omitempty"`
+}
+
+type TargetPoolRecord struct {
+	ID        string         `json:"id"`
+	SpaceID   string         `json:"spaceId"`
+	Name      string         `json:"name"`
+	Spec      TargetPoolSpec `json:"spec"`
+	CreatedAt string         `json:"createdAt,omitempty"`
+	UpdatedAt string         `json:"updatedAt,omitempty"`
+}
+
 // PreviewResourceResult is the response body of POST /v1/resources/preview.
 type PreviewResourceResult struct {
 	Resource               Resource            `json:"resource"`
@@ -289,6 +321,14 @@ func (c *Client) previewURL() string {
 	return c.endpoint + "/v1/resources/preview"
 }
 
+func (c *Client) targetPoolURL(name string, query url.Values) string {
+	u := fmt.Sprintf("%s/v1/target-pools/%s", c.endpoint, url.PathEscape(name))
+	if len(query) > 0 {
+		u += "?" + query.Encode()
+	}
+	return u
+}
+
 // PutResource creates or updates a resource:
 // PUT {endpoint}/v1/resources/{kind}/{name}. 200 => Resource with status.
 func (c *Client) PutResource(ctx context.Context, kind, name string, body *Resource) (*Resource, error) {
@@ -331,6 +371,43 @@ func (c *Client) PreviewResource(ctx context.Context, body *Resource) (*PreviewR
 		return nil, err
 	}
 	return &out, nil
+}
+
+// PutTargetPool creates or updates a TargetPool:
+// PUT {endpoint}/v1/target-pools/{name}. 200 => TargetPoolRecord.
+func (c *Client) PutTargetPool(ctx context.Context, name, space string, spec TargetPoolSpec) (*TargetPoolRecord, error) {
+	body := map[string]any{
+		"space": space,
+		"spec":  spec,
+	}
+	var out TargetPoolRecord
+	if err := c.doJSON(ctx, http.MethodPut, c.targetPoolURL(name, nil), body, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// GetTargetPool reads a TargetPool. A 404 is translated to ErrNotFound.
+func (c *Client) GetTargetPool(ctx context.Context, name, space string) (*TargetPoolRecord, error) {
+	var out TargetPoolRecord
+	if err := c.doJSON(ctx, http.MethodGet, c.targetPoolURL(name, spaceQuery(space)), nil, &out); err != nil {
+		if code, ok := statusCode(err); ok && code == http.StatusNotFound {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return &out, nil
+}
+
+// DeleteTargetPool removes a TargetPool. A 404 is treated as already-deleted.
+func (c *Client) DeleteTargetPool(ctx context.Context, name, space string) error {
+	if err := c.doJSON(ctx, http.MethodDelete, c.targetPoolURL(name, spaceQuery(space)), nil, nil); err != nil {
+		if code, ok := statusCode(err); ok && code == http.StatusNotFound {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 // doJSON marshals body (if any), sends the request, and decodes a 2xx response
