@@ -1,5 +1,10 @@
 import { expect, test } from "bun:test";
 
+import { TAKOSUMI_API_VERSION } from "../../../contract/capabilities.ts";
+import {
+  TAKOSUMI_PRODUCT_CAPABILITIES_PATH,
+  TAKOSUMI_WELL_KNOWN_PATH,
+} from "../../../contract/api-surface.ts";
 import { InMemoryRuntimeAgentRegistry } from "../../../core/agents/registry.ts";
 import { OpenTofuControllerError } from "../../../core/domains/deploy-control/mod.ts";
 import {
@@ -554,6 +559,36 @@ test("platform assets are served with immutable cache headers", async () => {
     "public, max-age=31536000, immutable",
   );
   expect(await response.text()).toBe("console.log('ok')");
+});
+
+test("platform provider mirror assets use mirror-aware cache headers", async () => {
+  const indexResponse = withPlatformAssetCacheHeaders(
+    new Request(
+      "https://app.takosumi.com/opentofu/providers/registry.opentofu.org/takosjp/takosumi/index.json",
+    ),
+    new URL(
+      "https://app.takosumi.com/opentofu/providers/registry.opentofu.org/takosjp/takosumi/index.json",
+    ),
+    new Response('{"versions":{}}', {
+      headers: { "cache-control": "public, max-age=0, must-revalidate" },
+    }),
+  );
+  expect(indexResponse.headers.get("cache-control")).toBe("no-cache");
+
+  const archiveResponse = withPlatformAssetCacheHeaders(
+    new Request(
+      "https://app.takosumi.com/opentofu/providers/registry.opentofu.org/takosjp/takosumi/terraform-provider-takosumi_0.1.0_linux_amd64.zip",
+    ),
+    new URL(
+      "https://app.takosumi.com/opentofu/providers/registry.opentofu.org/takosjp/takosumi/terraform-provider-takosumi_0.1.0_linux_amd64.zip",
+    ),
+    new Response("zip", {
+      headers: { "cache-control": "public, max-age=0, must-revalidate" },
+    }),
+  );
+  expect(archiveResponse.headers.get("cache-control")).toBe(
+    "public, max-age=31536000, immutable",
+  );
 });
 
 test("platform asset cache helper leaves non-assets untouched", () => {
@@ -1111,6 +1146,34 @@ test("the seam claims no extension path when TAKOSUMI_CLOUD_EXTENSIONS is unset"
     } as never,
   );
   expect(result).toBeUndefined();
+});
+
+test("platform worker exposes product discovery before accounts handler", async () => {
+  const worker = (await import("../../../deploy/platform/worker.ts")).default;
+
+  const discovery = await worker.fetch(
+    new Request(`https://app.takosumi.com${TAKOSUMI_WELL_KNOWN_PATH}`),
+    {} as never,
+  );
+  const capabilities = await worker.fetch(
+    new Request(
+      `https://app.takosumi.com${TAKOSUMI_PRODUCT_CAPABILITIES_PATH}`,
+    ),
+    {} as never,
+  );
+
+  expect(discovery.status).toBe(200);
+  const discoveryBody = await discovery.json();
+  expect(discoveryBody.api_versions).toEqual([TAKOSUMI_API_VERSION]);
+  expect(discoveryBody.endpoints.capabilities).toBe(
+    `https://app.takosumi.com${TAKOSUMI_PRODUCT_CAPABILITIES_PATH}`,
+  );
+
+  expect(capabilities.status).toBe(200);
+  const capabilitiesBody = await capabilities.json();
+  expect(capabilitiesBody.apiVersion).toBe(TAKOSUMI_API_VERSION);
+  expect(capabilitiesBody.resources.Stack).toBe(true);
+  expect(capabilitiesBody.compat.framework).toBe(true);
 });
 
 test("a configured cloud extension dispatches to the named handler through worker.fetch", async () => {

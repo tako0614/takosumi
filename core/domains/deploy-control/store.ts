@@ -35,7 +35,7 @@ import type {
 } from "takosumi-contract/sources";
 import type { Workspace as Space } from "takosumi-contract/workspaces";
 import type { InstallationProviderEnvBindingSet } from "takosumi-contract/connections";
-import type { OutputAllowlistEntry } from "takosumi-contract/installations";
+import type { OutputAllowlistEntry } from "takosumi-contract/install-configs";
 import type {
   Dependency,
   DependencySnapshot,

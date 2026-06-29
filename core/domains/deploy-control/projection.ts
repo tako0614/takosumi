@@ -21,7 +21,7 @@ import type {
 import type {
   OutputAllowlistEntry,
   OutputValueType,
-} from "takosumi-contract/installations";
+} from "takosumi-contract/install-configs";
 import { OpenTofuControllerError, requireNonEmptyString } from "./errors.ts";
 import {
   containsSecretLikeString,

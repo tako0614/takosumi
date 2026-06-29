@@ -279,7 +279,7 @@ test("customer-safe process openapi schemas are concrete", () => {
   assert.equal(
     openapi.components.schemas.DeployRequest?.properties?.providerEnvBindings,
     undefined,
-    "public DeployRequest must not expose internal provider resolver bindings",
+    "internal upload deploy schema must not expose provider resolver bindings",
   );
   assert.equal(
     openapi.components.schemas.DeployUploadSnapshotRequest,

@@ -132,9 +132,17 @@ test("Takosumi docs are rebuilt around the Final Plan surface", async () => {
   }
 
   assert.match(docs, /OpenTofu\/Terraform control plane/);
-  assert.match(docs, /existing\s+provider\s+ecosystem\s+as-is/);
+  assert.match(docs, /plain OpenTofu stacks as-is/);
   assert.match(docs, /Same manifest, different connection/);
-  assert.match(docs, /Cloudflare Compatibility Gateway is Takosumi Cloud-only/);
+  assert.match(
+    docs,
+    /Compatibility APIs are framework capabilities in standard Takosumi/,
+  );
+  assert.match(
+    docs,
+    /specific compatibility profile is enabled is reported through capabilities/,
+  );
+  assert.match(docs, /official managed capacity/);
   assert.match(docs, /cloud_extensions/);
   assert.match(docs, /takosumi-cloud\/platform\/worker\.ts/);
   assert.match(docs, /not deployed as separate Workers/);
@@ -162,7 +170,7 @@ test("source docs keep current source-module and modulePath vocabulary", async (
   assert.match(docs, /module path/);
 });
 
-test("deploy-control API docs enumerate the public session route inventory and Cloud-only exclusions", async () => {
+test("deploy-control API docs enumerate the public session route inventory and connection guards", async () => {
   const docs = [
     await readText(new URL("docs/reference/deploy-control-api.md", ROOT)),
     await readText(new URL("docs/en/reference/deploy-control-api.md", ROOT)),
@@ -175,13 +183,11 @@ test("deploy-control API docs enumerate the public session route inventory and C
     assert.match(doc, /resolved_provider_connection/);
     assert.match(doc, /blocked_missing_connection/);
     assert.match(doc, /blocked_policy/);
-    assert.match(doc, /\/compat\/cloudflare\/client\/v4/);
-    assert.match(doc, /closed Takosumi Cloud/);
     assert.doesNotMatch(doc, /gateway-coverages/);
   }
 });
 
-test("core spec names the final OSS model and explicitly excludes Cloud-managed resources", async () => {
+test("core spec names the final OSS model and excludes official managed capacity", async () => {
   const coreSpec = await readText(new URL("docs/core-spec.md", ROOT));
 
   for (const concept of FINAL_PUBLIC_CONCEPTS) {
@@ -191,8 +197,12 @@ test("core spec names the final OSS model and explicitly excludes Cloud-managed 
   assert.match(coreSpec, /CredentialRecipe/);
   assert.match(coreSpec, /ProviderBinding/);
   assert.match(coreSpec, /StateVersion storage and locking/);
-  assert.match(coreSpec, /Cloudflare Compatibility Gateway/);
-  assert.match(coreSpec, /managed edge\/storage\/container resource backend/);
+  assert.match(coreSpec, /Compatibility API framework is core/);
+  assert.match(coreSpec, /invoice \/ payment integration/);
+  assert.match(coreSpec, /rated billing and payment enforcement/);
+  assert.match(coreSpec, /official managed target capacity/);
+  assert.match(coreSpec, /official Takosumi native resource internals/);
+  assert.match(coreSpec, /official SLA \/ support \/ abuse tooling/);
 });
 
 test("workspace packages stay private source modules", async () => {

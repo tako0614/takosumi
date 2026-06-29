@@ -19,7 +19,8 @@
       "@takosjp/takosumi-accounts-contract": [
         "../accounts/contract/src/mod.ts"
       ],
-      "takosumi-contract": ["../contract/index.ts"]
+      "takosumi-contract": ["../contract/index.ts"],
+      "takosumi-contract/deployments": ["../contract/deployments.ts"]
     }
   },
   "include": ["src/**/*", "*.ts"],

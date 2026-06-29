@@ -1,32 +1,32 @@
 # AGENTS.md - Takosumi
 
-This repository is **Takosumi**, an OSS OpenTofu/Terraform control plane that runs existing provider ecosystems as-is.
-Users register OpenTofu/Terraform modules from Git URLs as Capsules under a Workspace/Project, bind providers or aliases
-to Provider Connections, run `tofu init` / `plan` / `apply` / `destroy`, and keep state, outputs, secrets, run history,
-and audit evidence in Takosumi.
+This repository is **Takosumi**, an OSS Git-based OpenTofu control plane.
+Takosumi can run existing OpenTofu/Terraform provider ecosystems as-is, and it
+also owns the Resource Shape API, Resolver / Planner / Runner / Reconciler,
+Target / Credential / OIDC / Secret / Policy, Compatibility API framework, and
+Adapter system described in `docs/final-plan.md`.
 
-The authoritative product direction is [`docs/final-plan.md`](docs/final-plan.md). It supersedes older designs that
-treated compatibility gateways, managed cloud resources, or Takosumi-provided provider-compatible endpoints as part of
-the OSS control plane.
+The authoritative product direction is [`docs/final-plan.md`](docs/final-plan.md). It supersedes older designs that made
+all compatibility APIs Cloud-only. The new boundary is:
 
-Takosumi OSS and Takosumi for Operators do **not** contain Cloudflare Compatibility Gateway, AWS/GCP compatibility APIs,
-S3 gateway, Resource Driver system, Compat Pack system, Managed Edge / Storage / Container, AI Gateway, Stripe-enforced
-billing, official quota, official usage metering, or official resource backends. Those live in the closed delta package
-`takosumi-cloud/` (this repo's sibling), which composes **on top of** the OSS Takosumi for Operators control plane.
+```text
+OSS:
+  framework and portable API
 
-The dependency direction is **one-way Cloud -> OSS**: `takosumi-cloud/` may depend on this repo, never the reverse, and
-only at two seams. It consumes only the OSS composition root (`takosumi`, at bootstrap) and the public contract
-(`takosumi-contract`); it must never reach into `takosumi/core` or `takosumi/accounts` internals. The OSS platform ships
-and runs with nothing from `takosumi-cloud/` present.
+Operator / Cloud:
+  commercial operation and official managed capacity
+```
 
-- **Seam A — additive HTTP route dispatch (`cloud_extensions`).** OSS exposes an additive route hook; mounted Cloud
-  extensions (e.g. the AI Gateway) dispatch their routes to closed fetch handlers supplied by `takosumi-cloud`, and when
-  unmounted those routes return 404 so OSS behaves exactly as if Cloud did not exist. Cloud is purely additive and never
-  rewrites or removes OSS routes. The official `app.takosumi.com` deployment mounts those handlers in-process through
-  the closed platform wrapper as one platform Worker.
-- **Seam B — in-process composition ports.** The OSS bootstrap accepts optional ports such as `BillingEnforcement` and
-  `QuotaPolicy`. OSS supplies safe no-op / open defaults so it runs standalone; Cloud injects the closed implementations
-  at bootstrap. Ports are typed against the public contract, keeping the dependency one-way.
+Takosumi OSS can define compatibility API framework, compatibility profiles,
+resource shapes, adapter contracts, target capability model, OIDC/workload
+identity, and usage-event emission. Takosumi for Operator / Cloud owns
+commercial customer management, rated billing, payment enforcement, invoices,
+official managed target pools, official Takosumi native resource internals,
+support/SLA, and abuse controls.
+
+`takosumi-cloud/` (this repo's sibling) is the closed official hosted operation.
+It may depend on the public contract and composition root, but it must not reach
+into `takosumi/core` or `takosumi/accounts` internals as a private shortcut.
 
 Takosumi is not a standalone npm-published service. It is one OSS control plane whose handlers are consumed
 **in-process** through `tsconfig` aliases by host workers in two composition contexts: the operator's **Takosumi platform
@@ -53,13 +53,22 @@ The two in-process entry points (consumed by both targets) are:
 
 ## Public Surface
 
-Takosumi's customer-facing model is the **17-noun** vocabulary, current and load-bearing — **14 persisted
-entities/nouns** plus the **3 guarded Run operations** (Plan / Apply / Destroy): **Workspace / Project /
-Capsule / Source / ProviderConnection / CredentialRecipe / ProviderBinding / Secret / Run / Plan / Apply / Destroy /
-StateVersion / Output / Runner / AuditEvent / Operator**. Plan / Apply / Destroy are not separate ledgers or entities:
-they are the guarded `RunType` operations recorded as `Run` ledger entries (see `Run` below). The old Space / Installation / OutputSnapshot / StateSnapshot /
-Deployment / Provider Catalog / `own_key` / `takos_provided` / Gateway / Service Graph names are retired; do not
-reintroduce them as product nouns.
+Takosumi now has two public model layers. The OpenTofu Stack flow uses
+Workspace / Project / Capsule / Source / ProviderConnection / CredentialRecipe /
+ProviderBinding / Secret / Run / Plan / Apply / Destroy / StateVersion / Output
+/ Runner / AuditEvent / Operator. Plan / Apply / Destroy are not separate
+ledgers or entities: they are guarded `RunType` operations recorded as `Run`
+ledger entries.
+
+The Resource Shape flow adds Space / Environment / Stack / Resource /
+ResourceShape / Interface / Profile / Implementation / Target / TargetPool /
+Credential / Policy / Adapter / ResolutionLock / NativeResource / Condition /
+Agent / AgentPool / Principal / Role / RoleBinding / ServiceAccount. `Space` is
+valid as a `takosumi.dev/v1alpha1` namespace/policy scope; it is not the old
+pre-v1 Space / Installation ledger model. The old Installation /
+OutputSnapshot / StateSnapshot / Deployment / Provider Catalog / `own_key` /
+`takos_provided` / Gateway / Service Graph names are retired; do not reintroduce
+them as current product nouns.
 
 - `Workspace`: user/team boundary for projects, provider connections, secrets, state isolation, and audit.
 - `Project`: one product, service, application, or infrastructure group.
@@ -80,9 +89,6 @@ reintroduce them as product nouns.
   state sync, output extraction, and cleanup.
 - `AuditEvent`: actor/action/target/result evidence.
 
-Do not introduce compatibility gateway or managed resource concepts as OSS product nouns. Takosumi Cloud may implement
-Cloud-only Provider Connections and Cloudflare compatibility outside the OSS control-plane contract.
-
 Repositories are plain OpenTofu modules. Use Git URL, commit, tag, module path, and well-known OpenTofu outputs for
 display, identity, and output projection.
 
@@ -100,10 +106,10 @@ Three principles are load-bearing for new work:
   integrations are optional adapters outside core.
 - **No in-repo manifest**: user repos stay plain git repos with no required Takosumi metadata file. All Capsule
   configuration is service-side DB config; repo metadata is read from Git and well-known OpenTofu outputs.
-- **No OSS Service Graph**: the Service Graph (ServiceExport / ServiceBinding / ServiceGrant) has been removed from OSS.
-  Runtime service surfaces are projected from a Capsule's `tofu output -json` (deployment outputs) by the consuming
-  product/profile (Takos is one such profile); there is no Takosumi-owned service class or runtime-grant authority in
-  OSS, and Capsule repos still adopt no Takosumi-specific manifest or DSL.
+- **Resource Shape API**: resource-shape authoring is a Takosumi API surface, not a repo metadata requirement. Plain
+  OpenTofu repos remain valid; `takosumi_*` resources use the thin `takosumi_provider` and Takosumi API.
+- **Compatibility profiles by capability**: S3 / OCI / CloudEvents / Kubernetes CRD / Cloudflare subset surfaces are
+  capability-versioned entrypoints into the Resource API. Do not claim complete AWS or Cloudflare API compatibility.
 
 ## Provider Connection / Policy Boundary
 
@@ -123,8 +129,8 @@ sandbox for source checkout, generated-root materialization, OpenTofu execution,
 cleanup. App builds and release artifact publication belong in the app repo, CI/release pipeline, or OpenTofu module
 inputs, not in Takosumi runner dispatch semantics.
 
-Do not add OSS code paths that require Takosumi Gateway, Cloudflare WfP, managed resources, or Takosumi-issued
-provider-compatible endpoints. If code needs that behavior, it belongs to `takosumi-cloud/` behind Seam A / Seam B.
+Do not hard-code Cloud-only edition branches into core. Add framework-level code behind capabilities and keep official
+managed capacity, closed native-resource internals, and enforced billing in Operator/Cloud integration points.
 
 OSS operator quota/showback machinery is implemented as a Workspace- or
 Organization-scoped ledger with operator-selected mode: `disabled` (self-host
@@ -140,9 +146,9 @@ The control-plane and account-plane handlers are composed into the host worker (
 via `deploy/platform/`, and the self-hosted Takos product worker via `takos/deploy/cloudflare/`), not run as separate
 services. The worker injects stores/capabilities and mounts the account-plane handler at the origin root. `/internal/*`
 HTTP route families are not customer APIs; they are reserved for opentofu-runner / executor container callbacks,
-host-internal deploy-control seams, and operator hardening gates. OSS Takosumi does not expose provider-compatible
-Gateway bridges, provider `base_url` endpoints, or Gateway run-key exchange routes; those belong to closed Takosumi
-Cloud modules.
+host-internal deploy-control seams, and operator hardening gates. Public compatibility routes must be explicit,
+versioned capability surfaces such as `compat.s3.v1` or `compat.cloudflare.workers.v1`, not hidden internal Gateway
+bridges.
 
 `deploy/node-postgres/` is the Bun + Postgres substrate that backs the account-plane handler in the local-substrate
 cloud profile (the `deploy/local-substrate/` cloud wrapper imports its server). It is a substrate for the same

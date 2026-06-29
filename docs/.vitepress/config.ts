@@ -2,6 +2,7 @@ import { type DefaultTheme, defineConfig } from "vitepress";
 
 const jaNav: DefaultTheme.NavItem[] = [
   { text: "概要", link: "/" },
+  { text: "Cloud", link: "/cloud/" },
   { text: "Quickstart", link: "/getting-started/quickstart" },
   { text: "仕組み", link: "/reference/model" },
   { text: "Legal", link: "/legal/terms-of-service" },
@@ -9,6 +10,7 @@ const jaNav: DefaultTheme.NavItem[] = [
 
 const enNav: DefaultTheme.NavItem[] = [
   { text: "Overview", link: "/en/" },
+  { text: "Cloud", link: "/en/cloud/" },
   { text: "Quickstart", link: "/en/getting-started/quickstart" },
   { text: "How it works", link: "/en/reference/model" },
 ];
@@ -19,6 +21,7 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
       text: "Start",
       items: [
         { text: "概要", link: "/" },
+        { text: "Takosumi Cloud", link: "/cloud/" },
         { text: "Quickstart", link: "/getting-started/quickstart" },
       ],
     },
@@ -26,6 +29,7 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
       text: "Reference",
       items: [
         { text: "Model", link: "/reference/model" },
+        { text: "Cloud Workers", link: "/reference/cloud-workers" },
         { text: "Cloud endpoints", link: "/reference/cloud-endpoints" },
         { text: "Deploy Control API", link: "/reference/deploy-control-api" },
         {
@@ -48,6 +52,7 @@ const enSidebar: DefaultTheme.SidebarMulti = {
       text: "Start",
       items: [
         { text: "Overview", link: "/en/" },
+        { text: "Takosumi Cloud", link: "/en/cloud/" },
         { text: "Quickstart", link: "/en/getting-started/quickstart" },
       ],
     },
@@ -55,6 +60,7 @@ const enSidebar: DefaultTheme.SidebarMulti = {
       text: "Reference",
       items: [
         { text: "Model", link: "/en/reference/model" },
+        { text: "Cloud Workers", link: "/en/reference/cloud-workers" },
         { text: "Cloud endpoints", link: "/en/reference/cloud-endpoints" },
         {
           text: "Deploy Control API",
@@ -73,7 +79,8 @@ const enSidebar: DefaultTheme.SidebarMulti = {
 
 export default defineConfig({
   title: "Takosumi",
-  description: "OpenTofu-native deploy control plane, UI, and audit ledger",
+  description:
+    "Git-based OpenTofu control plane, Resource Shape API, and adapter framework",
   lang: "ja",
   base: process.env.VITEPRESS_BASE ?? "/docs/",
   srcExclude: [
@@ -108,7 +115,8 @@ export default defineConfig({
       label: "日本語",
       lang: "ja",
       title: "Takosumi",
-      description: "OpenTofu-native deploy control plane, UI, and audit ledger",
+      description:
+        "Git-based OpenTofu control plane, Resource Shape API, and adapter framework",
       themeConfig: {
         nav: jaNav,
         sidebar: jaSidebar,
@@ -133,7 +141,8 @@ export default defineConfig({
       link: "/en/",
       lang: "en-US",
       title: "Takosumi",
-      description: "OpenTofu-native deploy control plane, UI, and audit ledger",
+      description:
+        "Git-based OpenTofu control plane, Resource Shape API, and adapter framework",
       themeConfig: {
         nav: enNav,
         sidebar: enSidebar,

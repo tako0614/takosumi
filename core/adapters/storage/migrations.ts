@@ -980,6 +980,77 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
       primaryKey: ["id"],
       indexes: [["space_id"], ["run_id"], ["severity"]],
     },
+    {
+      name: "takosumi_resource_shapes",
+      domain: "resources",
+      columns: [
+        "id",
+        "space_id",
+        "project",
+        "environment",
+        "kind",
+        "name",
+        "managed_by",
+        "spec_json",
+        "phase",
+        "generation",
+        "observed_generation",
+        "outputs_json",
+        "conditions_json",
+        "labels_json",
+        "created_at",
+        "updated_at",
+      ],
+      primaryKey: ["id"],
+      uniqueConstraints: [["space_id", "kind", "name"]],
+      indexes: [["space_id"]],
+    },
+    {
+      name: "takosumi_resolution_locks",
+      domain: "resources",
+      columns: [
+        "resource_id",
+        "selected_implementation",
+        "target",
+        "locked",
+        "reason_json",
+        "portability",
+        "native_resources_json",
+        "locked_at",
+        "updated_at",
+      ],
+      primaryKey: ["resource_id"],
+    },
+    {
+      name: "takosumi_target_pools",
+      domain: "resources",
+      columns: [
+        "id",
+        "space_id",
+        "name",
+        "spec_json",
+        "created_at",
+        "updated_at",
+      ],
+      primaryKey: ["id"],
+      uniqueConstraints: [["space_id", "name"]],
+      indexes: [["space_id"]],
+    },
+    {
+      name: "takosumi_space_policies",
+      domain: "resources",
+      columns: [
+        "id",
+        "space_id",
+        "name",
+        "spec_json",
+        "created_at",
+        "updated_at",
+      ],
+      primaryKey: ["id"],
+      uniqueConstraints: [["space_id", "name"]],
+      indexes: [["space_id"]],
+    },
   ]);
 
 export const postgresStorageMigrationStatements: readonly StorageMigrationStatement[] =
@@ -3247,5 +3318,73 @@ update takosumi_capsules
     || (case when project_id is not null
           then jsonb_build_object('projectId', to_jsonb(project_id))
           else '{}'::jsonb end);`,
+    },
+    {
+      id: "resources.resource_shape_flow.create",
+      version: 61,
+      domain: "resources",
+      description:
+        "Create the durable Resource Shape flow projections (`takosumi.dev/v1alpha1`) on the deploy-control plane (`final-plan.md` §10): takosumi_resource_shapes (desired spec + observed status, unique per (space, kind, name)), takosumi_resolution_locks (the pinned resolution decision keyed by resource id), takosumi_target_pools, and takosumi_space_policies (both unique per (space, name)). Complex sub-objects persist as jsonb columns. `down` drops the four tables (and their indexes).",
+      sql: `create table if not exists takosumi_resource_shapes (
+  id                  text    primary key,
+  space_id            text    not null,
+  project             text,
+  environment         text,
+  kind                text    not null,
+  name                text    not null,
+  managed_by          text    not null,
+  spec_json           jsonb   not null,
+  phase               text    not null,
+  generation          integer not null,
+  observed_generation integer not null,
+  outputs_json        jsonb,
+  conditions_json     jsonb,
+  labels_json         jsonb,
+  created_at          text    not null,
+  updated_at          text    not null
+);
+create unique index if not exists takosumi_resource_shapes_space_kind_name_unique
+  on takosumi_resource_shapes (space_id, kind, name);
+create index if not exists takosumi_resource_shapes_space_idx
+  on takosumi_resource_shapes (space_id);
+create table if not exists takosumi_resolution_locks (
+  resource_id             text    primary key,
+  selected_implementation text    not null,
+  target                  text    not null,
+  locked                  boolean not null,
+  reason_json             jsonb   not null,
+  portability             text,
+  native_resources_json   jsonb,
+  locked_at               text    not null,
+  updated_at              text    not null
+);
+create table if not exists takosumi_target_pools (
+  id          text  primary key,
+  space_id    text  not null,
+  name        text  not null,
+  spec_json   jsonb not null,
+  created_at  text  not null,
+  updated_at  text  not null
+);
+create unique index if not exists takosumi_target_pools_space_name_unique
+  on takosumi_target_pools (space_id, name);
+create index if not exists takosumi_target_pools_space_idx
+  on takosumi_target_pools (space_id);
+create table if not exists takosumi_space_policies (
+  id          text  primary key,
+  space_id    text  not null,
+  name        text  not null,
+  spec_json   jsonb not null,
+  created_at  text  not null,
+  updated_at  text  not null
+);
+create unique index if not exists takosumi_space_policies_space_name_unique
+  on takosumi_space_policies (space_id, name);
+create index if not exists takosumi_space_policies_space_idx
+  on takosumi_space_policies (space_id);`,
+      down: `drop table if exists takosumi_space_policies;
+drop table if exists takosumi_target_pools;
+drop table if exists takosumi_resolution_locks;
+drop table if exists takosumi_resource_shapes;`,
     },
   ]);

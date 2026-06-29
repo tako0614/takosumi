@@ -11,7 +11,7 @@
  * the rename converges.)
  */
 
-import type { PolicyConfig } from "./installations.ts";
+import type { PolicyConfig } from "./install-configs.ts";
 import type { BillingSettings } from "./billing.ts";
 
 export type WorkspaceType = "personal" | "organization";

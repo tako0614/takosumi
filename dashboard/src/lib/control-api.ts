@@ -31,7 +31,6 @@ import type {
   ProviderListing as ContractProviderListing,
   ProviderConnection as ContractProviderConnection,
   ProviderResolution as ContractProviderResolution,
-  PublicDeployment as ContractPublicDeployment,
   Run as ContractRun,
   RunCostInfo as ContractRunCostInfo,
   RunLogsResponse as ContractRunLogsResponse,
@@ -40,6 +39,7 @@ import type {
   Workspace as ContractWorkspace,
   UsageEvent as ContractUsageEvent,
 } from "takosumi-contract";
+import type { PublicDeployment as ContractPublicDeployment } from "takosumi-contract/deployments";
 
 // ===========================================================================
 // Transport — same-origin fetch with the session cookie (mirrors the account

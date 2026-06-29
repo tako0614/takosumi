@@ -1,5 +1,5 @@
 /**
- * Deployment / Installation read-projection facade.
+ * Deployment / Capsule read-projection facade.
  *
  * A thin collaborator pulled out of `OpenTofuDeploymentController`: every method
  * is a read-only projection over the {@link OpenTofuDeploymentStore} (no
@@ -16,34 +16,33 @@ import type {
   ApplyRunResponse,
   Deployment,
   GetInstallationResponse,
-  Installation,
   ListDeploymentsResponse,
   ListDeploymentOutputsResponse,
 } from "@takosumi/internal/deploy-control-api";
-import type { PublicInstallation } from "takosumi-contract/installations";
+import type { Capsule, PublicCapsule } from "takosumi-contract/capsules";
 import type { PageParams } from "takosumi-contract/pagination";
 import type { OpenTofuDeploymentStore } from "./store.ts";
 import { OpenTofuControllerError, requireNonEmptyString } from "./errors.ts";
 
 /**
- * Projects a stored {@link Installation} to its public shape (stripping the
+ * Projects a stored {@link Capsule} to its public shape (stripping the
  * internal `installType` seam). Injected by the controller so the projection
  * stays owned in exactly one place; `getApplyRun` / `getInstallation` apply it
- * to match the `PublicInstallation`-typed response contracts.
+ * to match the `PublicCapsule`-typed response contracts.
  */
 export type PublicInstallationProjector = (
-  installation: Installation,
-) => PublicInstallation;
+  installation: Capsule,
+) => PublicCapsule;
 
 /**
- * Resolves an Installation by id or throws a typed `not_found`. Shared by the
+ * Resolves an Capsule by id or throws a typed `not_found`. Shared by the
  * deployment-query facade and the controller's run-execution path so the guard
  * lives in exactly one place.
  */
 export async function requireInstallation(
   store: OpenTofuDeploymentStore,
   id: string,
-): Promise<Installation> {
+): Promise<Capsule> {
   requireNonEmptyString(id, "installationId");
   const installation = await store.getInstallation(id);
   if (!installation) {
@@ -55,7 +54,7 @@ export async function requireInstallation(
   return installation;
 }
 
-/** Read-only Deployment / Installation projections over the store. */
+/** Read-only Deployment / Capsule projections over the store. */
 export class DeploymentQuery {
   readonly #store: OpenTofuDeploymentStore;
   readonly #publicInstallation: PublicInstallationProjector;
@@ -102,14 +101,14 @@ export class DeploymentQuery {
   /**
    * Lists ACTIVE Installations across all Spaces, capped at `limit` (spec §28
    * scheduled drift sweep; Phase 8). Only `active` Installations are drift-checkable
-   * (a `pending` / `disabled` / `destroyed` / `error` Installation has no
+   * (a `pending` / `disabled` / `destroyed` / `error` Capsule has no
    * stable deployed state to compare against). The scheduled sweep iterates this
-   * bounded set and creates one drift check per Installation. A non-positive
+   * bounded set and creates one drift check per Capsule. A non-positive
    * limit returns an empty list.
    */
   async listActiveInstallations(
     limit: number,
-  ): Promise<readonly Installation[]> {
+  ): Promise<readonly Capsule[]> {
     if (!Number.isFinite(limit) || limit <= 0) return [];
     const all = await this.#store.listInstallations();
     return all.filter((i) => i.status === "active").slice(0, Math.floor(limit));

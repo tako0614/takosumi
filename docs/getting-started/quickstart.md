@@ -107,5 +107,7 @@ outputs
 audit event
 ```
 
-Cloudflare Compatibility Gateway や managed resources は Takosumi Cloud 専用で、OSS
-quickstart では使いません。
+Compatibility API framework は OSS Takosumi の capability surface ですが、この
+quickstart は OpenTofu Stack flow に絞るため使いません。公式 managed target pool /
+Takosumi-owned native resource internals / enforced billing / support/SLA は
+Takosumi for Operator / Cloud の運用層です。

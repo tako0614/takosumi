@@ -12,11 +12,11 @@
  * normalized view of a plain Git-hosted OpenTofu configuration that can be called
  * as a child module from a Takosumi generated root. A SourceSnapshot is
  * normalized as an OpenTofu Capsule before plan / apply. InstallConfig (see
- * `./installations.ts`) is the service-side DB record describing Capsule
+ * `./install-configs.ts`) is the service-side DB record describing Capsule
  * execution policy. User repos carry NO Takosumi manifest.
  *
  * (The Capsule ledger record was formerly `Installation`. The transient
- * `Installation` alias is re-exported from `./installations.ts` until the rename
+ * `Installation` alias is re-exported from `./install-configs.ts` until the rename
  * converges.)
  */
 

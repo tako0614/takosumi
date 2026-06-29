@@ -6,6 +6,8 @@ import {
   EXTERNAL_STANDARD_PREFIXES,
   HEALTH_PATHS,
   INTERNAL_V1_PREFIX,
+  TAKOSUMI_PRODUCT_CAPABILITIES_PATH,
+  TAKOSUMI_WELL_KNOWN_PATH,
   isAccountsIdentityPath,
   isApiV1Path,
   isExternalStandardPath,
@@ -22,6 +24,8 @@ test("prefix constants are the canonical taxonomy values", () => {
     ["/oauth", "/.well-known", "/hooks"],
   );
   assert.deepEqual([...HEALTH_PATHS], ["/healthz", "/readyz", "/livez"]);
+  assert.equal(TAKOSUMI_WELL_KNOWN_PATH, "/.well-known/takosumi");
+  assert.equal(TAKOSUMI_PRODUCT_CAPABILITIES_PATH, "/v1/capabilities");
 });
 
 test("isApiV1Path matches the prefix and nested paths only", () => {

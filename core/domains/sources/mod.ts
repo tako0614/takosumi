@@ -25,7 +25,7 @@ import type {
   CapsuleCompatibilityReportResponse,
   CreateSourceCompatibilityCheckRequest,
 } from "takosumi-contract/capsules";
-import type { PolicyConfig } from "takosumi-contract/installations";
+import type { PolicyConfig } from "takosumi-contract/install-configs";
 import type { PageParams } from "takosumi-contract/pagination";
 import type { SourceSnapshot } from "takosumi-contract/sources";
 import { sha256HexOfStringAsync } from "../../shared/runtime/hash.ts";

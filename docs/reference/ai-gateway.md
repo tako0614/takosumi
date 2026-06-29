@@ -15,15 +15,15 @@ carries only a fail-closed route seam and an optional Cloud-extension fetch
 handler handoff. In official Takosumi Cloud, the closed
 `takosumi-cloud/platform/worker.ts` wrapper mounts that handler in-process
 around the OSS platform worker. The platform Cloud extension registry currently
-contains exactly two public compatibility routes: this AI Gateway and the
-Cloudflare Compatibility Gateway. Upstream profiles, operator-held credentials,
-and request forwarding belong to the closed Takosumi Cloud deployment.
+contains exactly two public Cloud extension routes: this AI Gateway and the
+`compat.cloudflare.workers.v1` import path. Upstream profiles, operator-held
+credentials, and request forwarding belong to the closed Takosumi Cloud
+deployment.
 
-For the current GA scope, Takosumi Cloud compatibility APIs are limited to the
-Cloudflare Compatibility Gateway and this AI Gateway. Other providers should be
-supported through their normal OpenTofu/Terraform providers and generic
-ProviderConnection env/file injection rather than new provider-compatible
-gateway APIs.
+For the current GA scope, Takosumi Cloud extension routes are limited to the
+`compat.cloudflare.workers.v1` and this AI Gateway. Other Cloud extension routes
+need separate specs. OSS compatibility profiles remain scoped, versioned
+Takosumi capabilities outside this AI Gateway contract.
 
 The platform route is active only when the closed Cloud wrapper mounts the AI
 Gateway fetch handler. The wrapper exposes that handler to the OSS
@@ -321,8 +321,8 @@ headers. The platform strips internal usage headers before returning the
 OpenAI-compatible response, so GA smoke should rotate a runtime service token,
 call chat/embeddings, then read the target Workspace usage ledger and
 confirm a new `source: "resource_meter"` / `kind: "ai_request"` event for the
-same Installation. Use `--require-ai-runtime-service-token
---ai-service-installation-id <id> --require-ai-usage-ledger
+same Workspace and service resource. Use `--require-ai-runtime-service-token
+--ai-service-resource-id <id> --require-ai-usage-ledger
 --ai-usage-workspace-id <workspace-id>` for that strict check.
 
 ## Secret Boundary

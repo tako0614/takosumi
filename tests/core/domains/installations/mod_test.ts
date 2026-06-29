@@ -7,7 +7,7 @@ import type {
   OpenTofuDeploymentStore,
   StoredSource,
 } from "../../../../core/domains/deploy-control/store.ts";
-import type { InstallConfig } from "takosumi-contract/installations";
+import type { InstallConfig } from "takosumi-contract/install-configs";
 import type { Workspace as Space } from "takosumi-contract/workspaces";
 
 function build() {

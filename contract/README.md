@@ -26,19 +26,11 @@ The target public contract is centered on the final Takosumi model:
 - `AuditEvent` - actor/action/target/result evidence.
 - `Operator` - the party operating an OSS Takosumi for Operators instance.
 
-Current DTOs and routes may still expose legacy names from the previous
-architecture. Treat `Space`, `Installation`, `InstallConfig`, `Dependency`,
-`DependencySnapshot`, `RunGroup`, `StateSnapshot`, `OutputSnapshot`,
-`Deployment`, `Activity`, Provider Catalog, Gateway, and provider ownership
-flags as migration debt or implementation compatibility only unless
-a change deliberately maps them to the final model. In particular:
-
-- `Space` maps to the Workspace owner boundary.
-- `Installation` maps to a Capsule plus service-side configuration.
-- `StateSnapshot`, `OutputSnapshot`, and `Deployment` map to StateVersion,
-  Output, and successful Run evidence.
-- `Dependency`, `DependencySnapshot`, and OutputShare-style records map to
-  output-to-input wiring between Capsules.
+The root contract facade exports canonical names only. Internal stores may still
+read old physical columns while operator data is migrated, but that storage
+detail is not part of the public contract. Public code should use `Workspace`,
+`Capsule`, `StateVersion`, `Output`, `Run`, `ProviderConnection`,
+`CredentialRecipe`, and `ProviderBinding` directly.
 
 Account-plane workload compatibility shapes remain internal and are not
 re-exported from the public deploy-control contract facade.
@@ -50,7 +42,9 @@ metadata file.
 
 The OSS contract runs existing providers through ProviderConnection,
 CredentialRecipe, ProviderBinding, and per-run env/file injection. It must not
-define Cloudflare Compatibility Gateway, AWS/GCP compatibility APIs, S3 gateway,
-Resource Driver systems, Compat Pack systems, managed Edge/Storage/Container
-resources, official billing, official quota/usage, or official resource
-backends as OSS product concepts; those belong to closed Takosumi Cloud.
+define complete provider-compatible cloud APIs or official managed capacity as
+OSS product concepts. Compatibility API profiles are scoped capabilities such as
+`compat.s3.v1`, `compat.oci.v1`, `compat.cloudevents.v1`, and
+`compat.cloudflare.workers.v1`; official managed target pools, billing
+enforcement, quota, usage rating, support, and resource backends belong to
+Takosumi for Operator / Takosumi Cloud composition.

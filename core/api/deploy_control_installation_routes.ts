@@ -11,12 +11,14 @@ import type {
   CapsulesService,
 } from "../domains/capsules/mod.ts";
 import type {
+  Capsule,
+  CapsuleStatus,
+  PublicCapsule,
+} from "takosumi-contract/capsules";
+import type {
   InstallConfig,
-  Installation,
-  InstallationStatus,
   PublicInstallConfig,
-  PublicInstallation,
-} from "takosumi-contract/installations";
+} from "takosumi-contract/install-configs";
 import type { JsonValue } from "takosumi-contract";
 import { isAbsolute, normalize } from "node:path";
 import {
@@ -64,7 +66,7 @@ const INSTALL_CONFIG_ID_PARAM = {
 const INSTALLATION_ID_PARAM = { id: "installationId" } as const;
 
 interface PatchInstallationRequest {
-  readonly status?: InstallationStatus;
+  readonly status?: CapsuleStatus;
 }
 
 interface CreateInstallationRouteRequest extends Omit<
@@ -81,10 +83,10 @@ interface InstallationPlanRouteRequest {
   readonly runnerId?: string;
 }
 
-const API_PATCHABLE_INSTALLATION_STATUSES: ReadonlySet<InstallationStatus> =
+const API_PATCHABLE_INSTALLATION_STATUSES: ReadonlySet<CapsuleStatus> =
   new Set(["active", "stale", "error"]);
 
-function publicInstallation(installation: Installation): PublicInstallation {
+function publicInstallation(installation: Capsule): PublicCapsule {
   const {
     installType: _installType,
     currentOutputSnapshotId: _currentOutputSnapshotId,

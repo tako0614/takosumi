@@ -58,8 +58,11 @@ inside the runner dispatch path. They are injected through approved env/file
 channels and never through `.tfvars`, run logs, public API projections, or
 tenant workloads.
 
-## Cloud-Only Boundary
+## Managed-Capacity Boundary
 
-Workers for Platforms dispatch, Cloudflare Compatibility Gateway, Takosumi
-Managed Edge, and managed resource backends are Takosumi Cloud-only. The OSS repo
-must not expose those as the default operator execution path.
+Operator execution settings may select where a Run executes or which adapters a
+resolver can use, but they do not define the public compatibility API framework.
+Workers for Platforms dispatch, Takosumi-owned native resource internals,
+official managed target pools, and official resource backends are
+Operator/Cloud managed-capacity concerns. The OSS repo must not expose those as
+the default operator execution path.

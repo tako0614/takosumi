@@ -76,6 +76,14 @@ import type { SecretBoundaryCrypto } from "./adapters/secret-store/memory.ts";
 import { RunGroupsService } from "./domains/run-groups/mod.ts";
 import { ActivityService } from "./domains/activity/mod.ts";
 import {
+  createInMemoryResourceShapeStores,
+  ResourceShapeService,
+  StubResourceShapeAdapter,
+  type ResourceAdapter,
+  type ResourceShapeStores,
+} from "./domains/resource-shape/mod.ts";
+import { createSqlResourceShapeStores } from "./domains/resource-shape/sql_stores.ts";
+import {
   type BackupArtifactStore,
   type BackupObjectReader,
   BackupsService,
@@ -201,6 +209,24 @@ function resolveOpenTofuStore(input: {
   };
 }
 
+function resolveResourceShapeAdapter(input: {
+  readonly adapter?: ResourceAdapter;
+  readonly enableResourceShapeApi?: boolean;
+  readonly environment?: string;
+}): ResourceAdapter | undefined {
+  if (input.adapter) return input.adapter;
+  if (!input.enableResourceShapeApi) return undefined;
+  const strict =
+    input.environment === "production" || input.environment === "staging";
+  if (strict) {
+    throw new Error(
+      `${input.environment} runtime cannot expose the Resource Shape API ` +
+        `without an injected resourceShapeAdapter`,
+    );
+  }
+  return new StubResourceShapeAdapter();
+}
+
 /**
  * Durability gate for the public OpenTofu deployment ledger. The public API is
  * the canonical plan/apply/destroy entry point, so an in-memory ledger on a
@@ -292,6 +318,16 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
    * production/staging when the public deploy API is exposed).
    */
   readonly opentofuDeploymentStore?: OpenTofuDeploymentStore;
+  /** Resource Shape durable stores. When omitted, `sqlClient` is used. */
+  readonly resourceShapeStores?: ResourceShapeStores;
+  /**
+   * Adapter that materializes resolved Resource Shapes. Production/staging hosts
+   * must inject a real adapter; dev/test may opt into the built-in stub by
+   * setting `enableResourceShapeApi`.
+   */
+  readonly resourceShapeAdapter?: ResourceAdapter;
+  /** Enables the Resource Shape API with the dev/test stub when no adapter is supplied. */
+  readonly enableResourceShapeApi?: boolean;
   /**
    * Operator-selected public Git source for first-party catalog cards. The
    * default tracks the public development mirror, while hosted deployments can
@@ -962,6 +998,21 @@ export async function createTakosumiService(
       ? { serviceDataRunner: options.serviceDataBackupRunner }
       : {}),
   });
+  const resourceShapeAdapter = resolveResourceShapeAdapter({
+    adapter: options.resourceShapeAdapter,
+    enableResourceShapeApi: options.enableResourceShapeApi,
+    environment: runtimeConfig.environment,
+  });
+  const resourceShapeService = resourceShapeAdapter
+    ? new ResourceShapeService({
+        stores: options.resourceShapeStores ??
+          (options.sqlClient
+            ? createSqlResourceShapeStores(options.sqlClient)
+            : createInMemoryResourceShapeStores()),
+        adapter: resourceShapeAdapter,
+        now: () => new Date().toISOString(),
+      })
+    : undefined;
   const connectionOAuthHelpers =
     createConnectionOAuthHelpersFromEnv(runtimeEnv);
   const app = await createApiApp({
@@ -979,6 +1030,11 @@ export async function createTakosumiService(
       Boolean(context.adapters?.objectStorage),
     registerMetricsRoutes:
       role === "takosumi-api" && Boolean(metricsScrapeToken),
+    registerResourceShapeRoutes:
+      role === "takosumi-api" && resourceShapeService !== undefined,
+    resourceShapeRouteOptions: resourceShapeService
+      ? { service: resourceShapeService }
+      : undefined,
     metricsRouteOptions: metricsScrapeToken
       ? {
           observability: context.adapters.observability,

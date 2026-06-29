@@ -6,7 +6,7 @@ import type {
   CapsuleProvisionerSummary,
   CapsuleResourceSummary,
 } from "takosumi-contract/capsules";
-import type { PolicyConfig } from "takosumi-contract/installations";
+import type { PolicyConfig } from "takosumi-contract/install-configs";
 import type { SourceSnapshot } from "takosumi-contract/sources";
 import { providerById } from "@takosumi/providers";
 

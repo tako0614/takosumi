@@ -1,7 +1,7 @@
 /**
  * Root `takosumi-contract` exports the public contract facade. Internal ledger
  * fields such as InstallConfig.installType and templateBinding remain available
- * from the explicit `takosumi-contract/installations` subpath only.
+ * from the explicit `takosumi-contract/install-configs` subpath only.
  */
 import { expect, test } from "bun:test";
 
@@ -31,6 +31,8 @@ test("root contract facade exports public Installation projections", async () =>
   expect(deployControlSource).not.toContain("ProviderEnvStatus");
   expect(source).not.toContain('export * from "../../contract/api-surface.ts"');
   expect(source).not.toContain("INTERNAL_V1_PREFIX");
+  expect(source).not.toContain("DeployRequest");
+  expect(source).not.toContain("PublicDeployResponse");
 
   const config = {
     id: "cfg_public",

@@ -33,7 +33,6 @@ import type {
   DispatchStateScope,
   GetInstallationResponse,
   InstallConfig,
-  Installation,
   OpenTofuModuleSource,
   PlanRunInstallationContext,
   StateSnapshot,
@@ -58,16 +57,14 @@ import type {
   RunStatus,
   TestConnectionResponse,
 } from "@takosumi/internal/deploy-control-api";
+import type { Capsule, PublicCapsule } from "takosumi-contract/capsules";
 import type {
   ListProvidersResponse,
   ProviderListingResponse,
 } from "takosumi-contract/providers";
 import { computeProviderListings } from "./provider_listing.ts";
 import type { ConnectionVault } from "../../adapters/vault/mod.ts";
-import type {
-  OutputAllowlistEntry,
-  PublicInstallation,
-} from "takosumi-contract/installations";
+import type { OutputAllowlistEntry } from "takosumi-contract/install-configs";
 import type {
   BillingAccount,
   BillingMode,
@@ -267,8 +264,8 @@ export { providerMatches } from "./policy.ts";
 export { deploymentOutputsFromOpenTofu } from "./projection.ts";
 
 export function publicInstallation(
-  installation: Installation,
-): PublicInstallation {
+  installation: Capsule,
+): PublicCapsule {
   const { installType: _installType, ...publicRecord } = installation;
   return publicRecord;
 }
@@ -343,7 +340,7 @@ export interface RunInstallationDispatch {
   readonly sourceArchive?: DispatchSourceArchive;
   /**
    * Remote-state dependency descriptors (spec §15 `remote_state`). One per
-   * `remote_state` Dependency edge of the consumer Installation; the runner DO
+   * `remote_state` Dependency edge of the consumer Capsule; the runner DO
    * fetches + decrypts each producer state and the container writes it read-only
    * to `/work/deps/<name>.tfstate` before init/plan/apply. Absent for runs with
    * no `remote_state` edges.
@@ -379,7 +376,7 @@ export interface OpenTofuDestroyJob
   readonly applyRun: ApplyRun;
   readonly planRun: PlanRun;
   readonly planArtifact: OpenTofuPlanArtifact;
-  readonly installation: Installation;
+  readonly installation: Capsule;
   readonly runnerProfile: RunnerProfile;
   readonly providerInstallationPolicy?: {
     readonly requireMirror: boolean;
@@ -469,7 +466,7 @@ export interface ReleaseCommandRunResult {
 export interface ReleaseActivationInput {
   readonly planRun: PlanRun;
   readonly applyRun: ApplyRun;
-  readonly installation: Installation;
+  readonly installation: Capsule;
   readonly deployment: Deployment;
   readonly outputSnapshot: OutputSnapshot;
   /**
@@ -747,10 +744,10 @@ export interface OpenTofuDeploymentControllerDependencies {
    */
   readonly templateRegistry?: TemplateRegistry;
   /**
-   * Installation lease seam (core-spec.md §22 / §23). When present, the apply
+   * Capsule lease seam (core-spec.md §22 / §23). When present, the apply
    * consumer acquires the `installation:{installationId}:{environment}` lease
    * before executing a write run and releases it in `finally`, so only ONE
-   * write run per (Installation, environment) runs at a time. A busy lease
+   * write run per (Capsule, environment) runs at a time. A busy lease
    * throws {@link InstallationLeaseBusyError} so the queue redelivers. When
    * absent, the controller falls back to its in-process serialization on the
    * installation key (single-isolate safe; cross-isolate needs the DO-backed
@@ -827,7 +824,7 @@ export interface GenericRootDispatchContext {
 }
 
 /**
- * Internal plan-creation context for the Installation-driven flow. Carried only
+ * Internal plan-creation context for the Capsule-driven flow. Carried only
  * by {@link OpenTofuDeploymentController.createInstallationPlan} /
  * `createInstallationDestroyPlan`; the raw `/internal/v1/plan-runs` create path leaves
  * it empty.
@@ -836,7 +833,7 @@ export interface PlanRunInternalContext {
   readonly installationContext?: PlanRunInstallationContext;
   readonly sourceSnapshotId?: string;
   readonly compatibilityReportId?: string;
-  /** The Installation's current state generation (its latest StateSnapshot, or 0). */
+  /** The Capsule's current state generation (its latest StateSnapshot, or 0). */
   readonly baseStateGeneration?: number;
   /** Install-type wiring for an installation-driven template plan (§13). */
   readonly installTypePlan?: InstallTypePlanContext;
@@ -856,7 +853,7 @@ export interface PlanRunInternalContext {
    */
   readonly driftCheck?: true;
   /**
-   * Dependency pins resolved by the Installation planning path before the PlanRun
+   * Dependency pins resolved by the Capsule planning path before the PlanRun
    * row exists. `createPlanRun` persists them immediately after creating the run
    * row and before queue dispatch, so runner dispatch can restore remote_state
    * from the same DependencySnapshot apply will verify.
@@ -870,8 +867,8 @@ export interface PlanRunInternalContext {
 // because the controller's plan-creation / snapshot-pin seam still threads it.
 
 /**
- * Request to plan / destroy-plan an Installation (spec §23). Resolves the
- * Installation -> InstallConfig -> Source, picks the latest SourceSnapshot,
+ * Request to plan / destroy-plan an Capsule (spec §23). Resolves the
+ * Capsule -> InstallConfig -> Source, picks the latest SourceSnapshot,
  * and creates a plan run carrying installation context + the resolved
  * snapshot.
  */
@@ -904,8 +901,8 @@ export interface CreateInstallationPlanInternal {
    * Pins the plan to a SPECIFIC SourceSnapshot id instead of resolving the
    * Source's latest snapshot for its default ref. Used by the §30 deployment
    * rollback-plan path (`POST /internal/v1/deployments/:id/rollback-plan`) to re-plan an
-   * Installation against the source snapshot a prior Deployment was built from.
-   * The snapshot must belong to the Installation's Source.
+   * Capsule against the source snapshot a prior Deployment was built from.
+   * The snapshot must belong to the Capsule's Source.
    */
   readonly sourceSnapshotId?: string;
   /**
@@ -1390,14 +1387,14 @@ export class OpenTofuDeploymentController {
   /**
    * Lists ACTIVE Installations across all Spaces, capped at `limit` (spec §28
    * scheduled drift sweep; Phase 8). Only `active` Installations are drift-checkable
-   * (a `pending` / `disabled` / `destroyed` / `error` Installation has no
+   * (a `pending` / `disabled` / `destroyed` / `error` Capsule has no
    * stable deployed state to compare against). The scheduled sweep iterates this
-   * bounded set and creates one drift check per Installation. A non-positive
+   * bounded set and creates one drift check per Capsule. A non-positive
    * limit returns an empty list.
    */
   async listActiveInstallations(
     limit: number,
-  ): Promise<readonly Installation[]> {
+  ): Promise<readonly Capsule[]> {
     return await this.#deployments.listActiveInstallations(limit);
   }
 
@@ -1424,7 +1421,7 @@ export class OpenTofuDeploymentController {
 
   /**
    * Creates a rollback PLAN run for a Deployment (spec §30 `POST
-   * /internal/v1/deployments/:id/rollback-plan`): re-plans the Deployment's Installation
+   * /internal/v1/deployments/:id/rollback-plan`): re-plans the Deployment's Capsule
    * pinned to THAT Deployment's `sourceSnapshotId`. The plan then flows through
    * the normal approval/apply path. Reuses the installation plan path with an
    * internal snapshot override.
@@ -1673,14 +1670,14 @@ export class OpenTofuDeploymentController {
 
 /**
  * State generation guard. A PlanRun records the target's `baseStateGeneration`
- * at creation; if the target Installation's generation has advanced since (a
+ * at creation; if the target Capsule's generation has advanced since (a
  * successful apply/destroy ran in between), this plan is stale and must not
  * apply over the newer state. `create` plans (no planned installation) are
  * exempt — they have no prior generation to race.
  */
 export function assertStateGenerationMatches(
   planRun: PlanRun,
-  plannedInstallation: Installation | undefined,
+  plannedInstallation: Capsule | undefined,
 ): void {
   if (!plannedInstallation) return;
   const base = planRun.baseStateGeneration ?? 0;
@@ -1962,14 +1959,14 @@ export function rawOutputArtifactKey(input: {
  * real fetch never uses this URL).
  */
 /**
- * In-memory Source for a no-git Installation that has no registered Source row.
+ * In-memory Source for a no-git Capsule that has no registered Source row.
  * It is never persisted; it only supplies the few fields the plan
  * pipeline reads (`url` / `defaultRef` / `defaultPath`) so the generated-root
  * module-source descriptor validates. The runner still restores the actual code
  * from the snapshot's `archiveObjectKey`, so the synthetic git url is metadata.
  */
 export function syntheticUploadSource(
-  installation: Installation,
+  installation: Capsule,
   snapshot: SourceSnapshot,
 ): Source {
   return {
@@ -2048,7 +2045,7 @@ export function assertGeneratedRootDispatchPresent(
   if (!planRun.installationId || dispatch.generatedRoot) return;
   throw new OpenTofuControllerError(
     "failed_precondition",
-    `generated_root_sidecar_missing: plan run ${planRun.id} is Installation-bound but has no generated root sidecar`,
+    `generated_root_sidecar_missing: plan run ${planRun.id} is Capsule-bound but has no generated root sidecar`,
   );
 }
 

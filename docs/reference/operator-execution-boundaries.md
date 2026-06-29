@@ -18,9 +18,10 @@ runs. They are not public product vocabulary.
 
 - raw provider secret values
 - ProviderConnection public identity
-- compatibility gateway endpoints
-- managed resource backends
-- Takosumi Cloud official resource pools
+- public compatibility API contract
+- adapter capability contract
+- official managed target pools
+- Takosumi-owned native resource internals
 
 Provider credentials live in ProviderConnections / vault. The boundary only
 receives temporary run-scoped material after policy allows a Run to execute.
@@ -58,8 +59,11 @@ inside the runner dispatch path. They are injected through approved env/file
 channels and never through `.tfvars`, run logs, public API projections, or
 tenant workloads.
 
-## Cloud-Only Boundary
+## Managed-Capacity Boundary
 
-Workers for Platforms dispatch, Cloudflare Compatibility Gateway, Takosumi
-Managed Edge, and managed resource backends are Takosumi Cloud-only. The OSS repo
-must not expose those as the default operator execution path.
+Operator execution settings may select where a Run executes or which adapters a
+resolver can use, but they do not define the public compatibility API framework.
+Workers for Platforms dispatch, Takosumi-owned native resource internals,
+official managed target pools, and official resource backends are
+Operator/Cloud managed-capacity concerns. The OSS repo must not expose those as
+the default operator execution path.

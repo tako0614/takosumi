@@ -1,15 +1,12 @@
 export { API_V1_PREFIX, isApiV1Path } from "./api-surface.ts";
+export * from "./capabilities.ts";
+export * from "./resource-shape.ts";
+export * from "./target.ts";
+export * from "./resolution.ts";
 export * from "./sources.ts";
 export * from "./redaction.ts";
 export * from "./workspaces.ts";
-/** @deprecated `Space` is renamed to `Workspace` (`./workspaces.ts`). */
-export type {
-  Workspace as Space,
-  WorkspaceType as SpaceType,
-  CapsuleFullName as InstallationFullName,
-} from "./workspaces.ts";
-/** @deprecated `formatInstallationFullName` is renamed to `formatCapsuleFullName`. */
-export { formatCapsuleFullName as formatInstallationFullName } from "./workspaces.ts";
+export type { CapsuleFullName } from "./workspaces.ts";
 export type { Project, PublicProject } from "./projects.ts";
 export type {
   BackupConfig,
@@ -28,16 +25,7 @@ export type {
   PolicyConfig,
   PublicInstallConfig as InstallConfig,
   TrustLevel,
-} from "./installations.ts";
-/** @deprecated use `Capsule` / `CapsuleStatus` / `PublicCapsule`. */
-export type {
-  CapsuleStatus as InstallationStatus,
-  PublicCapsule as Installation,
-} from "./installations.ts";
-export type {
-  DeployRequest,
-  PublicDeployResponse as DeployResponse,
-} from "./deploy.ts";
+} from "./install-configs.ts";
 export type {
   Capsule,
   CapsuleStatus,
@@ -88,19 +76,7 @@ export type {
   OutputShareEntry,
   OutputShareStatus,
 } from "./outputs.ts";
-/** @deprecated `OutputSnapshot` is renamed to `Output` (`./outputs.ts`). */
-export type {
-  PublicOutput as PublicOutputSnapshot,
-  PublicOutput as OutputSnapshot,
-} from "./outputs.ts";
 export type { StateVersion } from "./state-versions.ts";
-/** @deprecated retired Deployment ledger; kept read-only for audit. */
-export type {
-  DeploymentStatus,
-  PublicDeployment,
-  PublicDeployment as Deployment,
-  StateVersion as StateSnapshot,
-} from "./deployments.ts";
 export * from "./backups.ts";
 export * from "./billing.ts";
 export * from "./security.ts";
@@ -125,6 +101,9 @@ export type {
   RunType,
 } from "./runs.ts";
 export type {
+  ActorContext,
+  Condition,
+  ConditionStatus,
   Digest,
   IsoTimestamp,
   JsonObject,

@@ -42,7 +42,7 @@ import type {
   TemplateDefinition,
 } from "@takosumi/internal/deploy-control-api";
 import type { JsonValue } from "takosumi-contract";
-import type { OutputAllowlistEntry } from "takosumi-contract/installations";
+import type { OutputAllowlistEntry } from "takosumi-contract/install-configs";
 import {
   providerCredentialArgs,
   providerEnvRule,

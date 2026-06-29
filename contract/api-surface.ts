@@ -45,6 +45,13 @@ export const EXTERNAL_STANDARD_PREFIXES = [
   "/hooks",
 ] as const;
 
+/** Takosumi product discovery document used by providers and CLIs. */
+export const TAKOSUMI_WELL_KNOWN_PATH = "/.well-known/takosumi" as const;
+
+/** Public product capability document, distinct from process route inventory. */
+export const TAKOSUMI_PRODUCT_CAPABILITIES_PATH =
+  "/v1/capabilities" as const;
+
 /** Process health/readiness/liveness probe paths (k8s/LB convention). */
 export const HEALTH_PATHS = ["/healthz", "/readyz", "/livez"] as const;
 
@@ -54,6 +61,8 @@ export const HEALTH_PATHS = ["/healthz", "/readyz", "/livez"] as const;
  */
 export const PROCESS_OBSERVABILITY_PATHS = [
   ...HEALTH_PATHS,
+  TAKOSUMI_WELL_KNOWN_PATH,
+  TAKOSUMI_PRODUCT_CAPABILITIES_PATH,
   "/metrics",
   "/capabilities",
   "/openapi.json",

@@ -35,7 +35,7 @@ import {
 import { seedInstallationModel } from "../../../helpers/deploy-control/model_fixture.ts";
 import { deployUpload } from "../../../../core/domains/deploy-control/upload_deploy.ts";
 import type { InstallationProviderEnvBindings } from "takosumi-contract/connections";
-import type { InstallConfig } from "takosumi-contract/installations";
+import type { InstallConfig } from "takosumi-contract/install-configs";
 
 const PLAN_DIGEST =
   "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";

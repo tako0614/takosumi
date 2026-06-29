@@ -31,6 +31,13 @@ export const deployControlLogicalTables = [
   "securityFindings",
   "auditEvents",
   "backups",
+  // Resource Shape flow (`takosumi.dev/v1alpha1`): the durable projections of
+  // Resource / ResolutionLock / TargetPool / SpacePolicy live on the same
+  // deploy-control plane as the Flow A ledger (`final-plan.md` §10).
+  "resourceShapes",
+  "resolutionLocks",
+  "targetPools",
+  "spacePolicies",
 ] as const;
 
 export type DeployControlLogicalTable =
@@ -72,6 +79,10 @@ export const deployControlD1TableNames = {
   securityFindings: "security_findings",
   auditEvents: "audit_events",
   backups: "backups",
+  resourceShapes: "resource_shapes",
+  resolutionLocks: "resolution_locks",
+  targetPools: "target_pools",
+  spacePolicies: "space_policies",
 } as const satisfies Record<DeployControlLogicalTable, string>;
 
 export const deployControlPostgresTableNames = {
@@ -109,4 +120,8 @@ export const deployControlPostgresTableNames = {
   securityFindings: "takosumi_security_findings",
   auditEvents: "takosumi_audit_events",
   backups: "takosumi_backups",
+  resourceShapes: "takosumi_resource_shapes",
+  resolutionLocks: "takosumi_resolution_locks",
+  targetPools: "takosumi_target_pools",
+  spacePolicies: "takosumi_space_policies",
 } as const satisfies Record<DeployControlLogicalTable, string>;

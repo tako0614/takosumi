@@ -39,14 +39,15 @@ examples, usage event contracts, and secret-handling rules belong in docs.
 
 ## Boundary
 
-Takosumi OSS runs existing OpenTofu/Terraform providers as-is.
+Takosumi OSS has the Git-based OpenTofu control plane, Resource Shape API,
+Compatibility API framework, and Adapter system.
 
-Only Takosumi Cloud has:
+Only the Takosumi for Operator / Cloud operation layer has:
 
 - AI Gateway
 - Takosumi Cloud Workers
-- Cloudflare-compatible import endpoint
-- managed resource backends
+- official hosted Cloudflare-compatible import endpoint backend
+- official managed target / native resource backends
 - official usage, quota, billing, and support controls
 
 Official `app.takosumi.com` uses the closed
@@ -194,12 +195,12 @@ Script is not dispatched.
 
 Pricing is owned by the Takosumi Cloud platform worker, not by the Cloud
 extension. The canonical extension report carries `meterId`, `kind`, `quantity`,
-and resource metadata. Extension-provided `usdMicros` is still accepted as a
-legacy/fallback compatibility path, but production pricing comes from the
-operator config `TAKOSUMI_CLOUD_USAGE_PRICE_BOOK`. The price book validates
-unit charge, estimated unit cost, and minimum gross margin before it writes
-`usdMicros` to the ledger. Unknown meters or prices below the required margin
-fail closed, so WfP and AI requests cannot succeed without billable credit.
+and resource metadata. Extension requests must not provide `usdMicros` or
+`credits`; production pricing comes from the operator config
+`TAKOSUMI_CLOUD_USAGE_PRICE_BOOK`. The price book validates unit charge,
+estimated unit cost, and minimum gross margin before it writes `usdMicros` to
+the ledger. Unknown meters or prices below the required margin fail closed, so
+WfP and AI requests cannot succeed without billable credit.
 The operating source of truth for prices and the free tier is
 `docs/operations/cloud-pricing.md`.
 
@@ -240,7 +241,7 @@ and runtime guard smoke evidence. Internal backend aliases are rejected in
 `meterId`, `resourceFamily`, Stripe meters, and public usage metadata. Example:
 
 ```http
-x-takosumi-cloud-usage-meters: [{"meterId":"cloudflare:workers_script:request","resourceFamily":"cloudflare.workers_script","resourceId":"script:api","operation":"request","kind":"gateway_compute","quantity":1,"installationId":"inst_xxx"}]
+x-takosumi-cloud-usage-meters: [{"meterId":"cloudflare:workers_script:request","resourceFamily":"cloudflare.workers_script","resourceId":"HttpService/api","operation":"request","kind":"gateway_compute","quantity":1}]
 ```
 
 For storage-backed resource inventory, the closed `takosumi-cloud`
@@ -269,9 +270,8 @@ POST /cloud/usage/storage-inventory
   "samples": [
     {
       "workspaceId": "space_xxx",
-      "installationId": "inst_xxx",
       "resourceFamily": "cloudflare.r2",
-      "resourceId": "bucket:assets",
+      "resourceId": "ObjectStore/assets",
       "averageBytes": 536870912
     }
   ]
@@ -281,15 +281,15 @@ POST /cloud/usage/storage-inventory
 ```http
 x-takosumi-cloud-usage-period-start: 2026-06-26T13:00:00.000Z
 x-takosumi-cloud-usage-period-end: 2026-06-26T14:00:00.000Z
-x-takosumi-cloud-usage-meters: [{"meterId":"cloudflare:r2:storage_gb_hour","resourceFamily":"cloudflare.r2","resourceId":"bucket:assets","operation":"storage.inventory","kind":"gateway_storage_gb_hour","quantity":0.5,"installationId":"inst_xxx"}]
+x-takosumi-cloud-usage-meters: [{"meterId":"cloudflare:r2:storage_gb_hour","resourceFamily":"cloudflare.r2","resourceId":"ObjectStore/assets","operation":"storage.inventory","kind":"gateway_storage_gb_hour","quantity":0.5}]
 ```
 
 When a managed resource backend measures compute or operation usage, it submits
 public meters to the `resource-meters` endpoint under the same `/cloud/usage`
 extension. The endpoint currently accepts only `cloudflare.containers` and
 `cloudflare.durable_objects`. A verified billing Workspace context is required;
-request `workspaceId` / `installationId` values that do not match the verified
-context are rejected. Callers must not send `usdMicros` or `credits`; the
+request `workspaceId` values that do not match the verified context are
+rejected. Callers must not send `usdMicros` or `credits`; the
 platform worker prices each meter through `TAKOSUMI_CLOUD_USAGE_PRICE_BOOK`.
 
 ```http
@@ -299,7 +299,6 @@ POST /cloud/usage/resource-meters
 ```json
 {
   "workspaceId": "space_xxx",
-  "installationId": "inst_xxx",
   "periodStart": "2026-06-26T13:00:00.000Z",
   "periodEnd": "2026-06-26T13:01:00.000Z",
   "meters": [
@@ -326,7 +325,7 @@ POST /cloud/usage/resource-meters
 ```http
 x-takosumi-cloud-usage-period-start: 2026-06-26T13:00:00.000Z
 x-takosumi-cloud-usage-period-end: 2026-06-26T13:01:00.000Z
-x-takosumi-cloud-usage-meters: [{"meterId":"cloudflare:containers:vcpu_second","resourceFamily":"cloudflare.containers","resourceId":"container:api","operation":"vcpu_second","kind":"gateway_compute","quantity":12.5,"installationId":"inst_xxx"}]
+x-takosumi-cloud-usage-meters: [{"meterId":"cloudflare:containers:vcpu_second","resourceFamily":"cloudflare.containers","resourceId":"ContainerService/api","operation":"vcpu_second","kind":"gateway_compute","quantity":12.5}]
 ```
 
 This ledger is the source input for billing reconciliation and Stripe invoices.
@@ -360,9 +359,8 @@ Operators trigger Stripe usage invoice item sync through the account-plane
 route, not a customer API, and requires the
 `x-takosumi-billing-usage-sync-token` header. When the body includes
 `usageEvents`, the route imports them as `BillingUsageRecord` rows through the
-ready Installation projection's `billingAccountId` before creating Stripe
-invoice items, so the Cloud extension usage ledger stays connected to customer
-billing. Configure
+verified `workspaceId` BillingAccount before creating Stripe invoice items, so
+the Cloud extension usage ledger stays connected to customer billing. Configure
 `TAKOSUMI_STRIPE_USAGE_INVOICE_ITEM_PRICES` as a JSON array of meter / unit /
 unitAmount / currency mappings, for example:
 
@@ -416,10 +414,11 @@ Base URL:
 https://app.takosumi.com/compat/cloudflare/client/v4
 ```
 
-This is a Cloudflare v4-compatible subset. It lets the `cloudflare/cloudflare`
-OpenTofu/Terraform provider point Workers-oriented resources at Takosumi Cloud
-Workers / managed bindings by changing provider `base_url`. It is an import and
-deploy path for existing manifests.
+This is the Cloudflare v4-shaped subset for `compat.cloudflare.workers.v1`. It
+lets the `cloudflare/cloudflare` OpenTofu/Terraform provider point
+Workers-oriented resources at Takosumi Cloud Workers / managed bindings by
+changing provider `base_url`. It is an import and deploy path for existing
+manifests, not full Cloudflare API compatibility.
 
 Response envelope:
 

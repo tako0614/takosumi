@@ -1,5 +1,6 @@
 import {
   bigint,
+  boolean,
   index,
   integer,
   jsonb,
@@ -635,5 +636,93 @@ export const backups = pgTable(
   (table) => [
     index("takosumi_backups_space_idx").on(table.spaceId, table.createdAt),
     index("takosumi_backups_installation_idx").on(table.installationId),
+  ],
+);
+
+// --- Resource Shape flow (`takosumi.dev/v1alpha1`) ---------------------------
+//
+// Columnar projections of the public Resource / ResolutionLock / TargetPool /
+// SpacePolicy objects on the deploy-control persistence plane (`final-plan.md`
+// §10). Complex sub-objects (spec / outputs / conditions / labels / reason /
+// native resources) are jsonb columns; the indexed columns drive name / space
+// lookups.
+
+export const resourceShapes = pgTable(
+  names.resourceShapes,
+  {
+    id: text("id").primaryKey(),
+    spaceId: text("space_id").notNull(),
+    project: text("project"),
+    environment: text("environment"),
+    kind: text("kind").notNull(),
+    name: text("name").notNull(),
+    managedBy: text("managed_by").notNull(),
+    specJson: json("spec_json").notNull(),
+    phase: text("phase").notNull(),
+    generation: integer("generation").notNull(),
+    observedGeneration: integer("observed_generation").notNull(),
+    outputsJson: json("outputs_json"),
+    conditionsJson: json("conditions_json"),
+    labelsJson: json("labels_json"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("takosumi_resource_shapes_space_kind_name_unique").on(
+      table.spaceId,
+      table.kind,
+      table.name,
+    ),
+    index("takosumi_resource_shapes_space_idx").on(table.spaceId),
+  ],
+);
+
+export const resolutionLocks = pgTable(names.resolutionLocks, {
+  resourceId: text("resource_id").primaryKey(),
+  selectedImplementation: text("selected_implementation").notNull(),
+  target: text("target").notNull(),
+  locked: boolean("locked").notNull(),
+  reasonJson: json("reason_json").notNull(),
+  portability: text("portability"),
+  nativeResourcesJson: json("native_resources_json"),
+  lockedAt: text("locked_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const targetPools = pgTable(
+  names.targetPools,
+  {
+    id: text("id").primaryKey(),
+    spaceId: text("space_id").notNull(),
+    name: text("name").notNull(),
+    specJson: json("spec_json").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("takosumi_target_pools_space_name_unique").on(
+      table.spaceId,
+      table.name,
+    ),
+    index("takosumi_target_pools_space_idx").on(table.spaceId),
+  ],
+);
+
+export const spacePolicies = pgTable(
+  names.spacePolicies,
+  {
+    id: text("id").primaryKey(),
+    spaceId: text("space_id").notNull(),
+    name: text("name").notNull(),
+    specJson: json("spec_json").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("takosumi_space_policies_space_name_unique").on(
+      table.spaceId,
+      table.name,
+    ),
+    index("takosumi_space_policies_space_idx").on(table.spaceId),
   ],
 );

@@ -127,6 +127,51 @@ test("Cloudflare Accounts Worker does not serve SPA HTML for missing dashboard c
   assert.match(await deepLink.text(), /<div id="root"><\/div>/);
 });
 
+test("Cloudflare Accounts Worker does not serve SPA HTML for missing provider mirror files", async () => {
+  const worker = createCloudflareWorker();
+  const env = createEnv(new InitOnlyD1Database(), {
+    ASSETS: {
+      fetch: async (request) => {
+        const path = new URL(request.url).pathname;
+        if (
+          path ===
+          "/opentofu/providers/registry.opentofu.org/takosjp/takosumi/index.json"
+        ) {
+          return new Response('{"versions":{}}', {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        return new Response('<!doctype html><div id="root"></div>', {
+          status: 200,
+          headers: { "content-type": "text/html; charset=utf-8" },
+        });
+      },
+    },
+  });
+
+  const index = await worker.fetch(
+    new Request(
+      "https://accounts.example/opentofu/providers/registry.opentofu.org/takosjp/takosumi/index.json",
+    ),
+    env,
+  );
+  assert.equal(index.status, 200);
+  assert.equal(index.headers.get("content-type"), "application/json");
+
+  const missingArchive = await worker.fetch(
+    new Request(
+      "https://accounts.example/opentofu/providers/registry.opentofu.org/takosjp/takosumi/terraform-provider-takosumi_0.0.0_linux_amd64.zip",
+    ),
+    env,
+  );
+  assert.equal(missingArchive.status, 404);
+  assert.equal(
+    missingArchive.headers.get("content-type"),
+    "text/plain; charset=utf-8",
+  );
+});
+
 test("Cloudflare Accounts Worker handles account-plane routes directly", async () => {
   const d1 = new InitOnlyD1Database();
   const worker = createCloudflareWorker();
@@ -1372,11 +1417,8 @@ test("Cloudflare Accounts Worker wires shared-cell runtime from the runtime cell
     env,
   );
 
-  assert.equal(response.status, 410, await response.clone().text());
-  assert.match(
-    await response.clone().text(),
-    /Public upload deploy is retired/,
-  );
+  assert.equal(response.status, 404, await response.clone().text());
+  assert.doesNotMatch(await response.clone().text(), /Public upload deploy/);
   const installation = await store.findAppCapsule("inst_upload");
   assert.equal(installation, undefined);
 });
