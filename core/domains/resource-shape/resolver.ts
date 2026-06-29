@@ -47,13 +47,6 @@ export const SHAPE_INTERFACE_REQUIREMENTS: Readonly<
     }
   >
 > = Object.freeze({
-  ObjectBucket: Object.freeze({
-    required: Object.freeze(["s3_api"]) as readonly string[],
-    preferred: Object.freeze([
-      "signed_url",
-      "object_events",
-    ]) as readonly string[],
-  }),
   EdgeWorker: Object.freeze({
     required: Object.freeze(["worker_fetch"]) as readonly string[],
     preferred: Object.freeze([
@@ -74,27 +67,13 @@ export const SHAPE_INTERFACE_REQUIREMENTS: Readonly<
 });
 
 /**
- * ObjectBucket has no implicit Target-type mapping.
- *
- * S3/R2/MinIO already have mature OpenTofu providers and standard APIs, so a
- * plain AWS/Cloudflare/Kubernetes Target must not become a Takosumi-owned
- * ObjectBucket just because the Target type matches. Operators can still expose
- * ObjectBucket as a managed service form by declaring a TargetPool
- * implementation explicitly.
- */
-export const OBJECT_BUCKET_TARGET_IMPLEMENTATION: Readonly<
-  Partial<Record<TargetType, string>>
-> = Object.freeze({});
-
-/**
  * Map Target backend type to implementation for shapes where Takosumi owns the
- * service form by default. Generic-provider-backed shapes stay out of this seed
- * table and use explicit TargetPool implementations instead.
+ * service form. Generic-provider-backed surfaces such as S3/R2/GCS stay out of
+ * this table and use the plain OpenTofu Stack flow instead.
  */
 export const SHAPE_TARGET_IMPLEMENTATION: Readonly<
   Record<string, Partial<Record<TargetType, string>>>
 > = Object.freeze({
-  ObjectBucket: OBJECT_BUCKET_TARGET_IMPLEMENTATION,
   EdgeWorker: Object.freeze({
     cloudflare: "cloudflare_workers",
     takosumi_native: "takosumi_edge_runtime",
@@ -112,10 +91,6 @@ export const SHAPE_TARGET_IMPLEMENTATION: Readonly<
  * Default per-implementation capability matrix. Only shapes that do not have an
  * adequate generic OpenTofu provider or standard API are advertised here by
  * default, and even then only when Takosumi needs typed service-form semantics.
- * ObjectBucket is intentionally absent; operators must opt into it via
- * TargetPool implementation capabilities when they need managed bindings,
- * policy, metering, or compatibility import paths instead of ordinary S3/R2
- * provider usage.
  */
 export const DEFAULT_RESOURCE_SHAPE_CAPABILITIES: TargetCapabilityMatrix =
   Object.freeze([
@@ -169,6 +144,26 @@ export const DEFAULT_RESOURCE_SHAPE_CAPABILITIES: TargetCapabilityMatrix =
       shape: "AIEndpoint",
       interfaces: Object.freeze({
         openai_chat_completions: "native",
+        openai_responses: "shim",
+        openai_embeddings: "shim",
+      }),
+    }),
+    Object.freeze({
+      implementation: "aws_bedrock_openai_gateway",
+      targetType: "aws",
+      shape: "AIEndpoint",
+      interfaces: Object.freeze({
+        openai_chat_completions: "shim",
+        openai_responses: "shim",
+        openai_embeddings: "shim",
+      }),
+    }),
+    Object.freeze({
+      implementation: "vertex_ai_openai_gateway",
+      targetType: "gcp",
+      shape: "AIEndpoint",
+      interfaces: Object.freeze({
+        openai_chat_completions: "shim",
         openai_responses: "shim",
         openai_embeddings: "shim",
       }),
@@ -259,18 +254,7 @@ function nativeResourcesFor(
         return [];
     }
   }
-  switch (implementation) {
-    case "cloudflare_r2":
-      return [{ type: "cloudflare.r2_bucket", id: name }];
-    case "aws_s3":
-      return [{ type: "aws.s3_bucket", id: name }];
-    case "minio":
-      return [{ type: "minio.s3_bucket", id: name }];
-    case "takosumi_object_bucket":
-      return [{ type: "takosumi.object_bucket", id: name }];
-    default:
-      return [];
-  }
+  return [];
 }
 
 function computePortability(

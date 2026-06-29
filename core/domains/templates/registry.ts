@@ -15,9 +15,7 @@
 import type { TemplateDefinition } from "@takosumi/internal/deploy-control-api";
 import type { DispatchGeneratedRoot } from "@takosumi/internal/deploy-control-api";
 import { firstPartyModuleFilesByTemplateId } from "../../../opentofu-modules/module-files.ts";
-import { awsS3StorageTemplate } from "../../../providers/aws/modules/aws-s3-storage/template.ts";
 import { cloudflareHelloWorkerTemplate } from "../../../providers/cloudflare/modules/cloudflare-hello-worker/template.ts";
-import { cloudflareR2StorageTemplate } from "../../../providers/cloudflare/modules/cloudflare-r2-storage/template.ts";
 import { cloudflareStaticSiteTemplate } from "../../../providers/cloudflare/modules/cloudflare-static-site/template.ts";
 import { cloudflareWorkerServiceTemplate } from "../../../providers/cloudflare/modules/cloudflare-worker-service/template.ts";
 import { takosumiAiEndpointTemplate } from "../../../providers/takosumi/modules/takosumi-ai-endpoint/template.ts";
@@ -29,9 +27,7 @@ import { assertValidTemplate } from "./validation.ts";
 const ACTIVE_CATALOG: readonly TemplateDefinition[] = [
   coreTemplate,
   cloudflareHelloWorkerTemplate,
-  cloudflareR2StorageTemplate,
   cloudflareStaticSiteTemplate,
-  awsS3StorageTemplate,
   takosumiAiEndpointTemplate,
 ];
 

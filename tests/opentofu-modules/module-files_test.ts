@@ -20,9 +20,7 @@
 
 import { test, expect } from "bun:test";
 import { firstPartyModuleFilesByTemplateId } from "../../opentofu-modules/module-files.ts";
-import { awsS3StorageTemplate } from "../../providers/aws/modules/aws-s3-storage/template.ts";
 import { cloudflareHelloWorkerTemplate } from "../../providers/cloudflare/modules/cloudflare-hello-worker/template.ts";
-import { cloudflareR2StorageTemplate } from "../../providers/cloudflare/modules/cloudflare-r2-storage/template.ts";
 import { cloudflareStaticSiteTemplate } from "../../providers/cloudflare/modules/cloudflare-static-site/template.ts";
 import { cloudflareWorkerServiceTemplate } from "../../providers/cloudflare/modules/cloudflare-worker-service/template.ts";
 import { coreTemplate } from "../../opentofu-modules/core/template.ts";
@@ -30,11 +28,9 @@ import { takosumiAiEndpointTemplate } from "../../providers/takosumi/modules/tak
 
 const TEMPLATES = [
   coreTemplate,
-  cloudflareR2StorageTemplate,
   cloudflareWorkerServiceTemplate,
   cloudflareStaticSiteTemplate,
   cloudflareHelloWorkerTemplate,
-  awsS3StorageTemplate,
   takosumiAiEndpointTemplate,
 ];
 

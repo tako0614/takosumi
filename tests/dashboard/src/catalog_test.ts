@@ -44,7 +44,7 @@ describe("dashboard catalog", () => {
     expect(template.outputs.public.url?.from).toBe("url");
   });
 
-  test("catalog keeps the runnable web app first and storage as building blocks", () => {
+  test("catalog keeps only runnable first-party service starters", () => {
     const entries = catalogEntries();
     const services = entries.filter((entry) => entry.surface === "service");
     const buildingBlocks = entries.filter(
@@ -55,11 +55,7 @@ describe("dashboard catalog", () => {
         .sort((a, b) => a.order - b.order)
         .map((entry) => entry.templateId),
     ).toEqual(["cloudflare-hello-worker"]);
-    expect(
-      buildingBlocks
-        .sort((a, b) => a.order - b.order)
-        .map((entry) => entry.templateId),
-    ).toEqual(["cloudflare-r2-storage", "aws-s3-storage"]);
+    expect(buildingBlocks).toEqual([]);
     expect(entries.some((entry) => entry.surface === "example")).toBe(false);
   });
 

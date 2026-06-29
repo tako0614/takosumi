@@ -1,10 +1,6 @@
 import { test, expect } from "bun:test";
 
-import type {
-  ActorContext,
-  ObjectBucketSpec,
-  TargetPoolEntry,
-} from "takosumi-contract";
+import type { ActorContext, TargetPoolEntry } from "takosumi-contract";
 import type {
   ApplyRunResponse,
   CreateApplyRunRequest,
@@ -17,7 +13,7 @@ import type {
   PlanRunInternalContext,
 } from "../../../../core/domains/deploy-control/mod.ts";
 import {
-  planObjectBucket,
+  planEdgeWorker,
   type ResourceShapePlan,
 } from "../../../../core/domains/resource-shape/planner.ts";
 import {
@@ -34,17 +30,10 @@ import {
   providerSourceForLocalName,
 } from "../../../../core/domains/resource-shape/opentofu_adapter.ts";
 
-// --- fixtures ----------------------------------------------------------------
-
 const actor: ActorContext = {
   actorAccountId: "acct_1",
   roles: ["owner"],
   requestId: "req_1",
-};
-
-const spec: ObjectBucketSpec = {
-  name: "assets",
-  interfaces: ["s3_api", "signed_url"],
 };
 
 const cloudflareTarget: TargetPoolEntry = {
@@ -62,13 +51,24 @@ const awsTarget: TargetPoolEntry = {
   priority: 5,
 };
 
+function edgeWorkerPlan(): ResourceShapePlan {
+  return planEdgeWorker(
+    "cloudflare_workers",
+    {
+      name: "api",
+      source: { artifactPath: "/work/dist/worker.js" },
+    },
+    cloudflareTarget,
+  );
+}
+
 function applyInput(
   plan: ResourceShapePlan,
   target: TargetPoolEntry,
   overrides: Partial<AdapterApplyInput> = {},
 ): AdapterApplyInput {
   return {
-    resourceId: "tkrn:demo:ObjectBucket:assets",
+    resourceId: "tkrn:demo:EdgeWorker:api",
     plan,
     target,
     credentialRef: "conn_cf_1",
@@ -76,8 +76,6 @@ function applyInput(
     ...overrides,
   };
 }
-
-// --- provider mapping --------------------------------------------------------
 
 test("provider mapping covers cloudflare/aws/gcp and falls through", () => {
   expect(providerLocalNameForTargetType("cloudflare")).toBe("cloudflare");
@@ -92,136 +90,86 @@ test("provider mapping covers cloudflare/aws/gcp and falls through", () => {
   expect(providerSourceForLocalName("google")).toBe("hashicorp/google");
 });
 
-// --- input augmentation ------------------------------------------------------
-
 test("augmentInputsForTarget fills cloudflare accountId from target.ref when absent", () => {
-  const inputs = augmentInputsForTarget(
-    { bucketName: "assets" },
-    cloudflareTarget,
-  );
-  expect(inputs).toEqual({ bucketName: "assets", accountId: "cf-account-123" });
+  const inputs = augmentInputsForTarget({ appName: "api" }, cloudflareTarget);
+  expect(inputs).toEqual({ appName: "api", accountId: "cf-account-123" });
 });
 
 test("augmentInputsForTarget does not overwrite a present accountId", () => {
   const inputs = augmentInputsForTarget(
-    { bucketName: "assets", accountId: "already-set" },
+    { appName: "api", accountId: "already-set" },
     cloudflareTarget,
   );
   expect(inputs.accountId).toBe("already-set");
 });
 
 test("augmentInputsForTarget fills aws region from target.region when absent", () => {
-  const inputs = augmentInputsForTarget({ bucketName: "assets" }, awsTarget);
-  expect(inputs).toEqual({ bucketName: "assets", region: "us-east-1" });
+  const inputs = augmentInputsForTarget({ name: "ai" }, awsTarget);
+  expect(inputs).toEqual({ name: "ai", region: "us-east-1" });
 });
-
-test("augmentInputsForTarget does not overwrite a present aws region", () => {
-  const inputs = augmentInputsForTarget(
-    { bucketName: "assets", region: "eu-west-1" },
-    awsTarget,
-  );
-  expect(inputs.region).toBe("eu-west-1");
-});
-
-// --- adapter over FakeOpentofuRunPort ---------------------------------------
 
 test("apply maps cloudflare target to provider+inputs and threads moduleFiles/templateId", async () => {
-  const port = new FakeOpentofuRunPort();
+  const port = new FakeOpentofuRunPort({
+    nativeResources: {
+      "tkrn:demo:EdgeWorker:api": [
+        { type: "cloudflare_workers_script", id: "api" },
+      ],
+    },
+  });
   const adapter = new OpentofuResourceShapeAdapter(port);
-  const plan = planObjectBucket("cloudflare_r2", spec, cloudflareTarget);
+  const plan = edgeWorkerPlan();
 
   const result = await adapter.apply(applyInput(plan, cloudflareTarget));
 
-  // One run request reached the port; nothing else.
   expect(port.applyRequests.length).toBe(1);
   expect(port.planRequests.length).toBe(0);
   const req = port.applyRequests[0]!;
 
-  // Target type -> OpenTofu provider + bound ProviderConnection.
   expect(req.providerBinding.provider).toBe("cloudflare");
   expect(req.providerBinding.providerSource).toBe("cloudflare/cloudflare");
   expect(req.providerBinding.connectionId).toBe("conn_cf_1");
-
-  // Inputs carry the planner values + augmented accountId from the Target ref.
-  expect(req.inputs.bucketName).toBe("assets");
+  expect(req.inputs.appName).toBe("api");
   expect(req.inputs.accountId).toBe("cf-account-123");
-  expect(req.inputs.location).toBe("weur");
-
-  // moduleFiles + templateId are threaded verbatim from the plan.
-  expect(req.templateId).toBe("cloudflare-r2-storage");
+  expect(req.inputs.artifactPath).toBe("/work/dist/worker.js");
+  expect(req.templateId).toBe("cloudflare-worker-service");
   expect(req.moduleFiles).toBe(plan.moduleFiles);
-  expect(req.publicOutputs).toEqual(["bucket_name", "location"]);
+  expect(req.publicOutputs).toEqual(["worker_name"]);
 
-  // Results map back to the adapter contract.
   expect(result.nativeResources).toEqual([
-    { type: "cloudflare_r2_bucket", id: "assets" },
+    { type: "cloudflare_workers_script", id: "api" },
   ]);
   expect(result.outputs).toEqual({
-    bucket_name: "fake://tkrn:demo:ObjectBucket:assets/bucket_name",
-    location: "fake://tkrn:demo:ObjectBucket:assets/location",
+    worker_name: "fake://tkrn:demo:EdgeWorker:api/worker_name",
   });
   expect(result.runId).toBeDefined();
 });
 
-test("apply augments accountId even when the planner omitted it", async () => {
-  const port = new FakeOpentofuRunPort();
-  const adapter = new OpentofuResourceShapeAdapter(port);
-  // Simulate a planner that did NOT emit accountId (final-plan note): the
-  // adapter must still inject it from the Target ref before dispatch.
-  const plan: ResourceShapePlan = {
-    templateId: "cloudflare-r2-storage",
-    moduleFiles: [
-      { path: "main.tf", text: 'resource "cloudflare_r2_bucket" "b" {}' },
-    ],
-    inputs: { bucketName: "assets" },
-    publicOutputs: ["bucket_name", "location"],
-  };
-
-  await adapter.apply(applyInput(plan, cloudflareTarget));
-  expect(port.applyRequests[0]!.inputs.accountId).toBe("cf-account-123");
-});
-
 test("preview returns summary + nativeResources + runId from a simulated plan", async () => {
-  const port = new FakeOpentofuRunPort();
+  const port = new FakeOpentofuRunPort({
+    nativeResources: {
+      "tkrn:demo:EdgeWorker:api": [
+        { type: "cloudflare_workers_script", id: "api" },
+      ],
+    },
+  });
   const adapter = new OpentofuResourceShapeAdapter(port);
-  const plan = planObjectBucket("cloudflare_r2", spec, cloudflareTarget);
+  const plan = edgeWorkerPlan();
 
   const preview = await adapter.preview(applyInput(plan, cloudflareTarget));
 
   expect(port.planRequests.length).toBe(1);
   expect(port.applyRequests.length).toBe(0);
-  expect(preview.summary).toContain("cloudflare-r2-storage");
+  expect(preview.summary).toContain("cloudflare-worker-service");
   expect(preview.nativeResources).toEqual([
-    { type: "cloudflare_r2_bucket", id: "assets" },
+    { type: "cloudflare_workers_script", id: "api" },
   ]);
   expect(preview.runId).toBeDefined();
-});
-
-test("apply maps aws target to provider+region and aws_s3_bucket native resource", async () => {
-  const port = new FakeOpentofuRunPort();
-  const adapter = new OpentofuResourceShapeAdapter(port);
-  const plan = planObjectBucket("aws_s3", spec, awsTarget);
-
-  const result = await adapter.apply(
-    applyInput(plan, awsTarget, { credentialRef: "conn_aws_1" }),
-  );
-
-  const req = port.applyRequests[0]!;
-  expect(req.providerBinding.provider).toBe("aws");
-  expect(req.providerBinding.providerSource).toBe("hashicorp/aws");
-  expect(req.providerBinding.connectionId).toBe("conn_aws_1");
-  expect(req.inputs.bucketName).toBe("assets");
-  expect(req.inputs.region).toBe("us-east-1");
-  expect(req.templateId).toBe("aws-s3-storage");
-  expect(result.nativeResources).toEqual([
-    { type: "aws_s3_bucket", id: "assets" },
-  ]);
 });
 
 test("apply without a credentialRef leaves the ProviderBinding connectionId unset", async () => {
   const port = new FakeOpentofuRunPort();
   const adapter = new OpentofuResourceShapeAdapter(port);
-  const plan = planObjectBucket("cloudflare_r2", spec, cloudflareTarget);
+  const plan = edgeWorkerPlan();
 
   await adapter.apply(
     applyInput(plan, cloudflareTarget, { credentialRef: undefined }),
@@ -229,14 +177,12 @@ test("apply without a credentialRef leaves the ProviderBinding connectionId unse
   expect(port.applyRequests[0]!.providerBinding.connectionId).toBeUndefined();
 });
 
-// --- delete / destroy --------------------------------------------------------
-
 function deleteInput(
   overrides: Partial<AdapterDeleteInput> = {},
 ): AdapterDeleteInput {
   return {
-    resourceId: "tkrn:demo:ObjectBucket:assets",
-    nativeResources: [{ type: "cloudflare_r2_bucket", id: "assets" }],
+    resourceId: "tkrn:demo:EdgeWorker:api",
+    nativeResources: [{ type: "cloudflare_workers_script", id: "api" }],
     target: cloudflareTarget,
     credentialRef: "conn_cf_1",
     deletePolicy: "delete",
@@ -256,39 +202,25 @@ test("delete with the delete policy drives destroy on the port", async () => {
   expect(req.providerBinding.provider).toBe("cloudflare");
   expect(req.providerBinding.connectionId).toBe("conn_cf_1");
   expect(req.nativeResources).toEqual([
-    { type: "cloudflare_r2_bucket", id: "assets" },
+    { type: "cloudflare_workers_script", id: "api" },
   ]);
   expect(req.deletePolicy).toBe("delete");
 });
 
-test("delete with a retain policy never destroys", async () => {
+test("delete with a retain or block policy never destroys", async () => {
   const port = new FakeOpentofuRunPort();
   const adapter = new OpentofuResourceShapeAdapter(port);
 
   await adapter.delete(deleteInput({ deletePolicy: "retain" }));
-  expect(port.destroyRequests.length).toBe(0);
-});
-
-test("delete with a block policy never destroys", async () => {
-  const port = new FakeOpentofuRunPort();
-  const adapter = new OpentofuResourceShapeAdapter(port);
-
   await adapter.delete(deleteInput({ deletePolicy: "block" }));
   expect(port.destroyRequests.length).toBe(0);
 });
-
-// --- REAL ControllerOpentofuRunPort against a fake deploy-control driver ------
 
 interface RecordedPlanCall {
   readonly request: CreatePlanRunRequest;
   readonly internal?: PlanRunInternalContext;
 }
 
-/**
- * A minimal stand-in for OpenTofuDeploymentController that drives the run
- * lifecycle in memory: createPlanRun -> runQueuedPlan (completes the plan) ->
- * createApplyRun -> runQueuedApply (captures outputs). No runner, no cloud.
- */
 class FakeDeployControlDriver implements DeployControlRunDriver {
   readonly planCalls: RecordedPlanCall[] = [];
   readonly applyCalls: CreateApplyRunRequest[] = [];
@@ -326,8 +258,6 @@ class FakeDeployControlDriver implements DeployControlRunDriver {
 
   runQueuedPlan(runId: string): Promise<unknown> {
     const planRun = this.#plans.get(runId)!;
-    // Complete the plan the way a runner would: status + plan JSON projection +
-    // immutable plan artifact (required for the apply TOCTOU guard).
     const completed = {
       ...planRun,
       status: "succeeded",
@@ -339,8 +269,8 @@ class FakeDeployControlDriver implements DeployControlRunDriver {
       },
       planResourceChanges: [
         {
-          address: "module.app.cloudflare_r2_bucket.this",
-          type: "cloudflare_r2_bucket",
+          address: "module.app.cloudflare_workers_script.this",
+          type: "cloudflare_workers_script",
           actions: ["create"],
         },
         {
@@ -392,15 +322,9 @@ class FakeDeployControlDriver implements DeployControlRunDriver {
       stateLock: { status: "recorded", backendRef: "ref" },
       outputs: [
         {
-          name: "bucket_name",
+          name: "worker_name",
           kind: "service_url",
-          value: "assets",
-          sensitive: false,
-        },
-        {
-          name: "location",
-          kind: "service_url",
-          value: "weur",
+          value: "api",
           sensitive: false,
         },
       ],
@@ -415,7 +339,7 @@ class FakeDeployControlDriver implements DeployControlRunDriver {
 const capsuleBinding = {
   workspaceId: "ws_1",
   capsuleId: "cap_1",
-  source: { kind: "local", path: "/resource-shape/cloudflare-r2-storage" },
+  source: { kind: "local", path: "/resource-shape/cloudflare-worker-service" },
 } as const;
 
 test("ControllerOpentofuRunPort.plan builds a real generated-root dispatch and maps plan changes", async () => {
@@ -425,38 +349,32 @@ test("ControllerOpentofuRunPort.plan builds a real generated-root dispatch and m
     resolveCapsuleBinding: () => capsuleBinding,
   });
   const adapter = new OpentofuResourceShapeAdapter(port);
-  const plan = planObjectBucket("cloudflare_r2", spec, cloudflareTarget);
+  const plan = edgeWorkerPlan();
 
   const preview = await adapter.preview(applyInput(plan, cloudflareTarget));
 
-  // The plan request targets the backing Capsule + workspace and derives the
-  // provider from the Target (no requiredProviders ambiguity).
   expect(driver.planCalls.length).toBe(1);
   const { request, internal } = driver.planCalls[0]!;
   expect(request.workspaceId).toBe("ws_1");
   expect(request.capsuleId).toBe("cap_1");
   expect(request.requiredProviders).toEqual(["cloudflare/cloudflare"]);
-  // Augmented inputs flow through as the run variables.
   expect(request.variables?.accountId).toBe("cf-account-123");
-  expect(request.variables?.bucketName).toBe("assets");
+  expect(request.variables?.appName).toBe("api");
 
-  // The genericRootDispatch carries the first-party module files verbatim and a
-  // real rootgen-generated root (versions/main/outputs).
   const dispatch = internal?.genericRootDispatch?.generatedRoot;
   expect(dispatch).toBeDefined();
   expect(dispatch!.moduleFiles?.map((f) => f.path)).toEqual(
     plan.moduleFiles.map((f) => f.path),
   );
   expect(dispatch!.files["main.tf"]).toContain('module "app"');
-  expect(dispatch!.files["main.tf"]).toContain('bucketName = "assets"');
+  expect(dispatch!.files["main.tf"]).toContain('appName = "api"');
   expect(dispatch!.files["main.tf"]).toContain('accountId = "cf-account-123"');
-  expect(dispatch!.files["outputs.tf"]).toContain('output "bucket_name"');
+  expect(dispatch!.files["outputs.tf"]).toContain('output "worker_name"');
 
-  // no-op resource changes are dropped; the created bucket is reported.
   expect(preview.nativeResources).toEqual([
     {
-      type: "cloudflare_r2_bucket",
-      id: "module.app.cloudflare_r2_bucket.this",
+      type: "cloudflare_workers_script",
+      id: "module.app.cloudflare_workers_script.this",
     },
   ]);
   expect(preview.runId).toBe("plan_1");
@@ -469,11 +387,10 @@ test("ControllerOpentofuRunPort.apply drives plan->apply and maps outputs+native
     resolveCapsuleBinding: () => capsuleBinding,
   });
   const adapter = new OpentofuResourceShapeAdapter(port);
-  const plan = planObjectBucket("cloudflare_r2", spec, cloudflareTarget);
+  const plan = edgeWorkerPlan();
 
   const result = await adapter.apply(applyInput(plan, cloudflareTarget));
 
-  // The apply request carried a TOCTOU guard derived from the completed plan.
   expect(driver.applyCalls.length).toBe(1);
   const guard = driver.applyCalls[0]!.expected;
   expect(guard.planRunId).toBe("plan_1");
@@ -481,12 +398,11 @@ test("ControllerOpentofuRunPort.apply drives plan->apply and maps outputs+native
   expect(guard.planArtifactDigest).toBe("sha256:art");
   expect(guard.capsuleId).toBe("cap_1");
 
-  // Outputs come from the apply run; native resources from the plan.
-  expect(result.outputs).toEqual({ bucket_name: "assets", location: "weur" });
+  expect(result.outputs).toEqual({ worker_name: "api" });
   expect(result.nativeResources).toEqual([
     {
-      type: "cloudflare_r2_bucket",
-      id: "module.app.cloudflare_r2_bucket.this",
+      type: "cloudflare_workers_script",
+      id: "module.app.cloudflare_workers_script.this",
     },
   ]);
   expect(result.runId).toBeDefined();

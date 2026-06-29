@@ -10,10 +10,9 @@ import type { Condition, JsonObject } from "./types.ts";
 import { TAKOSUMI_API_VERSION } from "./capabilities.ts";
 
 /** Resource shape kinds the Resource Shape API can host. */
-export type ResourceShapeKind = "ObjectBucket" | "EdgeWorker" | "AIEndpoint";
+export type ResourceShapeKind = "EdgeWorker" | "AIEndpoint";
 
 export const RESOURCE_SHAPE_KINDS: readonly ResourceShapeKind[] = [
-  "ObjectBucket",
   "EdgeWorker",
   "AIEndpoint",
 ] as const;
@@ -76,9 +75,8 @@ export interface ResourceStatus {
 }
 
 /**
- * Generic Resource object. `TKind`/`TSpec` are narrowed by concrete shapes
- * (e.g. {@link ObjectBucketResource}); the untyped fallback keeps the API and
- * store layers shape-agnostic.
+ * Generic Resource object. `TKind`/`TSpec` are narrowed by concrete shapes; the
+ * untyped fallback keeps the API and store layers shape-agnostic.
  */
 export interface ResourceObject<
   TKind extends ResourceShapeKind = ResourceShapeKind,
@@ -114,30 +112,6 @@ export interface ResourceConnectionSpec {
   readonly permissions: readonly ResourceConnectionPermission[];
   readonly projection: ResourceProjectionKind;
 }
-
-// --- ObjectBucket shape (`docs/final-plan.md` §5 / §10.2) ----------------------
-
-/**
- * ObjectBucket interface surfaces for the managed service form. Ordinary
- * S3/R2/GCS bucket use should stay on existing OpenTofu providers unless an
- * operator explicitly enables ObjectBucket for binding projection, policy,
- * metering, compatibility import, or resolution-lock semantics. The spec
- * defines only `s3_api` and `signed_url`; `object_events` appears in the §10.2
- * HCL example. No `access` or `durability` field exists in the spec — do not
- * invent them.
- */
-export type ObjectBucketInterface = "s3_api" | "signed_url" | "object_events";
-
-export interface ObjectBucketSpec {
-  readonly name: string;
-  readonly interfaces: readonly ObjectBucketInterface[];
-  readonly lifecyclePolicy?: ResourceLifecyclePolicy;
-}
-
-export type ObjectBucketResource = ResourceObject<
-  "ObjectBucket",
-  ObjectBucketSpec
->;
 
 // --- EdgeWorker shape (`docs/final-plan.md` §5 / §10.1) ---------------------
 

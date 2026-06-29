@@ -78,8 +78,8 @@ function recordingRunner(options?: {
       const outputs = hasOutputsOption
         ? options.outputs
         : {
-            bucket_name: { sensitive: false, value: "my-bucket" },
-            location: { sensitive: false, value: "weur" },
+            worker_name: { sensitive: false, value: "my-worker" },
+            url: { sensitive: false, value: "https://my-worker.example" },
           };
       return Promise.resolve({
         ...(outputs ? { outputs: outputs as never } : {}),
@@ -291,14 +291,14 @@ test("template plan is blocked when the plan introduces a disallowed resource ty
   const runner = recordingRunner({
     planResourceChanges: [
       {
-        address: "module.app.cloudflare_r2_bucket.this",
-        type: "cloudflare_r2_bucket",
+        address: "module.app.cloudflare_workers_script.this",
+        type: "cloudflare_workers_script",
         actions: ["create"],
       },
-      // Not in the r2 template allowlist.
+      // Not in the Worker starter template allowlist.
       {
-        address: "module.app.cloudflare_workers_script.x",
-        type: "cloudflare_workers_script",
+        address: "module.app.cloudflare_r2_bucket.x",
+        type: "cloudflare_r2_bucket",
         actions: ["create"],
       },
     ],
@@ -314,15 +314,19 @@ test("template plan is blocked when the plan introduces a disallowed resource ty
     spaceId: "space_test",
     installationId,
     source: SOURCE,
-    templateId: "cloudflare-r2-storage",
+    templateId: "cloudflare-hello-worker",
     templateVersion: "1.0.0",
-    inputs: { bucketName: "b", accountId: "a" },
+    inputs: {
+      appName: "my-worker",
+      accountId: "a",
+      workersSubdomain: "team",
+    },
   });
 
   expect(planRun.status).toEqual("failed");
   expect(planRun.policy.status).toEqual("blocked");
   expect(planRun.policy.reasons.join("\n")).toMatch(
-    /cloudflare_workers_script is not allowed/,
+    /cloudflare_r2_bucket is not allowed/,
   );
 });
 
@@ -330,14 +334,14 @@ test("template plan enforces InstallConfig scope boundary and quota", async () =
   const runner = recordingRunner({
     planResourceChanges: [
       {
-        address: "module.app.cloudflare_r2_bucket.this",
-        type: "cloudflare_r2_bucket",
+        address: "module.app.cloudflare_workers_script.this",
+        type: "cloudflare_workers_script",
         actions: ["create"],
         scope: { cloudflareAccountId: "acct_allowed" },
       },
       {
-        address: "module.app.cloudflare_r2_bucket.logs",
-        type: "cloudflare_r2_bucket",
+        address: "module.app.cloudflare_workers_script_subdomain.this",
+        type: "cloudflare_workers_script_subdomain",
         actions: ["create"],
         scope: { cloudflareAccountId: "acct_allowed" },
       },
@@ -369,9 +373,13 @@ test("template plan enforces InstallConfig scope boundary and quota", async () =
     spaceId: "space_test",
     installationId,
     source: SOURCE,
-    templateId: "cloudflare-r2-storage",
+    templateId: "cloudflare-hello-worker",
     templateVersion: "1.0.0",
-    inputs: { bucketName: "b", accountId: "acct_allowed" },
+    inputs: {
+      appName: "my-worker",
+      accountId: "acct_allowed",
+      workersSubdomain: "team",
+    },
   });
 
   expect(planRun.status).toEqual("failed");
@@ -385,8 +393,8 @@ test("destructive template plan requires confirmDestructive at apply", async () 
   const runner = recordingRunner({
     planResourceChanges: [
       {
-        address: "module.app.cloudflare_r2_bucket.this",
-        type: "cloudflare_r2_bucket",
+        address: "module.app.cloudflare_workers_script.this",
+        type: "cloudflare_workers_script",
         actions: ["delete", "create"],
       },
     ],
@@ -402,9 +410,13 @@ test("destructive template plan requires confirmDestructive at apply", async () 
     spaceId: "space_test",
     installationId,
     source: SOURCE,
-    templateId: "cloudflare-r2-storage",
+    templateId: "cloudflare-hello-worker",
     templateVersion: "1.0.0",
-    inputs: { bucketName: "b", accountId: "a" },
+    inputs: {
+      appName: "my-worker",
+      accountId: "a",
+      workersSubdomain: "team",
+    },
   });
   // A template `requiresConfirmation` change stays `succeeded` (it is gated by
   // `confirmDestructive` at apply, NOT by a recorded approval), so the persisted
@@ -440,7 +452,7 @@ test("destructive template plan requires confirmDestructive at apply", async () 
     'source = "./template-module"',
   );
   expect(runner.applyJobs[0]!.generatedRoot?.files["outputs.tf"]).toContain(
-    "module.app.bucket_name",
+    "module.app.worker_name",
   );
 });
 
@@ -448,14 +460,14 @@ test("output allowlist projects only template public outputs after the sensitive
   const runner = recordingRunner({
     planResourceChanges: [
       {
-        address: "module.app.cloudflare_r2_bucket.this",
-        type: "cloudflare_r2_bucket",
+        address: "module.app.cloudflare_workers_script.this",
+        type: "cloudflare_workers_script",
         actions: ["create"],
       },
     ],
     outputs: {
-      bucket_name: { sensitive: false, value: "my-bucket" },
-      location: { sensitive: false, value: "weur" },
+      worker_name: { sensitive: false, value: "my-worker" },
+      url: { sensitive: false, value: "https://my-worker.example" },
       // Not declared as a public output: must be dropped.
       internal_arn: { sensitive: false, value: "arn:secret" },
       // Declared public name but sensitive: must be dropped.
@@ -472,15 +484,19 @@ test("output allowlist projects only template public outputs after the sensitive
     spaceId: "space_test",
     installationId,
     source: SOURCE,
-    templateId: "cloudflare-r2-storage",
+    templateId: "cloudflare-hello-worker",
     templateVersion: "1.0.0",
-    inputs: { bucketName: "my-bucket", accountId: "a" },
+    inputs: {
+      appName: "my-worker",
+      accountId: "a",
+      workersSubdomain: "team",
+    },
   });
   const rootOutputs = runner.planJobs[0]!.generatedRoot?.files["outputs.tf"];
-  expect(rootOutputs).toContain('output "bucket_name"');
-  expect(rootOutputs).toContain("value = module.app.bucket_name");
-  expect(rootOutputs).toContain('output "location"');
-  expect(rootOutputs).toContain("value = module.app.location");
+  expect(rootOutputs).toContain('output "worker_name"');
+  expect(rootOutputs).toContain("value = module.app.worker_name");
+  expect(rootOutputs).toContain('output "url"');
+  expect(rootOutputs).toContain("value = module.app.url");
   expect(rootOutputs).not.toContain("internal_arn");
   const sidecar = await store.getPlanRunInputs(planRun.id);
   expect(sidecar?.generatedRoot?.files["outputs.tf"]).toEqual(rootOutputs);
@@ -499,16 +515,21 @@ test("output allowlist projects only template public outputs after the sensitive
   // allowlist must leave only the two declared public names.
   expect(applied.applyRun.outputs).toEqual([
     {
-      name: "bucket_name",
+      name: "worker_name",
       kind: "string",
-      value: "my-bucket",
+      value: "my-worker",
       sensitive: false,
     },
-    { name: "location", kind: "string", value: "weur", sensitive: false },
+    {
+      name: "url",
+      kind: "url",
+      value: "https://my-worker.example",
+      sensitive: false,
+    },
   ]);
   expect(applied.deployment?.outputsPublic).toEqual({
-    bucket_name: "my-bucket",
-    location: "weur",
+    worker_name: "my-worker",
+    url: "https://my-worker.example",
   });
 });
 
@@ -516,8 +537,8 @@ test("template apply fails closed when declared public outputs are missing", asy
   const runner = recordingRunner({
     planResourceChanges: [
       {
-        address: "module.app.cloudflare_r2_bucket.this",
-        type: "cloudflare_r2_bucket",
+        address: "module.app.cloudflare_workers_script.this",
+        type: "cloudflare_workers_script",
         actions: ["create"],
       },
     ],
@@ -534,9 +555,13 @@ test("template apply fails closed when declared public outputs are missing", asy
     spaceId: "space_test",
     installationId,
     source: SOURCE,
-    templateId: "cloudflare-r2-storage",
+    templateId: "cloudflare-hello-worker",
     templateVersion: "1.0.0",
-    inputs: { bucketName: "my-bucket", accountId: "a" },
+    inputs: {
+      appName: "my-worker",
+      accountId: "a",
+      workersSubdomain: "team",
+    },
   });
   const applied = await controller.createApplyRun({
     planRunId: planRun.id,
@@ -546,7 +571,7 @@ test("template apply fails closed when declared public outputs are missing", asy
   expect(applied.applyRun.status).toBe("failed");
   expect(applied.deployment).toBeUndefined();
   expect(JSON.stringify(applied.applyRun.diagnostics ?? [])).toContain(
-    "output bucket_name is missing",
+    "output worker_name is missing",
   );
   const persistedPlan = await store.getPlanRun(planRun.id);
   expect(persistedPlan?.appliedApplyRunId).toBeUndefined();
@@ -579,9 +604,13 @@ test("requiredProviders must not be passed alongside a template", async () => {
       spaceId: "space_test",
       installationId,
       source: SOURCE,
-      templateId: "cloudflare-r2-storage",
+      templateId: "cloudflare-hello-worker",
       templateVersion: "1.0.0",
-      inputs: { bucketName: "b", accountId: "a" },
+      inputs: {
+        appName: "my-worker",
+        accountId: "a",
+        workersSubdomain: "team",
+      },
       requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
     }),
   ).rejects.toThrow(/derived from the template/);

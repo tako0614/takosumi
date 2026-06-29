@@ -12,10 +12,9 @@
 # mirror` would bake only the latest 5.x provider and older reviewed lockfiles
 # would stop installing in the runner image.
 #
-# aws is mirrored so the first-party `aws-s3-storage` Capsule resolves its
-# `hashicorp/aws` provider from disk under offline init. google is still omitted
-# for size; it falls through to `direct` (registry) install until a later phase
-# mirrors it too.
+# Generic AWS/S3/GCS stacks install through the ordinary provider install/cache
+# path. google is still omitted for size; it falls through to `direct`
+# (registry) install until a later phase mirrors it too.
 terraform {
   required_providers {
     cloudflare = {
@@ -29,10 +28,6 @@ terraform {
     tls = {
       source  = "registry.opentofu.org/hashicorp/tls"
       version = "= 4.3.0"
-    }
-    aws = {
-      source  = "registry.opentofu.org/hashicorp/aws"
-      version = "= 6.51.0"
     }
   }
 }

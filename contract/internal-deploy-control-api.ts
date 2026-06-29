@@ -656,7 +656,7 @@ export interface TemplatePolicySpec {
 export interface TemplateSourceSpec {
   /**
    * Path INSIDE the runner image to a bundled first-party Capsule module, e.g.
-   * `/app/templates/cloudflare-r2-storage/module`. The runner copies it to
+   * `/app/templates/cloudflare-hello-worker/module`. The runner copies it to
    * `/work/generated-root/template-module`.
    */
   readonly localModulePath: string;

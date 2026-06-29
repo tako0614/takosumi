@@ -37,12 +37,11 @@ RUN set -eux; \
 # for provider binaries only.
 #
 # Mirror list covers the providers the bundled first-party modules require:
-# cloudflare + random + tls for the Cloudflare modules, and aws for the
-# `aws-s3-storage` Capsule (without it that Capsule fail-closes under offline
-# init because tofu.rc excludes aws from `direct`). The aws provider binary is
-# large, so this layer is the dominant build-time/image-size cost. google is
-# still omitted for size; it falls through to `direct` (network) install unless
-# a strict mirror policy blocks the run.
+# cloudflare + random + tls for Cloudflare starter modules. Generic AWS/S3/R2/GCS
+# stacks use the ordinary provider install/cache path instead of a Takosumi-owned
+# storage template baked into the image. google is still omitted for size; it
+# falls through to `direct` (network) install unless a strict mirror policy
+# blocks the run.
 # ---------------------------------------------------------------------------
 ENV OPENTOFU_PROVIDER_MIRROR=/opt/opentofu/provider-mirror
 ENV TF_CLI_CONFIG_FILE=/opt/opentofu/tofu.rc
@@ -72,17 +71,15 @@ RUN set -eux; \
 # image). The provider-agnostic `core` module lives under `opentofu-modules/`;
 # the provider-specific modules live under `providers/<provider>/modules/<id>/`.
 # Each is copied to `/app/templates/<id>/` so `template.localModulePath` (e.g.
-# /app/templates/cloudflare-r2-storage/module) stays a stable in-image path; the
+# /app/templates/cloudflare-hello-worker/module) stays a stable in-image path; the
 # runner copies it to /work/generated-root/template-module at plan/apply time.
 # Template-less Capsule runs copy their SourceSnapshot/normalized module into the
 # same generated-root child-module slot.
 WORKDIR /app
 COPY opentofu-modules/core/ ./templates/core/
 COPY providers/cloudflare/modules/cloudflare-hello-worker/ ./templates/cloudflare-hello-worker/
-COPY providers/cloudflare/modules/cloudflare-r2-storage/ ./templates/cloudflare-r2-storage/
 COPY providers/cloudflare/modules/cloudflare-static-site/ ./templates/cloudflare-static-site/
 COPY providers/cloudflare/modules/cloudflare-worker-service/ ./templates/cloudflare-worker-service/
-COPY providers/aws/modules/aws-s3-storage/ ./templates/aws-s3-storage/
 COPY providers/takosumi/modules/takosumi-ai-endpoint/ ./templates/takosumi-ai-endpoint/
 
 # The runner server imports the dependency-free shared provider->env-name table

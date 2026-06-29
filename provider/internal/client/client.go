@@ -25,9 +25,6 @@ const (
 	// APIVersion is the Resource object apiVersion this provider speaks.
 	APIVersion = "takosumi.dev/v1alpha1"
 
-	// KindObjectBucket is the resource shape kind for object stores.
-	KindObjectBucket = "ObjectBucket"
-
 	// KindEdgeWorker is the resource shape kind for HTTP services.
 	KindEdgeWorker = "EdgeWorker"
 

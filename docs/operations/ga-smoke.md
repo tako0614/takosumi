@@ -35,15 +35,15 @@ permission.
 bun run smoke:cloudflare
 ```
 
-Applies the official `cloudflare-r2-storage` Capsule against real Cloudflare,
-verifies the R2 bucket exists via the Cloudflare API, then destroys it and
-verifies it is gone. Idempotent (unique bucket name) and self-cleaning (always
-destroys, even on failure). This catches the integration risks no fake-runner
-test can: the real Cloudflare API, real provider install, real apply, clean
-destroy. Exit 0 = pass.
+Applies the official `cloudflare-hello-worker` Capsule against real Cloudflare,
+verifies the Worker script and `workers.dev` URL through the Cloudflare API and
+HTTP, then destroys it and verifies it is gone. Idempotent (unique worker name)
+and self-cleaning (always destroys, even on failure). This catches the
+integration risks no fake-runner test can: the real Cloudflare API, real
+provider install, real apply, clean destroy. Exit 0 = pass.
 
 Optional: `CLOUDFLARE_PROVIDER_VERSION=<x>` to pin the provider to the runner's
-mirrored version; `SMOKE_KEEP=1` to keep the workdir; `SMOKE_BUCKET_PREFIX=...`.
+mirrored version; `SMOKE_KEEP=1` to keep the workdir; `SMOKE_WORKER_PREFIX=...`.
 
 ## Layer 2 — full platform control plane (the real GA gate)
 
@@ -84,10 +84,11 @@ The command:
 6. verifies the Worker script is gone, then revokes the temporary Workspace
    ProviderConnection unless `--keep-connection` is set.
 
-R2 remains a Layer 1 / direct ProviderConnection integration smoke. Do not use
-`cloudflare-r2-storage` as the Layer 2 proof; Layer 2 is the product
-control-plane path and uses `cloudflare-hello-worker` because it needs no build
-artifact and can be created, verified, and destroyed by the platform loop.
+R2/S3 storage should be validated through existing providers or the scoped
+`compat.s3.v1` endpoint when an operator exposes it. Do not use a first-party
+R2 starter as the Layer 2 proof; Layer 2 is the product control-plane path and
+uses `cloudflare-hello-worker` because it needs no build artifact and can be
+created, verified, and destroyed by the platform loop.
 
 This is a required input to the enforced production hardening gate. Run it
 against `https://app-staging.takosumi.com` before production is touched; after

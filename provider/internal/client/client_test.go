@@ -84,7 +84,7 @@ func TestGetCapabilities(t *testing.T) {
 		}
 		_, _ = io.WriteString(w, `{
 			"apiVersion":"takosumi.dev/v1alpha1",
-			"resources":{"ObjectBucket":true,"EdgeWorker":true,"AIEndpoint":true},
+			"resources":{"EdgeWorker":true,"AIEndpoint":true},
 			"adapters":{"opentofu":true}
 		}`)
 	}))
@@ -95,8 +95,8 @@ func TestGetCapabilities(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetCapabilities: %v", err)
 	}
-	if !caps.SupportsResource(KindObjectBucket) || !caps.SupportsResource(KindEdgeWorker) {
-		t.Fatalf("expected ObjectBucket and EdgeWorker capabilities: %#v", caps.Resources)
+	if !caps.SupportsResource(KindEdgeWorker) {
+		t.Fatalf("expected EdgeWorker capability: %#v", caps.Resources)
 	}
 	if !caps.SupportsResource(KindAIEndpoint) {
 		t.Fatalf("expected AIEndpoint capability: %#v", caps.Resources)
@@ -112,7 +112,7 @@ func TestPutResource_RoundTrip(t *testing.T) {
 		if r.Method != http.MethodPut {
 			t.Errorf("expected PUT, got %s", r.Method)
 		}
-		if r.URL.Path != "/v1/resources/ObjectBucket/assets" {
+		if r.URL.Path != "/v1/resources/EdgeWorker/api" {
 			t.Errorf("unexpected path %q", r.URL.Path)
 		}
 		if auth := r.Header.Get("Authorization"); auth != "Bearer secret-token" {
@@ -127,19 +127,19 @@ func TestPutResource_RoundTrip(t *testing.T) {
 
 		resp := Resource{
 			APIVersion: APIVersion,
-			Kind:       KindObjectBucket,
-			Metadata:   Metadata{Name: "assets", Space: "prod"},
+			Kind:       KindEdgeWorker,
+			Metadata:   Metadata{Name: "api", Space: "prod"},
 			Spec:       gotBody.Spec,
 			Status: &Status{
 				Phase:              "Ready",
 				ObservedGeneration: 3,
 				Resolution: Resolution{
-					SelectedImplementation: "cloudflare_r2",
+					SelectedImplementation: "cloudflare_workers",
 					Target:                 "cloudflare-main",
 					Locked:                 true,
 					Portability:            "mostly_portable",
 				},
-				Outputs: map[string]any{"bucket": "assets-prod", "bytes": float64(12)},
+				Outputs: map[string]any{"worker_name": "api", "bytes": float64(12)},
 				Conditions: []Condition{
 					{Type: "Ready", Status: "True"},
 				},
@@ -153,15 +153,14 @@ func TestPutResource_RoundTrip(t *testing.T) {
 	c := New(srv.URL, "secret-token", srv.Client())
 	body := &Resource{
 		APIVersion: APIVersion,
-		Kind:       KindObjectBucket,
-		Metadata:   Metadata{Name: "assets", Space: "prod", ManagedBy: ManagedByOpenTofu},
+		Kind:       KindEdgeWorker,
+		Metadata:   Metadata{Name: "api", Space: "prod", ManagedBy: ManagedByOpenTofu},
 		Spec: map[string]any{
-			"name":            "assets",
-			"interfaces":      []string{"s3_api", "signed_url"},
-			"lifecyclePolicy": map[string]any{"delete": "retain"},
+			"name":   "api",
+			"source": map[string]any{"artifactPath": "/work/dist/worker.js"},
 		},
 	}
-	out, err := c.PutResource(context.Background(), KindObjectBucket, "assets", body)
+	out, err := c.PutResource(context.Background(), KindEdgeWorker, "api", body)
 	if err != nil {
 		t.Fatalf("PutResource: %v", err)
 	}
@@ -170,21 +169,21 @@ func TestPutResource_RoundTrip(t *testing.T) {
 	if gotBody.Metadata.ManagedBy != ManagedByOpenTofu {
 		t.Errorf("expected managedBy=opentofu, got %q", gotBody.Metadata.ManagedBy)
 	}
-	if gotBody.Spec["name"] != "assets" {
-		t.Errorf("expected spec.name=assets, got %v", gotBody.Spec["name"])
+	if gotBody.Spec["name"] != "api" {
+		t.Errorf("expected spec.name=api, got %v", gotBody.Spec["name"])
 	}
 
 	// Response mapped correctly.
 	if out.Status == nil {
 		t.Fatalf("expected status in response")
 	}
-	if out.Status.Resolution.SelectedImplementation != "cloudflare_r2" {
+	if out.Status.Resolution.SelectedImplementation != "cloudflare_workers" {
 		t.Errorf("unexpected selectedImplementation %q", out.Status.Resolution.SelectedImplementation)
 	}
 	if !out.Status.Resolution.Locked {
 		t.Errorf("expected locked true")
 	}
-	if out.Status.Outputs["bucket"] != "assets-prod" {
+	if out.Status.Outputs["worker_name"] != "api" {
 		t.Errorf("unexpected outputs %#v", out.Status.Outputs)
 	}
 	if out.Status.Outputs["bytes"] != float64(12) {
@@ -203,7 +202,7 @@ func TestGetResource_NotFound(t *testing.T) {
 	defer srv.Close()
 
 	c := New(srv.URL, "", srv.Client())
-	_, err := c.GetResource(context.Background(), KindObjectBucket, "missing", "prod")
+	_, err := c.GetResource(context.Background(), KindEdgeWorker, "missing", "prod")
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
@@ -218,7 +217,7 @@ func TestErrorEnvelope(t *testing.T) {
 	defer srv.Close()
 
 	c := New(srv.URL, "", srv.Client())
-	_, err := c.PutResource(context.Background(), KindObjectBucket, "assets", &Resource{})
+	_, err := c.PutResource(context.Background(), KindEdgeWorker, "api", &Resource{})
 	if err == nil {
 		t.Fatalf("expected error")
 	}
@@ -260,7 +259,7 @@ func TestDeleteResource(t *testing.T) {
 		defer srv.Close()
 
 		c := New(srv.URL, "", srv.Client())
-		if err := c.DeleteResource(context.Background(), KindObjectBucket, "assets", "prod"); err != nil {
+		if err := c.DeleteResource(context.Background(), KindEdgeWorker, "api", "prod"); err != nil {
 			t.Fatalf("DeleteResource: %v", err)
 		}
 	})
@@ -272,7 +271,7 @@ func TestDeleteResource(t *testing.T) {
 		defer srv.Close()
 
 		c := New(srv.URL, "", srv.Client())
-		if err := c.DeleteResource(context.Background(), KindObjectBucket, "assets", "prod"); err != nil {
+		if err := c.DeleteResource(context.Background(), KindEdgeWorker, "api", "prod"); err != nil {
 			t.Fatalf("expected nil error on 404 delete, got %v", err)
 		}
 	})
@@ -396,19 +395,19 @@ func TestPreviewResource(t *testing.T) {
 		resp := PreviewResourceResult{
 			Resource: Resource{
 				APIVersion: APIVersion,
-				Kind:       KindObjectBucket,
+				Kind:       KindAIEndpoint,
 				Status: &Status{
 					Conditions: []Condition{{Type: "Blocked", Status: "True", Message: "policy denies gcp"}},
 				},
 			},
-			SelectedImplementation: "cloudflare_r2",
+			SelectedImplementation: "cloudflare_ai_gateway",
 		}
 		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer srv.Close()
 
 	c := New(srv.URL, "", srv.Client())
-	out, err := c.PreviewResource(context.Background(), &Resource{Kind: KindObjectBucket})
+	out, err := c.PreviewResource(context.Background(), &Resource{Kind: KindAIEndpoint})
 	if err != nil {
 		t.Fatalf("PreviewResource: %v", err)
 	}
@@ -418,7 +417,7 @@ func TestPreviewResource(t *testing.T) {
 	if out.Resource.Status.Conditions[0].Type != "Blocked" {
 		t.Errorf("unexpected condition %#v", out.Resource.Status.Conditions[0])
 	}
-	if out.SelectedImplementation != "cloudflare_r2" {
+	if out.SelectedImplementation != "cloudflare_ai_gateway" {
 		t.Errorf("unexpected selected implementation %q", out.SelectedImplementation)
 	}
 }
