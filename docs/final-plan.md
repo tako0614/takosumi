@@ -1872,10 +1872,13 @@ a real usage period before storage is claimed usage-complete. The closed
 `takosumi-cloud` package owns the common `storageInventoryUsageReports()` helper:
 provider inventory collectors pass average stored bytes and the measured period,
 and the helper emits per-Workspace `gateway_storage_gb_hour` usage headers for
-the platform price book / usage ledger path. Containers, Durable Objects, and
-other managed resources listed in the price book are not supported customer
-surfaces until their Cloud-only routes, usage accounting, quota/fail-closed
-behavior, and destroy proof pass the same checklist.
+the platform price book / usage ledger path. In production, collectors submit
+one Workspace batch at a time to the Cloud-only
+`POST /cloud/usage/storage-inventory` extension endpoint so the platform Seam A
+proxy can price and record those headers in the Workspace usage ledger. Containers,
+Durable Objects, and other managed resources listed in the price book are not
+supported customer surfaces until their Cloud-only routes, usage accounting,
+quota/fail-closed behavior, and destroy proof pass the same checklist.
 
 ## 24. Final Fixed Policy
 

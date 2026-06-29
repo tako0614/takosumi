@@ -61,28 +61,24 @@ GET /__takosumi/cloud/extensions
   "serviceUrl": "https://app.takosumi.com",
   "extensions": [
     {
-      "id": "ai.openai_compatible.v1",
-      "kind": "ai_gateway",
-      "protocol": "openai-compatible",
       "basePath": "/gateway/ai/v1",
       "configured": true,
-      "capabilities": ["chat.completions", "embeddings", "models.list"],
-      "smokeChecks": ["GET /models", "POST /chat/completions"]
+      "requiredScopes": ["ai.chat", "ai.embeddings"]
     },
     {
-      "id": "provider.cloudflare.client_v4",
-      "kind": "provider_compat",
-      "provider": "cloudflare",
-      "protocol": "cloudflare-v4",
       "basePath": "/compat/cloudflare/client/v4",
       "configured": true,
-      "capabilities": ["workers", "kv", "r2", "d1"],
-      "smokeChecks": ["GET /user/tokens/verify", "GET /accounts"]
+      "requiredScopes": ["read", "write"]
+    },
+    {
+      "basePath": "/cloud/usage",
+      "configured": true,
+      "requiredScopes": ["cloud.usage.write"]
     }
   ],
   "summary": {
-    "total": 2,
-    "configured": 2,
+    "total": 3,
+    "configured": 3,
     "missing": 0
   }
 }
@@ -199,6 +195,33 @@ x-takosumi-cloud-usage-meters: [{"meterId":"cloudflare:workers_script:request","
 storage-backed resource の在庫計測では、closed `takosumi-cloud` の
 `storageInventoryUsageReports()` helper が provider inventory collector の
 平均 bytes と実 period から GB-hour を計算し、同じ header 形式で報告します。
+
+collector は customer API ではなく Cloud-only extension endpoint を呼びます。
+platform 側の `TAKOSUMI_CLOUD_EXTENSIONS` では `/cloud/usage` を closed
+`takosumi-cloud-usage` service binding に向け、service token には usage 書き込み用
+scope を付けます。request は 1 Workspace ずつ batch し、複数 Workspace を混ぜると
+endpoint は 400 を返します。verified billing Workspace context と sample の
+`workspaceId` が一致しない場合も 403 で fail closed します。
+
+```http
+POST /cloud/usage/storage-inventory
+```
+
+```json
+{
+  "periodStart": "2026-06-26T13:00:00.000Z",
+  "periodEnd": "2026-06-26T14:00:00.000Z",
+  "samples": [
+    {
+      "workspaceId": "space_xxx",
+      "installationId": "inst_xxx",
+      "resourceFamily": "cloudflare.r2",
+      "resourceId": "bucket:assets",
+      "averageBytes": 536870912
+    }
+  ]
+}
+```
 
 ```http
 x-takosumi-cloud-usage-period-start: 2026-06-26T13:00:00.000Z
