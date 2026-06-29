@@ -644,13 +644,18 @@ function processSchemas(): Record<string, Record<string, unknown>> {
     },
     TakosumiWellKnownResponse: {
       type: "object",
-      required: ["api_versions", "edition", "features", "endpoints"],
+      required: ["api_versions", "features", "endpoints"],
       properties: {
         api_versions: {
           type: "array",
           items: { const: "takosumi.dev/v1alpha1" },
         },
-        edition: { enum: ["core", "operator", "cloud"] },
+        edition: {
+          enum: ["core", "operator", "cloud"],
+          deprecated: true,
+          description:
+            "Deprecated compatibility hint. Clients must branch on capabilities, not edition names.",
+        },
         features: ref("TakosumiWellKnownFeatures"),
         endpoints: ref("TakosumiWellKnownEndpoints"),
       },

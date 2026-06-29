@@ -12,7 +12,7 @@ test("Takosumi discovery document exposes v1alpha1 endpoint metadata", () => {
   });
 
   assert.deepEqual(document.api_versions, [TAKOSUMI_API_VERSION]);
-  assert.equal(document.edition, "core");
+  assert.equal(document.edition, undefined);
   assert.equal(document.features.stacks, true);
   // ObjectStore is the first resolvable shape, so the Resource Shape API is on.
   assert.equal(document.features.resource_shapes, true);

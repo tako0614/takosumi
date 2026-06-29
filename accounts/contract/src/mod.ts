@@ -39,7 +39,7 @@ export const TAKOSUMI_ACCOUNTS_PASSKEY_AUTHENTICATE_COMPLETE_PATH =
  * Base path of the accounts Capsule projection surface.
  *
  * This is a distribution-internal/supporting account-plane projection, not the
- * Takosumi deploy-control Capsule resource served at `/api/v1/installations`.
+ * Takosumi deploy-control Capsule resource served at `/api/v1/capsules`.
  * It exists so installed services can receive identity metadata, billing usage
  * endpoints, export handoff, and service-token projections from the account
  * plane without competing with the public `/api/v1` control API or

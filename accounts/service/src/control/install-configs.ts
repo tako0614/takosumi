@@ -1,7 +1,6 @@
 /**
- * Session-authed Capsule creation config (`/api/v1/capsule-configs`, legacy
- * `/api/v1/install-configs`) control routes. Extracted from `control-routes.ts`
- * (P3 god-file split).
+ * Session-authed Capsule creation config (`/api/v1/capsule-configs`) control
+ * routes. Extracted from `control-routes.ts` (P3 god-file split).
  */
 import type {
   ApplyExpectedGuard,
@@ -184,7 +183,7 @@ export async function handleInstallConfigs(
   method: string,
 ): Promise<Response | undefined> {
   const { request, url, operations, store } = ctx;
-  // /api/v1/capsule-configs (legacy-compatible: /api/v1/install-configs)
+  // /api/v1/capsule-configs, normalized to the historical handler key.
   if (segments.length === 1 && segments[0] === "install-configs") {
     if (method !== "GET") return methodNotAllowed("GET");
     return await listInstallConfigs(

@@ -539,7 +539,7 @@ test("platform OIDC metric classifier covers issuer and upstream auth paths", ()
   expect(isOidcMetricPath("/oauth/authorize")).toBe(true);
   expect(isOidcMetricPath("/oauth/token")).toBe(true);
   expect(isOidcMetricPath("/v1/auth/upstream/google/start")).toBe(true);
-  expect(isOidcMetricPath("/api/v1/installations")).toBe(false);
+  expect(isOidcMetricPath("/api/v1/capsules")).toBe(false);
   expect(oidcMetricRoute("/oauth/authorize")).toBe("/oauth/authorize");
   expect(oidcMetricRoute("/v1/auth/upstream/google/callback")).toBe(
     "/v1/auth/upstream/*",
@@ -1165,6 +1165,7 @@ test("platform worker exposes product discovery before accounts handler", async 
   expect(discovery.status).toBe(200);
   const discoveryBody = await discovery.json();
   expect(discoveryBody.api_versions).toEqual([TAKOSUMI_API_VERSION]);
+  expect(discoveryBody.edition).toBeUndefined();
   expect(discoveryBody.endpoints.capabilities).toBe(
     `https://app.takosumi.com${TAKOSUMI_PRODUCT_CAPABILITIES_PATH}`,
   );
@@ -2484,14 +2485,33 @@ test("cloud extension catalog reports configured extensions without binding name
   expect(JSON.stringify(catalog)).not.toContain("TAKOSUMI_CLOUD_AI");
 });
 
-test("cloud extension catalog is a stable platform endpoint", async () => {
+test("cloud extension catalog is an operator-bearer gated platform endpoint", async () => {
   expect(
     isPlatformCloudExtensionCatalogPath("/__takosumi/cloud/extensions"),
   ).toBe(true);
-  const response = handlePlatformCloudExtensionCatalogRequest(
+
+  const missingSecret = handlePlatformCloudExtensionCatalogRequest(
     new Request("https://app.takosumi.com/__takosumi/cloud/extensions"),
     new URL("https://app.takosumi.com/__takosumi/cloud/extensions"),
     {} as never,
+  );
+  expect(missingSecret.status).toBe(404);
+
+  const wrongBearer = handlePlatformCloudExtensionCatalogRequest(
+    new Request("https://app.takosumi.com/__takosumi/cloud/extensions", {
+      headers: { authorization: "Bearer wrong" },
+    }),
+    new URL("https://app.takosumi.com/__takosumi/cloud/extensions"),
+    { TAKOSUMI_DEPLOY_CONTROL_TOKEN: "operator-secret" } as never,
+  );
+  expect(wrongBearer.status).toBe(401);
+
+  const response = handlePlatformCloudExtensionCatalogRequest(
+    new Request("https://app.takosumi.com/__takosumi/cloud/extensions", {
+      headers: { authorization: "Bearer operator-secret" },
+    }),
+    new URL("https://app.takosumi.com/__takosumi/cloud/extensions"),
+    { TAKOSUMI_DEPLOY_CONTROL_TOKEN: "operator-secret" } as never,
   );
   expect(response.status).toBe(200);
   expect(await response.json()).toMatchObject({

@@ -1,7 +1,7 @@
 /**
- * Session-authed StateVersion / Deployment (`/api/v1/state-versions`, legacy
- * `/api/v1/deployments`) read + rollback-plan control routes. Extracted from
- * `control-routes.ts` (P3 god-file split).
+ * Session-authed StateVersion (`/api/v1/state-versions`) read +
+ * rollback-plan control routes. Extracted from `control-routes.ts` (P3
+ * god-file split).
  */
 import type {
   ApplyExpectedGuard,
@@ -185,9 +185,8 @@ export async function handleStateVersions(
 ): Promise<Response | undefined> {
   const { request, url, operations, store } = ctx;
   // /api/v1/state-versions/:stateVersionId ; .../rollback-plan — session-authed
-  // (legacy-compatible: /api/v1/deployments/:deploymentId)
-  // deployment read + rollback (§30 GUI deploy). Each resolves the Deployment to
-  // learn its owning Workspace, then space-permission gates before projecting /
+  // StateVersion read + rollback. Each resolves the stored apply evidence to
+  // learn its owning Workspace, then Workspace-permission gates before projecting /
   // mutating. The read returns ONLY the allowlist-projected outputsPublic (no
   // raw output envelope, no outputId pointer, no sensitive values).
   if (segments[0] === "deployments" && segments.length >= 2) {

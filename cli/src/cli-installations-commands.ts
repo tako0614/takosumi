@@ -851,7 +851,7 @@ async function createTargetCapsuleForImportApply(input: {
   const environment =
     optionalStringOption(input.options, "environment") ??
     DEFAULT_IMPORT_ENVIRONMENT;
-  const path = `/api/v1/spaces/${encodeURIComponent(input.targetWorkspaceId)}/installations`;
+  const path = `/api/v1/workspaces/${encodeURIComponent(input.targetWorkspaceId)}/capsules`;
   const providerConnections = importApplyProviderConnections(input.options);
   const body = {
     name: importApplyName(input.plan, "installation"),
@@ -902,7 +902,7 @@ async function putTargetCapsuleProviderConnections(input: {
 }): Promise<void> {
   await requestAccountsApi({
     method: "PUT",
-    path: `/api/v1/installations/${encodeURIComponent(input.capsuleId)}/provider-connections`,
+    path: `/api/v1/capsules/${encodeURIComponent(input.capsuleId)}/provider-connections`,
     body: { connections: input.providerConnections },
     options: input.options,
   });

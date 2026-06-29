@@ -216,7 +216,7 @@ test("account session control routes execute plan and apply through the real Ope
       store: accountStore,
       cookie,
       method: "POST",
-      path: `/api/v1/installations/${seeded.installation.id}/plan`,
+      path: `/api/v1/capsules/${seeded.installation.id}/plan`,
     },
     201,
   );

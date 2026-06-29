@@ -15,7 +15,7 @@
     "deploy/node-postgres"
   ],
   "scripts": {
-    "check": "bun run check:test-source-boundary && tsc --noEmit && bun run check:dashboard && bun run test:dashboard-new-flow && bun run check:worker-types && bun run check:cloudflare-worker-build",
+    "check": "bun run provider:assets && bun run check:test-source-boundary && tsc --noEmit && bun run check:dashboard && bun run test:dashboard-new-flow && bun run check:worker-types && bun run check:cloudflare-worker-build",
     "check:test-source-boundary": "bun scripts/check-test-source-boundary.ts",
     "check:dashboard": "cd dashboard && bunx tsc --noEmit --pretty false -p tsconfig.json && bun run build",
     "check:worker-types": "tsc --noEmit -p tsconfig.worker.json",

@@ -1,5 +1,5 @@
 /**
- * Session-authed Capsule (`/api/v1/capsules`, legacy `/api/v1/installations`)
+ * Session-authed Capsule (`/api/v1/capsules`)
  * control routes: read/patch/destroy-plan, plan / destroy-plan / drift-check,
  * backups, state-versions (deployments) list, dependencies create/list,
  * provider-connection bindings. Extracted from `control-routes.ts` (P3 split).
@@ -192,8 +192,8 @@ export async function handleCapsules(
   method: string,
 ): Promise<Response | undefined> {
   const { request, url, operations, store } = ctx;
-  // /api/v1/capsules/:id ; .../plan ; .../destroy-plan ; .../dependencies
-  // (legacy-compatible: /api/v1/installations/:id)
+  // /api/v1/capsules/:id ; .../plan ; .../destroy-plan ; .../dependencies,
+  // normalized to the historical handler key.
   if (segments[0] === "installations" && segments.length >= 2) {
     const capsuleId = decodeURIComponent(segments[1] ?? "");
     const installation =

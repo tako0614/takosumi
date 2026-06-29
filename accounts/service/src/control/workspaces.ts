@@ -1,5 +1,5 @@
 /**
- * Session-authed Workspace (`/api/v1/workspaces`, legacy `/api/v1/spaces`)
+ * Session-authed Workspace (`/api/v1/workspaces`)
  * control routes: workspace CRUD, members, capsule create/list, graph,
  * runs/activity, backups, billing reads, plan-update / drift-check. Public
  * upload/prepared-source ingest is retired; upload compatibility remains
@@ -187,7 +187,7 @@ export async function handleWorkspaces(
   method: string,
 ): Promise<Response | undefined> {
   const { request, url, operations, store } = ctx;
-  // GET/POST /api/v1/workspaces (legacy-compatible: /api/v1/spaces)
+  // GET/POST /api/v1/workspaces, normalized to the historical handler key.
   if (segments.length === 1 && segments[0] === "spaces") {
     if (method === "GET") {
       await maybeEnsurePersonalWorkspaceForSession({
@@ -203,7 +203,6 @@ export async function handleWorkspaces(
     return methodNotAllowed("GET, POST");
   }
   // /api/v1/workspaces/:workspaceId ; /api/v1/workspaces/:workspaceId/...
-  // (legacy-compatible: /api/v1/spaces/:workspaceId)
   if (segments[0] === "spaces" && segments.length >= 2) {
     const workspaceId = decodeURIComponent(segments[1] ?? "");
     const auth = await requireWorkspaceAccess({

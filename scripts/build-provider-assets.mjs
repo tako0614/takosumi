@@ -11,7 +11,14 @@
  */
 
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -29,12 +36,21 @@ const mirrorRoot = join(
   "takosumi",
 );
 
-const version = process.env.TAKOSUMI_PROVIDER_VERSION?.trim();
+const packageJson = JSON.parse(
+  await readFile(join(repoRoot, "package.json"), "utf8"),
+);
+const version = process.env.TAKOSUMI_PROVIDER_VERSION?.trim() ||
+  String(packageJson.version ?? "").trim();
 if (!version) {
-  throw new Error("TAKOSUMI_PROVIDER_VERSION is required");
+  throw new Error(
+    "TAKOSUMI_PROVIDER_VERSION is required when package.json has no version",
+  );
 }
 
-const platforms = (process.env.TAKOSUMI_PROVIDER_PLATFORMS ?? "linux_amd64")
+const platforms = (
+  process.env.TAKOSUMI_PROVIDER_PLATFORMS ??
+  "linux_amd64,linux_arm64,darwin_amd64,darwin_arm64"
+)
   .split(",")
   .map((value) => value.trim())
   .filter(Boolean)

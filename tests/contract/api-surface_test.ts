@@ -30,8 +30,8 @@ test("prefix constants are the canonical taxonomy values", () => {
 
 test("isApiV1Path matches the prefix and nested paths only", () => {
   assert.ok(isApiV1Path("/api/v1"));
-  assert.ok(isApiV1Path("/api/v1/spaces"));
-  assert.ok(isApiV1Path("/api/v1/installations/inst_1/plan"));
+  assert.ok(isApiV1Path("/api/v1/workspaces"));
+  assert.ok(isApiV1Path("/api/v1/capsules/inst_1/plan"));
   assert.ok(!isApiV1Path("/api/v1x"));
   // A path under /api/ that is NOT /api/v1 must not match the edge surface.
   assert.ok(!isApiV1Path("/api/internal/runtime/agents"));
@@ -41,14 +41,14 @@ test("isApiV1Path matches the prefix and nested paths only", () => {
 test("isInternalV1Path matches the internal seam", () => {
   assert.ok(isInternalV1Path("/internal/v1"));
   assert.ok(isInternalV1Path("/internal/v1/plan-runs"));
-  assert.ok(!isInternalV1Path("/api/v1/spaces"));
+  assert.ok(!isInternalV1Path("/api/v1/workspaces"));
 });
 
 test("isAccountsIdentityPath matches /v1 but the caller must test /api/v1 first", () => {
   assert.ok(isAccountsIdentityPath("/v1/account/session/me"));
   assert.ok(isAccountsIdentityPath("/v1/auth/providers"));
   // /api/v1 is NOT under /v1, so identity matching never shadows the edge API.
-  assert.ok(!isAccountsIdentityPath("/api/v1/spaces"));
+  assert.ok(!isAccountsIdentityPath("/api/v1/workspaces"));
 });
 
 test("isExternalStandardPath matches OIDC / webhook surfaces", () => {
@@ -58,7 +58,7 @@ test("isExternalStandardPath matches OIDC / webhook surfaces", () => {
   assert.ok(isExternalStandardPath("/hooks/sources/src_1"));
   // /install is a plain SPA path — the external install link is client-handled.
   assert.ok(!isExternalStandardPath("/install"));
-  assert.ok(!isExternalStandardPath("/api/v1/spaces"));
+  assert.ok(!isExternalStandardPath("/api/v1/workspaces"));
 });
 
 test("isHealthPath matches only exact probe paths", () => {

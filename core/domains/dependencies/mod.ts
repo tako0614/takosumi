@@ -426,7 +426,7 @@ export class DependenciesService {
 
   /**
    * Lists every Dependency edge within a Space. Backs the Space dependency-graph
-   * projection (spec §14): the account-plane `/api/v1/spaces/:id/graph`
+   * projection (spec §14): the account-plane `/api/v1/workspaces/:id/graph`
    * route pairs these edges with the Space's Installations to render the DAG.
    */
   async listByWorkspace(

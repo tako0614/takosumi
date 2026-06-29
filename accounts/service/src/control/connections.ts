@@ -187,7 +187,6 @@ export async function handleConnections(
 ): Promise<Response | undefined> {
   const { request, url, operations, store } = ctx;
   // /api/v1/connections?workspaceId=  (GET list / POST create)
-  // (legacy-compatible: ?workspaceId=)
   if (segments.length === 1 && segments[0] === "connections") {
     if (method === "GET") {
       return await listControlConnections(
