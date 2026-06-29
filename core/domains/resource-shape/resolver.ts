@@ -110,8 +110,9 @@ export const SHAPE_TARGET_IMPLEMENTATION: Readonly<
 
 /**
  * Default per-implementation capability matrix. Only shapes that do not have an
- * adequate generic provider-neutral OpenTofu surface are advertised here by
- * default. ObjectBucket is intentionally absent; operators must opt into it via
+ * adequate generic OpenTofu provider or standard API are advertised here by
+ * default, and even then only when Takosumi needs typed service-form semantics.
+ * ObjectBucket is intentionally absent; operators must opt into it via
  * TargetPool implementation capabilities when they need managed bindings,
  * policy, metering, or compatibility import paths instead of ordinary S3/R2
  * provider usage.

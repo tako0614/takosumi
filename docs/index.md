@@ -89,6 +89,9 @@ Same shape, different target.
 
 ただし、既存の汎用 OpenTofu provider や標準 API で足りるものは Takosumi が作り直しません。Takosumi
 の shape は、provider-neutral な service form、binding、policy、metering、import path が必要なときだけ使います。
+逆に、汎用 provider がないだけで即 `takosumi_*` resource にするわけでもありません。一回限りの不足は
+generic-env ProviderConnection と通常の OpenTofu module で扱い、繰り返し使う service form として schema /
+planner / adapter / state / import / drift の意味が固まるものだけを Takosumi provider に追加します。
 
 ## OSS に含まれること
 

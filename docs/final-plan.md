@@ -49,7 +49,22 @@ If an adequate generic OpenTofu provider or standard API exists:
   use it through the plain OpenTofu Stack flow.
 
 If no adequate generic provider-neutral surface exists:
-  add a first-class Takosumi Resource Shape or adapter plugin.
+  add a first-class Takosumi Resource Shape or adapter plugin only when the
+  service form is repeated, useful, and needs Takosumi-owned semantics.
+```
+
+This is not "Takosumi should create every missing provider." It is:
+
+```text
+generic exists:
+  do not recreate it in takosumi_provider.
+
+generic does not exist, but the need is one-off:
+  use generic-env ProviderConnection and a normal OpenTofu provider/module.
+
+generic does not exist, and the need is a durable service form:
+  add a typed Takosumi shape with schema, validation, planner, adapter,
+  import/drift/state story, and capability evidence.
 ```
 
 Examples:
@@ -381,6 +396,12 @@ candidate vocabulary, not a commitment that Takosumi will recreate every
 service. Add a shape only when existing OpenTofu providers or standard APIs are
 not enough and Takosumi needs provider-neutral binding, policy, metering,
 import, or resolution semantics.
+
+If a mature provider-neutral provider already exists outside Takosumi, prefer
+that provider. Takosumi should define a new provider resource only when the
+ecosystem does not already provide a clean generic surface for the service form
+or when Takosumi must own resolution locks, bindings, policy, metering, or
+compatibility import.
 
 ```text
 Route
@@ -787,7 +808,7 @@ Do build:
 ```text
 plain OpenTofu Stack execution
 generic-env ProviderConnection escape hatch
-first-class shapes where generic providers are not enough
+first-class typed shapes only where generic providers/standards are not enough
 capability-driven provider behavior
 TargetPool adapter plugin system
 scoped compatibility import paths
