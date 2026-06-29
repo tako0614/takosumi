@@ -161,6 +161,13 @@ The allowed performance mechanisms are:
   parallel. Sharing the same cache path across independent runner processes or
   containers is an operator decision and must provide its own isolation or file
   locking.
+- Keep a successful Cloudflare Container runner warm for a short operator-set
+  window (`TAKOSUMI_RUNNER_KEEPALIVE_SECONDS`, default `120`; `0` disables it)
+  so source sync / compatibility / plan / apply bursts can reuse the container
+  and provider cache. Failed runs shut the container down immediately.
+- Forward only non-secret runner speed env into the container:
+  `TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR` for provider binaries and
+  `TAKOSUMI_SOURCE_ARCHIVE_ZSTD_LEVEL` for SourceSnapshot compression speed.
 - Keep app/container/bundle build optimization in the app repository, release
   pipeline, registry, or OpenTofu module. A module may accept a URL, digest,
   image tag, or object key as a normal variable, and may verify it with ordinary

@@ -147,6 +147,8 @@ const containerRuntimeAvailable =
 const CONTAINER_START_TIMEOUT_MS = 30_000;
 const CONTAINER_PORT_READY_TIMEOUT_MS = 30_000;
 const CONTAINER_START_POLL_INTERVAL_MS = 250;
+const DEFAULT_RUNNER_KEEPALIVE_SECONDS = 120;
+const MAX_RUNNER_KEEPALIVE_SECONDS = 900;
 const RUNNER_STARTUP_SECONDS_HEADER = "x-takosumi-runner-startup-seconds";
 
 export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<CloudflareWorkerEnv> {
@@ -161,10 +163,19 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
 
   constructor(ctx: ContainerHostContext, env: CloudflareWorkerEnv) {
     super(ctx, env);
+    const keepaliveSeconds = runnerKeepaliveSeconds(env);
+    this.sleepAfter = `${Math.max(1, keepaliveSeconds)}s`;
     this.envVars = {
       PORT: "8080",
       TAKOSUMI_OPENTOFU_RUNNER: "cloudflare-container",
       TAKOSUMI_RUNNER_START_SERVER: "1",
+      TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR:
+        optionalStringEnv(env.TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR) ??
+        "/tmp/takosumi-provider-cache",
+      ...optionalEnvVars({
+        TAKOSUMI_SOURCE_ARCHIVE_ZSTD_LEVEL:
+          env.TAKOSUMI_SOURCE_ARCHIVE_ZSTD_LEVEL,
+      }),
     };
   }
 
@@ -201,11 +212,15 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         { status: 501 },
       );
     }
-    const stopAfterRun = isRunDispatchRequest(request);
+    const runDispatch = isRunDispatchRequest(request);
+    const shutdownAfterRun =
+      runDispatch && runnerKeepaliveSeconds(this.env) === 0;
+    let runSucceeded = false;
     try {
       this.#lastStartupSeconds = undefined;
       const response = await this.#fetchWithDurablePlanArtifacts(request);
-      const output = stopAfterRun ? await bufferedResponse(response) : response;
+      runSucceeded = response.ok;
+      const output = runDispatch ? await bufferedResponse(response) : response;
       return withRunnerStartupHeader(output, this.#lastStartupSeconds);
     } catch (error) {
       const url = new URL(request.url);
@@ -226,7 +241,9 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         { status: 500 },
       );
     } finally {
-      if (stopAfterRun) await this.#shutdownContainerIfSupported();
+      if (runDispatch && (!runSucceeded || shutdownAfterRun)) {
+        await this.#shutdownContainerIfSupported();
+      }
       this.#lastStartupSeconds = undefined;
     }
   }
@@ -1691,6 +1708,33 @@ function redactedErrorMessage(error: unknown, fallback: string): string {
   const message = error instanceof Error ? error.message : String(error);
   const text = message && message.trim().length > 0 ? message : fallback;
   return redactString(text, { redactedValue: "[redacted]" });
+}
+
+function runnerKeepaliveSeconds(env: CloudflareWorkerEnv): number {
+  const raw = optionalStringEnv(env.TAKOSUMI_RUNNER_KEEPALIVE_SECONDS);
+  if (!raw) return DEFAULT_RUNNER_KEEPALIVE_SECONDS;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return DEFAULT_RUNNER_KEEPALIVE_SECONDS;
+  }
+  return Math.min(Math.floor(parsed), MAX_RUNNER_KEEPALIVE_SECONDS);
+}
+
+function optionalEnvVars(
+  input: Record<string, unknown>,
+): Record<string, string> {
+  const output: Record<string, string> = {};
+  for (const [name, value] of Object.entries(input)) {
+    const stringValue = optionalStringEnv(value);
+    if (stringValue) output[name] = stringValue;
+  }
+  return output;
+}
+
+function optionalStringEnv(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 function withRunnerStartupHeader(

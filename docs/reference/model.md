@@ -93,6 +93,12 @@ container images, release URLs, object keys, digests, and build pipelines belong
 to the app repo, CI/release pipeline, registry, provider, or ordinary
 OpenTofu/Terraform module variables.
 
+The reference runner keeps successful containers warm for
+`TAKOSUMI_RUNNER_KEEPALIVE_SECONDS` seconds (default `120`; `0` disables warm
+reuse) and shuts down failed runs immediately. Operators can also pass
+`TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR` and `TAKOSUMI_SOURCE_ARCHIVE_ZSTD_LEVEL`
+as non-secret speed settings.
+
 ## Cloud-Only Concepts
 
 The following are not OSS model concepts:
