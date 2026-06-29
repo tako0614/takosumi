@@ -1132,14 +1132,15 @@ export async function handlePlatformCloudExtensionRouteRequest(
     return platformCloudExtensionUsageFailure("usage_workspace_id_missing")
       .response;
   }
-  const usageAuthorization = await authorizePlatformCloudExtensionFallbackUsage(
+  const usagePrecharge = await prechargePlatformCloudExtensionFallbackUsage(
     authContext.request,
     env,
     route,
     authContext.session,
+    usageRecorder,
     usageAuthorizer,
   );
-  if (!usageAuthorization.ok) return usageAuthorization.response;
+  if (!usagePrecharge.ok) return usagePrecharge.response;
   const upstreamResponse = await binding.fetch(authContext.request);
   return await responseForPlatformCloudExtensionClient(
     authContext.request,
@@ -1148,6 +1149,7 @@ export async function handlePlatformCloudExtensionRouteRequest(
     route,
     authContext.session,
     usageRecorder,
+    usagePrecharge.charged,
   );
 }
 
@@ -1487,17 +1489,28 @@ export type PlatformCloudExtensionUsageAuthorizer = (
   input: RecordMeteredUsageInput,
 ) => Promise<void>;
 
-async function authorizePlatformCloudExtensionFallbackUsage(
+interface PlatformCloudExtensionChargedUsage {
+  readonly spaceId: string;
+  readonly input: RecordMeteredUsageInput;
+  readonly signature: string;
+}
+
+async function prechargePlatformCloudExtensionFallbackUsage(
   request: Request,
   env: CloudflareWorkerEnv,
   route: PlatformCloudExtensionRoute,
   session: PlatformCloudExtensionSessionContext,
+  usageRecorder: PlatformCloudExtensionUsageRecorder,
   usageAuthorizer: PlatformCloudExtensionUsageAuthorizer,
 ): Promise<
-  { readonly ok: true } | { readonly ok: false; readonly response: Response }
+  | {
+      readonly ok: true;
+      readonly charged: readonly PlatformCloudExtensionChargedUsage[];
+    }
+  | { readonly ok: false; readonly response: Response }
 > {
   if (!fallbackPlatformCloudUsageMeter(request, route, session)) {
-    return { ok: true };
+    return { ok: true, charged: [] };
   }
   const priced = platformCloudExtensionPricedUsageInputs(
     request,
@@ -1507,17 +1520,24 @@ async function authorizePlatformCloudExtensionFallbackUsage(
     session,
   );
   if (!priced.ok) return priced;
+  const charged: PlatformCloudExtensionChargedUsage[] = [];
   for (const { spaceId, input } of priced.inputs) {
     if ((input.usdMicros ?? 0) <= 0) continue;
     try {
       await usageAuthorizer(spaceId, input);
+      await usageRecorder(spaceId, input);
+      charged.push({
+        spaceId,
+        input,
+        signature: platformCloudExtensionUsageInputSignature(spaceId, input),
+      });
     } catch (error) {
       return platformCloudExtensionUsageFailure(
         platformCloudExtensionUsageRecordFailureReason(error),
       );
     }
   }
-  return { ok: true };
+  return { ok: true, charged };
 }
 
 async function responseForPlatformCloudExtensionClient(
@@ -1527,6 +1547,7 @@ async function responseForPlatformCloudExtensionClient(
   route: PlatformCloudExtensionRoute,
   session: PlatformCloudExtensionSessionContext,
   usageRecorder: PlatformCloudExtensionUsageRecorder,
+  charged: readonly PlatformCloudExtensionChargedUsage[] = [],
 ): Promise<Response> {
   const usageResult = await recordPlatformCloudExtensionUsage(
     request,
@@ -1535,6 +1556,7 @@ async function responseForPlatformCloudExtensionClient(
     route,
     session,
     usageRecorder,
+    charged,
   );
   if (!usageResult.ok) return usageResult.response;
   return new Response(response.body, {
@@ -1600,6 +1622,7 @@ async function recordPlatformCloudExtensionUsage(
   route: PlatformCloudExtensionRoute,
   session: PlatformCloudExtensionSessionContext,
   usageRecorder: PlatformCloudExtensionUsageRecorder,
+  charged: readonly PlatformCloudExtensionChargedUsage[] = [],
 ): Promise<
   { readonly ok: true } | { readonly ok: false; readonly response: Response }
 > {
@@ -1613,6 +1636,9 @@ async function recordPlatformCloudExtensionUsage(
   );
   if (!priced.ok) return priced;
   for (const { spaceId, input } of priced.inputs) {
+    if (platformCloudExtensionUsageWasCharged(spaceId, input, charged)) {
+      continue;
+    }
     try {
       await usageRecorder(spaceId, input);
     } catch (error) {
@@ -1622,6 +1648,57 @@ async function recordPlatformCloudExtensionUsage(
     }
   }
   return { ok: true };
+}
+
+function platformCloudExtensionUsageWasCharged(
+  spaceId: string,
+  input: RecordMeteredUsageInput,
+  charged: readonly PlatformCloudExtensionChargedUsage[],
+): boolean {
+  if (charged.length === 0) return false;
+  const signature = platformCloudExtensionUsageInputSignature(spaceId, input);
+  return charged.some(
+    (entry) =>
+      entry.signature === signature ||
+      platformCloudExtensionUsageInputsOverlap(entry.spaceId, entry.input, spaceId, input),
+  );
+}
+
+function platformCloudExtensionUsageInputSignature(
+  spaceId: string,
+  input: RecordMeteredUsageInput,
+): string {
+  return JSON.stringify({
+    spaceId,
+    installationId: input.installationId ?? null,
+    meterId: input.meterId ?? null,
+    resourceFamily: input.resourceFamily ?? null,
+    resourceId: input.resourceId ?? null,
+    operation: input.operation ?? null,
+    kind: input.kind,
+    quantity: input.quantity,
+    usdMicros: input.usdMicros ?? 0,
+    credits: input.credits ?? 0,
+  });
+}
+
+function platformCloudExtensionUsageInputsOverlap(
+  chargedSpaceId: string,
+  chargedInput: RecordMeteredUsageInput,
+  spaceId: string,
+  input: RecordMeteredUsageInput,
+): boolean {
+  if (chargedSpaceId !== spaceId) return false;
+  // AI Gateway precharges a generic request floor before the upstream model is
+  // called. The gateway response can then emit a model-specific ai_request
+  // meter plus token meters. Treat only the request floor as duplicate; token
+  // meters remain additive.
+  return (
+    chargedInput.kind === "ai_request" &&
+    input.kind === "ai_request" &&
+    (chargedInput.meterId?.startsWith("ai:") ?? false) &&
+    (input.meterId?.startsWith("ai:") ?? false)
+  );
 }
 
 function platformCloudExtensionPricedUsageInputs(

@@ -158,6 +158,14 @@ client response から削除し、`recordGatewayResourceUsage` で Workspace usa
 ledger に記録します。usage report があるのに ledger へ記録できない場合は、
 未課金の成功を返さないため fail closed します。
 
+state-changing Cloud extension route が `TAKOSUMI_CLOUD_EXTENSIONS` の
+`fallbackUsage` に一致する場合、platform worker は bound Cloud worker を呼ぶ前に
+price book で `usdMicros` を確定し、Workspace balance から atomic に spend します。
+残高不足・未価格付け・billing Workspace context 不足では upstream Cloudflare API /
+AI upstream / dispatch は呼びません。extension response が同じ request meter を
+返した場合は二重記録せず、AI の input/output token など response 後にしか分からない
+追加 meter だけを後段で記録します。
+
 public traffic を受ける Cloud Edge Runtime は例外で、client response に usage
 header を出しません。route ledger に `spaceId` があることを前提に、dispatch 前に
 platform worker の内部 route `POST /internal/platform/cloud/usage` へ
@@ -190,6 +198,9 @@ user-facing family には出しません。
 Worker script の使用量は `resourceFamily: "cloudflare.workers_script"` として
 `gateway_compute` または `gateway_storage_gb_hour` を報告します。Queues は
 `cloudflare.queues`、Workflows は `cloudflare.workflows` として報告します。
+KV value、R2 object、D1 query、Queue message、Workflow instance などの
+data-plane subpath は、対応 meter と fail-closed smoke が揃うまで 501 で閉じます。
+未実装 data-plane を Cloudflare upstream へ素通しして無料利用できる状態にはしません。
 Containers / Durable Objects などの追加 family は、closed Gateway backend
 が lifecycle endpoint と usage smoke を通した後に catalog / 画面 / billing price
 へ追加します。内部 backend alias は `meterId`、`resourceFamily`、Stripe meter、
