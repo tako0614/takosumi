@@ -600,7 +600,7 @@ test("resolve is deterministic across repeated calls", () => {
   expect(a).toBe(b);
 });
 
-test("DEFAULT_RESOURCE_SHAPE_CAPABILITIES covers ObjectBucket implementations", () => {
+test("DEFAULT_RESOURCE_SHAPE_CAPABILITIES omits ObjectBucket implementations", () => {
   const impls = DEFAULT_RESOURCE_SHAPE_CAPABILITIES.filter(
     (c) => c.shape === "ObjectBucket",
   )
