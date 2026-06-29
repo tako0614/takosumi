@@ -295,6 +295,7 @@ function ApiKeysCard(props: {
   readonly refetch: () => void;
   readonly result: CloudResourceResult<readonly TakosumiAccountsPatMetadata[]>;
 }): JSX.Element {
+  const { confirm } = useConfirmDialog();
   const [name, setName] = createSignal(t("cloudResources.keys.defaultName"));
   const [busy, setBusy] = createSignal(false);
   const [revokeBusy, setRevokeBusy] = createSignal<string | null>(null);
@@ -320,7 +321,15 @@ function ApiKeysCard(props: {
     }
   };
 
-  const revokeKey = async (tokenId: string) => {
+  const revokeKey = async (token: TakosumiAccountsPatMetadata) => {
+    const ok = await confirm({
+      title: t("cloudResources.keys.revokeTitle"),
+      message: t("cloudResources.keys.revokeMessage", { name: token.name }),
+      confirmText: t("cloudResources.keys.revoke"),
+      danger: true,
+    });
+    if (!ok) return;
+    const tokenId = token.id;
     setRevokeBusy(tokenId);
     setError(null);
     try {
@@ -402,9 +411,9 @@ function ApiKeysCard(props: {
                     type="button"
                     icon={<Trash2 size={14} />}
                     busy={revokeBusy() === token.id}
-                    onClick={() => void revokeKey(token.id)}
+                    onClick={() => void revokeKey(token)}
                   >
-                    {t("common.delete")}
+                    {t("cloudResources.keys.revoke")}
                   </Button>
                 </div>
               )}

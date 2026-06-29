@@ -929,6 +929,10 @@ export const en: Record<keyof typeof ja, string> = {
   "cloudResources.keys.created": "Created API key",
   "cloudResources.keys.lastUsed": "Last used",
   "cloudResources.keys.empty": "No API keys yet.",
+  "cloudResources.keys.revoke": "Revoke",
+  "cloudResources.keys.revokeTitle": "Revoke API key",
+  "cloudResources.keys.revokeMessage":
+    "Revoke “{name}”. Apps using this key will no longer be able to connect.",
   "cloudResources.ai.title": "AI Gateway",
   "cloudResources.ai.subtitle": "Connection status and default model",
   "cloudResources.ai.defaultModel": "Default model",
