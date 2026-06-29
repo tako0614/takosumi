@@ -194,6 +194,13 @@ availableUsdMicros:
 `disabled` / closed access の状態でも、Takosumi Cloud が提供する有料 resource は
 残高不足で止まります。
 
+Cloud extension が usage header を返す経路では、成功 response 後に platform worker
+が価格表で `usdMicros` を決め、atomic spend を行います。header 未配線で
+`fallbackUsage` によって課金する mutating route は、bound Cloud service を呼ぶ前に
+同じ価格表で必要額を計算し、Workspace の `availableUsdMicros` が不足していれば
+`402 cloud_extension_insufficient_credits` を返します。つまり、明らかに残高不足の
+deploy / create / delete / runtime execution は upstream side effect を起こしません。
+
 止める対象:
 
 - Cloudflare Compatibility Gateway 経由の Workers Script / KV / R2 / D1 / Queues / Workflows / Containers / Durable Objects

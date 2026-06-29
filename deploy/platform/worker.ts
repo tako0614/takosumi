@@ -38,11 +38,12 @@ import {
 import { constantTimeEqualsString } from "../../core/shared/constant_time.ts";
 import { TAKOSUMI_METRICS_PATH } from "../../core/api/metrics_routes.ts";
 import type { RuntimeAgentRegistry } from "../../core/agents/types.ts";
-import type {
-  BillingSettings,
-  UsageEventKind,
-  UsageResourceMetadata,
-  UsageResourceMetadataValue,
+import {
+  creditBalanceAvailableUsdMicros,
+  type BillingSettings,
+  type UsageEventKind,
+  type UsageResourceMetadata,
+  type UsageResourceMetadataValue,
 } from "takosumi-contract/billing";
 import type { TakosumiOperations } from "../../core/bootstrap.ts";
 import {
@@ -974,6 +975,28 @@ export async function handlePlatformCloudExtensionRouteRequest(
   ) => {
     await (await takosumiOperationsFor(env)).recordMeteredUsage(spaceId, input);
   },
+  usageAuthorizer: PlatformCloudExtensionUsageAuthorizer = async (
+    spaceId,
+    input,
+  ) => {
+    const operations = await takosumiOperationsFor(env);
+    const { billing } = await operations.getWorkspaceBilling(spaceId);
+    const availableUsdMicros = creditBalanceAvailableUsdMicros(
+      billing.balance,
+    );
+    const requiredUsdMicros = input.usdMicros ?? 0;
+    if (requiredUsdMicros > availableUsdMicros) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "metered usage spend failed: insufficient USD balance",
+        {
+          reason: "insufficient_credits",
+          workspaceId: spaceId,
+          usdMicros: requiredUsdMicros,
+        },
+      );
+    }
+  },
 ): Promise<Response> {
   const binding = platformCloudExtensionBinding(env, route.bindingName);
   if (!binding) return Response.json({ error: "not found" }, { status: 404 });
@@ -995,6 +1018,14 @@ export async function handlePlatformCloudExtensionRouteRequest(
     return platformCloudExtensionUsageFailure("usage_workspace_id_missing")
       .response;
   }
+  const usageAuthorization = await authorizePlatformCloudExtensionFallbackUsage(
+    authContext.request,
+    env,
+    route,
+    authContext.session,
+    usageAuthorizer,
+  );
+  if (!usageAuthorization.ok) return usageAuthorization.response;
   const upstreamResponse = await binding.fetch(authContext.request);
   return await responseForPlatformCloudExtensionClient(
     authContext.request,
@@ -1337,6 +1368,44 @@ export type PlatformCloudExtensionUsageRecorder = (
   input: RecordMeteredUsageInput,
 ) => Promise<void>;
 
+export type PlatformCloudExtensionUsageAuthorizer = (
+  spaceId: string,
+  input: RecordMeteredUsageInput,
+) => Promise<void>;
+
+async function authorizePlatformCloudExtensionFallbackUsage(
+  request: Request,
+  env: CloudflareWorkerEnv,
+  route: PlatformCloudExtensionRoute,
+  session: PlatformCloudExtensionSessionContext,
+  usageAuthorizer: PlatformCloudExtensionUsageAuthorizer,
+): Promise<
+  { readonly ok: true } | { readonly ok: false; readonly response: Response }
+> {
+  if (!fallbackPlatformCloudUsageMeter(request, route, session)) {
+    return { ok: true };
+  }
+  const priced = platformCloudExtensionPricedUsageInputs(
+    request,
+    new Response(null, { status: 204 }),
+    env,
+    route,
+    session,
+  );
+  if (!priced.ok) return priced;
+  for (const { spaceId, input } of priced.inputs) {
+    if ((input.usdMicros ?? 0) <= 0) continue;
+    try {
+      await usageAuthorizer(spaceId, input);
+    } catch (error) {
+      return platformCloudExtensionUsageFailure(
+        platformCloudExtensionUsageRecordFailureReason(error),
+      );
+    }
+  }
+  return { ok: true };
+}
+
 async function responseForPlatformCloudExtensionClient(
   request: Request,
   response: Response,
@@ -1421,13 +1490,48 @@ async function recordPlatformCloudExtensionUsage(
   { readonly ok: true } | { readonly ok: false; readonly response: Response }
 > {
   if (!response.ok) return { ok: true };
+  const priced = platformCloudExtensionPricedUsageInputs(
+    request,
+    response,
+    env,
+    route,
+    session,
+  );
+  if (!priced.ok) return priced;
+  for (const { spaceId, input } of priced.inputs) {
+    try {
+      await usageRecorder(spaceId, input);
+    } catch (error) {
+      return platformCloudExtensionUsageFailure(
+        platformCloudExtensionUsageRecordFailureReason(error),
+      );
+    }
+  }
+  return { ok: true };
+}
+
+function platformCloudExtensionPricedUsageInputs(
+  request: Request,
+  response: Response,
+  env: CloudflareWorkerEnv,
+  route: PlatformCloudExtensionRoute,
+  session: PlatformCloudExtensionSessionContext,
+):
+  | {
+      readonly ok: true;
+      readonly inputs: readonly {
+        readonly spaceId: string;
+        readonly input: RecordMeteredUsageInput;
+      }[];
+    }
+  | { readonly ok: false; readonly response: Response } {
   const usage = platformCloudExtensionUsageEnvelope(
     request,
     response,
     route,
     session,
   );
-  if (!usage) return { ok: true };
+  if (!usage) return { ok: true, inputs: [] };
   const { rawMeters, spaceId, periodStart, periodEnd } = usage;
   if (!spaceId) {
     return platformCloudExtensionUsageFailure("usage_workspace_id_missing");
@@ -1449,6 +1553,10 @@ async function recordPlatformCloudExtensionUsage(
   );
   if (!priceBook.ok) return platformCloudExtensionUsageFailure(priceBook.error);
 
+  const inputs: {
+    readonly spaceId: string;
+    readonly input: RecordMeteredUsageInput;
+  }[] = [];
   for (const [index, meter] of meters.value.entries()) {
     const kind = platformCloudUsageEventKind(meter.kind);
     if (!kind) {
@@ -1458,40 +1566,40 @@ async function recordPlatformCloudExtensionUsage(
     if (!usdMicros.ok) {
       return platformCloudExtensionUsageFailure(usdMicros.error);
     }
-    const input: RecordMeteredUsageInput = {
-      ...(meter.installationId ? { installationId: meter.installationId } : {}),
-      meterId: meter.meterId,
-      ...(meter.resourceFamily ? { resourceFamily: meter.resourceFamily } : {}),
-      ...(meter.resourceId ? { resourceId: meter.resourceId } : {}),
-      ...(meter.operation ? { operation: meter.operation } : {}),
-      ...(meter.resourceMetadata
-        ? { resourceMetadata: meter.resourceMetadata }
-        : {}),
-      kind,
-      quantity: meter.quantity,
-      usdMicros: usdMicros.value,
-      source: "resource_meter",
-      spendRequired: true,
-      idempotencyKey: [
-        "cloud-extension",
-        route.basePath,
-        spaceId,
-        periodStart,
-        periodEnd,
-        index,
-        meter.meterId,
-      ].join(":"),
-      createdAt: periodEnd,
-    };
-    try {
-      await usageRecorder(spaceId, input);
-    } catch (error) {
-      return platformCloudExtensionUsageFailure(
-        platformCloudExtensionUsageRecordFailureReason(error),
-      );
-    }
+    inputs.push({
+      spaceId,
+      input: {
+        ...(meter.installationId
+          ? { installationId: meter.installationId }
+          : {}),
+        meterId: meter.meterId,
+        ...(meter.resourceFamily
+          ? { resourceFamily: meter.resourceFamily }
+          : {}),
+        ...(meter.resourceId ? { resourceId: meter.resourceId } : {}),
+        ...(meter.operation ? { operation: meter.operation } : {}),
+        ...(meter.resourceMetadata
+          ? { resourceMetadata: meter.resourceMetadata }
+          : {}),
+        kind,
+        quantity: meter.quantity,
+        usdMicros: usdMicros.value,
+        source: "resource_meter",
+        spendRequired: true,
+        idempotencyKey: [
+          "cloud-extension",
+          route.basePath,
+          spaceId,
+          periodStart,
+          periodEnd,
+          index,
+          meter.meterId,
+        ].join(":"),
+        createdAt: periodEnd,
+      },
+    });
   }
-  return { ok: true };
+  return { ok: true, inputs };
 }
 
 interface PlatformCloudUsageEnvelope {

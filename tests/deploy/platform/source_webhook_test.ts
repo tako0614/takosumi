@@ -1354,6 +1354,7 @@ test("cloud extension fallback usage records successful extension calls without 
     async (spaceId, input) => {
       recorded.push({ spaceId, input });
     },
+    async () => {},
   );
 
   expect(response.status).toBe(201);
@@ -1467,6 +1468,7 @@ test("cloud extension usage spend failure fails closed", async () => {
     async () => {
       throw new Error("insufficient credits");
     },
+    async () => {},
   );
 
   expect(response.status).toBe(502);
@@ -1523,6 +1525,7 @@ test("cloud extension usage spend failure maps insufficient balance to payment r
         },
       );
     },
+    async () => {},
   );
 
   expect(response.status).toBe(402);
@@ -1530,6 +1533,72 @@ test("cloud extension usage spend failure maps insufficient balance to payment r
     error: "cloud_extension_insufficient_credits",
     reason: "insufficient_credits",
   });
+});
+
+test("cloud extension fallback usage authorizes spend before forwarding billable calls", async () => {
+  let forwarded = false;
+  let recorded = false;
+  const response = await handlePlatformCloudExtensionRouteRequest(
+    new Request(
+      "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/ts_acc/workers/scripts/api",
+      { method: "PUT" },
+    ),
+    {
+      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
+      TAKOSUMI_CLOUD_COMPAT: {
+        fetch: async () => {
+          forwarded = true;
+          return Response.json({ success: true }, { status: 201 });
+        },
+      },
+    } as never,
+    {
+      basePath: "/compat/cloudflare/client/v4",
+      bindingName: "TAKOSUMI_CLOUD_COMPAT",
+      fallbackUsage: [
+        {
+          pathTemplate: "/accounts/*/workers/scripts/:resourceId",
+          methods: ["PUT"],
+          meterIdPrefix: "cloudflare:workers_script:",
+          resourceFamily: "cloudflare.workers_script",
+          resourceIdPrefix: "script:",
+          resourceIdParam: "resourceId",
+          kind: "gateway_compute",
+          quantity: 1,
+          operationByMethod: { PUT: "deploy" },
+        },
+      ],
+    },
+    async () => ({
+      authenticated: true,
+      authKind: "session",
+      subject: "tsub_cloud",
+      spaceId: "space_cloud",
+      installationId: "inst_cloud",
+    }),
+    async () => {
+      recorded = true;
+    },
+    async () => {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "metered usage spend failed: insufficient USD balance",
+        {
+          reason: "insufficient_credits",
+          workspaceId: "space_cloud",
+          usdMicros: 1_000,
+        },
+      );
+    },
+  );
+
+  expect(response.status).toBe(402);
+  expect(await response.json()).toEqual({
+    error: "cloud_extension_insufficient_credits",
+    reason: "insufficient_credits",
+  });
+  expect(forwarded).toBe(false);
+  expect(recorded).toBe(false);
 });
 
 test("cloud extension usage metering fails closed for unknown meters", async () => {
