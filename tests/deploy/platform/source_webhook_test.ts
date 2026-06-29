@@ -1007,12 +1007,13 @@ test("platformCloudExtensionRoutes merges extra fallback usage descriptors", () 
           bindingName: "TAKOSUMI_CLOUD_COMPAT",
           fallbackUsage: [
             {
-              pathTemplate: "/accounts/*/r2/buckets/:resourceId/objects/**",
+              pathTemplate:
+                "/accounts/*/storage/kv/namespaces/:resourceId/values/**",
               methods: ["PUT"],
-              meterIdPrefix: "cloudflare:r2:",
+              meterIdPrefix: "cloudflare:kv:",
               kind: "gateway_compute",
               quantity: 1,
-              operationByMethod: { PUT: "object_write" },
+              operationByMethod: { PUT: "value_write" },
             },
           ],
         },
@@ -1031,12 +1032,13 @@ test("platformCloudExtensionRoutes merges extra fallback usage descriptors", () 
           quantity: 1,
         },
         {
-          pathTemplate: "/accounts/*/r2/buckets/:resourceId/objects/**",
+          pathTemplate:
+            "/accounts/*/storage/kv/namespaces/:resourceId/values/**",
           methods: ["PUT"],
-          meterIdPrefix: "cloudflare:r2:",
+          meterIdPrefix: "cloudflare:kv:",
           kind: "gateway_compute",
           quantity: 1,
-          operationByMethod: { PUT: "object_write" },
+          operationByMethod: { PUT: "value_write" },
         },
       ],
     },
@@ -1574,7 +1576,7 @@ test("cloud extension fallback usage records successful extension calls without 
   ]);
 });
 
-test("cloud extension fallback usage can meter nested data-plane object keys", async () => {
+test("cloud extension fallback usage can meter nested data-plane value keys", async () => {
   const recorded: {
     readonly spaceId: string;
     readonly input: unknown;
@@ -1582,7 +1584,7 @@ test("cloud extension fallback usage can meter nested data-plane object keys", a
   let forwarded = false;
   const response = await handlePlatformCloudExtensionRouteRequest(
     new Request(
-      "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/ts_acc/r2/buckets/user-bucket/objects/folder/logo.png",
+      "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/ts_acc/storage/kv/namespaces/user-kv/values/folder/session",
       { method: "PUT" },
     ),
     {
@@ -1599,15 +1601,16 @@ test("cloud extension fallback usage can meter nested data-plane object keys", a
       bindingName: "TAKOSUMI_CLOUD_COMPAT",
       fallbackUsage: [
         {
-          pathTemplate: "/accounts/*/r2/buckets/:resourceId/objects/**",
+          pathTemplate:
+            "/accounts/*/storage/kv/namespaces/:resourceId/values/**",
           methods: ["PUT"],
-          meterIdPrefix: "cloudflare:r2:",
-          resourceFamily: "cloudflare.r2",
-          resourceIdPrefix: "r2:",
+          meterIdPrefix: "cloudflare:kv:",
+          resourceFamily: "cloudflare.kv",
+          resourceIdPrefix: "kv:",
           resourceIdParam: "resourceId",
           kind: "gateway_compute",
           quantity: 1,
-          operationByMethod: { PUT: "object_write" },
+          operationByMethod: { PUT: "value_write" },
         },
       ],
     },
@@ -1632,10 +1635,10 @@ test("cloud extension fallback usage can meter nested data-plane object keys", a
       spaceId: "space_cloud",
       input: expect.objectContaining({
         installationId: "inst_cloud",
-        meterId: "cloudflare:r2:object_write",
-        resourceFamily: "cloudflare.r2",
-        resourceId: "r2:user-bucket",
-        operation: "object_write",
+        meterId: "cloudflare:kv:value_write",
+        resourceFamily: "cloudflare.kv",
+        resourceId: "kv:user-kv",
+        operation: "value_write",
         kind: "gateway_compute",
         quantity: 1,
         usdMicros: 500,
