@@ -50,11 +50,11 @@ test("requireAssets:false allows an API-only deploy without ASSETS", () => {
   expect(checkPlatformBindings(env).missing).toEqual(["ASSETS"]);
 });
 
-test("Cloud extension bindings are not part of OSS/operator readiness", () => {
-  // The OSS readiness check never names a Cloud-feature binding: cloud extension
-  // service bindings are config-driven (TAKOSUMI_CLOUD_EXTENSIONS) and declared
-  // by the closed Takosumi Cloud delta, so a fully-bound OSS env passes without
-  // any TAKOSUMI_CLOUD_* extension binding present.
+test("Cloud extension handlers are not part of OSS/operator readiness", () => {
+  // The OSS readiness check never names a Cloud-feature handler: cloud extension
+  // handler keys are config-driven (TAKOSUMI_CLOUD_EXTENSIONS) and resolved by
+  // the closed Takosumi Cloud wrapper, so a fully-bound OSS env passes without
+  // any TAKOSUMI_CLOUD_* extension handler present.
   const env = fullEnv();
   expect("TAKOSUMI_CLOUD_AI_GATEWAY" in env).toBe(false);
   expect(checkPlatformBindings(env).ok).toBe(true);

@@ -7,10 +7,10 @@ describes is realized: Takosumi OSS is the existing-provider control plane (the
 for-Operators edition is the multi-tenant operator build of that same OSS), and
 the compatibility gateways, managed cloud resources, AI Gateway, and enforced
 official billing live only in the closed `takosumi-cloud` package, which
-composes on top of OSS through two additive seams (an HTTP route proxy and the
-billing/quota ports). It supersedes older plans that treated compatibility
-gateways, managed cloud resources, or Takosumi-provided provider endpoints as
-part of the OSS control plane.
+composes on top of OSS through two additive seams (in-process HTTP route
+dispatch and the billing/quota ports). It supersedes older plans that treated
+compatibility gateways, managed cloud resources, or Takosumi-provided provider
+endpoints as part of the OSS control plane.
 
 ## 0. Definition
 
@@ -901,7 +901,7 @@ Takosumi Cloud Workers are the user-facing Cloud product: Worker-compatible app
 hosting with managed bindings, USD credits, and OpenTofu deploys. The
 Cloudflare Compatibility Gateway is Takosumi Cloud-only and closed. It lives in
 the `takosumi-cloud` package and is reached only through the additive
-`cloud_extensions` route proxy; OSS exposes no compatibility gateway, no
+`cloud_extensions` route dispatch; OSS exposes no compatibility gateway, no
 provider `base_url` bridge, and no run-key minting routes.
 
 Purpose:
@@ -1082,7 +1082,8 @@ This connection type is not part of OSS Takosumi.
 
 Takosumi AI Gateway is also Takosumi Cloud-only and closed. It physically lives
 in the `takosumi-cloud` package (`gateway/ai-gateway/`) and is served only when
-its `cloud_extensions` route is bound; OSS does not ship it. It is an
+the official Cloud wrapper mounts its handler into the `cloud_extensions` seam;
+OSS does not ship it. It is an
 OpenAI-compatible runtime API for deployed Capsules, not an OpenTofu provider
 compatibility layer and not an OSS control-plane feature.
 
@@ -1255,8 +1256,8 @@ official resource pools
 ### 15.2 Closed Cloud repository
 
 The closed `takosumi-cloud` package exists and composes on top of the OSS engine
-through the one-way Cloud->OSS seams in §3.3 (additive route proxy + billing/quota
-ports), depending only on the OSS composition root and the public
+through the one-way Cloud->OSS seams in §3.3 (additive route dispatch +
+billing/quota ports), depending only on the OSS composition root and the public
 `takosumi-contract`. Its full target shape is:
 
 ```text

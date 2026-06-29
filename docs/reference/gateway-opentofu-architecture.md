@@ -47,7 +47,7 @@ must live in the closed Cloud implementation, not in the OSS repo.
 
 The OSS platform worker may reserve public route seams through the Cloud
 extension route registry. A registry entry contains only the route base path and
-an abstract fetch-handler key (`bindingName`); the provider-compatible behavior
+an abstract fetch-handler key (`handlerKey`); the provider-compatible behavior
 itself stays in the closed Cloud implementation.
 
 For official staging/production `app.takosumi.com`, the closed

@@ -816,7 +816,7 @@ export async function handlePlatformCloudUsageRecordRequest(
     env,
     {
       basePath: INTERNAL_PLATFORM_CLOUD_USAGE_RECORD_PATH,
-      bindingName: "TAKOSUMI_INTERNAL_CLOUD_USAGE_RECORD",
+      handlerKey: "TAKOSUMI_INTERNAL_CLOUD_USAGE_RECORD",
     },
     {
       authenticated: true,
@@ -1022,7 +1022,7 @@ export function platformCloudExtensionCatalog(
   ).map((route) => ({
     basePath: route.basePath,
     configured:
-      platformCloudExtensionBinding(env, route.bindingName) !== undefined,
+      platformCloudExtensionHandler(env, route.handlerKey) !== undefined,
     ...(route.requiredScopes ? { requiredScopes: route.requiredScopes } : {}),
   }));
   const configured = extensions.filter(
@@ -1112,8 +1112,8 @@ export async function handlePlatformCloudExtensionRouteRequest(
     }
   },
 ): Promise<Response> {
-  const binding = platformCloudExtensionBinding(env, route.bindingName);
-  if (!binding) return Response.json({ error: "not found" }, { status: 404 });
+  const handler = platformCloudExtensionHandler(env, route.handlerKey);
+  if (!handler) return Response.json({ error: "not found" }, { status: 404 });
   const authContext = await platformCloudExtensionAuthContext(
     request,
     env,
@@ -1141,7 +1141,7 @@ export async function handlePlatformCloudExtensionRouteRequest(
     usageAuthorizer,
   );
   if (!usagePrecharge.ok) return usagePrecharge.response;
-  const upstreamResponse = await binding.fetch(authContext.request);
+  const upstreamResponse = await handler.fetch(authContext.request);
   return await responseForPlatformCloudExtensionClient(
     authContext.request,
     upstreamResponse,
@@ -2520,23 +2520,23 @@ function safeCloudExtensionHeaderValue(value: string): string {
   return value.replace(/[\u0000-\u001f\u007f]/gu, "");
 }
 
-interface PlatformCloudExtensionBinding {
+interface PlatformCloudExtensionHandler {
   fetch(request: Request): Response | Promise<Response>;
 }
 
-function platformCloudExtensionBinding(
+function platformCloudExtensionHandler(
   env: CloudflareWorkerEnv,
-  bindingName: string,
-): PlatformCloudExtensionBinding | undefined {
-  const binding = (env as Record<string, unknown>)[bindingName];
+  handlerKey: string,
+): PlatformCloudExtensionHandler | undefined {
+  const handler = (env as Record<string, unknown>)[handlerKey];
   if (
-    !binding ||
-    typeof binding !== "object" ||
-    typeof (binding as { fetch?: unknown }).fetch !== "function"
+    !handler ||
+    typeof handler !== "object" ||
+    typeof (handler as { fetch?: unknown }).fetch !== "function"
   ) {
     return undefined;
   }
-  return binding as PlatformCloudExtensionBinding;
+  return handler as PlatformCloudExtensionHandler;
 }
 
 const HARDENING_GATE_REF_PREFIX = "git+";

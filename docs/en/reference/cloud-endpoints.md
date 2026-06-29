@@ -54,7 +54,7 @@ mounts Cloud-only fetch handlers in-process into the OSS platform worker's
 `cloud_extensions` seam. AI Gateway, the Cloudflare-compatible import endpoint,
 Cloud usage, and Cloud Edge Runtime live in closed handlers; OSS code may
 contain catalog metadata, auth forwarding, dashboard clients, and smoke tests.
-`bindingName` is the handler key consumed by the OSS seam and resolved
+`handlerKey` is the logical handler key consumed by the OSS seam and resolved
 in-process by the official Cloud wrapper. Managed resource backends are
 Takosumi Cloud closed modules.
 
