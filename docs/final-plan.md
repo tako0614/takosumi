@@ -931,12 +931,15 @@ For routes that can create billable work before usage headers are emitted
 (create, deploy, delete, runtime execution, or other mutating operations), the
 Cloud extension descriptor must define a generic `fallbackUsage` rule. Matching
 `fallbackUsage` requests are rejected before the bound Cloud service is called
-unless the platform has verified Workspace billing context. Read-only
-management inventory such as resource lists and status/model catalogs is not a
-fallback-billed operation by default; it must remain usable for the dashboard
-without spending user credit. Client-supplied `x-takosumi-cloud-billing-*`
-headers are stripped first and re-created only from the verified session/token
-context or from an account-plane access check.
+unless the platform has verified Workspace billing context and can preauthorize
+the priced fallback operation against that Workspace's available USD balance.
+The actual usage event is still recorded after a successful response, but an
+obvious insufficient-credit request must never reach the bound Cloud service.
+Read-only management inventory such as resource lists and status/model catalogs
+is not a fallback-billed operation by default; it must remain usable for the
+dashboard without spending user credit. Client-supplied
+`x-takosumi-cloud-billing-*` headers are stripped first and re-created only from
+the verified session/token context or from an account-plane access check.
 
 Initial scope:
 
