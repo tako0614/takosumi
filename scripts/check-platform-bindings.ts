@@ -33,9 +33,10 @@ function main(): void {
       "operator wrangler/Cloudflare credentials and wire the realized ids in the\n" +
       "operator-private config. After deploy, GET /readyz on the worker fails\n" +
       "with the named missing required bindings until every one is present.\n" +
-      "Cloud extension service bindings are NOT part of OSS/operator readiness;\n" +
-      "the closed Takosumi Cloud delta declares them via TAKOSUMI_CLOUD_EXTENSIONS\n" +
-      "plus the named service bindings in its realized operator-private config.",
+      "Cloud extension handlers are NOT part of OSS/operator readiness. In\n" +
+      "official Takosumi Cloud, TAKOSUMI_CLOUD_EXTENSIONS names logical handler\n" +
+      "keys that takosumi-cloud/platform/worker.ts resolves in-process; do not\n" +
+      "add separate [[services]] bindings for Cloud-only handlers.",
   );
 }
 

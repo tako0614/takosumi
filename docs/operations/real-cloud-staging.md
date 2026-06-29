@@ -8,7 +8,10 @@ control-plane loop.
 
 ## Staging cell contract
 
-Use a separate Cloudflare Worker and separate durable resources:
+Use a separate staging platform Worker from production, with separate durable
+resources. Do not split Cloud-only handlers into separate extension Workers;
+staging uses the same `takosumi-cloud/platform/worker.ts` wrapper model as
+production.
 
 | item                   | staging value                                                                                                       |
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------- |
