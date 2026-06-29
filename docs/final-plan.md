@@ -1868,10 +1868,14 @@ destroy/deprovision proof
 
 For storage-backed managed resources, operation accounting is not enough.
 `gateway_storage_gb_hour` must be emitted from measured provider inventory with
-a real usage period before storage is claimed usage-complete. Containers,
-Durable Objects, and other managed resources listed in the price book are not
-supported customer surfaces until their Cloud-only routes, usage accounting,
-quota/fail-closed behavior, and destroy proof pass the same checklist.
+a real usage period before storage is claimed usage-complete. The closed
+`takosumi-cloud` package owns the common `storageInventoryUsageReports()` helper:
+provider inventory collectors pass average stored bytes and the measured period,
+and the helper emits per-Workspace `gateway_storage_gb_hour` usage headers for
+the platform price book / usage ledger path. Containers, Durable Objects, and
+other managed resources listed in the price book are not supported customer
+surfaces until their Cloud-only routes, usage accounting, quota/fail-closed
+behavior, and destroy proof pass the same checklist.
 
 ## 24. Final Fixed Policy
 

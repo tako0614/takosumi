@@ -196,6 +196,16 @@ public usage metadata では拒否します。例:
 x-takosumi-cloud-usage-meters: [{"meterId":"cloudflare:workers_script:request","resourceFamily":"cloudflare.workers_script","resourceId":"script:api","operation":"request","kind":"gateway_compute","quantity":1,"installationId":"inst_xxx"}]
 ```
 
+storage-backed resource の在庫計測では、closed `takosumi-cloud` の
+`storageInventoryUsageReports()` helper が provider inventory collector の
+平均 bytes と実 period から GB-hour を計算し、同じ header 形式で報告します。
+
+```http
+x-takosumi-cloud-usage-period-start: 2026-06-26T13:00:00.000Z
+x-takosumi-cloud-usage-period-end: 2026-06-26T14:00:00.000Z
+x-takosumi-cloud-usage-meters: [{"meterId":"cloudflare:r2:storage_gb_hour","resourceFamily":"cloudflare.r2","resourceId":"bucket:assets","operation":"storage.inventory","kind":"gateway_storage_gb_hour","quantity":0.5,"installationId":"inst_xxx"}]
+```
+
 この ledger に入った使用量を、billing reconciliation / Stripe invoice 側の
 正本入力にします。Cloudflare AI Gateway / Workers AI の上流請求は operator の
 Cloudflare account に来ますが、それだけでは Takosumi ユーザーへの請求完了を

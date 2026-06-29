@@ -201,6 +201,17 @@ smoke coverage for them. Internal backend aliases are rejected in `meterId`,
 x-takosumi-cloud-usage-meters: [{"meterId":"cloudflare:workers_script:request","resourceFamily":"cloudflare.workers_script","resourceId":"script:api","operation":"request","kind":"gateway_compute","quantity":1,"installationId":"inst_xxx"}]
 ```
 
+For storage-backed resource inventory, the closed `takosumi-cloud`
+`storageInventoryUsageReports()` helper converts provider inventory collector
+average bytes plus a real period into GB-hour usage and reports it with the same
+header shape.
+
+```http
+x-takosumi-cloud-usage-period-start: 2026-06-26T13:00:00.000Z
+x-takosumi-cloud-usage-period-end: 2026-06-26T14:00:00.000Z
+x-takosumi-cloud-usage-meters: [{"meterId":"cloudflare:r2:storage_gb_hour","resourceFamily":"cloudflare.r2","resourceId":"bucket:assets","operation":"storage.inventory","kind":"gateway_storage_gb_hour","quantity":0.5,"installationId":"inst_xxx"}]
+```
+
 This ledger is the source input for billing reconciliation and Stripe invoices.
 Upstream Cloudflare AI Gateway / Workers AI charges still land on the
 operator's Cloudflare account; that alone does not mean the Takosumi customer
