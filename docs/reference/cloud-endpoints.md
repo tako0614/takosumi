@@ -204,10 +204,12 @@ R2 は bucket lifecycle と storage inventory を課金対象にし、object dat
 dedicated managed backend / S3 signing path が入るまで Cloudflare REST compatibility
 worker では開きません。未対応 managed subpath は 501 で閉じ、Cloudflare upstream へ
 素通しして無料利用できる状態にはしません。
-Containers / Durable Objects などの追加 family は、closed Gateway backend
-が lifecycle endpoint と usage smoke を通した後に catalog / 画面 / billing price
-へ追加します。内部 backend alias は `meterId`、`resourceFamily`、Stripe meter、
-public usage metadata では拒否します。例:
+Containers / Durable Objects などの追加 family は、closed backend が発生させた
+usage を `/cloud/usage/resource-meters` で課金 ledger に流せます。ただし、
+customer-facing managed resource として catalog / 画面に出すには、別途 lifecycle
+endpoint、destroy / deprovision proof、runtime guard の smoke が必要です。内部
+backend alias は `meterId`、`resourceFamily`、Stripe meter、public usage metadata
+では拒否します。例:
 
 ```http
 x-takosumi-cloud-usage-meters: [{"meterId":"cloudflare:workers_script:request","resourceFamily":"cloudflare.workers_script","resourceId":"script:api","operation":"request","kind":"gateway_compute","quantity":1,"installationId":"inst_xxx"}]
@@ -248,6 +250,51 @@ POST /cloud/usage/storage-inventory
 x-takosumi-cloud-usage-period-start: 2026-06-26T13:00:00.000Z
 x-takosumi-cloud-usage-period-end: 2026-06-26T14:00:00.000Z
 x-takosumi-cloud-usage-meters: [{"meterId":"cloudflare:r2:storage_gb_hour","resourceFamily":"cloudflare.r2","resourceId":"bucket:assets","operation":"storage.inventory","kind":"gateway_storage_gb_hour","quantity":0.5,"installationId":"inst_xxx"}]
+```
+
+managed resource backend が compute / operation 系の使用量を実測できる場合は、
+同じ `/cloud/usage` extension の `resource-meters` endpoint に public meter を送ります。
+現在受け付ける family は `cloudflare.containers` と
+`cloudflare.durable_objects` だけです。endpoint は verified billing Workspace
+context を必須にし、body の `workspaceId` / `installationId` と一致しない usage を
+拒否します。`usdMicros` / `credits` は request body に書かせず、platform worker の
+`TAKOSUMI_CLOUD_USAGE_PRICE_BOOK` が価格を決めます。
+
+```http
+POST /cloud/usage/resource-meters
+```
+
+```json
+{
+  "workspaceId": "space_xxx",
+  "installationId": "inst_xxx",
+  "periodStart": "2026-06-26T13:00:00.000Z",
+  "periodEnd": "2026-06-26T13:01:00.000Z",
+  "meters": [
+    {
+      "meterId": "cloudflare:containers:vcpu_second",
+      "resourceFamily": "cloudflare.containers",
+      "resourceId": "container:api",
+      "operation": "vcpu_second",
+      "kind": "gateway_compute",
+      "quantity": 12.5
+    },
+    {
+      "meterId": "cloudflare:durable_objects:operation",
+      "resourceFamily": "cloudflare.durable_objects",
+      "resourceId": "durable_object:session",
+      "operation": "operation",
+      "kind": "gateway_compute",
+      "quantity": 3
+    }
+  ]
+}
+```
+
+```http
+x-takosumi-cloud-usage-period-start: 2026-06-26T13:00:00.000Z
+x-takosumi-cloud-usage-period-end: 2026-06-26T13:01:00.000Z
+x-takosumi-cloud-usage-meters: [{"meterId":"cloudflare:containers:vcpu_second","resourceFamily":"cloudflare.containers","resourceId":"container:api","operation":"vcpu_second","kind":"gateway_compute","quantity":12.5,"installationId":"inst_xxx"}]
 ```
 
 この ledger に入った使用量を、billing reconciliation / Stripe invoice 側の

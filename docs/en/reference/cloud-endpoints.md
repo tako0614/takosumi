@@ -201,11 +201,12 @@ exist. R2 bucket lifecycle and storage inventory are metered, but R2 object
 data-plane access is not opened through the Cloudflare REST compatibility
 worker until a dedicated managed backend / S3-signing path exists. Unsupported
 managed subpaths still return 501 instead of proxying to Cloudflare for free.
-Additional families such as Containers and Durable Objects are added to the
-catalog, UI, and billing prices only after the closed Gateway backend proves
-lifecycle endpoints and usage smoke coverage for them. Internal backend aliases
-are rejected in `meterId`, `resourceFamily`, Stripe meters, and public usage
-metadata. Example:
+Additional families such as Containers and Durable Objects can report
+backend-measured usage through `/cloud/usage/resource-meters`. That billing
+path does not by itself make the managed resource generally available: catalog
+and UI exposure still require lifecycle endpoints, destroy / deprovision proof,
+and runtime guard smoke evidence. Internal backend aliases are rejected in
+`meterId`, `resourceFamily`, Stripe meters, and public usage metadata. Example:
 
 ```http
 x-takosumi-cloud-usage-meters: [{"meterId":"cloudflare:workers_script:request","resourceFamily":"cloudflare.workers_script","resourceId":"script:api","operation":"request","kind":"gateway_compute","quantity":1,"installationId":"inst_xxx"}]
@@ -247,6 +248,51 @@ POST /cloud/usage/storage-inventory
 x-takosumi-cloud-usage-period-start: 2026-06-26T13:00:00.000Z
 x-takosumi-cloud-usage-period-end: 2026-06-26T14:00:00.000Z
 x-takosumi-cloud-usage-meters: [{"meterId":"cloudflare:r2:storage_gb_hour","resourceFamily":"cloudflare.r2","resourceId":"bucket:assets","operation":"storage.inventory","kind":"gateway_storage_gb_hour","quantity":0.5,"installationId":"inst_xxx"}]
+```
+
+When a managed resource backend measures compute or operation usage, it submits
+public meters to the `resource-meters` endpoint under the same `/cloud/usage`
+extension. The endpoint currently accepts only `cloudflare.containers` and
+`cloudflare.durable_objects`. A verified billing Workspace context is required;
+request `workspaceId` / `installationId` values that do not match the verified
+context are rejected. Callers must not send `usdMicros` or `credits`; the
+platform worker prices each meter through `TAKOSUMI_CLOUD_USAGE_PRICE_BOOK`.
+
+```http
+POST /cloud/usage/resource-meters
+```
+
+```json
+{
+  "workspaceId": "space_xxx",
+  "installationId": "inst_xxx",
+  "periodStart": "2026-06-26T13:00:00.000Z",
+  "periodEnd": "2026-06-26T13:01:00.000Z",
+  "meters": [
+    {
+      "meterId": "cloudflare:containers:vcpu_second",
+      "resourceFamily": "cloudflare.containers",
+      "resourceId": "container:api",
+      "operation": "vcpu_second",
+      "kind": "gateway_compute",
+      "quantity": 12.5
+    },
+    {
+      "meterId": "cloudflare:durable_objects:operation",
+      "resourceFamily": "cloudflare.durable_objects",
+      "resourceId": "durable_object:session",
+      "operation": "operation",
+      "kind": "gateway_compute",
+      "quantity": 3
+    }
+  ]
+}
+```
+
+```http
+x-takosumi-cloud-usage-period-start: 2026-06-26T13:00:00.000Z
+x-takosumi-cloud-usage-period-end: 2026-06-26T13:01:00.000Z
+x-takosumi-cloud-usage-meters: [{"meterId":"cloudflare:containers:vcpu_second","resourceFamily":"cloudflare.containers","resourceId":"container:api","operation":"vcpu_second","kind":"gateway_compute","quantity":12.5,"installationId":"inst_xxx"}]
 ```
 
 This ledger is the source input for billing reconciliation and Stripe invoices.
