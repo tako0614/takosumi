@@ -33,9 +33,9 @@ func newLifecycle(t *testing.T, del string) types.Object {
 	return obj
 }
 
-func TestObjectStoreSchema(t *testing.T) {
+func TestObjectBucketSchema(t *testing.T) {
 	ctx := context.Background()
-	r := NewObjectStoreResource()
+	r := NewObjectBucketResource()
 
 	var resp fwresource.SchemaResponse
 	r.Schema(ctx, fwresource.SchemaRequest{}, &resp)
@@ -53,19 +53,19 @@ func TestObjectStoreSchema(t *testing.T) {
 	}
 }
 
-func TestObjectStoreMetadataTypeName(t *testing.T) {
+func TestObjectBucketMetadataTypeName(t *testing.T) {
 	ctx := context.Background()
-	r := NewObjectStoreResource()
+	r := NewObjectBucketResource()
 	var resp fwresource.MetadataResponse
 	r.Metadata(ctx, fwresource.MetadataRequest{ProviderTypeName: "takosumi"}, &resp)
-	if resp.TypeName != "takosumi_object_store" {
+	if resp.TypeName != "takosumi_object_bucket" {
 		t.Fatalf("unexpected type name %q", resp.TypeName)
 	}
 }
 
 func TestToResource_BuildsEnvelope(t *testing.T) {
 	ctx := context.Background()
-	m := objectStoreModel{
+	m := objectBucketModel{
 		Name:            types.StringValue("assets"),
 		Interfaces:      newInterfacesSet(t, "s3_api", "signed_url"),
 		LifecyclePolicy: newLifecycle(t, "retain"),
@@ -79,7 +79,7 @@ func TestToResource_BuildsEnvelope(t *testing.T) {
 	if space != "prod" {
 		t.Fatalf("expected default space prod, got %q", space)
 	}
-	if res.APIVersion != client.APIVersion || res.Kind != client.KindObjectStore {
+	if res.APIVersion != client.APIVersion || res.Kind != client.KindObjectBucket {
 		t.Fatalf("unexpected envelope head %#v", res)
 	}
 	if res.Metadata.ManagedBy != client.ManagedByOpenTofu {
@@ -103,7 +103,7 @@ func TestToResource_BuildsEnvelope(t *testing.T) {
 
 func TestToResource_ResourceSpaceOverridesDefault(t *testing.T) {
 	ctx := context.Background()
-	m := objectStoreModel{
+	m := objectBucketModel{
 		Name:            types.StringValue("assets"),
 		Interfaces:      newInterfacesSet(t, "s3_api"),
 		LifecyclePolicy: types.ObjectNull(lifecyclePolicyAttrTypes),
@@ -123,7 +123,7 @@ func TestToResource_ResourceSpaceOverridesDefault(t *testing.T) {
 
 func TestToResource_MissingSpaceErrors(t *testing.T) {
 	ctx := context.Background()
-	m := objectStoreModel{
+	m := objectBucketModel{
 		Name:            types.StringValue("assets"),
 		Interfaces:      newInterfacesSet(t, "s3_api"),
 		LifecyclePolicy: types.ObjectNull(lifecyclePolicyAttrTypes),
@@ -137,7 +137,7 @@ func TestToResource_MissingSpaceErrors(t *testing.T) {
 
 func TestApplyStatus_MapsResolutionAndOutputs(t *testing.T) {
 	ctx := context.Background()
-	m := objectStoreModel{Name: types.StringValue("assets")}
+	m := objectBucketModel{Name: types.StringValue("assets")}
 	res := &client.Resource{
 		Metadata: client.Metadata{Name: "assets", Space: "prod"},
 		Status: &client.Status{
@@ -176,14 +176,14 @@ func TestApplyStatus_MapsResolutionAndOutputs(t *testing.T) {
 		t.Errorf("expected numeric output stringified, got %#v", outputs)
 	}
 	// id synthesized when server returns none.
-	if m.ID.ValueString() != "tkrn:prod:ObjectStore:assets" {
+	if m.ID.ValueString() != "tkrn:prod:ObjectBucket:assets" {
 		t.Errorf("unexpected synthesized id %q", m.ID.ValueString())
 	}
 }
 
 func TestApplyStatus_ServerProvidedID(t *testing.T) {
 	ctx := context.Background()
-	m := objectStoreModel{Name: types.StringValue("assets")}
+	m := objectBucketModel{Name: types.StringValue("assets")}
 	res := &client.Resource{ID: "srv-id-123", Status: &client.Status{}}
 	if diags := applyStatus(ctx, res, "prod", &m); diags.HasError() {
 		t.Fatalf("diagnostics: %v", diags)
@@ -195,7 +195,7 @@ func TestApplyStatus_ServerProvidedID(t *testing.T) {
 
 func TestApplyStatus_NilStatusIsKnown(t *testing.T) {
 	ctx := context.Background()
-	m := objectStoreModel{Name: types.StringValue("assets")}
+	m := objectBucketModel{Name: types.StringValue("assets")}
 	res := &client.Resource{Metadata: client.Metadata{Name: "assets"}}
 	if diags := applyStatus(ctx, res, "prod", &m); diags.HasError() {
 		t.Fatalf("diagnostics: %v", diags)
@@ -210,7 +210,7 @@ func TestApplyStatus_NilStatusIsKnown(t *testing.T) {
 
 func TestRefreshSpec_RoundTripsServerSpec(t *testing.T) {
 	ctx := context.Background()
-	m := objectStoreModel{}
+	m := objectBucketModel{}
 	res := &client.Resource{
 		Metadata: client.Metadata{Name: "assets", Space: "prod"},
 		Spec: map[string]any{
@@ -239,7 +239,7 @@ func TestRefreshSpec_RoundTripsServerSpec(t *testing.T) {
 
 func TestRefreshSpec_NoLifecycleBecomesNull(t *testing.T) {
 	ctx := context.Background()
-	m := objectStoreModel{LifecyclePolicy: newLifecycle(t, "retain")}
+	m := objectBucketModel{LifecyclePolicy: newLifecycle(t, "retain")}
 	res := &client.Resource{
 		Metadata: client.Metadata{Name: "assets", Space: "prod"},
 		Spec: map[string]any{
@@ -289,7 +289,7 @@ func TestStringOneOfValidator(t *testing.T) {
 
 func TestSetStringsOneOfValidator(t *testing.T) {
 	ctx := context.Background()
-	v := SetStringsOneOf(1, objectStoreInterfaces...)
+	v := SetStringsOneOf(1, objectBucketInterfaces...)
 
 	t.Run("valid", func(t *testing.T) {
 		set, _ := types.SetValueFrom(ctx, types.StringType, []string{"s3_api", "signed_url"})

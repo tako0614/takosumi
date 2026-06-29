@@ -6,9 +6,10 @@
 // and biases which Target the Resolver may pick.
 
 import { TAKOSUMI_API_VERSION } from "./capabilities.ts";
+import type { JsonObject } from "./types.ts";
 
-/** Target backend types, verbatim from `docs/final-plan.md` §7.1. */
-export type TargetType =
+/** Well-known Target backend types. Operators may add plugin-defined tokens. */
+export type KnownTargetType =
   | "aws"
   | "cloudflare"
   | "gcp"
@@ -22,7 +23,10 @@ export type TargetType =
   | "ai_provider"
   | "opentofu";
 
-export const TARGET_TYPES: readonly TargetType[] = [
+/** Target backend type token. Not a closed enum; plugin-defined tokens are allowed. */
+export type TargetType = KnownTargetType | (string & {});
+
+export const TARGET_TYPES: readonly KnownTargetType[] = [
   "aws",
   "cloudflare",
   "gcp",
@@ -91,16 +95,17 @@ export interface TargetPoolEntry {
 }
 
 export type TargetCapabilityLevel =
-  | "native"
-  | "shim"
-  | "emulated"
-  | "unsupported";
+  "native" | "shim" | "emulated" | "unsupported";
 
 export interface TargetPoolImplementation {
   readonly shape: string;
   readonly implementation: string;
   readonly interfaces: Readonly<Record<string, TargetCapabilityLevel>>;
   readonly nativeResourceType?: string;
+  /** Optional Vite-style plugin id that handles this implementation. */
+  readonly plugin?: string;
+  /** Plugin-local configuration. Secrets must stay in Credential/ProviderConnection. */
+  readonly options?: JsonObject;
 }
 
 export interface TargetPoolSpec {

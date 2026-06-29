@@ -11,7 +11,7 @@ import {
   isProjectionAllowedForMaterialKind,
   isProjectionFamilyName,
   isSafeDefaultAccessMode,
-  type ObjectStoreMaterial,
+  type ObjectStorageMaterial,
   type OfficialMaterialByKind,
   validateOfficialMaterial,
 } from "../../contract/catalog.ts";
@@ -102,7 +102,7 @@ test("catalog accepts valid official material samples", () => {
     [],
   );
 
-  const bucket: ObjectStoreMaterial = {
+  const bucket: ObjectStorageMaterial = {
     bucket: "assets",
     endpoint: "https://s3.example.test",
     accessKeyIdRef: { secretRef: "secret://bucket/access-key-id" },

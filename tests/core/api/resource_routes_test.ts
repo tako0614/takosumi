@@ -44,9 +44,9 @@ async function buildApp() {
 
 const JSON_HEADERS = { "content-type": "application/json" };
 
-test("PUT /v1/resources/ObjectStore/:name applies and returns id + resolution", async () => {
+test("PUT /v1/resources/ObjectBucket/:name applies and returns id + resolution", async () => {
   const { app } = await buildApp();
-  const res = await app.request("/v1/resources/ObjectStore/assets", {
+  const res = await app.request("/v1/resources/ObjectBucket/assets", {
     method: "PUT",
     headers: JSON_HEADERS,
     body: JSON.stringify({
@@ -56,32 +56,29 @@ test("PUT /v1/resources/ObjectStore/:name applies and returns id + resolution", 
   });
   expect(res.status).toBe(200);
   const body = await res.json();
-  expect(body.id).toBe("tkrn:space_1:ObjectStore:assets");
+  expect(body.id).toBe("tkrn:space_1:ObjectBucket:assets");
   expect(body.status.resolution.selectedImplementation).toBe("cloudflare_r2");
   expect(body.status.resolution.target).toBe("cloudflare-main");
   expect(body.status.phase).toBe("Ready");
 });
 
-test("PUT /v1/resources/HttpService/:name applies a first-class service shape", async () => {
+test("PUT /v1/resources/EdgeWorker/:name applies a first-class Worker shape", async () => {
   const { app } = await buildApp();
-  const res = await app.request("/v1/resources/HttpService/api", {
+  const res = await app.request("/v1/resources/EdgeWorker/api", {
     method: "PUT",
     headers: JSON_HEADERS,
     body: JSON.stringify({
       metadata: { space: "space_1" },
       spec: {
         name: "api",
-        runtime: {
-          interface: "web_fetch",
-          source: { artifactPath: "/work/dist/worker.js" },
-        },
-        exposure: { publicHttp: true },
+        source: { artifactPath: "/work/dist/worker.js" },
+        profiles: ["workers_bindings"],
       },
     }),
   });
   expect(res.status).toBe(200);
   const body = await res.json();
-  expect(body.id).toBe("tkrn:space_1:HttpService:api");
+  expect(body.id).toBe("tkrn:space_1:EdgeWorker:api");
   expect(body.status.resolution.selectedImplementation).toBe(
     "cloudflare_workers",
   );
@@ -230,9 +227,9 @@ test("TargetPool API persists admin-defined AI provider capability evidence", as
   expect(missing.status).toBe(404);
 });
 
-test("GET /v1/resources/ObjectStore/:name returns the applied resource", async () => {
+test("GET /v1/resources/ObjectBucket/:name returns the applied resource", async () => {
   const { app } = await buildApp();
-  await app.request("/v1/resources/ObjectStore/assets", {
+  await app.request("/v1/resources/ObjectBucket/assets", {
     method: "PUT",
     headers: JSON_HEADERS,
     body: JSON.stringify({
@@ -241,7 +238,7 @@ test("GET /v1/resources/ObjectStore/:name returns the applied resource", async (
     }),
   });
   const res = await app.request(
-    "/v1/resources/ObjectStore/assets?space=space_1",
+    "/v1/resources/ObjectBucket/assets?space=space_1",
   );
   expect(res.status).toBe(200);
   const body = await res.json();
@@ -255,7 +252,7 @@ test("POST /v1/resources/preview resolves without persisting", async () => {
     method: "POST",
     headers: JSON_HEADERS,
     body: JSON.stringify({
-      kind: "ObjectStore",
+      kind: "ObjectBucket",
       metadata: { space: "space_1", name: "assets" },
       spec: { name: "assets", interfaces: ["s3_api"] },
     }),
@@ -282,11 +279,11 @@ test("POST /v1/resources/preview requires an explicit shape kind", async () => {
 
 test("PUT /v1/resources/:kind/:name rejects body kind mismatch", async () => {
   const { app } = await buildApp();
-  const res = await app.request("/v1/resources/ObjectStore/assets", {
+  const res = await app.request("/v1/resources/ObjectBucket/assets", {
     method: "PUT",
     headers: JSON_HEADERS,
     body: JSON.stringify({
-      kind: "HttpService",
+      kind: "EdgeWorker",
       metadata: { space: "space_1" },
       spec: { name: "assets", interfaces: ["s3_api"] },
     }),
@@ -298,7 +295,7 @@ test("PUT /v1/resources/:kind/:name rejects body kind mismatch", async () => {
 
 test("PUT /v1/resources/:kind/:name rejects name mismatch", async () => {
   const { app } = await buildApp();
-  const res = await app.request("/v1/resources/ObjectStore/assets", {
+  const res = await app.request("/v1/resources/ObjectBucket/assets", {
     method: "PUT",
     headers: JSON_HEADERS,
     body: JSON.stringify({
@@ -328,7 +325,7 @@ test("Queue is not accepted until the planner can materialize it", async () => {
 
 test("missing space yields a 400 nested error envelope", async () => {
   const { app } = await buildApp();
-  const res = await app.request("/v1/resources/ObjectStore/assets", {
+  const res = await app.request("/v1/resources/ObjectBucket/assets", {
     method: "PUT",
     headers: JSON_HEADERS,
     body: JSON.stringify({ spec: { name: "assets", interfaces: ["s3_api"] } }),
@@ -344,7 +341,7 @@ test("GET /v1/capabilities advertises enabled Resource Shapes", async () => {
   const res = await app.request("/v1/capabilities");
   expect(res.status).toBe(200);
   const body = await res.json();
-  expect(body.resources.ObjectStore).toBe(true);
-  expect(body.resources.HttpService).toBe(true);
+  expect(body.resources.ObjectBucket).toBe(true);
+  expect(body.resources.EdgeWorker).toBe(true);
   expect(body.resources.AIEndpoint).toBe(true);
 });

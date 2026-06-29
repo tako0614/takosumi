@@ -83,6 +83,11 @@ Same manifest, different connection.
 Same shape, different target.
 ```
 
+This does not mean Takosumi should recreate every provider or standard API. If
+an adequate generic OpenTofu provider or standard endpoint already exists, use
+it through the Stack flow. Takosumi shapes are for provider-neutral service
+forms, bindings, policy, metering, and import paths.
+
 ## What OSS Includes
 
 ```text
@@ -98,9 +103,12 @@ Adapter framework
 takosumi_provider-compatible API
 ```
 
-Compatibility APIs are capability surfaces. Examples include `compat.s3.v1`,
-`compat.oci.v1`, and `compat.cloudevents.v1`. They are scoped and versioned
-subsets, not a claim of full AWS or full Cloudflare compatibility.
+Compatibility APIs are capability surfaces. Examples include `compat.oci.v1`,
+`compat.cloudevents.v1`, and `compat.cloudflare.workers.v1`. `compat.s3.v1`
+is only needed when an operator intentionally exposes ObjectBucket data/control
+compatibility; ordinary S3/R2/GCS use should go through existing providers.
+They are scoped and versioned subsets, not a claim of full AWS or full
+Cloudflare compatibility.
 
 Detailed Resource Shape and compatibility capability model lives in the
 [Takosumi Final Plan](https://github.com/tako0614/takosumi/blob/main/docs/final-plan.md).

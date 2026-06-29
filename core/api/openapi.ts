@@ -15,12 +15,7 @@ import {
 } from "./route_families.ts";
 
 export type OpenApiHttpMethod =
-  | "delete"
-  | "get"
-  | "head"
-  | "patch"
-  | "post"
-  | "put";
+  "delete" | "get" | "head" | "patch" | "post" | "put";
 
 /**
  * Canonical version emitted in `info.version`. Kept in lockstep with the
@@ -663,21 +658,12 @@ function processSchemas(): Record<string, Record<string, unknown>> {
     },
     TakosumiResourceCapabilities: {
       type: "object",
-      required: [
-        "Stack",
-        "ObjectStore",
-        "HttpService",
-        "AIEndpoint",
-        "ContainerService",
-        "Machine",
-      ],
+      required: ["Stack", "ObjectBucket", "EdgeWorker", "AIEndpoint"],
       properties: {
         Stack: { type: "boolean" },
-        ObjectStore: { type: "boolean" },
-        HttpService: { type: "boolean" },
+        ObjectBucket: { type: "boolean" },
+        EdgeWorker: { type: "boolean" },
         AIEndpoint: { type: "boolean" },
-        ContainerService: { type: "boolean" },
-        Machine: { type: "boolean" },
       },
       additionalProperties: false,
     },
@@ -705,13 +691,7 @@ function processSchemas(): Record<string, Record<string, unknown>> {
     },
     TakosumiCompatCapabilities: {
       type: "object",
-      required: [
-        "framework",
-        "s3",
-        "oci",
-        "cloudevents",
-        "cloudflare_subset",
-      ],
+      required: ["framework", "s3", "oci", "cloudevents", "cloudflare_subset"],
       properties: {
         framework: { type: "boolean" },
         s3: { type: "boolean" },
@@ -1445,7 +1425,9 @@ function providerCatalogSchemas(): Record<string, Record<string, unknown>> {
         kind: ref("ProviderConnectionKind"),
         scope: { enum: ["operator", "space"] },
         displayName: { type: "string" },
-        status: { enum: ["pending", "verified", "revoked", "expired", "error"] },
+        status: {
+          enum: ["pending", "verified", "revoked", "expired", "error"],
+        },
         materialization: ref("ProviderConnectionMaterialization"),
         envNames: { type: "array", items: { type: "string" } },
         fileEnvNames: { type: "array", items: { type: "string" } },

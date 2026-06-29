@@ -88,6 +88,9 @@ Same shape, different target.
 同じ Resource Shape を使い、TargetPool / policy / Adapter によって Cloudflare、AWS、Kubernetes、VM、Takosumi native
 target へ解決できます。
 
+ただし、既存の汎用 OpenTofu provider や標準 API で足りるものは Takosumi が作り直しません。Takosumi
+の shape は、provider-neutral な service form、binding、policy、metering、import path が必要なときだけ使います。
+
 ## OSS に含まれること
 
 Takosumi OSS は framework を含みます。
@@ -105,7 +108,9 @@ Adapter framework
 takosumi_provider-compatible API
 ```
 
-互換 API は capability として公開範囲を宣言します。例: `compat.s3.v1`、`compat.oci.v1`、`compat.cloudevents.v1`。
+互換 API は capability として公開範囲を宣言します。例: `compat.oci.v1`、`compat.cloudevents.v1`、
+`compat.cloudflare.workers.v1`。`compat.s3.v1` は operator が ObjectBucket の data/control
+compatibility を意図的に公開するときの profile であり、普通の S3/R2/GCS 利用は既存 provider を使います。
 full AWS compatibility や full Cloudflare compatibility を名乗らず、scope と version を明示します。
 
 詳細な Resource Shape / compatibility capability model は

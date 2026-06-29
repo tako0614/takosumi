@@ -13,7 +13,7 @@ provider "takosumi" {
   # token  = var.takosumi_token
 }
 
-resource "takosumi_object_store" "assets" {
+resource "takosumi_object_bucket" "assets" {
   name = "assets"
 
   interfaces = [
@@ -29,9 +29,9 @@ resource "takosumi_object_store" "assets" {
 # The backend implementation/target is chosen server-side by the Takosumi
 # Resolver; the provider only carries the thin resolution handle.
 output "assets_selected_implementation" {
-  value = takosumi_object_store.assets.selected_implementation
+  value = takosumi_object_bucket.assets.selected_implementation
 }
 
 output "assets_outputs" {
-  value = takosumi_object_store.assets.outputs
+  value = takosumi_object_bucket.assets.outputs
 }

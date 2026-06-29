@@ -26,20 +26,20 @@ APIs are capability entrypoints into those models, not the internal model itself
 
 ## Resource Shape Concepts
 
-| Concept        | Meaning                                                                  |
-| -------------- | ------------------------------------------------------------------------ |
-| Space          | Resource API namespace and policy scope                                  |
-| Environment    | Deployment environment inside a Space                                    |
-| Stack          | A group of Resource Shape objects and operations                         |
-| Resource       | Desired abstract resource, such as ObjectStore, HttpService, or Queue    |
-| Target         | Concrete implementation destination, such as AWS, Cloudflare, Kubernetes |
-| TargetPool     | Operator-controlled set of available Targets and capabilities            |
-| Credential     | Runtime authority used by a Target or Adapter                            |
-| Policy         | Rules for placement, cost, region, action, network, and access           |
-| Adapter        | Implementation bridge that can preview, apply, observe, and delete       |
-| ResolutionLock | Recorded resolver decision for a Resource                                |
-| NativeResource | Concrete provider/platform resource created by an Adapter                |
-| Condition      | Status and readiness evidence                                            |
+| Concept        | Meaning                                                                        |
+| -------------- | ------------------------------------------------------------------------------ |
+| Space          | Resource API namespace and policy scope                                        |
+| Environment    | Deployment environment inside a Space                                          |
+| Stack          | A group of Resource Shape objects and operations                               |
+| Resource       | Desired service-form resource, such as ObjectBucket, EdgeWorker, or AIEndpoint |
+| Target         | Concrete implementation destination, such as AWS, Cloudflare, Kubernetes       |
+| TargetPool     | Operator-controlled set of available Targets and capabilities                  |
+| Credential     | Runtime authority used by a Target or Adapter                                  |
+| Policy         | Rules for placement, cost, region, action, network, and access                 |
+| Adapter        | Implementation bridge that can preview, apply, observe, and delete             |
+| ResolutionLock | Recorded resolver decision for a Resource                                      |
+| NativeResource | Concrete provider/platform resource created by an Adapter                      |
+| Condition      | Status and readiness evidence                                                  |
 
 `Space` here is the Resource API namespace and policy scope.
 
@@ -136,6 +136,12 @@ which Targets are available, which Adapters are enabled, and which policies
 control placement. Resolver decisions are recorded as ResolutionLocks and do
 not move without an explicit migration.
 
+Resource Shapes are not a replacement for every existing provider. If an
+adequate generic OpenTofu provider or standard API already exists, use it
+through the OpenTofu Stack flow. Add a Takosumi shape only when Takosumi needs a
+provider-neutral service form, binding projection, resolution lock, policy,
+metering, or import path.
+
 Adapters report capabilities and perform preview/apply/observe/delete work.
 Initial adapter families can include OpenTofu, Cloudflare, AWS, Kubernetes, VM,
 and Takosumi-native adapters.
@@ -164,10 +170,11 @@ compat.kubernetes.crd.v1
 compat.cloudflare.workers.v1
 ```
 
-They map requests into Takosumi resources such as ObjectStore, Artifact,
-Queue, EventHandler, HttpService, or Kubernetes resources. They are not a claim
-of full AWS compatibility, full Cloudflare compatibility, or a provider-specific
-internal model.
+They map requests into Takosumi resources such as ObjectBucket, Artifact,
+Queue, EventHandler, EdgeWorker, or Kubernetes resources only when that profile
+is intentionally enabled. They are not a claim of full AWS compatibility, full
+Cloudflare compatibility, a provider-specific internal model, or a reason to
+recreate standards that already work through existing providers.
 
 Detailed Resource Shape and compatibility capability definitions live in the
 [Takosumi Final Plan](https://github.com/tako0614/takosumi/blob/main/docs/final-plan.md).

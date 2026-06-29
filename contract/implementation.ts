@@ -147,13 +147,9 @@ export interface OperatorImplementation {
   // ---------------------------------------------------------------------
 
   /** Fires before the first Deployment of a brand-new Capsule. */
-  onInstallStart?(
-    ctx: OperatorImplementationCapsuleContext,
-  ): Promise<void>;
+  onInstallStart?(ctx: OperatorImplementationCapsuleContext): Promise<void>;
   /** Fires after the first Deployment of a brand-new Capsule succeeds. */
-  onInstallComplete?(
-    ctx: OperatorImplementationCapsuleContext,
-  ): Promise<void>;
+  onInstallComplete?(ctx: OperatorImplementationCapsuleContext): Promise<void>;
   /** Fires before every Deployment apply (including the first one). */
   onDeploymentStart?(
     ctx: OperatorImplementationDeploymentContext,
@@ -334,11 +330,7 @@ export interface OperatorImplementationStatusContext {
 }
 
 export type OperatorImplementationResourceStatusKind =
-  | "pending"
-  | "ready"
-  | "degraded"
-  | "failed"
-  | "deleted";
+  "pending" | "ready" | "degraded" | "failed" | "deleted";
 
 export interface OperatorImplementationResourceStatus {
   readonly kind: OperatorImplementationResourceStatusKind;
@@ -576,7 +568,7 @@ function projectOfficialMaterial(
     case "service-binding":
       return projectServiceBindingMaterial(material);
     case "object-store":
-      return projectObjectStoreMaterial(material);
+      return projectObjectStorageMaterial(material);
     default:
       return material;
   }
@@ -661,7 +653,9 @@ function projectServiceBindingMaterial(
   return out;
 }
 
-function projectObjectStoreMaterial(material: OutputMaterial): OutputMaterial {
+function projectObjectStorageMaterial(
+  material: OutputMaterial,
+): OutputMaterial {
   const bucket = readString(material.bucket);
   const endpoint = readString(material.endpoint);
   if (!bucket || !endpoint) return material;

@@ -38,15 +38,29 @@ export type ResolveOutcome =
  * directly testable.
  */
 export const SHAPE_INTERFACE_REQUIREMENTS: Readonly<
-  Record<string, { readonly required: readonly string[]; readonly preferred: readonly string[] }>
+  Record<
+    string,
+    {
+      readonly required: readonly string[];
+      readonly preferred: readonly string[];
+    }
+  >
 > = Object.freeze({
-  ObjectStore: Object.freeze({
+  ObjectBucket: Object.freeze({
     required: Object.freeze(["s3_api"]) as readonly string[],
-    preferred: Object.freeze(["signed_url", "object_events"]) as readonly string[],
+    preferred: Object.freeze([
+      "signed_url",
+      "object_events",
+    ]) as readonly string[],
   }),
-  HttpService: Object.freeze({
-    required: Object.freeze(["web_fetch"]) as readonly string[],
-    preferred: Object.freeze(["public_http", "workers_bindings", "node_compat"]) as readonly string[],
+  EdgeWorker: Object.freeze({
+    required: Object.freeze(["worker_fetch"]) as readonly string[],
+    preferred: Object.freeze([
+      "workers_bindings",
+      "node_compat",
+      "service_bindings",
+      "static_assets",
+    ]) as readonly string[],
   }),
   AIEndpoint: Object.freeze({
     required: Object.freeze([]) as readonly string[],
@@ -59,16 +73,16 @@ export const SHAPE_INTERFACE_REQUIREMENTS: Readonly<
 });
 
 /**
- * Map a Target backend type to the ObjectStore implementation it hosts
- * (`docs/final-plan.md` §14: ObjectStore -> AWS S3 / Cloudflare R2 / MinIO /
+ * Map a Target backend type to the ObjectBucket implementation it hosts
+ * (`docs/final-plan.md` §14: ObjectBucket -> AWS S3 / Cloudflare R2 / MinIO /
  * Takosumi Object Store). `kubernetes`/`vm` host an s3-compatible MinIO.
  */
-export const OBJECT_STORE_TARGET_IMPLEMENTATION: Readonly<
+export const OBJECT_BUCKET_TARGET_IMPLEMENTATION: Readonly<
   Partial<Record<TargetType, string>>
 > = Object.freeze({
   cloudflare: "cloudflare_r2",
   aws: "aws_s3",
-  takosumi_native: "takosumi_object_store",
+  takosumi_native: "takosumi_object_bucket",
   kubernetes: "minio",
   vm: "minio",
 });
@@ -82,12 +96,10 @@ export const OBJECT_STORE_TARGET_IMPLEMENTATION: Readonly<
 export const SHAPE_TARGET_IMPLEMENTATION: Readonly<
   Record<string, Partial<Record<TargetType, string>>>
 > = Object.freeze({
-  ObjectStore: OBJECT_STORE_TARGET_IMPLEMENTATION,
-  HttpService: Object.freeze({
+  ObjectBucket: OBJECT_BUCKET_TARGET_IMPLEMENTATION,
+  EdgeWorker: Object.freeze({
     cloudflare: "cloudflare_workers",
-    takosumi_native: "takosumi_http_runtime",
-    kubernetes: "kubernetes_http_service",
-    aws: "aws_lambda_url",
+    takosumi_native: "takosumi_edge_runtime",
   }),
   AIEndpoint: Object.freeze({
     cloudflare: "cloudflare_ai_gateway",
@@ -99,8 +111,8 @@ export const SHAPE_TARGET_IMPLEMENTATION: Readonly<
 });
 
 /**
- * Default per-implementation capability matrix. ObjectStore is currently
- * materializable through first-party modules; HttpService is enabled for the
+ * Default per-implementation capability matrix. ObjectBucket is currently
+ * materializable through first-party modules; EdgeWorker is enabled for the
  * Cloudflare Worker-compatible path. Future shapes are added here only when the
  * planner can materialize them.
  */
@@ -109,7 +121,7 @@ export const DEFAULT_RESOURCE_SHAPE_CAPABILITIES: TargetCapabilityMatrix =
     Object.freeze({
       implementation: "aws_s3",
       targetType: "aws",
-      shape: "ObjectStore",
+      shape: "ObjectBucket",
       interfaces: Object.freeze({
         s3_api: "native",
         signed_url: "native",
@@ -119,7 +131,7 @@ export const DEFAULT_RESOURCE_SHAPE_CAPABILITIES: TargetCapabilityMatrix =
     Object.freeze({
       implementation: "cloudflare_r2",
       targetType: "cloudflare",
-      shape: "ObjectStore",
+      shape: "ObjectBucket",
       interfaces: Object.freeze({
         s3_api: "native",
         signed_url: "native",
@@ -129,7 +141,7 @@ export const DEFAULT_RESOURCE_SHAPE_CAPABILITIES: TargetCapabilityMatrix =
     Object.freeze({
       implementation: "minio",
       targetType: "kubernetes",
-      shape: "ObjectStore",
+      shape: "ObjectBucket",
       interfaces: Object.freeze({
         s3_api: "native",
         signed_url: "native",
@@ -137,9 +149,9 @@ export const DEFAULT_RESOURCE_SHAPE_CAPABILITIES: TargetCapabilityMatrix =
       }),
     }),
     Object.freeze({
-      implementation: "takosumi_object_store",
+      implementation: "takosumi_object_bucket",
       targetType: "takosumi_native",
-      shape: "ObjectStore",
+      shape: "ObjectBucket",
       interfaces: Object.freeze({
         s3_api: "native",
         signed_url: "native",
@@ -149,45 +161,25 @@ export const DEFAULT_RESOURCE_SHAPE_CAPABILITIES: TargetCapabilityMatrix =
     Object.freeze({
       implementation: "cloudflare_workers",
       targetType: "cloudflare",
-      shape: "HttpService",
+      shape: "EdgeWorker",
       interfaces: Object.freeze({
-        web_fetch: "native",
-        public_http: "native",
+        worker_fetch: "native",
         workers_bindings: "native",
         node_compat: "shim",
+        service_bindings: "native",
+        static_assets: "native",
       }),
     }),
     Object.freeze({
-      implementation: "takosumi_http_runtime",
+      implementation: "takosumi_edge_runtime",
       targetType: "takosumi_native",
-      shape: "HttpService",
+      shape: "EdgeWorker",
       interfaces: Object.freeze({
-        web_fetch: "native",
-        public_http: "native",
+        worker_fetch: "native",
         workers_bindings: "shim",
         node_compat: "native",
-      }),
-    }),
-    Object.freeze({
-      implementation: "kubernetes_http_service",
-      targetType: "kubernetes",
-      shape: "HttpService",
-      interfaces: Object.freeze({
-        web_fetch: "shim",
-        public_http: "shim",
-        workers_bindings: "emulated",
-        node_compat: "native",
-      }),
-    }),
-    Object.freeze({
-      implementation: "aws_lambda_url",
-      targetType: "aws",
-      shape: "HttpService",
-      interfaces: Object.freeze({
-        web_fetch: "shim",
-        public_http: "native",
-        workers_bindings: "emulated",
-        node_compat: "shim",
+        service_bindings: "shim",
+        static_assets: "shim",
       }),
     }),
     Object.freeze({
@@ -246,10 +238,11 @@ function findCapability(
   targetType?: TargetType,
   shape?: string,
 ): ImplementationCapability | undefined {
-  return matrix.find((c) =>
-    c.implementation === implementation &&
-    (targetType === undefined || c.targetType === targetType) &&
-    (shape === undefined || c.shape === shape)
+  return matrix.find(
+    (c) =>
+      c.implementation === implementation &&
+      (targetType === undefined || c.targetType === targetType) &&
+      (shape === undefined || c.shape === shape),
   );
 }
 
@@ -257,7 +250,9 @@ function levelOf(
   cap: ImplementationCapability | undefined,
   iface: string,
 ): CapabilityLevel {
-  return (cap?.interfaces[iface] as CapabilityLevel | undefined) ?? "unsupported";
+  return (
+    (cap?.interfaces[iface] as CapabilityLevel | undefined) ?? "unsupported"
+  );
 }
 
 /** Deterministic string compare (no locale dependence). */
@@ -277,16 +272,12 @@ function nativeResourcesFor(
   if (nativeResourceType) {
     return [{ type: nativeResourceType, id: name }];
   }
-  if (shape === "HttpService") {
+  if (shape === "EdgeWorker") {
     switch (implementation) {
       case "cloudflare_workers":
         return [{ type: "cloudflare.workers_script", id: name }];
-      case "takosumi_http_runtime":
-        return [{ type: "takosumi.http_service", id: name }];
-      case "kubernetes_http_service":
-        return [{ type: "kubernetes.deployment", id: name }];
-      case "aws_lambda_url":
-        return [{ type: "aws.lambda_function", id: name }];
+      case "takosumi_edge_runtime":
+        return [{ type: "takosumi.edge_worker", id: name }];
       default:
         return [];
     }
@@ -314,8 +305,8 @@ function nativeResourcesFor(
       return [{ type: "aws.s3_bucket", id: name }];
     case "minio":
       return [{ type: "minio.s3_bucket", id: name }];
-    case "takosumi_object_store":
-      return [{ type: "takosumi.object_store", id: name }];
+    case "takosumi_object_bucket":
+      return [{ type: "takosumi.object_bucket", id: name }];
     default:
       return [];
   }
@@ -326,7 +317,8 @@ function computePortability(
 ): ResourcePortability {
   const levels = scores.map((s) => s.level);
   if (levels.every((l) => l === "native")) return "portable";
-  if (levels.some((l) => l === "emulated" || l === "unsupported")) return "partial";
+  if (levels.some((l) => l === "emulated" || l === "unsupported"))
+    return "partial";
   if (levels.some((l) => l === "shim")) return "mostly_portable";
   return "portable";
 }
@@ -335,7 +327,10 @@ function capabilityScoresFor(
   cap: ImplementationCapability | undefined,
   interfaces: readonly string[],
 ): readonly InterfaceCapabilityScore[] {
-  return interfaces.map((iface) => ({ interface: iface, level: levelOf(cap, iface) }));
+  return interfaces.map((iface) => ({
+    interface: iface,
+    level: levelOf(cap, iface),
+  }));
 }
 
 function riskNotesFor(
@@ -345,7 +340,9 @@ function riskNotesFor(
   const notes: string[] = [];
   for (const s of scores) {
     if (s.level === "shim") {
-      notes.push(`${s.interface} is provided via an adapter shim on ${implementation}`);
+      notes.push(
+        `${s.interface} is provided via an adapter shim on ${implementation}`,
+      );
     } else if (s.level === "emulated") {
       notes.push(`${s.interface} is emulated by Takosumi on ${implementation}`);
     } else if (s.level === "unsupported") {
@@ -409,7 +406,10 @@ function capabilityRank(
     emulated: 1,
     unsupported: 0,
   };
-  return interfaces.reduce((sum, iface) => sum + weights[levelOf(cap, iface)], 0);
+  return interfaces.reduce(
+    (sum, iface) => sum + weights[levelOf(cap, iface)],
+    0,
+  );
 }
 
 type SelectResult =
@@ -432,7 +432,10 @@ function selectTarget(
   const eligible: Selection[] = [];
   for (const entry of input.targetPool.spec.targets) {
     // Deny wins; an entry matches a policy token by BOTH its type and name.
-    if (denied && (denied.includes(entry.type) || denied.includes(entry.name))) {
+    if (
+      denied &&
+      (denied.includes(entry.type) || denied.includes(entry.name))
+    ) {
       continue;
     }
     if (
@@ -442,7 +445,10 @@ function selectTarget(
     ) {
       continue;
     }
-    for (const candidate of targetImplementationsFor(input.resource.kind, entry)) {
+    for (const candidate of targetImplementationsFor(
+      input.resource.kind,
+      entry,
+    )) {
       const cap = findCapability(
         matrix,
         candidate.implementation,
@@ -450,7 +456,11 @@ function selectTarget(
         input.resource.kind,
       );
       if (!cap || cap.shape !== input.resource.kind) continue;
-      if (requestedInterfaces.every((iface) => levelOf(cap, iface) !== "unsupported")) {
+      if (
+        requestedInterfaces.every(
+          (iface) => levelOf(cap, iface) !== "unsupported",
+        )
+      ) {
         eligible.push({
           entry,
           implementation: candidate.implementation,
@@ -465,8 +475,7 @@ function selectTarget(
       ok: false,
       error: {
         code: "no_eligible_target",
-        message:
-          `no Target in the pool is allowed by policy and supports the required ${input.resource.kind} interfaces`,
+        message: `no Target in the pool is allowed by policy and supports the required ${input.resource.kind} interfaces`,
       },
     };
   }
@@ -477,11 +486,21 @@ function selectTarget(
     (a, b) =>
       b.entry.priority - a.entry.priority ||
       capabilityRank(
-        findCapability(matrix, b.implementation, b.entry.type, input.resource.kind),
+        findCapability(
+          matrix,
+          b.implementation,
+          b.entry.type,
+          input.resource.kind,
+        ),
         requestedInterfaces,
       ) -
         capabilityRank(
-          findCapability(matrix, a.implementation, a.entry.type, input.resource.kind),
+          findCapability(
+            matrix,
+            a.implementation,
+            a.entry.type,
+            input.resource.kind,
+          ),
           requestedInterfaces,
         ) ||
       byName(a.entry.name, b.entry.name) ||
@@ -496,7 +515,12 @@ function buildFreshOutput(
   selection: Selection,
 ): ResolverOutput {
   const { entry, implementation } = selection;
-  const cap = findCapability(matrix, implementation, entry.type, input.resource.kind);
+  const cap = findCapability(
+    matrix,
+    implementation,
+    entry.type,
+    input.resource.kind,
+  );
   const name = resourceName(input.resource);
 
   const capabilityScores = capabilityScoresFor(cap, input.interfaces);
@@ -557,14 +581,14 @@ function buildLockedOutput(
   const capabilityScores = capabilityScoresFor(cap, input.interfaces);
   const portability = lock.portability ?? computePortability(capabilityScores);
   const nativeResourcePlan =
-    lock.nativeResources ?? nativeResourcesFor(
-      input.resource.kind,
-      lock.selectedImplementation,
-      name,
-    );
+    lock.nativeResources ??
+    nativeResourcesFor(input.resource.kind, lock.selectedImplementation, name);
 
   const riskNotes = riskNotesFor(lock.selectedImplementation, capabilityScores);
-  if (freshSelection.ok && freshSelection.selection.entry.name !== lock.target) {
+  if (
+    freshSelection.ok &&
+    freshSelection.selection.entry.name !== lock.target
+  ) {
     riskNotes.push(
       `resolution is locked to target ${lock.target}; the current request would prefer ${freshSelection.selection.entry.name}, but migration is an explicit operation (no silent re-target)`,
     );
@@ -617,5 +641,8 @@ export function resolve(input: ResolverInput): ResolveOutcome {
   if (!freshSelection.ok) {
     return { ok: false, error: freshSelection.error };
   }
-  return { ok: true, output: buildFreshOutput(input, matrix, freshSelection.selection) };
+  return {
+    ok: true,
+    output: buildFreshOutput(input, matrix, freshSelection.selection),
+  };
 }

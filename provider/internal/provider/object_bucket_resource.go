@@ -23,7 +23,7 @@ import (
 
 // Allowed values for the frozen wire contract.
 var (
-	objectStoreInterfaces  = []string{"s3_api", "signed_url", "object_events"}
+	objectBucketInterfaces = []string{"s3_api", "signed_url", "object_events"}
 	lifecycleDeleteActions = []string{"delete", "retain", "snapshot_then_delete", "block"}
 )
 
@@ -34,24 +34,24 @@ var lifecyclePolicyAttrTypes = map[string]attr.Type{
 
 // Ensure interface compliance.
 var (
-	_ resource.Resource                = (*objectStoreResource)(nil)
-	_ resource.ResourceWithConfigure   = (*objectStoreResource)(nil)
-	_ resource.ResourceWithImportState = (*objectStoreResource)(nil)
-	_ resource.ResourceWithModifyPlan  = (*objectStoreResource)(nil)
+	_ resource.Resource                = (*objectBucketResource)(nil)
+	_ resource.ResourceWithConfigure   = (*objectBucketResource)(nil)
+	_ resource.ResourceWithImportState = (*objectBucketResource)(nil)
+	_ resource.ResourceWithModifyPlan  = (*objectBucketResource)(nil)
 )
 
-// objectStoreResource implements the takosumi_object_store resource.
-type objectStoreResource struct {
+// objectBucketResource implements the takosumi_object_bucket resource.
+type objectBucketResource struct {
 	data *providerData
 }
 
-// NewObjectStoreResource is the resource factory.
-func NewObjectStoreResource() resource.Resource {
-	return &objectStoreResource{}
+// NewObjectBucketResource is the resource factory.
+func NewObjectBucketResource() resource.Resource {
+	return &objectBucketResource{}
 }
 
-// objectStoreModel maps the takosumi_object_store HCL schema.
-type objectStoreModel struct {
+// objectBucketModel maps the takosumi_object_bucket HCL schema.
+type objectBucketModel struct {
 	ID                     types.String `tfsdk:"id"`
 	Name                   types.String `tfsdk:"name"`
 	Interfaces             types.Set    `tfsdk:"interfaces"`
@@ -69,18 +69,18 @@ type lifecyclePolicyModel struct {
 	Delete types.String `tfsdk:"delete"`
 }
 
-func (r *objectStoreResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
-	resp.TypeName = req.ProviderTypeName + "_object_store"
+func (r *objectBucketResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
+	resp.TypeName = req.ProviderTypeName + "_object_bucket"
 }
 
-func (r *objectStoreResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
+func (r *objectBucketResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "A Takosumi ObjectStore resource shape. The desired interfaces and lifecycle " +
+		Description: "A Takosumi ObjectBucket resource shape. The desired interfaces and lifecycle " +
 			"are declared here; the Takosumi Resolver selects the backend implementation and target.",
 		Attributes: map[string]schema.Attribute{
 			"name": schema.StringAttribute{
 				Required:    true,
-				Description: "ObjectStore name. Used as the resource key in the Takosumi API; changing it replaces the resource.",
+				Description: "ObjectBucket name. Used as the resource key in the Takosumi API; changing it replaces the resource.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
@@ -88,9 +88,9 @@ func (r *objectStoreResource) Schema(_ context.Context, _ resource.SchemaRequest
 			"interfaces": schema.SetAttribute{
 				Required:    true,
 				ElementType: types.StringType,
-				Description: "Desired externally visible interfaces. Allowed values: " + strings.Join(objectStoreInterfaces, ", ") + ".",
+				Description: "Desired externally visible interfaces. Allowed values: " + strings.Join(objectBucketInterfaces, ", ") + ".",
 				Validators: []validator.Set{
-					SetStringsOneOf(1, objectStoreInterfaces...),
+					SetStringsOneOf(1, objectBucketInterfaces...),
 				},
 			},
 			"lifecycle_policy": schema.SingleNestedAttribute{
@@ -119,7 +119,7 @@ func (r *objectStoreResource) Schema(_ context.Context, _ resource.SchemaRequest
 			// Computed: the thin handle returned by the server.
 			"id": schema.StringAttribute{
 				Computed:    true,
-				Description: "Takosumi resource identifier (tkrn:{space}:ObjectStore:{name} unless the server returns one).",
+				Description: "Takosumi resource identifier (tkrn:{space}:ObjectBucket:{name} unless the server returns one).",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},
@@ -149,7 +149,7 @@ func (r *objectStoreResource) Schema(_ context.Context, _ resource.SchemaRequest
 	}
 }
 
-func (r *objectStoreResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
+func (r *objectBucketResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
 	if req.ProviderData == nil {
 		return
 	}
@@ -164,12 +164,12 @@ func (r *objectStoreResource) Configure(_ context.Context, req resource.Configur
 	r.data = data
 }
 
-func (r *objectStoreResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+func (r *objectBucketResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	if !r.assertConfigured(&resp.Diagnostics) {
 		return
 	}
 
-	var plan objectStoreModel
+	var plan objectBucketModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -183,25 +183,25 @@ func (r *objectStoreResource) Create(ctx context.Context, req resource.CreateReq
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
-func (r *objectStoreResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+func (r *objectBucketResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
 	if !r.assertConfigured(&resp.Diagnostics) {
 		return
 	}
 
-	var state objectStoreModel
+	var state objectBucketModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
 	readSpace := effectiveSpace(state.Space, r.data.defaultSpace)
-	res, err := r.data.client.GetResource(ctx, client.KindObjectStore, state.Name.ValueString(), readSpace)
+	res, err := r.data.client.GetResource(ctx, client.KindObjectBucket, state.Name.ValueString(), readSpace)
 	if err != nil {
 		if errors.Is(err, client.ErrNotFound) {
 			resp.State.RemoveResource(ctx)
 			return
 		}
-		resp.Diagnostics.AddError("Failed to read ObjectStore", err.Error())
+		resp.Diagnostics.AddError("Failed to read ObjectBucket", err.Error())
 		return
 	}
 
@@ -219,12 +219,12 @@ func (r *objectStoreResource) Read(ctx context.Context, req resource.ReadRequest
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
-func (r *objectStoreResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+func (r *objectBucketResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	if !r.assertConfigured(&resp.Diagnostics) {
 		return
 	}
 
-	var plan objectStoreModel
+	var plan objectBucketModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -238,24 +238,24 @@ func (r *objectStoreResource) Update(ctx context.Context, req resource.UpdateReq
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
-func (r *objectStoreResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
+func (r *objectBucketResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
 	if !r.assertConfigured(&resp.Diagnostics) {
 		return
 	}
 
-	var state objectStoreModel
+	var state objectBucketModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 
 	deleteSpace := effectiveSpace(state.Space, r.data.defaultSpace)
-	if err := r.data.client.DeleteResource(ctx, client.KindObjectStore, state.Name.ValueString(), deleteSpace); err != nil {
-		resp.Diagnostics.AddError("Failed to delete ObjectStore", err.Error())
+	if err := r.data.client.DeleteResource(ctx, client.KindObjectBucket, state.Name.ValueString(), deleteSpace); err != nil {
+		resp.Diagnostics.AddError("Failed to delete ObjectBucket", err.Error())
 	}
 }
 
-func (r *objectStoreResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+func (r *objectBucketResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	// Accept "name" or "space/name".
 	if space, name, ok := strings.Cut(req.ID, "/"); ok {
 		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("space"), space)...)
@@ -267,13 +267,13 @@ func (r *objectStoreResource) ImportState(ctx context.Context, req resource.Impo
 
 // ModifyPlan performs a best-effort plan-time preview for nicer diffs and early
 // validation. Any transport error is tolerated by skipping silently.
-func (r *objectStoreResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
+func (r *objectBucketResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
 	if r.data == nil || req.Plan.Raw.IsNull() {
 		// Not configured, or this is a destroy plan: nothing to preview.
 		return
 	}
 
-	var plan objectStoreModel
+	var plan objectBucketModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -307,7 +307,7 @@ func (r *objectStoreResource) ModifyPlan(ctx context.Context, req resource.Modif
 }
 
 // assertConfigured guards CRUD against an unconfigured provider.
-func (r *objectStoreResource) assertConfigured(diags *diag.Diagnostics) bool {
+func (r *objectBucketResource) assertConfigured(diags *diag.Diagnostics) bool {
 	if r.data == nil || r.data.client == nil {
 		diags.AddError(
 			"Provider not configured",
@@ -315,10 +315,10 @@ func (r *objectStoreResource) assertConfigured(diags *diag.Diagnostics) bool {
 		)
 		return false
 	}
-	if !r.data.capabilities.SupportsResource(client.KindObjectStore) {
+	if !r.data.capabilities.SupportsResource(client.KindObjectBucket) {
 		diags.AddError(
-			"ObjectStore not supported",
-			"The configured Takosumi endpoint does not advertise the ObjectStore resource shape.",
+			"ObjectBucket not supported",
+			"The configured Takosumi endpoint does not advertise the ObjectBucket resource shape.",
 		)
 		return false
 	}
@@ -327,16 +327,16 @@ func (r *objectStoreResource) assertConfigured(diags *diag.Diagnostics) bool {
 
 // put builds the Resource envelope from plan, PUTs it, and maps the response
 // status back onto plan. Used by both Create and Update.
-func (r *objectStoreResource) put(ctx context.Context, plan *objectStoreModel, diags *diag.Diagnostics) {
+func (r *objectBucketResource) put(ctx context.Context, plan *objectBucketModel, diags *diag.Diagnostics) {
 	body, space, d := plan.toResource(ctx, r.data.defaultSpace)
 	diags.Append(d...)
 	if diags.HasError() {
 		return
 	}
 
-	res, err := r.data.client.PutResource(ctx, client.KindObjectStore, plan.Name.ValueString(), body)
+	res, err := r.data.client.PutResource(ctx, client.KindObjectBucket, plan.Name.ValueString(), body)
 	if err != nil {
-		diags.AddError("Failed to apply ObjectStore", err.Error())
+		diags.AddError("Failed to apply ObjectBucket", err.Error())
 		return
 	}
 
@@ -346,7 +346,7 @@ func (r *objectStoreResource) put(ctx context.Context, plan *objectStoreModel, d
 
 // toResource builds the request-side Resource envelope from the model and
 // resolves the effective space (resource override or provider default).
-func (m objectStoreModel) toResource(ctx context.Context, defaultSpace string) (*client.Resource, string, diag.Diagnostics) {
+func (m objectBucketModel) toResource(ctx context.Context, defaultSpace string) (*client.Resource, string, diag.Diagnostics) {
 	var diags diag.Diagnostics
 
 	space := m.Space.ValueString()
@@ -388,7 +388,7 @@ func (m objectStoreModel) toResource(ctx context.Context, defaultSpace string) (
 
 	res := &client.Resource{
 		APIVersion: client.APIVersion,
-		Kind:       client.KindObjectStore,
+		Kind:       client.KindObjectBucket,
 		Metadata: client.Metadata{
 			Name:      name,
 			Space:     space,
@@ -401,7 +401,7 @@ func (m objectStoreModel) toResource(ctx context.Context, defaultSpace string) (
 
 // applyStatus maps a server Resource response onto the model's computed
 // attributes (id + resolution + outputs).
-func applyStatus(ctx context.Context, res *client.Resource, space string, m *objectStoreModel) diag.Diagnostics {
+func applyStatus(ctx context.Context, res *client.Resource, space string, m *objectBucketModel) diag.Diagnostics {
 	var diags diag.Diagnostics
 
 	m.ID = types.StringValue(resourceID(res, space, m.Name.ValueString()))
@@ -428,7 +428,7 @@ func applyStatus(ctx context.Context, res *client.Resource, space string, m *obj
 
 // refreshSpec reconciles the model's configured attributes from a server
 // Resource response (used by Read to detect drift).
-func refreshSpec(ctx context.Context, res *client.Resource, m *objectStoreModel) diag.Diagnostics {
+func refreshSpec(ctx context.Context, res *client.Resource, m *objectBucketModel) diag.Diagnostics {
 	var diags diag.Diagnostics
 
 	if res.Metadata.Name != "" {
@@ -465,9 +465,9 @@ func refreshSpec(ctx context.Context, res *client.Resource, m *objectStoreModel)
 }
 
 // resourceID returns the server-provided id when present, otherwise synthesizes
-// tkrn:{space}:ObjectStore:{name}.
+// tkrn:{space}:ObjectBucket:{name}.
 func resourceID(res *client.Resource, space, name string) string {
-	return resourceIDForKind(res, space, client.KindObjectStore, name)
+	return resourceIDForKind(res, space, client.KindObjectBucket, name)
 }
 
 func resourceIDForKind(res *client.Resource, space, kind, name string) string {

@@ -27,9 +27,9 @@ func discoveryHandler(t *testing.T, resourceShapes bool) http.HandlerFunc {
 			body = map[string]any{
 				"apiVersion": "takosumi.dev/v1alpha1",
 				"resources": map[string]bool{
-					"ObjectStore": resourceShapes,
-					"HttpService": resourceShapes,
-					"AIEndpoint":  resourceShapes,
+					"ObjectBucket": resourceShapes,
+					"EdgeWorker":   resourceShapes,
+					"AIEndpoint":   resourceShapes,
 				},
 			}
 		default:
@@ -60,8 +60,8 @@ func versionedDiscoveryHandler(t *testing.T, discoveryVersion string, capability
 			body = map[string]any{
 				"apiVersion": capabilityVersion,
 				"resources": map[string]bool{
-					"ObjectStore": true,
-					"AIEndpoint":  false,
+					"ObjectBucket": true,
+					"AIEndpoint":   false,
 				},
 			}
 		default:
@@ -91,9 +91,9 @@ func TestConfigureClient_AcceptsAIEndpointOnlyCapabilities(t *testing.T) {
 			body = map[string]any{
 				"apiVersion": "takosumi.dev/v1alpha1",
 				"resources": map[string]bool{
-					"ObjectStore": false,
-					"HttpService": false,
-					"AIEndpoint":  true,
+					"ObjectBucket": false,
+					"EdgeWorker":   false,
+					"AIEndpoint":   true,
 				},
 			}
 		default:

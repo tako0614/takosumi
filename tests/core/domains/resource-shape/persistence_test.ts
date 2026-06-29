@@ -13,9 +13,7 @@ import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts"
 import { PGliteSqlClient } from "../../../helpers/deploy-control/pglite_sql_client.ts";
 import { createD1ResourceShapeStores } from "../../../../core/domains/resource-shape/d1_stores.ts";
 import { createSqlResourceShapeStores } from "../../../../core/domains/resource-shape/sql_stores.ts";
-import {
-  createInMemoryResourceShapeStores,
-} from "../../../../core/domains/resource-shape/stores.ts";
+import { createInMemoryResourceShapeStores } from "../../../../core/domains/resource-shape/stores.ts";
 import type { ResourceShapeStores } from "../../../../core/domains/resource-shape/stores.ts";
 import { formatResourceShapeId } from "../../../../core/domains/resource-shape/records.ts";
 import type {
@@ -34,11 +32,11 @@ const T1 = "2026-06-29T01:00:00.000Z" as IsoTimestamp;
 
 function fullShape(): ResourceShapeRecord {
   return {
-    id: formatResourceShapeId(SPACE_A, "ObjectStore", "assets"),
+    id: formatResourceShapeId(SPACE_A, "ObjectBucket", "assets"),
     spaceId: SPACE_A,
     project: "web",
     environment: "prod",
-    kind: "ObjectStore",
+    kind: "ObjectBucket",
     name: "assets",
     managedBy: "opentofu",
     spec: { bucket: "assets", versioning: true, nested: { a: [1, 2, 3] } },
@@ -62,9 +60,9 @@ function fullShape(): ResourceShapeRecord {
 
 function minimalShape(): ResourceShapeRecord {
   return {
-    id: formatResourceShapeId(SPACE_A, "HttpService", "api"),
+    id: formatResourceShapeId(SPACE_A, "EdgeWorker", "api"),
     spaceId: SPACE_A,
-    kind: "HttpService",
+    kind: "EdgeWorker",
     name: "api",
     managedBy: "api",
     spec: {},
@@ -185,7 +183,7 @@ for (const backend of backends) {
       expect(await stores.resources.upsert(record)).toEqual(record);
       expect(await stores.resources.get(record.id)).toEqual(record);
       expect(
-        await stores.resources.getByName(SPACE_A, "ObjectStore", "assets"),
+        await stores.resources.getByName(SPACE_A, "ObjectBucket", "assets"),
       ).toEqual(record);
     });
 
@@ -227,7 +225,7 @@ for (const backend of backends) {
       const a2 = minimalShape();
       const b1: ResourceShapeRecord = {
         ...minimalShape(),
-        id: formatResourceShapeId(SPACE_B, "HttpService", "api"),
+        id: formatResourceShapeId(SPACE_B, "EdgeWorker", "api"),
         spaceId: SPACE_B,
       };
       await stores.resources.upsert(a1);
@@ -247,14 +245,16 @@ for (const backend of backends) {
     });
 
     test("resource shape: get/getByName miss returns undefined", async () => {
-      expect(await stores.resources.get("tkrn:nope:ObjectStore:x")).toBeUndefined();
+      expect(
+        await stores.resources.get("tkrn:nope:ObjectBucket:x"),
+      ).toBeUndefined();
       expect(
         await stores.resources.getByName(SPACE_A, "Machine", "absent"),
       ).toBeUndefined();
     });
 
     test("resolution lock: full + minimal round-trip and overwrite", async () => {
-      const resourceId = formatResourceShapeId(SPACE_A, "ObjectStore", "lk");
+      const resourceId = formatResourceShapeId(SPACE_A, "ObjectBucket", "lk");
       const full = fullLock(resourceId);
       expect(await stores.locks.put(full)).toEqual(full);
       expect(await stores.locks.get(resourceId)).toEqual(full);
@@ -280,8 +280,12 @@ for (const backend of backends) {
       await stores.targetPools.upsert(pb);
 
       expect(await stores.targetPools.get(p1.id)).toEqual(p1);
-      expect(await stores.targetPools.getByName(SPACE_A, "primary")).toEqual(p1);
-      expect(await stores.targetPools.getByName(SPACE_B, "primary")).toEqual(pb);
+      expect(await stores.targetPools.getByName(SPACE_A, "primary")).toEqual(
+        p1,
+      );
+      expect(await stores.targetPools.getByName(SPACE_B, "primary")).toEqual(
+        pb,
+      );
       expect(
         (await stores.targetPools.listBySpace(SPACE_A)).map((r) => r.id).sort(),
       ).toEqual([p1.id, p2.id].sort());
@@ -303,13 +307,16 @@ for (const backend of backends) {
         s1,
       );
       expect(
-        (await stores.spacePolicies.listBySpace(SPACE_A)).map((r) => r.id).sort(),
+        (await stores.spacePolicies.listBySpace(SPACE_A))
+          .map((r) => r.id)
+          .sort(),
       ).toEqual([s1.id, s2.id].sort());
 
       await stores.spacePolicies.delete(s2.id);
       expect(await stores.spacePolicies.get(s2.id)).toBeUndefined();
-      expect(await stores.spacePolicies.getByName(SPACE_A, "strict"))
-        .toBeUndefined();
+      expect(
+        await stores.spacePolicies.getByName(SPACE_A, "strict"),
+      ).toBeUndefined();
     });
   });
 }

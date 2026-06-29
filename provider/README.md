@@ -3,7 +3,7 @@
 A thin OpenTofu/Terraform provider for the **Takosumi Resource Shape API**.
 
 This provider lets you declare Takosumi resource shapes (e.g.
-`takosumi_object_store`, `takosumi_http_service`, `takosumi_ai_endpoint`) and
+`takosumi_object_bucket`, `takosumi_edge_worker`, `takosumi_ai_endpoint`) and
 operator configuration such as `takosumi_target_pool` in HCL. It is
 deliberately **thin**: it carries shape-specific HCL schemas, validation, a
 Takosumi API HTTP client, and preview/apply/status mapping. It does **not**
@@ -11,11 +11,14 @@ call AWS / Cloudflare / Kubernetes SDKs, does **not** select a backend, and
 does **not** manage credentials. Backend selection happens server-side in the
 Takosumi **Resolver**; the provider holds only a thin handle (id + outputs +
 resolution status).
-The provider should expose broad shape-specific resources and admin capability
-configuration, not just the resources used by the official Takosumi Cloud
-deployment. Endpoint capabilities, TargetPool implementation evidence, policy,
-and the engine/admin configuration decide whether a given profile or backend is
-supported.
+The provider should expose shape-specific resources only where Takosumi needs a
+provider-neutral service form. If an adequate generic provider or standard API
+already exists, use it through the ordinary OpenTofu Stack flow,
+ProviderConnection, and CredentialRecipe instead of adding a Takosumi-owned
+clone. When no adequate generic provider exists, add a first-class shape or a
+TargetPool adapter plugin. Endpoint capabilities, TargetPool implementation
+evidence, policy, and the engine/admin configuration decide whether a given
+profile or backend is supported.
 
 It is **capability-driven, not edition-driven**: on configure it discovers the
 server's advertised capabilities and never branches on an "edition" string.
@@ -37,15 +40,15 @@ provider/
 │   │   └── client_test.go
 │   └── provider/
 │       ├── provider.go              # provider schema + Configure (discovery + capability gate)
-│       ├── object_store_resource.go # takosumi_object_store resource + model mapping
-│       ├── http_service_resource.go # takosumi_http_service resource + model mapping
+│       ├── object_bucket_resource.go # takosumi_object_bucket resource + model mapping
+│       ├── edge_worker_resource.go # takosumi_edge_worker resource + model mapping
 │       ├── ai_endpoint_resource.go  # takosumi_ai_endpoint resource + model mapping
 │       ├── target_pool_resource.go  # takosumi_target_pool admin capability config
 │       ├── validators.go            # in-tree string/set allow-list validators
 │       ├── provider_test.go
-│       └── object_store_resource_test.go
+│       └── object_bucket_resource_test.go
 └── examples/
-    └── resources/takosumi_object_store/resource.tf
+    └── resources/takosumi_object_bucket/resource.tf
 ```
 
 ## Build
@@ -189,7 +192,7 @@ resource "takosumi_target_pool" "ai" {
   }]
 }
 
-resource "takosumi_object_store" "assets" {
+resource "takosumi_object_bucket" "assets" {
   name = "assets"
 
   interfaces = [
@@ -203,18 +206,18 @@ resource "takosumi_object_store" "assets" {
 }
 
 output "assets_selected_implementation" {
-  value = takosumi_object_store.assets.selected_implementation
+  value = takosumi_object_bucket.assets.selected_implementation
 }
 
 output "assets_outputs" {
-  value = takosumi_object_store.assets.outputs
+  value = takosumi_object_bucket.assets.outputs
 }
 
-resource "takosumi_http_service" "api" {
-  name              = "api"
-  runtime_interface = "web_fetch"
-  artifact_path     = "/work/dist/worker.js"
-  public_http       = true
+resource "takosumi_edge_worker" "api" {
+  name               = "api"
+  artifact_path      = "/work/dist/worker.js"
+  compatibility_date = "2026-06-29"
+  profiles           = ["workers_bindings"]
 }
 
 resource "takosumi_ai_endpoint" "ai" {
@@ -236,9 +239,9 @@ resource "takosumi_ai_endpoint" "ai" {
 }
 ```
 
-See [`examples/resources/takosumi_object_store/resource.tf`](examples/resources/takosumi_object_store/resource.tf).
+See [`examples/resources/takosumi_object_bucket/resource.tf`](examples/resources/takosumi_object_bucket/resource.tf).
 
-### `takosumi_object_store`
+### `takosumi_object_bucket`
 
 | Attribute                 | Type        | Mode     | Notes                                                              |
 | ------------------------- | ----------- | -------- | ------------------------------------------------------------------ |
@@ -246,7 +249,7 @@ See [`examples/resources/takosumi_object_store/resource.tf`](examples/resources/
 | `interfaces`              | set(string) | required | One or more of `s3_api`, `signed_url`, `object_events`             |
 | `lifecycle_policy`        | object      | optional | `{ delete = "delete"\|"retain"\|"snapshot_then_delete"\|"block" }` |
 | `space`                   | string      | optional | Overrides the provider default; changing it replaces the resource  |
-| `id`                      | string      | computed | `tkrn:{space}:ObjectStore:{name}` unless the server returns one    |
+| `id`                      | string      | computed | `tkrn:{space}:ObjectBucket:{name}` unless the server returns one   |
 | `selected_implementation` | string      | computed | Backend chosen by the Resolver (e.g. `cloudflare_r2`, `aws_s3`)    |
 | `target`                  | string      | computed | Target the resource landed on                                      |
 | `locked`                  | bool        | computed | Whether the resolution is locked                                   |
@@ -256,24 +259,25 @@ See [`examples/resources/takosumi_object_store/resource.tf`](examples/resources/
 Import accepts `name` or `space/name`:
 
 ```bash
-tofu import takosumi_object_store.assets prod/assets
+tofu import takosumi_object_bucket.assets prod/assets
 ```
 
-### `takosumi_http_service`
+### `takosumi_edge_worker`
 
-| Attribute                 | Type        | Mode     | Notes                                                                |
-| ------------------------- | ----------- | -------- | -------------------------------------------------------------------- |
-| `name`                    | string      | required | Resource key; changing it replaces the resource                      |
-| `runtime_interface`       | string      | required | One of `web_fetch`, `node_http`, `container_http`                    |
-| `artifact_path`           | string      | optional | Runner-local path to a prebuilt artifact; Takosumi does not build it |
-| `public_http`             | bool        | optional | Requests a public HTTP route                                         |
-| `space`                   | string      | optional | Overrides the provider default; changing it replaces the resource    |
-| `id`                      | string      | computed | `tkrn:{space}:HttpService:{name}` unless the server returns one      |
-| `selected_implementation` | string      | computed | Backend chosen by the Resolver, e.g. `cloudflare_workers`            |
-| `target`                  | string      | computed | Target the resource landed on                                        |
-| `locked`                  | bool        | computed | Whether the resolution is locked                                     |
-| `portability`             | string      | computed | Resolver portability assessment                                      |
-| `outputs`                 | map(string) | computed | Resolved outputs                                                     |
+| Attribute                 | Type        | Mode     | Notes                                                                       |
+| ------------------------- | ----------- | -------- | --------------------------------------------------------------------------- |
+| `name`                    | string      | required | Resource key; changing it replaces the resource                             |
+| `artifact_path`           | string      | required | Runner-local path to a prebuilt Worker artifact; Takosumi does not build it |
+| `compatibility_date`      | string      | optional | Worker runtime compatibility date                                           |
+| `compatibility_flags`     | set(string) | optional | Worker runtime compatibility flags                                          |
+| `profiles`                | set(string) | optional | `workers_bindings`, `node_compat`, `service_bindings`, or `static_assets`   |
+| `space`                   | string      | optional | Overrides the provider default; changing it replaces the resource           |
+| `id`                      | string      | computed | `tkrn:{space}:EdgeWorker:{name}` unless the server returns one              |
+| `selected_implementation` | string      | computed | Backend chosen by the Resolver, e.g. `cloudflare_workers`                   |
+| `target`                  | string      | computed | Target the resource landed on                                               |
+| `locked`                  | bool        | computed | Whether the resolution is locked                                            |
+| `portability`             | string      | computed | Resolver portability assessment                                             |
+| `outputs`                 | map(string) | computed | Resolved outputs                                                            |
 
 ### `takosumi_ai_endpoint`
 
@@ -310,22 +314,24 @@ Targets and implementation capabilities the Resolver may use. It is not a
 vendor-specific AI resource. For AI, use target `type = "ai_provider"` and
 operator-defined `implementation` entries.
 
-| Attribute                                    | Type         | Mode     | Notes                                                                                                                                     |
-| -------------------------------------------- | ------------ | -------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `name`                                       | string       | required | TargetPool name; changing it replaces the resource                                                                                        |
-| `space`                                      | string       | optional | Overrides the provider default; changing it replaces the resource                                                                         |
-| `target`                                     | list(object) | required | Ranked target entries                                                                                                                     |
-| `target.name`                                | string       | required | Target name                                                                                                                               |
-| `target.type`                                | string       | required | One of `aws`, `cloudflare`, `gcp`, `azure`, `kubernetes`, `vm`, `proxmox`, `libvirt`, `ssh`, `takosumi_native`, `ai_provider`, `opentofu` |
-| `target.ref`                                 | string       | optional | Type-specific reference such as an account id, cluster id, endpoint URL, or provider base URL                                             |
-| `target.region`                              | string       | optional | Optional region token                                                                                                                     |
-| `target.priority`                            | number       | required | Higher priority wins after policy and capability filtering                                                                                |
-| `target.implementation`                      | list(object) | optional | Operator-defined implementation capability evidence                                                                                       |
-| `target.implementation.shape`                | string       | required | Shape the implementation can materialize, for example `AIEndpoint`                                                                        |
-| `target.implementation.implementation`       | string       | required | Implementation token such as `deepseek_openai_gateway`; not a provider-binary enum                                                        |
-| `target.implementation.native_resource_type` | string       | optional | Native resource type used in resolution evidence                                                                                          |
-| `target.implementation.interfaces`           | map(string)  | required | Interface/profile token to capability level (`native`, `shim`, `emulated`, `unsupported`)                                                 |
-| `id`                                         | string       | computed | `tkrn:{space}:TargetPool:{name}` unless the server returns one                                                                            |
+| Attribute                                    | Type         | Mode     | Notes                                                                                                                                   |
+| -------------------------------------------- | ------------ | -------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`                                       | string       | required | TargetPool name; changing it replaces the resource                                                                                      |
+| `space`                                      | string       | optional | Overrides the provider default; changing it replaces the resource                                                                       |
+| `target`                                     | list(object) | required | Ranked target entries                                                                                                                   |
+| `target.name`                                | string       | required | Target name                                                                                                                             |
+| `target.type`                                | string       | required | Extensible token; well-known examples include `aws`, `cloudflare`, `kubernetes`, `vm`, `takosumi_native`, `ai_provider`, and `opentofu` |
+| `target.ref`                                 | string       | optional | Type-specific reference such as an account id, cluster id, endpoint URL, or provider base URL                                           |
+| `target.region`                              | string       | optional | Optional region token                                                                                                                   |
+| `target.priority`                            | number       | required | Higher priority wins after policy and capability filtering                                                                              |
+| `target.implementation`                      | list(object) | optional | Operator-defined implementation capability evidence                                                                                     |
+| `target.implementation.shape`                | string       | required | Shape the implementation can materialize, for example `AIEndpoint`                                                                      |
+| `target.implementation.implementation`       | string       | required | Implementation token such as `deepseek_openai_gateway`; not a provider-binary enum                                                      |
+| `target.implementation.native_resource_type` | string       | optional | Native resource type used in resolution evidence                                                                                        |
+| `target.implementation.interfaces`           | map(string)  | required | Interface/profile token to capability level (`native`, `shim`, `emulated`, `unsupported`)                                               |
+| `target.implementation.plugin`               | string       | optional | Vite-style adapter plugin id that owns preview/apply/observe/delete for this implementation                                             |
+| `target.implementation.options_json`         | string       | optional | Plugin-local JSON object. Secrets must stay in Credential/ProviderConnection, not here                                                  |
+| `id`                                         | string       | computed | `tkrn:{space}:TargetPool:{name}` unless the server returns one                                                                          |
 
 ## Wire contract
 
@@ -348,8 +354,8 @@ used by each HCL resource, for example:
 {
   "apiVersion": "takosumi.dev/v1alpha1",
   "resources": {
-    "ObjectStore": true,
-    "HttpService": true,
+    "ObjectBucket": true,
+    "EdgeWorker": true,
     "AIEndpoint": true
   }
 }
@@ -373,7 +379,7 @@ Request body (PUT/preview):
 ```json
 {
   "apiVersion": "takosumi.dev/v1alpha1",
-  "kind": "ObjectStore",
+  "kind": "ObjectBucket",
   "metadata": { "name": "assets", "space": "prod", "managedBy": "opentofu" },
   "spec": {
     "name": "assets",

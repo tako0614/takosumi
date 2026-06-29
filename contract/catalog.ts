@@ -111,7 +111,7 @@ export interface ServiceBindingMaterial {
   readonly tokenRefs?: Readonly<Record<string, SecretReference>>;
 }
 
-export interface ObjectStoreMaterial {
+export interface ObjectStorageMaterial {
   readonly bucket: string;
   readonly endpoint: string;
   readonly region?: string;
@@ -154,7 +154,7 @@ export interface BillingPortMaterial {
 export interface OfficialMaterialByKind {
   readonly "http-endpoint": HttpEndpointMaterial;
   readonly "service-binding": ServiceBindingMaterial;
-  readonly "object-store": ObjectStoreMaterial;
+  readonly "object-store": ObjectStorageMaterial;
   readonly "event-channel": EventChannelMaterial;
   readonly "identity.oidc": IdentityOidcMaterial;
   readonly "billing.usage": BillingPortMaterial;
@@ -337,7 +337,7 @@ export function validateOfficialMaterial(
         issues,
         { optional: true },
       );
-      checkObjectStoreCredentialRefs(value, "$", issues);
+      checkObjectStorageCredentialRefs(value, "$", issues);
       break;
     case "event-channel":
       checkNoUnknownKeys(value, "$", issues, [
@@ -951,7 +951,7 @@ function checkSecretReferenceRecord(
   }
 }
 
-function checkObjectStoreCredentialRefs(
+function checkObjectStorageCredentialRefs(
   value: Record<string, unknown>,
   path: string,
   issues: CatalogValidationIssue[],

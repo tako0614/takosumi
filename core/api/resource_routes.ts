@@ -30,9 +30,7 @@ export interface RegisterResourceShapeRoutesOptions {
    * Resolves the acting principal for a request. Defaults to a single-tenant
    * self-host owner actor; operator/Cloud composition injects real auth.
    */
-  readonly resolveActor?: (
-    c: Context,
-  ) => ActorContext | Promise<ActorContext>;
+  readonly resolveActor?: (c: Context) => ActorContext | Promise<ActorContext>;
 }
 
 /** Route inventory for the resource-shape family (not yet OpenAPI-published). */
@@ -76,10 +74,17 @@ export function registerResourceShapeRoutes(
     if ("response" in kind) return kind.response;
     const space = requireQuery(c, "space");
     if ("response" in space) return space.response;
-    const result = await service.get(space.value, kind.value, c.req.param("name"));
+    const result = await service.get(
+      space.value,
+      kind.value,
+      c.req.param("name"),
+    );
     if (!result.ok) return errorResponse(c, result.error);
     return c.json(
-      { id: formatResourceShapeId(space.value, kind.value, c.req.param("name")), ...result.value },
+      {
+        id: formatResourceShapeId(space.value, kind.value, c.req.param("name")),
+        ...result.value,
+      },
       200,
     );
   });
@@ -111,8 +116,14 @@ export function registerResourceShapeRoutes(
     const body = await readJsonObject(c.req.raw);
     const space = stringField(body, "space");
     if (!space) return badRequest(c, "space is required");
-    const spec = (body.spec ?? { targets: body.targets ?? [] }) as TargetPoolSpec;
-    const record = await service.putTargetPool(space, c.req.param("name"), spec);
+    const spec = (body.spec ?? {
+      targets: body.targets ?? [],
+    }) as TargetPoolSpec;
+    const record = await service.putTargetPool(
+      space,
+      c.req.param("name"),
+      spec,
+    );
     return c.json(record, 200);
   });
 
@@ -126,7 +137,10 @@ export function registerResourceShapeRoutes(
   app.get("/v1/target-pools/:name", async (c) => {
     const space = requireQuery(c, "space");
     if ("response" in space) return space.response;
-    const record = await service.getTargetPool(space.value, c.req.param("name"));
+    const record = await service.getTargetPool(
+      space.value,
+      c.req.param("name"),
+    );
     if (!record) {
       return errorResponse(c, {
         code: "not_found",
@@ -148,7 +162,11 @@ export function registerResourceShapeRoutes(
     const space = stringField(body, "space");
     if (!space) return badRequest(c, "space is required");
     const spec = (body.spec ?? body) as SpacePolicySpec;
-    const record = await service.putSpacePolicy(space, c.req.param("name"), spec);
+    const record = await service.putSpacePolicy(
+      space,
+      c.req.param("name"),
+      spec,
+    );
     return c.json(record, 200);
   });
 
@@ -189,11 +207,14 @@ export function registerResourceShapeRoutes(
         ),
       };
     }
-    const name = c.req.param("name") ?? stringValue(metadata.name) ??
+    const name =
+      c.req.param("name") ??
+      stringValue(metadata.name) ??
       stringValue((spec as Record<string, unknown>).name);
     if (!name) return { response: badRequest(c, "resource name is required") };
     const space = stringValue(metadata.space) ?? stringField(body, "space");
-    if (!space) return { response: badRequest(c, "metadata.space is required") };
+    if (!space)
+      return { response: badRequest(c, "metadata.space is required") };
     const actor = await resolveActor(c, options);
     return {
       request: {
@@ -314,10 +335,8 @@ function httpStatusForServiceError(
     case "invalid_interfaces":
     case "invalid_interface":
     case "invalid_runtime":
-    case "invalid_runtime_interface":
     case "invalid_profile":
     case "invalid_source":
-    case "invalid_exposure":
     case "invalid_connections":
     case "invalid_model_policy":
     case "invalid_lifecycle_policy":

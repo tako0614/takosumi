@@ -84,7 +84,7 @@ func TestGetCapabilities(t *testing.T) {
 		}
 		_, _ = io.WriteString(w, `{
 			"apiVersion":"takosumi.dev/v1alpha1",
-			"resources":{"ObjectStore":true,"HttpService":true,"AIEndpoint":true},
+			"resources":{"ObjectBucket":true,"EdgeWorker":true,"AIEndpoint":true},
 			"adapters":{"opentofu":true}
 		}`)
 	}))
@@ -95,13 +95,13 @@ func TestGetCapabilities(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetCapabilities: %v", err)
 	}
-	if !caps.SupportsResource(KindObjectStore) || !caps.SupportsResource(KindHttpService) {
-		t.Fatalf("expected ObjectStore and HttpService capabilities: %#v", caps.Resources)
+	if !caps.SupportsResource(KindObjectBucket) || !caps.SupportsResource(KindEdgeWorker) {
+		t.Fatalf("expected ObjectBucket and EdgeWorker capabilities: %#v", caps.Resources)
 	}
 	if !caps.SupportsResource(KindAIEndpoint) {
 		t.Fatalf("expected AIEndpoint capability: %#v", caps.Resources)
 	}
-	if !c.Capabilities.SupportsResource(KindHttpService) {
+	if !c.Capabilities.SupportsResource(KindEdgeWorker) {
 		t.Fatalf("expected capabilities cached on client")
 	}
 }
@@ -112,7 +112,7 @@ func TestPutResource_RoundTrip(t *testing.T) {
 		if r.Method != http.MethodPut {
 			t.Errorf("expected PUT, got %s", r.Method)
 		}
-		if r.URL.Path != "/v1/resources/ObjectStore/assets" {
+		if r.URL.Path != "/v1/resources/ObjectBucket/assets" {
 			t.Errorf("unexpected path %q", r.URL.Path)
 		}
 		if auth := r.Header.Get("Authorization"); auth != "Bearer secret-token" {
@@ -127,7 +127,7 @@ func TestPutResource_RoundTrip(t *testing.T) {
 
 		resp := Resource{
 			APIVersion: APIVersion,
-			Kind:       KindObjectStore,
+			Kind:       KindObjectBucket,
 			Metadata:   Metadata{Name: "assets", Space: "prod"},
 			Spec:       gotBody.Spec,
 			Status: &Status{
@@ -153,7 +153,7 @@ func TestPutResource_RoundTrip(t *testing.T) {
 	c := New(srv.URL, "secret-token", srv.Client())
 	body := &Resource{
 		APIVersion: APIVersion,
-		Kind:       KindObjectStore,
+		Kind:       KindObjectBucket,
 		Metadata:   Metadata{Name: "assets", Space: "prod", ManagedBy: ManagedByOpenTofu},
 		Spec: map[string]any{
 			"name":            "assets",
@@ -161,7 +161,7 @@ func TestPutResource_RoundTrip(t *testing.T) {
 			"lifecyclePolicy": map[string]any{"delete": "retain"},
 		},
 	}
-	out, err := c.PutResource(context.Background(), KindObjectStore, "assets", body)
+	out, err := c.PutResource(context.Background(), KindObjectBucket, "assets", body)
 	if err != nil {
 		t.Fatalf("PutResource: %v", err)
 	}
@@ -203,7 +203,7 @@ func TestGetResource_NotFound(t *testing.T) {
 	defer srv.Close()
 
 	c := New(srv.URL, "", srv.Client())
-	_, err := c.GetResource(context.Background(), KindObjectStore, "missing", "prod")
+	_, err := c.GetResource(context.Background(), KindObjectBucket, "missing", "prod")
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
@@ -218,7 +218,7 @@ func TestErrorEnvelope(t *testing.T) {
 	defer srv.Close()
 
 	c := New(srv.URL, "", srv.Client())
-	_, err := c.PutResource(context.Background(), KindObjectStore, "assets", &Resource{})
+	_, err := c.PutResource(context.Background(), KindObjectBucket, "assets", &Resource{})
 	if err == nil {
 		t.Fatalf("expected error")
 	}
@@ -260,7 +260,7 @@ func TestDeleteResource(t *testing.T) {
 		defer srv.Close()
 
 		c := New(srv.URL, "", srv.Client())
-		if err := c.DeleteResource(context.Background(), KindObjectStore, "assets", "prod"); err != nil {
+		if err := c.DeleteResource(context.Background(), KindObjectBucket, "assets", "prod"); err != nil {
 			t.Fatalf("DeleteResource: %v", err)
 		}
 	})
@@ -272,7 +272,7 @@ func TestDeleteResource(t *testing.T) {
 		defer srv.Close()
 
 		c := New(srv.URL, "", srv.Client())
-		if err := c.DeleteResource(context.Background(), KindObjectStore, "assets", "prod"); err != nil {
+		if err := c.DeleteResource(context.Background(), KindObjectBucket, "assets", "prod"); err != nil {
 			t.Fatalf("expected nil error on 404 delete, got %v", err)
 		}
 	})
@@ -396,7 +396,7 @@ func TestPreviewResource(t *testing.T) {
 		resp := PreviewResourceResult{
 			Resource: Resource{
 				APIVersion: APIVersion,
-				Kind:       KindObjectStore,
+				Kind:       KindObjectBucket,
 				Status: &Status{
 					Conditions: []Condition{{Type: "Blocked", Status: "True", Message: "policy denies gcp"}},
 				},
@@ -408,7 +408,7 @@ func TestPreviewResource(t *testing.T) {
 	defer srv.Close()
 
 	c := New(srv.URL, "", srv.Client())
-	out, err := c.PreviewResource(context.Background(), &Resource{Kind: KindObjectStore})
+	out, err := c.PreviewResource(context.Background(), &Resource{Kind: KindObjectBucket})
 	if err != nil {
 		t.Fatalf("PreviewResource: %v", err)
 	}
