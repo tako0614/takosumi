@@ -62,28 +62,24 @@ Example:
   "serviceUrl": "https://app.takosumi.com",
   "extensions": [
     {
-      "id": "ai.openai_compatible.v1",
-      "kind": "ai_gateway",
-      "protocol": "openai-compatible",
       "basePath": "/gateway/ai/v1",
       "configured": true,
-      "capabilities": ["chat.completions", "embeddings", "models.list"],
-      "smokeChecks": ["GET /models", "POST /chat/completions"]
+      "requiredScopes": ["ai.chat", "ai.embeddings"]
     },
     {
-      "id": "provider.cloudflare.client_v4",
-      "kind": "provider_compat",
-      "provider": "cloudflare",
-      "protocol": "cloudflare-v4",
       "basePath": "/compat/cloudflare/client/v4",
       "configured": true,
-      "capabilities": ["workers", "kv", "r2", "d1"],
-      "smokeChecks": ["GET /user/tokens/verify", "GET /accounts"]
+      "requiredScopes": ["read", "write"]
+    },
+    {
+      "basePath": "/cloud/usage",
+      "configured": true,
+      "requiredScopes": ["cloud.usage.write"]
     }
   ],
   "summary": {
-    "total": 2,
-    "configured": 2,
+    "total": 3,
+    "configured": 3,
     "missing": 0
   }
 }
@@ -205,6 +201,33 @@ For storage-backed resource inventory, the closed `takosumi-cloud`
 `storageInventoryUsageReports()` helper converts provider inventory collector
 average bytes plus a real period into GB-hour usage and reports it with the same
 header shape.
+
+The collector calls a Cloud-only extension endpoint, not a customer API. The
+platform `TAKOSUMI_CLOUD_EXTENSIONS` config routes `/cloud/usage` to the closed
+`takosumi-cloud-usage` service binding, and the service token should carry a
+usage-write scope. Requests are batched per Workspace; mixing multiple
+Workspaces returns 400. If the verified billing Workspace context and the
+sample `workspaceId` differ, the endpoint returns 403 and no usage is recorded.
+
+```http
+POST /cloud/usage/storage-inventory
+```
+
+```json
+{
+  "periodStart": "2026-06-26T13:00:00.000Z",
+  "periodEnd": "2026-06-26T14:00:00.000Z",
+  "samples": [
+    {
+      "workspaceId": "space_xxx",
+      "installationId": "inst_xxx",
+      "resourceFamily": "cloudflare.r2",
+      "resourceId": "bucket:assets",
+      "averageBytes": 536870912
+    }
+  ]
+}
+```
 
 ```http
 x-takosumi-cloud-usage-period-start: 2026-06-26T13:00:00.000Z

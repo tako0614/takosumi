@@ -317,6 +317,32 @@ bun run cli -- secrets apply \
   --secrets-dir ../takosumi-private/.secrets/production
 ```
 
+Cloud storage inventory metering を有効にする場合は、closed Cloud usage worker を先に
+deploy し、operator-private realized platform config で service binding と
+`TAKOSUMI_CLOUD_EXTENSIONS` descriptor を追加する。これは customer API ではなく
+collector 用の Cloud-only extension で、1 request は 1 Workspace に分割する。
+
+```bash
+cd takosumi-cloud/gateway/cloud-usage
+bun run deploy:production
+```
+
+```toml
+[[services]]
+binding = "TAKOSUMI_CLOUD_USAGE"
+service = "takosumi-cloud-usage"
+```
+
+```json
+[
+  {
+    "basePath": "/cloud/usage",
+    "bindingName": "TAKOSUMI_CLOUD_USAGE",
+    "requiredScopes": ["cloud.usage.write"]
+  }
+]
+```
+
 ## 動作確認
 
 ```bash
@@ -381,6 +407,7 @@ bun run smoke:cloud-extensions -- \
   --platform-version <wrangler-platform-version-id> \
   --ai-gateway-version <wrangler-ai-gateway-version-id> \
   --cloudflare-compat-version <wrangler-cloudflare-compat-version-id> \
+  --cloud-usage-version <wrangler-cloud-usage-version-id> \
   --out-file ../takosumi-private/evidence/cloud-extension-smoke-production.json \
   --json
 
@@ -393,6 +420,9 @@ bun run smoke:cloud-extensions -- \
   --require-cloudflare-compat-usage-ledger \
   --cloudflare-compat-usage-workspace-id <workspace-id> \
   --cloudflare-compat-usage-installation-id <compat-installation-id> \
+  --require-cloud-usage-storage-ledger \
+  --cloud-usage-workspace-id <workspace-id> \
+  --cloud-usage-installation-id <cloud-usage-installation-id> \
   --json
 
 # GA strict + external AI upstream claim only:
@@ -410,6 +440,9 @@ bun run smoke:cloud-extensions -- \
   --require-cloudflare-compat-usage-ledger \
   --cloudflare-compat-usage-workspace-id <workspace-id> \
   --cloudflare-compat-usage-installation-id <compat-installation-id> \
+  --require-cloud-usage-storage-ledger \
+  --cloud-usage-workspace-id <workspace-id> \
+  --cloud-usage-installation-id <cloud-usage-installation-id> \
   --json
 ```
 

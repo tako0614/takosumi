@@ -188,6 +188,23 @@ closed `takosumi-cloud` package では、この共通変換を
 `gateway_storage_gb_hour` usage header を作ります。単価と USD debit は引き続き
 platform worker の price book が決めます。
 
+実運用では collector は `POST /cloud/usage/storage-inventory` を
+`cloud_extensions` Seam A 経由で呼びます。この endpoint は closed
+`takosumi-cloud-usage` worker にあり、platform が検証した billing Workspace
+context と request body の `workspaceId` を照合してから usage header を返します。
+header は client response から削除され、platform worker が price book で
+`usdMicros` を確定して Workspace usage ledger に記録します。1 request に複数
+Workspace を混ぜないでください。複数 Workspace の inventory は Workspace ごとに
+分割して送ります。
+
+```json
+{
+  "basePath": "/cloud/usage",
+  "bindingName": "TAKOSUMI_CLOUD_USAGE",
+  "requiredScopes": ["cloud.usage.write"]
+}
+```
+
 ## Free tier
 
 無料枠は monthly included USD grant として扱います。初期値は Workspace ごとに
