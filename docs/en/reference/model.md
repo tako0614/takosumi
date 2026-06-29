@@ -142,6 +142,13 @@ through the OpenTofu Stack flow. Add a Takosumi shape only when Takosumi needs a
 provider-neutral service form, binding projection, resolution lock, policy,
 metering, or import path.
 
+The inverse is also scoped: when a generic provider does not exist, Takosumi
+does not automatically create a catch-all provider. One-off provider gaps should
+stay in generic-env ProviderConnections and normal OpenTofu modules. A new
+`takosumi_*` resource is justified only for a repeated service form that needs a
+typed schema, planner, adapter, import/drift/state behavior, and capability
+evidence.
+
 Adapters report capabilities and perform preview/apply/observe/delete work.
 Initial adapter families can include OpenTofu, Cloudflare, AWS, Kubernetes, VM,
 and Takosumi-native adapters.

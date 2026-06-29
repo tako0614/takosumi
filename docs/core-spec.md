@@ -208,6 +208,12 @@ Takosumi-owned clone. Resource Shapes are for provider-neutral service forms
 where Takosumi needs resolution, binding projection, policy, metering, or
 managed target control.
 
+If no generic provider exists, that is still not enough by itself. One-off cases
+should use generic-env ProviderConnections and ordinary OpenTofu modules. Add a
+Takosumi provider resource only when the missing surface is a repeated service
+form with a clear schema, validation, planner, adapter path, state/import/drift
+story, and capability evidence.
+
 ## Resource Objects
 
 Resource objects use `apiVersion: takosumi.dev/v1alpha1`.

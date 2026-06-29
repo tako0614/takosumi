@@ -87,6 +87,11 @@ This does not mean Takosumi should recreate every provider or standard API. If
 an adequate generic OpenTofu provider or standard endpoint already exists, use
 it through the Stack flow. Takosumi shapes are for provider-neutral service
 forms, bindings, policy, metering, and import paths.
+The reverse is scoped too: if a generic provider does not exist, Takosumi still
+does not add a catch-all provider by default. One-off gaps stay in generic-env
+ProviderConnections and ordinary OpenTofu modules. New `takosumi_*` resources
+are added only for repeated service forms with a typed schema, planner, adapter,
+state/import/drift behavior, and capability evidence.
 
 ## What OSS Includes
 
