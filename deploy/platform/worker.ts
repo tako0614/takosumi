@@ -1867,6 +1867,7 @@ function fallbackPlatformCloudUsageMeter(
   const url = new URL(request.url);
   const suffix = url.pathname.slice(route.basePath.length) || "/";
   const method = request.method.toUpperCase();
+  if (method === "DELETE") return undefined;
   for (const rule of rules) {
     if (rule.methods && !rule.methods.includes(method)) continue;
     const match = matchPlatformCloudExtensionUsageTemplate(

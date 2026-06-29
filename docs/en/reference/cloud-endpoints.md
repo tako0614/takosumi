@@ -25,8 +25,10 @@ screen:
 
 Deleting a resource calls the compat gateway's DELETE. It requires a
 `write`-scoped session and only takes effect when the Cloud backend has
-materialized it; otherwise the gateway answers 501 fail-closed. The app does not
-carry the full specification — provider compatibility scope, OpenTofu provider
+materialized it; otherwise the gateway answers 501 fail-closed. DELETE cleanup is
+not a billable fallback operation, so a Workspace that has run out of credit can
+still destroy or remove already-created managed resources. The app does not carry
+the full specification — provider compatibility scope, OpenTofu provider
 examples, usage event contracts, and secret-handling rules belong in docs.
 
 ## Boundary
@@ -178,6 +180,12 @@ unit charge, estimated unit cost, and minimum gross margin before it writes
 fail closed, so WfP and AI requests cannot succeed without billable credit.
 The operating source of truth for prices and the free tier is
 `docs/operations/cloud-pricing.md`.
+
+Cleanup is intentionally different from expansion. Create, deploy, runtime, and
+data-plane write/query/message/instance operations are billable and fail closed
+when credit is insufficient. DELETE cleanup does not emit fallback usage and must
+remain available so OpenTofu destroy and app removal can recover from a depleted
+balance without leaving resources stuck.
 
 Internal headers:
 
