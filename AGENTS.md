@@ -19,9 +19,11 @@ only at two seams. It consumes only the OSS composition root (`takosumi`, at boo
 (`takosumi-contract`); it must never reach into `takosumi/core` or `takosumi/accounts` internals. The OSS platform ships
 and runs with nothing from `takosumi-cloud/` present.
 
-- **Seam A — additive HTTP route proxy (`cloud_extensions`).** OSS exposes an additive route-proxy hook; bound Cloud
-  extensions (e.g. the AI Gateway) proxy their routes to the Cloud worker, and when unbound those routes return 404 so
-  OSS behaves exactly as if Cloud did not exist. Cloud is purely additive and never rewrites or removes OSS routes.
+- **Seam A — additive HTTP route dispatch (`cloud_extensions`).** OSS exposes an additive route hook; mounted Cloud
+  extensions (e.g. the AI Gateway) dispatch their routes to closed fetch handlers supplied by `takosumi-cloud`, and when
+  unmounted those routes return 404 so OSS behaves exactly as if Cloud did not exist. Cloud is purely additive and never
+  rewrites or removes OSS routes. The official `app.takosumi.com` deployment mounts those handlers in-process through
+  the closed platform wrapper as one platform Worker.
 - **Seam B — in-process composition ports.** The OSS bootstrap accepts optional ports such as `BillingEnforcement` and
   `QuotaPolicy`. OSS supplies safe no-op / open defaults so it runs standalone; Cloud injects the closed implementations
   at bootstrap. Ports are typed against the public contract, keeping the dependency one-way.

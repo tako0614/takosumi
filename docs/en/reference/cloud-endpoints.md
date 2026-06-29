@@ -3,6 +3,11 @@
 Takosumi Cloud endpoints are Cloud-only managed services. They are not part of
 the Takosumi OSS or Takosumi for Operators public contract.
 
+Use [Takosumi Cloud](../cloud/index.md) and
+[Takosumi Cloud Workers](./cloud-workers.md) as the public product docs. This
+page is the detailed reference for endpoints, usage, API keys, and compatibility
+routes.
+
 The app screen should show operational facts that people need day to day: API
 keys, connection health, this month's usage, balance, and current resource
 counts. The full endpoint contract, scope, and examples live in this document.
@@ -15,7 +20,7 @@ counts. The full endpoint contract, scope, and examples live in this document.
 - Cloud resources (KV / Object Storage / Database / Workers): list, copy IDs,
   and delete
 - AI Gateway base URL, connection health, and default model
-- Cloudflare Compatibility API base URL and current account
+- OpenTofu import endpoint base URL and current virtual account
 
 Usage and billing live on Billing (`app.takosumi.com/billing`), not on the Cloud
 screen:
@@ -38,14 +43,20 @@ Takosumi OSS runs existing OpenTofu/Terraform providers as-is.
 Only Takosumi Cloud has:
 
 - AI Gateway
-- Cloudflare Compatibility API
+- Takosumi Cloud Workers
+- Cloudflare-compatible import endpoint
 - managed resource backends
 - official usage, quota, billing, and support controls
 
-The platform worker at `app.takosumi.com` exposes Cloud-only route families and
-delegates implementation to closed service bindings. OSS code may contain
-catalog metadata, auth forwarding, dashboard clients, and smoke tests. Managed
-resource backends are Takosumi Cloud closed modules.
+Official `app.takosumi.com` uses the closed
+`takosumi-cloud/platform/worker.ts` wrapper as the Worker entry. The wrapper
+mounts Cloud-only fetch handlers in-process into the OSS platform worker's
+`cloud_extensions` seam. AI Gateway, the Cloudflare-compatible import endpoint,
+Cloud usage, and Cloud Edge Runtime live in closed handlers; OSS code may
+contain catalog metadata, auth forwarding, dashboard clients, and smoke tests.
+`bindingName` is the handler key consumed by the OSS seam and resolved
+in-process by the official Cloud wrapper. Managed resource backends are
+Takosumi Cloud closed modules.
 
 ## Catalog
 
@@ -227,8 +238,11 @@ average bytes plus a real period into GB-hour usage and reports it with the same
 header shape.
 
 The collector calls a Cloud-only extension endpoint, not a customer API. The
-platform `TAKOSUMI_CLOUD_EXTENSIONS` config routes `/cloud/usage` to the closed
-`takosumi-cloud-usage` service binding, and the service token should carry a
+official Cloud wrapper mounts `/cloud/usage` to the closed Cloud usage handler
+in-process, and the platform `TAKOSUMI_CLOUD_EXTENSIONS` config points to that
+handler key. Official `app.takosumi.com` mounts the Cloud usage handler in the
+same platform Worker.
+The service token should carry a
 usage-write scope. Requests are batched per Workspace; mixing multiple
 Workspaces returns 400. If the verified billing Workspace context and the
 sample `workspaceId` differ, the endpoint returns 403 and no usage is recorded.
@@ -383,7 +397,7 @@ OpenAI-compatible upstream. `/models` and status responses must return only
 public model aliases and readiness metadata, never upstream keys or secret env
 names.
 
-## Cloudflare Compatibility API
+## OpenTofu Import Endpoint
 
 Base URL:
 
@@ -393,7 +407,8 @@ https://app.takosumi.com/compat/cloudflare/client/v4
 
 This is a Cloudflare v4-compatible subset. It lets the `cloudflare/cloudflare`
 OpenTofu/Terraform provider point Workers-oriented resources at Takosumi Cloud
-managed resources by changing provider `base_url`.
+Workers / managed bindings by changing provider `base_url`. It is an import and
+deploy path for existing manifests.
 
 Response envelope:
 
@@ -421,6 +436,8 @@ Initial target scope:
 
 - Workers scripts
 - Workers routes
+- default `*.app.takos.jp` hostname per Worker route
+- user-owned custom domains on Worker routes
 - KV namespaces
 - R2 buckets
 - D1 databases
@@ -441,6 +458,40 @@ Not in the initial target:
 Cloudflare billing API compatibility is out of scope. Takosumi Cloud managed
 resource usage must be recorded through the Workspace usage ledger above, not by
 proxying Cloudflare's billing API.
+
+Workers route records carry hostname fields:
+
+Request:
+
+```json
+{
+  "pattern": "my-app.app.takos.jp/*",
+  "script": "api",
+  "app_subdomain": "my-app",
+  "custom_domains": ["api.example.com"]
+}
+```
+
+Response:
+
+```json
+{
+  "id": "route_xxx",
+  "pattern": "my-app.app.takos.jp/*",
+  "script": "api",
+  "default_hostname": "my-app.app.takos.jp",
+  "custom_domains": ["api.example.com"]
+}
+```
+
+`default_hostname` is the immediately usable Takosumi-managed URL. It can be
+requested with `app_subdomain`, `default_hostname`, or `hostname`. If omitted,
+Takosumi issues `<app-slug>-<short-id>.app.takos.jp`. The `*.app.takos.jp`
+namespace is first-come-first-served; duplicate reservations return 409.
+`custom_domains` are user-owned domains. DNS ownership verification,
+certificate provisioning, and runtime dispatch activation are Cloud runtime
+responsibilities. Unverified custom domains are not activated for runtime
+dispatch, and the default hostname remains available.
 
 ## OpenTofu provider usage
 
@@ -478,7 +529,7 @@ Cloud endpoints must:
 - never redisplay secret values after creation
 - keep secret-shaped values out of usage, catalog, status, and model metadata
 - have the platform worker verify API key / session validity and read/write scope
-- have the closed binding verify Workspace / account / virtual-account resource scope
+- have the closed handler verify Workspace / account / virtual-account resource scope
 - fail closed for unsupported routes instead of pretending success
 - keep Cloud-only backends out of OSS Takosumi
 
@@ -493,7 +544,7 @@ The OSS repository contains:
 - smoke tests and provider E2E expectations
 
 The Cloudflare Compatibility backend and managed resource materialization are
-closed Takosumi Cloud service bindings. If AI Gateway / Cloudflare
-Compatibility bindings are not configured, `/gateway/ai/v1/*` and
-`/compat/cloudflare/client/v4/*` intentionally return not found from the
-platform worker.
+closed Takosumi Cloud handlers mounted in-process by the official Cloud wrapper.
+If AI Gateway / Cloudflare Compatibility handlers are not configured,
+`/gateway/ai/v1/*` and `/compat/cloudflare/client/v4/*` intentionally return
+not found from the platform worker.

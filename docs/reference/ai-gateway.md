@@ -11,11 +11,13 @@ and one rotated runtime service token while Takosumi Cloud keeps operator-held
 AI credentials in platform secrets.
 For Cloudflare Unified Billing that credential is a Cloudflare API token; for
 direct/BYOK profiles it is the provider API key. The OSS platform worker
-carries only a fail-closed route seam and an optional
-Cloud-extension service binding handoff. The platform Cloud extension registry
-currently contains exactly two routes: this AI Gateway and the Cloudflare
-Compatibility Gateway. Upstream profiles, operator-held credentials, and
-request forwarding belong to the closed Takosumi Cloud deployment.
+carries only a fail-closed route seam and an optional Cloud-extension fetch
+handler handoff. In official Takosumi Cloud, the closed
+`takosumi-cloud/platform/worker.ts` wrapper mounts that handler in-process
+around the OSS platform worker. The platform Cloud extension registry currently
+contains exactly two public compatibility routes: this AI Gateway and the
+Cloudflare Compatibility Gateway. Upstream profiles, operator-held credentials,
+and request forwarding belong to the closed Takosumi Cloud deployment.
 
 For the current GA scope, Takosumi Cloud compatibility APIs are limited to the
 Cloudflare Compatibility Gateway and this AI Gateway. Other providers should be
@@ -23,19 +25,12 @@ supported through their normal OpenTofu/Terraform providers and generic
 ProviderConnection env/file injection rather than new provider-compatible
 gateway APIs.
 
-The platform route is active only when the realized operator config binds the
-closed Cloud extension Worker:
-
-```toml
-[[services]]
-binding = "TAKOSUMI_CLOUD_AI_GATEWAY"
-service = "takosumi-cloud-ai-gateway"
-```
-
-The `service` value above is the OSS reference placeholder. The production
-value belongs in `takosumi-private/platform/wrangler.toml`, alongside the
-closed Worker deployment. Without this binding, `/gateway/ai/v1/*` intentionally
-returns `404`.
+The platform route is active only when the closed Cloud wrapper mounts the AI
+Gateway fetch handler. The wrapper exposes that handler to the OSS
+`cloud_extensions` seam through the `TAKOSUMI_CLOUD_AI_GATEWAY` handler key, so
+official staging/production `app.takosumi.com` remains one platform Worker.
+Without a mounted handler,
+`/gateway/ai/v1/*` intentionally returns `404`.
 
 It is not an OpenTofu provider credential and it is not an OpenTofu output secret. OpenTofu provisions and deploys the
 service that will consume the model API; runtime model access is granted after deployment through
@@ -68,9 +63,9 @@ Runtime calls should use a current `takosumi.ai.gateway` runtime service token
 as `Authorization: Bearer <taksrv_...>`. The platform worker introspects that
 token with the Cloud extension confidential client, verifies the endpoint
 scope, strips the raw bearer token, and forwards only a sanitized request to the
-closed AI Gateway worker. Failed auth or insufficient-scope requests are
+closed AI Gateway handler. Failed auth or insufficient-scope requests are
 forwarded without raw account/session/service credentials and without the
-pre-authenticated header, so the downstream worker fails closed without seeing
+pre-authenticated header, so the downstream handler fails closed without seeing
 the original credential.
 Operator/dashboard sessions and Takosumi personal access tokens are accepted
 only for owner/operator smoke and diagnostics; deployed Capsule runtimes should
@@ -84,7 +79,7 @@ charged to the Takosumi Cloud operator's Cloudflare account. That is only the
 upstream cost path. It is not sufficient evidence that the Takosumi customer has
 been billed.
 
-The closed AI Gateway worker must report billable usage back to the platform
+The closed AI Gateway handler must report billable usage back to the platform
 worker with the Cloud extension usage report headers. The platform worker strips
 those headers before returning the response and records them in the Workspace
 usage ledger. Supported AI meter kinds are:
@@ -276,7 +271,7 @@ Rules:
   and Unified Billing.
 - `workers_ai_binding` profiles must not set `baseUrl`, `apiKeyEnv`,
   `apiKeyHeader`, or static `headers`; they run through the Worker `AI`
-  binding configured on the closed Cloud worker.
+  binding configured on the closed Cloud handler environment.
 - `baseUrl` for `openai_compatible` profiles must be an HTTPS OpenAI-compatible base URL. Local HTTP is rejected unless
   `TAKOSUMI_AI_GATEWAY_ALLOW_LOCAL_HTTP=1` is set for tests.
 - Literal local/private/link-local/metadata IP upstreams and reserved internal DNS suffixes such as `.internal`,
@@ -306,11 +301,12 @@ Unified Billing and follow Workers AI pricing.
 
 `GET /gateway/ai/v1/__takosumi/status` returns only public readiness
 metadata. Explicitly configured profiles report `configured_upstreams`, the
-public providers/model aliases, and whether the Cloud worker has a Workers AI
-binding available for `workers_ai_binding` profiles. It never returns upstream
-keys, `apiKeyEnv` names, raw `Authorization` material, or service-binding
-names. Takosumi Cloud should configure at least one explicit profile before
-claiming AI Gateway readiness. Use `type: "openai_compatible"` with Cloudflare
+public providers/model aliases, and whether the Cloud handler environment has a
+Workers AI binding available for `workers_ai_binding` profiles. It never
+returns upstream keys, `apiKeyEnv` names, raw `Authorization` material, or
+handler keys. Takosumi Cloud should configure at least one explicit
+profile before claiming AI Gateway readiness. Use `type: "openai_compatible"`
+with Cloudflare
 AI Gateway REST API and Unified Billing for the default operator-paid sandbox,
 use direct/BYOK `openai_compatible` profiles when Takosumi intentionally owns
 provider-specific keys, or use `type: "workers_ai_binding"` for the base

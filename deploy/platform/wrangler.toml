@@ -143,8 +143,8 @@ max_batch_timeout = 5
 # Cloud extension seams are NOT declared in the OSS template. The generic Seam A
 # (deploy/platform/worker.ts + cloud_extensions.ts) is config-driven: the closed
 # Takosumi Cloud delta supplies `TAKOSUMI_CLOUD_EXTENSIONS` (the matched base
-# paths + service-binding names) plus the corresponding `[[services]]` bindings
-# in its realized operator-private config. The OSS worker names no Cloud feature.
+# paths + handler keys) and resolves those keys in its platform wrapper. The
+# OSS worker names no Cloud feature and declares no Cloud-only gateway binding.
 
 # Scheduled source polling (Core Specification §6). Every 5 minutes the worker's
 # scheduled() handler scans active autoSync sources and enqueues a deduped
