@@ -166,19 +166,22 @@ bun run check:takosumi-billing-readiness -- \
   --checkout-smoke \
   --out-file evidence/billing-readiness-production-sandbox.json
 
-bun run ga:status -- \
+bun run status:takosumi-completion -- \
+  --environment production \
   --probe-live \
   --require-complete \
   --billing-checkout-smoke \
-  --allow-production-test-stripe
+  --allow-production-test-stripe \
+  --out-file takosumi-private/evidence/completion-status-production-sandbox.json
 ```
 
 This proves the production-equivalent billing path can create Stripe Checkout
 Sessions without opening paid enforcement. In this mode `complete: true` means
-the closed pre-GA runtime path is complete with sandbox billing. `launchReady:
-true` still requires accepted public launch evidence, and paid enforcement still
-requires live-mode Stripe secrets plus `ga:status
---require-billing-readiness`.
+the closed pre-GA runtime path is complete with sandbox billing and
+`sandboxComplete: true` means runtime checks, live probe, and test-mode Checkout
+smoke passed. `launchReady` remains false until accepted production public
+readiness evidence is published, and paid enforcement still requires live-mode
+Stripe secrets plus `status:takosumi-completion --require-billing-readiness`.
 
 `bootstrap:takosumi-stripe-billing` creates or reuses Stripe prices by stable
 lookup key and writes only the non-secret Takosumi billing plan catalog. It reads
@@ -235,6 +238,14 @@ verified billing Workspace context and no usage headers, so a missing Cloud
 extension usage header does not silently skip billing evidence. Treat this as a
 GA safety net; it does not replace precise token, request, or storage metering
 inside the closed Cloud extension.
+
+Storage GB-hour billing is not request-count billing. Before KV / R2 / D1
+storage is presented as usage-complete, the closed Cloud extension or an
+operator metering job must emit measured `gateway_storage_gb_hour` events from
+provider inventory with a real `periodStart` / `periodEnd`. Similarly,
+Containers and Durable Objects must not be advertised as available Takosumi
+Cloud managed resources until their compat/managed routes, usage headers or
+fallback preauthorization, ledger smoke, and destroy proof are collected.
 
 GA billing evidence is collected through the `billing-operation` operation-drill
 batch and the `external-provider` billing provider batch. The latter covers
