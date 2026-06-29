@@ -31,6 +31,14 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
   readonly TAKOSUMI_RUNTIME_CELL_ID?: string;
   readonly TAKOSUMI_RUNTIME_CELL?: string;
   /**
+   * Runner performance knobs forwarded to the OpenTofu runner container. These
+   * are non-secret operational settings: the plugin cache stores provider
+   * binaries only, and keepalive only controls warm container lifetime.
+   */
+  readonly TAKOSUMI_RUNNER_KEEPALIVE_SECONDS?: string;
+  readonly TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR?: string;
+  readonly TAKOSUMI_SOURCE_ARCHIVE_ZSTD_LEVEL?: string;
+  /**
    * Local/private probe ingress opt-in for the `/internal/v1/*` HTTP seam.
    * Production edge deployments omit this so generic internal APIs stay 404.
    */

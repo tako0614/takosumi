@@ -821,6 +821,25 @@ parallel. If an operator shares one cache path across independent runner
 processes or containers, the operator must provide the external isolation or
 file lock for that substrate.
 
+The reference Cloudflare Container runner exposes these non-secret speed knobs:
+
+```text
+TAKOSUMI_RUNNER_KEEPALIVE_SECONDS
+  default: 120
+  0 means destroy the container after every run.
+  Successful runs may stay warm until the activity timeout; failed runs shut
+  down immediately so a crashed runner does not keep temporary material.
+
+TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR
+  default in the runner image: /tmp/takosumi-provider-cache
+  stores provider binaries only.
+
+TAKOSUMI_SOURCE_ARCHIVE_ZSTD_LEVEL
+  default: 3
+  lower values make SourceSnapshot creation faster at the cost of larger
+  archive objects.
+```
+
 Runner results expose phase timings for Git host policy, source ref resolution,
 SourceSnapshot reuse, clone/archive work, provider init, plan, apply, output,
 and compatibility checks. Takosumi uses those timings for app-install-style
