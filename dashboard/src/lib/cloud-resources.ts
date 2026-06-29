@@ -21,6 +21,7 @@ export interface CloudExtensionCatalogItem {
   readonly configured: boolean;
   readonly capabilities?: readonly string[];
   readonly smokeChecks?: readonly string[];
+  readonly requiredScopes?: readonly string[];
 }
 
 export interface CloudExtensionCatalog {
