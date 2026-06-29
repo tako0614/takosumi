@@ -941,7 +941,7 @@ The actual usage event is still recorded after a successful response, but an
 obvious insufficient-credit request must never reach the bound Cloud service.
 DELETE cleanup is intentionally not a fallback-billed operation; a depleted
 Workspace must still be able to remove or destroy already-created managed
-resources.
+resources and delete data-plane objects.
 For direct runtime execution, the edge runtime uses the internal usage route as
 that preauthorization boundary before dispatch.
 Read-only management inventory such as resource lists and status/model catalogs
@@ -957,6 +957,7 @@ cloudflare_workers_script
 cloudflare_workers_route
 cloudflare_workers_kv_namespace
 cloudflare_r2_bucket
+cloudflare_r2_object read/write/delete
 cloudflare_d1_database
 cloudflare_queue
 cloudflare_workflow
@@ -1453,7 +1454,10 @@ cloudflare_workers_script
 cloudflare_workers_route
 cloudflare_workers_kv_namespace
 cloudflare_r2_bucket
+cloudflare_r2_object read/write/delete
 cloudflare_d1_database
+cloudflare_queue
+cloudflare_workflow
 worker vars/secrets/bindings
 internal Workers Script backend for materialization
 compatibility report
