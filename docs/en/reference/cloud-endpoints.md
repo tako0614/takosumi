@@ -285,7 +285,7 @@ POST /cloud/usage/storage-inventory
     {
       "workspaceId": "space_xxx",
       "resourceFamily": "cloudflare.r2",
-      "resourceId": "ObjectBucket/assets",
+      "resourceId": "ObjectStorage/assets",
       "averageBytes": 536870912
     }
   ]
@@ -295,7 +295,7 @@ POST /cloud/usage/storage-inventory
 ```http
 x-takosumi-cloud-usage-period-start: 2026-06-26T13:00:00.000Z
 x-takosumi-cloud-usage-period-end: 2026-06-26T14:00:00.000Z
-x-takosumi-cloud-usage-meters: [{"meterId":"cloudflare:r2:storage_gb_hour","resourceFamily":"cloudflare.r2","resourceId":"ObjectBucket/assets","operation":"storage.inventory","kind":"gateway_storage_gb_hour","quantity":0.5}]
+x-takosumi-cloud-usage-meters: [{"meterId":"cloudflare:r2:storage_gb_hour","resourceFamily":"cloudflare.r2","resourceId":"ObjectStorage/assets","operation":"storage.inventory","kind":"gateway_storage_gb_hour","quantity":0.5}]
 ```
 
 When a managed resource backend measures compute or operation usage, it submits

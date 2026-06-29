@@ -114,8 +114,8 @@ takosumi_provider-compatible API
 
 互換 API は capability として公開範囲を宣言します。例: `compat.oci.v1`、`compat.cloudevents.v1`、
 `compat.cloudflare.workers.v1`。これらは標準 API を作り直すロードマップではありません。`compat.s3.v1` は
-operator が ObjectBucket の data/control compatibility を意図的に公開するときの profile であり、普通の S3/R2/GCS
-利用は既存 provider を使います。
+operator が object-storage の data/control compatibility を意図的に公開するときだけの profile であり、普通の
+S3/R2/GCS 利用は既存 provider や標準 endpoint を使います。
 full AWS compatibility や full Cloudflare compatibility を名乗らず、scope と version を明示します。
 
 詳細な Resource Shape / compatibility capability model は

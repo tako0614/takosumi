@@ -93,7 +93,9 @@ Ordinary S3/R2/GCS bucket:
 Object storage that must be projected as a managed binding into an EdgeWorker,
 locked by Takosumi resolution, metered by an operator, or exposed through a
 provider-neutral service contract:
-  use takosumi_object_bucket.
+  first try the existing provider/standard endpoint path. Add an ObjectBucket
+  shape only after the prior-art gate proves that the generic path cannot
+  express the required binding, policy, metering, import, or placement contract.
 
 Ordinary VM, Kubernetes, or container infrastructure:
   use existing OpenTofu providers when that is sufficient.
@@ -173,10 +175,9 @@ Resource Shape
 The shape names the service form. The operator decides which targets and
 adapters can satisfy it.
 
-The v1alpha1 implemented public shapes are:
+The v1alpha1 default public shapes are:
 
 ```text
-ObjectBucket
 EdgeWorker
 AIEndpoint
 ```
@@ -316,11 +317,19 @@ Takosumi Cloud Workers may be backed by Cloudflare Workers for Platforms and a
 Takosumi-managed dispatch layer. That detail should be documented in runtime
 docs, but the product headline should remain Worker-compatible hosting.
 
-### 4.2 ObjectBucket
+### 4.2 Deferred: ObjectBucket
 
-`ObjectBucket` is the provider-neutral service form for object storage when
-Takosumi needs to manage lifecycle, binding projection, resolution lock, usage
-events, or operator-side policy.
+`ObjectBucket` is not a default Takosumi shape.
+
+Object storage already has mature providers and standard APIs: AWS S3,
+Cloudflare R2, GCS, MinIO, S3-compatible endpoints, and their OpenTofu
+providers. Ordinary buckets must use the plain OpenTofu Stack flow with those
+providers.
+
+Takosumi may add or enable an ObjectBucket shape only when an operator proves
+that the existing provider/standard endpoint path is not enough and Takosumi
+must own lifecycle, binding projection, resolution lock, usage events,
+operator-side policy, import compatibility, or managed placement.
 
 ```hcl
 resource "takosumi_object_bucket" "assets" {
@@ -337,11 +346,10 @@ resource "takosumi_object_bucket" "assets" {
 }
 ```
 
-This does not mean Takosumi should recreate S3 for ordinary usage. If a normal
-S3-compatible provider is enough, use the existing provider in the plain
-OpenTofu Stack flow.
+This is a deferred/operator opt-in resource form, not the normal way to create
+S3/R2/GCS buckets.
 
-Operator opt-in implementations:
+Possible operator opt-in implementations:
 
 ```text
 aws_s3
@@ -353,8 +361,8 @@ operator-provided ObjectBucket adapter plugin
 
 These are not default replacements for existing S3/R2/GCS providers. They are
 valid only when an operator explicitly publishes ObjectBucket implementation
-capability evidence because Takosumi must own managed binding projection,
-policy, metering, import compatibility, or placement.
+capability evidence and the prior-art gate says a standard provider/endpoint is
+insufficient.
 
 ### 4.3 AIEndpoint
 
@@ -608,8 +616,8 @@ Cloudflare Workers subset:
   control compatibility for EdgeWorker import/deploy.
 
 S3 API:
-  only needed when the operator intentionally exposes ObjectBucket data-plane
-  or control-plane compatibility. It is not mandatory for normal S3 use.
+  only needed when the operator intentionally exposes object-storage data-plane
+  or control-plane compatibility. It is not mandatory for normal S3/R2/GCS use.
 
 OCI registry:
   useful for Artifact / ContainerImage flows when Takosumi owns artifact
@@ -671,9 +679,9 @@ GET /v1/capabilities
 
 Providers and tools branch on capabilities, not edition names.
 Adapter/target capabilities report what the operator has enabled; they do not
-create implicit Resource Shape mappings. A shape such as ObjectBucket still
-requires explicit TargetPool implementation evidence when it would otherwise be
-served by ordinary S3/R2/GCS providers.
+create implicit Resource Shape mappings. Deferred object-storage shapes require
+explicit TargetPool implementation evidence and a prior-art justification when
+they would otherwise be served by ordinary S3/R2/GCS providers.
 
 Example:
 
@@ -682,7 +690,7 @@ Example:
   "apiVersion": "takosumi.dev/v1alpha1",
   "resources": {
     "Stack": true,
-    "ObjectBucket": true,
+    "ObjectBucket": false,
     "EdgeWorker": true,
     "AIEndpoint": true
   },
@@ -711,8 +719,9 @@ Example:
 }
 ```
 
-`compat.s3.v1` can be false while `ObjectBucket` is true. ObjectBucket does not
-require Takosumi to operate an S3 gateway.
+`compat.s3.v1` should stay false unless an operator intentionally exposes an
+S3-compatible import/data path. Object storage can remain entirely on existing
+providers and standard endpoints.
 
 ## 11. Takosumi Cloud Public Offering
 
@@ -747,8 +756,8 @@ Stable:
   EdgeWorker deploy
   routes
   secrets / vars
-  ObjectBucket
   AIEndpoint OpenAI-compatible surface
+  Object Storage through existing providers / standard endpoints
 
 Preview:
   KV
@@ -842,8 +851,8 @@ clear OSS / Operator / Cloud boundaries
 1. Keep plain OpenTofu Stack execution reliable.
 2. Keep arbitrary provider support through generic-env ProviderConnections.
 3. Finish Resource API, planner, resolver, state, and ResolutionLock for
-   ObjectBucket, EdgeWorker, and AIEndpoint.
-4. Finish `takosumi/takosumi` provider schemas for those shapes.
+   EdgeWorker and AIEndpoint.
+4. Finish `takosumi/takosumi` provider schemas for those default shapes.
 5. Finish extensible TargetPool implementation plugin fields.
 6. Add compatibility profiles only where they are actually needed.
 7. Add new shapes one service form at a time, not as a catch-all resource.

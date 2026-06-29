@@ -370,7 +370,7 @@ test("GET /v1/capabilities advertises enabled Resource Shapes", async () => {
   const res = await app.request("/v1/capabilities");
   expect(res.status).toBe(200);
   const body = await res.json();
-  expect(body.resources.ObjectBucket).toBe(true);
+  expect(body.resources.ObjectBucket).toBe(false);
   expect(body.resources.EdgeWorker).toBe(true);
   expect(body.resources.AIEndpoint).toBe(true);
 });

@@ -138,7 +138,7 @@ export function createTakosumiProductCapabilities(
     apiVersion: TAKOSUMI_API_VERSION,
     resources: {
       Stack: true,
-      ObjectBucket: true,
+      ObjectBucket: false,
       EdgeWorker: true,
       AIEndpoint: false,
       ...(options.resources ?? {}),
