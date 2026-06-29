@@ -530,7 +530,7 @@ OSS repo にあるもの:
 - smoke tests and provider E2E expectations
 
 Cloudflare Compatibility backend と managed resource materialization は closed
-Takosumi Cloud handler で、公式 Cloud wrapper が in-process で mount します。
+Takosumi Cloud handler で、公式 platform worker が in-process で mount します。
 AI Gateway / Cloudflare Compatibility handler が未設定の場合、
 `/gateway/ai/v1/*` と `/compat/cloudflare/client/v4/*` は platform worker から
 意図的に not found を返します。

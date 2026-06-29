@@ -1081,7 +1081,7 @@ This connection type is not part of OSS Takosumi.
 ## 12.1 AI Gateway
 
 Takosumi AI Gateway is also Takosumi Cloud-only and closed. It physically lives
-in the `takosumi-cloud` package (`gateway/ai-gateway/`) and is served only when
+in the `takosumi-cloud` package (`extensions/ai-gateway/`) and is served only when
 the official Cloud wrapper mounts its handler into the `cloud_extensions` seam;
 OSS does not ship it. It is an
 OpenAI-compatible runtime API for deployed Capsules, not an OpenTofu provider
@@ -1267,7 +1267,7 @@ takosumi-cloud/
     official-config/
     cloud-admin/
 
-  gateway/
+  extensions/
     cloudflare-compat/
     ai-gateway/
 
