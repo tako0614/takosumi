@@ -947,10 +947,11 @@ platform-proxied Cloud extensions. Takosumi Cloud may also record fallback
 operation usage at the platform worker when a successful Gateway request has
 verified billing Workspace context but the extension did not emit usage headers;
 this prevents silent free success while keeping Workers for Platforms internal.
-The public Cloud Edge Runtime is different: it receives user traffic directly,
-so it sends a `cloudflare:workers_script:request` meter to the platform
-worker's internal `/internal/platform/cloud/usage` route before dispatching the
-Workers Script and does not expose usage headers to clients.
+The public Cloud Edge Runtime differs only in the metering path: it receives
+user traffic directly, but its handler is still mounted in the same official
+platform Worker. It sends a `cloudflare:workers_script:request` meter to the
+platform worker's internal `/internal/platform/cloud/usage` route before
+dispatching the Workers Script and does not expose usage headers to clients.
 
 Billable Cloud extension operations fail closed. A successful Gateway response
 that needs usage metering must resolve a Workspace billing context from the

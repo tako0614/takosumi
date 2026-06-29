@@ -127,7 +127,7 @@ policy://takosumi-cloud/tool-usage/starter-closed-ga
 Takosumi Cloud must distinguish hosted platform operations from customer Capsule
 execution. LLM and tool usage caps apply to Cloud-only hosted features that
 consume operator resources, such as compatibility helpers, review assistants, or
-managed service helpers when they are enabled.
+managed-resource helpers when they are enabled.
 
 Capsule OpenTofu provider execution remains controlled through Provider
 Connections, Credential Recipes, Provider Bindings, runner policy, and egress

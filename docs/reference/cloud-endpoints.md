@@ -1,7 +1,8 @@
 # Takosumi Cloud endpoints
 
-Takosumi Cloud endpoints は Takosumi Cloud 専用の managed service です。
-Takosumi OSS / Takosumi for Operators の public contract には含めません。
+Takosumi Cloud endpoints は Takosumi Cloud 専用の route / handler と
+managed-resource backend です。Takosumi OSS / Takosumi for Operators の
+public contract には含めません。
 
 Cloud の公開説明は [Takosumi Cloud](../cloud/index.md) と
 [Takosumi Cloud Workers](./cloud-workers.md) を正本にします。このページは
@@ -50,8 +51,11 @@ fetch handler を in-process で mount します。AI Gateway、Cloudflare-compa
 import endpoint、Cloud usage、Cloud Edge Runtime の実装は closed handler 側にあり、
 OSS code に入れてよいのは catalog metadata、auth forwarding、dashboard client、
 smoke test までです。`handlerKey` は OSS seam が参照する論理 handler key であり、
-公式 Cloud wrapper が in-process で解決します。
-managed resource backend は Takosumi Cloud 側の closed module です。
+公式 Cloud wrapper が in-process で解決します。これは単一の
+`takosumi-cloud/platform/worker.ts` deployment unit であり、AI Gateway /
+Cloudflare-compatible import endpoint / Cloud usage / Cloud Edge Runtime を
+別 Worker として deploy しません。managed resource backend は Takosumi Cloud 側の
+closed module です。
 
 ## Catalog
 
@@ -175,9 +179,10 @@ AI upstream / dispatch は呼びません。extension response が同じ request
 返した場合は二重記録せず、AI の input/output token など response 後にしか分からない
 追加 meter だけを後段で記録します。
 
-public traffic を受ける Cloud Edge Runtime は例外で、client response に usage
-header を出しません。route ledger に `spaceId` があることを前提に、dispatch 前に
-platform worker の内部 route `POST /internal/platform/cloud/usage` へ
+public traffic を受ける Cloud Edge Runtime は使用量報告だけが例外で、client
+response に usage header を出しません。ただし Edge Runtime handler も同じ公式
+platform Worker に mount されます。route ledger に `spaceId` があることを前提に、
+dispatch 前に platform worker の内部 route `POST /internal/platform/cloud/usage` へ
 `cloudflare:workers_script:request` meter を送り、price book による課金が成功した
 場合だけ Workers Script を dispatch します。残高不足・価格未設定・内部 usage token
 未設定では Workers Script は実行されません。

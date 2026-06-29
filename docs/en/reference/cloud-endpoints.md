@@ -1,7 +1,8 @@
 # Takosumi Cloud endpoints
 
-Takosumi Cloud endpoints are Cloud-only managed services. They are not part of
-the Takosumi OSS or Takosumi for Operators public contract.
+Takosumi Cloud endpoints are Cloud-only routes/handlers plus managed-resource
+backends. They are not part of the Takosumi OSS or Takosumi for Operators
+public contract.
 
 Use [Takosumi Cloud](../cloud/index.md) and
 [Takosumi Cloud Workers](./cloud-workers.md) as the public product docs. This
@@ -55,8 +56,11 @@ mounts Cloud-only fetch handlers in-process into the OSS platform worker's
 Cloud usage, and Cloud Edge Runtime live in closed handlers; OSS code may
 contain catalog metadata, auth forwarding, dashboard clients, and smoke tests.
 `handlerKey` is the logical handler key consumed by the OSS seam and resolved
-in-process by the official Cloud wrapper. Managed resource backends are
-Takosumi Cloud closed modules.
+in-process by the official Cloud wrapper. This is one
+`takosumi-cloud/platform/worker.ts` deployment unit; AI Gateway, the
+Cloudflare-compatible import endpoint, Cloud usage, and Cloud Edge Runtime are
+not deployed as separate Workers. Managed resource backends are Takosumi Cloud
+closed modules.
 
 ## Catalog
 
@@ -174,12 +178,14 @@ those headers from the client response and records them through
 reports usage but the ledger write cannot be completed, the platform fails
 closed instead of returning an unmetered success.
 
-The public Cloud Edge Runtime is the exception: it does not expose usage headers
-to client responses. For a matched route with a `spaceId`, it sends a
-`cloudflare:workers_script:request` meter to the platform worker's internal
-`POST /internal/platform/cloud/usage` route before dispatching the Workers
-Script. If the Workspace has insufficient credits, pricing is missing, or the
-internal usage token is not configured, the Workers Script is not dispatched.
+The public Cloud Edge Runtime is the exception only for usage reporting: it does
+not expose usage headers to client responses. The Edge Runtime handler is still
+mounted into the same official platform Worker. For a matched route with a
+`spaceId`, it sends a `cloudflare:workers_script:request` meter to the platform
+worker's internal `POST /internal/platform/cloud/usage` route before
+dispatching the Workers Script. If the Workspace has insufficient credits,
+pricing is missing, or the internal usage token is not configured, the Workers
+Script is not dispatched.
 
 Pricing is owned by the Takosumi Cloud platform worker, not by the Cloud
 extension. The canonical extension report carries `meterId`, `kind`, `quantity`,
