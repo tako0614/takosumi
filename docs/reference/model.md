@@ -138,9 +138,11 @@ not move without an explicit migration.
 
 Resource Shapes are not a replacement for every existing provider. If an
 adequate generic OpenTofu provider or standard API already exists, use it
-through the OpenTofu Stack flow. Add a Takosumi shape only when Takosumi needs a
+through the OpenTofu Stack flow. A new Takosumi shape must pass a prior-art
+gate first: existing provider, standard endpoint, and generic-env paths are the
+default. Add a Takosumi shape only when Takosumi needs to own a
 provider-neutral service form, binding projection, resolution lock, policy,
-metering, or import path.
+metering, import path, or managed target placement.
 
 The inverse is also scoped: when a generic provider does not exist, Takosumi
 does not automatically create a catch-all provider. One-off provider gaps should

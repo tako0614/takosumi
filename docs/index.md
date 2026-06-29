@@ -87,8 +87,10 @@ Same shape, different target.
 同じ `.tf` を使い、Provider Binding だけを変えて dev/prod、別 account、別 provider alias に流せます。
 同じ Resource Shape を使い、TargetPool / policy / Adapter によって、operator が有効化した target へ解決できます。
 
-ただし、既存の汎用 OpenTofu provider や標準 API で足りるものは Takosumi が作り直しません。Takosumi
-の shape は、provider-neutral な service form、binding、policy、metering、import path が必要なときだけ使います。
+ただし、既存の汎用 OpenTofu provider や標準 API で足りるものは Takosumi が作り直しません。新しい
+`takosumi_*` resource を増やす前に、既存 provider / 標準 endpoint / generic-env ProviderConnection
+で足りるかを先に確認します。Takosumi の shape は、provider-neutral な service form、binding、policy、
+metering、import path、managed target placement を Takosumi が所有する必要があるときだけ使います。
 逆に、汎用 provider がないだけで即 `takosumi_*` resource にするわけでもありません。一回限りの不足は
 generic-env ProviderConnection と通常の OpenTofu module で扱い、繰り返し使う service form として schema /
 planner / adapter / state / import / drift の意味が固まるものだけを Takosumi provider に追加します。

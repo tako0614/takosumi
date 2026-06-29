@@ -14,7 +14,9 @@ test("Takosumi discovery document exposes v1alpha1 endpoint metadata", () => {
   assert.deepEqual(document.api_versions, [TAKOSUMI_API_VERSION]);
   assert.equal(document.edition, undefined);
   assert.equal(document.features.stacks, true);
-  // ObjectBucket is the first resolvable shape, so the Resource Shape API is on.
+  // Resource Shape API support is separate from default backend mapping. A shape
+  // may be schema/API-supported while still requiring explicit TargetPool
+  // implementation evidence before it resolves.
   assert.equal(document.features.resource_shapes, true);
   assert.equal(document.features.compat_framework, true);
   assert.equal(document.features.compat_s3, false);
