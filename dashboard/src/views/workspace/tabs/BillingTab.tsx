@@ -366,9 +366,9 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
                   </ul>
                 </Show>
                 <Show when={packs().length > 0}>
-                  <h3 class="tg-card-title av-plan-section">
+                  <h2 class="tg-card-title av-plan-section">
                     {t("billing.packs.title")}
-                  </h3>
+                  </h2>
                   <ul class="av-plan-list">
                     <For each={packs()}>{planCard}</For>
                   </ul>
@@ -387,7 +387,7 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
           <summary>{t("billing.ledger.title")}</summary>
           <div class="wc-stack-sm">
             <section>
-              <h3 class="tg-card-title">{t("billing.usage.title")}</h3>
+              <h2 class="tg-card-title">{t("billing.usage.title")}</h2>
               <Switch>
                 <Match when={usage.loading}>
                   <p class="muted">{t("billing.usage.loading")}</p>
