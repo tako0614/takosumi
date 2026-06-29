@@ -118,9 +118,13 @@ export interface ResourceConnectionSpec {
 // --- ObjectBucket shape (`docs/final-plan.md` §5 / §10.2) ----------------------
 
 /**
- * ObjectBucket interface surfaces. The spec defines only `s3_api` and
- * `signed_url`; `object_events` appears in the §10.2 HCL example. No `access`
- * or `durability` field exists in the spec — do not invent them.
+ * ObjectBucket interface surfaces for the managed service form. Ordinary
+ * S3/R2/GCS bucket use should stay on existing OpenTofu providers unless an
+ * operator explicitly enables ObjectBucket for binding projection, policy,
+ * metering, compatibility import, or resolution-lock semantics. The spec
+ * defines only `s3_api` and `signed_url`; `object_events` appears in the §10.2
+ * HCL example. No `access` or `durability` field exists in the spec — do not
+ * invent them.
  */
 export type ObjectBucketInterface = "s3_api" | "signed_url" | "object_events";
 
