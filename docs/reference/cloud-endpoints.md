@@ -158,6 +158,13 @@ client response から削除し、`recordGatewayResourceUsage` で Workspace usa
 ledger に記録します。usage report があるのに ledger へ記録できない場合は、
 未課金の成功を返さないため fail closed します。
 
+public traffic を受ける Cloud Edge Runtime は例外で、client response に usage
+header を出しません。route ledger に `spaceId` があることを前提に、dispatch 前に
+platform worker の内部 route `POST /internal/platform/cloud/usage` へ
+`cloudflare:workers_script:request` meter を送り、price book による課金が成功した
+場合だけ Workers Script を dispatch します。残高不足・価格未設定・内部 usage token
+未設定では Workers Script は実行されません。
+
 価格は Cloud extension ではなく Takosumi Cloud platform worker が決めます。
 Cloud extension の usage report は `meterId`、`kind`、`quantity`、resource metadata
 を出すのが正本です。`usdMicros` を extension が出す経路は legacy / fallback

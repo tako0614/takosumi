@@ -909,11 +909,15 @@ Users keep using Cloudflare provider Workers resources such as
 `cloudflare.workers_script`. `wfp` / `workers_for_platforms` must not appear as
 a `meterId`, `resourceFamily`, Stripe usage meter, or public usage metadata.
 
-Cloud extension usage headers are the authoritative metering path. Takosumi
-Cloud may also record fallback operation usage at the platform worker when a
-successful Gateway request has verified billing Workspace context but the
-extension did not emit usage headers; this prevents silent free success while
-keeping Workers for Platforms internal.
+Cloud extension usage headers are the authoritative metering path for
+platform-proxied Cloud extensions. Takosumi Cloud may also record fallback
+operation usage at the platform worker when a successful Gateway request has
+verified billing Workspace context but the extension did not emit usage headers;
+this prevents silent free success while keeping Workers for Platforms internal.
+The public Cloud Edge Runtime is different: it receives user traffic directly,
+so it sends a `cloudflare:workers_script:request` meter to the platform
+worker's internal `/internal/platform/cloud/usage` route before dispatching the
+Workers Script and does not expose usage headers to clients.
 
 Billable Cloud extension operations fail closed. A successful Gateway response
 that needs usage metering must resolve a Workspace billing context from the
@@ -927,14 +931,16 @@ or price-book misconfiguration remain `502
 cloud_extension_usage_metering_failed` because those are operator/Cloud
 configuration faults, not user payment actions.
 
-For routes that can create billable work before usage headers are emitted
-(create, deploy, delete, runtime execution, or other mutating operations), the
-Cloud extension descriptor must define a generic `fallbackUsage` rule. Matching
+For platform-proxied routes that can create billable work before usage headers
+are emitted (create, deploy, delete, or other mutating operations), the Cloud
+extension descriptor must define a generic `fallbackUsage` rule. Matching
 `fallbackUsage` requests are rejected before the bound Cloud service is called
 unless the platform has verified Workspace billing context and can preauthorize
 the priced fallback operation against that Workspace's available USD balance.
 The actual usage event is still recorded after a successful response, but an
 obvious insufficient-credit request must never reach the bound Cloud service.
+For direct runtime execution, the edge runtime uses the internal usage route as
+that preauthorization boundary before dispatch.
 Read-only management inventory such as resource lists and status/model catalogs
 is not a fallback-billed operation by default; it must remain usable for the
 dashboard without spending user credit. Client-supplied

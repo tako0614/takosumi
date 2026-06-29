@@ -73,6 +73,16 @@ charge >= estimated_cost / (1 - minimumGrossMarginBps / 10000)
 この条件を満たさない meter は usage ledger に記録せず、Cloud extension request を
 `502` で fail closed します。価格表に meter が存在しない場合も fail closed です。
 
+Cloud Edge Runtime は public user traffic を直接受けるため、usage header を client
+response に出して platform worker に拾わせる経路ではありません。runtime worker は
+`TAKOSUMI_PLATFORM_USAGE_ORIGIN` と secret `TAKOSUMI_CLOUD_USAGE_RECORD_TOKEN`
+を持ち、dispatch 前に platform worker の
+`POST /internal/platform/cloud/usage` へ `cloudflare:workers_script:request`
+meter を送ります。platform worker は同じ `TAKOSUMI_CLOUD_USAGE_PRICE_BOOK` で
+価格を決め、Workspace balance から atomic spend できた場合だけ runtime は user
+script を dispatch します。token 未設定、`spaceId` 未設定、価格未設定、残高不足は
+すべて fail closed です。
+
 ## Price book schema
 
 各 meter entry は `meterId` または `meterIdPrefix` のどちらか一方を持ちます。

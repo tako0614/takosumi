@@ -145,6 +145,14 @@ export default {
       );
       return response ?? Response.json({ error: "not found" }, { status: 404 });
     }
+    if (isPlatformCloudUsageRecordPath(url.pathname)) {
+      const response = await handlePlatformCloudUsageRecordRequest(
+        request,
+        url,
+        env,
+      );
+      return response ?? Response.json({ error: "not found" }, { status: 404 });
+    }
     if (isPlatformCloudExtensionCatalogPath(url.pathname)) {
       return handlePlatformCloudExtensionCatalogRequest(request, url, env);
     }
@@ -471,6 +479,8 @@ const INTERNAL_PLATFORM_SPACE_BILLING_SUFFIX = "/billing";
 const INTERNAL_PLATFORM_SPACE_CREDITS_TOP_UP_SUFFIX = "/credits/top-up";
 const INTERNAL_PLATFORM_SPACE_SUBSCRIPTION_CHANGE_SUFFIX =
   "/subscription/change";
+const INTERNAL_PLATFORM_CLOUD_USAGE_RECORD_PATH =
+  "/internal/platform/cloud/usage";
 
 async function runtimeAgentRegistryFor(
   env: CloudflareWorkerEnv,
@@ -755,6 +765,83 @@ export async function handleOperatorBillingRequest(
   );
 }
 
+export function isPlatformCloudUsageRecordPath(pathname: string): boolean {
+  return pathname === INTERNAL_PLATFORM_CLOUD_USAGE_RECORD_PATH;
+}
+
+export async function handlePlatformCloudUsageRecordRequest(
+  request: Request,
+  url: URL,
+  env: CloudflareWorkerEnv,
+  usageRecorder: PlatformCloudExtensionUsageRecorder = async (
+    spaceId,
+    input,
+  ) => {
+    await (await takosumiOperationsFor(env)).recordMeteredUsage(spaceId, input);
+  },
+): Promise<Response | undefined> {
+  if (!isPlatformCloudUsageRecordPath(url.pathname)) return undefined;
+  if (request.method !== "POST") {
+    return Response.json({ error: "method not allowed" }, { status: 405 });
+  }
+  const auth = requireCloudUsageRecordBearer(request, env);
+  if (auth) return auth;
+  const body = await readJsonRecord(request);
+  if (!body.ok) return body.response;
+
+  const spaceId = safePlatformCloudExtensionContextId(
+    valueString(body.value.spaceId),
+  );
+  if (!spaceId) {
+    return platformCloudExtensionUsageFailure("usage_workspace_id_missing")
+      .response;
+  }
+
+  const periodStart = isoHeaderValue(valueString(body.value.periodStart) ?? "");
+  const periodEnd = isoHeaderValue(valueString(body.value.periodEnd) ?? "");
+  const rawMeters = JSON.stringify(body.value.meters ?? null);
+  const headers = new Headers({
+    [PLATFORM_CLOUD_EXTENSION_USAGE_SPACE_ID_HEADER]: spaceId,
+    ...(periodStart
+      ? { [PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_START_HEADER]: periodStart }
+      : {}),
+    ...(periodEnd
+      ? { [PLATFORM_CLOUD_EXTENSION_USAGE_PERIOD_END_HEADER]: periodEnd }
+      : {}),
+    [PLATFORM_CLOUD_EXTENSION_USAGE_METERS_HEADER]: rawMeters,
+  });
+  const priced = platformCloudExtensionPricedUsageInputs(
+    request,
+    new Response(null, { status: 202, headers }),
+    env,
+    {
+      basePath: INTERNAL_PLATFORM_CLOUD_USAGE_RECORD_PATH,
+      bindingName: "TAKOSUMI_INTERNAL_CLOUD_USAGE_RECORD",
+    },
+    {
+      authenticated: true,
+      authKind: "service-token",
+      spaceId,
+    },
+  );
+  if (!priced.ok) return priced.response;
+
+  for (const { spaceId: pricedSpaceId, input } of priced.inputs) {
+    try {
+      await usageRecorder(pricedSpaceId, input);
+    } catch (error) {
+      return platformCloudExtensionUsageFailure(
+        platformCloudExtensionUsageRecordFailureReason(error),
+      ).response;
+    }
+  }
+
+  return Response.json(
+    { ok: true, usageEvents: priced.inputs.length },
+    { status: 202 },
+  );
+}
+
 function spaceIdFromInternalPlatformPath(
   pathname: string,
   suffix: string,
@@ -778,6 +865,33 @@ function requireDeployControlBearer(
     typeof env.TAKOSUMI_DEPLOY_CONTROL_TOKEN === "string"
       ? env.TAKOSUMI_DEPLOY_CONTROL_TOKEN
       : undefined;
+  if (!token) return Response.json({ error: "not found" }, { status: 404 });
+  const bearer = bearerFromAuthorization(
+    request.headers.get("authorization") ?? "",
+  );
+  if (!bearer || !constantTimeEqualsString(bearer, token)) {
+    return Response.json({ error: "unauthenticated" }, { status: 401 });
+  }
+  return undefined;
+}
+
+function requireCloudUsageRecordBearer(
+  request: Request,
+  env: CloudflareWorkerEnv,
+): Response | undefined {
+  const recordToken =
+    typeof (env as unknown as Record<string, unknown>)
+      .TAKOSUMI_CLOUD_USAGE_RECORD_TOKEN === "string"
+      ? String(
+          (env as unknown as Record<string, unknown>)
+            .TAKOSUMI_CLOUD_USAGE_RECORD_TOKEN,
+        )
+      : undefined;
+  const deployControlToken =
+    typeof env.TAKOSUMI_DEPLOY_CONTROL_TOKEN === "string"
+      ? env.TAKOSUMI_DEPLOY_CONTROL_TOKEN
+      : undefined;
+  const token = recordToken || deployControlToken;
   if (!token) return Response.json({ error: "not found" }, { status: 404 });
   const bearer = bearerFromAuthorization(
     request.headers.get("authorization") ?? "",
