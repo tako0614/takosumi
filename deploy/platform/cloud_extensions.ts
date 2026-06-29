@@ -12,10 +12,12 @@
 // env var. When that env is empty or unset, every extension path 404s.
 //
 // Descriptors are intentionally generic: `{ basePath, bindingName,
-// requiredScopes?, fallbackUsage? }`. The OSS seam records priced usage from the
-// generic descriptor shape and treats a matching fallbackUsage rule as a
-// preflight billing-context requirement, but never names a concrete Cloud
-// feature.
+// requiredScopes?, fallbackUsage? }`. Large operator configs can split
+// additional descriptors into `TAKOSUMI_CLOUD_EXTENSIONS_EXTRA`; descriptors
+// with the same basePath/bindingName are merged by concatenating fallbackUsage.
+// The OSS seam records priced usage from the generic descriptor shape and
+// treats a matching fallbackUsage rule as a preflight billing-context
+// requirement, but never names a concrete Cloud feature.
 
 export interface PlatformCloudExtensionRoute {
   /** Path prefix this descriptor matches (and proxies to its binding). */
@@ -52,6 +54,8 @@ export interface PlatformCloudExtensionFallbackUsageRule {
 }
 
 export const PLATFORM_CLOUD_EXTENSIONS_ENV = "TAKOSUMI_CLOUD_EXTENSIONS";
+export const PLATFORM_CLOUD_EXTENSIONS_EXTRA_ENV =
+  "TAKOSUMI_CLOUD_EXTENSIONS_EXTRA";
 
 export const PLATFORM_CLOUD_EXTENSION_CATALOG_PATH =
   "/__takosumi/cloud/extensions" as const;
@@ -64,35 +68,50 @@ export const PLATFORM_CLOUD_EXTENSION_CATALOG_PATH =
  */
 export function platformCloudExtensionRoutes(env: {
   readonly [PLATFORM_CLOUD_EXTENSIONS_ENV]?: unknown;
+  readonly [PLATFORM_CLOUD_EXTENSIONS_EXTRA_ENV]?: unknown;
 }): readonly PlatformCloudExtensionRoute[] {
-  const raw = env[PLATFORM_CLOUD_EXTENSIONS_ENV];
+  const primary = platformCloudExtensionRoutesFromRaw(
+    env[PLATFORM_CLOUD_EXTENSIONS_ENV],
+    PLATFORM_CLOUD_EXTENSIONS_ENV,
+  );
+  const extra = platformCloudExtensionRoutesFromRaw(
+    env[PLATFORM_CLOUD_EXTENSIONS_EXTRA_ENV],
+    PLATFORM_CLOUD_EXTENSIONS_EXTRA_ENV,
+  );
+  return mergePlatformCloudExtensionRoutes([...primary, ...extra]);
+}
+
+function platformCloudExtensionRoutesFromRaw(
+  raw: unknown,
+  envName: string,
+): readonly PlatformCloudExtensionRoute[] {
   if (raw === undefined || raw === null || raw === "") return [];
   let parsed: unknown;
   if (typeof raw === "string") {
     try {
       parsed = JSON.parse(raw) as unknown;
     } catch (error) {
-      throw new TypeError(
-        `${PLATFORM_CLOUD_EXTENSIONS_ENV} must be valid JSON`,
-        { cause: error },
-      );
+      throw new TypeError(`${envName} must be valid JSON`, { cause: error });
     }
   } else {
     parsed = raw;
   }
   if (!Array.isArray(parsed)) {
     throw new TypeError(
-      `${PLATFORM_CLOUD_EXTENSIONS_ENV} must be a JSON array of extension descriptors`,
+      `${envName} must be a JSON array of extension descriptors`,
     );
   }
-  return parsed.map(platformCloudExtensionRouteFromJson);
+  return parsed.map((entry, index) =>
+    platformCloudExtensionRouteFromJson(entry, index, envName),
+  );
 }
 
 function platformCloudExtensionRouteFromJson(
   value: unknown,
   index: number,
+  envName = PLATFORM_CLOUD_EXTENSIONS_ENV,
 ): PlatformCloudExtensionRoute {
-  const label = `${PLATFORM_CLOUD_EXTENSIONS_ENV}[${index}]`;
+  const label = `${envName}[${index}]`;
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     throw new TypeError(`${label} must be an object`);
   }
@@ -119,6 +138,32 @@ function platformCloudExtensionRouteFromJson(
     ...(requiredScopes ? { requiredScopes } : {}),
     ...(fallbackUsage ? { fallbackUsage } : {}),
   };
+}
+
+function mergePlatformCloudExtensionRoutes(
+  routes: readonly PlatformCloudExtensionRoute[],
+): readonly PlatformCloudExtensionRoute[] {
+  const merged = new Map<string, PlatformCloudExtensionRoute>();
+  for (const route of routes) {
+    const key = [
+      route.basePath,
+      route.bindingName,
+      ...(route.requiredScopes ?? []),
+    ].join("\0");
+    const existing = merged.get(key);
+    if (!existing) {
+      merged.set(key, route);
+      continue;
+    }
+    merged.set(key, {
+      ...existing,
+      fallbackUsage: [
+        ...(existing.fallbackUsage ?? []),
+        ...(route.fallbackUsage ?? []),
+      ],
+    });
+  }
+  return [...merged.values()];
 }
 
 function platformCloudExtensionRequiredScopes(

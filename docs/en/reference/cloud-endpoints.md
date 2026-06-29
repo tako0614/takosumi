@@ -194,11 +194,15 @@ and Workflows. Internal backend names must not become the user-facing billing
 or usage-ledger family. Worker script usage is reported with
 `resourceFamily: "cloudflare.workers_script"` as `gateway_compute` or
 `gateway_storage_gb_hour`. Queues are reported as `cloudflare.queues`, and
-Workflows are reported as `cloudflare.workflows`. Additional families such as
-Containers and Durable Objects are added to the catalog, UI, and billing prices
-only after the closed Gateway backend proves lifecycle endpoints and usage
-smoke coverage for them. Internal backend aliases are rejected in `meterId`,
-`resourceFamily`, Stripe meters, and public usage metadata. Example:
+Workflows are reported as `cloudflare.workflows`. Data-plane subpaths for KV
+values, R2 objects, D1 query, Queue messages, and Workflow instances are opened
+only when the corresponding public meter and platform `fallbackUsage` precharge
+coverage exist. Unsupported managed subpaths still return 501 instead of
+proxying to Cloudflare for free. Additional families such as Containers and
+Durable Objects are added to the catalog, UI, and billing prices only after the
+closed Gateway backend proves lifecycle endpoints and usage smoke coverage for
+them. Internal backend aliases are rejected in `meterId`, `resourceFamily`,
+Stripe meters, and public usage metadata. Example:
 
 ```http
 x-takosumi-cloud-usage-meters: [{"meterId":"cloudflare:workers_script:request","resourceFamily":"cloudflare.workers_script","resourceId":"script:api","operation":"request","kind":"gateway_compute","quantity":1,"installationId":"inst_xxx"}]
