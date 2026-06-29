@@ -95,10 +95,10 @@ Plan / Apply / Destroy are guarded Run operations, not separate ledgers.
 | Environment    | Deployment environment within a Space/Project                 |
 | Stack          | Git-backed OpenTofu stack or resource-shape bundle            |
 | Resource       | Kubernetes-like desired/observed resource object              |
-| ResourceShape  | Resource form such as ObjectBucket, EdgeWorker, AIEndpoint    |
-| Interface      | External protocol/API such as s3_api or web_fetch             |
+| ResourceShape  | Resource form such as EdgeWorker or AIEndpoint                |
+| Interface      | External protocol/API such as web_fetch or openai_chat        |
 | Profile        | Ecosystem compatibility surface such as workers_bindings      |
-| Implementation | Concrete backend such as cloudflare_workers or aws_s3         |
+| Implementation | Concrete backend such as cloudflare_workers or ai_gateway     |
 | Target         | Southbound account/cluster/fleet/runtime endpoint             |
 | TargetPool     | Candidate targets used by the resolver                        |
 | Credential     | Target or workload credential configuration                   |
@@ -345,9 +345,10 @@ projection, policy, or metering surface is actually needed.
 Do not claim complete AWS or Cloudflare compatibility. Specific surfaces are
 enabled or disabled by `/v1/capabilities`.
 
-For example, `ObjectBucket` can be enabled while `compat.s3.v1` is disabled.
-That means Takosumi can resolve object storage shapes without operating a
-Takosumi-owned S3 gateway.
+For example, ordinary S3/R2/GCS object storage can use existing providers while
+`compat.s3.v1` remains disabled. An object-storage Resource Shape or S3
+compatibility facade is justified only when an operator needs Takosumi-owned
+binding projection, policy, metering, import, or managed placement semantics.
 
 ## Discovery
 
@@ -411,8 +412,8 @@ that OSS core owns those resources by default.
 ```text
 EdgeWorker request count
 EdgeWorker execution time
-ObjectBucket storage bytes
-ObjectBucket request count
+Object storage bytes, when an operator enables a managed storage surface
+Object storage request count, when an operator enables a managed storage surface
 Queue messages
 DB storage
 DB compute
@@ -451,7 +452,7 @@ isolation, quota, network egress policy, admin audit, and usage metering.
 2. OpenTofu Stack controller: Git, runner, state, logs, approval, credentials.
 3. ProviderConnection / CredentialRecipe / generic env / OIDC federation.
 4. Resource object schema, Resource API preview/apply/status, ResolutionLock.
-5. ObjectBucket / EdgeWorker / AIEndpoint planner and provider schemas.
+5. EdgeWorker / AIEndpoint planner and provider schemas.
 6. TargetPool implementation plugin fields.
 7. Add scoped compatibility profiles only where existing providers are not
    enough for import, binding, policy, or metering.

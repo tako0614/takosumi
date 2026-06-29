@@ -31,7 +31,7 @@ APIs are capability entrypoints into those models, not the internal model itself
 | Space          | Resource API namespace and policy scope                                        |
 | Environment    | Deployment environment inside a Space                                          |
 | Stack          | A group of Resource Shape objects and operations                               |
-| Resource       | Desired service-form resource, such as ObjectBucket, EdgeWorker, or AIEndpoint |
+| Resource       | Desired service-form resource, such as EdgeWorker or AIEndpoint                |
 | Target         | Concrete implementation destination, such as AWS, Cloudflare, Kubernetes       |
 | TargetPool     | Operator-controlled set of available Targets and capabilities                  |
 | Credential     | Runtime authority used by a Target or Adapter                                  |

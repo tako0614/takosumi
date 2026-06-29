@@ -114,9 +114,10 @@ takosumi_provider-compatible API
 Compatibility APIs are capability surfaces. Examples include `compat.oci.v1`,
 `compat.cloudevents.v1`, and `compat.cloudflare.workers.v1`. These are not a
 roadmap to rebuild standard APIs. `compat.s3.v1` is only needed when an
-operator intentionally exposes ObjectBucket data/control compatibility;
-ordinary S3/R2/GCS use should go through existing providers. They are scoped
-and versioned subsets, not a claim of full AWS or full Cloudflare compatibility.
+operator intentionally exposes object-storage data/control compatibility;
+ordinary S3/R2/GCS use should go through existing providers or standard
+endpoints. They are scoped and versioned subsets, not a claim of full AWS or
+full Cloudflare compatibility.
 
 Detailed Resource Shape and compatibility capability model lives in the
 [Takosumi Final Plan](https://github.com/tako0614/takosumi/blob/main/docs/final-plan.md).

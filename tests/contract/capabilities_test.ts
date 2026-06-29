@@ -46,3 +46,12 @@ test("Takosumi product capabilities separate framework from enabled profiles", (
   assert.equal(capabilities.compat.cloudflare_subset, false);
   assert.equal(capabilities.commercial.payment_enforcement, false);
 });
+
+test("ObjectBucket is not a default shape when generic providers are enough", () => {
+  const capabilities = createTakosumiProductCapabilities();
+
+  assert.equal(capabilities.resources.ObjectBucket, false);
+  assert.equal(capabilities.resources.EdgeWorker, true);
+  assert.equal(capabilities.resources.AIEndpoint, false);
+  assert.equal(capabilities.compat.s3, false);
+});

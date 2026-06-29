@@ -300,7 +300,11 @@ function createProductDiscoveryOptions(input: {
     origin: input.origin,
     resources: {
       Stack: stacks,
-      ObjectBucket: resourceShapes,
+      // S3/R2/GCS already have mature providers and standard APIs. Operators
+      // can explicitly advertise ObjectBucket later, but the platform worker
+      // must not imply that Takosumi recreates generic object storage by
+      // default.
+      ObjectBucket: false,
       EdgeWorker: resourceShapes,
       AIEndpoint: resourceShapes,
     },
