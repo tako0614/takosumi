@@ -196,16 +196,29 @@ export type HttpServiceResource = ResourceObject<"HttpService", HttpServiceSpec>
 
 // --- AIEndpoint shape (`docs/final-plan.md` §5 / §12) ------------------------
 
-export type AIEndpointInterface =
-  | "openai_chat_completions"
-  | "openai_responses"
-  | "openai_embeddings";
+/**
+ * AI interfaces/profiles are extensible capability tokens. Takosumi publishes
+ * well-known tokens, but the endpoint's engine/admin may add more through
+ * TargetPool implementation capabilities. The provider must not block future
+ * Gemini/DeepSeek/GLM/Bedrock/Vertex/native gateway profiles before the
+ * endpoint advertises support.
+ */
+export type AIEndpointInterface = string;
 
-export type AIEndpointProfile =
-  | "openai_compatible"
-  | "workers_ai"
-  | "anthropic_messages"
-  | "gemini_compat";
+export const WELL_KNOWN_AI_ENDPOINT_INTERFACES: readonly AIEndpointInterface[] = [
+  "openai_chat_completions",
+  "openai_responses",
+  "openai_embeddings",
+] as const;
+
+export type AIEndpointProfile = string;
+
+export const WELL_KNOWN_AI_ENDPOINT_PROFILES: readonly AIEndpointProfile[] = [
+  "openai_compatible",
+  "workers_ai",
+  "anthropic_messages",
+  "gemini_compat",
+] as const;
 
 export interface AIEndpointModelPolicy {
   readonly defaultModel?: string;

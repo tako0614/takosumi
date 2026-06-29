@@ -21,6 +21,7 @@ func TestAIEndpointModelToResource(t *testing.T) {
 	}
 	profiles, diags := types.SetValueFrom(ctx, types.StringType, []string{
 		"openai_compatible",
+		"provider.deepseek",
 	})
 	if diags.HasError() {
 		t.Fatalf("profiles diagnostics: %v", diags)
@@ -65,5 +66,12 @@ func TestAIEndpointModelToResource(t *testing.T) {
 	}
 	if policy["defaultModel"] != "fast/chat" {
 		t.Fatalf("unexpected defaultModel %#v", policy["defaultModel"])
+	}
+	gotProfiles, ok := res.Spec["profiles"].([]string)
+	if !ok {
+		t.Fatalf("expected profiles []string, got %#v", res.Spec["profiles"])
+	}
+	if len(gotProfiles) != 2 || gotProfiles[1] != "provider.deepseek" {
+		t.Fatalf("expected custom AI profile to pass through, got %#v", gotProfiles)
 	}
 }

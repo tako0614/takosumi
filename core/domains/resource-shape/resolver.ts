@@ -239,8 +239,14 @@ function resourceId(resource: ResourceObject): string {
 function findCapability(
   matrix: TargetCapabilityMatrix,
   implementation: string,
+  targetType?: TargetType,
+  shape?: string,
 ): ImplementationCapability | undefined {
-  return matrix.find((c) => c.implementation === implementation);
+  return matrix.find((c) =>
+    c.implementation === implementation &&
+    (targetType === undefined || c.targetType === targetType) &&
+    (shape === undefined || c.shape === shape)
+  );
 }
 
 function levelOf(
@@ -262,7 +268,11 @@ function nativeResourcesFor(
   shape: string,
   implementation: string,
   name: string,
+  nativeResourceType?: string,
 ): readonly NativeResourceRef[] {
+  if (nativeResourceType) {
+    return [{ type: nativeResourceType, id: name }];
+  }
   if (shape === "HttpService") {
     switch (implementation) {
       case "cloudflare_workers":
@@ -344,6 +354,58 @@ function riskNotesFor(
 interface Selection {
   readonly entry: TargetPoolEntry;
   readonly implementation: string;
+  readonly nativeResourceType?: string;
+}
+
+interface ImplementationCandidate {
+  readonly implementation: string;
+  readonly nativeResourceType?: string;
+}
+
+function targetImplementationsFor(
+  shape: string,
+  entry: TargetPoolEntry,
+): readonly ImplementationCandidate[] {
+  const explicit = (entry.implementations ?? [])
+    .filter((impl) => impl.shape === shape)
+    .map((impl) => ({
+      implementation: impl.implementation,
+      nativeResourceType: impl.nativeResourceType,
+    }));
+  if (explicit.length > 0) return explicit;
+  const seeded = SHAPE_TARGET_IMPLEMENTATION[shape]?.[entry.type];
+  return seeded ? [{ implementation: seeded }] : [];
+}
+
+function targetPoolCapabilityMatrix(
+  matrix: TargetCapabilityMatrix,
+  entries: readonly TargetPoolEntry[],
+): TargetCapabilityMatrix {
+  const configured: ImplementationCapability[] = [];
+  for (const entry of entries) {
+    for (const impl of entry.implementations ?? []) {
+      configured.push({
+        implementation: impl.implementation,
+        targetType: entry.type,
+        shape: impl.shape,
+        interfaces: impl.interfaces,
+      });
+    }
+  }
+  return configured.length === 0 ? matrix : [...configured, ...matrix];
+}
+
+function capabilityRank(
+  cap: ImplementationCapability | undefined,
+  interfaces: readonly string[],
+): number {
+  const weights: Readonly<Record<CapabilityLevel, number>> = {
+    native: 3,
+    shim: 2,
+    emulated: 1,
+    unsupported: 0,
+  };
+  return interfaces.reduce((sum, iface) => sum + weights[levelOf(cap, iface)], 0);
 }
 
 type SelectResult =
@@ -363,24 +425,36 @@ function selectTarget(
   const denied = policy?.deniedTargets;
   const allowed = policy?.allowedTargets;
 
-  const eligible = input.targetPool.spec.targets.filter((entry) => {
+  const eligible: Selection[] = [];
+  for (const entry of input.targetPool.spec.targets) {
     // Deny wins; an entry matches a policy token by BOTH its type and name.
     if (denied && (denied.includes(entry.type) || denied.includes(entry.name))) {
-      return false;
+      continue;
     }
     if (
       allowed &&
       allowed.length > 0 &&
       !(allowed.includes(entry.type) || allowed.includes(entry.name))
     ) {
-      return false;
+      continue;
     }
-    const implementation = SHAPE_TARGET_IMPLEMENTATION[input.resource.kind]?.[entry.type];
-    if (!implementation) return false;
-    const cap = findCapability(matrix, implementation);
-    if (!cap || cap.shape !== input.resource.kind) return false;
-    return requestedInterfaces.every((iface) => levelOf(cap, iface) !== "unsupported");
-  });
+    for (const candidate of targetImplementationsFor(input.resource.kind, entry)) {
+      const cap = findCapability(
+        matrix,
+        candidate.implementation,
+        entry.type,
+        input.resource.kind,
+      );
+      if (!cap || cap.shape !== input.resource.kind) continue;
+      if (requestedInterfaces.every((iface) => levelOf(cap, iface) !== "unsupported")) {
+        eligible.push({
+          entry,
+          implementation: candidate.implementation,
+          nativeResourceType: candidate.nativeResourceType,
+        });
+      }
+    }
+  }
 
   if (eligible.length === 0) {
     return {
@@ -393,18 +467,23 @@ function selectTarget(
     };
   }
 
-  // Highest priority wins; tie-break by name ascending (deterministic).
+  // Highest Target priority wins; when one Target exposes multiple
+  // implementations, prefer the better interface fit, then deterministic names.
   const ranked = [...eligible].sort(
-    (a, b) => b.priority - a.priority || byName(a.name, b.name),
+    (a, b) =>
+      b.entry.priority - a.entry.priority ||
+      capabilityRank(
+        findCapability(matrix, b.implementation, b.entry.type, input.resource.kind),
+        requestedInterfaces,
+      ) -
+        capabilityRank(
+          findCapability(matrix, a.implementation, a.entry.type, input.resource.kind),
+          requestedInterfaces,
+        ) ||
+      byName(a.entry.name, b.entry.name) ||
+      byName(a.implementation, b.implementation),
   );
-  const entry = ranked[0]!;
-  return {
-    ok: true,
-    selection: {
-      entry,
-      implementation: SHAPE_TARGET_IMPLEMENTATION[input.resource.kind]![entry.type]!,
-    },
-  };
+  return { ok: true, selection: ranked[0]! };
 }
 
 function buildFreshOutput(
@@ -413,12 +492,17 @@ function buildFreshOutput(
   selection: Selection,
 ): ResolverOutput {
   const { entry, implementation } = selection;
-  const cap = findCapability(matrix, implementation);
+  const cap = findCapability(matrix, implementation, entry.type, input.resource.kind);
   const name = resourceName(input.resource);
 
   const capabilityScores = capabilityScoresFor(cap, input.interfaces);
   const portability = computePortability(capabilityScores);
-  const nativeResourcePlan = nativeResourcesFor(input.resource.kind, implementation, name);
+  const nativeResourcePlan = nativeResourcesFor(
+    input.resource.kind,
+    implementation,
+    name,
+    selection.nativeResourceType,
+  );
   const riskNotes = riskNotesFor(implementation, capabilityScores);
 
   const lockAfterCreate =
@@ -506,7 +590,10 @@ export function resolve(input: ResolverInput): ResolveOutcome {
     );
   }
 
-  const matrix = input.targetCapabilities ?? DEFAULT_RESOURCE_SHAPE_CAPABILITIES;
+  const matrix = targetPoolCapabilityMatrix(
+    input.targetCapabilities ?? DEFAULT_RESOURCE_SHAPE_CAPABILITIES,
+    input.targetPool.spec.targets,
+  );
   const freshSelection = selectTarget(input, matrix, input.interfaces);
 
   // §3.5: a locked resolution is never silently re-targeted unless policy opts

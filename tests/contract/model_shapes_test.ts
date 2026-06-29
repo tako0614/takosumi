@@ -51,6 +51,7 @@ import type {
   CredentialMintEvent,
   SecurityFinding,
 } from "../../contract/security.ts";
+import type { TargetPool } from "../../contract/target.ts";
 import {
   formatCapsuleFullName,
   type Workspace,
@@ -321,6 +322,40 @@ test("Provider resolution exposes OSS ProviderConnection delivery without Gatewa
   expect(runEnvironment.providerResolutions[0]?.envId).toBe("penv_cf_secret");
   expect(publicResolution.connectionId).toBe("conn_cf_main");
   expect(runtimeGrant.serviceBindingId).toBe("sb_1");
+});
+
+test("TargetPool can carry operator-declared implementation capabilities", () => {
+  const pool: TargetPool = {
+    apiVersion: "takosumi.dev/v1alpha1",
+    kind: "TargetPool",
+    metadata: { name: "default", space: "prod" },
+    spec: {
+      targets: [
+        {
+          name: "deepseek-main",
+          type: "ai_provider",
+          ref: "https://api.deepseek.example/v1",
+          priority: 90,
+          implementations: [
+            {
+              shape: "AIEndpoint",
+              implementation: "deepseek_openai_gateway",
+              nativeResourceType: "ai.deepseek_endpoint",
+              interfaces: {
+                openai_chat_completions: "native",
+                "vendor.deepseek.responses.v1": "native",
+                openai_embeddings: "shim",
+              },
+            },
+          ],
+        },
+      ],
+    },
+  };
+
+  const implementation = pool.spec.targets[0]?.implementations?.[0];
+  expect(implementation?.shape).toBe("AIEndpoint");
+  expect(implementation?.interfaces["vendor.deepseek.responses.v1"]).toBe("native");
 });
 
 test("Connection expiry shape", () => {

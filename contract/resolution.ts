@@ -8,14 +8,19 @@
 
 import type { IsoTimestamp } from "./types.ts";
 import type { ResourceObject, ResourcePortability } from "./resource-shape.ts";
-import type { SpacePolicy, TargetPool, TargetType } from "./target.ts";
+import type {
+  SpacePolicy,
+  TargetCapabilityLevel,
+  TargetPool,
+  TargetType,
+} from "./target.ts";
 
 /**
  * How well a Target satisfies an interface (`docs/final-plan.md` §8):
  * `native` (provided directly), `shim` (adapter/runtime shim), `emulated`
  * (Takosumi substitutes), `unsupported`.
  */
-export type CapabilityLevel = "native" | "shim" | "emulated" | "unsupported";
+export type CapabilityLevel = TargetCapabilityLevel;
 
 /** A native resource the implementation will create on the Target. */
 export interface NativeResourceRef {

@@ -9,6 +9,10 @@ client, and preview/apply/status mapping. It does **not** call AWS / Cloudflare 
 Kubernetes SDKs, does **not** select a backend, and does **not** manage
 credentials. Backend selection happens server-side in the Takosumi **Resolver**;
 the provider holds only a thin handle (id + outputs + resolution status).
+The provider should expose broad shape-specific resources, not just the
+resources used by the official Takosumi Cloud deployment. Endpoint
+capabilities, TargetPool implementation evidence, policy, and the engine/admin
+configuration decide whether a given profile or backend is supported.
 
 It is **capability-driven, not edition-driven**: on configure it discovers the
 server's advertised capabilities and never branches on an "edition" string.
@@ -250,8 +254,8 @@ tofu import takosumi_object_store.assets prod/assets
 | Attribute                 | Type        | Mode     | Notes                                                            |
 | ------------------------- | ----------- | -------- | ---------------------------------------------------------------- |
 | `name`                    | string      | required | Resource key; changing it replaces the resource                 |
-| `interfaces`              | set(string) | required | One or more of `openai_chat_completions`, `openai_responses`, `openai_embeddings` |
-| `profiles`                | set(string) | optional | Compatibility profiles such as `openai_compatible`, `workers_ai`, `anthropic_messages`, `gemini_compat` |
+| `interfaces`              | set(string) | required | Non-empty AI interface tokens; known tokens include `openai_chat_completions`, `openai_responses`, `openai_embeddings` |
+| `profiles`                | set(string) | optional | Non-empty compatibility profile tokens such as `openai_compatible`, `workers_ai`, `anthropic_messages`, `gemini_compat`, or operator-defined profiles |
 | `model_policy`            | object      | optional | Public model alias policy; no upstream API keys                 |
 | `space`                   | string      | optional | Overrides the provider default; changing it replaces the resource |
 | `id`                      | string      | computed | `tkrn:{space}:AIEndpoint:{name}` unless the server returns one  |
@@ -266,6 +270,10 @@ only"; the endpoint capabilities, TargetPool, policy, and engine/admin
 configuration decide whether the resource can be backed by Cloudflare AI
 Gateway, Workers AI, an OpenAI-compatible upstream, Gemini, DeepSeek, GLM,
 Bedrock, Vertex AI, Takosumi native, or another adapter.
+Unknown AI interface/profile tokens are passed to the endpoint after basic
+non-empty token validation. If the endpoint cannot resolve them, the server
+returns the Resource Shape API error; the provider binary should not need a
+release for every new AI vendor.
 
 ## Wire contract
 

@@ -97,19 +97,6 @@ const HTTP_SERVICE_PROFILES: readonly HttpServiceProfile[] = [
   "python_asgi",
 ];
 
-const AI_ENDPOINT_INTERFACES: readonly AIEndpointInterface[] = [
-  "openai_chat_completions",
-  "openai_responses",
-  "openai_embeddings",
-];
-
-const AI_ENDPOINT_PROFILES: readonly AIEndpointProfile[] = [
-  "openai_compatible",
-  "workers_ai",
-  "anthropic_messages",
-  "gemini_compat",
-];
-
 const RESOURCE_DELETE_POLICIES: readonly ResourceDeletePolicy[] = [
   "delete",
   "retain",
@@ -131,13 +118,15 @@ export const HTTP_SERVICE_IMPLEMENTATION_TEMPLATE: Readonly<Record<string, strin
   });
 
 /** Map AIEndpoint implementation -> first-party Capsule module template id. */
+export const AI_ENDPOINT_GENERIC_TEMPLATE_ID = "takosumi-ai-endpoint";
+
 export const AI_ENDPOINT_IMPLEMENTATION_TEMPLATE: Readonly<Record<string, string>> =
   Object.freeze({
-    cloudflare_ai_gateway: "takosumi-ai-endpoint",
-    takosumi_ai_gateway: "takosumi-ai-endpoint",
-    openai_compatible_ai_endpoint: "takosumi-ai-endpoint",
-    aws_bedrock_openai_gateway: "takosumi-ai-endpoint",
-    vertex_ai_openai_gateway: "takosumi-ai-endpoint",
+    cloudflare_ai_gateway: AI_ENDPOINT_GENERIC_TEMPLATE_ID,
+    takosumi_ai_gateway: AI_ENDPOINT_GENERIC_TEMPLATE_ID,
+    openai_compatible_ai_endpoint: AI_ENDPOINT_GENERIC_TEMPLATE_ID,
+    aws_bedrock_openai_gateway: AI_ENDPOINT_GENERIC_TEMPLATE_ID,
+    vertex_ai_openai_gateway: AI_ENDPOINT_GENERIC_TEMPLATE_ID,
   });
 
 export function parseResourceSpec(
@@ -206,17 +195,16 @@ export function parseAIEndpointSpec(spec: unknown): ParseAIEndpointSpecResult {
   const name = parseName(candidate);
   if (!name.ok) return name;
 
-  const interfaces = parseStringList(
+  const interfaces = parseExtensibleTokenList(
     candidate.interfaces,
     "interfaces",
-    AI_ENDPOINT_INTERFACES,
     true,
   );
   if (!interfaces.ok) return interfaces;
 
   const profiles = candidate.profiles === undefined
     ? undefined
-    : parseStringList(candidate.profiles, "profiles", AI_ENDPOINT_PROFILES, false);
+    : parseExtensibleTokenList(candidate.profiles, "profiles", false);
   if (profiles && !profiles.ok) return profiles;
 
   const modelPolicy = parseAIEndpointModelPolicy(candidate.modelPolicy);
@@ -455,12 +443,9 @@ export function planAIEndpoint(
   spec: AIEndpointSpec,
   target: TargetPoolEntry,
 ): ResourceShapePlan {
-  const templateId = AI_ENDPOINT_IMPLEMENTATION_TEMPLATE[implementation];
-  if (!templateId) {
-    throw new Error(
-      `planAIEndpoint: no first-party module for implementation "${implementation}"`,
-    );
-  }
+  const templateId =
+    AI_ENDPOINT_IMPLEMENTATION_TEMPLATE[implementation] ??
+      AI_ENDPOINT_GENERIC_TEMPLATE_ID;
   const moduleFiles = moduleFilesFor(templateId, "planAIEndpoint");
   const inputs: Record<string, unknown> = {
     endpointName: spec.name,
@@ -550,6 +535,45 @@ function parseStringList<T extends string>(
     }
   }
   return { ok: true, value: value as readonly T[] };
+}
+
+function parseExtensibleTokenList(
+  value: unknown,
+  field: string,
+  requireNonEmpty: boolean,
+):
+  | { readonly ok: true; readonly value: readonly string[] }
+  | { readonly ok: false; readonly error: { readonly code: string; readonly message: string } } {
+  if (!Array.isArray(value) || (requireNonEmpty && value.length === 0)) {
+    return {
+      ok: false,
+      error: {
+        code: field === "interfaces" ? "invalid_interfaces" : "invalid_profile",
+        message: `spec.${field} must be ${requireNonEmpty ? "a non-empty" : "an"} array`,
+      },
+    };
+  }
+  for (const item of value) {
+    if (typeof item !== "string" || item.trim().length === 0) {
+      return {
+        ok: false,
+        error: {
+          code: field === "interfaces" ? "invalid_interface" : "invalid_profile",
+          message: `spec.${field} values must be non-empty strings`,
+        },
+      };
+    }
+    if (/\s/.test(item)) {
+      return {
+        ok: false,
+        error: {
+          code: field === "interfaces" ? "invalid_interface" : "invalid_profile",
+          message: `spec.${field} values must be capability tokens without whitespace: ${item}`,
+        },
+      };
+    }
+  }
+  return { ok: true, value: value as readonly string[] };
 }
 
 function parseAIEndpointModelPolicy(value: unknown):

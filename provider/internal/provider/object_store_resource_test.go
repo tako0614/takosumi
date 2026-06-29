@@ -322,6 +322,41 @@ func TestSetStringsOneOfValidator(t *testing.T) {
 	})
 }
 
+func TestSetStringsNonEmptyValidator(t *testing.T) {
+	ctx := context.Background()
+	v := SetStringsNonEmpty(1)
+
+	t.Run("valid custom token", func(t *testing.T) {
+		set, _ := types.SetValueFrom(ctx, types.StringType, []string{"provider.deepseek"})
+		req := validator.SetRequest{ConfigValue: set}
+		var resp validator.SetResponse
+		v.ValidateSet(ctx, req, &resp)
+		if resp.Diagnostics.HasError() {
+			t.Fatalf("unexpected error: %v", resp.Diagnostics)
+		}
+	})
+
+	t.Run("blank token rejected", func(t *testing.T) {
+		set, _ := types.SetValueFrom(ctx, types.StringType, []string{" "})
+		req := validator.SetRequest{ConfigValue: set}
+		var resp validator.SetResponse
+		v.ValidateSet(ctx, req, &resp)
+		if !resp.Diagnostics.HasError() {
+			t.Fatalf("expected error for blank token")
+		}
+	})
+
+	t.Run("whitespace token rejected", func(t *testing.T) {
+		set, _ := types.SetValueFrom(ctx, types.StringType, []string{"bad token"})
+		req := validator.SetRequest{ConfigValue: set}
+		var resp validator.SetResponse
+		v.ValidateSet(ctx, req, &resp)
+		if !resp.Diagnostics.HasError() {
+			t.Fatalf("expected error for whitespace token")
+		}
+	})
+}
+
 func TestToStringSlice(t *testing.T) {
 	if got := toStringSlice([]any{"a", "b", 3}); len(got) != 2 {
 		t.Fatalf("expected non-string dropped, got %#v", got)
