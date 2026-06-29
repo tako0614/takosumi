@@ -383,7 +383,7 @@ AI Gateway status が `workers_ai_fallback` の場合、基礎の managed AI は
 AI Gateway は `openai_compatible` または `workers_ai_binding` の profile を
 少なくとも1つ設定する。sandbox 完結の推奨形は Cloudflare AI Gateway REST API
 と Unified Billing の `openai_compatible` profile で、`apiKeyEnv` には
-`TAKOSUMI_AI_GATEWAY_CLOUDFLARE_API_TOKEN` を使う。DeepSeek / Z.AI GLM /
+`CLOUDFLARE_API_TOKEN` を使う。DeepSeek / Z.AI GLM /
 Gemini / OpenAI などを direct/BYOK provider として Takosumi が直接持つ場合だけ、
 provider-specific upstream key を repo 外の operator secret に置く。外部
 provider を Cloud の提供機能として告知する release では、明示 profile と
