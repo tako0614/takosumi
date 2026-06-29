@@ -172,6 +172,11 @@ deprovision proof が揃っている必要があります。
 この表は細かい USD micro-credit で引き落とします。表示上は USD に丸めても、
 ledger では `usdMicros` を正本にします。
 
+AI Gateway の streaming response は response header を先に返す必要があるため、
+token-only pricing では公開しません。streaming を許可する public model は必ず
+nonzero `ai_request` meter を持ち、input/output token meter は非 streaming JSON
+response で upstream が usage を返した場合の追加 meter として扱います。
+
 `gateway_storage_gb_hour` は create/delete の操作課金ではありません。Cloud extension
 または operator metering job が provider-side inventory から byte size と計測期間を
 取得し、GB-hour quantity と `periodStart` / `periodEnd` を持つ usage header / usage
