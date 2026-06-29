@@ -3,7 +3,7 @@
 A thin OpenTofu/Terraform provider for the **Takosumi Resource Shape API**.
 
 This provider lets you declare Takosumi resource shapes (e.g.
-`takosumi_object_store`, `takosumi_http_service`) in HCL. It is deliberately
+`takosumi_object_store`, `takosumi_http_service`, `takosumi_ai_endpoint`) in HCL. It is deliberately
 **thin**: it carries shape-specific HCL schemas, validation, a Takosumi API HTTP
 client, and preview/apply/status mapping. It does **not** call AWS / Cloudflare /
 Kubernetes SDKs, does **not** select a backend, and does **not** manage
@@ -32,6 +32,7 @@ provider/
 │       ├── provider.go              # provider schema + Configure (discovery + capability gate)
 │       ├── object_store_resource.go # takosumi_object_store resource + model mapping
 │       ├── http_service_resource.go # takosumi_http_service resource + model mapping
+│       ├── ai_endpoint_resource.go  # takosumi_ai_endpoint resource + model mapping
 │       ├── validators.go            # in-tree string/set allow-list validators
 │       ├── provider_test.go
 │       └── object_store_resource_test.go
@@ -185,6 +186,24 @@ resource "takosumi_http_service" "api" {
   artifact_path     = "/work/dist/worker.js"
   public_http       = true
 }
+
+resource "takosumi_ai_endpoint" "ai" {
+  name = "ai"
+
+  interfaces = [
+    "openai_chat_completions",
+    "openai_embeddings",
+  ]
+
+  profiles = [
+    "openai_compatible",
+  ]
+
+  model_policy = {
+    default_model  = "fast/chat"
+    allowed_models = ["fast/chat", "embed/text"]
+  }
+}
 ```
 
 See [`examples/resources/takosumi_object_store/resource.tf`](examples/resources/takosumi_object_store/resource.tf).
@@ -226,6 +245,28 @@ tofu import takosumi_object_store.assets prod/assets
 | `portability`             | string      | computed | Resolver portability assessment                                 |
 | `outputs`                 | map(string) | computed | Resolved outputs                                                |
 
+### `takosumi_ai_endpoint`
+
+| Attribute                 | Type        | Mode     | Notes                                                            |
+| ------------------------- | ----------- | -------- | ---------------------------------------------------------------- |
+| `name`                    | string      | required | Resource key; changing it replaces the resource                 |
+| `interfaces`              | set(string) | required | One or more of `openai_chat_completions`, `openai_responses`, `openai_embeddings` |
+| `profiles`                | set(string) | optional | Compatibility profiles such as `openai_compatible`, `workers_ai`, `anthropic_messages`, `gemini_compat` |
+| `model_policy`            | object      | optional | Public model alias policy; no upstream API keys                 |
+| `space`                   | string      | optional | Overrides the provider default; changing it replaces the resource |
+| `id`                      | string      | computed | `tkrn:{space}:AIEndpoint:{name}` unless the server returns one  |
+| `selected_implementation` | string      | computed | Backend chosen by the Resolver, e.g. `cloudflare_ai_gateway`    |
+| `target`                  | string      | computed | Target the resource landed on                                   |
+| `locked`                  | bool        | computed | Whether the resolution is locked                                |
+| `portability`             | string      | computed | Resolver portability assessment                                 |
+| `outputs`                 | map(string) | computed | Resolved outputs                                                |
+
+`takosumi_ai_endpoint` is broad by design. It does not mean "Takosumi Cloud AI
+only"; the endpoint capabilities, TargetPool, policy, and engine/admin
+configuration decide whether the resource can be backed by Cloudflare AI
+Gateway, Workers AI, an OpenAI-compatible upstream, Gemini, DeepSeek, GLM,
+Bedrock, Vertex AI, Takosumi native, or another adapter.
+
 ## Wire contract
 
 The provider speaks the Takosumi Resource object envelope over JSON.
@@ -248,7 +289,8 @@ used by each HCL resource, for example:
   "apiVersion": "takosumi.dev/v1alpha1",
   "resources": {
     "ObjectStore": true,
-    "HttpService": true
+    "HttpService": true,
+    "AIEndpoint": true
   }
 }
 ```
@@ -289,5 +331,4 @@ surfaced as a Terraform diagnostic:
 ## Status
 
 The provider is shape-specific and matches the Resource Shape wire contract.
-Run `go test ./...` in an environment with Go installed. This workspace did not
-have `go` available during the latest update, so Go tests were not executed here.
+Run `go test ./...` in an environment with Go installed.

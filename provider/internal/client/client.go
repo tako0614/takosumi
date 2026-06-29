@@ -31,6 +31,9 @@ const (
 	// KindHttpService is the resource shape kind for HTTP services.
 	KindHttpService = "HttpService"
 
+	// KindAIEndpoint is the resource shape kind for AI gateway endpoints.
+	KindAIEndpoint = "AIEndpoint"
+
 	// ManagedByOpenTofu is stamped into metadata.managedBy on every write.
 	ManagedByOpenTofu = "opentofu"
 
@@ -102,11 +105,11 @@ type Condition struct {
 
 // Status is the observed state returned by the server on PUT/GET/preview.
 type Status struct {
-	Phase              string            `json:"phase,omitempty"`
-	ObservedGeneration int64             `json:"observedGeneration,omitempty"`
-	Resolution         Resolution        `json:"resolution"`
-	Outputs            map[string]any    `json:"outputs,omitempty"`
-	Conditions         []Condition       `json:"conditions,omitempty"`
+	Phase              string         `json:"phase,omitempty"`
+	ObservedGeneration int64          `json:"observedGeneration,omitempty"`
+	Resolution         Resolution     `json:"resolution"`
+	Outputs            map[string]any `json:"outputs,omitempty"`
+	Conditions         []Condition    `json:"conditions,omitempty"`
 }
 
 // Resource is the Takosumi Resource object envelope. Spec is kept generic so

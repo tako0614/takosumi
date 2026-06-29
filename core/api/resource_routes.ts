@@ -297,6 +297,7 @@ function httpStatusForServiceError(
     case "invalid_source":
     case "invalid_exposure":
     case "invalid_connections":
+    case "invalid_model_policy":
     case "invalid_lifecycle_policy":
     case "invalid_delete_policy":
     case "unsupported_shape":

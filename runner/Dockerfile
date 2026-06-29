@@ -83,6 +83,7 @@ COPY providers/cloudflare/modules/cloudflare-r2-storage/ ./templates/cloudflare-
 COPY providers/cloudflare/modules/cloudflare-static-site/ ./templates/cloudflare-static-site/
 COPY providers/cloudflare/modules/cloudflare-worker-service/ ./templates/cloudflare-worker-service/
 COPY providers/aws/modules/aws-s3-storage/ ./templates/aws-s3-storage/
+COPY providers/takosumi/modules/takosumi-ai-endpoint/ ./templates/takosumi-ai-endpoint/
 
 # The runner server imports the dependency-free shared provider->env-name table
 # from the contract layer via a relative path. The build context is the repo root

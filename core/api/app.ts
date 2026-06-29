@@ -299,6 +299,7 @@ function createProductDiscoveryOptions(input: {
       Stack: stacks,
       ObjectStore: resourceShapes,
       HttpService: resourceShapes,
+      AIEndpoint: resourceShapes,
       ContainerService: false,
       Machine: false,
     },
@@ -309,6 +310,7 @@ function createProductDiscoveryOptions(input: {
       kubernetes: resourceShapes,
       vm: resourceShapes,
       takosumi_native: resourceShapes,
+      ai_provider: resourceShapes,
     },
     resourceShapesEnabled: resourceShapes,
   };

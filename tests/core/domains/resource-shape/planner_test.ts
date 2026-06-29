@@ -2,10 +2,13 @@ import { test, expect } from "bun:test";
 
 import type { ObjectStoreSpec, TargetPoolEntry } from "takosumi-contract";
 import {
+  AI_ENDPOINT_IMPLEMENTATION_TEMPLATE,
   HTTP_SERVICE_IMPLEMENTATION_TEMPLATE,
   OBJECT_STORE_IMPLEMENTATION_TEMPLATE,
+  parseAIEndpointSpec,
   parseHttpServiceSpec,
   parseObjectStoreSpec,
+  planAIEndpoint,
   planHttpService,
   planObjectStore,
 } from "../../../../core/domains/resource-shape/planner.ts";
@@ -250,5 +253,71 @@ test("planHttpService maps cloudflare_workers to cloudflare-worker-service", () 
   expect(plan.publicOutputs).toEqual(["worker_name", "url"]);
   expect(plan.moduleFiles).toBe(
     firstPartyModuleFilesByTemplateId["cloudflare-worker-service"],
+  );
+});
+
+// --- AIEndpoint --------------------------------------------------------------
+
+test("parseAIEndpointSpec accepts an OpenAI-compatible endpoint policy", () => {
+  const r = parseAIEndpointSpec({
+    name: "ai",
+    interfaces: ["openai_chat_completions", "openai_embeddings"],
+    profiles: ["openai_compatible"],
+    modelPolicy: {
+      defaultModel: "fast/chat",
+      allowedModels: ["fast/chat", "embed/text"],
+    },
+  });
+  expect(r.ok).toBe(true);
+  if (!r.ok) return;
+  expect(r.spec.interfaces).toEqual([
+    "openai_chat_completions",
+    "openai_embeddings",
+  ]);
+  expect(r.spec.modelPolicy?.defaultModel).toBe("fast/chat");
+});
+
+test("parseAIEndpointSpec rejects an unknown AI interface", () => {
+  const r = parseAIEndpointSpec({
+    name: "ai",
+    interfaces: ["vendor_native_magic"],
+  });
+  expect(r.ok).toBe(false);
+  if (!r.ok) expect(r.error.code).toBe("invalid_interface");
+});
+
+test("planAIEndpoint keeps upstream choice in the selected target", () => {
+  const target: TargetPoolEntry = {
+    name: "deepseek-main",
+    type: "ai_provider",
+    ref: "https://api.deepseek.example/v1",
+    priority: 10,
+  };
+  const plan = planAIEndpoint("openai_compatible_ai_endpoint", {
+    name: "ai",
+    interfaces: ["openai_chat_completions"],
+    profiles: ["openai_compatible"],
+    modelPolicy: { defaultModel: "deepseek/chat" },
+  }, target);
+
+  expect(AI_ENDPOINT_IMPLEMENTATION_TEMPLATE.openai_compatible_ai_endpoint).toBe(
+    "takosumi-ai-endpoint",
+  );
+  expect(plan.shape).toBe("AIEndpoint");
+  expect(plan.templateId).toBe("takosumi-ai-endpoint");
+  expect(plan.inputs).toEqual({
+    endpointName: "ai",
+    implementation: "openai_compatible_ai_endpoint",
+    targetName: "deepseek-main",
+    targetType: "ai_provider",
+    interfaces: ["openai_chat_completions"],
+    profiles: ["openai_compatible"],
+    allowedModels: [],
+    defaultModel: "deepseek/chat",
+    baseUrl: "https://api.deepseek.example/v1",
+  });
+  expect(plan.publicOutputs).toEqual(["base_url", "default_model"]);
+  expect(plan.moduleFiles).toBe(
+    firstPartyModuleFilesByTemplateId["takosumi-ai-endpoint"],
   );
 });

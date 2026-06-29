@@ -46,6 +46,7 @@ export interface TakosumiResourceCapabilities {
   readonly Stack: boolean;
   readonly ObjectStore: boolean;
   readonly HttpService: boolean;
+  readonly AIEndpoint: boolean;
   readonly ContainerService: boolean;
   readonly Machine: boolean;
 }
@@ -57,6 +58,7 @@ export interface TakosumiAdapterCapabilities {
   readonly kubernetes: boolean;
   readonly vm: boolean;
   readonly takosumi_native: boolean;
+  readonly ai_provider: boolean;
 }
 
 export interface TakosumiCompatCapabilities {
@@ -139,6 +141,7 @@ export function createTakosumiProductCapabilities(
       Stack: true,
       ObjectStore: true,
       HttpService: true,
+      AIEndpoint: false,
       ContainerService: false,
       Machine: false,
       ...(options.resources ?? {}),
@@ -150,6 +153,7 @@ export function createTakosumiProductCapabilities(
       kubernetes: false,
       vm: false,
       takosumi_native: false,
+      ai_provider: false,
       ...(options.adapters ?? {}),
     },
     compat,
@@ -175,5 +179,5 @@ function resourceShapeApiEnabled(
   resources: TakosumiResourceCapabilities,
 ): boolean {
   return resources.ObjectStore || resources.HttpService ||
-    resources.ContainerService || resources.Machine;
+    resources.AIEndpoint || resources.ContainerService || resources.Machine;
 }

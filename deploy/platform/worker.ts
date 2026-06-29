@@ -139,6 +139,14 @@ export default {
           operatorTenants: true,
           commercialBilling: true,
           paymentEnforcement: true,
+          resources: {
+            AIEndpoint: true,
+          },
+          adapters: {
+            cloudflare: true,
+            takosumi_native: true,
+            ai_provider: true,
+          },
           compat: {
             cloudflare_subset: true,
           },
@@ -151,6 +159,14 @@ export default {
           operatorTenants: true,
           commercialBilling: true,
           paymentEnforcement: true,
+          resources: {
+            AIEndpoint: true,
+          },
+          adapters: {
+            cloudflare: true,
+            takosumi_native: true,
+            ai_provider: true,
+          },
           compat: {
             cloudflare_subset: true,
           },

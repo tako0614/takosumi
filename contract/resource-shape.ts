@@ -12,11 +12,13 @@ import { TAKOSUMI_API_VERSION } from "./capabilities.ts";
 /** Resource shape kinds the Resource Shape API can host. */
 export type ResourceShapeKind =
   | "ObjectStore"
-  | "HttpService";
+  | "HttpService"
+  | "AIEndpoint";
 
 export const RESOURCE_SHAPE_KINDS: readonly ResourceShapeKind[] = [
   "ObjectStore",
   "HttpService",
+  "AIEndpoint",
 ] as const;
 
 /**
@@ -191,3 +193,31 @@ export interface HttpServiceSpec {
 }
 
 export type HttpServiceResource = ResourceObject<"HttpService", HttpServiceSpec>;
+
+// --- AIEndpoint shape (`docs/final-plan.md` §5 / §12) ------------------------
+
+export type AIEndpointInterface =
+  | "openai_chat_completions"
+  | "openai_responses"
+  | "openai_embeddings";
+
+export type AIEndpointProfile =
+  | "openai_compatible"
+  | "workers_ai"
+  | "anthropic_messages"
+  | "gemini_compat";
+
+export interface AIEndpointModelPolicy {
+  readonly defaultModel?: string;
+  readonly allowedModels?: readonly string[];
+}
+
+export interface AIEndpointSpec {
+  readonly name: string;
+  readonly interfaces: readonly AIEndpointInterface[];
+  readonly profiles?: readonly AIEndpointProfile[];
+  readonly modelPolicy?: AIEndpointModelPolicy;
+  readonly lifecyclePolicy?: ResourceLifecyclePolicy;
+}
+
+export type AIEndpointResource = ResourceObject<"AIEndpoint", AIEndpointSpec>;

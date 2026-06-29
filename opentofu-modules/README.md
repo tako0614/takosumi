@@ -54,6 +54,7 @@ policy enforce; `main.tf` is the actual module those inputs flow into.
 | `core`                    | —     | (none)                  | `base_domain`, `public_origin`, `member_issuer`, `service_registry_url` |
 | `cloudflare-hello-worker` | —     | `cloudflare/cloudflare` | `script_name`, `workers_dev_url`                                        |
 | `cloudflare-r2-storage`   | —     | `cloudflare/cloudflare` | `bucket_name`, `location`                                               |
+| `takosumi-ai-endpoint`    | —     | none                    | `base_url`, `default_model`                                             |
 | `cloudflare-static-site`  | —     | `cloudflare/cloudflare` | `project_name`, `url`                                                   |
 | `aws-s3-storage`          | —     | `hashicorp/aws`         | `bucket_name`, `bucket_arn`, `region`                                   |
 

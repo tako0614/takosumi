@@ -70,6 +70,7 @@ const MODULE_DIRS: Readonly<Record<string, string>> = {
   "cloudflare-static-site":
     "providers/cloudflare/modules/cloudflare-static-site",
   "aws-s3-storage": "providers/aws/modules/aws-s3-storage",
+  "takosumi-ai-endpoint": "providers/takosumi/modules/takosumi-ai-endpoint",
 };
 
 test("bundled module files match the first-party module sources", async () => {

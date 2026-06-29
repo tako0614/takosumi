@@ -8,6 +8,9 @@
 // resource-aware.
 
 import type {
+  AIEndpointInterface,
+  AIEndpointProfile,
+  AIEndpointSpec,
   HttpServiceProfile,
   HttpServiceRuntimeInterface,
   HttpServiceSpec,
@@ -39,6 +42,12 @@ export type ParsedResourceSpec =
     readonly spec: HttpServiceSpec;
     readonly interfaces: readonly string[];
     readonly lifecyclePolicy?: HttpServiceSpec["lifecyclePolicy"];
+  }
+  | {
+    readonly kind: "AIEndpoint";
+    readonly spec: AIEndpointSpec;
+    readonly interfaces: readonly string[];
+    readonly lifecyclePolicy?: AIEndpointSpec["lifecyclePolicy"];
   };
 
 export type ParseResourceSpecResult =
@@ -57,6 +66,13 @@ export type ParseObjectStoreSpecResult =
 
 export type ParseHttpServiceSpecResult =
   | { readonly ok: true; readonly spec: HttpServiceSpec }
+  | {
+    readonly ok: false;
+    readonly error: { readonly code: string; readonly message: string };
+  };
+
+export type ParseAIEndpointSpecResult =
+  | { readonly ok: true; readonly spec: AIEndpointSpec }
   | {
     readonly ok: false;
     readonly error: { readonly code: string; readonly message: string };
@@ -81,6 +97,19 @@ const HTTP_SERVICE_PROFILES: readonly HttpServiceProfile[] = [
   "python_asgi",
 ];
 
+const AI_ENDPOINT_INTERFACES: readonly AIEndpointInterface[] = [
+  "openai_chat_completions",
+  "openai_responses",
+  "openai_embeddings",
+];
+
+const AI_ENDPOINT_PROFILES: readonly AIEndpointProfile[] = [
+  "openai_compatible",
+  "workers_ai",
+  "anthropic_messages",
+  "gemini_compat",
+];
+
 const RESOURCE_DELETE_POLICIES: readonly ResourceDeletePolicy[] = [
   "delete",
   "retain",
@@ -99,6 +128,16 @@ export const OBJECT_STORE_IMPLEMENTATION_TEMPLATE: Readonly<Record<string, strin
 export const HTTP_SERVICE_IMPLEMENTATION_TEMPLATE: Readonly<Record<string, string>> =
   Object.freeze({
     cloudflare_workers: "cloudflare-worker-service",
+  });
+
+/** Map AIEndpoint implementation -> first-party Capsule module template id. */
+export const AI_ENDPOINT_IMPLEMENTATION_TEMPLATE: Readonly<Record<string, string>> =
+  Object.freeze({
+    cloudflare_ai_gateway: "takosumi-ai-endpoint",
+    takosumi_ai_gateway: "takosumi-ai-endpoint",
+    openai_compatible_ai_endpoint: "takosumi-ai-endpoint",
+    aws_bedrock_openai_gateway: "takosumi-ai-endpoint",
+    vertex_ai_openai_gateway: "takosumi-ai-endpoint",
   });
 
 export function parseResourceSpec(
@@ -134,6 +173,20 @@ export function parseResourceSpec(
         }
         : r;
     }
+    case "AIEndpoint": {
+      const r = parseAIEndpointSpec(spec);
+      return r.ok
+        ? {
+          ok: true,
+          parsed: {
+            kind,
+            spec: r.spec,
+            interfaces: r.spec.interfaces,
+            lifecyclePolicy: r.spec.lifecyclePolicy,
+          },
+        }
+        : r;
+    }
     default:
       return {
         ok: false,
@@ -143,6 +196,45 @@ export function parseResourceSpec(
         },
       };
   }
+}
+
+export function parseAIEndpointSpec(spec: unknown): ParseAIEndpointSpecResult {
+  const base = objectCandidate(spec);
+  if (!base.ok) return base;
+  const candidate = base.value;
+
+  const name = parseName(candidate);
+  if (!name.ok) return name;
+
+  const interfaces = parseStringList(
+    candidate.interfaces,
+    "interfaces",
+    AI_ENDPOINT_INTERFACES,
+    true,
+  );
+  if (!interfaces.ok) return interfaces;
+
+  const profiles = candidate.profiles === undefined
+    ? undefined
+    : parseStringList(candidate.profiles, "profiles", AI_ENDPOINT_PROFILES, false);
+  if (profiles && !profiles.ok) return profiles;
+
+  const modelPolicy = parseAIEndpointModelPolicy(candidate.modelPolicy);
+  if (!modelPolicy.ok) return modelPolicy;
+
+  const lifecyclePolicy = parseLifecyclePolicy(candidate.lifecyclePolicy);
+  if (!lifecyclePolicy.ok) return lifecyclePolicy;
+
+  return {
+    ok: true,
+    spec: {
+      name: name.value,
+      interfaces: interfaces.value as readonly AIEndpointInterface[],
+      ...(profiles?.value ? { profiles: profiles.value as readonly AIEndpointProfile[] } : {}),
+      ...(modelPolicy.value ? { modelPolicy: modelPolicy.value } : {}),
+      ...(lifecyclePolicy.value ? { lifecyclePolicy: lifecyclePolicy.value } : {}),
+    },
+  };
 }
 
 /**
@@ -264,6 +356,8 @@ export function planResourceShape(
       return planObjectStore(implementation, parsed.spec, target);
     case "HttpService":
       return planHttpService(implementation, parsed.spec, target);
+    case "AIEndpoint":
+      return planAIEndpoint(implementation, parsed.spec, target);
   }
 }
 
@@ -350,6 +444,44 @@ export function planHttpService(
   };
 }
 
+/**
+ * Plan an AIEndpoint as Takosumi control-plane configuration. The chosen
+ * upstream/provider remains a Target/Adapter decision; this module carries only
+ * OpenTofu-visible outputs so the Resource Shape can stay first-class without a
+ * catch-all `takosumi_resource` escape hatch.
+ */
+export function planAIEndpoint(
+  implementation: string,
+  spec: AIEndpointSpec,
+  target: TargetPoolEntry,
+): ResourceShapePlan {
+  const templateId = AI_ENDPOINT_IMPLEMENTATION_TEMPLATE[implementation];
+  if (!templateId) {
+    throw new Error(
+      `planAIEndpoint: no first-party module for implementation "${implementation}"`,
+    );
+  }
+  const moduleFiles = moduleFilesFor(templateId, "planAIEndpoint");
+  const inputs: Record<string, unknown> = {
+    endpointName: spec.name,
+    implementation,
+    targetName: target.name,
+    targetType: target.type,
+    interfaces: spec.interfaces,
+    profiles: spec.profiles ?? [],
+    allowedModels: spec.modelPolicy?.allowedModels ?? [],
+    defaultModel: spec.modelPolicy?.defaultModel ?? "",
+    baseUrl: target.ref ?? "",
+  };
+  return {
+    shape: "AIEndpoint",
+    templateId,
+    moduleFiles,
+    inputs,
+    publicOutputs: ["base_url", "default_model"],
+  };
+}
+
 function requiredHttpServiceInterfaces(spec: HttpServiceSpec): readonly string[] {
   const interfaces: string[] = [spec.runtime.interface];
   if (spec.exposure?.publicHttp) interfaces.push("public_http");
@@ -418,6 +550,60 @@ function parseStringList<T extends string>(
     }
   }
   return { ok: true, value: value as readonly T[] };
+}
+
+function parseAIEndpointModelPolicy(value: unknown):
+  | { readonly ok: true; readonly value: AIEndpointSpec["modelPolicy"] | undefined }
+  | { readonly ok: false; readonly error: { readonly code: string; readonly message: string } } {
+  if (value === undefined) return { ok: true, value: undefined };
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return {
+      ok: false,
+      error: {
+        code: "invalid_model_policy",
+        message: "spec.modelPolicy must be an object",
+      },
+    };
+  }
+  const policy = value as Record<string, unknown>;
+  const defaultModel = policy.defaultModel;
+  if (defaultModel !== undefined && typeof defaultModel !== "string") {
+    return {
+      ok: false,
+      error: {
+        code: "invalid_model_policy",
+        message: "spec.modelPolicy.defaultModel must be a string",
+      },
+    };
+  }
+  const allowedModels = policy.allowedModels;
+  if (allowedModels !== undefined) {
+    if (
+      !Array.isArray(allowedModels) ||
+      !allowedModels.every((model) =>
+        typeof model === "string" && model.trim().length > 0
+      )
+    ) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_model_policy",
+          message: "spec.modelPolicy.allowedModels must be an array of non-empty strings",
+        },
+      };
+    }
+  }
+  return {
+    ok: true,
+    value: {
+      ...(typeof defaultModel === "string" && defaultModel.length > 0
+        ? { defaultModel }
+        : {}),
+      ...(Array.isArray(allowedModels)
+        ? { allowedModels: allowedModels as readonly string[] }
+        : {}),
+    },
+  };
 }
 
 function parseLifecyclePolicy(value: unknown):
