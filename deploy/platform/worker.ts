@@ -203,7 +203,11 @@ export default {
       return response ?? Response.json({ error: "not found" }, { status: 404 });
     }
     if (isPlatformCloudExtensionCatalogPath(url.pathname)) {
-      return handlePlatformCloudExtensionCatalogRequest(request, url, env);
+      return await handlePlatformCloudExtensionCatalogRequest(
+        request,
+        url,
+        env,
+      );
     }
     const cloudExtensionRoute = matchPlatformCloudExtensionRoute(
       url.pathname,
@@ -1080,8 +1084,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export interface PlatformCloudExtensionCatalogItem {
+  readonly id?: string;
+  readonly kind?: string;
+  readonly provider?: string;
+  readonly protocol?: string;
   readonly basePath: `/${string}`;
   readonly configured: boolean;
+  readonly capabilities?: readonly string[];
+  readonly smokeChecks?: readonly string[];
   readonly requiredScopes?: readonly string[];
 }
 
@@ -1104,9 +1114,15 @@ export function platformCloudExtensionCatalog(
   const extensions = platformCloudExtensionRoutes(
     env as unknown as { readonly [key: string]: unknown },
   ).map((route) => ({
+    ...(route.id ? { id: route.id } : {}),
+    ...(route.kind ? { kind: route.kind } : {}),
+    ...(route.provider ? { provider: route.provider } : {}),
+    ...(route.protocol ? { protocol: route.protocol } : {}),
     basePath: route.basePath,
     configured:
       platformCloudExtensionHandler(env, route.handlerKey) !== undefined,
+    ...(route.capabilities ? { capabilities: route.capabilities } : {}),
+    ...(route.smokeChecks ? { smokeChecks: route.smokeChecks } : {}),
     ...(route.requiredScopes ? { requiredScopes: route.requiredScopes } : {}),
   }));
   const configured = extensions.filter(
@@ -1125,15 +1141,20 @@ export function platformCloudExtensionCatalog(
   };
 }
 
-export function handlePlatformCloudExtensionCatalogRequest(
+export async function handlePlatformCloudExtensionCatalogRequest(
   request: Request,
   url: URL,
   env: CloudflareWorkerEnv,
-): Response {
+  sessionVerifier: PlatformCloudExtensionSessionVerifier = verifyPlatformCloudExtensionSession,
+): Promise<Response> {
   if (request.method !== "GET" && request.method !== "HEAD") {
     return Response.json({ error: "method not allowed" }, { status: 405 });
   }
-  const auth = requireDeployControlBearer(request, env);
+  const auth = await authorizePlatformCloudExtensionCatalogRequest(
+    request,
+    env,
+    sessionVerifier,
+  );
   if (auth) return auth;
   const headers = {
     "cache-control": "no-store",
@@ -1143,6 +1164,21 @@ export function handlePlatformCloudExtensionCatalogRequest(
   return Response.json(platformCloudExtensionCatalog(env, url.origin), {
     headers,
   });
+}
+
+async function authorizePlatformCloudExtensionCatalogRequest(
+  request: Request,
+  env: CloudflareWorkerEnv,
+  sessionVerifier: PlatformCloudExtensionSessionVerifier,
+): Promise<Response | undefined> {
+  const bearer = bearerFromAuthorization(
+    request.headers.get("authorization") ?? "",
+  );
+  if (bearer) return requireDeployControlBearer(request, env);
+
+  const session = await sessionVerifier(request, env);
+  if (session.authenticated) return undefined;
+  return Response.json({ error: "unauthenticated" }, { status: 401 });
 }
 
 export async function handlePlatformCloudExtensionRequest(
@@ -1181,9 +1217,7 @@ export async function handlePlatformCloudExtensionRouteRequest(
   ) => {
     const operations = await takosumiOperationsFor(env);
     const { billing } = await operations.getWorkspaceBilling(spaceId);
-    const availableUsdMicros = creditBalanceAvailableUsdMicros(
-      billing.balance,
-    );
+    const availableUsdMicros = creditBalanceAvailableUsdMicros(billing.balance);
     const requiredUsdMicros = input.usdMicros ?? 0;
     if (requiredUsdMicros > availableUsdMicros) {
       throw new OpenTofuControllerError(
@@ -1746,7 +1780,12 @@ function platformCloudExtensionUsageWasCharged(
   return charged.some(
     (entry) =>
       entry.signature === signature ||
-      platformCloudExtensionUsageInputsOverlap(entry.spaceId, entry.input, spaceId, input),
+      platformCloudExtensionUsageInputsOverlap(
+        entry.spaceId,
+        entry.input,
+        spaceId,
+        input,
+      ),
   );
 }
 

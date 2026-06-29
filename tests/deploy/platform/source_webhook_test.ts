@@ -1019,8 +1019,13 @@ test("platformCloudExtensionRoutes parses opaque descriptors", () => {
     platformCloudExtensionRoutes({
       TAKOSUMI_CLOUD_EXTENSIONS: JSON.stringify([
         {
+          id: "ai",
+          kind: "ai_gateway",
+          protocol: "openai-compatible",
           basePath: "/gateway/ai/v1",
           handlerKey: "TAKOSUMI_CLOUD_AI",
+          capabilities: ["openai.chat_completions", "openai.embeddings"],
+          smokeChecks: ["models", "chat"],
           requiredScopes: ["ai.chat"],
           fallbackUsage: [
             {
@@ -1038,8 +1043,13 @@ test("platformCloudExtensionRoutes parses opaque descriptors", () => {
     }),
   ).toEqual([
     {
+      id: "ai",
+      kind: "ai_gateway",
+      protocol: "openai-compatible",
       basePath: "/gateway/ai/v1",
       handlerKey: "TAKOSUMI_CLOUD_AI",
+      capabilities: ["openai.chat_completions", "openai.embeddings"],
+      smokeChecks: ["models", "chat"],
       requiredScopes: ["ai.chat"],
       fallbackUsage: [
         {
@@ -1132,6 +1142,13 @@ test("platformCloudExtensionRoutes rejects malformed descriptors", () => {
       TAKOSUMI_CLOUD_EXTENSIONS: JSON.stringify([{ basePath: "/x" }]),
     }),
   ).toThrow("handlerKey");
+  expect(() =>
+    platformCloudExtensionRoutes({
+      TAKOSUMI_CLOUD_EXTENSIONS: JSON.stringify([
+        { basePath: "/x", handlerKey: "X", capabilities: "ai" },
+      ]),
+    }),
+  ).toThrow("capabilities");
 });
 
 test("the seam claims no extension path when TAKOSUMI_CLOUD_EXTENSIONS is unset", async () => {
@@ -2459,8 +2476,13 @@ test("cloud extension catalog reports configured extensions without binding name
   const env = {
     TAKOSUMI_CLOUD_EXTENSIONS: JSON.stringify([
       {
+        id: "ai",
+        kind: "ai_gateway",
+        protocol: "openai-compatible",
         basePath: "/gateway/ai/v1",
         handlerKey: "TAKOSUMI_CLOUD_AI",
+        capabilities: ["openai.chat_completions"],
+        smokeChecks: ["models"],
         requiredScopes: ["ai.chat"],
       },
       { basePath: "/compat/x", handlerKey: "TAKOSUMI_CLOUD_X" },
@@ -2475,8 +2497,13 @@ test("cloud extension catalog reports configured extensions without binding name
   expect(catalog.summary).toEqual({ total: 2, configured: 1, missing: 1 });
   expect(catalog.extensions).toEqual([
     {
+      id: "ai",
+      kind: "ai_gateway",
+      protocol: "openai-compatible",
       basePath: "/gateway/ai/v1",
       configured: true,
+      capabilities: ["openai.chat_completions"],
+      smokeChecks: ["models"],
       requiredScopes: ["ai.chat"],
     },
     { basePath: "/compat/x", configured: false },
@@ -2485,19 +2512,20 @@ test("cloud extension catalog reports configured extensions without binding name
   expect(JSON.stringify(catalog)).not.toContain("TAKOSUMI_CLOUD_AI");
 });
 
-test("cloud extension catalog is an operator-bearer gated platform endpoint", async () => {
+test("cloud extension catalog accepts dashboard sessions or operator bearer", async () => {
   expect(
     isPlatformCloudExtensionCatalogPath("/__takosumi/cloud/extensions"),
   ).toBe(true);
 
-  const missingSecret = handlePlatformCloudExtensionCatalogRequest(
+  const noSession = await handlePlatformCloudExtensionCatalogRequest(
     new Request("https://app.takosumi.com/__takosumi/cloud/extensions"),
     new URL("https://app.takosumi.com/__takosumi/cloud/extensions"),
     {} as never,
+    async () => ({ authenticated: false }),
   );
-  expect(missingSecret.status).toBe(404);
+  expect(noSession.status).toBe(401);
 
-  const wrongBearer = handlePlatformCloudExtensionCatalogRequest(
+  const wrongBearer = await handlePlatformCloudExtensionCatalogRequest(
     new Request("https://app.takosumi.com/__takosumi/cloud/extensions", {
       headers: { authorization: "Bearer wrong" },
     }),
@@ -2506,7 +2534,21 @@ test("cloud extension catalog is an operator-bearer gated platform endpoint", as
   );
   expect(wrongBearer.status).toBe(401);
 
-  const response = handlePlatformCloudExtensionCatalogRequest(
+  const sessionResponse = await handlePlatformCloudExtensionCatalogRequest(
+    new Request("https://app.takosumi.com/__takosumi/cloud/extensions", {
+      headers: { cookie: "takosumi_session=test" },
+    }),
+    new URL("https://app.takosumi.com/__takosumi/cloud/extensions"),
+    {} as never,
+    async () => ({
+      authenticated: true,
+      authKind: "session",
+      subject: "acct_1",
+    }),
+  );
+  expect(sessionResponse.status).toBe(200);
+
+  const response = await handlePlatformCloudExtensionCatalogRequest(
     new Request("https://app.takosumi.com/__takosumi/cloud/extensions", {
       headers: { authorization: "Bearer operator-secret" },
     }),

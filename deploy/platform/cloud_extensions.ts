@@ -20,10 +20,22 @@
 // requirement, but never names a concrete Cloud feature.
 
 export interface PlatformCloudExtensionRoute {
+  /** Public, stable catalog id. This is display/discovery metadata only. */
+  readonly id?: string;
+  /** Public feature family, e.g. ai_gateway or provider_compat. */
+  readonly kind?: string;
+  /** Optional ecosystem/provider label, e.g. cloudflare. */
+  readonly provider?: string;
+  /** Optional protocol/profile label, e.g. openai-compatible. */
+  readonly protocol?: string;
   /** Path prefix this descriptor matches (and dispatches to its handler). */
   readonly basePath: `/${string}`;
   /** Logical fetch handler key on `env` the matched request is dispatched to. */
   readonly handlerKey: string;
+  /** Public capability labels advertised to UI/clients. */
+  readonly capabilities?: readonly string[];
+  /** Public smoke-check labels the closed Cloud delta can run/report. */
+  readonly smokeChecks?: readonly string[];
   /**
    * Optional scopes the authenticated caller must hold for this descriptor.
    * When omitted, any authenticated platform session may reach the binding.
@@ -124,6 +136,16 @@ function platformCloudExtensionRouteFromJson(
   if (typeof handlerKey !== "string" || handlerKey.trim() === "") {
     throw new TypeError(`${label}.handlerKey must be a non-empty string`);
   }
+  const capabilities = optionalStringArray(
+    record.capabilities,
+    label,
+    "capabilities",
+  );
+  const smokeChecks = optionalStringArray(
+    record.smokeChecks,
+    label,
+    "smokeChecks",
+  );
   const requiredScopes = platformCloudExtensionRequiredScopes(
     record.requiredScopes,
     label,
@@ -133,8 +155,20 @@ function platformCloudExtensionRouteFromJson(
     label,
   );
   return {
+    ...(nonEmptyString(record.id) ? { id: nonEmptyString(record.id) } : {}),
+    ...(nonEmptyString(record.kind)
+      ? { kind: nonEmptyString(record.kind) }
+      : {}),
+    ...(nonEmptyString(record.provider)
+      ? { provider: nonEmptyString(record.provider) }
+      : {}),
+    ...(nonEmptyString(record.protocol)
+      ? { protocol: nonEmptyString(record.protocol) }
+      : {}),
     basePath: basePath as `/${string}`,
     handlerKey,
+    ...(capabilities ? { capabilities } : {}),
+    ...(smokeChecks ? { smokeChecks } : {}),
     ...(requiredScopes ? { requiredScopes } : {}),
     ...(fallbackUsage ? { fallbackUsage } : {}),
   };
@@ -305,6 +339,27 @@ function platformCloudExtensionOperationByMethod(
 
 function nonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function optionalStringArray(
+  value: unknown,
+  label: string,
+  field: string,
+): readonly string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${label}.${field} must be an array of strings`);
+  }
+  const values = value.map((entry) => {
+    const normalized = nonEmptyString(entry);
+    if (!normalized) {
+      throw new TypeError(
+        `${label}.${field} entries must be non-empty strings`,
+      );
+    }
+    return normalized;
+  });
+  return values.length > 0 ? values : undefined;
 }
 
 export function matchPlatformCloudExtensionRoute(

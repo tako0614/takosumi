@@ -66,6 +66,8 @@ closed modules.
 ## Catalog
 
 Use this route to inspect enabled Cloud extensions:
+The dashboard reads it with the account session cookie. Operator drills and
+automation can also read it with the deploy-control bearer.
 
 ```http
 GET /__takosumi/cloud/extensions
@@ -80,16 +82,28 @@ Example:
   "serviceUrl": "https://app.takosumi.com",
   "extensions": [
     {
+      "id": "ai",
+      "kind": "ai_gateway",
+      "protocol": "openai-compatible",
       "basePath": "/gateway/ai/v1",
       "configured": true,
+      "capabilities": ["openai.chat_completions", "openai.embeddings"],
+      "smokeChecks": ["models", "chat"],
       "requiredScopes": ["ai.chat", "ai.embeddings"]
     },
     {
+      "id": "cloudflare",
+      "kind": "provider_compat",
+      "provider": "cloudflare",
+      "protocol": "cloudflare-v4",
       "basePath": "/compat/cloudflare/client/v4",
       "configured": true,
+      "capabilities": ["workers", "kv", "r2", "d1", "queues", "workflows"],
       "requiredScopes": ["read", "write"]
     },
     {
+      "id": "usage",
+      "kind": "usage_ingest",
       "basePath": "/cloud/usage",
       "configured": true,
       "requiredScopes": ["cloud.usage.write"]

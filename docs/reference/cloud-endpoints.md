@@ -60,6 +60,8 @@ closed module です。
 ## Catalog
 
 Cloud extension の有効状態はこの route で確認できます。
+Dashboard からは account session cookie で読みます。operator drill /
+automation では deploy-control bearer でも読めます。
 
 ```http
 GET /__takosumi/cloud/extensions
@@ -74,16 +76,28 @@ GET /__takosumi/cloud/extensions
   "serviceUrl": "https://app.takosumi.com",
   "extensions": [
     {
+      "id": "ai",
+      "kind": "ai_gateway",
+      "protocol": "openai-compatible",
       "basePath": "/gateway/ai/v1",
       "configured": true,
+      "capabilities": ["openai.chat_completions", "openai.embeddings"],
+      "smokeChecks": ["models", "chat"],
       "requiredScopes": ["ai.chat", "ai.embeddings"]
     },
     {
+      "id": "cloudflare",
+      "kind": "provider_compat",
+      "provider": "cloudflare",
+      "protocol": "cloudflare-v4",
       "basePath": "/compat/cloudflare/client/v4",
       "configured": true,
+      "capabilities": ["workers", "kv", "r2", "d1", "queues", "workflows"],
       "requiredScopes": ["read", "write"]
     },
     {
+      "id": "usage",
+      "kind": "usage_ingest",
       "basePath": "/cloud/usage",
       "configured": true,
       "requiredScopes": ["cloud.usage.write"]
