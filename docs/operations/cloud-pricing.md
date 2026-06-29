@@ -190,11 +190,14 @@ runtime config も同じ制約です。`TAKOSUMI_AI_GATEWAY_ALLOW_UNMETERED_MODE
 を明示した local development 以外では、billing meter を持たない public model は
 AI Gateway の config parser が拒否します。
 
-Cloud extension の write / deploy / delete route は `fallbackUsage` を持つ場合、
+Cloud extension の write / deploy route は `fallbackUsage` を持つ場合、
 upstream を呼ぶ前に platform worker が price book で課金額を決め、Workspace USD
 balance から atomic に spend します。残高不足なら Cloudflare API や AI upstream は
 呼びません。extension response が同じ request meter を返した場合は二重課金せず、
 AI token meter や storage inventory meter のような追加 usage だけを成功後に記録します。
+DELETE cleanup は例外です。残高切れで destroy / app removal / provider-side cleanup
+が詰まると危険なので、DELETE は fallback precharge を持たせず、deprovision proof と
+audit だけを残します。
 
 `gateway_storage_gb_hour` は create/delete の操作課金ではありません。Cloud extension
 または operator metering job が provider-side inventory から byte size と計測期間を
