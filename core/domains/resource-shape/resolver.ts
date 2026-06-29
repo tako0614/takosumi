@@ -11,6 +11,7 @@ import type {
   CapabilityLevel,
   ImplementationCapability,
   InterfaceCapabilityScore,
+  JsonObject,
   NativeResourceRef,
   ResolutionLock,
   ResolverInput,
@@ -73,25 +74,22 @@ export const SHAPE_INTERFACE_REQUIREMENTS: Readonly<
 });
 
 /**
- * Map a Target backend type to the ObjectBucket implementation it hosts
- * (`docs/final-plan.md` §14: ObjectBucket -> AWS S3 / Cloudflare R2 / MinIO /
- * Takosumi Object Store). `kubernetes`/`vm` host an s3-compatible MinIO.
+ * ObjectBucket has no implicit Target-type mapping.
+ *
+ * S3/R2/MinIO already have mature OpenTofu providers and standard APIs, so a
+ * plain AWS/Cloudflare/Kubernetes Target must not become a Takosumi-owned
+ * ObjectBucket just because the Target type matches. Operators can still expose
+ * ObjectBucket as a managed service form by declaring a TargetPool
+ * implementation explicitly.
  */
 export const OBJECT_BUCKET_TARGET_IMPLEMENTATION: Readonly<
   Partial<Record<TargetType, string>>
-> = Object.freeze({
-  cloudflare: "cloudflare_r2",
-  aws: "aws_s3",
-  takosumi_native: "takosumi_object_bucket",
-  kubernetes: "minio",
-  vm: "minio",
-});
+> = Object.freeze({});
 
 /**
- * Map Target backend type to implementation for each shape. This table is the
- * resolver's pluggable target-adapter registry seed; operators can still pass
- * a custom capability matrix, but Takosumi never collapses shapes into one
- * generic `takosumi_resource` path.
+ * Map Target backend type to implementation for shapes where Takosumi owns the
+ * service form by default. Generic-provider-backed shapes stay out of this seed
+ * table and use explicit TargetPool implementations instead.
  */
 export const SHAPE_TARGET_IMPLEMENTATION: Readonly<
   Record<string, Partial<Record<TargetType, string>>>
@@ -111,53 +109,15 @@ export const SHAPE_TARGET_IMPLEMENTATION: Readonly<
 });
 
 /**
- * Default per-implementation capability matrix. ObjectBucket is currently
- * materializable through first-party modules; EdgeWorker is enabled for the
- * Cloudflare Worker-compatible path. Future shapes are added here only when the
- * planner can materialize them.
+ * Default per-implementation capability matrix. Only shapes that do not have an
+ * adequate generic provider-neutral OpenTofu surface are advertised here by
+ * default. ObjectBucket is intentionally absent; operators must opt into it via
+ * TargetPool implementation capabilities when they need managed bindings,
+ * policy, metering, or compatibility import paths instead of ordinary S3/R2
+ * provider usage.
  */
 export const DEFAULT_RESOURCE_SHAPE_CAPABILITIES: TargetCapabilityMatrix =
   Object.freeze([
-    Object.freeze({
-      implementation: "aws_s3",
-      targetType: "aws",
-      shape: "ObjectBucket",
-      interfaces: Object.freeze({
-        s3_api: "native",
-        signed_url: "native",
-        object_events: "native",
-      }),
-    }),
-    Object.freeze({
-      implementation: "cloudflare_r2",
-      targetType: "cloudflare",
-      shape: "ObjectBucket",
-      interfaces: Object.freeze({
-        s3_api: "native",
-        signed_url: "native",
-        object_events: "shim",
-      }),
-    }),
-    Object.freeze({
-      implementation: "minio",
-      targetType: "kubernetes",
-      shape: "ObjectBucket",
-      interfaces: Object.freeze({
-        s3_api: "native",
-        signed_url: "native",
-        object_events: "emulated",
-      }),
-    }),
-    Object.freeze({
-      implementation: "takosumi_object_bucket",
-      targetType: "takosumi_native",
-      shape: "ObjectBucket",
-      interfaces: Object.freeze({
-        s3_api: "native",
-        signed_url: "native",
-        object_events: "native",
-      }),
-    }),
     Object.freeze({
       implementation: "cloudflare_workers",
       targetType: "cloudflare",
@@ -356,11 +316,15 @@ interface Selection {
   readonly entry: TargetPoolEntry;
   readonly implementation: string;
   readonly nativeResourceType?: string;
+  readonly plugin?: string;
+  readonly options?: JsonObject;
 }
 
 interface ImplementationCandidate {
   readonly implementation: string;
   readonly nativeResourceType?: string;
+  readonly plugin?: string;
+  readonly options?: JsonObject;
 }
 
 function targetImplementationsFor(
@@ -371,7 +335,11 @@ function targetImplementationsFor(
     .filter((impl) => impl.shape === shape)
     .map((impl) => ({
       implementation: impl.implementation,
-      nativeResourceType: impl.nativeResourceType,
+      ...(impl.nativeResourceType
+        ? { nativeResourceType: impl.nativeResourceType }
+        : {}),
+      ...(impl.plugin ? { plugin: impl.plugin } : {}),
+      ...(impl.options ? { options: impl.options } : {}),
     }));
   if (explicit.length > 0) return explicit;
   const seeded = SHAPE_TARGET_IMPLEMENTATION[shape]?.[entry.type];
@@ -464,7 +432,11 @@ function selectTarget(
         eligible.push({
           entry,
           implementation: candidate.implementation,
-          nativeResourceType: candidate.nativeResourceType,
+          ...(candidate.nativeResourceType
+            ? { nativeResourceType: candidate.nativeResourceType }
+            : {}),
+          ...(candidate.plugin ? { plugin: candidate.plugin } : {}),
+          ...(candidate.options ? { options: candidate.options } : {}),
         });
       }
     }
@@ -554,6 +526,12 @@ function buildFreshOutput(
 
   return {
     selectedImplementation: implementation,
+    ...(selection.plugin
+      ? { selectedImplementationPlugin: selection.plugin }
+      : {}),
+    ...(selection.options
+      ? { selectedImplementationOptions: selection.options }
+      : {}),
     selectedTarget: entry.name,
     nativeResourcePlan,
     capabilityScores,
@@ -585,6 +563,12 @@ function buildLockedOutput(
     nativeResourcesFor(input.resource.kind, lock.selectedImplementation, name);
 
   const riskNotes = riskNotesFor(lock.selectedImplementation, capabilityScores);
+  const lockedSelection =
+    freshSelection.ok &&
+    freshSelection.selection.entry.name === lock.target &&
+    freshSelection.selection.implementation === lock.selectedImplementation
+      ? freshSelection.selection
+      : undefined;
   if (
     freshSelection.ok &&
     freshSelection.selection.entry.name !== lock.target
@@ -596,6 +580,12 @@ function buildLockedOutput(
 
   return {
     selectedImplementation: lock.selectedImplementation,
+    ...(lockedSelection?.plugin
+      ? { selectedImplementationPlugin: lockedSelection.plugin }
+      : {}),
+    ...(lockedSelection?.options
+      ? { selectedImplementationOptions: lockedSelection.options }
+      : {}),
     selectedTarget: lock.target,
     nativeResourcePlan,
     capabilityScores,

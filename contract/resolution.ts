@@ -6,7 +6,7 @@
 // ResolutionLock (§3.5, §10): once a resource is created, its implementation is
 // pinned and never silently re-targeted — migration is an explicit operation.
 
-import type { IsoTimestamp } from "./types.ts";
+import type { IsoTimestamp, JsonObject } from "./types.ts";
 import type { ResourceObject, ResourcePortability } from "./resource-shape.ts";
 import type {
   SpacePolicy,
@@ -83,6 +83,8 @@ export interface ResolverInput {
 /** Resolver outputs, verbatim from `docs/final-plan.md` §8. */
 export interface ResolverOutput {
   readonly selectedImplementation: string;
+  readonly selectedImplementationPlugin?: string;
+  readonly selectedImplementationOptions?: JsonObject;
   readonly selectedTarget: string;
   readonly nativeResourcePlan: readonly NativeResourceRef[];
   readonly capabilityScores: readonly InterfaceCapabilityScore[];

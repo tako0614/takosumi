@@ -29,6 +29,14 @@ export interface AdapterApplyInput {
    * stub echoes it.
    */
   readonly nativeResources?: readonly NativeResourceRef[];
+  /**
+   * Optional operator-selected implementation plugin. The built-in opentofu
+   * adapter may ignore it; plugin-aware adapters use this to dispatch the
+   * selected implementation without hard-coding vendor breadth into core.
+   */
+  readonly implementationPlugin?: string;
+  /** Plugin-local, non-secret configuration from TargetPoolImplementation. */
+  readonly implementationOptions?: JsonObject;
   readonly actor: ActorContext;
 }
 
@@ -51,6 +59,8 @@ export interface AdapterDeleteInput {
   readonly nativeResources: readonly NativeResourceRef[];
   readonly target: TargetPoolEntry;
   readonly credentialRef?: string;
+  readonly implementationPlugin?: string;
+  readonly implementationOptions?: JsonObject;
   readonly deletePolicy?: ResourceDeletePolicy;
   readonly actor: ActorContext;
 }
@@ -76,7 +86,8 @@ export class StubResourceShapeAdapter implements ResourceAdapter {
   preview(input: AdapterApplyInput): Promise<AdapterPreviewResult> {
     const native = input.nativeResources ?? [];
     return Promise.resolve({
-      summary: `create ${native.length} resource(s) ` +
+      summary:
+        `create ${native.length} resource(s) ` +
         `via ${input.plan.templateId} on ${input.target.name}`,
       nativeResources: native,
     });

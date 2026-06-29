@@ -170,9 +170,9 @@ compat.kubernetes.crd.v1
 compat.cloudflare.workers.v1
 ```
 
-They map requests into Takosumi resources such as ObjectBucket, Artifact,
-Queue, EventHandler, EdgeWorker, or Kubernetes resources only when that profile
-is intentionally enabled. They are not a claim of full AWS compatibility, full
+They map narrow import/API facades into enabled Resource Shapes or
+operator-provided adapters only when the generic provider or standard endpoint
+path is inadequate. They are not a claim of full AWS compatibility, full
 Cloudflare compatibility, a provider-specific internal model, or a reason to
 recreate standards that already work through existing providers.
 

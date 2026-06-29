@@ -1,7 +1,9 @@
 import { test, expect } from "bun:test";
 import type { ActorContext } from "takosumi-contract";
 import {
+  type AdapterApplyInput,
   createInMemoryResourceShapeStores,
+  type AdapterApplyResult,
   ResourceShapeService,
   StubResourceShapeAdapter,
 } from "../../../../core/domains/resource-shape/mod.ts";
@@ -25,6 +27,15 @@ function makeService() {
   return { stores, service };
 }
 
+class PluginSpyAdapter extends StubResourceShapeAdapter {
+  applyInputs: AdapterApplyInput[] = [];
+
+  override async apply(input: AdapterApplyInput): Promise<AdapterApplyResult> {
+    this.applyInputs.push(input);
+    return super.apply(input);
+  }
+}
+
 const POOL: TargetPoolSpec = {
   targets: [
     {
@@ -32,8 +43,37 @@ const POOL: TargetPoolSpec = {
       type: "cloudflare",
       ref: "cf-acct",
       priority: 80,
+      implementations: [
+        {
+          shape: "ObjectBucket",
+          implementation: "cloudflare_r2",
+          nativeResourceType: "cloudflare.r2_bucket",
+          interfaces: {
+            s3_api: "native",
+            signed_url: "native",
+            object_events: "shim",
+          },
+        },
+      ],
     },
-    { name: "aws-main", type: "aws", region: "ap-northeast-1", priority: 70 },
+    {
+      name: "aws-main",
+      type: "aws",
+      region: "ap-northeast-1",
+      priority: 70,
+      implementations: [
+        {
+          shape: "ObjectBucket",
+          implementation: "aws_s3",
+          nativeResourceType: "aws.s3_bucket",
+          interfaces: {
+            s3_api: "native",
+            signed_url: "native",
+            object_events: "native",
+          },
+        },
+      ],
+    },
   ],
 };
 
@@ -152,6 +192,60 @@ test("apply resolves AIEndpoint with admin-declared provider implementation", as
   expect(result.value.status?.outputs?.base_url).toContain(
     "AIEndpoint:ai/base_url",
   );
+});
+
+test("apply passes selected implementation plugin metadata to the adapter", async () => {
+  const stores = createInMemoryResourceShapeStores();
+  const adapter = new PluginSpyAdapter();
+  const service = new ResourceShapeService({
+    stores,
+    adapter,
+    now: () => NOW,
+  });
+  await service.putTargetPool("space_1", "default", {
+    targets: [
+      {
+        name: "glm-main",
+        type: "ai_provider",
+        ref: "https://glm.example/v1",
+        priority: 90,
+        implementations: [
+          {
+            shape: "AIEndpoint",
+            implementation: "glm_openai_gateway",
+            nativeResourceType: "ai.glm_endpoint",
+            plugin: "takosumi-ai-provider-glm",
+            options: { route: "jp", timeoutMs: 30000 },
+            interfaces: {
+              openai_chat_completions: "native",
+            },
+          },
+        ],
+      },
+    ],
+  });
+  await service.putSpacePolicy("space_1", "default", POLICY);
+
+  const result = await service.apply({
+    actor: ACTOR,
+    space: "space_1",
+    kind: "AIEndpoint",
+    name: "ai",
+    spec: {
+      name: "ai",
+      interfaces: ["openai_chat_completions"],
+      profiles: ["openai_compatible", "provider.glm"],
+    },
+  });
+  expect(result.ok).toBe(true);
+  expect(adapter.applyInputs).toHaveLength(1);
+  expect(adapter.applyInputs[0]?.implementationPlugin).toBe(
+    "takosumi-ai-provider-glm",
+  );
+  expect(adapter.applyInputs[0]?.implementationOptions).toEqual({
+    route: "jp",
+    timeoutMs: 30000,
+  });
 });
 
 test("get returns the applied resource with resolution status", async () => {

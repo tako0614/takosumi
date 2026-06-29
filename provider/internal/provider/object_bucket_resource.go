@@ -75,8 +75,8 @@ func (r *objectBucketResource) Metadata(_ context.Context, req resource.Metadata
 
 func (r *objectBucketResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "A Takosumi ObjectBucket resource shape. The desired interfaces and lifecycle " +
-			"are declared here; the Takosumi Resolver selects the backend implementation and target.",
+		Description: "A Takosumi ObjectBucket resource shape for managed object-storage service forms. " +
+			"Use existing OpenTofu providers for ordinary S3/R2/GCS buckets; this resource resolves only against explicit TargetPool implementation evidence.",
 		Attributes: map[string]schema.Attribute{
 			"name": schema.StringAttribute{
 				Required:    true,
@@ -126,7 +126,7 @@ func (r *objectBucketResource) Schema(_ context.Context, _ resource.SchemaReques
 			},
 			"selected_implementation": schema.StringAttribute{
 				Computed:    true,
-				Description: "Backend implementation selected by the Resolver (e.g. cloudflare_r2, aws_s3).",
+				Description: "Explicit TargetPool implementation selected by the Resolver.",
 			},
 			"target": schema.StringAttribute{
 				Computed:    true,

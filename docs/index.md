@@ -38,7 +38,7 @@ Takosumi for Operator:
 Takosumi Cloud:
   公式 hosted Takosumi for Operator
   + official managed targets
-  + Takosumi-owned native resources
+  + Cloud-operated managed service backends
   + official billing / SLA / support。
 ```
 
@@ -85,8 +85,7 @@ Same shape, different target.
 ```
 
 同じ `.tf` を使い、Provider Binding だけを変えて dev/prod、別 account、別 provider alias に流せます。
-同じ Resource Shape を使い、TargetPool / policy / Adapter によって Cloudflare、AWS、Kubernetes、VM、Takosumi native
-target へ解決できます。
+同じ Resource Shape を使い、TargetPool / policy / Adapter によって、operator が有効化した target へ解決できます。
 
 ただし、既存の汎用 OpenTofu provider や標準 API で足りるものは Takosumi が作り直しません。Takosumi
 の shape は、provider-neutral な service form、binding、policy、metering、import path が必要なときだけ使います。
@@ -109,8 +108,9 @@ takosumi_provider-compatible API
 ```
 
 互換 API は capability として公開範囲を宣言します。例: `compat.oci.v1`、`compat.cloudevents.v1`、
-`compat.cloudflare.workers.v1`。`compat.s3.v1` は operator が ObjectBucket の data/control
-compatibility を意図的に公開するときの profile であり、普通の S3/R2/GCS 利用は既存 provider を使います。
+`compat.cloudflare.workers.v1`。これらは標準 API を作り直すロードマップではありません。`compat.s3.v1` は
+operator が ObjectBucket の data/control compatibility を意図的に公開するときの profile であり、普通の S3/R2/GCS
+利用は既存 provider を使います。
 full AWS compatibility や full Cloudflare compatibility を名乗らず、scope と version を明示します。
 
 詳細な Resource Shape / compatibility capability model は
@@ -136,7 +136,7 @@ Takosumi Cloud は公式 hosted operation です。
 Takosumi Cloud =
   official hosted Takosumi for Operator
   + official managed targets
-  + Takosumi-owned native resources
+  + Cloud-operated managed service backends
   + official billing / SLA / support
 ```
 

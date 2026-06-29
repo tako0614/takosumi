@@ -14,8 +14,37 @@ const POOL: TargetPoolSpec = {
       type: "cloudflare",
       ref: "cf-acct",
       priority: 80,
+      implementations: [
+        {
+          shape: "ObjectBucket",
+          implementation: "cloudflare_r2",
+          nativeResourceType: "cloudflare.r2_bucket",
+          interfaces: {
+            s3_api: "native",
+            signed_url: "native",
+            object_events: "shim",
+          },
+        },
+      ],
     },
-    { name: "aws-main", type: "aws", region: "ap-northeast-1", priority: 70 },
+    {
+      name: "aws-main",
+      type: "aws",
+      region: "ap-northeast-1",
+      priority: 70,
+      implementations: [
+        {
+          shape: "ObjectBucket",
+          implementation: "aws_s3",
+          nativeResourceType: "aws.s3_bucket",
+          interfaces: {
+            s3_api: "native",
+            signed_url: "native",
+            object_events: "native",
+          },
+        },
+      ],
+    },
   ],
 };
 

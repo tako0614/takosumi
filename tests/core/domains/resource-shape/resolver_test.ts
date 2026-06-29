@@ -6,7 +6,7 @@ import {
   type ResolverInput,
   type ResourceObject,
   type SpacePolicy,
-  type TargetCapabilityMatrix,
+  type TargetPoolImplementation,
   type TargetPool,
   type TargetPoolEntry,
 } from "takosumi-contract";
@@ -66,6 +66,39 @@ function targetPool(targets: readonly TargetPoolEntry[]): TargetPool {
   };
 }
 
+const cloudflareObjectBucketImplementation: TargetPoolImplementation = {
+  shape: "ObjectBucket",
+  implementation: "cloudflare_r2",
+  nativeResourceType: "cloudflare.r2_bucket",
+  interfaces: {
+    s3_api: "native",
+    signed_url: "native",
+    object_events: "shim",
+  },
+};
+
+const awsObjectBucketImplementation: TargetPoolImplementation = {
+  shape: "ObjectBucket",
+  implementation: "aws_s3",
+  nativeResourceType: "aws.s3_bucket",
+  interfaces: {
+    s3_api: "native",
+    signed_url: "native",
+    object_events: "native",
+  },
+};
+
+const minioObjectBucketImplementation: TargetPoolImplementation = {
+  shape: "ObjectBucket",
+  implementation: "minio",
+  nativeResourceType: "minio.s3_bucket",
+  interfaces: {
+    s3_api: "native",
+    signed_url: "native",
+    object_events: "emulated",
+  },
+};
+
 function spacePolicy(
   spec: Partial<SpacePolicy["spec"]> & {
     resolution?: Partial<SpacePolicy["spec"]["resolution"]>;
@@ -90,8 +123,20 @@ function input(over: Partial<ResolverInput> = {}): ResolverInput {
     resource: objectBucketResource(),
     interfaces: ["s3_api", "signed_url"],
     targetPool: targetPool([
-      { name: "cf-main", type: "cloudflare", ref: "acct-cf", priority: 10 },
-      { name: "aws-main", type: "aws", region: "us-east-1", priority: 5 },
+      {
+        name: "cf-main",
+        type: "cloudflare",
+        ref: "acct-cf",
+        priority: 10,
+        implementations: [cloudflareObjectBucketImplementation],
+      },
+      {
+        name: "aws-main",
+        type: "aws",
+        region: "us-east-1",
+        priority: 5,
+        implementations: [awsObjectBucketImplementation],
+      },
     ]),
     ...over,
   };
@@ -105,13 +150,11 @@ function expectOk(outcome: ReturnType<typeof resolve>) {
 
 // --- mapping / table sanity --------------------------------------------------
 
-test("target type maps to the expected ObjectBucket implementation", () => {
-  expect(OBJECT_BUCKET_TARGET_IMPLEMENTATION.cloudflare).toBe("cloudflare_r2");
-  expect(OBJECT_BUCKET_TARGET_IMPLEMENTATION.aws).toBe("aws_s3");
-  expect(OBJECT_BUCKET_TARGET_IMPLEMENTATION.takosumi_native).toBe(
-    "takosumi_object_bucket",
-  );
-  expect(OBJECT_BUCKET_TARGET_IMPLEMENTATION.kubernetes).toBe("minio");
+test("ObjectBucket has no implicit target-type implementation mapping", () => {
+  expect(OBJECT_BUCKET_TARGET_IMPLEMENTATION.cloudflare).toBeUndefined();
+  expect(OBJECT_BUCKET_TARGET_IMPLEMENTATION.aws).toBeUndefined();
+  expect(OBJECT_BUCKET_TARGET_IMPLEMENTATION.takosumi_native).toBeUndefined();
+  expect(OBJECT_BUCKET_TARGET_IMPLEMENTATION.kubernetes).toBeUndefined();
 });
 
 test("ObjectBucket requires s3_api", () => {
@@ -129,10 +172,23 @@ test("AIEndpoint uses requested capability tokens instead of a fixed OpenAI-chat
 
 // --- selection ---------------------------------------------------------------
 
-test("resolve picks the highest-priority eligible target", () => {
+test("resolve picks the highest-priority eligible target with explicit implementation evidence", () => {
   const out = expectOk(resolve(input()));
   expect(out.selectedTarget).toBe("cf-main");
   expect(out.selectedImplementation).toBe("cloudflare_r2");
+});
+
+test("plain cloud targets do not become ObjectBucket unless the operator opts in", () => {
+  const outcome = resolve(
+    input({
+      targetPool: targetPool([
+        { name: "cf-main", type: "cloudflare", ref: "acct-cf", priority: 10 },
+        { name: "aws-main", type: "aws", region: "us-east-1", priority: 5 },
+      ]),
+    }),
+  );
+  expect(outcome.ok).toBe(false);
+  if (!outcome.ok) expect(outcome.error.code).toBe("no_eligible_target");
 });
 
 test("resolve tie-breaks equal priority by name ascending", () => {
@@ -140,8 +196,20 @@ test("resolve tie-breaks equal priority by name ascending", () => {
     resolve(
       input({
         targetPool: targetPool([
-          { name: "zeta", type: "aws", region: "us-east-1", priority: 7 },
-          { name: "alpha", type: "aws", region: "us-east-1", priority: 7 },
+          {
+            name: "zeta",
+            type: "aws",
+            region: "us-east-1",
+            priority: 7,
+            implementations: [awsObjectBucketImplementation],
+          },
+          {
+            name: "alpha",
+            type: "aws",
+            region: "us-east-1",
+            priority: 7,
+            implementations: [awsObjectBucketImplementation],
+          },
         ]),
       }),
     ),
@@ -175,46 +243,54 @@ test("allowedTargets keeps only allowed entries (matched by type or name)", () =
 });
 
 test("a target whose implementation lacks required s3_api is excluded", () => {
-  // Custom matrix: cloudflare_r2 cannot serve s3_api, so the lower-priority aws
-  // target must win even though cloudflare has the higher priority.
-  const matrix: TargetCapabilityMatrix = [
-    {
-      implementation: "cloudflare_r2",
-      targetType: "cloudflare",
-      shape: "ObjectBucket",
-      interfaces: { s3_api: "unsupported", signed_url: "native" },
-    },
-    {
-      implementation: "aws_s3",
-      targetType: "aws",
-      shape: "ObjectBucket",
-      interfaces: {
-        s3_api: "native",
-        signed_url: "native",
-        object_events: "native",
-      },
-    },
-  ];
-  const out = expectOk(resolve(input({ targetCapabilities: matrix })));
+  const out = expectOk(
+    resolve(
+      input({
+        targetPool: targetPool([
+          {
+            name: "cf-main",
+            type: "cloudflare",
+            ref: "acct-cf",
+            priority: 10,
+            implementations: [
+              {
+                ...cloudflareObjectBucketImplementation,
+                interfaces: { s3_api: "unsupported", signed_url: "native" },
+              },
+            ],
+          },
+          {
+            name: "aws-main",
+            type: "aws",
+            region: "us-east-1",
+            priority: 5,
+            implementations: [awsObjectBucketImplementation],
+          },
+        ]),
+      }),
+    ),
+  );
   expect(out.selectedTarget).toBe("aws-main");
   expect(out.selectedImplementation).toBe("aws_s3");
 });
 
 test("a target whose implementation lacks a requested interface is excluded", () => {
-  const matrix: TargetCapabilityMatrix = [
-    {
-      implementation: "cloudflare_r2",
-      targetType: "cloudflare",
-      shape: "ObjectBucket",
-      interfaces: { s3_api: "native", signed_url: "unsupported" },
-    },
-  ];
   const outcome = resolve(
     input({
       targetPool: targetPool([
-        { name: "cf-main", type: "cloudflare", ref: "acct-cf", priority: 10 },
+        {
+          name: "cf-main",
+          type: "cloudflare",
+          ref: "acct-cf",
+          priority: 10,
+          implementations: [
+            {
+              ...cloudflareObjectBucketImplementation,
+              interfaces: { s3_api: "native", signed_url: "unsupported" },
+            },
+          ],
+        },
       ]),
-      targetCapabilities: matrix,
       interfaces: ["s3_api", "signed_url"],
     }),
   );
@@ -349,6 +425,43 @@ test("resolve uses admin-declared AI provider implementations from TargetPool", 
   ]);
 });
 
+test("resolve preserves operator implementation plugin metadata", () => {
+  const out = expectOk(
+    resolve(
+      input({
+        resource: aiEndpointResource(),
+        interfaces: ["openai_chat_completions"],
+        targetPool: targetPool([
+          {
+            name: "glm-main",
+            type: "ai_provider",
+            ref: "https://glm.example/v1",
+            priority: 20,
+            implementations: [
+              {
+                shape: "AIEndpoint",
+                implementation: "glm_openai_gateway",
+                nativeResourceType: "ai.glm_endpoint",
+                plugin: "takosumi-ai-provider-glm",
+                options: { route: "jp", timeoutMs: 30000 },
+                interfaces: {
+                  openai_chat_completions: "native",
+                },
+              },
+            ],
+          },
+        ]),
+      }),
+    ),
+  );
+  expect(out.selectedImplementation).toBe("glm_openai_gateway");
+  expect(out.selectedImplementationPlugin).toBe("takosumi-ai-provider-glm");
+  expect(out.selectedImplementationOptions).toEqual({
+    route: "jp",
+    timeoutMs: 30000,
+  });
+});
+
 // --- native plan / lock fields ----------------------------------------------
 
 test("cloudflare_r2 plans a cloudflare.r2_bucket native resource", () => {
@@ -424,6 +537,7 @@ test("portability is partial when an interface is emulated", () => {
             type: "kubernetes",
             ref: "cluster-1",
             priority: 3,
+            implementations: [minioObjectBucketImplementation],
           },
         ]),
       }),
@@ -492,12 +606,7 @@ test("DEFAULT_RESOURCE_SHAPE_CAPABILITIES covers ObjectBucket implementations", 
   )
     .map((c) => c.implementation)
     .sort();
-  expect(impls).toEqual([
-    "aws_s3",
-    "cloudflare_r2",
-    "minio",
-    "takosumi_object_bucket",
-  ]);
+  expect(impls).toEqual([]);
 });
 
 test("DEFAULT_RESOURCE_SHAPE_CAPABILITIES does not advertise half-materialized shapes", () => {
