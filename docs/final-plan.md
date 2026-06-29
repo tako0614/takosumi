@@ -49,8 +49,9 @@ If an adequate generic OpenTofu provider or standard API exists:
   use it through the plain OpenTofu Stack flow.
 
 If no adequate generic provider-neutral surface exists:
-  add a first-class Takosumi Resource Shape or adapter plugin only when the
-  service form is repeated, useful, and needs Takosumi-owned semantics.
+  do not immediately create a Takosumi provider resource. First prove that the
+  need is not served by a normal OpenTofu provider, standard endpoint, or
+  generic-env ProviderConnection.
 ```
 
 This is not "Takosumi should create every missing provider." It is:
@@ -66,6 +67,21 @@ generic does not exist, and the need is a durable service form:
   add a typed Takosumi shape with schema, validation, planner, adapter,
   import/drift/state story, and capability evidence.
 ```
+
+Before adding any `takosumi_*` resource, the design must pass a prior-art gate:
+
+```text
+1. Is there an existing OpenTofu/Terraform provider that users can run through
+   the Stack flow?
+2. Is there a standard protocol/endpoint that should remain the product
+   surface instead of a Takosumi resource?
+3. Can the gap be handled by generic-env ProviderConnection plus an ordinary
+   module?
+4. Does Takosumi need to own resolution lock, binding projection, policy,
+   metering, import compatibility, or managed-target placement?
+```
+
+If answers 1-3 are yes and answer 4 is no, do not add a Takosumi resource.
 
 Examples:
 
@@ -325,7 +341,7 @@ This does not mean Takosumi should recreate S3 for ordinary usage. If a normal
 S3-compatible provider is enough, use the existing provider in the plain
 OpenTofu Stack flow.
 
-Possible implementations:
+Operator opt-in implementations:
 
 ```text
 aws_s3
@@ -334,6 +350,11 @@ minio
 takosumi_object_storage
 operator-provided ObjectBucket adapter plugin
 ```
+
+These are not default replacements for existing S3/R2/GCS providers. They are
+valid only when an operator explicitly publishes ObjectBucket implementation
+capability evidence because Takosumi must own managed binding projection,
+policy, metering, import compatibility, or placement.
 
 ### 4.3 AIEndpoint
 
@@ -808,7 +829,8 @@ Do build:
 ```text
 plain OpenTofu Stack execution
 generic-env ProviderConnection escape hatch
-first-class typed shapes only where generic providers/standards are not enough
+first-class typed shapes only after the prior-art gate proves generic
+providers/standards are not enough
 capability-driven provider behavior
 TargetPool adapter plugin system
 scoped compatibility import paths
