@@ -50,7 +50,11 @@ Git + OpenTofu + Resource Shape + Resolver + Compat API + Adapter
 
 Takosumi can run plain OpenTofu stacks as-is, and it can also resolve
 `takosumi_*` resource shapes to Cloudflare, AWS, Kubernetes, VMs, or Takosumi
-native targets.
+native targets. AI providers are handled through the same mechanism: a
+`takosumi_ai_endpoint` shape declares the desired API surface, while the engine
+and operator decide whether it is backed by Cloudflare AI Gateway, Workers AI,
+an OpenAI-compatible upstream, Gemini/GLM/DeepSeek, Bedrock, Vertex AI, or a
+Takosumi native gateway.
 
 ## 1. Product Split
 
@@ -219,6 +223,24 @@ Good:
 
 Bad:
   if edition == "cloud" then ...
+```
+
+The provider is not limited to resources used by the official Cloud deployment.
+It should grow as a broad, shape-specific provider for the public Takosumi
+Resource Shape API. Whether a shape is accepted is decided by endpoint
+capabilities, target capabilities, policy, and the engine/admin configuration.
+
+```text
+Good:
+  takosumi_ai_endpoint exists in the provider
+  endpoint capabilities decide if AIEndpoint is usable
+  resolver/admin decide if openai-compatible, Workers AI, Gemini, DeepSeek, GLM,
+  Bedrock, Vertex AI, or Takosumi native can back it
+
+Bad:
+  only add resources used by Takosumi Cloud itself
+  hide every non-official provider behind generic takosumi_resource
+  branch on edition == cloud
 ```
 
 ### 1.4 takosumi-agent
@@ -670,7 +692,60 @@ Volume
 FileShare
 ```
 
-### 5.4 Network / Exposure
+### 5.4 AI
+
+```text
+AIEndpoint
+AIModelProvider
+EmbeddingModelProvider
+ModelRoute
+ModelPolicy
+```
+
+`AIEndpoint` is the first-class user-facing shape. It declares the API surface
+and model policy the application needs.
+
+```hcl
+resource "takosumi_ai_endpoint" "main" {
+  name = "ai"
+
+  interfaces = [
+    "openai_chat_completions",
+    "openai_embeddings",
+  ]
+
+  profiles = [
+    "openai_compatible",
+  ]
+
+  model_policy = {
+    default_model  = "fast/chat"
+    allowed_models = ["fast/chat", "reasoning/chat", "embed/text"]
+  }
+}
+```
+
+The HCL does not choose a vendor by default. A TargetPool and policy decide
+whether this is backed by:
+
+```text
+Cloudflare AI Gateway
+Workers AI
+OpenAI-compatible upstream
+DeepSeek
+GLM
+Gemini / Vertex AI
+AWS Bedrock
+Takosumi native AI gateway
+operator-provided custom adapter
+```
+
+The public interface can be OpenAI-compatible even when the implementation is
+not OpenAI. Model aliases, routing, quotas, and billing are operator/Cloud
+policy. Secrets and upstream API keys stay in ProviderConnection/Credential
+storage, not in the resource spec or OpenTofu state.
+
+### 5.5 Network / Exposure
 
 ```text
 Endpoint
@@ -683,7 +758,7 @@ FirewallPolicy
 ServiceLink
 ```
 
-### 5.5 Identity / Security
+### 5.6 Identity / Security
 
 ```text
 Secret
@@ -697,7 +772,7 @@ OIDCProvider
 Federation
 ```
 
-### 5.6 Build / Artifact
+### 5.7 Build / Artifact
 
 ```text
 Source
@@ -1094,6 +1169,7 @@ Example:
     "Stack": true,
     "ObjectStore": true,
     "HttpService": true,
+    "AIEndpoint": true,
     "ContainerService": true,
     "Machine": false
   },
@@ -1102,7 +1178,8 @@ Example:
     "cloudflare": true,
     "kubernetes": true,
     "vm": false,
-    "takosumi_native": true
+    "takosumi_native": true,
+    "ai_provider": true
   },
   "compat": {
     "s3": true,

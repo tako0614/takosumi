@@ -80,6 +80,31 @@ test("PUT /v1/resources/HttpService/:name applies a first-class service shape", 
   expect(body.status.resolution.selectedImplementation).toBe("cloudflare_workers");
 });
 
+test("PUT /v1/resources/AIEndpoint/:name applies a first-class AI shape", async () => {
+  const { app } = await buildApp();
+  const res = await app.request("/v1/resources/AIEndpoint/ai", {
+    method: "PUT",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({
+      metadata: { space: "space_1" },
+      spec: {
+        name: "ai",
+        interfaces: ["openai_chat_completions", "openai_embeddings"],
+        profiles: ["openai_compatible"],
+        modelPolicy: {
+          defaultModel: "fast/chat",
+          allowedModels: ["fast/chat", "embed/text"],
+        },
+      },
+    }),
+  });
+  expect(res.status).toBe(200);
+  const body = await res.json();
+  expect(body.id).toBe("tkrn:space_1:AIEndpoint:ai");
+  expect(body.status.resolution.selectedImplementation).toBe("cloudflare_ai_gateway");
+  expect(body.status.outputs.base_url).toContain("AIEndpoint:ai/base_url");
+});
+
 test("GET /v1/resources/ObjectStore/:name returns the applied resource", async () => {
   const { app } = await buildApp();
   await app.request("/v1/resources/ObjectStore/assets", {
@@ -187,10 +212,12 @@ test("missing space yields a 400 nested error envelope", async () => {
   expect(typeof body.error.requestId).toBe("string");
 });
 
-test("GET /v1/capabilities advertises the ObjectStore shape", async () => {
+test("GET /v1/capabilities advertises enabled Resource Shapes", async () => {
   const { app } = await buildApp();
   const res = await app.request("/v1/capabilities");
   expect(res.status).toBe(200);
   const body = await res.json();
   expect(body.resources.ObjectStore).toBe(true);
+  expect(body.resources.HttpService).toBe(true);
+  expect(body.resources.AIEndpoint).toBe(true);
 });

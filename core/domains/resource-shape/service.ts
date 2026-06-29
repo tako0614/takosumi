@@ -55,6 +55,7 @@ export type ResourceServiceErrorCode =
   | "invalid_source"
   | "invalid_exposure"
   | "invalid_connections"
+  | "invalid_model_policy"
   | "invalid_lifecycle_policy"
   | "invalid_delete_policy"
   | "target_pool_not_found"

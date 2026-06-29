@@ -36,7 +36,9 @@ test("Takosumi product capabilities separate framework from enabled profiles", (
   assert.equal(capabilities.resources.Stack, true);
   assert.equal(capabilities.resources.ObjectStore, true);
   assert.equal(capabilities.resources.HttpService, false);
+  assert.equal(capabilities.resources.AIEndpoint, false);
   assert.equal(capabilities.adapters.opentofu, true);
+  assert.equal(capabilities.adapters.ai_provider, false);
   assert.equal(capabilities.compat.framework, true);
   assert.equal(capabilities.compat.s3, true);
   assert.equal(capabilities.compat.cloudflare_subset, false);

@@ -29,6 +29,7 @@ func discoveryHandler(t *testing.T, resourceShapes bool) http.HandlerFunc {
 				"resources": map[string]bool{
 					"ObjectStore": resourceShapes,
 					"HttpService": resourceShapes,
+					"AIEndpoint":  resourceShapes,
 				},
 			}
 		default:
@@ -60,6 +61,7 @@ func versionedDiscoveryHandler(t *testing.T, discoveryVersion string, capability
 				"apiVersion": capabilityVersion,
 				"resources": map[string]bool{
 					"ObjectStore": true,
+					"AIEndpoint":  false,
 				},
 			}
 		default:
@@ -70,6 +72,47 @@ func versionedDiscoveryHandler(t *testing.T, discoveryVersion string, capability
 		raw, _ := json.Marshal(body)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(raw)
+	}
+}
+
+func TestConfigureClient_AcceptsAIEndpointOnlyCapabilities(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		switch r.URL.Path {
+		case "/.well-known/takosumi":
+			body = map[string]any{
+				"api_versions": []string{"takosumi.dev/v1alpha1"},
+				"features": map[string]bool{
+					"resource_shapes": true,
+				},
+				"endpoints": map[string]string{},
+			}
+		case "/v1/capabilities":
+			body = map[string]any{
+				"apiVersion": "takosumi.dev/v1alpha1",
+				"resources": map[string]bool{
+					"ObjectStore": false,
+					"HttpService": false,
+					"AIEndpoint":  true,
+				},
+			}
+		default:
+			t.Errorf("unexpected path %q", r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
+		raw, _ := json.Marshal(body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(raw)
+	}))
+	defer srv.Close()
+
+	c, err := configureClient(context.Background(), srv.URL, "tok", srv.Client())
+	if err != nil {
+		t.Fatalf("configureClient: %v", err)
+	}
+	if !c.Capabilities.SupportsResource("AIEndpoint") {
+		t.Fatalf("expected AIEndpoint capability cached")
 	}
 }
 

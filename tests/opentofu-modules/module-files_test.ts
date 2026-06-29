@@ -26,6 +26,7 @@ import { cloudflareR2StorageTemplate } from "../../providers/cloudflare/modules/
 import { cloudflareStaticSiteTemplate } from "../../providers/cloudflare/modules/cloudflare-static-site/template.ts";
 import { cloudflareWorkerServiceTemplate } from "../../providers/cloudflare/modules/cloudflare-worker-service/template.ts";
 import { coreTemplate } from "../../opentofu-modules/core/template.ts";
+import { takosumiAiEndpointTemplate } from "../../providers/takosumi/modules/takosumi-ai-endpoint/template.ts";
 
 const TEMPLATES = [
   coreTemplate,
@@ -34,6 +35,7 @@ const TEMPLATES = [
   cloudflareStaticSiteTemplate,
   cloudflareHelloWorkerTemplate,
   awsS3StorageTemplate,
+  takosumiAiEndpointTemplate,
 ];
 
 function mainTfFor(id: string): string {

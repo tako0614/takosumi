@@ -44,6 +44,19 @@ function httpServiceResource(name = "api"): ResourceObject {
   };
 }
 
+function aiEndpointResource(name = "ai"): ResourceObject {
+  return {
+    apiVersion: TAKOSUMI_API_VERSION,
+    kind: "AIEndpoint",
+    metadata: { name, space: "prod", managedBy: "api" },
+    spec: {
+      name,
+      interfaces: ["openai_chat_completions", "openai_embeddings"],
+      profiles: ["openai_compatible"],
+    },
+  };
+}
+
 function targetPool(targets: readonly TargetPoolEntry[]): TargetPool {
   return {
     apiVersion: TAKOSUMI_API_VERSION,
@@ -102,6 +115,12 @@ test("target type maps to the expected ObjectStore implementation", () => {
 
 test("ObjectStore requires s3_api", () => {
   expect(SHAPE_INTERFACE_REQUIREMENTS.ObjectStore?.required).toContain("s3_api");
+});
+
+test("AIEndpoint requires the OpenAI-compatible chat interface", () => {
+  expect(SHAPE_INTERFACE_REQUIREMENTS.AIEndpoint?.required).toContain(
+    "openai_chat_completions",
+  );
 });
 
 // --- selection ---------------------------------------------------------------
@@ -219,6 +238,31 @@ test("resolve maps HttpService to cloudflare_workers on a Cloudflare target", ()
   expect(out.selectedImplementation).toBe("cloudflare_workers");
   expect(out.nativeResourcePlan).toEqual([
     { type: "cloudflare.workers_script", id: "api" },
+  ]);
+});
+
+test("resolve maps AIEndpoint to an operator-selected AI target", () => {
+  const out = expectOk(
+    resolve(
+      input({
+        resource: aiEndpointResource(),
+        interfaces: ["openai_chat_completions", "openai_embeddings"],
+        targetPool: targetPool([
+          {
+            name: "deepseek-main",
+            type: "ai_provider",
+            ref: "https://api.deepseek.example/v1",
+            priority: 20,
+          },
+          { name: "cf-ai", type: "cloudflare", ref: "cf-acct", priority: 10 },
+        ]),
+      }),
+    ),
+  );
+  expect(out.selectedImplementation).toBe("openai_compatible_ai_endpoint");
+  expect(out.selectedTarget).toBe("deepseek-main");
+  expect(out.nativeResourcePlan).toEqual([
+    { type: "ai.openai_compatible_endpoint", id: "ai" },
   ]);
 });
 

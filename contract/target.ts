@@ -19,6 +19,7 @@ export type TargetType =
   | "libvirt"
   | "ssh"
   | "takosumi_native"
+  | "ai_provider"
   | "opentofu";
 
 export const TARGET_TYPES: readonly TargetType[] = [
@@ -32,6 +33,7 @@ export const TARGET_TYPES: readonly TargetType[] = [
   "libvirt",
   "ssh",
   "takosumi_native",
+  "ai_provider",
   "opentofu",
 ] as const;
 

@@ -84,7 +84,7 @@ func TestGetCapabilities(t *testing.T) {
 		}
 		_, _ = io.WriteString(w, `{
 			"apiVersion":"takosumi.dev/v1alpha1",
-			"resources":{"ObjectStore":true,"HttpService":true},
+			"resources":{"ObjectStore":true,"HttpService":true,"AIEndpoint":true},
 			"adapters":{"opentofu":true}
 		}`)
 	}))
@@ -97,6 +97,9 @@ func TestGetCapabilities(t *testing.T) {
 	}
 	if !caps.SupportsResource(KindObjectStore) || !caps.SupportsResource(KindHttpService) {
 		t.Fatalf("expected ObjectStore and HttpService capabilities: %#v", caps.Resources)
+	}
+	if !caps.SupportsResource(KindAIEndpoint) {
+		t.Fatalf("expected AIEndpoint capability: %#v", caps.Resources)
 	}
 	if !c.Capabilities.SupportsResource(KindHttpService) {
 		t.Fatalf("expected capabilities cached on client")

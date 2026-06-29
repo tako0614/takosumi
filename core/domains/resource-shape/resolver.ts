@@ -48,6 +48,10 @@ export const SHAPE_INTERFACE_REQUIREMENTS: Readonly<
     required: Object.freeze(["web_fetch"]) as readonly string[],
     preferred: Object.freeze(["public_http", "workers_bindings", "node_compat"]) as readonly string[],
   }),
+  AIEndpoint: Object.freeze({
+    required: Object.freeze(["openai_chat_completions"]) as readonly string[],
+    preferred: Object.freeze(["openai_responses", "openai_embeddings"]) as readonly string[],
+  }),
 });
 
 /**
@@ -80,6 +84,13 @@ export const SHAPE_TARGET_IMPLEMENTATION: Readonly<
     takosumi_native: "takosumi_http_runtime",
     kubernetes: "kubernetes_http_service",
     aws: "aws_lambda_url",
+  }),
+  AIEndpoint: Object.freeze({
+    cloudflare: "cloudflare_ai_gateway",
+    takosumi_native: "takosumi_ai_gateway",
+    ai_provider: "openai_compatible_ai_endpoint",
+    aws: "aws_bedrock_openai_gateway",
+    gcp: "vertex_ai_openai_gateway",
   }),
 });
 
@@ -175,6 +186,36 @@ export const DEFAULT_RESOURCE_SHAPE_CAPABILITIES: TargetCapabilityMatrix =
         node_compat: "shim",
       }),
     }),
+    Object.freeze({
+      implementation: "cloudflare_ai_gateway",
+      targetType: "cloudflare",
+      shape: "AIEndpoint",
+      interfaces: Object.freeze({
+        openai_chat_completions: "native",
+        openai_responses: "shim",
+        openai_embeddings: "native",
+      }),
+    }),
+    Object.freeze({
+      implementation: "takosumi_ai_gateway",
+      targetType: "takosumi_native",
+      shape: "AIEndpoint",
+      interfaces: Object.freeze({
+        openai_chat_completions: "native",
+        openai_responses: "native",
+        openai_embeddings: "native",
+      }),
+    }),
+    Object.freeze({
+      implementation: "openai_compatible_ai_endpoint",
+      targetType: "ai_provider",
+      shape: "AIEndpoint",
+      interfaces: Object.freeze({
+        openai_chat_completions: "native",
+        openai_responses: "shim",
+        openai_embeddings: "shim",
+      }),
+    }),
   ]) as TargetCapabilityMatrix;
 
 // --- internals ---------------------------------------------------------------
@@ -232,6 +273,22 @@ function nativeResourcesFor(
         return [{ type: "kubernetes.deployment", id: name }];
       case "aws_lambda_url":
         return [{ type: "aws.lambda_function", id: name }];
+      default:
+        return [];
+    }
+  }
+  if (shape === "AIEndpoint") {
+    switch (implementation) {
+      case "cloudflare_ai_gateway":
+        return [{ type: "cloudflare.ai_gateway", id: name }];
+      case "takosumi_ai_gateway":
+        return [{ type: "takosumi.ai_endpoint", id: name }];
+      case "openai_compatible_ai_endpoint":
+        return [{ type: "ai.openai_compatible_endpoint", id: name }];
+      case "aws_bedrock_openai_gateway":
+        return [{ type: "aws.bedrock_inference_profile", id: name }];
+      case "vertex_ai_openai_gateway":
+        return [{ type: "gcp.vertex_ai_endpoint", id: name }];
       default:
         return [];
     }
@@ -445,7 +502,7 @@ export function resolve(input: ResolverInput): ResolveOutcome {
   if (!requirements) {
     return fail(
       "unsupported_shape",
-      `resolver does not implement shape ${input.resource.kind} (Phase 2 ships ObjectStore only)`,
+      `resolver does not implement shape ${input.resource.kind}`,
     );
   }
 
