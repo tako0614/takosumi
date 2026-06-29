@@ -221,7 +221,7 @@ Workspace を混ぜないでください。複数 Workspace の inventory は Wo
 分割して送ります。
 
 Containers / Durable Objects のような compute / operation usage を backend が
-実測する場合は、同じ Cloud usage worker の
+実測する場合は、同じ Cloud usage extension handler の
 `POST /cloud/usage/resource-meters` に public meter を送ります。この endpoint は
 現時点で `cloudflare.containers` と `cloudflare.durable_objects` だけを受け付け、
 request body の `usdMicros` / `credits` は拒否します。単価は必ず platform worker の

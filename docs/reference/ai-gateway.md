@@ -123,16 +123,18 @@ service that only needs model listing or chat completions.
 
 ## Cloud Extension Configuration
 
-The closed Takosumi Cloud AI Gateway service reads upstream profiles from
-`TAKOSUMI_AI_GATEWAY_PROFILES`. This is config, not a secret. Each profile
-is either an OpenAI-compatible HTTPS upstream that names the env/secret
-containing its upstream credential, or a Cloudflare Workers AI binding profile
-that uses the Cloudflare Worker `AI` binding and therefore has no upstream
-REST credential. For Takosumi Cloud, the preferred operator-paid sandbox path
-is a Cloudflare AI Gateway REST API profile backed by Cloudflare Unified
-Billing: the secret is a Cloudflare API token, and Cloudflare bills the
-configured provider credits. The OSS platform worker does not parse this config
-or forward model requests by itself.
+The closed Takosumi Cloud AI Gateway handler reads upstream profiles from
+`TAKOSUMI_AI_GATEWAY_PROFILES`. This is config, not a secret. The handler is
+mounted through the `cloud_extensions` seam by the official
+`takosumi-cloud/platform/worker.ts` wrapper; it is not deployed as an
+independent Worker. Each profile is either an OpenAI-compatible HTTPS upstream
+that names the env/secret containing its upstream credential, or a Cloudflare
+Workers AI binding profile that uses the Cloudflare Worker `AI` binding and
+therefore has no upstream REST credential. For Takosumi Cloud, the preferred
+operator-paid sandbox path is a Cloudflare AI Gateway REST API profile backed by
+Cloudflare Unified Billing: the secret is a Cloudflare API token, and Cloudflare
+bills the configured provider credits. The OSS platform worker does not parse
+this config or forward model requests by itself.
 
 Takosumi customer billing is explicit and separate from upstream provider
 billing. A model may set `billingUsdMicrosPerRequest`,
