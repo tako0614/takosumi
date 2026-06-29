@@ -21,6 +21,7 @@
 | unknown provider が runnable にならない | Compatibility Report の provider finding / missing Provider Connection                                     | declared-env CredentialRecipe、ProviderConnection status、runner profile provider allowlist、egress policy を確認   |
 | producer 更新後に downstream が古い     | Capsule `stale` マーク                                                                                     | dependency graph を確認し、 Workspace update として DAG 順に plan/apply                                              |
 | Runner Container が起動しない           | dispatch timeout / container error                                                                         | runner image / Container 設定を確認、 queue DLQ を確認                                                               |
+| install / deploy が遅い                 | phase timings で `source_clone` / `tofu_init` / `tofu_apply` のどれかが長い                                | SourceSnapshot reuse、provider mirror/cache、runner keepalive、app repo 側の image/build 最適化を分けて確認         |
 
 ## 切り分けの基本
 
@@ -37,6 +38,12 @@
    を作り、通常の Run として承認・適用し直す。
 4. **依存起因は graph で見る**: producer の outputs が変わると downstream は
    stale になる。 単発で直すより Workspace update として DAG 順に流す。
+5. **遅さは phase timings で見る**: `source_clone` が長いなら Git/ref/path と
+   SourceSnapshot reuse、`tofu_init` が長いなら provider mirror/cache、
+   `tofu_apply` が長いなら provider 側 API / resource 作成待ちを確認する。
+   `TAKOSUMI_RUNNER_KEEPALIVE_SECONDS` は成功 run の連続実行に効くが、
+   app bundle / container image / DB migration の最適化は app repo / CI /
+   OpenTofu module 側で行う。
 
 ## エスカレーション
 
