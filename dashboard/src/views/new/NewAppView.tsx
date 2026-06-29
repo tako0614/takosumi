@@ -1357,6 +1357,18 @@ function Inner() {
     providerConnectionError() === null;
   const usingSelectedService = () =>
     activeTab() !== "git" && Boolean(sourceGitUrl());
+  const hasChosenSource = () =>
+    usingSelectedService() || Boolean(sourceGitUrl());
+  const addGuideStage = (): "select" | "configure" | "review" => {
+    if (busy() || existingCapsule() || canContinue()) return "review";
+    return hasChosenSource() ? "configure" : "select";
+  };
+  const addGuideClass = (stage: "select" | "configure" | "review"): string => {
+    const order = { select: 0, configure: 1, review: 2 } as const;
+    const current = addGuideStage();
+    if (stage === current) return "is-current";
+    return order[stage] < order[current] ? "is-done" : "";
+  };
   const sourceSummaryTitle = () =>
     sourceGitUrl() ? name().trim() || capsuleNameFromUrl(sourceGitUrl()) : "";
   const retryAfterSyncWait = () => {
@@ -1982,15 +1994,15 @@ function Inner() {
                 </div>
               </div>
               <ol class="av-add-guide" aria-label={t("new.flow.aria")}>
-                <li class="is-done">
+                <li class={addGuideClass("select")}>
                   <span>1</span>
                   {t("new.flow.stepSelect")}
                 </li>
-                <li class="is-current">
+                <li class={addGuideClass("configure")}>
                   <span>2</span>
                   {t("new.flow.stepConfigure")}
                 </li>
-                <li>
+                <li class={addGuideClass("review")}>
                   <span>3</span>
                   {t("new.flow.stepReview")}
                 </li>
