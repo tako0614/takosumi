@@ -1,11 +1,16 @@
 import type { TakosumiProcessRole } from "../process/mod.ts";
-import { isInternalV1Path } from "takosumi-contract/api-surface";
+import {
+  isInternalV1Path,
+  TAKOSUMI_PRODUCT_CAPABILITIES_PATH,
+  TAKOSUMI_WELL_KNOWN_PATH,
+} from "takosumi-contract/api-surface";
 import { DEPLOY_CONTROL_INTERNAL_ENDPOINTS } from "./deploy_control_internal_routes.ts";
 import { ARTIFACT_ENDPOINTS } from "./artifact_routes.ts";
 import { RUNTIME_AGENT_ENDPOINTS } from "./runtime_agent_routes.ts";
 import { READINESS_ENDPOINTS } from "./readiness_routes.ts";
 import { METRICS_ENDPOINTS } from "./metrics_routes.ts";
 import { OPENAPI_ENDPOINTS } from "./openapi_endpoint.ts";
+import { RESOURCE_SHAPE_ENDPOINTS } from "./resource_routes.ts";
 
 /**
  * Single source of truth for the API route inventory mounted by
@@ -120,7 +125,8 @@ export type RouteFamilyId =
   | "readiness"
   | "artifact"
   | "deployControl-internal"
-  | "metrics";
+  | "metrics"
+  | "resource-shape";
 
 export type RouteFamilyFlag =
   | "runtimeAgentRoutesMounted"
@@ -128,7 +134,8 @@ export type RouteFamilyFlag =
   | "readinessRoutesMounted"
   | "artifactRoutesMounted"
   | "deployControlInternalRoutesMounted"
-  | "metricsRoutesMounted";
+  | "metricsRoutesMounted"
+  | "resourceShapeRoutesMounted";
 
 export type RouteFamilyMountedFlags = Record<RouteFamilyFlag, boolean>;
 
@@ -140,6 +147,26 @@ export type RouteFamilyMountedFlags = Record<RouteFamilyFlag, boolean>;
  * worker shells, not the in-process API app.
  */
 export const ALWAYS_MOUNTED_ENDPOINTS: readonly ApiEndpoint[] = [
+  {
+    method: "GET",
+    path: TAKOSUMI_WELL_KNOWN_PATH,
+    summary:
+      "Returns Takosumi product discovery metadata for providers and CLIs.",
+    auth: "none",
+    operationId: "getTakosumiDiscovery",
+    tag: "process",
+    openapi: { okSchema: "TakosumiWellKnownResponse" },
+  },
+  {
+    method: "GET",
+    path: TAKOSUMI_PRODUCT_CAPABILITIES_PATH,
+    summary:
+      "Returns product capabilities for stacks, resource shapes, adapters, compatibility profiles, identity, and commercial features.",
+    auth: "none",
+    operationId: "getTakosumiProductCapabilities",
+    tag: "process",
+    openapi: { okSchema: "TakosumiProductCapabilitiesResponse" },
+  },
   {
     method: "GET",
     path: "/capabilities",
@@ -201,6 +228,14 @@ export const ROUTE_FAMILIES: readonly RouteFamilyDescriptor[] = [
     defaultMounted: ({ role, hasOptions }) =>
       role === "takosumi-api" && hasOptions,
     endpoints: METRICS_ENDPOINTS,
+  },
+  {
+    id: "resource-shape",
+    flag: "resourceShapeRoutesMounted",
+    openapiTags: ["resource-shape"],
+    defaultMounted: ({ role, hasOptions }) =>
+      role === "takosumi-api" && hasOptions,
+    endpoints: RESOURCE_SHAPE_ENDPOINTS,
   },
 ] as const;
 

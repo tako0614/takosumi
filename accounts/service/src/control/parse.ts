@@ -55,7 +55,7 @@ import type {
   PolicyConfig,
   PublicInstallConfig,
   PublicCapsule,
-} from "takosumi-contract/installations";
+} from "takosumi-contract/install-configs";
 import type {
   Dependency,
   DependencyMode,

@@ -2,6 +2,11 @@ import { test } from "bun:test";
 import assert from "node:assert/strict";
 import type { TakosumiActorContext } from "takosumi-contract/reference/compat";
 import { signTakosumiInternalRequest } from "takosumi-contract/internal/rpc";
+import { TAKOSUMI_API_VERSION } from "../../../contract/capabilities.ts";
+import {
+  TAKOSUMI_PRODUCT_CAPABILITIES_PATH,
+  TAKOSUMI_WELL_KNOWN_PATH,
+} from "../../../contract/api-surface.ts";
 import { InMemoryRuntimeAgentRegistry } from "../../../core/agents/mod.ts";
 import { createInMemoryAppContext } from "../../../core/app_context.ts";
 import { createApiApp } from "../../../core/api/app.ts";
@@ -69,6 +74,38 @@ test("createApiApp hides /capabilities when no inventory bearer is configured", 
   });
 
   assert.equal((await app.request("/capabilities")).status, 404);
+});
+
+test("createApiApp exposes product discovery without inventory auth", async () => {
+  const app = await createApiApp({
+    registerOpenApiRoute: true,
+  });
+
+  const response = await app.request(
+    `https://takosumi.example.test${TAKOSUMI_WELL_KNOWN_PATH}`,
+  );
+
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.deepEqual(body.api_versions, [TAKOSUMI_API_VERSION]);
+  assert.equal(
+    body.endpoints.capabilities,
+    `https://takosumi.example.test${TAKOSUMI_PRODUCT_CAPABILITIES_PATH}`,
+  );
+});
+
+test("createApiApp exposes product capabilities without inventory auth", async () => {
+  const app = await createApiApp({
+    registerOpenApiRoute: true,
+  });
+
+  const response = await app.request(TAKOSUMI_PRODUCT_CAPABILITIES_PATH);
+
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.apiVersion, TAKOSUMI_API_VERSION);
+  assert.equal(body.resources.Stack, true);
+  assert.equal(body.compat.framework, true);
 });
 
 test("createApiApp does not mount retired public deployment routes", async () => {

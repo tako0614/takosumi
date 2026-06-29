@@ -1634,7 +1634,9 @@ function requireCommitPinnedEvidencePairs(
 }
 
 function isDashboardAssetPath(pathname: string): boolean {
-  return pathname === "/favicon.ico" || pathname.startsWith("/assets/");
+  return pathname === "/favicon.ico" ||
+    pathname.startsWith("/assets/") ||
+    pathname.startsWith("/opentofu/providers/");
 }
 
 function dashboardAssetResponse(response: Response, method: string): Response {

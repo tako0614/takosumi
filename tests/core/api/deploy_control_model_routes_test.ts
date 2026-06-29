@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 
 import { createTakosumiService } from "../../../core/bootstrap.ts";
-import type { InstallConfig } from "takosumi-contract/installations";
+import type { InstallConfig } from "takosumi-contract/install-configs";
 
 const TOKEN = "deploy-control-token";
 

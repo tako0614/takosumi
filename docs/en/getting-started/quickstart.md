@@ -112,5 +112,7 @@ outputs
 audit event
 ```
 
-Cloudflare Compatibility Gateway and managed resources are Takosumi Cloud-only
-and are not used by the OSS quickstart.
+This OSS quickstart uses the normal Cloudflare provider flow and does not use a
+compatibility profile. Compatibility profiles are OSS capability surfaces, while
+Takosumi Cloud's official managed capacity remains an Operator/Cloud operation
+concern.

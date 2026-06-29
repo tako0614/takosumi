@@ -16,7 +16,7 @@ import type { Connection } from "takosumi-contract/connections";
 import type {
   Installation,
   InstallConfig,
-} from "takosumi-contract/installations";
+} from "takosumi-contract/install-configs";
 import { DEFAULT_PAGE_LIMIT } from "takosumi-contract/pagination";
 
 const SPACE_ID = "space_pagination01";

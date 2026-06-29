@@ -37,6 +37,14 @@ import {
 } from "../../worker/src/scheduled/drift.ts";
 import { constantTimeEqualsString } from "../../core/shared/constant_time.ts";
 import { TAKOSUMI_METRICS_PATH } from "../../core/api/metrics_routes.ts";
+import {
+  createTakosumiProductCapabilities,
+  createTakosumiWellKnownDocument,
+} from "takosumi-contract/capabilities";
+import {
+  TAKOSUMI_PRODUCT_CAPABILITIES_PATH,
+  TAKOSUMI_WELL_KNOWN_PATH,
+} from "takosumi-contract/api-surface";
 import type { RuntimeAgentRegistry } from "../../core/agents/types.ts";
 import {
   creditBalanceAvailableUsdMicros,
@@ -124,6 +132,33 @@ export default {
     const metricsResponse = await handlePlatformMetricsRequest(request, env);
     if (metricsResponse) return metricsResponse;
     const url = new URL(request.url);
+    if (url.pathname === TAKOSUMI_WELL_KNOWN_PATH) {
+      return Response.json(
+        createTakosumiWellKnownDocument({
+          origin: url.origin,
+          edition: "cloud",
+          operatorTenants: true,
+          commercialBilling: true,
+          paymentEnforcement: true,
+          compat: {
+            cloudflare_subset: true,
+          },
+        }),
+      );
+    }
+    if (url.pathname === TAKOSUMI_PRODUCT_CAPABILITIES_PATH) {
+      return Response.json(
+        createTakosumiProductCapabilities({
+          edition: "cloud",
+          operatorTenants: true,
+          commercialBilling: true,
+          paymentEnforcement: true,
+          compat: {
+            cloudflare_subset: true,
+          },
+        }),
+      );
+    }
     if (url.pathname === "/internal/platform/hardening-gates") {
       return handleHardeningGatesRequest(request, env);
     }
@@ -207,8 +242,22 @@ export function withPlatformAssetCacheHeaders(
   response: Response,
 ): Response {
   if (request.method !== "GET" && request.method !== "HEAD") return response;
-  if (!url.pathname.startsWith("/assets/")) return response;
   if (response.status < 200 || response.status >= 400) return response;
+  if (url.pathname.startsWith("/opentofu/providers/")) {
+    const headers = new Headers(response.headers);
+    headers.set(
+      "cache-control",
+      url.pathname.endsWith("/index.json")
+        ? "no-cache"
+        : "public, max-age=31536000, immutable",
+    );
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    });
+  }
+  if (!url.pathname.startsWith("/assets/")) return response;
   const headers = new Headers(response.headers);
   headers.set("cache-control", "public, max-age=31536000, immutable");
   return new Response(response.body, {

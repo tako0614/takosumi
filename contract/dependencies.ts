@@ -16,7 +16,7 @@
  *     variables.
  */
 
-import type { OutputValueType } from "./installations.ts";
+import type { OutputValueType } from "./install-configs.ts";
 import { INTERNAL_V1_PREFIX } from "./api-surface.ts";
 
 export const INSTALLATION_DEPENDENCIES_PATH = (

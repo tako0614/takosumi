@@ -6,10 +6,9 @@
  * Secret / Run / Plan / Apply / Destroy / StateVersion / Output / Runner /
  * AuditEvent / Operator.
  *
- * This facade exports those canonical names plus transient deprecated aliases
- * (Space / Installation / Deployment / OutputSnapshot / StateSnapshot) used by
- * the current dashboard and operator tooling while the wire surface migrates; do
- * not introduce the deprecated names as new public product nouns.
+ * This facade exports the canonical names only. Internal storage modules may
+ * still read old column names for operator data migration, but this public
+ * facade does not re-export retired product vocabulary.
  *
  * Internal in-process compatibility DTOs for the account-plane workload seam live in
  * `internal-deploy-control-api.ts` and are intentionally not re-exported here.
@@ -22,10 +21,6 @@ export type {
   CapsuleProviderConnectionBinding,
   CapsuleProviderConnectionBindings,
   CapsuleProviderConnectionSet,
-  // @deprecated pre-rename binding alias names.
-  InstallationProviderConnectionBinding,
-  InstallationProviderConnectionBindings,
-  InstallationProviderConnectionSet,
   ListProviderConnectionsResponse,
   ProviderBinding,
   ProviderBindings,
@@ -77,13 +72,6 @@ export type {
   TakosumiApiErrorEnvelope,
   TakosumiApiErrorHttpStatus,
 } from "./deploy-control-errors.ts";
-/** @deprecated retired Deployment ledger projection; kept for audit reads. */
-export type {
-  DeploymentStatus,
-  PublicDeployment,
-  PublicDeployment as Deployment,
-  StateVersion as StateSnapshot,
-} from "./deployments.ts";
 export type {
   BackupConfig,
   InstallConfigCatalogDefault,
@@ -96,20 +84,13 @@ export type {
   InstallConfigSourceKind,
   InstallBuildConfig,
   InstallPrebuiltArtifactConfig,
-  CapsuleStatus as InstallationStatus,
   NormalizationConfig,
   OutputAllowlistEntry,
   OutputValueType,
   PolicyConfig,
   PublicInstallConfig as InstallConfig,
-  PublicCapsule as Installation,
   TrustLevel,
-} from "./installations.ts";
-/** @deprecated `OutputSnapshot` is renamed to `Output`. */
-export type {
-  PublicOutput as PublicOutputSnapshot,
-  PublicOutput as OutputSnapshot,
-} from "./outputs.ts";
+} from "./install-configs.ts";
 export * from "./providers.ts";
 export type {
   ArtifactRecord,
@@ -130,11 +111,3 @@ export type {
 export * from "./security.ts";
 export * from "./sources.ts";
 export * from "./workspaces.ts";
-/** @deprecated `Space` is renamed to `Workspace`. */
-export type {
-  Workspace as Space,
-  WorkspaceType as SpaceType,
-  CapsuleFullName as InstallationFullName,
-} from "./workspaces.ts";
-/** @deprecated `formatInstallationFullName` is renamed to `formatCapsuleFullName`. */
-export { formatCapsuleFullName as formatInstallationFullName } from "./workspaces.ts";

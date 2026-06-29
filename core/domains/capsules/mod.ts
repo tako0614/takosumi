@@ -25,7 +25,7 @@ import type {
 import type {
   CapsuleProviderEnvBindingSet,
   InstallConfig,
-} from "takosumi-contract/installations";
+} from "takosumi-contract/install-configs";
 import type { Page, PageParams } from "takosumi-contract/pagination";
 import {
   OpenTofuControllerError,

@@ -143,17 +143,15 @@ export interface CloudflareCompatInventory {
   >;
   readonly r2Buckets: CloudResourceResult<readonly CloudflareCompatR2Bucket[]>;
   readonly queues: CloudResourceResult<readonly CloudflareCompatQueue[]>;
-  readonly workflows: CloudResourceResult<
-    readonly CloudflareCompatWorkflow[]
-  >;
+  readonly workflows: CloudResourceResult<readonly CloudflareCompatWorkflow[]>;
   readonly workerScripts: CloudResourceResult<
     readonly CloudflareCompatWorkerScript[]
   >;
 }
 
 /**
- * Material for the Cloud screen (`/cloud`): Cloud API keys, the AI gateway
- * endpoint, and the Cloudflare compatibility endpoint + its managed-resource
+ * Material for the Cloud screen (`/cloud`): Cloud API keys, the AI gateway,
+ * the OpenTofu import endpoint, and Takosumi Cloud Workers / managed binding
  * inventory. Usage/billing is intentionally NOT part of this snapshot — it
  * lives on the Billing (支払い) tab via `getWorkspaceBilling` / `listWorkspaceUsage`.
  */
@@ -279,23 +277,19 @@ async function getCloudflareCompatInventory(
     workflows,
     workerScripts,
   ] = await Promise.all([
-      cloudflareListResult<CloudflareCompatKvNamespace>(
-        `${accountPath}/storage/kv/namespaces`,
-      ),
-      cloudflareListResult<CloudflareCompatD1Database>(
-        `${accountPath}/d1/database`,
-      ),
-      cloudflareListResult<CloudflareCompatR2Bucket>(
-        `${accountPath}/r2/buckets`,
-      ),
-      cloudflareListResult<CloudflareCompatQueue>(`${accountPath}/queues`),
-      cloudflareListResult<CloudflareCompatWorkflow>(
-        `${accountPath}/workflows`,
-      ),
-      cloudflareListResult<CloudflareCompatWorkerScript>(
-        `${accountPath}/workers/scripts`,
-      ),
-    ]);
+    cloudflareListResult<CloudflareCompatKvNamespace>(
+      `${accountPath}/storage/kv/namespaces`,
+    ),
+    cloudflareListResult<CloudflareCompatD1Database>(
+      `${accountPath}/d1/database`,
+    ),
+    cloudflareListResult<CloudflareCompatR2Bucket>(`${accountPath}/r2/buckets`),
+    cloudflareListResult<CloudflareCompatQueue>(`${accountPath}/queues`),
+    cloudflareListResult<CloudflareCompatWorkflow>(`${accountPath}/workflows`),
+    cloudflareListResult<CloudflareCompatWorkerScript>(
+      `${accountPath}/workers/scripts`,
+    ),
+  ]);
   return {
     accounts,
     selectedAccountId,
@@ -353,12 +347,7 @@ export async function revokeCloudApiKey(
 
 /** The Cloudflare compatibility resources the Cloud screen can manage. */
 export type CloudflareResourceKind =
-  | "kv"
-  | "r2"
-  | "d1"
-  | "queue"
-  | "workflow"
-  | "worker";
+  "kv" | "r2" | "d1" | "queue" | "workflow" | "worker";
 
 /**
  * Compat-API path for a single managed resource. The compat gateway mirrors the

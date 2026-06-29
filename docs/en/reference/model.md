@@ -1,11 +1,12 @@
 # Model Reference
 
-Last updated: 2026-06-28
+Last updated: 2026-06-29
 
-Takosumi OSS models OpenTofu/Terraform execution around the existing provider
-ecosystem. It does not model compatibility gateways or managed cloud resources.
+Takosumi OSS has two public flows: run plain OpenTofu from Git, and resolve
+Takosumi Resource Shapes through TargetPools, policy, and Adapters. Compatibility
+APIs are capability entrypoints into those models, not the internal model itself.
 
-## Public Concepts
+## OpenTofu Stack Concepts
 
 | Concept            | Meaning                                                                    |
 | ------------------ | -------------------------------------------------------------------------- |
@@ -23,7 +24,26 @@ ecosystem. It does not model compatibility gateways or managed cloud resources.
 | Runner             | Local/docker/remote/operator/cloud execution worker                        |
 | AuditEvent         | Actor/action/target/result evidence                                        |
 
-## Provider Resolution
+## Resource Shape Concepts
+
+| Concept        | Meaning                                                                  |
+| -------------- | ------------------------------------------------------------------------ |
+| Space          | Resource API namespace and policy scope                                  |
+| Environment    | Deployment environment inside a Space                                    |
+| Stack          | A group of Resource Shape objects and operations                         |
+| Resource       | Desired abstract resource, such as ObjectStore, HttpService, or Queue    |
+| Target         | Concrete implementation destination, such as AWS, Cloudflare, Kubernetes |
+| TargetPool     | Operator-controlled set of available Targets and capabilities            |
+| Credential     | Runtime authority used by a Target or Adapter                            |
+| Policy         | Rules for placement, cost, region, action, network, and access           |
+| Adapter        | Implementation bridge that can preview, apply, observe, and delete       |
+| ResolutionLock | Recorded resolver decision for a Resource                                |
+| NativeResource | Concrete provider/platform resource created by an Adapter                |
+| Condition      | Status and readiness evidence                                            |
+
+`Space` here is the Resource API namespace and policy scope.
+
+## OpenTofu Provider Resolution
 
 Upload/prepared-source snapshots are internal/operator compatibility only. They
 are not a public Source kind and do not create new public Capsules.
@@ -40,9 +60,8 @@ blocked_missing_connection
 blocked_policy
 ```
 
-Resolution evidence never includes secret values. Internal legacy names such as
-`ProviderEnv` may still appear in code during migration, but public API/UI/docs
-should speak in terms of ProviderConnection and ProviderBinding.
+Resolution evidence never includes secret values. Public API, UI, and docs use
+ProviderConnection and ProviderBinding.
 
 ## Same Manifest, Different Connection
 
@@ -99,15 +118,62 @@ reuse) and shuts down failed runs immediately. Operators can also pass
 `TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR` and `TAKOSUMI_SOURCE_ARCHIVE_ZSTD_LEVEL`
 as non-secret speed settings.
 
-## Cloud-Only Concepts
+## Resource Shape Resolution
 
-The following are not OSS model concepts:
+The Resource Shape flow starts from `takosumi_*` resources and resolves them to
+Targets:
 
 ```text
-provider-compatible Gateway evidence
-compatibility endpoint resolution
-managed edge/storage/container resources
+Resource Shape
+  -> TargetPool / Policy / Credential
+  -> Adapter capability
+  -> ResolutionLock
+  -> NativeResource
 ```
 
-Those belong to closed Takosumi Cloud if and when the official hosted service
-adds them.
+Users normally describe the shape they want, not the backend. Operators decide
+which Targets are available, which Adapters are enabled, and which policies
+control placement. Resolver decisions are recorded as ResolutionLocks and do
+not move without an explicit migration.
+
+Adapters report capabilities and perform preview/apply/observe/delete work.
+Initial adapter families can include OpenTofu, Cloudflare, AWS, Kubernetes, VM,
+and Takosumi-native adapters.
+
+## Compatibility Capabilities
+
+Compatibility APIs are scoped, versioned entrypoints. They are enabled and
+advertised as capabilities, for example:
+
+```text
+compat.s3.v1
+compat.oci.v1
+compat.cloudevents.v1
+compat.kubernetes.crd.v1
+compat.cloudflare.workers.v1
+```
+
+They map requests into Takosumi resources such as ObjectStore, Artifact,
+Queue, EventHandler, HttpService, or Kubernetes resources. They are not a claim
+of full AWS compatibility, full Cloudflare compatibility, or a provider-specific
+internal model.
+
+Detailed Resource Shape and compatibility capability definitions live in the
+[Takosumi Final Plan](https://github.com/tako0614/takosumi/blob/main/docs/final-plan.md).
+
+## Operator / Cloud Concepts
+
+The following are operation or hosted-service concepts, not portable OSS model
+requirements:
+
+```text
+commercial customer management
+subscription / invoice / payment integration
+official managed target pools
+official native runtime / object store / queue / DB / edge gateway internals
+official billing / SLA / support / abuse controls
+```
+
+Takosumi for Operator can operate its own managed target catalog and commercial
+service. Takosumi Cloud is the official hosted operation with official managed
+capacity.

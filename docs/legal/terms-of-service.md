@@ -17,10 +17,12 @@ records are backing material; they do not grant broad operator access to user
 provider accounts. Account-plane projection material must not be embedded in
 OpenTofu outputs.
 
-Takosumi OSS and Takosumi for Operators do not include compatibility APIs,
-Gateway-backed managed resources, official billing, official usage metering, or
-official support/abuse workflows. Those are Takosumi Cloud-only features and are
-governed by the Takosumi Cloud operator terms when used.
+Takosumi OSS may include Compatibility API framework, compatibility profiles,
+Resource Shape APIs, adapter contracts, and usage-event emission. Official
+managed target pools, Takosumi-owned native resource internals, enforced
+billing/payment, official usage metering sold as a service, and official
+support/abuse workflows are Takosumi for Operator / Takosumi Cloud operation
+features and are governed by the relevant hosted operator terms when used.
 
 Self-hosted operators may replace this page with their own terms. If a hosted
 operator publishes separate signed terms, those operator terms take precedence

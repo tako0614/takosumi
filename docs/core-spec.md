@@ -1,45 +1,38 @@
 # Takosumi Core Spec
 
-Last updated: 2026-06-28
+Last updated: 2026-06-29
 
-This document is the current OSS core specification and describes the live model.
-Product direction is fixed by [Takosumi Final Plan](./final-plan.md).
+This document describes the OSS core specification. Product direction is fixed
+by [Takosumi Final Plan](./final-plan.md).
 
 ## Definition
 
-Takosumi OSS is an OpenTofu/Terraform control plane that runs the existing
-provider ecosystem as-is.
+Takosumi OSS is a Git-based OpenTofu control plane with resource-shape
+resolution.
 
-Takosumi Cloud is the closed official hosted service based on Takosumi for
-Operators, with cloud-only compatibility gateways and managed resources.
-
-The invariant is:
+It supports two flows:
 
 ```text
-OSS runs existing providers.
-Only Cloud has compatibility gateways and managed resources.
+Flow A:
+  plain OpenTofu/Terraform stack execution from Git
+
+Flow B:
+  Takosumi Resource Shape API resolved through TargetPool, Policy, and adapters
 ```
 
-## Product Layers
+The current implementation is stronger in Flow A and is being extended toward
+Flow B.
 
-| Layer                  | License / operation     | Scope                                   |
-| ---------------------- | ----------------------- | --------------------------------------- |
-| Takosumi Core          | OSS                     | Shared execution engine                 |
-| Takosumi               | OSS self-host           | Personal / small-team self-host product |
-| Takosumi for Operators | OSS self-host           | Multi-tenant operator edition           |
-| Takosumi Cloud         | Closed official service | Hosted Operators + Cloud-only features  |
-
-## OSS Core Responsibilities
+## Core Responsibilities
 
 Takosumi Core owns:
 
 ```text
-Workspace / Project / Capsule model
-Source snapshotting
+Git Source and immutable source snapshots
 OpenTofu/Terraform init / validate / plan / apply / destroy
-Provider Connection
-Credential Recipe
-Provider Binding
+ProviderConnection
+CredentialRecipe
+ProviderBinding
 run-scoped env/file injection
 StateVersion storage and locking
 Secret storage
@@ -50,21 +43,31 @@ Output-to-input wiring
 AuditEvent ledger
 Runner protocol
 policy and approval hooks
+Resource Shape API
+Target / TargetPool
+Credential / OIDC / Workload Identity
+Resolver / Planner / Reconciler
+Adapter framework
+Compatibility API framework
+usage event emission
 ```
 
 Takosumi Core does not own:
 
 ```text
-Cloudflare Compatibility Gateway
-AWS/GCP compatibility API
-S3 gateway
-managed edge/storage/container resource backend
-official billing implementation
-official resource pools
-closed Takosumi Cloud operator modules
+commercial customer management
+invoice / payment integration
+rated billing and payment enforcement
+official managed target capacity
+official Takosumi native resource internals
+official SLA / support / abuse tooling
 ```
 
+Compatibility API framework is core; official managed capacity is not.
+
 ## Public Model
+
+### OpenTofu Stack Flow
 
 | Concept            | Meaning                                                                    |
 | ------------------ | -------------------------------------------------------------------------- |
@@ -82,22 +85,36 @@ closed Takosumi Cloud operator modules
 | Runner             | Local/docker/remote/operator/cloud execution worker                        |
 | AuditEvent         | Actor/action/target/result evidence                                        |
 
-Upload/prepared-source snapshots are internal/operator compatibility only; they are not a public Source kind and do not create new public Capsules.
+Plan / Apply / Destroy are guarded Run operations, not separate ledgers.
 
-This is the live public model. The retired `Space` / `Installation` /
-`StateSnapshot` / `OutputSnapshot` / `ProviderEnv` / `Deployment` /
-Provider Catalog names from the previous architecture have been renamed to this
-model across contract, core, runner, dashboard, and storage (with non-destructive
-rename-aside migrations on both storage engines). Docs and UI use Workspace,
-Project, Capsule, ProviderConnection, ProviderBinding, CredentialRecipe, Run,
-StateVersion, Output, and AuditEvent. A few internal helpers (such as the
-`SourceSnapshot` archive type and `InstallConfig` service-side config record)
-keep descriptive names that are not public product nouns.
+### Resource Shape Flow
+
+| Concept          | Meaning                                                       |
+| ---------------- | ------------------------------------------------------------- |
+| Space            | Resource API namespace and policy scope                       |
+| Environment      | Deployment environment within a Space/Project                 |
+| Stack            | Git-backed OpenTofu stack or resource-shape bundle            |
+| Resource         | Kubernetes-like desired/observed resource object              |
+| ResourceShape    | Resource form such as ObjectStore, HttpService, Queue         |
+| Interface        | External protocol/API such as s3_api or web_fetch             |
+| Profile          | Ecosystem compatibility surface such as workers_bindings      |
+| Implementation   | Concrete backend such as cloudflare_workers or aws_s3         |
+| Target           | Southbound account/cluster/fleet/runtime endpoint             |
+| TargetPool       | Candidate targets used by the resolver                        |
+| Credential       | Target or workload credential configuration                   |
+| Policy           | Constraints, approvals, lifecycle, and resolution rules       |
+| Adapter          | Code that previews/applies/observes a selected implementation |
+| ResolutionLock   | Persisted selected implementation + target                    |
+| NativeResource   | Concrete backend resource reference                           |
+| Condition        | Ready / Reconciling / Drifted / Degraded / Blocked evidence   |
+
+`Space` in this model is the Resource API namespace and policy scope. The public
+model uses Workspace / Project / Capsule / Run / StateVersion / Output /
+Resource Shape / Target / Adapter.
 
 ## Git Source And Run Input Model
 
-Takosumi's standard path is deliberately simple: run the OpenTofu/Terraform
-module that lives in Git.
+Takosumi's standard path runs the OpenTofu/Terraform module that lives in Git.
 
 ```text
 Git URL + ref/tag/commit + module path
@@ -109,87 +126,37 @@ Git URL + ref/tag/commit + module path
 
 The runner may persist an immutable `SourceSnapshot` archive for reproducible
 plan/apply, but that snapshot is a copy of the Git module bytes selected by the
-source ref. Legacy upload/prepared-source archive paths can still exist for
-operator tooling and stored compatibility rows; they are not the product model
-for installing apps.
-For webhook or scheduled source polling, the runner still resolves the ref with
-Git. If the resolved commit matches an existing SourceSnapshot for the same
-Source/ref/path, Takosumi reuses the existing archive object rather than
-cloning, archiving, and storing duplicate bytes.
-`Source.autoSync` is the public opt-in for scheduled Git-ref polling. It only
-prepares a newer immutable SourceSnapshot; it does not apply changes by itself.
-Updates still go through the normal Plan / Apply approval boundary.
+source ref. `Source.autoSync` may prepare a newer immutable source snapshot; it
+does not apply changes by itself.
 
-Takosumi does not fetch, build, or interpret deployable application artifacts.
-If an OpenTofu module needs an image reference, version, release tag, object key,
-or any other app-specific value, it declares a normal Terraform variable and the
-install/deploy request passes that value through `variableMapping` / `vars`.
-Takosumi does not reserve those variable names or assign semantics to them.
-
-Distribution/catalog entries may supply `modulePath` and `variables`. `modulePath`
-is only the repository-relative OpenTofu/Terraform module selector. `variables`
-is a JSON object copied into the OpenTofu variable map for plan/apply. Values
-such as `artifact_url`, `image_digest`, `worker_name`, or
-`enable_cloudflare_resources` remain module-owned inputs; Takosumi records and
-passes them but does not fetch or interpret the referenced artifact.
-
-Legacy `build` / `prebuiltArtifact` fields remain compatibility-only for stored
-pre-v1 / first-party row readability and are not the final public Capsule
-contract. New generated-root dispatch does not run them or pass them to the
-runner.
+Takosumi does not decide app artifact semantics. If a module needs an image
+reference, release tag, object key, URL, or digest, the module declares a normal
+variable or provider/data-source logic.
 
 ## Performance Model
 
-Takosumi should feel closer to an app install flow than a visible CI console,
-without leaving the OpenTofu-native model:
+Takosumi should feel like an app install flow without leaving the
+Git/OpenTofu model.
+
+Allowed Takosumi-side speed mechanisms:
 
 ```text
-Git ref resolution -> SourceSnapshot reuse -> provider init -> plan -> apply
+SourceSnapshot reuse for identical resolved commits
+runner image provider mirror
+operator-configured OpenTofu provider plugin cache
+serialized tofu init per shared cache path
+short keepalive for successful runner containers
+phase timing evidence
+user-level progress phases
 ```
 
-The allowed performance mechanisms are:
-
-- Reuse immutable SourceSnapshot archive bytes when the same Source/ref/path
-  resolves to the same commit.
-- Bake a filesystem provider mirror into the runner image for first-party and
-  operator-approved providers, and record provider installation evidence.
-- Use an operator-configured OpenTofu provider plugin cache inside the runner
-  container for direct provider installs. The cache stores provider binaries
-  only; provider credentials and generated files remain per-run and are deleted
-  after the run. Within a runner process, `tofu init` is serialized per shared
-  cache path to avoid cache corruption while keeping plan/apply execution
-  parallel. Sharing the same cache path across independent runner processes or
-  containers is an operator decision and must provide its own isolation or file
-  locking.
-- Keep a successful Cloudflare Container runner warm for a short operator-set
-  window (`TAKOSUMI_RUNNER_KEEPALIVE_SECONDS`, default `120`; `0` disables it)
-  so source sync / compatibility / plan / apply bursts can reuse the container
-  and provider cache. Failed runs shut the container down immediately.
-- Forward only non-secret runner speed env into the container:
-  `TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR` for provider binaries and
-  `TAKOSUMI_SOURCE_ARCHIVE_ZSTD_LEVEL` for SourceSnapshot compression speed.
-- Keep app/container/bundle build optimization in the app repository, release
-  pipeline, registry, or OpenTofu module. A module may accept a URL, digest,
-  image tag, or object key as a normal variable, and may verify it with ordinary
-  provider/data-source logic, but Takosumi does not decide what that artifact
-  means.
-
-Runner responses include phase timing evidence for source resolution/reuse,
-provider init, plan, apply, output, and compatibility checks. The dashboard can
-map those internal timings to app-install phases and operators can see whether
-time is going to Git/source archive work, provider installation, OpenTofu plan,
-or provider apply.
-
-UI progress should show user-level phases such as preparing, checking access,
-planning, installing, finishing, and ready. OpenTofu logs, plan JSON, provider
-bindings, state, and audit evidence remain available in details/advanced views.
+App/container/bundle build optimization belongs in the app repo, CI/release
+pipeline, registry, provider, or OpenTofu module inputs.
 
 ## Provider Connections
 
 A ProviderConnection stores credential material or a reference to credential
 material for a real OpenTofu/Terraform provider.
-
-Examples:
 
 ```yaml
 connections:
@@ -218,229 +185,193 @@ connections:
       SNOWFLAKE_USER: takosumi_runner
 ```
 
-Secrets are never written to Capsule source, generated `.tfvars`, state
-metadata, logs, or audit messages. They are decrypted only for the run sandbox.
-For a declared-env provider recipe, the declared names are injected into the
-runner process under the same names, such as `SNOWFLAKE_PASSWORD`. This path is
-available for any OpenTofu/Terraform provider, including providers that also
-have guided CredentialRecipes.
-Runner/runtime-reserved names such as `PATH`, `TAKOSUMI_*`, `OPENTOFU_*`, and
-`TF_*` are rejected for declared-env recipes.
+Secrets are decrypted only for the run sandbox. Runner/runtime-reserved env
+names such as `PATH`, `TAKOSUMI_*`, `OPENTOFU_*`, and `TF_*` are rejected for
+declared-env recipes.
 
 ## Credential Recipes
 
 A CredentialRecipe defines how a provider credential becomes temporary runtime
 material.
 
-Built-in recipe files are stored under `recipes/providers/*.yaml`. The
-dependency-free runner projection is `contract/provider-env-rules.ts`; tests
-must keep the YAML catalog, provider runtime registry, and runner/vault
-projection in sync.
+Built-in recipes live under `recipes/providers/*.yaml`. The dependency-free
+runner projection is `contract/provider-env-rules.ts`; tests keep YAML,
+provider runtime registry, and runner/vault projection in sync.
 
-Cloudflare example:
+Generic env is a required escape hatch so arbitrary providers can run with
+explicit env/file declarations, runner policy, provider plugin policy, and
+egress policy.
 
-```yaml
-id: cloudflare
-terraform_source: cloudflare/cloudflare
-auth_modes:
-  api_token:
-    env:
-      CLOUDFLARE_API_TOKEN:
-        from_secret: api_token
-      CLOUDFLARE_ACCOUNT_ID:
-        from_value: account_id
-```
+## Resource Objects
 
-AWS example:
+Resource objects use `apiVersion: takosumi.dev/v1alpha1`.
 
-```yaml
-id: aws
-terraform_source: hashicorp/aws
-auth_modes:
-  static_keys:
-    env:
-      AWS_ACCESS_KEY_ID:
-        from_secret: access_key_id
-      AWS_SECRET_ACCESS_KEY:
-        from_secret: secret_access_key
-      AWS_REGION:
-        from_value: region
-  assume_role:
-    pre_run:
-      type: aws_sts_assume_role
-    env:
-      AWS_ACCESS_KEY_ID:
-        from_generated: access_key_id
-      AWS_SECRET_ACCESS_KEY:
-        from_generated: secret_access_key
-      AWS_SESSION_TOKEN:
-        from_generated: session_token
-      AWS_REGION:
-        from_value: region
-```
-
-GCP example:
-
-```yaml
-id: google
-terraform_source:
-  - hashicorp/google
-  - hashicorp/google-beta
-auth_modes:
-  service_account_json:
-    files:
-      /run/takosumi/google.json:
-        from_secret: service_account_json
-    env:
-      GOOGLE_APPLICATION_CREDENTIALS:
-        value: /run/takosumi/google.json
-      GOOGLE_PROJECT:
-        from_value: project_id
-```
-
-Built-in CredentialRecipes are validation and guided-setup helpers, not the
-global provider boundary. Any provider can run through an explicit declared-env
-recipe when the runner profile and egress policy allow it:
-
-```yaml
-id: declared-env
-terraform_source: registry.opentofu.org/snowflake-labs/snowflake
-env:
-  SNOWFLAKE_ACCOUNT:
-    from_value: account
-  SNOWFLAKE_USER:
-    from_value: user
-  SNOWFLAKE_PASSWORD:
-    from_secret: password
-```
-
-## Provider Binding
-
-ProviderBinding maps a provider address/name and optional alias to a
-ProviderConnection.
-
-```yaml
-provider_bindings:
-  cloudflare.default:
-    connection: cloudflare-main
-  aws.tokyo:
-    connection: aws-tokyo
-  aws.virginia:
-    connection: aws-virginia
-```
-
-This is the "Same manifest, different connection" model.
-
-## Run Environment
-
-At run time:
-
-```text
-ProviderConnection
-  -> CredentialRecipe
-  -> temporary env/file material
-  -> runner sandbox
-  -> OpenTofu/Terraform provider
-```
-
-The runner must:
-
-```text
-checkout source
-materialize generated root if needed
-install provider plugins
-run tofu init/validate/plan/apply/destroy
-stream redacted logs
-capture state
-capture outputs
-record run evidence
-delete temporary credential files
-```
-
-## State
-
-Takosumi OSS provides state storage, state lock, state versioning, rollback,
-diff, and backup hooks.
-
-Initial supported backends:
-
-```text
-Postgres
-local filesystem
-S3-compatible backup
-```
-
-Cloud may provide an official managed state backend, but that backend is not an
-OSS compatibility gateway.
-
-## Outputs
-
-OpenTofu outputs are saved as Capsule outputs and can be wired into another
-Capsule's inputs.
-
-```yaml
-inputs:
-  home_domain:
-    from_output:
-      capsule: home-core
-      name: home_domain
-```
-
-Sensitive outputs remain encrypted and are not projected into public views.
-
-## Post-Apply Release Commands
-
-OpenTofu apply is not the same thing as an application being ready. A Capsule may
-declare generic post-apply release commands in the neutral `takosumi_release`
-output; Takosumi core treats those commands as opaque argv arrays and never adds
-DB-specific, Worker-specific, or provider-specific activation code.
-
-```hcl
-output "takosumi_release" {
-  value = {
-    post_apply = [
-      {
-        id       = "activate"
-        executor = "runner"
-        command  = ["bun", "run", "app:activate"]
-      }
-    ]
+```json
+{
+  "apiVersion": "takosumi.dev/v1alpha1",
+  "kind": "HttpService",
+  "metadata": {
+    "name": "api",
+    "space": "prod",
+    "project": "myapp",
+    "managedBy": "opentofu"
+  },
+  "spec": {
+    "runtime": {
+      "interface": "web_fetch",
+      "language": "typescript",
+      "profiles": ["workers_bindings"]
+    },
+    "exposure": {
+      "publicHttp": true
+    }
+  },
+  "status": {
+    "phase": "Ready",
+    "resolution": {
+      "selectedImplementation": "cloudflare_workers",
+      "target": "cloudflare-main",
+      "locked": true
+    },
+    "outputs": {
+      "url": "https://api.example.com"
+    }
   }
 }
 ```
 
-When a host wires a ReleaseActivator, Takosumi passes the commands with the
-apply/deployment/output references and non-sensitive outputs. The built-in
-runner activator runs `executor = "runner"` argv commands in the restored source
-snapshot and injects only non-secret metadata such as `TAKOSUMI_OUTPUTS_JSON`,
-`TAKOSUMI_RELEASE_CONTEXT_JSON`, `TAKOSUMI_RELEASE_RUN_ID`,
-`TAKOSUMI_APPLY_RUN_ID`, `TAKOSUMI_CAPSULE_ID`, and
-`TAKOSUMI_STATE_VERSION_ID`. `TAKOSUMI_RELEASE_CONTEXT_JSON` is a generic
-`takosumi.release-context@v1` object with release/apply/deployment ids and the
-same non-sensitive outputs; it is not a provider-specific or DB-specific
-contract. Provider credentials
-are not injected into arbitrary post-apply source commands; provider-owned
-artifact publishing should declare `executor = "operator"` and be handled by an
-operator/Cloud activator or another explicit credential boundary. If no operator
-activator is configured, such commands remain `release_activation.pending`
-instead of being attempted inside the credential-free runner sandbox.
+## Resolver
 
-`post_apply.env` is limited to non-sensitive knobs. DB URLs, DSNs, connection
-strings, API tokens, provider credentials, session tokens, and passwords must
-not be declared through the OpenTofu output. App bootstrap and publication work
-remain ordinary argv commands, but their authority comes from the command's own
-runtime context or from an explicit operator/Cloud secret boundary, not from
-secrets stored inside OpenTofu state.
+Resolver input:
 
-Operator release activators may opt in to forwarding selected operator-owned
-environment variables to `executor = "operator"` commands with an explicit
-operator-side allowlist. That allowlist is not part of the Capsule output
-contract and does not make Takosumi understand databases, Workers, queues, or
-other app resources; the command remains an opaque argv.
+```text
+resource shape
+interfaces
+profiles
+connections
+triggers
+constraints
+preferences
+space policy
+target pool
+existing resolution lock
+target capabilities
+cost model
+compliance rules
+```
 
-When no activator is configured, the OpenTofu apply can still succeed, but
-Takosumi records `release_activation.pending` instead of silently implying that
-post-apply commands, app publication, or app initialization ran.
+Resolver output:
+
+```text
+selected implementation
+selected target
+native resource plan
+compatibility score
+portability score
+cost estimate
+risk notes
+resolution lock
+```
+
+Capability levels:
+
+```text
+native
+shim
+emulated
+unsupported
+```
+
+## Compatibility API Framework
+
+Compatibility APIs are versioned capability profiles. They are entrypoints into
+the Resource API.
+
+```text
+compat.s3.v1
+compat.oci.v1
+compat.cloudevents.v1
+compat.kubernetes.crd.v1
+compat.cloudflare.workers.v1
+compat.aws.sqs.v1
+compat.redis.v1
+compat.postgres.v1
+```
+
+Do not claim complete AWS or Cloudflare compatibility. Specific surfaces are
+enabled or disabled by `/v1/capabilities`.
+
+## Discovery
+
+Any Takosumi endpoint should expose product discovery for tooling and the
+`takosumi/takosumi` provider.
+
+```http
+GET /.well-known/takosumi
+GET /v1/capabilities
+```
+
+`/capabilities` remains the existing operator-gated route inventory endpoint.
+`/v1/capabilities` is the public product capability document.
+
+The official hosted platform serves the `takosumi/takosumi` provider from the
+same platform Worker static assets as the dashboard. The mirror base is:
+
+```text
+https://app.takosumi.com/opentofu/providers/
+```
+
+This is an OpenTofu network mirror, not a separate provider service. The mirror
+assets are generated into `dashboard/public/opentofu/providers/` by
+`bun run provider:assets` before the dashboard build.
+
+## OIDC And Workload Identity
+
+Standard Takosumi includes an OIDC issuer and workload identity primitives.
+Operator/Cloud may add enterprise SSO, SAML, SCIM, advanced session policy, and
+tenant isolation.
+
+Credential modes:
+
+```text
+static_secret
+oidc_federation
+agent_local
+managed
+```
+
+## State
+
+Takosumi keeps three state layers separate:
+
+```text
+OpenTofu state
+Takosumi resource state
+Native resource state
+```
+
+OpenTofu provider state for `takosumi_*` resources should hold Takosumi resource
+ids and outputs, not secret material or raw native provider internals.
+
+## Billing And Usage Events
+
+Core can emit usage events:
+
+```text
+HttpService request count
+HttpService execution time
+ObjectStore storage bytes
+ObjectStore request count
+Queue messages
+DB storage
+DB compute
+VM hours
+Build minutes
+Egress
+```
+
+Operator/Cloud turns usage into meters, rating, invoices, payment, commercial
+quota, and support tooling.
 
 ## Security
 
@@ -452,55 +383,26 @@ provider credentials are injected only into the run sandbox
 logs are redacted before persistence
 runs use a temporary workspace
 temporary credential files are removed after the run
-provider plugin cache stores provider binaries only and is run-local or isolated/serialized by operator policy
-state is isolated per Workspace/Capsule
+provider plugin cache stores provider binaries only
+state is isolated per Workspace/Capsule/Resource
 apply approval is supported
 destroy protection is supported
 audit log is required
 ```
 
-Operator / Cloud deployments additionally require tenant isolation, runner pool
+Operator/Cloud deployments additionally require tenant isolation, runner pool
 isolation, quota, network egress policy, admin audit, and usage metering.
-
-## Cloud-Only Boundary
-
-Compatibility Gateway and managed resources are not part of OSS Takosumi. They
-live only in the closed `takosumi-cloud` package, which composes on top of OSS
-through an additive route proxy and the billing/quota ports (one-way Cloud->OSS).
-
-The following belong only to closed Takosumi Cloud:
-
-```text
-Cloudflare Compatibility Gateway
-Takosumi AI Gateway
-Takosumi Managed Edge Worker
-Takosumi Object Storage
-Takosumi App Database
-Takosumi KV
-Takosumi Queue
-Takosumi Cloud Container
-official (enforced) billing/quota/usage/support
-official resource pools
-```
-
-OSS code must not expose provider-compatible Gateway endpoints, default Gateway
-runner profiles, run-key minting, managed resource backends, or enforced billing
-gates. OSS billing is `disabled` or `showback` only; it estimates and records
-without ever blocking apply.
 
 ## MVP Order
 
-1. Build OSS Core model: Workspace, Project, Capsule, Source, Run,
-   ProviderConnection, ProviderBinding, Secret, StateVersion, Output, Audit.
-2. Build runner: checkout, OpenTofu install/version selection, init, validate,
-   plan, apply, destroy, log streaming, state capture, output capture, cleanup.
-3. Build built-in Credential Recipes for Cloudflare, AWS, GCP, S3-compatible,
-   plus declared-env recipes for arbitrary OpenTofu providers.
-4. Build state, output-to-input wiring, audit, and secret redaction.
-5. Build Web UI and CLI for projects, capsules, connections, runs, plans,
-   applies, state, outputs, and logs.
-6. Add Takosumi for Operators multi-tenancy, teams, runner pools, admin, and
-   quota.
-7. Build Takosumi Cloud as closed official hosting.
-8. Add Cloudflare Compatibility Gateway and managed resources only in the closed
-   Cloud implementation.
+1. Discovery and capability documents: `/.well-known/takosumi`,
+   `/v1/capabilities`.
+2. OpenTofu Stack controller: Git, runner, state, logs, approval, credentials.
+3. ProviderConnection / CredentialRecipe / generic env / OIDC federation.
+4. Resource object schema, Resource API preview/apply/status, ResolutionLock.
+5. ObjectStore + S3 compatibility profile.
+6. HttpService / ContainerService / Route / Connection model.
+7. Queue / RelationalDatabase / EventHandler / CloudEvents profile.
+8. Kubernetes CRDs and Kubernetes adapter.
+9. VM / MachinePool / agent-local credentials.
+10. Operator/Cloud commercial operation and official managed targets.

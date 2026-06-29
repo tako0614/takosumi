@@ -24,7 +24,7 @@ import type {
   StateSnapshot,
 } from "@takosumi/internal/deploy-control-api";
 import type { Workspace as Space } from "takosumi-contract/workspaces";
-import type { InstallationProviderEnvBindingSet } from "takosumi-contract/installations";
+import type { InstallationProviderEnvBindingSet } from "takosumi-contract/install-configs";
 import type { SourceSnapshot, SourceSyncRun } from "takosumi-contract/sources";
 import type {
   Dependency,

@@ -4,6 +4,15 @@ import { InMemoryRuntimeAgentRegistry } from "../agents/registry.ts";
 import type { TakosumiProcessRole } from "../process/mod.ts";
 import { currentRuntime } from "../shared/runtime/index.ts";
 import { createApiCapabilitiesDescription } from "./capabilities.ts";
+import {
+  createTakosumiProductCapabilities,
+  createTakosumiWellKnownDocument,
+  type CreateTakosumiDiscoveryOptions,
+} from "takosumi-contract/capabilities";
+import {
+  TAKOSUMI_PRODUCT_CAPABILITIES_PATH,
+  TAKOSUMI_WELL_KNOWN_PATH,
+} from "takosumi-contract/api-surface";
 import { registerApiErrorHandler } from "./errors.ts";
 import {
   createTakosumiOpenApiDocument,
@@ -31,6 +40,10 @@ import {
   registerMetricsRoutes,
   type RegisterMetricsRoutesOptions,
 } from "./metrics_routes.ts";
+import {
+  type RegisterResourceShapeRoutesOptions,
+  registerResourceShapeRoutes,
+} from "./resource_routes.ts";
 import {
   registerRequestCorrelation,
   type RegisterRequestCorrelationOptions,
@@ -61,6 +74,9 @@ export interface CreateApiAppOptions {
   readonly deployControlInternalRouteOptions?: DeployControlInternalRouteDependencies;
   readonly registerMetricsRoutes?: boolean;
   readonly metricsRouteOptions?: RegisterMetricsRoutesOptions;
+  /** When set, mounts the `/v1/resources` Resource Shape API (Flow B). */
+  readonly registerResourceShapeRoutes?: boolean;
+  readonly resourceShapeRouteOptions?: RegisterResourceShapeRoutesOptions;
   /**
    * HTTP request/correlation id propagation is mounted by default. Pass
    * `false` only for low-level route tests that need to exercise raw Hono
@@ -88,11 +104,30 @@ export async function createApiApp(
   const deployControlInternalRoutesMounted =
     mounted.deployControlInternalRoutesMounted;
   const metricsRoutesMounted = mounted.metricsRoutesMounted;
+  const resourceShapeRoutesMounted = mounted.resourceShapeRoutesMounted;
 
   app.get("/capabilities", (c) => {
     const guard = authorizeInventoryRoute(c, options, "capabilities");
     if (guard) return guard;
     return c.json(createApiCapabilitiesDescription(role, mounted));
+  });
+
+  app.get(TAKOSUMI_WELL_KNOWN_PATH, (c) => {
+    return c.json(
+      createTakosumiWellKnownDocument(createProductDiscoveryOptions({
+        origin: new URL(c.req.url).origin,
+        mounted,
+      })),
+    );
+  });
+
+  app.get(TAKOSUMI_PRODUCT_CAPABILITIES_PATH, (c) => {
+    return c.json(
+      createTakosumiProductCapabilities(createProductDiscoveryOptions({
+        origin: new URL(c.req.url).origin,
+        mounted,
+      })),
+    );
   });
 
   if (runtimeAgentRoutesMounted) {
@@ -124,6 +159,16 @@ export async function createApiApp(
       );
     }
     registerMetricsRoutes(app, options.metricsRouteOptions);
+  }
+
+  if (resourceShapeRoutesMounted) {
+    if (!options.resourceShapeRouteOptions) {
+      throw new Error(
+        "registerResourceShapeRoutes was requested but " +
+          "resourceShapeRouteOptions (with service) was not supplied",
+      );
+    }
+    registerResourceShapeRoutes(app, options.resourceShapeRouteOptions);
   }
 
   if (readinessRoutesMounted) {
@@ -216,6 +261,10 @@ function routeFamilyMountInputs(
       override: options.registerMetricsRoutes,
       hasOptions: options.metricsRouteOptions !== undefined,
     },
+    resourceShapeRoutesMounted: {
+      override: options.registerResourceShapeRoutes,
+      hasOptions: options.resourceShapeRouteOptions !== undefined,
+    },
   };
 }
 
@@ -236,6 +285,33 @@ function resolveMountedRouteFamilies(
       override ?? family.defaultMounted({ role, hasOptions });
   }
   return flags;
+}
+
+function createProductDiscoveryOptions(input: {
+  readonly origin: string;
+  readonly mounted: RouteFamilyMountedFlags;
+}): CreateTakosumiDiscoveryOptions {
+  const resourceShapes = input.mounted.resourceShapeRoutesMounted;
+  const stacks = input.mounted.deployControlInternalRoutesMounted;
+  return {
+    origin: input.origin,
+    resources: {
+      Stack: stacks,
+      ObjectStore: resourceShapes,
+      HttpService: resourceShapes,
+      ContainerService: false,
+      Machine: false,
+    },
+    adapters: {
+      opentofu: stacks || resourceShapes,
+      aws: resourceShapes,
+      cloudflare: resourceShapes,
+      kubernetes: resourceShapes,
+      vm: resourceShapes,
+      takosumi_native: resourceShapes,
+    },
+    resourceShapesEnabled: resourceShapes,
+  };
 }
 
 function createRuntimeAgentRouteOptions(

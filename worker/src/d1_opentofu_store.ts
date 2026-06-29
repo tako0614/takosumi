@@ -3835,6 +3835,64 @@ export async function ensureD1OpenTofuLedgerSchema(
       on backups (space_id)`,
     `create index if not exists backups_installation_idx
       on backups (installation_id)`,
+    // Resource Shape flow (`takosumi.dev/v1alpha1`) durable projections.
+    `create table if not exists resource_shapes (
+      id text primary key,
+      space_id text not null,
+      project text,
+      environment text,
+      kind text not null,
+      name text not null,
+      managed_by text not null,
+      spec_json text not null,
+      phase text not null,
+      generation integer not null,
+      observed_generation integer not null,
+      outputs_json text,
+      conditions_json text,
+      labels_json text,
+      created_at text not null,
+      updated_at text not null
+    )`,
+    `create unique index if not exists resource_shapes_space_kind_name_unique
+      on resource_shapes (space_id, kind, name)`,
+    `create index if not exists resource_shapes_space_idx
+      on resource_shapes (space_id)`,
+    `create table if not exists resolution_locks (
+      resource_id text primary key,
+      selected_implementation text not null,
+      target text not null,
+      locked integer not null,
+      reason_json text not null,
+      portability text,
+      native_resources_json text,
+      locked_at text not null,
+      updated_at text not null
+    )`,
+    `create table if not exists target_pools (
+      id text primary key,
+      space_id text not null,
+      name text not null,
+      spec_json text not null,
+      created_at text not null,
+      updated_at text not null
+    )`,
+    `create unique index if not exists target_pools_space_name_unique
+      on target_pools (space_id, name)`,
+    `create index if not exists target_pools_space_idx
+      on target_pools (space_id)`,
+    `create table if not exists space_policies (
+      id text primary key,
+      space_id text not null,
+      name text not null,
+      spec_json text not null,
+      created_at text not null,
+      updated_at text not null
+    )`,
+    `create unique index if not exists space_policies_space_name_unique
+      on space_policies (space_id, name)`,
+    `create index if not exists space_policies_space_idx
+      on space_policies (space_id)`,
   ];
   const tableStatements = statements.filter((sql) => !isD1IndexStatement(sql));
   const indexStatements = statements.filter((sql) => isD1IndexStatement(sql));

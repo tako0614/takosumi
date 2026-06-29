@@ -10,7 +10,7 @@
  */
 
 import type { JsonValue } from "./types.ts";
-import type { PublicCapsule } from "./installations.ts";
+import type { PublicCapsule } from "./install-configs.ts";
 import type { Deployment } from "./deployments.ts";
 import type { ProviderResolution } from "./provider-resolution.ts";
 import type { DeployRequest } from "./deploy.ts";
@@ -49,9 +49,9 @@ export const INSTALLATION_DEPLOYMENT_OUTPUTS_PATH = (id: string): string =>
 export const INTERNAL_DEPLOY_PATH = `${INTERNAL_V1_PREFIX}/deploy` as const;
 
 /**
- * Internal in-process deploy-control request. The account-plane public deploy
- * facade converts public Provider Connection ids and runner hints into this
- * operator-policy shape after authorization. Public callers must not send it.
+ * Internal in-process upload-source deploy request. Internal callers provide
+ * operator-policy runner profile and Provider Binding resolution after
+ * authorization. Public callers must not send it.
  */
 export interface InternalDeployRequest extends Omit<
   DeployRequest,
@@ -509,7 +509,7 @@ export interface ApplyExpectedGuard {
   readonly resolvedProviderEnvBindingsDigest?: string;
 }
 
-// Capsule / InstallConfig live in ./installations.ts and
+// Capsule / InstallConfig live in ./install-configs.ts and
 // Deployment / StateVersion in ./deployments.ts; this internal seam exports the
 // DTO set consumed by accounts-plane and operator helper paths.
 export type {
@@ -524,7 +524,7 @@ export type {
   OutputValueType,
   PolicyConfig,
   TrustLevel,
-} from "./installations.ts";
+} from "./install-configs.ts";
 export type {
   Deployment,
   DeploymentStatus,
@@ -537,7 +537,7 @@ export type {
   Capsule as Installation,
   CapsuleStatus as InstallationStatus,
   CapsuleProviderEnvBindingSet as InstallationProviderEnvBindingSet,
-} from "./installations.ts";
+} from "./install-configs.ts";
 /** @deprecated use `StateVersion`. */
 export type { StateVersion as StateSnapshot } from "./deployments.ts";
 

@@ -39,7 +39,6 @@ import {
   controlPlaneUnavailable,
 } from "./control/shared.ts";
 import { handleWorkspaces } from "./control/workspaces.ts";
-import { handleDeploy } from "./control/deploy.ts";
 import { handleCapsules } from "./control/capsules.ts";
 import { handleInstallConfigs } from "./control/install-configs.ts";
 import {
@@ -87,7 +86,6 @@ type ControlResourceHandler = (
  */
 const RESOURCE_HANDLERS: Partial<Record<string, ControlResourceHandler>> = {
   spaces: handleWorkspaces,
-  deploy: handleDeploy,
   installations: handleCapsules,
   "install-configs": handleInstallConfigs,
   providers: handleProviders,

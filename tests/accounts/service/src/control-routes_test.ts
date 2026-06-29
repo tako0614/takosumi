@@ -1288,7 +1288,6 @@ test("anonymous control requests are 401 across the family", async () => {
   const paths: Array<[string, string]> = [
     ["GET", "/api/v1/spaces"],
     ["POST", "/api/v1/spaces"],
-    ["POST", "/api/v1/deploy"],
     ["POST", "/api/v1/spaces/space_a/uploads"],
     ["GET", "/api/v1/spaces/space_a/installations"],
     ["GET", "/api/v1/spaces/space_a/graph"],
@@ -1430,66 +1429,7 @@ test("POST /api/v1/spaces/:id/artifact-snapshots returns gone on the public faca
   expect(operations.calls.recordArtifactSnapshot).toBeUndefined();
 });
 
-test("POST /api/v1/deploy returns gone on the public facade", async () => {
-  const store = new InMemoryAccountsStore();
-  const { cookie } = seedSession(store);
-  const operations = fakeOperations({
-    connections: {
-      listProviderConnections: async () => [
-        {
-          id: "conn_cf",
-          workspaceId: "space_a",
-          provider: "cloudflare",
-          providerSource: "registry.opentofu.org/cloudflare/cloudflare",
-          kind: "cloudflare_api_token",
-          scope: "space",
-          displayName: "Cloudflare",
-          materialization: "secret",
-          status: "verified",
-          envNames: ["CLOUDFLARE_API_TOKEN"],
-          createdAt: "2026-01-01T00:00:00Z",
-          updatedAt: "2026-01-01T00:00:00Z",
-        },
-      ],
-    },
-  });
-  const { request: req, url } = request("POST", "/api/v1/deploy", {
-    cookie,
-    body: {
-      workspaceId: "space_a",
-      name: "hello",
-      environment: "preview",
-      snapshotId: "snap_upload",
-      modulePath: "takos/deploy/opentofu",
-      vars: { greeting: "hi" },
-      outputAllowlist: {
-        url: { from: "url", type: "url", required: true },
-        worker_name: { from: "worker_name", type: "string" },
-      },
-      providerConnections: [
-        {
-          provider: "cloudflare",
-          alias: "main",
-          connectionId: "conn_cf",
-        },
-      ],
-      autoApprove: true,
-    },
-  });
-  const response = await handleControlRoute({
-    request: req,
-    url,
-    store,
-    operations,
-  });
-  expect(response?.status).toEqual(410);
-  const raw = await response!.text();
-  expect(raw).toContain("Public upload deploy is retired");
-  expect(operations.calls.deployUpload).toBeUndefined();
-  expect(await store.findAppCapsule("inst_upload")).toBeUndefined();
-});
-
-test("POST /api/v1/deploy does not create public shared-cell projections", async () => {
+test("POST /api/v1/deploy is not part of the public control surface", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
@@ -1499,7 +1439,6 @@ test("POST /api/v1/deploy does not create public shared-cell projections", async
       workspaceId: "space_a",
       name: "hello",
       snapshotId: "snap_upload",
-      projectionMode: "shared-cell",
     },
   });
   const response = await handleControlRoute({
@@ -1507,18 +1446,10 @@ test("POST /api/v1/deploy does not create public shared-cell projections", async
     url,
     store,
     operations,
-    sharedCellRuntime: async ({ capsuleId, now }) => ({
-      runtimeBindingId: `rtb_${capsuleId}_shared_cell`,
-      capsuleId,
-      mode: "shared-cell",
-      targetType: "shared-cell",
-      targetId: `shared-cell://tokyo-cell-01/namespaces/${capsuleId}`,
-      createdAt: now,
-      updatedAt: now,
-    }),
   });
-
-  expect(response?.status).toEqual(410);
+  expect(response?.status).toEqual(404);
+  const raw = await response!.text();
+  expect(raw).not.toContain("Public upload deploy");
   expect(operations.calls.deployUpload).toBeUndefined();
   expect(await store.findAppCapsule("inst_upload")).toBeUndefined();
 });
@@ -1582,37 +1513,6 @@ test("GET /api/v1/runs/:id syncs a succeeded apply into an export-ready projecti
     "installation.created",
     "installation.status_changed",
   ]);
-});
-
-test("POST /api/v1/deploy rejects internal resolver bindings", async () => {
-  const store = new InMemoryAccountsStore();
-  const { cookie } = seedSession(store);
-  const operations = fakeOperations();
-  const { request: req, url } = request("POST", "/api/v1/deploy", {
-    cookie,
-    body: {
-      workspaceId: "space_a",
-      name: "hello",
-      snapshotId: "snap_upload",
-      providerEnvBindings: [
-        {
-          provider: "cloudflare",
-          alias: "main",
-          envId: "penv_cf",
-        },
-      ],
-    },
-  });
-  const response = await handleControlRoute({
-    request: req,
-    url,
-    store,
-    operations,
-  });
-  expect(response?.status).toEqual(410);
-  const raw = await response!.text();
-  expect(raw).toContain("Public upload deploy is retired");
-  expect(operations.calls.deployUpload).toBeUndefined();
 });
 
 test("GET /api/v1/spaces unions directly-owned + legal-owner spaces, excludes foreign", async () => {

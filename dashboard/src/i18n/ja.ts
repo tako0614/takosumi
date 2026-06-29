@@ -909,8 +909,9 @@ export const ja = {
   "account.preferences.body": "言語と見た目を変更できます。",
 
   // --- cloud resources -------------------------------------------------------------
-  "cloudResources.title": "Takosumi Cloud",
-  "cloudResources.subtitle": "APIキーとクラウドリソースを管理します。",
+  "cloudResources.title": "Takosumi Cloud Workers",
+  "cloudResources.subtitle":
+    "APIキー、Worker-compatible resource、managed binding を管理します。",
   "cloudResources.unavailable.title": "Takosumi Cloud 専用です",
   "cloudResources.unavailable.body":
     "この実行環境では Cloud 専用エンドポイントは提供されていません。",
@@ -951,13 +952,14 @@ export const ja = {
   "cloudResources.ai.providers": "接続先数",
   "cloudResources.ai.models": "モデル",
   "cloudResources.ai.modelDetails": "モデル一覧",
-  "cloudResources.compat.title": "Cloudflare 接続",
-  "cloudResources.compat.subtitle": "現在のエンドポイントとアカウント",
+  "cloudResources.compat.title": "OpenTofu import endpoint",
+  "cloudResources.compat.subtitle":
+    "Cloudflare-compatible deploy path と virtual account",
   "cloudResources.compat.token": "認証状態",
-  "cloudResources.compat.account": "アカウント",
+  "cloudResources.compat.account": "Virtual account",
   "cloudResources.inventory.title": "クラウドリソース",
   "cloudResources.inventory.subtitle":
-    "Takosumi Cloud 側に作成済みのリソース数です。",
+    "Takosumi Cloud 側の Workers と managed binding です。",
   "cloudResources.inventory.kv": "KV",
   "cloudResources.inventory.r2": "オブジェクトストレージ",
   "cloudResources.inventory.d1": "データベース",

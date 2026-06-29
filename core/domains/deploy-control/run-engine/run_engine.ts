@@ -38,7 +38,7 @@ import type {
   Dependency,
   DependencySnapshot,
 } from "takosumi-contract/dependencies";
-import type { OutputAllowlistEntry } from "takosumi-contract/installations";
+import type { OutputAllowlistEntry } from "takosumi-contract/install-configs";
 import type { Output as OutputSnapshot } from "takosumi-contract/outputs";
 import type { Run } from "takosumi-contract/runs";
 import type {

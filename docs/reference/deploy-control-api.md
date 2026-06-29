@@ -3,7 +3,9 @@
 Last updated: 2026-06-19
 
 This API controls OpenTofu/Terraform execution in Takosumi OSS. It runs existing
-providers as-is and does not expose compatibility gateway endpoints.
+providers as-is. Public compatibility profiles are separate capability-versioned
+surfaces that map into the Resource Shape model, not hidden deploy-control
+gateway routes.
 
 ## Public Surface
 
@@ -22,9 +24,6 @@ StateVersion
 Output
 AuditEvent
 ```
-
-Current code may still expose legacy internal names while migration is underway,
-but new API docs and UI should project them to the names above.
 
 A Capsule-driven plan Run is the caller contract: clients create or select a
 Capsule, bind providers through ProviderBindings, create a `plan` Run, review the
@@ -143,9 +142,8 @@ URLs must be `https`; `http` is accepted only in explicit local substrate/dev
 mode. The webhook receives a `takosumi.operator.release-activation@v1` JSON
 payload with deploy-control ledger ids, the current runtime Capsule /
 StateVersion / Output context, deployment summary, and already-filtered
-non-sensitive outputs. Current implementations may still include legacy bridge
-ids for the materializer, but public readiness evidence must map them to
-Workspace / Project / Capsule / StateVersion / Output claims. This payload is an
+non-sensitive outputs. Public readiness evidence is expressed as Workspace /
+Project / Capsule / StateVersion / Output claims. This payload is an
 operator-controlled bridge contract, not a customer API surface. It must return
 one of:
 
@@ -177,8 +175,7 @@ official billing/quota/usage endpoints
 
 Those belong to closed Takosumi Cloud.
 
-The current Cloud compatibility API scope is Cloudflare Compatibility Gateway
-and the OpenAI-compatible AI Gateway only. Other providers belong on the normal
-OpenTofu/Terraform path with ProviderConnection / CredentialRecipe /
-ProviderBinding env-file injection, including generic-env Provider Connections
-for providers without a guided recipe.
+The current Cloud extension route scope is `compat.cloudflare.workers.v1` and
+the OpenAI-compatible AI Gateway only. Other Cloud extension routes must be
+separately specified; OSS compatibility profiles remain scoped, versioned
+capabilities outside this deploy-control API.

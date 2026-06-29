@@ -611,3 +611,87 @@ export const backups = sqliteTable(
     index("backups_installation_idx").on(table.installationId),
   ],
 );
+
+// --- Resource Shape flow (`takosumi.dev/v1alpha1`) ---------------------------
+//
+// Columnar projections of the public Resource / ResolutionLock / TargetPool /
+// SpacePolicy objects. Complex sub-objects (spec / outputs / conditions /
+// labels / reason / native resources) are TEXT JSON columns; the indexed
+// columns drive name / space lookups. Booleans persist as 0/1 integers.
+
+export const resourceShapes = sqliteTable(
+  names.resourceShapes,
+  {
+    id: text("id").primaryKey(),
+    spaceId: text("space_id").notNull(),
+    project: text("project"),
+    environment: text("environment"),
+    kind: text("kind").notNull(),
+    name: text("name").notNull(),
+    managedBy: text("managed_by").notNull(),
+    specJson: jsonText("spec_json").notNull(),
+    phase: text("phase").notNull(),
+    generation: integer("generation").notNull(),
+    observedGeneration: integer("observed_generation").notNull(),
+    outputsJson: jsonText("outputs_json"),
+    conditionsJson: jsonText("conditions_json"),
+    labelsJson: jsonText("labels_json"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("resource_shapes_space_kind_name_unique").on(
+      table.spaceId,
+      table.kind,
+      table.name,
+    ),
+    index("resource_shapes_space_idx").on(table.spaceId),
+  ],
+);
+
+export const resolutionLocks = sqliteTable(names.resolutionLocks, {
+  resourceId: text("resource_id").primaryKey(),
+  selectedImplementation: text("selected_implementation").notNull(),
+  target: text("target").notNull(),
+  locked: integer("locked").notNull(),
+  reasonJson: jsonText("reason_json").notNull(),
+  portability: text("portability"),
+  nativeResourcesJson: jsonText("native_resources_json"),
+  lockedAt: text("locked_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+});
+
+export const targetPools = sqliteTable(
+  names.targetPools,
+  {
+    id: text("id").primaryKey(),
+    spaceId: text("space_id").notNull(),
+    name: text("name").notNull(),
+    specJson: jsonText("spec_json").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("target_pools_space_name_unique").on(table.spaceId, table.name),
+    index("target_pools_space_idx").on(table.spaceId),
+  ],
+);
+
+export const spacePolicies = sqliteTable(
+  names.spacePolicies,
+  {
+    id: text("id").primaryKey(),
+    spaceId: text("space_id").notNull(),
+    name: text("name").notNull(),
+    specJson: jsonText("spec_json").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    uniqueIndex("space_policies_space_name_unique").on(
+      table.spaceId,
+      table.name,
+    ),
+    index("space_policies_space_idx").on(table.spaceId),
+  ],
+);

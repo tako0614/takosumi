@@ -10,7 +10,7 @@
 
 import { expect, test } from "bun:test";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
-import type { InstallConfig } from "takosumi-contract/installations";
+import type { InstallConfig } from "takosumi-contract/install-configs";
 import type { SourceSnapshot } from "takosumi-contract/sources";
 import type { ActivityEvent } from "takosumi-contract/activity";
 import type { OpenTofuRunner } from "../../../core/domains/deploy-control/mod.ts";

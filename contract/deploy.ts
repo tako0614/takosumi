@@ -1,31 +1,22 @@
 /**
- * Retired public deploy contract (`POST /api/v1/deploy`).
+ * Internal upload-source deploy DTOs.
  *
- * The public handler now returns `410 gone`. New clients should register a Git
- * URL Source, create a Capsule, and run plan/apply against the Git-pinned
- * SourceSnapshot. Upload/prepared-source deploy survives only as an internal
- * operator compatibility seam under `/internal/v1`.
+ * The edge-public Takosumi surface does not expose `POST /api/v1/deploy`.
+ * Dashboard/API clients register a Git URL Source, create a Capsule, then run
+ * plan/apply against the Git-pinned SourceSnapshot. Upload/prepared-source
+ * deploy DTOs remain only for the internal `/internal/v1/deploy` seam.
  */
 
 import type {
   OutputAllowlistEntry,
   PublicCapsule,
-} from "./installations.ts";
+} from "./install-configs.ts";
 import type { JsonValue } from "./types.ts";
 import type { CapsuleProviderConnectionBindings } from "./connections.ts";
 import type { PublicRun, Run } from "./runs.ts";
-import { API_V1_PREFIX } from "./api-surface.ts";
 
 /**
- * Retired edge-public deploy path. The handler returns `410 gone`; do not use
- * this for new dashboard/API/CLI clients.
- *
- * @deprecated Use Git URL Source/Capsule plan/apply routes.
- */
-export const DEPLOY_PATH = `${API_V1_PREFIX}/deploy` as const;
-
-/**
- * Legacy body of retired `POST {@link DEPLOY_PATH}`.
+ * Body of the internal upload-source deploy seam.
  *
  * `snapshotId` is an upload- or artifact-origin {@link SourceSnapshot}
  * previously created via `SPACE_UPLOADS_PATH` or
@@ -36,9 +27,9 @@ export const DEPLOY_PATH = `${API_V1_PREFIX}/deploy` as const;
  * means no public outputs are projected. `providerConnections` binds required
  * OpenTofu providers to public Provider Connection identifiers before planning;
  * it never carries credential values.
- * `planOnly` stops after the plan Run. `autoApprove` is accepted for
- * compatibility with older CLI callers, but public clients should follow the
- * returned plan Run and call the reviewed apply route when the plan is ready.
+ * `planOnly` stops after the plan Run. `autoApprove` is accepted only by the
+ * internal seam; public clients should follow the returned plan Run and call
+ * the reviewed apply route when the plan is ready.
  * `runnerId` is an optional public runner selection hint. The control plane
  * maps it to operator runner policy internally and still validates provider
  * allowlists, source policy, and credential binding before any OpenTofu
@@ -64,10 +55,10 @@ export interface DeployRequest {
 }
 
 /**
- * Legacy response of retired `POST {@link DEPLOY_PATH}`: the resolved Capsule and the
- * plan Run the deploy started. Older responses may include `applyRun` when a
- * host explicitly chains the reviewed apply server-side; current public clients
- * should treat `planRun ?? run` as the authoritative follow-up Run.
+ * Internal upload-source deploy response: the resolved Capsule and the plan Run
+ * the deploy started. Responses may include `applyRun` when a host explicitly
+ * chains the reviewed apply server-side; clients should treat `planRun ?? run`
+ * as the authoritative follow-up Run.
  */
 export interface DeployResponse {
   readonly capsule?: PublicCapsule;

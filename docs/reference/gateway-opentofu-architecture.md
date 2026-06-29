@@ -1,24 +1,27 @@
-# Cloud-Only Compatibility Gateway Note
+# Cloud Compatibility Import Path Note
 
 Last updated: 2026-06-19
 
-This document is intentionally not an OSS implementation spec for the gateway
-backend.
+This document is intentionally not a general OSS Compatibility API framework
+spec. It describes the Cloud-hosted import/deploy route family for
+`compat.cloudflare.workers.v1`.
 
-Takosumi OSS does not provide a provider-compatible Gateway, Cloudflare
-compatibility API, managed edge backend, managed storage backend, or run-key
-minting system. OSS Takosumi runs existing OpenTofu/Terraform providers against
+Takosumi OSS may provide the Compatibility API framework, scoped compatibility
+profiles such as `compat.s3.v1`, and adapter contracts. It does not provide the
+official hosted `compat.cloudflare.workers.v1` backend, managed edge backend,
+official managed storage backend, or Cloud run-key minting system. The
+OpenTofu Stack flow still runs existing OpenTofu/Terraform providers against
 the user's real provider accounts through ProviderConnections and
 CredentialRecipes.
 
-The only current product spec for this boundary is:
+The current boundary is:
 
 ```text
 OSS:
-  run existing providers as-is
+  Compatibility API framework and portable capability profiles
 
-Cloud:
-  add compatibility APIs and managed resources
+Operator/Cloud:
+  official managed capacity and hosted Cloud extension backends
 ```
 
 See [Takosumi Final Plan](../final-plan.md) and
@@ -30,7 +33,7 @@ The following belong to closed Takosumi Cloud:
 
 ```text
 Takosumi Cloud Workers
-Cloudflare Compatibility Gateway
+Cloudflare-shaped Workers import endpoint
 Takosumi AI Gateway
 Cloudflare provider base_url endpoint
 OpenAI-compatible AI endpoint
@@ -85,19 +88,19 @@ evidence for AI Gateway or Cloudflare compatibility must prove the corresponding
 route is mounted and reaches the closed Cloud handler inside the platform
 wrapper.
 
-The current compatibility API contract stops here: Cloudflare Compatibility
-Gateway and Takosumi AI Gateway. AWS, GCP, S3-compatible storage, Hetzner,
-Vultr, DigitalOcean, OpenStack, and other providers should be handled through
-normal OpenTofu/Terraform providers plus ProviderConnection / CredentialRecipe /
-ProviderBinding env-file injection. Takosumi OSS and Takosumi for Operators
-should not grow provider-compatible endpoints for those providers.
+The current Cloud extension contract stops here: `compat.cloudflare.workers.v1`
+and Takosumi AI Gateway. Other Cloud extension routes require a new
+Operator/Cloud product spec and implementation. OSS compatibility profiles such
+as S3, OCI, CloudEvents, Kubernetes CRD, or scoped Cloudflare Workers
+compatibility remain capability-versioned Resource Shape entrypoints, not
+complete provider API compatibility.
 
-If Takosumi Cloud later wants another compatibility endpoint, it requires a new
-Cloud-only product spec and closed implementation. It must not be inferred from
+If Takosumi Cloud later wants another hosted extension endpoint, it requires a
+new Operator/Cloud product spec and implementation. It must not be inferred from
 the OSS route seam or from adding env vars to the platform worker.
 
-The Cloudflare compatibility endpoint is an import/deploy path a Cloud-only
-Provider Connection can put into the Cloudflare provider `base_url`:
+The Cloudflare-shaped endpoint is an import/deploy path a Cloud Provider
+Connection can put into the Cloudflare provider `base_url`:
 
 ```hcl
 provider "cloudflare" {

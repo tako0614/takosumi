@@ -898,8 +898,9 @@ export const en: Record<keyof typeof ja, string> = {
   "account.preferences.body": "Change language and appearance.",
 
   // --- cloud resources -------------------------------------------------------------
-  "cloudResources.title": "Takosumi Cloud",
-  "cloudResources.subtitle": "Manage API keys and Cloud resources.",
+  "cloudResources.title": "Takosumi Cloud Workers",
+  "cloudResources.subtitle":
+    "Manage API keys, Worker-compatible resources, and managed bindings.",
   "cloudResources.unavailable.title": "Takosumi Cloud only",
   "cloudResources.unavailable.body":
     "Cloud-only endpoints are not provided in this runtime.",
@@ -939,13 +940,14 @@ export const en: Record<keyof typeof ja, string> = {
   "cloudResources.ai.providers": "Upstreams",
   "cloudResources.ai.models": "Models",
   "cloudResources.ai.modelDetails": "Model list",
-  "cloudResources.compat.title": "Cloudflare connection",
-  "cloudResources.compat.subtitle": "Current endpoint and account",
+  "cloudResources.compat.title": "OpenTofu import endpoint",
+  "cloudResources.compat.subtitle":
+    "Cloudflare-compatible deploy path and virtual account",
   "cloudResources.compat.token": "Auth status",
-  "cloudResources.compat.account": "Account",
+  "cloudResources.compat.account": "Virtual account",
   "cloudResources.inventory.title": "Cloud resources",
   "cloudResources.inventory.subtitle":
-    "Current resource counts in Takosumi Cloud.",
+    "Current Workers and managed bindings in Takosumi Cloud.",
   "cloudResources.inventory.kv": "KV",
   "cloudResources.inventory.r2": "Object Storage",
   "cloudResources.inventory.d1": "Database",

@@ -30,7 +30,7 @@ import type {
   InstallType,
   OutputAllowlistEntry,
   PolicyConfig,
-} from "takosumi-contract/installations";
+} from "takosumi-contract/install-configs";
 import {
   defaultTemplateRegistry,
   type TemplateRegistry,

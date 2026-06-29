@@ -1,48 +1,61 @@
 # Takosumi Core Conformance
 
-Last updated: 2026-06-28
+Last updated: 2026-06-29
 
 This document tracks conformance to [Core Spec](./core-spec.md) and
 [Final Plan](./final-plan.md). It is not the product direction source of truth.
 
 ## Status Terms
 
-- **conformant**: implemented and covered by the current source/tests.
-- **partial**: implemented partly or still using legacy internal names.
+- **conformant**: implemented and covered by current source/tests.
+- **partial**: implemented partly or exposed through older internal names.
 - **gap**: required by the Final Plan but not implemented yet.
-- **cloud-only**: intentionally outside OSS Takosumi.
+- **operator/cloud**: belongs to Takosumi for Operator / Takosumi Cloud
+  commercial or official-hosting operation.
 
-## Boundary
+## Conformance Matrix
 
-| Area                                                                                                                                                        | Status     | Notes                                                                                                                                                                                                                                                                                                                        |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Existing provider execution                                                                                                                                 | conformant | Runner, generated root, ProviderConnection, and vault paths run existing providers as-is; legacy internal aliases are compatibility debt and the public model is Workspace / Project / Capsule / ProviderConnection / CredentialRecipe / ProviderBinding.                                                                    |
-| ProviderConnection                                                                                                                                          | conformant | OSS contract exposes ProviderConnections backed by user/operator-managed credential material; the provider-credential cluster collapsed to ProviderConnection / CredentialRecipe / ProviderBinding and Provider Catalog was removed. Cloud-managed connections belong only to closed Takosumi Cloud.                         |
-| CredentialRecipe                                                                                                                                            | conformant | `recipes/providers/*.yaml` defines the built-in recipe catalog, including Cloudflare, AWS, GCP, S3-compatible, generic env, and common provider recipes; tests keep it in sync with runner/vault env-rule projections.                                                                                                       |
-| ProviderBinding                                                                                                                                             | conformant | Provider / alias-to-ProviderConnection binding is the live model.                                                                                                                                                                                                                                                            |
-| StateVersion                                                                                                                                                | conformant | State storage exists and the public model is StateVersion (renamed from StateSnapshot, with rename-aside migrations on both engines).                                                                                                                                                                                        |
-| Outputs                                                                                                                                                     | conformant | Output capture and projection paths exist.                                                                                                                                                                                                                                                                                   |
-| Outputs-to-inputs                                                                                                                                           | conformant | Output-to-input wiring is pinned at plan time and marks downstream Capsule inputs stale.                                                                                                                                                                                                                                     |
-| Run ledger                                                                                                                                                  | conformant | Runs, logs, plan/apply records, approval, and audit evidence exist.                                                                                                                                                                                                                                                          |
-| Runner protocol                                                                                                                                             | conformant | Worker/container runner paths exist; the RunEngine and runner entrypoint were split into focused modules.                                                                                                                                                                                                                    |
-| Git-native SourceSnapshot reuse                                                                                                                             | conformant | `source_sync` resolves refs with Git, records immutable SourceSnapshots, updates `lastSeenCommit`, and reuses a prior archive when the same Source/ref/path resolves to the same commit. `Source.autoSync` only prepares snapshots; it never applies updates.                                                                |
-| OpenTofu provider mirror and plugin cache                                                                                                                   | conformant | The runner image bakes an offline filesystem mirror for first-party/provider-approved providers, generates per-run CLI config with `plugin_cache_dir`, and supports an operator-configured shared provider plugin cache with serialized `tofu init`. The cache stores provider binaries only.                                |
-| App-install speed boundary                                                                                                                                  | conformant | Takosumi-side speed work is limited to SourceSnapshot reuse, provider mirror/cache, runner queueing, operator/runtime-selected warm capacity, phase timings, and app-level progress states. Container/image/bundle optimization remains in the app repo, CI/release pipeline, registry, provider, or OpenTofu module inputs. |
-| active first-party OpenTofu Capsule module catalog (`aws-s3-storage`, `cloudflare-hello-worker`, `cloudflare-r2-storage`, `cloudflare-static-site`, `core`) | conformant | The tracked active catalog matches `opentofu-modules/module-files.ts`; these are normal OpenTofu modules using existing providers, not managed-resource drivers or Takosumi-owned app build paths.                                                                                                                           |
-| legacy `cloudflare-worker-service` module metadata                                                                                                          | partial    | Kept for stored pre-v1 row readability and tests, but hidden from the active catalog. New generated-root dispatch does not run or thread its legacy build/prebuilt artifact path.                                                                                                                                            |
-| Output projection (Service Graph replacement)                                                                                                               | conformant | The OSS Service Graph ledger was removed; runtime services are projected store-free from Capsule Outputs (`core/domains/output-projection/service-projection.ts`) and validated fail-closed at apply.                                                                                                                        |
-| Web UI                                                                                                                                                      | conformant | Dashboard uses the final-model vocabulary; covered by `check:dashboard` and the new-flow tests.                                                                                                                                                                                                                              |
-| CLI                                                                                                                                                         | conformant | The single operator/platform CLI is rehomed to top-level `cli/`; it is an operator/developer helper, not the primary user flow.                                                                                                                                                                                              |
-| Takosumi for Operators                                                                                                                                      | conformant | The multi-tenant operator build of OSS uses the final-plan vocabulary; quota/showback is a Workspace-scoped ledger with `disabled` / `showback` modes and no enforced billing gate.                                                                                                                                          |
-| Takosumi Cloud                                                                                                                                              | cloud-only | Closed official hosted implementation in the `takosumi-cloud` package.                                                                                                                                                                                                                                                       |
-| Compatibility Gateway                                                                                                                                       | cloud-only | Removed from the OSS public contract/routes/registry; lives in `takosumi-cloud`, reached only via the `cloud_extensions` route proxy.                                                                                                                                                                                        |
-| AI Gateway                                                                                                                                                  | cloud-only | Moved into `takosumi-cloud` (`extensions/ai-gateway/`); OpenAI-compatible runtime API, not an OSS feature.                                                                                                                                                                                                                   |
-| Enforced billing                                                                                                                                            | cloud-only | OSS ships no-op `BillingEnforcement` / `QuotaPolicy` ports; enforced Stripe billing lives only in `takosumi-cloud`.                                                                                                                                                                                                          |
-| Managed resources                                                                                                                                           | cloud-only | Live in the closed `takosumi-cloud` package.                                                                                                                                                                                                                                                                                 |
+| Area | Status | Notes |
+| --- | --- | --- |
+| Existing provider execution | conformant | Runner, generated root, ProviderConnection, vault paths, state/output capture, approval, and audit run existing providers as-is. |
+| Git-native SourceSnapshot reuse | conformant | `source_sync` resolves refs with Git, records immutable SourceSnapshots, and reuses existing archives when the same Source/ref/path resolves to the same commit. |
+| ProviderConnection | conformant | Secret-backed and generic-env ProviderConnections exist. |
+| CredentialRecipe | conformant | `recipes/providers/*.yaml` includes Cloudflare, AWS, GCP, S3-compatible, generic env, and common provider recipes; tests keep catalog/projection in sync. |
+| ProviderBinding | conformant | Provider / alias-to-ProviderConnection binding is live. |
+| StateVersion | conformant | State storage exists and the public model is StateVersion. |
+| Outputs | conformant | Output capture and projection paths exist. |
+| Outputs-to-inputs | conformant | Output-to-input wiring is pinned at plan time and marks downstream Capsules stale. |
+| Run ledger | conformant | Runs, logs, plan/apply records, approval, and audit evidence exist. |
+| Runner protocol | conformant | Worker/container runner paths exist; OpenTofu runner is the execution sandbox. |
+| Provider mirror and plugin cache | conformant | Runner image supports offline mirror and operator-configured plugin cache; credentials and generated files remain per-run. |
+| first-party OpenTofu Capsule module catalog | conformant | Active bundled-HCL catalog in `firstPartyModuleFilesByTemplateId` matches `aws-s3-storage`, `cloudflare-hello-worker`, `cloudflare-r2-storage`, `cloudflare-static-site`, and `core`; each is a plain child module called from the generated root. |
+| first-party HttpService module metadata for `cloudflare-worker-service` | partial | Used by the Resource Shape planner for Worker-compatible HttpService materialization; production hosts must inject a real ResourceShape adapter. |
+| App-install speed boundary | conformant | Takosumi-side speed work is SourceSnapshot reuse, provider mirror/cache, runner queueing/warmth, timings, and progress phases. |
+| Web UI for OpenTofu flow | partial | Dashboard is usable for current OpenTofu/ProviderConnection flow. Resource Shape UI is not complete. |
+| CLI for OpenTofu flow | partial | Operator/platform CLI exists. Resource Shape API CLI is not complete. |
+| `/.well-known/takosumi` | conformant | Public discovery document is served without inventory auth and points providers/CLIs at `/v1/capabilities`. |
+| `/v1/capabilities` product capabilities | conformant | Public product capability document is served without inventory auth. Existing `/capabilities` remains the separate operator route inventory. |
+| Resource Shape API | gap | Required by Final Plan. Needs Resource object schema, preview/apply/status, events, refresh/import. |
+| Resource Shape contract types | gap | Required in `takosumi-contract` for `takosumi.dev/v1alpha1`. |
+| Resolver / Planner / Reconciler | gap | Required to resolve Shape / Interface / Profile against TargetPool, Policy, and adapters. |
+| Target / TargetPool | gap | Required for backend selection. |
+| Credential modes | partial | Static/generic provider credential flow exists. OIDC federation and agent-local need final Resource Shape credential model. |
+| OIDC issuer / workload identity | partial | Accounts OIDC exists. Standard Takosumi workload identity API is not complete. |
+| Adapter framework | partial | Internal `ProviderAdapter` exists, but public adapter contract and target capability model are not complete. |
+| Compatibility API framework | gap | Required in OSS as a versioned profile framework. Specific profiles still need implementation and capabilities. |
+| S3 compatibility profile | gap | First priority compatibility profile for ObjectStore. |
+| OCI compatibility profile | gap | Needed for Artifact / ContainerImage. |
+| CloudEvents compatibility profile | gap | Needed for Queue / EventHandler / Stream. |
+| Cloudflare Workers subset profile | gap | Limited profile only; must not claim complete Cloudflare API compatibility. |
+| Usage event emission | partial | Usage/billing ledgers exist for current platform work. Shape-level usage event taxonomy is not complete. |
+| Takosumi for Operator commercial features | operator/cloud | Customer/tenant/subscription/payment/rating/invoice/support operations are outside core. |
+| Takosumi Cloud official managed targets | operator/cloud | Closed official hosted operation. |
+| Enforced billing and payments | operator/cloud | Stripe enforcement and payment gates stay outside OSS Core. |
+| Official Takosumi native resource internals | operator/cloud | Official runtime/object-store/queue/DB/edge internals are hosted-operation implementations, not OSS Core requirements. |
 
 ## Current Verification
 
-The minimum local checks for OSS conformance work are:
+Minimum local checks for OSS conformance work:
 
 ```bash
 cd takosumi
@@ -52,14 +65,25 @@ bun run check:cloudflare-worker-build
 bun run docs:build
 ```
 
-Targeted tests should cover provider registry, runner profiles, deploy-control
-contract, ProviderConnection resolution, RunEnvResolver, output projection, and
-the dashboard install flow whenever those surfaces change.
+Targeted tests should cover:
+
+```text
+ProviderConnection resolution
+CredentialRecipe env/file projection
+RunEnvResolver
+StateVersion / Output capture
+SourceSnapshot reuse
+discovery and capability documents
+Resource Shape contract types
+adapter capability matching
+compatibility profile enable/disable behavior
+```
 
 ## Remaining Cleanup
 
-- Storage migrations keep retired columns/tables (renamed aside, e.g.
-  `service_graph_*` -> `*_retired`) for non-destructive rollback; they are not
-  public model and can be dropped in a later destructive migration.
+- Storage migrations keep retired columns/tables for non-destructive rollback;
+  they are not public model and can be dropped in a later destructive migration.
 - A few internal helper names (`SourceSnapshot`, `InstallConfig`) are
-  descriptive implementation names, not public product nouns.
+  descriptive implementation names, not product nouns.
+- The old `/capabilities` route inventory must not be confused with
+  `/v1/capabilities` product capabilities.

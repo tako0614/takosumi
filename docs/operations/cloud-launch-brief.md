@@ -52,8 +52,8 @@ Out of scope for the first open gate:
 ## Launch Risk Controls
 
 These controls are Cloud-only launch controls for the closed official hosted
-deployment. They do not add billing, managed resources, compatibility gateways,
-or official resource pools to OSS Takosumi or Takosumi for Operators.
+deployment. They do not add billing enforcement, official managed capacity,
+hosted Cloud extension backends, or official resource pools to OSS Takosumi.
 
 Do not mark Takosumi Cloud open based on this section alone. Operator signoff,
 legal signoff, provider drills, incident drills, Stripe flows, support mailbox

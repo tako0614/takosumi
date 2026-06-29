@@ -1,10 +1,10 @@
 /**
  * Cloud screen (`/cloud`) — Takosumi Cloud only. Two management surfaces:
  *   - Cloud API keys (create / list / revoke)
- *   - Cloud resources (KV / Object Storage / Database / Queue / Workflow /
- *     Workers Script): list, copy identifiers, and DELETE through the
- *     Cloudflare compatibility gateway.
- * Plus compact endpoint reference cards (AI gateway, Cloudflare compat).
+ *   - Takosumi Cloud Workers and managed bindings (KV / Object Storage /
+ *     Database / Queue / Workflow / Worker): list, copy identifiers, and
+ *     DELETE through the Cloud import endpoint.
+ * Plus compact endpoint reference cards (AI gateway, OpenTofu import path).
  *
  * Usage / billing intentionally lives on the Billing (支払い) tab, not here, so
  * this screen stays focused on keys + resources.

@@ -18,9 +18,9 @@ import type { DeployResponse } from "takosumi-contract/deploy";
 import type { InternalDeployRequest } from "@takosumi/internal/deploy-control-api";
 import type {
   InstallConfig,
-  Installation,
-  PublicInstallation,
-} from "takosumi-contract/installations";
+  Capsule,
+  PublicCapsule,
+} from "takosumi-contract/install-configs";
 import type { InstallationProviderEnvBindings } from "takosumi-contract/connections";
 import type { JsonValue } from "takosumi-contract";
 import type { OpenTofuDeploymentController } from "./mod.ts";
@@ -156,7 +156,7 @@ export async function deployUpload(
 
 async function putProviderConnections(input: {
   readonly deps: DeployUploadDependencies;
-  readonly installation: Installation;
+  readonly installation: Capsule;
   readonly connections: InstallationProviderEnvBindings;
   readonly id: string;
   readonly now: () => Date;
@@ -185,9 +185,9 @@ function deployStatus(
 
 async function reconcileUploadInstallationStatus(input: {
   readonly deps: DeployUploadDependencies;
-  readonly installation: Installation;
+  readonly installation: Capsule;
   readonly status: NonNullable<DeployResponse["status"]>;
-}): Promise<Installation> {
+}): Promise<Capsule> {
   void input.deps;
   void input.status;
   return input.installation;
@@ -221,7 +221,7 @@ function refreshedOutputAllowlist(
   return existing.outputAllowlist;
 }
 
-function toPublicInstallation(installation: Installation): PublicInstallation {
+function toPublicInstallation(installation: Capsule): PublicCapsule {
   const { installType: _installType, ...rest } = installation;
   return rest;
 }
