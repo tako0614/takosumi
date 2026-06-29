@@ -117,8 +117,9 @@ test("ObjectStore requires s3_api", () => {
   expect(SHAPE_INTERFACE_REQUIREMENTS.ObjectStore?.required).toContain("s3_api");
 });
 
-test("AIEndpoint requires the OpenAI-compatible chat interface", () => {
-  expect(SHAPE_INTERFACE_REQUIREMENTS.AIEndpoint?.required).toContain(
+test("AIEndpoint uses requested capability tokens instead of a fixed OpenAI-chat requirement", () => {
+  expect(SHAPE_INTERFACE_REQUIREMENTS.AIEndpoint?.required).toEqual([]);
+  expect(SHAPE_INTERFACE_REQUIREMENTS.AIEndpoint?.preferred).toContain(
     "openai_chat_completions",
   );
 });
@@ -263,6 +264,40 @@ test("resolve maps AIEndpoint to an operator-selected AI target", () => {
   expect(out.selectedTarget).toBe("deepseek-main");
   expect(out.nativeResourcePlan).toEqual([
     { type: "ai.openai_compatible_endpoint", id: "ai" },
+  ]);
+});
+
+test("resolve can select an embeddings-only AIEndpoint", () => {
+  const out = expectOk(
+    resolve(
+      input({
+        resource: aiEndpointResource(),
+        interfaces: ["openai_embeddings"],
+        targetPool: targetPool([
+          {
+            name: "embeddings-main",
+            type: "ai_provider",
+            ref: "https://provider.example/v1",
+            priority: 20,
+            implementations: [
+              {
+                shape: "AIEndpoint",
+                implementation: "embedding_only_gateway",
+                nativeResourceType: "ai.embedding_endpoint",
+                interfaces: {
+                  openai_embeddings: "native",
+                },
+              },
+            ],
+          },
+        ]),
+      }),
+    ),
+  );
+  expect(out.selectedImplementation).toBe("embedding_only_gateway");
+  expect(out.selectedTarget).toBe("embeddings-main");
+  expect(out.capabilityScores).toEqual([
+    { interface: "openai_embeddings", level: "native" },
   ]);
 });
 

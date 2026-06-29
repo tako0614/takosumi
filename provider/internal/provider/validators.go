@@ -47,6 +47,39 @@ func (v stringOneOfValidator) ValidateString(_ context.Context, req validator.St
 	)
 }
 
+// stringTokenValidator validates an extensible capability token. It is used for
+// fields where the Takosumi endpoint, not the provider binary, owns the final
+// allow-list.
+type stringTokenValidator struct{}
+
+// StringToken returns a validator.String enforcing a non-empty token without
+// whitespace when the optional value is configured.
+func StringToken() validator.String {
+	return stringTokenValidator{}
+}
+
+func (v stringTokenValidator) Description(_ context.Context) string {
+	return "value must be a non-empty token without whitespace"
+}
+
+func (v stringTokenValidator) MarkdownDescription(ctx context.Context) string {
+	return v.Description(ctx)
+}
+
+func (v stringTokenValidator) ValidateString(_ context.Context, req validator.StringRequest, resp *validator.StringResponse) {
+	if req.ConfigValue.IsNull() || req.ConfigValue.IsUnknown() {
+		return
+	}
+	val := req.ConfigValue.ValueString()
+	if strings.TrimSpace(val) == "" {
+		resp.Diagnostics.AddAttributeError(req.Path, "Invalid value", "value must not be blank")
+		return
+	}
+	if strings.ContainsFunc(val, unicode.IsSpace) {
+		resp.Diagnostics.AddAttributeError(req.Path, "Invalid value", fmt.Sprintf("%q contains whitespace", val))
+	}
+}
+
 // setStringsOneOfValidator validates that every element of a set of strings is
 // in a fixed allow-list and that the set has at least minItems elements.
 type setStringsOneOfValidator struct {

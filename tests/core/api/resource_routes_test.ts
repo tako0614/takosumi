@@ -91,6 +91,12 @@ test("PUT /v1/resources/AIEndpoint/:name applies a first-class AI shape", async 
         name: "ai",
         interfaces: ["openai_chat_completions", "openai_embeddings"],
         profiles: ["openai_compatible"],
+        providerPreferences: ["provider.deepseek", "provider.gemini"],
+        routingPolicy: {
+          strategy: "lowest_latency",
+          allowFallback: true,
+          preferredRegions: ["jp"],
+        },
         modelPolicy: {
           defaultModel: "fast/chat",
           allowedModels: ["fast/chat", "embed/text"],
@@ -101,6 +107,15 @@ test("PUT /v1/resources/AIEndpoint/:name applies a first-class AI shape", async 
   expect(res.status).toBe(200);
   const body = await res.json();
   expect(body.id).toBe("tkrn:space_1:AIEndpoint:ai");
+  expect(body.spec.providerPreferences).toEqual([
+    "provider.deepseek",
+    "provider.gemini",
+  ]);
+  expect(body.spec.routingPolicy).toEqual({
+    strategy: "lowest_latency",
+    allowFallback: true,
+    preferredRegions: ["jp"],
+  });
   expect(body.status.resolution.selectedImplementation).toBe("cloudflare_ai_gateway");
   expect(body.status.outputs.base_url).toContain("AIEndpoint:ai/base_url");
 });
@@ -137,6 +152,7 @@ test("PUT /v1/resources/AIEndpoint/:name accepts admin-defined AI profiles", asy
         name: "ai",
         interfaces: ["openai_chat_completions", "vendor.deepseek.responses.v1"],
         profiles: ["openai_compatible", "provider.deepseek"],
+        providerPreferences: ["provider.deepseek"],
         modelPolicy: { defaultModel: "deepseek/chat" },
       },
     }),

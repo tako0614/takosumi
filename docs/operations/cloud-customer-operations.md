@@ -216,7 +216,7 @@ non-secret JSON array, for example:
     "currency": "usd"
   },
   {
-    "meter": "cloudflare.ai_gateway",
+    "meter": "takosumi.ai_gateway",
     "unit": "requests",
     "unitAmount": 10,
     "currency": "usd"

@@ -132,6 +132,12 @@ test("apply resolves AIEndpoint with admin-declared provider implementation", as
       name: "ai",
       interfaces: ["openai_chat_completions", "vendor.deepseek.responses.v1"],
       profiles: ["openai_compatible", "provider.deepseek"],
+      providerPreferences: ["provider.deepseek"],
+      routingPolicy: {
+        strategy: "lowest_latency",
+        allowFallback: true,
+        preferredRegions: ["jp"],
+      },
       modelPolicy: {
         defaultModel: "deepseek/chat",
         allowedModels: ["deepseek/chat"],

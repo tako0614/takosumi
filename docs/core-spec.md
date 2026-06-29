@@ -281,8 +281,9 @@ targets:
 
 The Resource Shape parser validates shape-specific structure and rejects empty
 or whitespace-bearing AI tokens, but it does not reject unknown AI
-interface/profile tokens. Support is decided by the resolver, TargetPool
-capability evidence, policy, and the configured adapter.
+interface/profile/provider-preference/routing-strategy tokens. Support is
+decided by the resolver, TargetPool capability evidence, policy, credentials,
+and the configured adapter.
 
 Resolver output:
 

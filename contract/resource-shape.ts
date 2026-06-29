@@ -225,10 +225,31 @@ export interface AIEndpointModelPolicy {
   readonly allowedModels?: readonly string[];
 }
 
+export type AIEndpointProviderPreference = string;
+
+export interface AIEndpointRoutingPolicy {
+  /**
+   * Extensible routing strategy token. Well-known values include
+   * `operator_default`, `fixed`, `fallback`, `lowest_cost`, `lowest_latency`,
+   * and `highest_quality`, but endpoint policy decides which values are valid.
+   */
+  readonly strategy?: string;
+  /**
+   * Whether the resolver/runtime may use another eligible provider when the
+   * preferred route is unavailable. This is a preference; policy may still
+   * force fail-closed behavior for regulated spaces.
+   */
+  readonly allowFallback?: boolean;
+  /** Preferred serving/data regions expressed as operator-defined tokens. */
+  readonly preferredRegions?: readonly string[];
+}
+
 export interface AIEndpointSpec {
   readonly name: string;
   readonly interfaces: readonly AIEndpointInterface[];
   readonly profiles?: readonly AIEndpointProfile[];
+  readonly providerPreferences?: readonly AIEndpointProviderPreference[];
+  readonly routingPolicy?: AIEndpointRoutingPolicy;
   readonly modelPolicy?: AIEndpointModelPolicy;
   readonly lifecyclePolicy?: ResourceLifecyclePolicy;
 }

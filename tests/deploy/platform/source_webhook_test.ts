@@ -1192,6 +1192,55 @@ test("platform worker exposes product discovery before accounts handler", async 
   expect(capabilitiesBody.apiVersion).toBe(TAKOSUMI_API_VERSION);
   expect(capabilitiesBody.resources.Stack).toBe(true);
   expect(capabilitiesBody.compat.framework).toBe(true);
+  expect(capabilitiesBody.resources.AIEndpoint).toBe(false);
+  expect(capabilitiesBody.adapters.ai_provider).toBe(false);
+  expect(capabilitiesBody.adapters.cloudflare).toBe(false);
+  expect(capabilitiesBody.compat.cloudflare_subset).toBe(false);
+});
+
+test("platform worker product discovery enables Cloud capabilities only from configured extensions", async () => {
+  const worker = (await import("../../../deploy/platform/worker.ts")).default;
+
+  const capabilities = await worker.fetch(
+    new Request(
+      `https://app.takosumi.com${TAKOSUMI_PRODUCT_CAPABILITIES_PATH}`,
+    ),
+    {
+      TAKOSUMI_CLOUD_EXTENSIONS: JSON.stringify([
+        {
+          kind: "ai_gateway",
+          protocol: "openai-compatible",
+          basePath: "/gateway/ai/v1",
+          handlerKey: "TAKOSUMI_CLOUD_AI",
+          capabilities: ["ai.gateway"],
+        },
+        {
+          kind: "provider_compat",
+          provider: "cloudflare",
+          basePath: "/compat/cloudflare/client/v4",
+          handlerKey: "TAKOSUMI_CLOUD_CLOUDFLARE",
+          capabilities: ["compat.cloudflare.workers.v1"],
+        },
+        {
+          kind: "managed_usage",
+          basePath: "/cloud/usage",
+          handlerKey: "TAKOSUMI_CLOUD_USAGE",
+          capabilities: ["cloud.usage"],
+        },
+      ]),
+      TAKOSUMI_CLOUD_AI: { fetch: async () => Response.json({}) },
+      TAKOSUMI_CLOUD_CLOUDFLARE: { fetch: async () => Response.json({}) },
+      TAKOSUMI_CLOUD_USAGE: { fetch: async () => Response.json({}) },
+    } as never,
+  );
+
+  expect(capabilities.status).toBe(200);
+  const body = await capabilities.json();
+  expect(body.resources.AIEndpoint).toBe(true);
+  expect(body.adapters.ai_provider).toBe(true);
+  expect(body.adapters.cloudflare).toBe(true);
+  expect(body.adapters.takosumi_native).toBe(true);
+  expect(body.compat.cloudflare_subset).toBe(true);
 });
 
 test("a configured cloud extension dispatches to the named handler through worker.fetch", async () => {
@@ -2153,7 +2202,7 @@ test("cloud extension fallback precharge skips duplicate response usage and reco
                   {
                     installationId: "inst_cloud",
                     meterId: "ai:takosumi-default:chat.completions:request",
-                    resourceFamily: "cloudflare.ai_gateway",
+                    resourceFamily: "takosumi.ai_gateway",
                     resourceId: "takosumi/default",
                     operation: "chat.completions",
                     kind: "ai_request",

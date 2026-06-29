@@ -49,8 +49,12 @@ export const SHAPE_INTERFACE_REQUIREMENTS: Readonly<
     preferred: Object.freeze(["public_http", "workers_bindings", "node_compat"]) as readonly string[],
   }),
   AIEndpoint: Object.freeze({
-    required: Object.freeze(["openai_chat_completions"]) as readonly string[],
-    preferred: Object.freeze(["openai_responses", "openai_embeddings"]) as readonly string[],
+    required: Object.freeze([]) as readonly string[],
+    preferred: Object.freeze([
+      "openai_chat_completions",
+      "openai_responses",
+      "openai_embeddings",
+    ]) as readonly string[],
   }),
 });
 

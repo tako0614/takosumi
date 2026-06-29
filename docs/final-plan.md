@@ -721,6 +721,18 @@ resource "takosumi_ai_endpoint" "main" {
     "openai_compatible",
   ]
 
+  provider_preferences = [
+    "provider.deepseek",
+    "provider.gemini",
+    "provider.bedrock",
+  ]
+
+  routing_policy = {
+    strategy          = "lowest_latency"
+    allow_fallback    = true
+    preferred_regions = ["jp", "us"]
+  }
+
   model_policy = {
     default_model  = "fast/chat"
     allowed_models = ["fast/chat", "reasoning/chat", "embed/text"]
@@ -728,8 +740,9 @@ resource "takosumi_ai_endpoint" "main" {
 }
 ```
 
-The HCL does not choose a vendor by default. A TargetPool and policy decide
-whether this is backed by:
+The HCL can express provider/routing preferences, but it does not force a
+vendor. A TargetPool, adapter capability evidence, SpacePolicy, credentials,
+and the engine/admin configuration decide whether this is backed by:
 
 ```text
 Cloudflare AI Gateway
@@ -743,12 +756,14 @@ Takosumi native AI gateway
 operator-provided custom adapter
 ```
 
-AI interfaces and profiles are extensible capability tokens. Takosumi publishes
-well-known tokens such as `openai_chat_completions`, `openai_embeddings`, and
-`openai_compatible`, but an operator can add endpoint-specific tokens when the
-engine, adapter, and TargetPool capability evidence support them. This keeps
-`takosumi_ai_endpoint` broad without falling back to a generic
-`takosumi_resource`.
+AI interfaces, profiles, provider preferences, and routing strategies are
+extensible capability tokens. Takosumi publishes well-known tokens such as
+`openai_chat_completions`, `openai_embeddings`, and `openai_compatible`, but an
+operator can add endpoint-specific tokens when the engine, adapter, and
+TargetPool capability evidence support them. The `takosumi` OpenTofu provider
+validates the shape and token syntax; it does not hard-code every AI vendor the
+official Cloud deployment happens to use. This keeps `takosumi_ai_endpoint`
+broad without falling back to a generic `takosumi_resource`.
 
 Example operator TargetPool entry:
 

@@ -371,6 +371,30 @@ variable "profiles" {
   default     = []
 }
 
+variable "providerPreferences" {
+  type        = list(string)
+  description = "Optional provider/capability preference tokens. Resolver and operator policy decide whether they are accepted."
+  default     = []
+}
+
+variable "routingStrategy" {
+  type        = string
+  description = "Optional routing strategy token such as operator_default, fallback, lowest_cost, lowest_latency, or highest_quality."
+  default     = ""
+}
+
+variable "allowFallback" {
+  type        = bool
+  description = "Whether fallback to another eligible provider is preferred when policy permits it."
+  default     = false
+}
+
+variable "preferredRegions" {
+  type        = list(string)
+  description = "Optional serving/data region preference tokens."
+  default     = []
+}
+
 locals {
   projected_base_url = var.baseUrl
 }

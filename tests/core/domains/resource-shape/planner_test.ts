@@ -264,6 +264,12 @@ test("parseAIEndpointSpec accepts an OpenAI-compatible endpoint policy", () => {
     name: "ai",
     interfaces: ["openai_chat_completions", "openai_embeddings"],
     profiles: ["openai_compatible"],
+    providerPreferences: ["provider.deepseek", "provider.gemini"],
+    routingPolicy: {
+      strategy: "lowest_latency",
+      allowFallback: true,
+      preferredRegions: ["jp", "us"],
+    },
     modelPolicy: {
       defaultModel: "fast/chat",
       allowedModels: ["fast/chat", "embed/text"],
@@ -275,6 +281,15 @@ test("parseAIEndpointSpec accepts an OpenAI-compatible endpoint policy", () => {
     "openai_chat_completions",
     "openai_embeddings",
   ]);
+  expect(r.spec.providerPreferences).toEqual([
+    "provider.deepseek",
+    "provider.gemini",
+  ]);
+  expect(r.spec.routingPolicy).toEqual({
+    strategy: "lowest_latency",
+    allowFallback: true,
+    preferredRegions: ["jp", "us"],
+  });
   expect(r.spec.modelPolicy?.defaultModel).toBe("fast/chat");
 });
 
@@ -283,11 +298,13 @@ test("parseAIEndpointSpec accepts operator-defined AI interface and profile toke
     name: "ai",
     interfaces: ["openai_chat_completions", "vendor.deepseek.responses.v1"],
     profiles: ["openai_compatible", "provider.deepseek"],
+    providerPreferences: ["provider.deepseek"],
   });
   expect(r.ok).toBe(true);
   if (!r.ok) return;
   expect(r.spec.interfaces).toContain("vendor.deepseek.responses.v1");
   expect(r.spec.profiles).toContain("provider.deepseek");
+  expect(r.spec.providerPreferences).toContain("provider.deepseek");
 });
 
 test("parseAIEndpointSpec rejects an invalid AI interface token", () => {
@@ -297,6 +314,18 @@ test("parseAIEndpointSpec rejects an invalid AI interface token", () => {
   });
   expect(r.ok).toBe(false);
   if (!r.ok) expect(r.error.code).toBe("invalid_interface");
+});
+
+test("parseAIEndpointSpec rejects an invalid AI routing token", () => {
+  const r = parseAIEndpointSpec({
+    name: "ai",
+    interfaces: ["openai_chat_completions"],
+    routingPolicy: {
+      strategy: "lowest latency",
+    },
+  });
+  expect(r.ok).toBe(false);
+  if (!r.ok) expect(r.error.code).toBe("invalid_routing_policy");
 });
 
 test("planAIEndpoint keeps upstream choice in the selected target", () => {
@@ -310,6 +339,12 @@ test("planAIEndpoint keeps upstream choice in the selected target", () => {
     name: "ai",
     interfaces: ["openai_chat_completions"],
     profiles: ["openai_compatible"],
+    providerPreferences: ["provider.deepseek"],
+    routingPolicy: {
+      strategy: "lowest_latency",
+      allowFallback: true,
+      preferredRegions: ["jp"],
+    },
     modelPolicy: { defaultModel: "deepseek/chat" },
   }, target);
 
@@ -325,6 +360,10 @@ test("planAIEndpoint keeps upstream choice in the selected target", () => {
     targetType: "ai_provider",
     interfaces: ["openai_chat_completions"],
     profiles: ["openai_compatible"],
+    providerPreferences: ["provider.deepseek"],
+    routingStrategy: "lowest_latency",
+    allowFallback: true,
+    preferredRegions: ["jp"],
     allowedModels: [],
     defaultModel: "deepseek/chat",
     baseUrl: "https://api.deepseek.example/v1",
@@ -346,10 +385,12 @@ test("planAIEndpoint uses the generic projection module for admin-defined implem
     name: "ai",
     interfaces: ["openai_chat_completions"],
     profiles: ["provider.gemini", "openai_compatible"],
+    providerPreferences: ["provider.gemini"],
   }, target);
 
   expect(AI_ENDPOINT_GENERIC_TEMPLATE_ID).toBe("takosumi-ai-endpoint");
   expect(plan.templateId).toBe(AI_ENDPOINT_GENERIC_TEMPLATE_ID);
   expect(plan.inputs.implementation).toBe("gemini_openai_compatible");
   expect(plan.inputs.profiles).toEqual(["provider.gemini", "openai_compatible"]);
+  expect(plan.inputs.providerPreferences).toEqual(["provider.gemini"]);
 });
