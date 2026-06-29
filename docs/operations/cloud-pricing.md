@@ -74,14 +74,14 @@ charge >= estimated_cost / (1 - minimumGrossMarginBps / 10000)
 `502` で fail closed します。価格表に meter が存在しない場合も fail closed です。
 
 Cloud Edge Runtime は public user traffic を直接受けるため、usage header を client
-response に出して platform worker に拾わせる経路ではありません。runtime worker は
-`TAKOSUMI_PLATFORM_USAGE_ORIGIN` と secret `TAKOSUMI_CLOUD_USAGE_RECORD_TOKEN`
-を持ち、dispatch 前に platform worker の
-`POST /internal/platform/cloud/usage` へ `cloudflare:workers_script:request`
-meter を送ります。platform worker は同じ `TAKOSUMI_CLOUD_USAGE_PRICE_BOOK` で
-価格を決め、Workspace balance から atomic spend できた場合だけ runtime は user
-script を dispatch します。token 未設定、`spaceId` 未設定、価格未設定、残高不足は
-すべて fail closed です。
+response に出して platform worker に拾わせる経路ではありません。公式 Cloud では
+この runtime handler も `takosumi-cloud/platform/worker.ts` に in-process mount
+され、別 Worker としては deploy しません。handler は dispatch 前に同じ platform
+Worker origin の `POST /internal/platform/cloud/usage` へ
+`cloudflare:workers_script:request` meter を送り、platform worker 側の同じ
+`TAKOSUMI_CLOUD_USAGE_PRICE_BOOK` と atomic Workspace balance spend を再利用します。
+token 未設定、`spaceId` 未設定、価格未設定、残高不足はすべて fail closed で、
+user script は dispatch されません。
 
 ## Price book schema
 
