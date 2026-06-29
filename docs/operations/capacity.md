@@ -65,6 +65,23 @@ planning に使う conservative capacity:
 | apply / destroy runs               |                  10 active runs |
 | R2 artifact/state writes           |                  100 writes/min |
 
+## Runner Warm-Capacity Tuning
+
+初回 install の体感は、container cold start、Git source sync、provider init、
+provider apply のどこに時間が寄っているかで分けて見る。Takosumi 側で使える
+speed knob は OpenTofu 実行基盤に限定する。
+
+| Knob                                | Default                         | 速くなる箇所                                             | コスト/注意点                                                                 |
+| ----------------------------------- | ------------------------------- | -------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `TAKOSUMI_RUNNER_KEEPALIVE_SECONDS` | `120`                           | source_sync / compatibility / plan / apply の連続実行     | 成功後だけ短時間 container を温存する。`0` は run ごとに破棄して idle cost 優先 |
+| `TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR` | `/tmp/takosumi-provider-cache`  | `tofu init` の direct provider install                   | provider binary 専用。credential / tfplan / state / outputs は入れない        |
+| `TAKOSUMI_SOURCE_ARCHIVE_ZSTD_LEVEL` | runner default `3`, template `1` | SourceSnapshot archive 作成                              | 低いほど速いが R2 object が大きくなる                                         |
+
+失敗した run は keepalive 設定に関係なく container を落とす。これは crash や
+relay error のあとに一時 credential file を温存しないための fail-closed 動作。
+container image、Worker bundle、DB migration、app index 作成などの最適化は
+各 app repo / CI / registry / OpenTofu module 側の責務として扱う。
+
 ## Headroom Checks
 
 capacity review で見る signal:
@@ -76,6 +93,8 @@ capacity review で見る signal:
 - queue depth, queue age, DLQ count
 - CoordinationObject lease waits and takeover count
 - runner container startup latency and failure rate
+- runner phase timings (`source_clone`, `source_snapshot_reuse`, `tofu_init`,
+  `tofu_plan`, `tofu_apply`) and provider installation evidence
 - D1 CPU, lock wait, storage growth
 - R2 object count / byte growth per bucket
 - Workspace-level top-N usage concentration
