@@ -2,9 +2,9 @@
 
 A thin OpenTofu/Terraform provider for the **Takosumi Resource Shape API**.
 
-This provider lets you declare Takosumi resource shapes (e.g.
-`takosumi_object_bucket`, `takosumi_edge_worker`, `takosumi_ai_endpoint`) and
-operator configuration such as `takosumi_target_pool` in HCL. It is
+This provider lets you declare Takosumi resource shapes such as
+`takosumi_edge_worker` and `takosumi_ai_endpoint`, plus operator configuration
+such as `takosumi_target_pool`, in HCL. It is
 deliberately **thin**: it carries shape-specific HCL schemas, validation, a
 Takosumi API HTTP client, and preview/apply/status mapping. It does **not**
 call AWS / Cloudflare / Kubernetes SDKs, does **not** select a backend, and
@@ -15,10 +15,12 @@ The provider should expose shape-specific resources only where Takosumi needs a
 provider-neutral service form. If an adequate generic provider or standard API
 already exists, use it through the ordinary OpenTofu Stack flow,
 ProviderConnection, and CredentialRecipe instead of adding a Takosumi-owned
-clone. When no adequate generic provider exists, add a first-class shape or a
-TargetPool adapter plugin. Endpoint capabilities, TargetPool implementation
-evidence, policy, and the engine/admin configuration decide whether a given
-profile or backend is supported.
+clone. Object storage is the canonical example: S3/R2/GCS/MinIO should stay on
+existing OpenTofu providers or standard S3-compatible endpoints. When no
+adequate generic provider exists, add a first-class shape or a TargetPool
+adapter plugin. Endpoint capabilities, TargetPool implementation evidence,
+policy, and the engine/admin configuration decide whether a given profile or
+backend is supported.
 
 It is **capability-driven, not edition-driven**: on configure it discovers the
 server's advertised capabilities and never branches on an "edition" string.
@@ -40,15 +42,13 @@ provider/
 │   │   └── client_test.go
 │   └── provider/
 │       ├── provider.go              # provider schema + Configure (discovery + capability gate)
-│       ├── object_bucket_resource.go # takosumi_object_bucket resource + model mapping
-│       ├── edge_worker_resource.go # takosumi_edge_worker resource + model mapping
+│       ├── edge_worker_resource.go  # takosumi_edge_worker resource + model mapping
 │       ├── ai_endpoint_resource.go  # takosumi_ai_endpoint resource + model mapping
 │       ├── target_pool_resource.go  # takosumi_target_pool admin capability config
 │       ├── validators.go            # in-tree string/set allow-list validators
 │       ├── provider_test.go
-│       └── object_bucket_resource_test.go
 └── examples/
-    └── resources/takosumi_object_bucket/resource.tf
+    └── resources/takosumi_edge_worker/resource.tf
 ```
 
 ## Build
@@ -178,19 +178,6 @@ resource "takosumi_target_pool" "default" {
     type     = "cloudflare"
     ref      = "cf-account-id"
     priority = 80
-
-    # ObjectBucket is explicit operator capability evidence. Without this,
-    # ordinary S3/R2/GCS buckets should use existing OpenTofu providers.
-    implementation = [{
-      shape                = "ObjectBucket"
-      implementation       = "cloudflare_r2"
-      native_resource_type = "cloudflare.r2_bucket"
-      interfaces = {
-        s3_api        = "native"
-        signed_url    = "native"
-        object_events = "shim"
-      }
-    }]
   }, {
     name     = "deepseek-main"
     type     = "ai_provider"
@@ -208,29 +195,6 @@ resource "takosumi_target_pool" "default" {
       }
     }]
   }]
-}
-
-resource "takosumi_object_bucket" "assets" {
-  name = "assets"
-
-  interfaces = [
-    "s3_api",
-    "signed_url",
-  ]
-
-  lifecycle_policy = {
-    delete = "retain"
-  }
-
-  depends_on = [takosumi_target_pool.default]
-}
-
-output "assets_selected_implementation" {
-  value = takosumi_object_bucket.assets.selected_implementation
-}
-
-output "assets_outputs" {
-  value = takosumi_object_bucket.assets.outputs
 }
 
 resource "takosumi_edge_worker" "api" {
@@ -259,33 +223,10 @@ resource "takosumi_ai_endpoint" "ai" {
 }
 ```
 
-See [`examples/resources/takosumi_object_bucket/resource.tf`](examples/resources/takosumi_object_bucket/resource.tf).
-
-### `takosumi_object_bucket`
-
-Use this only when the operator has enabled an ObjectBucket implementation in
-the TargetPool and Takosumi needs binding, policy, metering, import, or
-resolution semantics. For an ordinary S3/R2/GCS bucket, use the existing
-OpenTofu provider in a normal Stack.
-
-| Attribute                 | Type        | Mode     | Notes                                                              |
-| ------------------------- | ----------- | -------- | ------------------------------------------------------------------ |
-| `name`                    | string      | required | Resource key; changing it replaces the resource                    |
-| `interfaces`              | set(string) | required | One or more of `s3_api`, `signed_url`, `object_events`             |
-| `lifecycle_policy`        | object      | optional | `{ delete = "delete"\|"retain"\|"snapshot_then_delete"\|"block" }` |
-| `space`                   | string      | optional | Overrides the provider default; changing it replaces the resource  |
-| `id`                      | string      | computed | `tkrn:{space}:ObjectBucket:{name}` unless the server returns one   |
-| `selected_implementation` | string      | computed | Explicit TargetPool implementation chosen by the Resolver          |
-| `target`                  | string      | computed | Target the resource landed on                                      |
-| `locked`                  | bool        | computed | Whether the resolution is locked                                   |
-| `portability`             | string      | computed | Resolver portability assessment                                    |
-| `outputs`                 | map(string) | computed | Resolved outputs                                                   |
-
-Import accepts `name` or `space/name`:
-
-```bash
-tofu import takosumi_object_bucket.assets prod/assets
-```
+Use existing OpenTofu providers for ordinary object storage. For example,
+create S3 with `hashicorp/aws`, R2 with `cloudflare/cloudflare`, GCS with
+`hashicorp/google`, or MinIO through an S3-compatible provider/module in the
+plain Stack flow.
 
 ### `takosumi_edge_worker`
 
@@ -379,7 +320,6 @@ used by each HCL resource, for example:
 {
   "apiVersion": "takosumi.dev/v1alpha1",
   "resources": {
-    "ObjectBucket": true,
     "EdgeWorker": true,
     "AIEndpoint": true
   }
@@ -404,12 +344,12 @@ Request body (PUT/preview):
 ```json
 {
   "apiVersion": "takosumi.dev/v1alpha1",
-  "kind": "ObjectBucket",
-  "metadata": { "name": "assets", "space": "prod", "managedBy": "opentofu" },
+  "kind": "EdgeWorker",
+  "metadata": { "name": "api", "space": "prod", "managedBy": "opentofu" },
   "spec": {
-    "name": "assets",
-    "interfaces": ["s3_api", "signed_url"],
-    "lifecyclePolicy": { "delete": "retain" }
+    "name": "api",
+    "source": { "artifactPath": "/work/dist/worker.js" },
+    "profiles": ["workers_bindings"]
   }
 }
 ```

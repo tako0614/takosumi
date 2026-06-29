@@ -42,7 +42,7 @@ export const cloudflareHelloWorkerTemplate: TemplateDefinition = {
   outputs: {
     public: {
       worker_name: { type: "string", from: "worker_name" },
-      url: { type: "string", from: "url" },
+      url: { type: "url", from: "url" },
     },
   },
   policy: {

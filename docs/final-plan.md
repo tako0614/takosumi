@@ -93,9 +93,9 @@ Ordinary S3/R2/GCS bucket:
 Object storage that must be projected as a managed binding into an EdgeWorker,
 locked by Takosumi resolution, metered by an operator, or exposed through a
 provider-neutral service contract:
-  first try the existing provider/standard endpoint path. Add an ObjectBucket
-  shape only after the prior-art gate proves that the generic path cannot
-  express the required binding, policy, metering, import, or placement contract.
+  keep the standard S3-compatible API as the data-plane surface. Enable
+  compat.s3.v1 only when Takosumi owns the import/data path, binding
+  projection, policy, metering, or managed-target control.
 
 Ordinary VM, Kubernetes, or container infrastructure:
   use existing OpenTofu providers when that is sufficient.
@@ -317,52 +317,37 @@ Takosumi Cloud Workers may be backed by Cloudflare Workers for Platforms and a
 Takosumi-managed dispatch layer. That detail should be documented in runtime
 docs, but the product headline should remain Worker-compatible hosting.
 
-### 4.2 Deferred: ObjectBucket
+### 4.2 S3-Compatible Object Storage
 
-`ObjectBucket` is not a default Takosumi shape.
+S3-compatible API support is required, but it is a compatibility/data-plane
+surface, not a default `takosumi_*` Resource Shape.
 
-Object storage already has mature providers and standard APIs: AWS S3,
-Cloudflare R2, GCS, MinIO, S3-compatible endpoints, and their OpenTofu
-providers. Ordinary buckets must use the plain OpenTofu Stack flow with those
-providers.
-
-Takosumi may add or enable an ObjectBucket shape only when an operator proves
-that the existing provider/standard endpoint path is not enough and Takosumi
-must own lifecycle, binding projection, resolution lock, usage events,
-operator-side policy, import compatibility, or managed placement.
-
-```hcl
-resource "takosumi_object_bucket" "assets" {
-  name = "assets"
-
-  interfaces = [
-    "s3_api",
-    "signed_url",
-  ]
-
-  lifecycle_policy = {
-    delete = "retain"
-  }
-}
-```
-
-This is a deferred/operator opt-in resource form, not the normal way to create
-S3/R2/GCS buckets.
-
-Possible operator opt-in implementations:
+Why it exists:
 
 ```text
-aws_s3
-cloudflare_r2
-minio
-takosumi_object_storage
-operator-provided ObjectBucket adapter plugin
+Takosumi or an operator may provide object storage.
+Apps, SDKs, and existing OpenTofu providers need a standard way to consume it.
+The correct standard surface is S3-compatible API.
 ```
 
-These are not default replacements for existing S3/R2/GCS providers. They are
-valid only when an operator explicitly publishes ObjectBucket implementation
-capability evidence and the prior-art gate says a standard provider/endpoint is
-insufficient.
+Ordinary object storage remains outside Takosumi Resource Shapes:
+
+```text
+AWS S3:
+  use hashicorp/aws in the plain OpenTofu Stack flow.
+
+Cloudflare R2:
+  use cloudflare/cloudflare in the plain OpenTofu Stack flow.
+
+GCS / MinIO / other S3-compatible storage:
+  use the existing provider or standard S3-compatible endpoint.
+```
+
+Takosumi enables `compat.s3.v1` only when the operator intentionally exposes an
+object-storage import/data path, binding projection, policy, metering, or
+managed target control. This lets Takosumi-provided storage be received and used
+through the same S3-compatible provider/SDK surface without inventing a bucket
+resource in `takosumi_provider`.
 
 ### 4.3 AIEndpoint
 
@@ -679,9 +664,10 @@ GET /v1/capabilities
 
 Providers and tools branch on capabilities, not edition names.
 Adapter/target capabilities report what the operator has enabled; they do not
-create implicit Resource Shape mappings. Deferred object-storage shapes require
-explicit TargetPool implementation evidence and a prior-art justification when
-they would otherwise be served by ordinary S3/R2/GCS providers.
+create implicit Resource Shape mappings. Object storage remains a standard
+endpoint/provider concern unless `compat.s3.v1` is explicitly enabled by an
+operator for an import/data path, binding projection, policy, metering, or
+managed target control.
 
 Example:
 
@@ -690,7 +676,6 @@ Example:
   "apiVersion": "takosumi.dev/v1alpha1",
   "resources": {
     "Stack": true,
-    "ObjectBucket": false,
     "EdgeWorker": true,
     "AIEndpoint": true
   },

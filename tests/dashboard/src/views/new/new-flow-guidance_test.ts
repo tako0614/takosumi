@@ -203,7 +203,7 @@ describe("/new flow guidance", () => {
     );
   });
 
-  test("catalog exposes multiple runnable service choices backed by official configs", () => {
+  test("catalog exposes runnable service choices backed by official configs", () => {
     const officialSeedSource = readFileSync(
       resolve(
         here,
@@ -212,12 +212,11 @@ describe("/new flow guidance", () => {
       "utf8",
     );
     expect(officialSeedSource).toContain('"cloudflare-hello-worker"');
-    expect(officialSeedSource).toContain('"cloudflare-r2-storage"');
-    expect(officialSeedSource).toContain('"aws-s3-storage"');
     expect(officialSeedSource).toContain("catalogMetadataForTemplate");
     expect(officialSeedSource).toContain("officialCatalogSource");
     expect(officialSeedSource).toContain('name: "accountId"');
-    expect(officialSeedSource).toContain('name: "bucketName"');
+    expect(officialSeedSource).toContain('name: "workersSubdomain"');
+    expect(officialSeedSource).not.toContain('name: "bucketName"');
     expect(officialSeedSource).toContain(
       'defaultValue: "service-name-with-space"',
     );

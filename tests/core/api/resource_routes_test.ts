@@ -14,36 +14,12 @@ const POOL: TargetPoolSpec = {
       type: "cloudflare",
       ref: "cf-acct",
       priority: 80,
-      implementations: [
-        {
-          shape: "ObjectBucket",
-          implementation: "cloudflare_r2",
-          nativeResourceType: "cloudflare.r2_bucket",
-          interfaces: {
-            s3_api: "native",
-            signed_url: "native",
-            object_events: "shim",
-          },
-        },
-      ],
     },
     {
       name: "aws-main",
       type: "aws",
       region: "ap-northeast-1",
       priority: 70,
-      implementations: [
-        {
-          shape: "ObjectBucket",
-          implementation: "aws_s3",
-          nativeResourceType: "aws.s3_bucket",
-          interfaces: {
-            s3_api: "native",
-            signed_url: "native",
-            object_events: "native",
-          },
-        },
-      ],
     },
   ],
 };
@@ -73,24 +49,6 @@ async function buildApp() {
 
 const JSON_HEADERS = { "content-type": "application/json" };
 
-test("PUT /v1/resources/ObjectBucket/:name applies and returns id + resolution", async () => {
-  const { app } = await buildApp();
-  const res = await app.request("/v1/resources/ObjectBucket/assets", {
-    method: "PUT",
-    headers: JSON_HEADERS,
-    body: JSON.stringify({
-      metadata: { space: "space_1" },
-      spec: { name: "assets", interfaces: ["s3_api", "signed_url"] },
-    }),
-  });
-  expect(res.status).toBe(200);
-  const body = await res.json();
-  expect(body.id).toBe("tkrn:space_1:ObjectBucket:assets");
-  expect(body.status.resolution.selectedImplementation).toBe("cloudflare_r2");
-  expect(body.status.resolution.target).toBe("cloudflare-main");
-  expect(body.status.phase).toBe("Ready");
-});
-
 test("PUT /v1/resources/EdgeWorker/:name applies a first-class Worker shape", async () => {
   const { app } = await buildApp();
   const res = await app.request("/v1/resources/EdgeWorker/api", {
@@ -111,6 +69,8 @@ test("PUT /v1/resources/EdgeWorker/:name applies a first-class Worker shape", as
   expect(body.status.resolution.selectedImplementation).toBe(
     "cloudflare_workers",
   );
+  expect(body.status.resolution.target).toBe("cloudflare-main");
+  expect(body.status.phase).toBe("Ready");
 });
 
 test("PUT /v1/resources/AIEndpoint/:name applies a first-class AI shape", async () => {
@@ -256,22 +216,23 @@ test("TargetPool API persists admin-defined AI provider capability evidence", as
   expect(missing.status).toBe(404);
 });
 
-test("GET /v1/resources/ObjectBucket/:name returns the applied resource", async () => {
+test("GET /v1/resources/EdgeWorker/:name returns the applied resource", async () => {
   const { app } = await buildApp();
-  await app.request("/v1/resources/ObjectBucket/assets", {
+  await app.request("/v1/resources/EdgeWorker/api", {
     method: "PUT",
     headers: JSON_HEADERS,
     body: JSON.stringify({
       metadata: { space: "space_1" },
-      spec: { name: "assets", interfaces: ["s3_api"] },
+      spec: {
+        name: "api",
+        source: { artifactPath: "/work/dist/worker.js" },
+      },
     }),
   });
-  const res = await app.request(
-    "/v1/resources/ObjectBucket/assets?space=space_1",
-  );
+  const res = await app.request("/v1/resources/EdgeWorker/api?space=space_1");
   expect(res.status).toBe(200);
   const body = await res.json();
-  expect(body.metadata.name).toBe("assets");
+  expect(body.metadata.name).toBe("api");
   expect(body.status.resolution.target).toBe("cloudflare-main");
 });
 
@@ -281,14 +242,18 @@ test("POST /v1/resources/preview resolves without persisting", async () => {
     method: "POST",
     headers: JSON_HEADERS,
     body: JSON.stringify({
-      kind: "ObjectBucket",
-      metadata: { space: "space_1", name: "assets" },
-      spec: { name: "assets", interfaces: ["s3_api"] },
+      kind: "AIEndpoint",
+      metadata: { space: "space_1", name: "ai" },
+      spec: {
+        name: "ai",
+        interfaces: ["openai_chat_completions"],
+        profiles: ["openai_compatible"],
+      },
     }),
   });
   expect(res.status).toBe(200);
   const body = await res.json();
-  expect(body.selectedImplementation).toBe("cloudflare_r2");
+  expect(body.selectedImplementation).toBe("cloudflare_ai_gateway");
 });
 
 test("POST /v1/resources/preview requires an explicit shape kind", async () => {
@@ -297,8 +262,8 @@ test("POST /v1/resources/preview requires an explicit shape kind", async () => {
     method: "POST",
     headers: JSON_HEADERS,
     body: JSON.stringify({
-      metadata: { space: "space_1", name: "assets" },
-      spec: { name: "assets", interfaces: ["s3_api"] },
+      metadata: { space: "space_1", name: "api" },
+      spec: { name: "api" },
     }),
   });
   expect(res.status).toBe(400);
@@ -308,13 +273,16 @@ test("POST /v1/resources/preview requires an explicit shape kind", async () => {
 
 test("PUT /v1/resources/:kind/:name rejects body kind mismatch", async () => {
   const { app } = await buildApp();
-  const res = await app.request("/v1/resources/ObjectBucket/assets", {
+  const res = await app.request("/v1/resources/EdgeWorker/api", {
     method: "PUT",
     headers: JSON_HEADERS,
     body: JSON.stringify({
-      kind: "EdgeWorker",
+      kind: "AIEndpoint",
       metadata: { space: "space_1" },
-      spec: { name: "assets", interfaces: ["s3_api"] },
+      spec: {
+        name: "api",
+        source: { artifactPath: "/work/dist/worker.js" },
+      },
     }),
   });
   expect(res.status).toBe(400);
@@ -324,12 +292,15 @@ test("PUT /v1/resources/:kind/:name rejects body kind mismatch", async () => {
 
 test("PUT /v1/resources/:kind/:name rejects name mismatch", async () => {
   const { app } = await buildApp();
-  const res = await app.request("/v1/resources/ObjectBucket/assets", {
+  const res = await app.request("/v1/resources/EdgeWorker/api", {
     method: "PUT",
     headers: JSON_HEADERS,
     body: JSON.stringify({
       metadata: { space: "space_1", name: "other" },
-      spec: { name: "assets", interfaces: ["s3_api"] },
+      spec: {
+        name: "api",
+        source: { artifactPath: "/work/dist/worker.js" },
+      },
     }),
   });
   expect(res.status).toBe(400);
@@ -354,10 +325,15 @@ test("Queue is not accepted until the planner can materialize it", async () => {
 
 test("missing space yields a 400 nested error envelope", async () => {
   const { app } = await buildApp();
-  const res = await app.request("/v1/resources/ObjectBucket/assets", {
+  const res = await app.request("/v1/resources/EdgeWorker/api", {
     method: "PUT",
     headers: JSON_HEADERS,
-    body: JSON.stringify({ spec: { name: "assets", interfaces: ["s3_api"] } }),
+    body: JSON.stringify({
+      spec: {
+        name: "api",
+        source: { artifactPath: "/work/dist/worker.js" },
+      },
+    }),
   });
   expect(res.status).toBe(400);
   const body = await res.json();
@@ -370,7 +346,6 @@ test("GET /v1/capabilities advertises enabled Resource Shapes", async () => {
   const res = await app.request("/v1/capabilities");
   expect(res.status).toBe(200);
   const body = await res.json();
-  expect(body.resources.ObjectBucket).toBe(false);
   expect(body.resources.EdgeWorker).toBe(true);
   expect(body.resources.AIEndpoint).toBe(true);
 });

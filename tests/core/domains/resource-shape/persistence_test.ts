@@ -32,18 +32,22 @@ const T1 = "2026-06-29T01:00:00.000Z" as IsoTimestamp;
 
 function fullShape(): ResourceShapeRecord {
   return {
-    id: formatResourceShapeId(SPACE_A, "ObjectBucket", "assets"),
+    id: formatResourceShapeId(SPACE_A, "AIEndpoint", "ai"),
     spaceId: SPACE_A,
     project: "web",
     environment: "prod",
-    kind: "ObjectBucket",
-    name: "assets",
+    kind: "AIEndpoint",
+    name: "ai",
     managedBy: "opentofu",
-    spec: { bucket: "assets", versioning: true, nested: { a: [1, 2, 3] } },
+    spec: {
+      name: "ai",
+      interfaces: ["openai_chat_completions"],
+      nested: { a: [1, 2, 3] },
+    },
     phase: "Ready",
     generation: 3,
     observedGeneration: 2,
-    outputs: { endpoint: "https://assets.example", region: "auto" },
+    outputs: { base_url: "https://ai.example/v1", default_model: "fast/chat" },
     conditions: [
       {
         type: "Ready",
@@ -77,12 +81,12 @@ function minimalShape(): ResourceShapeRecord {
 function fullLock(resourceId: string): ResolutionLockRecord {
   return {
     resourceId,
-    selectedImplementation: "cloudflare_r2",
+    selectedImplementation: "cloudflare_ai_gateway",
     target: "tgt_cf",
     locked: true,
     reason: ["best capability score", "operator preference"],
     portability: "mostly_portable",
-    nativeResources: [{ type: "cloudflare.r2_bucket", id: "assets" }],
+    nativeResources: [{ type: "cloudflare.ai_gateway", id: "ai" }],
     lockedAt: T0,
     updatedAt: T1,
   };
@@ -91,7 +95,7 @@ function fullLock(resourceId: string): ResolutionLockRecord {
 function minimalLock(resourceId: string): ResolutionLockRecord {
   return {
     resourceId,
-    selectedImplementation: "aws_s3",
+    selectedImplementation: "openai_compatible_ai_endpoint",
     target: "tgt_aws",
     locked: false,
     reason: [],
@@ -183,7 +187,7 @@ for (const backend of backends) {
       expect(await stores.resources.upsert(record)).toEqual(record);
       expect(await stores.resources.get(record.id)).toEqual(record);
       expect(
-        await stores.resources.getByName(SPACE_A, "ObjectBucket", "assets"),
+        await stores.resources.getByName(SPACE_A, "AIEndpoint", "ai"),
       ).toEqual(record);
     });
 
@@ -246,7 +250,7 @@ for (const backend of backends) {
 
     test("resource shape: get/getByName miss returns undefined", async () => {
       expect(
-        await stores.resources.get("tkrn:nope:ObjectBucket:x"),
+        await stores.resources.get("tkrn:nope:AIEndpoint:x"),
       ).toBeUndefined();
       expect(
         await stores.resources.getByName(SPACE_A, "Machine", "absent"),
@@ -254,7 +258,7 @@ for (const backend of backends) {
     });
 
     test("resolution lock: full + minimal round-trip and overwrite", async () => {
-      const resourceId = formatResourceShapeId(SPACE_A, "ObjectBucket", "lk");
+      const resourceId = formatResourceShapeId(SPACE_A, "AIEndpoint", "lk");
       const full = fullLock(resourceId);
       expect(await stores.locks.put(full)).toEqual(full);
       expect(await stores.locks.get(resourceId)).toEqual(full);

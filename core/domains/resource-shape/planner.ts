@@ -2,10 +2,11 @@
 //
 // The Planner validates one shape-specific spec and lowers a resolved
 // implementation to a first-party OpenTofu module call. It deliberately keeps
-// shape-specific resource types (ObjectBucket, EdgeWorker, ...) instead
-// of accepting a catch-all `takosumi_resource { type, spec }` object, so
-// OpenTofu plan diffs, validation, import, drift, and state upgrades can remain
-// resource-aware.
+// shape-specific resource types (EdgeWorker, AIEndpoint, ...) instead of
+// accepting a catch-all `takosumi_resource { type, spec }` object, so OpenTofu
+// plan diffs, validation, import, drift, and state upgrades can remain
+// resource-aware. Existing generic providers and standards such as S3/R2/GCS
+// stay in the plain OpenTofu Stack flow, not in Takosumi-owned shapes.
 
 import type {
   AIEndpointInterface,
@@ -13,8 +14,6 @@ import type {
   AIEndpointSpec,
   EdgeWorkerProfile,
   EdgeWorkerSpec,
-  ObjectBucketInterface,
-  ObjectBucketSpec,
   ResourceDeletePolicy,
   ResourceShapeKind,
   TargetPoolEntry,
@@ -33,13 +32,7 @@ export interface ResourceShapePlan {
 }
 
 export type ParsedResourceSpec =
-  | {
-      readonly kind: "ObjectBucket";
-      readonly spec: ObjectBucketSpec;
-      readonly interfaces: readonly string[];
-      readonly lifecyclePolicy?: ObjectBucketSpec["lifecyclePolicy"];
-    }
-  | {
+  {
       readonly kind: "EdgeWorker";
       readonly spec: EdgeWorkerSpec;
       readonly interfaces: readonly string[];
@@ -59,13 +52,6 @@ export type ParseResourceSpecResult =
       readonly error: { readonly code: string; readonly message: string };
     };
 
-export type ParseObjectBucketSpecResult =
-  | { readonly ok: true; readonly spec: ObjectBucketSpec }
-  | {
-      readonly ok: false;
-      readonly error: { readonly code: string; readonly message: string };
-    };
-
 export type ParseEdgeWorkerSpecResult =
   | { readonly ok: true; readonly spec: EdgeWorkerSpec }
   | {
@@ -80,12 +66,6 @@ export type ParseAIEndpointSpecResult =
       readonly error: { readonly code: string; readonly message: string };
     };
 
-const OBJECT_BUCKET_INTERFACES: readonly ObjectBucketInterface[] = [
-  "s3_api",
-  "signed_url",
-  "object_events",
-];
-
 const EDGE_WORKER_PROFILES: readonly EdgeWorkerProfile[] = [
   "workers_bindings",
   "node_compat",
@@ -99,14 +79,6 @@ const RESOURCE_DELETE_POLICIES: readonly ResourceDeletePolicy[] = [
   "snapshot_then_delete",
   "block",
 ];
-
-/** Map ObjectBucket implementation -> first-party Capsule module template id. */
-export const OBJECT_BUCKET_IMPLEMENTATION_TEMPLATE: Readonly<
-  Record<string, string>
-> = Object.freeze({
-  cloudflare_r2: "cloudflare-r2-storage",
-  aws_s3: "aws-s3-storage",
-});
 
 /** Map EdgeWorker implementation -> first-party Capsule module template id. */
 export const EDGE_WORKER_IMPLEMENTATION_TEMPLATE: Readonly<
@@ -133,20 +105,6 @@ export function parseResourceSpec(
   spec: unknown,
 ): ParseResourceSpecResult {
   switch (kind) {
-    case "ObjectBucket": {
-      const r = parseObjectBucketSpec(spec);
-      return r.ok
-        ? {
-            ok: true,
-            parsed: {
-              kind,
-              spec: r.spec,
-              interfaces: r.spec.interfaces,
-              lifecyclePolicy: r.spec.lifecyclePolicy,
-            },
-          }
-        : r;
-    }
     case "EdgeWorker": {
       const r = parseEdgeWorkerSpec(spec);
       return r.ok
@@ -247,43 +205,6 @@ export function parseAIEndpointSpec(spec: unknown): ParseAIEndpointSpecResult {
   };
 }
 
-/**
- * Validate untrusted input into an ObjectBucketSpec: `name` must be a non-empty
- * string and `interfaces` a non-empty array of valid interface tokens.
- */
-export function parseObjectBucketSpec(
-  spec: unknown,
-): ParseObjectBucketSpecResult {
-  const base = objectCandidate(spec);
-  if (!base.ok) return base;
-  const candidate = base.value;
-
-  const name = parseName(candidate);
-  if (!name.ok) return name;
-
-  const interfaces = parseStringList(
-    candidate.interfaces,
-    "interfaces",
-    OBJECT_BUCKET_INTERFACES,
-    true,
-  );
-  if (!interfaces.ok) return interfaces;
-
-  const lifecyclePolicy = parseLifecyclePolicy(candidate.lifecyclePolicy);
-  if (!lifecyclePolicy.ok) return lifecyclePolicy;
-
-  return {
-    ok: true,
-    spec: {
-      name: name.value,
-      interfaces: interfaces.value as readonly ObjectBucketInterface[],
-      ...(lifecyclePolicy.value
-        ? { lifecyclePolicy: lifecyclePolicy.value }
-        : {}),
-    },
-  };
-}
-
 export function parseEdgeWorkerSpec(spec: unknown): ParseEdgeWorkerSpecResult {
   const base = objectCandidate(spec);
   if (!base.ok) return base;
@@ -371,58 +292,11 @@ export function planResourceShape(
   target: TargetPoolEntry,
 ): ResourceShapePlan {
   switch (parsed.kind) {
-    case "ObjectBucket":
-      return planObjectBucket(implementation, parsed.spec, target);
     case "EdgeWorker":
       return planEdgeWorker(implementation, parsed.spec, target);
     case "AIEndpoint":
       return planAIEndpoint(implementation, parsed.spec, target);
   }
-}
-
-/**
- * Plan the first-party module call for a resolved ObjectBucket implementation.
- * Inputs use the modules' real variable names:
- *  - cloudflare-r2-storage: bucketName, accountId, location
- *  - aws-s3-storage:        bucketName, region
- */
-export function planObjectBucket(
-  implementation: string,
-  spec: ObjectBucketSpec,
-  target: TargetPoolEntry,
-): ResourceShapePlan {
-  const templateId = OBJECT_BUCKET_IMPLEMENTATION_TEMPLATE[implementation];
-  if (!templateId) {
-    throw new Error(
-      `planObjectBucket: no first-party module for implementation "${implementation}"`,
-    );
-  }
-  const moduleFiles = moduleFilesFor(templateId, "planObjectBucket");
-
-  if (implementation === "cloudflare_r2") {
-    const inputs: Record<string, unknown> = {
-      bucketName: spec.name,
-      accountId: target.ref ?? "",
-    };
-    if (target.region !== undefined) inputs.location = target.region;
-    return {
-      shape: "ObjectBucket",
-      templateId,
-      moduleFiles,
-      inputs,
-      publicOutputs: ["bucket_name", "location"],
-    };
-  }
-
-  const inputs: Record<string, unknown> = { bucketName: spec.name };
-  if (target.region !== undefined) inputs.region = target.region;
-  return {
-    shape: "ObjectBucket",
-    templateId,
-    moduleFiles,
-    inputs,
-    publicOutputs: ["bucket_name", "bucket_arn", "region"],
-  };
 }
 
 /**

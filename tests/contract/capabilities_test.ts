@@ -14,9 +14,6 @@ test("Takosumi discovery document exposes v1alpha1 endpoint metadata", () => {
   assert.deepEqual(document.api_versions, [TAKOSUMI_API_VERSION]);
   assert.equal(document.edition, undefined);
   assert.equal(document.features.stacks, true);
-  // Resource Shape API support is separate from default backend mapping. A shape
-  // may be schema/API-supported while still requiring explicit TargetPool
-  // implementation evidence before it resolves.
   assert.equal(document.features.resource_shapes, true);
   assert.equal(document.features.compat_framework, true);
   assert.equal(document.features.compat_s3, false);
@@ -30,13 +27,12 @@ test("Takosumi discovery document exposes v1alpha1 endpoint metadata", () => {
 
 test("Takosumi product capabilities separate framework from enabled profiles", () => {
   const capabilities = createTakosumiProductCapabilities({
-    resources: { ObjectBucket: true, EdgeWorker: false },
+    resources: { EdgeWorker: false },
     compat: { s3: true },
   });
 
   assert.equal(capabilities.apiVersion, TAKOSUMI_API_VERSION);
   assert.equal(capabilities.resources.Stack, true);
-  assert.equal(capabilities.resources.ObjectBucket, true);
   assert.equal(capabilities.resources.EdgeWorker, false);
   assert.equal(capabilities.resources.AIEndpoint, false);
   assert.equal(capabilities.adapters.opentofu, true);
@@ -47,10 +43,9 @@ test("Takosumi product capabilities separate framework from enabled profiles", (
   assert.equal(capabilities.commercial.payment_enforcement, false);
 });
 
-test("ObjectBucket is not a default shape when generic providers are enough", () => {
+test("S3 compatibility is a compat profile, not a default Resource Shape", () => {
   const capabilities = createTakosumiProductCapabilities();
 
-  assert.equal(capabilities.resources.ObjectBucket, false);
   assert.equal(capabilities.resources.EdgeWorker, true);
   assert.equal(capabilities.resources.AIEndpoint, false);
   assert.equal(capabilities.compat.s3, false);

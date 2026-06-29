@@ -58,51 +58,6 @@ output "service_registry_url" {
 }
 `;
 
-const cloudflareR2StorageMainTf = hcl`terraform {
-  required_providers {
-    cloudflare = {
-      source = "cloudflare/cloudflare"
-    }
-  }
-}
-
-variable "bucketName" {
-  type        = string
-  description = "Name of the R2 bucket to create."
-}
-
-variable "accountId" {
-  type        = string
-  description = "Cloudflare account id that owns the bucket."
-}
-
-variable "location" {
-  type        = string
-  description = "Optional R2 location hint (jurisdiction/region). Empty selects the provider default."
-  default     = ""
-}
-
-# Provider credentials are supplied through environment (CLOUDFLARE_API_TOKEN /
-# CLOUDFLARE_ACCOUNT_ID) minted by Takosumi at dispatch; no provider block needs
-# inline secrets here.
-
-resource "cloudflare_r2_bucket" "this" {
-  account_id = var.accountId
-  name       = var.bucketName
-  location   = var.location != "" ? var.location : null
-}
-
-output "bucket_name" {
-  description = "Name of the created R2 bucket."
-  value       = cloudflare_r2_bucket.this.name
-}
-
-output "location" {
-  description = "Resolved R2 location for the bucket."
-  value       = cloudflare_r2_bucket.this.location
-}
-`;
-
 const cloudflareWorkerServiceMainTf = hcl`terraform {
   required_providers {
     cloudflare = {
@@ -276,52 +231,6 @@ output "url" {
 }
 `;
 
-const awsS3StorageMainTf = hcl`terraform {
-  required_providers {
-    aws = {
-      source = "hashicorp/aws"
-    }
-  }
-}
-
-variable "bucketName" {
-  type        = string
-  description = "Globally-unique S3 bucket name to create."
-}
-
-variable "region" {
-  type        = string
-  description = "AWS region for the bucket."
-  default     = "us-east-1"
-}
-
-# Provider credentials (and region) are minted by Takosumi at dispatch via the
-# AWS environment (AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_REGION or an
-# assume-role session); no inline secrets here.
-provider "aws" {
-  region = var.region
-}
-
-resource "aws_s3_bucket" "this" {
-  bucket = var.bucketName
-}
-
-output "bucket_name" {
-  description = "Name of the created S3 bucket."
-  value       = aws_s3_bucket.this.bucket
-}
-
-output "bucket_arn" {
-  description = "ARN of the created S3 bucket."
-  value       = aws_s3_bucket.this.arn
-}
-
-output "region" {
-  description = "Region the bucket was created in."
-  value       = var.region
-}
-`;
-
 const takosumiAiEndpointMainTf = hcl`variable "endpointName" {
   type        = string
   description = "Logical AI endpoint name."
@@ -417,15 +326,11 @@ export const firstPartyModuleFilesByTemplateId: Readonly<
   "cloudflare-hello-worker": [
     { path: "main.tf", text: cloudflareHelloWorkerMainTf },
   ],
-  "cloudflare-r2-storage": [
-    { path: "main.tf", text: cloudflareR2StorageMainTf },
-  ],
   "cloudflare-worker-service": [
     { path: "main.tf", text: cloudflareWorkerServiceMainTf },
   ],
   "cloudflare-static-site": [
     { path: "main.tf", text: cloudflareStaticSiteMainTf },
   ],
-  "aws-s3-storage": [{ path: "main.tf", text: awsS3StorageMainTf }],
   "takosumi-ai-endpoint": [{ path: "main.tf", text: takosumiAiEndpointMainTf }],
 });

@@ -84,16 +84,12 @@ test("hostable official configs expose public catalog metadata for the dashboard
   const catalogTemplateIds = configs
     .map((config) => config.catalog?.templateId)
     .filter(Boolean);
-  expect(catalogTemplateIds).toEqual([
-    "cloudflare-hello-worker",
-    "cloudflare-r2-storage",
-    "aws-s3-storage",
-  ]);
+  expect(catalogTemplateIds).toEqual(["cloudflare-hello-worker"]);
   expect(
     configs
       .map((config) => config.catalog?.order)
       .filter((order): order is number => order !== undefined),
-  ).toEqual([10, 30, 40]);
+  ).toEqual([10]);
 
   const hello = configs.find(
     (config) => config.catalog?.templateId === "cloudflare-hello-worker",
@@ -136,11 +132,11 @@ test("official catalog source can be operator-selected without changing template
 
 test("seeded config output allowlist mirrors the template public outputs", () => {
   const template = defaultTemplateRegistry.require(
-    "cloudflare-r2-storage",
+    "cloudflare-hello-worker",
     "1.0.0",
   );
   const config = officialInstallConfigs({ now: NOW }).find(
-    (c) => c.name === "cloudflare-r2-storage",
+    (c) => c.name === "cloudflare-hello-worker",
   );
   for (const [name, spec] of Object.entries(template.outputs.public)) {
     expect(config?.outputAllowlist[name]?.from).toBe(spec.from);
@@ -150,11 +146,11 @@ test("seeded config output allowlist mirrors the template public outputs", () =>
 
 test("seeded config policy mirrors the template policy spec", () => {
   const template = defaultTemplateRegistry.require(
-    "cloudflare-r2-storage",
+    "cloudflare-hello-worker",
     "1.0.0",
   );
   const config = officialInstallConfigs({ now: NOW }).find(
-    (c) => c.name === "cloudflare-r2-storage",
+    (c) => c.name === "cloudflare-hello-worker",
   );
   expect(config?.policy.allowedProviders).toEqual(
     template.policy.allowedProviders,

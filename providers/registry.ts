@@ -43,7 +43,7 @@ const PROVIDER_RUNTIME_BASES: readonly ProviderRuntimeBase[] = [
       mode: "egress-allowlist",
       allowedHosts: [OPENTOFU, "api.cloudflare.com"],
     },
-    capsuleModuleIds: ["cloudflare-r2-storage", "cloudflare-static-site"],
+    capsuleModuleIds: ["cloudflare-static-site"],
     runnerProfileId: "cloudflare-default",
   },
   {
@@ -61,7 +61,6 @@ const PROVIDER_RUNTIME_BASES: readonly ProviderRuntimeBase[] = [
       ],
       allowedHostPatterns: ["*.amazonaws.com", "*.api.aws"],
     },
-    capsuleModuleIds: ["aws-s3-storage"],
     runnerProfileId: "aws-provider-env-candidate",
   },
   {

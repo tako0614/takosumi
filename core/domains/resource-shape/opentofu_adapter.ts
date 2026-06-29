@@ -95,7 +95,7 @@ import type {
 
 // ---------------------------------------------------------------------------
 // OpentofuRunPort: the few run operations the adapter needs. Keeping this narrow
-// (and free of ObjectBucket vocabulary) is what isolates the RunEngine coupling.
+// (and free of shape-specific vocabulary) is what isolates the RunEngine coupling.
 // ---------------------------------------------------------------------------
 
 /** OpenTofu provider mapping for one resolved Target. */
@@ -117,7 +117,7 @@ export interface OpentofuProviderBinding {
 export interface OpentofuRunRequest {
   /** Canonical resource id (`tkrn:{space}:{kind}:{name}`). */
   readonly resourceId: string;
-  /** First-party module template id, e.g. `cloudflare-r2-storage`. */
+  /** First-party module template id, e.g. `cloudflare-worker-service`. */
   readonly templateId: string;
   /** The first-party module's HCL files (child module materialized by the runner). */
   readonly moduleFiles: readonly {
@@ -197,7 +197,7 @@ function isNonEmptyString(value: unknown): value is string {
 
 /**
  * Keep only JSON-serializable values; drop `undefined`/functions/symbols. The
- * planner's ObjectBucket inputs are scalars, but this guards the seam so the
+ * Planner inputs are normally scalars/lists, but this guards the seam so the
  * runner never receives non-HCL-encodable junk.
  */
 function normalizeJsonInputs(
@@ -232,10 +232,10 @@ function coerceJsonValue(value: unknown): JsonValue | undefined {
 
 /**
  * Augment the planner's module inputs with Target-derived values the planner may
- * not have emitted (`docs/final-plan.md` §8): cloudflare-r2-storage REQUIRES
- * `accountId` (the Cloudflare account, carried by the TargetPool entry `ref`);
- * aws-s3-storage takes an optional `region` from the Target. Existing non-empty
- * values are never overwritten.
+ * not have emitted (`docs/final-plan.md` §8): Cloudflare-backed modules often
+ * need `accountId` (carried by the TargetPool entry `ref`); AWS-backed modules
+ * commonly take a `region` from the Target. Existing non-empty values are never
+ * overwritten.
  */
 export function augmentInputsForTarget(
   rawInputs: Readonly<Record<string, unknown>>,
@@ -711,14 +711,17 @@ export class FakeOpentofuRunPort implements OpentofuRunPort {
   #nativeResources(request: OpentofuRunRequest): readonly NativeResourceRef[] {
     const override = this.#overrides.nativeResources?.[request.resourceId];
     if (override) return override;
-    const id = isNonEmptyString(request.inputs.bucketName)
-      ? request.inputs.bucketName
-      : request.resourceId;
+    let id = request.resourceId;
+    if (isNonEmptyString(request.inputs.appName)) {
+      id = request.inputs.appName;
+    } else if (isNonEmptyString(request.inputs.endpointName)) {
+      id = request.inputs.endpointName;
+    }
     const type =
       request.providerBinding.provider === "cloudflare"
-        ? "cloudflare_r2_bucket"
+        ? "cloudflare_resource"
         : request.providerBinding.provider === "aws"
-          ? "aws_s3_bucket"
+          ? "aws_resource"
           : `${request.providerBinding.provider}_resource`;
     return [{ type, id }];
   }

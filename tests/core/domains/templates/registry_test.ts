@@ -10,9 +10,12 @@ import {
 } from "../../../../core/domains/templates/mod.ts";
 
 test("built-in registry resolves first-party modules by id+version", () => {
-  const r2 = defaultTemplateRegistry.require("cloudflare-r2-storage", "1.0.0");
-  expect(r2.source.localModulePath).toEqual(
-    "/app/templates/cloudflare-r2-storage/module",
+  const hello = defaultTemplateRegistry.require(
+    "cloudflare-hello-worker",
+    "1.0.0",
+  );
+  expect(hello.source.localModulePath).toEqual(
+    "/app/templates/cloudflare-hello-worker/module",
   );
 });
 
@@ -66,10 +69,8 @@ const MODULE_DIRS: Readonly<Record<string, string>> = {
   core: "opentofu-modules/core",
   "cloudflare-hello-worker":
     "providers/cloudflare/modules/cloudflare-hello-worker",
-  "cloudflare-r2-storage": "providers/cloudflare/modules/cloudflare-r2-storage",
   "cloudflare-static-site":
     "providers/cloudflare/modules/cloudflare-static-site",
-  "aws-s3-storage": "providers/aws/modules/aws-s3-storage",
   "takosumi-ai-endpoint": "providers/takosumi/modules/takosumi-ai-endpoint",
 };
 
@@ -96,12 +97,12 @@ test("registry require throws not_found for an unknown id or version", () => {
     /not a built-in Capsule module/,
   );
   expect(() =>
-    defaultTemplateRegistry.require("cloudflare-r2-storage", "9.9.9"),
+    defaultTemplateRegistry.require("cloudflare-hello-worker", "9.9.9"),
   ).toThrow(/not a built-in Capsule module/);
 });
 
 test("registry rejects a catalog with a duplicate id+version", () => {
-  const t = defaultTemplateRegistry.require("cloudflare-r2-storage", "1.0.0");
+  const t = defaultTemplateRegistry.require("cloudflare-hello-worker", "1.0.0");
   expect(() => new TemplateRegistry([t, t])).toThrow(
     /duplicate first-party Capsule module/,
   );
@@ -109,7 +110,7 @@ test("registry rejects a catalog with a duplicate id+version", () => {
 
 test("assertValidTemplate rejects traversal in the in-image module path", () => {
   const bad: TemplateDefinition = {
-    ...defaultTemplateRegistry.require("cloudflare-r2-storage", "1.0.0"),
+    ...defaultTemplateRegistry.require("cloudflare-hello-worker", "1.0.0"),
     source: { localModulePath: "/app/../etc/passwd" },
   };
   expect(() => assertValidTemplate(bad)).toThrow(/localModulePath/);
@@ -117,36 +118,47 @@ test("assertValidTemplate rejects traversal in the in-image module path", () => 
 
 test("validateTemplateInputs validates types, required, defaults, and unknown keys", () => {
   const template = defaultTemplateRegistry.require(
-    "cloudflare-r2-storage",
+    "cloudflare-hello-worker",
     "1.0.0",
   );
   // Required input missing.
   expect(() => validateTemplateInputs(template, { accountId: "a" })).toThrow(
-    /bucketName is required/,
+    /workersSubdomain is required/,
   );
   // Wrong type.
   expect(() =>
-    validateTemplateInputs(template, { bucketName: 1, accountId: "a" }),
-  ).toThrow(/bucketName must be a string/);
+    validateTemplateInputs(template, {
+      appName: 1,
+      accountId: "a",
+      workersSubdomain: "team",
+    }),
+  ).toThrow(/appName must be a string/);
   // Unknown input.
   expect(() =>
     validateTemplateInputs(template, {
-      bucketName: "b",
+      appName: "api",
       accountId: "a",
+      workersSubdomain: "team",
       bogus: "x",
     }),
   ).toThrow(/unknown input bogus/);
-  // Optional with default filled; required passed through.
+  // Required values pass through; module-level Terraform defaults are not
+  // repeated as TemplateDefinition inputs unless the dashboard must expose them.
   const normalized = validateTemplateInputs(template, {
-    bucketName: "b",
+    appName: "api",
     accountId: "a",
+    workersSubdomain: "team",
   });
-  expect(normalized).toEqual({ bucketName: "b", accountId: "a", location: "" });
+  expect(normalized).toEqual({
+    accountId: "a",
+    appName: "api",
+    workersSubdomain: "team",
+  });
 });
 
 test("validateTemplateInputs rejects non-finite numbers", () => {
   const template: TemplateDefinition = {
-    ...defaultTemplateRegistry.require("cloudflare-r2-storage", "1.0.0"),
+    ...defaultTemplateRegistry.require("cloudflare-hello-worker", "1.0.0"),
     inputs: {
       retentionDays: { type: "number", title: "Retention", required: true },
     },

@@ -658,10 +658,9 @@ function processSchemas(): Record<string, Record<string, unknown>> {
     },
     TakosumiResourceCapabilities: {
       type: "object",
-      required: ["Stack", "ObjectBucket", "EdgeWorker", "AIEndpoint"],
+      required: ["Stack", "EdgeWorker", "AIEndpoint"],
       properties: {
         Stack: { type: "boolean" },
-        ObjectBucket: { type: "boolean" },
         EdgeWorker: { type: "boolean" },
         AIEndpoint: { type: "boolean" },
       },

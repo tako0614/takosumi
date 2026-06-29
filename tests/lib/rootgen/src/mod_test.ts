@@ -6,39 +6,41 @@ import {
   generateRootModule,
 } from "../../../../lib/rootgen/src/mod.ts";
 
-const R2_TEMPLATE: TemplateDefinition = {
-  id: "cloudflare-r2-storage",
-  name: "Cloudflare R2 Storage",
+const WORKER_TEMPLATE: TemplateDefinition = {
+  id: "cloudflare-hello-worker",
+  name: "Cloudflare Hello Worker",
   version: "1.0.0",
-  source: { localModulePath: "/app/templates/cloudflare-r2-storage/module" },
+  source: { localModulePath: "/app/templates/cloudflare-hello-worker/module" },
   inputs: {
-    bucketName: { type: "string", title: "Bucket name", required: true },
+    appName: { type: "string", title: "Worker name", required: true },
     accountId: { type: "string", title: "Account id", required: true },
-    location: {
+    workersSubdomain: {
       type: "string",
-      title: "Location",
-      required: false,
-      default: "",
+      title: "Workers subdomain",
+      required: true,
     },
   },
   outputs: {
     public: {
-      bucket_name: { type: "string", from: "bucket_name" },
-      location: { type: "string", from: "location" },
+      worker_name: { type: "string", from: "script_name" },
+      url: { type: "url", from: "workers_dev_url" },
     },
   },
   policy: {
     allowedProviders: ["cloudflare/cloudflare"],
-    allowedResourceTypes: ["cloudflare_r2_bucket"],
+    allowedResourceTypes: [
+      "cloudflare_workers_script",
+      "cloudflare_workers_script_subdomain",
+    ],
     destructiveChanges: { requireExplicitConfirmation: true },
   },
 };
 
 test("rootgen emits versions.tf with required_providers from the policy", () => {
-  const { files } = generateRootModule(R2_TEMPLATE, {
-    bucketName: "my-bucket",
+  const { files } = generateRootModule(WORKER_TEMPLATE, {
+    appName: "my-worker",
     accountId: "acct_123",
-    location: "",
+    workersSubdomain: "team",
   });
   expect(files["versions.tf"]).toEqual(
     [
@@ -56,18 +58,18 @@ test("rootgen emits versions.tf with required_providers from the policy", () => 
 });
 
 test("rootgen golden main.tf wires the child module with literal inputs", () => {
-  const { files } = generateRootModule(R2_TEMPLATE, {
-    bucketName: "my-bucket",
+  const { files } = generateRootModule(WORKER_TEMPLATE, {
+    appName: "my-worker",
     accountId: "acct_123",
-    location: "weur",
+    workersSubdomain: "team",
   });
   expect(files["main.tf"]).toEqual(
     [
       'module "app" {',
       '  source = "./template-module"',
-      '  bucketName = "my-bucket"',
+      '  appName = "my-worker"',
       '  accountId = "acct_123"',
-      '  location = "weur"',
+      '  workersSubdomain = "team"',
       "}",
       "",
     ].join("\n"),
@@ -75,19 +77,19 @@ test("rootgen golden main.tf wires the child module with literal inputs", () => 
 });
 
 test("rootgen golden outputs.tf re-exports template public outputs from module.app", () => {
-  const { files } = generateRootModule(R2_TEMPLATE, {
-    bucketName: "b",
+  const { files } = generateRootModule(WORKER_TEMPLATE, {
+    appName: "worker",
     accountId: "a",
-    location: "",
+    workersSubdomain: "team",
   });
   expect(files["outputs.tf"]).toEqual(
     [
-      'output "bucket_name" {',
-      "  value = module.app.bucket_name",
+      'output "worker_name" {',
+      "  value = module.app.script_name",
       "}",
       "",
-      'output "location" {',
-      "  value = module.app.location",
+      'output "url" {',
+      "  value = module.app.workers_dev_url",
       "}",
       "",
     ].join("\n"),
@@ -96,19 +98,19 @@ test("rootgen golden outputs.tf re-exports template public outputs from module.a
 
 test("rootgen omits an optional input that has no value and no default", () => {
   const template: TemplateDefinition = {
-    ...R2_TEMPLATE,
+    ...WORKER_TEMPLATE,
     inputs: {
-      bucketName: { type: "string", title: "Bucket", required: true },
+      appName: { type: "string", title: "App", required: true },
       note: { type: "string", title: "Note", required: false },
     },
   };
-  const { files } = generateRootModule(template, { bucketName: "b" });
+  const { files } = generateRootModule(template, { appName: "api" });
   expect(files["main.tf"]).not.toContain("note");
 });
 
 test("rootgen renders number and boolean inputs as bare HCL literals", () => {
   const template: TemplateDefinition = {
-    ...R2_TEMPLATE,
+    ...WORKER_TEMPLATE,
     inputs: {
       retentionDays: { type: "number", title: "Retention", required: true },
       enabled: { type: "boolean", title: "Enabled", required: true },
@@ -123,18 +125,18 @@ test("rootgen renders number and boolean inputs as bare HCL literals", () => {
 });
 
 test("rootgen escapes HCL interpolation and quotes in string inputs", () => {
-  const { files } = generateRootModule(R2_TEMPLATE, {
-    bucketName: 'evil"}"\n${file("/etc/passwd")}',
+  const { files } = generateRootModule(WORKER_TEMPLATE, {
+    appName: 'evil"}"\n${file("/etc/passwd")}',
     accountId: "a",
-    location: "%{ for x in y }",
+    workersSubdomain: "%{ for x in y }",
   });
   const main = files["main.tf"]!;
   // The value must stay inside one quoted string: no raw interpolation opener
   // and no premature closing quote+brace can break out of the module block.
   expect(main).toContain(
-    'bucketName = "evil\\"}\\"\\n$${file(\\"/etc/passwd\\")}"',
+    'appName = "evil\\"}\\"\\n$${file(\\"/etc/passwd\\")}"',
   );
-  expect(main).toContain('location = "%%{ for x in y }"');
+  expect(main).toContain('workersSubdomain = "%%{ for x in y }"');
   // Exactly one module block close brace on its own line.
   expect(main.split("\n").filter((line) => line === "}").length).toEqual(1);
 });
@@ -145,14 +147,14 @@ test("rootgen escapes HCL interpolation and quotes in string inputs", () => {
 
 test("generateInstallationRoot provider-free root is byte-stable vs generateRootModule", () => {
   const inputs = {
-    bucketName: "my-bucket",
+    appName: "my-worker",
     accountId: "acct_123",
-    location: "weur",
+    workersSubdomain: "team",
   };
-  const legacy = generateRootModule(R2_TEMPLATE, inputs);
+  const legacy = generateRootModule(WORKER_TEMPLATE, inputs);
   for (const installType of ["core", "opentofu_module"] as const) {
     const next = generateInstallationRoot({
-      template: R2_TEMPLATE,
+      template: WORKER_TEMPLATE,
       inputs,
       installType,
     });
@@ -161,14 +163,14 @@ test("generateInstallationRoot provider-free root is byte-stable vs generateRoot
 });
 
 test("generateInstallationRoot core and opentofu_module are structurally identical", () => {
-  const inputs = { bucketName: "b", accountId: "a", location: "" };
+  const inputs = { appName: "api", accountId: "a", workersSubdomain: "team" };
   const core = generateInstallationRoot({
-    template: R2_TEMPLATE,
+    template: WORKER_TEMPLATE,
     inputs,
     installType: "core",
   });
   const mod = generateInstallationRoot({
-    template: R2_TEMPLATE,
+    template: WORKER_TEMPLATE,
     inputs,
     installType: "opentofu_module",
   });
@@ -177,11 +179,11 @@ test("generateInstallationRoot core and opentofu_module are structurally identic
 
 test("generateInstallationRoot golden provider-aliased main.tf", () => {
   const { files } = generateInstallationRoot({
-    template: R2_TEMPLATE,
+    template: WORKER_TEMPLATE,
     inputs: {
-      bucketName: "my-bucket",
+      appName: "my-worker",
       accountId: "acct_123",
-      location: "weur",
+      workersSubdomain: "team",
     },
     installType: "opentofu_module",
     providerEnvBindings: [
@@ -240,19 +242,19 @@ test("generateInstallationRoot golden provider-aliased main.tf", () => {
       "    aws = aws.archive",
       "  }",
       "",
-      '  bucketName = "my-bucket"',
+      '  appName = "my-worker"',
       '  accountId = "acct_123"',
-      '  location = "weur"',
+      '  workersSubdomain = "team"',
       "}",
       "",
     ].join("\n"),
   );
   // versions.tf / outputs.tf are unchanged by provider aliasing.
   expect(files["versions.tf"]).toEqual(
-    generateRootModule(R2_TEMPLATE, {
-      bucketName: "b",
+    generateRootModule(WORKER_TEMPLATE, {
+      appName: "api",
       accountId: "a",
-      location: "",
+      workersSubdomain: "team",
     }).files["versions.tf"],
   );
 });
@@ -276,11 +278,11 @@ test("generateGenericCapsuleRoot normalizes gcp bindings to google provider args
 
 test("generateInstallationRoot wires multiple aliases for one child provider", () => {
   const { files } = generateInstallationRoot({
-    template: R2_TEMPLATE,
+    template: WORKER_TEMPLATE,
     inputs: {
-      bucketName: "my-bucket",
+      appName: "my-worker",
       accountId: "acct_123",
-      location: "weur",
+      workersSubdomain: "team",
     },
     installType: "opentofu_module",
     providerEnvBindings: [
@@ -302,11 +304,11 @@ test("generateInstallationRoot renders base_url in the provider block when set (
   const baseUrl =
     "https://app.takosumi.com/internal/v1/gateway/Gateway provider endpoint/takosumi-tenants/app/client/v4";
   const { files } = generateInstallationRoot({
-    template: R2_TEMPLATE,
+    template: WORKER_TEMPLATE,
     inputs: {
-      bucketName: "my-bucket",
+      appName: "my-worker",
       accountId: "acct_123",
-      location: "weur",
+      workersSubdomain: "team",
     },
     installType: "opentofu_module",
     providerEnvBindings: [
@@ -328,11 +330,11 @@ test("generateInstallationRoot renders base_url in the provider block when set (
 
 test("generateInstallationRoot omits base_url when the binding has none (self-host)", () => {
   const { files } = generateInstallationRoot({
-    template: R2_TEMPLATE,
+    template: WORKER_TEMPLATE,
     inputs: {
-      bucketName: "my-bucket",
+      appName: "my-worker",
       accountId: "acct_123",
-      location: "weur",
+      workersSubdomain: "team",
     },
     installType: "opentofu_module",
     providerEnvBindings: [{ provider: "cloudflare/cloudflare", alias: "main" }],
@@ -342,7 +344,7 @@ test("generateInstallationRoot omits base_url when the binding has none (self-ho
 
 test("generateInstallationRoot app_source does not synthesize artifact_path", () => {
   const APP_TEMPLATE: TemplateDefinition = {
-    ...R2_TEMPLATE,
+    ...WORKER_TEMPLATE,
     id: "cloudflare-worker-deploy",
     inputs: {
       service_slug: { type: "string", title: "Service slug", required: true },
@@ -367,8 +369,8 @@ test("generateInstallationRoot app_source does not synthesize artifact_path", ()
 
 test("generateInstallationRoot app_source without an artifact_path input emits no variable", () => {
   const { files } = generateInstallationRoot({
-    template: R2_TEMPLATE,
-    inputs: { bucketName: "b", accountId: "a", location: "" },
+    template: WORKER_TEMPLATE,
+    inputs: { appName: "api", accountId: "a", workersSubdomain: "team" },
     installType: "app_source",
   });
   expect(files["main.tf"]).not.toContain("variable");
@@ -377,7 +379,7 @@ test("generateInstallationRoot app_source without an artifact_path input emits n
 
 test("generateInstallationRoot app_source treats artifact_path as an ordinary input", () => {
   const APP_TEMPLATE: TemplateDefinition = {
-    ...R2_TEMPLATE,
+    ...WORKER_TEMPLATE,
     inputs: {
       artifact_path: { type: "string", title: "Artifact path", required: true },
     },
@@ -402,8 +404,8 @@ test("generateInstallationRoot app_source treats artifact_path as an ordinary in
 
 test("generateInstallationRoot wires a sensitive per-alias credential var into the cloudflare alias (§13)", () => {
   const { files } = generateInstallationRoot({
-    template: R2_TEMPLATE,
-    inputs: { bucketName: "b", accountId: "a", location: "" },
+    template: WORKER_TEMPLATE,
+    inputs: { appName: "api", accountId: "a", workersSubdomain: "team" },
     installType: "opentofu_module",
     providerEnvBindings: [{ provider: "cloudflare", alias: "main" }],
   });
@@ -421,15 +423,15 @@ test("generateInstallationRoot wires a sensitive per-alias credential var into t
 
 test("generateInstallationRoot keeps a credential-free alias for a provider without an arg mapping", () => {
   const K8S_TEMPLATE: TemplateDefinition = {
-    ...R2_TEMPLATE,
+    ...WORKER_TEMPLATE,
     policy: {
-      ...R2_TEMPLATE.policy,
+      ...WORKER_TEMPLATE.policy,
       allowedProviders: ["hashicorp/kubernetes"],
     },
   };
   const { files } = generateInstallationRoot({
     template: K8S_TEMPLATE,
-    inputs: { bucketName: "b", accountId: "a", location: "" },
+    inputs: { appName: "api", accountId: "a", workersSubdomain: "team" },
     installType: "opentofu_module",
     providerEnvBindings: [{ provider: "hashicorp/kubernetes", alias: "main" }],
   });
@@ -563,8 +565,8 @@ test("generateGenericCapsuleRoot leaves generic-env credentials to the runner pr
 
 test("generateInstallationRoot keeps generic-env credentials out of generated root", () => {
   const { files } = generateInstallationRoot({
-    template: R2_TEMPLATE,
-    inputs: { bucketName: "b", accountId: "a", location: "" },
+    template: WORKER_TEMPLATE,
+    inputs: { appName: "api", accountId: "a", workersSubdomain: "team" },
     installType: "opentofu_module",
     providerEnvBindings: [
       {

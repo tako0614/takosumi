@@ -11,9 +11,7 @@ The provider-agnostic `core` base Capsule module lives here under
 `opentofu-modules/core/`. Provider-specific modules live with their provider
 implementation under `providers/<provider>/modules/<id>/`:
 
-- `providers/cloudflare/modules/cloudflare-r2-storage`
 - `providers/cloudflare/modules/cloudflare-static-site`
-- `providers/aws/modules/aws-s3-storage`
 
 `providers/cloudflare/modules/cloudflare-worker-service` remains in the tree
 only so stored legacy rows can resolve their reviewed module files. It is not
@@ -25,6 +23,13 @@ build path.
 The shared bundled-HCL catalog (`module-files.ts`) and the catalog parity test
 (`module-files_test.ts`) stay here because they cover `core` plus every provider
 module. The id+version registry is `core/domains/templates/registry.ts`.
+
+Storage starter modules are intentionally not part of the first-party catalog.
+Ordinary S3/R2/GCS/MinIO buckets should use existing OpenTofu providers or
+standard S3-compatible endpoints through the plain Stack flow. When an operator
+exposes Takosumi-provided object storage, it should publish the scoped
+`compat.s3.v1` capability/data-plane surface instead of a bespoke bucket starter
+module.
 
 ## Why TypeScript catalog data (not YAML)
 
@@ -53,10 +58,8 @@ policy enforce; `main.tf` is the actual module those inputs flow into.
 | ------------------------- | ----- | ----------------------- | ----------------------------------------------------------------------- |
 | `core`                    | —     | (none)                  | `base_domain`, `public_origin`, `member_issuer`, `service_registry_url` |
 | `cloudflare-hello-worker` | —     | `cloudflare/cloudflare` | `script_name`, `workers_dev_url`                                        |
-| `cloudflare-r2-storage`   | —     | `cloudflare/cloudflare` | `bucket_name`, `location`                                               |
 | `takosumi-ai-endpoint`    | —     | none                    | `base_url`, `default_model`                                             |
 | `cloudflare-static-site`  | —     | `cloudflare/cloudflare` | `project_name`, `url`                                                   |
-| `aws-s3-storage`          | —     | `hashicorp/aws`         | `bucket_name`, `bucket_arn`, `region`                                   |
 
 ## Adding a first-party Capsule module
 

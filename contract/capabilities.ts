@@ -44,7 +44,6 @@ export interface TakosumiProductCapabilities {
 
 export interface TakosumiResourceCapabilities {
   readonly Stack: boolean;
-  readonly ObjectBucket: boolean;
   readonly EdgeWorker: boolean;
   readonly AIEndpoint: boolean;
 }
@@ -138,7 +137,6 @@ export function createTakosumiProductCapabilities(
     apiVersion: TAKOSUMI_API_VERSION,
     resources: {
       Stack: true,
-      ObjectBucket: false,
       EdgeWorker: true,
       AIEndpoint: false,
       ...(options.resources ?? {}),

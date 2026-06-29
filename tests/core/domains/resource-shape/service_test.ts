@@ -43,36 +43,12 @@ const POOL: TargetPoolSpec = {
       type: "cloudflare",
       ref: "cf-acct",
       priority: 80,
-      implementations: [
-        {
-          shape: "ObjectBucket",
-          implementation: "cloudflare_r2",
-          nativeResourceType: "cloudflare.r2_bucket",
-          interfaces: {
-            s3_api: "native",
-            signed_url: "native",
-            object_events: "shim",
-          },
-        },
-      ],
     },
     {
       name: "aws-main",
       type: "aws",
       region: "ap-northeast-1",
       priority: 70,
-      implementations: [
-        {
-          shape: "ObjectBucket",
-          implementation: "aws_s3",
-          nativeResourceType: "aws.s3_bucket",
-          interfaces: {
-            s3_api: "native",
-            signed_url: "native",
-            object_events: "native",
-          },
-        },
-      ],
     },
   ],
 };
@@ -89,12 +65,16 @@ async function seed(service: ResourceShapeService, policy = POLICY) {
 const APPLY = {
   actor: ACTOR,
   space: "space_1",
-  kind: "ObjectBucket" as const,
-  name: "assets",
-  spec: { name: "assets", interfaces: ["s3_api", "signed_url"] },
+  kind: "AIEndpoint" as const,
+  name: "ai",
+  spec: {
+    name: "ai",
+    interfaces: ["openai_chat_completions", "openai_embeddings"],
+    profiles: ["openai_compatible"],
+  },
 };
 
-test("apply resolves ObjectBucket to the highest-priority target and locks it", async () => {
+test("apply resolves AIEndpoint to the highest-priority target and locks it", async () => {
   const { service } = makeService();
   await seed(service);
 
@@ -104,11 +84,12 @@ test("apply resolves ObjectBucket to the highest-priority target and locks it", 
 
   const status = result.value.status;
   expect(status?.phase).toBe("Ready");
-  expect(status?.resolution?.selectedImplementation).toBe("cloudflare_r2");
+  expect(status?.resolution?.selectedImplementation).toBe(
+    "cloudflare_ai_gateway",
+  );
   expect(status?.resolution?.target).toBe("cloudflare-main");
   expect(status?.resolution?.locked).toBe(true);
   expect(status?.observedGeneration).toBe(1);
-  // Stub adapter synthesizes outputs from the module's public output names.
   expect(Object.keys(status?.outputs ?? {}).length).toBeGreaterThan(0);
 });
 
@@ -253,10 +234,10 @@ test("get returns the applied resource with resolution status", async () => {
   await seed(service);
   await service.apply(APPLY);
 
-  const got = await service.get("space_1", "ObjectBucket", "assets");
+  const got = await service.get("space_1", "AIEndpoint", "ai");
   expect(got.ok).toBe(true);
   if (!got.ok) return;
-  expect(got.value.metadata.name).toBe("assets");
+  expect(got.value.metadata.name).toBe("ai");
   expect(got.value.status?.resolution?.target).toBe("cloudflare-main");
 });
 
@@ -265,13 +246,11 @@ test("a locked resolution is not silently re-targeted on re-apply", async () => 
   await seed(service);
   await service.apply(APPLY);
 
-  // Re-apply with cloudflare denied: without the lock this would move to AWS;
-  // with lockAfterCreate + allowAutoMigration:false it must stay put.
   const reResult = await service.apply(APPLY);
   expect(reResult.ok).toBe(true);
   if (!reResult.ok) return;
   expect(reResult.value.status?.resolution?.selectedImplementation).toBe(
-    "cloudflare_r2",
+    "cloudflare_ai_gateway",
   );
   expect(reResult.value.status?.observedGeneration).toBe(2);
 });
@@ -288,7 +267,7 @@ test("SpacePolicy deniedTargets steers resolution to the allowed target", async 
   expect(result.ok).toBe(true);
   if (!result.ok) return;
   expect(result.value.status?.resolution?.selectedImplementation).toBe(
-    "aws_s3",
+    "aws_bedrock_openai_gateway",
   );
   expect(result.value.status?.resolution?.target).toBe("aws-main");
 });
@@ -300,10 +279,9 @@ test("preview resolves without persisting", async () => {
   const preview = await service.preview(APPLY);
   expect(preview.ok).toBe(true);
   if (!preview.ok) return;
-  expect(preview.value.selectedImplementation).toBe("cloudflare_r2");
+  expect(preview.value.selectedImplementation).toBe("cloudflare_ai_gateway");
   expect(preview.value.nativeResourcePlan.length).toBeGreaterThan(0);
-  // preview must not create a persisted resource
-  const stored = await stores.resources.get("tkrn:space_1:ObjectBucket:assets");
+  const stored = await stores.resources.get("tkrn:space_1:AIEndpoint:ai");
   expect(stored).toBeUndefined();
 });
 
@@ -320,7 +298,7 @@ test("invalid spec (empty interfaces) is rejected before resolution", async () =
   await seed(service);
   const result = await service.apply({
     ...APPLY,
-    spec: { name: "assets", interfaces: [] },
+    spec: { name: "ai", interfaces: [] },
   });
   expect(result.ok).toBe(false);
   if (result.ok) return;
@@ -333,23 +311,18 @@ test("delete respects lifecyclePolicy.delete=block", async () => {
   const created = await service.apply({
     ...APPLY,
     spec: {
-      name: "assets",
-      interfaces: ["s3_api"],
+      name: "ai",
+      interfaces: ["openai_chat_completions"],
       lifecyclePolicy: { delete: "block" },
     },
   });
   expect(created.ok).toBe(true);
 
-  const deleted = await service.delete(
-    "space_1",
-    "ObjectBucket",
-    "assets",
-    ACTOR,
-  );
+  const deleted = await service.delete("space_1", "AIEndpoint", "ai", ACTOR);
   expect(deleted.ok).toBe(false);
   if (deleted.ok) return;
   expect(deleted.error.code).toBe("delete_blocked");
 
-  const stillThere = await service.get("space_1", "ObjectBucket", "assets");
+  const stillThere = await service.get("space_1", "AIEndpoint", "ai");
   expect(stillThere.ok).toBe(true);
 });
