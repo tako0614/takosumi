@@ -932,13 +932,16 @@ cloud_extension_usage_metering_failed` because those are operator/Cloud
 configuration faults, not user payment actions.
 
 For platform-proxied routes that can create billable work before usage headers
-are emitted (create, deploy, delete, or other mutating operations), the Cloud
+are emitted (create, deploy, or other expansion/runtime operations), the Cloud
 extension descriptor must define a generic `fallbackUsage` rule. Matching
 `fallbackUsage` requests are rejected before the bound Cloud service is called
 unless the platform has verified Workspace billing context and can preauthorize
 the priced fallback operation against that Workspace's available USD balance.
 The actual usage event is still recorded after a successful response, but an
 obvious insufficient-credit request must never reach the bound Cloud service.
+DELETE cleanup is intentionally not a fallback-billed operation; a depleted
+Workspace must still be able to remove or destroy already-created managed
+resources.
 For direct runtime execution, the edge runtime uses the internal usage route as
 that preauthorization boundary before dispatch.
 Read-only management inventory such as resource lists and status/model catalogs

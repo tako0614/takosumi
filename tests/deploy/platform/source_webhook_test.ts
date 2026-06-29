@@ -1890,6 +1890,59 @@ test("cloud extension fallback usage precharges spend before forwarding billable
   expect(recorded).toBe(false);
 });
 
+test("cloud extension fallback usage does not block DELETE cleanup", async () => {
+  let forwarded = false;
+  const response = await handlePlatformCloudExtensionRouteRequest(
+    new Request(
+      "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/ts_acc/workers/scripts/api",
+      { method: "DELETE" },
+    ),
+    {
+      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
+      TAKOSUMI_CLOUD_COMPAT: {
+        fetch: async () => {
+          forwarded = true;
+          return Response.json({ success: true }, { status: 200 });
+        },
+      },
+    } as never,
+    {
+      basePath: "/compat/cloudflare/client/v4",
+      bindingName: "TAKOSUMI_CLOUD_COMPAT",
+      fallbackUsage: [
+        {
+          pathTemplate: "/accounts/*/workers/scripts/:resourceId",
+          methods: ["DELETE"],
+          meterIdPrefix: "cloudflare:workers_script:",
+          resourceFamily: "cloudflare.workers_script",
+          resourceIdPrefix: "script:",
+          resourceIdParam: "resourceId",
+          kind: "gateway_compute",
+          quantity: 1,
+          operationByMethod: { DELETE: "delete" },
+        },
+      ],
+    },
+    async () => ({
+      authenticated: true,
+      authKind: "session",
+      subject: "tsub_cloud",
+      spaceId: "space_cloud",
+      installationId: "inst_cloud",
+    }),
+    async () => {
+      throw new Error("DELETE cleanup must not record priced usage");
+    },
+    async () => {
+      throw new Error("DELETE cleanup must not precharge credits");
+    },
+  );
+
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({ success: true });
+  expect(forwarded).toBe(true);
+});
+
 test("cloud extension fallback precharge skips duplicate response usage and records extra meters", async () => {
   const periodStart = "2026-06-28T10:00:00.000Z";
   const periodEnd = "2026-06-28T10:00:01.000Z";
