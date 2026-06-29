@@ -1005,6 +1005,13 @@ POST /gateway/ai/v1/chat/completions
 POST /gateway/ai/v1/embeddings
 ```
 
+OpenAI-compatible streaming is allowed only when the selected public model has
+a nonzero per-request meter. Token-only streaming is rejected before the
+upstream provider is called, because token usage from streamed responses is not
+available before response headers are sent. Non-streaming JSON responses may
+still emit request, input-token, and output-token usage meters when the upstream
+reports OpenAI-compatible `usage`.
+
 Takosumi Cloud may back those routes with Cloudflare AI Gateway REST API plus
 Unified Billing, Workers AI, or direct/BYOK OpenAI-compatible upstreams such as
 OpenAI, DeepSeek, Z.AI/GLM, Gemini-compatible endpoints, or other configured
