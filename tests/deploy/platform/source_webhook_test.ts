@@ -803,9 +803,9 @@ test("platform Cloud usage record path is a stable internal endpoint", async () 
   expect(isPlatformCloudUsageRecordPath("/internal/platform/cloud/usage")).toBe(
     true,
   );
-  expect(isPlatformCloudUsageRecordPath("/internal/platform/cloud/usage/")).toBe(
-    false,
-  );
+  expect(
+    isPlatformCloudUsageRecordPath("/internal/platform/cloud/usage/"),
+  ).toBe(false);
   const url = new URL("https://app.takosumi.com/internal/platform/cloud/usage");
   const response = await handlePlatformCloudUsageRecordRequest(
     new Request(url, {
@@ -980,6 +980,66 @@ test("platformCloudExtensionRoutes parses opaque descriptors", () => {
       ],
     },
     { basePath: "/compat/x", bindingName: "TAKOSUMI_CLOUD_X" },
+  ]);
+});
+
+test("platformCloudExtensionRoutes merges extra fallback usage descriptors", () => {
+  expect(
+    platformCloudExtensionRoutes({
+      TAKOSUMI_CLOUD_EXTENSIONS: JSON.stringify([
+        {
+          basePath: "/compat/cloudflare/client/v4",
+          bindingName: "TAKOSUMI_CLOUD_COMPAT",
+          fallbackUsage: [
+            {
+              pathTemplate: "/accounts/*/r2/buckets",
+              methods: ["POST"],
+              meterIdPrefix: "cloudflare:r2:",
+              kind: "gateway_compute",
+              quantity: 1,
+            },
+          ],
+        },
+      ]),
+      TAKOSUMI_CLOUD_EXTENSIONS_EXTRA: JSON.stringify([
+        {
+          basePath: "/compat/cloudflare/client/v4",
+          bindingName: "TAKOSUMI_CLOUD_COMPAT",
+          fallbackUsage: [
+            {
+              pathTemplate: "/accounts/*/r2/buckets/:resourceId/objects/**",
+              methods: ["PUT"],
+              meterIdPrefix: "cloudflare:r2:",
+              kind: "gateway_compute",
+              quantity: 1,
+              operationByMethod: { PUT: "object_write" },
+            },
+          ],
+        },
+      ]),
+    }),
+  ).toEqual([
+    {
+      basePath: "/compat/cloudflare/client/v4",
+      bindingName: "TAKOSUMI_CLOUD_COMPAT",
+      fallbackUsage: [
+        {
+          pathTemplate: "/accounts/*/r2/buckets",
+          methods: ["POST"],
+          meterIdPrefix: "cloudflare:r2:",
+          kind: "gateway_compute",
+          quantity: 1,
+        },
+        {
+          pathTemplate: "/accounts/*/r2/buckets/:resourceId/objects/**",
+          methods: ["PUT"],
+          meterIdPrefix: "cloudflare:r2:",
+          kind: "gateway_compute",
+          quantity: 1,
+          operationByMethod: { PUT: "object_write" },
+        },
+      ],
+    },
   ]);
 });
 
@@ -1507,6 +1567,78 @@ test("cloud extension fallback usage records successful extension calls without 
         kind: "gateway_compute",
         quantity: 1,
         usdMicros: 1_000,
+        source: "resource_meter",
+        spendRequired: true,
+      }),
+    },
+  ]);
+});
+
+test("cloud extension fallback usage can meter nested data-plane object keys", async () => {
+  const recorded: {
+    readonly spaceId: string;
+    readonly input: unknown;
+  }[] = [];
+  let forwarded = false;
+  const response = await handlePlatformCloudExtensionRouteRequest(
+    new Request(
+      "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/ts_acc/r2/buckets/user-bucket/objects/folder/logo.png",
+      { method: "PUT" },
+    ),
+    {
+      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
+      TAKOSUMI_CLOUD_COMPAT: {
+        fetch: async () => {
+          forwarded = true;
+          return Response.json({ success: true }, { status: 200 });
+        },
+      },
+    } as never,
+    {
+      basePath: "/compat/cloudflare/client/v4",
+      bindingName: "TAKOSUMI_CLOUD_COMPAT",
+      fallbackUsage: [
+        {
+          pathTemplate: "/accounts/*/r2/buckets/:resourceId/objects/**",
+          methods: ["PUT"],
+          meterIdPrefix: "cloudflare:r2:",
+          resourceFamily: "cloudflare.r2",
+          resourceIdPrefix: "r2:",
+          resourceIdParam: "resourceId",
+          kind: "gateway_compute",
+          quantity: 1,
+          operationByMethod: { PUT: "object_write" },
+        },
+      ],
+    },
+    async () => ({
+      authenticated: true,
+      authKind: "session",
+      subject: "tsub_cloud",
+      spaceId: "space_cloud",
+      installationId: "inst_cloud",
+    }),
+    async (spaceId, input) => {
+      recorded.push({ spaceId, input });
+    },
+    async () => {},
+  );
+
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({ success: true });
+  expect(forwarded).toBe(true);
+  expect(recorded).toEqual([
+    {
+      spaceId: "space_cloud",
+      input: expect.objectContaining({
+        installationId: "inst_cloud",
+        meterId: "cloudflare:r2:object_write",
+        resourceFamily: "cloudflare.r2",
+        resourceId: "r2:user-bucket",
+        operation: "object_write",
+        kind: "gateway_compute",
+        quantity: 1,
+        usdMicros: 500,
         source: "resource_meter",
         spendRequired: true,
       }),

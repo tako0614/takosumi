@@ -198,9 +198,10 @@ user-facing family には出しません。
 Worker script の使用量は `resourceFamily: "cloudflare.workers_script"` として
 `gateway_compute` または `gateway_storage_gb_hour` を報告します。Queues は
 `cloudflare.queues`、Workflows は `cloudflare.workflows` として報告します。
-KV value、R2 object、D1 query、Queue message、Workflow instance などの
-data-plane subpath は、対応 meter と fail-closed smoke が揃うまで 501 で閉じます。
-未実装 data-plane を Cloudflare upstream へ素通しして無料利用できる状態にはしません。
+KV value、R2 object、D1 query、Queue message、Workflow instance の
+data-plane subpath は、対応する public meter と platform `fallbackUsage`
+precharge がある場合だけ開きます。未対応 managed subpath は 501 で閉じ、
+Cloudflare upstream へ素通しして無料利用できる状態にはしません。
 Containers / Durable Objects などの追加 family は、closed Gateway backend
 が lifecycle endpoint と usage smoke を通した後に catalog / 画面 / billing price
 へ追加します。内部 backend alias は `meterId`、`resourceFamily`、Stripe meter、

@@ -1907,9 +1907,14 @@ function matchPlatformCloudExtensionUsageTemplate(
 ): Record<string, string> | undefined {
   const pathSegments = pathSegmentsForUsageMatch(suffix);
   const templateSegments = pathSegmentsForUsageMatch(template);
-  if (pathSegments.length !== templateSegments.length) return undefined;
   const params: Record<string, string> = {};
   for (const [index, templateSegment] of templateSegments.entries()) {
+    if (templateSegment === "**") {
+      return index === templateSegments.length - 1 &&
+        pathSegments.length >= index + 1
+        ? params
+        : undefined;
+    }
     const pathSegment = pathSegments[index];
     if (pathSegment === undefined) return undefined;
     if (templateSegment === "*") continue;
@@ -1921,7 +1926,7 @@ function matchPlatformCloudExtensionUsageTemplate(
     }
     if (templateSegment !== pathSegment) return undefined;
   }
-  return params;
+  return pathSegments.length === templateSegments.length ? params : undefined;
 }
 
 function pathSegmentsForUsageMatch(path: string): readonly string[] {
