@@ -120,7 +120,7 @@ function platformCloudExtensionRouteFromJson(
   if (typeof basePath !== "string" || !basePath.startsWith("/")) {
     throw new TypeError(`${label}.basePath must be a path starting with "/"`);
   }
-  const handlerKey = record.handlerKey ?? record.bindingName;
+  const handlerKey = record.handlerKey;
   if (typeof handlerKey !== "string" || handlerKey.trim() === "") {
     throw new TypeError(`${label}.handlerKey must be a non-empty string`);
   }

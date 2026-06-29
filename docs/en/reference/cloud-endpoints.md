@@ -544,7 +544,7 @@ The OSS repository contains:
 - smoke tests and provider E2E expectations
 
 The Cloudflare Compatibility backend and managed resource materialization are
-closed Takosumi Cloud handlers mounted in-process by the official Cloud wrapper.
+closed Takosumi Cloud handlers mounted in-process by the official platform worker.
 If AI Gateway / Cloudflare Compatibility handlers are not configured,
 `/gateway/ai/v1/*` and `/compat/cloudflare/client/v4/*` intentionally return
 not found from the platform worker.
