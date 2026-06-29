@@ -104,6 +104,11 @@ Example:
 
 An extension with `configured: false` may appear in the UI, but runtime calls
 must fail closed.
+This catalog lists only path-based `cloud_extensions` routes.
+Takosumi Cloud Worker traffic for `*.app.takos.jp` and
+`*.app-staging.takos.jp` is dispatched to the Cloud Edge Runtime by the same
+`takosumi-cloud/platform/worker.ts` hostname dispatch registry. It is not a
+separate Worker.
 
 ## API keys
 

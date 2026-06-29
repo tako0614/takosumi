@@ -135,6 +135,9 @@ test("Takosumi docs are rebuilt around the Final Plan surface", async () => {
   assert.match(docs, /existing\s+provider\s+ecosystem\s+as-is/);
   assert.match(docs, /Same manifest, different connection/);
   assert.match(docs, /Cloudflare Compatibility Gateway is Takosumi Cloud-only/);
+  assert.match(docs, /cloud_extensions/);
+  assert.match(docs, /takosumi-cloud\/platform\/worker\.ts/);
+  assert.match(docs, /not deployed as separate Workers/);
   for (const concept of FINAL_PUBLIC_CONCEPTS) {
     assert.match(docs, new RegExp(`\\b${concept}\\b`), `missing ${concept}`);
   }
