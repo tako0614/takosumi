@@ -957,6 +957,10 @@ export const ja = {
     "Cloudflare-compatible deploy path と virtual account",
   "cloudResources.compat.token": "認証状態",
   "cloudResources.compat.account": "Virtual account",
+  "cloudResources.s3.title": "Object Storage endpoint",
+  "cloudResources.s3.subtitle": "Managed storage 用の S3-compatible API",
+  "cloudResources.s3.protocol": "プロトコル",
+  "cloudResources.s3.capability": "Capability",
   "cloudResources.inventory.title": "クラウドリソース",
   "cloudResources.inventory.subtitle":
     "Takosumi Cloud 側の Workers と managed binding です。",

@@ -1222,6 +1222,14 @@ test("platform worker product discovery enables Cloud capabilities only from con
           capabilities: ["compat.cloudflare.workers.v1"],
         },
         {
+          kind: "provider_compat",
+          provider: "object-storage",
+          protocol: "s3-compatible",
+          basePath: "/compat/s3/v1",
+          handlerKey: "TAKOSUMI_CLOUD_S3",
+          capabilities: ["compat.s3.v1"],
+        },
+        {
           kind: "managed_usage",
           basePath: "/cloud/usage",
           handlerKey: "TAKOSUMI_CLOUD_USAGE",
@@ -1230,6 +1238,7 @@ test("platform worker product discovery enables Cloud capabilities only from con
       ]),
       TAKOSUMI_CLOUD_AI: { fetch: async () => Response.json({}) },
       TAKOSUMI_CLOUD_CLOUDFLARE: { fetch: async () => Response.json({}) },
+      TAKOSUMI_CLOUD_S3: { fetch: async () => Response.json({}) },
       TAKOSUMI_CLOUD_USAGE: { fetch: async () => Response.json({}) },
     } as never,
   );
@@ -1241,6 +1250,27 @@ test("platform worker product discovery enables Cloud capabilities only from con
   expect(body.adapters.cloudflare).toBe(true);
   expect(body.adapters.takosumi_native).toBe(true);
   expect(body.compat.cloudflare_subset).toBe(true);
+  expect(body.compat.s3).toBe(true);
+  const discovery = await worker.fetch(
+    new Request(`https://app.takosumi.com${TAKOSUMI_WELL_KNOWN_PATH}`),
+    {
+      TAKOSUMI_CLOUD_EXTENSIONS: JSON.stringify([
+        {
+          kind: "provider_compat",
+          provider: "object-storage",
+          protocol: "s3-compatible",
+          basePath: "/compat/s3/v1",
+          handlerKey: "TAKOSUMI_CLOUD_S3",
+          capabilities: ["compat.s3.v1"],
+        },
+      ]),
+      TAKOSUMI_CLOUD_S3: { fetch: async () => Response.json({}) },
+    } as never,
+  );
+  expect(discovery.status).toBe(200);
+  expect((await discovery.json()).endpoints.s3).toBe(
+    "https://app.takosumi.com/compat/s3/v1",
+  );
 });
 
 test("a configured cloud extension dispatches to the named handler through worker.fetch", async () => {

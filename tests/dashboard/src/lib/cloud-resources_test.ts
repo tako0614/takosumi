@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   aiGatewayRoute,
   cloudflareCompatRoute,
+  s3CompatibleRoute,
   type CloudExtensionCatalog,
 } from "../../../../dashboard/src/lib/cloud-resources.ts";
 
@@ -21,14 +22,21 @@ describe("dashboard cloud resources route selection", () => {
           basePath: "/compat/cloudflare/client/v4",
           configured: true,
         },
+        {
+          basePath: "/compat/s3/v1",
+          protocol: "s3-compatible",
+          configured: true,
+          capabilities: ["compat.s3.v1"],
+        },
       ],
-      summary: { total: 2, configured: 2, missing: 0 },
+      summary: { total: 3, configured: 3, missing: 0 },
     };
 
     expect(aiGatewayRoute(catalog)?.basePath).toBe("/gateway/ai/v1");
     expect(cloudflareCompatRoute(catalog)?.basePath).toBe(
       "/compat/cloudflare/client/v4",
     );
+    expect(s3CompatibleRoute(catalog)?.basePath).toBe("/compat/s3/v1");
   });
 
   test("still accepts richer Cloud-only descriptors when the closed delta provides them", () => {

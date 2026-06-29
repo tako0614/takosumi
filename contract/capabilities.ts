@@ -89,6 +89,9 @@ export interface CreateTakosumiDiscoveryOptions {
   readonly commercialBilling?: boolean;
   readonly paymentEnforcement?: boolean;
   readonly compat?: Partial<TakosumiCompatCapabilities>;
+  readonly endpoints?: Partial<
+    Pick<TakosumiWellKnownEndpoints, "s3" | "oci">
+  >;
   readonly resourceShapesEnabled?: boolean;
 }
 
@@ -118,6 +121,8 @@ export function createTakosumiWellKnownDocument(
       api: `${trimTrailingSlash(options.origin)}/api`,
       capabilities: `${trimTrailingSlash(options.origin)}/v1/capabilities`,
       oidc_issuer: trimTrailingSlash(options.origin),
+      ...(options.endpoints?.s3 ? { s3: options.endpoints.s3 } : {}),
+      ...(options.endpoints?.oci ? { oci: options.endpoints.oci } : {}),
     },
   };
 }
