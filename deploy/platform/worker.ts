@@ -176,7 +176,11 @@ export default {
     if (url.pathname.startsWith("/hooks/sources/")) {
       return await handleSourceWebhook(request, url, env);
     }
-    const accountsResponse = await accountsWorker.fetch(request, env);
+    const accountsResponse = withPlatformAssetCacheHeaders(
+      request,
+      url,
+      await accountsWorker.fetch(request, env),
+    );
     if (isOidcMetricPath(url.pathname)) {
       await recordPlatformOidcMetric(request, url, env, accountsResponse);
     }
@@ -196,6 +200,23 @@ export default {
     }
   },
 };
+
+export function withPlatformAssetCacheHeaders(
+  request: Request,
+  url: URL,
+  response: Response,
+): Response {
+  if (request.method !== "GET" && request.method !== "HEAD") return response;
+  if (!url.pathname.startsWith("/assets/")) return response;
+  if (response.status < 200 || response.status >= 400) return response;
+  const headers = new Headers(response.headers);
+  headers.set("cache-control", "public, max-age=31536000, immutable");
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
 
 async function recordPlatformOidcMetric(
   request: Request,

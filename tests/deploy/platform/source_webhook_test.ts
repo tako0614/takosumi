@@ -28,6 +28,7 @@ import {
   summarizePrometheusMetrics,
   verifyPlatformCloudExtensionPersonalAccessToken,
   verifyPlatformCloudExtensionServiceAccessToken,
+  withPlatformAssetCacheHeaders,
   type OperatorBillingOperations,
   type SourcePollOperations,
   type SourceWebhookOperations,
@@ -538,6 +539,35 @@ test("platform OIDC metric classifier covers issuer and upstream auth paths", ()
   expect(oidcMetricRoute("/v1/auth/upstream/google/callback")).toBe(
     "/v1/auth/upstream/*",
   );
+});
+
+test("platform assets are served with immutable cache headers", async () => {
+  const response = withPlatformAssetCacheHeaders(
+    new Request("https://app.takosumi.com/assets/index-abc123.js"),
+    new URL("https://app.takosumi.com/assets/index-abc123.js"),
+    new Response("console.log('ok')", {
+      headers: { "cache-control": "public, max-age=0, must-revalidate" },
+    }),
+  );
+
+  expect(response.headers.get("cache-control")).toBe(
+    "public, max-age=31536000, immutable",
+  );
+  expect(await response.text()).toBe("console.log('ok')");
+});
+
+test("platform asset cache helper leaves non-assets untouched", () => {
+  const response = new Response("ok", {
+    headers: { "cache-control": "no-store" },
+  });
+
+  expect(
+    withPlatformAssetCacheHeaders(
+      new Request("https://app.takosumi.com/api/v1/workspaces"),
+      new URL("https://app.takosumi.com/api/v1/workspaces"),
+      response,
+    ),
+  ).toBe(response);
 });
 
 function makeOperatorBillingOps(): {

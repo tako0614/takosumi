@@ -98,6 +98,10 @@ GET /__takosumi/cloud/extensions
 ```
 
 `configured: false` の extension は画面に出ても、実行時は fail closed します。
+この catalog は path-based の `cloud_extensions` route だけを列挙します。
+`*.app.takos.jp` / `*.app-staging.takos.jp` の Takosumi Cloud Worker traffic は
+同じ `takosumi-cloud/platform/worker.ts` 内の hostname dispatch registry で
+Cloud Edge Runtime に送られます。別 Worker ではありません。
 
 ## API keys
 
