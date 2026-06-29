@@ -9,7 +9,12 @@ import type { SpacePolicySpec, TargetPoolSpec } from "takosumi-contract";
 
 const POOL: TargetPoolSpec = {
   targets: [
-    { name: "cloudflare-main", type: "cloudflare", ref: "cf-acct", priority: 80 },
+    {
+      name: "cloudflare-main",
+      type: "cloudflare",
+      ref: "cf-acct",
+      priority: 80,
+    },
     { name: "aws-main", type: "aws", region: "ap-northeast-1", priority: 70 },
   ],
 };
@@ -77,7 +82,9 @@ test("PUT /v1/resources/HttpService/:name applies a first-class service shape", 
   expect(res.status).toBe(200);
   const body = await res.json();
   expect(body.id).toBe("tkrn:space_1:HttpService:api");
-  expect(body.status.resolution.selectedImplementation).toBe("cloudflare_workers");
+  expect(body.status.resolution.selectedImplementation).toBe(
+    "cloudflare_workers",
+  );
 });
 
 test("PUT /v1/resources/AIEndpoint/:name applies a first-class AI shape", async () => {
@@ -116,7 +123,9 @@ test("PUT /v1/resources/AIEndpoint/:name applies a first-class AI shape", async 
     allowFallback: true,
     preferredRegions: ["jp"],
   });
-  expect(body.status.resolution.selectedImplementation).toBe("cloudflare_ai_gateway");
+  expect(body.status.resolution.selectedImplementation).toBe(
+    "cloudflare_ai_gateway",
+  );
   expect(body.status.outputs.base_url).toContain("AIEndpoint:ai/base_url");
 });
 
@@ -165,6 +174,62 @@ test("PUT /v1/resources/AIEndpoint/:name accepts admin-defined AI profiles", asy
   expect(body.status.resolution.target).toBe("deepseek-main");
 });
 
+test("TargetPool API persists admin-defined AI provider capability evidence", async () => {
+  const { app } = await buildApp();
+  const put = await app.request("/v1/target-pools/ai", {
+    method: "PUT",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({
+      space: "space_1",
+      spec: {
+        targets: [
+          {
+            name: "gemini-main",
+            type: "ai_provider",
+            ref: "https://generativelanguage.googleapis.com/v1beta/openai",
+            priority: 80,
+            implementations: [
+              {
+                shape: "AIEndpoint",
+                implementation: "gemini_openai_compatible",
+                nativeResourceType: "ai.gemini_endpoint",
+                interfaces: {
+                  openai_chat_completions: "native",
+                  openai_embeddings: "native",
+                  "provider.gemini.responses.v1": "shim",
+                },
+              },
+            ],
+          },
+        ],
+      },
+    }),
+  });
+  expect(put.status).toBe(200);
+  const saved = await put.json();
+  expect(saved.id).toBe("tkrn:space_1:TargetPool:ai");
+
+  const get = await app.request("/v1/target-pools/ai?space=space_1");
+  expect(get.status).toBe(200);
+  const body = await get.json();
+  expect(body.spec.targets[0].type).toBe("ai_provider");
+  expect(body.spec.targets[0].implementations[0].implementation).toBe(
+    "gemini_openai_compatible",
+  );
+  expect(
+    body.spec.targets[0].implementations[0].interfaces[
+      "provider.gemini.responses.v1"
+    ],
+  ).toBe("shim");
+
+  const del = await app.request("/v1/target-pools/ai?space=space_1", {
+    method: "DELETE",
+  });
+  expect(del.status).toBe(204);
+  const missing = await app.request("/v1/target-pools/ai?space=space_1");
+  expect(missing.status).toBe(404);
+});
+
 test("GET /v1/resources/ObjectStore/:name returns the applied resource", async () => {
   const { app } = await buildApp();
   await app.request("/v1/resources/ObjectStore/assets", {
@@ -175,7 +240,9 @@ test("GET /v1/resources/ObjectStore/:name returns the applied resource", async (
       spec: { name: "assets", interfaces: ["s3_api"] },
     }),
   });
-  const res = await app.request("/v1/resources/ObjectStore/assets?space=space_1");
+  const res = await app.request(
+    "/v1/resources/ObjectStore/assets?space=space_1",
+  );
   expect(res.status).toBe(200);
   const body = await res.json();
   expect(body.metadata.name).toBe("assets");

@@ -146,6 +146,7 @@ func (p *takosumiProvider) Resources(_ context.Context) []func() resource.Resour
 		NewObjectStoreResource,
 		NewHttpServiceResource,
 		NewAIEndpointResource,
+		NewTargetPoolResource,
 	}
 }
 
@@ -189,26 +190,8 @@ func configureClient(ctx context.Context, endpoint, token string, httpClient *ht
 			client.APIVersion,
 		)
 	}
-	if !supportsAnyProviderResource(caps) {
-		return nil, fmt.Errorf(
-			"this Takosumi endpoint exposes Resource Shapes but advertises no supported provider resource shapes",
-		)
-	}
 
 	return c, nil
-}
-
-func supportsAnyProviderResource(caps client.ProductCapabilities) bool {
-	for _, kind := range []string{
-		client.KindObjectStore,
-		client.KindHttpService,
-		client.KindAIEndpoint,
-	} {
-		if caps.SupportsResource(kind) {
-			return true
-		}
-	}
-	return false
 }
 
 func supportsAPIVersion(versions []string, want string) bool {

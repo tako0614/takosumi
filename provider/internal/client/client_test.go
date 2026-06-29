@@ -278,6 +278,113 @@ func TestDeleteResource(t *testing.T) {
 	})
 }
 
+func TestTargetPoolCRUD(t *testing.T) {
+	var gotBody struct {
+		Space string         `json:"space"`
+		Spec  TargetPoolSpec `json:"spec"`
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/target-pools/default" {
+			t.Errorf("unexpected target pool path %q", r.URL.Path)
+		}
+		switch r.Method {
+		case http.MethodPut:
+			if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+				t.Errorf("decode request: %v", err)
+			}
+			if gotBody.Space != "prod" {
+				t.Errorf("expected prod space, got %q", gotBody.Space)
+			}
+			resp := TargetPoolRecord{
+				ID:      "tkrn:prod:TargetPool:default",
+				SpaceID: "prod",
+				Name:    "default",
+				Spec:    gotBody.Spec,
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+		case http.MethodGet:
+			if got := r.URL.Query().Get("space"); got != "prod" {
+				t.Errorf("expected space query prod, got %q", got)
+			}
+			resp := TargetPoolRecord{
+				ID:      "tkrn:prod:TargetPool:default",
+				SpaceID: "prod",
+				Name:    "default",
+				Spec: TargetPoolSpec{Targets: []TargetPoolEntry{{
+					Name:     "deepseek-main",
+					Type:     "ai_provider",
+					Priority: 90,
+				}}},
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(resp)
+		case http.MethodDelete:
+			if got := r.URL.Query().Get("space"); got != "prod" {
+				t.Errorf("expected space query prod, got %q", got)
+			}
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("unexpected method %s", r.Method)
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "tok", srv.Client())
+	spec := TargetPoolSpec{Targets: []TargetPoolEntry{{
+		Name:     "deepseek-main",
+		Type:     "ai_provider",
+		Ref:      "https://api.deepseek.example/v1",
+		Priority: 90,
+		Implementations: []TargetPoolImplementation{{
+			Shape:              KindAIEndpoint,
+			Implementation:     "deepseek_openai_gateway",
+			NativeResourceType: "ai.deepseek_endpoint",
+			Interfaces: map[string]string{
+				"openai_chat_completions":      "native",
+				"vendor.deepseek.responses.v1": "native",
+			},
+		}},
+	}}}
+	put, err := c.PutTargetPool(context.Background(), "default", "prod", spec)
+	if err != nil {
+		t.Fatalf("PutTargetPool: %v", err)
+	}
+	if put.ID != "tkrn:prod:TargetPool:default" {
+		t.Fatalf("unexpected put response %#v", put)
+	}
+	if gotBody.Spec.Targets[0].Implementations[0].Implementation != "deepseek_openai_gateway" {
+		t.Fatalf("custom AI implementation did not pass through: %#v", gotBody.Spec)
+	}
+
+	got, err := c.GetTargetPool(context.Background(), "default", "prod")
+	if err != nil {
+		t.Fatalf("GetTargetPool: %v", err)
+	}
+	if got.Spec.Targets[0].Type != "ai_provider" {
+		t.Fatalf("unexpected target pool response %#v", got)
+	}
+
+	if err := c.DeleteTargetPool(context.Background(), "default", "prod"); err != nil {
+		t.Fatalf("DeleteTargetPool: %v", err)
+	}
+}
+
+func TestGetTargetPool_NotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = io.WriteString(w, `{"error":{"code":"not_found","message":"missing"}}`)
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "", srv.Client())
+	_, err := c.GetTargetPool(context.Background(), "missing", "prod")
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
 func TestPreviewResource(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {

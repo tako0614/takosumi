@@ -116,6 +116,43 @@ func TestConfigureClient_AcceptsAIEndpointOnlyCapabilities(t *testing.T) {
 	}
 }
 
+func TestConfigureClient_AcceptsResourceShapeAPIForAdminConfig(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		switch r.URL.Path {
+		case "/.well-known/takosumi":
+			body = map[string]any{
+				"api_versions": []string{"takosumi.dev/v1alpha1"},
+				"features": map[string]bool{
+					"resource_shapes": true,
+				},
+				"endpoints": map[string]string{},
+			}
+		case "/v1/capabilities":
+			body = map[string]any{
+				"apiVersion": "takosumi.dev/v1alpha1",
+				"resources":  map[string]bool{},
+			}
+		default:
+			t.Errorf("unexpected path %q", r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
+		raw, _ := json.Marshal(body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(raw)
+	}))
+	defer srv.Close()
+
+	c, err := configureClient(context.Background(), srv.URL, "tok", srv.Client())
+	if err != nil {
+		t.Fatalf("configureClient: %v", err)
+	}
+	if c == nil {
+		t.Fatalf("expected a client")
+	}
+}
+
 func TestConfigureClient_AcceptsResourceShapes(t *testing.T) {
 	srv := httptest.NewServer(discoveryHandler(t, true))
 	defer srv.Close()

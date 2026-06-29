@@ -160,6 +160,18 @@ export class ResourceShapeService {
     return this.#stores.targetPools.listBySpace(space);
   }
 
+  getTargetPool(
+    space: SpaceId,
+    name: string,
+  ): Promise<TargetPoolRecord | undefined> {
+    return this.#stores.targetPools.getByName(space, name);
+  }
+
+  async deleteTargetPool(space: SpaceId, name: string): Promise<void> {
+    const existing = await this.#stores.targetPools.getByName(space, name);
+    if (existing) await this.#stores.targetPools.delete(existing.id);
+  }
+
   // --- preview / apply / get / list / delete ----------------------------------
 
   async preview(
