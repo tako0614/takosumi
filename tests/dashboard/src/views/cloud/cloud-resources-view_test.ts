@@ -47,6 +47,7 @@ describe("Cloud resources view", () => {
     expect(ja["common.refresh"]).toBe("更新");
     expect(ja["cloudResources.inventory.title"]).toBe("クラウドリソース");
     expect(ja["cloudResources.keys.title"]).toBe("APIキー");
+    expect(ja["cloudResources.keys.empty"]).toBe("まだ APIキーはありません。");
   });
 
   test("keeps raw resource identifiers behind an explicit copy action", () => {
@@ -78,6 +79,24 @@ describe("Cloud resources view", () => {
         ja[`cloudResources.inventory.${key}` as keyof typeof ja],
       ).toBeUndefined();
     }
+  });
+
+  test("requires confirmation before revoking Cloud API keys", () => {
+    expect(cloudResourcesViewSource).toContain(
+      "const { confirm } = useConfirmDialog()",
+    );
+    expect(cloudResourcesViewSource).toContain(
+      'title: t("cloudResources.keys.revokeTitle")',
+    );
+    expect(cloudResourcesViewSource).toContain(
+      'message: t("cloudResources.keys.revokeMessage"',
+    );
+    expect(cloudResourcesViewSource).toContain("if (!ok) return;");
+    expect(cloudResourcesViewSource).toContain(
+      't("cloudResources.keys.revoke")',
+    );
+    expect(en["cloudResources.keys.revoke"]).toBe("Revoke");
+    expect(ja["cloudResources.keys.revoke"]).toBe("取り消し");
   });
 
   test("keeps compact resource controls responsive on mobile", () => {

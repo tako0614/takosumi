@@ -75,7 +75,9 @@ describe("dashboard shell navigation layout", () => {
     expect(mobileTabsSource).not.toContain('href: "/services"');
     expect(mobileTabsSource).not.toContain('href: "/connections"');
     expect(mobileTabsSource).not.toContain('href: "/advanced/workspace"');
-    expect(shellCssSource).toContain("grid-template-columns: repeat(4, 1fr);");
+    expect(shellCssSource).toContain(
+      "grid-template-columns: repeat(auto-fit, minmax(56px, 1fr));",
+    );
     expect(shellCssSource).toContain(".topbar-icon-btn.topbar-add");
     expect(shellCssSource).toContain("display: inline-flex;");
   });

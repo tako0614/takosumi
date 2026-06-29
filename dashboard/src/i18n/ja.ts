@@ -940,7 +940,11 @@ export const ja = {
   "cloudResources.keys.create": "APIキーを作成",
   "cloudResources.keys.created": "作成されたAPIキー",
   "cloudResources.keys.lastUsed": "最終利用",
-  "cloudResources.keys.empty": "まだ API key はありません。",
+  "cloudResources.keys.empty": "まだ APIキーはありません。",
+  "cloudResources.keys.revoke": "取り消し",
+  "cloudResources.keys.revokeTitle": "APIキーを取り消し",
+  "cloudResources.keys.revokeMessage":
+    "「{name}」を取り消します。このキーを使っているアプリは接続できなくなります。",
   "cloudResources.ai.title": "AI Gateway",
   "cloudResources.ai.subtitle": "接続状態と既定モデル",
   "cloudResources.ai.defaultModel": "既定モデル",
