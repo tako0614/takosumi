@@ -117,6 +117,14 @@ const TEST_CLOUD_USAGE_PRICE_BOOK = JSON.stringify({
       minimumChargeUsdMicros: 2,
     },
     {
+      meterIdPrefix: "cloudflare:durable_objects:",
+      kind: "gateway_compute",
+      unit: "operation",
+      chargeUsdMicrosPerUnit: 500,
+      estimatedCostUsdMicrosPerUnit: 100,
+      minimumChargeUsdMicros: 500,
+    },
+    {
       meterIdPrefix: "cloudflare:queues:",
       kind: "gateway_compute",
       unit: "operation",
@@ -1985,6 +1993,102 @@ test("cloud extension fallback precharge skips duplicate response usage and reco
       createdAt: periodEnd,
     }),
   });
+});
+
+test("cloud usage extension records managed Containers and Durable Objects meters", async () => {
+  const periodStart = "2026-06-29T00:00:00.000Z";
+  const periodEnd = "2026-06-29T00:01:00.000Z";
+  const recorded: {
+    readonly spaceId: string;
+    readonly input: Record<string, unknown>;
+  }[] = [];
+  const response = await handlePlatformCloudExtensionRouteRequest(
+    new Request("https://app.takosumi.com/cloud/usage/resource-meters", {
+      method: "POST",
+    }),
+    {
+      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
+      TAKOSUMI_CLOUD_USAGE: {
+        fetch: async () =>
+          Response.json(
+            { ok: true, reports: 1, workspaceId: "space_cloud" },
+            {
+              headers: {
+                "x-takosumi-cloud-usage-space-id": "space_cloud",
+                "x-takosumi-cloud-usage-period-start": periodStart,
+                "x-takosumi-cloud-usage-period-end": periodEnd,
+                "x-takosumi-cloud-usage-meters": JSON.stringify([
+                  {
+                    installationId: "inst_cloud",
+                    meterId: "cloudflare:containers:vcpu_second",
+                    resourceFamily: "cloudflare.containers",
+                    resourceId: "container:api",
+                    operation: "vcpu_second",
+                    kind: "gateway_compute",
+                    quantity: 4,
+                  },
+                  {
+                    installationId: "inst_cloud",
+                    meterId: "cloudflare:durable_objects:operation",
+                    resourceFamily: "cloudflare.durable_objects",
+                    resourceId: "durable_object:session",
+                    operation: "operation",
+                    kind: "gateway_compute",
+                    quantity: 2,
+                  },
+                ]),
+              },
+            },
+          ),
+      },
+    } as never,
+    { basePath: "/cloud/usage", bindingName: "TAKOSUMI_CLOUD_USAGE" },
+    async () => ({
+      authenticated: true,
+      authKind: "service-token",
+      subject: "svc_cloud_usage",
+      spaceId: "space_cloud",
+      installationId: "inst_cloud",
+      scopes: ["cloud.usage.write"],
+    }),
+    async (spaceId, input) => {
+      recorded.push({ spaceId, input: input as Record<string, unknown> });
+    },
+  );
+
+  expect(response.status).toBe(200);
+  expect(recorded).toEqual([
+    {
+      spaceId: "space_cloud",
+      input: expect.objectContaining({
+        installationId: "inst_cloud",
+        meterId: "cloudflare:containers:vcpu_second",
+        resourceFamily: "cloudflare.containers",
+        resourceId: "container:api",
+        operation: "vcpu_second",
+        kind: "gateway_compute",
+        quantity: 4,
+        usdMicros: 4,
+        spendRequired: true,
+        createdAt: periodEnd,
+      }),
+    },
+    {
+      spaceId: "space_cloud",
+      input: expect.objectContaining({
+        installationId: "inst_cloud",
+        meterId: "cloudflare:durable_objects:operation",
+        resourceFamily: "cloudflare.durable_objects",
+        resourceId: "durable_object:session",
+        operation: "operation",
+        kind: "gateway_compute",
+        quantity: 2,
+        usdMicros: 1_000,
+        spendRequired: true,
+        createdAt: periodEnd,
+      }),
+    },
+  ]);
 });
 
 test("cloud extension usage metering fails closed for unknown meters", async () => {
