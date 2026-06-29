@@ -520,7 +520,7 @@ export interface OpenTofuDeploymentStore {
   /**
    * Lists only the Spaces directly owned by `ownerUserId` (spec §4), same
    * `(createdAt, id)` sort as `listSpaces`. Used by the dashboard session
-   * `GET /api/v1/spaces` to scope the read to the caller's spaces instead of
+   * `GET /api/v1/workspaces` to scope the read to the caller's spaces instead of
    * loading every tenant's Space and filtering in the route.
    */
   listSpacesByOwner(ownerUserId: string): Promise<readonly Space[]>;

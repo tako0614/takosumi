@@ -13,7 +13,6 @@ import (
 func discoveryBody(resourceShapes bool) string {
 	body := map[string]any{
 		"api_versions": []string{APIVersion},
-		"edition":      "core",
 		"features": map[string]bool{
 			"resource_shapes": resourceShapes,
 			"oidc":            true,

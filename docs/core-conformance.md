@@ -53,6 +53,20 @@ This document tracks conformance to [Core Spec](./core-spec.md) and
 | Enforced billing and payments | operator/cloud | Stripe enforcement and payment gates stay outside OSS Core. |
 | Official Takosumi native resource internals | operator/cloud | Official runtime/object-store/queue/DB/edge internals are hosted-operation implementations, not OSS Core requirements. |
 
+## Pre-Staging Redesign Cutline
+
+Do not promote a new hosted staging cell until these Final Plan contract gates
+pass. This cutline exists so real-cloud deploy work does not freeze a mixed
+pre-v1/public-v1 surface.
+
+| Gate | Required state |
+| --- | --- |
+| Public Stack API vocabulary | Session control routes expose `workspaces`, `capsules`, `state-versions`, and `capsule-configs`; retired `/api/v1/spaces`, `/api/v1/installations`, `/api/v1/deployments`, and `/api/v1/install-configs` are rejected. |
+| Capability-driven discovery | `/.well-known/takosumi` and `/v1/capabilities` are sufficient for clients; provider/client behavior must not branch on `edition`. |
+| Provider mirror assets | `bun run provider:assets` succeeds before dashboard/platform build so `/opentofu/providers/registry.opentofu.org/takosjp/takosumi/` is present in Worker assets. |
+| Cloud extension inventory | Detailed Cloud extension catalog routes are operator-gated; public discovery exposes only non-secret capabilities. |
+| OSS/Cloud boundary | Official managed targets, native runtime internals, Stripe enforcement, SLA/support, and abuse controls remain Operator/Cloud operation layers, not OSS Core contracts. |
+
 ## Current Verification
 
 Minimum local checks for OSS conformance work:

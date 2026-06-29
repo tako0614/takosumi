@@ -139,7 +139,7 @@ production 後:
 
 - `https://app.takosumi.com/healthz` が green
 - OIDC discovery / JWKS が serve される
-- `GET /api/v1/spaces` が認証なしで 401 を返す
+- `GET /api/v1/workspaces` が認証なしで 401 を返す
 - known staging / production Workspace の Capsule list が読める
 - compatibility check / plan read path が smoke できる
 - migration runtime、row 数、skip した duplicate DDL を private evidence に記録する

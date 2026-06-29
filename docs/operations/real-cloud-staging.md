@@ -138,11 +138,14 @@ repo.
    # image_build_context is used only when image points at a Dockerfile.
    ```
 
-2. Build the dashboard and dry-run the staging realized config:
+2. Build provider mirror assets, build the dashboard, and dry-run the staging
+   realized config:
 
    ```bash
-   cd takosumi/dashboard && bun install && bun run build
-   cd ../..
+   cd takosumi
+   bun run provider:assets
+   cd dashboard && bun install && bun run build
+   cd ../../
    bunx wrangler@latest deploy --dry-run --config takosumi-private/platform/wrangler.staging.toml
    ```
 

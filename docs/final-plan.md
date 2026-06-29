@@ -1058,7 +1058,6 @@ Example:
 ```json
 {
   "api_versions": ["takosumi.dev/v1alpha1"],
-  "edition": "core",
   "features": {
     "stacks": true,
     "resource_shapes": true,

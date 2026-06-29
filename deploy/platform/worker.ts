@@ -136,7 +136,6 @@ export default {
       return Response.json(
         createTakosumiWellKnownDocument({
           origin: url.origin,
-          edition: "cloud",
           operatorTenants: true,
           commercialBilling: true,
           paymentEnforcement: true,
@@ -149,7 +148,6 @@ export default {
     if (url.pathname === TAKOSUMI_PRODUCT_CAPABILITIES_PATH) {
       return Response.json(
         createTakosumiProductCapabilities({
-          edition: "cloud",
           operatorTenants: true,
           commercialBilling: true,
           paymentEnforcement: true,
@@ -1119,6 +1117,8 @@ export function handlePlatformCloudExtensionCatalogRequest(
   if (request.method !== "GET" && request.method !== "HEAD") {
     return Response.json({ error: "method not allowed" }, { status: 405 });
   }
+  const auth = requireDeployControlBearer(request, env);
+  if (auth) return auth;
   const headers = {
     "cache-control": "no-store",
     "content-type": "application/json",
@@ -1514,7 +1514,7 @@ async function platformCloudExtensionSessionCanAccessInstallation(
     const response = await accountsWorker.fetch(
       new Request(
         new URL(
-          `/api/v1/installations/${encodeURIComponent(installationId)}`,
+          `/api/v1/capsules/${encodeURIComponent(installationId)}`,
           request.url,
         ),
         { method: "GET", headers },

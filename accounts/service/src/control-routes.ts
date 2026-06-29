@@ -80,9 +80,10 @@ type ControlResourceHandler = (
 /**
  * Resource dispatch table, keyed by the NORMALIZED first path segment (after
  * {@link normalizePublicControlSegments} maps the public Workspace/Capsule/
- * StateVersion vocabulary onto the legacy segment names). This is the single
- * source of "which resource handler owns a route", and its key set is gated
- * against {@link control-route-inventory.ts} by the inventory parity test.
+ * StateVersion vocabulary onto the historical internal handler names). This is
+ * the single source of "which resource handler owns a route", and its key set
+ * is gated against {@link control-route-inventory.ts} by the inventory parity
+ * test.
  */
 const RESOURCE_HANDLERS: Partial<Record<string, ControlResourceHandler>> = {
   spaces: handleWorkspaces,
@@ -100,6 +101,18 @@ const RESOURCE_HANDLERS: Partial<Record<string, ControlResourceHandler>> = {
   "output-shares": handleOutputShares,
   billing: handleBilling,
 };
+
+/**
+ * Retired public route roots from the pre-v1 control surface. These strings may
+ * still exist as internal handler keys until the deeper ledger rename lands,
+ * but they must not be accepted as public API paths.
+ */
+const RETIRED_PUBLIC_CONTROL_SEGMENTS = new Set([
+  "spaces",
+  "installations",
+  "install-configs",
+  "deployments",
+]);
 
 /** Registered dispatch resource keys (for the inventory parity test). */
 export const CONTROL_DISPATCH_RESOURCE_KEYS: readonly string[] =
@@ -244,9 +257,11 @@ interface DispatchInput {
 }
 
 async function dispatch(input: DispatchInput): Promise<Response> {
-  const segments = normalizePublicControlSegments(
-    input.tail.split("/").filter(Boolean),
-  );
+  const rawSegments = input.tail.split("/").filter(Boolean);
+  if (RETIRED_PUBLIC_CONTROL_SEGMENTS.has(rawSegments[0] ?? "")) {
+    return errorJson("not_found", "not found", 404);
+  }
+  const segments = normalizePublicControlSegments(rawSegments);
   const method = input.request.method;
   const key = segments[0];
   const handler = key !== undefined ? RESOURCE_HANDLERS[key] : undefined;
@@ -272,8 +287,9 @@ async function dispatch(input: DispatchInput): Promise<Response> {
 
 /**
  * Maps the public Workspace / Capsule / Capsule-config / StateVersion vocabulary
- * onto the legacy first-segment names the dispatch table and per-resource
- * handlers key on. Pure path normalization — no behavior change.
+ * onto the historical first-segment names the dispatch table and per-resource
+ * handlers still key on. Raw retired public paths are rejected before this
+ * helper runs.
  */
 function normalizePublicControlSegments(
   segments: readonly string[],

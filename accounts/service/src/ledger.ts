@@ -179,7 +179,7 @@ export interface AppCapsuleLedgerStore {
   /**
    * Lists the Workspaces whose owning ledger account is legally owned by `subject`
    * (i.e. `LedgerAccountRecord.legalOwnerSubject === subject`). Used by the
-   * dashboard session `GET /api/v1/spaces` to scope the legal-owner branch of
+   * dashboard session `GET /api/v1/workspaces` to scope the legal-owner branch of
    * Workspace visibility without scanning every Workspace.
    */
   listWorkspacesForOwner(

@@ -7751,7 +7751,7 @@ test("internal installations import-apply creates a target plan and projection",
         ),
       );
     }
-    if (url.pathname === "/api/v1/spaces/space_target/installations") {
+    if (url.pathname === "/api/v1/workspaces/space_target/capsules") {
       return Promise.resolve(
         Response.json(
           { installation: { id: "inst_import_target" } },
@@ -7761,7 +7761,7 @@ test("internal installations import-apply creates a target plan and projection",
     }
     if (
       url.pathname ===
-      "/api/v1/installations/inst_import_target/provider-connections"
+      "/api/v1/capsules/inst_import_target/provider-connections"
     ) {
       return Promise.resolve(
         Response.json(
@@ -7897,8 +7897,8 @@ test("internal installations import-apply creates a target plan and projection",
     expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
       "/api/v1/sources",
       "/api/v1/sources/src_import/sync",
-      "/api/v1/spaces/space_target/installations",
-      "/api/v1/installations/inst_import_target/provider-connections",
+      "/api/v1/workspaces/space_target/capsules",
+      "/api/v1/capsules/inst_import_target/provider-connections",
       "/v1/installation-projections/plan-runs",
       "/v1/installation-projections",
     ]);
@@ -7999,7 +7999,7 @@ test("internal installations import-apply reuses duplicate target installation",
         ),
       );
     }
-    if (url.pathname === "/api/v1/spaces/space_target/installations") {
+    if (url.pathname === "/api/v1/workspaces/space_target/capsules") {
       return Promise.resolve(
         Response.json(
           {
@@ -8018,7 +8018,7 @@ test("internal installations import-apply reuses duplicate target installation",
     }
     if (
       url.pathname ===
-      "/api/v1/installations/inst_existing_target/provider-connections"
+      "/api/v1/capsules/inst_existing_target/provider-connections"
     ) {
       return Promise.resolve(
         Response.json(
@@ -8141,8 +8141,8 @@ test("internal installations import-apply reuses duplicate target installation",
     expect(requests.map((request) => new URL(request.url).pathname)).toEqual([
       "/api/v1/sources",
       "/api/v1/sources/src_import/sync",
-      "/api/v1/spaces/space_target/installations",
-      "/api/v1/installations/inst_existing_target/provider-connections",
+      "/api/v1/workspaces/space_target/capsules",
+      "/api/v1/capsules/inst_existing_target/provider-connections",
       "/v1/installation-projections/plan-runs",
       "/v1/installation-projections",
     ]);

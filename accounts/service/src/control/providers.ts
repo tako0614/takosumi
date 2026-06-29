@@ -199,7 +199,6 @@ export async function handleProviderConnections(
 ): Promise<Response | undefined> {
   const { request, url, operations, store } = ctx;
   // /api/v1/provider-connections?workspaceId=
-  // (legacy-compatible: ?workspaceId=)
   if (segments.length === 1 && segments[0] === "provider-connections") {
     if (method !== "GET") return methodNotAllowed("GET");
     return await listProviderConnections(

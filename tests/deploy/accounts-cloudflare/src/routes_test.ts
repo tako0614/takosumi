@@ -13,8 +13,8 @@ describe("isAccountsApiPath", () => {
   test("claims every API namespace the handler owns", () => {
     const apiPaths = [
       "/.well-known/openid-configuration",
-      "/api/v1/spaces",
-      "/api/v1/installations/inst_1/plan",
+      "/api/v1/workspaces",
+      "/api/v1/capsules/inst_1/plan",
       "/oauth/authorize",
       "/oauth/token",
       "/oauth/jwks",

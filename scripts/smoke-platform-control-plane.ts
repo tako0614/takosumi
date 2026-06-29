@@ -1483,7 +1483,7 @@ function failedNextAction(input: {
   if (
     input.error instanceof RequestTimeoutError &&
     input.error.method === "POST" &&
-    /\/installations\/[^/]+\/plan$/u.test(input.error.path)
+    /\/capsules\/[^/]+\/plan$/u.test(input.error.path)
   ) {
     return "The Capsule plan request timed out before returning a plan run id. Check the scratch Workspace for a pending smoke Capsule run with this app name, verify the temporary Provider Connection is revoked, then inspect platform worker logs for the source sync, compatibility check, or plan creation step that did not return.";
   }
@@ -1510,7 +1510,7 @@ async function resolveSpaceId(
       await requestJson({
         baseUrl: options.url,
         token: options.accountSessionToken,
-        path: `${API_PREFIX}/spaces/${encodeURIComponent(normalized)}`,
+        path: `${API_PREFIX}/workspaces/${encodeURIComponent(normalized)}`,
       });
     }
     return normalized;
@@ -1523,7 +1523,7 @@ async function resolveSpaceId(
   }>({
     baseUrl: options.url,
     token: options.accountSessionToken,
-    path: `${API_PREFIX}/spaces`,
+    path: `${API_PREFIX}/workspaces`,
   });
   const match = (response.spaces ?? []).find(
     (space) => space.handle === normalized,
@@ -1536,7 +1536,7 @@ async function resolveSpaceId(
         baseUrl: options.url,
         token: options.accountSessionToken,
         method: "POST",
-        path: `${API_PREFIX}/spaces`,
+        path: `${API_PREFIX}/workspaces`,
         body: {
           handle: normalized,
           displayName: options.spaceDisplayName ?? normalized,
@@ -1766,7 +1766,7 @@ async function deployGitSourceCapsule(
     baseUrl: options.url,
     token: options.accountSessionToken,
     method: "POST",
-    path: `${API_PREFIX}/installations/${encodeURIComponent(
+    path: `${API_PREFIX}/capsules/${encodeURIComponent(
       installation.id,
     )}/plan`,
     timeoutMs: options.deployTimeoutSeconds * 1000,
@@ -1892,9 +1892,9 @@ async function createSourceInstallation(
     baseUrl: options.url,
     token: options.accountSessionToken,
     method: "POST",
-    path: `${API_PREFIX}/spaces/${encodeURIComponent(
+    path: `${API_PREFIX}/workspaces/${encodeURIComponent(
       input.spaceId,
-    )}/installations`,
+    )}/capsules`,
     body: {
       name: options.appName,
       environment: options.environment,
@@ -1931,7 +1931,7 @@ async function putInstallationProviderConnections(
     baseUrl: options.url,
     token: options.accountSessionToken,
     method: "PUT",
-    path: `${API_PREFIX}/installations/${encodeURIComponent(
+    path: `${API_PREFIX}/capsules/${encodeURIComponent(
       input.installationId,
     )}/provider-connections`,
     body: {
@@ -2044,7 +2044,7 @@ async function markPendingSmokeInstallationError(
           await requestJson<{ readonly installation?: InstallationRecord }>({
             baseUrl: options.url,
             token: options.accountSessionToken,
-            path: `${API_PREFIX}/installations/${encodeURIComponent(
+            path: `${API_PREFIX}/capsules/${encodeURIComponent(
               input.installationId,
             )}`,
           })
@@ -2054,9 +2054,9 @@ async function markPendingSmokeInstallationError(
         await requestJson<{ readonly installations?: InstallationRecord[] }>({
           baseUrl: options.url,
           token: options.accountSessionToken,
-          path: `${API_PREFIX}/spaces/${encodeURIComponent(
+          path: `${API_PREFIX}/workspaces/${encodeURIComponent(
             input.spaceId,
-          )}/installations`,
+          )}/capsules`,
         })
       ).installations ?? []);
 
@@ -2070,7 +2070,7 @@ async function markPendingSmokeInstallationError(
     baseUrl: options.url,
     token: options.accountSessionToken,
     method: "PATCH",
-    path: `${API_PREFIX}/installations/${encodeURIComponent(target.id)}`,
+    path: `${API_PREFIX}/capsules/${encodeURIComponent(target.id)}`,
     body: { status: "error" },
   });
   return true;
@@ -2100,7 +2100,7 @@ async function cleanupAppliedSmokeFailure(
       baseUrl: options.url,
       token: options.accountSessionToken,
       method: "PATCH",
-      path: `${API_PREFIX}/installations/${encodeURIComponent(
+      path: `${API_PREFIX}/capsules/${encodeURIComponent(
         input.installationId,
       )}`,
       body: { status: "error" },
@@ -2216,7 +2216,7 @@ async function runBackupRestoreRehearsal(
       baseUrl: options.url,
       token: options.accountSessionToken,
       method: "POST",
-      path: `${API_PREFIX}/installations/${encodeURIComponent(
+      path: `${API_PREFIX}/capsules/${encodeURIComponent(
         input.installationId,
       )}/backups`,
     })
@@ -2226,7 +2226,7 @@ async function runBackupRestoreRehearsal(
       baseUrl: options.url,
       token: options.accountSessionToken,
       method: "POST",
-      path: `${API_PREFIX}/spaces/${encodeURIComponent(
+      path: `${API_PREFIX}/workspaces/${encodeURIComponent(
         input.spaceId,
       )}/backups/${encodeURIComponent(backup.id)}/restores`,
       body: {
@@ -2279,9 +2279,9 @@ async function latestDeploymentForInstallation(
   }>({
     baseUrl: options.url,
     token: options.accountSessionToken,
-    path: `${API_PREFIX}/installations/${encodeURIComponent(
+    path: `${API_PREFIX}/capsules/${encodeURIComponent(
       installationId,
-    )}/deployments`,
+    )}/state-versions`,
   });
   const deployments = [...(response.deployments ?? [])].sort(
     (a, b) =>
@@ -2457,7 +2457,7 @@ async function assertDeploymentLedger(
   }>({
     baseUrl: options.url,
     token: options.accountSessionToken,
-    path: `${API_PREFIX}/installations/${encodeURIComponent(
+    path: `${API_PREFIX}/capsules/${encodeURIComponent(
       input.installationId,
     )}`,
   });
@@ -2506,9 +2506,9 @@ async function assertDeploymentLedger(
   }>({
     baseUrl: options.url,
     token: options.accountSessionToken,
-    path: `${API_PREFIX}/installations/${encodeURIComponent(
+    path: `${API_PREFIX}/capsules/${encodeURIComponent(
       input.installationId,
-    )}/deployments`,
+    )}/state-versions`,
   });
   const deployments = deploymentsResponse.deployments ?? [];
   const deployment =
@@ -2601,7 +2601,7 @@ async function assertGenericDeploymentLedger(
   }>({
     baseUrl: options.url,
     token: options.accountSessionToken,
-    path: `${API_PREFIX}/installations/${encodeURIComponent(
+    path: `${API_PREFIX}/capsules/${encodeURIComponent(
       input.installationId,
     )}`,
   });
@@ -2650,9 +2650,9 @@ async function assertGenericDeploymentLedger(
   }>({
     baseUrl: options.url,
     token: options.accountSessionToken,
-    path: `${API_PREFIX}/installations/${encodeURIComponent(
+    path: `${API_PREFIX}/capsules/${encodeURIComponent(
       input.installationId,
-    )}/deployments`,
+    )}/state-versions`,
   });
   const deployments = deploymentsResponse.deployments ?? [];
   const deployment =
@@ -2734,7 +2734,7 @@ async function assertReleaseActivation(
     }>({
       baseUrl: options.url,
       token: options.accountSessionToken,
-      path: `${API_PREFIX}/spaces/${encodeURIComponent(input.spaceId)}/activity?limit=50`,
+      path: `${API_PREFIX}/workspaces/${encodeURIComponent(input.spaceId)}/activity?limit=50`,
     });
     const event = (response.events ?? []).find((candidate) =>
       isReleaseActivationEvent(candidate, input),
@@ -4161,7 +4161,7 @@ async function runSelfTest(): Promise<void> {
     timedOutRunId: "run_selftest",
     runCancellationStatus: "cancelled",
     error: new Error(
-      "GET /api/v1/spaces failed with Bearer secret-token token=secret cookie=session",
+      "GET /api/v1/workspaces failed with Bearer secret-token token=secret cookie=session",
     ),
   });
   const serializedFailed = JSON.stringify(failed);
@@ -4201,7 +4201,7 @@ async function runSelfTest(): Promise<void> {
     connectionRevoked: true,
     error: new RequestTimeoutError(
       "POST",
-      `${API_PREFIX}/installations/inst_selftest/plan`,
+      `${API_PREFIX}/capsules/inst_selftest/plan`,
       1,
     ),
   });
@@ -4251,7 +4251,7 @@ async function runSelfTest(): Promise<void> {
       baseUrl: "https://app-staging.takosumi.com",
       token: "redacted",
       method: "POST",
-      path: `${API_PREFIX}/installations/inst_selftest/plan`,
+      path: `${API_PREFIX}/capsules/inst_selftest/plan`,
       timeoutMs: 1,
       body: {},
     });
@@ -4271,7 +4271,7 @@ async function runSelfTest(): Promise<void> {
       baseUrl: "https://app-staging.takosumi.com",
       token: "redacted",
       method: "POST",
-      path: `${API_PREFIX}/installations/inst_selftest/plan`,
+      path: `${API_PREFIX}/capsules/inst_selftest/plan`,
       timeoutMs: 1,
       body: {},
       transport: "native",
@@ -4280,7 +4280,7 @@ async function runSelfTest(): Promise<void> {
   } catch (error) {
     if (
       !(error instanceof RequestTimeoutError) ||
-      error.path !== `${API_PREFIX}/installations/inst_selftest/plan`
+      error.path !== `${API_PREFIX}/capsules/inst_selftest/plan`
     ) {
       throw error;
     }

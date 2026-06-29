@@ -135,7 +135,7 @@ test("composed app builds accounts handler with an in-process service deploy con
         typeof deployControl.operations.createPlanRun === "function" &&
         typeof deployControl.operations.getCapsule === "function";
       // The session-authed dashboard API needs the full control-plane facade
-      // (`/api/v1/spaces`, connections, run groups, etc.), not just the narrow
+      // (`/api/v1/workspaces`, connections, run groups, etc.), not just the narrow
       // plan/apply deploy-control facade above.
       controlPlaneOperationsWired =
         typeof controlPlaneOperations.spaces.listWorkspacesByOwner ===

@@ -4,7 +4,8 @@ export type TakosumiEdition = "core" | "operator" | "cloud";
 
 export interface TakosumiWellKnownDocument {
   readonly api_versions: readonly [typeof TAKOSUMI_API_VERSION];
-  readonly edition: TakosumiEdition;
+  /** @deprecated Clients must branch on `features` and `/v1/capabilities`, not edition names. */
+  readonly edition?: TakosumiEdition;
   readonly features: TakosumiWellKnownFeatures;
   readonly endpoints: TakosumiWellKnownEndpoints;
 }
@@ -80,6 +81,7 @@ export interface TakosumiCommercialCapabilities {
 
 export interface CreateTakosumiDiscoveryOptions {
   readonly origin: string;
+  /** @deprecated Discovery output is capability-driven; edition is ignored. */
   readonly edition?: TakosumiEdition;
   readonly resources?: Partial<TakosumiResourceCapabilities>;
   readonly adapters?: Partial<TakosumiAdapterCapabilities>;
@@ -97,7 +99,6 @@ export function createTakosumiWellKnownDocument(
   const capabilities = createTakosumiProductCapabilities(options);
   return {
     api_versions: [TAKOSUMI_API_VERSION],
-    edition: options.edition ?? "core",
     features: {
       stacks: capabilities.resources.Stack,
       resource_shapes: options.resourceShapesEnabled ??
