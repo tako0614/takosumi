@@ -247,7 +247,13 @@ function platformDiscoveryOptions(
       ai_provider: extensionCapabilities.aiGateway,
     },
     compat: {
+      s3: extensionCapabilities.s3Compat,
       cloudflare_subset: extensionCapabilities.cloudflareCompat,
+    },
+    endpoints: {
+      ...(extensionCapabilities.s3Endpoint
+        ? { s3: new URL(extensionCapabilities.s3Endpoint, origin).toString() }
+        : {}),
     },
   };
 }
@@ -255,6 +261,8 @@ function platformDiscoveryOptions(
 function platformCloudExtensionCapabilities(env: CloudflareWorkerEnv): {
   readonly aiGateway: boolean;
   readonly cloudflareCompat: boolean;
+  readonly s3Compat: boolean;
+  readonly s3Endpoint?: string;
   readonly cloudManagedResources: boolean;
 } {
   const configuredRoutes = platformCloudExtensionRoutes(
@@ -270,6 +278,15 @@ function platformCloudExtensionCapabilities(env: CloudflareWorkerEnv): {
       basePath: route.basePath,
     };
   });
+  const s3Route = routeSignals.find(
+    (route) =>
+      route.protocol === "s3-compatible" ||
+      route.provider === "s3" ||
+      route.provider === "object-storage" ||
+      route.capabilities.has("compat.s3.v1") ||
+      route.capabilities.has("s3-compatible") ||
+      route.basePath.startsWith("/compat/s3/"),
+  );
   const aiGateway = routeSignals.some(
     (route) =>
       route.kind === "ai_gateway" ||
@@ -293,7 +310,13 @@ function platformCloudExtensionCapabilities(env: CloudflareWorkerEnv): {
       route.capabilities.has("managed.resources") ||
       route.basePath.startsWith("/cloud/usage"),
   );
-  return { aiGateway, cloudflareCompat, cloudManagedResources };
+  return {
+    aiGateway,
+    cloudflareCompat,
+    s3Compat: Boolean(s3Route),
+    ...(s3Route ? { s3Endpoint: s3Route.basePath } : {}),
+    cloudManagedResources,
+  };
 }
 
 export function withPlatformAssetCacheHeaders(

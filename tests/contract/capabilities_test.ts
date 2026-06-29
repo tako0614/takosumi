@@ -43,6 +43,20 @@ test("Takosumi product capabilities separate framework from enabled profiles", (
   assert.equal(capabilities.commercial.payment_enforcement, false);
 });
 
+test("Takosumi discovery can publish a scoped S3-compatible endpoint", () => {
+  const document = createTakosumiWellKnownDocument({
+    origin: "https://takosumi.example.com/",
+    compat: { s3: true },
+    endpoints: { s3: "https://takosumi.example.com/compat/s3/v1" },
+  });
+
+  assert.equal(document.features.compat_s3, true);
+  assert.equal(
+    document.endpoints.s3,
+    "https://takosumi.example.com/compat/s3/v1",
+  );
+});
+
 test("S3 compatibility is a compat profile, not a default Resource Shape", () => {
   const capabilities = createTakosumiProductCapabilities();
 

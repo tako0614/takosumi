@@ -152,6 +152,9 @@ function CloudResourceBody(props: {
   const compatBaseUrl = createMemo(() =>
     endpointUrl(props.snapshot.catalog.serviceUrl, props.snapshot.compatRoute),
   );
+  const s3BaseUrl = createMemo(() =>
+    endpointUrl(props.snapshot.catalog.serviceUrl, props.snapshot.s3Route),
+  );
   const aiReady = createMemo(
     () =>
       props.snapshot.aiRoute?.configured === true &&
@@ -164,6 +167,7 @@ function CloudResourceBody(props: {
       props.snapshot.compatToken.ok &&
       props.snapshot.compatToken.data.success === true,
   );
+  const s3Ready = createMemo(() => props.snapshot.s3Route?.configured === true);
   const providers = createMemo(() =>
     props.snapshot.aiStatus.ok
       ? props.snapshot.aiStatus.data.summary.providers
@@ -282,6 +286,38 @@ function CloudResourceBody(props: {
             ]}
           />
           <ResultNotice result={props.snapshot.compatToken} />
+        </Card>
+
+        <Card class="av-cloud-card">
+          <CardHeader
+            title={
+              <IconTitle
+                icon={<HardDrive size={18} />}
+                label={t("cloudResources.s3.title")}
+              />
+            }
+            subtitle={t("cloudResources.s3.subtitle")}
+            actions={<ReadyBadge ready={s3Ready()} />}
+          />
+          <EndpointRow
+            label={t("cloudResources.baseUrl")}
+            value={s3BaseUrl()}
+            copyKey="s3-base-url"
+            copied={props.copied}
+            copyText={props.copyText}
+          />
+          <KVList
+            items={[
+              {
+                label: t("cloudResources.s3.protocol"),
+                value: "S3-compatible",
+              },
+              {
+                label: t("cloudResources.s3.capability"),
+                value: props.snapshot.s3Route?.capabilities?.join(", ") || "—",
+              },
+            ]}
+          />
         </Card>
       </div>
     </div>

@@ -945,6 +945,10 @@ export const en: Record<keyof typeof ja, string> = {
     "Cloudflare-compatible deploy path and virtual account",
   "cloudResources.compat.token": "Auth status",
   "cloudResources.compat.account": "Virtual account",
+  "cloudResources.s3.title": "Object Storage endpoint",
+  "cloudResources.s3.subtitle": "S3-compatible API for managed storage",
+  "cloudResources.s3.protocol": "Protocol",
+  "cloudResources.s3.capability": "Capability",
   "cloudResources.inventory.title": "Cloud resources",
   "cloudResources.inventory.subtitle":
     "Current Workers and managed bindings in Takosumi Cloud.",

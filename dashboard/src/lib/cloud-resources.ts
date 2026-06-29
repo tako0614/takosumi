@@ -160,6 +160,7 @@ export interface CloudResourcesSnapshot {
   readonly catalog: CloudExtensionCatalog;
   readonly aiRoute?: CloudExtensionCatalogItem;
   readonly compatRoute?: CloudExtensionCatalogItem;
+  readonly s3Route?: CloudExtensionCatalogItem;
   readonly aiStatus: CloudResourceResult<AiGatewayStatus>;
   readonly aiModels: CloudResourceResult<OpenAiModelList>;
   readonly compatToken: CloudResourceResult<CloudflareTokenVerify>;
@@ -185,6 +186,7 @@ export async function getCloudResourcesSnapshot(): Promise<CloudResourcesSnapsho
   );
   const aiRoute = aiGatewayRoute(catalog);
   const compatRoute = cloudflareCompatRoute(catalog);
+  const s3Route = s3CompatibleRoute(catalog);
   const [aiStatus, aiModels, compatToken, compatInventory, accountTokens] =
     await Promise.all([
       resultFor<AiGatewayStatus>(
@@ -203,6 +205,7 @@ export async function getCloudResourcesSnapshot(): Promise<CloudResourcesSnapsho
     catalog,
     aiRoute,
     compatRoute,
+    s3Route,
     aiStatus,
     aiModels,
     compatToken,
@@ -230,6 +233,22 @@ export function cloudflareCompatRoute(
         extension.provider === "cloudflare") ||
       extension.basePath === "/compat/cloudflare/client/v4",
   );
+}
+
+export function s3CompatibleRoute(
+  catalog: CloudExtensionCatalog,
+): CloudExtensionCatalogItem | undefined {
+  return catalog.extensions.find((extension) => {
+    const capabilities = new Set(extension.capabilities ?? []);
+    return (
+      extension.protocol === "s3-compatible" ||
+      extension.provider === "s3" ||
+      extension.provider === "object-storage" ||
+      capabilities.has("compat.s3.v1") ||
+      capabilities.has("s3-compatible") ||
+      extension.basePath.startsWith("/compat/s3/")
+    );
+  });
 }
 
 async function getCloudflareCompatInventory(
