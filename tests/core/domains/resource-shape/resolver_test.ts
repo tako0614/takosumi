@@ -266,6 +266,46 @@ test("resolve maps AIEndpoint to an operator-selected AI target", () => {
   ]);
 });
 
+test("resolve uses admin-declared AI provider implementations from TargetPool", () => {
+  const out = expectOk(
+    resolve(
+      input({
+        resource: aiEndpointResource(),
+        interfaces: [
+          "openai_chat_completions",
+          "vendor.deepseek.responses.v1",
+        ],
+        targetPool: targetPool([
+          {
+            name: "deepseek-main",
+            type: "ai_provider",
+            ref: "https://api.deepseek.example/v1",
+            priority: 20,
+            implementations: [
+              {
+                shape: "AIEndpoint",
+                implementation: "deepseek_openai_gateway",
+                nativeResourceType: "ai.deepseek_endpoint",
+                interfaces: {
+                  openai_chat_completions: "native",
+                  "vendor.deepseek.responses.v1": "native",
+                  openai_embeddings: "unsupported",
+                },
+              },
+            ],
+          },
+          { name: "cf-ai", type: "cloudflare", ref: "cf-acct", priority: 10 },
+        ]),
+      }),
+    ),
+  );
+  expect(out.selectedImplementation).toBe("deepseek_openai_gateway");
+  expect(out.selectedTarget).toBe("deepseek-main");
+  expect(out.nativeResourcePlan).toEqual([
+    { type: "ai.deepseek_endpoint", id: "ai" },
+  ]);
+});
+
 // --- native plan / lock fields ----------------------------------------------
 
 test("cloudflare_r2 plans a cloudflare.r2_bucket native resource", () => {

@@ -105,6 +105,50 @@ test("PUT /v1/resources/AIEndpoint/:name applies a first-class AI shape", async 
   expect(body.status.outputs.base_url).toContain("AIEndpoint:ai/base_url");
 });
 
+test("PUT /v1/resources/AIEndpoint/:name accepts admin-defined AI profiles", async () => {
+  const { app, service } = await buildApp();
+  await service.putTargetPool("space_1", "default", {
+    targets: [
+      {
+        name: "deepseek-main",
+        type: "ai_provider",
+        ref: "https://api.deepseek.example/v1",
+        priority: 90,
+        implementations: [
+          {
+            shape: "AIEndpoint",
+            implementation: "deepseek_openai_gateway",
+            nativeResourceType: "ai.deepseek_endpoint",
+            interfaces: {
+              openai_chat_completions: "native",
+              "vendor.deepseek.responses.v1": "native",
+            },
+          },
+        ],
+      },
+    ],
+  });
+  const res = await app.request("/v1/resources/AIEndpoint/ai", {
+    method: "PUT",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({
+      metadata: { space: "space_1" },
+      spec: {
+        name: "ai",
+        interfaces: ["openai_chat_completions", "vendor.deepseek.responses.v1"],
+        profiles: ["openai_compatible", "provider.deepseek"],
+        modelPolicy: { defaultModel: "deepseek/chat" },
+      },
+    }),
+  });
+  expect(res.status).toBe(200);
+  const body = await res.json();
+  expect(body.status.resolution.selectedImplementation).toBe(
+    "deepseek_openai_gateway",
+  );
+  expect(body.status.resolution.target).toBe("deepseek-main");
+});
+
 test("GET /v1/resources/ObjectStore/:name returns the applied resource", async () => {
   const { app } = await buildApp();
   await app.request("/v1/resources/ObjectStore/assets", {

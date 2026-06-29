@@ -260,6 +260,30 @@ cost model
 compliance rules
 ```
 
+TargetPool entries may include operator-declared implementations. This is how
+an operator enables broad AI providers or other custom adapters without waiting
+for the `takosumi` OpenTofu provider binary to know the vendor name.
+
+```yaml
+targets:
+  - name: gemini-main
+    type: ai_provider
+    ref: https://generativelanguage.googleapis.com/v1beta/openai
+    priority: 80
+    implementations:
+      - shape: AIEndpoint
+        implementation: gemini_openai_compatible
+        interfaces:
+          openai_chat_completions: native
+          openai_embeddings: native
+          provider.gemini.responses.v1: shim
+```
+
+The Resource Shape parser validates shape-specific structure and rejects empty
+or whitespace-bearing AI tokens, but it does not reject unknown AI
+interface/profile tokens. Support is decided by the resolver, TargetPool
+capability evidence, policy, and the configured adapter.
+
 Resolver output:
 
 ```text

@@ -80,6 +80,27 @@ export interface TargetPoolEntry {
   readonly ref?: string;
   readonly region?: string;
   readonly priority: number;
+  /**
+   * Optional operator/admin implementation declarations for this Target. When
+   * omitted, the resolver uses the built-in seed mapping for the Target type.
+   * When present, these entries are the capability evidence the resolver uses
+   * for the named shape. This keeps provider/vendor breadth in operator config
+   * instead of hard-coding every backend into the `takosumi` OpenTofu provider.
+   */
+  readonly implementations?: readonly TargetPoolImplementation[];
+}
+
+export type TargetCapabilityLevel =
+  | "native"
+  | "shim"
+  | "emulated"
+  | "unsupported";
+
+export interface TargetPoolImplementation {
+  readonly shape: string;
+  readonly implementation: string;
+  readonly interfaces: Readonly<Record<string, TargetCapabilityLevel>>;
+  readonly nativeResourceType?: string;
 }
 
 export interface TargetPoolSpec {

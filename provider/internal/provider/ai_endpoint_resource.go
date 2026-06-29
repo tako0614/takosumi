@@ -21,12 +21,12 @@ import (
 )
 
 var (
-	aiEndpointInterfaces = []string{
+	knownAIEndpointInterfaces = []string{
 		"openai_chat_completions",
 		"openai_responses",
 		"openai_embeddings",
 	}
-	aiEndpointProfiles = []string{
+	knownAIEndpointProfiles = []string{
 		"openai_compatible",
 		"workers_ai",
 		"anthropic_messages",
@@ -90,17 +90,17 @@ func (r *aiEndpointResource) Schema(_ context.Context, _ resource.SchemaRequest,
 			"interfaces": schema.SetAttribute{
 				Required:    true,
 				ElementType: types.StringType,
-				Description: "Desired AI API interfaces. Allowed values: " + strings.Join(aiEndpointInterfaces, ", ") + ".",
+				Description: "Desired AI API interface tokens. Known values include: " + strings.Join(knownAIEndpointInterfaces, ", ") + ". Additional tokens may be accepted by the configured Takosumi endpoint.",
 				Validators: []validator.Set{
-					SetStringsOneOf(1, aiEndpointInterfaces...),
+					SetStringsNonEmpty(1),
 				},
 			},
 			"profiles": schema.SetAttribute{
 				Optional:    true,
 				ElementType: types.StringType,
-				Description: "Optional compatibility profiles. Allowed values: " + strings.Join(aiEndpointProfiles, ", ") + ".",
+				Description: "Optional compatibility profile tokens. Known values include: " + strings.Join(knownAIEndpointProfiles, ", ") + ". Endpoint capabilities, TargetPool, policy, and the resolver decide which profiles are supported.",
 				Validators: []validator.Set{
-					SetStringsOneOf(0, aiEndpointProfiles...),
+					SetStringsNonEmpty(0),
 				},
 			},
 			"model_policy": schema.SingleNestedAttribute{

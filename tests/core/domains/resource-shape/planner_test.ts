@@ -2,6 +2,7 @@ import { test, expect } from "bun:test";
 
 import type { ObjectStoreSpec, TargetPoolEntry } from "takosumi-contract";
 import {
+  AI_ENDPOINT_GENERIC_TEMPLATE_ID,
   AI_ENDPOINT_IMPLEMENTATION_TEMPLATE,
   HTTP_SERVICE_IMPLEMENTATION_TEMPLATE,
   OBJECT_STORE_IMPLEMENTATION_TEMPLATE,
@@ -277,10 +278,22 @@ test("parseAIEndpointSpec accepts an OpenAI-compatible endpoint policy", () => {
   expect(r.spec.modelPolicy?.defaultModel).toBe("fast/chat");
 });
 
-test("parseAIEndpointSpec rejects an unknown AI interface", () => {
+test("parseAIEndpointSpec accepts operator-defined AI interface and profile tokens", () => {
   const r = parseAIEndpointSpec({
     name: "ai",
-    interfaces: ["vendor_native_magic"],
+    interfaces: ["openai_chat_completions", "vendor.deepseek.responses.v1"],
+    profiles: ["openai_compatible", "provider.deepseek"],
+  });
+  expect(r.ok).toBe(true);
+  if (!r.ok) return;
+  expect(r.spec.interfaces).toContain("vendor.deepseek.responses.v1");
+  expect(r.spec.profiles).toContain("provider.deepseek");
+});
+
+test("parseAIEndpointSpec rejects an invalid AI interface token", () => {
+  const r = parseAIEndpointSpec({
+    name: "ai",
+    interfaces: ["bad interface"],
   });
   expect(r.ok).toBe(false);
   if (!r.ok) expect(r.error.code).toBe("invalid_interface");
@@ -320,4 +333,23 @@ test("planAIEndpoint keeps upstream choice in the selected target", () => {
   expect(plan.moduleFiles).toBe(
     firstPartyModuleFilesByTemplateId["takosumi-ai-endpoint"],
   );
+});
+
+test("planAIEndpoint uses the generic projection module for admin-defined implementations", () => {
+  const target: TargetPoolEntry = {
+    name: "gemini-main",
+    type: "ai_provider",
+    ref: "https://generativelanguage.googleapis.com/v1beta/openai",
+    priority: 10,
+  };
+  const plan = planAIEndpoint("gemini_openai_compatible", {
+    name: "ai",
+    interfaces: ["openai_chat_completions"],
+    profiles: ["provider.gemini", "openai_compatible"],
+  }, target);
+
+  expect(AI_ENDPOINT_GENERIC_TEMPLATE_ID).toBe("takosumi-ai-endpoint");
+  expect(plan.templateId).toBe(AI_ENDPOINT_GENERIC_TEMPLATE_ID);
+  expect(plan.inputs.implementation).toBe("gemini_openai_compatible");
+  expect(plan.inputs.profiles).toEqual(["provider.gemini", "openai_compatible"]);
 });

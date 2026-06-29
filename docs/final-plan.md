@@ -229,6 +229,9 @@ The provider is not limited to resources used by the official Cloud deployment.
 It should grow as a broad, shape-specific provider for the public Takosumi
 Resource Shape API. Whether a shape is accepted is decided by endpoint
 capabilities, target capabilities, policy, and the engine/admin configuration.
+For extensible surfaces such as AI, the provider validates the resource shape
+and basic token syntax, then lets the endpoint decide support. It must not
+hard-code every vendor/profile the official Cloud deployment happens to use.
 
 ```text
 Good:
@@ -738,6 +741,31 @@ Gemini / Vertex AI
 AWS Bedrock
 Takosumi native AI gateway
 operator-provided custom adapter
+```
+
+AI interfaces and profiles are extensible capability tokens. Takosumi publishes
+well-known tokens such as `openai_chat_completions`, `openai_embeddings`, and
+`openai_compatible`, but an operator can add endpoint-specific tokens when the
+engine, adapter, and TargetPool capability evidence support them. This keeps
+`takosumi_ai_endpoint` broad without falling back to a generic
+`takosumi_resource`.
+
+Example operator TargetPool entry:
+
+```yaml
+targets:
+  - name: deepseek-main
+    type: ai_provider
+    ref: https://api.deepseek.example/v1
+    priority: 90
+    implementations:
+      - shape: AIEndpoint
+        implementation: deepseek_openai_gateway
+        nativeResourceType: ai.deepseek_endpoint
+        interfaces:
+          openai_chat_completions: native
+          openai_embeddings: shim
+          vendor.deepseek.responses.v1: native
 ```
 
 The public interface can be OpenAI-compatible even when the implementation is

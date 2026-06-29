@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -104,6 +105,63 @@ func (v setStringsOneOfValidator) ValidateSet(ctx context.Context, req validator
 				"Invalid value",
 				fmt.Sprintf("%q is not a valid value; must be one of: %s", val, strings.Join(v.allowed, ", ")),
 			)
+		}
+	}
+}
+
+// setStringsNonEmptyValidator validates that every element of a set is a
+// non-empty capability token and that the set has at least minItems elements.
+// It deliberately does not enforce a fixed allow-list: extensible surfaces such
+// as AIEndpoint profiles are accepted or rejected by the Takosumi endpoint's
+// capabilities, TargetPool, policy, and resolver.
+type setStringsNonEmptyValidator struct {
+	minItems int
+}
+
+// SetStringsNonEmpty returns a validator.Set enforcing a minimum size and
+// non-empty token strings without whitespace.
+func SetStringsNonEmpty(minItems int) validator.Set {
+	return setStringsNonEmptyValidator{minItems: minItems}
+}
+
+func (v setStringsNonEmptyValidator) Description(_ context.Context) string {
+	return "each value must be a non-empty token without whitespace"
+}
+
+func (v setStringsNonEmptyValidator) MarkdownDescription(ctx context.Context) string {
+	return v.Description(ctx)
+}
+
+func (v setStringsNonEmptyValidator) ValidateSet(ctx context.Context, req validator.SetRequest, resp *validator.SetResponse) {
+	if req.ConfigValue.IsNull() || req.ConfigValue.IsUnknown() {
+		return
+	}
+
+	var elems []types.String
+	resp.Diagnostics.Append(req.ConfigValue.ElementsAs(ctx, &elems, false)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	if len(elems) < v.minItems {
+		resp.Diagnostics.AddAttributeError(
+			req.Path,
+			"Too few values",
+			fmt.Sprintf("at least %d value(s) required, got %d", v.minItems, len(elems)),
+		)
+	}
+
+	for _, e := range elems {
+		if e.IsNull() || e.IsUnknown() {
+			continue
+		}
+		val := e.ValueString()
+		if strings.TrimSpace(val) == "" {
+			resp.Diagnostics.AddAttributeError(req.Path, "Invalid value", "value must not be blank")
+			continue
+		}
+		if strings.ContainsFunc(val, unicode.IsSpace) {
+			resp.Diagnostics.AddAttributeError(req.Path, "Invalid value", fmt.Sprintf("%q contains whitespace", val))
 		}
 	}
 }

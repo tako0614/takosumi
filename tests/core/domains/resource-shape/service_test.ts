@@ -97,6 +97,56 @@ test("apply resolves HttpService as a first-class shape", async () => {
   expect(result.value.status?.resolution?.target).toBe("cloudflare-main");
 });
 
+test("apply resolves AIEndpoint with admin-declared provider implementation", async () => {
+  const { service } = makeService();
+  await service.putTargetPool("space_1", "default", {
+    targets: [
+      {
+        name: "deepseek-main",
+        type: "ai_provider",
+        ref: "https://api.deepseek.example/v1",
+        priority: 90,
+        implementations: [
+          {
+            shape: "AIEndpoint",
+            implementation: "deepseek_openai_gateway",
+            nativeResourceType: "ai.deepseek_endpoint",
+            interfaces: {
+              openai_chat_completions: "native",
+              "vendor.deepseek.responses.v1": "native",
+              openai_embeddings: "shim",
+            },
+          },
+        ],
+      },
+    ],
+  });
+  await service.putSpacePolicy("space_1", "default", POLICY);
+
+  const result = await service.apply({
+    actor: ACTOR,
+    space: "space_1",
+    kind: "AIEndpoint",
+    name: "ai",
+    spec: {
+      name: "ai",
+      interfaces: ["openai_chat_completions", "vendor.deepseek.responses.v1"],
+      profiles: ["openai_compatible", "provider.deepseek"],
+      modelPolicy: {
+        defaultModel: "deepseek/chat",
+        allowedModels: ["deepseek/chat"],
+      },
+    },
+  });
+  expect(result.ok).toBe(true);
+  if (!result.ok) return;
+  expect(result.value.status?.resolution?.selectedImplementation).toBe(
+    "deepseek_openai_gateway",
+  );
+  expect(result.value.status?.resolution?.target).toBe("deepseek-main");
+  expect(result.value.status?.outputs?.base_url).toContain("AIEndpoint:ai/base_url");
+});
+
 test("get returns the applied resource with resolution status", async () => {
   const { service } = makeService();
   await seed(service);
