@@ -25,7 +25,9 @@ This document tracks conformance to [Core Spec](./core-spec.md) and
 | StateVersion | conformant | State storage exists and the public model is StateVersion. |
 | Outputs | conformant | Output capture and projection paths exist. |
 | Outputs-to-inputs | conformant | Output-to-input wiring is pinned at plan time and marks downstream Capsules stale. |
+| Output projection (Service Graph replacement) | conformant | Runtime services are projected store-free from Capsule Outputs; product/profile code reads well-known `tofu output -json` values instead of a Takosumi-owned Service Graph. |
 | Run ledger | conformant | Runs, logs, plan/apply records, approval, and audit evidence exist. |
+| Apply validation | conformant | Saved plans are validated fail-closed at apply by checking plan digest, source identity, ProviderBindings, and state generation before materialization. |
 | Runner protocol | conformant | Worker/container runner paths exist; OpenTofu runner is the execution sandbox. |
 | Provider mirror and plugin cache | conformant | Runner image supports offline mirror and operator-configured plugin cache; credentials and generated files remain per-run. |
 | first-party OpenTofu Capsule module catalog | conformant | Active bundled-HCL catalog in `firstPartyModuleFilesByTemplateId` matches `aws-s3-storage`, `cloudflare-hello-worker`, `cloudflare-r2-storage`, `cloudflare-static-site`, and `core`; each is a plain child module called from the generated root. |
@@ -86,6 +88,9 @@ ProviderConnection resolution
 CredentialRecipe env/file projection
 RunEnvResolver
 StateVersion / Output capture
+Output projection (Service Graph replacement)
+runtime services are projected store-free from Capsule Outputs
+validated fail-closed at apply
 SourceSnapshot reuse
 discovery and capability documents
 Resource Shape contract types

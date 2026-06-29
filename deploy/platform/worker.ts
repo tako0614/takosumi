@@ -65,6 +65,7 @@ import {
   platformCloudExtensionRoutes,
   type PlatformCloudExtensionRoute,
 } from "./cloud_extensions.ts";
+import type { CreateTakosumiDiscoveryOptions } from "takosumi-contract/capabilities";
 export {
   isPlatformCloudExtensionCatalogPath,
   matchPlatformCloudExtensionRoute,
@@ -134,43 +135,16 @@ export default {
     const url = new URL(request.url);
     if (url.pathname === TAKOSUMI_WELL_KNOWN_PATH) {
       return Response.json(
-        createTakosumiWellKnownDocument({
-          origin: url.origin,
-          operatorTenants: true,
-          commercialBilling: true,
-          paymentEnforcement: true,
-          resources: {
-            AIEndpoint: true,
-          },
-          adapters: {
-            cloudflare: true,
-            takosumi_native: true,
-            ai_provider: true,
-          },
-          compat: {
-            cloudflare_subset: true,
-          },
-        }),
+        createTakosumiWellKnownDocument(
+          platformDiscoveryOptions(url.origin, env),
+        ),
       );
     }
     if (url.pathname === TAKOSUMI_PRODUCT_CAPABILITIES_PATH) {
       return Response.json(
-        createTakosumiProductCapabilities({
-          operatorTenants: true,
-          commercialBilling: true,
-          paymentEnforcement: true,
-          resources: {
-            AIEndpoint: true,
-          },
-          adapters: {
-            cloudflare: true,
-            takosumi_native: true,
-            ai_provider: true,
-          },
-          compat: {
-            cloudflare_subset: true,
-          },
-        }),
+        createTakosumiProductCapabilities(
+          platformDiscoveryOptions(url.origin, env),
+        ),
       );
     }
     if (url.pathname === "/internal/platform/hardening-gates") {
@@ -253,6 +227,74 @@ export default {
     }
   },
 };
+
+function platformDiscoveryOptions(
+  origin: string,
+  env: CloudflareWorkerEnv,
+): CreateTakosumiDiscoveryOptions {
+  const extensionCapabilities = platformCloudExtensionCapabilities(env);
+  return {
+    origin,
+    operatorTenants: true,
+    commercialBilling: true,
+    paymentEnforcement: true,
+    resources: {
+      AIEndpoint: extensionCapabilities.aiGateway,
+    },
+    adapters: {
+      cloudflare: extensionCapabilities.cloudflareCompat,
+      takosumi_native: extensionCapabilities.cloudManagedResources,
+      ai_provider: extensionCapabilities.aiGateway,
+    },
+    compat: {
+      cloudflare_subset: extensionCapabilities.cloudflareCompat,
+    },
+  };
+}
+
+function platformCloudExtensionCapabilities(env: CloudflareWorkerEnv): {
+  readonly aiGateway: boolean;
+  readonly cloudflareCompat: boolean;
+  readonly cloudManagedResources: boolean;
+} {
+  const configuredRoutes = platformCloudExtensionRoutes(
+    env as unknown as { readonly [key: string]: unknown },
+  ).filter((route) => platformCloudExtensionHandler(env, route.handlerKey));
+  const routeSignals = configuredRoutes.map((route) => {
+    const capabilities = new Set(route.capabilities ?? []);
+    return {
+      kind: route.kind,
+      provider: route.provider,
+      protocol: route.protocol,
+      capabilities,
+      basePath: route.basePath,
+    };
+  });
+  const aiGateway = routeSignals.some(
+    (route) =>
+      route.kind === "ai_gateway" ||
+      route.protocol === "openai-compatible" ||
+      route.capabilities.has("ai.gateway") ||
+      route.capabilities.has("openai-compatible") ||
+      route.basePath.startsWith("/gateway/ai/"),
+  );
+  const cloudflareCompat = routeSignals.some(
+    (route) =>
+      route.kind === "provider_compat" ||
+      route.provider === "cloudflare" ||
+      route.capabilities.has("compat.cloudflare.workers.v1") ||
+      route.capabilities.has("cloudflare.compat") ||
+      route.basePath.startsWith("/compat/cloudflare/"),
+  );
+  const cloudManagedResources = routeSignals.some(
+    (route) =>
+      route.kind === "managed_usage" ||
+      route.capabilities.has("cloud.usage") ||
+      route.capabilities.has("managed.resources") ||
+      route.basePath.startsWith("/cloud/usage"),
+  );
+  return { aiGateway, cloudflareCompat, cloudManagedResources };
+}
 
 export function withPlatformAssetCacheHeaders(
   request: Request,

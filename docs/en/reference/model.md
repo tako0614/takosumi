@@ -140,6 +140,17 @@ Adapters report capabilities and perform preview/apply/observe/delete work.
 Initial adapter families can include OpenTofu, Cloudflare, AWS, Kubernetes, VM,
 and Takosumi-native adapters.
 
+Extensible surfaces use capability tokens. For example,
+`takosumi_ai_endpoint` has stable shape-specific HCL, but its
+`interfaces`/`profiles`/`provider_preferences`/`routing_policy` tokens are not
+limited to the AI providers Takosumi Cloud uses today. Operators can publish
+TargetPool implementation capability evidence for DeepSeek, GLM, Gemini,
+Bedrock, Vertex AI, OpenAI-compatible upstreams, Cloudflare AI Gateway, Workers
+AI, or their own adapter. The endpoint accepts or rejects those tokens through
+resolver/policy, not through a hard-coded provider binary allow-list. Upstream
+API keys remain Credential/ProviderConnection material and are never placed in
+the Resource Shape spec or OpenTofu state.
+
 ## Compatibility Capabilities
 
 Compatibility APIs are scoped, versioned entrypoints. They are enabled and

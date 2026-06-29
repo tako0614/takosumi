@@ -142,12 +142,14 @@ and Takosumi-native adapters.
 
 Extensible surfaces use capability tokens. For example,
 `takosumi_ai_endpoint` has stable shape-specific HCL, but its
-`interfaces`/`profiles` are not limited to the AI providers Takosumi Cloud uses
-today. Operators can publish TargetPool implementation capability evidence for
-DeepSeek, GLM, Gemini, Bedrock, Vertex AI, OpenAI-compatible upstreams,
-Cloudflare AI Gateway, Workers AI, or their own adapter. The endpoint accepts or
-rejects those tokens through resolver/policy, not through a hard-coded provider
-binary allow-list.
+`interfaces`/`profiles`/`provider_preferences`/`routing_policy` tokens are not
+limited to the AI providers Takosumi Cloud uses today. Operators can publish
+TargetPool implementation capability evidence for DeepSeek, GLM, Gemini,
+Bedrock, Vertex AI, OpenAI-compatible upstreams, Cloudflare AI Gateway, Workers
+AI, or their own adapter. The endpoint accepts or rejects those tokens through
+resolver/policy, not through a hard-coded provider binary allow-list. Upstream
+API keys remain Credential/ProviderConnection material and are never placed in
+the Resource Shape spec or OpenTofu state.
 
 ## Compatibility Capabilities
 

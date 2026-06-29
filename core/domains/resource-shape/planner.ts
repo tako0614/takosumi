@@ -207,6 +207,18 @@ export function parseAIEndpointSpec(spec: unknown): ParseAIEndpointSpecResult {
     : parseExtensibleTokenList(candidate.profiles, "profiles", false);
   if (profiles && !profiles.ok) return profiles;
 
+  const providerPreferences = candidate.providerPreferences === undefined
+    ? undefined
+    : parseExtensibleTokenList(
+      candidate.providerPreferences,
+      "providerPreferences",
+      false,
+    );
+  if (providerPreferences && !providerPreferences.ok) return providerPreferences;
+
+  const routingPolicy = parseAIEndpointRoutingPolicy(candidate.routingPolicy);
+  if (!routingPolicy.ok) return routingPolicy;
+
   const modelPolicy = parseAIEndpointModelPolicy(candidate.modelPolicy);
   if (!modelPolicy.ok) return modelPolicy;
 
@@ -219,6 +231,10 @@ export function parseAIEndpointSpec(spec: unknown): ParseAIEndpointSpecResult {
       name: name.value,
       interfaces: interfaces.value as readonly AIEndpointInterface[],
       ...(profiles?.value ? { profiles: profiles.value as readonly AIEndpointProfile[] } : {}),
+      ...(providerPreferences?.value
+        ? { providerPreferences: providerPreferences.value }
+        : {}),
+      ...(routingPolicy.value ? { routingPolicy: routingPolicy.value } : {}),
       ...(modelPolicy.value ? { modelPolicy: modelPolicy.value } : {}),
       ...(lifecyclePolicy.value ? { lifecyclePolicy: lifecyclePolicy.value } : {}),
     },
@@ -454,6 +470,10 @@ export function planAIEndpoint(
     targetType: target.type,
     interfaces: spec.interfaces,
     profiles: spec.profiles ?? [],
+    providerPreferences: spec.providerPreferences ?? [],
+    routingStrategy: spec.routingPolicy?.strategy ?? "",
+    allowFallback: spec.routingPolicy?.allowFallback ?? false,
+    preferredRegions: spec.routingPolicy?.preferredRegions ?? [],
     allowedModels: spec.modelPolicy?.allowedModels ?? [],
     defaultModel: spec.modelPolicy?.defaultModel ?? "",
     baseUrl: target.ref ?? "",
@@ -626,6 +646,83 @@ function parseAIEndpointModelPolicy(value: unknown):
       ...(Array.isArray(allowedModels)
         ? { allowedModels: allowedModels as readonly string[] }
         : {}),
+    },
+  };
+}
+
+function parseAIEndpointRoutingPolicy(value: unknown):
+  | { readonly ok: true; readonly value: AIEndpointSpec["routingPolicy"] | undefined }
+  | { readonly ok: false; readonly error: { readonly code: string; readonly message: string } } {
+  if (value === undefined) return { ok: true, value: undefined };
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return {
+      ok: false,
+      error: {
+        code: "invalid_routing_policy",
+        message: "spec.routingPolicy must be an object",
+      },
+    };
+  }
+  const policy = value as Record<string, unknown>;
+  const strategy = policy.strategy;
+  if (strategy !== undefined) {
+    if (
+      typeof strategy !== "string" ||
+      strategy.trim().length === 0 ||
+      /\s/.test(strategy)
+    ) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_routing_policy",
+          message: "spec.routingPolicy.strategy must be a non-empty token without whitespace",
+        },
+      };
+    }
+  }
+  const allowFallback = policy.allowFallback;
+  if (allowFallback !== undefined && typeof allowFallback !== "boolean") {
+    return {
+      ok: false,
+      error: {
+        code: "invalid_routing_policy",
+        message: "spec.routingPolicy.allowFallback must be a boolean",
+      },
+    };
+  }
+  const preferredRegions = policy.preferredRegions;
+  if (preferredRegions !== undefined) {
+    const regions = parseExtensibleTokenList(
+      preferredRegions,
+      "preferredRegions",
+      false,
+    );
+    if (!regions.ok) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_routing_policy",
+          message: regions.error.message.replace(
+            "spec.preferredRegions",
+            "spec.routingPolicy.preferredRegions",
+          ),
+        },
+      };
+    }
+    return {
+      ok: true,
+      value: {
+        ...(typeof strategy === "string" ? { strategy } : {}),
+        ...(typeof allowFallback === "boolean" ? { allowFallback } : {}),
+        preferredRegions: regions.value,
+      },
+    };
+  }
+  return {
+    ok: true,
+    value: {
+      ...(typeof strategy === "string" ? { strategy } : {}),
+      ...(typeof allowFallback === "boolean" ? { allowFallback } : {}),
     },
   };
 }

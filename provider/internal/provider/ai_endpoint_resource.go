@@ -36,6 +36,11 @@ var (
 		"default_model":  types.StringType,
 		"allowed_models": types.SetType{ElemType: types.StringType},
 	}
+	aiEndpointRoutingPolicyAttrTypes = map[string]attr.Type{
+		"strategy":          types.StringType,
+		"allow_fallback":    types.BoolType,
+		"preferred_regions": types.SetType{ElemType: types.StringType},
+	}
 )
 
 var (
@@ -58,6 +63,8 @@ type aiEndpointModel struct {
 	Name                   types.String `tfsdk:"name"`
 	Interfaces             types.Set    `tfsdk:"interfaces"`
 	Profiles               types.Set    `tfsdk:"profiles"`
+	ProviderPreferences    types.Set    `tfsdk:"provider_preferences"`
+	RoutingPolicy          types.Object `tfsdk:"routing_policy"`
 	ModelPolicy            types.Object `tfsdk:"model_policy"`
 	Space                  types.String `tfsdk:"space"`
 	SelectedImplementation types.String `tfsdk:"selected_implementation"`
@@ -70,6 +77,12 @@ type aiEndpointModel struct {
 type aiEndpointModelPolicyModel struct {
 	DefaultModel  types.String `tfsdk:"default_model"`
 	AllowedModels types.Set    `tfsdk:"allowed_models"`
+}
+
+type aiEndpointRoutingPolicyModel struct {
+	Strategy         types.String `tfsdk:"strategy"`
+	AllowFallback    types.Bool   `tfsdk:"allow_fallback"`
+	PreferredRegions types.Set    `tfsdk:"preferred_regions"`
 }
 
 func (r *aiEndpointResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -101,6 +114,39 @@ func (r *aiEndpointResource) Schema(_ context.Context, _ resource.SchemaRequest,
 				Description: "Optional compatibility profile tokens. Known values include: " + strings.Join(knownAIEndpointProfiles, ", ") + ". Endpoint capabilities, TargetPool, policy, and the resolver decide which profiles are supported.",
 				Validators: []validator.Set{
 					SetStringsNonEmpty(0),
+				},
+			},
+			"provider_preferences": schema.SetAttribute{
+				Optional:    true,
+				ElementType: types.StringType,
+				Description: "Optional provider/capability preference tokens such as provider.deepseek, provider.gemini, provider.bedrock, or provider.vertex. They are preferences only: the Takosumi endpoint, resolver, TargetPool, and operator policy decide support and final routing.",
+				Validators: []validator.Set{
+					SetStringsNonEmpty(0),
+				},
+			},
+			"routing_policy": schema.SingleNestedAttribute{
+				Optional:    true,
+				Description: "Optional routing preferences. These values do not force a vendor; they are interpreted by the configured Takosumi endpoint and operator policy.",
+				Attributes: map[string]schema.Attribute{
+					"strategy": schema.StringAttribute{
+						Optional:    true,
+						Description: "Extensible routing strategy token, for example operator_default, fixed, fallback, lowest_cost, lowest_latency, or highest_quality.",
+						Validators: []validator.String{
+							StringToken(),
+						},
+					},
+					"allow_fallback": schema.BoolAttribute{
+						Optional:    true,
+						Description: "Whether another eligible AI provider may be used when the preferred route is unavailable and policy permits fallback.",
+					},
+					"preferred_regions": schema.SetAttribute{
+						Optional:    true,
+						ElementType: types.StringType,
+						Description: "Optional serving/data region preference tokens. Operator policy decides whether they are meaningful for the selected provider.",
+						Validators: []validator.Set{
+							SetStringsNonEmpty(0),
+						},
+					},
 				},
 			},
 			"model_policy": schema.SingleNestedAttribute{
@@ -343,6 +389,39 @@ func (m aiEndpointModel) toResource(ctx context.Context, defaultSpace string) (*
 		}
 		spec["profiles"] = profiles
 	}
+	if !m.ProviderPreferences.IsNull() && !m.ProviderPreferences.IsUnknown() {
+		var preferences []string
+		diags.Append(m.ProviderPreferences.ElementsAs(ctx, &preferences, false)...)
+		if diags.HasError() {
+			return nil, "", diags
+		}
+		spec["providerPreferences"] = preferences
+	}
+	if !m.RoutingPolicy.IsNull() && !m.RoutingPolicy.IsUnknown() {
+		var policy aiEndpointRoutingPolicyModel
+		diags.Append(m.RoutingPolicy.As(ctx, &policy, basetypes.ObjectAsOptions{})...)
+		if diags.HasError() {
+			return nil, "", diags
+		}
+		routingPolicy := map[string]any{}
+		if !policy.Strategy.IsNull() && !policy.Strategy.IsUnknown() && policy.Strategy.ValueString() != "" {
+			routingPolicy["strategy"] = policy.Strategy.ValueString()
+		}
+		if !policy.AllowFallback.IsNull() && !policy.AllowFallback.IsUnknown() {
+			routingPolicy["allowFallback"] = policy.AllowFallback.ValueBool()
+		}
+		if !policy.PreferredRegions.IsNull() && !policy.PreferredRegions.IsUnknown() {
+			var regions []string
+			diags.Append(policy.PreferredRegions.ElementsAs(ctx, &regions, false)...)
+			if diags.HasError() {
+				return nil, "", diags
+			}
+			routingPolicy["preferredRegions"] = regions
+		}
+		if len(routingPolicy) > 0 {
+			spec["routingPolicy"] = routingPolicy
+		}
+	}
 	if !m.ModelPolicy.IsNull() && !m.ModelPolicy.IsUnknown() {
 		var policy aiEndpointModelPolicyModel
 		diags.Append(m.ModelPolicy.As(ctx, &policy, basetypes.ObjectAsOptions{})...)
@@ -421,6 +500,36 @@ func refreshAIEndpointSpec(ctx context.Context, res *client.Resource, m *aiEndpo
 		m.Profiles = set
 	} else {
 		m.Profiles = types.SetNull(types.StringType)
+	}
+	if raw, ok := res.Spec["providerPreferences"]; ok {
+		set, d := types.SetValueFrom(ctx, types.StringType, toStringSlice(raw))
+		diags.Append(d...)
+		m.ProviderPreferences = set
+	} else {
+		m.ProviderPreferences = types.SetNull(types.StringType)
+	}
+	if raw, ok := res.Spec["routingPolicy"].(map[string]any); ok {
+		strategy, _ := raw["strategy"].(string)
+		allowFallback, hasAllowFallback := raw["allowFallback"].(bool)
+		regions, d := types.SetValueFrom(ctx, types.StringType, toStringSlice(raw["preferredRegions"]))
+		diags.Append(d...)
+		allowFallbackValue := types.BoolNull()
+		if hasAllowFallback {
+			allowFallbackValue = types.BoolValue(allowFallback)
+		}
+		strategyValue := types.StringNull()
+		if strategy != "" {
+			strategyValue = types.StringValue(strategy)
+		}
+		obj, d := types.ObjectValue(aiEndpointRoutingPolicyAttrTypes, map[string]attr.Value{
+			"strategy":          strategyValue,
+			"allow_fallback":    allowFallbackValue,
+			"preferred_regions": regions,
+		})
+		diags.Append(d...)
+		m.RoutingPolicy = obj
+	} else {
+		m.RoutingPolicy = types.ObjectNull(aiEndpointRoutingPolicyAttrTypes)
 	}
 	if raw, ok := res.Spec["modelPolicy"].(map[string]any); ok {
 		defaultModel, _ := raw["defaultModel"].(string)
