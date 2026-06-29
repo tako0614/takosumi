@@ -163,7 +163,7 @@ is rejected if it contains secret-shaped keys or values.
     "id": "cloudflare-unified",
     "provider": "cloudflare_unified_billing",
     "baseUrl": "https://api.cloudflare.com/client/v4/accounts/<account_id>/ai/v1",
-    "apiKeyEnv": "TAKOSUMI_AI_GATEWAY_CLOUDFLARE_API_TOKEN",
+    "apiKeyEnv": "CLOUDFLARE_API_TOKEN",
     "headers": {
       "cf-aig-gateway-id": "default"
     },
@@ -265,7 +265,7 @@ Rules:
 - `openai_compatible` profiles must set `baseUrl` and `apiKeyEnv`.
 - Cloudflare Unified Billing uses `type: "openai_compatible"`,
   `baseUrl: "https://api.cloudflare.com/client/v4/accounts/<account_id>/ai/v1"`,
-  `apiKeyEnv: "TAKOSUMI_AI_GATEWAY_CLOUDFLARE_API_TOKEN"`, and Cloudflare model ids such as
+  `apiKeyEnv: "CLOUDFLARE_API_TOKEN"`, and Cloudflare model ids such as
   `openai/gpt-4.1-mini`, `anthropic/claude-sonnet-4-5`, or Google AI Studio model ids as `upstreamModel`.
   It does not require provider API keys in Takosumi; the Cloudflare API token authorizes Cloudflare AI Gateway
   and Unified Billing.
