@@ -95,7 +95,7 @@ import type {
 
 // ---------------------------------------------------------------------------
 // OpentofuRunPort: the few run operations the adapter needs. Keeping this narrow
-// (and free of ObjectStore vocabulary) is what isolates the RunEngine coupling.
+// (and free of ObjectBucket vocabulary) is what isolates the RunEngine coupling.
 // ---------------------------------------------------------------------------
 
 /** OpenTofu provider mapping for one resolved Target. */
@@ -120,7 +120,10 @@ export interface OpentofuRunRequest {
   /** First-party module template id, e.g. `cloudflare-r2-storage`. */
   readonly templateId: string;
   /** The first-party module's HCL files (child module materialized by the runner). */
-  readonly moduleFiles: readonly { readonly path: string; readonly text: string }[];
+  readonly moduleFiles: readonly {
+    readonly path: string;
+    readonly text: string;
+  }[];
   /** Module variable values, already augmented (accountId/region) and JSON-coerced. */
   readonly inputs: Readonly<Record<string, JsonValue>>;
   /** Public OpenTofu output names projected from the module (`tofu output -json`). */
@@ -163,18 +166,20 @@ export interface OpentofuRunPort {
 // Target type -> OpenTofu provider mapping + input augmentation.
 // ---------------------------------------------------------------------------
 
-const PROVIDER_LOCAL_NAME_BY_TARGET_TYPE: Readonly<Partial<Record<TargetType, string>>> =
-  Object.freeze({
-    cloudflare: "cloudflare",
-    aws: "aws",
-    gcp: "google",
-  });
-
-const PROVIDER_SOURCE_BY_LOCAL_NAME: Readonly<Record<string, string>> = Object.freeze({
-  cloudflare: "cloudflare/cloudflare",
-  aws: "hashicorp/aws",
-  google: "hashicorp/google",
+const PROVIDER_LOCAL_NAME_BY_TARGET_TYPE: Readonly<
+  Partial<Record<TargetType, string>>
+> = Object.freeze({
+  cloudflare: "cloudflare",
+  aws: "aws",
+  gcp: "google",
 });
+
+const PROVIDER_SOURCE_BY_LOCAL_NAME: Readonly<Record<string, string>> =
+  Object.freeze({
+    cloudflare: "cloudflare/cloudflare",
+    aws: "hashicorp/aws",
+    google: "hashicorp/google",
+  });
 
 /** Map a resolved Target type to the OpenTofu provider local name. */
 export function providerLocalNameForTargetType(type: TargetType): string {
@@ -192,7 +197,7 @@ function isNonEmptyString(value: unknown): value is string {
 
 /**
  * Keep only JSON-serializable values; drop `undefined`/functions/symbols. The
- * planner's ObjectStore inputs are scalars, but this guards the seam so the
+ * planner's ObjectBucket inputs are scalars, but this guards the seam so the
  * runner never receives non-HCL-encodable junk.
  */
 function normalizeJsonInputs(
@@ -209,7 +214,8 @@ function normalizeJsonInputs(
 function coerceJsonValue(value: unknown): JsonValue | undefined {
   if (value === null) return null;
   const t = typeof value;
-  if (t === "string" || t === "number" || t === "boolean") return value as JsonValue;
+  if (t === "string" || t === "number" || t === "boolean")
+    return value as JsonValue;
   if (Array.isArray(value)) {
     return value.map((v) => coerceJsonValue(v) ?? null);
   }
@@ -345,7 +351,8 @@ export function nativeResourcesFromPlanChanges(
   const refs: NativeResourceRef[] = [];
   for (const change of changes) {
     const actions = change.actions ?? [];
-    const isPureDelete = actions.length > 0 && actions.every((a) => a === "delete");
+    const isPureDelete =
+      actions.length > 0 && actions.every((a) => a === "delete");
     const isNoOp = actions.length === 0 || actions.every((a) => a === "no-op");
     if (isPureDelete || isNoOp) continue;
     refs.push({ type: change.type, id: change.address });
@@ -441,7 +448,9 @@ export class ControllerOpentofuRunPort implements OpentofuRunPort {
     return {
       runId: planRun.id,
       summary: summarizePlan(planRun),
-      nativeResources: nativeResourcesFromPlanChanges(planRun.planResourceChanges),
+      nativeResources: nativeResourcesFromPlanChanges(
+        planRun.planResourceChanges,
+      ),
       outputs: {},
     };
   }
@@ -449,7 +458,9 @@ export class ControllerOpentofuRunPort implements OpentofuRunPort {
   async apply(request: OpentofuRunRequest): Promise<OpentofuRunResult> {
     const binding = await this.#resolveCapsuleBinding(request);
     const planRun = await this.#createAndDrivePlan(request, binding, "create");
-    const nativeResources = nativeResourcesFromPlanChanges(planRun.planResourceChanges);
+    const nativeResources = nativeResourcesFromPlanChanges(
+      planRun.planResourceChanges,
+    );
 
     const applyResponse = await this.#driver.createApplyRun(
       { planRunId: planRun.id, expected: applyGuardFromPlanRun(planRun) },
@@ -543,8 +554,12 @@ export class ControllerOpentofuRunPort implements OpentofuRunPort {
    * `template-module`, inputs are baked as literals, and `publicOutputs` are
    * projected for `tofu output -json` capture.
    */
-  #genericRootDispatch(request: OpentofuRunRequest): GenericRootDispatchContext {
-    const outputAllowlist = outputAllowlistFromPublicOutputs(request.publicOutputs);
+  #genericRootDispatch(
+    request: OpentofuRunRequest,
+  ): GenericRootDispatchContext {
+    const outputAllowlist = outputAllowlistFromPublicOutputs(
+      request.publicOutputs,
+    );
     const providerEnvBindings = providerEnvBindingsFor(request.providerBinding);
     const generatedRoot = generateGenericCapsuleRoot({
       requiredProviders: [request.providerBinding.providerSource],
@@ -600,7 +615,9 @@ function summarizePlan(planRun: PublicPlanRun): string {
  * Requires the runner to have populated `planDigest` + `planArtifact` (a real or
  * simulated runner); a plan with neither cannot be applied.
  */
-export function applyGuardFromPlanRun(planRun: PublicPlanRun): ApplyExpectedGuard {
+export function applyGuardFromPlanRun(
+  planRun: PublicPlanRun,
+): ApplyExpectedGuard {
   if (!planRun.planDigest || !planRun.planArtifact) {
     throw new Error(
       `applyGuardFromPlanRun: plan ${planRun.id} has no completed plan artifact; ` +
@@ -642,7 +659,9 @@ export function applyGuardFromPlanRun(planRun: PublicPlanRun): ApplyExpectedGuar
 
 export interface FakeOpentofuRunPortOverrides {
   /** Override the native resources a plan/apply reports for a resourceId. */
-  readonly nativeResources?: Readonly<Record<string, readonly NativeResourceRef[]>>;
+  readonly nativeResources?: Readonly<
+    Record<string, readonly NativeResourceRef[]>
+  >;
   /** Override the outputs an apply returns for a resourceId. */
   readonly outputs?: Readonly<Record<string, JsonObject>>;
 }

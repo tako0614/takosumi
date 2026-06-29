@@ -1,24 +1,24 @@
 import { test, expect } from "bun:test";
 
-import type { ObjectStoreSpec, TargetPoolEntry } from "takosumi-contract";
+import type { ObjectBucketSpec, TargetPoolEntry } from "takosumi-contract";
 import {
   AI_ENDPOINT_GENERIC_TEMPLATE_ID,
   AI_ENDPOINT_IMPLEMENTATION_TEMPLATE,
-  HTTP_SERVICE_IMPLEMENTATION_TEMPLATE,
-  OBJECT_STORE_IMPLEMENTATION_TEMPLATE,
+  EDGE_WORKER_IMPLEMENTATION_TEMPLATE,
+  OBJECT_BUCKET_IMPLEMENTATION_TEMPLATE,
   parseAIEndpointSpec,
-  parseHttpServiceSpec,
-  parseObjectStoreSpec,
+  parseEdgeWorkerSpec,
+  parseObjectBucketSpec,
   planAIEndpoint,
-  planHttpService,
-  planObjectStore,
+  planEdgeWorker,
+  planObjectBucket,
 } from "../../../../core/domains/resource-shape/planner.ts";
 import { firstPartyModuleFilesByTemplateId } from "../../../../opentofu-modules/module-files.ts";
 
-// --- parseObjectStoreSpec ----------------------------------------------------
+// --- parseObjectBucketSpec ----------------------------------------------------
 
-test("parseObjectStoreSpec accepts a valid minimal spec", () => {
-  const r = parseObjectStoreSpec({ name: "assets", interfaces: ["s3_api"] });
+test("parseObjectBucketSpec accepts a valid minimal spec", () => {
+  const r = parseObjectBucketSpec({ name: "assets", interfaces: ["s3_api"] });
   expect(r.ok).toBe(true);
   if (r.ok) {
     expect(r.spec.name).toBe("assets");
@@ -27,8 +27,8 @@ test("parseObjectStoreSpec accepts a valid minimal spec", () => {
   }
 });
 
-test("parseObjectStoreSpec accepts a valid lifecyclePolicy", () => {
-  const r = parseObjectStoreSpec({
+test("parseObjectBucketSpec accepts a valid lifecyclePolicy", () => {
+  const r = parseObjectBucketSpec({
     name: "assets",
     interfaces: ["s3_api", "signed_url"],
     lifecyclePolicy: { delete: "retain" },
@@ -37,35 +37,38 @@ test("parseObjectStoreSpec accepts a valid lifecyclePolicy", () => {
   if (r.ok) expect(r.spec.lifecyclePolicy?.delete).toBe("retain");
 });
 
-test("parseObjectStoreSpec rejects a non-object spec", () => {
-  expect(parseObjectStoreSpec(null).ok).toBe(false);
-  expect(parseObjectStoreSpec("nope").ok).toBe(false);
-  expect(parseObjectStoreSpec([]).ok).toBe(false);
+test("parseObjectBucketSpec rejects a non-object spec", () => {
+  expect(parseObjectBucketSpec(null).ok).toBe(false);
+  expect(parseObjectBucketSpec("nope").ok).toBe(false);
+  expect(parseObjectBucketSpec([]).ok).toBe(false);
 });
 
-test("parseObjectStoreSpec rejects a missing/blank name", () => {
-  const missing = parseObjectStoreSpec({ interfaces: ["s3_api"] });
+test("parseObjectBucketSpec rejects a missing/blank name", () => {
+  const missing = parseObjectBucketSpec({ interfaces: ["s3_api"] });
   expect(missing.ok).toBe(false);
   if (!missing.ok) expect(missing.error.code).toBe("invalid_name");
 
-  const blank = parseObjectStoreSpec({ name: "   ", interfaces: ["s3_api"] });
+  const blank = parseObjectBucketSpec({ name: "   ", interfaces: ["s3_api"] });
   expect(blank.ok).toBe(false);
 });
 
-test("parseObjectStoreSpec rejects empty interfaces", () => {
-  const r = parseObjectStoreSpec({ name: "assets", interfaces: [] });
+test("parseObjectBucketSpec rejects empty interfaces", () => {
+  const r = parseObjectBucketSpec({ name: "assets", interfaces: [] });
   expect(r.ok).toBe(false);
   if (!r.ok) expect(r.error.code).toBe("invalid_interfaces");
 });
 
-test("parseObjectStoreSpec rejects an unknown interface value", () => {
-  const r = parseObjectStoreSpec({ name: "assets", interfaces: ["s3_api", "ftp"] });
+test("parseObjectBucketSpec rejects an unknown interface value", () => {
+  const r = parseObjectBucketSpec({
+    name: "assets",
+    interfaces: ["s3_api", "ftp"],
+  });
   expect(r.ok).toBe(false);
   if (!r.ok) expect(r.error.code).toBe("invalid_interface");
 });
 
-test("parseObjectStoreSpec rejects an invalid delete policy", () => {
-  const r = parseObjectStoreSpec({
+test("parseObjectBucketSpec rejects an invalid delete policy", () => {
+  const r = parseObjectBucketSpec({
     name: "assets",
     interfaces: ["s3_api"],
     lifecyclePolicy: { delete: "vaporize" },
@@ -74,18 +77,21 @@ test("parseObjectStoreSpec rejects an invalid delete policy", () => {
   if (!r.ok) expect(r.error.code).toBe("invalid_delete_policy");
 });
 
-// --- planObjectStore ---------------------------------------------------------
+// --- planObjectBucket ---------------------------------------------------------
 
-const spec: ObjectStoreSpec = { name: "assets", interfaces: ["s3_api", "signed_url"] };
+const spec: ObjectBucketSpec = {
+  name: "assets",
+  interfaces: ["s3_api", "signed_url"],
+};
 
 test("implementation->templateId map matches the first-party catalog", () => {
-  expect(OBJECT_STORE_IMPLEMENTATION_TEMPLATE.cloudflare_r2).toBe(
+  expect(OBJECT_BUCKET_IMPLEMENTATION_TEMPLATE.cloudflare_r2).toBe(
     "cloudflare-r2-storage",
   );
-  expect(OBJECT_STORE_IMPLEMENTATION_TEMPLATE.aws_s3).toBe("aws-s3-storage");
+  expect(OBJECT_BUCKET_IMPLEMENTATION_TEMPLATE.aws_s3).toBe("aws-s3-storage");
 });
 
-test("planObjectStore maps cloudflare_r2 to cloudflare-r2-storage with real inputs", () => {
+test("planObjectBucket maps cloudflare_r2 to cloudflare-r2-storage with real inputs", () => {
   const target: TargetPoolEntry = {
     name: "cf-main",
     type: "cloudflare",
@@ -93,7 +99,7 @@ test("planObjectStore maps cloudflare_r2 to cloudflare-r2-storage with real inpu
     region: "weur",
     priority: 10,
   };
-  const plan = planObjectStore("cloudflare_r2", spec, target);
+  const plan = planObjectBucket("cloudflare_r2", spec, target);
 
   expect(plan.templateId).toBe("cloudflare-r2-storage");
   // Real module variable names (providers/cloudflare/modules/cloudflare-r2-storage).
@@ -108,113 +114,124 @@ test("planObjectStore maps cloudflare_r2 to cloudflare-r2-storage with real inpu
   );
 });
 
-test("planObjectStore omits location when the target has no region", () => {
+test("planObjectBucket omits location when the target has no region", () => {
   const target: TargetPoolEntry = {
     name: "cf-main",
     type: "cloudflare",
     ref: "cf-account-123",
     priority: 10,
   };
-  const plan = planObjectStore("cloudflare_r2", spec, target);
-  expect(plan.inputs).toEqual({ bucketName: "assets", accountId: "cf-account-123" });
+  const plan = planObjectBucket("cloudflare_r2", spec, target);
+  expect(plan.inputs).toEqual({
+    bucketName: "assets",
+    accountId: "cf-account-123",
+  });
   expect(plan.inputs.location).toBeUndefined();
 });
 
-test("planObjectStore maps aws_s3 to aws-s3-storage with real inputs", () => {
+test("planObjectBucket maps aws_s3 to aws-s3-storage with real inputs", () => {
   const target: TargetPoolEntry = {
     name: "aws-main",
     type: "aws",
     region: "us-east-1",
     priority: 5,
   };
-  const plan = planObjectStore("aws_s3", spec, target);
+  const plan = planObjectBucket("aws_s3", spec, target);
 
   expect(plan.templateId).toBe("aws-s3-storage");
   // Real module variable names (providers/aws/modules/aws-s3-storage).
   expect(plan.inputs).toEqual({ bucketName: "assets", region: "us-east-1" });
   expect(plan.publicOutputs).toEqual(["bucket_name", "bucket_arn", "region"]);
-  expect(plan.moduleFiles).toBe(firstPartyModuleFilesByTemplateId["aws-s3-storage"]);
+  expect(plan.moduleFiles).toBe(
+    firstPartyModuleFilesByTemplateId["aws-s3-storage"],
+  );
 });
 
-test("planObjectStore omits region when the aws target has no region", () => {
-  const target: TargetPoolEntry = { name: "aws-main", type: "aws", priority: 5 };
-  const plan = planObjectStore("aws_s3", spec, target);
+test("planObjectBucket omits region when the aws target has no region", () => {
+  const target: TargetPoolEntry = {
+    name: "aws-main",
+    type: "aws",
+    priority: 5,
+  };
+  const plan = planObjectBucket("aws_s3", spec, target);
   expect(plan.inputs).toEqual({ bucketName: "assets" });
 });
 
-test("planObjectStore throws for an implementation without a first-party module", () => {
-  const target: TargetPoolEntry = { name: "k8s", type: "kubernetes", priority: 1 };
-  expect(() => planObjectStore("minio", spec, target)).toThrow();
-  expect(() => planObjectStore("takosumi_object_store", spec, target)).toThrow();
+test("planObjectBucket throws for an implementation without a first-party module", () => {
+  const target: TargetPoolEntry = {
+    name: "k8s",
+    type: "kubernetes",
+    priority: 1,
+  };
+  expect(() => planObjectBucket("minio", spec, target)).toThrow();
+  expect(() =>
+    planObjectBucket("takosumi_object_bucket", spec, target),
+  ).toThrow();
 });
 
 test("planned module files are the real first-party HCL", () => {
-  const target: TargetPoolEntry = { name: "aws-main", type: "aws", priority: 5 };
-  const plan = planObjectStore("aws_s3", spec, target);
+  const target: TargetPoolEntry = {
+    name: "aws-main",
+    type: "aws",
+    priority: 5,
+  };
+  const plan = planObjectBucket("aws_s3", spec, target);
   expect(plan.moduleFiles[0]?.path).toBe("main.tf");
   expect(plan.moduleFiles[0]?.text).toContain('resource "aws_s3_bucket"');
 });
 
-// --- HttpService -------------------------------------------------------------
+// --- EdgeWorker -------------------------------------------------------------
 
-test("parseHttpServiceSpec accepts a Worker-compatible service", () => {
-  const r = parseHttpServiceSpec({
+test("parseEdgeWorkerSpec accepts a Worker script artifact", () => {
+  const r = parseEdgeWorkerSpec({
     name: "api",
-    runtime: {
-      interface: "web_fetch",
-      language: "typescript",
-      profiles: ["workers_bindings"],
-      source: { artifactPath: "/work/dist/worker.js" },
-    },
-    exposure: { publicHttp: true },
+    source: { artifactPath: "/work/dist/worker.js" },
+    compatibilityDate: "2026-06-29",
+    compatibilityFlags: ["nodejs_compat"],
+    profiles: ["workers_bindings"],
   });
   expect(r.ok).toBe(true);
   if (!r.ok) return;
-  expect(r.spec.runtime.interface).toBe("web_fetch");
-  expect(r.spec.runtime.source?.artifactPath).toBe("/work/dist/worker.js");
-  expect(r.spec.exposure?.publicHttp).toBe(true);
+  expect(r.spec.source.artifactPath).toBe("/work/dist/worker.js");
+  expect(r.spec.compatibilityDate).toBe("2026-06-29");
+  expect(r.spec.compatibilityFlags).toEqual(["nodejs_compat"]);
+  expect(r.spec.profiles).toEqual(["workers_bindings"]);
 });
 
-test("parseHttpServiceSpec rejects an unknown runtime interface", () => {
-  const r = parseHttpServiceSpec({
+test("parseEdgeWorkerSpec rejects an unknown profile", () => {
+  const r = parseEdgeWorkerSpec({
     name: "api",
-    runtime: { interface: "cgi" },
+    source: { artifactPath: "/work/dist/worker.js" },
+    profiles: ["lambda_handler"],
   });
   expect(r.ok).toBe(false);
-  if (!r.ok) expect(r.error.code).toBe("invalid_runtime_interface");
+  if (!r.ok) expect(r.error.code).toBe("invalid_profile");
 });
 
-test("parseHttpServiceSpec requires an explicit artifactPath source", () => {
-  const r = parseHttpServiceSpec({
+test("parseEdgeWorkerSpec requires an explicit artifactPath source", () => {
+  const r = parseEdgeWorkerSpec({
     name: "api",
-    runtime: { interface: "web_fetch" },
-  });
-  expect(r.ok).toBe(false);
-  if (!r.ok) expect(r.error.code).toBe("invalid_source");
-});
-
-test("parseHttpServiceSpec rejects source modes the planner cannot materialize", () => {
-  const r = parseHttpServiceSpec({
-    name: "api",
-    runtime: {
-      interface: "web_fetch",
-      source: { artifactRef: "artifact_123" },
-    },
   });
   expect(r.ok).toBe(false);
   if (!r.ok) expect(r.error.code).toBe("invalid_source");
 });
 
-test("parseHttpServiceSpec rejects connections until grant/projection planning lands", () => {
-  const r = parseHttpServiceSpec({
+test("parseEdgeWorkerSpec rejects source modes the planner cannot materialize", () => {
+  const r = parseEdgeWorkerSpec({
     name: "api",
-    runtime: {
-      interface: "web_fetch",
-      source: { artifactPath: "/work/dist/worker.js" },
-    },
+    source: { artifactRef: "artifact_123" },
+  });
+  expect(r.ok).toBe(false);
+  if (!r.ok) expect(r.error.code).toBe("invalid_source");
+});
+
+test("parseEdgeWorkerSpec rejects connections until grant/projection planning lands", () => {
+  const r = parseEdgeWorkerSpec({
+    name: "api",
+    source: { artifactPath: "/work/dist/worker.js" },
     connections: {
       ASSETS: {
-        resource: "ObjectStore/assets",
+        resource: "ObjectBucket/assets",
         permissions: ["read"],
         projection: "runtime_binding",
       },
@@ -224,34 +241,33 @@ test("parseHttpServiceSpec rejects connections until grant/projection planning l
   if (!r.ok) expect(r.error.code).toBe("invalid_connections");
 });
 
-test("planHttpService maps cloudflare_workers to cloudflare-worker-service", () => {
+test("planEdgeWorker maps cloudflare_workers to cloudflare-worker-service", () => {
   const target: TargetPoolEntry = {
     name: "cf-main",
     type: "cloudflare",
     ref: "cf-account-123",
     priority: 10,
   };
-  const plan = planHttpService("cloudflare_workers", {
-    name: "api",
-    runtime: {
-      interface: "web_fetch",
+  const plan = planEdgeWorker(
+    "cloudflare_workers",
+    {
+      name: "api",
       source: { artifactPath: "/work/dist/worker.js" },
     },
-    exposure: { publicHttp: true },
-  }, target);
+    target,
+  );
 
-  expect(HTTP_SERVICE_IMPLEMENTATION_TEMPLATE.cloudflare_workers).toBe(
+  expect(EDGE_WORKER_IMPLEMENTATION_TEMPLATE.cloudflare_workers).toBe(
     "cloudflare-worker-service",
   );
-  expect(plan.shape).toBe("HttpService");
+  expect(plan.shape).toBe("EdgeWorker");
   expect(plan.templateId).toBe("cloudflare-worker-service");
   expect(plan.inputs).toEqual({
     appName: "api",
     accountId: "cf-account-123",
     artifactPath: "/work/dist/worker.js",
-    publicUrl: "",
   });
-  expect(plan.publicOutputs).toEqual(["worker_name", "url"]);
+  expect(plan.publicOutputs).toEqual(["worker_name"]);
   expect(plan.moduleFiles).toBe(
     firstPartyModuleFilesByTemplateId["cloudflare-worker-service"],
   );
@@ -335,22 +351,26 @@ test("planAIEndpoint keeps upstream choice in the selected target", () => {
     ref: "https://api.deepseek.example/v1",
     priority: 10,
   };
-  const plan = planAIEndpoint("openai_compatible_ai_endpoint", {
-    name: "ai",
-    interfaces: ["openai_chat_completions"],
-    profiles: ["openai_compatible"],
-    providerPreferences: ["provider.deepseek"],
-    routingPolicy: {
-      strategy: "lowest_latency",
-      allowFallback: true,
-      preferredRegions: ["jp"],
+  const plan = planAIEndpoint(
+    "openai_compatible_ai_endpoint",
+    {
+      name: "ai",
+      interfaces: ["openai_chat_completions"],
+      profiles: ["openai_compatible"],
+      providerPreferences: ["provider.deepseek"],
+      routingPolicy: {
+        strategy: "lowest_latency",
+        allowFallback: true,
+        preferredRegions: ["jp"],
+      },
+      modelPolicy: { defaultModel: "deepseek/chat" },
     },
-    modelPolicy: { defaultModel: "deepseek/chat" },
-  }, target);
-
-  expect(AI_ENDPOINT_IMPLEMENTATION_TEMPLATE.openai_compatible_ai_endpoint).toBe(
-    "takosumi-ai-endpoint",
+    target,
   );
+
+  expect(
+    AI_ENDPOINT_IMPLEMENTATION_TEMPLATE.openai_compatible_ai_endpoint,
+  ).toBe("takosumi-ai-endpoint");
   expect(plan.shape).toBe("AIEndpoint");
   expect(plan.templateId).toBe("takosumi-ai-endpoint");
   expect(plan.inputs).toEqual({
@@ -381,16 +401,23 @@ test("planAIEndpoint uses the generic projection module for admin-defined implem
     ref: "https://generativelanguage.googleapis.com/v1beta/openai",
     priority: 10,
   };
-  const plan = planAIEndpoint("gemini_openai_compatible", {
-    name: "ai",
-    interfaces: ["openai_chat_completions"],
-    profiles: ["provider.gemini", "openai_compatible"],
-    providerPreferences: ["provider.gemini"],
-  }, target);
+  const plan = planAIEndpoint(
+    "gemini_openai_compatible",
+    {
+      name: "ai",
+      interfaces: ["openai_chat_completions"],
+      profiles: ["provider.gemini", "openai_compatible"],
+      providerPreferences: ["provider.gemini"],
+    },
+    target,
+  );
 
   expect(AI_ENDPOINT_GENERIC_TEMPLATE_ID).toBe("takosumi-ai-endpoint");
   expect(plan.templateId).toBe(AI_ENDPOINT_GENERIC_TEMPLATE_ID);
   expect(plan.inputs.implementation).toBe("gemini_openai_compatible");
-  expect(plan.inputs.profiles).toEqual(["provider.gemini", "openai_compatible"]);
+  expect(plan.inputs.profiles).toEqual([
+    "provider.gemini",
+    "openai_compatible",
+  ]);
   expect(plan.inputs.providerPreferences).toEqual(["provider.gemini"]);
 });

@@ -5,10 +5,7 @@ import {
   ResourceShapeService,
   StubResourceShapeAdapter,
 } from "../../../../core/domains/resource-shape/mod.ts";
-import type {
-  SpacePolicySpec,
-  TargetPoolSpec,
-} from "takosumi-contract";
+import type { SpacePolicySpec, TargetPoolSpec } from "takosumi-contract";
 
 const ACTOR: ActorContext = {
   actorAccountId: "acc_1",
@@ -30,7 +27,12 @@ function makeService() {
 
 const POOL: TargetPoolSpec = {
   targets: [
-    { name: "cloudflare-main", type: "cloudflare", ref: "cf-acct", priority: 80 },
+    {
+      name: "cloudflare-main",
+      type: "cloudflare",
+      ref: "cf-acct",
+      priority: 80,
+    },
     { name: "aws-main", type: "aws", region: "ap-northeast-1", priority: 70 },
   ],
 };
@@ -47,12 +49,12 @@ async function seed(service: ResourceShapeService, policy = POLICY) {
 const APPLY = {
   actor: ACTOR,
   space: "space_1",
-  kind: "ObjectStore" as const,
+  kind: "ObjectBucket" as const,
   name: "assets",
   spec: { name: "assets", interfaces: ["s3_api", "signed_url"] },
 };
 
-test("apply resolves ObjectStore to the highest-priority target and locks it", async () => {
+test("apply resolves ObjectBucket to the highest-priority target and locks it", async () => {
   const { service } = makeService();
   await seed(service);
 
@@ -70,27 +72,24 @@ test("apply resolves ObjectStore to the highest-priority target and locks it", a
   expect(Object.keys(status?.outputs ?? {}).length).toBeGreaterThan(0);
 });
 
-test("apply resolves HttpService as a first-class shape", async () => {
+test("apply resolves EdgeWorker as a first-class shape", async () => {
   const { service } = makeService();
   await seed(service);
 
   const result = await service.apply({
     actor: ACTOR,
     space: "space_1",
-    kind: "HttpService",
+    kind: "EdgeWorker",
     name: "api",
     spec: {
       name: "api",
-      runtime: {
-        interface: "web_fetch",
-        source: { artifactPath: "/work/dist/worker.js" },
-      },
-      exposure: { publicHttp: true },
+      source: { artifactPath: "/work/dist/worker.js" },
+      profiles: ["workers_bindings"],
     },
   });
   expect(result.ok).toBe(true);
   if (!result.ok) return;
-  expect(result.value.kind).toBe("HttpService");
+  expect(result.value.kind).toBe("EdgeWorker");
   expect(result.value.status?.resolution?.selectedImplementation).toBe(
     "cloudflare_workers",
   );
@@ -150,7 +149,9 @@ test("apply resolves AIEndpoint with admin-declared provider implementation", as
     "deepseek_openai_gateway",
   );
   expect(result.value.status?.resolution?.target).toBe("deepseek-main");
-  expect(result.value.status?.outputs?.base_url).toContain("AIEndpoint:ai/base_url");
+  expect(result.value.status?.outputs?.base_url).toContain(
+    "AIEndpoint:ai/base_url",
+  );
 });
 
 test("get returns the applied resource with resolution status", async () => {
@@ -158,7 +159,7 @@ test("get returns the applied resource with resolution status", async () => {
   await seed(service);
   await service.apply(APPLY);
 
-  const got = await service.get("space_1", "ObjectStore", "assets");
+  const got = await service.get("space_1", "ObjectBucket", "assets");
   expect(got.ok).toBe(true);
   if (!got.ok) return;
   expect(got.value.metadata.name).toBe("assets");
@@ -192,7 +193,9 @@ test("SpacePolicy deniedTargets steers resolution to the allowed target", async 
   const result = await service.apply(APPLY);
   expect(result.ok).toBe(true);
   if (!result.ok) return;
-  expect(result.value.status?.resolution?.selectedImplementation).toBe("aws_s3");
+  expect(result.value.status?.resolution?.selectedImplementation).toBe(
+    "aws_s3",
+  );
   expect(result.value.status?.resolution?.target).toBe("aws-main");
 });
 
@@ -206,7 +209,7 @@ test("preview resolves without persisting", async () => {
   expect(preview.value.selectedImplementation).toBe("cloudflare_r2");
   expect(preview.value.nativeResourcePlan.length).toBeGreaterThan(0);
   // preview must not create a persisted resource
-  const stored = await stores.resources.get("tkrn:space_1:ObjectStore:assets");
+  const stored = await stores.resources.get("tkrn:space_1:ObjectBucket:assets");
   expect(stored).toBeUndefined();
 });
 
@@ -243,11 +246,16 @@ test("delete respects lifecyclePolicy.delete=block", async () => {
   });
   expect(created.ok).toBe(true);
 
-  const deleted = await service.delete("space_1", "ObjectStore", "assets", ACTOR);
+  const deleted = await service.delete(
+    "space_1",
+    "ObjectBucket",
+    "assets",
+    ACTOR,
+  );
   expect(deleted.ok).toBe(false);
   if (deleted.ok) return;
   expect(deleted.error.code).toBe("delete_blocked");
 
-  const stillThere = await service.get("space_1", "ObjectStore", "assets");
+  const stillThere = await service.get("space_1", "ObjectBucket", "assets");
   expect(stillThere.ok).toBe(true);
 });

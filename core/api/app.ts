@@ -62,8 +62,7 @@ export interface CreateApiAppOptions {
   readonly registerReadinessRoutes?: boolean;
   readonly readinessRouteProbes?: ReadinessRouteProbes;
   readonly createOpenApiDocument?: () =>
-    | OpenApiDocument
-    | Promise<OpenApiDocument>;
+    OpenApiDocument | Promise<OpenApiDocument>;
   readonly getOpenApiBearerToken?: () => string | undefined;
   readonly registerRuntimeAgentRoutes?: boolean;
   readonly runtimeAgentRouteOptions?: RegisterRuntimeAgentRoutesOptions;
@@ -114,19 +113,23 @@ export async function createApiApp(
 
   app.get(TAKOSUMI_WELL_KNOWN_PATH, (c) => {
     return c.json(
-      createTakosumiWellKnownDocument(createProductDiscoveryOptions({
-        origin: new URL(c.req.url).origin,
-        mounted,
-      })),
+      createTakosumiWellKnownDocument(
+        createProductDiscoveryOptions({
+          origin: new URL(c.req.url).origin,
+          mounted,
+        }),
+      ),
     );
   });
 
   app.get(TAKOSUMI_PRODUCT_CAPABILITIES_PATH, (c) => {
     return c.json(
-      createTakosumiProductCapabilities(createProductDiscoveryOptions({
-        origin: new URL(c.req.url).origin,
-        mounted,
-      })),
+      createTakosumiProductCapabilities(
+        createProductDiscoveryOptions({
+          origin: new URL(c.req.url).origin,
+          mounted,
+        }),
+      ),
     );
   });
 
@@ -297,11 +300,9 @@ function createProductDiscoveryOptions(input: {
     origin: input.origin,
     resources: {
       Stack: stacks,
-      ObjectStore: resourceShapes,
-      HttpService: resourceShapes,
+      ObjectBucket: resourceShapes,
+      EdgeWorker: resourceShapes,
       AIEndpoint: resourceShapes,
-      ContainerService: false,
-      Machine: false,
     },
     adapters: {
       opentofu: stacks || resourceShapes,

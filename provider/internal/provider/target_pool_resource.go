@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -20,7 +21,7 @@ import (
 )
 
 var (
-	targetTypes = []string{
+	wellKnownTargetTypes = []string{
 		"aws",
 		"cloudflare",
 		"gcp",
@@ -70,6 +71,8 @@ type targetPoolImplementationModel struct {
 	Shape              types.String `tfsdk:"shape"`
 	Implementation     types.String `tfsdk:"implementation"`
 	NativeResourceType types.String `tfsdk:"native_resource_type"`
+	Plugin             types.String `tfsdk:"plugin"`
+	OptionsJSON        types.String `tfsdk:"options_json"`
 	Interfaces         types.Map    `tfsdk:"interfaces"`
 }
 
@@ -77,6 +80,8 @@ var targetPoolImplementationAttrTypes = map[string]attr.Type{
 	"shape":                types.StringType,
 	"implementation":       types.StringType,
 	"native_resource_type": types.StringType,
+	"plugin":               types.StringType,
+	"options_json":         types.StringType,
 	"interfaces":           types.MapType{ElemType: types.StringType},
 }
 
@@ -95,7 +100,7 @@ func (r *targetPoolResource) Metadata(_ context.Context, req resource.MetadataRe
 
 func (r *targetPoolResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "A Takosumi TargetPool admin resource. It declares which Targets and implementation capabilities the Takosumi Resolver may use. AI provider support is declared here as capability evidence, not hard-coded in the provider binary.",
+		Description: "A Takosumi TargetPool admin resource. It declares which Targets and implementation capabilities the Takosumi Resolver may use. Provider/backend support is declared here as capability evidence and optional plugin wiring, not hard-coded in the provider binary.",
 		Attributes: map[string]schema.Attribute{
 			"name": schema.StringAttribute{
 				Required:    true,
@@ -118,7 +123,7 @@ func (r *targetPoolResource) Schema(_ context.Context, _ resource.SchemaRequest,
 			},
 			"target": schema.ListNestedAttribute{
 				Required:    true,
-				Description: "Ranked Targets available to the Resolver. Use type ai_provider for external AI provider gateways such as DeepSeek, Gemini, GLM, Bedrock, Vertex AI, OpenAI-compatible upstreams, or an operator custom adapter.",
+				Description: "Ranked Targets available to the Resolver. Type is an extensible token; known examples include " + strings.Join(wellKnownTargetTypes, ", ") + ", but operator/backend plugin tokens are also valid.",
 				NestedObject: schema.NestedAttributeObject{
 					Attributes: map[string]schema.Attribute{
 						"name": schema.StringAttribute{
@@ -130,9 +135,9 @@ func (r *targetPoolResource) Schema(_ context.Context, _ resource.SchemaRequest,
 						},
 						"type": schema.StringAttribute{
 							Required:    true,
-							Description: "Target type. Allowed values: " + strings.Join(targetTypes, ", ") + ".",
+							Description: "Target type token. Known examples: " + strings.Join(wellKnownTargetTypes, ", ") + ". Custom provider/backend plugin tokens are intentionally allowed.",
 							Validators: []validator.String{
-								StringOneOf(targetTypes...),
+								StringToken(),
 							},
 						},
 						"ref": schema.StringAttribute{
@@ -175,6 +180,17 @@ func (r *targetPoolResource) Schema(_ context.Context, _ resource.SchemaRequest,
 										Validators: []validator.String{
 											StringToken(),
 										},
+									},
+									"plugin": schema.StringAttribute{
+										Optional:    true,
+										Description: "Optional adapter plugin id for this implementation. This is a Vite-style extension hook: the plugin supplies preview/apply/observe/delete behavior for the implementation token.",
+										Validators: []validator.String{
+											StringToken(),
+										},
+									},
+									"options_json": schema.StringAttribute{
+										Optional:    true,
+										Description: "Optional plugin-local JSON object. Secret material must stay in Credential or ProviderConnection, not in this field.",
 									},
 									"interfaces": schema.MapAttribute{
 										Required:    true,
@@ -393,6 +409,21 @@ func targetPoolImplementations(ctx context.Context, targetIndex int, value types
 		}
 		if !item.NativeResourceType.IsNull() && !item.NativeResourceType.IsUnknown() {
 			impl.NativeResourceType = item.NativeResourceType.ValueString()
+		}
+		if !item.Plugin.IsNull() && !item.Plugin.IsUnknown() {
+			impl.Plugin = item.Plugin.ValueString()
+		}
+		if !item.OptionsJSON.IsNull() && !item.OptionsJSON.IsUnknown() && strings.TrimSpace(item.OptionsJSON.ValueString()) != "" {
+			var options map[string]any
+			if err := json.Unmarshal([]byte(item.OptionsJSON.ValueString()), &options); err != nil {
+				diags.AddAttributeError(
+					path.Root("target").AtListIndex(targetIndex).AtName("implementation").AtListIndex(index).AtName("options_json"),
+					"Invalid plugin options JSON",
+					"implementation.options_json must be a JSON object when set.",
+				)
+			} else {
+				impl.Options = options
+			}
 		}
 		implementations = append(implementations, impl)
 	}

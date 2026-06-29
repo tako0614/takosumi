@@ -22,6 +22,8 @@ func TestTargetPoolModelToSpecAcceptsAdminDefinedAIProviders(t *testing.T) {
 		"shape":                types.StringValue("AIEndpoint"),
 		"implementation":       types.StringValue("deepseek_openai_gateway"),
 		"native_resource_type": types.StringValue("ai.deepseek_endpoint"),
+		"plugin":               types.StringValue("deepseek-plugin"),
+		"options_json":         types.StringValue(`{"basePath":"/v1"}`),
 		"interfaces":           interfaces,
 	})
 	if diags.HasError() {
@@ -81,6 +83,12 @@ func TestTargetPoolModelToSpecAcceptsAdminDefinedAIProviders(t *testing.T) {
 	if gotImplementation.Interfaces["vendor.deepseek.responses.v1"] != "native" {
 		t.Fatalf("expected custom AI interface capability, got %#v", gotImplementation.Interfaces)
 	}
+	if gotImplementation.Plugin != "deepseek-plugin" {
+		t.Fatalf("expected plugin to pass through, got %#v", gotImplementation)
+	}
+	if gotImplementation.Options["basePath"] != "/v1" {
+		t.Fatalf("expected options_json to pass through, got %#v", gotImplementation.Options)
+	}
 }
 
 func TestTargetPoolModelToSpecRejectsInvalidCapabilityLevel(t *testing.T) {
@@ -95,6 +103,8 @@ func TestTargetPoolModelToSpecRejectsInvalidCapabilityLevel(t *testing.T) {
 		"shape":                types.StringValue("AIEndpoint"),
 		"implementation":       types.StringValue("custom_ai"),
 		"native_resource_type": types.StringNull(),
+		"plugin":               types.StringNull(),
+		"options_json":         types.StringNull(),
 		"interfaces":           interfaces,
 	})
 	if diags.HasError() {

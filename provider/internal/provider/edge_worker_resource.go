@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
@@ -18,29 +19,30 @@ import (
 	"github.com/takosjp/terraform-provider-takosumi/internal/client"
 )
 
-var httpServiceRuntimeInterfaces = []string{"web_fetch", "node_http", "container_http"}
+var edgeWorkerProfiles = []string{"workers_bindings", "node_compat", "service_bindings", "static_assets"}
 
 var (
-	_ resource.Resource                = (*httpServiceResource)(nil)
-	_ resource.ResourceWithConfigure   = (*httpServiceResource)(nil)
-	_ resource.ResourceWithImportState = (*httpServiceResource)(nil)
-	_ resource.ResourceWithModifyPlan  = (*httpServiceResource)(nil)
+	_ resource.Resource                = (*edgeWorkerResource)(nil)
+	_ resource.ResourceWithConfigure   = (*edgeWorkerResource)(nil)
+	_ resource.ResourceWithImportState = (*edgeWorkerResource)(nil)
+	_ resource.ResourceWithModifyPlan  = (*edgeWorkerResource)(nil)
 )
 
-type httpServiceResource struct {
+type edgeWorkerResource struct {
 	data *providerData
 }
 
-func NewHttpServiceResource() resource.Resource {
-	return &httpServiceResource{}
+func NewEdgeWorkerResource() resource.Resource {
+	return &edgeWorkerResource{}
 }
 
-type httpServiceModel struct {
+type edgeWorkerModel struct {
 	ID                     types.String `tfsdk:"id"`
 	Name                   types.String `tfsdk:"name"`
-	RuntimeInterface       types.String `tfsdk:"runtime_interface"`
 	ArtifactPath           types.String `tfsdk:"artifact_path"`
-	PublicHTTP             types.Bool   `tfsdk:"public_http"`
+	CompatibilityDate      types.String `tfsdk:"compatibility_date"`
+	CompatibilityFlags     types.Set    `tfsdk:"compatibility_flags"`
+	Profiles               types.Set    `tfsdk:"profiles"`
 	Space                  types.String `tfsdk:"space"`
 	SelectedImplementation types.String `tfsdk:"selected_implementation"`
 	Target                 types.String `tfsdk:"target"`
@@ -49,35 +51,44 @@ type httpServiceModel struct {
 	Outputs                types.Map    `tfsdk:"outputs"`
 }
 
-func (r *httpServiceResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
-	resp.TypeName = req.ProviderTypeName + "_http_service"
+func (r *edgeWorkerResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
+	resp.TypeName = req.ProviderTypeName + "_edge_worker"
 }
 
-func (r *httpServiceResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
+func (r *edgeWorkerResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "A Takosumi HttpService resource shape. The Takosumi Resolver selects the backend implementation and target.",
+		Description: "A Takosumi EdgeWorker resource shape. The Takosumi Resolver selects the backend implementation and target.",
 		Attributes: map[string]schema.Attribute{
 			"name": schema.StringAttribute{
 				Required:    true,
-				Description: "HttpService name. Changing it replaces the resource.",
+				Description: "EdgeWorker name. Changing it replaces the resource.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
 			},
-			"runtime_interface": schema.StringAttribute{
+			"artifact_path": schema.StringAttribute{
 				Required:    true,
-				Description: "Desired runtime interface. Allowed values: web_fetch, node_http, container_http.",
-				Validators: []validator.String{
-					StringOneOf(httpServiceRuntimeInterfaces...),
+				Description: "OpenTofu-runner-local path to a prebuilt Worker artifact. Takosumi does not build or fetch it implicitly.",
+			},
+			"compatibility_date": schema.StringAttribute{
+				Optional:    true,
+				Description: "Optional Worker runtime compatibility date.",
+			},
+			"compatibility_flags": schema.SetAttribute{
+				Optional:    true,
+				ElementType: types.StringType,
+				Description: "Optional Worker runtime compatibility flags. Values are endpoint-defined tokens.",
+				Validators: []validator.Set{
+					SetStringsNonEmpty(0),
 				},
 			},
-			"artifact_path": schema.StringAttribute{
+			"profiles": schema.SetAttribute{
 				Optional:    true,
-				Description: "OpenTofu-runner-local path to a prebuilt artifact. Takosumi does not build or fetch it implicitly.",
-			},
-			"public_http": schema.BoolAttribute{
-				Optional:    true,
-				Description: "Whether the service should be exposed over public HTTP.",
+				ElementType: types.StringType,
+				Description: "Optional Worker profile tokens. Allowed values: " + strings.Join(edgeWorkerProfiles, ", ") + ".",
+				Validators: []validator.Set{
+					SetStringsOneOf(0, edgeWorkerProfiles...),
+				},
 			},
 			"space": schema.StringAttribute{
 				Optional:    true,
@@ -120,7 +131,7 @@ func (r *httpServiceResource) Schema(_ context.Context, _ resource.SchemaRequest
 	}
 }
 
-func (r *httpServiceResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
+func (r *edgeWorkerResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
 	if req.ProviderData == nil {
 		return
 	}
@@ -135,11 +146,11 @@ func (r *httpServiceResource) Configure(_ context.Context, req resource.Configur
 	r.data = data
 }
 
-func (r *httpServiceResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
+func (r *edgeWorkerResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	if !r.assertConfigured(&resp.Diagnostics) {
 		return
 	}
-	var plan httpServiceModel
+	var plan edgeWorkerModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -151,42 +162,42 @@ func (r *httpServiceResource) Create(ctx context.Context, req resource.CreateReq
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
-func (r *httpServiceResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
+func (r *edgeWorkerResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
 	if !r.assertConfigured(&resp.Diagnostics) {
 		return
 	}
-	var state httpServiceModel
+	var state edgeWorkerModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 	readSpace := effectiveSpace(state.Space, r.data.defaultSpace)
-	res, err := r.data.client.GetResource(ctx, client.KindHttpService, state.Name.ValueString(), readSpace)
+	res, err := r.data.client.GetResource(ctx, client.KindEdgeWorker, state.Name.ValueString(), readSpace)
 	if err != nil {
 		if errors.Is(err, client.ErrNotFound) {
 			resp.State.RemoveResource(ctx)
 			return
 		}
-		resp.Diagnostics.AddError("Failed to read HttpService", err.Error())
+		resp.Diagnostics.AddError("Failed to read EdgeWorker", err.Error())
 		return
 	}
 	space := state.Space.ValueString()
 	if res.Metadata.Space != "" {
 		space = res.Metadata.Space
 	}
-	resp.Diagnostics.Append(refreshHttpServiceSpec(res, &state)...)
-	resp.Diagnostics.Append(applyHttpServiceStatus(ctx, res, space, &state)...)
+	resp.Diagnostics.Append(refreshEdgeWorkerSpec(res, &state)...)
+	resp.Diagnostics.Append(applyEdgeWorkerStatus(ctx, res, space, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
-func (r *httpServiceResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+func (r *edgeWorkerResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	if !r.assertConfigured(&resp.Diagnostics) {
 		return
 	}
-	var plan httpServiceModel
+	var plan edgeWorkerModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -198,22 +209,22 @@ func (r *httpServiceResource) Update(ctx context.Context, req resource.UpdateReq
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
-func (r *httpServiceResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
+func (r *edgeWorkerResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
 	if !r.assertConfigured(&resp.Diagnostics) {
 		return
 	}
-	var state httpServiceModel
+	var state edgeWorkerModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
 	deleteSpace := effectiveSpace(state.Space, r.data.defaultSpace)
-	if err := r.data.client.DeleteResource(ctx, client.KindHttpService, state.Name.ValueString(), deleteSpace); err != nil {
-		resp.Diagnostics.AddError("Failed to delete HttpService", err.Error())
+	if err := r.data.client.DeleteResource(ctx, client.KindEdgeWorker, state.Name.ValueString(), deleteSpace); err != nil {
+		resp.Diagnostics.AddError("Failed to delete EdgeWorker", err.Error())
 	}
 }
 
-func (r *httpServiceResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+func (r *edgeWorkerResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	if space, name, ok := cutSpaceName(req.ID); ok {
 		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("space"), space)...)
 		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("name"), name)...)
@@ -222,23 +233,23 @@ func (r *httpServiceResource) ImportState(ctx context.Context, req resource.Impo
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("name"), req.ID)...)
 }
 
-func (r *httpServiceResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, _ *resource.ModifyPlanResponse) {
+func (r *edgeWorkerResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, _ *resource.ModifyPlanResponse) {
 	if r.data == nil || req.Plan.Raw.IsNull() {
 		return
 	}
-	var plan httpServiceModel
+	var plan edgeWorkerModel
 	_ = req.Plan.Get(ctx, &plan)
-	if plan.Name.IsUnknown() || plan.RuntimeInterface.IsUnknown() {
+	if plan.Name.IsUnknown() || plan.ArtifactPath.IsUnknown() {
 		return
 	}
-	body, _, diags := plan.toResource(r.data.defaultSpace)
+	body, _, diags := plan.toResource(ctx, r.data.defaultSpace)
 	if diags.HasError() {
 		return
 	}
 	_, _ = r.data.client.PreviewResource(ctx, body)
 }
 
-func (r *httpServiceResource) assertConfigured(diags *diag.Diagnostics) bool {
+func (r *edgeWorkerResource) assertConfigured(diags *diag.Diagnostics) bool {
 	if r.data == nil || r.data.client == nil {
 		diags.AddError(
 			"Provider not configured",
@@ -246,32 +257,32 @@ func (r *httpServiceResource) assertConfigured(diags *diag.Diagnostics) bool {
 		)
 		return false
 	}
-	if !r.data.capabilities.SupportsResource(client.KindHttpService) {
+	if !r.data.capabilities.SupportsResource(client.KindEdgeWorker) {
 		diags.AddError(
-			"HttpService not supported",
-			"The configured Takosumi endpoint does not advertise the HttpService resource shape.",
+			"EdgeWorker not supported",
+			"The configured Takosumi endpoint does not advertise the EdgeWorker resource shape.",
 		)
 		return false
 	}
 	return true
 }
 
-func (r *httpServiceResource) put(ctx context.Context, plan *httpServiceModel, diags *diag.Diagnostics) {
-	body, space, d := plan.toResource(r.data.defaultSpace)
+func (r *edgeWorkerResource) put(ctx context.Context, plan *edgeWorkerModel, diags *diag.Diagnostics) {
+	body, space, d := plan.toResource(ctx, r.data.defaultSpace)
 	diags.Append(d...)
 	if diags.HasError() {
 		return
 	}
-	res, err := r.data.client.PutResource(ctx, client.KindHttpService, plan.Name.ValueString(), body)
+	res, err := r.data.client.PutResource(ctx, client.KindEdgeWorker, plan.Name.ValueString(), body)
 	if err != nil {
-		diags.AddError("Failed to apply HttpService", err.Error())
+		diags.AddError("Failed to apply EdgeWorker", err.Error())
 		return
 	}
 	plan.Space = types.StringValue(space)
-	diags.Append(applyHttpServiceStatus(ctx, res, space, plan)...)
+	diags.Append(applyEdgeWorkerStatus(ctx, res, space, plan)...)
 }
 
-func (m httpServiceModel) toResource(defaultSpace string) (*client.Resource, string, diag.Diagnostics) {
+func (m edgeWorkerModel) toResource(ctx context.Context, defaultSpace string) (*client.Resource, string, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	space := m.Space.ValueString()
 	if m.Space.IsNull() || m.Space.IsUnknown() || space == "" {
@@ -286,22 +297,38 @@ func (m httpServiceModel) toResource(defaultSpace string) (*client.Resource, str
 		return nil, "", diags
 	}
 	name := m.Name.ValueString()
-	runtime := map[string]any{
-		"interface": m.RuntimeInterface.ValueString(),
-	}
-	if !m.ArtifactPath.IsNull() && !m.ArtifactPath.IsUnknown() && m.ArtifactPath.ValueString() != "" {
-		runtime["source"] = map[string]any{"artifactPath": m.ArtifactPath.ValueString()}
-	}
 	spec := map[string]any{
-		"name":    name,
-		"runtime": runtime,
+		"name": name,
+		"source": map[string]any{
+			"artifactPath": m.ArtifactPath.ValueString(),
+		},
 	}
-	if !m.PublicHTTP.IsNull() && !m.PublicHTTP.IsUnknown() {
-		spec["exposure"] = map[string]any{"publicHttp": m.PublicHTTP.ValueBool()}
+	if !m.CompatibilityDate.IsNull() && !m.CompatibilityDate.IsUnknown() && m.CompatibilityDate.ValueString() != "" {
+		spec["compatibilityDate"] = m.CompatibilityDate.ValueString()
+	}
+	if !m.CompatibilityFlags.IsNull() && !m.CompatibilityFlags.IsUnknown() {
+		var flags []string
+		diags.Append(m.CompatibilityFlags.ElementsAs(ctx, &flags, false)...)
+		if diags.HasError() {
+			return nil, "", diags
+		}
+		if len(flags) > 0 {
+			spec["compatibilityFlags"] = flags
+		}
+	}
+	if !m.Profiles.IsNull() && !m.Profiles.IsUnknown() {
+		var profiles []string
+		diags.Append(m.Profiles.ElementsAs(ctx, &profiles, false)...)
+		if diags.HasError() {
+			return nil, "", diags
+		}
+		if len(profiles) > 0 {
+			spec["profiles"] = profiles
+		}
 	}
 	return &client.Resource{
 		APIVersion: client.APIVersion,
-		Kind:       client.KindHttpService,
+		Kind:       client.KindEdgeWorker,
 		Metadata: client.Metadata{
 			Name:      name,
 			Space:     space,
@@ -311,9 +338,9 @@ func (m httpServiceModel) toResource(defaultSpace string) (*client.Resource, str
 	}, space, diags
 }
 
-func applyHttpServiceStatus(ctx context.Context, res *client.Resource, space string, m *httpServiceModel) diag.Diagnostics {
+func applyEdgeWorkerStatus(ctx context.Context, res *client.Resource, space string, m *edgeWorkerModel) diag.Diagnostics {
 	var diags diag.Diagnostics
-	m.ID = types.StringValue(resourceIDForKind(res, space, client.KindHttpService, m.Name.ValueString()))
+	m.ID = types.StringValue(resourceIDForKind(res, space, client.KindEdgeWorker, m.Name.ValueString()))
 	if res.Status != nil {
 		m.SelectedImplementation = types.StringValue(res.Status.Resolution.SelectedImplementation)
 		m.Target = types.StringValue(res.Status.Resolution.Target)
@@ -332,7 +359,7 @@ func applyHttpServiceStatus(ctx context.Context, res *client.Resource, space str
 	return diags
 }
 
-func refreshHttpServiceSpec(res *client.Resource, m *httpServiceModel) diag.Diagnostics {
+func refreshEdgeWorkerSpec(res *client.Resource, m *edgeWorkerModel) diag.Diagnostics {
 	var diags diag.Diagnostics
 	if res.Metadata.Name != "" {
 		m.Name = types.StringValue(res.Metadata.Name)
@@ -343,30 +370,41 @@ func refreshHttpServiceSpec(res *client.Resource, m *httpServiceModel) diag.Diag
 	if res.Spec == nil {
 		return diags
 	}
-	if raw, ok := res.Spec["runtime"].(map[string]any); ok {
-		if iface, ok := raw["interface"].(string); ok {
-			m.RuntimeInterface = types.StringValue(iface)
-		}
-		if source, ok := raw["source"].(map[string]any); ok {
-			if artifactPath, ok := source["artifactPath"].(string); ok {
-				m.ArtifactPath = types.StringValue(artifactPath)
-			} else {
-				m.ArtifactPath = types.StringNull()
-			}
+	if raw, ok := res.Spec["source"].(map[string]any); ok {
+		if artifactPath, ok := raw["artifactPath"].(string); ok {
+			m.ArtifactPath = types.StringValue(artifactPath)
 		} else {
 			m.ArtifactPath = types.StringNull()
 		}
-	}
-	if raw, ok := res.Spec["exposure"].(map[string]any); ok {
-		if publicHTTP, ok := raw["publicHttp"].(bool); ok {
-			m.PublicHTTP = types.BoolValue(publicHTTP)
-		} else {
-			m.PublicHTTP = types.BoolNull()
-		}
 	} else {
-		m.PublicHTTP = types.BoolNull()
+		m.ArtifactPath = types.StringNull()
+	}
+	if compatibilityDate, ok := res.Spec["compatibilityDate"].(string); ok {
+		m.CompatibilityDate = types.StringValue(compatibilityDate)
+	} else {
+		m.CompatibilityDate = types.StringNull()
+	}
+	if raw, ok := res.Spec["compatibilityFlags"].([]any); ok {
+		m.CompatibilityFlags = stringSetFromAny(raw)
+	} else {
+		m.CompatibilityFlags = types.SetNull(types.StringType)
+	}
+	if raw, ok := res.Spec["profiles"].([]any); ok {
+		m.Profiles = stringSetFromAny(raw)
+	} else {
+		m.Profiles = types.SetNull(types.StringType)
 	}
 	return diags
+}
+
+func stringSetFromAny(raw []any) types.Set {
+	values := make([]attr.Value, 0, len(raw))
+	for _, item := range raw {
+		if value, ok := item.(string); ok {
+			values = append(values, types.StringValue(value))
+		}
+	}
+	return types.SetValueMust(types.StringType, values)
 }
 
 func cutSpaceName(id string) (string, string, bool) {

@@ -44,11 +44,9 @@ export interface TakosumiProductCapabilities {
 
 export interface TakosumiResourceCapabilities {
   readonly Stack: boolean;
-  readonly ObjectStore: boolean;
-  readonly HttpService: boolean;
+  readonly ObjectBucket: boolean;
+  readonly EdgeWorker: boolean;
   readonly AIEndpoint: boolean;
-  readonly ContainerService: boolean;
-  readonly Machine: boolean;
 }
 
 export interface TakosumiAdapterCapabilities {
@@ -103,7 +101,8 @@ export function createTakosumiWellKnownDocument(
     api_versions: [TAKOSUMI_API_VERSION],
     features: {
       stacks: capabilities.resources.Stack,
-      resource_shapes: options.resourceShapesEnabled ??
+      resource_shapes:
+        options.resourceShapesEnabled ??
         resourceShapeApiEnabled(capabilities.resources),
       opentofu_runner: capabilities.adapters.opentofu,
       oidc: capabilities.identity.oidc_issuer,
@@ -139,11 +138,9 @@ export function createTakosumiProductCapabilities(
     apiVersion: TAKOSUMI_API_VERSION,
     resources: {
       Stack: true,
-      ObjectStore: true,
-      HttpService: true,
+      ObjectBucket: true,
+      EdgeWorker: true,
       AIEndpoint: false,
-      ContainerService: false,
-      Machine: false,
       ...(options.resources ?? {}),
     },
     adapters: {
@@ -178,6 +175,7 @@ function trimTrailingSlash(value: string): string {
 function resourceShapeApiEnabled(
   resources: TakosumiResourceCapabilities,
 ): boolean {
-  return resources.ObjectStore || resources.HttpService ||
-    resources.AIEndpoint || resources.ContainerService || resources.Machine;
+  return Object.entries(resources).some(
+    ([key, enabled]) => key !== "Stack" && enabled,
+  );
 }

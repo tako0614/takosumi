@@ -25,11 +25,11 @@ const (
 	// APIVersion is the Resource object apiVersion this provider speaks.
 	APIVersion = "takosumi.dev/v1alpha1"
 
-	// KindObjectStore is the resource shape kind for object stores.
-	KindObjectStore = "ObjectStore"
+	// KindObjectBucket is the resource shape kind for object stores.
+	KindObjectBucket = "ObjectBucket"
 
-	// KindHttpService is the resource shape kind for HTTP services.
-	KindHttpService = "HttpService"
+	// KindEdgeWorker is the resource shape kind for HTTP services.
+	KindEdgeWorker = "EdgeWorker"
 
 	// KindAIEndpoint is the resource shape kind for AI gateway endpoints.
 	KindAIEndpoint = "AIEndpoint"
@@ -152,6 +152,8 @@ type TargetPoolImplementation struct {
 	Implementation     string            `json:"implementation"`
 	Interfaces         map[string]string `json:"interfaces"`
 	NativeResourceType string            `json:"nativeResourceType,omitempty"`
+	Plugin             string            `json:"plugin,omitempty"`
+	Options            map[string]any    `json:"options,omitempty"`
 }
 
 type TargetPoolRecord struct {

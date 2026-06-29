@@ -6,18 +6,15 @@
 // `conditions`. Kinds in this file are only public when they have a planner and
 // adapter path; future shapes should be added when they can actually materialize.
 
-import type { Condition, IsoTimestamp, JsonObject } from "./types.ts";
+import type { Condition, JsonObject } from "./types.ts";
 import { TAKOSUMI_API_VERSION } from "./capabilities.ts";
 
 /** Resource shape kinds the Resource Shape API can host. */
-export type ResourceShapeKind =
-  | "ObjectStore"
-  | "HttpService"
-  | "AIEndpoint";
+export type ResourceShapeKind = "ObjectBucket" | "EdgeWorker" | "AIEndpoint";
 
 export const RESOURCE_SHAPE_KINDS: readonly ResourceShapeKind[] = [
-  "ObjectStore",
-  "HttpService",
+  "ObjectBucket",
+  "EdgeWorker",
   "AIEndpoint",
 ] as const;
 
@@ -53,21 +50,14 @@ export type ResourcePhase =
 
 /** Condition type enum from `docs/final-plan.md` §4 / `core-spec.md`. */
 export type ResourceConditionType =
-  | "Ready"
-  | "Reconciling"
-  | "Drifted"
-  | "Degraded"
-  | "Blocked";
+  "Ready" | "Reconciling" | "Drifted" | "Degraded" | "Blocked";
 
 /**
  * Portability score reported alongside the resolution. `locked_in` marks a
  * resolution that cannot be re-targeted without an explicit migration.
  */
 export type ResourcePortability =
-  | "portable"
-  | "mostly_portable"
-  | "partial"
-  | "locked_in";
+  "portable" | "mostly_portable" | "partial" | "locked_in";
 
 /** `status.resolution` keys are verbatim from `docs/final-plan.md` §4. */
 export interface ResourceResolutionStatus {
@@ -87,7 +77,7 @@ export interface ResourceStatus {
 
 /**
  * Generic Resource object. `TKind`/`TSpec` are narrowed by concrete shapes
- * (e.g. {@link ObjectStoreResource}); the untyped fallback keeps the API and
+ * (e.g. {@link ObjectBucketResource}); the untyped fallback keeps the API and
  * store layers shape-agnostic.
  */
 export interface ResourceObject<
@@ -105,10 +95,7 @@ export interface ResourceObject<
 
 /** Allowed `lifecycle_policy.delete` values, verbatim from §7.3. */
 export type ResourceDeletePolicy =
-  | "delete"
-  | "retain"
-  | "snapshot_then_delete"
-  | "block";
+  "delete" | "retain" | "snapshot_then_delete" | "block";
 
 export interface ResourceLifecyclePolicy {
   readonly delete: ResourceDeletePolicy;
@@ -117,18 +104,10 @@ export interface ResourceLifecyclePolicy {
 // --- Connection / grant / projection vocabulary (`docs/final-plan.md` §10) ---
 
 export type ResourceConnectionPermission =
-  | "read"
-  | "write"
-  | "connect"
-  | "publish"
-  | "consume";
+  "read" | "write" | "connect" | "publish" | "consume";
 
 export type ResourceProjectionKind =
-  | "env"
-  | "database_url"
-  | "runtime_binding"
-  | "volume_mount"
-  | "sdk_client";
+  "env" | "database_url" | "runtime_binding" | "volume_mount" | "sdk_client";
 
 export interface ResourceConnectionSpec {
   readonly resource: string;
@@ -136,63 +115,49 @@ export interface ResourceConnectionSpec {
   readonly projection: ResourceProjectionKind;
 }
 
-// --- ObjectStore shape (`docs/final-plan.md` §5 / §10.2) ----------------------
+// --- ObjectBucket shape (`docs/final-plan.md` §5 / §10.2) ----------------------
 
 /**
- * ObjectStore interface surfaces. The spec defines only `s3_api` and
+ * ObjectBucket interface surfaces. The spec defines only `s3_api` and
  * `signed_url`; `object_events` appears in the §10.2 HCL example. No `access`
  * or `durability` field exists in the spec — do not invent them.
  */
-export type ObjectStoreInterface = "s3_api" | "signed_url" | "object_events";
+export type ObjectBucketInterface = "s3_api" | "signed_url" | "object_events";
 
-export interface ObjectStoreSpec {
+export interface ObjectBucketSpec {
   readonly name: string;
-  readonly interfaces: readonly ObjectStoreInterface[];
+  readonly interfaces: readonly ObjectBucketInterface[];
   readonly lifecyclePolicy?: ResourceLifecyclePolicy;
 }
 
-export type ObjectStoreResource = ResourceObject<"ObjectStore", ObjectStoreSpec>;
+export type ObjectBucketResource = ResourceObject<
+  "ObjectBucket",
+  ObjectBucketSpec
+>;
 
-// --- HttpService shape (`docs/final-plan.md` §5 / §10.1) ---------------------
+// --- EdgeWorker shape (`docs/final-plan.md` §5 / §10.1) ---------------------
 
-export type HttpServiceRuntimeInterface =
-  | "web_fetch"
-  | "node_http"
-  | "container_http";
+export type EdgeWorkerProfile =
+  "workers_bindings" | "node_compat" | "service_bindings" | "static_assets";
 
-export type HttpServiceProfile =
-  | "workers_bindings"
-  | "node_compat"
-  | "lambda_handler"
-  | "python_asgi";
-
-export interface HttpServiceRuntimeSource {
+export interface EdgeWorkerSource {
   /**
    * OpenTofu-runner-local path for modules that upload a prebuilt artifact
    * through `file(...)`. This keeps Takosumi out of the build/fetch path.
    */
-  readonly artifactPath?: string;
+  readonly artifactPath: string;
 }
 
-export interface HttpServiceRuntimeSpec {
-  readonly interface: HttpServiceRuntimeInterface;
-  readonly language?: string;
-  readonly profiles?: readonly HttpServiceProfile[];
-  readonly source?: HttpServiceRuntimeSource;
-}
-
-export interface HttpServiceExposureSpec {
-  readonly publicHttp?: boolean;
-}
-
-export interface HttpServiceSpec {
+export interface EdgeWorkerSpec {
   readonly name: string;
-  readonly runtime: HttpServiceRuntimeSpec;
-  readonly exposure?: HttpServiceExposureSpec;
+  readonly source: EdgeWorkerSource;
+  readonly compatibilityDate?: string;
+  readonly compatibilityFlags?: readonly string[];
+  readonly profiles?: readonly EdgeWorkerProfile[];
   readonly lifecyclePolicy?: ResourceLifecyclePolicy;
 }
 
-export type HttpServiceResource = ResourceObject<"HttpService", HttpServiceSpec>;
+export type EdgeWorkerResource = ResourceObject<"EdgeWorker", EdgeWorkerSpec>;
 
 // --- AIEndpoint shape (`docs/final-plan.md` §5 / §12) ------------------------
 
@@ -205,11 +170,8 @@ export type HttpServiceResource = ResourceObject<"HttpService", HttpServiceSpec>
  */
 export type AIEndpointInterface = string;
 
-export const WELL_KNOWN_AI_ENDPOINT_INTERFACES: readonly AIEndpointInterface[] = [
-  "openai_chat_completions",
-  "openai_responses",
-  "openai_embeddings",
-] as const;
+export const WELL_KNOWN_AI_ENDPOINT_INTERFACES: readonly AIEndpointInterface[] =
+  ["openai_chat_completions", "openai_responses", "openai_embeddings"] as const;
 
 export type AIEndpointProfile = string;
 

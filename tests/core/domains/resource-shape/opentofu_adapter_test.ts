@@ -2,7 +2,7 @@ import { test, expect } from "bun:test";
 
 import type {
   ActorContext,
-  ObjectStoreSpec,
+  ObjectBucketSpec,
   TargetPoolEntry,
 } from "takosumi-contract";
 import type {
@@ -17,7 +17,7 @@ import type {
   PlanRunInternalContext,
 } from "../../../../core/domains/deploy-control/mod.ts";
 import {
-  planObjectStore,
+  planObjectBucket,
   type ResourceShapePlan,
 } from "../../../../core/domains/resource-shape/planner.ts";
 import {
@@ -42,7 +42,7 @@ const actor: ActorContext = {
   requestId: "req_1",
 };
 
-const spec: ObjectStoreSpec = {
+const spec: ObjectBucketSpec = {
   name: "assets",
   interfaces: ["s3_api", "signed_url"],
 };
@@ -68,7 +68,7 @@ function applyInput(
   overrides: Partial<AdapterApplyInput> = {},
 ): AdapterApplyInput {
   return {
-    resourceId: "tkrn:demo:ObjectStore:assets",
+    resourceId: "tkrn:demo:ObjectBucket:assets",
     plan,
     target,
     credentialRef: "conn_cf_1",
@@ -85,7 +85,9 @@ test("provider mapping covers cloudflare/aws/gcp and falls through", () => {
   expect(providerLocalNameForTargetType("gcp")).toBe("google");
   expect(providerLocalNameForTargetType("kubernetes")).toBe("kubernetes");
 
-  expect(providerSourceForLocalName("cloudflare")).toBe("cloudflare/cloudflare");
+  expect(providerSourceForLocalName("cloudflare")).toBe(
+    "cloudflare/cloudflare",
+  );
   expect(providerSourceForLocalName("aws")).toBe("hashicorp/aws");
   expect(providerSourceForLocalName("google")).toBe("hashicorp/google");
 });
@@ -93,7 +95,10 @@ test("provider mapping covers cloudflare/aws/gcp and falls through", () => {
 // --- input augmentation ------------------------------------------------------
 
 test("augmentInputsForTarget fills cloudflare accountId from target.ref when absent", () => {
-  const inputs = augmentInputsForTarget({ bucketName: "assets" }, cloudflareTarget);
+  const inputs = augmentInputsForTarget(
+    { bucketName: "assets" },
+    cloudflareTarget,
+  );
   expect(inputs).toEqual({ bucketName: "assets", accountId: "cf-account-123" });
 });
 
@@ -123,7 +128,7 @@ test("augmentInputsForTarget does not overwrite a present aws region", () => {
 test("apply maps cloudflare target to provider+inputs and threads moduleFiles/templateId", async () => {
   const port = new FakeOpentofuRunPort();
   const adapter = new OpentofuResourceShapeAdapter(port);
-  const plan = planObjectStore("cloudflare_r2", spec, cloudflareTarget);
+  const plan = planObjectBucket("cloudflare_r2", spec, cloudflareTarget);
 
   const result = await adapter.apply(applyInput(plan, cloudflareTarget));
 
@@ -152,8 +157,8 @@ test("apply maps cloudflare target to provider+inputs and threads moduleFiles/te
     { type: "cloudflare_r2_bucket", id: "assets" },
   ]);
   expect(result.outputs).toEqual({
-    bucket_name: "fake://tkrn:demo:ObjectStore:assets/bucket_name",
-    location: "fake://tkrn:demo:ObjectStore:assets/location",
+    bucket_name: "fake://tkrn:demo:ObjectBucket:assets/bucket_name",
+    location: "fake://tkrn:demo:ObjectBucket:assets/location",
   });
   expect(result.runId).toBeDefined();
 });
@@ -165,7 +170,9 @@ test("apply augments accountId even when the planner omitted it", async () => {
   // adapter must still inject it from the Target ref before dispatch.
   const plan: ResourceShapePlan = {
     templateId: "cloudflare-r2-storage",
-    moduleFiles: [{ path: "main.tf", text: 'resource "cloudflare_r2_bucket" "b" {}' }],
+    moduleFiles: [
+      { path: "main.tf", text: 'resource "cloudflare_r2_bucket" "b" {}' },
+    ],
     inputs: { bucketName: "assets" },
     publicOutputs: ["bucket_name", "location"],
   };
@@ -177,7 +184,7 @@ test("apply augments accountId even when the planner omitted it", async () => {
 test("preview returns summary + nativeResources + runId from a simulated plan", async () => {
   const port = new FakeOpentofuRunPort();
   const adapter = new OpentofuResourceShapeAdapter(port);
-  const plan = planObjectStore("cloudflare_r2", spec, cloudflareTarget);
+  const plan = planObjectBucket("cloudflare_r2", spec, cloudflareTarget);
 
   const preview = await adapter.preview(applyInput(plan, cloudflareTarget));
 
@@ -193,7 +200,7 @@ test("preview returns summary + nativeResources + runId from a simulated plan", 
 test("apply maps aws target to provider+region and aws_s3_bucket native resource", async () => {
   const port = new FakeOpentofuRunPort();
   const adapter = new OpentofuResourceShapeAdapter(port);
-  const plan = planObjectStore("aws_s3", spec, awsTarget);
+  const plan = planObjectBucket("aws_s3", spec, awsTarget);
 
   const result = await adapter.apply(
     applyInput(plan, awsTarget, { credentialRef: "conn_aws_1" }),
@@ -214,9 +221,11 @@ test("apply maps aws target to provider+region and aws_s3_bucket native resource
 test("apply without a credentialRef leaves the ProviderBinding connectionId unset", async () => {
   const port = new FakeOpentofuRunPort();
   const adapter = new OpentofuResourceShapeAdapter(port);
-  const plan = planObjectStore("cloudflare_r2", spec, cloudflareTarget);
+  const plan = planObjectBucket("cloudflare_r2", spec, cloudflareTarget);
 
-  await adapter.apply(applyInput(plan, cloudflareTarget, { credentialRef: undefined }));
+  await adapter.apply(
+    applyInput(plan, cloudflareTarget, { credentialRef: undefined }),
+  );
   expect(port.applyRequests[0]!.providerBinding.connectionId).toBeUndefined();
 });
 
@@ -226,7 +235,7 @@ function deleteInput(
   overrides: Partial<AdapterDeleteInput> = {},
 ): AdapterDeleteInput {
   return {
-    resourceId: "tkrn:demo:ObjectStore:assets",
+    resourceId: "tkrn:demo:ObjectBucket:assets",
     nativeResources: [{ type: "cloudflare_r2_bucket", id: "assets" }],
     target: cloudflareTarget,
     credentialRef: "conn_cf_1",
@@ -323,7 +332,11 @@ class FakeDeployControlDriver implements DeployControlRunDriver {
       ...planRun,
       status: "succeeded",
       planDigest: "sha256:plan",
-      planArtifact: { kind: "object-storage", ref: "r2://plan", digest: "sha256:art" },
+      planArtifact: {
+        kind: "object-storage",
+        ref: "r2://plan",
+        digest: "sha256:art",
+      },
       planResourceChanges: [
         {
           address: "module.app.cloudflare_r2_bucket.this",
@@ -378,7 +391,12 @@ class FakeDeployControlDriver implements DeployControlRunDriver {
       stateBackend: { kind: "operator-managed" },
       stateLock: { status: "recorded", backendRef: "ref" },
       outputs: [
-        { name: "bucket_name", kind: "service_url", value: "assets", sensitive: false },
+        {
+          name: "bucket_name",
+          kind: "service_url",
+          value: "assets",
+          sensitive: false,
+        },
         {
           name: "location",
           kind: "service_url",
@@ -407,7 +425,7 @@ test("ControllerOpentofuRunPort.plan builds a real generated-root dispatch and m
     resolveCapsuleBinding: () => capsuleBinding,
   });
   const adapter = new OpentofuResourceShapeAdapter(port);
-  const plan = planObjectStore("cloudflare_r2", spec, cloudflareTarget);
+  const plan = planObjectBucket("cloudflare_r2", spec, cloudflareTarget);
 
   const preview = await adapter.preview(applyInput(plan, cloudflareTarget));
 
@@ -429,10 +447,10 @@ test("ControllerOpentofuRunPort.plan builds a real generated-root dispatch and m
   expect(dispatch!.moduleFiles?.map((f) => f.path)).toEqual(
     plan.moduleFiles.map((f) => f.path),
   );
-  expect(dispatch!.files["main.tf"]).toContain("module \"app\"");
+  expect(dispatch!.files["main.tf"]).toContain('module "app"');
   expect(dispatch!.files["main.tf"]).toContain('bucketName = "assets"');
   expect(dispatch!.files["main.tf"]).toContain('accountId = "cf-account-123"');
-  expect(dispatch!.files["outputs.tf"]).toContain("output \"bucket_name\"");
+  expect(dispatch!.files["outputs.tf"]).toContain('output "bucket_name"');
 
   // no-op resource changes are dropped; the created bucket is reported.
   expect(preview.nativeResources).toEqual([
@@ -451,7 +469,7 @@ test("ControllerOpentofuRunPort.apply drives plan->apply and maps outputs+native
     resolveCapsuleBinding: () => capsuleBinding,
   });
   const adapter = new OpentofuResourceShapeAdapter(port);
-  const plan = planObjectStore("cloudflare_r2", spec, cloudflareTarget);
+  const plan = planObjectBucket("cloudflare_r2", spec, cloudflareTarget);
 
   const result = await adapter.apply(applyInput(plan, cloudflareTarget));
 

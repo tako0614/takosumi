@@ -34,10 +34,7 @@ import {
 } from "./records.ts";
 import type { ResourceShapeStores } from "./stores.ts";
 import type { ResourceAdapter } from "./adapter.ts";
-import {
-  DEFAULT_RESOURCE_SHAPE_CAPABILITIES,
-  resolve,
-} from "./resolver.ts";
+import { DEFAULT_RESOURCE_SHAPE_CAPABILITIES, resolve } from "./resolver.ts";
 import {
   parseResourceSpec,
   planResourceShape,
@@ -50,10 +47,8 @@ export type ResourceServiceErrorCode =
   | "invalid_interfaces"
   | "invalid_interface"
   | "invalid_runtime"
-  | "invalid_runtime_interface"
   | "invalid_profile"
   | "invalid_source"
-  | "invalid_exposure"
   | "invalid_connections"
   | "invalid_model_policy"
   | "invalid_lifecycle_policy"
@@ -342,9 +337,10 @@ export class ResourceShapeService {
       space,
       DEFAULT_POOL_NAME,
     );
-    const entry = lock && pool
-      ? targetPoolSpecOf(pool).targets.find((t) => t.name === lock.target)
-      : undefined;
+    const entry =
+      lock && pool
+        ? targetPoolSpecOf(pool).targets.find((t) => t.name === lock.target)
+        : undefined;
     if (lock && entry) {
       const specResult = parseResourceSpec(record.kind, record.spec);
       const deletePolicy = specResult.ok
@@ -355,8 +351,7 @@ export class ResourceShapeService {
           ok: false,
           error: {
             code: "delete_blocked",
-            message:
-              `resource ${id} has lifecyclePolicy.delete=block and requires an explicit policy change before deletion`,
+            message: `resource ${id} has lifecyclePolicy.delete=block and requires an explicit policy change before deletion`,
           },
         };
       }
@@ -421,9 +416,7 @@ export class ResourceShapeService {
 
     const resource = this.#buildResourceObject(req);
     const targetPool = toTargetPool(poolRecord);
-    const spacePolicy = policyRecord
-      ? toSpacePolicy(policyRecord)
-      : undefined;
+    const spacePolicy = policyRecord ? toSpacePolicy(policyRecord) : undefined;
 
     const outcome = resolve({
       resource,
@@ -432,15 +425,15 @@ export class ResourceShapeService {
       spacePolicy,
       existingLock: existingLock
         ? {
-          resourceId: existingLock.resourceId,
-          selectedImplementation: existingLock.selectedImplementation,
-          target: existingLock.target,
-          locked: existingLock.locked,
-          reason: existingLock.reason,
-          portability: existingLock.portability,
-          nativeResources: existingLock.nativeResources,
-          lockedAt: existingLock.lockedAt,
-        }
+            resourceId: existingLock.resourceId,
+            selectedImplementation: existingLock.selectedImplementation,
+            target: existingLock.target,
+            locked: existingLock.locked,
+            reason: existingLock.reason,
+            portability: existingLock.portability,
+            nativeResources: existingLock.nativeResources,
+            lockedAt: existingLock.lockedAt,
+          }
         : undefined,
       targetCapabilities: DEFAULT_RESOURCE_SHAPE_CAPABILITIES,
     });
@@ -463,8 +456,7 @@ export class ResourceShapeService {
         ok: false,
         error: {
           code: "selected_target_missing",
-          message:
-            `resolver selected target ${output.selectedTarget} not in pool`,
+          message: `resolver selected target ${output.selectedTarget} not in pool`,
         },
       };
     }
@@ -508,11 +500,11 @@ export class ResourceShapeService {
       observedGeneration: record.observedGeneration,
       resolution: lock
         ? {
-          selectedImplementation: lock.selectedImplementation,
-          target: lock.target,
-          locked: lock.locked,
-          portability: lock.portability ?? "partial",
-        }
+            selectedImplementation: lock.selectedImplementation,
+            target: lock.target,
+            locked: lock.locked,
+            portability: lock.portability ?? "partial",
+          }
         : undefined,
       outputs: record.outputs,
       conditions: record.conditions,

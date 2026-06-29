@@ -12,34 +12,34 @@ import {
 } from "takosumi-contract";
 import {
   DEFAULT_RESOURCE_SHAPE_CAPABILITIES,
-  OBJECT_STORE_TARGET_IMPLEMENTATION,
+  OBJECT_BUCKET_TARGET_IMPLEMENTATION,
   SHAPE_INTERFACE_REQUIREMENTS,
   resolve,
 } from "../../../../core/domains/resource-shape/resolver.ts";
 
 // --- fixtures ----------------------------------------------------------------
 
-function objectStoreResource(
+function objectBucketResource(
   name = "assets",
   interfaces: readonly string[] = ["s3_api", "signed_url"],
 ): ResourceObject {
   return {
     apiVersion: TAKOSUMI_API_VERSION,
-    kind: "ObjectStore",
+    kind: "ObjectBucket",
     metadata: { name, space: "prod", managedBy: "api" },
     spec: { name, interfaces: [...interfaces] },
   };
 }
 
-function httpServiceResource(name = "api"): ResourceObject {
+function edgeWorkerResource(name = "api"): ResourceObject {
   return {
     apiVersion: TAKOSUMI_API_VERSION,
-    kind: "HttpService",
+    kind: "EdgeWorker",
     metadata: { name, space: "prod", managedBy: "api" },
     spec: {
       name,
-      runtime: { interface: "web_fetch", profiles: ["workers_bindings"] },
-      exposure: { publicHttp: true },
+      source: { artifactPath: "/work/dist/worker.js" },
+      profiles: ["workers_bindings"],
     },
   };
 }
@@ -87,7 +87,7 @@ function spacePolicy(
 
 function input(over: Partial<ResolverInput> = {}): ResolverInput {
   return {
-    resource: objectStoreResource(),
+    resource: objectBucketResource(),
     interfaces: ["s3_api", "signed_url"],
     targetPool: targetPool([
       { name: "cf-main", type: "cloudflare", ref: "acct-cf", priority: 10 },
@@ -98,23 +98,26 @@ function input(over: Partial<ResolverInput> = {}): ResolverInput {
 }
 
 function expectOk(outcome: ReturnType<typeof resolve>) {
-  if (!outcome.ok) throw new Error(`expected ok, got error: ${outcome.error.code}`);
+  if (!outcome.ok)
+    throw new Error(`expected ok, got error: ${outcome.error.code}`);
   return outcome.output;
 }
 
 // --- mapping / table sanity --------------------------------------------------
 
-test("target type maps to the expected ObjectStore implementation", () => {
-  expect(OBJECT_STORE_TARGET_IMPLEMENTATION.cloudflare).toBe("cloudflare_r2");
-  expect(OBJECT_STORE_TARGET_IMPLEMENTATION.aws).toBe("aws_s3");
-  expect(OBJECT_STORE_TARGET_IMPLEMENTATION.takosumi_native).toBe(
-    "takosumi_object_store",
+test("target type maps to the expected ObjectBucket implementation", () => {
+  expect(OBJECT_BUCKET_TARGET_IMPLEMENTATION.cloudflare).toBe("cloudflare_r2");
+  expect(OBJECT_BUCKET_TARGET_IMPLEMENTATION.aws).toBe("aws_s3");
+  expect(OBJECT_BUCKET_TARGET_IMPLEMENTATION.takosumi_native).toBe(
+    "takosumi_object_bucket",
   );
-  expect(OBJECT_STORE_TARGET_IMPLEMENTATION.kubernetes).toBe("minio");
+  expect(OBJECT_BUCKET_TARGET_IMPLEMENTATION.kubernetes).toBe("minio");
 });
 
-test("ObjectStore requires s3_api", () => {
-  expect(SHAPE_INTERFACE_REQUIREMENTS.ObjectStore?.required).toContain("s3_api");
+test("ObjectBucket requires s3_api", () => {
+  expect(SHAPE_INTERFACE_REQUIREMENTS.ObjectBucket?.required).toContain(
+    "s3_api",
+  );
 });
 
 test("AIEndpoint uses requested capability tokens instead of a fixed OpenAI-chat requirement", () => {
@@ -148,14 +151,18 @@ test("resolve tie-breaks equal priority by name ascending", () => {
 
 test("denied target (by name) is excluded", () => {
   const out = expectOk(
-    resolve(input({ spacePolicy: spacePolicy({ deniedTargets: ["cf-main"] }) })),
+    resolve(
+      input({ spacePolicy: spacePolicy({ deniedTargets: ["cf-main"] }) }),
+    ),
   );
   expect(out.selectedTarget).toBe("aws-main");
 });
 
 test("denied target (by type) is excluded", () => {
   const out = expectOk(
-    resolve(input({ spacePolicy: spacePolicy({ deniedTargets: ["cloudflare"] }) })),
+    resolve(
+      input({ spacePolicy: spacePolicy({ deniedTargets: ["cloudflare"] }) }),
+    ),
   );
   expect(out.selectedTarget).toBe("aws-main");
 });
@@ -174,14 +181,18 @@ test("a target whose implementation lacks required s3_api is excluded", () => {
     {
       implementation: "cloudflare_r2",
       targetType: "cloudflare",
-      shape: "ObjectStore",
+      shape: "ObjectBucket",
       interfaces: { s3_api: "unsupported", signed_url: "native" },
     },
     {
       implementation: "aws_s3",
       targetType: "aws",
-      shape: "ObjectStore",
-      interfaces: { s3_api: "native", signed_url: "native", object_events: "native" },
+      shape: "ObjectBucket",
+      interfaces: {
+        s3_api: "native",
+        signed_url: "native",
+        object_events: "native",
+      },
     },
   ];
   const out = expectOk(resolve(input({ targetCapabilities: matrix })));
@@ -194,7 +205,7 @@ test("a target whose implementation lacks a requested interface is excluded", ()
     {
       implementation: "cloudflare_r2",
       targetType: "cloudflare",
-      shape: "ObjectStore",
+      shape: "ObjectBucket",
       interfaces: { s3_api: "native", signed_url: "unsupported" },
     },
   ];
@@ -215,7 +226,7 @@ test("no eligible target returns a no_eligible_target error", () => {
   const outcome = resolve(
     input({
       targetPool: targetPool([
-        // gcp has no ObjectStore implementation mapping in Phase 2.
+        // gcp has no ObjectBucket implementation mapping in Phase 2.
         { name: "gcp-main", type: "gcp", priority: 9 },
       ]),
     }),
@@ -224,12 +235,12 @@ test("no eligible target returns a no_eligible_target error", () => {
   if (!outcome.ok) expect(outcome.error.code).toBe("no_eligible_target");
 });
 
-test("resolve maps HttpService to cloudflare_workers on a Cloudflare target", () => {
+test("resolve maps EdgeWorker to cloudflare_workers on a Cloudflare target", () => {
   const out = expectOk(
     resolve(
       input({
-        resource: httpServiceResource(),
-        interfaces: ["web_fetch", "public_http", "workers_bindings"],
+        resource: edgeWorkerResource(),
+        interfaces: ["worker_fetch", "workers_bindings"],
         targetPool: targetPool([
           { name: "cf-main", type: "cloudflare", ref: "acct-cf", priority: 10 },
         ]),
@@ -306,10 +317,7 @@ test("resolve uses admin-declared AI provider implementations from TargetPool", 
     resolve(
       input({
         resource: aiEndpointResource(),
-        interfaces: [
-          "openai_chat_completions",
-          "vendor.deepseek.responses.v1",
-        ],
+        interfaces: ["openai_chat_completions", "vendor.deepseek.responses.v1"],
         targetPool: targetPool([
           {
             name: "deepseek-main",
@@ -354,14 +362,20 @@ test("aws_s3 plans an aws.s3_bucket native resource", () => {
   const out = expectOk(
     resolve(input({ spacePolicy: spacePolicy({ allowedTargets: ["aws"] }) })),
   );
-  expect(out.nativeResourcePlan).toEqual([{ type: "aws.s3_bucket", id: "assets" }]);
+  expect(out.nativeResourcePlan).toEqual([
+    { type: "aws.s3_bucket", id: "assets" },
+  ]);
 });
 
 test("resolutionLock carries resourceId and does NOT stamp lockedAt", () => {
   const out = expectOk(
-    resolve(input({ spacePolicy: spacePolicy({ resolution: { lockAfterCreate: true } }) })),
+    resolve(
+      input({
+        spacePolicy: spacePolicy({ resolution: { lockAfterCreate: true } }),
+      }),
+    ),
   );
-  expect(out.resolutionLock.resourceId).toBe("tkrn:prod:ObjectStore:assets");
+  expect(out.resolutionLock.resourceId).toBe("tkrn:prod:ObjectBucket:assets");
   expect(out.resolutionLock.locked).toBe(true);
   expect(out.resolutionLock.lockedAt).toBeUndefined();
   expect(out.resolutionLock.reason.length).toBeGreaterThan(0);
@@ -405,7 +419,12 @@ test("portability is partial when an interface is emulated", () => {
       input({
         interfaces: ["s3_api", "object_events"], // object_events is emulated on minio
         targetPool: targetPool([
-          { name: "k8s-main", type: "kubernetes", ref: "cluster-1", priority: 3 },
+          {
+            name: "k8s-main",
+            type: "kubernetes",
+            ref: "cluster-1",
+            priority: 3,
+          },
         ]),
       }),
     ),
@@ -418,7 +437,7 @@ test("portability is partial when an interface is emulated", () => {
 
 function existingAwsLock(): ResolutionLock {
   return {
-    resourceId: "tkrn:prod:ObjectStore:assets",
+    resourceId: "tkrn:prod:ObjectBucket:assets",
     selectedImplementation: "aws_s3",
     target: "aws-main",
     locked: true,
@@ -467,16 +486,22 @@ test("resolve is deterministic across repeated calls", () => {
   expect(a).toBe(b);
 });
 
-test("DEFAULT_RESOURCE_SHAPE_CAPABILITIES covers ObjectStore implementations", () => {
-  const impls = DEFAULT_RESOURCE_SHAPE_CAPABILITIES
-    .filter((c) => c.shape === "ObjectStore")
+test("DEFAULT_RESOURCE_SHAPE_CAPABILITIES covers ObjectBucket implementations", () => {
+  const impls = DEFAULT_RESOURCE_SHAPE_CAPABILITIES.filter(
+    (c) => c.shape === "ObjectBucket",
+  )
     .map((c) => c.implementation)
     .sort();
-  expect(impls).toEqual(["aws_s3", "cloudflare_r2", "minio", "takosumi_object_store"]);
+  expect(impls).toEqual([
+    "aws_s3",
+    "cloudflare_r2",
+    "minio",
+    "takosumi_object_bucket",
+  ]);
 });
 
 test("DEFAULT_RESOURCE_SHAPE_CAPABILITIES does not advertise half-materialized shapes", () => {
-  expect(DEFAULT_RESOURCE_SHAPE_CAPABILITIES.some((c) => c.shape === "Queue")).toBe(
-    false,
-  );
+  expect(
+    DEFAULT_RESOURCE_SHAPE_CAPABILITIES.some((c) => c.shape === "Queue"),
+  ).toBe(false);
 });

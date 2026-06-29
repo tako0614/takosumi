@@ -14,7 +14,7 @@ test("Takosumi discovery document exposes v1alpha1 endpoint metadata", () => {
   assert.deepEqual(document.api_versions, [TAKOSUMI_API_VERSION]);
   assert.equal(document.edition, undefined);
   assert.equal(document.features.stacks, true);
-  // ObjectStore is the first resolvable shape, so the Resource Shape API is on.
+  // ObjectBucket is the first resolvable shape, so the Resource Shape API is on.
   assert.equal(document.features.resource_shapes, true);
   assert.equal(document.features.compat_framework, true);
   assert.equal(document.features.compat_s3, false);
@@ -28,14 +28,14 @@ test("Takosumi discovery document exposes v1alpha1 endpoint metadata", () => {
 
 test("Takosumi product capabilities separate framework from enabled profiles", () => {
   const capabilities = createTakosumiProductCapabilities({
-    resources: { ObjectStore: true, HttpService: false },
+    resources: { ObjectBucket: true, EdgeWorker: false },
     compat: { s3: true },
   });
 
   assert.equal(capabilities.apiVersion, TAKOSUMI_API_VERSION);
   assert.equal(capabilities.resources.Stack, true);
-  assert.equal(capabilities.resources.ObjectStore, true);
-  assert.equal(capabilities.resources.HttpService, false);
+  assert.equal(capabilities.resources.ObjectBucket, true);
+  assert.equal(capabilities.resources.EdgeWorker, false);
   assert.equal(capabilities.resources.AIEndpoint, false);
   assert.equal(capabilities.adapters.opentofu, true);
   assert.equal(capabilities.adapters.ai_provider, false);

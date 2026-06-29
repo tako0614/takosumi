@@ -243,7 +243,7 @@ backend alias は `meterId`、`resourceFamily`、Stripe meter、public usage met
 では拒否します。例:
 
 ```http
-x-takosumi-cloud-usage-meters: [{"meterId":"cloudflare:workers_script:request","resourceFamily":"cloudflare.workers_script","resourceId":"HttpService/api","operation":"request","kind":"gateway_compute","quantity":1}]
+x-takosumi-cloud-usage-meters: [{"meterId":"cloudflare:workers_script:request","resourceFamily":"cloudflare.workers_script","resourceId":"EdgeWorker/api","operation":"request","kind":"gateway_compute","quantity":1}]
 ```
 
 storage-backed resource の在庫計測では、closed `takosumi-cloud` の
@@ -271,7 +271,7 @@ POST /cloud/usage/storage-inventory
     {
       "workspaceId": "space_xxx",
       "resourceFamily": "cloudflare.r2",
-      "resourceId": "ObjectStore/assets",
+      "resourceId": "ObjectBucket/assets",
       "averageBytes": 536870912
     }
   ]
@@ -281,7 +281,7 @@ POST /cloud/usage/storage-inventory
 ```http
 x-takosumi-cloud-usage-period-start: 2026-06-26T13:00:00.000Z
 x-takosumi-cloud-usage-period-end: 2026-06-26T14:00:00.000Z
-x-takosumi-cloud-usage-meters: [{"meterId":"cloudflare:r2:storage_gb_hour","resourceFamily":"cloudflare.r2","resourceId":"ObjectStore/assets","operation":"storage.inventory","kind":"gateway_storage_gb_hour","quantity":0.5}]
+x-takosumi-cloud-usage-meters: [{"meterId":"cloudflare:r2:storage_gb_hour","resourceFamily":"cloudflare.r2","resourceId":"ObjectBucket/assets","operation":"storage.inventory","kind":"gateway_storage_gb_hour","quantity":0.5}]
 ```
 
 managed resource backend が compute / operation 系の使用量を実測できる場合は、
@@ -325,7 +325,7 @@ POST /cloud/usage/resource-meters
 ```http
 x-takosumi-cloud-usage-period-start: 2026-06-26T13:00:00.000Z
 x-takosumi-cloud-usage-period-end: 2026-06-26T13:01:00.000Z
-x-takosumi-cloud-usage-meters: [{"meterId":"cloudflare:containers:vcpu_second","resourceFamily":"cloudflare.containers","resourceId":"ContainerService/api","operation":"vcpu_second","kind":"gateway_compute","quantity":12.5}]
+x-takosumi-cloud-usage-meters: [{"meterId":"cloudflare:containers:vcpu_second","resourceFamily":"cloudflare.containers","resourceId":"container:api","operation":"vcpu_second","kind":"gateway_compute","quantity":12.5}]
 ```
 
 この ledger に入った使用量を、billing reconciliation / Stripe invoice 側の

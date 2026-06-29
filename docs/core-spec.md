@@ -89,24 +89,24 @@ Plan / Apply / Destroy are guarded Run operations, not separate ledgers.
 
 ### Resource Shape Flow
 
-| Concept          | Meaning                                                       |
-| ---------------- | ------------------------------------------------------------- |
-| Space            | Resource API namespace and policy scope                       |
-| Environment      | Deployment environment within a Space/Project                 |
-| Stack            | Git-backed OpenTofu stack or resource-shape bundle            |
-| Resource         | Kubernetes-like desired/observed resource object              |
-| ResourceShape    | Resource form such as ObjectStore, HttpService, Queue         |
-| Interface        | External protocol/API such as s3_api or web_fetch             |
-| Profile          | Ecosystem compatibility surface such as workers_bindings      |
-| Implementation   | Concrete backend such as cloudflare_workers or aws_s3         |
-| Target           | Southbound account/cluster/fleet/runtime endpoint             |
-| TargetPool       | Candidate targets used by the resolver                        |
-| Credential       | Target or workload credential configuration                   |
-| Policy           | Constraints, approvals, lifecycle, and resolution rules       |
-| Adapter          | Code that previews/applies/observes a selected implementation |
-| ResolutionLock   | Persisted selected implementation + target                    |
-| NativeResource   | Concrete backend resource reference                           |
-| Condition        | Ready / Reconciling / Drifted / Degraded / Blocked evidence   |
+| Concept        | Meaning                                                       |
+| -------------- | ------------------------------------------------------------- |
+| Space          | Resource API namespace and policy scope                       |
+| Environment    | Deployment environment within a Space/Project                 |
+| Stack          | Git-backed OpenTofu stack or resource-shape bundle            |
+| Resource       | Kubernetes-like desired/observed resource object              |
+| ResourceShape  | Resource form such as ObjectBucket, EdgeWorker, AIEndpoint    |
+| Interface      | External protocol/API such as s3_api or web_fetch             |
+| Profile        | Ecosystem compatibility surface such as workers_bindings      |
+| Implementation | Concrete backend such as cloudflare_workers or aws_s3         |
+| Target         | Southbound account/cluster/fleet/runtime endpoint             |
+| TargetPool     | Candidate targets used by the resolver                        |
+| Credential     | Target or workload credential configuration                   |
+| Policy         | Constraints, approvals, lifecycle, and resolution rules       |
+| Adapter        | Code that previews/applies/observes a selected implementation |
+| ResolutionLock | Persisted selected implementation + target                    |
+| NativeResource | Concrete backend resource reference                           |
+| Condition      | Ready / Reconciling / Drifted / Degraded / Blocked evidence   |
 
 `Space` in this model is the Resource API namespace and policy scope. The public
 model uses Workspace / Project / Capsule / Run / StateVersion / Output /
@@ -202,6 +202,12 @@ Generic env is a required escape hatch so arbitrary providers can run with
 explicit env/file declarations, runner policy, provider plugin policy, and
 egress policy.
 
+If an adequate generic OpenTofu provider or standard API already exists,
+Takosumi should use it through this Stack flow instead of creating a
+Takosumi-owned clone. Resource Shapes are for provider-neutral service forms
+where Takosumi needs resolution, binding projection, policy, metering, or
+managed target control.
+
 ## Resource Objects
 
 Resource objects use `apiVersion: takosumi.dev/v1alpha1`.
@@ -209,7 +215,7 @@ Resource objects use `apiVersion: takosumi.dev/v1alpha1`.
 ```json
 {
   "apiVersion": "takosumi.dev/v1alpha1",
-  "kind": "HttpService",
+  "kind": "EdgeWorker",
   "metadata": {
     "name": "api",
     "space": "prod",
@@ -217,14 +223,11 @@ Resource objects use `apiVersion: takosumi.dev/v1alpha1`.
     "managedBy": "opentofu"
   },
   "spec": {
-    "runtime": {
-      "interface": "web_fetch",
-      "language": "typescript",
-      "profiles": ["workers_bindings"]
+    "source": {
+      "artifactPath": "/work/dist/worker.js"
     },
-    "exposure": {
-      "publicHttp": true
-    }
+    "compatibilityDate": "2026-06-29",
+    "profiles": ["workers_bindings"]
   },
   "status": {
     "phase": "Ready",
@@ -234,7 +237,7 @@ Resource objects use `apiVersion: takosumi.dev/v1alpha1`.
       "locked": true
     },
     "outputs": {
-      "url": "https://api.example.com"
+      "worker_name": "api"
     }
   }
 }
@@ -273,6 +276,9 @@ targets:
     implementations:
       - shape: AIEndpoint
         implementation: gemini_openai_compatible
+        plugin: takosumi-plugin-openai-compatible
+        options:
+          base_url: https://generativelanguage.googleapis.com/v1beta/openai
         interfaces:
           openai_chat_completions: native
           openai_embeddings: native
@@ -310,7 +316,9 @@ unsupported
 ## Compatibility API Framework
 
 Compatibility APIs are versioned capability profiles. They are entrypoints into
-the Resource API.
+the Resource API when an operator actually needs an import path, data-plane
+proxy, or SDK-compatible facade. They are not mandatory when an existing
+OpenTofu provider or standard endpoint is already enough.
 
 ```text
 compat.s3.v1
@@ -325,6 +333,10 @@ compat.postgres.v1
 
 Do not claim complete AWS or Cloudflare compatibility. Specific surfaces are
 enabled or disabled by `/v1/capabilities`.
+
+For example, `ObjectBucket` can be enabled while `compat.s3.v1` is disabled.
+That means Takosumi can resolve object storage shapes without operating a
+Takosumi-owned S3 gateway.
 
 ## Discovery
 
@@ -383,10 +395,10 @@ ids and outputs, not secret material or raw native provider internals.
 Core can emit usage events:
 
 ```text
-HttpService request count
-HttpService execution time
-ObjectStore storage bytes
-ObjectStore request count
+EdgeWorker request count
+EdgeWorker execution time
+ObjectBucket storage bytes
+ObjectBucket request count
 Queue messages
 DB storage
 DB compute
@@ -425,9 +437,10 @@ isolation, quota, network egress policy, admin audit, and usage metering.
 2. OpenTofu Stack controller: Git, runner, state, logs, approval, credentials.
 3. ProviderConnection / CredentialRecipe / generic env / OIDC federation.
 4. Resource object schema, Resource API preview/apply/status, ResolutionLock.
-5. ObjectStore + S3 compatibility profile.
-6. HttpService / ContainerService / Route / Connection model.
-7. Queue / RelationalDatabase / EventHandler / CloudEvents profile.
-8. Kubernetes CRDs and Kubernetes adapter.
-9. VM / MachinePool / agent-local credentials.
+5. ObjectBucket / EdgeWorker / AIEndpoint planner and provider schemas.
+6. TargetPool implementation plugin fields.
+7. Add scoped compatibility profiles only where existing providers are not
+   enough for import, binding, policy, or metering.
+8. Add future shapes one service form at a time.
+9. Kubernetes / VM / agent-local credentials where they are needed as targets.
 10. Operator/Cloud commercial operation and official managed targets.
