@@ -325,10 +325,14 @@ bun run cli -- secrets apply \
   --secrets-dir ../takosumi-private/.secrets/production
 ```
 
-Cloud storage inventory metering を有効にする場合は、closed Cloud usage worker を先に
+Cloud storage / managed resource metering を有効にする場合は、closed Cloud usage worker を先に
 deploy し、operator-private realized platform config で service binding と
 `TAKOSUMI_CLOUD_EXTENSIONS` descriptor を追加する。これは customer API ではなく
 collector 用の Cloud-only extension で、1 request は 1 Workspace に分割する。
+この worker は `POST /cloud/usage/storage-inventory` と
+`POST /cloud/usage/resource-meters` を持つ。後者は closed backend が実測した
+`cloudflare.containers` / `cloudflare.durable_objects` の public meter を
+usage ledger に流すための endpoint で、customer-facing lifecycle API ではない。
 
 ```bash
 cd takosumi-cloud/gateway/cloud-usage
@@ -429,6 +433,7 @@ bun run smoke:cloud-extensions -- \
   --cloudflare-compat-usage-workspace-id <workspace-id> \
   --cloudflare-compat-usage-installation-id <compat-installation-id> \
   --require-cloud-usage-storage-ledger \
+  --require-cloud-usage-managed-resource-ledger \
   --cloud-usage-workspace-id <workspace-id> \
   --cloud-usage-installation-id <cloud-usage-installation-id> \
   --json
@@ -462,6 +467,7 @@ bun run smoke:cloud-extensions -- \
   --cloudflare-compat-usage-workspace-id <workspace-id> \
   --cloudflare-compat-usage-installation-id <compat-installation-id> \
   --require-cloud-usage-storage-ledger \
+  --require-cloud-usage-managed-resource-ledger \
   --cloud-usage-workspace-id <workspace-id> \
   --cloud-usage-installation-id <cloud-usage-installation-id> \
   --json
