@@ -161,6 +161,21 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain('createSignal<"catalog" | "git">(');
   });
 
+  test("starts the add guide on source selection before a link or service is chosen", () => {
+    expect(newAppViewSource).toContain("const hasChosenSource = () =>");
+    expect(newAppViewSource).toContain(
+      'const addGuideStage = (): "select" | "configure" | "review" =>',
+    );
+    expect(newAppViewSource).toContain(
+      'return hasChosenSource() ? "configure" : "select"',
+    );
+    expect(newAppViewSource).toContain('class={addGuideClass("select")}');
+    expect(newAppViewSource).toContain('class={addGuideClass("configure")}');
+    expect(newAppViewSource).toContain('class={addGuideClass("review")}');
+    expect(newAppViewSource).not.toContain('<li class="is-done">');
+    expect(newAppViewSource).not.toContain('<li class="is-current">');
+  });
+
   test("treats pasted install links as active prefill state, not raw git input", () => {
     expect(newAppViewSource).toContain("activeInstallPrefill");
     expect(newAppViewSource).toContain("setActiveInstallPrefill(next)");
