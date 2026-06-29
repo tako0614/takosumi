@@ -1657,6 +1657,79 @@ test("cloud extension fallback usage can meter nested data-plane value keys", as
   ]);
 });
 
+test("cloud extension fallback usage can meter nested R2 object keys", async () => {
+  const recorded: {
+    readonly spaceId: string;
+    readonly input: unknown;
+  }[] = [];
+  const response = await handlePlatformCloudExtensionRouteRequest(
+    new Request(
+      "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/ts_acc/r2/buckets/assets/objects/images/logo.png",
+      { method: "PUT" },
+    ),
+    {
+      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
+      TAKOSUMI_CLOUD_COMPAT: {
+        fetch: async () => Response.json({ success: true }, { status: 200 }),
+      },
+    } as never,
+    {
+      basePath: "/compat/cloudflare/client/v4",
+      bindingName: "TAKOSUMI_CLOUD_COMPAT",
+      fallbackUsage: [
+        {
+          pathTemplate: "/accounts/*/r2/buckets/:resourceId/objects/**",
+          methods: ["GET", "HEAD", "PUT", "POST", "PATCH"],
+          meterIdPrefix: "cloudflare:r2:",
+          resourceFamily: "cloudflare.r2",
+          resourceIdPrefix: "r2:",
+          resourceIdParam: "resourceId",
+          kind: "gateway_compute",
+          quantity: 1,
+          operationByMethod: {
+            GET: "object_read",
+            HEAD: "object_read",
+            PUT: "object_write",
+            POST: "object_write",
+            PATCH: "object_write",
+          },
+        },
+      ],
+    },
+    async () => ({
+      authenticated: true,
+      authKind: "session",
+      subject: "tsub_cloud",
+      spaceId: "space_cloud",
+      installationId: "inst_cloud",
+    }),
+    async (spaceId, input) => {
+      recorded.push({ spaceId, input });
+    },
+    async () => {},
+  );
+
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({ success: true });
+  expect(recorded).toEqual([
+    {
+      spaceId: "space_cloud",
+      input: expect.objectContaining({
+        installationId: "inst_cloud",
+        meterId: "cloudflare:r2:object_write",
+        resourceFamily: "cloudflare.r2",
+        resourceId: "r2:assets",
+        operation: "object_write",
+        kind: "gateway_compute",
+        quantity: 1,
+        usdMicros: 500,
+        source: "resource_meter",
+        spendRequired: true,
+      }),
+    },
+  ]);
+});
+
 test("cloud extension fallback usage requires billing Workspace context for billable writes", async () => {
   let forwarded = false;
   const response = await handlePlatformCloudExtensionRouteRequest(
