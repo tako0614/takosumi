@@ -233,7 +233,7 @@ runtime guard smoke が必要です。
 ```json
 {
   "basePath": "/cloud/usage",
-  "bindingName": "TAKOSUMI_CLOUD_USAGE",
+  "handlerKey": "TAKOSUMI_CLOUD_USAGE",
   "requiredScopes": ["cloud.usage.write"]
 }
 ```

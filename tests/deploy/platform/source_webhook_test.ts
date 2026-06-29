@@ -937,10 +937,10 @@ test("runtime-cell drill route records drain and evacuation events", async () =>
 //
 // The OSS platform worker names no Cloud feature. The extension seam is driven
 // entirely by the operator/Cloud-supplied `TAKOSUMI_CLOUD_EXTENSIONS` env var
-// (a JSON array of opaque `{ basePath, bindingName, requiredScopes? }`
+// (a JSON array of opaque `{ basePath, handlerKey, requiredScopes? }`
 // descriptors). When that env is unset, every extension path 404s; when it is
-// set, a matching path verifies the platform session and proxies to the named
-// service binding.
+// set, a matching path verifies the platform session and dispatches to the
+// named in-process handler.
 
 test("platformCloudExtensionRoutes is empty when the env is unset", () => {
   expect(platformCloudExtensionRoutes({})).toEqual([]);
@@ -955,7 +955,7 @@ test("platformCloudExtensionRoutes parses opaque descriptors", () => {
       TAKOSUMI_CLOUD_EXTENSIONS: JSON.stringify([
         {
           basePath: "/gateway/ai/v1",
-          bindingName: "TAKOSUMI_CLOUD_AI",
+          handlerKey: "TAKOSUMI_CLOUD_AI",
           requiredScopes: ["ai.chat"],
           fallbackUsage: [
             {
@@ -968,13 +968,13 @@ test("platformCloudExtensionRoutes parses opaque descriptors", () => {
             },
           ],
         },
-        { basePath: "/compat/x", bindingName: "TAKOSUMI_CLOUD_X" },
+        { basePath: "/compat/x", handlerKey: "TAKOSUMI_CLOUD_X" },
       ]),
     }),
   ).toEqual([
     {
       basePath: "/gateway/ai/v1",
-      bindingName: "TAKOSUMI_CLOUD_AI",
+      handlerKey: "TAKOSUMI_CLOUD_AI",
       requiredScopes: ["ai.chat"],
       fallbackUsage: [
         {
@@ -987,7 +987,7 @@ test("platformCloudExtensionRoutes parses opaque descriptors", () => {
         },
       ],
     },
-    { basePath: "/compat/x", bindingName: "TAKOSUMI_CLOUD_X" },
+    { basePath: "/compat/x", handlerKey: "TAKOSUMI_CLOUD_X" },
   ]);
 });
 
@@ -997,7 +997,7 @@ test("platformCloudExtensionRoutes merges extra fallback usage descriptors", () 
       TAKOSUMI_CLOUD_EXTENSIONS: JSON.stringify([
         {
           basePath: "/compat/cloudflare/client/v4",
-          bindingName: "TAKOSUMI_CLOUD_COMPAT",
+          handlerKey: "TAKOSUMI_CLOUD_COMPAT",
           fallbackUsage: [
             {
               pathTemplate: "/accounts/*/r2/buckets",
@@ -1012,7 +1012,7 @@ test("platformCloudExtensionRoutes merges extra fallback usage descriptors", () 
       TAKOSUMI_CLOUD_EXTENSIONS_EXTRA: JSON.stringify([
         {
           basePath: "/compat/cloudflare/client/v4",
-          bindingName: "TAKOSUMI_CLOUD_COMPAT",
+          handlerKey: "TAKOSUMI_CLOUD_COMPAT",
           fallbackUsage: [
             {
               pathTemplate:
@@ -1030,7 +1030,7 @@ test("platformCloudExtensionRoutes merges extra fallback usage descriptors", () 
   ).toEqual([
     {
       basePath: "/compat/cloudflare/client/v4",
-      bindingName: "TAKOSUMI_CLOUD_COMPAT",
+      handlerKey: "TAKOSUMI_CLOUD_COMPAT",
       fallbackUsage: [
         {
           pathTemplate: "/accounts/*/r2/buckets",
@@ -1059,14 +1059,14 @@ test("platformCloudExtensionRoutes rejects malformed descriptors", () => {
   ).toThrow("must be valid JSON");
   expect(() =>
     platformCloudExtensionRoutes({
-      TAKOSUMI_CLOUD_EXTENSIONS: JSON.stringify([{ bindingName: "X" }]),
+      TAKOSUMI_CLOUD_EXTENSIONS: JSON.stringify([{ handlerKey: "X" }]),
     }),
   ).toThrow("basePath");
   expect(() =>
     platformCloudExtensionRoutes({
       TAKOSUMI_CLOUD_EXTENSIONS: JSON.stringify([{ basePath: "/x" }]),
     }),
-  ).toThrow("bindingName");
+  ).toThrow("handlerKey");
 });
 
 test("the seam claims no extension path when TAKOSUMI_CLOUD_EXTENSIONS is unset", async () => {
@@ -1083,7 +1083,7 @@ test("the seam claims no extension path when TAKOSUMI_CLOUD_EXTENSIONS is unset"
   expect(result).toBeUndefined();
 });
 
-test("a configured cloud extension proxies to the named binding through worker.fetch", async () => {
+test("a configured cloud extension dispatches to the named handler through worker.fetch", async () => {
   const worker = (await import("../../../deploy/platform/worker.ts")).default;
   const forwarded: { url: string; authorization: string | null }[] = [];
   const response = await worker.fetch(
@@ -1092,7 +1092,7 @@ test("a configured cloud extension proxies to the named binding through worker.f
     }),
     {
       TAKOSUMI_CLOUD_EXTENSIONS: JSON.stringify([
-        { basePath: "/gateway/ai/v1", bindingName: "TAKOSUMI_CLOUD_AI" },
+        { basePath: "/gateway/ai/v1", handlerKey: "TAKOSUMI_CLOUD_AI" },
       ]),
       TAKOSUMI_CLOUD_AI: {
         fetch: async (request: Request) => {
@@ -1107,7 +1107,7 @@ test("a configured cloud extension proxies to the named binding through worker.f
   );
   expect(response.status).toBe(200);
   expect(await response.json()).toEqual({ object: "list", data: [] });
-  // Raw credential material is never forwarded to the bound Cloud service.
+  // Raw credential material is never forwarded to the Cloud handler.
   expect(forwarded).toEqual([
     {
       url: "https://app.takosumi.com/gateway/ai/v1/models",
@@ -1116,13 +1116,13 @@ test("a configured cloud extension proxies to the named binding through worker.f
   ]);
 });
 
-test("a configured cloud extension 404s when its binding is absent", async () => {
+test("a configured cloud extension 404s when its handler is absent", async () => {
   const worker = (await import("../../../deploy/platform/worker.ts")).default;
   const response = await worker.fetch(
     new Request("https://app.takosumi.com/gateway/ai/v1/models"),
     {
       TAKOSUMI_CLOUD_EXTENSIONS: JSON.stringify([
-        { basePath: "/gateway/ai/v1", bindingName: "TAKOSUMI_CLOUD_AI" },
+        { basePath: "/gateway/ai/v1", handlerKey: "TAKOSUMI_CLOUD_AI" },
       ]),
     } as never,
   );
@@ -1166,7 +1166,7 @@ test("cloud extension route injects verified session context and strips raw cred
         },
       },
     } as never,
-    { basePath: "/gateway/ai/v1", bindingName: "TAKOSUMI_CLOUD_AI" },
+    { basePath: "/gateway/ai/v1", handlerKey: "TAKOSUMI_CLOUD_AI" },
     async () => ({
       authenticated: true,
       authKind: "session",
@@ -1204,7 +1204,7 @@ test("cloud extension route rejects spoofed billing Workspace context", async ()
         },
       },
     } as never,
-    { basePath: "/gateway/ai/v1", bindingName: "TAKOSUMI_CLOUD_AI" },
+    { basePath: "/gateway/ai/v1", handlerKey: "TAKOSUMI_CLOUD_AI" },
     async () => ({
       authenticated: true,
       authKind: "session",
@@ -1227,7 +1227,7 @@ test("cloud extension requiredScopes gate token auth", async () => {
   } as never;
   const route = {
     basePath: "/gateway/ai/v1",
-    bindingName: "TAKOSUMI_CLOUD_AI",
+    handlerKey: "TAKOSUMI_CLOUD_AI",
     requiredScopes: ["ai.chat"],
   };
 
@@ -1262,7 +1262,7 @@ test("cloud extension requiredScopes gate token auth", async () => {
   expect(allowed.status).toBe(200);
 
   // A full human session is allowed through regardless of descriptor scopes;
-  // the bound Cloud service performs any finer authorization.
+  // the Cloud handler performs any finer authorization.
   const session = await handlePlatformCloudExtensionRouteRequest(
     new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
       method: "POST",
@@ -1319,7 +1319,7 @@ test("cloud extension usage headers are priced, recorded, and stripped from clie
     } as never,
     {
       basePath: "/compat/cloudflare/client/v4",
-      bindingName: "TAKOSUMI_CLOUD_COMPAT",
+      handlerKey: "TAKOSUMI_CLOUD_COMPAT",
     },
     async () => ({
       authenticated: true,
@@ -1399,7 +1399,7 @@ test("cloud extension usage headers price Cloudflare Queue meters", async () => 
     } as never,
     {
       basePath: "/compat/cloudflare/client/v4",
-      bindingName: "TAKOSUMI_CLOUD_COMPAT",
+      handlerKey: "TAKOSUMI_CLOUD_COMPAT",
     },
     async () => ({
       authenticated: true,
@@ -1474,7 +1474,7 @@ test("cloud extension usage headers use token Workspace context when the extensi
     } as never,
     {
       basePath: "/compat/cloudflare/client/v4",
-      bindingName: "TAKOSUMI_CLOUD_COMPAT",
+      handlerKey: "TAKOSUMI_CLOUD_COMPAT",
     },
     async () => ({
       authenticated: true,
@@ -1530,7 +1530,7 @@ test("cloud extension fallback usage records successful extension calls without 
     } as never,
     {
       basePath: "/compat/cloudflare/client/v4",
-      bindingName: "TAKOSUMI_CLOUD_COMPAT",
+      handlerKey: "TAKOSUMI_CLOUD_COMPAT",
       fallbackUsage: [
         {
           pathTemplate: "/accounts/*/workers/scripts/:resourceId",
@@ -1606,7 +1606,7 @@ test("cloud extension fallback usage can meter nested data-plane value keys", as
     } as never,
     {
       basePath: "/compat/cloudflare/client/v4",
-      bindingName: "TAKOSUMI_CLOUD_COMPAT",
+      handlerKey: "TAKOSUMI_CLOUD_COMPAT",
       fallbackUsage: [
         {
           pathTemplate:
@@ -1675,7 +1675,7 @@ test("cloud extension fallback usage can meter nested R2 object keys", async () 
     } as never,
     {
       basePath: "/compat/cloudflare/client/v4",
-      bindingName: "TAKOSUMI_CLOUD_COMPAT",
+      handlerKey: "TAKOSUMI_CLOUD_COMPAT",
       fallbackUsage: [
         {
           pathTemplate: "/accounts/*/r2/buckets/:resourceId/objects/**",
@@ -1748,7 +1748,7 @@ test("cloud extension fallback usage requires billing Workspace context for bill
     } as never,
     {
       basePath: "/compat/cloudflare/client/v4",
-      bindingName: "TAKOSUMI_CLOUD_COMPAT",
+      handlerKey: "TAKOSUMI_CLOUD_COMPAT",
       fallbackUsage: [
         {
           pathTemplate: "/accounts/*/workers/scripts/:resourceId",
@@ -1799,7 +1799,7 @@ test("cloud extension usage spend failure fails closed", async () => {
     } as never,
     {
       basePath: "/compat/cloudflare/client/v4",
-      bindingName: "TAKOSUMI_CLOUD_COMPAT",
+      handlerKey: "TAKOSUMI_CLOUD_COMPAT",
       fallbackUsage: [
         {
           pathTemplate: "/accounts/*/workers/scripts/:resourceId",
@@ -1853,7 +1853,7 @@ test("cloud extension usage spend failure maps insufficient balance to payment r
     } as never,
     {
       basePath: "/compat/cloudflare/client/v4",
-      bindingName: "TAKOSUMI_CLOUD_COMPAT",
+      handlerKey: "TAKOSUMI_CLOUD_COMPAT",
       fallbackUsage: [
         {
           pathTemplate: "/accounts/*/workers/scripts/:resourceId",
@@ -1916,7 +1916,7 @@ test("cloud extension fallback usage precharges spend before forwarding billable
     } as never,
     {
       basePath: "/compat/cloudflare/client/v4",
-      bindingName: "TAKOSUMI_CLOUD_COMPAT",
+      handlerKey: "TAKOSUMI_CLOUD_COMPAT",
       fallbackUsage: [
         {
           pathTemplate: "/accounts/*/workers/scripts/:resourceId",
@@ -1981,7 +1981,7 @@ test("cloud extension fallback usage does not block DELETE cleanup", async () =>
     } as never,
     {
       basePath: "/compat/cloudflare/client/v4",
-      bindingName: "TAKOSUMI_CLOUD_COMPAT",
+      handlerKey: "TAKOSUMI_CLOUD_COMPAT",
       fallbackUsage: [
         {
           pathTemplate: "/accounts/*/workers/scripts/:resourceId",
@@ -2064,7 +2064,7 @@ test("cloud extension fallback precharge skips duplicate response usage and reco
     } as never,
     {
       basePath: "/gateway/ai/v1",
-      bindingName: "TAKOSUMI_CLOUD_AI",
+      handlerKey: "TAKOSUMI_CLOUD_AI",
       fallbackUsage: [
         {
           pathTemplate: "/chat/completions",
@@ -2168,7 +2168,7 @@ test("cloud usage extension records managed Containers and Durable Objects meter
           ),
       },
     } as never,
-    { basePath: "/cloud/usage", bindingName: "TAKOSUMI_CLOUD_USAGE" },
+    { basePath: "/cloud/usage", handlerKey: "TAKOSUMI_CLOUD_USAGE" },
     async () => ({
       authenticated: true,
       authKind: "service-token",
@@ -2247,7 +2247,7 @@ test("cloud extension usage metering fails closed for unknown meters", async () 
           ),
       },
     } as never,
-    { basePath: "/gateway/ai/v1", bindingName: "TAKOSUMI_CLOUD_AI" },
+    { basePath: "/gateway/ai/v1", handlerKey: "TAKOSUMI_CLOUD_AI" },
     async () => ({
       authenticated: true,
       authKind: "service-token",
@@ -2279,7 +2279,7 @@ test("cloud extension authenticates personal access tokens through accounts intr
       TAKOSUMI_ACCOUNTS_CLIENT_SECRET: "client-secret",
     } as never,
     "takpat_cloud",
-    { basePath: "/gateway/ai/v1", bindingName: "TAKOSUMI_CLOUD_AI" },
+    { basePath: "/gateway/ai/v1", handlerKey: "TAKOSUMI_CLOUD_AI" },
     async (request: Request) => {
       introspectionRequests.push({
         url: request.url,
@@ -2311,7 +2311,7 @@ test("cloud extension service access token enforces descriptor scopes", async ()
   } as never;
   const route = {
     basePath: "/gateway/ai/v1",
-    bindingName: "TAKOSUMI_CLOUD_AI",
+    handlerKey: "TAKOSUMI_CLOUD_AI",
     requiredScopes: ["ai.chat"],
   };
   const introspect = (scope: string) => async () =>
@@ -2344,7 +2344,7 @@ test("cloud extension service access token enforces descriptor scopes", async ()
 test("cloud extension route matcher rejects near-prefixes", () => {
   const routes = platformCloudExtensionRoutes({
     TAKOSUMI_CLOUD_EXTENSIONS: JSON.stringify([
-      { basePath: "/gateway/ai/v1", bindingName: "TAKOSUMI_CLOUD_AI" },
+      { basePath: "/gateway/ai/v1", handlerKey: "TAKOSUMI_CLOUD_AI" },
     ]),
   });
   expect(
@@ -2366,10 +2366,10 @@ test("cloud extension catalog reports configured extensions without binding name
     TAKOSUMI_CLOUD_EXTENSIONS: JSON.stringify([
       {
         basePath: "/gateway/ai/v1",
-        bindingName: "TAKOSUMI_CLOUD_AI",
+        handlerKey: "TAKOSUMI_CLOUD_AI",
         requiredScopes: ["ai.chat"],
       },
-      { basePath: "/compat/x", bindingName: "TAKOSUMI_CLOUD_X" },
+      { basePath: "/compat/x", handlerKey: "TAKOSUMI_CLOUD_X" },
     ]),
     TAKOSUMI_CLOUD_AI: { fetch: async () => new Response("") },
   } as never;
@@ -2387,7 +2387,7 @@ test("cloud extension catalog reports configured extensions without binding name
     },
     { basePath: "/compat/x", configured: false },
   ]);
-  // The catalog never leaks the underlying service-binding names.
+  // The catalog never leaks the underlying handler keys.
   expect(JSON.stringify(catalog)).not.toContain("TAKOSUMI_CLOUD_AI");
 });
 

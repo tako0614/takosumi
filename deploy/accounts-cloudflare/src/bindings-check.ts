@@ -11,7 +11,7 @@
  * Cloud extension handlers are NOT part of OSS/operator readiness. They are
  * config-driven: the closed Takosumi Cloud delta declares route descriptors via
  * `TAKOSUMI_CLOUD_EXTENSIONS` and resolves the named handler keys inside its
- * platform wrapper. OSS never hardcodes a Cloud-feature binding name.
+ * platform wrapper. OSS never hardcodes a Cloud-feature handler key.
  *
  * It validates PRESENCE (the binding object exists on `env`), not liveness — it
  * never touches D1/R2/DO so it is cheap and side-effect-free. ASSETS is treated

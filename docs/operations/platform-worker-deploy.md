@@ -344,7 +344,7 @@ production では closed platform wrapper が同じ Worker 内で handler を mo
 [
   {
     "basePath": "/cloud/usage",
-    "bindingName": "TAKOSUMI_CLOUD_USAGE",
+    "handlerKey": "TAKOSUMI_CLOUD_USAGE",
     "requiredScopes": ["cloud.usage.write"]
   }
 ]

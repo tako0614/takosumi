@@ -49,7 +49,7 @@ Worker entry にし、OSS platform worker の `cloud_extensions` seam に Cloud-
 fetch handler を in-process で mount します。AI Gateway、Cloudflare-compatible
 import endpoint、Cloud usage、Cloud Edge Runtime の実装は closed handler 側にあり、
 OSS code に入れてよいのは catalog metadata、auth forwarding、dashboard client、
-smoke test までです。`bindingName` は OSS seam が参照する handler key であり、
+smoke test までです。`handlerKey` は OSS seam が参照する論理 handler key であり、
 公式 Cloud wrapper が in-process で解決します。
 managed resource backend は Takosumi Cloud 側の closed module です。
 

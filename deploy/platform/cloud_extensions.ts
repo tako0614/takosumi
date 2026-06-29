@@ -4,17 +4,17 @@
 // The OSS platform worker exposes a single additive HTTP seam that the closed
 // Takosumi Cloud delta can compose ON TOP of: for a configured base path, the
 // worker verifies the platform session and dispatches the request to a named
-// fetch-handler key on env. The OSS worker stays Cloud-feature-agnostic — it never names
+// logical fetch-handler key on env. The OSS worker stays Cloud-feature-agnostic — it never names
 // a Cloud feature (no AI Gateway, no Cloudflare compatibility, no managed
 // resource enum). Which paths exist, which handler key each dispatches to, and which
 // scopes they require, and any operator-supplied fallback metering rules are
 // supplied entirely by the operator/Cloud via the `TAKOSUMI_CLOUD_EXTENSIONS`
 // env var. When that env is empty or unset, every extension path 404s.
 //
-// Descriptors are intentionally generic: `{ basePath, bindingName,
+// Descriptors are intentionally generic: `{ basePath, handlerKey,
 // requiredScopes?, fallbackUsage? }`. Large operator configs can split
 // additional descriptors into `TAKOSUMI_CLOUD_EXTENSIONS_EXTRA`; descriptors
-// with the same basePath/bindingName are merged by concatenating fallbackUsage.
+// with the same basePath/handlerKey are merged by concatenating fallbackUsage.
 // The OSS seam records priced usage from the generic descriptor shape and
 // treats a matching fallbackUsage rule as a preflight billing-context
 // requirement, but never names a concrete Cloud feature.
@@ -22,8 +22,8 @@
 export interface PlatformCloudExtensionRoute {
   /** Path prefix this descriptor matches (and dispatches to its handler). */
   readonly basePath: `/${string}`;
-  /** Name of the fetch handler key on `env` the matched request is dispatched to. */
-  readonly bindingName: string;
+  /** Logical fetch handler key on `env` the matched request is dispatched to. */
+  readonly handlerKey: string;
   /**
    * Optional scopes the authenticated caller must hold for this descriptor.
    * When omitted, any authenticated platform session may reach the binding.
@@ -120,9 +120,9 @@ function platformCloudExtensionRouteFromJson(
   if (typeof basePath !== "string" || !basePath.startsWith("/")) {
     throw new TypeError(`${label}.basePath must be a path starting with "/"`);
   }
-  const bindingName = record.bindingName;
-  if (typeof bindingName !== "string" || bindingName.trim() === "") {
-    throw new TypeError(`${label}.bindingName must be a non-empty string`);
+  const handlerKey = record.handlerKey ?? record.bindingName;
+  if (typeof handlerKey !== "string" || handlerKey.trim() === "") {
+    throw new TypeError(`${label}.handlerKey must be a non-empty string`);
   }
   const requiredScopes = platformCloudExtensionRequiredScopes(
     record.requiredScopes,
@@ -134,7 +134,7 @@ function platformCloudExtensionRouteFromJson(
   );
   return {
     basePath: basePath as `/${string}`,
-    bindingName,
+    handlerKey,
     ...(requiredScopes ? { requiredScopes } : {}),
     ...(fallbackUsage ? { fallbackUsage } : {}),
   };
@@ -147,7 +147,7 @@ function mergePlatformCloudExtensionRoutes(
   for (const route of routes) {
     const key = [
       route.basePath,
-      route.bindingName,
+      route.handlerKey,
       ...(route.requiredScopes ?? []),
     ].join("\0");
     const existing = merged.get(key);
