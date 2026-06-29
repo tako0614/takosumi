@@ -161,6 +161,13 @@ those headers from the client response and records them through
 reports usage but the ledger write cannot be completed, the platform fails
 closed instead of returning an unmetered success.
 
+The public Cloud Edge Runtime is the exception: it does not expose usage headers
+to client responses. For a matched route with a `spaceId`, it sends a
+`cloudflare:workers_script:request` meter to the platform worker's internal
+`POST /internal/platform/cloud/usage` route before dispatching the Workers
+Script. If the Workspace has insufficient credits, pricing is missing, or the
+internal usage token is not configured, the Workers Script is not dispatched.
+
 Pricing is owned by the Takosumi Cloud platform worker, not by the Cloud
 extension. The canonical extension report carries `meterId`, `kind`, `quantity`,
 and resource metadata. Extension-provided `usdMicros` is still accepted as a

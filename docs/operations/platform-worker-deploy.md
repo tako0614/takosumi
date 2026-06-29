@@ -192,6 +192,14 @@ Cloud-only WfP / AI / managed resource usage の顧客向け単価は
 platform config を正本にする。価格表、無料枠、最低粗利 guard は
 [`cloud-pricing.md`](cloud-pricing.md) を参照する。
 
+Cloud Edge Runtime は public traffic を dispatch する前に platform worker の
+`POST /internal/platform/cloud/usage` へ runtime usage を記録する。platform worker
+には secret `TAKOSUMI_CLOUD_USAGE_RECORD_TOKEN` を設定する。edge runtime worker
+にも同じ secret と非 secret var `TAKOSUMI_PLATFORM_USAGE_ORIGIN=https://app.takosumi.com`
+を設定する。後方互換として platform route は token 未設定時に
+`TAKOSUMI_DEPLOY_CONTROL_TOKEN` を受けられるが、GA 運用では usage 記録専用 token を
+使う。
+
 Operator default provider credential は CLI で Connection として登録する。例:
 
 ```bash

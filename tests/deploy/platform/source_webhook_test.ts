@@ -9,12 +9,14 @@ import {
   handlePlatformCloudExtensionRequest,
   handlePlatformCloudExtensionCatalogRequest,
   handlePlatformCloudExtensionRouteRequest,
+  handlePlatformCloudUsageRecordRequest,
   handlePlatformMetricsDashboardRequest,
   handlePlatformMetricsRequest,
   handlePlatformRuntimeCellDrillRequest,
   handleSourceWebhookRequest,
   isOperatorBillingPath,
   isOidcMetricPath,
+  isPlatformCloudUsageRecordPath,
   isPlatformCloudExtensionCatalogPath,
   matchPlatformCloudExtensionRoute,
   platformCloudExtensionCatalog,
@@ -683,6 +685,140 @@ test("operator billing path classifier includes top-up routes", () => {
       "/internal/platform/spaces/not-a-space/credits/top-up",
     ),
   ).toBe(false);
+});
+
+test("platform Cloud usage record route prices and spends runtime usage", async () => {
+  const recorded: {
+    readonly spaceId: string;
+    readonly input: unknown;
+  }[] = [];
+  const url = new URL("https://app.takosumi.com/internal/platform/cloud/usage");
+  const response = await handlePlatformCloudUsageRecordRequest(
+    new Request(url, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer usage-secret",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        spaceId: "space_cloud",
+        periodStart: "2026-06-28T10:00:00.000Z",
+        periodEnd: "2026-06-28T10:00:01.000Z",
+        meters: [
+          {
+            installationId: "inst_cloud",
+            meterId: "cloudflare:workers_script:request",
+            resourceFamily: "cloudflare.workers_script",
+            resourceId: "script:api",
+            operation: "request",
+            kind: "gateway_compute",
+            quantity: 1,
+          },
+        ],
+      }),
+    }),
+    url,
+    {
+      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
+      TAKOSUMI_CLOUD_USAGE_RECORD_TOKEN: "usage-secret",
+    } as never,
+    async (spaceId, input) => {
+      recorded.push({ spaceId, input });
+    },
+  );
+
+  expect(response?.status).toBe(202);
+  expect(await response?.json()).toEqual({ ok: true, usageEvents: 1 });
+  expect(recorded).toEqual([
+    {
+      spaceId: "space_cloud",
+      input: expect.objectContaining({
+        installationId: "inst_cloud",
+        meterId: "cloudflare:workers_script:request",
+        resourceFamily: "cloudflare.workers_script",
+        resourceId: "script:api",
+        operation: "request",
+        kind: "gateway_compute",
+        quantity: 1,
+        usdMicros: 1_000,
+        source: "resource_meter",
+        spendRequired: true,
+        createdAt: "2026-06-28T10:00:01.000Z",
+      }),
+    },
+  ]);
+});
+
+test("platform Cloud usage record route maps insufficient balance to payment required", async () => {
+  const url = new URL("https://app.takosumi.com/internal/platform/cloud/usage");
+  const response = await handlePlatformCloudUsageRecordRequest(
+    new Request(url, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer usage-secret",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        spaceId: "space_cloud",
+        periodStart: "2026-06-28T10:00:00.000Z",
+        periodEnd: "2026-06-28T10:00:01.000Z",
+        meters: [
+          {
+            meterId: "cloudflare:workers_script:request",
+            resourceFamily: "cloudflare.workers_script",
+            resourceId: "script:api",
+            operation: "request",
+            kind: "gateway_compute",
+            quantity: 1,
+          },
+        ],
+      }),
+    }),
+    url,
+    {
+      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
+      TAKOSUMI_CLOUD_USAGE_RECORD_TOKEN: "usage-secret",
+    } as never,
+    async () => {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "metered usage spend failed: insufficient USD balance",
+        {
+          reason: "insufficient_credits",
+          workspaceId: "space_cloud",
+          usdMicros: 1_000,
+        },
+      );
+    },
+  );
+
+  expect(response?.status).toBe(402);
+  expect(await response?.json()).toEqual({
+    error: "cloud_extension_insufficient_credits",
+    reason: "insufficient_credits",
+  });
+});
+
+test("platform Cloud usage record path is a stable internal endpoint", async () => {
+  expect(isPlatformCloudUsageRecordPath("/internal/platform/cloud/usage")).toBe(
+    true,
+  );
+  expect(isPlatformCloudUsageRecordPath("/internal/platform/cloud/usage/")).toBe(
+    false,
+  );
+  const url = new URL("https://app.takosumi.com/internal/platform/cloud/usage");
+  const response = await handlePlatformCloudUsageRecordRequest(
+    new Request(url, {
+      method: "POST",
+      body: JSON.stringify({}),
+    }),
+    url,
+    { TAKOSUMI_CLOUD_USAGE_RECORD_TOKEN: "usage-secret" } as never,
+    async () => {
+      throw new Error("must not record unauthenticated usage");
+    },
+  );
+  expect(response?.status).toBe(401);
 });
 
 test("operator billing route validates settings before mutation", async () => {
