@@ -1566,6 +1566,7 @@ test("cloud extension fallback usage requires billing Workspace context for bill
 });
 
 test("cloud extension usage spend failure fails closed", async () => {
+  let forwarded = false;
   const response = await handlePlatformCloudExtensionRouteRequest(
     new Request(
       "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/ts_acc/workers/scripts/api",
@@ -1574,7 +1575,10 @@ test("cloud extension usage spend failure fails closed", async () => {
     {
       TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
       TAKOSUMI_CLOUD_COMPAT: {
-        fetch: async () => Response.json({ success: true }, { status: 201 }),
+        fetch: async () => {
+          forwarded = true;
+          return Response.json({ success: true }, { status: 201 });
+        },
       },
     } as never,
     {
@@ -1612,9 +1616,11 @@ test("cloud extension usage spend failure fails closed", async () => {
     error: "cloud_extension_usage_metering_failed",
     reason: "usage_record_failed",
   });
+  expect(forwarded).toBe(false);
 });
 
 test("cloud extension usage spend failure maps insufficient balance to payment required", async () => {
+  let forwarded = false;
   const response = await handlePlatformCloudExtensionRouteRequest(
     new Request(
       "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/ts_acc/workers/scripts/api",
@@ -1623,7 +1629,10 @@ test("cloud extension usage spend failure maps insufficient balance to payment r
     {
       TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
       TAKOSUMI_CLOUD_COMPAT: {
-        fetch: async () => Response.json({ success: true }, { status: 201 }),
+        fetch: async () => {
+          forwarded = true;
+          return Response.json({ success: true }, { status: 201 });
+        },
       },
     } as never,
     {
@@ -1669,9 +1678,10 @@ test("cloud extension usage spend failure maps insufficient balance to payment r
     error: "cloud_extension_insufficient_credits",
     reason: "insufficient_credits",
   });
+  expect(forwarded).toBe(false);
 });
 
-test("cloud extension fallback usage authorizes spend before forwarding billable calls", async () => {
+test("cloud extension fallback usage precharges spend before forwarding billable calls", async () => {
   let forwarded = false;
   let recorded = false;
   const response = await handlePlatformCloudExtensionRouteRequest(
@@ -1735,6 +1745,111 @@ test("cloud extension fallback usage authorizes spend before forwarding billable
   });
   expect(forwarded).toBe(false);
   expect(recorded).toBe(false);
+});
+
+test("cloud extension fallback precharge skips duplicate response usage and records extra meters", async () => {
+  const periodStart = "2026-06-28T10:00:00.000Z";
+  const periodEnd = "2026-06-28T10:00:01.000Z";
+  const recorded: {
+    readonly spaceId: string;
+    readonly input: Record<string, unknown>;
+  }[] = [];
+  const response = await handlePlatformCloudExtensionRouteRequest(
+    new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
+      method: "POST",
+    }),
+    {
+      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
+      TAKOSUMI_CLOUD_AI: {
+        fetch: async () =>
+          Response.json(
+            { id: "chatcmpl" },
+            {
+              headers: {
+                "x-takosumi-cloud-usage-space-id": "space_cloud",
+                "x-takosumi-cloud-usage-period-start": periodStart,
+                "x-takosumi-cloud-usage-period-end": periodEnd,
+                "x-takosumi-cloud-usage-meters": JSON.stringify([
+                  {
+                    installationId: "inst_cloud",
+                    meterId: "ai:takosumi-default:chat.completions:request",
+                    resourceFamily: "cloudflare.ai_gateway",
+                    resourceId: "takosumi/default",
+                    operation: "chat.completions",
+                    kind: "ai_request",
+                    quantity: 1,
+                  },
+                  {
+                    installationId: "inst_cloud",
+                    meterId: "ai:chat:input_token",
+                    resourceFamily: "ai.chat",
+                    operation: "chat.input_tokens",
+                    kind: "ai_input_token",
+                    quantity: 100,
+                  },
+                ]),
+              },
+            },
+          ),
+      },
+    } as never,
+    {
+      basePath: "/gateway/ai/v1",
+      bindingName: "TAKOSUMI_CLOUD_AI",
+      fallbackUsage: [
+        {
+          pathTemplate: "/chat/completions",
+          methods: ["POST"],
+          meterIdPrefix: "ai:",
+          resourceFamily: "ai.chat",
+          kind: "ai_request",
+          quantity: 1,
+          operationByMethod: { POST: "chat" },
+        },
+      ],
+    },
+    async () => ({
+      authenticated: true,
+      authKind: "session",
+      subject: "tsub_cloud",
+      spaceId: "space_cloud",
+      installationId: "inst_cloud",
+    }),
+    async (spaceId, input) => {
+      recorded.push({ spaceId, input: input as Record<string, unknown> });
+    },
+    async () => {},
+  );
+
+  expect(response.status).toBe(200);
+  expect(recorded).toHaveLength(2);
+  expect(recorded[0]).toEqual({
+    spaceId: "space_cloud",
+    input: expect.objectContaining({
+      installationId: "inst_cloud",
+      meterId: "ai:chat",
+      resourceFamily: "ai.chat",
+      operation: "chat",
+      kind: "ai_request",
+      quantity: 1,
+      usdMicros: 1_000,
+      spendRequired: true,
+    }),
+  });
+  expect(recorded[1]).toEqual({
+    spaceId: "space_cloud",
+    input: expect.objectContaining({
+      installationId: "inst_cloud",
+      meterId: "ai:chat:input_token",
+      resourceFamily: "ai.chat",
+      operation: "chat.input_tokens",
+      kind: "ai_input_token",
+      quantity: 100,
+      usdMicros: 30,
+      spendRequired: true,
+      createdAt: periodEnd,
+    }),
+  });
 });
 
 test("cloud extension usage metering fails closed for unknown meters", async () => {
