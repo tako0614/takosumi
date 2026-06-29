@@ -29,6 +29,7 @@ See [Takosumi Final Plan](../final-plan.md) and
 The following belong to closed Takosumi Cloud:
 
 ```text
+Takosumi Cloud Workers
 Cloudflare Compatibility Gateway
 Takosumi AI Gateway
 Cloudflare provider base_url endpoint
@@ -44,43 +45,45 @@ If Takosumi Cloud implements these features, their production architecture,
 tests, deployment config, secrets, and provider-compatible endpoint behavior
 must live in the closed Cloud implementation, not in the OSS repo.
 
-The OSS platform worker may reserve public route seams and delegate them through
-the Cloud extension route registry. A registry entry contains only the route
-base path and the Cloud-only service binding name; the provider-compatible
-behavior itself stays in the closed Cloud implementation.
+The OSS platform worker may reserve public route seams through the Cloud
+extension route registry. A registry entry contains only the route base path and
+an abstract fetch-handler key (`bindingName`); the provider-compatible behavior
+itself stays in the closed Cloud implementation.
+
+For official staging/production `app.takosumi.com`, the closed
+`takosumi-cloud/platform/worker.ts` wrapper is the Worker entry. It wraps
+`takosumi/deploy/platform/worker.ts` and mounts the Cloud extension fetch
+handlers in-process:
 
 ```text
 /compat/cloudflare/client/v4/*
-  -> TAKOSUMI_CLOUD_CLOUDFLARE_COMPAT service binding
-  -> closed Takosumi Cloud compatibility worker
+  -> cloud_extensions registry
+  -> TAKOSUMI_CLOUD_CLOUDFLARE_COMPAT handler key
+  -> in-process Cloudflare compatibility handler
 
 /gateway/ai/v1/*
-  -> TAKOSUMI_CLOUD_AI_GATEWAY service binding
-  -> closed Takosumi Cloud AI Gateway worker
+  -> cloud_extensions registry
+  -> TAKOSUMI_CLOUD_AI_GATEWAY handler key
+  -> in-process AI Gateway handler
+
+/cloud/usage/*
+  -> cloud_extensions registry
+  -> TAKOSUMI_CLOUD_USAGE handler key
+  -> in-process Cloud usage handler
+
+*.app.takos.jp/*
+  -> Takosumi Cloud wrapper host dispatch
+  -> in-process Cloud Edge Runtime handler
 ```
 
-If the service binding is absent, the route returns `404 { "error": "not
-found" }`. Adding `TAKOSUMI_AI_GATEWAY_PROFILES` or provider-looking env vars to
-the OSS platform worker must not activate a gateway by itself.
+If no handler is mounted, the route returns `404 { "error": "not found" }`.
+Adding `TAKOSUMI_AI_GATEWAY_PROFILES` or provider-looking env vars to the OSS
+platform worker must not activate a gateway by itself.
 
-The OSS reference `deploy/platform/wrangler.toml` declares placeholder service
-bindings so the operator-private realized config has an exact shape to copy:
-
-```toml
-[[services]]
-binding = "TAKOSUMI_CLOUD_AI_GATEWAY"
-service = "takosumi-cloud-ai-gateway"
-
-[[services]]
-binding = "TAKOSUMI_CLOUD_CLOUDFLARE_COMPAT"
-service = "takosumi-cloud-cloudflare-compat"
-```
-
-Those `service` names are placeholders. Takosumi Cloud operators replace them
-with the actual closed extension Worker names in `takosumi-private/platform/wrangler.toml`.
-The `/readyz` baseline does not require these bindings, but GA evidence for AI
-Gateway or Cloudflare compatibility must prove the corresponding service binding
-exists and delegates to the closed Cloud worker.
+The `/readyz` baseline does not require Cloud extension handlers. GA
+evidence for AI Gateway or Cloudflare compatibility must prove the corresponding
+route is mounted and reaches the closed Cloud handler inside the platform
+wrapper.
 
 The current compatibility API contract stops here: Cloudflare Compatibility
 Gateway and Takosumi AI Gateway. AWS, GCP, S3-compatible storage, Hetzner,
@@ -93,8 +96,8 @@ If Takosumi Cloud later wants another compatibility endpoint, it requires a new
 Cloud-only product spec and closed implementation. It must not be inferred from
 the OSS route seam or from adding env vars to the platform worker.
 
-The Cloudflare compatibility endpoint is the path a Cloud-only Provider
-Connection can put into the Cloudflare provider `base_url`:
+The Cloudflare compatibility endpoint is an import/deploy path a Cloud-only
+Provider Connection can put into the Cloudflare provider `base_url`:
 
 ```hcl
 provider "cloudflare" {

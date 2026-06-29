@@ -20,6 +20,17 @@ provider ecosystem as-is.
 Takosumi Cloud is the official hosted, closed service based on Takosumi for
 Operators, with cloud-only compatibility gateways and managed resources.
 
+Takosumi Cloud's user-facing product identity is Workers-compatible application
+hosting:
+
+```text
+Takosumi Cloud Workers let users host Worker-compatible apps with managed
+bindings, USD credits, and OpenTofu deploys.
+```
+
+Cloudflare-compatible APIs are an import and deploy path for existing
+Cloudflare Workers-oriented manifests. They are not the product identity.
+
 ```text
 OSS:
   Run existing providers as-is.
@@ -144,6 +155,8 @@ Takosumi Cloud is the official service operated by us.
 ```text
 Takosumi Cloud =
   official hosted Takosumi for Operators
+  + Takosumi Cloud Workers
+  + Worker-compatible managed bindings
   + closed cloud-only features
 ```
 
@@ -161,6 +174,7 @@ official usage metering
 official support/admin
 Cloudflare Compatibility Gateway
 Takosumi AI Gateway
+Takosumi Cloud Workers
 Takosumi Edge Worker
 Takosumi Object Storage
 Takosumi App Database
@@ -274,10 +288,12 @@ These all live in the closed `takosumi-cloud` package, never in OSS. Cloud
 attaches to the OSS platform through two additive seams and never adds a
 Cloud-only concept to the OSS contract:
 
-- an additive HTTP route proxy (`cloud_extensions`): when a Cloud extension is
-  bound, its routes (for example the AI Gateway base path) are proxied to the
-  Cloud worker; when unbound, those routes return 404 and OSS behaves exactly as
-  if Cloud did not exist;
+- an additive HTTP route dispatch seam (`cloud_extensions`): when a Cloud
+  extension is mounted, its routes (for example the AI Gateway base path)
+  dispatch to closed fetch handlers supplied by `takosumi-cloud`; when
+  unmounted, those routes return 404 and OSS behaves exactly as if Cloud did not
+  exist. The official `app.takosumi.com` deployment mounts those handlers
+  in-process through the closed platform wrapper as one platform Worker;
 - the billing/quota ports (`BillingEnforcement` / `QuotaPolicy`): OSS ships
   no-op defaults that estimate-and-record without ever blocking or charging, and
   only the Cloud package injects enforcing implementations.
@@ -881,6 +897,8 @@ runner pools. Takosumi Cloud operates the official hosted runner pool.
 
 ## 12. Cloudflare Compatibility Gateway
 
+Takosumi Cloud Workers are the user-facing Cloud product: Worker-compatible app
+hosting with managed bindings, USD credits, and OpenTofu deploys. The
 Cloudflare Compatibility Gateway is Takosumi Cloud-only and closed. It lives in
 the `takosumi-cloud` package and is reached only through the additive
 `cloud_extensions` route proxy; OSS exposes no compatibility gateway, no
@@ -889,8 +907,8 @@ provider `base_url` bridge, and no run-key minting routes.
 Purpose:
 
 ```text
-Run existing Cloudflare Workers manifests against Takosumi Cloud Edge
-while keeping the cloudflare/cloudflare provider.
+Deploy Worker-compatible apps to Takosumi Cloud.
+Use Cloudflare-compatible Terraform/OpenTofu resources when convenient.
 ```
 
 Shape:
@@ -899,15 +917,30 @@ Shape:
 cloudflare/cloudflare provider
   -> base_url = https://app.takosumi.com/compat/cloudflare/client/v4
   -> Takosumi Cloudflare Compatibility Gateway
-  -> Takosumi Managed Edge internal API
-  -> Takosumi Cloud internal Workers Script backend / R2 / D1 / KV
+  -> Takosumi Cloud Workers / managed bindings
+  -> internal Workers Script backend / R2 / D1 / KV
 ```
 
-The internal Workers Script backend is not the customer-facing product surface.
-Users keep using Cloudflare provider Workers resources such as
+The internal Workers Script backend is not the public headline. Users see
+Takosumi Cloud Workers, bindings, routes, secrets, credits, and resource
+inventory. When they choose the compatibility path, they keep using Cloudflare
+provider Workers resources such as
 `cloudflare_workers_script`; usage ledger and billing use
 `cloudflare.workers_script`. `wfp` / `workers_for_platforms` must not appear as
 a `meterId`, `resourceFamily`, Stripe usage meter, or public usage metadata.
+
+Runtime backing is explicit in architecture docs:
+
+```text
+Workers-compatible HTTP apps:
+  Cloudflare Workers for Platforms dispatch namespace
+
+Durable user workflows:
+  Cloudflare Dynamic Workers + @cloudflare/dynamic-workflows where available
+
+Operator/internal jobs:
+  Cloudflare Workflows
+```
 
 Cloud extension usage headers are the authoritative metering path for
 platform-proxied Cloud extensions. Takosumi Cloud may also record fallback
@@ -966,7 +999,53 @@ worker secrets
 worker bindings
 ```
 
-Out of scope for the first Cloudflare compatibility release:
+Public rollout status:
+
+```text
+Stable:
+  Worker script deploy
+  Worker routes
+  Worker secrets
+  Worker vars
+  KV namespace
+  R2 bucket / Object Storage
+  D1 database / App Database
+  AI Gateway OpenAI-compatible endpoint
+
+Preview:
+  Queue
+  Durable Workflow
+  Dynamic Worker workflow support
+
+Planned:
+  Containers
+  Durable Objects style stateful apps
+```
+
+Cloud Workers routes have two hostname paths:
+
+```text
+Default app URL:
+  https://my-app.app.takos.jp
+  or generated fallback:
+  https://<app-slug>-<short-id>.app.takos.jp
+
+User-owned custom domains:
+  app.example.com
+  www.example.com
+```
+
+The `*.app.takos.jp` namespace is first-come-first-served for user-selected,
+DNS-valid single-label hostnames. Duplicate reservations fail. Platform-reserved
+names are unavailable. If the user does not request a hostname, Takosumi issues
+a generated fallback hostname. The default URL remains available for preview,
+first deploy, support, and cleanup even when a custom domain is pending or
+disabled. Custom domains require DNS ownership verification and
+certificate/runtime activation in the closed Cloud runtime. The compatibility
+route record stores `default_hostname` and `custom_domains`; the runtime must
+not dispatch unverified custom domains.
+
+Out of scope for the Cloudflare compatibility release:
 
 ```text
 all DNS

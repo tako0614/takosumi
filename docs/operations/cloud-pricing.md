@@ -212,8 +212,9 @@ platform worker の price book が決めます。
 
 実運用では collector は `POST /cloud/usage/storage-inventory` を
 `cloud_extensions` Seam A 経由で呼びます。この endpoint は closed
-`takosumi-cloud-usage` worker にあり、platform が検証した billing Workspace
-context と request body の `workspaceId` を照合してから usage header を返します。
+Cloud usage handler にあり、official Cloud wrapper が platform worker 内で
+in-process mount します。platform が検証した billing Workspace context と request
+body の `workspaceId` を照合してから usage header を返します。
 header は client response から削除され、platform worker が price book で
 `usdMicros` を確定して Workspace usage ledger に記録します。1 request に複数
 Workspace を混ぜないでください。複数 Workspace の inventory は Workspace ごとに
