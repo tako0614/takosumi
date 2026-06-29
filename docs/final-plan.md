@@ -34,7 +34,7 @@ Takosumi for Operator:
 
 Takosumi Cloud:
   the official hosted Takosumi for Operator, with official managed targets,
-  official native resources, credits, support, and SLA.
+  Cloud-operated managed service backends, credits, support, and SLA.
 ```
 
 Takosumi Cloud is an official deployment of Takosumi for Operator. It is not a
@@ -376,7 +376,11 @@ stored in the Resource Shape spec or OpenTofu state.
 
 ## 5. Future Shape Families
 
-Future shapes should be introduced one service form at a time:
+Future shapes should be introduced one service form at a time. This list is a
+candidate vocabulary, not a commitment that Takosumi will recreate every
+service. Add a shape only when existing OpenTofu providers or standard APIs are
+not enough and Takosumi needs provider-neutral binding, policy, metering,
+import, or resolution semantics.
 
 ```text
 Route
@@ -542,6 +546,11 @@ compat.redis.v1
 compat.postgres.v1
 ```
 
+These names are possible capability tokens, not a roadmap to rebuild standard
+APIs. Redis, Postgres, SQS, S3, and OCI should stay on existing providers or
+standard endpoints unless an operator-owned import path, binding projection,
+policy, or metering gap is proven.
+
 The key rule still applies:
 
 ```text
@@ -619,6 +628,10 @@ GET /v1/capabilities
 ```
 
 Providers and tools branch on capabilities, not edition names.
+Adapter/target capabilities report what the operator has enabled; they do not
+create implicit Resource Shape mappings. A shape such as ObjectBucket still
+requires explicit TargetPool implementation evidence when it would otherwise be
+served by ordinary S3/R2/GCS providers.
 
 Example:
 

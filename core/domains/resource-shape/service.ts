@@ -181,6 +181,12 @@ export class ResourceShapeService {
       target: entry,
       credentialRef: entry.ref,
       nativeResources: output.nativeResourcePlan,
+      ...(output.selectedImplementationPlugin
+        ? { implementationPlugin: output.selectedImplementationPlugin }
+        : {}),
+      ...(output.selectedImplementationOptions
+        ? { implementationOptions: output.selectedImplementationOptions }
+        : {}),
       actor: req.actor,
     });
     return {
@@ -253,6 +259,12 @@ export class ResourceShapeService {
         target: entry,
         credentialRef: entry.ref,
         nativeResources: output.nativeResourcePlan,
+        ...(output.selectedImplementationPlugin
+          ? { implementationPlugin: output.selectedImplementationPlugin }
+          : {}),
+        ...(output.selectedImplementationOptions
+          ? { implementationOptions: output.selectedImplementationOptions }
+          : {}),
         actor: req.actor,
       });
       const readyRecord: ResourceShapeRecord = {

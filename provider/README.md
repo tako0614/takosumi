@@ -170,10 +170,28 @@ provider "takosumi" {
   space    = "prod"
 }
 
-resource "takosumi_target_pool" "ai" {
+resource "takosumi_target_pool" "default" {
   name = "default"
 
   target = [{
+    name     = "cloudflare-main"
+    type     = "cloudflare"
+    ref      = "cf-account-id"
+    priority = 80
+
+    # ObjectBucket is explicit operator capability evidence. Without this,
+    # ordinary S3/R2/GCS buckets should use existing OpenTofu providers.
+    implementation = [{
+      shape                = "ObjectBucket"
+      implementation       = "cloudflare_r2"
+      native_resource_type = "cloudflare.r2_bucket"
+      interfaces = {
+        s3_api        = "native"
+        signed_url    = "native"
+        object_events = "shim"
+      }
+    }]
+  }, {
     name     = "deepseek-main"
     type     = "ai_provider"
     ref      = "https://api.deepseek.example/v1"
@@ -203,6 +221,8 @@ resource "takosumi_object_bucket" "assets" {
   lifecycle_policy = {
     delete = "retain"
   }
+
+  depends_on = [takosumi_target_pool.default]
 }
 
 output "assets_selected_implementation" {
@@ -243,6 +263,11 @@ See [`examples/resources/takosumi_object_bucket/resource.tf`](examples/resources
 
 ### `takosumi_object_bucket`
 
+Use this only when the operator has enabled an ObjectBucket implementation in
+the TargetPool and Takosumi needs binding, policy, metering, import, or
+resolution semantics. For an ordinary S3/R2/GCS bucket, use the existing
+OpenTofu provider in a normal Stack.
+
 | Attribute                 | Type        | Mode     | Notes                                                              |
 | ------------------------- | ----------- | -------- | ------------------------------------------------------------------ |
 | `name`                    | string      | required | Resource key; changing it replaces the resource                    |
@@ -250,7 +275,7 @@ See [`examples/resources/takosumi_object_bucket/resource.tf`](examples/resources
 | `lifecycle_policy`        | object      | optional | `{ delete = "delete"\|"retain"\|"snapshot_then_delete"\|"block" }` |
 | `space`                   | string      | optional | Overrides the provider default; changing it replaces the resource  |
 | `id`                      | string      | computed | `tkrn:{space}:ObjectBucket:{name}` unless the server returns one   |
-| `selected_implementation` | string      | computed | Backend chosen by the Resolver (e.g. `cloudflare_r2`, `aws_s3`)    |
+| `selected_implementation` | string      | computed | Explicit TargetPool implementation chosen by the Resolver          |
 | `target`                  | string      | computed | Target the resource landed on                                      |
 | `locked`                  | bool        | computed | Whether the resolution is locked                                   |
 | `portability`             | string      | computed | Resolver portability assessment                                    |

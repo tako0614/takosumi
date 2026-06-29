@@ -1,7 +1,7 @@
 # Takosumi Cloud
 
 Takosumi Cloud は、公式にホストされた Takosumi for Operator です。
-Git-based OpenTofu control plane、managed targets、native resources、
+Git-based OpenTofu control plane、managed targets、Cloud-operated managed service backends、
 USD credits / usage metering、operator support を公式運用として提供します。
 Takosumi の core は plain OpenTofu stacks as-is を実行でき、Cloud はその上に
 official managed targets と billing を足します。
@@ -15,7 +15,7 @@ AI などを bindings として使えます。deploy と更新は OpenTofu/Terra
 Takosumi Cloud =
   official hosted Takosumi for Operator
   + official managed target pools
-  + native resources
+  + Cloud-operated managed service backends
   + billing / credits / usage metering
   + support / operations
 

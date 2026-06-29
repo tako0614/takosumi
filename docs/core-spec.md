@@ -331,6 +331,11 @@ compat.redis.v1
 compat.postgres.v1
 ```
 
+These are possible capability tokens, not default Takosumi-owned replacements
+for Redis, Postgres, SQS, S3, OCI, or other standards. Existing providers and
+standard endpoints stay the default unless a Takosumi-managed import,
+projection, policy, or metering surface is actually needed.
+
 Do not claim complete AWS or Cloudflare compatibility. Specific surfaces are
 enabled or disabled by `/v1/capabilities`.
 
@@ -392,7 +397,10 @@ ids and outputs, not secret material or raw native provider internals.
 
 ## Billing And Usage Events
 
-Core can emit usage events:
+Core records usage events reported by enabled shapes and adapters. Queue, DB,
+VM, and other service-family events exist only when an operator or Cloud
+adapter enables those service forms; their presence here is not a statement
+that OSS core owns those resources by default.
 
 ```text
 EdgeWorker request count
