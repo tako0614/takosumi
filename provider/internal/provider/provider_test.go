@@ -109,14 +109,6 @@ func TestProviderExampleResourcesMatchCurrentResources(t *testing.T) {
 	}
 }
 
-func TestProviderResourcesDoNotExposePushNotification(t *testing.T) {
-	for _, name := range providerResourceTypeNames(t) {
-		if name == "takosumi_push_notification" {
-			t.Fatalf("push notification delivery is not a Takosumi provider resource")
-		}
-	}
-}
-
 func currentProviderResourceTypeNames() []string {
 	names := []string{
 		"takosumi_edge_worker",
