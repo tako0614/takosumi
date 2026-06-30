@@ -37,6 +37,7 @@ import {
 } from "./util.ts";
 import {
   redactBuildOutput,
+  redactRunnerOutput,
 } from "./redaction.ts";
 import {
   runCommand,
@@ -49,6 +50,8 @@ import {
   allKnownCredentialEnvNames,
   buildPhaseEnv,
   assertCommandEnvHasNoProviderCredentials,
+  commandContextFromRequest,
+  prepareProviderCredentialFiles,
 } from "./credentials.ts";
 import {
   workspaceForRun,
@@ -122,47 +125,62 @@ export async function runRelease(
   const release = parseRelease(request);
   const workspace = workspaceForRun(runId);
   await assertDirectory(workspace.sourceRoot, "release source root");
+  const commandContext = commandContextFromRequest(request, undefined);
+  const preparedCredentials = await prepareProviderCredentialFiles(
+    commandContext,
+    workspace,
+  );
   const logs: string[] = [];
-  for (const command of release.commands) {
-    const cwd = releaseCommandCwd(workspace, command);
-    await assertDirectory(
-      cwd,
-      `release command ${command.id} working directory`,
-    );
-    await assertRealPathInsideSourceRoot(
-      cwd,
-      workspace.sourceRoot,
-      `release command ${command.id} working directory`,
-    );
-    const context: CommandContext = {
-      env: {
-        ...buildPhaseEnv(),
-        ...releaseBaseEnv(runId, release),
-        ...(command.env ?? {}),
-      },
-      timeoutMs: 10 * 60 * 1000,
-    };
-    assertCommandEnvHasNoProviderCredentials(context.env);
-    const result = await runCommand(command.command, { cwd, context });
-    logs.push(
-      redactBuildOutput(
-        `$ ${command.command.join(" ")}\n${result.stdout}\n${result.stderr}`,
-      ),
-    );
-    if (result.exitCode !== 0) {
-      return {
-        runId,
-        action: "release",
-        status: "failed",
-        exitCode: result.exitCode,
-        phase: "release",
-        failedCommandId: command.id,
-        stdout: logs.join("\n"),
-        stderr: redactBuildOutput(
-          `release command failed (${result.exitCode}): ${command.id}\n${result.stderr}`,
-        ),
+  try {
+    for (const command of release.commands) {
+      const cwd = releaseCommandCwd(workspace, command);
+      await assertDirectory(
+        cwd,
+        `release command ${command.id} working directory`,
+      );
+      await assertRealPathInsideSourceRoot(
+        cwd,
+        workspace.sourceRoot,
+        `release command ${command.id} working directory`,
+      );
+      const context: CommandContext = {
+        ...preparedCredentials.context,
+        env: {
+          ...preparedCredentials.context.env,
+          ...releaseBaseEnv(runId, release),
+          ...(command.env ?? {}),
+        },
+        timeoutMs: preparedCredentials.context.timeoutMs ?? 10 * 60 * 1000,
       };
+      const result = await runCommand(command.command, { cwd, context });
+      logs.push(
+        redactRunnerOutput(
+          redactBuildOutput(
+            `$ ${command.command.join(" ")}\n${result.stdout}\n${result.stderr}`,
+          ),
+          context.redactionValues,
+        ),
+      );
+      if (result.exitCode !== 0) {
+        return {
+          runId,
+          action: "release",
+          status: "failed",
+          exitCode: result.exitCode,
+          phase: "release",
+          failedCommandId: command.id,
+          stdout: logs.join("\n"),
+          stderr: redactRunnerOutput(
+            redactBuildOutput(
+              `release command failed (${result.exitCode}): ${command.id}\n${result.stderr}`,
+            ),
+            context.redactionValues,
+          ),
+        };
+      }
     }
+  } finally {
+    await preparedCredentials.cleanup();
   }
   return {
     runId,

@@ -194,6 +194,7 @@ export class CloudflareContainerOpenTofuRunner
         digest: job.sourceSnapshot.archiveDigest,
       },
       outputs: job.nonSensitiveOutputs,
+      ...(job.credentials ? { credentials: job.credentials } : {}),
       activation: {
         applyRunId: job.applyRunId,
         installationId: job.installationId,

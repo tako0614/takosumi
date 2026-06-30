@@ -186,6 +186,7 @@ import type {
   PlanCompletionVerdict,
   PlanPolicyLayers,
   PlanRunInternalContext,
+  ReleaseActivationCommand,
   ReleaseActivationResult,
   ReleaseActivationStatus,
   ReleaseActivator,
@@ -195,6 +196,10 @@ import type {
   RunTemplateDispatch,
   TerminalRunPersistResult,
 } from "../mod.ts";
+
+function releaseCommandRunId(applyRunId: string): string {
+  return `release_${applyRunId.replace(/[^A-Za-z0-9._-]+/g, "_")}`;
+}
 
 /**
  * The single-owner run-serialization port. The controller owns the only
@@ -4798,8 +4803,14 @@ export class RunEngine {
       }
       return;
     }
-    let result: ReleaseActivationResult;
     try {
+      const credentials = await this.#releaseCredentialsForCommands({
+        planRun: input.planRun,
+        applyRun: input.applyRun,
+        commands,
+        phase: "apply",
+      });
+      let result: ReleaseActivationResult;
       result = await this.#releaseActivator.activate({
         planRun: input.planRun,
         applyRun: input.applyRun,
@@ -4807,8 +4818,21 @@ export class RunEngine {
         deployment: input.deployment,
         outputSnapshot: input.outputSnapshot,
         nonSensitiveOutputs,
+        ...(credentials ? { credentials } : {}),
         commands,
         ...(sourceSnapshot ? { sourceSnapshot } : {}),
+      });
+      if (result.status === "skipped") return;
+      await this.#recordReleaseActivationActivity({
+        ...input,
+        status: result.status,
+        kind: result.kind,
+        message: result.message,
+        hasLaunchUrl: Boolean(result.launchUrl),
+        hasHealthUrl: Boolean(result.healthUrl),
+        metadataKeys: Object.keys(result.metadata ?? {}).sort(),
+        commandCount: commands.length,
+        outputCount: Object.keys(nonSensitiveOutputs).length,
       });
     } catch (error) {
       await this.#recordReleaseActivationActivity({
@@ -4820,18 +4844,6 @@ export class RunEngine {
       });
       return;
     }
-    if (result.status === "skipped") return;
-    await this.#recordReleaseActivationActivity({
-      ...input,
-      status: result.status,
-      kind: result.kind,
-      message: result.message,
-      hasLaunchUrl: Boolean(result.launchUrl),
-      hasHealthUrl: Boolean(result.healthUrl),
-      metadataKeys: Object.keys(result.metadata ?? {}).sort(),
-      commandCount: commands.length,
-      outputCount: Object.keys(nonSensitiveOutputs).length,
-    });
   }
 
   async #activateReleaseBeforeDestroy(input: {
@@ -4875,8 +4887,14 @@ export class RunEngine {
         "pre-destroy release commands require a release activator",
       );
     }
-    let result: ReleaseActivationResult;
     try {
+      const credentials = await this.#releaseCredentialsForCommands({
+        planRun: input.planRun,
+        applyRun: input.applyRun,
+        commands,
+        phase: "destroy",
+      });
+      let result: ReleaseActivationResult;
       result = await this.#releaseActivator.activate({
         planRun: input.planRun,
         applyRun: input.applyRun,
@@ -4884,8 +4902,23 @@ export class RunEngine {
         deployment,
         outputSnapshot,
         nonSensitiveOutputs,
+        ...(credentials ? { credentials } : {}),
         commands,
         ...(sourceSnapshot ? { sourceSnapshot } : {}),
+      });
+      if (result.status === "skipped") return;
+      await this.#recordReleaseActivationActivity({
+        applyRun: input.applyRun,
+        installation: input.installation,
+        deployment,
+        status: result.status,
+        kind: result.kind,
+        message: result.message,
+        hasLaunchUrl: Boolean(result.launchUrl),
+        hasHealthUrl: Boolean(result.healthUrl),
+        metadataKeys: Object.keys(result.metadata ?? {}).sort(),
+        commandCount: commands.length,
+        outputCount: Object.keys(nonSensitiveOutputs).length,
       });
     } catch (error) {
       await this.#recordReleaseActivationActivity({
@@ -4899,20 +4932,24 @@ export class RunEngine {
       });
       return;
     }
-    if (result.status === "skipped") return;
-    await this.#recordReleaseActivationActivity({
-      applyRun: input.applyRun,
-      installation: input.installation,
-      deployment,
-      status: result.status,
-      kind: result.kind,
-      message: result.message,
-      hasLaunchUrl: Boolean(result.launchUrl),
-      hasHealthUrl: Boolean(result.healthUrl),
-      metadataKeys: Object.keys(result.metadata ?? {}).sort(),
-      commandCount: commands.length,
-      outputCount: Object.keys(nonSensitiveOutputs).length,
-    });
+  }
+
+  async #releaseCredentialsForCommands(input: {
+    readonly planRun: PlanRun;
+    readonly applyRun: ApplyRun;
+    readonly commands: readonly ReleaseActivationCommand[];
+    readonly phase: "apply" | "destroy";
+  }): Promise<RunCredentials | undefined> {
+    if (!input.commands.some((command) => command.executor !== "operator")) {
+      return undefined;
+    }
+    return (
+      await this.#runEnv.resolveRunEnvironment({
+        planRun: input.planRun,
+        phase: input.phase,
+        auditRunId: releaseCommandRunId(input.applyRun.id),
+      })
+    ).credentials;
   }
 
   async #recordReleaseActivationActivity(input: {

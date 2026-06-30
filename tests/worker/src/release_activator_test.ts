@@ -134,6 +134,9 @@ test("runner release activator runs opaque post-apply commands", async () => {
       public_url: "https://app.example.test",
       worker_script_name: "site-worker",
     },
+    credentials: {
+      CLOUDFLARE_API_TOKEN: "fixture-provider-token",
+    },
     commands: [
       {
         id: "activate",
@@ -466,13 +469,18 @@ test("releaseActivatorFromEnv allows http only in explicit local dev", async () 
 });
 
 function fakeRunnerActivationInput(): ReleaseActivationInput {
-  return fakeActivationInput([
-    {
-      id: "activate",
-      phase: "post_apply",
-      command: ["bun", "run", "app:activate"],
+  return {
+    ...fakeActivationInput([
+      {
+        id: "activate",
+        phase: "post_apply",
+        command: ["bun", "run", "app:activate"],
+      },
+    ]),
+    credentials: {
+      CLOUDFLARE_API_TOKEN: "fixture-provider-token",
     },
-  ]);
+  } as ReleaseActivationInput;
 }
 
 function fakeOperatorActivationInput(): ReleaseActivationInput {

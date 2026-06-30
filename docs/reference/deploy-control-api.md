@@ -115,20 +115,22 @@ OpenTofu apply
   -> AuditEvent: release_activation.pending|succeeded|failed
 ```
 
-The activator receives no provider credentials, no runner env, and no sensitive
-OpenTofu outputs. Secret-shaped output names or values are filtered before the
-hook. A release activation failure records AuditEvent evidence but does not roll
-back the OpenTofu apply ledger; callers must surface it as "infrastructure
-applied, application activation failed/pending" rather than as a generic apply
-failure.
+Operator webhook activators receive no provider credentials, no runner env, and
+no sensitive OpenTofu outputs. Runner activators receive only dispatch-scoped
+ProviderConnection / CredentialRecipe material minted from the same reviewed
+ProviderBinding set as apply/destroy. Secret-shaped output names or values are
+filtered before either hook. A release activation failure records AuditEvent
+evidence but does not roll back the OpenTofu apply ledger; callers must surface
+it as "infrastructure applied, application activation failed/pending" rather
+than as a generic apply failure.
 
 Capsules may mark individual post-apply commands with `executor = "runner"` or
 `executor = "operator"`. Runner commands are restored into the source snapshot
-and receive only non-secret metadata such as `TAKOSUMI_OUTPUTS_JSON`. Operator
-commands are not attempted by the built-in runner activator; they remain pending
-unless the host configures an operator/Cloud release activator that owns the
-credential boundary for work such as provider-side publication, app-owned setup,
-or external index setup.
+and receive non-secret metadata such as `TAKOSUMI_OUTPUTS_JSON` plus
+dispatch-only provider credentials when the reviewed run had ProviderBindings.
+Operator commands are not attempted by the built-in runner activator; they
+remain pending unless the host configures an operator/Cloud release activator
+that owns the credential boundary for work outside the runner sandbox.
 
 The platform Worker can enable the generic webhook bridge with:
 
