@@ -15,7 +15,7 @@ The account plane is the backing layer for session cookies, upstream sign-in, th
 account records, Capsule projection metadata, and export handoff. It is mounted on the same composed Takosumi origin as
 the dashboard and control plane; it is not a second control plane and does not require a dedicated accounts subdomain.
 Workspace / Project / Capsule / Run / StateVersion / Output resources are created and read through the control-plane
-surface. The current `/v1/installation-projections` route is a compatibility projection path for older installed-service
+surface. The current `/v1/capsule-projections` route is a compatibility projection path for older installed-service
 clients and must map back to Capsule / Output / account-plane evidence in public docs.
 
 ## Quick start

@@ -6691,7 +6691,7 @@ test("internal installations list calls Takosumi Accounts with the target space"
     expect(code).toEqual(0);
     expect(stderr).toEqual([]);
     expect(requests[0]?.url).toEqual(
-      "http://accounts.local/v1/installation-projections?space_id=space_1",
+      "http://accounts.local/v1/capsule-projections?space_id=space_1",
     );
     expect(requests[0]?.headers.get("authorization")).toEqual(
       "Bearer sess_accounts",
@@ -6775,7 +6775,7 @@ test("internal installations inspect prints service bindings and service grants"
     expect(code).toEqual(0);
     expect(stderr).toEqual([]);
     expect(requests[0]?.url).toEqual(
-      "http://accounts.local/v1/installation-projections/inst_1",
+      "http://accounts.local/v1/capsule-projections/inst_1",
     );
     expect(requests[0]?.headers.get("authorization")).toEqual(
       "Bearer sess_accounts",
@@ -6848,7 +6848,7 @@ test("internal installations uninstall deletes through ledger-retained Accounts 
     expect(code).toEqual(0);
     expect(stderr).toEqual([]);
     expect(requests[0]?.url).toEqual(
-      "http://accounts.local/v1/installation-projections/inst_1",
+      "http://accounts.local/v1/capsule-projections/inst_1",
     );
     expect(requests[0]?.method).toEqual("DELETE");
     expect(requests[0]?.headers.get("authorization")).toEqual(
@@ -6914,7 +6914,7 @@ test("internal installations status patches the target installation", async () =
     expect(code).toEqual(0);
     expect(stderr).toEqual([]);
     expect(requests[0]?.url).toEqual(
-      "http://accounts.local/v1/installation-projections/inst_1/status",
+      "http://accounts.local/v1/capsule-projections/inst_1/status",
     );
     expect(requests[0]?.method).toEqual("PATCH");
     expect(requests[0]?.headers.get("authorization")).toEqual(
@@ -7174,7 +7174,7 @@ test("internal installations materialize posts a dedicated request", async () =>
         fromMode: "shared-cell",
         toMode: "dedicated",
         trackingUrl:
-          "/v1/installation-projections/inst_1/events?types=installation.materialize-requested",
+          "/v1/capsule-projections/inst_1/events?types=installation.materialize-requested",
       }),
     );
   }) as typeof fetch;
@@ -7217,7 +7217,7 @@ test("internal installations materialize posts a dedicated request", async () =>
     expect(code).toEqual(0);
     expect(stderr).toEqual([]);
     expect(requests[0]?.url).toEqual(
-      "http://accounts.local/v1/installation-projections/inst_1/materialize",
+      "http://accounts.local/v1/capsule-projections/inst_1/materialize",
     );
     expect(requests[0]?.method).toEqual("POST");
     expect(requests[0]?.headers.get("authorization")).toEqual(
@@ -7262,7 +7262,7 @@ test("internal installations materialize posts a dedicated request", async () =>
         "Materialize operation op_materialize",
         "  installation: inst_1",
         "  mode: shared-cell -> dedicated",
-        "  tracking: /v1/installation-projections/inst_1/events?types=installation.materialize-requested",
+        "  tracking: /v1/capsule-projections/inst_1/events?types=installation.materialize-requested",
       ].join("\n"),
     );
   } finally {
@@ -7325,7 +7325,7 @@ test("internal installations export posts a pending bundle request", async () =>
         operationId: "op_export",
         status: "preparing",
         trackingUrl:
-          "/v1/installation-projections/inst_1/events?types=installation.export-requested",
+          "/v1/capsule-projections/inst_1/events?types=installation.export-requested",
         downloadUrl: null,
         downloadExpiresAt: null,
       }),
@@ -7364,7 +7364,7 @@ test("internal installations export posts a pending bundle request", async () =>
     expect(code).toEqual(0);
     expect(stderr).toEqual([]);
     expect(requests[0]?.url).toEqual(
-      "http://accounts.local/v1/installation-projections/inst_1/export",
+      "http://accounts.local/v1/capsule-projections/inst_1/export",
     );
     expect(requests[0]?.method).toEqual("POST");
     expect(requests[0]?.headers.get("idempotency-key")).toEqual("idem-export");
@@ -7384,7 +7384,7 @@ test("internal installations export posts a pending bundle request", async () =>
       [
         "Export operation op_export",
         "  status: preparing",
-        "  tracking: /v1/installation-projections/inst_1/events?types=installation.export-requested",
+        "  tracking: /v1/capsule-projections/inst_1/events?types=installation.export-requested",
       ].join("\n"),
     );
   } finally {
@@ -7432,7 +7432,7 @@ test("internal installations export-operation reads operation status", async () 
     expect(code).toEqual(0);
     expect(stderr).toEqual([]);
     expect(requests[0]?.url).toEqual(
-      "http://accounts.local/v1/installation-projections/inst_1/exports/op_export",
+      "http://accounts.local/v1/capsule-projections/inst_1/exports/op_export",
     );
     expect(requests[0]?.method).toEqual("GET");
     expect(requests[0]?.headers.get("authorization")).toEqual(
@@ -7785,7 +7785,7 @@ test("internal installations import-apply creates a target plan and projection",
         ),
       );
     }
-    if (url.pathname === "/v1/installation-projections/plan-runs") {
+    if (url.pathname === "/v1/capsule-projections/plan-runs") {
       return Promise.resolve(
         Response.json(
           {
@@ -7810,7 +7810,7 @@ test("internal installations import-apply creates a target plan and projection",
         ),
       );
     }
-    if (url.pathname === "/v1/installation-projections") {
+    if (url.pathname === "/v1/capsule-projections") {
       return Promise.resolve(
         Response.json(
           {
@@ -7899,8 +7899,8 @@ test("internal installations import-apply creates a target plan and projection",
       "/api/v1/sources/src_import/sync",
       "/api/v1/workspaces/space_target/capsules",
       "/api/v1/capsules/inst_import_target/provider-connections",
-      "/v1/installation-projections/plan-runs",
-      "/v1/installation-projections",
+      "/v1/capsule-projections/plan-runs",
+      "/v1/capsule-projections",
     ]);
     expect(requests[0]?.headers.get("authorization")).toEqual(
       "Bearer takpat_write",
@@ -8037,7 +8037,7 @@ test("internal installations import-apply reuses duplicate target installation",
         ),
       );
     }
-    if (url.pathname === "/v1/installation-projections/plan-runs") {
+    if (url.pathname === "/v1/capsule-projections/plan-runs") {
       return Promise.resolve(
         Response.json(
           {
@@ -8061,7 +8061,7 @@ test("internal installations import-apply reuses duplicate target installation",
         ),
       );
     }
-    if (url.pathname === "/v1/installation-projections") {
+    if (url.pathname === "/v1/capsule-projections") {
       return Promise.resolve(
         Response.json(
           {
@@ -8143,8 +8143,8 @@ test("internal installations import-apply reuses duplicate target installation",
       "/api/v1/sources/src_import/sync",
       "/api/v1/workspaces/space_target/capsules",
       "/api/v1/capsules/inst_existing_target/provider-connections",
-      "/v1/installation-projections/plan-runs",
-      "/v1/installation-projections",
+      "/v1/capsule-projections/plan-runs",
+      "/v1/capsule-projections",
     ]);
     expect(await requests[3]?.json()).toEqual({
       connections: [

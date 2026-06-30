@@ -27,7 +27,7 @@ Accounts is a backing layer, not a second control plane. Product control-plane
 resources (Workspaces, Projects, Capsules, Sources, ProviderConnections,
 CredentialRecipes, ProviderBindings, Secrets, Runs, StateVersions, Outputs,
 Runners, and AuditEvents) are created and read through `/api/v1/*`. The current
-`/v1/installation-projections` route family keeps a legacy path name, but its
+`/v1/capsule-projections` route family keeps a legacy path name, but its
 role is supporting account-plane projection for Capsule runtimes: OIDC client
 metadata, Service Graph grant material, operator/showback usage projection when
 enabled, and export handoff. Accounts OIDC should be described as Capsule

@@ -68,7 +68,7 @@ describe("createStaticAssetResponder", () => {
       const serve = createStaticAssetResponder(dir);
       const apiPaths = [
         "/v1/account/session/me",
-        "/v1/installation-projections",
+        "/v1/capsule-projections",
         "/v1/auth/upstream/callback",
         "/oauth/authorize",
         "/.well-known/openid-configuration",

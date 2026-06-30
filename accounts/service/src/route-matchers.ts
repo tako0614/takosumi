@@ -1,13 +1,13 @@
 import {
   TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH,
-  TAKOSUMI_ACCOUNTS_INSTALLATIONS_PATH,
+  TAKOSUMI_ACCOUNTS_CAPSULE_PROJECTIONS_PATH,
 } from "@takosjp/takosumi-accounts-contract";
 
 export type CapsuleRoute =
-  | { kind: "installation"; capsuleId: string }
+  | { kind: "capsule"; capsuleId: string }
   | { kind: "status"; capsuleId: string }
-  | { kind: "deployment"; capsuleId: string }
-  | { kind: "deployment-plan-run"; capsuleId: string }
+  | { kind: "revision"; capsuleId: string }
+  | { kind: "revision-plan-run"; capsuleId: string }
   | { kind: "rollback"; capsuleId: string }
   | { kind: "materialize"; capsuleId: string }
   | { kind: "export"; capsuleId: string }
@@ -34,28 +34,26 @@ export function matchAccountTokenRevokeRoute(
   return { tokenId: parts[0] };
 }
 
-export function matchCapsuleRoute(
-  pathname: string,
-): CapsuleRoute | null {
-  const prefix = `${TAKOSUMI_ACCOUNTS_INSTALLATIONS_PATH}/`;
+export function matchCapsuleRoute(pathname: string): CapsuleRoute | null {
+  const prefix = `${TAKOSUMI_ACCOUNTS_CAPSULE_PROJECTIONS_PATH}/`;
   if (!pathname.startsWith(prefix)) return null;
   const parts = pathname.slice(prefix.length).split("/");
   const capsuleId = parts[0];
   if (!capsuleId) return null;
   if (capsuleId === "import") return null;
-  if (parts.length === 1) return { kind: "installation", capsuleId };
+  if (parts.length === 1) return { kind: "capsule", capsuleId };
   if (parts.length === 2 && parts[1] === "status") {
     return { kind: "status", capsuleId };
   }
-  if (parts.length === 2 && parts[1] === "deployments") {
-    return { kind: "deployment", capsuleId };
+  if (parts.length === 2 && parts[1] === "revisions") {
+    return { kind: "revision", capsuleId };
   }
   if (
     parts.length === 3 &&
-    parts[1] === "deployments" &&
+    parts[1] === "revisions" &&
     parts[2] === "plan-runs"
   ) {
-    return { kind: "deployment-plan-run", capsuleId };
+    return { kind: "revision-plan-run", capsuleId };
   }
   if (parts.length === 2 && parts[1] === "rollback") {
     return { kind: "rollback", capsuleId };

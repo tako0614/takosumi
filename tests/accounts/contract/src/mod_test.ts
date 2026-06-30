@@ -18,8 +18,8 @@ import {
   TAKOSUMI_ACCOUNTS_UPSTREAM_CALLBACK_PATH,
   takosumiAccountsAccountTokenRevokePath,
   takosumiAccountsCapsuleBillingUsageReportsPath,
-  takosumiAccountsCapsuleDeploymentPlanRunsPath,
-  takosumiAccountsCapsuleDeploymentsPath,
+  takosumiAccountsCapsuleRevisionPlanRunsPath,
+  takosumiAccountsCapsuleRevisionsPath,
   takosumiAccountsCapsulePlanRunsPath,
   takosumiAccountsCapsuleEventsPath,
   takosumiAccountsCapsuleExportDownloadPath,
@@ -121,37 +121,37 @@ test("export bundle kind is stable for portable Capsule projection exports", () 
 
 test("Capsule projection path helpers expose the Accounts route surface", () => {
   expect(takosumiAccountsCapsulePlanRunsPath()).toEqual(
-    "/v1/installation-projections/plan-runs",
+    "/v1/capsule-projections/plan-runs",
   );
   expect(takosumiAccountsCapsulePath("inst_1")).toEqual(
-    "/v1/installation-projections/inst_1",
+    "/v1/capsule-projections/inst_1",
   );
   expect(takosumiAccountsCapsuleStatusPath("inst_1")).toEqual(
-    "/v1/installation-projections/inst_1/status",
+    "/v1/capsule-projections/inst_1/status",
   );
-  expect(takosumiAccountsCapsuleDeploymentsPath("inst_1")).toEqual(
-    "/v1/installation-projections/inst_1/deployments",
+  expect(takosumiAccountsCapsuleRevisionsPath("inst_1")).toEqual(
+    "/v1/capsule-projections/inst_1/revisions",
   );
-  expect(takosumiAccountsCapsuleDeploymentPlanRunsPath("inst_1")).toEqual(
-    "/v1/installation-projections/inst_1/deployments/plan-runs",
+  expect(takosumiAccountsCapsuleRevisionPlanRunsPath("inst_1")).toEqual(
+    "/v1/capsule-projections/inst_1/revisions/plan-runs",
   );
   expect(takosumiAccountsCapsuleRollbackPath("inst_1")).toEqual(
-    "/v1/installation-projections/inst_1/rollback",
+    "/v1/capsule-projections/inst_1/rollback",
   );
   expect(takosumiAccountsCapsuleMaterializePath("inst_1")).toEqual(
-    "/v1/installation-projections/inst_1/materialize",
+    "/v1/capsule-projections/inst_1/materialize",
   );
   expect(takosumiAccountsCapsuleExportPath("inst_1")).toEqual(
-    "/v1/installation-projections/inst_1/export",
+    "/v1/capsule-projections/inst_1/export",
   );
   expect(takosumiAccountsCapsuleExportOperationPath("inst_1", "op_1")).toEqual(
-    "/v1/installation-projections/inst_1/exports/op_1",
+    "/v1/capsule-projections/inst_1/exports/op_1",
   );
   expect(takosumiAccountsCapsuleExportDownloadPath("inst_1", "op_1")).toEqual(
-    "/v1/installation-projections/inst_1/exports/op_1/download",
+    "/v1/capsule-projections/inst_1/exports/op_1/download",
   );
   expect(takosumiAccountsCapsuleEventsPath("inst_1")).toEqual(
-    "/v1/installation-projections/inst_1/events",
+    "/v1/capsule-projections/inst_1/events",
   );
   expect(
     takosumiAccountsCapsuleServiceRotateTokenPath(
@@ -159,26 +159,24 @@ test("Capsule projection path helpers expose the Accounts route surface", () => 
       "takosumi.ai.gateway",
     ),
   ).toEqual(
-    "/v1/installation-projections/inst_1/services/takosumi.ai.gateway/rotate-token",
+    "/v1/capsule-projections/inst_1/services/takosumi.ai.gateway/rotate-token",
   );
   expect(takosumiAccountsCapsuleBillingUsageReportsPath("inst_1")).toEqual(
-    "/v1/installation-projections/inst_1/billing/usage-reports",
+    "/v1/capsule-projections/inst_1/billing/usage-reports",
   );
   expect(takosumiAccountsCapsulePath("inst/one")).toEqual(
-    "/v1/installation-projections/inst%2Fone",
+    "/v1/capsule-projections/inst%2Fone",
   );
   expect(
     takosumiAccountsCapsuleExportOperationPath("inst/one", "op/one"),
-  ).toEqual("/v1/installation-projections/inst%2Fone/exports/op%2Fone");
+  ).toEqual("/v1/capsule-projections/inst%2Fone/exports/op%2Fone");
   expect(
     takosumiAccountsCapsuleExportDownloadPath("inst/one", "op/one"),
-  ).toEqual(
-    "/v1/installation-projections/inst%2Fone/exports/op%2Fone/download",
-  );
+  ).toEqual("/v1/capsule-projections/inst%2Fone/exports/op%2Fone/download");
   expect(
     takosumiAccountsCapsuleServiceRotateTokenPath("inst/one", "service/one"),
   ).toEqual(
-    "/v1/installation-projections/inst%2Fone/services/service%2Fone/rotate-token",
+    "/v1/capsule-projections/inst%2Fone/services/service%2Fone/rotate-token",
   );
   assertThrows(
     () => takosumiAccountsCapsulePath(""),

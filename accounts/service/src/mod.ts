@@ -6,8 +6,8 @@ import {
   TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH,
   TAKOSUMI_ACCOUNTS_AUTH_PROVIDERS_PATH,
   TAKOSUMI_ACCOUNTS_AUTHORIZE_PATH,
-  TAKOSUMI_ACCOUNTS_INSTALLATION_PLAN_RUNS_PATH,
-  TAKOSUMI_ACCOUNTS_INSTALLATIONS_PATH,
+  TAKOSUMI_ACCOUNTS_CAPSULE_PROJECTION_PLAN_RUNS_PATH,
+  TAKOSUMI_ACCOUNTS_CAPSULE_PROJECTIONS_PATH,
   TAKOSUMI_ACCOUNTS_INTROSPECT_PATH,
   TAKOSUMI_ACCOUNTS_JWKS_PATH,
   TAKOSUMI_ACCOUNTS_OIDC_DISCOVERY_PATH,
@@ -982,7 +982,7 @@ export function createAccountsHandler(
       });
     }
 
-    if (url.pathname === TAKOSUMI_ACCOUNTS_INSTALLATION_PLAN_RUNS_PATH) {
+    if (url.pathname === TAKOSUMI_ACCOUNTS_CAPSULE_PROJECTION_PLAN_RUNS_PATH) {
       if (request.method !== "POST") return methodNotAllowed("POST");
       const authBlocked = await requireCapsulePlanRunWriteAccess({
         request: request.clone(),
@@ -1002,7 +1002,7 @@ export function createAccountsHandler(
       });
     }
 
-    if (url.pathname === TAKOSUMI_ACCOUNTS_INSTALLATIONS_PATH) {
+    if (url.pathname === TAKOSUMI_ACCOUNTS_CAPSULE_PROJECTIONS_PATH) {
       if (request.method === "POST") {
         const limited = installationsLimiter.consume(request);
         if (limited) return limited;
@@ -1027,182 +1027,164 @@ export function createAccountsHandler(
       return methodNotAllowed("GET, POST");
     }
 
-    const installationRoute = matchCapsuleRoute(url.pathname);
-    if (installationRoute) {
+    const capsuleRoute = matchCapsuleRoute(url.pathname);
+    if (capsuleRoute) {
       const materializeDrillAllowed =
-        installationRoute.kind === "materialize" &&
+        capsuleRoute.kind === "materialize" &&
         request.method === "POST" &&
         materializeDrillAccessAllowed({
           request,
           token: options.materializeDrillToken,
         });
       if (
-        platformGuardedCapsuleMutation(
-          installationRoute.kind,
-          request.method,
-        ) &&
+        platformGuardedCapsuleMutation(capsuleRoute.kind, request.method) &&
         !materializeDrillAllowed
       ) {
         const blocked = platformAccessBlocked(options.platformAccess);
         if (blocked) return blocked;
       }
-      const accountAccess = installationRouteAccountAccess(
-        installationRoute,
+      const accountAccess = capsuleRouteAccountAccess(
+        capsuleRoute,
         request.method,
       );
       if (accountAccess) {
         const authBlocked = await requireAppCapsuleAccountAccess({
           request,
           store,
-          capsuleId: installationRoute.capsuleId,
+          capsuleId: capsuleRoute.capsuleId,
           scope: accountAccess,
         });
         if (authBlocked) return authBlocked;
       }
-      if (
-        installationRoute.kind === "installation" &&
-        request.method === "GET"
-      ) {
+      if (capsuleRoute.kind === "capsule" && request.method === "GET") {
         return await handleGetAppCapsule({
-          capsuleId: installationRoute.capsuleId,
+          capsuleId: capsuleRoute.capsuleId,
           request,
           store,
         });
       }
-      if (
-        installationRoute.kind === "installation" &&
-        request.method === "DELETE"
-      ) {
+      if (capsuleRoute.kind === "capsule" && request.method === "DELETE") {
         return await handleUninstallAppCapsule({
-          capsuleId: installationRoute.capsuleId,
+          capsuleId: capsuleRoute.capsuleId,
           request,
           store,
         });
       }
-      if (installationRoute.kind === "status" && request.method === "PATCH") {
+      if (capsuleRoute.kind === "status" && request.method === "PATCH") {
         const authBlocked = await requireAppCapsuleAccountAccess({
           request,
           store,
-          capsuleId: installationRoute.capsuleId,
+          capsuleId: capsuleRoute.capsuleId,
           scope: "write",
         });
         if (authBlocked) return authBlocked;
         return await handleUpdateAppCapsuleStatus({
-          capsuleId: installationRoute.capsuleId,
+          capsuleId: capsuleRoute.capsuleId,
           request,
           store,
         });
       }
       if (
-        installationRoute.kind === "deployment-plan-run" &&
+        capsuleRoute.kind === "revision-plan-run" &&
         request.method === "POST"
       ) {
         return await handlePlanAppCapsuleDeployment({
-          capsuleId: installationRoute.capsuleId,
+          capsuleId: capsuleRoute.capsuleId,
           request,
           store,
           deployControl: options.deployControl,
         });
       }
-      if (
-        installationRoute.kind === "deployment" &&
-        request.method === "POST"
-      ) {
+      if (capsuleRoute.kind === "revision" && request.method === "POST") {
         return await handleUpdateAppCapsuleRevision({
-          capsuleId: installationRoute.capsuleId,
-          operation: "deployment",
+          capsuleId: capsuleRoute.capsuleId,
+          operation: "revision",
           request,
           store,
           deployControl: options.deployControl,
         });
       }
-      if (installationRoute.kind === "rollback" && request.method === "POST") {
+      if (capsuleRoute.kind === "rollback" && request.method === "POST") {
         return await handleUpdateAppCapsuleRevision({
-          capsuleId: installationRoute.capsuleId,
+          capsuleId: capsuleRoute.capsuleId,
           operation: "rollback",
           request,
           store,
           deployControl: options.deployControl,
         });
       }
-      if (
-        installationRoute.kind === "materialize" &&
-        request.method === "POST"
-      ) {
+      if (capsuleRoute.kind === "materialize" && request.method === "POST") {
         return await handleRequestAppCapsuleMaterialize({
-          capsuleId: installationRoute.capsuleId,
+          capsuleId: capsuleRoute.capsuleId,
           request,
           store,
           materializeWorker: options.materializeWorker,
         });
       }
-      if (installationRoute.kind === "export" && request.method === "POST") {
+      if (capsuleRoute.kind === "export" && request.method === "POST") {
         return await handleRequestAppCapsuleExport({
-          capsuleId: installationRoute.capsuleId,
+          capsuleId: capsuleRoute.capsuleId,
           request,
           store,
           exportWorker: options.exportWorker,
         });
       }
       if (
-        installationRoute.kind === "export-operation" &&
+        capsuleRoute.kind === "export-operation" &&
         request.method === "GET"
       ) {
         return await handleGetAppCapsuleExportOperation({
-          capsuleId: installationRoute.capsuleId,
-          operationId: installationRoute.operationId,
+          capsuleId: capsuleRoute.capsuleId,
+          operationId: capsuleRoute.operationId,
           store,
         });
       }
-      if (
-        installationRoute.kind === "export-download" &&
-        request.method === "GET"
-      ) {
+      if (capsuleRoute.kind === "export-download" && request.method === "GET") {
         return await handleDownloadAppCapsuleExport({
-          capsuleId: installationRoute.capsuleId,
-          operationId: installationRoute.operationId,
+          capsuleId: capsuleRoute.capsuleId,
+          operationId: capsuleRoute.operationId,
           store,
           exportDownloadSigningSecret: options.exportDownloadSigningSecret,
         });
       }
-      if (installationRoute.kind === "events" && request.method === "GET") {
+      if (capsuleRoute.kind === "events" && request.method === "GET") {
         return await handleListCapsuleEvents({
-          capsuleId: installationRoute.capsuleId,
+          capsuleId: capsuleRoute.capsuleId,
           request,
           url,
           store,
         });
       }
       if (
-        installationRoute.kind === "service-rotate-token" &&
+        capsuleRoute.kind === "service-rotate-token" &&
         request.method === "POST"
       ) {
         return await handleRotateRuntimeServiceToken({
-          capsuleId: installationRoute.capsuleId,
-          serviceId: installationRoute.serviceId,
+          capsuleId: capsuleRoute.capsuleId,
+          serviceId: capsuleRoute.serviceId,
           request,
           store,
           runtimeServiceTokens: options.runtimeServiceTokens,
         });
       }
       if (
-        installationRoute.kind === "billing-usage-reports" &&
+        capsuleRoute.kind === "billing-usage-reports" &&
         request.method === "POST"
       ) {
         return await handleReportCapsuleBillingUsage({
-          capsuleId: installationRoute.capsuleId,
+          capsuleId: capsuleRoute.capsuleId,
           request,
           store,
         });
       }
       if (
-        installationRoute.kind === "launch-token-consume" &&
+        capsuleRoute.kind === "launch-token-consume" &&
         request.method === "POST"
       ) {
         const limited = launchConsumeLimiter.consume(request);
         if (limited) return limited;
         return await handleConsumeLaunchToken({
-          capsuleId: installationRoute.capsuleId,
+          capsuleId: capsuleRoute.capsuleId,
           request,
           store,
         });
@@ -1340,11 +1322,7 @@ function runtimeServiceTokenScopesValue(
   const seen = new Set<string>();
   const allowed = new Set(serviceScopes);
   for (const scope of value) {
-    if (
-      typeof scope !== "string" ||
-      !allowed.has(scope) ||
-      seen.has(scope)
-    ) {
+    if (typeof scope !== "string" || !allowed.has(scope) || seen.has(scope)) {
       return undefined;
     }
     seen.add(scope);
@@ -1693,18 +1671,18 @@ function requirePrivacyOperationsAccess(input: {
   );
 }
 
-function installationRouteAccountAccess(
+function capsuleRouteAccountAccess(
   route: CapsuleRoute,
   method: string,
 ): "read" | "write" | undefined {
   if (route.kind === "billing-usage-reports") return undefined;
-  if (route.kind === "installation") {
+  if (route.kind === "capsule") {
     if (method === "DELETE") return "write";
     return undefined;
   }
   if (
-    (route.kind === "deployment" ||
-      route.kind === "deployment-plan-run" ||
+    (route.kind === "revision" ||
+      route.kind === "revision-plan-run" ||
       route.kind === "rollback" ||
       route.kind === "materialize" ||
       route.kind === "service-rotate-token" ||

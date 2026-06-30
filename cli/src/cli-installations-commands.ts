@@ -2,7 +2,7 @@ import process from "node:process";
 import { readFile, writeFile } from "node:fs/promises";
 import {
   type TakosumiSubject,
-  TAKOSUMI_ACCOUNTS_INSTALLATIONS_PATH,
+  TAKOSUMI_ACCOUNTS_CAPSULE_PROJECTIONS_PATH,
   takosumiAccountsCapsuleExportOperationPath,
   takosumiAccountsCapsulePlanRunsPath,
   takosumiAccountsCapsuleExportPath,
@@ -89,14 +89,12 @@ export async function runCapsulesList(
   }
   try {
     const response = await requestAccountsApi({
-      path: `${TAKOSUMI_ACCOUNTS_INSTALLATIONS_PATH}?space_id=${encodeURIComponent(
+      path: `${TAKOSUMI_ACCOUNTS_CAPSULE_PROJECTIONS_PATH}?space_id=${encodeURIComponent(
         workspaceId,
       )}`,
       options,
     });
-    io.stdout(
-      formatCapsulesList(response, booleanOption(options, "json")),
-    );
+    io.stdout(formatCapsulesList(response, booleanOption(options, "json")));
     return 0;
   } catch (error) {
     io.stderr(error instanceof Error ? error.message : String(error));
@@ -123,9 +121,7 @@ export async function runCapsulesInspect(
       path: takosumiAccountsCapsulePath(capsuleId),
       options,
     });
-    io.stdout(
-      formatCapsuleInspect(response, booleanOption(options, "json")),
-    );
+    io.stdout(formatCapsuleInspect(response, booleanOption(options, "json")));
     return 0;
   } catch (error) {
     io.stderr(error instanceof Error ? error.message : String(error));
@@ -155,9 +151,7 @@ export async function runCapsulesUninstall(
       body: reason ? { reason } : undefined,
       options,
     });
-    io.stdout(
-      formatCapsuleUninstall(response, booleanOption(options, "json")),
-    );
+    io.stdout(formatCapsuleUninstall(response, booleanOption(options, "json")));
     return 0;
   } catch (error) {
     io.stderr(error instanceof Error ? error.message : String(error));
@@ -202,9 +196,7 @@ export async function runCapsulesStatus(
       body,
       options,
     });
-    io.stdout(
-      formatCapsuleStatus(response, booleanOption(options, "json")),
-    );
+    io.stdout(formatCapsuleStatus(response, booleanOption(options, "json")));
     return 0;
   } catch (error) {
     io.stderr(error instanceof Error ? error.message : String(error));
@@ -456,10 +448,7 @@ export async function runCapsulesExportOperation(
   }
   try {
     const response = await requestAccountsApi({
-      path: takosumiAccountsCapsuleExportOperationPath(
-        capsuleId,
-        operationId,
-      ),
+      path: takosumiAccountsCapsuleExportOperationPath(capsuleId, operationId),
       options,
     });
     io.stdout(
@@ -539,7 +528,7 @@ export async function runCapsulesImportApply(
     });
     const projectionResponse = await requestAccountsApi({
       method: "POST",
-      path: TAKOSUMI_ACCOUNTS_INSTALLATIONS_PATH,
+      path: TAKOSUMI_ACCOUNTS_CAPSULE_PROJECTIONS_PATH,
       body: projectionRequest,
       idempotencyKey: installationIdempotencyKey(options),
       options,
@@ -868,8 +857,7 @@ async function createTargetCapsuleForImportApply(input: {
       options: input.options,
     });
   } catch (error) {
-    const duplicateCapsuleId =
-      duplicateCapsuleIdFromAccountsError(error);
+    const duplicateCapsuleId = duplicateCapsuleIdFromAccountsError(error);
     if (!duplicateCapsuleId) throw error;
     if (providerConnections.length > 0) {
       await putTargetCapsuleProviderConnections({
