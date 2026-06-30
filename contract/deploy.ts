@@ -61,9 +61,9 @@ export interface DeployRequest {
  * as the authoritative follow-up Run.
  */
 export interface DeployResponse {
-  readonly capsule?: PublicCapsule;
-  /** @deprecated Use capsule. */
-  readonly installation: PublicCapsule;
+  readonly capsule: PublicCapsule;
+  /** @deprecated Internal upload-deploy callers must use capsule. */
+  readonly installation?: PublicCapsule;
   readonly installConfigId: string;
   /** Plan Run started by this deploy. Kept as `run` for older callers. */
   readonly run: Run;

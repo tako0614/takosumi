@@ -644,6 +644,7 @@ function adaptApplyRunResult(input: {
   const response = input.payload as Partial<ApplyRunResponse>;
   if (!response.applyRun) return input;
   const deployment = response.deployment;
+  const capsule = response.capsule ?? response.installation;
   // The Workspace-direct Deployment dropped its embedded `source` / `planDigest` /
   // `sourceCommit` projections (those now live on the reviewed PlanRun and in
   // the control-plane SourceSnapshot, not on the Deployment row). The only
@@ -658,7 +659,7 @@ function adaptApplyRunResult(input: {
       kind: "takosumi.deploy-control.apply-run@v1",
       ...input.payload,
       applyRun: response.applyRun,
-      ...(response.installation ? { installation: response.installation } : {}),
+      ...(capsule ? { capsule } : {}),
       ...(deployment ? { deployment } : {}),
       ...(outputs ? launchProjection(outputs) : {}),
       response: {

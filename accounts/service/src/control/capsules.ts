@@ -207,7 +207,7 @@ export async function handleCapsules(
     if (!auth.ok) return auth.response;
     if (segments.length === 2) {
       if (method === "GET") {
-        return json({ installation: publicCapsule(installation) });
+        return json({ capsule: publicCapsule(installation) });
       }
       if (method === "PATCH") {
         return await patchCapsule(request, operations, capsuleId);
@@ -361,7 +361,7 @@ async function getCapsule(
   const installation =
     await operations.installations.getCapsule(capsuleId);
   return json({
-    installation: publicCapsule(installation),
+    capsule: publicCapsule(installation),
   });
 }
 
@@ -387,7 +387,7 @@ async function patchCapsule(
     capsuleId,
     status,
   );
-  return json({ installation: publicCapsule(installation) });
+  return json({ capsule: publicCapsule(installation) });
 }
 
 async function deleteCapsule(
@@ -449,7 +449,7 @@ async function maybeAbandonUnappliedCapsule(input: {
   );
   return jsonStatus(
     {
-      installation: publicCapsule(installation),
+      capsule: publicCapsule(installation),
       abandoned: true,
       projectionStatus: updatedProjection?.status ?? "failed",
     },

@@ -98,6 +98,10 @@ function publicInstallation(installation: Capsule): PublicCapsule {
   return publicRecord;
 }
 
+function capsuleResponse(capsule: Capsule): { readonly capsule: PublicCapsule } {
+  return { capsule: publicInstallation(capsule) };
+}
+
 function publicInstallConfig(config: InstallConfig): PublicInstallConfig {
   const {
     installType: _installType,
@@ -451,7 +455,7 @@ export function mountDeployControlInstallationRoutes(
           workspaceId: id,
           installConfigId,
         });
-        return c.json({ installation: publicInstallation(installation) }, 201);
+        return c.json(capsuleResponse(installation), 201);
       },
     }),
   );
@@ -472,7 +476,7 @@ export function mountDeployControlInstallationRoutes(
         );
         return c.json(
           {
-            installations: result.items.map(publicInstallation),
+            capsules: result.items.map(publicInstallation),
             ...(result.nextCursor !== undefined
               ? { nextCursor: result.nextCursor }
               : {}),
@@ -518,7 +522,7 @@ export function mountDeployControlInstallationRoutes(
             errorEnvelope(
               c,
               "invalid_argument",
-              "PATCH /internal/v1/capsules/:installationId requires status",
+              "PATCH /internal/v1/capsules/:capsuleId requires status",
             ),
             400,
           );
@@ -537,7 +541,7 @@ export function mountDeployControlInstallationRoutes(
           id,
           body.status,
         );
-        return c.json({ installation: publicInstallation(installation) }, 200);
+        return c.json(capsuleResponse(installation), 200);
       },
     }),
   );

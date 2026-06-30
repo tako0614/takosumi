@@ -5093,6 +5093,7 @@ export class RunEngine {
     });
     return {
       applyRun: completed,
+      capsule: input.patched ?? installation,
       installation: input.patched ?? installation,
       deployment,
     };
@@ -5346,6 +5347,7 @@ export class RunEngine {
       });
       return {
         applyRun: completed,
+        capsule: publicInstallation(patched ?? installation),
         installation: publicInstallation(patched ?? installation),
       };
     } catch (error) {
@@ -5372,6 +5374,7 @@ export class RunEngine {
       }
       return {
         applyRun: failed,
+        capsule: publicInstallation(installation),
         installation: publicInstallation(installation),
       };
     }

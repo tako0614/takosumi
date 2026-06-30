@@ -145,6 +145,7 @@ export async function deployUpload(
   });
 
   return {
+    capsule: toPublicInstallation(installation),
     installation: toPublicInstallation(installation),
     installConfigId,
     run,

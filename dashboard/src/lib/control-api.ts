@@ -1152,18 +1152,15 @@ export async function listCapsules(
 ): Promise<readonly Capsule[]> {
   return await fetchAllPages<Capsule>(
     `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/capsules`,
-    // Legacy backend emits `{ installations }`; prefer the new `capsules` key.
-    (body) =>
-      ((body.capsules ?? body.installations) as readonly Capsule[]) ?? [],
+    (body) => (body.capsules as readonly Capsule[]) ?? [],
   );
 }
 
 export async function getCapsule(id: string): Promise<Capsule> {
   const body = await controlFetch<{
-    capsule?: Capsule;
-    installation?: Capsule;
+    capsule: Capsule;
   }>(`${BASE}/capsules/${encodeURIComponent(id)}`);
-  return (body.capsule ?? body.installation)!;
+  return body.capsule;
 }
 
 export async function createCapsule(input: {
@@ -1175,8 +1172,7 @@ export async function createCapsule(input: {
   readonly vars?: Readonly<Record<string, ContractJsonValue>>;
 }): Promise<Capsule> {
   const body = await controlFetch<{
-    capsule?: Capsule;
-    installation?: Capsule;
+    capsule: Capsule;
   }>(`${BASE}/workspaces/${encodeURIComponent(input.workspaceId)}/capsules`, {
     method: "POST",
     body: {
@@ -1189,7 +1185,7 @@ export async function createCapsule(input: {
         : {}),
     },
   });
-  return (body.capsule ?? body.installation)!;
+  return body.capsule;
 }
 
 export async function getCapsuleProviderConnectionSet(
