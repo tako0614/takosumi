@@ -8,6 +8,8 @@ import {
   createTakosumiProductCapabilities,
   createTakosumiWellKnownDocument,
   type CreateTakosumiDiscoveryOptions,
+  type TakosumiAdapterCapabilities,
+  type TakosumiResourceCapabilities,
 } from "takosumi-contract/capabilities";
 import {
   TAKOSUMI_PRODUCT_CAPABILITIES_PATH,
@@ -76,6 +78,8 @@ export interface CreateApiAppOptions {
   /** When set, mounts the `/v1/resources` Resource Shape API (Flow B). */
   readonly registerResourceShapeRoutes?: boolean;
   readonly resourceShapeRouteOptions?: RegisterResourceShapeRoutesOptions;
+  readonly resourceCapabilities?: Partial<TakosumiResourceCapabilities>;
+  readonly adapterCapabilities?: Partial<TakosumiAdapterCapabilities>;
   /**
    * HTTP request/correlation id propagation is mounted by default. Pass
    * `false` only for low-level route tests that need to exercise raw Hono
@@ -117,6 +121,8 @@ export async function createApiApp(
         createProductDiscoveryOptions({
           origin: new URL(c.req.url).origin,
           mounted,
+          resourceCapabilities: options.resourceCapabilities,
+          adapterCapabilities: options.adapterCapabilities,
         }),
       ),
     );
@@ -128,6 +134,8 @@ export async function createApiApp(
         createProductDiscoveryOptions({
           origin: new URL(c.req.url).origin,
           mounted,
+          resourceCapabilities: options.resourceCapabilities,
+          adapterCapabilities: options.adapterCapabilities,
         }),
       ),
     );
@@ -293,30 +301,52 @@ function resolveMountedRouteFamilies(
 function createProductDiscoveryOptions(input: {
   readonly origin: string;
   readonly mounted: RouteFamilyMountedFlags;
+  readonly resourceCapabilities?: Partial<TakosumiResourceCapabilities>;
+  readonly adapterCapabilities?: Partial<TakosumiAdapterCapabilities>;
 }): CreateTakosumiDiscoveryOptions {
   const resourceShapes = input.mounted.resourceShapeRoutesMounted;
   const stacks = input.mounted.deployControlInternalRoutesMounted;
+  const resources: Partial<TakosumiResourceCapabilities> = {
+    Stack: stacks,
+    EdgeWorker: resourceShapes,
+    ObjectBucket: resourceShapes,
+    KVStore: resourceShapes,
+    Queue: resourceShapes,
+    SQLDatabase: resourceShapes,
+    ContainerService: resourceShapes,
+    ...(input.resourceCapabilities ?? {}),
+  };
+  const adapters: Partial<TakosumiAdapterCapabilities> = {
+    opentofu: stacks || resourceShapes,
+    aws: false,
+    cloudflare: false,
+    kubernetes: false,
+    vm: false,
+    takosumi_native: false,
+    ...(input.adapterCapabilities ?? {}),
+  };
   return {
     origin: input.origin,
-    resources: {
-      Stack: stacks,
-      EdgeWorker: resourceShapes,
-      ObjectBucket: resourceShapes,
-      KVStore: resourceShapes,
-      Queue: resourceShapes,
-      SQLDatabase: resourceShapes,
-      ContainerService: resourceShapes,
-    },
-    adapters: {
-      opentofu: stacks || resourceShapes,
-      aws: resourceShapes,
-      cloudflare: resourceShapes,
-      kubernetes: resourceShapes,
-      vm: resourceShapes,
-      takosumi_native: resourceShapes,
-    },
-    resourceShapesEnabled: resourceShapes,
+    resources,
+    adapters,
+    resourceShapesEnabled:
+      input.resourceCapabilities === undefined
+        ? resourceShapes
+        : resourceShapeCapabilitiesEnabled(resources),
   };
+}
+
+function resourceShapeCapabilitiesEnabled(
+  resources: Partial<TakosumiResourceCapabilities>,
+): boolean {
+  return (
+    resources.EdgeWorker === true ||
+    resources.ObjectBucket === true ||
+    resources.KVStore === true ||
+    resources.Queue === true ||
+    resources.SQLDatabase === true ||
+    resources.ContainerService === true
+  );
 }
 
 function createRuntimeAgentRouteOptions(

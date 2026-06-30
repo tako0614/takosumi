@@ -29,10 +29,8 @@ resource "takosumi_target_pool" "default" {
 
     implementation = [{
       shape                = "ContainerService"
-      implementation       = "custom_container_runtime"
-      native_resource_type = "custom.container_service"
-      plugin               = "takosumi-container-plugin"
-      options_json         = jsonencode({ runtimeClass = "edge" })
+      implementation       = "kubernetes_deployment"
+      native_resource_type = "kubernetes.deployment"
 
       interfaces = {
         oci_container = "native"

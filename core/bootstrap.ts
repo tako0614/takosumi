@@ -135,6 +135,10 @@ import type {
   RunLogsResponse,
 } from "takosumi-contract/runs";
 import type { PageParams } from "takosumi-contract/pagination";
+import type {
+  TakosumiAdapterCapabilities,
+  TakosumiResourceCapabilities,
+} from "takosumi-contract/capabilities";
 import {
   InMemoryOpenTofuDeploymentStore,
   type OpenTofuDeploymentStore,
@@ -152,6 +156,7 @@ import type {
   UsageEvent,
 } from "takosumi-contract/billing";
 import type { ListProvidersResponse } from "takosumi-contract/providers";
+import type { ResourceShapeKind } from "takosumi-contract";
 
 function resolveTakosumiDeploymentRecordStore(input: {
   readonly takosumiDeploymentRecordStore?: TakosumiDeploymentRecordStore;
@@ -366,6 +371,14 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
   ) => ResourceAdapter | Promise<ResourceAdapter>;
   /** Enables the Resource Shape API with the dev/test stub when no adapter is supplied. */
   readonly enableResourceShapeApi?: boolean;
+  /**
+   * Public Resource Shape kinds this service instance exposes. Omitted keeps
+   * the compiled dev/test default; operator hosts should pass an explicit
+   * capability-derived allowlist.
+   */
+  readonly enabledResourceShapeKinds?: readonly ResourceShapeKind[];
+  readonly resourceCapabilities?: Partial<TakosumiResourceCapabilities>;
+  readonly adapterCapabilities?: Partial<TakosumiAdapterCapabilities>;
   /**
    * Operator-selected public Git source for first-party catalog cards. The
    * default tracks the public development mirror, while hosted deployments can
@@ -1083,9 +1096,18 @@ export async function createTakosumiService(
       role === "takosumi-api" && Boolean(metricsScrapeToken),
     registerResourceShapeRoutes:
       role === "takosumi-api" && resourceShapeService !== undefined,
+    ...(options.resourceCapabilities
+      ? { resourceCapabilities: options.resourceCapabilities }
+      : {}),
+    ...(options.adapterCapabilities
+      ? { adapterCapabilities: options.adapterCapabilities }
+      : {}),
     resourceShapeRouteOptions: resourceShapeService
       ? {
           service: resourceShapeService,
+          ...(options.enabledResourceShapeKinds
+            ? { enabledResourceShapeKinds: options.enabledResourceShapeKinds }
+            : {}),
           ...(deployControlToken
             ? { getResourceShapeBearerToken: () => deployControlToken }
             : {}),

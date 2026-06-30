@@ -28,6 +28,12 @@ import {
 export interface RegisterResourceShapeRoutesOptions {
   readonly service: ResourceShapeService;
   /**
+   * Public Resource Shape kinds this host exposes. Omitted keeps the dev/test
+   * default of all compiled shape kinds, while operator/Cloud composition can
+   * fail closed to an explicit allowlist.
+   */
+  readonly enabledResourceShapeKinds?: readonly ResourceShapeKind[];
+  /**
    * Resolves the acting principal for a request. Defaults to a single-tenant
    * self-host owner actor; operator/Cloud composition injects real auth.
    */
@@ -67,6 +73,9 @@ export function registerResourceShapeRoutes(
   options: RegisterResourceShapeRoutesOptions,
 ): void {
   const { service } = options;
+  const enabledKinds = new Set<ResourceShapeKind>(
+    options.enabledResourceShapeKinds ?? RESOURCE_SHAPE_KINDS,
+  );
 
   app.post("/v1/resources/preview", async (c) => {
     const auth = await authorizeResourceShape(c, options);
@@ -91,7 +100,7 @@ export function registerResourceShapeRoutes(
   app.get("/v1/resources/:kind/:name", async (c) => {
     const auth = await authorizeResourceShape(c, options);
     if (!auth.ok) return auth.response;
-    const kind = parseKind(c);
+    const kind = parseKind(c, enabledKinds);
     if ("response" in kind) return kind.response;
     const space = requireQuery(c, "space");
     if ("response" in space) return space.response;
@@ -122,7 +131,7 @@ export function registerResourceShapeRoutes(
   app.delete("/v1/resources/:kind/:name", async (c) => {
     const auth = await authorizeResourceShape(c, options);
     if (!auth.ok) return auth.response;
-    const kind = parseKind(c);
+    const kind = parseKind(c, enabledKinds);
     if ("response" in kind) return kind.response;
     const space = requireQuery(c, "space");
     if ("response" in space) return space.response;
@@ -212,7 +221,7 @@ export function registerResourceShapeRoutes(
     { readonly request: ApplyResourceRequest } | { readonly response: Response }
   > {
     const body = await readJsonObject(c.req.raw);
-    const kind = parseKindFromBodyOrParam(c, body);
+    const kind = parseKindFromBodyOrParam(c, body, enabledKinds);
     if ("response" in kind) return kind;
     const metadata = (body.metadata ?? {}) as Record<string, unknown>;
     const spec = (body.spec ?? {}) as JsonObject;
@@ -345,10 +354,14 @@ function isResourceKind(value: string): value is ResourceShapeKind {
 
 function parseKind(
   c: Context,
+  enabledKinds: ReadonlySet<ResourceShapeKind>,
 ): { readonly value: ResourceShapeKind } | { readonly response: Response } {
   const kind = c.req.param("kind");
   if (!kind || !isResourceKind(kind)) {
     return { response: badRequest(c, `unknown resource kind: ${kind}`) };
+  }
+  if (!enabledKinds.has(kind)) {
+    return { response: badRequest(c, `resource kind is not enabled: ${kind}`) };
   }
   return { value: kind };
 }
@@ -356,6 +369,7 @@ function parseKind(
 function parseKindFromBodyOrParam(
   c: Context,
   body: Record<string, unknown>,
+  enabledKinds: ReadonlySet<ResourceShapeKind>,
 ): { readonly value: ResourceShapeKind } | { readonly response: Response } {
   const fromParam = c.req.param("kind");
   if (fromParam) {
@@ -368,11 +382,16 @@ function parseKindFromBodyOrParam(
         ),
       };
     }
-    return parseKind(c);
+    return parseKind(c, enabledKinds);
   }
   const fromBody = stringField(body, "kind");
   if (!fromBody || !isResourceKind(fromBody)) {
     return { response: badRequest(c, `unknown resource kind: ${fromBody}`) };
+  }
+  if (!enabledKinds.has(fromBody)) {
+    return {
+      response: badRequest(c, `resource kind is not enabled: ${fromBody}`),
+    };
   }
   return { value: fromBody };
 }
