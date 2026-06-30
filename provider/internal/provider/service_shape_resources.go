@@ -13,6 +13,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
+	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/takosjp/terraform-provider-takosumi/internal/client"
@@ -67,6 +68,230 @@ type serviceShapeModel struct {
 	Locked                 types.Bool   `tfsdk:"locked"`
 	Portability            types.String `tfsdk:"portability"`
 	Outputs                types.Map    `tfsdk:"outputs"`
+}
+
+type objectBucketModel struct {
+	ID                     types.String `tfsdk:"id"`
+	Name                   types.String `tfsdk:"name"`
+	Interfaces             types.Set    `tfsdk:"interfaces"`
+	Space                  types.String `tfsdk:"space"`
+	TargetPool             types.String `tfsdk:"target_pool"`
+	SelectedImplementation types.String `tfsdk:"selected_implementation"`
+	Target                 types.String `tfsdk:"target"`
+	Locked                 types.Bool   `tfsdk:"locked"`
+	Portability            types.String `tfsdk:"portability"`
+	Outputs                types.Map    `tfsdk:"outputs"`
+}
+
+type kvStoreModel struct {
+	ID                     types.String `tfsdk:"id"`
+	Name                   types.String `tfsdk:"name"`
+	Consistency            types.String `tfsdk:"consistency"`
+	Space                  types.String `tfsdk:"space"`
+	TargetPool             types.String `tfsdk:"target_pool"`
+	SelectedImplementation types.String `tfsdk:"selected_implementation"`
+	Target                 types.String `tfsdk:"target"`
+	Locked                 types.Bool   `tfsdk:"locked"`
+	Portability            types.String `tfsdk:"portability"`
+	Outputs                types.Map    `tfsdk:"outputs"`
+}
+
+type queueModel struct {
+	ID                     types.String `tfsdk:"id"`
+	Name                   types.String `tfsdk:"name"`
+	MaxRetries             types.Int64  `tfsdk:"max_retries"`
+	MaxBatchSize           types.Int64  `tfsdk:"max_batch_size"`
+	Space                  types.String `tfsdk:"space"`
+	TargetPool             types.String `tfsdk:"target_pool"`
+	SelectedImplementation types.String `tfsdk:"selected_implementation"`
+	Target                 types.String `tfsdk:"target"`
+	Locked                 types.Bool   `tfsdk:"locked"`
+	Portability            types.String `tfsdk:"portability"`
+	Outputs                types.Map    `tfsdk:"outputs"`
+}
+
+type sqlDatabaseModel struct {
+	ID                     types.String `tfsdk:"id"`
+	Name                   types.String `tfsdk:"name"`
+	Engine                 types.String `tfsdk:"engine"`
+	MigrationsPath         types.String `tfsdk:"migrations_path"`
+	Space                  types.String `tfsdk:"space"`
+	TargetPool             types.String `tfsdk:"target_pool"`
+	SelectedImplementation types.String `tfsdk:"selected_implementation"`
+	Target                 types.String `tfsdk:"target"`
+	Locked                 types.Bool   `tfsdk:"locked"`
+	Portability            types.String `tfsdk:"portability"`
+	Outputs                types.Map    `tfsdk:"outputs"`
+}
+
+type containerServiceModel struct {
+	ID                     types.String `tfsdk:"id"`
+	Name                   types.String `tfsdk:"name"`
+	Image                  types.String `tfsdk:"image"`
+	Ports                  types.Set    `tfsdk:"ports"`
+	PublicHTTP             types.Bool   `tfsdk:"public_http"`
+	Environment            types.Map    `tfsdk:"environment"`
+	Space                  types.String `tfsdk:"space"`
+	TargetPool             types.String `tfsdk:"target_pool"`
+	SelectedImplementation types.String `tfsdk:"selected_implementation"`
+	Target                 types.String `tfsdk:"target"`
+	Locked                 types.Bool   `tfsdk:"locked"`
+	Portability            types.String `tfsdk:"portability"`
+	Outputs                types.Map    `tfsdk:"outputs"`
+}
+
+func (m objectBucketModel) toServiceShapeModel() serviceShapeModel {
+	base := serviceShapeModelFromCommon(
+		m.ID, m.Name, m.Space, m.TargetPool, m.SelectedImplementation,
+		m.Target, m.Locked, m.Portability, m.Outputs,
+	)
+	base.Interfaces = m.Interfaces
+	return base
+}
+
+func objectBucketModelFromServiceShape(m serviceShapeModel) objectBucketModel {
+	return objectBucketModel{
+		ID:                     m.ID,
+		Name:                   m.Name,
+		Interfaces:             m.Interfaces,
+		Space:                  m.Space,
+		TargetPool:             m.TargetPool,
+		SelectedImplementation: m.SelectedImplementation,
+		Target:                 m.Target,
+		Locked:                 m.Locked,
+		Portability:            m.Portability,
+		Outputs:                m.Outputs,
+	}
+}
+
+func (m kvStoreModel) toServiceShapeModel() serviceShapeModel {
+	base := serviceShapeModelFromCommon(
+		m.ID, m.Name, m.Space, m.TargetPool, m.SelectedImplementation,
+		m.Target, m.Locked, m.Portability, m.Outputs,
+	)
+	base.Consistency = m.Consistency
+	return base
+}
+
+func kvStoreModelFromServiceShape(m serviceShapeModel) kvStoreModel {
+	return kvStoreModel{
+		ID:                     m.ID,
+		Name:                   m.Name,
+		Consistency:            m.Consistency,
+		Space:                  m.Space,
+		TargetPool:             m.TargetPool,
+		SelectedImplementation: m.SelectedImplementation,
+		Target:                 m.Target,
+		Locked:                 m.Locked,
+		Portability:            m.Portability,
+		Outputs:                m.Outputs,
+	}
+}
+
+func (m queueModel) toServiceShapeModel() serviceShapeModel {
+	base := serviceShapeModelFromCommon(
+		m.ID, m.Name, m.Space, m.TargetPool, m.SelectedImplementation,
+		m.Target, m.Locked, m.Portability, m.Outputs,
+	)
+	base.MaxRetries = m.MaxRetries
+	base.MaxBatchSize = m.MaxBatchSize
+	return base
+}
+
+func queueModelFromServiceShape(m serviceShapeModel) queueModel {
+	return queueModel{
+		ID:                     m.ID,
+		Name:                   m.Name,
+		MaxRetries:             m.MaxRetries,
+		MaxBatchSize:           m.MaxBatchSize,
+		Space:                  m.Space,
+		TargetPool:             m.TargetPool,
+		SelectedImplementation: m.SelectedImplementation,
+		Target:                 m.Target,
+		Locked:                 m.Locked,
+		Portability:            m.Portability,
+		Outputs:                m.Outputs,
+	}
+}
+
+func (m sqlDatabaseModel) toServiceShapeModel() serviceShapeModel {
+	base := serviceShapeModelFromCommon(
+		m.ID, m.Name, m.Space, m.TargetPool, m.SelectedImplementation,
+		m.Target, m.Locked, m.Portability, m.Outputs,
+	)
+	base.Engine = m.Engine
+	base.MigrationsPath = m.MigrationsPath
+	return base
+}
+
+func sqlDatabaseModelFromServiceShape(m serviceShapeModel) sqlDatabaseModel {
+	return sqlDatabaseModel{
+		ID:                     m.ID,
+		Name:                   m.Name,
+		Engine:                 m.Engine,
+		MigrationsPath:         m.MigrationsPath,
+		Space:                  m.Space,
+		TargetPool:             m.TargetPool,
+		SelectedImplementation: m.SelectedImplementation,
+		Target:                 m.Target,
+		Locked:                 m.Locked,
+		Portability:            m.Portability,
+		Outputs:                m.Outputs,
+	}
+}
+
+func (m containerServiceModel) toServiceShapeModel() serviceShapeModel {
+	base := serviceShapeModelFromCommon(
+		m.ID, m.Name, m.Space, m.TargetPool, m.SelectedImplementation,
+		m.Target, m.Locked, m.Portability, m.Outputs,
+	)
+	base.Image = m.Image
+	base.Ports = m.Ports
+	base.PublicHTTP = m.PublicHTTP
+	base.Environment = m.Environment
+	return base
+}
+
+func containerServiceModelFromServiceShape(m serviceShapeModel) containerServiceModel {
+	return containerServiceModel{
+		ID:                     m.ID,
+		Name:                   m.Name,
+		Image:                  m.Image,
+		Ports:                  m.Ports,
+		PublicHTTP:             m.PublicHTTP,
+		Environment:            m.Environment,
+		Space:                  m.Space,
+		TargetPool:             m.TargetPool,
+		SelectedImplementation: m.SelectedImplementation,
+		Target:                 m.Target,
+		Locked:                 m.Locked,
+		Portability:            m.Portability,
+		Outputs:                m.Outputs,
+	}
+}
+
+func serviceShapeModelFromCommon(
+	id types.String,
+	name types.String,
+	space types.String,
+	targetPool types.String,
+	selectedImplementation types.String,
+	target types.String,
+	locked types.Bool,
+	portability types.String,
+	outputs types.Map,
+) serviceShapeModel {
+	return serviceShapeModel{
+		ID:                     id,
+		Name:                   name,
+		Space:                  space,
+		TargetPool:             targetPool,
+		SelectedImplementation: selectedImplementation,
+		Target:                 target,
+		Locked:                 locked,
+		Portability:            portability,
+		Outputs:                outputs,
+	}
 }
 
 func NewObjectBucketResource() resource.Resource {
@@ -252,8 +477,8 @@ func (r *serviceShapeResource) Create(ctx context.Context, req resource.CreateRe
 	if !r.assertConfigured(&resp.Diagnostics) {
 		return
 	}
-	var plan serviceShapeModel
-	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	plan, diags := r.modelFromPlan(ctx, req.Plan)
+	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -261,15 +486,15 @@ func (r *serviceShapeResource) Create(ctx context.Context, req resource.CreateRe
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+	resp.Diagnostics.Append(r.setState(ctx, &resp.State, plan)...)
 }
 
 func (r *serviceShapeResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
 	if !r.assertConfigured(&resp.Diagnostics) {
 		return
 	}
-	var state serviceShapeModel
-	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	state, diags := r.modelFromState(ctx, req.State)
+	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -292,15 +517,15 @@ func (r *serviceShapeResource) Read(ctx context.Context, req resource.ReadReques
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
+	resp.Diagnostics.Append(r.setState(ctx, &resp.State, state)...)
 }
 
 func (r *serviceShapeResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	if !r.assertConfigured(&resp.Diagnostics) {
 		return
 	}
-	var plan serviceShapeModel
-	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	plan, diags := r.modelFromPlan(ctx, req.Plan)
+	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -308,15 +533,15 @@ func (r *serviceShapeResource) Update(ctx context.Context, req resource.UpdateRe
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+	resp.Diagnostics.Append(r.setState(ctx, &resp.State, plan)...)
 }
 
 func (r *serviceShapeResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
 	if !r.assertConfigured(&resp.Diagnostics) {
 		return
 	}
-	var state serviceShapeModel
-	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	state, diags := r.modelFromState(ctx, req.State)
+	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -339,16 +564,95 @@ func (r *serviceShapeResource) ModifyPlan(ctx context.Context, req resource.Modi
 	if r.data == nil || req.Plan.Raw.IsNull() {
 		return
 	}
-	var plan serviceShapeModel
-	_ = req.Plan.Get(ctx, &plan)
-	if plan.Name.IsUnknown() {
-		return
-	}
-	body, _, diags := plan.toResource(ctx, r.data.defaultSpace, r.cfg.kind, r.cfg.spec)
+	plan, diags := r.modelFromPlan(ctx, req.Plan)
 	if diags.HasError() {
 		return
 	}
+	if plan.Name.IsUnknown() {
+		return
+	}
+	body, _, d := plan.toResource(ctx, r.data.defaultSpace, r.cfg.kind, r.cfg.spec)
+	if d.HasError() {
+		return
+	}
 	_, _ = r.data.client.PreviewResource(ctx, body)
+}
+
+func (r *serviceShapeResource) modelFromPlan(ctx context.Context, plan tfsdk.Plan) (serviceShapeModel, diag.Diagnostics) {
+	switch r.cfg.spec {
+	case specObjectBucket:
+		var m objectBucketModel
+		diags := plan.Get(ctx, &m)
+		return m.toServiceShapeModel(), diags
+	case specKVStore:
+		var m kvStoreModel
+		diags := plan.Get(ctx, &m)
+		return m.toServiceShapeModel(), diags
+	case specQueue:
+		var m queueModel
+		diags := plan.Get(ctx, &m)
+		return m.toServiceShapeModel(), diags
+	case specSQLDatabase:
+		var m sqlDatabaseModel
+		diags := plan.Get(ctx, &m)
+		return m.toServiceShapeModel(), diags
+	case specContainerService:
+		var m containerServiceModel
+		diags := plan.Get(ctx, &m)
+		return m.toServiceShapeModel(), diags
+	default:
+		var diags diag.Diagnostics
+		diags.AddError("Unsupported service shape", "The provider cannot decode this service shape plan.")
+		return serviceShapeModel{}, diags
+	}
+}
+
+func (r *serviceShapeResource) modelFromState(ctx context.Context, state tfsdk.State) (serviceShapeModel, diag.Diagnostics) {
+	switch r.cfg.spec {
+	case specObjectBucket:
+		var m objectBucketModel
+		diags := state.Get(ctx, &m)
+		return m.toServiceShapeModel(), diags
+	case specKVStore:
+		var m kvStoreModel
+		diags := state.Get(ctx, &m)
+		return m.toServiceShapeModel(), diags
+	case specQueue:
+		var m queueModel
+		diags := state.Get(ctx, &m)
+		return m.toServiceShapeModel(), diags
+	case specSQLDatabase:
+		var m sqlDatabaseModel
+		diags := state.Get(ctx, &m)
+		return m.toServiceShapeModel(), diags
+	case specContainerService:
+		var m containerServiceModel
+		diags := state.Get(ctx, &m)
+		return m.toServiceShapeModel(), diags
+	default:
+		var diags diag.Diagnostics
+		diags.AddError("Unsupported service shape", "The provider cannot decode this service shape state.")
+		return serviceShapeModel{}, diags
+	}
+}
+
+func (r *serviceShapeResource) setState(ctx context.Context, state *tfsdk.State, m serviceShapeModel) diag.Diagnostics {
+	switch r.cfg.spec {
+	case specObjectBucket:
+		return state.Set(ctx, objectBucketModelFromServiceShape(m))
+	case specKVStore:
+		return state.Set(ctx, kvStoreModelFromServiceShape(m))
+	case specQueue:
+		return state.Set(ctx, queueModelFromServiceShape(m))
+	case specSQLDatabase:
+		return state.Set(ctx, sqlDatabaseModelFromServiceShape(m))
+	case specContainerService:
+		return state.Set(ctx, containerServiceModelFromServiceShape(m))
+	default:
+		var diags diag.Diagnostics
+		diags.AddError("Unsupported service shape", "The provider cannot encode this service shape state.")
+		return diags
+	}
 }
 
 func (r *serviceShapeResource) assertConfigured(diags *diag.Diagnostics) bool {
