@@ -145,12 +145,13 @@ export function registerResourceShapeRoutes(
     const spec = (body.spec ?? {
       targets: body.targets ?? [],
     }) as TargetPoolSpec;
-    const record = await service.putTargetPool(
+    const result = await service.putTargetPool(
       space,
       c.req.param("name"),
       spec,
     );
-    return c.json(record, 200);
+    if (!result.ok) return errorResponse(c, result.error);
+    return c.json(result.value, 200);
   });
 
   app.get("/v1/target-pools", async (c) => {
@@ -421,6 +422,17 @@ function httpStatusForServiceError(
     case "invalid_name":
     case "invalid_interfaces":
     case "invalid_interface":
+    case "invalid_protocols":
+    case "invalid_protocol":
+    case "invalid_consistency":
+    case "invalid_delivery":
+    case "invalid_engine":
+    case "invalid_migrations_path":
+    case "invalid_image":
+    case "invalid_ports":
+    case "invalid_public_http":
+    case "invalid_environment":
+    case "invalid_compatibility_date":
     case "invalid_runtime":
     case "invalid_profile":
     case "invalid_source":
@@ -428,6 +440,7 @@ function httpStatusForServiceError(
     case "invalid_model_policy":
     case "invalid_lifecycle_policy":
     case "invalid_delete_policy":
+    case "invalid_target_pool":
     case "unsupported_shape":
       return 400;
     case "target_pool_not_found":

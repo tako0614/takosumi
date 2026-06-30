@@ -184,6 +184,28 @@ test("PUT /v1/resources/ObjectBucket/:name applies a provider-neutral bucket sha
   expect(body.status.outputs.bucket_name).toContain("ObjectBucket:assets");
 });
 
+test("PUT /v1/resources/KVStore/:name applies a provider-neutral KV shape", async () => {
+  const { app } = await buildApp();
+  const res = await app.request("/v1/resources/KVStore/cache", {
+    method: "PUT",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({
+      metadata: { space: "space_1" },
+      spec: {
+        name: "cache",
+        consistency: "eventual",
+      },
+    }),
+  });
+  expect(res.status).toBe(200);
+  const body = await res.json();
+  expect(body.id).toBe("tkrn:space_1:KVStore:cache");
+  expect(body.status.resolution.selectedImplementation).toBe(
+    "cloudflare_kv_namespace",
+  );
+  expect(body.status.outputs.namespace_id).toContain("KVStore:cache");
+});
+
 test("PUT /v1/resources/ContainerService/:name accepts admin-defined implementation capabilities", async () => {
   const { app, service } = await buildApp();
   await service.putTargetPool("space_1", "default", {
@@ -316,6 +338,64 @@ test("TargetPool API persists admin-defined capability evidence", async () => {
   expect(missing.status).toBe(404);
 });
 
+test("TargetPool API rejects invalid capability evidence and secret-looking options", async () => {
+  const { app } = await buildApp();
+  const badShape = await app.request("/v1/target-pools/bad-shape", {
+    method: "PUT",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({
+      space: "space_1",
+      spec: {
+        targets: [
+          {
+            name: "plugin-main",
+            type: "kubernetes",
+            priority: 80,
+            implementations: [
+              {
+                shape: "AIGateway",
+                implementation: "custom_ai_gateway",
+                interfaces: { api: "native" },
+              },
+            ],
+          },
+        ],
+      },
+    }),
+  });
+  expect(badShape.status).toBe(400);
+  expect((await badShape.json()).error.code).toBe("invalid_target_pool");
+
+  const secretOptions = await app.request("/v1/target-pools/secret", {
+    method: "PUT",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({
+      space: "space_1",
+      spec: {
+        targets: [
+          {
+            name: "plugin-main",
+            type: "kubernetes",
+            priority: 80,
+            implementations: [
+              {
+                shape: "ContainerService",
+                implementation: "custom_container_runtime",
+                interfaces: { oci_container: "native" },
+                options: { clientSecret: "plain-value" },
+              },
+            ],
+          },
+        ],
+      },
+    }),
+  });
+  expect(secretOptions.status).toBe(400);
+  const body = await secretOptions.json();
+  expect(body.error.code).toBe("invalid_target_pool");
+  expect(body.error.message).toContain("secret-looking");
+});
+
 test("GET /v1/resources/EdgeWorker/:name returns the applied resource", async () => {
   const { app } = await buildApp();
   await app.request("/v1/resources/EdgeWorker/api", {
@@ -420,6 +500,25 @@ test("unknown Resource Shape kind is rejected", async () => {
   expect(res.status).toBe(400);
   const body = await res.json();
   expect(body.error.code).toBe("invalid_argument");
+});
+
+test("AI Gateway is intentionally not a Resource Shape", async () => {
+  const { app } = await buildApp();
+  const res = await app.request("/v1/resources/AIGateway/ai", {
+    method: "PUT",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({
+      metadata: { space: "space_1" },
+      spec: { name: "ai" },
+    }),
+  });
+  expect(res.status).toBe(400);
+  const body = await res.json();
+  expect(body.error.message).toContain("unknown resource kind");
+
+  const caps = await app.request("/v1/capabilities");
+  expect(caps.status).toBe(200);
+  expect((await caps.json()).resources.AIGateway).toBeUndefined();
 });
 
 test("missing space yields a 400 nested error envelope", async () => {
