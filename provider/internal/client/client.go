@@ -116,11 +116,12 @@ type Status struct {
 // the same transport carries every resource shape; the provider's resource
 // layer owns the per-shape spec contents.
 type Resource struct {
-	APIVersion string         `json:"apiVersion"`
-	Kind       string         `json:"kind"`
-	Metadata   Metadata       `json:"metadata"`
-	Spec       map[string]any `json:"spec,omitempty"`
-	Status     *Status        `json:"status,omitempty"`
+	APIVersion     string         `json:"apiVersion"`
+	Kind           string         `json:"kind"`
+	Metadata       Metadata       `json:"metadata"`
+	Spec           map[string]any `json:"spec,omitempty"`
+	TargetPoolName string         `json:"targetPoolName,omitempty"`
+	Status         *Status        `json:"status,omitempty"`
 	// ID is an optional top-level server identifier.
 	ID string `json:"id,omitempty"`
 }

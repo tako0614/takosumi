@@ -1208,7 +1208,7 @@ test("platform worker exposes product discovery before accounts handler", async 
   expect(capabilitiesBody.compat.cloudflare_subset).toBe(false);
 });
 
-test("platform worker product discovery enables Cloud capabilities only from configured extensions", async () => {
+test("platform worker product discovery exposes Cloud endpoint capabilities without claiming Resource Shape API", async () => {
   const worker = (await import("../../../deploy/platform/worker.ts")).default;
 
   const capabilities = await worker.fetch(
@@ -1255,12 +1255,12 @@ test("platform worker product discovery enables Cloud capabilities only from con
 
   expect(capabilities.status).toBe(200);
   const body = await capabilities.json();
-  expect(body.resources.EdgeWorker).toBe(true);
-  expect(body.resources.ObjectBucket).toBe(true);
-  expect(body.resources.KVStore).toBe(true);
-  expect(body.resources.Queue).toBe(true);
-  expect(body.resources.SQLDatabase).toBe(true);
-  expect(body.resources.ContainerService).toBe(true);
+  expect(body.resources.EdgeWorker).toBe(false);
+  expect(body.resources.ObjectBucket).toBe(false);
+  expect(body.resources.KVStore).toBe(false);
+  expect(body.resources.Queue).toBe(false);
+  expect(body.resources.SQLDatabase).toBe(false);
+  expect(body.resources.ContainerService).toBe(false);
   expect(Object.keys(body.resources).sort()).toEqual([
     "ContainerService",
     "EdgeWorker",
@@ -1270,8 +1270,8 @@ test("platform worker product discovery enables Cloud capabilities only from con
     "SQLDatabase",
     "Stack",
   ]);
-  expect(body.adapters.cloudflare).toBe(true);
-  expect(body.adapters.takosumi_native).toBe(true);
+  expect(body.adapters.cloudflare).toBe(false);
+  expect(body.adapters.takosumi_native).toBe(false);
   expect(body.compat.cloudflare_subset).toBe(true);
   expect(body.compat.s3).toBe(true);
   const discovery = await worker.fetch(
@@ -1291,7 +1291,9 @@ test("platform worker product discovery enables Cloud capabilities only from con
     } as never,
   );
   expect(discovery.status).toBe(200);
-  expect((await discovery.json()).endpoints.s3).toBe(
+  const discoveryBody = await discovery.json();
+  expect(discoveryBody.features.resource_shapes).toBe(false);
+  expect(discoveryBody.endpoints.s3).toBe(
     "https://app.takosumi.com/compat/s3/v1",
   );
 });
