@@ -274,6 +274,7 @@ export class OpentofuResourceShapeAdapter implements ResourceAdapter {
   }
 
   async preview(input: AdapterApplyInput): Promise<AdapterPreviewResult> {
+    assertNoImplementationPlugin(input.implementationPlugin, this.id);
     const request = this.#runRequest(input);
     const result = await this.#port.plan(request);
     return {
@@ -284,6 +285,7 @@ export class OpentofuResourceShapeAdapter implements ResourceAdapter {
   }
 
   async apply(input: AdapterApplyInput): Promise<AdapterApplyResult> {
+    assertNoImplementationPlugin(input.implementationPlugin, this.id);
     const request = this.#runRequest(input);
     const result = await this.#port.apply(request);
     return {
@@ -299,6 +301,7 @@ export class OpentofuResourceShapeAdapter implements ResourceAdapter {
     if (input.deletePolicy === "retain" || input.deletePolicy === "block") {
       return;
     }
+    assertNoImplementationPlugin(input.implementationPlugin, this.id);
     const provider = providerLocalNameForTargetType(input.target.type);
     await this.#port.destroy({
       resourceId: input.resourceId,
@@ -331,6 +334,16 @@ export class OpentofuResourceShapeAdapter implements ResourceAdapter {
       actor: input.actor,
     };
   }
+}
+
+function assertNoImplementationPlugin(
+  implementationPlugin: string | undefined,
+  adapterId: string,
+): void {
+  if (!implementationPlugin) return;
+  throw new Error(
+    `implementation plugin ${implementationPlugin} requires a plugin-aware Resource Shape adapter; ${adapterId} cannot execute it`,
+  );
 }
 
 // ---------------------------------------------------------------------------

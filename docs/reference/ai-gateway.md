@@ -30,16 +30,17 @@ direct/BYOK profiles it is the provider API key. The OSS platform worker
 carries only a fail-closed route seam and an optional Cloud-extension fetch
 handler handoff. In official Takosumi Cloud, the closed
 `takosumi-cloud/platform/worker.ts` wrapper mounts that handler in-process
-around the OSS platform worker. The platform Cloud extension registry currently
-contains exactly two public Cloud extension routes: this AI Gateway and the
-`compat.cloudflare.workers.v1` import path. Upstream profiles, operator-held
-credentials, and request forwarding belong to the closed Takosumi Cloud
-deployment.
+around the OSS platform worker. The platform Cloud extension registry is
+operator-configured. In official Takosumi Cloud it currently includes this AI
+Gateway, the `compat.cloudflare.workers.v1` import path, and the scoped
+`compat.s3.v1` object-storage data-plane when configured. Upstream profiles,
+operator-held credentials, and request forwarding belong to the closed Takosumi
+Cloud deployment.
 
-For the current GA scope, Takosumi Cloud extension routes are limited to the
-`compat.cloudflare.workers.v1` and this AI Gateway. Other Cloud extension routes
-need separate specs. OSS compatibility profiles remain scoped, versioned
-Takosumi capabilities outside this AI Gateway contract.
+For the current GA scope, Takosumi Cloud extension routes are limited to scoped
+capability routes that have their own contracts. OSS compatibility profiles
+remain scoped, versioned Takosumi capabilities outside this AI Gateway
+contract.
 
 The platform route is active only when the closed Cloud wrapper mounts the AI
 Gateway fetch handler. The wrapper exposes that handler to the OSS
