@@ -24,6 +24,12 @@ AI Gateway is intentionally not a provider resource. Use ProviderConnection,
 Secret, output projection, or generic env to pass values such as
 `OPENAI_BASE_URL`, `OPENAI_API_KEY`, and model names into an app.
 
+Push notification delivery is intentionally not a provider resource. Model
+durable app events with `takosumi_queue` when Takosumi must own delivery
+semantics, or pass APNs/FCM/provider credentials and endpoints through
+ProviderConnection, Secret, output projection, or generic env. Product-local
+mobile shells may still implement native push adapters outside the provider.
+
 Ordinary S3/R2/GCS/MinIO buckets, Kubernetes resources, VMs, and provider-owned
 cloud services should use existing OpenTofu providers through the plain Stack
 flow when that is enough.
