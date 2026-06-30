@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test";
 import {
   PLATFORM_CONTROL_PLANE_SMOKE_KIND,
+  capsuleFromLedgerResponse,
+  createdCapsuleFromCreateResponse,
   dryRunResult,
   isSmokeProviderConnectionMatch,
   isSelectableGenericCapsuleInstallConfig,
@@ -74,6 +76,62 @@ test("platform control-plane smoke dry-run is redacted and complete", async () =
   expect(json).not.toContain("CLOUDFLARE_ACCOUNT_ID");
   expect(json).not.toContain("TAKOSUMI_ACCOUNT_SESSION_TOKEN");
   expect(json).not.toContain("CLOUDFLARE_API_TOKEN");
+});
+
+test("platform control-plane smoke reads current Capsule create responses", () => {
+  expect(
+    createdCapsuleFromCreateResponse({
+      capsule: { id: "inst_current", name: "current capsule" },
+    }),
+  ).toEqual({ id: "inst_current", name: "current capsule" });
+  expect(
+    createdCapsuleFromCreateResponse({
+      installation: { id: "inst_legacy", name: "legacy capsule" },
+    }),
+  ).toEqual({ id: "inst_legacy", name: "legacy capsule" });
+  expect(() => createdCapsuleFromCreateResponse({ capsule: {} })).toThrow(
+    "capsule create response did not include id",
+  );
+});
+
+test("platform control-plane smoke reads current Capsule ledger responses", () => {
+  expect(
+    capsuleFromLedgerResponse({
+      capsule: {
+        id: "cap_current",
+        workspaceId: "space_current",
+        currentStateVersionId: "state_current",
+        currentStateGeneration: 1,
+        status: "active",
+      },
+    }),
+  ).toEqual({
+    id: "cap_current",
+    workspaceId: "space_current",
+    currentStateVersionId: "state_current",
+    currentStateGeneration: 1,
+    status: "active",
+  });
+  expect(
+    capsuleFromLedgerResponse({
+      installation: {
+        id: "inst_legacy",
+        spaceId: "space_legacy",
+        currentDeploymentId: "dep_legacy",
+        currentStateGeneration: 1,
+        status: "active",
+      },
+    }),
+  ).toEqual({
+    id: "inst_legacy",
+    spaceId: "space_legacy",
+    currentDeploymentId: "dep_legacy",
+    currentStateGeneration: 1,
+    status: "active",
+  });
+  expect(() => capsuleFromLedgerResponse({})).toThrow(
+    "capsule ledger response did not include capsule",
+  );
 });
 
 test("platform control-plane smoke matches canonical provider connection sources", () => {
