@@ -227,7 +227,7 @@ test("local-substrate cloud service uses the OpenTofu-capable service image", ()
 });
 
 test("local-substrate cli smoke exercises upload deploy and apply", () => {
-  expect(cliSmoke).toContain("/internal/v1/spaces/$SPACE_ID/uploads?path=.");
+  expect(cliSmoke).toContain("/internal/v1/workspaces/$SPACE_ID/uploads?path=.");
   expect(cliSmoke).toContain('post_json "/internal/v1/deploy"');
   expect(cliSmoke).toContain('post_json "/internal/v1/apply-runs"');
   expect(cliSmoke).not.toContain("/internal/v1/plan-runs");

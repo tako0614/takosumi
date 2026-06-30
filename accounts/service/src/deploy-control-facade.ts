@@ -2,9 +2,9 @@ import type { JsonValue } from "takosumi-contract";
 import { INTERNAL_V1_PREFIX } from "takosumi-contract/api-surface";
 import {
   APPLY_RUNS_PATH,
+  CAPSULE_PATH,
+  CAPSULE_STATE_VERSIONS_PATH,
   DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE,
-  INSTALLATION_DEPLOYMENTS_PATH,
-  INSTALLATION_PATH,
   PLAN_RUN_PATH,
   PLAN_RUNS_PATH,
 } from "@takosumi/internal/deploy-control-api";
@@ -217,7 +217,7 @@ export async function requestRollback(input: {
   const deployments = await requestDeployControlJson<ListDeploymentsResponse>({
     deployControl: input.deployControl,
     method: "GET",
-    path: INSTALLATION_DEPLOYMENTS_PATH(input.capsuleId),
+    path: CAPSULE_STATE_VERSIONS_PATH(input.capsuleId),
   });
   if (deployments.status < 200 || deployments.status >= 300) return deployments;
   const target = isRecord(deployments.payload)
@@ -325,7 +325,7 @@ async function createPlanRunForFacadeRequest(input: {
       await requestDeployControlJson<GetCapsuleResponse>({
         deployControl: input.deployControl,
         method: "GET",
-        path: INSTALLATION_PATH(capsuleId),
+        path: CAPSULE_PATH(capsuleId),
       });
     if (installationResult.status < 200 || installationResult.status >= 300) {
       return installationResult;
@@ -799,13 +799,13 @@ async function requestDeployControlInProcess(input: {
       }
       const deploymentsId = idFromPath(
         input.path,
-        INSTALLATION_DEPLOYMENTS_PATH,
+        CAPSULE_STATE_VERSIONS_PATH,
       );
       if (deploymentsId !== undefined) {
         const payload = await input.operations.listDeployments(deploymentsId);
         return { status: 200, contentType: JSON_CONTENT_TYPE, payload };
       }
-      const capsuleId = idFromPath(input.path, INSTALLATION_PATH);
+      const capsuleId = idFromPath(input.path, CAPSULE_PATH);
       if (capsuleId !== undefined) {
         const payload = await input.operations.getCapsule(capsuleId);
         return { status: 200, contentType: JSON_CONTENT_TYPE, payload };
@@ -832,21 +832,21 @@ function idFromPath(
   build: (id: string) => string,
 ): string | undefined {
   // The contract path helpers encodeURIComponent the id, so reverse the build
-  // by trying the decoded segment(s) of the request path. Both deployments and
-  // single-installation paths share a prefix; resolve by exact reconstruction.
-  // These prefixes mirror the `/internal/v1` deploy-control seam the contract
-  // path builders (`INSTALLATION_PATH` / `PLAN_RUN_PATH`) emit.
-  const installationsPrefix = `${INTERNAL_V1_PREFIX}/installations/`;
-  if (path.startsWith(installationsPrefix)) {
-    const remainder = path.slice(installationsPrefix.length);
-    const deploymentsSuffix = "/deployments";
-    if (build === INSTALLATION_DEPLOYMENTS_PATH) {
-      if (!remainder.endsWith(deploymentsSuffix)) return undefined;
-      const encoded = remainder.slice(0, -deploymentsSuffix.length);
+  // by trying the decoded segment(s) of the request path. Both state-history and
+  // single-Capsule paths share a prefix; resolve by exact reconstruction. These
+  // prefixes mirror the `/internal/v1` deploy-control seam the contract path
+  // builders (`CAPSULE_PATH` / `PLAN_RUN_PATH`) emit.
+  const capsulesPrefix = `${INTERNAL_V1_PREFIX}/capsules/`;
+  if (path.startsWith(capsulesPrefix)) {
+    const remainder = path.slice(capsulesPrefix.length);
+    const stateVersionsSuffix = "/state-versions";
+    if (build === CAPSULE_STATE_VERSIONS_PATH) {
+      if (!remainder.endsWith(stateVersionsSuffix)) return undefined;
+      const encoded = remainder.slice(0, -stateVersionsSuffix.length);
       if (encoded.length === 0 || encoded.includes("/")) return undefined;
       return decodeURIComponent(encoded);
     }
-    if (build === INSTALLATION_PATH) {
+    if (build === CAPSULE_PATH) {
       if (remainder.length === 0 || remainder.includes("/")) return undefined;
       return decodeURIComponent(remainder);
     }

@@ -103,11 +103,11 @@ const HEADERS = {
   "content-type": "application/json",
 } as const;
 
-test("GET /internal/v1/spaces/:spaceId/billing returns settings and balance", async () => {
+test("GET /internal/v1/workspaces/:spaceId/billing returns settings and balance", async () => {
   const { app } = await makeApp();
 
   const response = await app.request(
-    "/internal/v1/spaces/space_12345678/billing",
+    "/internal/v1/workspaces/space_12345678/billing",
     {
       headers: { authorization: "Bearer scoped-token" },
     },
@@ -168,11 +168,11 @@ test("GET /internal/v1/spaces/:spaceId/billing returns settings and balance", as
   });
 });
 
-test("GET /internal/v1/spaces/:spaceId/usage lists usage events", async () => {
+test("GET /internal/v1/workspaces/:spaceId/usage lists usage events", async () => {
   const { app } = await makeApp();
 
   const response = await app.request(
-    "/internal/v1/spaces/space_12345678/usage",
+    "/internal/v1/workspaces/space_12345678/usage",
     {
       headers: { authorization: "Bearer scoped-token" },
     },
@@ -188,11 +188,11 @@ test("GET /internal/v1/spaces/:spaceId/usage lists usage events", async () => {
   ]);
 });
 
-test("GET /internal/v1/spaces/:spaceId/credit-reservations lists reservation history", async () => {
+test("GET /internal/v1/workspaces/:spaceId/credit-reservations lists reservation history", async () => {
   const { app } = await makeApp();
 
   const response = await app.request(
-    "/internal/v1/spaces/space_12345678/credit-reservations",
+    "/internal/v1/workspaces/space_12345678/credit-reservations",
     {
       headers: { authorization: "Bearer scoped-token" },
     },
@@ -210,11 +210,11 @@ test("GET /internal/v1/spaces/:spaceId/credit-reservations lists reservation his
   ]);
 });
 
-test("POST /internal/v1/spaces/:spaceId/credits/top-up adds purchased credits", async () => {
+test("POST /internal/v1/workspaces/:spaceId/credits/top-up adds purchased credits", async () => {
   const { app } = await makeApp();
 
   const response = await app.request(
-    "/internal/v1/spaces/space_12345678/credits/top-up",
+    "/internal/v1/workspaces/space_12345678/credits/top-up",
     {
       method: "POST",
       headers: HEADERS,
@@ -231,12 +231,12 @@ test("POST /internal/v1/spaces/:spaceId/credits/top-up adds purchased credits", 
   });
 });
 
-test("POST /internal/v1/spaces/:spaceId/credits/top-up rejects invalid credits", async () => {
+test("POST /internal/v1/workspaces/:spaceId/credits/top-up rejects invalid credits", async () => {
   const { app } = await makeApp();
 
   for (const credits of [0, "8"]) {
     const response = await app.request(
-      "/internal/v1/spaces/space_12345678/credits/top-up",
+      "/internal/v1/workspaces/space_12345678/credits/top-up",
       {
         method: "POST",
         headers: HEADERS,
@@ -248,7 +248,7 @@ test("POST /internal/v1/spaces/:spaceId/credits/top-up rejects invalid credits",
     expect((await response.json()).error.code).toBe("invalid_argument");
   }
   const invalidMicros = await app.request(
-    "/internal/v1/spaces/space_12345678/credits/top-up",
+    "/internal/v1/workspaces/space_12345678/credits/top-up",
     {
       method: "POST",
       headers: HEADERS,
@@ -263,9 +263,9 @@ test("billing routes reject an unknown Space", async () => {
   const { app } = await makeApp();
 
   for (const path of [
-    "/internal/v1/spaces/space_99999999/billing",
-    "/internal/v1/spaces/space_99999999/usage",
-    "/internal/v1/spaces/space_99999999/credit-reservations",
+    "/internal/v1/workspaces/space_99999999/billing",
+    "/internal/v1/workspaces/space_99999999/usage",
+    "/internal/v1/workspaces/space_99999999/credit-reservations",
   ]) {
     const response = await app.request(path, {
       headers: { authorization: "Bearer scoped-token" },
@@ -293,7 +293,7 @@ test("billing routes reject an unknown Space", async () => {
   });
 
   const response = await appWithWideScope.request(
-    "/internal/v1/spaces/space_99999999/credits/top-up",
+    "/internal/v1/workspaces/space_99999999/credits/top-up",
     {
       method: "POST",
       headers: {
@@ -306,11 +306,11 @@ test("billing routes reject an unknown Space", async () => {
   expect(response.status).toBe(404);
 });
 
-test("POST /internal/v1/spaces/:spaceId/subscription/change updates billing settings", async () => {
+test("POST /internal/v1/workspaces/:spaceId/subscription/change updates billing settings", async () => {
   const { app, store } = await makeApp();
 
   const response = await app.request(
-    "/internal/v1/spaces/space_12345678/subscription/change",
+    "/internal/v1/workspaces/space_12345678/subscription/change",
     {
       method: "POST",
       headers: HEADERS,
@@ -334,7 +334,7 @@ test("POST /internal/v1/spaces/:spaceId/subscription/change updates billing sett
   });
 });
 
-test("POST /internal/v1/spaces/:spaceId/subscription/change rejects invalid billing settings", async () => {
+test("POST /internal/v1/workspaces/:spaceId/subscription/change rejects invalid billing settings", async () => {
   const { app } = await makeApp();
 
   for (const billingSettings of [
@@ -347,7 +347,7 @@ test("POST /internal/v1/spaces/:spaceId/subscription/change rejects invalid bill
     { mode: "bogus", provider: "none" },
   ]) {
     const response = await app.request(
-      "/internal/v1/spaces/space_12345678/subscription/change",
+      "/internal/v1/workspaces/space_12345678/subscription/change",
       {
         method: "POST",
         headers: HEADERS,
@@ -364,7 +364,7 @@ test("billing routes enforce space scope", async () => {
   const { app } = await makeApp();
 
   const response = await app.request(
-    "/internal/v1/spaces/space_87654321/billing",
+    "/internal/v1/workspaces/space_87654321/billing",
     {
       headers: { authorization: "Bearer scoped-token" },
     },

@@ -19,10 +19,10 @@
 import type { OutputValueType } from "./install-configs.ts";
 import { INTERNAL_V1_PREFIX } from "./api-surface.ts";
 
-export const INSTALLATION_DEPENDENCIES_PATH = (
+export const CAPSULE_DEPENDENCIES_PATH = (
   capsuleId: string,
 ): string =>
-  `${INTERNAL_V1_PREFIX}/installations/${
+  `${INTERNAL_V1_PREFIX}/capsules/${
     encodeURIComponent(capsuleId)
   }/dependencies`;
 export const DEPENDENCY_PATH = (dependencyId: string): string =>

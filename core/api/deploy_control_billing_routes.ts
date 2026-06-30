@@ -18,55 +18,58 @@ import {
   SPACE_ID_PATTERN,
 } from "./deploy_control_shared.ts";
 import {
-  TAKOSUMI_SPACE_BILLING_ROUTE,
-  TAKOSUMI_SPACE_CREDIT_RESERVATIONS_ROUTE,
-  TAKOSUMI_SPACE_CREDITS_TOP_UP_ROUTE,
-  TAKOSUMI_SPACE_SUBSCRIPTION_CHANGE_ROUTE,
-  TAKOSUMI_SPACE_USAGE_ROUTE,
+  TAKOSUMI_WORKSPACE_BILLING_ROUTE,
+  TAKOSUMI_WORKSPACE_CREDIT_RESERVATIONS_ROUTE,
+  TAKOSUMI_WORKSPACE_CREDITS_TOP_UP_ROUTE,
+  TAKOSUMI_WORKSPACE_SUBSCRIPTION_CHANGE_ROUTE,
+  TAKOSUMI_WORKSPACE_USAGE_ROUTE,
 } from "./deploy_control_route_paths.ts";
 
-const SPACE_ID_PARAM = { param: "spaceId", pattern: SPACE_ID_PATTERN } as const;
+const WORKSPACE_ID_PARAM = {
+  param: "workspaceId",
+  pattern: SPACE_ID_PATTERN,
+} as const;
 
 export const DEPLOY_CONTROL_BILLING_ENDPOINTS: readonly DeployControlEndpoint[] =
   [
     {
       method: "GET",
-      path: TAKOSUMI_SPACE_BILLING_ROUTE,
-      summary: "Reads Space billing settings and USD balance.",
+      path: TAKOSUMI_WORKSPACE_BILLING_ROUTE,
+      summary: "Reads Workspace billing settings and USD balance.",
       auth: "deploy-control-token",
-      operationId: "getSpaceBilling",
-      openapi: { pathParams: ["spaceId"], okSchema: "SpaceBillingResponse" },
+      operationId: "getWorkspaceBilling",
+      openapi: { pathParams: ["workspaceId"], okSchema: "SpaceBillingResponse" },
       notImplementedMessage: "billing not wired",
     },
     {
       method: "GET",
-      path: TAKOSUMI_SPACE_USAGE_ROUTE,
-      summary: "Lists Space usage events.",
+      path: TAKOSUMI_WORKSPACE_USAGE_ROUTE,
+      summary: "Lists Workspace usage events.",
       auth: "deploy-control-token",
-      operationId: "listSpaceUsage",
-      openapi: { pathParams: ["spaceId"], okSchema: "SpaceUsageResponse" },
+      operationId: "listWorkspaceUsage",
+      openapi: { pathParams: ["workspaceId"], okSchema: "SpaceUsageResponse" },
       notImplementedMessage: "billing not wired",
     },
     {
       method: "GET",
-      path: TAKOSUMI_SPACE_CREDIT_RESERVATIONS_ROUTE,
-      summary: "Lists Space credit reservations.",
+      path: TAKOSUMI_WORKSPACE_CREDIT_RESERVATIONS_ROUTE,
+      summary: "Lists Workspace credit reservations.",
       auth: "deploy-control-token",
-      operationId: "listSpaceCreditReservations",
+      operationId: "listWorkspaceCreditReservations",
       openapi: {
-        pathParams: ["spaceId"],
+        pathParams: ["workspaceId"],
         okSchema: "SpaceCreditReservationsResponse",
       },
       notImplementedMessage: "billing not wired",
     },
     {
       method: "POST",
-      path: TAKOSUMI_SPACE_CREDITS_TOP_UP_ROUTE,
-      summary: "Adds manual credits to a Space balance.",
+      path: TAKOSUMI_WORKSPACE_CREDITS_TOP_UP_ROUTE,
+      summary: "Adds manual credits to a Workspace balance.",
       auth: "deploy-control-token",
-      operationId: "topUpSpaceCredits",
+      operationId: "topUpWorkspaceCredits",
       openapi: {
-        pathParams: ["spaceId"],
+        pathParams: ["workspaceId"],
         requestSchema: "CreditsTopUpRequest",
         okSchema: "CreditBalanceResponse",
       },
@@ -74,12 +77,12 @@ export const DEPLOY_CONTROL_BILLING_ENDPOINTS: readonly DeployControlEndpoint[] 
     },
     {
       method: "POST",
-      path: TAKOSUMI_SPACE_SUBSCRIPTION_CHANGE_ROUTE,
-      summary: "Changes Space billing settings.",
+      path: TAKOSUMI_WORKSPACE_SUBSCRIPTION_CHANGE_ROUTE,
+      summary: "Changes Workspace billing settings.",
       auth: "deploy-control-token",
-      operationId: "changeSpaceSubscription",
+      operationId: "changeWorkspaceSubscription",
       openapi: {
-        pathParams: ["spaceId"],
+        pathParams: ["workspaceId"],
         requestSchema: "SubscriptionChangeRequest",
         okSchema: "SpaceBillingResponse",
       },
@@ -93,10 +96,10 @@ export function mountDeployControlBillingRoutes(
   const { app, deployControlBodyLimit, controller } = ctx;
 
   app.get(
-    TAKOSUMI_SPACE_BILLING_ROUTE,
+    TAKOSUMI_WORKSPACE_BILLING_ROUTE,
     defineRoute({
       ctx,
-      param: SPACE_ID_PARAM,
+      param: WORKSPACE_ID_PARAM,
       handler: async ({ c, principal, id }) => {
         ensureSpacePermission(principal, id);
         return c.json(await controller.getSpaceBilling(id), 200);
@@ -105,10 +108,10 @@ export function mountDeployControlBillingRoutes(
   );
 
   app.get(
-    TAKOSUMI_SPACE_USAGE_ROUTE,
+    TAKOSUMI_WORKSPACE_USAGE_ROUTE,
     defineRoute({
       ctx,
-      param: SPACE_ID_PARAM,
+      param: WORKSPACE_ID_PARAM,
       handler: async ({ c, principal, id }) => {
         ensureSpacePermission(principal, id);
         const page = parsePageParams(c);
@@ -119,10 +122,10 @@ export function mountDeployControlBillingRoutes(
   );
 
   app.get(
-    TAKOSUMI_SPACE_CREDIT_RESERVATIONS_ROUTE,
+    TAKOSUMI_WORKSPACE_CREDIT_RESERVATIONS_ROUTE,
     defineRoute({
       ctx,
-      param: SPACE_ID_PARAM,
+      param: WORKSPACE_ID_PARAM,
       handler: async ({ c, principal, id }) => {
         ensureSpacePermission(principal, id);
         return c.json(await controller.listSpaceCreditReservations(id), 200);
@@ -131,11 +134,11 @@ export function mountDeployControlBillingRoutes(
   );
 
   app.post(
-    TAKOSUMI_SPACE_CREDITS_TOP_UP_ROUTE,
+    TAKOSUMI_WORKSPACE_CREDITS_TOP_UP_ROUTE,
     deployControlBodyLimit,
     defineRoute({
       ctx,
-      param: SPACE_ID_PARAM,
+      param: WORKSPACE_ID_PARAM,
       enforceBody: true,
       handler: async ({ c, principal, id }) => {
         ensureSpacePermission(principal, id);
@@ -149,11 +152,11 @@ export function mountDeployControlBillingRoutes(
   );
 
   app.post(
-    TAKOSUMI_SPACE_SUBSCRIPTION_CHANGE_ROUTE,
+    TAKOSUMI_WORKSPACE_SUBSCRIPTION_CHANGE_ROUTE,
     deployControlBodyLimit,
     defineRoute({
       ctx,
-      param: SPACE_ID_PARAM,
+      param: WORKSPACE_ID_PARAM,
       enforceBody: true,
       handler: async ({ c, principal, id }) => {
         ensureSpacePermission(principal, id);

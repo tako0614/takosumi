@@ -48,7 +48,7 @@ export interface InternalGroupRequest extends Partial<GroupCreateRequest> {
 export type InternalGroupSummary = GroupSummary;
 
 export const TAKOSUMI_INTERNAL_PATHS = {
-  spaces: `${INTERNAL_V1_PREFIX}/spaces`,
+  workspaces: `${INTERNAL_V1_PREFIX}/workspaces`,
   groups: `${INTERNAL_V1_PREFIX}/groups`,
 } as const;
 

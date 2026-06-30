@@ -126,7 +126,7 @@ test("createApiApp does not mount retired public deployment routes", async () =>
     ["POST", "/internal/v1/plan-runs"],
     ["POST", "/internal/v1/apply-runs"],
     ["GET", "/internal/v1/runner-profiles"],
-    ["GET", "/internal/v1/installations/inst_abcdef12/deployment-outputs"],
+    ["GET", "/internal/v1/capsules/inst_abcdef12/outputs"],
   ] as const) {
     const response = await app.request(path, { method });
     assert.equal(response.status, 404, path);
@@ -147,7 +147,7 @@ test("createApiApp does not mount retired public deployment routes", async () =>
   assert.equal(endpointPaths.includes("/internal/v1/runner-profiles"), false);
   assert.equal(
     endpointPaths.includes(
-      "/internal/v1/installations/:installationId/deployment-outputs",
+      "/internal/v1/capsules/:installationId/outputs",
     ),
     false,
   );
@@ -167,7 +167,7 @@ test("createApiApp does not mount retired public deployment routes", async () =>
   assert.equal(openapi.paths["/internal/v1/runner-profiles"], undefined);
   assert.equal(
     openapi.paths[
-      "/internal/v1/installations/{installationId}/deployment-outputs"
+      "/internal/v1/capsules/{installationId}/outputs"
     ],
     undefined,
   );

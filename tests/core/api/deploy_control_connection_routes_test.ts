@@ -218,7 +218,7 @@ test("POST /internal/v1/connections/cloudflare/token happy path returns 201 and 
   expect(payload.connection.values).toBeUndefined();
 
   const activity = await app.request(
-    `/internal/v1/spaces/${SPACE_ID}/activity`,
+    `/internal/v1/workspaces/${SPACE_ID}/activity`,
     {
       headers: { authorization: "Bearer scoped-token" },
     },
@@ -953,7 +953,7 @@ test("POST /internal/v1/connections/{id}/revoke revokes and returns 204", async 
   expect((await list.json()).connections).toHaveLength(0);
 
   const activity = await app.request(
-    `/internal/v1/spaces/${SPACE_ID}/activity`,
+    `/internal/v1/workspaces/${SPACE_ID}/activity`,
     {
       headers: { authorization: "Bearer scoped-token" },
     },

@@ -900,7 +900,7 @@ export interface CreateInstallationPlanInternal {
   /**
    * Pins the plan to a SPECIFIC SourceSnapshot id instead of resolving the
    * Source's latest snapshot for its default ref. Used by the §30 deployment
-   * rollback-plan path (`POST /internal/v1/deployments/:id/rollback-plan`) to re-plan an
+   * rollback-plan path (`POST /internal/v1/state-versions/:id/rollback-plan`) to re-plan an
    * Capsule against the source snapshot a prior Deployment was built from.
    * The snapshot must belong to the Capsule's Source.
    */
@@ -1413,7 +1413,7 @@ export class OpenTofuDeploymentController {
 
   /**
    * Reads a single Deployment ledger record (spec §21 / §30 `GET
-   * /internal/v1/deployments/:id`). A missing id is a typed 404.
+   * /internal/v1/state-versions/:id`). A missing id is a typed 404.
    */
   async getDeployment(id: string): Promise<Deployment> {
     return await this.#deployments.getDeployment(id);
@@ -1421,7 +1421,7 @@ export class OpenTofuDeploymentController {
 
   /**
    * Creates a rollback PLAN run for a Deployment (spec §30 `POST
-   * /internal/v1/deployments/:id/rollback-plan`): re-plans the Deployment's Capsule
+   * /internal/v1/state-versions/:id/rollback-plan`): re-plans the Deployment's Capsule
    * pinned to THAT Deployment's `sourceSnapshotId`. The plan then flows through
    * the normal approval/apply path. Reuses the installation plan path with an
    * internal snapshot override.

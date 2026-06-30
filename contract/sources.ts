@@ -266,7 +266,7 @@ export const SPACE_UPLOADS_PATH = (workspaceId: string): string =>
 
 /** INTERNAL upload ingest seam path (`/internal/v1`, reached in-process). */
 export const INTERNAL_SPACE_UPLOADS_PATH = (workspaceId: string): string =>
-  `${INTERNAL_V1_PREFIX}/spaces/${encodeURIComponent(workspaceId)}/uploads`;
+  `${INTERNAL_V1_PREFIX}/workspaces/${encodeURIComponent(workspaceId)}/uploads`;
 
 /**
  * Retired public ingest for a digest-pinned prepared Capsule source archive.
@@ -287,7 +287,7 @@ export const SPACE_ARTIFACT_SNAPSHOTS_PATH = (workspaceId: string): string =>
 export const INTERNAL_SPACE_ARTIFACT_SNAPSHOTS_PATH = (
   workspaceId: string,
 ): string =>
-  `${INTERNAL_V1_PREFIX}/spaces/${encodeURIComponent(
+  `${INTERNAL_V1_PREFIX}/workspaces/${encodeURIComponent(
     workspaceId,
   )}/artifact-snapshots`;
 

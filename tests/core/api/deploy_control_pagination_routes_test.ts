@@ -171,7 +171,7 @@ test("GET /internal/v1/connections rejects a malformed ?limit= and ?cursor= (400
   expect(badCursor.status).toBe(400);
 });
 
-test("GET /internal/v1/spaces/:id/installations caps the default page at 100 and emits a cursor", async () => {
+test("GET /internal/v1/workspaces/:id/capsules caps the default page at 100 and emits a cursor", async () => {
   const total = 150;
   const app = await makeApp(async (store) => {
     for (let i = 0; i < total; i += 1) {
@@ -179,7 +179,7 @@ test("GET /internal/v1/spaces/:id/installations caps the default page at 100 and
     }
   });
   const res = await app.request(
-    `/internal/v1/spaces/${SPACE_ID}/installations`,
+    `/internal/v1/workspaces/${SPACE_ID}/capsules`,
     { headers: AUTH },
   );
   expect(res.status).toBe(200);
@@ -191,7 +191,7 @@ test("GET /internal/v1/spaces/:id/installations caps the default page at 100 and
   expect(body.nextCursor).toBeDefined();
 
   const next = await app.request(
-    `/internal/v1/spaces/${SPACE_ID}/installations?cursor=${encodeURIComponent(body.nextCursor!)}`,
+    `/internal/v1/workspaces/${SPACE_ID}/capsules?cursor=${encodeURIComponent(body.nextCursor!)}`,
     { headers: AUTH },
   );
   const nextBody = (await next.json()) as {

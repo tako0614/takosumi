@@ -20,36 +20,39 @@ import {
   SPACE_ID_PATTERN,
 } from "./deploy_control_shared.ts";
 import {
-  TAKOSUMI_INSTALLATION_BACKUPS_ROUTE,
-  TAKOSUMI_SPACE_ACTIVITY_ROUTE,
-  TAKOSUMI_SPACE_BACKUP_RESTORES_ROUTE,
-  TAKOSUMI_SPACE_BACKUPS_ROUTE,
+  TAKOSUMI_CAPSULE_BACKUPS_ROUTE,
+  TAKOSUMI_WORKSPACE_ACTIVITY_ROUTE,
+  TAKOSUMI_WORKSPACE_BACKUP_RESTORES_ROUTE,
+  TAKOSUMI_WORKSPACE_BACKUPS_ROUTE,
 } from "./deploy_control_route_paths.ts";
 
-const SPACE_ID_PARAM = { param: "spaceId", pattern: SPACE_ID_PATTERN } as const;
-const INSTALLATION_ID_PARAM = { id: "installationId" } as const;
+const WORKSPACE_ID_PARAM = {
+  param: "workspaceId",
+  pattern: SPACE_ID_PATTERN,
+} as const;
+const CAPSULE_ID_PARAM = { id: "capsuleId" } as const;
 
 export const DEPLOY_CONTROL_ACTIVITY_ENDPOINTS: readonly DeployControlEndpoint[] =
   [
     {
       method: "GET",
-      path: TAKOSUMI_SPACE_ACTIVITY_ROUTE,
+      path: TAKOSUMI_WORKSPACE_ACTIVITY_ROUTE,
       summary:
-        "Lists a Space's recent Activity audit trail (newest first; ?limit= 1..500).",
+        "Lists a Workspace's recent Activity audit trail (newest first; ?limit= 1..500).",
       auth: "deploy-control-token",
-      operationId: "listSpaceActivity",
-      openapi: { pathParams: ["spaceId"], okSchema: "ListActivityResponse" },
+      operationId: "listWorkspaceActivity",
+      openapi: { pathParams: ["workspaceId"], okSchema: "ListActivityResponse" },
       notImplementedMessage: "activity not wired",
     },
     {
       method: "POST",
-      path: TAKOSUMI_SPACE_BACKUPS_ROUTE,
+      path: TAKOSUMI_WORKSPACE_BACKUPS_ROUTE,
       summary:
-        "Creates a sealed zstd control backup of a Space's ledger in R2_BACKUPS (no secret material).",
+        "Creates a sealed zstd control backup of a Workspace ledger in R2_BACKUPS (no secret material).",
       auth: "deploy-control-token",
-      operationId: "createSpaceBackup",
+      operationId: "createWorkspaceBackup",
       openapi: {
-        pathParams: ["spaceId"],
+        pathParams: ["workspaceId"],
         okStatus: "201",
         okSchema: "CreateBackupResponse",
       },
@@ -57,13 +60,13 @@ export const DEPLOY_CONTROL_ACTIVITY_ENDPOINTS: readonly DeployControlEndpoint[]
     },
     {
       method: "POST",
-      path: TAKOSUMI_INSTALLATION_BACKUPS_ROUTE,
+      path: TAKOSUMI_CAPSULE_BACKUPS_ROUTE,
       summary:
-        "Creates a sealed control backup for the Installation's Space after resolving the Installation.",
+        "Creates a sealed control backup for the Capsule's Workspace after resolving the Capsule.",
       auth: "deploy-control-token",
-      operationId: "createInstallationBackup",
+      operationId: "createCapsuleBackup",
       openapi: {
-        pathParams: ["installationId"],
+        pathParams: ["capsuleId"],
         okStatus: "201",
         okSchema: "CreateBackupResponse",
       },
@@ -71,22 +74,22 @@ export const DEPLOY_CONTROL_ACTIVITY_ENDPOINTS: readonly DeployControlEndpoint[]
     },
     {
       method: "GET",
-      path: TAKOSUMI_SPACE_BACKUPS_ROUTE,
-      summary: "Lists a Space's control backups (newest first).",
+      path: TAKOSUMI_WORKSPACE_BACKUPS_ROUTE,
+      summary: "Lists a Workspace's control backups (newest first).",
       auth: "deploy-control-token",
-      operationId: "listSpaceBackups",
-      openapi: { pathParams: ["spaceId"], okSchema: "ListBackupsResponse" },
+      operationId: "listWorkspaceBackups",
+      openapi: { pathParams: ["workspaceId"], okSchema: "ListBackupsResponse" },
       notImplementedMessage: "backups not wired",
     },
     {
       method: "POST",
-      path: TAKOSUMI_SPACE_BACKUP_RESTORES_ROUTE,
+      path: TAKOSUMI_WORKSPACE_BACKUP_RESTORES_ROUTE,
       summary:
         "Creates a destructive restore Run from a Backup; the Run waits for approval before dispatch.",
       auth: "deploy-control-token",
       operationId: "createBackupRestore",
       openapi: {
-        pathParams: ["spaceId", "backupId"],
+        pathParams: ["workspaceId", "backupId"],
         requestSchema: "CreateRestoreRequest",
         okStatus: "201",
         okSchema: "CreateRestoreResponse",
@@ -119,14 +122,14 @@ export function mountDeployControlActivityRoutes(
 ): void {
   const { app, dependencies } = ctx;
 
-  app.get(TAKOSUMI_SPACE_ACTIVITY_ROUTE, async (c: Context) => {
+  app.get(TAKOSUMI_WORKSPACE_ACTIVITY_ROUTE, async (c: Context) => {
     const auth = await authorizeDeployControl(c, dependencies);
     if (!auth.ok) return auth.response;
     const activityService = dependencies.activityService;
     if (!activityService) {
       return c.json(notImplemented(c, "activity not wired"), 501);
     }
-    const idCheck = ensureValidParam(c, "spaceId", SPACE_ID_PATTERN);
+    const idCheck = ensureValidParam(c, "workspaceId", SPACE_ID_PATTERN);
     if (idCheck.kind === "invalid") return idCheck.response;
     const limit = parseActivityLimit(c.req.query("limit"));
     if (limit.kind === "invalid") {
@@ -147,12 +150,12 @@ export function mountDeployControlActivityRoutes(
   });
 
   app.post(
-    TAKOSUMI_SPACE_BACKUPS_ROUTE,
+    TAKOSUMI_WORKSPACE_BACKUPS_ROUTE,
     defineRoute({
       ctx,
       requireService: (deps) =>
         deps.backupsService ? undefined : "backups not wired",
-      param: SPACE_ID_PARAM,
+      param: WORKSPACE_ID_PARAM,
       handler: async ({ c, principal, id }) => {
         ensureSpacePermission(principal, id);
         const backup = await dependencies.backupsService!.createBackup({
@@ -164,14 +167,14 @@ export function mountDeployControlActivityRoutes(
   );
 
   app.post(
-    TAKOSUMI_INSTALLATION_BACKUPS_ROUTE,
+    TAKOSUMI_CAPSULE_BACKUPS_ROUTE,
     defineRoute({
       ctx,
       requireService: (deps) =>
         deps.backupsService && deps.controller
           ? undefined
           : "backups not wired",
-      param: INSTALLATION_ID_PARAM,
+      param: CAPSULE_ID_PARAM,
       handler: async ({ c, principal, id }) => {
         const response = await dependencies.controller!.getInstallation(id);
         ensureSpacePermission(principal, response.capsule.workspaceId);
@@ -186,12 +189,12 @@ export function mountDeployControlActivityRoutes(
   );
 
   app.get(
-    TAKOSUMI_SPACE_BACKUPS_ROUTE,
+    TAKOSUMI_WORKSPACE_BACKUPS_ROUTE,
     defineRoute({
       ctx,
       requireService: (deps) =>
         deps.backupsService ? undefined : "backups not wired",
-      param: SPACE_ID_PARAM,
+      param: WORKSPACE_ID_PARAM,
       handler: async ({ c, principal, id }) => {
         ensureSpacePermission(principal, id);
         const page = parsePageParams(c);
@@ -205,12 +208,12 @@ export function mountDeployControlActivityRoutes(
   );
 
   app.post(
-    TAKOSUMI_SPACE_BACKUP_RESTORES_ROUTE,
+    TAKOSUMI_WORKSPACE_BACKUP_RESTORES_ROUTE,
     defineRoute({
       ctx,
       requireService: (deps) =>
         deps.controller ? undefined : "deploy control not wired",
-      param: SPACE_ID_PARAM,
+      param: WORKSPACE_ID_PARAM,
       handler: async ({ c, principal, id }) => {
         ensureSpacePermission(principal, id);
         const backupId = c.req.param("backupId");

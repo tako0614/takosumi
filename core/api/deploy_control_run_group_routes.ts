@@ -1,6 +1,6 @@
 /**
- * §19 / §24 RunGroup routes: the Space `plan-update` (creates a space_update
- * RunGroup re-planning every stale Installation in topological order) plus the
+ * §19 / §24 RunGroup routes: the Workspace `plan-update` (creates a workspace_update
+ * RunGroup re-planning every stale Capsule in topological order) plus the
  * RunGroup read / approve handlers. Owns its handlers and its slice of the
  * {@link DEPLOY_CONTROL_INTERNAL_ENDPOINTS} descriptor inventory.
  */
@@ -17,8 +17,8 @@ import {
 import {
   TAKOSUMI_RUN_GROUP_APPROVE_ROUTE,
   TAKOSUMI_RUN_GROUP_ROUTE,
-  TAKOSUMI_SPACE_DRIFT_CHECK_ROUTE,
-  TAKOSUMI_SPACE_PLAN_UPDATE_ROUTE,
+  TAKOSUMI_WORKSPACE_DRIFT_CHECK_ROUTE,
+  TAKOSUMI_WORKSPACE_PLAN_UPDATE_ROUTE,
 } from "./deploy_control_route_paths.ts";
 
 const RUN_GROUP_ID_PARAM = {
@@ -30,13 +30,13 @@ export const DEPLOY_CONTROL_RUN_GROUP_ENDPOINTS: readonly DeployControlEndpoint[
   [
     {
       method: "POST",
-      path: TAKOSUMI_SPACE_PLAN_UPDATE_ROUTE,
+      path: TAKOSUMI_WORKSPACE_PLAN_UPDATE_ROUTE,
       summary:
-        "Creates a space_update RunGroup: re-plans every stale Installation (+ downstream) in topological order.",
+        "Creates a workspace_update RunGroup: re-plans every stale Capsule (+ downstream) in topological order.",
       auth: "deploy-control-token",
-      operationId: "createSpacePlanUpdate",
+      operationId: "createWorkspacePlanUpdate",
       openapi: {
-        pathParams: ["spaceId"],
+        pathParams: ["workspaceId"],
         okStatus: "201",
         okSchema: "RunGroupResponse",
       },
@@ -44,13 +44,13 @@ export const DEPLOY_CONTROL_RUN_GROUP_ENDPOINTS: readonly DeployControlEndpoint[
     },
     {
       method: "POST",
-      path: TAKOSUMI_SPACE_DRIFT_CHECK_ROUTE,
+      path: TAKOSUMI_WORKSPACE_DRIFT_CHECK_ROUTE,
       summary:
-        "Creates a space_drift_check RunGroup: creates one read-only drift_check Run per active Installation in the Space.",
+        "Creates a workspace_drift_check RunGroup: creates one read-only drift_check Run per active Capsule in the Workspace.",
       auth: "deploy-control-token",
-      operationId: "createSpaceDriftCheck",
+      operationId: "createWorkspaceDriftCheck",
       openapi: {
-        pathParams: ["spaceId"],
+        pathParams: ["workspaceId"],
         okStatus: "201",
         okSchema: "RunGroupResponse",
       },
@@ -86,11 +86,11 @@ export function mountDeployControlRunGroupRoutes(
     deps.runGroupsService ? undefined : "run groups not wired";
 
   app.post(
-    TAKOSUMI_SPACE_PLAN_UPDATE_ROUTE,
+    TAKOSUMI_WORKSPACE_PLAN_UPDATE_ROUTE,
     defineRoute({
       ctx,
       requireService: requireRunGroups,
-      param: { param: "spaceId", pattern: SPACE_ID_PATTERN },
+      param: { param: "workspaceId", pattern: SPACE_ID_PATTERN },
       handler: async ({ c, principal, id }) => {
         ensureSpacePermission(principal, id);
         const result = await runGroupsService!.createWorkspaceUpdate(id);
@@ -100,11 +100,11 @@ export function mountDeployControlRunGroupRoutes(
   );
 
   app.post(
-    TAKOSUMI_SPACE_DRIFT_CHECK_ROUTE,
+    TAKOSUMI_WORKSPACE_DRIFT_CHECK_ROUTE,
     defineRoute({
       ctx,
       requireService: requireRunGroups,
-      param: { param: "spaceId", pattern: SPACE_ID_PATTERN },
+      param: { param: "workspaceId", pattern: SPACE_ID_PATTERN },
       handler: async ({ c, principal, id }) => {
         ensureSpacePermission(principal, id);
         const result = await runGroupsService!.createWorkspaceDriftCheck(id);

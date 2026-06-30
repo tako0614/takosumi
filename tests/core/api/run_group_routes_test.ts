@@ -1,7 +1,7 @@
 /**
  * RunGroup HTTP route tests (Core Specification §19 / §24).
  *
- *   POST /internal/v1/spaces/:spaceId/plan-update   -> create a space_update RunGroup
+ *   POST /internal/v1/workspaces/:spaceId/plan-update   -> create a space_update RunGroup
  *   GET  /internal/v1/run-groups/:runGroupId        -> read group + member Runs + status
  *   POST /internal/v1/run-groups/:runGroupId/approve -> approve waiting members
  *
@@ -126,7 +126,7 @@ async function seedInstallation(
   await operations.installations.putInstallConfig(config);
 
   const installRes = await app.request(
-    `/internal/v1/spaces/${spaceId}/installations`,
+    `/internal/v1/workspaces/${spaceId}/capsules`,
     {
       method: "POST",
       headers: headers({ "content-type": "application/json" }),
@@ -184,7 +184,7 @@ async function applyInstallation(
   installationId: string,
 ): Promise<void> {
   const planRes = await app.request(
-    `/internal/v1/installations/${installationId}/plan`,
+    `/internal/v1/capsules/${installationId}/plan`,
     { method: "POST", headers: headers() },
   );
   expect(planRes.status).toBe(201);
@@ -221,7 +221,7 @@ test("plan-update creates a RunGroup over stale consumers; GET reads members; ap
     startWorkerDaemon: false,
   });
 
-  const spaceRes = await app.request("/internal/v1/spaces", {
+  const spaceRes = await app.request("/internal/v1/workspaces", {
     method: "POST",
     headers: headers({ "content-type": "application/json" }),
     body: JSON.stringify({
@@ -252,7 +252,7 @@ test("plan-update creates a RunGroup over stale consumers; GET reads members; ap
 
   // Dependency: consumer injects producer's base_domain.
   const depRes = await app.request(
-    `/internal/v1/installations/${consumer}/dependencies`,
+    `/internal/v1/capsules/${consumer}/dependencies`,
     {
       method: "POST",
       headers: headers({ "content-type": "application/json" }),
@@ -278,7 +278,7 @@ test("plan-update creates a RunGroup over stale consumers; GET reads members; ap
 
   // Before any stale: plan-update is failed_precondition nothing_to_update.
   const emptyRes = await app.request(
-    `/internal/v1/spaces/${spaceId}/plan-update`,
+    `/internal/v1/workspaces/${spaceId}/plan-update`,
     {
       method: "POST",
       headers: headers(),
@@ -290,7 +290,7 @@ test("plan-update creates a RunGroup over stale consumers; GET reads members; ap
   // Space drift-check: active Installations are grouped under one RunGroup and
   // each member projects as read-only drift_check.
   const driftGroupRes = await app.request(
-    `/internal/v1/spaces/${spaceId}/drift-check`,
+    `/internal/v1/workspaces/${spaceId}/drift-check`,
     {
       method: "POST",
       headers: headers(),
@@ -312,7 +312,7 @@ test("plan-update creates a RunGroup over stale consumers; GET reads members; ap
   producerValue.producer = "v2.example.com";
   await applyInstallation(app, producer);
   const consumerRow = await app.request(
-    `/internal/v1/installations/${consumer}`,
+    `/internal/v1/capsules/${consumer}`,
     {
       headers: headers(),
     },
@@ -321,7 +321,7 @@ test("plan-update creates a RunGroup over stale consumers; GET reads members; ap
 
   // plan-update: builds the group with the consumer as the sole member.
   const updateRes = await app.request(
-    `/internal/v1/spaces/${spaceId}/plan-update`,
+    `/internal/v1/workspaces/${spaceId}/plan-update`,
     {
       method: "POST",
       headers: headers(),
@@ -386,7 +386,7 @@ test("plan-update rejects a malformed spaceId and run-group rejects a malformed 
   });
 
   const badSpace = await app.request(
-    "/internal/v1/spaces/not-a-space/plan-update",
+    "/internal/v1/workspaces/not-a-space/plan-update",
     {
       method: "POST",
       headers: headers(),
@@ -395,7 +395,7 @@ test("plan-update rejects a malformed spaceId and run-group rejects a malformed 
   expect(badSpace.status).toBe(400);
 
   const badDriftSpace = await app.request(
-    "/internal/v1/spaces/not-a-space/drift-check",
+    "/internal/v1/workspaces/not-a-space/drift-check",
     {
       method: "POST",
       headers: headers(),

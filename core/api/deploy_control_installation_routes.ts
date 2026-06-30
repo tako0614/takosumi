@@ -42,28 +42,31 @@ import {
 } from "../domains/capsules/official_seed.ts";
 import { pageSorted } from "takosumi-contract/pagination";
 import {
-  TAKOSUMI_API_INSTALLATION_DEPLOYMENTS_ROUTE,
-  TAKOSUMI_API_INSTALLATION_ROUTE,
-  TAKOSUMI_DEPLOYMENT_ROLLBACK_PLAN_ROUTE,
-  TAKOSUMI_DEPLOYMENT_ROUTE,
+  TAKOSUMI_API_CAPSULE_STATE_VERSIONS_ROUTE,
+  TAKOSUMI_API_CAPSULE_ROUTE,
+  TAKOSUMI_STATE_VERSION_ROLLBACK_PLAN_ROUTE,
+  TAKOSUMI_STATE_VERSION_ROUTE,
   TAKOSUMI_INSTALL_CONFIG_ROUTE,
   TAKOSUMI_INSTALL_CONFIGS_ROUTE,
-  TAKOSUMI_INSTALLATION_DESTROY_PLAN_ROUTE,
-  TAKOSUMI_INSTALLATION_DRIFT_CHECK_ROUTE,
-  TAKOSUMI_INSTALLATION_PLAN_ROUTE,
-  TAKOSUMI_SPACE_INSTALLATIONS_ROUTE,
+  TAKOSUMI_CAPSULE_DESTROY_PLAN_ROUTE,
+  TAKOSUMI_CAPSULE_DRIFT_CHECK_ROUTE,
+  TAKOSUMI_CAPSULE_PLAN_ROUTE,
+  TAKOSUMI_WORKSPACE_CAPSULES_ROUTE,
 } from "./deploy_control_route_paths.ts";
 
-const SPACE_ID_PARAM = { param: "spaceId", pattern: SPACE_ID_PATTERN } as const;
-const DEPLOYMENT_ID_PARAM = {
-  param: "deploymentId",
+const WORKSPACE_ID_PARAM = {
+  param: "workspaceId",
+  pattern: SPACE_ID_PATTERN,
+} as const;
+const STATE_VERSION_ID_PARAM = {
+  param: "stateVersionId",
   pattern: DEPLOYMENT_ID_PATTERN,
 } as const;
 const INSTALL_CONFIG_ID_PARAM = {
   param: "installConfigId",
   pattern: /^cfg[-_][0-9a-zA-Z-]{3,96}$/,
 } as const;
-const INSTALLATION_ID_PARAM = { id: "installationId" } as const;
+const CAPSULE_ID_PARAM = { id: "capsuleId" } as const;
 
 interface PatchInstallationRequest {
   readonly status?: CapsuleStatus;
@@ -181,13 +184,13 @@ export const DEPLOY_CONTROL_INSTALLATION_ENDPOINTS: readonly DeployControlEndpoi
   [
     {
       method: "POST",
-      path: TAKOSUMI_SPACE_INSTALLATIONS_ROUTE,
+      path: TAKOSUMI_WORKSPACE_CAPSULES_ROUTE,
       summary:
-        "Creates an Installation under a Space (UNIQUE(space, name, environment)) from a Source + InstallConfig.",
+        "Creates a Capsule under a Workspace (UNIQUE(workspace, name, environment)) from a Source + InstallConfig.",
       auth: "deploy-control-token",
-      operationId: "createInstallation",
+      operationId: "createCapsule",
       openapi: {
-        pathParams: ["spaceId"],
+        pathParams: ["workspaceId"],
         requestSchema: "CreateCapsuleRequest",
         okStatus: "201",
         okSchema: "InstallationResponse",
@@ -196,37 +199,37 @@ export const DEPLOY_CONTROL_INSTALLATION_ENDPOINTS: readonly DeployControlEndpoi
     },
     {
       method: "GET",
-      path: TAKOSUMI_SPACE_INSTALLATIONS_ROUTE,
-      summary: "Lists the Installations of a Space.",
+      path: TAKOSUMI_WORKSPACE_CAPSULES_ROUTE,
+      summary: "Lists the Capsules of a Workspace.",
       auth: "deploy-control-token",
-      operationId: "listInstallations",
+      operationId: "listCapsules",
       openapi: {
-        pathParams: ["spaceId"],
+        pathParams: ["workspaceId"],
         okSchema: "ListInstallationsResponse",
       },
       notImplementedMessage: "installations not wired",
     },
     {
       method: "GET",
-      path: TAKOSUMI_API_INSTALLATION_ROUTE,
-      summary: "Reads an Installation ledger record (§30 public surface).",
+      path: TAKOSUMI_API_CAPSULE_ROUTE,
+      summary: "Reads a Capsule ledger record.",
       auth: "deploy-control-token",
-      operationId: "getApiInstallation",
+      operationId: "getCapsule",
       openapi: {
-        pathParams: ["installationId"],
+        pathParams: ["capsuleId"],
         okSchema: "GetInstallationResponse",
       },
       notImplementedMessage: "installations not wired",
     },
     {
       method: "PATCH",
-      path: TAKOSUMI_API_INSTALLATION_ROUTE,
+      path: TAKOSUMI_API_CAPSULE_ROUTE,
       summary:
-        "Updates safe mutable Installation fields; MVP exposes status patching for active/stale/error only.",
+        "Updates safe mutable Capsule fields; MVP exposes status patching for active/stale/error only.",
       auth: "deploy-control-token",
-      operationId: "patchApiInstallation",
+      operationId: "patchCapsule",
       openapi: {
-        pathParams: ["installationId"],
+        pathParams: ["capsuleId"],
         requestSchema: "PatchInstallationRequest",
         okSchema: "GetInstallationResponse",
       },
@@ -234,13 +237,13 @@ export const DEPLOY_CONTROL_INSTALLATION_ENDPOINTS: readonly DeployControlEndpoi
     },
     {
       method: "DELETE",
-      path: TAKOSUMI_API_INSTALLATION_ROUTE,
+      path: TAKOSUMI_API_CAPSULE_ROUTE,
       summary:
         "Starts the canonical destroy flow by creating a destroy-plan Run; approval + destroy_apply perform teardown.",
       auth: "deploy-control-token",
-      operationId: "deleteApiInstallation",
+      operationId: "deleteCapsule",
       openapi: {
-        pathParams: ["installationId"],
+        pathParams: ["capsuleId"],
         okStatus: "202",
         okSchema: "RunResponse",
       },
@@ -248,35 +251,35 @@ export const DEPLOY_CONTROL_INSTALLATION_ENDPOINTS: readonly DeployControlEndpoi
     },
     {
       method: "GET",
-      path: TAKOSUMI_API_INSTALLATION_DEPLOYMENTS_ROUTE,
+      path: TAKOSUMI_API_CAPSULE_STATE_VERSIONS_ROUTE,
       summary:
-        "Lists Deployment records for an Installation (§30 public surface).",
+        "Lists StateVersion records for a Capsule.",
       auth: "deploy-control-token",
-      operationId: "listApiInstallationDeployments",
+      operationId: "listCapsuleStateVersions",
       openapi: {
-        pathParams: ["installationId"],
+        pathParams: ["capsuleId"],
         okSchema: "ListDeploymentsResponse",
       },
       notImplementedMessage: "deployment ledger not wired",
     },
     {
       method: "GET",
-      path: TAKOSUMI_DEPLOYMENT_ROUTE,
-      summary: "Reads a Deployment ledger record.",
+      path: TAKOSUMI_STATE_VERSION_ROUTE,
+      summary: "Reads a StateVersion ledger record.",
       auth: "deploy-control-token",
-      operationId: "getDeployment",
-      openapi: { pathParams: ["deploymentId"], okSchema: "DeploymentResponse" },
+      operationId: "getStateVersion",
+      openapi: { pathParams: ["stateVersionId"], okSchema: "DeploymentResponse" },
       notImplementedMessage: "deployment ledger not wired",
     },
     {
       method: "POST",
-      path: TAKOSUMI_DEPLOYMENT_ROLLBACK_PLAN_ROUTE,
+      path: TAKOSUMI_STATE_VERSION_ROLLBACK_PLAN_ROUTE,
       summary:
-        "Creates a rollback plan run for a Deployment, pinned to that Deployment's source snapshot (flows through normal approval/apply).",
+        "Creates a rollback plan run for a StateVersion, pinned to that StateVersion's source snapshot (flows through normal approval/apply).",
       auth: "deploy-control-token",
-      operationId: "createDeploymentRollbackPlan",
+      operationId: "createStateVersionRollbackPlan",
       openapi: {
-        pathParams: ["deploymentId"],
+        pathParams: ["stateVersionId"],
         okStatus: "201",
         okSchema: "RunResponse",
       },
@@ -286,17 +289,17 @@ export const DEPLOY_CONTROL_INSTALLATION_ENDPOINTS: readonly DeployControlEndpoi
       method: "GET",
       path: TAKOSUMI_INSTALL_CONFIGS_ROUTE,
       summary:
-        "Lists built-in shared InstallConfigs plus the Space's own configs when spaceId is given.",
+        "Lists built-in shared InstallConfigs plus the Workspace's own configs when workspaceId is given.",
       auth: "deploy-control-token",
       operationId: "listInstallConfigs",
-      openapi: { query: ["spaceId"], okSchema: "ListInstallConfigsResponse" },
+      openapi: { query: ["workspaceId"], okSchema: "ListInstallConfigsResponse" },
       notImplementedMessage: "installations not wired",
     },
     {
       method: "GET",
       path: TAKOSUMI_INSTALL_CONFIG_ROUTE,
       summary:
-        "Reads a public InstallConfig projection (built-in shared config or a Space-owned config).",
+        "Reads a public InstallConfig projection (built-in shared config or a Workspace-owned config).",
       auth: "deploy-control-token",
       operationId: "getInstallConfig",
       openapi: {
@@ -307,13 +310,13 @@ export const DEPLOY_CONTROL_INSTALLATION_ENDPOINTS: readonly DeployControlEndpoi
     },
     {
       method: "POST",
-      path: TAKOSUMI_INSTALLATION_PLAN_ROUTE,
+      path: TAKOSUMI_CAPSULE_PLAN_ROUTE,
       summary:
-        "Creates an Installation-driven plan run: resolves the Source's latest SourceSnapshot and dispatches with installation state scope.",
+        "Creates a Capsule-driven plan run: resolves the Source's latest SourceSnapshot and dispatches with Capsule state scope.",
       auth: "deploy-control-token",
-      operationId: "createInstallationPlan",
+      operationId: "createCapsulePlan",
       openapi: {
-        pathParams: ["installationId"],
+        pathParams: ["capsuleId"],
         requestSchema: "InstallationPlanRequest",
         okStatus: "201",
         okSchema: "RunResponse",
@@ -322,13 +325,13 @@ export const DEPLOY_CONTROL_INSTALLATION_ENDPOINTS: readonly DeployControlEndpoi
     },
     {
       method: "POST",
-      path: TAKOSUMI_INSTALLATION_DESTROY_PLAN_ROUTE,
+      path: TAKOSUMI_CAPSULE_DESTROY_PLAN_ROUTE,
       summary:
-        "Creates an Installation-driven destroy-plan run (always lands waiting_approval per spec §23).",
+        "Creates a Capsule-driven destroy-plan run (always lands waiting_approval per spec §23).",
       auth: "deploy-control-token",
-      operationId: "createInstallationDestroyPlan",
+      operationId: "createCapsuleDestroyPlan",
       openapi: {
-        pathParams: ["installationId"],
+        pathParams: ["capsuleId"],
         requestSchema: "InstallationPlanRequest",
         okStatus: "201",
         okSchema: "RunResponse",
@@ -337,13 +340,13 @@ export const DEPLOY_CONTROL_INSTALLATION_ENDPOINTS: readonly DeployControlEndpoi
     },
     {
       method: "POST",
-      path: TAKOSUMI_INSTALLATION_DRIFT_CHECK_ROUTE,
+      path: TAKOSUMI_CAPSULE_DRIFT_CHECK_ROUTE,
       summary:
-        "Creates an Installation-driven drift-check run (read-only drift_check; never applyable).",
+        "Creates a Capsule-driven drift-check run (read-only drift_check; never applyable).",
       auth: "deploy-control-token",
-      operationId: "createInstallationDriftCheck",
+      operationId: "createCapsuleDriftCheck",
       openapi: {
-        pathParams: ["installationId"],
+        pathParams: ["capsuleId"],
         okStatus: "201",
         okSchema: "RunResponse",
       },
@@ -362,12 +365,12 @@ export function mountDeployControlInstallationRoutes(
     deps.installationsService ? undefined : "installations not wired";
 
   app.post(
-    TAKOSUMI_SPACE_INSTALLATIONS_ROUTE,
+    TAKOSUMI_WORKSPACE_CAPSULES_ROUTE,
     deployControlBodyLimit,
     defineRoute({
       ctx,
       requireService: requireInstallations,
-      param: SPACE_ID_PARAM,
+      param: WORKSPACE_ID_PARAM,
       enforceBody: true,
       handler: async ({ c, principal, id }) => {
         ensureSpacePermission(principal, id);
@@ -454,11 +457,11 @@ export function mountDeployControlInstallationRoutes(
   );
 
   app.get(
-    TAKOSUMI_SPACE_INSTALLATIONS_ROUTE,
+    TAKOSUMI_WORKSPACE_CAPSULES_ROUTE,
     defineRoute({
       ctx,
       requireService: requireInstallations,
-      param: SPACE_ID_PARAM,
+      param: WORKSPACE_ID_PARAM,
       handler: async ({ c, principal, id }) => {
         ensureSpacePermission(principal, id);
         const page = parsePageParams(c);
@@ -483,10 +486,10 @@ export function mountDeployControlInstallationRoutes(
   // --- PUBLIC §30 Installation + Deployment reads --------------------------
 
   app.get(
-    TAKOSUMI_API_INSTALLATION_ROUTE,
+    TAKOSUMI_API_CAPSULE_ROUTE,
     defineRoute({
       ctx,
-      param: INSTALLATION_ID_PARAM,
+      param: CAPSULE_ID_PARAM,
       handler: async ({ c, principal, id }) => {
         const response = await controller.getInstallation(id);
         ensureSpacePermission(principal, response.capsule.workspaceId);
@@ -496,12 +499,12 @@ export function mountDeployControlInstallationRoutes(
   );
 
   app.patch(
-    TAKOSUMI_API_INSTALLATION_ROUTE,
+    TAKOSUMI_API_CAPSULE_ROUTE,
     deployControlBodyLimit,
     defineRoute({
       ctx,
       requireService: requireInstallations,
-      param: INSTALLATION_ID_PARAM,
+      param: CAPSULE_ID_PARAM,
       enforceBody: true,
       handler: async ({ c, principal, id }) => {
         const existing = await controller.getInstallation(id);
@@ -515,7 +518,7 @@ export function mountDeployControlInstallationRoutes(
             errorEnvelope(
               c,
               "invalid_argument",
-              "PATCH /internal/v1/installations/:installationId requires status",
+              "PATCH /internal/v1/capsules/:installationId requires status",
             ),
             400,
           );
@@ -540,10 +543,10 @@ export function mountDeployControlInstallationRoutes(
   );
 
   app.delete(
-    TAKOSUMI_API_INSTALLATION_ROUTE,
+    TAKOSUMI_API_CAPSULE_ROUTE,
     defineRoute({
       ctx,
-      param: INSTALLATION_ID_PARAM,
+      param: CAPSULE_ID_PARAM,
       handler: async ({ c, principal, id }) => {
         const existing = await controller.getInstallation(id);
         ensureSpacePermission(principal, existing.capsule.workspaceId);
@@ -559,10 +562,10 @@ export function mountDeployControlInstallationRoutes(
   );
 
   app.get(
-    TAKOSUMI_API_INSTALLATION_DEPLOYMENTS_ROUTE,
+    TAKOSUMI_API_CAPSULE_STATE_VERSIONS_ROUTE,
     defineRoute({
       ctx,
-      param: INSTALLATION_ID_PARAM,
+      param: CAPSULE_ID_PARAM,
       handler: async ({ c, principal, id }) => {
         const installation = await controller.getInstallation(id);
         ensureSpacePermission(principal, installation.capsule.workspaceId);
@@ -574,10 +577,10 @@ export function mountDeployControlInstallationRoutes(
   );
 
   app.get(
-    TAKOSUMI_DEPLOYMENT_ROUTE,
+    TAKOSUMI_STATE_VERSION_ROUTE,
     defineRoute({
       ctx,
-      param: DEPLOYMENT_ID_PARAM,
+      param: STATE_VERSION_ID_PARAM,
       handler: async ({ c, principal, id }) => {
         const deployment = await controller.getDeployment(id);
         ensureSpacePermission(principal, deployment.spaceId);
@@ -587,10 +590,10 @@ export function mountDeployControlInstallationRoutes(
   );
 
   app.post(
-    TAKOSUMI_DEPLOYMENT_ROLLBACK_PLAN_ROUTE,
+    TAKOSUMI_STATE_VERSION_ROLLBACK_PLAN_ROUTE,
     defineRoute({
       ctx,
-      param: DEPLOYMENT_ID_PARAM,
+      param: STATE_VERSION_ID_PARAM,
       handler: async ({ c, principal, id }) => {
         // Resolve the Deployment first so the rollback plan is space-permission
         // gated via its Space, then create the pinned rollback plan.
@@ -669,10 +672,10 @@ export function mountDeployControlInstallationRoutes(
   // --- Installation-driven plan / destroy-plan (§10 / §23) ------------------
 
   app.post(
-    TAKOSUMI_INSTALLATION_PLAN_ROUTE,
+    TAKOSUMI_CAPSULE_PLAN_ROUTE,
     defineRoute({
       ctx,
-      param: INSTALLATION_ID_PARAM,
+      param: CAPSULE_ID_PARAM,
       handler: async ({ c, principal, id }) => {
         const installation = await controller.getInstallation(id);
         ensureSpacePermission(principal, installation.capsule.workspaceId);
@@ -713,10 +716,10 @@ export function mountDeployControlInstallationRoutes(
   );
 
   app.post(
-    TAKOSUMI_INSTALLATION_DESTROY_PLAN_ROUTE,
+    TAKOSUMI_CAPSULE_DESTROY_PLAN_ROUTE,
     defineRoute({
       ctx,
-      param: INSTALLATION_ID_PARAM,
+      param: CAPSULE_ID_PARAM,
       handler: async ({ c, principal, id }) => {
         const installation = await controller.getInstallation(id);
         ensureSpacePermission(principal, installation.capsule.workspaceId);
@@ -743,10 +746,10 @@ export function mountDeployControlInstallationRoutes(
   // Drift check is a canonical read-only Run type. It is Space-permission gated
   // like plan/destroy-plan, but never produces an applyable saved plan.
   app.post(
-    TAKOSUMI_INSTALLATION_DRIFT_CHECK_ROUTE,
+    TAKOSUMI_CAPSULE_DRIFT_CHECK_ROUTE,
     defineRoute({
       ctx,
-      param: INSTALLATION_ID_PARAM,
+      param: CAPSULE_ID_PARAM,
       handler: async ({ c, principal, id }) => {
         const installation = await controller.getInstallation(id);
         ensureSpacePermission(principal, installation.capsule.workspaceId);

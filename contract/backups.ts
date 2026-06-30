@@ -67,21 +67,21 @@ export const SERVICE_DATA_BACKUP_OBJECT_KEY = (
 export const CONTROL_BACKUP_CONTENT_TYPE = "application/octet-stream" as const;
 
 /** Path of the Workspace-scoped control-backup REST surface. */
-export const SPACE_BACKUPS_PATH = (workspaceId: string): string =>
-  `${INTERNAL_V1_PREFIX}/spaces/${encodeURIComponent(workspaceId)}/backups`;
+export const WORKSPACE_BACKUPS_PATH = (workspaceId: string): string =>
+  `${INTERNAL_V1_PREFIX}/workspaces/${encodeURIComponent(workspaceId)}/backups`;
 
 /** Path of the Workspace-scoped destructive restore trigger REST surface. */
-export const SPACE_BACKUP_RESTORES_PATH = (
+export const WORKSPACE_BACKUP_RESTORES_PATH = (
   workspaceId: string,
   backupId: string,
 ): string =>
-  `${SPACE_BACKUPS_PATH(workspaceId)}/${encodeURIComponent(backupId)}/restores`;
+  `${WORKSPACE_BACKUPS_PATH(workspaceId)}/${encodeURIComponent(
+    backupId,
+  )}/restores`;
 
 /** Path of the Capsule-scoped backup trigger REST surface. */
-export const INSTALLATION_BACKUPS_PATH = (capsuleId: string): string =>
-  `${INTERNAL_V1_PREFIX}/installations/${encodeURIComponent(
-    capsuleId,
-  )}/backups`;
+export const CAPSULE_BACKUPS_PATH = (capsuleId: string): string =>
+  `${INTERNAL_V1_PREFIX}/capsules/${encodeURIComponent(capsuleId)}/backups`;
 
 /**
  * Ledger pointer to one sealed control-backup bundle.

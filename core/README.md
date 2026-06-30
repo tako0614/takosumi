@@ -30,29 +30,28 @@ PORT=8788 bun core/index.ts
 
 This `core/api` Hono table is **not** edge-reachable. It is the in-process deploy-control seam dialed by the accounts
 composition; the single edge-public surface is `/api/v1/*`, owned by the accounts router (see
-[`docs/reference/deploy-control-api.md`](../docs/reference/deploy-control-api.md)). The current seam still exposes
-legacy route names while the implementation migrates to the final public model:
+[`docs/reference/deploy-control-api.md`](../docs/reference/deploy-control-api.md)). The seam uses the current
+Workspace / Capsule / StateVersion route vocabulary:
 
-- `POST /internal/v1/spaces` / `GET /internal/v1/spaces`
+- `POST /internal/v1/workspaces` / `GET /internal/v1/workspaces`
 - `POST /internal/v1/sources` / `POST /internal/v1/sources/{id}/sync`
 - `POST /internal/v1/connections/*` / `GET /internal/v1/connections`
-- `POST /internal/v1/spaces/{spaceId}/installations`
-- `POST /internal/v1/installations/{id}/plan`
+- `POST /internal/v1/workspaces/{workspaceId}/capsules`
+- `POST /internal/v1/capsules/{id}/plan`
 - `POST /internal/v1/runs/{id}/approve`
-- `POST /internal/v1/installations/{id}/destroy-plan`
-- `GET /internal/v1/installations/{id}/revisions`
-- `GET /internal/v1/revisions/{id}`
-- `GET /internal/v1/spaces/{spaceId}/activity`
+- `POST /internal/v1/capsules/{id}/destroy-plan`
+- `GET /internal/v1/capsules/{id}/state-versions`
+- `GET /internal/v1/state-versions/{id}`
+- `GET /internal/v1/workspaces/{workspaceId}/activity`
 
-These route names are current implementation details. They are not the target
-customer vocabulary. New docs and API surfaces should describe Workspace /
+These route names are internal implementation details. New docs and API surfaces should describe Workspace /
 Project / Capsule / Source / ProviderConnection / CredentialRecipe /
 ProviderBinding / Secret / Run / Plan / Apply / Destroy / StateVersion /
 Output / Runner / AuditEvent / Operator unless they are explicitly documenting
 this migration seam.
 
 The `/internal/v1/plan-runs`, `/internal/v1/apply-runs`, `/internal/v1/runner-profiles`, and
-`/internal/v1/installations/*` ledger routes are part of the same internal seam dialed by the accounts plane / CLI. They
+`/internal/v1/capsules/*` ledger routes are part of the same internal seam dialed by the accounts plane / CLI. They
 are not surfaced through `/capabilities` or `/openapi.json`. (The account-plane product surface `/v1/capsule-projections` and
 the session-authed control surface `/api/v1/connections` are a distinct edge API, owned by the accounts plane, not this
 seam. Connections are served only under `/api/v1/connections`; there is no `/v1/connections` edge.)

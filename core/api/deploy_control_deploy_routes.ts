@@ -1,9 +1,9 @@
 /**
  * Internal upload/source-archive compatibility routes.
  *
- *   POST /internal/v1/spaces/:spaceId/uploads   binary tar(zstd) ingest ->
+ *   POST /internal/v1/workspaces/:spaceId/uploads   binary tar(zstd) ingest ->
  *                                        R2_SOURCE -> upload SourceSnapshot
- *   POST /internal/v1/spaces/:spaceId/artifact-snapshots
+ *   POST /internal/v1/workspaces/:spaceId/artifact-snapshots
  *                                        legacy HTTPS source archive + sha256
  *                                        ingest -> R2_SOURCE -> SourceSnapshot
  *   POST /internal/v1/deploy             resolve an existing source-less legacy
@@ -41,9 +41,9 @@ import {
 } from "./deploy_control_shared.ts";
 
 const SPACE_UPLOADS_ROUTE =
-  `${INTERNAL_V1_PREFIX}/spaces/:spaceId/uploads` as const;
+  `${INTERNAL_V1_PREFIX}/workspaces/:spaceId/uploads` as const;
 const SPACE_ARTIFACT_SNAPSHOTS_ROUTE =
-  `${INTERNAL_V1_PREFIX}/spaces/:spaceId/artifact-snapshots` as const;
+  `${INTERNAL_V1_PREFIX}/workspaces/:spaceId/artifact-snapshots` as const;
 const DEPLOY_ROUTE = `${INTERNAL_V1_PREFIX}/deploy` as const;
 
 export const DEPLOY_CONTROL_DEPLOY_ENDPOINTS: readonly DeployControlEndpoint[] =
@@ -56,7 +56,7 @@ export const DEPLOY_CONTROL_DEPLOY_ENDPOINTS: readonly DeployControlEndpoint[] =
       auth: "deploy-control-token",
       operationId: "uploadSpaceSourceSnapshot",
       openapi: {
-        pathParams: ["spaceId"],
+        pathParams: ["workspaceId"],
         query: ["path"],
         okStatus: "201",
         okSchema: "UploadSnapshotResponse",
@@ -84,7 +84,7 @@ export const DEPLOY_CONTROL_DEPLOY_ENDPOINTS: readonly DeployControlEndpoint[] =
       auth: "deploy-control-token",
       operationId: "createArtifactSourceSnapshot",
       openapi: {
-        pathParams: ["spaceId"],
+        pathParams: ["workspaceId"],
         requestSchema: "ArtifactSnapshotRequest",
         okStatus: "201",
         okSchema: "ArtifactSnapshotResponse",
@@ -279,7 +279,7 @@ export function mountDeployControlDeployRoutes(
     ctx.deployControlBodyLimit,
     defineRoute({
       ctx,
-      param: { param: "spaceId", pattern: SPACE_ID_PATTERN },
+      param: { param: "workspaceId", pattern: SPACE_ID_PATTERN },
       enforceBody: true,
       handler: async ({ c, principal, id: spaceId }) => {
         const writeSourceArchive = dependencies.writeSourceArchive;

@@ -1,5 +1,5 @@
 /**
- * Dependency routes: create / list an Installation's DAG edges and delete a
+ * Dependency routes: create / list a Capsule's DAG edges and delete a
  * single edge. Owns its handlers and its slice of the internal descriptor
  * inventory.
  */
@@ -16,20 +16,20 @@ import {
 } from "./deploy_control_shared.ts";
 import {
   TAKOSUMI_DEPENDENCY_ROUTE,
-  TAKOSUMI_INSTALLATION_DEPENDENCIES_ROUTE,
+  TAKOSUMI_CAPSULE_DEPENDENCIES_ROUTE,
 } from "./deploy_control_route_paths.ts";
 
 export const DEPLOY_CONTROL_DEPENDENCY_ENDPOINTS: readonly DeployControlEndpoint[] =
   [
     {
       method: "POST",
-      path: TAKOSUMI_INSTALLATION_DEPENDENCIES_ROUTE,
+      path: TAKOSUMI_CAPSULE_DEPENDENCIES_ROUTE,
       summary:
-        "Creates a Dependency edge whose consumer is this Installation (variable_injection, remote_state, or published_output; cycles rejected).",
+        "Creates a Dependency edge whose consumer is this Capsule (variable_injection, remote_state, or published_output; cycles rejected).",
       auth: "deploy-control-token",
       operationId: "createDependency",
       openapi: {
-        pathParams: ["installationId"],
+        pathParams: ["capsuleId"],
         requestSchema: "CreateDependencyRequest",
         okStatus: "201",
         okSchema: "DependencyResponse",
@@ -38,13 +38,13 @@ export const DEPLOY_CONTROL_DEPENDENCY_ENDPOINTS: readonly DeployControlEndpoint
     },
     {
       method: "GET",
-      path: TAKOSUMI_INSTALLATION_DEPENDENCIES_ROUTE,
+      path: TAKOSUMI_CAPSULE_DEPENDENCIES_ROUTE,
       summary:
-        "Lists the Dependencies of an Installation, split into asProducer / asConsumer views.",
+        "Lists the Dependencies of a Capsule, split into asProducer / asConsumer views.",
       auth: "deploy-control-token",
-      operationId: "listInstallationDependencies",
+      operationId: "listCapsuleDependencies",
       openapi: {
-        pathParams: ["installationId"],
+        pathParams: ["capsuleId"],
         okSchema: "InstallationDependenciesResponse",
       },
       notImplementedMessage: "dependencies not wired",
@@ -76,15 +76,15 @@ export function mountDeployControlDependencyRoutes(
     deps.dependenciesService ? undefined : "dependencies not wired";
 
   app.post(
-    TAKOSUMI_INSTALLATION_DEPENDENCIES_ROUTE,
+    TAKOSUMI_CAPSULE_DEPENDENCIES_ROUTE,
     deployControlBodyLimit,
     defineRoute({
       ctx,
       requireService: requireDependencies,
-      param: { id: "installationId" },
+      param: { id: "capsuleId" },
       enforceBody: true,
       handler: async ({ c, principal, id }) => {
-        // The consumer is the path Installation; its Space gates the write.
+        // The consumer is the path Capsule; its Workspace gates the write.
         const consumer = await controller.getInstallation(id);
         ensureSpacePermission(principal, consumer.capsule.workspaceId);
         const body = await readJsonBody<
@@ -104,14 +104,14 @@ export function mountDeployControlDependencyRoutes(
   );
 
   app.get(
-    TAKOSUMI_INSTALLATION_DEPENDENCIES_ROUTE,
+    TAKOSUMI_CAPSULE_DEPENDENCIES_ROUTE,
     defineRoute({
       ctx,
       requireService: requireDependencies,
-      param: { id: "installationId" },
+      param: { id: "capsuleId" },
       handler: async ({ c, principal, id }) => {
-        const installation = await controller.getInstallation(id);
-        ensureSpacePermission(principal, installation.capsule.workspaceId);
+        const capsule = await controller.getInstallation(id);
+        ensureSpacePermission(principal, capsule.capsule.workspaceId);
         return c.json(await dependenciesService!.listForCapsule(id), 200);
       },
     }),
@@ -124,8 +124,8 @@ export function mountDeployControlDependencyRoutes(
       requireService: requireDependencies,
       param: { param: "dependencyId", pattern: DEPENDENCY_ID_PATTERN },
       handler: async ({ principal, id, c }) => {
-        // Resolve the edge first so deletion is space-permission gated via its
-        // consumer Installation's Space (the edge carries spaceId directly).
+        // Resolve the edge first so deletion is workspace-permission gated via
+        // its consumer Capsule's Workspace (the edge carries workspaceId).
         const dependency = await dependenciesService!.getDependency(id);
         if (!dependency) {
           throw new OpenTofuControllerError(
