@@ -1,12 +1,43 @@
 import { describe, expect, test } from "bun:test";
 import {
+  activeCloudApiTokens,
   aiGatewayRoute,
   cloudflareCompatRoute,
   s3CompatibleRoute,
   type CloudExtensionCatalog,
 } from "../../../../dashboard/src/lib/cloud-resources.ts";
+import type { TakosumiAccountsPatMetadata } from "@takosjp/takosumi-accounts-contract";
 
 describe("dashboard cloud resources route selection", () => {
+  test("activeCloudApiTokens hides revoked and expired keys", () => {
+    const now = Date.parse("2026-06-30T00:00:00.000Z");
+    const token = (
+      id: string,
+      extra: Partial<TakosumiAccountsPatMetadata> = {},
+    ): TakosumiAccountsPatMetadata => ({
+      id,
+      subject: "tsub_test",
+      name: id,
+      prefix: `takpat_${id}`,
+      scopes: ["read"],
+      created_at: "2026-06-29T00:00:00.000Z",
+      ...extra,
+    });
+
+    expect(
+      activeCloudApiTokens(
+        [
+          token("active"),
+          token("future", { expires_at: "2026-07-01T00:00:00.000Z" }),
+          token("revoked", { revoked_at: "2026-06-29T12:00:00.000Z" }),
+          token("expired", { expires_at: "2026-06-29T00:00:00.000Z" }),
+          token("invalid", { expires_at: "not-a-date" }),
+        ],
+        now,
+      ).map((item) => item.id),
+    ).toEqual(["active", "future"]);
+  });
+
   test("recognizes the generic platform extension catalog used by production", () => {
     const catalog: CloudExtensionCatalog = {
       kind: "takosumi.platform-cloud-extensions@v1",
