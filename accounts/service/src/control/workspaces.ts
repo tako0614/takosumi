@@ -942,7 +942,7 @@ async function listWorkspaceCapsules(
   const { items, nextCursor } =
     await operations.installations.listCapsulesPage(workspaceId, page.params);
   return json({
-    installations: items.map(publicCapsule),
+    capsules: items.map(publicCapsule),
     ...(nextCursor !== undefined ? { nextCursor } : {}),
   });
 }
@@ -1048,7 +1048,7 @@ async function createCapsule(
     sourceId,
     installConfigId: resolvedInstallConfigId,
   });
-  return jsonStatus({ installation: publicCapsule(installation) }, 201);
+  return jsonStatus({ capsule: publicCapsule(installation) }, 201);
 }
 
 function scopedCloneOutputAllowlist(

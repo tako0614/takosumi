@@ -1245,8 +1245,8 @@ test("GET /api/v1/workspaces/:id/capsules serves the Capsule list route", async 
     operations,
   });
   expect(response?.status).toEqual(200);
-  const body = (await response!.json()) as { installations: unknown[] };
-  expect(body.installations.length).toEqual(1);
+  const body = (await response!.json()) as { capsules: unknown[] };
+  expect(body.capsules.length).toEqual(1);
   expect(operations.calls.listCapsulesPage?.[0]).toEqual("space_a");
 });
 
@@ -2487,7 +2487,7 @@ test("POST /api/v1/workspaces uses the session subject as ownerUserId", async ()
   expect(createCall.handle).toEqual("myspace");
 });
 
-test("GET /api/v1/workspaces/:id/capsules lists installations", async () => {
+test("GET /api/v1/workspaces/:id/capsules lists Capsules", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
@@ -2503,18 +2503,18 @@ test("GET /api/v1/workspaces/:id/capsules lists installations", async () => {
     operations,
   });
   expect(response?.status).toEqual(200);
-  const body = (await response!.json()) as { installations: unknown[] };
-  expect(body.installations.length).toEqual(1);
-  const installation = body.installations[0] as {
+  const body = (await response!.json()) as { capsules: unknown[] };
+  expect(body.capsules.length).toEqual(1);
+  const capsule = body.capsules[0] as {
     installType?: string;
     currentOutputId?: string;
   };
-  expect(installation.installType).toBeUndefined();
-  expect(installation.currentOutputId).toBeUndefined();
+  expect(capsule.installType).toBeUndefined();
+  expect(capsule.currentOutputId).toBeUndefined();
   expect(operations.calls.listCapsulesPage?.[0]).toEqual("space_a");
 });
 
-test("POST /api/v1/workspaces/:id/capsules creates an installation", async () => {
+test("POST /api/v1/workspaces/:id/capsules creates a Capsule", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
@@ -2539,10 +2539,10 @@ test("POST /api/v1/workspaces/:id/capsules creates an installation", async () =>
   });
   expect(response?.status).toEqual(201);
   const body = (await response!.json()) as {
-    installation: { installType?: string; currentOutputId?: string };
+    capsule: { installType?: string; currentOutputId?: string };
   };
-  expect(body.installation.installType).toBeUndefined();
-  expect(body.installation.currentOutputId).toBeUndefined();
+  expect(body.capsule.installType).toBeUndefined();
+  expect(body.capsule.currentOutputId).toBeUndefined();
   const createCall = operations.calls.createCapsule?.[0] as {
     workspaceId: string;
   };
@@ -2737,7 +2737,7 @@ test("GET /api/v1/workspaces/:id/graph projects nodes + edges", async () => {
   expect(body.edges[0]?.producerCapsuleId).toEqual("inst_1");
 });
 
-test("GET /api/v1/capsules/:id reads one installation", async () => {
+test("GET /api/v1/capsules/:id reads one Capsule", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
@@ -2752,10 +2752,10 @@ test("GET /api/v1/capsules/:id reads one installation", async () => {
   });
   expect(response?.status).toEqual(200);
   const body = (await response!.json()) as {
-    installation: { installType?: string; currentOutputId?: string };
+    capsule: { installType?: string; currentOutputId?: string };
   };
-  expect(body.installation.installType).toBeUndefined();
-  expect(body.installation.currentOutputId).toBeUndefined();
+  expect(body.capsule.installType).toBeUndefined();
+  expect(body.capsule.currentOutputId).toBeUndefined();
   expect(operations.calls.getCapsule?.[0]).toEqual("inst_1");
 });
 
@@ -3387,11 +3387,11 @@ test("DELETE /api/v1/capsules/:id abandons unapplied upload-origin projections",
   expect(response?.status).toEqual(202);
   const body = (await response!.json()) as {
     abandoned: boolean;
-    installation: { status: string };
+    capsule: { status: string };
     projectionStatus: string;
   };
   expect(body.abandoned).toEqual(true);
-  expect(body.installation.status).toEqual("error");
+  expect(body.capsule.status).toEqual("error");
   expect(body.projectionStatus).toEqual("failed");
   expect(store.findAppCapsule("inst_upload_pending")?.status).toEqual("failed");
   expect(
@@ -3478,11 +3478,11 @@ test("DELETE /api/v1/capsules/:id abandons unapplied projections when destroy pl
   expect(response?.status).toEqual(202);
   const body = (await response!.json()) as {
     abandoned: boolean;
-    installation: { status: string };
+    capsule: { status: string };
     projectionStatus: string;
   };
   expect(body.abandoned).toEqual(true);
-  expect(body.installation.status).toEqual("error");
+  expect(body.capsule.status).toEqual("error");
   expect(body.projectionStatus).toEqual("failed");
   expect(store.findAppCapsule("inst_pending_provider")?.status).toEqual(
     "failed",
@@ -5469,11 +5469,11 @@ test("POST /api/v1/runs/:id/apply projects installation and deployment handles",
   });
   expect(response?.status).toEqual(201);
   const body = (await response!.json()) as {
-    installation?: Record<string, unknown>;
+    capsule?: Record<string, unknown>;
     deployment?: Record<string, unknown>;
   };
-  expect(body.installation?.installType).toBeUndefined();
-  expect(body.installation?.currentOutputId).toBeUndefined();
+  expect(body.capsule?.installType).toBeUndefined();
+  expect(body.capsule?.currentOutputId).toBeUndefined();
   expect(body.deployment?.outputSnapshotId).toBeUndefined();
   expect(JSON.stringify(body)).not.toContain("osnap_secret_1");
 });

@@ -151,7 +151,7 @@ export async function syncDeployControlProjectionFromDeploy(input: {
     operations: input.operations,
     store: input.store,
     sessionSubject: input.sessionSubject,
-    installation: input.deployResponse.installation,
+    installation: input.deployResponse.capsule,
     planRun,
     fallbackRun: input.deployResponse.planRun ?? input.deployResponse.run,
     requestedStatus: projectionStatusFromDeploy(input.deployResponse),
@@ -168,6 +168,7 @@ export async function syncDeployControlProjectionFromApply(input: {
   readonly response: ApplyRunResponse;
 }): Promise<Response | undefined> {
   const installation =
+    input.response.capsule ??
     input.response.installation ??
     (input.planRun.capsuleId
       ? await input.operations.installations
@@ -520,8 +521,8 @@ function projectionStatusFromDeploy(
   if (
     deployResponse.status === "applied" ||
     deployResponse.applyRun?.status === "succeeded" ||
-    (deployResponse.installation.status === "active" &&
-      deployResponse.installation.currentStateGeneration > 0)
+    (deployResponse.capsule.status === "active" &&
+      deployResponse.capsule.currentStateGeneration > 0)
   ) {
     return "ready";
   }

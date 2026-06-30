@@ -269,7 +269,8 @@ export async function publicDeployResponse(
   operations: ControlPlaneOperations,
   response: DeployResponse,
 ): Promise<PublicDeployResponse> {
-  const { run, planRun, applyRun, ...rest } = response;
+  const { run, planRun, applyRun, installation: _installation, ...rest } =
+    response;
   return {
     ...rest,
     run: await publicRun(operations, run),
@@ -286,7 +287,7 @@ interface PublicPlanActionResponse {
 
 interface PublicApplyActionResponse {
   readonly run: PublicRun;
-  readonly installation?: PublicCapsule;
+  readonly capsule?: PublicCapsule;
   readonly deployment?: PublicDeployment;
 }
 
@@ -312,11 +313,10 @@ export async function publicApplyActionResponse(
   response: ApplyRunResponse,
 ): Promise<PublicApplyActionResponse> {
   const run = await operations.getRun(response.applyRun.id);
+  const capsule = response.capsule ?? response.installation;
   return {
     run: await publicRun(operations, run),
-    ...(response.installation
-      ? { installation: publicCapsule(response.installation) }
-      : {}),
+    ...(capsule ? { capsule: publicCapsule(capsule) } : {}),
     ...(response.deployment
       ? { deployment: publicDeployment(response.deployment) }
       : {}),
