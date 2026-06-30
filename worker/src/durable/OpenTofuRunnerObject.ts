@@ -151,6 +151,7 @@ const CONTAINER_READY_ATTEMPTS = 3;
 const CONTAINER_NOT_RUNNING_PATTERN =
   /container is not running|consider calling start/i;
 const DEFAULT_RUNNER_KEEPALIVE_SECONDS = 0;
+const RUNNER_MIN_ACTIVITY_GRACE_SECONDS = 30;
 const MAX_RUNNER_KEEPALIVE_SECONDS = 900;
 const RUNNER_STARTUP_SECONDS_HEADER = "x-takosumi-runner-startup-seconds";
 
@@ -167,7 +168,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
   constructor(ctx: ContainerHostContext, env: CloudflareWorkerEnv) {
     super(ctx, env);
     const keepaliveSeconds = runnerKeepaliveSeconds(env);
-    this.sleepAfter = `${Math.max(1, keepaliveSeconds)}s`;
+    this.sleepAfter = `${runnerActivityGraceSeconds(keepaliveSeconds)}s`;
     this.envVars = {
       PORT: "8080",
       TAKOSUMI_OPENTOFU_RUNNER: "cloudflare-container",
@@ -1775,6 +1776,13 @@ function runnerKeepaliveSeconds(env: CloudflareWorkerEnv): number {
     return DEFAULT_RUNNER_KEEPALIVE_SECONDS;
   }
   return Math.min(Math.floor(parsed), MAX_RUNNER_KEEPALIVE_SECONDS);
+}
+
+function runnerActivityGraceSeconds(keepaliveSeconds: number): number {
+  if (keepaliveSeconds > 0) {
+    return Math.max(RUNNER_MIN_ACTIVITY_GRACE_SECONDS, keepaliveSeconds);
+  }
+  return RUNNER_MIN_ACTIVITY_GRACE_SECONDS;
 }
 
 function optionalEnvVars(
