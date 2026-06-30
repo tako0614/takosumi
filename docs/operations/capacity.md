@@ -73,12 +73,14 @@ speed knob は OpenTofu 実行基盤に限定する。
 
 | Knob                                | Default                         | 速くなる箇所                                             | コスト/注意点                                                                 |
 | ----------------------------------- | ------------------------------- | -------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `TAKOSUMI_RUNNER_KEEPALIVE_SECONDS` | `120`                           | source_sync / compatibility / plan / apply の連続実行     | 成功後だけ短時間 container を温存する。`0` は run ごとに破棄して idle cost 優先 |
+| `TAKOSUMI_RUNNER_KEEPALIVE_SECONDS` | `0`                             | run-scoped container lifetime                            | run ごとに破棄して `max_instances` 枯渇を避ける。positive value は current run container を短時間残すだけ |
 | `TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR` | `/tmp/takosumi-provider-cache`  | `tofu init` の direct provider install                   | provider binary 専用。credential / tfplan / state / outputs は入れない        |
 | `TAKOSUMI_SOURCE_ARCHIVE_ZSTD_LEVEL` | runner default `3`, template `1` | SourceSnapshot archive 作成                              | 低いほど速いが R2 object が大きくなる                                         |
 
 失敗した run は keepalive 設定に関係なく container を落とす。これは crash や
 relay error のあとに一時 credential file を温存しないための fail-closed 動作。
+current Cloudflare runner は `idFromName(runId)` の run-scoped Durable Object
+を使うため、positive keepalive は cross-run provider cache reuse にはならない。
 container image、Worker bundle、DB migration、app index 作成などの最適化は
 各 app repo / CI / registry / OpenTofu module 側の責務として扱う。
 

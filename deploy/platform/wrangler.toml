@@ -175,11 +175,12 @@ TAKOSUMI_ENABLED_RUNNER_PROFILES = "cloudflare-default,generic-opentofu-provider
 #   TAKOSUMI_RELEASE_ACTIVATION_FAILURE_SURFACING_EVIDENCE_REF / _DIGEST
 #   TAKOSUMI_RELEASE_ACTIVATION_LEDGER_INDEPENDENCE_EVIDENCE_REF / _DIGEST
 #   TAKOSUMI_RELEASE_ACTIVATION_PAYLOAD_BOUNDARY_EVIDENCE_REF / _DIGEST
-# OpenTofu runner speed knobs. The keepalive window keeps a successful runner
-# container warm long enough for source_sync -> compatibility -> plan -> apply
-# bursts to reuse the same container and provider plugin cache. Set to "0" to
-# destroy after every run when minimizing idle container cost is more important.
-TAKOSUMI_RUNNER_KEEPALIVE_SECONDS = "120"
+# OpenTofu runner capacity knob. Runner DO ids are currently run-scoped, so a
+# positive keepalive keeps that run's container alive but does not reuse it for
+# the next source_sync / compatibility / plan / apply run. Keep this at "0"
+# until stable runner affinity exists; otherwise bursty installs can exhaust
+# Cloudflare container max_instances.
+TAKOSUMI_RUNNER_KEEPALIVE_SECONDS = "0"
 # Provider binaries only; credentials, generated roots, plans, state, and
 # outputs remain run/ledger scoped. This path is inside the runner container.
 TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR = "/tmp/takosumi-provider-cache"

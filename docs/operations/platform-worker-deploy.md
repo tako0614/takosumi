@@ -118,20 +118,23 @@ image = "registry.cloudflare.com/<account-id>/takosumi-runner:<tag>"
 
 Runner speed vars は secret ではないが、production の cost/performance behavior
 を決めるので realized config (`takosumi-private/platform/wrangler*.toml`) を
-正本にする。OSS template の初期値は、成功 run の短時間温存と provider binary
-cache を有効にして app-install 体感を優先する:
+正本にする。OSS template の初期値は、run-scoped Cloudflare container が
+`max_instances` を埋めないことと、SourceSnapshot / provider mirror/cache の
+安全な高速化を優先する:
 
 ```toml
 [vars]
-TAKOSUMI_RUNNER_KEEPALIVE_SECONDS = "120"
+TAKOSUMI_RUNNER_KEEPALIVE_SECONDS = "0"
 TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR = "/tmp/takosumi-provider-cache"
 TAKOSUMI_SOURCE_ARCHIVE_ZSTD_LEVEL = "1"
 ```
 
 `TAKOSUMI_RUNNER_KEEPALIVE_SECONDS = "0"` は run ごとに container を破棄する。
-idle cost を最小化したいセルでは使えるが、source_sync → compatibility →
-plan → apply の連続実行で cold start と provider init の再発が増える。
-失敗 run は keepalive 値に関係なく shutdown される。
+Cloudflare runner は現在 `idFromName(runId)` の run-scoped Durable Object を
+使うため、positive value は次の source_sync / compatibility / plan / apply
+には再利用されず、burst 時に `max_instances` を埋めやすい。stable runner
+affinity を導入するまでは production は `0` を推奨する。失敗 run は keepalive
+値に関係なく shutdown される。
 
 ## Secrets
 

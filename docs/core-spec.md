@@ -145,7 +145,7 @@ SourceSnapshot reuse for identical resolved commits
 runner image provider mirror
 operator-configured OpenTofu provider plugin cache
 serialized tofu init per shared cache path
-short keepalive for successful runner containers
+runner capacity controls
 phase timing evidence
 user-level progress phases
 ```

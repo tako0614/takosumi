@@ -102,19 +102,23 @@ Run may execute and which provider plugins/resources may be reached, but they
 are not public product nouns like ProviderConnection or ProviderBinding.
 Operators may configure a runner-local OpenTofu provider plugin cache to speed
 direct provider installs. It stores provider binaries only; credentials and
-generated run files remain per-run.
+generated run files remain per-run. On Cloudflare Containers, the current
+runner Durable Object id is run-scoped, so this cache is only reused while that
+single runner instance is alive; SourceSnapshot reuse and provider mirrors are
+the portable speed mechanisms.
 
 The user-facing flow should feel like installing an app, but the model remains
 Git-native and OpenTofu-native. Takosumi can reuse SourceSnapshots, provider
-mirrors, provider plugin caches, warm runner capacity, and clear progress
+mirrors, provider plugin caches, runner capacity controls, and clear progress
 phases. It must not decide what a deployable app artifact is. Worker bundles,
 container images, release URLs, object keys, digests, and build pipelines belong
 to the app repo, CI/release pipeline, registry, provider, or ordinary
 OpenTofu/Terraform module variables.
 
 The reference runner keeps successful containers warm for
-`TAKOSUMI_RUNNER_KEEPALIVE_SECONDS` seconds (default `120`; `0` disables warm
-reuse) and shuts down failed runs immediately. Operators can also pass
+`TAKOSUMI_RUNNER_KEEPALIVE_SECONDS` seconds (default `0`; positive values keep
+the current run-scoped container alive briefly but do not provide cross-run
+affinity yet) and shuts down failed runs immediately. Operators can also pass
 `TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR` and `TAKOSUMI_SOURCE_ARCHIVE_ZSTD_LEVEL`
 as non-secret speed settings.
 
