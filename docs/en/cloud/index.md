@@ -5,10 +5,11 @@ Git-based OpenTofu control plane, managed targets, Cloud-operated managed
 service backends, USD credits / usage metering, and operator support as an
 official operation.
 
-The first major offering is Takosumi Cloud Workers. Add an app from Git, run it
-on a Worker-compatible runtime, use KV / Object Storage / Database / Queue / AI
-as bindings, and keep deploys and updates recorded through OpenTofu/Terraform.
-Usage spends from a USD credit balance.
+Takosumi Cloud covers more than one service form. Add an app or service from Git,
+attach the resources it needs as bindings, and keep deploys and updates
+recorded through OpenTofu/Terraform. Edge JS runtime, Object Storage, KV,
+Database, Queue, AI, and Container are peer managed resources. Usage spends
+from a USD credit balance.
 
 ```text
 Takosumi Cloud =
@@ -18,15 +19,15 @@ Takosumi Cloud =
   + billing / credits / usage metering
   + support / operations
 
-Takosumi Cloud Workers =
-  Worker-compatible app hosting offering
+Takosumi Cloud Resources =
+  official managed resource offerings
   + managed bindings
   + OpenTofu deploy path
 ```
 
 ## What You Can Host
 
-- host Worker-compatible apps
+- host apps, APIs, and services
 - use a default `*.app.takos.jp` URL immediately
 - attach user-owned custom domains
 - configure secrets and environment variables
@@ -36,26 +37,29 @@ Takosumi Cloud Workers =
 
 ## Runtime
 
-HTTP apps run as Takosumi Cloud Workers: a Worker-compatible runtime backed by
-Cloudflare Workers for Platforms. User apps are deployed as Worker-like scripts
-and routed through a Takosumi-managed dispatch layer.
+Edge JS apps run as `EdgeWorker` resources. Takosumi Cloud can implement them
+with Cloudflare Workers for Platforms and a Takosumi-managed dispatch layer.
+This is one Cloud resource, separate from ContainerService, Object Storage, KV,
+Database, Queue, and AI.
 
 Durable workflows use Dynamic Workers with `@cloudflare/dynamic-workflows` when
 available. Operator/internal jobs use normal Cloudflare Workflows.
 
-| App type                    | Runtime backing                                   |
-| --------------------------- | ------------------------------------------------- |
-| HTTP Worker-compatible apps | Workers for Platforms dispatch namespace          |
-| Durable user workflows      | Dynamic Workers + `@cloudflare/dynamic-workflows` |
-| Operator/internal jobs      | Cloudflare Workflows                              |
+| Service form           | Backing example                                   |
+| ---------------------- | ------------------------------------------------- |
+| Edge JS app            | Workers for Platforms dispatch namespace          |
+| Container service      | Cloudflare Containers or another operator target  |
+| Durable user workflow  | Dynamic Workers + `@cloudflare/dynamic-workflows` |
+| Operator/internal jobs | Cloudflare Workflows                              |
 
 ## Managed Bindings
 
-Takosumi Cloud resources are exposed to Workers as bindings.
+Takosumi Cloud resources are exposed to apps and services as bindings.
 
 | User-facing name | Purpose                         |
 | ---------------- | ------------------------------- |
-| Worker           | HTTP app / API / app runtime    |
+| Edge Worker      | Edge JS app / API runtime       |
+| Container        | OCI image based service         |
 | Route            | public URL / routing rule       |
 | Secrets          | write-only runtime secrets      |
 | KV               | small key-value data            |
@@ -67,9 +71,10 @@ Takosumi Cloud resources are exposed to Workers as bindings.
 
 ## Domains
 
-Every Worker has a Takosumi-managed default URL. Users can pick a DNS-valid
-single-label `*.app.takos.jp` hostname on a first-come-first-served basis. If no
-hostname is requested, Takosumi issues a safe generated hostname.
+Every public HTTP resource can receive a Takosumi-managed default URL. Users
+can pick a DNS-valid single-label `*.app.takos.jp` hostname on a
+first-come-first-served basis. If no hostname is requested, Takosumi issues a
+safe generated hostname.
 
 ```text
 User-chosen:
@@ -82,7 +87,7 @@ Auto-issued fallback:
 
 Use this URL for previews, first deploys, and apps that do not have external DNS
 yet. To use a user-owned domain, add a custom domain and complete DNS ownership
-verification. The custom domain then points at the same Worker route.
+verification. The custom domain then points at the same route.
 
 ```text
 Default URL:
@@ -115,7 +120,7 @@ Initial rollout:
 
 | Service          | Stage   |
 | ---------------- | ------- |
-| Workers          | Stable  |
+| Edge Worker      | Stable  |
 | Routes           | Stable  |
 | Secrets / Vars   | Stable  |
 | KV               | Stable  |
@@ -169,7 +174,8 @@ compatibility. AI Gateway is a separate OpenAI-compatible profile.
 | Stable | `/gateway/ai/v1/embeddings`       |
 
 The Cloudflare-compatible API is an import and deploy path. Use it when you
-want an existing Cloudflare Workers manifest to target Takosumi Cloud.
+want an existing Cloudflare Workers manifest to target Takosumi Cloud
+`EdgeWorker` and managed bindings.
 
 ```hcl
 provider "cloudflare" {
@@ -181,5 +187,5 @@ provider "cloudflare" {
 
 Details:
 
-- [Takosumi Cloud Workers](../reference/cloud-workers.md)
+- [Takosumi Cloud resources](../reference/cloud-resources.md)
 - [Takosumi Cloud endpoints](../reference/cloud-endpoints.md)

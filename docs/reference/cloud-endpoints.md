@@ -5,7 +5,7 @@ managed-resource backend です。Takosumi OSS / Takosumi for Operators の
 public contract には含めません。
 
 Cloud の公開説明は [Takosumi Cloud](../cloud/index.md) と
-[Takosumi Cloud Workers](./cloud-workers.md) を正本にします。このページは
+[Takosumi Cloud resources](./cloud-resources.md) を正本にします。このページは
 endpoint、usage、API key、互換 route の契約を確認する詳細 reference です。
 
 アプリ画面の役割は、日常的に見る運用情報をすぐ確認できるようにすることです。
@@ -41,7 +41,7 @@ Compatibility API framework、Adapter system を持ちます。
 Takosumi for Operator / Cloud の運用層だけが次を持ちます。
 
 - AI Gateway
-- Takosumi Cloud Workers
+- Takosumi Cloud managed resources
 - official hosted Cloudflare-compatible import endpoint backend
 - official S3-compatible Object Storage endpoint backend
 - official managed target / native resource backend
@@ -131,9 +131,9 @@ GET /__takosumi/cloud/extensions
 が直接検証する route だけに使います。この場合 platform は customer session /
 PAT を検証せず、spoof 可能な Takosumi context header と cookie は削除し、
 `Authorization` header を handler に渡します。
-`*.app.takos.jp` / `*.app-staging.takos.jp` の Takosumi Cloud Worker traffic は
+`*.app.takos.jp` / `*.app-staging.takos.jp` の Takosumi Cloud public HTTP traffic は
 同じ `takosumi-cloud/platform/worker.ts` 内の hostname dispatch registry で
-Cloud Edge Runtime に送られます。別 Worker ではありません。
+Cloud runtime に送られます。別 Worker ではありません。
 
 ## S3-compatible Object Storage endpoint
 
@@ -461,7 +461,7 @@ https://app.takosumi.com/compat/cloudflare/client/v4
 
 `compat.cloudflare.workers.v1` の Cloudflare v4-shaped subset です。目的は
 `cloudflare/cloudflare` OpenTofu/Terraform provider の `base_url` を変えて、
-Workers-oriented resource を Takosumi Cloud Workers / managed bindings に
+Workers-oriented resource を Takosumi Cloud `EdgeWorker` / managed bindings に
 向けられるようにすることです。これは既存 manifest を取り込むための import /
 deploy path であり、Cloudflare API 全体の互換ではありません。
 
@@ -491,8 +491,8 @@ GET /compat/cloudflare/client/v4/accounts/{accountId}/d1/database
 
 - Workers scripts
 - Workers routes
-- default `*.app.takos.jp` hostname per Worker route
-- user-owned custom domains on Worker routes
+- default `*.app.takos.jp` hostname per HTTP route
+- user-owned custom domains on HTTP routes
 - KV namespaces
 - R2 buckets
 - D1 databases

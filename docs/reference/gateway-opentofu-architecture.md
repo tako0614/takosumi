@@ -32,7 +32,7 @@ See [Takosumi Final Plan](../final-plan.md) and
 The following belong to closed Takosumi Cloud:
 
 ```text
-Takosumi Cloud Workers
+Takosumi Cloud EdgeWorker runtime
 Cloudflare-shaped Workers import endpoint
 Takosumi AI Gateway
 Cloudflare provider base_url endpoint
@@ -110,11 +110,12 @@ provider "cloudflare" {
 }
 ```
 
-The first Cloud-only compatibility slice is limited to the Workers family from
-the final plan: Workers scripts/routes, Workers KV namespace bindings, R2
-buckets, D1 databases, Worker vars/secrets/bindings, and virtual account/resource
-IDs. DNS, WAF, Rulesets, Zero Trust, IAM, Billing, Registrar, Load Balancer,
-Email Routing, and Turnstile stay out of the initial compatibility contract.
+The first Cloud-only compatibility slice is limited to importing
+Workers-oriented resources into Takosumi Cloud resources: `EdgeWorker`, routes,
+KV namespace bindings, object buckets, app databases, Worker vars/secrets, and
+virtual account/resource IDs. DNS, WAF, Rulesets, Zero Trust, IAM, Billing,
+Registrar, Load Balancer, Email Routing, and Turnstile stay out of the initial
+compatibility contract.
 
 ## OSS Scope
 
