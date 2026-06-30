@@ -141,16 +141,7 @@ export function createTakosumiProductCapabilities(
   };
   return {
     apiVersion: TAKOSUMI_API_VERSION,
-    resources: {
-      Stack: true,
-      EdgeWorker: false,
-      ObjectBucket: false,
-      KVStore: false,
-      Queue: false,
-      SQLDatabase: false,
-      ContainerService: false,
-      ...(options.resources ?? {}),
-    },
+    resources: mergeResourceCapabilities(options.resources),
     adapters: {
       opentofu: true,
       aws: false,
@@ -172,6 +163,20 @@ export function createTakosumiProductCapabilities(
       operator_tenants: options.operatorTenants ?? false,
       payment_enforcement: options.paymentEnforcement ?? false,
     },
+  };
+}
+
+function mergeResourceCapabilities(
+  resources: Partial<TakosumiResourceCapabilities> | undefined,
+): TakosumiResourceCapabilities {
+  return {
+    Stack: resources?.Stack ?? true,
+    EdgeWorker: resources?.EdgeWorker ?? false,
+    ObjectBucket: resources?.ObjectBucket ?? false,
+    KVStore: resources?.KVStore ?? false,
+    Queue: resources?.Queue ?? false,
+    SQLDatabase: resources?.SQLDatabase ?? false,
+    ContainerService: resources?.ContainerService ?? false,
   };
 }
 

@@ -5,6 +5,7 @@ import {
   createTakosumiWellKnownDocument,
   TAKOSUMI_API_VERSION,
 } from "../../contract/capabilities.ts";
+import { RESOURCE_SHAPE_KINDS } from "../../contract/resource-shape.ts";
 
 test("Takosumi discovery document exposes v1alpha1 endpoint metadata", () => {
   const document = createTakosumiWellKnownDocument({
@@ -65,4 +66,23 @@ test("S3 compatibility is separate from the ObjectBucket Resource Shape", () => 
   assert.equal(capabilities.resources.EdgeWorker, false);
   assert.equal(capabilities.resources.ObjectBucket, true);
   assert.equal(capabilities.compat.s3, false);
+});
+
+test("push notification delivery is not a Takosumi resource/provider capability", () => {
+  const capabilities = createTakosumiProductCapabilities({
+    resources: {
+      PushNotification: true,
+    } as Partial<
+      ReturnType<typeof createTakosumiProductCapabilities>["resources"]
+    >,
+  });
+
+  assert.equal(
+    Object.hasOwn(capabilities.resources, "PushNotification"),
+    false,
+  );
+  assert.equal(
+    RESOURCE_SHAPE_KINDS.includes("PushNotification" as never),
+    false,
+  );
 });
