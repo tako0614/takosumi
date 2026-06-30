@@ -169,6 +169,57 @@ test("OpenTofu runner Durable Object starts the container before dispatch", asyn
   assert.deepEqual(calls, ["start [8080]", "fetch POST /runs/plan_1"]);
 });
 
+test("OpenTofu runner Durable Object retries when health check races a stopped container", async () => {
+  const calls: string[] = [];
+  let healthAttempts = 0;
+  const runner = runnerWithContainer(
+    new FakeR2Bucket(),
+    {
+      async containerFetch(request) {
+        calls.push(`fetch ${request.method} ${new URL(request.url).pathname}`);
+        return Response.json({ status: "succeeded" });
+      },
+    },
+    {
+      async startAndWaitForPorts(ports) {
+        calls.push(`start ${JSON.stringify(ports)}`);
+      },
+      async healthFetch() {
+        healthAttempts += 1;
+        calls.push(`health ${healthAttempts}`);
+        if (healthAttempts === 1) {
+          throw new Error(
+            "The container is not running, consider calling start()",
+          );
+        }
+        return Response.json({ ok: true });
+      },
+    },
+  );
+
+  const response = await runner.fetch(
+    new Request("https://runner/runs/plan_1", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "takosumi.opentofu-run@v1",
+        action: "plan",
+        runId: "plan_1",
+        request: {},
+      }),
+    }),
+  );
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(calls, [
+    "start [8080]",
+    "health 1",
+    "start [8080]",
+    "health 2",
+    "fetch POST /runs/plan_1",
+  ]);
+});
+
 test("OpenTofu runner Durable Object forwards non-secret performance env to the container", () => {
   const runner = runnerWithContainer(
     new FakeR2Bucket(),
@@ -757,6 +808,7 @@ function runnerWithContainer(
     readonly bucketName?: string;
     readonly stateBucket?: R2Bucket;
     readonly env?: Partial<CloudflareWorkerEnv>;
+    readonly healthFetch?: (request: Request) => Promise<Response>;
     readonly startAndWaitForPorts?: (
       ports?: number | number[],
     ) => Promise<void>;
@@ -778,7 +830,9 @@ function runnerWithContainer(
   Object.defineProperty(runner, "containerFetch", {
     value(request: Request, _port?: number) {
       if (new URL(request.url).pathname === "/healthz") {
-        return Response.json({ ok: true });
+        return options.healthFetch
+          ? options.healthFetch(request)
+          : Response.json({ ok: true });
       }
       return container.containerFetch(request);
     },
