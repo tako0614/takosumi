@@ -165,7 +165,8 @@ describe("Run review ProviderConnection evidence", () => {
 
   test("surfaces the deployed public app URL as the primary completion action", () => {
     expect(runViewSource).toContain("listDeployments");
-    expect(runViewSource).toContain("launchUrlFromOutputs");
+    expect(runViewSource).toContain("listActivity");
+    expect(runViewSource).toContain("launchUrlFromDeployment");
     expect(runViewSource).toContain("completedRunLaunchUrl");
     expect(runViewSource).toContain('t("apps.openApp")');
     expect(runViewSource).toContain('target="_blank"');

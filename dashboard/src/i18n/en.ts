@@ -221,6 +221,10 @@ export const en: Record<keyof typeof ja, string> = {
   "app.outputs.subtitle": "Visible screens and addresses appear here.",
   "app.outputs.deletedSubtitle":
     "This service has been deleted. Previous addresses are shown as records only.",
+  "app.outputs.activationPending":
+    "You can open this address after app activation finishes.",
+  "app.outputs.activationFailed":
+    "App activation failed. Check recent updates for details.",
   "app.outputs.empty": "Links appear after a deploy.",
   "app.outputs.none": "This service has no public link.",
   "app.outputs.valuesTitle": "Other values",

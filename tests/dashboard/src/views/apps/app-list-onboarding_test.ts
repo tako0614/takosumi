@@ -29,12 +29,16 @@ describe("AppListView app launcher", () => {
     expect(installationsUiSource).toContain(
       "export function appSurfacesFromOutputs",
     );
+    expect(installationsUiSource).toContain(
+      "export function appSurfacesFromDeployment",
+    );
     expect(installationsUiSource).toContain("export interface AppSurface");
     expect(installationsUiSource).toContain(
       "export function isVisibleServiceCapsule",
     );
     expect(installationsUiSource).toContain('inst.status !== "destroyed"');
-    expect(appListSource).toContain("appSurfacesFromOutputs");
+    expect(appListSource).toContain("appSurfacesFromDeployment");
+    expect(appListSource).toContain("listActivity");
     expect(appListSource).toContain("surfacesByCapsule");
     expect(appListSource).toContain("const appTiles = createMemo");
     expect(appListSource).toContain("function AppLauncher");
@@ -96,7 +100,7 @@ describe("AppListView app launcher", () => {
   test("opens the surface URL when present, else the service screen", () => {
     expect(appListSource).toContain("function AppTileView");
     expect(appListSource).toContain("when={surface().url}");
-    expect(appListSource).toContain("appSurfacesFromOutputs");
+    expect(appListSource).toContain("appSurfacesFromDeployment");
     expect(appListSource).toContain('target="_blank"');
     expect(appListSource).toContain("props.openDetail(tile.inst)");
     expect(appListSource).not.toContain("window.open");

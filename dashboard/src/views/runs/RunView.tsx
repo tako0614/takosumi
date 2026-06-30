@@ -40,6 +40,7 @@ import {
   getRun,
   getRunCostInfo,
   getRunLogs,
+  listActivity,
   listDeployments,
   listProviderConnections,
   planCapsule,
@@ -60,7 +61,7 @@ import {
   inputNamesFromLogs,
   isTerminalRunStatus,
 } from "../../lib/run-logs.ts";
-import { launchUrlFromOutputs } from "../../lib/capsules-ui.ts";
+import { launchUrlFromDeployment } from "../../lib/capsules-ui.ts";
 import {
   diagnosticSeverityLabel,
   operationLabel,
@@ -577,6 +578,10 @@ function Inner() {
     () => run.latest?.workspaceId ?? null,
     listProviderConnections,
   );
+  const [activity] = createResource(
+    () => run.latest?.workspaceId ?? null,
+    (id) => listActivity(id, 100),
+  );
   // The owning app, for the plain-language summary sentence + back link.
   const capsuleId = () => run.latest?.capsuleId ?? null;
   const [capsule] = createResource(capsuleId, getCapsule);
@@ -605,7 +610,12 @@ function Inner() {
       rows.find(
         (row) => row.applyRunId === r.id && row.status !== "destroyed",
       ) ?? rows.find((row) => row.status === "active");
-    return launchUrlFromOutputs(deployment?.outputsPublic ?? {});
+    if (activity.loading) return undefined;
+    return launchUrlFromDeployment(
+      deployment,
+      activity() ?? [],
+      capsuleId() ?? undefined,
+    );
   });
 
   createEffect(() => {

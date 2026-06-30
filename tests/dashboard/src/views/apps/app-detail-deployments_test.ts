@@ -107,6 +107,15 @@ describe("Installation detail deployment surface", () => {
     expect(source).toMatch(/createResource\(capsuleId,\s*listDeployments\)/);
   });
 
+  test("gates public open actions on release activation evidence", () => {
+    expect(source).toContain("releaseActivationStatusForDeployment");
+    expect(source).toContain("isDeploymentPubliclyOpenable");
+    expect(source).toContain("launchUrlFromDeployment");
+    expect(source).toContain('t("app.outputs.activationPending")');
+    expect(source).toContain('t("app.outputs.activationFailed")');
+    expect(source).toContain("activityBelongsToCapsule");
+  });
+
   test("surfaces ONLY allowlist-projected public outputs (no sensitive)", () => {
     // The outputs section reads outputsPublic; it must never reference a raw
     // output snapshot pointer or a `sensitive` field.
@@ -143,7 +152,7 @@ describe("Installation detail deployment surface", () => {
   test("does not offer stale open links for deleted services", () => {
     expect(source).toContain("serviceOpenable");
     expect(source).toContain('capsule()?.status !== "destroyed"');
-    expect(source).toContain('currentDeployment()?.status !== "destroyed"');
+    expect(source).toContain("isDeploymentPubliclyOpenable");
     expect(source).toContain('t("app.outputs.deletedSubtitle")');
     expect(source).toContain("openable={props.serviceOpenable}");
     expect(source).toContain("props.openable !== false");
