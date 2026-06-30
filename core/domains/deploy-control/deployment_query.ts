@@ -71,7 +71,10 @@ export class DeploymentQuery {
     requireNonEmptyString(id, "applyRunId");
     const applyRun = await this.#store.getApplyRun(id);
     if (!applyRun) {
-      throw new OpenTofuControllerError("not_found", `apply run ${id} not found`);
+      throw new OpenTofuControllerError(
+        "not_found",
+        `apply run ${id} not found`,
+      );
     }
     const installation = applyRun.installationId
       ? await this.#store.getInstallation(applyRun.installationId)
@@ -79,11 +82,12 @@ export class DeploymentQuery {
     const deployment = applyRun.deploymentId
       ? await this.#store.getDeployment(applyRun.deploymentId)
       : undefined;
+    const capsule = installation
+      ? this.#publicInstallation(installation)
+      : undefined;
     return {
       applyRun,
-      ...(installation
-        ? { installation: this.#publicInstallation(installation) }
-        : {}),
+      ...(capsule ? { capsule, installation: capsule } : {}),
       ...(deployment ? { deployment } : {}),
     };
   }
@@ -106,9 +110,7 @@ export class DeploymentQuery {
    * bounded set and creates one drift check per Capsule. A non-positive
    * limit returns an empty list.
    */
-  async listActiveInstallations(
-    limit: number,
-  ): Promise<readonly Capsule[]> {
+  async listActiveInstallations(limit: number): Promise<readonly Capsule[]> {
     if (!Number.isFinite(limit) || limit <= 0) return [];
     const all = await this.#store.listInstallations();
     return all.filter((i) => i.status === "active").slice(0, Math.floor(limit));

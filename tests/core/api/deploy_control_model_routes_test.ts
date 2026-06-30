@@ -142,12 +142,12 @@ test("model e2e: create Installation -> list -> 409 on duplicate name+environmen
     },
   );
   expect(createRes.status).toBe(201);
-  const installation = (await createRes.json()).installation;
-  expect(installation.spaceId).toBe(spaceId);
-  expect(installation.name).toBe("web");
-  expect(installation.environment).toBe("production");
-  expect(installation.status).toBe("pending");
-  const installationId = installation.id as string;
+  const capsule = (await createRes.json()).capsule;
+  expect(capsule.spaceId).toBe(spaceId);
+  expect(capsule.name).toBe("web");
+  expect(capsule.environment).toBe("production");
+  expect(capsule.status).toBe("pending");
+  const capsuleId = capsule.id as string;
 
   const listRes = await app.request(
     `/internal/v1/workspaces/${spaceId}/capsules`,
@@ -156,10 +156,10 @@ test("model e2e: create Installation -> list -> 409 on duplicate name+environmen
     },
   );
   expect(listRes.status).toBe(200);
-  const installations = (await listRes.json()).installations as Array<{
+  const capsules = (await listRes.json()).capsules as Array<{
     id: string;
   }>;
-  expect(installations.some((i) => i.id === installationId)).toBe(true);
+  expect(capsules.some((i) => i.id === capsuleId)).toBe(true);
 
   // A different environment is allowed (UNIQUE is per space+name+environment).
   const previewRes = await app.request(
@@ -216,13 +216,13 @@ test("model e2e: create Installation with vars clones a Space-scoped InstallConf
     },
   );
   expect(createRes.status).toBe(201);
-  const installation = (await createRes.json()).installation as {
+  const capsule = (await createRes.json()).capsule as {
     installConfigId: string;
   };
-  expect(installation.installConfigId).not.toBe(installConfigId);
+  expect(capsule.installConfigId).not.toBe(installConfigId);
 
   const config = await operations.installations.getInstallConfig(
-    installation.installConfigId,
+    capsule.installConfigId,
   );
   expect(config.spaceId).toBe(spaceId);
   expect(config.internal).toEqual({ reason: "per_install_overrides" });
@@ -260,15 +260,15 @@ test("model e2e: create Installation with runnerId and outputAllowlist stores a 
     },
   );
   expect(createRes.status).toBe(201);
-  const installation = (await createRes.json()).installation as {
+  const capsule = (await createRes.json()).capsule as {
     installConfigId: string;
     runnerId?: string;
   };
-  expect(installation.installConfigId).not.toBe(installConfigId);
-  expect(installation.runnerId).toBeUndefined();
+  expect(capsule.installConfigId).not.toBe(installConfigId);
+  expect(capsule.runnerId).toBeUndefined();
 
   const config = await operations.installations.getInstallConfig(
-    installation.installConfigId,
+    capsule.installConfigId,
   );
   expect(config.spaceId).toBe(spaceId);
   expect(config.internal).toEqual({ reason: "per_install_overrides" });
@@ -314,13 +314,13 @@ test("model e2e: create Installation with modulePath stores a scoped InstallConf
     },
   );
   expect(createRes.status).toBe(201);
-  const installation = (await createRes.json()).installation as {
+  const capsule = (await createRes.json()).capsule as {
     installConfigId: string;
   };
-  expect(installation.installConfigId).not.toBe(installConfigId);
+  expect(capsule.installConfigId).not.toBe(installConfigId);
 
   const config = await operations.installations.getInstallConfig(
-    installation.installConfigId,
+    capsule.installConfigId,
   );
   expect(config.spaceId).toBe(spaceId);
   expect(config.internal).toEqual({ reason: "per_install_overrides" });
@@ -372,20 +372,17 @@ test("model e2e: GET /internal/v1/capsules/{id} returns the new shape", async ()
     },
   );
   expect(createRes.status).toBe(201);
-  const installationId = (await createRes.json()).installation.id as string;
+  const capsuleId = (await createRes.json()).capsule.id as string;
 
-  const getRes = await app.request(
-    `/internal/v1/capsules/${installationId}`,
-    {
-      headers: headers(),
-    },
-  );
+  const getRes = await app.request(`/internal/v1/capsules/${capsuleId}`, {
+    headers: headers(),
+  });
   expect(getRes.status).toBe(200);
   const body = await getRes.json();
-  expect(body.installation.id).toBe(installationId);
-  expect(body.installation.spaceId).toBe(spaceId);
-  expect(body.installation.currentStateGeneration).toBe(0);
-  expect(body.installation.installType).toBeUndefined();
+  expect(body.capsule.id).toBe(capsuleId);
+  expect(body.capsule.spaceId).toBe(spaceId);
+  expect(body.capsule.currentStateGeneration).toBe(0);
+  expect(body.capsule.installType).toBeUndefined();
 });
 
 test("model e2e: install-configs lists the space's seeded config", async () => {
@@ -431,12 +428,12 @@ test("model e2e: plan without a SourceSnapshot is a 409 source_sync_required", a
     },
   );
   expect(createRes.status).toBe(201);
-  const installationId = (await createRes.json()).installation.id as string;
+  const capsuleId = (await createRes.json()).capsule.id as string;
 
-  const planRes = await app.request(
-    `/internal/v1/capsules/${installationId}/plan`,
-    { method: "POST", headers: headers() },
-  );
+  const planRes = await app.request(`/internal/v1/capsules/${capsuleId}/plan`, {
+    method: "POST",
+    headers: headers(),
+  });
   expect(planRes.status).toBe(409);
   const error = (await planRes.json()).error;
   expect(error.code).toBe("failed_precondition");
@@ -450,21 +447,18 @@ async function createInstallation(
   installConfigId: string,
   name: string,
 ): Promise<string> {
-  const res = await app.request(
-    `/internal/v1/workspaces/${spaceId}/capsules`,
-    {
-      method: "POST",
-      headers: headers({ "content-type": "application/json" }),
-      body: JSON.stringify({
-        name,
-        environment: "production",
-        sourceId,
-        installConfigId,
-      }),
-    },
-  );
+  const res = await app.request(`/internal/v1/workspaces/${spaceId}/capsules`, {
+    method: "POST",
+    headers: headers({ "content-type": "application/json" }),
+    body: JSON.stringify({
+      name,
+      environment: "production",
+      sourceId,
+      installConfigId,
+    }),
+  });
   expect(res.status).toBe(201);
-  return (await res.json()).installation.id as string;
+  return (await res.json()).capsule.id as string;
 }
 
 test("model e2e: dependency create -> list -> 409 on cycle -> delete", async () => {

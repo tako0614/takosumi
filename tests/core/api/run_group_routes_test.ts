@@ -139,7 +139,7 @@ async function seedInstallation(
     },
   );
   expect(installRes.status).toBe(201);
-  const installationId = (await installRes.json()).installation.id as string;
+  const installationId = (await installRes.json()).capsule.id as string;
   const installation = await store.getInstallation(installationId);
   expect(installation).toBeDefined();
   await seedProviderConnections(store, installation!);
@@ -311,13 +311,10 @@ test("plan-update creates a RunGroup over stale consumers; GET reads members; ap
   // Producer re-applies with a CHANGED output -> consumer goes stale.
   producerValue.producer = "v2.example.com";
   await applyInstallation(app, producer);
-  const consumerRow = await app.request(
-    `/internal/v1/capsules/${consumer}`,
-    {
-      headers: headers(),
-    },
-  );
-  expect((await consumerRow.json()).installation.status).toBe("stale");
+  const consumerRow = await app.request(`/internal/v1/capsules/${consumer}`, {
+    headers: headers(),
+  });
+  expect((await consumerRow.json()).capsule.status).toBe("stale");
 
   // plan-update: builds the group with the consumer as the sole member.
   const updateRes = await app.request(

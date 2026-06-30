@@ -142,7 +142,7 @@ async function createInstallation(
     },
   );
   expect(installRes.status).toBe(201);
-  const installationId = (await installRes.json()).installation.id as string;
+  const installationId = (await installRes.json()).capsule.id as string;
   const installation = await store.getInstallation(installationId);
   expect(installation).toBeDefined();
   await seedProviderConnections(store, installation!);
@@ -186,9 +186,12 @@ async function listActivity(
   spaceId: string,
   query = "",
 ): Promise<Response> {
-  return await app.request(`/internal/v1/workspaces/${spaceId}/activity${query}`, {
-    headers: headers(),
-  });
+  return await app.request(
+    `/internal/v1/workspaces/${spaceId}/activity${query}`,
+    {
+      headers: headers(),
+    },
+  );
 }
 
 test("real flows emit Activity events; listing is space-scoped and newest-first", async () => {

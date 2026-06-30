@@ -338,7 +338,7 @@ async function seedInstallationViaRoutes(
     },
   );
   expect(installRes.status).toBe(201);
-  const installationId = (await installRes.json()).installation.id as string;
+  const installationId = (await installRes.json()).capsule.id as string;
 
   // After the credential-model collapse the Provider Connection row IS the
   // resolver record (the former separate ProviderEnv projection is gone), so the
@@ -459,7 +459,7 @@ test("deployControl e2e exposes OpenTofu plan and apply runs", async () => {
   const apply = (await applyRes.json()) as ApplyRunResponse;
   expect(apply.applyRun.status).toEqual("succeeded");
   // New Installation status after a successful apply is "active" (§5 / §27).
-  expect(apply.installation?.status).toEqual("active");
+  expect(apply.capsule?.status).toEqual("active");
   // The new Deployment projects non-sensitive outputs as the `outputsPublic`
   // map (the legacy `outputs[]` lived on the rich Deployment, now removed).
   expect(apply.deployment?.outputsPublic.launch_url).toEqual(
@@ -626,14 +626,11 @@ test("deployment get + rollback-plan happy path; missing deployment is 404 (§30
   expect(deploymentId).toBeTruthy();
 
   // Public §30 Installation read + deployments list.
-  const instRes = await app.request(
-    `/internal/v1/capsules/${installationId}`,
-    {
-      headers: headers(),
-    },
-  );
+  const instRes = await app.request(`/internal/v1/capsules/${installationId}`, {
+    headers: headers(),
+  });
   expect(instRes.status).toEqual(200);
-  expect((await instRes.json()).installation.id).toEqual(installationId);
+  expect((await instRes.json()).capsule.id).toEqual(installationId);
 
   const deploymentsRes = await app.request(
     `/internal/v1/capsules/${installationId}/state-versions`,
@@ -643,9 +640,12 @@ test("deployment get + rollback-plan happy path; missing deployment is 404 (§30
   expect((await deploymentsRes.json()).deployments.length).toBeGreaterThan(0);
 
   // GET /internal/v1/state-versions/:id.
-  const getRes = await app.request(`/internal/v1/state-versions/${deploymentId}`, {
-    headers: headers(),
-  });
+  const getRes = await app.request(
+    `/internal/v1/state-versions/${deploymentId}`,
+    {
+      headers: headers(),
+    },
+  );
   expect(getRes.status).toEqual(200);
   const got = await getRes.json();
   expect(got.deployment.id).toEqual(deploymentId);
@@ -683,13 +683,10 @@ test("space PATCH updates displayName (§30 MVP)", async () => {
   const { app, installationId, store } =
     await seedInstallationViaRoutes(fakeRunner());
   // Recover the space id via the public Installation read.
-  const instRes = await app.request(
-    `/internal/v1/capsules/${installationId}`,
-    {
-      headers: headers(),
-    },
-  );
-  const spaceId = (await instRes.json()).installation.spaceId as string;
+  const instRes = await app.request(`/internal/v1/capsules/${installationId}`, {
+    headers: headers(),
+  });
+  const spaceId = (await instRes.json()).capsule.spaceId as string;
 
   const patchRes = await app.request(`/internal/v1/workspaces/${spaceId}`, {
     method: "PATCH",
@@ -870,16 +867,13 @@ test("output-shares revoke 404 for a missing share (§18)", async () => {
 
 test("installation PATCH safely updates status only (§30)", async () => {
   const { app, installationId } = await seedInstallationViaRoutes(fakeRunner());
-  const patch = await app.request(
-    `/internal/v1/capsules/${installationId}`,
-    {
-      method: "PATCH",
-      headers: headers({ "content-type": "application/json" }),
-      body: JSON.stringify({ status: "stale" }),
-    },
-  );
+  const patch = await app.request(`/internal/v1/capsules/${installationId}`, {
+    method: "PATCH",
+    headers: headers({ "content-type": "application/json" }),
+    body: JSON.stringify({ status: "stale" }),
+  });
   expect(patch.status).toEqual(200);
-  expect((await patch.json()).installation.status).toEqual("stale");
+  expect((await patch.json()).capsule.status).toEqual("stale");
 
   const rejectedDestroyState = await app.request(
     `/internal/v1/capsules/${installationId}`,
@@ -908,13 +902,10 @@ test("installation PATCH safely updates status only (§30)", async () => {
 
 test("installation DELETE creates a destroy-plan run instead of deleting state (§30 / §23)", async () => {
   const { app, installationId } = await seedInstallationViaRoutes(fakeRunner());
-  const del = await app.request(
-    `/internal/v1/capsules/${installationId}`,
-    {
-      method: "DELETE",
-      headers: headers(),
-    },
-  );
+  const del = await app.request(`/internal/v1/capsules/${installationId}`, {
+    method: "DELETE",
+    headers: headers(),
+  });
   expect(del.status).toEqual(202);
   const payload = ((await del.json()) as { run: Run }).run;
   expect(payload.installationId).toEqual(installationId);

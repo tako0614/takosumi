@@ -237,7 +237,7 @@ test("account session control routes execute plan and apply through the real Ope
 
   const applyBody = await controlJson<{
     readonly run: { readonly id: string; readonly status: string };
-    readonly installation?: {
+    readonly capsule?: {
       readonly id: string;
       readonly status: string;
       readonly currentStateGeneration?: number;
@@ -258,7 +258,7 @@ test("account session control routes execute plan and apply through the real Ope
     201,
   );
   expect(applyBody.run.status).toEqual("succeeded");
-  expect(applyBody.installation).toMatchObject({
+  expect(applyBody.capsule).toMatchObject({
     id: seeded.installation.id,
     status: "active",
     currentStateGeneration: 1,
