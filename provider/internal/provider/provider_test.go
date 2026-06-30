@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	frameworkresource "github.com/hashicorp/terraform-plugin-framework/resource"
 )
 
 func discoveryHandler(t *testing.T, resourceShapes bool) http.HandlerFunc {
@@ -76,6 +78,38 @@ func versionedDiscoveryHandler(t *testing.T, discoveryVersion string, capability
 		raw, _ := json.Marshal(body)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(raw)
+	}
+}
+
+func TestProviderResourcesIncludeCurrentShapeResources(t *testing.T) {
+	p := &takosumiProvider{}
+	got := map[string]bool{}
+	for _, factory := range p.Resources(context.Background()) {
+		res := factory()
+		var resp frameworkresource.MetadataResponse
+		res.Metadata(context.Background(), frameworkresource.MetadataRequest{
+			ProviderTypeName: "takosumi",
+		}, &resp)
+		got[resp.TypeName] = true
+	}
+
+	want := []string{
+		"takosumi_edge_worker",
+		"takosumi_object_bucket",
+		"takosumi_kv_store",
+		"takosumi_queue",
+		"takosumi_push_notification",
+		"takosumi_sql_database",
+		"takosumi_container_service",
+		"takosumi_target_pool",
+	}
+	for _, resourceType := range want {
+		if !got[resourceType] {
+			t.Fatalf("provider resource %q is not registered; got %#v", resourceType, got)
+		}
+	}
+	if len(got) != len(want) {
+		t.Fatalf("unexpected provider resource set: got %#v, want %#v", got, want)
 	}
 }
 
