@@ -425,30 +425,6 @@ OPENAI_API_KEY
 The values come from ProviderConnection, Secret, output projection, or generic
 env. They must not be stored in Resource Shape specs or OpenTofu state.
 
-### 4.5 Push Notification Is Not A Provider Resource
-
-Push notification delivery is not a default `takosumi_*` resource.
-
-Use the existing service forms instead:
-
-```text
-durable app event or fan-out:
-  Queue
-
-provider-specific APNs / FCM / Web Push setup:
-  plain OpenTofu Stack flow with an existing provider/module, or generic-env
-  ProviderConnection for credentials and endpoints
-
-native mobile token registration and tap handling:
-  product-local mobile shell adapter
-```
-
-Takosumi should not create `takosumi_push_notification` unless a future design
-proves a durable, provider-neutral service form that Takosumi must resolve,
-lock, meter, project, and reconcile. The current line is to keep delivery
-events in `Queue` and keep provider-specific push credentials out of Resource
-Shape specs and OpenTofu state.
-
 ## 5. Future Shape Families
 
 Future shapes should be introduced one service form at a time. This list is a
