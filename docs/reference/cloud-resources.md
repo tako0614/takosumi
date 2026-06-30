@@ -12,7 +12,6 @@ Takosumi Cloud Resources =
   + KVStore
   + SQLDatabase
   + Queue
-  + PushNotification
   + AI Gateway
   + routes / domains / secrets
   + USD credits / usage metering

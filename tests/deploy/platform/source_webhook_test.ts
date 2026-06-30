@@ -1204,7 +1204,6 @@ test("platform worker exposes product discovery before accounts handler", async 
     "EdgeWorker",
     "KVStore",
     "ObjectBucket",
-    "PushNotification",
     "Queue",
     "SQLDatabase",
     "Stack",
@@ -1264,7 +1263,6 @@ test("platform worker product discovery exposes Cloud endpoint capabilities with
   expect(body.resources.ObjectBucket).toBe(false);
   expect(body.resources.KVStore).toBe(false);
   expect(body.resources.Queue).toBe(false);
-  expect(body.resources.PushNotification).toBe(false);
   expect(body.resources.SQLDatabase).toBe(false);
   expect(body.resources.ContainerService).toBe(false);
   expect(Object.keys(body.resources).sort()).toEqual([
@@ -1272,7 +1270,6 @@ test("platform worker product discovery exposes Cloud endpoint capabilities with
     "EdgeWorker",
     "KVStore",
     "ObjectBucket",
-    "PushNotification",
     "Queue",
     "SQLDatabase",
     "Stack",
@@ -1330,7 +1327,6 @@ test("platform Resource Shape API discovery is gated by deploy-control token and
   expect(body.resources.ObjectBucket).toBe(true);
   expect(body.resources.KVStore).toBe(true);
   expect(body.resources.Queue).toBe(true);
-  expect(body.resources.PushNotification).toBe(false);
   expect(body.resources.SQLDatabase).toBe(true);
   expect(body.resources.ContainerService).toBe(false);
   expect(body.adapters.cloudflare).toBe(true);
@@ -1362,7 +1358,6 @@ test("platform Resource Shape API does not advertise shapes without an operator 
   const body = await capabilities.json();
   expect(body.resources.EdgeWorker).toBe(false);
   expect(body.resources.ObjectBucket).toBe(false);
-  expect(body.resources.PushNotification).toBe(false);
   expect(body.adapters.opentofu).toBe(false);
   expect(body.adapters.cloudflare).toBe(false);
 

@@ -154,42 +154,6 @@ test("apply resolves Queue and SQLDatabase as concrete Cloudflare-backed shapes"
   );
 });
 
-test("apply resolves PushNotification on a native target", async () => {
-  const { service } = makeService();
-  await service.putTargetPool("space_1", "default", {
-    targets: [
-      {
-        name: "native-main",
-        type: "takosumi_native",
-        ref: "native-prod",
-        priority: 90,
-      },
-    ],
-  });
-  await service.putSpacePolicy("space_1", "default", POLICY);
-
-  const result = await service.apply({
-    actor: ACTOR,
-    space: "space_1",
-    kind: "PushNotification",
-    name: "push",
-    spec: {
-      name: "push",
-      protocols: ["web_push", "fcm"],
-      delivery: { ttlSeconds: 600 },
-    },
-  });
-  expect(result.ok).toBe(true);
-  if (!result.ok) return;
-  expect(result.value.kind).toBe("PushNotification");
-  expect(result.value.status?.resolution?.selectedImplementation).toBe(
-    "takosumi_push_notification",
-  );
-  expect(result.value.status?.outputs?.resource_name).toContain(
-    "PushNotification:push",
-  );
-});
-
 test("apply resolves ContainerService with admin-declared implementation", async () => {
   const { service } = makeService();
   await service.putTargetPool("space_1", "default", {
@@ -383,7 +347,7 @@ test("delete resolves native target from the non-default TargetPool that created
     adapter,
     now: () => NOW,
   });
-  await service.putTargetPool("space_1", "notifications", {
+  await service.putTargetPool("space_1", "storage", {
     targets: [
       {
         name: "native-main",
@@ -399,20 +363,20 @@ test("delete resolves native target from the non-default TargetPool that created
   const created = await service.apply({
     actor: ACTOR,
     space: "space_1",
-    kind: "PushNotification",
-    name: "push",
-    targetPoolName: "notifications",
+    kind: "ObjectBucket",
+    name: "assets",
+    targetPoolName: "storage",
     spec: {
-      name: "push",
-      protocols: ["web_push"],
+      name: "assets",
+      interfaces: ["s3_api"],
     },
   });
   expect(created.ok).toBe(true);
 
   const deleted = await service.delete(
     "space_1",
-    "PushNotification",
-    "push",
+    "ObjectBucket",
+    "assets",
     ACTOR,
   );
   expect(deleted.ok).toBe(true);
@@ -420,7 +384,7 @@ test("delete resolves native target from the non-default TargetPool that created
   expect(adapter.deleteInputs[0]?.target.name).toBe("native-main");
   expect(adapter.deleteInputs[0]?.credentialRef).toBe("conn_native");
   expect(adapter.deleteInputs[0]?.nativeResources).toEqual([
-    { type: "takosumi.push_notification", id: "push" },
+    { type: "takosumi.object_bucket", id: "assets" },
   ]);
 });
 

@@ -8,14 +8,12 @@ import {
   parseEdgeWorkerSpec,
   parseKVStoreSpec,
   parseObjectBucketSpec,
-  parsePushNotificationSpec,
   parseQueueSpec,
   parseSQLDatabaseSpec,
   planContainerService,
   planEdgeWorker,
   planKVStore,
   planObjectBucket,
-  planPushNotification,
   planQueue,
   planSQLDatabase,
 } from "../../../../core/domains/resource-shape/planner.ts";
@@ -148,34 +146,6 @@ test("parseQueueSpec rejects negative delivery values", () => {
   if (!r.ok) expect(r.error.code).toBe("invalid_delivery");
 });
 
-test("parsePushNotificationSpec accepts protocols and ttl", () => {
-  const r = parsePushNotificationSpec({
-    name: "push",
-    protocols: ["web_push", "apns"],
-    delivery: { ttlSeconds: 3600 },
-  });
-  expect(r.ok).toBe(true);
-  if (!r.ok) return;
-  expect(r.spec.protocols).toEqual(["web_push", "apns"]);
-  expect(r.spec.delivery?.ttlSeconds).toBe(3600);
-});
-
-test("parsePushNotificationSpec rejects unknown protocols and negative ttl", () => {
-  const unknown = parsePushNotificationSpec({
-    name: "push",
-    protocols: ["sms"],
-  });
-  expect(unknown.ok).toBe(false);
-  if (!unknown.ok) expect(unknown.error.code).toBe("invalid_protocol");
-
-  const badTtl = parsePushNotificationSpec({
-    name: "push",
-    delivery: { ttlSeconds: -1 },
-  });
-  expect(badTtl.ok).toBe(false);
-  if (!badTtl.ok) expect(badTtl.error.code).toBe("invalid_delivery");
-});
-
 test("parseSQLDatabaseSpec accepts sqlite and migrations path", () => {
   const r = parseSQLDatabaseSpec({
     name: "main",
@@ -242,35 +212,6 @@ test("service-shape planners map Cloudflare resources to focused modules", () =>
     planSQLDatabase("cloudflare_d1_database", { name: "main" }, target)
       .templateId,
   ).toBe("cloudflare-sql-database");
-});
-
-test("planPushNotification uses the generic service shape module", () => {
-  const target: TargetPoolEntry = {
-    name: "takosumi-native",
-    type: "takosumi_native",
-    ref: "native-prod",
-    priority: 90,
-  };
-  const plan = planPushNotification(
-    "takosumi_push_notification",
-    {
-      name: "push",
-      protocols: ["web_push", "fcm"],
-      delivery: { ttlSeconds: 600 },
-    },
-    target,
-  );
-  expect(plan.shape).toBe("PushNotification");
-  expect(plan.templateId).toBe("takosumi-service-shape");
-  expect(plan.inputs).toEqual({
-    resourceName: "push",
-    shape: "PushNotification",
-    implementation: "takosumi_push_notification",
-    targetName: "takosumi-native",
-    targetType: "takosumi_native",
-    protocols: ["web_push", "fcm"],
-    ttlSeconds: 600,
-  });
 });
 
 test("planContainerService uses the generic container module for operator implementations", () => {
