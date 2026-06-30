@@ -91,6 +91,15 @@ func TestProviderResourcesIncludeCurrentShapeResources(t *testing.T) {
 	}
 }
 
+func TestProviderDoesNotExposePushNotificationResources(t *testing.T) {
+	for _, name := range providerResourceTypeNames(t) {
+		normalized := strings.ToLower(name)
+		if strings.Contains(normalized, "push") || strings.Contains(normalized, "notification") {
+			t.Fatalf("push notification delivery is product-local, not a Takosumi provider resource: %s", name)
+		}
+	}
+}
+
 func TestProviderExampleResourcesMatchCurrentResources(t *testing.T) {
 	entries, err := os.ReadDir(filepath.Clean("../../examples/resources"))
 	if err != nil {

@@ -29,6 +29,10 @@ AI Gateway is intentionally not a provider resource. Use ProviderConnection,
 Secret, output projection, or generic env to pass values such as
 `OPENAI_BASE_URL`, `OPENAI_API_KEY`, and model names into an app.
 
+Push notification delivery is intentionally not a provider resource. APNs, FCM,
+Web Push, and device-token registration stay in the product shell, product host
+API, a normal OpenTofu module/provider, or generic env.
+
 Ordinary S3/R2/GCS/MinIO buckets, Kubernetes resources, VMs, and provider-owned
 cloud services should use existing OpenTofu providers through the plain Stack
 flow when that is enough.
@@ -199,14 +203,14 @@ Common computed fields:
 
 Shape-specific fields:
 
-| Resource                     | Required fields              | Optional fields                                                               |
-| ---------------------------- | ---------------------------- | ----------------------------------------------------------------------------- |
-| `takosumi_edge_worker`       | `name`, `artifact_path`      | `target_pool`, `compatibility_date`, `compatibility_flags`, `profiles`        |
-| `takosumi_object_bucket`     | `name`                       | `target_pool`, `interfaces`                                                   |
-| `takosumi_kv_store`          | `name`                       | `target_pool`, `consistency`                                                  |
-| `takosumi_queue`             | `name`                       | `target_pool`, `max_retries`, `max_batch_size`                                |
-| `takosumi_sql_database`      | `name`                       | `target_pool`, `engine`, `migrations_path`                                    |
-| `takosumi_container_service` | `name`, `image`              | `target_pool`, `ports`, `public_http`, `environment`                          |
+| Resource                     | Required fields         | Optional fields                                                        |
+| ---------------------------- | ----------------------- | ---------------------------------------------------------------------- |
+| `takosumi_edge_worker`       | `name`, `artifact_path` | `target_pool`, `compatibility_date`, `compatibility_flags`, `profiles` |
+| `takosumi_object_bucket`     | `name`                  | `target_pool`, `interfaces`                                            |
+| `takosumi_kv_store`          | `name`                  | `target_pool`, `consistency`                                           |
+| `takosumi_queue`             | `name`                  | `target_pool`, `max_retries`, `max_batch_size`                         |
+| `takosumi_sql_database`      | `name`                  | `target_pool`, `engine`, `migrations_path`                             |
+| `takosumi_container_service` | `name`, `image`         | `target_pool`, `ports`, `public_http`, `environment`                   |
 
 Operator/admin fields:
 
