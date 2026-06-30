@@ -73,10 +73,10 @@ describe("Workspace settings user-facing noise", () => {
     expect(connectionsTabSource).toContain(
       "const shouldShowCreateForm = () => createFormOpen();",
     );
-    expect(en["conn.add.open"]).toBe("Add hosting access");
-    expect(ja["conn.add.open"]).toBe("ホスト接続を追加");
-    expect(en["conn.empty.title"]).toBe("No hosting access yet");
-    expect(ja["conn.empty.title"]).toBe("ホスト接続はまだありません");
+    expect(en["conn.add.open"]).toBe("Connect account");
+    expect(ja["conn.add.open"]).toBe("アカウントを接続");
+    expect(en["conn.empty.title"]).toBe("No connected accounts yet");
+    expect(ja["conn.empty.title"]).toBe("接続済みアカウントはまだありません");
   });
 
   test("keeps raw account subjects out of the always-visible user menu", () => {

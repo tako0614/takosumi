@@ -35,6 +35,7 @@ import {
   Globe2,
   HardDrive,
   KeyRound,
+  Search,
   Plus,
   Trash,
 } from "lucide-solid";
@@ -85,6 +86,9 @@ import {
   type Workspace,
 } from "../../lib/control-api.ts";
 import { locale, t } from "../../i18n/index.ts";
+import { StoreBrowser } from "../store/StoreBrowser.tsx";
+import { buildNewQuery } from "../store/store-link.ts";
+import type { TcsListing } from "../../lib/tcs-client.ts";
 import {
   Badge,
   Button,
@@ -132,6 +136,9 @@ const INSTALLATION_DONE: StepState = "done";
 type CatalogEntry = NonNullable<InstallConfig["catalog"]> & {
   readonly id: string;
   readonly installConfigId: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly source: NonNullable<NonNullable<InstallConfig["catalog"]>["source"]>;
 };
 type CatalogInputField = CatalogEntry["inputs"][number];
 type CatalogInstallConfig = InstallConfig & {
@@ -375,6 +382,41 @@ function catalogDefaultInputValue(
   }
 }
 
+function catalogEntryToListing(
+  entry: CatalogEntry,
+  workspaceId: string | null,
+): TcsListing {
+  return {
+    id: entry.id,
+    installConfigId: entry.installConfigId,
+    source: {
+      git: entry.source.git,
+      ref: entry.source.ref,
+      path: entry.source.path,
+    },
+    kind: entry.kind,
+    surface: entry.surface,
+    provider: entry.provider,
+    category: entry.surface,
+    suggestedName: entry.suggestedName,
+    name: entry.name,
+    description: entry.description,
+    badge: entry.badge,
+    inputs: entry.inputs.map((field) => ({
+      name: field.name,
+      ...(field.type ? { type: field.type } : {}),
+      ...(field.required ? { required: field.required } : {}),
+      defaultValue: catalogDefaultInputValue(entry, field, workspaceId),
+      label: field.label,
+      ...(field.helper ? { helper: field.helper } : {}),
+      ...(field.placeholder ? { placeholder: field.placeholder } : {}),
+    })),
+    outputAllowlist: [],
+    createdAt: entry.createdAt,
+    updatedAt: entry.updatedAt,
+  };
+}
+
 function catalogVariablePath(name: string): readonly string[] | undefined {
   const path = name.split(".").map((part) => part.trim());
   if (path.length === 0) return undefined;
@@ -526,9 +568,11 @@ function parseInitialInstallConfigId(search: string): string | null {
 }
 
 function initialAddTab(search: string): "catalog" | "git" {
-  // The add tab is the install-link form. "catalog" only pre-selects a service
-  // handed off from the store via installConfigId; browsing lives in the store.
-  return parseInitialInstallConfigId(search) ? "catalog" : "git";
+  // Start on the service browser. Install links and pasted source links enter
+  // the same flow after a source is selected.
+  return parseInitialInstallConfigId(search) || !hasInstallPrefillParams(search)
+    ? "catalog"
+    : "git";
 }
 
 function Inner() {
@@ -549,6 +593,7 @@ function Inner() {
     !initialInstallPrefill &&
     hasInstallPrefillParams(initialSearch);
   const initialInstallConfigId = parseInitialInstallConfigId(initialSearch);
+  const [linkDraft, setLinkDraft] = createSignal(initialInstallPrefill?.git ?? "");
 
   // `/new` opens the install-link form. External `/install?git=…` redirects and
   // store hand-offs (`?installConfigId=…`) seed the same Git-backed flow.
@@ -636,6 +681,8 @@ function Inner() {
       .map((config) => ({
         id: config.catalog.templateId ?? config.id,
         installConfigId: config.id,
+        createdAt: config.createdAt,
+        updatedAt: config.updatedAt,
         ...config.catalog,
       }))
       .sort(
@@ -644,6 +691,11 @@ function Inner() {
           a.order - b.order ||
           a.name[locale()].localeCompare(b.name[locale()]),
       ),
+  );
+  const localStoreListings = createMemo<readonly TcsListing[]>(() =>
+    allCatalogEntries().map((entry) =>
+      catalogEntryToListing(entry, workspaceId()),
+    ),
   );
   const defaultGitInstallConfig = () =>
     configList().find(
@@ -1290,6 +1342,7 @@ function Inner() {
   const pickCatalogEntry = (entry: CatalogEntry) => {
     if (!entry.source) return;
     setActiveInstallPrefill(null);
+    setLinkDraft("");
     setGitUrl(entry.source.git);
     setRef(displayRef(entry.source.ref));
     setPinnedFullRef(
@@ -1311,6 +1364,62 @@ function Inner() {
     setResourcePrefixTouched(false);
     resetCompatibility();
     setActiveTab("catalog");
+  };
+  const pickStoreListing = (listing: TcsListing) => {
+    const localEntry = listing.installConfigId
+      ? allCatalogEntries().find(
+          (entry) =>
+            entry.installConfigId === listing.installConfigId ||
+            entry.id === listing.installConfigId,
+        )
+      : undefined;
+    if (localEntry) {
+      pickCatalogEntry(localEntry);
+      return;
+    }
+
+    const prefill = parseInstallPrefill(`?${buildNewQuery(listing)}`);
+    if (prefill) {
+      applyInstallPrefillInput(prefill);
+      return;
+    }
+
+    setActiveTab("git");
+    setActiveInstallPrefill(null);
+    setSelectedCatalogId(null);
+    setGitUrl(listing.source.git);
+    setRef(displayRef(listing.source.resolvedCommit ?? listing.source.ref));
+    setPinnedFullRef(
+      isFullCommitSha(listing.source.resolvedCommit ?? listing.source.ref)
+        ? (listing.source.resolvedCommit ?? listing.source.ref)
+        : null,
+    );
+    setPath(listing.source.path || ".");
+    setName(listing.suggestedName);
+    setInputVariables([]);
+    resetCompatibility();
+  };
+  const startLinkImport = () => {
+    const raw = linkDraft().trim();
+    if (!raw) {
+      setActiveTab("git");
+      clearSelectedCatalog();
+      return;
+    }
+    const parsed = parseInstallPrefillFromInput(raw);
+    if (parsed) {
+      applyInstallPrefillInput(parsed);
+      return;
+    }
+    clearSelectedCatalog();
+    setActiveTab("git");
+    setActiveInstallPrefill(null);
+    setGitUrl(raw);
+    setName(name().trim() || capsuleNameFromUrl(raw));
+    setRef("main");
+    setPinnedFullRef(null);
+    setPath(".");
+    resetCompatibility();
   };
 
   let initialCatalogApplied = false;
@@ -1361,7 +1470,7 @@ function Inner() {
   const usingSelectedService = () =>
     activeTab() !== "git" && Boolean(sourceGitUrl());
   const hasChosenSource = () =>
-    usingSelectedService() || Boolean(sourceGitUrl());
+    activeTab() === "git" || usingSelectedService() || Boolean(sourceGitUrl());
   const addGuideStage = (): "select" | "configure" | "review" => {
     if (busy() || existingCapsule() || canContinue()) return "review";
     return hasChosenSource() ? "configure" : "select";
@@ -1958,12 +2067,54 @@ function Inner() {
           </div>
         </Show>
 
+        <Show when={!hasChosenSource()}>
+          <section class="av-add-discovery" aria-label={t("new.discovery.aria")}>
+            <header class="av-add-discovery-head">
+              <div class="av-add-discovery-title">
+                <span class="av-add-discovery-icon" aria-hidden="true">
+                  <Search size={22} />
+                </span>
+                <div>
+                  <h2>{t("new.discovery.title")}</h2>
+                  <p>{t("new.discovery.subtitle")}</p>
+                </div>
+              </div>
+              <form
+                class="av-link-entry"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  startLinkImport();
+                }}
+              >
+                <Input
+                  id="new-service-link"
+                  name="serviceLink"
+                  type="text"
+                  value={linkDraft()}
+                  onInput={(event) => setLinkDraft(event.currentTarget.value)}
+                  placeholder={t("new.discovery.linkPlaceholder")}
+                  autocomplete="off"
+                  spellcheck={false}
+                />
+                <Button variant="primary" type="submit">
+                  {t("new.discovery.linkCta")}
+                </Button>
+              </form>
+            </header>
+            <StoreBrowser
+              locale={locale()}
+              localListings={localStoreListings()}
+              onInstall={pickStoreListing}
+              onConfigure={pickStoreListing}
+              showSourceControls={false}
+              showSortControl={false}
+              showKindFilters={false}
+            />
+          </section>
+        </Show>
+
         <Show
-          when={
-            activeTab() === "git" ||
-            Boolean(gitUrl().trim()) ||
-            Boolean(initialInstallConfigId)
-          }
+          when={hasChosenSource()}
         >
           <section class="av-add-flow" aria-label={t("new.title")}>
             <div class="av-add-flow-header">

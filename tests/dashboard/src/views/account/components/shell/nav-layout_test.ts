@@ -44,37 +44,40 @@ describe("dashboard shell navigation layout", () => {
     expect(sidebarSource).toContain('labelKey: "nav.apps"');
     expect(sidebarSource).toContain('href: "/new"');
     expect(sidebarSource).toContain('labelKey: "nav.add"');
-    expect(sidebarSource).toContain('href: "/store"');
-    expect(sidebarSource).toContain('labelKey: "nav.store"');
+    expect(sidebarSource).toContain('href: "/runs"');
+    expect(sidebarSource).toContain('labelKey: "nav.runs"');
+    expect(sidebarSource).toContain('href: "/account"');
+    expect(sidebarSource).toContain('labelKey: "nav.account"');
+    expect(sidebarSource).not.toContain('href: "/store"');
+    expect(sidebarSource).not.toContain('labelKey: "nav.store"');
     expect(sidebarSource).toContain("const MANAGE");
     expect(sidebarSource).toContain("sidebar-nav-manage");
-    // Apps (/) and the full Services list (/services) are split into two nav
-    // groups; `/` is the app launcher, `/services` the technical list.
+    // Apps (/) stays the launcher; the full Services list remains secondary.
     expect(sidebarSource).toContain('href: "/services"');
     expect(sidebarSource).toContain('labelKey: "nav.services"');
-    expect(sidebarSource).toContain('href: "/connections"');
-    expect(sidebarSource).toContain('labelKey: "nav.connections"');
+    expect(sidebarSource).not.toContain('href: "/connections"');
+    expect(sidebarSource).not.toContain('labelKey: "nav.connections"');
     expect(sidebarSource).toContain('href: "/advanced/workspace"');
     expect(sidebarSource).toContain('labelKey: "nav.workspaceSettings"');
-    // Billing is a sidebar item, Cloud-only.
+    // Cloud/Billing stay off the primary shell and are reached from settings.
     expect(sidebarSource).toContain("isTakosumiCloudRuntime");
-    expect(sidebarSource).toContain('href="/billing"');
-    expect(sidebarSource).toContain('t("nav.billing")');
+    expect(sidebarSource).not.toContain('href="/billing"');
+    expect(sidebarSource).not.toContain('href="/cloud"');
     // The workspace switcher moved out of the profile menu into the sidebar.
     expect(sidebarSource).toContain("WorkspaceSwitcher");
-    // Runs / notifications are NOT first-class sidebar items.
-    expect(sidebarSource).not.toContain('href: "/runs"');
+    // Notifications are still an attention affordance, not a sidebar item.
     expect(sidebarSource).not.toContain('href: "/notifications"');
   });
 
   test("mobile keeps persistent app-first navigation without hosting internals as tabs", () => {
     expect(mobileTabsSource).toContain('href: "/"');
     expect(mobileTabsSource).toContain('href: "/new"');
-    expect(mobileTabsSource).toContain('href: "/store"');
+    expect(mobileTabsSource).toContain('href: "/runs"');
+    expect(mobileTabsSource).toContain('href: "/advanced/workspace"');
     expect(mobileTabsSource).toContain('href: "/account"');
+    expect(mobileTabsSource).not.toContain('href: "/store"');
     expect(mobileTabsSource).not.toContain('href: "/services"');
     expect(mobileTabsSource).not.toContain('href: "/connections"');
-    expect(mobileTabsSource).not.toContain('href: "/advanced/workspace"');
     expect(shellCssSource).toContain(
       "grid-template-columns: repeat(auto-fit, minmax(56px, 1fr));",
     );
@@ -82,13 +85,14 @@ describe("dashboard shell navigation layout", () => {
     expect(shellCssSource).toContain("display: inline-flex;");
   });
 
-  test("top bar is actions-only; brand + workspace switch live in the sidebar", () => {
+  test("top bar keeps mobile workspace switching without returning brand chrome", () => {
     expect(topBarSource).toContain('href="/new"');
     expect(topBarSource).toContain('href="/notifications"');
     expect(topBarSource).toContain("<UserMenu />");
+    expect(topBarSource).toContain("<WorkspaceSwitcher compact />");
+    expect(shellCssSource).toContain(".topbar-mobile-workspace");
     expect(topBarSource).not.toContain("Wordmark");
     expect(topBarSource).not.toContain("topbar-brand");
-    expect(topBarSource).not.toContain("WorkspaceSwitcher");
   });
 
   test("profile menu keeps account + history; connections/settings/billing/switcher moved to the sidebar", () => {
@@ -99,8 +103,12 @@ describe("dashboard shell navigation layout", () => {
     expect(userMenuSource).not.toContain('href="/connections"');
     expect(userMenuSource).not.toContain('href="/advanced/workspace"');
     expect(userMenuSource).not.toContain('href="/billing"');
-    // Switcher stays read/select only (no inline space creation).
-    expect(spaceSwitcherSource).toContain("loadedWorkspaces().length > 1");
+    // Switcher stays read/select only (no inline space creation), but remains
+    // visible even for a single workspace so the current Space is never hidden.
+    expect(spaceSwitcherSource).toContain("loadedWorkspaces().length > 0");
+    expect(spaceSwitcherSource).toContain(
+      "disabled={loadedWorkspaces().length < 2}",
+    );
     expect(spaceSwitcherSource).not.toContain("createSpace");
     // Management vocabulary parity. Keys are flat with dots, so assert direct
     // access — toHaveProperty would treat "a.b" as a nested path.
@@ -110,8 +118,8 @@ describe("dashboard shell navigation layout", () => {
     expect(ja["nav.primary"]).toBeTruthy();
     expect(en["nav.workspaceSettings"]).toBeTruthy();
     expect(ja["nav.workspaceSettings"]).toBeTruthy();
-    expect(en["workspaceSettings.title"]).toBe("Team settings");
-    expect(ja["workspaceSettings.title"]).toBe("チーム設定");
+    expect(en["workspaceSettings.title"]).toBe("Settings");
+    expect(ja["workspaceSettings.title"]).toBe("設定");
   });
 
   test("workspace switcher and settings tabs keep visible selection and loaded data aligned", () => {
@@ -126,6 +134,15 @@ describe("dashboard shell navigation layout", () => {
     expect(workspaceSettingsSource).toContain("keyed");
     expect(workspaceSettingsSource).toContain(
       "<BillingTab workspaceId={id} />",
+    );
+    expect(workspaceSettingsSource).toContain(
+      'href: "/advanced/workspace/cloud"',
+    );
+    expect(workspaceSettingsSource).toContain(
+      'label: t("workspaceSettings.tab.cloud")',
+    );
+    expect(workspaceSettingsSource).toContain(
+      "<CloudResourcesPanel showHeader={false} />",
     );
     expect(workspaceSettingsSource).not.toContain(
       "<BillingTab workspaceId={id()} />",

@@ -72,8 +72,8 @@ const STR = {
   settings: { ja: "追加時の設定", en: "Setup" },
   source: { ja: "取得元の詳細", en: "Source details" },
   technicalDetails: {
-    ja: "詳細な取得元と設定名",
-    en: "Advanced source and input IDs",
+    ja: "取得元と設定名",
+    en: "Source and setting names",
   },
   sourceLocation: { ja: "取得元", en: "Source" },
   version: { ja: "バージョン", en: "Version" },
@@ -139,6 +139,9 @@ export interface StoreBrowserProps {
   readonly onInstall: (listing: TcsListing) => Promise<void> | void;
   readonly onConfigure: (listing: TcsListing) => void;
   readonly canQuickInstall?: (listing: TcsListing) => boolean;
+  readonly showSourceControls?: boolean;
+  readonly showSortControl?: boolean;
+  readonly showKindFilters?: boolean;
 }
 
 export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
@@ -156,6 +159,9 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
   const [installState, setInstallState] = createSignal<Record<string, Status>>(
     {},
   );
+  const showSourceControls = () => props.showSourceControls ?? true;
+  const showSortControl = () => props.showSortControl ?? true;
+  const showKindFilters = () => props.showKindFilters ?? true;
 
   const setSearchValue = (value: string) => {
     setSearchInput(value);
@@ -319,26 +325,30 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
             placeholder={s("search", props.locale)}
           />
         </form>
-        <select
-          name="storeSort"
-          class="tcs-sort"
-          value={sort()}
-          onChange={(e) => onSort(e.currentTarget.value as TcsSort)}
-        >
-          <option value="updated">{s("sortUpdated", props.locale)}</option>
-          <option value="name">{s("sortName", props.locale)}</option>
-        </select>
-        <button
-          type="button"
-          class="tcs-btn"
-          onClick={() => setShowServers((v) => !v)}
-        >
-          {s("serversAdvanced", props.locale)}: {s("servers", props.locale)} (
-          {agg().status.length})
-        </button>
+        <Show when={showSortControl()}>
+          <select
+            name="storeSort"
+            class="tcs-sort"
+            value={sort()}
+            onChange={(e) => onSort(e.currentTarget.value as TcsSort)}
+          >
+            <option value="updated">{s("sortUpdated", props.locale)}</option>
+            <option value="name">{s("sortName", props.locale)}</option>
+          </select>
+        </Show>
+        <Show when={showSourceControls()}>
+          <button
+            type="button"
+            class="tcs-btn"
+            onClick={() => setShowServers((v) => !v)}
+          >
+            {s("serversAdvanced", props.locale)}:{" "}
+            {s("servers", props.locale)} ({agg().status.length})
+          </button>
+        </Show>
       </div>
 
-      <Show when={showServers()}>
+      <Show when={showSourceControls() && showServers()}>
         <div class="tcs-servers">
           <ul>
             <For each={agg().status}>
@@ -405,18 +415,20 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
             </button>
           )}
         </For>
-        <For each={kinds()}>
-          {(k) => (
-            <button
-              type="button"
-              class="tcs-chip tcs-kind"
-              classList={{ active: fKind() === k }}
-              onClick={() => setFKind(fKind() === k ? "" : k)}
-            >
-              {tcsKindLabel(k, props.locale)}
-            </button>
-          )}
-        </For>
+        <Show when={showKindFilters()}>
+          <For each={kinds()}>
+            {(k) => (
+              <button
+                type="button"
+                class="tcs-chip tcs-kind"
+                classList={{ active: fKind() === k }}
+                onClick={() => setFKind(fKind() === k ? "" : k)}
+              >
+                {tcsKindLabel(k, props.locale)}
+              </button>
+            )}
+          </For>
+        </Show>
       </div>
 
       <Show

@@ -5,14 +5,12 @@
 import { A, useLocation } from "@solidjs/router";
 import {
   ArrowLeft,
-  Cloud,
-  CreditCard,
+  Clock3,
   LayoutGrid,
-  Plug,
   Plus,
   Server,
   Settings,
-  Store,
+  UserCircle2,
 } from "lucide-solid";
 import { Show } from "solid-js";
 import Wordmark from "../brand/Wordmark.tsx";
@@ -36,12 +34,12 @@ type NavItem = {
 const PRIMARY: NavItem[] = [
   { href: "/", labelKey: "nav.apps", icon: LayoutGrid, end: true },
   { href: "/new", labelKey: "nav.add", icon: Plus },
-  { href: "/store", labelKey: "nav.store", icon: Store },
+  { href: "/runs", labelKey: "nav.runs", icon: Clock3 },
+  { href: "/account", labelKey: "nav.account", icon: UserCircle2 },
 ];
 
 const MANAGE: NavItem[] = [
   { href: "/services", labelKey: "nav.services", icon: Server },
-  { href: "/connections", labelKey: "nav.connections", icon: Plug },
   {
     href: "/advanced/workspace",
     labelKey: "nav.workspaceSettings",
@@ -105,26 +103,6 @@ export default function Sidebar() {
             <span class="sidebar-link-label">{t(item.labelKey)}</span>
           </A>
         ))}
-        <Show when={isTakosumiCloudRuntime()}>
-          <A
-            href="/cloud"
-            class="sidebar-link"
-            classList={{ active: isActive({ href: "/cloud" }) }}
-          >
-            <Cloud size={18} />
-            <span class="sidebar-link-label">{t("nav.cloudResources")}</span>
-          </A>
-        </Show>
-        <Show when={isTakosumiCloudRuntime()}>
-          <A
-            href="/billing"
-            class="sidebar-link"
-            classList={{ active: isActive({ href: "/billing" }) }}
-          >
-            <CreditCard size={18} />
-            <span class="sidebar-link-label">{t("nav.billing")}</span>
-          </A>
-        </Show>
       </nav>
     </aside>
   );

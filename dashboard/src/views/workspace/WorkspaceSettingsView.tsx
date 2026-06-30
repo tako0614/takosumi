@@ -21,9 +21,16 @@ import ConnectionsTab from "./tabs/ConnectionsTab.tsx";
 import BillingTab from "./tabs/BillingTab.tsx";
 import BackupsTab from "./tabs/BackupsTab.tsx";
 import SharesTab from "./tabs/SharesTab.tsx";
+import { CloudResourcesPanel } from "../cloud/CloudResourcesView.tsx";
 
 type TabId =
-  "general" | "members" | "connections" | "billing" | "backups" | "shares";
+  | "general"
+  | "members"
+  | "connections"
+  | "billing"
+  | "cloud"
+  | "backups"
+  | "shares";
 
 type StandaloneTabId = Extract<TabId, "connections" | "billing">;
 
@@ -54,6 +61,7 @@ function Inner(props: {
     return raw === "members" ||
       raw === "connections" ||
       raw === "billing" ||
+      raw === "cloud" ||
       raw === "backups" ||
       raw === "shares"
       ? raw
@@ -82,6 +90,14 @@ function Inner(props: {
         ? t("workspaceSettings.tab.billing")
         : t("workspaceSettings.tab.usageQuota"),
     },
+    ...(isTakosumiCloudRuntime()
+      ? [
+          {
+            href: "/advanced/workspace/cloud",
+            label: t("workspaceSettings.tab.cloud"),
+          },
+        ]
+      : []),
   ];
 
   return (
@@ -119,6 +135,9 @@ function Inner(props: {
               </Match>
               <Match when={tab() === "billing"}>
                 <BillingTab workspaceId={id} />
+              </Match>
+              <Match when={tab() === "cloud"}>
+                <CloudResourcesPanel showHeader={false} />
               </Match>
               <Match when={tab() === "backups"}>
                 <BackupsTab workspaceId={id} />

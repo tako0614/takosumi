@@ -50,8 +50,8 @@ describe("Cloud resources view", () => {
     expect(en["common.refresh"]).toBe("Refresh");
     expect(ja["common.refresh"]).toBe("更新");
     expect(ja["cloudResources.inventory.title"]).toBe("クラウドリソース");
-    expect(ja["cloudResources.keys.title"]).toBe("APIキー");
-    expect(ja["cloudResources.keys.empty"]).toBe("まだ APIキーはありません。");
+    expect(ja["cloudResources.keys.title"]).toBe("外部APIキー");
+    expect(ja["cloudResources.keys.empty"]).toBe("まだ外部APIキーはありません。");
     expect(en["cloudResources.s3.buckets"]).toBe("Buckets");
     expect(en["cloudResources.s3.configuredBuckets"]).toBe("Ready buckets");
     expect(ja["cloudResources.s3.buckets"]).toBe("Bucket数");
@@ -59,6 +59,9 @@ describe("Cloud resources view", () => {
   });
 
   test("loads resource inventory separately from the endpoint overview", () => {
+    expect(cloudResourcesViewSource).toContain(
+      "export function CloudResourcesPanel",
+    );
     expect(cloudResourcesViewSource).toContain(
       "getCloudResourcesSnapshot",
     );
