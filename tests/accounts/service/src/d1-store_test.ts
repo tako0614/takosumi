@@ -196,13 +196,11 @@ test("D1AccountsStore persists PAT metadata and billing usage indexes", async ()
     reportedAt: 3_000,
   });
   expect(
-    (await store.listBillingUsageRecordsForCapsule("inst_1")).map(
-      (record) => ({
-        id: record.usageReportId,
-        meter: record.meter,
-        metadata: record.metadata,
-      }),
-    ),
+    (await store.listBillingUsageRecordsForCapsule("inst_1")).map((record) => ({
+      id: record.usageReportId,
+      meter: record.meter,
+      metadata: record.metadata,
+    })),
   ).toEqual([
     {
       id: "usage_report_1",
@@ -251,9 +249,9 @@ test("D1AccountsStore indexes OIDC clients and installation events", async () =>
   expect((await store.findOidcClient("toc_client"))?.capsuleId).toEqual(
     "inst_1",
   );
-  expect(
-    (await store.findOidcClientForCapsule("inst_1"))?.clientId,
-  ).toEqual("toc_client");
+  expect((await store.findOidcClientForCapsule("inst_1"))?.clientId).toEqual(
+    "toc_client",
+  );
 
   await store.appendCapsuleEvent({
     eventId: "evt_1",
@@ -274,9 +272,7 @@ test("D1AccountsStore indexes OIDC clients and installation events", async () =>
   });
 
   expect(
-    (await store.listCapsuleEvents("inst_1")).map(
-      (event) => event.eventId,
-    ),
+    (await store.listCapsuleEvents("inst_1")).map((event) => event.eventId),
   ).toEqual(["evt_1", "evt_2"]);
 });
 
@@ -618,6 +614,121 @@ test("D1AccountsStore listWorkspacesForOwner backfills the by-owner index for le
   expect(await store.listWorkspacesForOwner("tsub_nobody")).toEqual([]);
 });
 
+test("D1AccountsStore normalizes legacy AppCapsule documents keyed by installation id", async () => {
+  const db = new MemoryD1Database();
+  const store = new D1AccountsStore(db);
+  const key = "inst_legacy_key";
+  const productionShapeKey = "inst_legacy_production_shape";
+  const workspaceId = "space_legacy";
+  const billingAccountId = "billing_legacy";
+  const legacyDocument = {
+    account_id: "acct_legacy",
+    space_id: workspaceId,
+    capsule_id: "legacy.display-app",
+    source: {
+      type: "git",
+      url: "https://github.com/example/legacy",
+      ref: "main",
+      commit: "abc123",
+      path: "deploy/opentofu",
+    },
+    plan_digest: "sha256:legacy",
+    artifact_digest: "sha256:artifact",
+    mode: "self-hosted",
+    billing_account_id: billingAccountId,
+    status: "ready",
+    created_by_subject: "tsub_legacy",
+    created_at: "2026-06-30T00:00:00.000Z",
+    updated_at: "2026-06-30T00:01:00.000Z",
+  };
+  db.documents.set(
+    documentKey("app_installations", key),
+    JSON.stringify(legacyDocument),
+  );
+  db.documents.set(
+    documentKey("app_installations", productionShapeKey),
+    JSON.stringify({
+      accountId: "acct_legacy",
+      spaceId: workspaceId,
+      appId: "legacy.production-shape",
+      sourceGitUrl: "https://github.com/example/legacy",
+      sourceRef: "main",
+      sourceCommit: "def456",
+      planDigest: "sha256:legacy-production",
+      mode: "self-hosted",
+      status: "suspended",
+      createdBySubject: "tsub_legacy",
+      createdAt: 1_782_293_753_222,
+      updatedAt: 1_782_293_900_734,
+    }),
+  );
+  db.indexes.set(
+    indexRowKey(
+      "installations_by_space",
+      workspaceId,
+      "app_installations",
+      key,
+    ),
+    {
+      indexName: "installations_by_space",
+      indexKey: workspaceId,
+      bucket: "app_installations",
+      documentKey: key,
+      sortKey: 1,
+    },
+  );
+  db.indexes.set(
+    indexRowKey(
+      "installations_by_space",
+      workspaceId,
+      "app_installations",
+      productionShapeKey,
+    ),
+    {
+      indexName: "installations_by_space",
+      indexKey: workspaceId,
+      bucket: "app_installations",
+      documentKey: productionShapeKey,
+      sortKey: 2,
+    },
+  );
+  db.indexes.set(
+    indexRowKey(
+      "installations_by_billing_account",
+      billingAccountId,
+      "app_installations",
+      key,
+    ),
+    {
+      indexName: "installations_by_billing_account",
+      indexKey: billingAccountId,
+      bucket: "app_installations",
+      documentKey: key,
+      sortKey: 1,
+    },
+  );
+
+  const byWorkspace = await store.listAppCapsulesForWorkspace(workspaceId);
+  expect(byWorkspace.map((capsule) => capsule.capsuleId)).toEqual([
+    key,
+    productionShapeKey,
+  ]);
+  expect(byWorkspace[0]?.appId).toEqual("legacy.display-app");
+  expect(byWorkspace[0]?.sourcePath).toEqual("deploy/opentofu");
+  expect(byWorkspace[0]?.createdAt).toEqual(
+    Date.parse("2026-06-30T00:00:00.000Z"),
+  );
+  expect(byWorkspace[1]?.workspaceId).toEqual(workspaceId);
+  expect(byWorkspace[1]?.appId).toEqual("legacy.production-shape");
+  expect(byWorkspace[1]?.sourceCommit).toEqual("def456");
+  expect((await store.findAppCapsule(key))?.capsuleId).toEqual(key);
+  expect(
+    (await store.listAppCapsulesForBillingAccount(billingAccountId)).map(
+      (capsule) => capsule.capsuleId,
+    ),
+  ).toEqual([key]);
+});
+
 interface DocumentRow {
   readonly document: string;
 }
@@ -863,6 +974,29 @@ class MemoryD1Statement implements D1PreparedStatement {
 
   all<T = unknown>(): Promise<D1Result<T>> {
     const query = normalizedQuery(this.query);
+    if (
+      query.startsWith(
+        "SELECT i.document_key, d.document FROM takosumi_accounts_indexes",
+      )
+    ) {
+      const [indexName, indexKey] = this.#stringValues(2);
+      const rows = [...this.db.indexes.values()]
+        .filter(
+          (row) => row.indexName === indexName && row.indexKey === indexKey,
+        )
+        .sort(
+          (left, right) =>
+            left.sortKey - right.sortKey ||
+            left.documentKey.localeCompare(right.documentKey),
+        )
+        .flatMap((row): Array<{ document_key: string; document: string }> => {
+          const document = this.db.documents.get(
+            documentKey(row.bucket, row.documentKey),
+          );
+          return document ? [{ document_key: row.documentKey, document }] : [];
+        });
+      return Promise.resolve({ success: true, results: rows as T[] });
+    }
     if (query.startsWith("SELECT d.document FROM takosumi_accounts_indexes")) {
       const [indexName, indexKey] = this.#stringValues(2);
       const rows = [...this.db.indexes.values()]
