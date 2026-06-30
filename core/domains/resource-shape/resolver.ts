@@ -68,10 +68,6 @@ export const SHAPE_INTERFACE_REQUIREMENTS: Readonly<
     required: Object.freeze(["queue"]) as readonly string[],
     preferred: Object.freeze(["publish", "consume", "cloudevents"]),
   }),
-  PushNotification: Object.freeze({
-    required: Object.freeze(["push_notification"]) as readonly string[],
-    preferred: Object.freeze(["web_push", "apns", "fcm", "topic_fanout"]),
-  }),
   SQLDatabase: Object.freeze({
     required: Object.freeze(["sql"]) as readonly string[],
     preferred: Object.freeze(["sqlite", "postgres_protocol", "migrations"]),
@@ -117,9 +113,6 @@ export const SHAPE_TARGET_IMPLEMENTATION: Readonly<
     gcp: "gcp_pubsub_queue",
     kubernetes: "kubernetes_queue",
     takosumi_native: "takosumi_queue",
-  }),
-  PushNotification: Object.freeze({
-    takosumi_native: "takosumi_push_notification",
   }),
   SQLDatabase: Object.freeze({
     cloudflare: "cloudflare_d1_database",
@@ -276,18 +269,6 @@ export const DEFAULT_RESOURCE_SHAPE_CAPABILITIES: TargetCapabilityMatrix =
       }),
     }),
     Object.freeze({
-      implementation: "takosumi_push_notification",
-      targetType: "takosumi_native",
-      shape: "PushNotification",
-      interfaces: Object.freeze({
-        push_notification: "native",
-        web_push: "native",
-        apns: "native",
-        fcm: "native",
-        topic_fanout: "native",
-      }),
-    }),
-    Object.freeze({
       implementation: "takosumi_sql_database",
       targetType: "takosumi_native",
       shape: "SQLDatabase",
@@ -403,8 +384,6 @@ function nativeResourcesFor(
       return [{ type: "takosumi.kv_store", id: name }];
     case "takosumi_queue":
       return [{ type: "takosumi.queue", id: name }];
-    case "takosumi_push_notification":
-      return [{ type: "takosumi.push_notification", id: name }];
     case "takosumi_sql_database":
       return [{ type: "takosumi.sql_database", id: name }];
     case "takosumi_container_service":

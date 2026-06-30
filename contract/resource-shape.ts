@@ -15,7 +15,6 @@ export type ResourceShapeKind =
   | "ObjectBucket"
   | "KVStore"
   | "Queue"
-  | "PushNotification"
   | "SQLDatabase"
   | "ContainerService";
 
@@ -24,7 +23,6 @@ export const RESOURCE_SHAPE_KINDS: readonly ResourceShapeKind[] = [
   "ObjectBucket",
   "KVStore",
   "Queue",
-  "PushNotification",
   "SQLDatabase",
   "ContainerService",
 ] as const;
@@ -182,22 +180,6 @@ export interface QueueSpec {
 }
 
 export type QueueResource = ResourceObject<"Queue", QueueSpec>;
-
-export type PushNotificationProtocol = "web_push" | "apns" | "fcm";
-
-export interface PushNotificationSpec {
-  readonly name: string;
-  readonly protocols?: readonly PushNotificationProtocol[];
-  readonly delivery?: {
-    readonly ttlSeconds?: number;
-  };
-  readonly lifecyclePolicy?: ResourceLifecyclePolicy;
-}
-
-export type PushNotificationResource = ResourceObject<
-  "PushNotification",
-  PushNotificationSpec
->;
 
 export interface SQLDatabaseSpec {
   readonly name: string;

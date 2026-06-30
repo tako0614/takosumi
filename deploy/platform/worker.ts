@@ -272,7 +272,6 @@ const RESOURCE_CAPABILITY_KEYS: readonly (Exclude<
   "ObjectBucket",
   "KVStore",
   "Queue",
-  "PushNotification",
   "SQLDatabase",
   "ContainerService",
 ];
@@ -286,13 +285,17 @@ const ADAPTER_CAPABILITY_KEYS: readonly (keyof TakosumiAdapterCapabilities)[] = 
   "takosumi_native",
 ];
 
+type MutablePartial<T> = {
+  -readonly [K in keyof T]?: T[K];
+};
+
 function platformResourceCapabilities(
   env: CloudflareWorkerEnv,
   apiEnabled: boolean,
 ): Partial<TakosumiResourceCapabilities> {
   const base = Object.fromEntries(
     RESOURCE_CAPABILITY_KEYS.map((key) => [key, false]),
-  ) as Partial<TakosumiResourceCapabilities>;
+  ) as MutablePartial<TakosumiResourceCapabilities>;
   if (!apiEnabled) return base;
   for (const key of parseCapabilityList(
     env.TAKOSUMI_RESOURCE_SHAPES,
@@ -309,7 +312,7 @@ function platformAdapterCapabilities(
 ): Partial<TakosumiAdapterCapabilities> {
   const base = Object.fromEntries(
     ADAPTER_CAPABILITY_KEYS.map((key) => [key, false]),
-  ) as Partial<TakosumiAdapterCapabilities>;
+  ) as MutablePartial<TakosumiAdapterCapabilities>;
   if (!resourceShapesEnabled) return base;
   base.opentofu = true;
   for (const key of parseCapabilityList(

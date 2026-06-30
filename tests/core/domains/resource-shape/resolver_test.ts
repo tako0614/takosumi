@@ -41,18 +41,6 @@ function containerResource(name = "agent"): ResourceObject {
   };
 }
 
-function pushNotificationResource(name = "push"): ResourceObject {
-  return {
-    apiVersion: TAKOSUMI_API_VERSION,
-    kind: "PushNotification",
-    metadata: { name, space: "prod", managedBy: "api" },
-    spec: {
-      name,
-      protocols: ["web_push"],
-    },
-  };
-}
-
 function targetPool(targets: readonly TargetPoolEntry[]): TargetPool {
   return {
     apiVersion: TAKOSUMI_API_VERSION,
@@ -118,9 +106,6 @@ test("current public shapes carry shape-specific interface requirements", () => 
   ]);
   expect(SHAPE_INTERFACE_REQUIREMENTS.KVStore?.required).toEqual(["kv_store"]);
   expect(SHAPE_INTERFACE_REQUIREMENTS.Queue?.required).toEqual(["queue"]);
-  expect(SHAPE_INTERFACE_REQUIREMENTS.PushNotification?.required).toEqual([
-    "push_notification",
-  ]);
   expect(SHAPE_INTERFACE_REQUIREMENTS.SQLDatabase?.required).toEqual(["sql"]);
   expect(SHAPE_INTERFACE_REQUIREMENTS.ContainerService?.required).toEqual([
     "oci_container",
@@ -269,67 +254,6 @@ test("resolve uses admin-declared implementation capabilities from TargetPool", 
   ]);
 });
 
-test("resolve maps PushNotification to Takosumi Native by default", () => {
-  const out = expectOk(
-    resolve(
-      input({
-        resource: pushNotificationResource(),
-        interfaces: ["push_notification", "web_push"],
-        targetPool: targetPool([
-          {
-            name: "native-main",
-            type: "takosumi_native",
-            ref: "native-prod",
-            priority: 50,
-          },
-        ]),
-      }),
-    ),
-  );
-  expect(out.selectedImplementation).toBe("takosumi_push_notification");
-  expect(out.selectedTarget).toBe("native-main");
-  expect(out.nativeResourcePlan).toEqual([
-    { type: "takosumi.push_notification", id: "push" },
-  ]);
-});
-
-test("resolve accepts operator-declared PushNotification provider implementations", () => {
-  const out = expectOk(
-    resolve(
-      input({
-        resource: pushNotificationResource(),
-        interfaces: ["push_notification", "web_push", "fcm"],
-        targetPool: targetPool([
-          {
-            name: "notifications-main",
-            type: "aws",
-            ref: "aws-prod",
-            priority: 90,
-            implementations: [
-              {
-                shape: "PushNotification",
-                implementation: "custom_push_gateway",
-                nativeResourceType: "custom.push_channel",
-                plugin: "takosumi-push-plugin",
-                interfaces: {
-                  push_notification: "native",
-                  web_push: "native",
-                  fcm: "shim",
-                },
-              },
-            ],
-          },
-        ]),
-      }),
-    ),
-  );
-  expect(out.selectedImplementation).toBe("custom_push_gateway");
-  expect(out.selectedImplementationPlugin).toBe("takosumi-push-plugin");
-  expect(out.nativeResourcePlan).toEqual([
-    { type: "custom.push_channel", id: "push" },
-  ]);
-});
-
 test("resolve preserves operator implementation plugin metadata", () => {
   const out = expectOk(
     resolve(
@@ -458,7 +382,6 @@ test("DEFAULT_RESOURCE_SHAPE_CAPABILITIES advertises the current public shapes",
     "EdgeWorker",
     "KVStore",
     "ObjectBucket",
-    "PushNotification",
     "Queue",
     "SQLDatabase",
   ]);
