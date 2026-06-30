@@ -46,18 +46,18 @@ async function makeApp() {
 
 const TAR = new Uint8Array([0x74, 0x61, 0x72, 0x0a, 0x01, 0x02, 0x03]);
 
-test("POST /internal/v1/spaces/:id/uploads requires a bearer (401)", async () => {
+test("POST /internal/v1/workspaces/:id/uploads requires a bearer (401)", async () => {
   const { app } = await makeApp();
-  const res = await app.request("/internal/v1/spaces/space_aaaaaaaa/uploads", {
+  const res = await app.request("/internal/v1/workspaces/space_aaaaaaaa/uploads", {
     method: "POST",
     body: TAR,
   });
   expect(res.status).toBe(401);
 });
 
-test("POST /internal/v1/spaces/:id/uploads records an upload snapshot and stores the archive", async () => {
+test("POST /internal/v1/workspaces/:id/uploads records an upload snapshot and stores the archive", async () => {
   const { app, store, archives } = await makeApp();
-  const res = await app.request("/internal/v1/spaces/space_aaaaaaaa/uploads", {
+  const res = await app.request("/internal/v1/workspaces/space_aaaaaaaa/uploads", {
     method: "POST",
     headers: { authorization: "Bearer scoped-token" },
     body: TAR,
@@ -150,9 +150,9 @@ test("recordArtifactSnapshotFromUrl rejects a digest mismatch", async () => {
   expect(archives.size).toBe(0);
 });
 
-test("POST /internal/v1/spaces/:id/uploads rejects a Space outside the principal scope (403)", async () => {
+test("POST /internal/v1/workspaces/:id/uploads rejects a Space outside the principal scope (403)", async () => {
   const { app } = await makeApp();
-  const res = await app.request("/internal/v1/spaces/space_bbbbbbbb/uploads", {
+  const res = await app.request("/internal/v1/workspaces/space_bbbbbbbb/uploads", {
     method: "POST",
     headers: { authorization: "Bearer scoped-token" },
     body: TAR,

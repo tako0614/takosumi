@@ -24,7 +24,7 @@ async function createSpace(
   app: { request: (path: string, init?: RequestInit) => Promise<Response> },
   handle: string,
 ): Promise<string> {
-  const res = await app.request("/internal/v1/spaces", {
+  const res = await app.request("/internal/v1/workspaces", {
     method: "POST",
     headers: headers({ "content-type": "application/json" }),
     body: JSON.stringify({
@@ -90,13 +90,13 @@ test("model e2e: create Space -> read Space -> list Spaces", async () => {
   const { app } = await service();
   const spaceId = await createSpace(app, "acme");
 
-  const getRes = await app.request(`/internal/v1/spaces/${spaceId}`, {
+  const getRes = await app.request(`/internal/v1/workspaces/${spaceId}`, {
     headers: headers(),
   });
   expect(getRes.status).toBe(200);
   expect((await getRes.json()).space.handle).toBe("acme");
 
-  const listRes = await app.request("/internal/v1/spaces", {
+  const listRes = await app.request("/internal/v1/workspaces", {
     headers: headers(),
   });
   expect(listRes.status).toBe(200);
@@ -108,7 +108,7 @@ test("model e2e: duplicate handle is a 409 failed_precondition", async () => {
   const { app } = await service();
   await createSpace(app, "dup");
 
-  const res = await app.request("/internal/v1/spaces", {
+  const res = await app.request("/internal/v1/workspaces", {
     method: "POST",
     headers: headers({ "content-type": "application/json" }),
     body: JSON.stringify({
@@ -129,7 +129,7 @@ test("model e2e: create Installation -> list -> 409 on duplicate name+environmen
   const installConfigId = await seedInstallConfig(operations, spaceId);
 
   const createRes = await app.request(
-    `/internal/v1/spaces/${spaceId}/installations`,
+    `/internal/v1/workspaces/${spaceId}/capsules`,
     {
       method: "POST",
       headers: headers({ "content-type": "application/json" }),
@@ -150,7 +150,7 @@ test("model e2e: create Installation -> list -> 409 on duplicate name+environmen
   const installationId = installation.id as string;
 
   const listRes = await app.request(
-    `/internal/v1/spaces/${spaceId}/installations`,
+    `/internal/v1/workspaces/${spaceId}/capsules`,
     {
       headers: headers(),
     },
@@ -163,7 +163,7 @@ test("model e2e: create Installation -> list -> 409 on duplicate name+environmen
 
   // A different environment is allowed (UNIQUE is per space+name+environment).
   const previewRes = await app.request(
-    `/internal/v1/spaces/${spaceId}/installations`,
+    `/internal/v1/workspaces/${spaceId}/capsules`,
     {
       method: "POST",
       headers: headers({ "content-type": "application/json" }),
@@ -179,7 +179,7 @@ test("model e2e: create Installation -> list -> 409 on duplicate name+environmen
 
   // Same name + environment is a 409 failed_precondition.
   const dupRes = await app.request(
-    `/internal/v1/spaces/${spaceId}/installations`,
+    `/internal/v1/workspaces/${spaceId}/capsules`,
     {
       method: "POST",
       headers: headers({ "content-type": "application/json" }),
@@ -202,7 +202,7 @@ test("model e2e: create Installation with vars clones a Space-scoped InstallConf
   const installConfigId = await seedInstallConfig(operations, spaceId);
 
   const createRes = await app.request(
-    `/internal/v1/spaces/${spaceId}/installations`,
+    `/internal/v1/workspaces/${spaceId}/capsules`,
     {
       method: "POST",
       headers: headers({ "content-type": "application/json" }),
@@ -243,7 +243,7 @@ test("model e2e: create Installation with runnerId and outputAllowlist stores a 
   const installConfigId = await seedInstallConfig(operations, spaceId);
 
   const createRes = await app.request(
-    `/internal/v1/spaces/${spaceId}/installations`,
+    `/internal/v1/workspaces/${spaceId}/capsules`,
     {
       method: "POST",
       headers: headers({ "content-type": "application/json" }),
@@ -300,7 +300,7 @@ test("model e2e: create Installation with modulePath stores a scoped InstallConf
   const installConfigId = await seedInstallConfig(operations, spaceId);
 
   const createRes = await app.request(
-    `/internal/v1/spaces/${spaceId}/installations`,
+    `/internal/v1/workspaces/${spaceId}/capsules`,
     {
       method: "POST",
       headers: headers({ "content-type": "application/json" }),
@@ -334,7 +334,7 @@ test("model e2e: create Installation rejects non-object vars", async () => {
   const installConfigId = await seedInstallConfig(operations, spaceId);
 
   const createRes = await app.request(
-    `/internal/v1/spaces/${spaceId}/installations`,
+    `/internal/v1/workspaces/${spaceId}/capsules`,
     {
       method: "POST",
       headers: headers({ "content-type": "application/json" }),
@@ -352,14 +352,14 @@ test("model e2e: create Installation rejects non-object vars", async () => {
   expect(body.error.message).toContain("vars must be an object");
 });
 
-test("model e2e: GET /internal/v1/installations/{id} returns the new shape", async () => {
+test("model e2e: GET /internal/v1/capsules/{id} returns the new shape", async () => {
   const { app, operations } = await service();
   const spaceId = await createSpace(app, "reader");
   const sourceId = await createSource(app, spaceId);
   const installConfigId = await seedInstallConfig(operations, spaceId);
 
   const createRes = await app.request(
-    `/internal/v1/spaces/${spaceId}/installations`,
+    `/internal/v1/workspaces/${spaceId}/capsules`,
     {
       method: "POST",
       headers: headers({ "content-type": "application/json" }),
@@ -375,7 +375,7 @@ test("model e2e: GET /internal/v1/installations/{id} returns the new shape", asy
   const installationId = (await createRes.json()).installation.id as string;
 
   const getRes = await app.request(
-    `/internal/v1/installations/${installationId}`,
+    `/internal/v1/capsules/${installationId}`,
     {
       headers: headers(),
     },
@@ -418,7 +418,7 @@ test("model e2e: plan without a SourceSnapshot is a 409 source_sync_required", a
   const installConfigId = await seedInstallConfig(operations, spaceId);
 
   const createRes = await app.request(
-    `/internal/v1/spaces/${spaceId}/installations`,
+    `/internal/v1/workspaces/${spaceId}/capsules`,
     {
       method: "POST",
       headers: headers({ "content-type": "application/json" }),
@@ -434,7 +434,7 @@ test("model e2e: plan without a SourceSnapshot is a 409 source_sync_required", a
   const installationId = (await createRes.json()).installation.id as string;
 
   const planRes = await app.request(
-    `/internal/v1/installations/${installationId}/plan`,
+    `/internal/v1/capsules/${installationId}/plan`,
     { method: "POST", headers: headers() },
   );
   expect(planRes.status).toBe(409);
@@ -451,7 +451,7 @@ async function createInstallation(
   name: string,
 ): Promise<string> {
   const res = await app.request(
-    `/internal/v1/spaces/${spaceId}/installations`,
+    `/internal/v1/workspaces/${spaceId}/capsules`,
     {
       method: "POST",
       headers: headers({ "content-type": "application/json" }),
@@ -489,7 +489,7 @@ test("model e2e: dependency create -> list -> 409 on cycle -> delete", async () 
 
   // Create a producer -> consumer edge (consumer is the path installation).
   const createRes = await app.request(
-    `/internal/v1/installations/${consumer}/dependencies`,
+    `/internal/v1/capsules/${consumer}/dependencies`,
     {
       method: "POST",
       headers: headers({ "content-type": "application/json" }),
@@ -515,7 +515,7 @@ test("model e2e: dependency create -> list -> 409 on cycle -> delete", async () 
 
   // List from the consumer: it appears as a consumer-side edge.
   const listRes = await app.request(
-    `/internal/v1/installations/${consumer}/dependencies`,
+    `/internal/v1/capsules/${consumer}/dependencies`,
     { headers: headers() },
   );
   expect(listRes.status).toBe(200);
@@ -525,7 +525,7 @@ test("model e2e: dependency create -> list -> 409 on cycle -> delete", async () 
 
   // The reverse edge (producer depends on consumer) would close a cycle: 409.
   const cycleRes = await app.request(
-    `/internal/v1/installations/${producer}/dependencies`,
+    `/internal/v1/capsules/${producer}/dependencies`,
     {
       method: "POST",
       headers: headers({ "content-type": "application/json" }),
@@ -554,7 +554,7 @@ test("model e2e: dependency create -> list -> 409 on cycle -> delete", async () 
 
   // After deletion the consumer has no edges.
   const afterRes = await app.request(
-    `/internal/v1/installations/${consumer}/dependencies`,
+    `/internal/v1/capsules/${consumer}/dependencies`,
     { headers: headers() },
   );
   const after = await afterRes.json();
@@ -601,7 +601,7 @@ test("model e2e: a dependency to a producer in another space is rejected", async
   // consumer is in spaceA; producer is in spaceB. The consumer-path edge is
   // gated by spaceA, but the producer belongs to spaceB -> failed_precondition.
   const res = await app.request(
-    `/internal/v1/installations/${consumer}/dependencies`,
+    `/internal/v1/capsules/${consumer}/dependencies`,
     {
       method: "POST",
       headers: headers({ "content-type": "application/json" }),
@@ -625,6 +625,6 @@ test("model e2e: a dependency to a producer in another space is rejected", async
 
 test("model e2e: unauthorized without the deploy-control bearer", async () => {
   const { app } = await service();
-  const res = await app.request("/internal/v1/spaces");
+  const res = await app.request("/internal/v1/workspaces");
   expect(res.status).toBe(401);
 });

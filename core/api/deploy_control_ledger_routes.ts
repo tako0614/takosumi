@@ -1,7 +1,7 @@
 /**
  * Plan / Apply run ledger + operator execution boundary routes and the INTERNAL
  * `/internal/v1` DeploymentOutput read consumed by the accounts plane + CLI.
- * The Installation + Deployment reads (`/internal/v1/installations/:id` and
+ * The Installation + Deployment reads (`/internal/v1/capsules/:id` and
  * `.../deployments`) are owned solely by the installation route group
  * (`mountDeployControlInstallationRoutes`); they used to be duplicated here as a
  * separate `/v1` seam, but once both groups collapsed onto `/internal/v1` the
@@ -29,7 +29,7 @@ import {
 import {
   TAKOSUMI_APPLY_RUN_ROUTE,
   TAKOSUMI_APPLY_RUNS_ROUTE,
-  TAKOSUMI_INSTALLATION_DEPLOYMENT_OUTPUTS_ROUTE,
+  TAKOSUMI_CAPSULE_OUTPUTS_ROUTE,
   TAKOSUMI_PLAN_RUN_ROUTE,
   TAKOSUMI_PLAN_RUNS_ROUTE,
   TAKOSUMI_RUNNER_PROFILES_ROUTE,
@@ -95,13 +95,13 @@ export const DEPLOY_CONTROL_LEDGER_ENDPOINTS: readonly DeployControlEndpoint[] =
     },
     {
       method: "GET",
-      path: TAKOSUMI_INSTALLATION_DEPLOYMENT_OUTPUTS_ROUTE,
+      path: TAKOSUMI_CAPSULE_OUTPUTS_ROUTE,
       summary:
-        "INTERNAL seam: lists non-sensitive DeploymentOutput records for the current Deployment of an Installation (accounts-plane consumer; not part of the §30 public surface).",
+        "INTERNAL seam: lists non-sensitive Output records for the current StateVersion of a Capsule (accounts-plane consumer; not part of the public surface).",
       auth: "deploy-control-token",
-      operationId: "listInstallationDeploymentOutputs",
+      operationId: "listCapsuleOutputs",
       openapi: {
-        pathParams: ["installationId"],
+        pathParams: ["capsuleId"],
         okSchema: "ListDeploymentOutputsResponse",
       },
       notImplementedMessage: "deployment outputs not wired",
@@ -196,10 +196,10 @@ export function mountDeployControlLedgerRoutes(
   );
 
   app.get(
-    TAKOSUMI_INSTALLATION_DEPLOYMENT_OUTPUTS_ROUTE,
+    TAKOSUMI_CAPSULE_OUTPUTS_ROUTE,
     defineRoute({
       ctx,
-      param: { id: "installationId" },
+      param: { id: "capsuleId" },
       handler: async ({ c, principal, id }) => {
         const installation = await controller.getInstallation(id);
         ensureSpacePermission(principal, installation.capsule.workspaceId);

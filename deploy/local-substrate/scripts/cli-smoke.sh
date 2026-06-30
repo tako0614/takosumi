@@ -2,13 +2,13 @@
 # Exercises the real upload deploy path used by `takosumi deploy`.
 #
 #   1. GET  /internal/v1/runner-profiles.
-#   2. POST /internal/v1/spaces.
+#   2. POST /internal/v1/workspaces.
 #   3. tar.zst a plain OpenTofu Capsule.
-#   4. POST /internal/v1/spaces/{spaceId}/uploads.
+#   4. POST /internal/v1/workspaces/{workspaceId}/uploads.
 #   5. POST /internal/v1/deploy -> real plan Run.
 #   6. POST /internal/v1/runs/{planRunId}/approve when approval is required.
 #   7. POST /internal/v1/apply-runs -> real apply Run.
-#   8. GET  /internal/v1/installations/{id} and deployments.
+#   8. GET  /internal/v1/capsules/{id} and state versions.
 #
 # Run: bash scripts/cli-smoke.sh
 set -euo pipefail
@@ -107,7 +107,7 @@ SPACE_REQUEST=$(cat <<EOF
 }
 EOF
 )
-SPACE_RESPONSE="$(post_json "/internal/v1/spaces" "$SPACE_REQUEST")"
+SPACE_RESPONSE="$(post_json "/internal/v1/workspaces" "$SPACE_REQUEST")"
 require_code "space create" "$SPACE_RESPONSE" "201"
 SPACE_ID="$(response_body "$SPACE_RESPONSE" | json_field "data['space']['id']")"
 
@@ -115,7 +115,7 @@ ARCHIVE="$(mktemp -t takosumi-cli-smoke.XXXXXX.tar.zst)"
 trap 'rm -f "$ARCHIVE"' EXIT
 tar --zstd -cf "$ARCHIVE" -C "$SOURCE_PATH" .
 
-UPLOAD_RESPONSE="$(post_binary "/internal/v1/spaces/$SPACE_ID/uploads?path=." "$ARCHIVE")"
+UPLOAD_RESPONSE="$(post_binary "/internal/v1/workspaces/$SPACE_ID/uploads?path=." "$ARCHIVE")"
 require_code "upload snapshot" "$UPLOAD_RESPONSE" "201"
 SNAPSHOT_ID="$(response_body "$UPLOAD_RESPONSE" | json_field "data['snapshot']['id']")"
 SNAPSHOT_DIGEST="$(response_body "$UPLOAD_RESPONSE" | json_field "data['snapshot']['archiveDigest']")"
@@ -176,9 +176,9 @@ if [[ "$APPLY_STATUS" != "succeeded" ]]; then
 	exit 1
 fi
 
-GET_INSTALLATION_RESPONSE="$(get_json "/internal/v1/installations/$INSTALLATION_ID")"
+GET_INSTALLATION_RESPONSE="$(get_json "/internal/v1/capsules/$INSTALLATION_ID")"
 require_code "get installation" "$GET_INSTALLATION_RESPONSE" "200"
-LIST_DEPLOYMENTS_RESPONSE="$(get_json "/internal/v1/installations/$INSTALLATION_ID/deployments")"
+LIST_DEPLOYMENTS_RESPONSE="$(get_json "/internal/v1/capsules/$INSTALLATION_ID/state-versions")"
 require_code "list deployments" "$LIST_DEPLOYMENTS_RESPONSE" "200"
 DEPLOYMENT_COUNT="$(response_body "$LIST_DEPLOYMENTS_RESPONSE" | json_field "len(data.get('deployments') or [])")"
 [[ "$DEPLOYMENT_COUNT" -gt 0 ]] || {

@@ -92,12 +92,12 @@ test("Cloudflare Worker dispatches internal seams only with local/private opt-in
     "/internal/v1/plan-runs/plan_abcdef12",
     "/internal/v1/apply-runs",
     "/internal/v1/apply-runs/apply_abcdef12",
-    "/internal/v1/installations/ins_abcdef12",
-    "/internal/v1/installations/ins_abcdef12/deployments",
-    "/internal/v1/installations/ins_abcdef12/deployment-outputs",
-    "/internal/v1/installations/inst_abcdef12",
-    "/internal/v1/installations/inst_abcdef12/deployments",
-    "/internal/v1/installations/inst_abcdef12/deployment-outputs",
+    "/internal/v1/capsules/ins_abcdef12",
+    "/internal/v1/capsules/ins_abcdef12/state-versions",
+    "/internal/v1/capsules/ins_abcdef12/outputs",
+    "/internal/v1/capsules/inst_abcdef12",
+    "/internal/v1/capsules/inst_abcdef12/state-versions",
+    "/internal/v1/capsules/inst_abcdef12/outputs",
   ]) {
     calls.length = 0;
     const response = await worker.fetch(

@@ -26,7 +26,7 @@ export type {
 // INTERNAL deploy-control seam paths. These `/internal/v1/*` routes are the
 // internal compatibility seam the accounts plane + CLI consume (PlanRun / ApplyRun /
 // internal-execution-profile ledgers and the Capsule read + its
-// deployments / deployment-outputs reads). They live under the unified
+// state-version / output reads). They live under the unified
 // `/internal/v1` internal-seam prefix and are never edge-public.
 // ---------------------------------------------------------------------------
 
@@ -38,14 +38,12 @@ export const PLAN_RUN_PATH = (id: string): string =>
 export const APPLY_RUNS_PATH = `${INTERNAL_V1_PREFIX}/apply-runs` as const;
 export const APPLY_RUN_PATH = (id: string): string =>
   `${INTERNAL_V1_PREFIX}/apply-runs/${encodeURIComponent(id)}`;
-export const INSTALLATION_PATH = (id: string): string =>
-  `${INTERNAL_V1_PREFIX}/installations/${encodeURIComponent(id)}`;
-export const INSTALLATION_DEPLOYMENTS_PATH = (id: string): string =>
-  `${INTERNAL_V1_PREFIX}/installations/${encodeURIComponent(id)}/deployments`;
-export const INSTALLATION_DEPLOYMENT_OUTPUTS_PATH = (id: string): string =>
-  `${INTERNAL_V1_PREFIX}/installations/${encodeURIComponent(
-    id,
-  )}/deployment-outputs`;
+export const CAPSULE_PATH = (id: string): string =>
+  `${INTERNAL_V1_PREFIX}/capsules/${encodeURIComponent(id)}`;
+export const CAPSULE_STATE_VERSIONS_PATH = (id: string): string =>
+  `${INTERNAL_V1_PREFIX}/capsules/${encodeURIComponent(id)}/state-versions`;
+export const CAPSULE_OUTPUTS_PATH = (id: string): string =>
+  `${INTERNAL_V1_PREFIX}/capsules/${encodeURIComponent(id)}/outputs`;
 export const INTERNAL_DEPLOY_PATH = `${INTERNAL_V1_PREFIX}/deploy` as const;
 
 /**
@@ -353,7 +351,7 @@ export interface PlanRun {
   /**
    * RunGroup this plan belongs to. Set when the plan was
    * created as a member of a Workspace-update RunGroup (`POST
-   * /internal/v1/spaces/:id/plan-update`); the apply that follows carries it
+   * /internal/v1/workspaces/:id/plan-update`); the apply that follows carries it
    * onto the public Run so the
    * group status can be computed from its member runs. Absent for standalone
    * plans. Projected onto the public Run `runGroupId`.

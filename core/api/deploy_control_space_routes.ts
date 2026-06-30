@@ -1,5 +1,5 @@
 /**
- * §4 Space CRUD routes. Owns
+ * Workspace CRUD routes. Owns
  * its handlers and its slice of the {@link DEPLOY_CONTROL_INTERNAL_ENDPOINTS}
  * descriptor inventory.
  */
@@ -18,22 +18,25 @@ import {
   SPACE_ID_PATTERN,
 } from "./deploy_control_shared.ts";
 import {
-  TAKOSUMI_SPACE_ROUTE,
-  TAKOSUMI_SPACES_ROUTE,
+  TAKOSUMI_WORKSPACE_ROUTE,
+  TAKOSUMI_WORKSPACES_ROUTE,
 } from "./deploy_control_route_paths.ts";
 import { stableJsonDigest } from "../adapters/source/digest.ts";
 
-const SPACE_ID_PARAM = { param: "spaceId", pattern: SPACE_ID_PATTERN } as const;
+const WORKSPACE_ID_PARAM = {
+  param: "workspaceId",
+  pattern: SPACE_ID_PATTERN,
+} as const;
 
 export const DEPLOY_CONTROL_SPACE_ENDPOINTS: readonly DeployControlEndpoint[] =
   [
     {
       method: "POST",
-      path: TAKOSUMI_SPACES_ROUTE,
+      path: TAKOSUMI_WORKSPACES_ROUTE,
       summary:
-        "Creates a Space (owner namespace `@handle`) Installations live directly under.",
+        "Creates a Workspace (owner namespace `@handle`) Capsules live directly under.",
       auth: "deploy-control-token",
-      operationId: "createSpace",
+      operationId: "createWorkspace",
       openapi: {
         requestSchema: "CreateWorkspaceRequest",
         okStatus: "201",
@@ -43,31 +46,31 @@ export const DEPLOY_CONTROL_SPACE_ENDPOINTS: readonly DeployControlEndpoint[] =
     },
     {
       method: "GET",
-      path: TAKOSUMI_SPACES_ROUTE,
-      summary: "Lists Spaces visible to the principal.",
+      path: TAKOSUMI_WORKSPACES_ROUTE,
+      summary: "Lists Workspaces visible to the principal.",
       auth: "deploy-control-token",
-      operationId: "listSpaces",
+      operationId: "listWorkspaces",
       openapi: { okSchema: "ListSpacesResponse" },
       notImplementedMessage: "spaces not wired",
     },
     {
       method: "GET",
-      path: TAKOSUMI_SPACE_ROUTE,
-      summary: "Reads a Space record.",
+      path: TAKOSUMI_WORKSPACE_ROUTE,
+      summary: "Reads a Workspace record.",
       auth: "deploy-control-token",
-      operationId: "getSpace",
-      openapi: { pathParams: ["spaceId"], okSchema: "SpaceResponse" },
+      operationId: "getWorkspace",
+      openapi: { pathParams: ["workspaceId"], okSchema: "SpaceResponse" },
       notImplementedMessage: "spaces not wired",
     },
     {
       method: "PATCH",
-      path: TAKOSUMI_SPACE_ROUTE,
+      path: TAKOSUMI_WORKSPACE_ROUTE,
       summary:
-        "Updates mutable Space settings such as displayName or archive state.",
+        "Updates mutable Workspace settings such as displayName or archive state.",
       auth: "deploy-control-token",
-      operationId: "patchSpace",
+      operationId: "patchWorkspace",
       openapi: {
-        pathParams: ["spaceId"],
+        pathParams: ["workspaceId"],
         requestSchema: "PatchSpaceRequest",
         okSchema: "SpaceResponse",
       },
@@ -83,7 +86,7 @@ export function mountDeployControlSpaceRoutes(
   const activity = dependencies.activityService;
 
   app.post(
-    TAKOSUMI_SPACES_ROUTE,
+    TAKOSUMI_WORKSPACES_ROUTE,
     deployControlBodyLimit,
     defineRoute({
       ctx,
@@ -91,8 +94,8 @@ export function mountDeployControlSpaceRoutes(
         deps.spacesService ? undefined : "spaces not wired",
       enforceBody: true,
       handler: async ({ c, principal }) => {
-        // Space creation is not scoped by an existing space id, so only an
-        // unrestricted principal (`spaceIds: "*"`) may mint new Spaces.
+        // Workspace creation is not scoped by an existing workspace id, so only
+        // an unrestricted principal (`spaceIds: "*"`) may mint new Workspaces.
         ensureSpaceCreatePermission(principal);
         const body = await readJsonBody<CreateWorkspaceRequest>(c, "spaceCreate");
         return c.json({ space: await spaces!.createWorkspace(body) }, 201);
@@ -101,14 +104,14 @@ export function mountDeployControlSpaceRoutes(
   );
 
   app.get(
-    TAKOSUMI_SPACES_ROUTE,
+    TAKOSUMI_WORKSPACES_ROUTE,
     defineRoute({
       ctx,
       requireService: (deps) =>
         deps.spacesService ? undefined : "spaces not wired",
       handler: async ({ c, principal }) => {
         const all = await spaces!.listWorkspaces();
-        // A scoped principal only sees the Spaces it may access.
+        // A scoped principal only sees the Workspaces it may access.
         const visible =
           principal.spaceIds === "*"
             ? all
@@ -119,12 +122,12 @@ export function mountDeployControlSpaceRoutes(
   );
 
   app.get(
-    TAKOSUMI_SPACE_ROUTE,
+    TAKOSUMI_WORKSPACE_ROUTE,
     defineRoute({
       ctx,
       requireService: (deps) =>
         deps.spacesService ? undefined : "spaces not wired",
-      param: SPACE_ID_PARAM,
+      param: WORKSPACE_ID_PARAM,
       handler: async ({ c, principal, id }) => {
         ensureSpacePermission(principal, id);
         return c.json({ space: await spaces!.getWorkspace(id) }, 200);
@@ -132,15 +135,15 @@ export function mountDeployControlSpaceRoutes(
     }),
   );
 
-  // §30 `PATCH /internal/v1/spaces/:spaceId` — mutable Space settings.
+  // Mutable Workspace settings.
   app.patch(
-    TAKOSUMI_SPACE_ROUTE,
+    TAKOSUMI_WORKSPACE_ROUTE,
     deployControlBodyLimit,
     defineRoute({
       ctx,
       requireService: (deps) =>
         deps.spacesService ? undefined : "spaces not wired",
-      param: SPACE_ID_PARAM,
+      param: WORKSPACE_ID_PARAM,
       enforceBody: true,
       handler: async ({ c, principal, id }) => {
         ensureSpacePermission(principal, id);

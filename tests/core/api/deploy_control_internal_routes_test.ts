@@ -19,24 +19,24 @@ test("deploy_control_internal_routes — internal seam endpoints respond with 50
   });
 
   const endpoints = [
-    ["GET", "/internal/v1/spaces", undefined],
-    ["POST", "/internal/v1/spaces", {}],
+    ["GET", "/internal/v1/workspaces", undefined],
+    ["POST", "/internal/v1/workspaces", {}],
     ["GET", "/internal/v1/sources", undefined],
     ["POST", "/internal/v1/sources", {}],
-    ["GET", "/internal/v1/installations/ins_abcdef12", undefined],
-    ["POST", "/internal/v1/installations/ins_abcdef12/plan", {}],
+    ["GET", "/internal/v1/capsules/ins_abcdef12", undefined],
+    ["POST", "/internal/v1/capsules/ins_abcdef12/plan", {}],
     ["GET", "/internal/v1/runs/plan_abcdef12", undefined],
     ["POST", "/internal/v1/runs/plan_abcdef12/approve", {}],
-    ["GET", "/internal/v1/spaces/space_abcdef12/billing", undefined],
-    ["GET", "/internal/v1/spaces/space_abcdef12/usage", undefined],
+    ["GET", "/internal/v1/workspaces/space_abcdef12/billing", undefined],
+    ["GET", "/internal/v1/workspaces/space_abcdef12/usage", undefined],
     [
       "POST",
-      "/internal/v1/spaces/space_abcdef12/credits/top-up",
+      "/internal/v1/workspaces/space_abcdef12/credits/top-up",
       { credits: 1 },
     ],
     [
       "POST",
-      "/internal/v1/spaces/space_abcdef12/subscription/change",
+      "/internal/v1/workspaces/space_abcdef12/subscription/change",
       { billingSettings: { mode: "disabled", provider: "none" } },
     ],
   ] as const;
@@ -64,7 +64,7 @@ test("deploy_control_internal_routes — disabled without TAKOSUMI_DEPLOY_CONTRO
     requestCorrelation: false,
   });
 
-  const response = await app.request("/internal/v1/spaces", {
+  const response = await app.request("/internal/v1/workspaces", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({}),
@@ -83,7 +83,7 @@ test("deploy_control_internal_routes — rejects invalid bearer", async () => {
     requestCorrelation: false,
   });
 
-  const response = await app.request("/internal/v1/spaces", {
+  const response = await app.request("/internal/v1/workspaces", {
     method: "POST",
     headers: {
       authorization: "Bearer wrong-token",

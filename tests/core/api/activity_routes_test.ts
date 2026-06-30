@@ -1,7 +1,7 @@
 /**
  * Activity HTTP route tests (Core Specification §27 audit_events / §34 Activity).
  *
- *   GET /internal/v1/spaces/:spaceId/activity   -> the Space's audit trail, newest first
+ *   GET /internal/v1/workspaces/:spaceId/activity   -> the Space's audit trail, newest first
  *
  * Drives the full internal route surface over an in-memory store. Real flows emit
  * Activity events (Installation created, plan created), and the listing shows
@@ -80,7 +80,7 @@ async function createSpace(
   app: Harness["app"],
   handle: string,
 ): Promise<string> {
-  const res = await app.request("/internal/v1/spaces", {
+  const res = await app.request("/internal/v1/workspaces", {
     method: "POST",
     headers: headers({ "content-type": "application/json" }),
     body: JSON.stringify({
@@ -129,7 +129,7 @@ async function createInstallation(
   await store.putInstallConfig(config);
 
   const installRes = await app.request(
-    `/internal/v1/spaces/${spaceId}/installations`,
+    `/internal/v1/workspaces/${spaceId}/capsules`,
     {
       method: "POST",
       headers: headers({ "content-type": "application/json" }),
@@ -186,7 +186,7 @@ async function listActivity(
   spaceId: string,
   query = "",
 ): Promise<Response> {
-  return await app.request(`/internal/v1/spaces/${spaceId}/activity${query}`, {
+  return await app.request(`/internal/v1/workspaces/${spaceId}/activity${query}`, {
     headers: headers(),
   });
 }
@@ -201,7 +201,7 @@ test("real flows emit Activity events; listing is space-scoped and newest-first"
 
   // Planning emits run.plan_created.
   const planRes = await app.request(
-    `/internal/v1/installations/${installationId}/plan`,
+    `/internal/v1/capsules/${installationId}/plan`,
     { method: "POST", headers: headers() },
   );
   expect(planRes.status).toBe(201);

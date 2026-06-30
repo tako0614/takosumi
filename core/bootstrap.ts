@@ -645,11 +645,11 @@ export interface TakosumiOperations {
   listDeploymentOutputs(
     installationId: string,
   ): Promise<ListDeploymentOutputsResponse>;
-  /** Reads one Deployment ledger record by id (§30 `GET /internal/v1/deployments/:id`). */
+  /** Reads one Deployment ledger record by id (§30 `GET /internal/v1/state-versions/:id`). */
   getDeployment(id: string): Promise<Deployment>;
   /**
    * Creates a rollback PLAN run for a Deployment (§30 `POST
-   * /internal/v1/deployments/:id/rollback-plan`): re-plans the Deployment's Installation
+   * /internal/v1/state-versions/:id/rollback-plan`): re-plans the Deployment's Installation
    * pinned to that Deployment's source snapshot. Flows through the normal
    * approve/apply path.
    */

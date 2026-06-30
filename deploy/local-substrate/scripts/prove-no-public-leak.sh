@@ -30,7 +30,7 @@ assert_internal_seam_not_edge_reachable() {
 	# We also probe the retired unversioned `/api/...` core-seam strings, which
 	# must likewise not be edge-reachable after the /internal/v1 cutover.
 	local paths=(
-		"/internal/v1/spaces"
+		"/internal/v1/workspaces"
 		"/internal/v1/plan-runs"
 		"/internal/v1/apply-runs"
 		"/internal/v1/runner-profiles"

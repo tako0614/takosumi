@@ -19,8 +19,10 @@
 
 import { INTERNAL_V1_PREFIX } from "./api-surface.ts";
 
-export const SPACE_ACTIVITY_PATH = (workspaceId: string): string =>
-  `${INTERNAL_V1_PREFIX}/spaces/${encodeURIComponent(workspaceId)}/activity`;
+export const WORKSPACE_ACTIVITY_PATH = (workspaceId: string): string =>
+  `${INTERNAL_V1_PREFIX}/workspaces/${encodeURIComponent(
+    workspaceId,
+  )}/activity`;
 
 /** Default page size for an Activity listing when no limit is given. */
 export const ACTIVITY_DEFAULT_LIMIT = 100;
@@ -61,7 +63,7 @@ export interface ActivityEvent {
   readonly createdAt: string;
 }
 
-/** The body of an Activity listing (`GET /internal/v1/spaces/:workspaceId/activity`). */
+/** The body of an Activity listing (`GET /internal/v1/workspaces/:workspaceId/activity`). */
 export interface ListActivityResponse {
   readonly events: readonly ActivityEvent[];
 }

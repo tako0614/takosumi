@@ -12,7 +12,7 @@ import {
 
 test("signInternalResponse / verifySignedInternalResponseFromHeaders round trip", async () => {
   const body = '{"space":{"id":"space_42","name":"default"}}';
-  const path = TAKOSUMI_INTERNAL_PATHS.spaces;
+  const path = TAKOSUMI_INTERNAL_PATHS.workspaces;
   const signed = await signInternalResponse({
     method: "POST",
     path,
@@ -65,7 +65,7 @@ test("signInternalResponse / verifySignedInternalResponseFromHeaders round trip"
 });
 
 test("canonicalInternalResponse binds method/path/status/body", () => {
-  const path = TAKOSUMI_INTERNAL_PATHS.spaces;
+  const path = TAKOSUMI_INTERNAL_PATHS.workspaces;
   const canonical = canonicalInternalResponse({
     method: "post",
     path,

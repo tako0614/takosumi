@@ -115,7 +115,8 @@ function mountByMethod(
 const ID_PATTERNS = {
   planRunId: /^plan_[0-9a-zA-Z]{8,64}$/,
   applyRunId: /^apply_[0-9a-zA-Z]{8,64}$/,
-  // The InstallationsService mints `inst_...`.
+  // The CapsulesService still mints `inst_...` while storage rows converge.
+  capsuleId: /^inst_[0-9a-zA-Z]{8,64}$/,
   installationId: /^inst_[0-9a-zA-Z]{8,64}$/,
 } as const;
 

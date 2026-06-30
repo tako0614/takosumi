@@ -2,9 +2,9 @@ import { expect, test } from "bun:test";
 import {
   APPLY_RUN_PATH,
   APPLY_RUNS_PATH,
-  INSTALLATION_DEPLOYMENTS_PATH,
-  INSTALLATION_DEPLOYMENT_OUTPUTS_PATH,
-  INSTALLATION_PATH,
+  CAPSULE_OUTPUTS_PATH,
+  CAPSULE_PATH,
+  CAPSULE_STATE_VERSIONS_PATH,
   DEPLOY_CONTROL_ERROR_CODES,
   DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE,
   PLAN_RUN_PATH,
@@ -20,18 +20,18 @@ test("Deploy Control API v1 exposes the OpenTofu deploy-control endpoint templat
     PLAN_RUN_PATH("{id}"),
     APPLY_RUNS_PATH,
     APPLY_RUN_PATH("{id}"),
-    INSTALLATION_PATH("{id}"),
-    INSTALLATION_DEPLOYMENTS_PATH("{id}"),
-    INSTALLATION_DEPLOYMENT_OUTPUTS_PATH("{id}"),
+    CAPSULE_PATH("{id}"),
+    CAPSULE_STATE_VERSIONS_PATH("{id}"),
+    CAPSULE_OUTPUTS_PATH("{id}"),
   ]).toEqual([
     "/internal/v1/runner-profiles",
     "/internal/v1/plan-runs",
     "/internal/v1/plan-runs/%7Bid%7D",
     "/internal/v1/apply-runs",
     "/internal/v1/apply-runs/%7Bid%7D",
-    "/internal/v1/installations/%7Bid%7D",
-    "/internal/v1/installations/%7Bid%7D/deployments",
-    "/internal/v1/installations/%7Bid%7D/deployment-outputs",
+    "/internal/v1/capsules/%7Bid%7D",
+    "/internal/v1/capsules/%7Bid%7D/state-versions",
+    "/internal/v1/capsules/%7Bid%7D/outputs",
   ]);
 });
 

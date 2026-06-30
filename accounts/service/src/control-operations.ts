@@ -459,7 +459,7 @@ export interface ControlPlaneOperations {
   // --- Deployments (§21 / §30) ---
   /**
    * Lists an Capsule's Deployment ledger (§30 `GET
-   * /internal/v1/installations/:id/deployments`). The control surface resolves the
+   * /internal/v1/capsules/:id/state-versions`). The control surface resolves the
    * Capsule's owning Workspace first and space-permission gates before calling
    * this; the returned `Deployment` rows only carry the allowlist-projected
    * `outputsPublic` map (sensitive outputs never enter the ledger row).
@@ -469,7 +469,7 @@ export interface ControlPlaneOperations {
     params?: PageParams,
   ): Promise<ListDeploymentsResponse>;
   /**
-   * Reads one Deployment ledger record by id (§30 `GET /internal/v1/deployments/:id`).
+   * Reads one Deployment ledger record by id (§30 `GET /internal/v1/state-versions/:id`).
    * Used by the control surface to resolve a Deployment's owning Workspace (for the
    * space-permission gate) and to project its public fields. A missing id is a
    * typed `not_found`.
@@ -477,7 +477,7 @@ export interface ControlPlaneOperations {
   getDeployment(id: string): Promise<Deployment>;
   /**
    * Creates a rollback PLAN run for a Deployment (§30 `POST
-   * /internal/v1/deployments/:id/rollback-plan`): re-plans the Deployment's Capsule
+   * /internal/v1/state-versions/:id/rollback-plan`): re-plans the Deployment's Capsule
    * pinned to that Deployment's source snapshot. The plan then flows through the
    * normal approve/apply path, so the response is a `PlanRunResponse`.
    */
