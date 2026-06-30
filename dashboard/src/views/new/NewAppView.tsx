@@ -663,6 +663,8 @@ function Inner() {
     }
     return list;
   };
+  const installConfigLoading = () =>
+    configs.loading && configList().length === 0;
   const selectedInstallConfigId = () => {
     ensureConfigSelected();
     return installConfigId();
@@ -842,6 +844,7 @@ function Inner() {
     if (!INSTALLATION_NAME_PATTERN.test(name().trim())) {
       return t("new.error.nameInvalid");
     }
+    if (installConfigLoading()) return t("new.error.configLoading");
     if (!selectedInstallConfigId()) return t("new.error.configMissing");
     const sourceCredentialError = sourceAccessError();
     if (sourceCredentialError) return sourceCredentialError;
@@ -2421,6 +2424,7 @@ function Inner() {
                     disabled={
                       checkingCompatibility() ||
                       busy() ||
+                      installConfigLoading() ||
                       (compatibility() !== null && !canContinue())
                     }
                   >
@@ -2428,7 +2432,9 @@ function Inner() {
                       ? t("new.compat.checking")
                       : busy()
                         ? t("new.installing")
-                        : t("new.installCta")}
+                        : installConfigLoading()
+                          ? t("common.loading")
+                          : t("new.installCta")}
                   </Button>
                   <Show
                     when={

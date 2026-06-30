@@ -203,6 +203,16 @@ describe("/new flow guidance", () => {
     );
   });
 
+  test("does not allow install-link submit before add configuration loads", () => {
+    expect(newAppViewSource).toContain("const installConfigLoading = () =>");
+    expect(newAppViewSource).toContain(
+      'if (installConfigLoading()) return t("new.error.configLoading")',
+    );
+    expect(newAppViewSource).toContain("installConfigLoading() ||");
+    expect(en["new.error.configLoading"]).toContain("Loading add configuration");
+    expect(ja["new.error.configLoading"]).toContain("追加設定を読み込み中");
+  });
+
   test("catalog exposes runnable service choices backed by official configs", () => {
     const officialSeedSource = readFileSync(
       resolve(
