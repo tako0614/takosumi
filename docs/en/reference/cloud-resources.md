@@ -12,6 +12,7 @@ Takosumi Cloud Resources =
   + KVStore
   + SQLDatabase
   + Queue
+  + PushNotification
   + AI Gateway
   + routes / domains / secrets
   + USD credits / usage metering
@@ -39,6 +40,7 @@ Use these terms in landing pages and the main app UI:
 - Object Storage
 - Database
 - Queue
+- Push Notifications
 - AI Gateway
 - Durable Workflow
 

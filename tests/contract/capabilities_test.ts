@@ -35,6 +35,7 @@ test("Takosumi product capabilities separate framework from enabled profiles", (
   assert.equal(capabilities.resources.Stack, true);
   assert.equal(capabilities.resources.EdgeWorker, false);
   assert.equal(capabilities.resources.ObjectBucket, true);
+  assert.equal(capabilities.resources.PushNotification, true);
   assert.equal(capabilities.resources.ContainerService, true);
   assert.equal(capabilities.adapters.opentofu, true);
   assert.equal(capabilities.compat.framework, true);

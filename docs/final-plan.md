@@ -184,6 +184,7 @@ EdgeWorker
 ObjectBucket
 KVStore
 Queue
+PushNotification
 SQLDatabase
 ContainerService
 ```
@@ -360,7 +361,7 @@ through the same S3-compatible provider/SDK surface. `takosumi_object_bucket`
 exists for the control-plane shape; S3-compatible APIs remain the data-plane
 surface.
 
-### 4.3 KVStore / Queue / SQLDatabase / ContainerService
+### 4.3 KVStore / Queue / PushNotification / SQLDatabase / ContainerService
 
 These are minimum service forms needed by Takos and yurucommu-style apps.
 
@@ -372,6 +373,12 @@ resource "takosumi_kv_store" "cache" {
 resource "takosumi_queue" "delivery" {
   name        = "delivery"
   max_retries = 5
+}
+
+resource "takosumi_push_notification" "push" {
+  name        = "push"
+  protocols   = ["web_push", "fcm"]
+  ttl_seconds = 3600
 }
 
 resource "takosumi_sql_database" "main" {
@@ -395,6 +402,11 @@ KVStore:
 
 Queue:
   async delivery and event fan-out.
+
+PushNotification:
+  provider-neutral notification delivery channel for Web Push, APNs, and FCM.
+  VAPID / APNs / FCM credentials are Target / Credential / ProviderConnection
+  material, not shape spec fields.
 
 SQLDatabase:
   D1-like sqlite first, postgres/mysql only when an operator target supports it.
@@ -697,6 +709,7 @@ Example:
     "ObjectBucket": true,
     "KVStore": true,
     "Queue": true,
+    "PushNotification": true,
     "SQLDatabase": true,
     "ContainerService": true
   },
@@ -769,6 +782,7 @@ Stable:
 Preview:
   KV
   Queue
+  PushNotification
   SQLDatabase
   ContainerService
   DurableWorkflow
@@ -859,8 +873,8 @@ clear OSS / Operator / Cloud boundaries
 1. Keep plain OpenTofu Stack execution reliable.
 2. Keep arbitrary provider support through generic-env ProviderConnections.
 3. Finish Resource API, planner, resolver, state, and ResolutionLock for
-   EdgeWorker, ObjectBucket, KVStore, Queue, SQLDatabase, and
-   ContainerService.
+   EdgeWorker, ObjectBucket, KVStore, Queue, PushNotification, SQLDatabase,
+   and ContainerService.
 4. Finish `takosumi/takosumi` provider schemas for those default shapes.
 5. Finish extensible TargetPool implementation plugin fields.
 6. Add compatibility profiles only where they are actually needed.

@@ -227,6 +227,39 @@ test("PUT /v1/resources/ContainerService/:name accepts admin-defined implementat
   expect(body.status.resolution.target).toBe("containers-main");
 });
 
+test("PUT /v1/resources/PushNotification/:name applies a provider-neutral notification shape", async () => {
+  const { app, service } = await buildApp();
+  await service.putTargetPool("space_1", "default", {
+    targets: [
+      {
+        name: "native-main",
+        type: "takosumi_native",
+        ref: "native-prod",
+        priority: 90,
+      },
+    ],
+  });
+  const res = await app.request("/v1/resources/PushNotification/push", {
+    method: "PUT",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({
+      metadata: { space: "space_1" },
+      spec: {
+        name: "push",
+        protocols: ["web_push", "apns"],
+        delivery: { ttlSeconds: 3600 },
+      },
+    }),
+  });
+  expect(res.status).toBe(200);
+  const body = await res.json();
+  expect(body.id).toBe("tkrn:space_1:PushNotification:push");
+  expect(body.status.resolution.selectedImplementation).toBe(
+    "takosumi_push_notification",
+  );
+  expect(body.status.resolution.target).toBe("native-main");
+});
+
 test("TargetPool API persists admin-defined capability evidence", async () => {
   const { app } = await buildApp();
   const put = await app.request("/v1/target-pools/containers", {
@@ -416,6 +449,7 @@ test("GET /v1/capabilities advertises enabled Resource Shapes", async () => {
   expect(body.resources.ObjectBucket).toBe(true);
   expect(body.resources.KVStore).toBe(true);
   expect(body.resources.Queue).toBe(true);
+  expect(body.resources.PushNotification).toBe(true);
   expect(body.resources.SQLDatabase).toBe(true);
   expect(body.resources.ContainerService).toBe(true);
   expect(Object.keys(body.resources).sort()).toEqual([
@@ -423,6 +457,7 @@ test("GET /v1/capabilities advertises enabled Resource Shapes", async () => {
     "EdgeWorker",
     "KVStore",
     "ObjectBucket",
+    "PushNotification",
     "Queue",
     "SQLDatabase",
     "Stack",

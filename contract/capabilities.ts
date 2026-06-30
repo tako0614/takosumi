@@ -48,6 +48,7 @@ export interface TakosumiResourceCapabilities {
   readonly ObjectBucket: boolean;
   readonly KVStore: boolean;
   readonly Queue: boolean;
+  readonly PushNotification: boolean;
   readonly SQLDatabase: boolean;
   readonly ContainerService: boolean;
 }
@@ -147,6 +148,7 @@ export function createTakosumiProductCapabilities(
       ObjectBucket: true,
       KVStore: true,
       Queue: true,
+      PushNotification: true,
       SQLDatabase: true,
       ContainerService: true,
       ...(options.resources ?? {}),

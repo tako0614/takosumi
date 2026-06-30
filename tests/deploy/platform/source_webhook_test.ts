@@ -1200,6 +1200,7 @@ test("platform worker exposes product discovery before accounts handler", async 
     "EdgeWorker",
     "KVStore",
     "ObjectBucket",
+    "PushNotification",
     "Queue",
     "SQLDatabase",
     "Stack",
@@ -1259,6 +1260,7 @@ test("platform worker product discovery exposes Cloud endpoint capabilities with
   expect(body.resources.ObjectBucket).toBe(false);
   expect(body.resources.KVStore).toBe(false);
   expect(body.resources.Queue).toBe(false);
+  expect(body.resources.PushNotification).toBe(false);
   expect(body.resources.SQLDatabase).toBe(false);
   expect(body.resources.ContainerService).toBe(false);
   expect(Object.keys(body.resources).sort()).toEqual([
@@ -1266,6 +1268,7 @@ test("platform worker product discovery exposes Cloud endpoint capabilities with
     "EdgeWorker",
     "KVStore",
     "ObjectBucket",
+    "PushNotification",
     "Queue",
     "SQLDatabase",
     "Stack",

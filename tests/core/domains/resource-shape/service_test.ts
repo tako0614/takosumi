@@ -147,6 +147,42 @@ test("apply resolves Queue and SQLDatabase as concrete Cloudflare-backed shapes"
   );
 });
 
+test("apply resolves PushNotification on a native target", async () => {
+  const { service } = makeService();
+  await service.putTargetPool("space_1", "default", {
+    targets: [
+      {
+        name: "native-main",
+        type: "takosumi_native",
+        ref: "native-prod",
+        priority: 90,
+      },
+    ],
+  });
+  await service.putSpacePolicy("space_1", "default", POLICY);
+
+  const result = await service.apply({
+    actor: ACTOR,
+    space: "space_1",
+    kind: "PushNotification",
+    name: "push",
+    spec: {
+      name: "push",
+      protocols: ["web_push", "fcm"],
+      delivery: { ttlSeconds: 600 },
+    },
+  });
+  expect(result.ok).toBe(true);
+  if (!result.ok) return;
+  expect(result.value.kind).toBe("PushNotification");
+  expect(result.value.status?.resolution?.selectedImplementation).toBe(
+    "takosumi_push_notification",
+  );
+  expect(result.value.status?.outputs?.resource_name).toContain(
+    "PushNotification:push",
+  );
+});
+
 test("apply resolves ContainerService with admin-declared implementation", async () => {
   const { service } = makeService();
   await service.putTargetPool("space_1", "default", {

@@ -250,6 +250,7 @@ function platformDiscoveryOptions(
       ObjectBucket: resourceShapes,
       KVStore: resourceShapes,
       Queue: resourceShapes,
+      PushNotification: resourceShapes,
       SQLDatabase: resourceShapes,
       ContainerService: resourceShapes,
     },

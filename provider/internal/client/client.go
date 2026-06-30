@@ -31,6 +31,7 @@ const (
 	KindObjectBucket     = "ObjectBucket"
 	KindKVStore          = "KVStore"
 	KindQueue            = "Queue"
+	KindPushNotification = "PushNotification"
 	KindSQLDatabase      = "SQLDatabase"
 	KindContainerService = "ContainerService"
 

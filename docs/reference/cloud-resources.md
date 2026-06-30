@@ -12,6 +12,7 @@ Takosumi Cloud Resources =
   + KVStore
   + SQLDatabase
   + Queue
+  + PushNotification
   + AI Gateway
   + routes / domains / secrets
   + USD credits / usage metering
@@ -38,6 +39,7 @@ Cloudflare Workers 向け Terraform/OpenTofu manifest を Takosumi Cloud の
 - Object Storage
 - Database
 - Queue
+- Push Notifications
 - AI Gateway
 - Durable Workflow
 
