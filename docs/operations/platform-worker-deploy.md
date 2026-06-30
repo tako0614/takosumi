@@ -424,7 +424,7 @@ Cloudflare Workers script materialization がまだ 501 の場合、script は `
 `gaReady: false` と `cloudflare_compat_materialization_not_enabled` gap を出す。
 GA 判定では `--require-compat-materialization` と `--require-provider-e2e`
 を必ず付け、501 と OpenTofu provider の `init -> plan -> apply -> destroy`
-不成立を失敗にする。Cloudflare Compatibility Gateway の請求証跡まで GA 判定に
+不成立を失敗にする。Cloudflare-compatible import endpoint の請求証跡まで GA 判定に
 含める場合は、compat lifecycle / provider E2E 後に対象 Workspace の usage
 ledger を読み、`resource_meter` / `gateway_compute` または
 `gateway_storage_gb_hour` event が増えたことを
@@ -441,7 +441,7 @@ bun run smoke:cloud-extensions -- \
   --out-file ../takosumi-private/evidence/cloud-extension-smoke-production.json \
   --json
 
-# GA strict: Cloudflare Compatibility Gateway materialization / provider E2E / usage ledger
+# GA strict: Cloudflare-compatible import endpoint materialization / provider E2E / usage ledger
 bun run smoke:cloud-extensions -- \
   --url https://app.takosumi.com \
   --session-token-file ../takosumi-private/.secrets/production/TAKOSUMI_ACCOUNT_SESSION_TOKEN \

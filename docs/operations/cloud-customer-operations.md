@@ -3,7 +3,7 @@
 This runbook defines the customer-facing operating surface required before
 Takosumi Cloud can be treated as a generally available hosted service.
 
-Takosumi OSS and Takosumi for Operators remain OpenTofu/Terraform control plane
+Takosumi OSS and Takosumi for Operator remain OpenTofu/Terraform control plane
 software. This document is for the closed official Takosumi Cloud deployment at
 `app.takosumi.com`.
 

@@ -18,7 +18,7 @@ runs. They are not public product vocabulary.
 
 - raw provider secret values
 - ProviderConnection public identity
-- compatibility gateway endpoints
+- provider-compatible import endpoint backends
 - managed resource backends
 - Takosumi Cloud official resource pools
 

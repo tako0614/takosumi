@@ -3,9 +3,9 @@
 This launch brief defines what Takosumi Cloud is allowed to offer before the
 platform access gate can move from closed to open.
 
-Takosumi Cloud is the closed official hosted Takosumi for Operators deployment.
+Takosumi Cloud is the closed official hosted Takosumi for Operator deployment.
 It is not the OSS control plane and it may contain Cloud-only billing, quota,
-support, compatibility gateway, and managed resource modules.
+support, provider-compatible import endpoints, and managed resource modules.
 
 ## Target Customer
 
@@ -40,7 +40,7 @@ Out of scope for the first open gate:
 
 - public self-serve login before the code-enforced pre-GA allowlist is removed;
 - arbitrary managed Cloud resources without explicit coverage;
-- Cloudflare Compatibility Gateway public availability unless its provider and
+- Cloudflare-compatible import endpoint public availability unless its provider and
   resource operation coverage has separate readiness evidence;
 - GitHub OAuth as a sign-in provider;
 - passkey sign-in as a GA provider; passkeys may remain implemented but disabled
@@ -223,7 +223,7 @@ Google account `shoutatomiyama0614@gmail.com` on `app-staging.takosumi.com` and
 `app.takosumi.com`. Operator env cannot widen that official Cloud allowlist.
 
 It does not by itself mean paid enforcement, managed Cloud resources, or public
-compatibility gateway coverage.
+provider-compatible import endpoint coverage.
 
 ## Quota Plan
 
@@ -255,7 +255,7 @@ meter://takosumi-cloud/usd-balance/v1
 The planned customer-visible units are:
 
 - USD-denominated balance (`usdMicros` in the ledger);
-- Cloudflare Compatibility Gateway usage priced by the operator price book;
+- Cloudflare-compatible import endpoint usage priced by the operator price book;
 - AI Gateway usage priced by the operator price book;
 - managed resource usage when Cloud-only managed resources are opened.
 
