@@ -1157,6 +1157,7 @@ export interface PlatformCloudExtensionCatalogItem {
   readonly configured: boolean;
   readonly capabilities?: readonly string[];
   readonly smokeChecks?: readonly string[];
+  readonly authMode?: "platform" | "handler";
   readonly requiredScopes?: readonly string[];
 }
 
@@ -1188,6 +1189,7 @@ export function platformCloudExtensionCatalog(
       platformCloudExtensionHandler(env, route.handlerKey) !== undefined,
     ...(route.capabilities ? { capabilities: route.capabilities } : {}),
     ...(route.smokeChecks ? { smokeChecks: route.smokeChecks } : {}),
+    ...(route.authMode ? { authMode: route.authMode } : {}),
     ...(route.requiredScopes ? { requiredScopes: route.requiredScopes } : {}),
   }));
   const configured = extensions.filter(
@@ -1299,6 +1301,15 @@ export async function handlePlatformCloudExtensionRouteRequest(
 ): Promise<Response> {
   const handler = platformCloudExtensionHandler(env, route.handlerKey);
   if (!handler) return Response.json({ error: "not found" }, { status: 404 });
+  if (route.authMode === "handler") {
+    return await handlePlatformCloudExtensionHandlerAuthRouteRequest(
+      request,
+      env,
+      route,
+      handler,
+      usageRecorder,
+    );
+  }
   const authContext = await platformCloudExtensionAuthContext(
     request,
     env,
@@ -1335,6 +1346,36 @@ export async function handlePlatformCloudExtensionRouteRequest(
     authContext.session,
     usageRecorder,
     usagePrecharge.charged,
+  );
+}
+
+async function handlePlatformCloudExtensionHandlerAuthRouteRequest(
+  request: Request,
+  env: CloudflareWorkerEnv,
+  route: PlatformCloudExtensionRoute,
+  handler: PlatformCloudExtensionHandler,
+  usageRecorder: PlatformCloudExtensionUsageRecorder,
+): Promise<Response> {
+  const headers = new Headers(request.headers);
+  for (const header of [
+    ...PLATFORM_CLOUD_EXTENSION_RAW_CREDENTIAL_HEADERS.filter(
+      (name) => name !== "authorization",
+    ),
+    ...PLATFORM_CLOUD_EXTENSION_TRUSTED_CONTEXT_HEADERS,
+    ...PLATFORM_CLOUD_EXTENSION_BILLING_CONTEXT_HEADERS,
+  ]) {
+    headers.delete(header);
+  }
+  const upstreamResponse = await handler.fetch(
+    clonePlatformCloudExtensionRequest(request, headers),
+  );
+  return await responseForPlatformCloudExtensionClient(
+    request,
+    upstreamResponse,
+    env,
+    route,
+    { authenticated: false },
+    usageRecorder,
   );
 }
 

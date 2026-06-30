@@ -48,6 +48,10 @@ describe("Cloud resources view", () => {
     expect(ja["cloudResources.inventory.title"]).toBe("クラウドリソース");
     expect(ja["cloudResources.keys.title"]).toBe("APIキー");
     expect(ja["cloudResources.keys.empty"]).toBe("まだ APIキーはありません。");
+    expect(en["cloudResources.s3.buckets"]).toBe("Buckets");
+    expect(en["cloudResources.s3.configuredBuckets"]).toBe("Ready buckets");
+    expect(ja["cloudResources.s3.buckets"]).toBe("Bucket数");
+    expect(ja["cloudResources.s3.configuredBuckets"]).toBe("利用可能Bucket");
   });
 
   test("keeps raw resource identifiers behind an explicit copy action", () => {

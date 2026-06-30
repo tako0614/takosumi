@@ -22,6 +22,7 @@ counts. The full endpoint contract, scope, and examples live in this document.
   and delete
 - AI Gateway base URL, connection health, and default model
 - OpenTofu import endpoint base URL and current virtual account
+- Object Storage endpoint base URL and S3-compatible bucket configuration health
 
 Usage and billing live on Billing (`app.takosumi.com/billing`), not on the Cloud
 screen:
@@ -47,6 +48,7 @@ Only the Takosumi for Operator / Cloud operation layer has:
 - AI Gateway
 - Takosumi Cloud Workers
 - official hosted Cloudflare-compatible import endpoint backend
+- official S3-compatible Object Storage endpoint backend
 - official managed target / native resource backends
 - official usage, quota, billing, and support controls
 
@@ -54,14 +56,14 @@ Official `app.takosumi.com` uses the closed
 `takosumi-cloud/platform/worker.ts` wrapper as the Worker entry. The wrapper
 mounts Cloud-only fetch handlers in-process into the OSS platform worker's
 `cloud_extensions` seam. AI Gateway, the Cloudflare-compatible import endpoint,
-Cloud usage, and Cloud Edge Runtime live in closed handlers; OSS code may
-contain catalog metadata, auth forwarding, dashboard clients, and smoke tests.
-`handlerKey` is the logical handler key consumed by the OSS seam and resolved
-in-process by the official Cloud wrapper. This is one
-`takosumi-cloud/platform/worker.ts` deployment unit; AI Gateway, the
-Cloudflare-compatible import endpoint, Cloud usage, and Cloud Edge Runtime are
-not deployed as separate Workers. Managed resource backends are Takosumi Cloud
-closed modules.
+the S3-compatible Object Storage endpoint, Cloud usage, and Cloud Edge Runtime
+live in closed handlers; OSS code may contain catalog metadata, auth forwarding,
+dashboard clients, and smoke tests. `handlerKey` is the logical handler key
+consumed by the OSS seam and resolved in-process by the official Cloud wrapper.
+This is one `takosumi-cloud/platform/worker.ts` deployment unit; AI Gateway, the
+Cloudflare-compatible import endpoint, the S3-compatible Object Storage
+endpoint, Cloud usage, and Cloud Edge Runtime are not deployed as separate
+Workers. Managed resource backends are Takosumi Cloud closed modules.
 
 ## Catalog
 
@@ -102,6 +104,17 @@ Example:
       "requiredScopes": ["read", "write"]
     },
     {
+      "id": "s3",
+      "kind": "data_compat",
+      "provider": "object-storage",
+      "protocol": "s3-compatible",
+      "basePath": "/compat/s3/v1",
+      "configured": true,
+      "capabilities": ["compat.s3.v1"],
+      "authMode": "handler",
+      "smokeChecks": ["status", "put-get-delete"]
+    },
+    {
       "id": "usage",
       "kind": "usage_ingest",
       "basePath": "/cloud/usage",
@@ -110,8 +123,8 @@ Example:
     }
   ],
   "summary": {
-    "total": 3,
-    "configured": 3,
+    "total": 4,
+    "configured": 4,
     "missing": 0
   }
 }
@@ -120,10 +133,50 @@ Example:
 An extension with `configured: false` may appear in the UI, but runtime calls
 must fail closed.
 This catalog lists only path-based `cloud_extensions` routes.
+`authMode: "handler"` is reserved for standard signed protocols such as S3
+SigV4, where the Cloud handler must verify the protocol Authorization header
+itself. In that mode, the platform does not verify a customer session/PAT; it
+strips spoofable Takosumi context headers and cookies, then forwards the
+`Authorization` header to the handler.
 Takosumi Cloud Worker traffic for `*.app.takos.jp` and
 `*.app-staging.takos.jp` is dispatched to the Cloud Edge Runtime by the same
 `takosumi-cloud/platform/worker.ts` hostname dispatch registry. It is not a
 separate Worker.
+
+## S3-compatible Object Storage endpoint
+
+The S3-compatible endpoint is the data-plane for Object Storage provided by
+Takosumi Cloud. It lets existing S3 SDKs and S3-compatible OpenTofu providers
+consume Takosumi Cloud storage. It is not full AWS API compatibility; the public
+scope is the `compat.s3.v1` capability.
+
+```http
+GET  /compat/s3/v1/__takosumi/status
+GET  /compat/s3/v1
+HEAD /compat/s3/v1/{bucket}
+PUT  /compat/s3/v1/{bucket}
+GET  /compat/s3/v1/{bucket}?list-type=2
+GET  /compat/s3/v1/{bucket}/{key}
+HEAD /compat/s3/v1/{bucket}/{key}
+PUT  /compat/s3/v1/{bucket}/{key}
+DELETE /compat/s3/v1/{bucket}/{key}
+```
+
+Normal Cloud API keys (Takosumi Accounts personal access tokens) are not S3 SDK
+credentials. The S3-compatible endpoint verifies AWS SigV4 access key / secret
+access key credentials. Each access key is scoped to a Workspace and optional
+bucket allowlist, while bucket descriptors come from the Cloud realized config
+or managed-resource backend.
+
+`GET /compat/s3/v1/__takosumi/status` is readable without SigV4 and reports
+operational configuration health. The dashboard uses it to show configured
+bucket counts.
+
+Read/write/list operations precharge through the Cloud usage ledger. If the
+Workspace USD balance is exhausted, `PUT` fails with `402 PaymentRequired`
+before backend storage is mutated. `DELETE` cleanup intentionally has no
+operation precharge so users can remove already-created managed resources even
+when their balance is exhausted.
 
 ## API keys
 

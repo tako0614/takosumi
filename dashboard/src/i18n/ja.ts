@@ -961,6 +961,8 @@ export const ja = {
   "cloudResources.s3.subtitle": "Managed storage 用の S3-compatible API",
   "cloudResources.s3.protocol": "プロトコル",
   "cloudResources.s3.capability": "Capability",
+  "cloudResources.s3.buckets": "Bucket数",
+  "cloudResources.s3.configuredBuckets": "利用可能Bucket",
   "cloudResources.inventory.title": "クラウドリソース",
   "cloudResources.inventory.subtitle":
     "Takosumi Cloud 側の Workers と managed binding です。",

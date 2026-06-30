@@ -27,6 +27,7 @@ describe("dashboard cloud resources route selection", () => {
           protocol: "s3-compatible",
           configured: true,
           capabilities: ["compat.s3.v1"],
+          authMode: "handler",
         },
       ],
       summary: { total: 3, configured: 3, missing: 0 },
@@ -65,8 +66,6 @@ describe("dashboard cloud resources route selection", () => {
     };
 
     expect(aiGatewayRoute(catalog)?.basePath).toBe("/custom/ai");
-    expect(cloudflareCompatRoute(catalog)?.basePath).toBe(
-      "/custom/cloudflare",
-    );
+    expect(cloudflareCompatRoute(catalog)?.basePath).toBe("/custom/cloudflare");
   });
 });
