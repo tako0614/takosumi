@@ -108,6 +108,11 @@ AI Gateway or OpenAI-compatible upstream access:
   do not create a Takosumi Resource Shape by default.
   pass the endpoint URL, model name, and API key through ProviderConnection,
   Secret, output projection, or generic env.
+
+Push notification delivery:
+  do not create a Takosumi Resource Shape or takosumi_provider resource.
+  APNs, FCM, Web Push, and product-native notification registration stay in
+  the product shell, a normal OpenTofu module/provider, or generic env.
 ```
 
 Do not add a Takosumi-owned resource just because another cloud already has a

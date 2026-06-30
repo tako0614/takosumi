@@ -24,6 +24,10 @@ AI Gateway is intentionally not a provider resource. Use ProviderConnection,
 Secret, output projection, or generic env to pass values such as
 `OPENAI_BASE_URL`, `OPENAI_API_KEY`, and model names into an app.
 
+Push notification delivery is intentionally not a provider resource. APNs,
+FCM, Web Push, and product-native notification token registration belong in the
+product shell, a normal OpenTofu module/provider, or generic env.
+
 Ordinary S3/R2/GCS/MinIO buckets, Kubernetes resources, VMs, and provider-owned
 cloud services should use existing OpenTofu providers through the plain Stack
 flow when that is enough.
