@@ -15,13 +15,7 @@ import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { Buffer } from "node:buffer";
 import process from "node:process";
-import {
-  mkdir,
-  mkdtemp,
-  readFile,
-  rm,
-  writeFile,
-} from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { canonicalProviderSource } from "../contract/provider-env-rules.ts";
@@ -125,12 +119,7 @@ type JsonSmokeValue =
   | readonly JsonSmokeValue[]
   | { readonly [key: string]: JsonSmokeValue };
 type SmokeOutputAllowlistType =
-  | "string"
-  | "url"
-  | "hostname"
-  | "number"
-  | "boolean"
-  | "json";
+  "string" | "url" | "hostname" | "number" | "boolean" | "json";
 type SmokeOutputAllowlist = Readonly<
   Record<
     string,
@@ -426,11 +415,20 @@ export interface SmokeProviderConnectionListEntry {
   readonly displayName?: string;
 }
 
-interface InstallationRecord {
+interface CapsuleLedgerRecord {
   readonly id?: string;
   readonly name?: string;
+  readonly workspaceId?: string;
+  readonly spaceId?: string;
   readonly status?: string;
+  readonly currentStateVersionId?: string;
+  readonly currentDeploymentId?: string;
   readonly currentStateGeneration?: number;
+}
+
+interface CapsuleLedgerResponse {
+  readonly capsule?: CapsuleLedgerRecord;
+  readonly installation?: CapsuleLedgerRecord;
 }
 
 interface BackupRecord {
@@ -442,9 +440,14 @@ interface BackupRecord {
 
 interface DeploymentRecord {
   readonly id: string;
-  readonly installationId: string;
+  readonly workspaceId?: string;
+  readonly spaceId?: string;
+  readonly capsuleId?: string;
+  readonly installationId?: string;
   readonly environment: string;
+  readonly applyRunId?: string;
   readonly stateGeneration: number;
+  readonly outputsPublic?: Record<string, unknown>;
   readonly status: string;
   readonly createdAt: string;
 }
@@ -1285,9 +1288,8 @@ export async function runPlatformControlPlaneSmoke(
         completeStep("destroy");
         failureCleanup = {
           attempted: true,
-          cloudflareWorkerGone: await assertCloudflareWorkerGoneForCleanup(
-            options,
-          ),
+          cloudflareWorkerGone:
+            await assertCloudflareWorkerGoneForCleanup(options),
           installationMarkedError: false,
           destroyAttempted: true,
           destroyPlanRunId,
@@ -1766,9 +1768,7 @@ async function deployGitSourceCapsule(
     baseUrl: options.url,
     token: options.accountSessionToken,
     method: "POST",
-    path: `${API_PREFIX}/capsules/${encodeURIComponent(
-      installation.id,
-    )}/plan`,
+    path: `${API_PREFIX}/capsules/${encodeURIComponent(installation.id)}/plan`,
     timeoutMs: options.deployTimeoutSeconds * 1000,
     body: {
       ...(options.runnerProfileId
@@ -1886,9 +1886,7 @@ async function createSourceInstallation(
     readonly installConfigId: string;
   },
 ): Promise<{ readonly id: string; readonly name?: string }> {
-  const response = await requestJson<{
-    readonly installation?: { readonly id?: string; readonly name?: string };
-  }>({
+  const response = await requestJson<CapsuleCreateSmokeResponse>({
     baseUrl: options.url,
     token: options.accountSessionToken,
     method: "POST",
@@ -1908,16 +1906,51 @@ async function createSourceInstallation(
       vars: options.vars,
     },
   });
-  const id = response.installation?.id;
+  const created = createdCapsuleFromCreateResponse(response);
+  const id = created.id;
+  return {
+    id,
+    ...(created.name ? { name: created.name } : {}),
+  };
+}
+
+export interface CapsuleCreateSmokeResponse {
+  readonly capsule?: { readonly id?: string; readonly name?: string };
+  readonly installation?: { readonly id?: string; readonly name?: string };
+}
+
+export function createdCapsuleFromCreateResponse(
+  response: CapsuleCreateSmokeResponse,
+): { readonly id: string; readonly name?: string } {
+  const created = response.capsule ?? response.installation;
+  const id = created?.id;
   if (!id) {
-    throw new Error("installation create response did not include id");
+    throw new Error("capsule create response did not include id");
   }
   return {
     id,
-    ...(response.installation?.name
-      ? { name: response.installation.name }
-      : {}),
+    ...(created?.name ? { name: created.name } : {}),
   };
+}
+
+export function capsuleFromLedgerResponse(
+  response: CapsuleLedgerResponse,
+): CapsuleLedgerRecord {
+  const capsule = response.capsule ?? response.installation;
+  if (!capsule) {
+    throw new Error("capsule ledger response did not include capsule");
+  }
+  return capsule;
+}
+
+function capsuleWorkspaceId(capsule: CapsuleLedgerRecord): string | undefined {
+  return capsule.workspaceId ?? capsule.spaceId;
+}
+
+function capsuleCurrentStateVersionId(
+  capsule: CapsuleLedgerRecord,
+): string | undefined {
+  return capsule.currentStateVersionId ?? capsule.currentDeploymentId;
 }
 
 async function putInstallationProviderConnections(
@@ -2446,51 +2479,34 @@ async function assertDeploymentLedger(
     readonly applyRunId: string;
   },
 ): Promise<DeploymentLedgerVerificationResult> {
-  const installationResponse = await requestJson<{
-    readonly installation?: {
-      readonly id?: string;
-      readonly spaceId?: string;
-      readonly status?: string;
-      readonly currentDeploymentId?: string;
-      readonly currentStateGeneration?: number;
-    };
-  }>({
+  const capsuleResponse = await requestJson<CapsuleLedgerResponse>({
     baseUrl: options.url,
     token: options.accountSessionToken,
-    path: `${API_PREFIX}/capsules/${encodeURIComponent(
-      input.installationId,
-    )}`,
+    path: `${API_PREFIX}/capsules/${encodeURIComponent(input.installationId)}`,
   });
-  const installation = installationResponse.installation;
-  if (!installation) {
-    throw new Error(
-      "installation ledger response did not include installation",
-    );
+  const capsule = capsuleFromLedgerResponse(capsuleResponse);
+  if (capsule.id !== input.installationId) {
+    throw new Error("capsule ledger returned an unexpected capsule id");
   }
-  if (installation.id !== input.installationId) {
-    throw new Error(
-      "installation ledger returned an unexpected installation id",
-    );
+  if (capsuleWorkspaceId(capsule) !== input.spaceId) {
+    throw new Error("capsule ledger returned an unexpected Workspace id");
   }
-  if (installation.spaceId !== input.spaceId) {
-    throw new Error("installation ledger returned an unexpected Workspace id");
-  }
-  if (installation.status !== "active") {
+  if (capsule.status !== "active") {
     throw new Error(
-      `installation ledger status was ${installation.status ?? "unknown"}; expected active`,
+      `capsule ledger status was ${capsule.status ?? "unknown"}; expected active`,
     );
   }
   if (
-    !Number.isInteger(installation.currentStateGeneration) ||
-    Number(installation.currentStateGeneration) < 1
+    !Number.isInteger(capsule.currentStateGeneration) ||
+    Number(capsule.currentStateGeneration) < 1
   ) {
-    throw new Error("installation ledger did not advance state generation");
+    throw new Error("capsule ledger did not advance state generation");
   }
-  if (!installation.currentDeploymentId) {
-    throw new Error("installation ledger did not expose currentDeploymentId");
+  const currentStateVersionId = capsuleCurrentStateVersionId(capsule);
+  if (!currentStateVersionId) {
+    throw new Error("capsule ledger did not expose currentStateVersionId");
   }
-  const currentDeploymentId = installation.currentDeploymentId;
-  const currentStateGeneration = installation.currentStateGeneration;
+  const currentStateGeneration = capsule.currentStateGeneration;
 
   const deploymentsResponse = await requestJson<{
     readonly deployments?: readonly {
@@ -2512,20 +2528,26 @@ async function assertDeploymentLedger(
   });
   const deployments = deploymentsResponse.deployments ?? [];
   const deployment =
-    deployments.find((item) => item.id === currentDeploymentId) ??
+    deployments.find((item) => item.id === currentStateVersionId) ??
     deployments.find((item) => item.applyRunId === input.applyRunId);
   if (!deployment) {
-    throw new Error("deployment ledger did not include the applied deployment");
+    throw new Error(
+      "state-version ledger did not include the applied state version",
+    );
   }
-  if (!deployment.id || deployment.id !== currentDeploymentId) {
-    throw new Error("deployment ledger does not match currentDeploymentId");
+  if (!deployment.id || deployment.id !== currentStateVersionId) {
+    throw new Error(
+      "state-version ledger does not match currentStateVersionId",
+    );
   }
   const deploymentId = deployment.id;
-  if (deployment.spaceId !== input.spaceId) {
-    throw new Error("deployment ledger returned an unexpected Workspace id");
+  if ((deployment.workspaceId ?? deployment.spaceId) !== input.spaceId) {
+    throw new Error("state-version ledger returned an unexpected Workspace id");
   }
-  if (deployment.installationId !== input.installationId) {
-    throw new Error("deployment ledger returned an unexpected installation id");
+  if (
+    (deployment.capsuleId ?? deployment.installationId) !== input.installationId
+  ) {
+    throw new Error("state-version ledger returned an unexpected capsule id");
   }
   if (deployment.environment !== options.environment) {
     throw new Error(
@@ -2533,11 +2555,11 @@ async function assertDeploymentLedger(
     );
   }
   if (deployment.applyRunId !== input.applyRunId) {
-    throw new Error("deployment ledger returned an unexpected applyRunId");
+    throw new Error("state-version ledger returned an unexpected applyRunId");
   }
   if (deployment.status !== "active") {
     throw new Error(
-      `deployment ledger status was ${deployment.status ?? "unknown"}; expected active`,
+      `state-version ledger status was ${deployment.status ?? "unknown"}; expected active`,
     );
   }
   if (
@@ -2545,13 +2567,13 @@ async function assertDeploymentLedger(
     deployment.stateGeneration !== currentStateGeneration
   ) {
     throw new Error(
-      "deployment ledger state generation did not match installation",
+      "state-version ledger state generation did not match capsule",
     );
   }
   const stateGeneration = deployment.stateGeneration;
   const outputsPublic = deployment.outputsPublic;
   if (!isRecord(outputsPublic)) {
-    throw new Error("deployment ledger did not expose outputsPublic");
+    throw new Error("state-version ledger did not expose outputsPublic");
   }
   if (outputsPublic.worker_name !== options.appName) {
     throw new Error(
@@ -2572,7 +2594,7 @@ async function assertDeploymentLedger(
     }
   }
   return {
-    installationStatus: installation.status,
+    installationStatus: capsule.status,
     deploymentId,
     stateGeneration,
     applyRunId: input.applyRunId,
@@ -2590,51 +2612,34 @@ async function assertGenericDeploymentLedger(
     readonly applyRunId: string;
   },
 ): Promise<DeploymentLedgerVerificationResult> {
-  const installationResponse = await requestJson<{
-    readonly installation?: {
-      readonly id?: string;
-      readonly spaceId?: string;
-      readonly status?: string;
-      readonly currentDeploymentId?: string;
-      readonly currentStateGeneration?: number;
-    };
-  }>({
+  const capsuleResponse = await requestJson<CapsuleLedgerResponse>({
     baseUrl: options.url,
     token: options.accountSessionToken,
-    path: `${API_PREFIX}/capsules/${encodeURIComponent(
-      input.installationId,
-    )}`,
+    path: `${API_PREFIX}/capsules/${encodeURIComponent(input.installationId)}`,
   });
-  const installation = installationResponse.installation;
-  if (!installation) {
-    throw new Error(
-      "installation ledger response did not include installation",
-    );
+  const capsule = capsuleFromLedgerResponse(capsuleResponse);
+  if (capsule.id !== input.installationId) {
+    throw new Error("capsule ledger returned an unexpected capsule id");
   }
-  if (installation.id !== input.installationId) {
-    throw new Error(
-      "installation ledger returned an unexpected installation id",
-    );
+  if (capsuleWorkspaceId(capsule) !== input.spaceId) {
+    throw new Error("capsule ledger returned an unexpected Workspace id");
   }
-  if (installation.spaceId !== input.spaceId) {
-    throw new Error("installation ledger returned an unexpected Workspace id");
-  }
-  if (installation.status !== "active") {
+  if (capsule.status !== "active") {
     throw new Error(
-      `installation ledger status was ${installation.status ?? "unknown"}; expected active`,
+      `capsule ledger status was ${capsule.status ?? "unknown"}; expected active`,
     );
   }
   if (
-    !Number.isInteger(installation.currentStateGeneration) ||
-    Number(installation.currentStateGeneration) < 1
+    !Number.isInteger(capsule.currentStateGeneration) ||
+    Number(capsule.currentStateGeneration) < 1
   ) {
-    throw new Error("installation ledger did not advance state generation");
+    throw new Error("capsule ledger did not advance state generation");
   }
-  if (!installation.currentDeploymentId) {
-    throw new Error("installation ledger did not expose currentDeploymentId");
+  const currentStateVersionId = capsuleCurrentStateVersionId(capsule);
+  if (!currentStateVersionId) {
+    throw new Error("capsule ledger did not expose currentStateVersionId");
   }
-  const currentDeploymentId = installation.currentDeploymentId;
-  const currentStateGeneration = installation.currentStateGeneration;
+  const currentStateGeneration = capsule.currentStateGeneration;
 
   const deploymentsResponse = await requestJson<{
     readonly deployments?: readonly {
@@ -2656,20 +2661,26 @@ async function assertGenericDeploymentLedger(
   });
   const deployments = deploymentsResponse.deployments ?? [];
   const deployment =
-    deployments.find((item) => item.id === currentDeploymentId) ??
+    deployments.find((item) => item.id === currentStateVersionId) ??
     deployments.find((item) => item.applyRunId === input.applyRunId);
   if (!deployment) {
-    throw new Error("deployment ledger did not include the applied deployment");
+    throw new Error(
+      "state-version ledger did not include the applied state version",
+    );
   }
-  if (!deployment.id || deployment.id !== currentDeploymentId) {
-    throw new Error("deployment ledger does not match currentDeploymentId");
+  if (!deployment.id || deployment.id !== currentStateVersionId) {
+    throw new Error(
+      "state-version ledger does not match currentStateVersionId",
+    );
   }
   const deploymentId = deployment.id;
-  if (deployment.spaceId !== input.spaceId) {
-    throw new Error("deployment ledger returned an unexpected Workspace id");
+  if ((deployment.workspaceId ?? deployment.spaceId) !== input.spaceId) {
+    throw new Error("state-version ledger returned an unexpected Workspace id");
   }
-  if (deployment.installationId !== input.installationId) {
-    throw new Error("deployment ledger returned an unexpected installation id");
+  if (
+    (deployment.capsuleId ?? deployment.installationId) !== input.installationId
+  ) {
+    throw new Error("state-version ledger returned an unexpected capsule id");
   }
   if (deployment.environment !== options.environment) {
     throw new Error(
@@ -2677,11 +2688,11 @@ async function assertGenericDeploymentLedger(
     );
   }
   if (deployment.applyRunId !== input.applyRunId) {
-    throw new Error("deployment ledger returned an unexpected applyRunId");
+    throw new Error("state-version ledger returned an unexpected applyRunId");
   }
   if (deployment.status !== "active") {
     throw new Error(
-      `deployment ledger status was ${deployment.status ?? "unknown"}; expected active`,
+      `state-version ledger status was ${deployment.status ?? "unknown"}; expected active`,
     );
   }
   if (
@@ -2689,12 +2700,12 @@ async function assertGenericDeploymentLedger(
     deployment.stateGeneration !== currentStateGeneration
   ) {
     throw new Error(
-      "deployment ledger state generation did not match installation",
+      "state-version ledger state generation did not match capsule",
     );
   }
   const outputsPublic = deployment.outputsPublic;
   if (!isRecord(outputsPublic)) {
-    throw new Error("deployment ledger did not expose outputsPublic");
+    throw new Error("state-version ledger did not expose outputsPublic");
   }
   const publicOutputNames = Object.keys(outputsPublic).sort();
   const missingRequiredOutputs = Object.entries(options.outputAllowlist)
@@ -2709,7 +2720,7 @@ async function assertGenericDeploymentLedger(
     );
   }
   return {
-    installationStatus: installation.status,
+    installationStatus: capsule.status,
     deploymentId,
     stateGeneration: deployment.stateGeneration,
     applyRunId: input.applyRunId,
