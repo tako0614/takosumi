@@ -145,7 +145,8 @@ Takosumi Cloud =
   + official billing / SLA / support
 ```
 
-Takosumi Cloud では Worker-compatible hosting、managed bindings、AI Gateway、credits などを公式 managed service として提供します。
+Takosumi Cloud では EdgeWorker、Container、Object Storage、KV、Database、
+Queue、AI Gateway、credits などを公式 managed resources として提供します。
 
 [Takosumi Cloud](./cloud/index.md) に、公開用の compatibility matrix と service rollout をまとめています。
 

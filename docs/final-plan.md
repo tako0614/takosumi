@@ -100,8 +100,9 @@ provider-neutral service contract:
 Ordinary VM, Kubernetes, or container infrastructure:
   use existing OpenTofu providers when that is sufficient.
 
-Provider-neutral Worker-compatible application hosting:
-  use takosumi_edge_worker.
+Provider-neutral edge JavaScript app hosting:
+  use takosumi_edge_worker. This is one service shape, not the whole Cloud
+  product identity.
 
 AI Gateway or OpenAI-compatible upstream access:
   do not create a Takosumi Resource Shape by default.
@@ -271,8 +272,8 @@ Takosumi AI Gateway
 Takosumi Cloud product identity:
 
 ```text
-Worker-compatible application hosting with managed bindings, credits,
-and OpenTofu deploys.
+Managed application and data resources on official targets, with credits,
+usage metering, and OpenTofu deploys.
 ```
 
 Cloudflare-compatible APIs are import/deploy paths, not the product identity.
@@ -318,9 +319,10 @@ takosumi_edge_runtime
 operator-provided EdgeWorker adapter plugin
 ```
 
-Takosumi Cloud Workers may be backed by Cloudflare Workers for Platforms and a
-Takosumi-managed dispatch layer. That detail should be documented in runtime
-docs, but the product headline should remain Worker-compatible hosting.
+Takosumi Cloud may implement `EdgeWorker` with Cloudflare Workers for Platforms
+and a Takosumi-managed dispatch layer. That is an implementation detail for one
+shape. Object storage, KV, database, queue, container, workflow, and AI surfaces
+are peer resources in Takosumi Cloud.
 
 ### 4.2 ObjectBucket And S3-Compatible Object Storage
 
@@ -733,7 +735,9 @@ Takosumi Cloud should be documented like a simple cloud service.
 Public service names:
 
 ```text
-Cloud Workers
+Apps / Services
+Edge Worker
+Container
 Bindings
 Routes
 Secrets

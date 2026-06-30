@@ -663,7 +663,7 @@ function ResourcesCard(props: {
           ) : undefined
         }
       />
-      <Show when={!canManage()}>
+      <Show when={!props.inventoryLoading && props.inventory && !canManage()}>
         <CardSection>
           <p class="muted">{t("cloudResources.resources.noAccount")}</p>
         </CardSection>
@@ -678,145 +678,156 @@ function ResourcesCard(props: {
           </Toast>
         )}
       </Show>
-      <div class="av-cloud-res-groups">
-        <For each={groups()}>
-          {(group) => {
-            const allItems = createMemo(() =>
-              group.result.ok ? group.result.data : [],
-            );
-            const expanded = createMemo(() => expandedGroups()[group.kind]);
-            const visibleItems = createMemo(() =>
-              expanded()
-                ? allItems()
-                : allItems().slice(0, RESOURCE_PREVIEW_LIMIT),
-            );
-            const hiddenCount = createMemo(() =>
-              Math.max(0, allItems().length - visibleItems().length),
-            );
-            const toggle = () =>
-              setExpandedGroups((current) => ({
-                ...current,
-                [group.kind]: !current[group.kind],
-              }));
+      <Show
+        when={props.inventory || !props.inventoryLoading}
+        fallback={
+          <CardSection>
+            <Skeleton variant="row" count={4} />
+          </CardSection>
+        }
+      >
+        <div class="av-cloud-res-groups">
+          <For each={groups()}>
+            {(group) => {
+              const allItems = createMemo(() =>
+                group.result.ok ? group.result.data : [],
+              );
+              const expanded = createMemo(() => expandedGroups()[group.kind]);
+              const visibleItems = createMemo(() =>
+                expanded()
+                  ? allItems()
+                  : allItems().slice(0, RESOURCE_PREVIEW_LIMIT),
+              );
+              const hiddenCount = createMemo(() =>
+                Math.max(0, allItems().length - visibleItems().length),
+              );
+              const toggle = () =>
+                setExpandedGroups((current) => ({
+                  ...current,
+                  [group.kind]: !current[group.kind],
+                }));
 
-            return (
-              <section class="av-cloud-res-group">
-                <div class="av-cloud-res-group-head">
-                  <div class="av-cloud-res-group-title">
-                    <span class="av-cloud-title-icon" aria-hidden="true">
-                      {group.icon}
-                    </span>
-                    <span>{group.label}</span>
-                    <Badge tone={group.result.ok ? "neutral" : "warn"}>
-                      {group.result.ok ? group.result.data.length : "!"}
-                    </Badge>
-                  </div>
-                  <Show
-                    when={
-                      group.result.ok &&
-                      group.result.data.length > RESOURCE_PREVIEW_LIMIT
-                    }
-                  >
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      type="button"
-                      onClick={toggle}
+              return (
+                <section class="av-cloud-res-group">
+                  <div class="av-cloud-res-group-head">
+                    <div class="av-cloud-res-group-title">
+                      <span class="av-cloud-title-icon" aria-hidden="true">
+                        {group.icon}
+                      </span>
+                      <span>{group.label}</span>
+                      <Badge tone={group.result.ok ? "neutral" : "warn"}>
+                        {group.result.ok ? group.result.data.length : "!"}
+                      </Badge>
+                    </div>
+                    <Show
+                      when={
+                        group.result.ok &&
+                        group.result.data.length > RESOURCE_PREVIEW_LIMIT
+                      }
                     >
-                      {expanded()
-                        ? t("cloudResources.inventory.showLess")
-                        : t("cloudResources.inventory.showAll", {
-                            count: String(
-                              group.result.ok ? group.result.data.length : 0,
-                            ),
-                          })}
-                    </Button>
-                  </Show>
-                </div>
-                <Switch>
-                  <Match when={!group.result.ok}>
-                    <span class="muted">
-                      {group.result.ok ? "" : group.result.error}
-                    </span>
-                  </Match>
-                  <Match
-                    when={group.result.ok && group.result.data.length === 0}
-                  >
-                    <span class="muted">{t("common.none")}</span>
-                  </Match>
-                  <Match when={group.result.ok}>
-                    <div class="av-cloud-token-list">
-                      <For each={visibleItems()}>
-                        {(item) => (
-                          <div class="av-cloud-token-row">
-                            <div class="av-cloud-token-main">
-                              <span class="av-cloud-token-name">
-                                {item.name || item.id}
-                              </span>
-                            </div>
-                            <div class="av-actions">
-                              <Show when={item.id}>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        type="button"
+                        onClick={toggle}
+                      >
+                        {expanded()
+                          ? t("cloudResources.inventory.showLess")
+                          : t("cloudResources.inventory.showAll", {
+                              count: String(
+                                group.result.ok ? group.result.data.length : 0,
+                              ),
+                            })}
+                      </Button>
+                    </Show>
+                  </div>
+                  <Switch>
+                    <Match when={!group.result.ok}>
+                      <span class="muted">
+                        {group.result.ok ? "" : group.result.error}
+                      </span>
+                    </Match>
+                    <Match
+                      when={group.result.ok && group.result.data.length === 0}
+                    >
+                      <span class="muted">{t("common.none")}</span>
+                    </Match>
+                    <Match when={group.result.ok}>
+                      <div class="av-cloud-token-list">
+                        <For each={visibleItems()}>
+                          {(item) => (
+                            <div class="av-cloud-token-row">
+                              <div class="av-cloud-token-main">
+                                <span class="av-cloud-token-name">
+                                  {item.name || item.id}
+                                </span>
+                              </div>
+                              <div class="av-actions">
+                                <Show when={item.id}>
+                                  <Button
+                                    variant={
+                                      props.copied ===
+                                      `res:${group.kind}:${item.id}`
+                                        ? "primary"
+                                        : "secondary"
+                                    }
+                                    size="sm"
+                                    type="button"
+                                    icon={
+                                      props.copied ===
+                                      `res:${group.kind}:${item.id}` ? (
+                                        <CheckCircle2 size={14} />
+                                      ) : (
+                                        <Copy size={14} />
+                                      )
+                                    }
+                                    onClick={() =>
+                                      void props.copyText(
+                                        `res:${group.kind}:${item.id}`,
+                                        item.id,
+                                      )
+                                    }
+                                  >
+                                    {t("cloudResources.resources.copyId")}
+                                  </Button>
+                                </Show>
                                 <Button
-                                  variant={
-                                    props.copied ===
-                                    `res:${group.kind}:${item.id}`
-                                      ? "primary"
-                                      : "secondary"
-                                  }
+                                  variant="danger"
                                   size="sm"
                                   type="button"
-                                  icon={
-                                    props.copied ===
-                                    `res:${group.kind}:${item.id}` ? (
-                                      <CheckCircle2 size={14} />
-                                    ) : (
-                                      <Copy size={14} />
-                                    )
-                                  }
+                                  icon={<Trash2 size={14} />}
+                                  busy={busy() === `${group.kind}:${item.id}`}
+                                  disabled={!canManage() || !item.id}
                                   onClick={() =>
-                                    void props.copyText(
-                                      `res:${group.kind}:${item.id}`,
-                                      item.id,
-                                    )
+                                    void removeResource(group, item)
                                   }
                                 >
-                                  {t("cloudResources.resources.copyId")}
+                                  {t("common.delete")}
                                 </Button>
-                              </Show>
-                              <Button
-                                variant="danger"
-                                size="sm"
-                                type="button"
-                                icon={<Trash2 size={14} />}
-                                busy={busy() === `${group.kind}:${item.id}`}
-                                disabled={!canManage() || !item.id}
-                                onClick={() => void removeResource(group, item)}
-                              >
-                                {t("common.delete")}
-                              </Button>
+                              </div>
                             </div>
-                          </div>
-                        )}
-                      </For>
-                      <Show when={hiddenCount() > 0}>
-                        <button
-                          class="av-cloud-res-more"
-                          type="button"
-                          onClick={toggle}
-                        >
-                          {t("cloudResources.inventory.remaining", {
-                            count: String(hiddenCount()),
-                          })}
-                        </button>
-                      </Show>
-                    </div>
-                  </Match>
-                </Switch>
-              </section>
-            );
-          }}
-        </For>
-      </div>
+                          )}
+                        </For>
+                        <Show when={hiddenCount() > 0}>
+                          <button
+                            class="av-cloud-res-more"
+                            type="button"
+                            onClick={toggle}
+                          >
+                            {t("cloudResources.inventory.remaining", {
+                              count: String(hiddenCount()),
+                            })}
+                          </button>
+                        </Show>
+                      </div>
+                    </Match>
+                  </Switch>
+                </section>
+              );
+            }}
+          </For>
+        </div>
+      </Show>
     </Card>
   );
 }

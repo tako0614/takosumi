@@ -5,7 +5,7 @@ backends. They are not part of the Takosumi OSS or Takosumi for Operators
 public contract.
 
 Use [Takosumi Cloud](../cloud/index.md) and
-[Takosumi Cloud Workers](./cloud-workers.md) as the public product docs. This
+[Takosumi Cloud resources](./cloud-resources.md) as the public product docs. This
 page is the detailed reference for endpoints, usage, API keys, and compatibility
 routes.
 
@@ -46,7 +46,7 @@ Compatibility API framework, and Adapter system.
 Only the Takosumi for Operator / Cloud operation layer has:
 
 - AI Gateway
-- Takosumi Cloud Workers
+- Takosumi Cloud managed resources
 - official hosted Cloudflare-compatible import endpoint backend
 - official S3-compatible Object Storage endpoint backend
 - official managed target / native resource backends
@@ -138,7 +138,7 @@ SigV4, where the Cloud handler must verify the protocol Authorization header
 itself. In that mode, the platform does not verify a customer session/PAT; it
 strips spoofable Takosumi context headers and cookies, then forwards the
 `Authorization` header to the handler.
-Takosumi Cloud Worker traffic for `*.app.takos.jp` and
+Takosumi Cloud public HTTP traffic for `*.app.takos.jp` and
 `*.app-staging.takos.jp` is dispatched to the Cloud Edge Runtime by the same
 `takosumi-cloud/platform/worker.ts` hostname dispatch registry. It is not a
 separate Worker.
@@ -483,7 +483,7 @@ https://app.takosumi.com/compat/cloudflare/client/v4
 
 This is the Cloudflare v4-shaped subset for `compat.cloudflare.workers.v1`. It
 lets the `cloudflare/cloudflare` OpenTofu/Terraform provider point
-Workers-oriented resources at Takosumi Cloud Workers / managed bindings by
+Workers-oriented resources at Takosumi Cloud `EdgeWorker` / managed bindings by
 changing provider `base_url`. It is an import and deploy path for existing
 manifests, not full Cloudflare API compatibility.
 
@@ -513,8 +513,8 @@ Initial target scope:
 
 - Workers scripts
 - Workers routes
-- default `*.app.takos.jp` hostname per Worker route
-- user-owned custom domains on Worker routes
+- default `*.app.takos.jp` hostname per HTTP route
+- user-owned custom domains on HTTP routes
 - KV namespaces
 - R2 buckets
 - D1 databases
