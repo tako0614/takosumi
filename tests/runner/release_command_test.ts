@@ -113,6 +113,59 @@ test("release action treats post-apply work as opaque app commands", async () =>
   }
 });
 
+test("release action admits dispatch-only provider credentials", async () => {
+  const runId = `release_provider_env_${crypto.randomUUID().replace(/-/g, "")}`;
+  const root = join(RUN_ROOT, safeRunId(runId));
+  const sourceRoot = join(root, "source");
+  const secret = "cf-release-token-1234567890";
+  try {
+    await mkdir(sourceRoot, { recursive: true });
+
+    const response = await handleRunnerRequest(
+      runnerRequest(runId, {
+        release: {
+          commands: [
+            {
+              id: "publish",
+              command: [
+                process.execPath,
+                "-e",
+                [
+                  `if (Bun.env.CLOUDFLARE_API_TOKEN !== ${JSON.stringify(secret)}) process.exit(7)`,
+                  `await Bun.write("credential-seen.txt", "yes")`,
+                  `console.log("token=" + Bun.env.CLOUDFLARE_API_TOKEN)`,
+                ].join(";"),
+              ],
+            },
+          ],
+        },
+        credentials: {
+          env: {
+            CLOUDFLARE_API_TOKEN: secret,
+          },
+        },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({
+      runId,
+      action: "release",
+      status: "succeeded",
+      exitCode: 0,
+      commandCount: 1,
+    });
+    expect(body.stdout).toContain("token=[redacted]");
+    expect(JSON.stringify(body)).not.toContain(secret);
+    await expect(
+      readFile(join(sourceRoot, "credential-seen.txt"), "utf8"),
+    ).resolves.toBe("yes");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("release action rejects provider credential and reserved env", async () => {
   const runId = `release_secret_${crypto.randomUUID().replace(/-/g, "")}`;
   const root = join(RUN_ROOT, safeRunId(runId));

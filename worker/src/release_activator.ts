@@ -177,6 +177,7 @@ export function createRunnerReleaseActivator(
         commands: input.commands,
         sourceSnapshot: input.sourceSnapshot,
         nonSensitiveOutputs: input.nonSensitiveOutputs,
+        ...(input.credentials ? { credentials: input.credentials } : {}),
         applyRunId: input.applyRun.id,
         installationId: input.installation.id,
         deploymentId: input.deployment.id,

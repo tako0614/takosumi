@@ -451,6 +451,7 @@ export interface ReleaseCommandRunJob {
   readonly commands: readonly ReleaseActivationCommand[];
   readonly sourceSnapshot: SourceSnapshot;
   readonly nonSensitiveOutputs: Readonly<Record<string, JsonValue>>;
+  readonly credentials?: RunCredentials;
   readonly applyRunId: string;
   readonly installationId: string;
   readonly deploymentId: string;
@@ -477,6 +478,12 @@ export interface ReleaseActivationInput {
    * secret-shaped names/values are filtered before this seam.
    */
   readonly nonSensitiveOutputs: Readonly<Record<string, JsonValue>>;
+  /**
+   * Dispatch-only provider credentials for runner-executed release commands.
+   * Minted immediately before activation from the same reviewed ProviderBinding
+   * set as apply/destroy; never persisted or sent to operator webhooks.
+   */
+  readonly credentials?: RunCredentials;
   /**
    * App-declared release commands extracted from the neutral
    * `takosumi_release.post_apply` output. Takosumi core treats them as opaque

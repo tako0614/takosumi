@@ -2358,6 +2358,7 @@ test("release activator receives neutral post-apply commands as opaque argv", as
           post_apply: [
             {
               id: "activate",
+              executor: "operator",
               command: ["bun", "run", "app:activate", "--target", "runtime"],
               working_directory: ".",
               env: {
@@ -2396,6 +2397,7 @@ test("release activator receives neutral post-apply commands as opaque argv", as
     {
       id: "activate",
       phase: "post_apply",
+      executor: "operator",
       command: ["bun", "run", "app:activate", "--target", "runtime"],
       workingDirectory: ".",
       env: { APP_RELEASE_TARGET: "runtime" },
@@ -2410,6 +2412,66 @@ test("release activator receives neutral post-apply commands as opaque argv", as
   expect(activity?.metadata).toMatchObject({
     commandCount: 1,
   });
+});
+
+test("runner release commands receive dispatch-only provider credentials", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner(
+    {},
+    {
+      takosumi_release: {
+        sensitive: false,
+        value: {
+          post_apply: [
+            {
+              id: "publish",
+              executor: "runner",
+              command: ["bun", "run", "app:activate"],
+              working_directory: ".",
+            },
+          ],
+        },
+      },
+      launch_url: { sensitive: false, value: "https://x.example" },
+    },
+  );
+  await seedRunnableInstallationModel(store, { environment: "preview" });
+  const activations: ReleaseActivationInput[] = [];
+  const controller = controllerWith(store, runner, {
+    activity: activityRecorderFor(store),
+    releaseActivator: {
+      activate: (input) => {
+        activations.push(input);
+        return Promise.resolve({ status: "succeeded" });
+      },
+    },
+  });
+
+  const { planRun } = await controller.createInstallationPlan("inst_fixture");
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+
+  expect(applyRun.status).toBe("succeeded");
+  expect(activations).toHaveLength(1);
+  expect(activations[0]?.commands).toEqual([
+    {
+      id: "publish",
+      phase: "post_apply",
+      executor: "runner",
+      command: ["bun", "run", "app:activate"],
+      workingDirectory: ".",
+    },
+  ]);
+  expect(activations[0]?.credentials).toEqual({
+    TF_VAR_cloudflare_main_api_token: "fixture-provider-token",
+  });
+
+  const activity = (await store.listActivityEvents("space_test")).find(
+    (event) => event.action === "release_activation.succeeded",
+  );
+  expect(JSON.stringify(activity)).not.toContain("fixture-provider-token");
 });
 
 test("release command descriptor validates only generic command shape", async () => {

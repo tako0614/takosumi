@@ -94,11 +94,11 @@ platform readiness `open` also requires the validator output's four
 `TAKOSUMI_RELEASE_ACTIVATION_*_EVIDENCE_REF` / `_DIGEST` pairs in realized
 operator config.
 
-Use the built-in runner activator only for `executor = "runner"` commands that
-can run without cloud provider credentials inside the restored source snapshot,
-for example source-local readiness or metadata checks. Commands
-that require a provider token, an operator checkout of the full repository, or
-publication outside the source snapshot should declare `executor = "operator"`
+Use the built-in runner activator for `executor = "runner"` commands that can
+run inside the restored source snapshot with the same ProviderConnection
+credential boundary as the reviewed apply. Commands that require operator-only
+tools, an operator checkout outside the source snapshot, or credentials that are
+not represented as ProviderConnections should declare `executor = "operator"`
 and be handled by the configured release activator materializer.
 
 The bundled Cloudflare-hosted operator helper is intentionally small:
