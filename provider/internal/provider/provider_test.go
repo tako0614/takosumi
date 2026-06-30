@@ -6,6 +6,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -81,18 +84,33 @@ func versionedDiscoveryHandler(t *testing.T, discoveryVersion string, capability
 }
 
 func TestProviderResourcesIncludeCurrentShapeResources(t *testing.T) {
-	p := &takosumiProvider{}
-	got := map[string]bool{}
-	for _, factory := range p.Resources(context.Background()) {
-		res := factory()
-		var resp frameworkresource.MetadataResponse
-		res.Metadata(context.Background(), frameworkresource.MetadataRequest{
-			ProviderTypeName: "takosumi",
-		}, &resp)
-		got[resp.TypeName] = true
+	got := providerResourceTypeNames(t)
+	want := currentProviderResourceTypeNames()
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("unexpected provider resource set:\ngot  %v\nwant %v", got, want)
 	}
+}
 
-	want := []string{
+func TestProviderExampleResourcesMatchCurrentResources(t *testing.T) {
+	entries, err := os.ReadDir(filepath.Clean("../../examples/resources"))
+	if err != nil {
+		t.Fatalf("read examples/resources: %v", err)
+	}
+	got := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() {
+			got = append(got, entry.Name())
+		}
+	}
+	sort.Strings(got)
+	want := currentProviderResourceTypeNames()
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("example resource directories must match provider resources:\ngot  %v\nwant %v", got, want)
+	}
+}
+
+func currentProviderResourceTypeNames() []string {
+	names := []string{
 		"takosumi_edge_worker",
 		"takosumi_object_bucket",
 		"takosumi_kv_store",
@@ -101,14 +119,24 @@ func TestProviderResourcesIncludeCurrentShapeResources(t *testing.T) {
 		"takosumi_container_service",
 		"takosumi_target_pool",
 	}
-	for _, resourceType := range want {
-		if !got[resourceType] {
-			t.Fatalf("provider resource %q is not registered; got %#v", resourceType, got)
-		}
+	sort.Strings(names)
+	return names
+}
+
+func providerResourceTypeNames(t *testing.T) []string {
+	t.Helper()
+	p := &takosumiProvider{}
+	got := make([]string, 0, len(p.Resources(context.Background())))
+	for _, factory := range p.Resources(context.Background()) {
+		res := factory()
+		var resp frameworkresource.MetadataResponse
+		res.Metadata(context.Background(), frameworkresource.MetadataRequest{
+			ProviderTypeName: "takosumi",
+		}, &resp)
+		got = append(got, resp.TypeName)
 	}
-	if len(got) != len(want) {
-		t.Fatalf("unexpected provider resource set: got %#v, want %#v", got, want)
-	}
+	sort.Strings(got)
+	return got
 }
 
 func TestConfigureClient_AcceptsContainerServiceOnlyCapabilities(t *testing.T) {
