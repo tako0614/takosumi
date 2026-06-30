@@ -245,6 +245,24 @@ test("OpenTofu runner Durable Object forwards non-secret performance env to the 
   assert.equal(runner.envVars.TAKOSUMI_SOURCE_ARCHIVE_ZSTD_LEVEL, "1");
 });
 
+test("OpenTofu runner Durable Object keeps a minimum activity grace while startup is in flight", () => {
+  const runner = runnerWithContainer(
+    new FakeR2Bucket(),
+    {
+      async containerFetch() {
+        return Response.json({ status: "succeeded" });
+      },
+    },
+    {
+      env: {
+        TAKOSUMI_RUNNER_KEEPALIVE_SECONDS: "5",
+      },
+    },
+  );
+
+  assert.equal(runner.sleepAfter, "30s");
+});
+
 test("OpenTofu runner Durable Object destroys a successful run container by default", async () => {
   const calls: string[] = [];
   const runner = runnerWithContainer(
@@ -280,7 +298,7 @@ test("OpenTofu runner Durable Object destroys a successful run container by defa
     status: "succeeded",
     run: "plan_1",
   });
-  assert.equal(runner.sleepAfter, "1s");
+  assert.equal(runner.sleepAfter, "30s");
   assert.deepEqual(calls, ["fetch POST /runs/plan_1", "destroy"]);
 });
 
@@ -320,7 +338,7 @@ test("OpenTofu runner Durable Object destroys after a successful run when keepal
     status: "succeeded",
     run: "plan_1",
   });
-  assert.equal(runner.sleepAfter, "1s");
+  assert.equal(runner.sleepAfter, "30s");
   assert.deepEqual(calls, ["fetch POST /runs/plan_1", "destroy"]);
 });
 
@@ -415,7 +433,7 @@ test("OpenTofu runner Durable Object destroys the container when activity expire
 
   await runner.onActivityExpired();
 
-  assert.equal(runner.sleepAfter, "1s");
+  assert.equal(runner.sleepAfter, "30s");
   assert.deepEqual(calls, ["destroy"]);
 });
 
