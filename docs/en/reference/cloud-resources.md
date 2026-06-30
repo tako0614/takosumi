@@ -39,7 +39,6 @@ Use these terms in landing pages and the main app UI:
 - Object Storage
 - Database
 - Queue
-- Push Notifications
 - AI Gateway
 - Durable Workflow
 
