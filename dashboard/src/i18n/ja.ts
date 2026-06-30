@@ -561,6 +561,7 @@ export const ja = {
   "new.error.nameInvalid":
     "サービス名は半角小文字・数字・ハイフンだけで入力してください。",
   "new.error.configMissing": "追加設定がまだ利用できません。",
+  "new.error.configLoading": "追加設定を読み込み中です。",
   "new.error.syncPending":
     "ソースの取得がまだ完了していません。少し待ってから「再試行」してください。",
   "new.error.sourceFetchFailed":

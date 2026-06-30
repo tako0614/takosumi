@@ -559,6 +559,7 @@ export const en: Record<keyof typeof ja, string> = {
   "new.error.nameInvalid":
     "Use lowercase letters, numbers, and hyphens only for the service name.",
   "new.error.configMissing": "Add configuration is not available yet.",
+  "new.error.configLoading": "Loading add configuration.",
   "new.error.syncPending":
     "The source has not finished syncing. Wait a moment, then retry.",
   "new.error.sourceFetchFailed":
