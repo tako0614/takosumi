@@ -21,6 +21,7 @@
       "takosumi-contract": ["./contract/index.ts"],
       "takosumi-contract/api-surface": ["./contract/api-surface.ts"],
       "takosumi-contract/capabilities": ["./contract/capabilities.ts"],
+      "takosumi-contract/mobile": ["./contract/mobile.ts"],
       "takosumi-contract/deploy-control-api": [
         "./contract/deploy-control-api.ts"
       ],

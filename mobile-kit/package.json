@@ -1,0 +1,22 @@
+{
+  "name": "@takosjp/takosumi-mobile-kit",
+  "version": "0.0.0",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "peerDependencies": {
+    "solid-js": "^1.9.0"
+  },
+  "scripts": {
+    "check": "tsc --noEmit -p tsconfig.json",
+    "test": "bun test ../tests/mobile-kit/src"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.0",
+    "solid-js": "^1.9.13",
+    "typescript": "^5.7.0"
+  }
+}
