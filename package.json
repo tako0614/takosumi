@@ -12,7 +12,8 @@
     "accounts/service",
     "accounts/platform-services",
     "cli",
-    "deploy/node-postgres"
+    "deploy/node-postgres",
+    "mobile-kit"
   ],
   "scripts": {
     "check": "bun run provider:assets && bun run test:provider && bun run check:test-source-boundary && tsc --noEmit && bun run check:dashboard && bun run test:dashboard-new-flow && bun run check:worker-types && bun run check:cloudflare-worker-build",
@@ -20,6 +21,7 @@
     "check:dashboard": "cd dashboard && bunx tsc --noEmit --pretty false -p tsconfig.json && bun run build",
     "check:worker-types": "tsc --noEmit -p tsconfig.worker.json",
     "check:cloudflare-worker-build": "bun build --target browser --format esm --external cloudflare:workers deploy/platform/worker.ts --outfile /tmp/takosumi-platform-worker-check.mjs",
+    "check:mobile-kit": "cd mobile-kit && bun run check && bun run test",
     "test": "bun test ./tests",
     "test:service": "bun test ./tests/core",
     "test:accounts": "bun test ./tests/accounts ./tests/deploy/node-postgres ./tests/deploy/accounts-cloudflare",

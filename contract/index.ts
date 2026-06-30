@@ -1,5 +1,11 @@
-export { API_V1_PREFIX, isApiV1Path } from "./api-surface.ts";
+export {
+  API_V1_PREFIX,
+  isApiV1Path,
+  TAKOSUMI_PRODUCT_CAPABILITIES_PATH,
+  TAKOSUMI_WELL_KNOWN_PATH,
+} from "./api-surface.ts";
 export * from "./capabilities.ts";
+export * from "./mobile.ts";
 export * from "./resource-shape.ts";
 export * from "./target.ts";
 export * from "./resolution.ts";
