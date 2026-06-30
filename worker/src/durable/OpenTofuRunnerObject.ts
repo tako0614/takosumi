@@ -147,6 +147,9 @@ const containerRuntimeAvailable =
 const CONTAINER_START_TIMEOUT_MS = 30_000;
 const CONTAINER_PORT_READY_TIMEOUT_MS = 30_000;
 const CONTAINER_START_POLL_INTERVAL_MS = 250;
+const CONTAINER_READY_ATTEMPTS = 3;
+const CONTAINER_NOT_RUNNING_PATTERN =
+  /container is not running|consider calling start/i;
 const DEFAULT_RUNNER_KEEPALIVE_SECONDS = 0;
 const MAX_RUNNER_KEEPALIVE_SECONDS = 900;
 const RUNNER_STARTUP_SECONDS_HEADER = "x-takosumi-runner-startup-seconds";
@@ -317,17 +320,56 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
 
   async #ensureContainerReady(baseUrl: URL): Promise<void> {
     const startedAt = monotonicNow();
-    await this.#startContainerIfSupported();
-    const response = await this.#containerFetch(
-      new Request(containerHealthUrl(baseUrl), { method: "GET" }),
-    );
-    if (!response.ok) {
-      const failure = await readRunnerFailureDetail(response);
-      throw new Error(
-        `container health check failed: ${response.status}${failure ? ` (${failure})` : ""}`,
-      );
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= CONTAINER_READY_ATTEMPTS; attempt += 1) {
+      try {
+        await this.#startContainerIfSupported();
+        const response = await this.#containerFetch(
+          new Request(containerHealthUrl(baseUrl), { method: "GET" }),
+        );
+        if (!response.ok) {
+          const failure = await readRunnerFailureDetail(response);
+          throw new Error(
+            `container health check failed: ${response.status}${failure ? ` (${failure})` : ""}`,
+          );
+        }
+        this.#lastStartupSeconds ??=
+          Math.max(0, monotonicNow() - startedAt) / 1000;
+        return;
+      } catch (error) {
+        lastError = error;
+        if (
+          attempt >= CONTAINER_READY_ATTEMPTS ||
+          !isContainerNotRunningError(error)
+        ) {
+          throw error;
+        }
+        console.warn(
+          "OpenTofu runner container was not running after start; retrying",
+          { attempt },
+        );
+        await sleep(CONTAINER_START_POLL_INTERVAL_MS * attempt);
+      }
     }
-    this.#lastStartupSeconds ??= Math.max(0, monotonicNow() - startedAt) / 1000;
+    throw lastError instanceof Error
+      ? lastError
+      : new Error("container readiness failed");
+  }
+
+  async #containerFetchAfterReady(
+    requestFactory: () => Request,
+    baseUrl: URL,
+  ): Promise<Response> {
+    try {
+      return await this.#containerFetch(requestFactory());
+    } catch (error) {
+      if (!isContainerNotRunningError(error)) throw error;
+      console.warn(
+        "OpenTofu runner container stopped before dispatch; restarting",
+      );
+      await this.#ensureContainerReady(baseUrl);
+      return await this.#containerFetch(requestFactory());
+    }
   }
 
   async #fetchWithDurablePlanArtifacts(request: Request): Promise<Response> {
@@ -391,12 +433,14 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       await this.#restoreStateArtifact(runId, stateKeys, url);
     }
     await this.#ensureContainerReady(url);
-    const runnerResponse = await this.#containerFetch(
-      new Request(request.url, {
-        method: request.method,
-        headers: runnerRequestHeaders(request),
-        body: bodyText,
-      }),
+    const runnerResponse = await this.#containerFetchAfterReady(
+      () =>
+        new Request(request.url, {
+          method: request.method,
+          headers: runnerRequestHeaders(request),
+          body: bodyText,
+        }),
+      url,
     );
     if (
       (envelope.action === "apply" || envelope.action === "destroy") &&
@@ -456,12 +500,14 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       envelope.request,
     );
     const reuseSnapshot = parseReusableSourceSnapshot(envelope.request);
-    const runnerResponse = await this.#containerFetch(
-      new Request(request.url, {
-        method: request.method,
-        headers: runnerRequestHeaders(request),
-        body: bodyText,
-      }),
+    const runnerResponse = await this.#containerFetchAfterReady(
+      () =>
+        new Request(request.url, {
+          method: request.method,
+          headers: runnerRequestHeaders(request),
+          body: bodyText,
+        }),
+      url,
     );
     if (!runnerResponse.ok) return runnerResponse;
     const payload = await readJsonObject(runnerResponse);
@@ -1062,6 +1108,17 @@ function containerHealthUrl(baseUrl: URL): string {
   url.pathname = "/healthz";
   url.search = "";
   return url.toString();
+}
+
+function isContainerNotRunningError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    CONTAINER_NOT_RUNNING_PATTERN.test(error.message)
+  );
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function stateArtifactUrl(baseUrl: URL, runId: string): string {
