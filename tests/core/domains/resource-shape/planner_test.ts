@@ -2,13 +2,20 @@ import { test, expect } from "bun:test";
 
 import type { TargetPoolEntry } from "takosumi-contract";
 import {
-  AI_ENDPOINT_GENERIC_TEMPLATE_ID,
-  AI_ENDPOINT_IMPLEMENTATION_TEMPLATE,
+  CONTAINER_SERVICE_GENERIC_TEMPLATE_ID,
   EDGE_WORKER_IMPLEMENTATION_TEMPLATE,
-  parseAIEndpointSpec,
+  parseContainerServiceSpec,
   parseEdgeWorkerSpec,
-  planAIEndpoint,
+  parseKVStoreSpec,
+  parseObjectBucketSpec,
+  parseQueueSpec,
+  parseSQLDatabaseSpec,
+  planContainerService,
   planEdgeWorker,
+  planKVStore,
+  planObjectBucket,
+  planQueue,
+  planSQLDatabase,
 } from "../../../../core/domains/resource-shape/planner.ts";
 import { firstPartyModuleFilesByTemplateId } from "../../../../opentofu-modules/module-files.ts";
 
@@ -61,7 +68,7 @@ test("parseEdgeWorkerSpec rejects connections until grant/projection planning la
     source: { artifactPath: "/work/dist/worker.js" },
     connections: {
       AI: {
-        resource: "AIEndpoint/main",
+        resource: "ObjectBucket/assets",
         permissions: ["connect"],
         projection: "env",
       },
@@ -103,103 +110,121 @@ test("planEdgeWorker maps cloudflare_workers to cloudflare-worker-service", () =
   );
 });
 
-test("parseAIEndpointSpec accepts an OpenAI-compatible endpoint policy", () => {
-  const r = parseAIEndpointSpec({
-    name: "ai",
-    interfaces: ["openai_chat_completions", "openai_embeddings"],
-    profiles: ["openai_compatible"],
-    providerPreferences: ["provider.deepseek", "provider.gemini"],
-    routingPolicy: {
-      strategy: "lowest_latency",
-      allowFallback: true,
-      preferredRegions: ["jp", "us"],
-    },
-    modelPolicy: {
-      defaultModel: "fast/chat",
-      allowedModels: ["fast/chat", "embed/text"],
-    },
+test("parseObjectBucketSpec accepts S3-compatible object storage interfaces", () => {
+  const r = parseObjectBucketSpec({
+    name: "assets",
+    interfaces: ["s3_api", "signed_url"],
+    lifecyclePolicy: { delete: "retain" },
   });
   expect(r.ok).toBe(true);
   if (!r.ok) return;
-  expect(r.spec.interfaces).toEqual([
-    "openai_chat_completions",
-    "openai_embeddings",
-  ]);
-  expect(r.spec.providerPreferences).toEqual([
-    "provider.deepseek",
-    "provider.gemini",
-  ]);
-  expect(r.spec.routingPolicy?.strategy).toBe("lowest_latency");
-  expect(r.spec.modelPolicy?.defaultModel).toBe("fast/chat");
+  expect(r.spec.interfaces).toEqual(["s3_api", "signed_url"]);
+  expect(r.spec.lifecyclePolicy?.delete).toBe("retain");
 });
 
-test("parseAIEndpointSpec keeps vendor interface/profile tokens extensible", () => {
-  const r = parseAIEndpointSpec({
-    name: "ai",
-    interfaces: ["openai_chat_completions", "vendor.glm.responses.v1"],
-    profiles: ["openai_compatible", "provider.glm"],
+test("parseKVStoreSpec validates consistency preference", () => {
+  const ok = parseKVStoreSpec({ name: "cache", consistency: "eventual" });
+  expect(ok.ok).toBe(true);
+  const bad = parseKVStoreSpec({ name: "cache", consistency: "linearizable" });
+  expect(bad.ok).toBe(false);
+  if (!bad.ok) expect(bad.error.code).toBe("invalid_consistency");
+});
+
+test("parseQueueSpec accepts delivery preferences", () => {
+  const r = parseQueueSpec({
+    name: "delivery",
+    delivery: { maxRetries: 5, maxBatchSize: 25 },
   });
   expect(r.ok).toBe(true);
   if (!r.ok) return;
-  expect(r.spec.interfaces).toContain("vendor.glm.responses.v1");
-  expect(r.spec.profiles).toContain("provider.glm");
+  expect(r.spec.delivery).toEqual({ maxRetries: 5, maxBatchSize: 25 });
 });
 
-test("parseAIEndpointSpec rejects empty interfaces", () => {
-  const r = parseAIEndpointSpec({ name: "ai", interfaces: [] });
+test("parseQueueSpec rejects negative delivery values", () => {
+  const r = parseQueueSpec({ name: "delivery", delivery: { maxRetries: -1 } });
   expect(r.ok).toBe(false);
-  if (!r.ok) expect(r.error.code).toBe("invalid_interfaces");
+  if (!r.ok) expect(r.error.code).toBe("invalid_delivery");
 });
 
-test("planAIEndpoint uses a generic endpoint module for known and custom implementations", () => {
+test("parseSQLDatabaseSpec accepts sqlite and migrations path", () => {
+  const r = parseSQLDatabaseSpec({
+    name: "main",
+    engine: "sqlite",
+    migrationsPath: "migrations",
+  });
+  expect(r.ok).toBe(true);
+  if (!r.ok) return;
+  expect(r.spec.engine).toBe("sqlite");
+  expect(r.spec.migrationsPath).toBe("migrations");
+});
+
+test("parseContainerServiceSpec accepts an OCI image with ports and env", () => {
+  const r = parseContainerServiceSpec({
+    name: "agent",
+    image: "ghcr.io/example/agent:1.0.0",
+    ports: [8080],
+    publicHttp: true,
+    environment: { NODE_ENV: "production" },
+  });
+  expect(r.ok).toBe(true);
+  if (!r.ok) return;
+  expect(r.spec.image).toBe("ghcr.io/example/agent:1.0.0");
+  expect(r.spec.ports).toEqual([8080]);
+});
+
+test("service-shape planners map Cloudflare resources to focused modules", () => {
   const target: TargetPoolEntry = {
-    name: "deepseek-main",
-    type: "ai_provider",
-    ref: "https://api.deepseek.example/v1",
+    name: "cf-main",
+    type: "cloudflare",
+    ref: "cf-account-123",
     priority: 90,
   };
-  const plan = planAIEndpoint(
-    "deepseek_openai_gateway",
+  expect(
+    planObjectBucket("cloudflare_r2_bucket", { name: "assets" }, target)
+      .templateId,
+  ).toBe("cloudflare-r2-bucket");
+  expect(
+    planKVStore("cloudflare_kv_namespace", { name: "cache" }, target)
+      .templateId,
+  ).toBe("cloudflare-kv-store");
+  expect(
+    planQueue("cloudflare_queue", { name: "delivery" }, target).templateId,
+  ).toBe("cloudflare-queue");
+  expect(
+    planSQLDatabase("cloudflare_d1_database", { name: "main" }, target)
+      .templateId,
+  ).toBe("cloudflare-sql-database");
+});
+
+test("planContainerService uses the generic container module for operator implementations", () => {
+  const target: TargetPoolEntry = {
+    name: "k8s-main",
+    type: "kubernetes",
+    ref: "cluster-prod",
+    priority: 90,
+  };
+  const plan = planContainerService(
+    "kubernetes_deployment",
     {
-      name: "ai",
-      interfaces: ["openai_chat_completions"],
-      profiles: ["openai_compatible", "provider.deepseek"],
-      providerPreferences: ["provider.deepseek"],
-      routingPolicy: {
-        strategy: "lowest_latency",
-        allowFallback: true,
-        preferredRegions: ["jp"],
-      },
-      modelPolicy: {
-        defaultModel: "deepseek/chat",
-        allowedModels: ["deepseek/chat"],
-      },
+      name: "agent",
+      image: "ghcr.io/example/agent:1.0.0",
+      ports: [8080],
+      publicHttp: true,
+      environment: { NODE_ENV: "production" },
     },
     target,
   );
-
-  expect(
-    AI_ENDPOINT_IMPLEMENTATION_TEMPLATE.cloudflare_ai_gateway,
-  ).toBe(AI_ENDPOINT_GENERIC_TEMPLATE_ID);
-  expect(plan.templateId).toBe(AI_ENDPOINT_GENERIC_TEMPLATE_ID);
-  expect(plan.shape).toBe("AIEndpoint");
+  expect(plan.templateId).toBe(CONTAINER_SERVICE_GENERIC_TEMPLATE_ID);
+  expect(plan.shape).toBe("ContainerService");
   expect(plan.inputs).toEqual({
-    endpointName: "ai",
-    implementation: "deepseek_openai_gateway",
-    targetName: "deepseek-main",
-    targetType: "ai_provider",
-    interfaces: ["openai_chat_completions"],
-    profiles: ["openai_compatible", "provider.deepseek"],
-    providerPreferences: ["provider.deepseek"],
-    routingStrategy: "lowest_latency",
-    allowFallback: true,
-    preferredRegions: ["jp"],
-    allowedModels: ["deepseek/chat"],
-    defaultModel: "deepseek/chat",
-    baseUrl: "https://api.deepseek.example/v1",
+    serviceName: "agent",
+    implementation: "kubernetes_deployment",
+    targetName: "k8s-main",
+    targetType: "kubernetes",
+    image: "ghcr.io/example/agent:1.0.0",
+    ports: [8080],
+    publicHttp: true,
+    environment: { NODE_ENV: "production" },
   });
-  expect(plan.publicOutputs).toEqual(["base_url", "default_model"]);
-  expect(plan.moduleFiles).toBe(
-    firstPartyModuleFilesByTemplateId[AI_ENDPOINT_GENERIC_TEMPLATE_ID],
-  );
+  expect(plan.publicOutputs).toEqual(["service_name", "url"]);
 });

@@ -38,14 +38,8 @@ import type {
 } from "../../contract/dependencies.ts";
 import type { Connection } from "../../contract/internal-deploy-control-api.ts";
 import type { Deployment, StateVersion } from "../../contract/deployments.ts";
-import type {
-  InstallConfig,
-  Capsule,
-} from "../../contract/installations.ts";
-import type {
-  OutputShare,
-  Output,
-} from "../../contract/outputs.ts";
+import type { InstallConfig, Capsule } from "../../contract/installations.ts";
+import type { OutputShare, Output } from "../../contract/outputs.ts";
 import type { Run, RunGroup } from "../../contract/runs.ts";
 import type {
   CredentialMintEvent,
@@ -239,7 +233,11 @@ test("unified Provider Connection + binding shape uses concrete connection ids",
   };
   const bindings: readonly CapsuleProviderEnvBinding[] = [
     { provider: "cloudflare", alias: "main", connectionId: "conn_cf_other" },
-    { provider: "cloudflare", alias: "zone", connectionId: providerConnection.id },
+    {
+      provider: "cloudflare",
+      alias: "zone",
+      connectionId: providerConnection.id,
+    },
   ];
   expect(binding.connectionId).toBe("conn_space_cf");
   expect(providerConnection.materialization).toBe("secret");
@@ -332,19 +330,19 @@ test("TargetPool can carry operator-declared implementation capabilities", () =>
     spec: {
       targets: [
         {
-          name: "deepseek-main",
-          type: "ai_provider",
-          ref: "https://api.deepseek.example/v1",
+          name: "containers-main",
+          type: "kubernetes",
+          ref: "cluster-prod",
           priority: 90,
           implementations: [
             {
-              shape: "AIEndpoint",
-              implementation: "deepseek_openai_gateway",
-              nativeResourceType: "ai.deepseek_endpoint",
+              shape: "ContainerService",
+              implementation: "custom_container_runtime",
+              nativeResourceType: "custom.container_service",
               interfaces: {
-                openai_chat_completions: "native",
-                "vendor.deepseek.responses.v1": "native",
-                openai_embeddings: "shim",
+                oci_container: "native",
+                public_http: "shim",
+                "custom.mesh": "native",
               },
             },
           ],
@@ -354,8 +352,8 @@ test("TargetPool can carry operator-declared implementation capabilities", () =>
   };
 
   const implementation = pool.spec.targets[0]?.implementations?.[0];
-  expect(implementation?.shape).toBe("AIEndpoint");
-  expect(implementation?.interfaces["vendor.deepseek.responses.v1"]).toBe("native");
+  expect(implementation?.shape).toBe("ContainerService");
+  expect(implementation?.interfaces["custom.mesh"]).toBe("native");
 });
 
 test("Connection expiry shape", () => {

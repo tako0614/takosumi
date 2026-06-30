@@ -34,9 +34,9 @@ test("Takosumi product capabilities separate framework from enabled profiles", (
   assert.equal(capabilities.apiVersion, TAKOSUMI_API_VERSION);
   assert.equal(capabilities.resources.Stack, true);
   assert.equal(capabilities.resources.EdgeWorker, false);
-  assert.equal(capabilities.resources.AIEndpoint, false);
+  assert.equal(capabilities.resources.ObjectBucket, true);
+  assert.equal(capabilities.resources.ContainerService, true);
   assert.equal(capabilities.adapters.opentofu, true);
-  assert.equal(capabilities.adapters.ai_provider, false);
   assert.equal(capabilities.compat.framework, true);
   assert.equal(capabilities.compat.s3, true);
   assert.equal(capabilities.compat.cloudflare_subset, false);
@@ -57,10 +57,10 @@ test("Takosumi discovery can publish a scoped S3-compatible endpoint", () => {
   );
 });
 
-test("S3 compatibility is a compat profile, not a default Resource Shape", () => {
+test("S3 compatibility is separate from the ObjectBucket Resource Shape", () => {
   const capabilities = createTakosumiProductCapabilities();
 
   assert.equal(capabilities.resources.EdgeWorker, true);
-  assert.equal(capabilities.resources.AIEndpoint, false);
+  assert.equal(capabilities.resources.ObjectBucket, true);
   assert.equal(capabilities.compat.s3, false);
 });

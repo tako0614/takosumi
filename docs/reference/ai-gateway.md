@@ -5,14 +5,21 @@ Takosumi OSS control-plane feature. OSS Takosumi remains an OpenTofu/Terraform
 control plane that runs existing providers as-is; it does not provide model
 gateway services as part of the public OSS contract.
 
-This page describes the official hosted data-plane implementation. The general
-control-plane model is the `AIEndpoint` Resource Shape: HCL declares interfaces,
-profiles, provider preferences, routing policy, and model aliases, while the
-Takosumi engine, TargetPool capability evidence, credentials, and operator
-policy decide whether the endpoint is backed by Cloudflare AI Gateway, Workers
-AI, OpenAI-compatible upstreams, Gemini/GLM/DeepSeek, Bedrock, Vertex AI, or a
-custom adapter. The `takosumi` OpenTofu provider must not treat the official
-Cloud upstream list as the global AI provider allow-list.
+This page describes the official hosted data-plane implementation. AI Gateway
+is not a default Resource Shape and is not exposed as a dedicated provider
+resource.
+Apps consume it as an OpenAI-compatible endpoint through runtime environment
+projection:
+
+```text
+OPENAI_BASE_URL=https://<issuer>/gateway/ai/v1
+OPENAI_API_KEY=<rotated service token>
+OPENAI_MODEL=takosumi/default
+```
+
+The `takosumi` OpenTofu provider must not treat the official Cloud upstream
+list as a global AI provider allow-list. Upstream choices and routing belong to
+the closed Cloud handler or to an operator-provided runtime service.
 
 The Cloud extension is a Takosumi Cloud operator-backed, OpenAI-compatible
 runtime profile. It lets a deployed Capsule runtime use one Takosumi endpoint

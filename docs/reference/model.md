@@ -26,20 +26,20 @@ APIs are capability entrypoints into those models, not the internal model itself
 
 ## Resource Shape Concepts
 
-| Concept        | Meaning                                                                        |
-| -------------- | ------------------------------------------------------------------------------ |
-| Space          | Resource API namespace and policy scope                                        |
-| Environment    | Deployment environment inside a Space                                          |
-| Stack          | A group of Resource Shape objects and operations                               |
-| Resource       | Desired service-form resource, such as EdgeWorker or AIEndpoint                |
-| Target         | Concrete implementation destination, such as AWS, Cloudflare, Kubernetes       |
-| TargetPool     | Operator-controlled set of available Targets and capabilities                  |
-| Credential     | Runtime authority used by a Target or Adapter                                  |
-| Policy         | Rules for placement, cost, region, action, network, and access                 |
-| Adapter        | Implementation bridge that can preview, apply, observe, and delete             |
-| ResolutionLock | Recorded resolver decision for a Resource                                      |
-| NativeResource | Concrete provider/platform resource created by an Adapter                      |
-| Condition      | Status and readiness evidence                                                  |
+| Concept        | Meaning                                                                   |
+| -------------- | ------------------------------------------------------------------------- |
+| Space          | Resource API namespace and policy scope                                   |
+| Environment    | Deployment environment inside a Space                                     |
+| Stack          | A group of Resource Shape objects and operations                          |
+| Resource       | Desired service-form resource, such as EdgeWorker, ObjectBucket, or Queue |
+| Target         | Concrete implementation destination, such as AWS, Cloudflare, Kubernetes  |
+| TargetPool     | Operator-controlled set of available Targets and capabilities             |
+| Credential     | Runtime authority used by a Target or Adapter                             |
+| Policy         | Rules for placement, cost, region, action, network, and access            |
+| Adapter        | Implementation bridge that can preview, apply, observe, and delete        |
+| ResolutionLock | Recorded resolver decision for a Resource                                 |
+| NativeResource | Concrete provider/platform resource created by an Adapter                 |
+| Condition      | Status and readiness evidence                                             |
 
 `Space` here is the Resource API namespace and policy scope.
 
@@ -155,16 +155,13 @@ Adapters report capabilities and perform preview/apply/observe/delete work.
 Initial adapter families can include OpenTofu, Cloudflare, AWS, Kubernetes, VM,
 and Takosumi-native adapters.
 
-Extensible surfaces use capability tokens. For example,
-`takosumi_ai_endpoint` has stable shape-specific HCL, but its
-`interfaces`/`profiles`/`provider_preferences`/`routing_policy` tokens are not
-limited to the AI providers Takosumi Cloud uses today. Operators can publish
-TargetPool implementation capability evidence for DeepSeek, GLM, Gemini,
-Bedrock, Vertex AI, OpenAI-compatible upstreams, Cloudflare AI Gateway, Workers
-AI, or their own adapter. The endpoint accepts or rejects those tokens through
-resolver/policy, not through a hard-coded provider binary allow-list. Upstream
-API keys remain Credential/ProviderConnection material and are never placed in
-the Resource Shape spec or OpenTofu state.
+Extensible surfaces use capability tokens. For example, a
+`ContainerService` target can publish an operator-defined implementation plugin
+with custom interface evidence. The endpoint accepts or rejects those tokens
+through resolver/policy, not through a hard-coded provider binary allow-list.
+Secrets remain Credential/ProviderConnection material and are never placed in
+the Resource Shape spec or OpenTofu state. AI Gateway configuration follows the
+same secret/env projection rule; it is not a default Resource Shape.
 
 ## Compatibility Capabilities
 

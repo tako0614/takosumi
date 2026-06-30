@@ -16,9 +16,9 @@ const POOL: TargetPoolSpec = {
       priority: 80,
     },
     {
-      name: "aws-main",
-      type: "aws",
-      region: "ap-northeast-1",
+      name: "k8s-main",
+      type: "kubernetes",
+      ref: "cluster-prod",
       priority: 70,
     },
   ],
@@ -73,96 +73,74 @@ test("PUT /v1/resources/EdgeWorker/:name applies a first-class Worker shape", as
   expect(body.status.phase).toBe("Ready");
 });
 
-test("PUT /v1/resources/AIEndpoint/:name applies a first-class AI shape", async () => {
+test("PUT /v1/resources/ObjectBucket/:name applies a provider-neutral bucket shape", async () => {
   const { app } = await buildApp();
-  const res = await app.request("/v1/resources/AIEndpoint/ai", {
+  const res = await app.request("/v1/resources/ObjectBucket/assets", {
     method: "PUT",
     headers: JSON_HEADERS,
     body: JSON.stringify({
       metadata: { space: "space_1" },
       spec: {
-        name: "ai",
-        interfaces: ["openai_chat_completions", "openai_embeddings"],
-        profiles: ["openai_compatible"],
-        providerPreferences: ["provider.deepseek", "provider.gemini"],
-        routingPolicy: {
-          strategy: "lowest_latency",
-          allowFallback: true,
-          preferredRegions: ["jp"],
-        },
-        modelPolicy: {
-          defaultModel: "fast/chat",
-          allowedModels: ["fast/chat", "embed/text"],
-        },
+        name: "assets",
+        interfaces: ["s3_api", "signed_url"],
       },
     }),
   });
   expect(res.status).toBe(200);
   const body = await res.json();
-  expect(body.id).toBe("tkrn:space_1:AIEndpoint:ai");
-  expect(body.spec.providerPreferences).toEqual([
-    "provider.deepseek",
-    "provider.gemini",
-  ]);
-  expect(body.spec.routingPolicy).toEqual({
-    strategy: "lowest_latency",
-    allowFallback: true,
-    preferredRegions: ["jp"],
-  });
+  expect(body.id).toBe("tkrn:space_1:ObjectBucket:assets");
   expect(body.status.resolution.selectedImplementation).toBe(
-    "cloudflare_ai_gateway",
+    "cloudflare_r2_bucket",
   );
-  expect(body.status.outputs.base_url).toContain("AIEndpoint:ai/base_url");
+  expect(body.status.outputs.bucket_name).toContain("ObjectBucket:assets");
 });
 
-test("PUT /v1/resources/AIEndpoint/:name accepts admin-defined AI profiles", async () => {
+test("PUT /v1/resources/ContainerService/:name accepts admin-defined implementation capabilities", async () => {
   const { app, service } = await buildApp();
   await service.putTargetPool("space_1", "default", {
     targets: [
       {
-        name: "deepseek-main",
-        type: "ai_provider",
-        ref: "https://api.deepseek.example/v1",
+        name: "containers-main",
+        type: "kubernetes",
+        ref: "cluster-prod",
         priority: 90,
         implementations: [
           {
-            shape: "AIEndpoint",
-            implementation: "deepseek_openai_gateway",
-            nativeResourceType: "ai.deepseek_endpoint",
+            shape: "ContainerService",
+            implementation: "custom_container_runtime",
+            nativeResourceType: "custom.container_service",
             interfaces: {
-              openai_chat_completions: "native",
-              "vendor.deepseek.responses.v1": "native",
+              oci_container: "native",
+              public_http: "native",
             },
           },
         ],
       },
     ],
   });
-  const res = await app.request("/v1/resources/AIEndpoint/ai", {
+  const res = await app.request("/v1/resources/ContainerService/agent", {
     method: "PUT",
     headers: JSON_HEADERS,
     body: JSON.stringify({
       metadata: { space: "space_1" },
       spec: {
-        name: "ai",
-        interfaces: ["openai_chat_completions", "vendor.deepseek.responses.v1"],
-        profiles: ["openai_compatible", "provider.deepseek"],
-        providerPreferences: ["provider.deepseek"],
-        modelPolicy: { defaultModel: "deepseek/chat" },
+        name: "agent",
+        image: "ghcr.io/example/agent:1.0.0",
+        publicHttp: true,
       },
     }),
   });
   expect(res.status).toBe(200);
   const body = await res.json();
   expect(body.status.resolution.selectedImplementation).toBe(
-    "deepseek_openai_gateway",
+    "custom_container_runtime",
   );
-  expect(body.status.resolution.target).toBe("deepseek-main");
+  expect(body.status.resolution.target).toBe("containers-main");
 });
 
-test("TargetPool API persists admin-defined AI provider capability evidence", async () => {
+test("TargetPool API persists admin-defined capability evidence", async () => {
   const { app } = await buildApp();
-  const put = await app.request("/v1/target-pools/ai", {
+  const put = await app.request("/v1/target-pools/containers", {
     method: "PUT",
     headers: JSON_HEADERS,
     body: JSON.stringify({
@@ -170,19 +148,19 @@ test("TargetPool API persists admin-defined AI provider capability evidence", as
       spec: {
         targets: [
           {
-            name: "gemini-main",
-            type: "ai_provider",
-            ref: "https://generativelanguage.googleapis.com/v1beta/openai",
+            name: "containers-main",
+            type: "kubernetes",
+            ref: "cluster-prod",
             priority: 80,
             implementations: [
               {
-                shape: "AIEndpoint",
-                implementation: "gemini_openai_compatible",
-                nativeResourceType: "ai.gemini_endpoint",
+                shape: "ContainerService",
+                implementation: "custom_container_runtime",
+                nativeResourceType: "custom.container_service",
                 interfaces: {
-                  openai_chat_completions: "native",
-                  openai_embeddings: "native",
-                  "provider.gemini.responses.v1": "shim",
+                  oci_container: "native",
+                  public_http: "shim",
+                  "custom.mesh": "native",
                 },
               },
             ],
@@ -193,26 +171,26 @@ test("TargetPool API persists admin-defined AI provider capability evidence", as
   });
   expect(put.status).toBe(200);
   const saved = await put.json();
-  expect(saved.id).toBe("tkrn:space_1:TargetPool:ai");
+  expect(saved.id).toBe("tkrn:space_1:TargetPool:containers");
 
-  const get = await app.request("/v1/target-pools/ai?space=space_1");
+  const get = await app.request("/v1/target-pools/containers?space=space_1");
   expect(get.status).toBe(200);
   const body = await get.json();
-  expect(body.spec.targets[0].type).toBe("ai_provider");
+  expect(body.spec.targets[0].type).toBe("kubernetes");
   expect(body.spec.targets[0].implementations[0].implementation).toBe(
-    "gemini_openai_compatible",
+    "custom_container_runtime",
   );
   expect(
-    body.spec.targets[0].implementations[0].interfaces[
-      "provider.gemini.responses.v1"
-    ],
-  ).toBe("shim");
+    body.spec.targets[0].implementations[0].interfaces["custom.mesh"],
+  ).toBe("native");
 
-  const del = await app.request("/v1/target-pools/ai?space=space_1", {
+  const del = await app.request("/v1/target-pools/containers?space=space_1", {
     method: "DELETE",
   });
   expect(del.status).toBe(204);
-  const missing = await app.request("/v1/target-pools/ai?space=space_1");
+  const missing = await app.request(
+    "/v1/target-pools/containers?space=space_1",
+  );
   expect(missing.status).toBe(404);
 });
 
@@ -242,18 +220,17 @@ test("POST /v1/resources/preview resolves without persisting", async () => {
     method: "POST",
     headers: JSON_HEADERS,
     body: JSON.stringify({
-      kind: "AIEndpoint",
-      metadata: { space: "space_1", name: "ai" },
+      kind: "Queue",
+      metadata: { space: "space_1", name: "delivery" },
       spec: {
-        name: "ai",
-        interfaces: ["openai_chat_completions"],
-        profiles: ["openai_compatible"],
+        name: "delivery",
+        delivery: { maxRetries: 5 },
       },
     }),
   });
   expect(res.status).toBe(200);
   const body = await res.json();
-  expect(body.selectedImplementation).toBe("cloudflare_ai_gateway");
+  expect(body.selectedImplementation).toBe("cloudflare_queue");
 });
 
 test("POST /v1/resources/preview requires an explicit shape kind", async () => {
@@ -277,7 +254,7 @@ test("PUT /v1/resources/:kind/:name rejects body kind mismatch", async () => {
     method: "PUT",
     headers: JSON_HEADERS,
     body: JSON.stringify({
-      kind: "AIEndpoint",
+      kind: "ObjectBucket",
       metadata: { space: "space_1" },
       spec: {
         name: "api",
@@ -308,14 +285,14 @@ test("PUT /v1/resources/:kind/:name rejects name mismatch", async () => {
   expect(body.error.code).toBe("invalid_argument");
 });
 
-test("Queue is not accepted until the planner can materialize it", async () => {
+test("unknown Resource Shape kind is rejected", async () => {
   const { app } = await buildApp();
-  const res = await app.request("/v1/resources/Queue/jobs", {
+  const res = await app.request("/v1/resources/Machine/box", {
     method: "PUT",
     headers: JSON_HEADERS,
     body: JSON.stringify({
       metadata: { space: "space_1" },
-      spec: { name: "jobs", interfaces: ["queue_api"] },
+      spec: { name: "box" },
     }),
   });
   expect(res.status).toBe(400);
@@ -347,5 +324,18 @@ test("GET /v1/capabilities advertises enabled Resource Shapes", async () => {
   expect(res.status).toBe(200);
   const body = await res.json();
   expect(body.resources.EdgeWorker).toBe(true);
-  expect(body.resources.AIEndpoint).toBe(true);
+  expect(body.resources.ObjectBucket).toBe(true);
+  expect(body.resources.KVStore).toBe(true);
+  expect(body.resources.Queue).toBe(true);
+  expect(body.resources.SQLDatabase).toBe(true);
+  expect(body.resources.ContainerService).toBe(true);
+  expect(Object.keys(body.resources).sort()).toEqual([
+    "ContainerService",
+    "EdgeWorker",
+    "KVStore",
+    "ObjectBucket",
+    "Queue",
+    "SQLDatabase",
+    "Stack",
+  ]);
 });

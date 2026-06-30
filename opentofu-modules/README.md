@@ -24,12 +24,12 @@ The shared bundled-HCL catalog (`module-files.ts`) and the catalog parity test
 (`module-files_test.ts`) stay here because they cover `core` plus every provider
 module. The id+version registry is `core/domains/templates/registry.ts`.
 
-Storage starter modules are intentionally not part of the first-party catalog.
+Storage starter modules are intentionally not part of the install catalog.
 Ordinary S3/R2/GCS/MinIO buckets should use existing OpenTofu providers or
-standard S3-compatible endpoints through the plain Stack flow. When an operator
-exposes Takosumi-provided object storage, it should publish the scoped
-`compat.s3.v1` capability/data-plane surface instead of a bespoke bucket starter
-module.
+standard S3-compatible endpoints through the plain Stack flow. Resource Shape
+planner modules such as `cloudflare-r2-bucket` are internal lowering targets for
+`takosumi_object_bucket` when Takosumi owns binding projection, policy,
+metering, or managed-target placement.
 
 ## Why TypeScript catalog data (not YAML)
 
@@ -58,8 +58,12 @@ policy enforce; `main.tf` is the actual module those inputs flow into.
 | ------------------------- | ----- | ----------------------- | ----------------------------------------------------------------------- |
 | `core`                    | —     | (none)                  | `base_domain`, `public_origin`, `member_issuer`, `service_registry_url` |
 | `cloudflare-hello-worker` | —     | `cloudflare/cloudflare` | `script_name`, `workers_dev_url`                                        |
-| `takosumi-ai-endpoint`    | —     | none                    | `base_url`, `default_model`                                             |
 | `cloudflare-static-site`  | —     | `cloudflare/cloudflare` | `project_name`, `url`                                                   |
+
+Planner-only bundled HCL ids currently include `cloudflare-r2-bucket`,
+`cloudflare-kv-store`, `cloudflare-queue`, `cloudflare-sql-database`,
+`takosumi-service-shape`, and `takosumi-container-service`. They are not shown
+as install catalog entries.
 
 ## Adding a first-party Capsule module
 

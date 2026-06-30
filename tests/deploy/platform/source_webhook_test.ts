@@ -1194,8 +1194,16 @@ test("platform worker exposes product discovery before accounts handler", async 
   expect(capabilitiesBody.apiVersion).toBe(TAKOSUMI_API_VERSION);
   expect(capabilitiesBody.resources.Stack).toBe(true);
   expect(capabilitiesBody.compat.framework).toBe(true);
-  expect(capabilitiesBody.resources.AIEndpoint).toBe(false);
-  expect(capabilitiesBody.adapters.ai_provider).toBe(false);
+  expect(capabilitiesBody.resources.ObjectBucket).toBe(false);
+  expect(Object.keys(capabilitiesBody.resources).sort()).toEqual([
+    "ContainerService",
+    "EdgeWorker",
+    "KVStore",
+    "ObjectBucket",
+    "Queue",
+    "SQLDatabase",
+    "Stack",
+  ]);
   expect(capabilitiesBody.adapters.cloudflare).toBe(false);
   expect(capabilitiesBody.compat.cloudflare_subset).toBe(false);
 });
@@ -1247,8 +1255,21 @@ test("platform worker product discovery enables Cloud capabilities only from con
 
   expect(capabilities.status).toBe(200);
   const body = await capabilities.json();
-  expect(body.resources.AIEndpoint).toBe(true);
-  expect(body.adapters.ai_provider).toBe(true);
+  expect(body.resources.EdgeWorker).toBe(true);
+  expect(body.resources.ObjectBucket).toBe(true);
+  expect(body.resources.KVStore).toBe(true);
+  expect(body.resources.Queue).toBe(true);
+  expect(body.resources.SQLDatabase).toBe(true);
+  expect(body.resources.ContainerService).toBe(true);
+  expect(Object.keys(body.resources).sort()).toEqual([
+    "ContainerService",
+    "EdgeWorker",
+    "KVStore",
+    "ObjectBucket",
+    "Queue",
+    "SQLDatabase",
+    "Stack",
+  ]);
   expect(body.adapters.cloudflare).toBe(true);
   expect(body.adapters.takosumi_native).toBe(true);
   expect(body.compat.cloudflare_subset).toBe(true);

@@ -28,8 +28,11 @@ const (
 	// KindEdgeWorker is the resource shape kind for HTTP services.
 	KindEdgeWorker = "EdgeWorker"
 
-	// KindAIEndpoint is the resource shape kind for AI gateway endpoints.
-	KindAIEndpoint = "AIEndpoint"
+	KindObjectBucket     = "ObjectBucket"
+	KindKVStore          = "KVStore"
+	KindQueue            = "Queue"
+	KindSQLDatabase      = "SQLDatabase"
+	KindContainerService = "ContainerService"
 
 	// ManagedByOpenTofu is stamped into metadata.managedBy on every write.
 	ManagedByOpenTofu = "opentofu"

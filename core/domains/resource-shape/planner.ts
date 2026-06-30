@@ -2,20 +2,23 @@
 //
 // The Planner validates one shape-specific spec and lowers a resolved
 // implementation to a first-party OpenTofu module call. It deliberately keeps
-// shape-specific resource types (EdgeWorker, AIEndpoint, ...) instead of
+// shape-specific resource types (EdgeWorker, ObjectBucket, Queue, ...) instead of
 // accepting a catch-all `takosumi_resource { type, spec }` object, so OpenTofu
 // plan diffs, validation, import, drift, and state upgrades can remain
 // resource-aware. Existing generic providers and standards such as S3/R2/GCS
 // stay in the plain OpenTofu Stack flow, not in Takosumi-owned shapes.
 
 import type {
-  AIEndpointInterface,
-  AIEndpointProfile,
-  AIEndpointSpec,
+  ContainerServiceSpec,
   EdgeWorkerProfile,
   EdgeWorkerSpec,
+  KVStoreSpec,
+  ObjectBucketInterface,
+  ObjectBucketSpec,
+  QueueSpec,
   ResourceDeletePolicy,
   ResourceShapeKind,
+  SQLDatabaseSpec,
   TargetPoolEntry,
 } from "takosumi-contract";
 import { firstPartyModuleFilesByTemplateId } from "../../../opentofu-modules/module-files.ts";
@@ -32,17 +35,41 @@ export interface ResourceShapePlan {
 }
 
 export type ParsedResourceSpec =
-  {
+  | {
       readonly kind: "EdgeWorker";
       readonly spec: EdgeWorkerSpec;
       readonly interfaces: readonly string[];
       readonly lifecyclePolicy?: EdgeWorkerSpec["lifecyclePolicy"];
     }
   | {
-      readonly kind: "AIEndpoint";
-      readonly spec: AIEndpointSpec;
+      readonly kind: "ObjectBucket";
+      readonly spec: ObjectBucketSpec;
       readonly interfaces: readonly string[];
-      readonly lifecyclePolicy?: AIEndpointSpec["lifecyclePolicy"];
+      readonly lifecyclePolicy?: ObjectBucketSpec["lifecyclePolicy"];
+    }
+  | {
+      readonly kind: "KVStore";
+      readonly spec: KVStoreSpec;
+      readonly interfaces: readonly string[];
+      readonly lifecyclePolicy?: KVStoreSpec["lifecyclePolicy"];
+    }
+  | {
+      readonly kind: "Queue";
+      readonly spec: QueueSpec;
+      readonly interfaces: readonly string[];
+      readonly lifecyclePolicy?: QueueSpec["lifecyclePolicy"];
+    }
+  | {
+      readonly kind: "SQLDatabase";
+      readonly spec: SQLDatabaseSpec;
+      readonly interfaces: readonly string[];
+      readonly lifecyclePolicy?: SQLDatabaseSpec["lifecyclePolicy"];
+    }
+  | {
+      readonly kind: "ContainerService";
+      readonly spec: ContainerServiceSpec;
+      readonly interfaces: readonly string[];
+      readonly lifecyclePolicy?: ContainerServiceSpec["lifecyclePolicy"];
     };
 
 export type ParseResourceSpecResult =
@@ -59,8 +86,36 @@ export type ParseEdgeWorkerSpecResult =
       readonly error: { readonly code: string; readonly message: string };
     };
 
-export type ParseAIEndpointSpecResult =
-  | { readonly ok: true; readonly spec: AIEndpointSpec }
+export type ParseObjectBucketSpecResult =
+  | { readonly ok: true; readonly spec: ObjectBucketSpec }
+  | {
+      readonly ok: false;
+      readonly error: { readonly code: string; readonly message: string };
+    };
+
+export type ParseKVStoreSpecResult =
+  | { readonly ok: true; readonly spec: KVStoreSpec }
+  | {
+      readonly ok: false;
+      readonly error: { readonly code: string; readonly message: string };
+    };
+
+export type ParseQueueSpecResult =
+  | { readonly ok: true; readonly spec: QueueSpec }
+  | {
+      readonly ok: false;
+      readonly error: { readonly code: string; readonly message: string };
+    };
+
+export type ParseSQLDatabaseSpecResult =
+  | { readonly ok: true; readonly spec: SQLDatabaseSpec }
+  | {
+      readonly ok: false;
+      readonly error: { readonly code: string; readonly message: string };
+    };
+
+export type ParseContainerServiceSpecResult =
+  | { readonly ok: true; readonly spec: ContainerServiceSpec }
   | {
       readonly ok: false;
       readonly error: { readonly code: string; readonly message: string };
@@ -87,17 +142,39 @@ export const EDGE_WORKER_IMPLEMENTATION_TEMPLATE: Readonly<
   cloudflare_workers: "cloudflare-worker-service",
 });
 
-/** Map AIEndpoint implementation -> first-party Capsule module template id. */
-export const AI_ENDPOINT_GENERIC_TEMPLATE_ID = "takosumi-ai-endpoint";
-
-export const AI_ENDPOINT_IMPLEMENTATION_TEMPLATE: Readonly<
+export const OBJECT_BUCKET_IMPLEMENTATION_TEMPLATE: Readonly<
   Record<string, string>
 > = Object.freeze({
-  cloudflare_ai_gateway: AI_ENDPOINT_GENERIC_TEMPLATE_ID,
-  takosumi_ai_gateway: AI_ENDPOINT_GENERIC_TEMPLATE_ID,
-  openai_compatible_ai_endpoint: AI_ENDPOINT_GENERIC_TEMPLATE_ID,
-  aws_bedrock_openai_gateway: AI_ENDPOINT_GENERIC_TEMPLATE_ID,
-  vertex_ai_openai_gateway: AI_ENDPOINT_GENERIC_TEMPLATE_ID,
+  cloudflare_r2_bucket: "cloudflare-r2-bucket",
+});
+
+export const KV_STORE_IMPLEMENTATION_TEMPLATE: Readonly<
+  Record<string, string>
+> = Object.freeze({
+  cloudflare_kv_namespace: "cloudflare-kv-store",
+});
+
+export const QUEUE_IMPLEMENTATION_TEMPLATE: Readonly<Record<string, string>> =
+  Object.freeze({
+    cloudflare_queue: "cloudflare-queue",
+  });
+
+export const SQL_DATABASE_IMPLEMENTATION_TEMPLATE: Readonly<
+  Record<string, string>
+> = Object.freeze({
+  cloudflare_d1_database: "cloudflare-sql-database",
+});
+
+export const CONTAINER_SERVICE_GENERIC_TEMPLATE_ID =
+  "takosumi-container-service";
+
+export const CONTAINER_SERVICE_IMPLEMENTATION_TEMPLATE: Readonly<
+  Record<string, string>
+> = Object.freeze({
+  cloudflare_container: CONTAINER_SERVICE_GENERIC_TEMPLATE_ID,
+  kubernetes_deployment: CONTAINER_SERVICE_GENERIC_TEMPLATE_ID,
+  aws_ecs_service: CONTAINER_SERVICE_GENERIC_TEMPLATE_ID,
+  takosumi_container_service: CONTAINER_SERVICE_GENERIC_TEMPLATE_ID,
 });
 
 export function parseResourceSpec(
@@ -119,15 +196,71 @@ export function parseResourceSpec(
           }
         : r;
     }
-    case "AIEndpoint": {
-      const r = parseAIEndpointSpec(spec);
+    case "ObjectBucket": {
+      const r = parseObjectBucketSpec(spec);
       return r.ok
         ? {
             ok: true,
             parsed: {
               kind,
               spec: r.spec,
-              interfaces: r.spec.interfaces,
+              interfaces: requiredObjectBucketInterfaces(r.spec),
+              lifecyclePolicy: r.spec.lifecyclePolicy,
+            },
+          }
+        : r;
+    }
+    case "KVStore": {
+      const r = parseKVStoreSpec(spec);
+      return r.ok
+        ? {
+            ok: true,
+            parsed: {
+              kind,
+              spec: r.spec,
+              interfaces: requiredKVStoreInterfaces(r.spec),
+              lifecyclePolicy: r.spec.lifecyclePolicy,
+            },
+          }
+        : r;
+    }
+    case "Queue": {
+      const r = parseQueueSpec(spec);
+      return r.ok
+        ? {
+            ok: true,
+            parsed: {
+              kind,
+              spec: r.spec,
+              interfaces: requiredQueueInterfaces(r.spec),
+              lifecyclePolicy: r.spec.lifecyclePolicy,
+            },
+          }
+        : r;
+    }
+    case "SQLDatabase": {
+      const r = parseSQLDatabaseSpec(spec);
+      return r.ok
+        ? {
+            ok: true,
+            parsed: {
+              kind,
+              spec: r.spec,
+              interfaces: requiredSQLDatabaseInterfaces(r.spec),
+              lifecyclePolicy: r.spec.lifecyclePolicy,
+            },
+          }
+        : r;
+    }
+    case "ContainerService": {
+      const r = parseContainerServiceSpec(spec);
+      return r.ok
+        ? {
+            ok: true,
+            parsed: {
+              kind,
+              spec: r.spec,
+              interfaces: requiredContainerServiceInterfaces(r.spec),
               lifecyclePolicy: r.spec.lifecyclePolicy,
             },
           }
@@ -144,7 +277,9 @@ export function parseResourceSpec(
   }
 }
 
-export function parseAIEndpointSpec(spec: unknown): ParseAIEndpointSpecResult {
+export function parseObjectBucketSpec(
+  spec: unknown,
+): ParseObjectBucketSpecResult {
   const base = objectCandidate(spec);
   if (!base.ok) return base;
   const candidate = base.value;
@@ -152,35 +287,11 @@ export function parseAIEndpointSpec(spec: unknown): ParseAIEndpointSpecResult {
   const name = parseName(candidate);
   if (!name.ok) return name;
 
-  const interfaces = parseExtensibleTokenList(
-    candidate.interfaces,
-    "interfaces",
-    true,
-  );
-  if (!interfaces.ok) return interfaces;
-
-  const profiles =
-    candidate.profiles === undefined
+  const interfaces =
+    candidate.interfaces === undefined
       ? undefined
-      : parseExtensibleTokenList(candidate.profiles, "profiles", false);
-  if (profiles && !profiles.ok) return profiles;
-
-  const providerPreferences =
-    candidate.providerPreferences === undefined
-      ? undefined
-      : parseExtensibleTokenList(
-          candidate.providerPreferences,
-          "providerPreferences",
-          false,
-        );
-  if (providerPreferences && !providerPreferences.ok)
-    return providerPreferences;
-
-  const routingPolicy = parseAIEndpointRoutingPolicy(candidate.routingPolicy);
-  if (!routingPolicy.ok) return routingPolicy;
-
-  const modelPolicy = parseAIEndpointModelPolicy(candidate.modelPolicy);
-  if (!modelPolicy.ok) return modelPolicy;
+      : parseExtensibleTokenList(candidate.interfaces, "interfaces", false);
+  if (interfaces && !interfaces.ok) return interfaces;
 
   const lifecyclePolicy = parseLifecyclePolicy(candidate.lifecyclePolicy);
   if (!lifecyclePolicy.ok) return lifecyclePolicy;
@@ -189,15 +300,163 @@ export function parseAIEndpointSpec(spec: unknown): ParseAIEndpointSpecResult {
     ok: true,
     spec: {
       name: name.value,
-      interfaces: interfaces.value as readonly AIEndpointInterface[],
-      ...(profiles?.value
-        ? { profiles: profiles.value as readonly AIEndpointProfile[] }
+      ...(interfaces?.value
+        ? { interfaces: interfaces.value as readonly ObjectBucketInterface[] }
         : {}),
-      ...(providerPreferences?.value
-        ? { providerPreferences: providerPreferences.value }
+      ...(lifecyclePolicy.value
+        ? { lifecyclePolicy: lifecyclePolicy.value }
         : {}),
-      ...(routingPolicy.value ? { routingPolicy: routingPolicy.value } : {}),
-      ...(modelPolicy.value ? { modelPolicy: modelPolicy.value } : {}),
+    },
+  };
+}
+
+export function parseKVStoreSpec(spec: unknown): ParseKVStoreSpecResult {
+  const base = objectCandidate(spec);
+  if (!base.ok) return base;
+  const candidate = base.value;
+  const name = parseName(candidate);
+  if (!name.ok) return name;
+  const consistency = candidate.consistency;
+  if (
+    consistency !== undefined &&
+    consistency !== "eventual" &&
+    consistency !== "strong"
+  ) {
+    return {
+      ok: false,
+      error: {
+        code: "invalid_consistency",
+        message: "spec.consistency must be eventual or strong",
+      },
+    };
+  }
+  const lifecyclePolicy = parseLifecyclePolicy(candidate.lifecyclePolicy);
+  if (!lifecyclePolicy.ok) return lifecyclePolicy;
+  return {
+    ok: true,
+    spec: {
+      name: name.value,
+      ...(consistency ? { consistency } : {}),
+      ...(lifecyclePolicy.value
+        ? { lifecyclePolicy: lifecyclePolicy.value }
+        : {}),
+    },
+  };
+}
+
+export function parseQueueSpec(spec: unknown): ParseQueueSpecResult {
+  const base = objectCandidate(spec);
+  if (!base.ok) return base;
+  const candidate = base.value;
+  const name = parseName(candidate);
+  if (!name.ok) return name;
+  const delivery = parseQueueDelivery(candidate.delivery);
+  if (!delivery.ok) return delivery;
+  const lifecyclePolicy = parseLifecyclePolicy(candidate.lifecyclePolicy);
+  if (!lifecyclePolicy.ok) return lifecyclePolicy;
+  return {
+    ok: true,
+    spec: {
+      name: name.value,
+      ...(delivery.value ? { delivery: delivery.value } : {}),
+      ...(lifecyclePolicy.value
+        ? { lifecyclePolicy: lifecyclePolicy.value }
+        : {}),
+    },
+  };
+}
+
+export function parseSQLDatabaseSpec(
+  spec: unknown,
+): ParseSQLDatabaseSpecResult {
+  const base = objectCandidate(spec);
+  if (!base.ok) return base;
+  const candidate = base.value;
+  const name = parseName(candidate);
+  if (!name.ok) return name;
+  const engine = candidate.engine;
+  if (
+    engine !== undefined &&
+    engine !== "sqlite" &&
+    engine !== "postgres" &&
+    engine !== "mysql"
+  ) {
+    return {
+      ok: false,
+      error: {
+        code: "invalid_engine",
+        message: "spec.engine must be sqlite, postgres, or mysql",
+      },
+    };
+  }
+  const migrationsPath = candidate.migrationsPath;
+  if (migrationsPath !== undefined && typeof migrationsPath !== "string") {
+    return {
+      ok: false,
+      error: {
+        code: "invalid_migrations_path",
+        message: "spec.migrationsPath must be a string",
+      },
+    };
+  }
+  const lifecyclePolicy = parseLifecyclePolicy(candidate.lifecyclePolicy);
+  if (!lifecyclePolicy.ok) return lifecyclePolicy;
+  return {
+    ok: true,
+    spec: {
+      name: name.value,
+      ...(engine ? { engine } : {}),
+      ...(typeof migrationsPath === "string" && migrationsPath.length > 0
+        ? { migrationsPath }
+        : {}),
+      ...(lifecyclePolicy.value
+        ? { lifecyclePolicy: lifecyclePolicy.value }
+        : {}),
+    },
+  };
+}
+
+export function parseContainerServiceSpec(
+  spec: unknown,
+): ParseContainerServiceSpecResult {
+  const base = objectCandidate(spec);
+  if (!base.ok) return base;
+  const candidate = base.value;
+  const name = parseName(candidate);
+  if (!name.ok) return name;
+  if (typeof candidate.image !== "string" || candidate.image.trim() === "") {
+    return {
+      ok: false,
+      error: {
+        code: "invalid_image",
+        message: "spec.image must be a non-empty OCI image reference",
+      },
+    };
+  }
+  const ports = parseNumberList(candidate.ports, "ports", false);
+  if (!ports.ok) return ports;
+  const environment = parseStringMap(candidate.environment, "environment");
+  if (!environment.ok) return environment;
+  const publicHttp = candidate.publicHttp;
+  if (publicHttp !== undefined && typeof publicHttp !== "boolean") {
+    return {
+      ok: false,
+      error: {
+        code: "invalid_public_http",
+        message: "spec.publicHttp must be a boolean",
+      },
+    };
+  }
+  const lifecyclePolicy = parseLifecyclePolicy(candidate.lifecyclePolicy);
+  if (!lifecyclePolicy.ok) return lifecyclePolicy;
+  return {
+    ok: true,
+    spec: {
+      name: name.value,
+      image: candidate.image,
+      ...(ports.value ? { ports: ports.value } : {}),
+      ...(publicHttp !== undefined ? { publicHttp } : {}),
+      ...(environment.value ? { environment: environment.value } : {}),
       ...(lifecyclePolicy.value
         ? { lifecyclePolicy: lifecyclePolicy.value }
         : {}),
@@ -294,8 +553,16 @@ export function planResourceShape(
   switch (parsed.kind) {
     case "EdgeWorker":
       return planEdgeWorker(implementation, parsed.spec, target);
-    case "AIEndpoint":
-      return planAIEndpoint(implementation, parsed.spec, target);
+    case "ObjectBucket":
+      return planObjectBucket(implementation, parsed.spec, target);
+    case "KVStore":
+      return planKVStore(implementation, parsed.spec, target);
+    case "Queue":
+      return planQueue(implementation, parsed.spec, target);
+    case "SQLDatabase":
+      return planSQLDatabase(implementation, parsed.spec, target);
+    case "ContainerService":
+      return planContainerService(implementation, parsed.spec, target);
   }
 }
 
@@ -336,42 +603,130 @@ export function planEdgeWorker(
   };
 }
 
-/**
- * Plan an AIEndpoint as Takosumi control-plane configuration. The chosen
- * upstream/provider remains a Target/Adapter decision; this module carries only
- * OpenTofu-visible outputs so the Resource Shape can stay first-class without a
- * catch-all `takosumi_resource` escape hatch.
- */
-export function planAIEndpoint(
+export function planObjectBucket(
   implementation: string,
-  spec: AIEndpointSpec,
+  spec: ObjectBucketSpec,
+  target: TargetPoolEntry,
+): ResourceShapePlan {
+  const templateId = OBJECT_BUCKET_IMPLEMENTATION_TEMPLATE[implementation];
+  if (!templateId)
+    return planGenericServiceShape(
+      "ObjectBucket",
+      implementation,
+      spec,
+      target,
+    );
+  const moduleFiles = moduleFilesFor(templateId, "planObjectBucket");
+  return {
+    shape: "ObjectBucket",
+    templateId,
+    moduleFiles,
+    inputs: { bucketName: spec.name, accountId: target.ref ?? "" },
+    publicOutputs: ["bucket_name", "s3_endpoint"],
+  };
+}
+
+export function planKVStore(
+  implementation: string,
+  spec: KVStoreSpec,
+  target: TargetPoolEntry,
+): ResourceShapePlan {
+  const templateId = KV_STORE_IMPLEMENTATION_TEMPLATE[implementation];
+  if (!templateId)
+    return planGenericServiceShape("KVStore", implementation, spec, target);
+  const moduleFiles = moduleFilesFor(templateId, "planKVStore");
+  return {
+    shape: "KVStore",
+    templateId,
+    moduleFiles,
+    inputs: { namespaceTitle: spec.name, accountId: target.ref ?? "" },
+    publicOutputs: ["namespace_id", "namespace_title"],
+  };
+}
+
+export function planQueue(
+  implementation: string,
+  spec: QueueSpec,
+  target: TargetPoolEntry,
+): ResourceShapePlan {
+  const templateId = QUEUE_IMPLEMENTATION_TEMPLATE[implementation];
+  if (!templateId)
+    return planGenericServiceShape("Queue", implementation, spec, target);
+  const moduleFiles = moduleFilesFor(templateId, "planQueue");
+  return {
+    shape: "Queue",
+    templateId,
+    moduleFiles,
+    inputs: { queueName: spec.name, accountId: target.ref ?? "" },
+    publicOutputs: ["queue_name"],
+  };
+}
+
+export function planSQLDatabase(
+  implementation: string,
+  spec: SQLDatabaseSpec,
+  target: TargetPoolEntry,
+): ResourceShapePlan {
+  const templateId = SQL_DATABASE_IMPLEMENTATION_TEMPLATE[implementation];
+  if (!templateId)
+    return planGenericServiceShape("SQLDatabase", implementation, spec, target);
+  const moduleFiles = moduleFilesFor(templateId, "planSQLDatabase");
+  return {
+    shape: "SQLDatabase",
+    templateId,
+    moduleFiles,
+    inputs: { databaseName: spec.name, accountId: target.ref ?? "" },
+    publicOutputs: ["database_id", "database_name"],
+  };
+}
+
+export function planContainerService(
+  implementation: string,
+  spec: ContainerServiceSpec,
   target: TargetPoolEntry,
 ): ResourceShapePlan {
   const templateId =
-    AI_ENDPOINT_IMPLEMENTATION_TEMPLATE[implementation] ??
-    AI_ENDPOINT_GENERIC_TEMPLATE_ID;
-  const moduleFiles = moduleFilesFor(templateId, "planAIEndpoint");
-  const inputs: Record<string, unknown> = {
-    endpointName: spec.name,
-    implementation,
-    targetName: target.name,
-    targetType: target.type,
-    interfaces: spec.interfaces,
-    profiles: spec.profiles ?? [],
-    providerPreferences: spec.providerPreferences ?? [],
-    routingStrategy: spec.routingPolicy?.strategy ?? "",
-    allowFallback: spec.routingPolicy?.allowFallback ?? false,
-    preferredRegions: spec.routingPolicy?.preferredRegions ?? [],
-    allowedModels: spec.modelPolicy?.allowedModels ?? [],
-    defaultModel: spec.modelPolicy?.defaultModel ?? "",
-    baseUrl: target.ref ?? "",
-  };
+    CONTAINER_SERVICE_IMPLEMENTATION_TEMPLATE[implementation] ??
+    CONTAINER_SERVICE_GENERIC_TEMPLATE_ID;
+  const moduleFiles = moduleFilesFor(templateId, "planContainerService");
   return {
-    shape: "AIEndpoint",
+    shape: "ContainerService",
     templateId,
     moduleFiles,
-    inputs,
-    publicOutputs: ["base_url", "default_model"],
+    inputs: {
+      serviceName: spec.name,
+      implementation,
+      targetName: target.name,
+      targetType: target.type,
+      image: spec.image,
+      ports: spec.ports ?? [],
+      publicHttp: spec.publicHttp ?? false,
+      environment: spec.environment ?? {},
+    },
+    publicOutputs: ["service_name", "url"],
+  };
+}
+
+function planGenericServiceShape(
+  shape: ResourceShapeKind,
+  implementation: string,
+  spec: { readonly name: string },
+  target: TargetPoolEntry,
+): ResourceShapePlan {
+  const templateId = "takosumi-service-shape";
+  const moduleFiles = moduleFilesFor(templateId, "planGenericServiceShape");
+  return {
+    shape,
+    templateId,
+    moduleFiles,
+    inputs: {
+      resourceName: spec.name,
+      shape,
+      implementation,
+      targetName: target.name,
+      targetType: target.type,
+    },
+    publicOutputs: ["resource_name"],
   };
 }
 
@@ -379,6 +734,39 @@ function requiredEdgeWorkerInterfaces(spec: EdgeWorkerSpec): readonly string[] {
   const interfaces: string[] = ["worker_fetch"];
   for (const profile of spec.profiles ?? []) interfaces.push(profile);
   return interfaces;
+}
+
+function requiredObjectBucketInterfaces(
+  spec: ObjectBucketSpec,
+): readonly string[] {
+  return ["object_store", ...(spec.interfaces ?? ["s3_api"])];
+}
+
+function requiredKVStoreInterfaces(_spec: KVStoreSpec): readonly string[] {
+  return ["kv_store", "runtime_binding"];
+}
+
+function requiredQueueInterfaces(_spec: QueueSpec): readonly string[] {
+  return ["queue", "publish", "consume"];
+}
+
+function requiredSQLDatabaseInterfaces(
+  spec: SQLDatabaseSpec,
+): readonly string[] {
+  const engine = spec.engine ?? "sqlite";
+  return ["sql", engine === "postgres" ? "postgres_protocol" : engine];
+}
+
+function requiredContainerServiceInterfaces(
+  spec: ContainerServiceSpec,
+): readonly string[] {
+  return [
+    "oci_container",
+    ...(spec.publicHttp ? ["public_http"] : []),
+    ...(spec.environment && Object.keys(spec.environment).length > 0
+      ? ["env_projection"]
+      : []),
+  ];
 }
 
 function moduleFilesFor(
@@ -411,9 +799,7 @@ function objectCandidate(spec: unknown): ObjectResult {
   return { ok: true, value: spec as Record<string, unknown> };
 }
 
-function parseName(
-  candidate: Record<string, unknown>,
-):
+function parseName(candidate: Record<string, unknown>):
   | { readonly ok: true; readonly value: string }
   | {
       readonly ok: false;
@@ -511,12 +897,50 @@ function parseExtensibleTokenList(
   return { ok: true, value: value as readonly string[] };
 }
 
-function parseAIEndpointModelPolicy(
+function parseNumberList(
   value: unknown,
+  field: string,
+  requireNonEmpty: boolean,
 ):
   | {
       readonly ok: true;
-      readonly value: AIEndpointSpec["modelPolicy"] | undefined;
+      readonly value: readonly number[] | undefined;
+    }
+  | {
+      readonly ok: false;
+      readonly error: { readonly code: string; readonly message: string };
+    } {
+  if (value === undefined) return { ok: true, value: undefined };
+  if (!Array.isArray(value) || (requireNonEmpty && value.length === 0)) {
+    return {
+      ok: false,
+      error: {
+        code: `invalid_${field}`,
+        message: `spec.${field} must be ${requireNonEmpty ? "a non-empty" : "an"} array`,
+      },
+    };
+  }
+  for (const item of value) {
+    if (typeof item !== "number" || !Number.isInteger(item) || item <= 0) {
+      return {
+        ok: false,
+        error: {
+          code: `invalid_${field}`,
+          message: `spec.${field} values must be positive integers`,
+        },
+      };
+    }
+  }
+  return { ok: true, value: value as readonly number[] };
+}
+
+function parseStringMap(
+  value: unknown,
+  field: string,
+):
+  | {
+      readonly ok: true;
+      readonly value: Readonly<Record<string, string>> | undefined;
     }
   | {
       readonly ok: false;
@@ -527,59 +951,32 @@ function parseAIEndpointModelPolicy(
     return {
       ok: false,
       error: {
-        code: "invalid_model_policy",
-        message: "spec.modelPolicy must be an object",
+        code: `invalid_${field}`,
+        message: `spec.${field} must be an object`,
       },
     };
   }
-  const policy = value as Record<string, unknown>;
-  const defaultModel = policy.defaultModel;
-  if (defaultModel !== undefined && typeof defaultModel !== "string") {
-    return {
-      ok: false,
-      error: {
-        code: "invalid_model_policy",
-        message: "spec.modelPolicy.defaultModel must be a string",
-      },
-    };
-  }
-  const allowedModels = policy.allowedModels;
-  if (allowedModels !== undefined) {
-    if (
-      !Array.isArray(allowedModels) ||
-      !allowedModels.every(
-        (model) => typeof model === "string" && model.trim().length > 0,
-      )
-    ) {
+  const entries = Object.entries(value as Record<string, unknown>);
+  for (const [key, item] of entries) {
+    if (!key || typeof item !== "string") {
       return {
         ok: false,
         error: {
-          code: "invalid_model_policy",
-          message:
-            "spec.modelPolicy.allowedModels must be an array of non-empty strings",
+          code: `invalid_${field}`,
+          message: `spec.${field} must map non-empty string keys to string values`,
         },
       };
     }
   }
-  return {
-    ok: true,
-    value: {
-      ...(typeof defaultModel === "string" && defaultModel.length > 0
-        ? { defaultModel }
-        : {}),
-      ...(Array.isArray(allowedModels)
-        ? { allowedModels: allowedModels as readonly string[] }
-        : {}),
-    },
-  };
+  return { ok: true, value: value as Readonly<Record<string, string>> };
 }
 
-function parseAIEndpointRoutingPolicy(
-  value: unknown,
-):
+function parseQueueDelivery(value: unknown):
   | {
       readonly ok: true;
-      readonly value: AIEndpointSpec["routingPolicy"] | undefined;
+      readonly value:
+        | { readonly maxRetries?: number; readonly maxBatchSize?: number }
+        | undefined;
     }
   | {
       readonly ok: false;
@@ -590,79 +987,41 @@ function parseAIEndpointRoutingPolicy(
     return {
       ok: false,
       error: {
-        code: "invalid_routing_policy",
-        message: "spec.routingPolicy must be an object",
+        code: "invalid_delivery",
+        message: "spec.delivery must be an object",
       },
     };
   }
-  const policy = value as Record<string, unknown>;
-  const strategy = policy.strategy;
-  if (strategy !== undefined) {
+  const delivery = value as Record<string, unknown>;
+  for (const field of ["maxRetries", "maxBatchSize"] as const) {
+    const item = delivery[field];
     if (
-      typeof strategy !== "string" ||
-      strategy.trim().length === 0 ||
-      /\s/.test(strategy)
+      item !== undefined &&
+      (typeof item !== "number" || !Number.isInteger(item) || item < 0)
     ) {
       return {
         ok: false,
         error: {
-          code: "invalid_routing_policy",
-          message:
-            "spec.routingPolicy.strategy must be a non-empty token without whitespace",
+          code: "invalid_delivery",
+          message: `spec.delivery.${field} must be a non-negative integer`,
         },
       };
     }
-  }
-  const allowFallback = policy.allowFallback;
-  if (allowFallback !== undefined && typeof allowFallback !== "boolean") {
-    return {
-      ok: false,
-      error: {
-        code: "invalid_routing_policy",
-        message: "spec.routingPolicy.allowFallback must be a boolean",
-      },
-    };
-  }
-  const preferredRegions = policy.preferredRegions;
-  if (preferredRegions !== undefined) {
-    const regions = parseExtensibleTokenList(
-      preferredRegions,
-      "preferredRegions",
-      false,
-    );
-    if (!regions.ok) {
-      return {
-        ok: false,
-        error: {
-          code: "invalid_routing_policy",
-          message: regions.error.message.replace(
-            "spec.preferredRegions",
-            "spec.routingPolicy.preferredRegions",
-          ),
-        },
-      };
-    }
-    return {
-      ok: true,
-      value: {
-        ...(typeof strategy === "string" ? { strategy } : {}),
-        ...(typeof allowFallback === "boolean" ? { allowFallback } : {}),
-        preferredRegions: regions.value,
-      },
-    };
   }
   return {
     ok: true,
     value: {
-      ...(typeof strategy === "string" ? { strategy } : {}),
-      ...(typeof allowFallback === "boolean" ? { allowFallback } : {}),
+      ...(typeof delivery.maxRetries === "number"
+        ? { maxRetries: delivery.maxRetries }
+        : {}),
+      ...(typeof delivery.maxBatchSize === "number"
+        ? { maxBatchSize: delivery.maxBatchSize }
+        : {}),
     },
   };
 }
 
-function parseLifecyclePolicy(
-  value: unknown,
-):
+function parseLifecyclePolicy(value: unknown):
   | {
       readonly ok: true;
       readonly value: { readonly delete: ResourceDeletePolicy } | undefined;
@@ -697,9 +1056,7 @@ function parseLifecyclePolicy(
   return { ok: true, value: { delete: del as ResourceDeletePolicy } };
 }
 
-function parseEdgeWorkerSource(
-  value: unknown,
-):
+function parseEdgeWorkerSource(value: unknown):
   | { readonly ok: true; readonly value: EdgeWorkerSpec["source"] }
   | {
       readonly ok: false;

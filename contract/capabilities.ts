@@ -45,7 +45,11 @@ export interface TakosumiProductCapabilities {
 export interface TakosumiResourceCapabilities {
   readonly Stack: boolean;
   readonly EdgeWorker: boolean;
-  readonly AIEndpoint: boolean;
+  readonly ObjectBucket: boolean;
+  readonly KVStore: boolean;
+  readonly Queue: boolean;
+  readonly SQLDatabase: boolean;
+  readonly ContainerService: boolean;
 }
 
 export interface TakosumiAdapterCapabilities {
@@ -55,7 +59,6 @@ export interface TakosumiAdapterCapabilities {
   readonly kubernetes: boolean;
   readonly vm: boolean;
   readonly takosumi_native: boolean;
-  readonly ai_provider: boolean;
 }
 
 export interface TakosumiCompatCapabilities {
@@ -89,9 +92,7 @@ export interface CreateTakosumiDiscoveryOptions {
   readonly commercialBilling?: boolean;
   readonly paymentEnforcement?: boolean;
   readonly compat?: Partial<TakosumiCompatCapabilities>;
-  readonly endpoints?: Partial<
-    Pick<TakosumiWellKnownEndpoints, "s3" | "oci">
-  >;
+  readonly endpoints?: Partial<Pick<TakosumiWellKnownEndpoints, "s3" | "oci">>;
   readonly resourceShapesEnabled?: boolean;
 }
 
@@ -143,7 +144,11 @@ export function createTakosumiProductCapabilities(
     resources: {
       Stack: true,
       EdgeWorker: true,
-      AIEndpoint: false,
+      ObjectBucket: true,
+      KVStore: true,
+      Queue: true,
+      SQLDatabase: true,
+      ContainerService: true,
       ...(options.resources ?? {}),
     },
     adapters: {
@@ -153,7 +158,6 @@ export function createTakosumiProductCapabilities(
       kubernetes: false,
       vm: false,
       takosumi_native: false,
-      ai_provider: false,
       ...(options.adapters ?? {}),
     },
     compat,

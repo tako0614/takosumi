@@ -71,7 +71,6 @@ const MODULE_DIRS: Readonly<Record<string, string>> = {
     "providers/cloudflare/modules/cloudflare-hello-worker",
   "cloudflare-static-site":
     "providers/cloudflare/modules/cloudflare-static-site",
-  "takosumi-ai-endpoint": "providers/takosumi/modules/takosumi-ai-endpoint",
 };
 
 test("bundled module files match the first-party module sources", async () => {

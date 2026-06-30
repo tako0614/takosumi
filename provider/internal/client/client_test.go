@@ -84,7 +84,7 @@ func TestGetCapabilities(t *testing.T) {
 		}
 		_, _ = io.WriteString(w, `{
 			"apiVersion":"takosumi.dev/v1alpha1",
-			"resources":{"EdgeWorker":true,"AIEndpoint":true},
+			"resources":{"EdgeWorker":true,"ObjectBucket":true,"KVStore":true,"Queue":true,"SQLDatabase":true,"ContainerService":true},
 			"adapters":{"opentofu":true}
 		}`)
 	}))
@@ -98,8 +98,8 @@ func TestGetCapabilities(t *testing.T) {
 	if !caps.SupportsResource(KindEdgeWorker) {
 		t.Fatalf("expected EdgeWorker capability: %#v", caps.Resources)
 	}
-	if !caps.SupportsResource(KindAIEndpoint) {
-		t.Fatalf("expected AIEndpoint capability: %#v", caps.Resources)
+	if !caps.SupportsResource(KindContainerService) {
+		t.Fatalf("expected ContainerService capability: %#v", caps.Resources)
 	}
 	if !c.Capabilities.SupportsResource(KindEdgeWorker) {
 		t.Fatalf("expected capabilities cached on client")
@@ -311,8 +311,8 @@ func TestTargetPoolCRUD(t *testing.T) {
 				SpaceID: "prod",
 				Name:    "default",
 				Spec: TargetPoolSpec{Targets: []TargetPoolEntry{{
-					Name:     "deepseek-main",
-					Type:     "ai_provider",
+					Name:     "containers-main",
+					Type:     "kubernetes",
 					Priority: 90,
 				}}},
 			}
@@ -332,17 +332,17 @@ func TestTargetPoolCRUD(t *testing.T) {
 
 	c := New(srv.URL, "tok", srv.Client())
 	spec := TargetPoolSpec{Targets: []TargetPoolEntry{{
-		Name:     "deepseek-main",
-		Type:     "ai_provider",
-		Ref:      "https://api.deepseek.example/v1",
+		Name:     "containers-main",
+		Type:     "kubernetes",
+		Ref:      "cluster-prod",
 		Priority: 90,
 		Implementations: []TargetPoolImplementation{{
-			Shape:              KindAIEndpoint,
-			Implementation:     "deepseek_openai_gateway",
-			NativeResourceType: "ai.deepseek_endpoint",
+			Shape:              KindContainerService,
+			Implementation:     "custom_container_runtime",
+			NativeResourceType: "custom.container_service",
 			Interfaces: map[string]string{
-				"openai_chat_completions":      "native",
-				"vendor.deepseek.responses.v1": "native",
+				"oci_container": "native",
+				"public_http":   "shim",
 			},
 		}},
 	}}}
@@ -353,15 +353,15 @@ func TestTargetPoolCRUD(t *testing.T) {
 	if put.ID != "tkrn:prod:TargetPool:default" {
 		t.Fatalf("unexpected put response %#v", put)
 	}
-	if gotBody.Spec.Targets[0].Implementations[0].Implementation != "deepseek_openai_gateway" {
-		t.Fatalf("custom AI implementation did not pass through: %#v", gotBody.Spec)
+	if gotBody.Spec.Targets[0].Implementations[0].Implementation != "custom_container_runtime" {
+		t.Fatalf("custom container implementation did not pass through: %#v", gotBody.Spec)
 	}
 
 	got, err := c.GetTargetPool(context.Background(), "default", "prod")
 	if err != nil {
 		t.Fatalf("GetTargetPool: %v", err)
 	}
-	if got.Spec.Targets[0].Type != "ai_provider" {
+	if got.Spec.Targets[0].Type != "kubernetes" {
 		t.Fatalf("unexpected target pool response %#v", got)
 	}
 
@@ -395,19 +395,19 @@ func TestPreviewResource(t *testing.T) {
 		resp := PreviewResourceResult{
 			Resource: Resource{
 				APIVersion: APIVersion,
-				Kind:       KindAIEndpoint,
+				Kind:       KindContainerService,
 				Status: &Status{
 					Conditions: []Condition{{Type: "Blocked", Status: "True", Message: "policy denies gcp"}},
 				},
 			},
-			SelectedImplementation: "cloudflare_ai_gateway",
+			SelectedImplementation: "kubernetes_deployment",
 		}
 		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer srv.Close()
 
 	c := New(srv.URL, "", srv.Client())
-	out, err := c.PreviewResource(context.Background(), &Resource{Kind: KindAIEndpoint})
+	out, err := c.PreviewResource(context.Background(), &Resource{Kind: KindContainerService})
 	if err != nil {
 		t.Fatalf("PreviewResource: %v", err)
 	}
@@ -417,7 +417,7 @@ func TestPreviewResource(t *testing.T) {
 	if out.Resource.Status.Conditions[0].Type != "Blocked" {
 		t.Errorf("unexpected condition %#v", out.Resource.Status.Conditions[0])
 	}
-	if out.SelectedImplementation != "cloudflare_ai_gateway" {
+	if out.SelectedImplementation != "kubernetes_deployment" {
 		t.Errorf("unexpected selected implementation %q", out.SelectedImplementation)
 	}
 }

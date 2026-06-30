@@ -144,9 +144,9 @@ func (v setStringsOneOfValidator) ValidateSet(ctx context.Context, req validator
 
 // setStringsNonEmptyValidator validates that every element of a set is a
 // non-empty capability token and that the set has at least minItems elements.
-// It deliberately does not enforce a fixed allow-list: extensible surfaces such
-// as AIEndpoint profiles are accepted or rejected by the Takosumi endpoint's
-// capabilities, TargetPool, policy, and resolver.
+// It deliberately does not enforce a fixed allow-list: extensible surfaces are
+// accepted or rejected by the Takosumi endpoint's capabilities, TargetPool,
+// policy, and resolver.
 type setStringsNonEmptyValidator struct {
 	minItems int
 }

@@ -56,13 +56,29 @@ export const SHAPE_INTERFACE_REQUIREMENTS: Readonly<
       "static_assets",
     ]) as readonly string[],
   }),
-  AIEndpoint: Object.freeze({
-    required: Object.freeze([]) as readonly string[],
+  ObjectBucket: Object.freeze({
+    required: Object.freeze(["object_store"]) as readonly string[],
+    preferred: Object.freeze(["s3_api", "signed_url", "object_events"]),
+  }),
+  KVStore: Object.freeze({
+    required: Object.freeze(["kv_store"]) as readonly string[],
+    preferred: Object.freeze(["runtime_binding"]),
+  }),
+  Queue: Object.freeze({
+    required: Object.freeze(["queue"]) as readonly string[],
+    preferred: Object.freeze(["publish", "consume", "cloudevents"]),
+  }),
+  SQLDatabase: Object.freeze({
+    required: Object.freeze(["sql"]) as readonly string[],
+    preferred: Object.freeze(["sqlite", "postgres_protocol", "migrations"]),
+  }),
+  ContainerService: Object.freeze({
+    required: Object.freeze(["oci_container"]) as readonly string[],
     preferred: Object.freeze([
-      "openai_chat_completions",
-      "openai_responses",
-      "openai_embeddings",
-    ]) as readonly string[],
+      "public_http",
+      "scale_to_zero",
+      "env_projection",
+    ]),
   }),
 });
 
@@ -78,12 +94,40 @@ export const SHAPE_TARGET_IMPLEMENTATION: Readonly<
     cloudflare: "cloudflare_workers",
     takosumi_native: "takosumi_edge_runtime",
   }),
-  AIEndpoint: Object.freeze({
-    cloudflare: "cloudflare_ai_gateway",
-    takosumi_native: "takosumi_ai_gateway",
-    ai_provider: "openai_compatible_ai_endpoint",
-    aws: "aws_bedrock_openai_gateway",
-    gcp: "vertex_ai_openai_gateway",
+  ObjectBucket: Object.freeze({
+    cloudflare: "cloudflare_r2_bucket",
+    aws: "aws_s3_bucket",
+    gcp: "gcp_storage_bucket",
+    kubernetes: "minio_bucket",
+    takosumi_native: "takosumi_object_bucket",
+  }),
+  KVStore: Object.freeze({
+    cloudflare: "cloudflare_kv_namespace",
+    aws: "aws_dynamodb_kv",
+    kubernetes: "kubernetes_kv_store",
+    takosumi_native: "takosumi_kv_store",
+  }),
+  Queue: Object.freeze({
+    cloudflare: "cloudflare_queue",
+    aws: "aws_sqs_queue",
+    gcp: "gcp_pubsub_queue",
+    kubernetes: "kubernetes_queue",
+    takosumi_native: "takosumi_queue",
+  }),
+  SQLDatabase: Object.freeze({
+    cloudflare: "cloudflare_d1_database",
+    aws: "aws_rds_database",
+    gcp: "gcp_cloudsql_database",
+    kubernetes: "kubernetes_postgres_database",
+    takosumi_native: "takosumi_sql_database",
+  }),
+  ContainerService: Object.freeze({
+    cloudflare: "cloudflare_container",
+    aws: "aws_ecs_service",
+    gcp: "gcp_cloud_run_service",
+    kubernetes: "kubernetes_deployment",
+    vm: "vm_container_service",
+    takosumi_native: "takosumi_container_service",
   }),
 });
 
@@ -119,53 +163,120 @@ export const DEFAULT_RESOURCE_SHAPE_CAPABILITIES: TargetCapabilityMatrix =
       }),
     }),
     Object.freeze({
-      implementation: "cloudflare_ai_gateway",
+      implementation: "cloudflare_r2_bucket",
       targetType: "cloudflare",
-      shape: "AIEndpoint",
+      shape: "ObjectBucket",
       interfaces: Object.freeze({
-        openai_chat_completions: "native",
-        openai_responses: "shim",
-        openai_embeddings: "native",
+        object_store: "native",
+        s3_api: "native",
+        signed_url: "native",
+        object_events: "shim",
       }),
     }),
     Object.freeze({
-      implementation: "takosumi_ai_gateway",
+      implementation: "cloudflare_kv_namespace",
+      targetType: "cloudflare",
+      shape: "KVStore",
+      interfaces: Object.freeze({
+        kv_store: "native",
+        runtime_binding: "native",
+      }),
+    }),
+    Object.freeze({
+      implementation: "cloudflare_queue",
+      targetType: "cloudflare",
+      shape: "Queue",
+      interfaces: Object.freeze({
+        queue: "native",
+        publish: "native",
+        consume: "native",
+        cloudevents: "shim",
+      }),
+    }),
+    Object.freeze({
+      implementation: "cloudflare_d1_database",
+      targetType: "cloudflare",
+      shape: "SQLDatabase",
+      interfaces: Object.freeze({
+        sql: "native",
+        sqlite: "native",
+        postgres_protocol: "unsupported",
+        migrations: "shim",
+      }),
+    }),
+    Object.freeze({
+      implementation: "cloudflare_container",
+      targetType: "cloudflare",
+      shape: "ContainerService",
+      interfaces: Object.freeze({
+        oci_container: "native",
+        public_http: "native",
+        scale_to_zero: "shim",
+        env_projection: "native",
+      }),
+    }),
+    Object.freeze({
+      implementation: "kubernetes_deployment",
+      targetType: "kubernetes",
+      shape: "ContainerService",
+      interfaces: Object.freeze({
+        oci_container: "native",
+        public_http: "shim",
+        scale_to_zero: "shim",
+        env_projection: "native",
+      }),
+    }),
+    Object.freeze({
+      implementation: "takosumi_container_service",
       targetType: "takosumi_native",
-      shape: "AIEndpoint",
+      shape: "ContainerService",
       interfaces: Object.freeze({
-        openai_chat_completions: "native",
-        openai_responses: "native",
-        openai_embeddings: "native",
+        oci_container: "native",
+        public_http: "native",
+        scale_to_zero: "native",
+        env_projection: "native",
       }),
     }),
     Object.freeze({
-      implementation: "openai_compatible_ai_endpoint",
-      targetType: "ai_provider",
-      shape: "AIEndpoint",
+      implementation: "takosumi_object_bucket",
+      targetType: "takosumi_native",
+      shape: "ObjectBucket",
       interfaces: Object.freeze({
-        openai_chat_completions: "native",
-        openai_responses: "shim",
-        openai_embeddings: "shim",
+        object_store: "native",
+        s3_api: "native",
+        signed_url: "native",
+        object_events: "native",
       }),
     }),
     Object.freeze({
-      implementation: "aws_bedrock_openai_gateway",
-      targetType: "aws",
-      shape: "AIEndpoint",
+      implementation: "takosumi_kv_store",
+      targetType: "takosumi_native",
+      shape: "KVStore",
       interfaces: Object.freeze({
-        openai_chat_completions: "shim",
-        openai_responses: "shim",
-        openai_embeddings: "shim",
+        kv_store: "native",
+        runtime_binding: "native",
       }),
     }),
     Object.freeze({
-      implementation: "vertex_ai_openai_gateway",
-      targetType: "gcp",
-      shape: "AIEndpoint",
+      implementation: "takosumi_queue",
+      targetType: "takosumi_native",
+      shape: "Queue",
       interfaces: Object.freeze({
-        openai_chat_completions: "shim",
-        openai_responses: "shim",
-        openai_embeddings: "shim",
+        queue: "native",
+        publish: "native",
+        consume: "native",
+        cloudevents: "native",
+      }),
+    }),
+    Object.freeze({
+      implementation: "takosumi_sql_database",
+      targetType: "takosumi_native",
+      shape: "SQLDatabase",
+      interfaces: Object.freeze({
+        sql: "native",
+        sqlite: "native",
+        postgres_protocol: "shim",
+        migrations: "native",
       }),
     }),
   ]) as TargetCapabilityMatrix;
@@ -238,23 +349,48 @@ function nativeResourcesFor(
         return [];
     }
   }
-  if (shape === "AIEndpoint") {
-    switch (implementation) {
-      case "cloudflare_ai_gateway":
-        return [{ type: "cloudflare.ai_gateway", id: name }];
-      case "takosumi_ai_gateway":
-        return [{ type: "takosumi.ai_endpoint", id: name }];
-      case "openai_compatible_ai_endpoint":
-        return [{ type: "ai.openai_compatible_endpoint", id: name }];
-      case "aws_bedrock_openai_gateway":
-        return [{ type: "aws.bedrock_inference_profile", id: name }];
-      case "vertex_ai_openai_gateway":
-        return [{ type: "gcp.vertex_ai_endpoint", id: name }];
-      default:
-        return [];
-    }
+  switch (implementation) {
+    case "cloudflare_r2_bucket":
+      return [{ type: "cloudflare.r2_bucket", id: name }];
+    case "cloudflare_kv_namespace":
+      return [{ type: "cloudflare.kv_namespace", id: name }];
+    case "cloudflare_queue":
+      return [{ type: "cloudflare.queue", id: name }];
+    case "cloudflare_d1_database":
+      return [{ type: "cloudflare.d1_database", id: name }];
+    case "cloudflare_container":
+      return [{ type: "cloudflare.container", id: name }];
+    case "kubernetes_deployment":
+      return [{ type: "kubernetes.deployment", id: name }];
+    case "aws_s3_bucket":
+      return [{ type: "aws.s3_bucket", id: name }];
+    case "aws_sqs_queue":
+      return [{ type: "aws.sqs_queue", id: name }];
+    case "aws_rds_database":
+      return [{ type: "aws.rds_instance", id: name }];
+    case "aws_ecs_service":
+      return [{ type: "aws.ecs_service", id: name }];
+    case "gcp_storage_bucket":
+      return [{ type: "gcp.storage_bucket", id: name }];
+    case "gcp_pubsub_queue":
+      return [{ type: "gcp.pubsub_topic", id: name }];
+    case "gcp_cloudsql_database":
+      return [{ type: "gcp.cloudsql_database", id: name }];
+    case "gcp_cloud_run_service":
+      return [{ type: "gcp.cloud_run_service", id: name }];
+    case "takosumi_object_bucket":
+      return [{ type: "takosumi.object_bucket", id: name }];
+    case "takosumi_kv_store":
+      return [{ type: "takosumi.kv_store", id: name }];
+    case "takosumi_queue":
+      return [{ type: "takosumi.queue", id: name }];
+    case "takosumi_sql_database":
+      return [{ type: "takosumi.sql_database", id: name }];
+    case "takosumi_container_service":
+      return [{ type: "takosumi.container_service", id: name }];
+    default:
+      return [];
   }
-  return [];
 }
 
 function computePortability(

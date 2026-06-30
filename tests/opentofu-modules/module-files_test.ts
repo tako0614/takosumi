@@ -24,15 +24,22 @@ import { cloudflareHelloWorkerTemplate } from "../../providers/cloudflare/module
 import { cloudflareStaticSiteTemplate } from "../../providers/cloudflare/modules/cloudflare-static-site/template.ts";
 import { cloudflareWorkerServiceTemplate } from "../../providers/cloudflare/modules/cloudflare-worker-service/template.ts";
 import { coreTemplate } from "../../opentofu-modules/core/template.ts";
-import { takosumiAiEndpointTemplate } from "../../providers/takosumi/modules/takosumi-ai-endpoint/template.ts";
 
 const TEMPLATES = [
   coreTemplate,
   cloudflareWorkerServiceTemplate,
   cloudflareStaticSiteTemplate,
   cloudflareHelloWorkerTemplate,
-  takosumiAiEndpointTemplate,
 ];
+
+const PLANNER_MODULE_IDS = [
+  "cloudflare-r2-bucket",
+  "cloudflare-kv-store",
+  "cloudflare-queue",
+  "cloudflare-sql-database",
+  "takosumi-service-shape",
+  "takosumi-container-service",
+] as const;
 
 function mainTfFor(id: string): string {
   const files = firstPartyModuleFilesByTemplateId[id];
@@ -50,8 +57,11 @@ function hasHclBlock(hcl: string, kind: string, label: string): boolean {
   return pattern.test(hcl);
 }
 
-test("the catalog and the bundled-file map cover exactly the same template ids", () => {
-  const templateIds = new Set(TEMPLATES.map((t) => t.id));
+test("the bundled-file map covers install templates and planner modules", () => {
+  const templateIds = new Set([
+    ...TEMPLATES.map((t) => t.id),
+    ...PLANNER_MODULE_IDS,
+  ]);
   const fileIds = new Set(Object.keys(firstPartyModuleFilesByTemplateId));
   expect(fileIds).toEqual(templateIds);
 });
