@@ -386,3 +386,12 @@ test("DEFAULT_RESOURCE_SHAPE_CAPABILITIES advertises the current public shapes",
     "SQLDatabase",
   ]);
 });
+
+test("push notification delivery is not a Resource Shape resolver surface", () => {
+  expect(SHAPE_INTERFACE_REQUIREMENTS.PushNotification).toBeUndefined();
+  expect(
+    DEFAULT_RESOURCE_SHAPE_CAPABILITIES.some(
+      (capability) => capability.shape === "PushNotification",
+    ),
+  ).toBe(false);
+});

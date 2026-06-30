@@ -113,6 +113,9 @@ Push notification delivery:
   do not create a Takosumi Resource Shape or takosumi_provider resource.
   APNs, FCM, Web Push, and product-native notification registration stay in
   the product shell, a normal OpenTofu module/provider, or generic env.
+  A mobile shell may still post a product-owned device token to its own host
+  API, but Takosumi does not advertise a PushNotification capability, resolver
+  shape, or provider resource.
 ```
 
 Do not add a Takosumi-owned resource just because another cloud already has a
