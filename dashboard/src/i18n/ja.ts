@@ -47,14 +47,14 @@ export const ja = {
   "store.noWorkspace": "先に Workspace を選択してください。",
   "nav.cloudResources": "クラウド",
   "nav.runs": "更新履歴",
-  "nav.connections": "ホスト接続",
+  "nav.connections": "接続済みアカウント",
   "nav.billing": "お支払い",
   "nav.activity": "操作履歴",
   "nav.primary": "主な操作",
-  "nav.manage": "管理",
+  "nav.manage": "詳細",
   "nav.accountSection": "アカウント",
   "nav.notifications": "通知",
-  "nav.workspaceSettings": "ワークスペース設定",
+  "nav.workspaceSettings": "設定",
   "nav.workspaceSettingsShort": "設定",
   "nav.account": "アカウント",
   "nav.docs": "ドキュメント",
@@ -76,7 +76,7 @@ export const ja = {
   "workspace.none": "ワークスペースがありません",
   "workspace.select": "ワークスペースを選択してください",
   "workspace.selectMessage":
-    "右上のワークスペース選択からワークスペースを選ぶと表示されます。",
+    "サイドバーのワークスペース選択からワークスペースを選ぶと表示されます。",
   "workspace.defaultName": "自分のワークスペース",
   "workspace.start.aria": "ワークスペースの開始",
   "workspace.start.kicker": "ワークスペースがありません",
@@ -257,9 +257,9 @@ export const ja = {
   "app.deploys.empty": "まだデプロイ履歴はありません。",
   "app.deploys.restoreMenu": "その他",
   "app.deploys.restore": "この状態に戻す",
-  "app.deploys.advancedActions": "バックアップと詳細操作",
+  "app.deploys.advancedActions": "必要なときだけ使う操作",
   "app.deploys.advancedActionsBody":
-    "変更前の復元ポイントやエクスポートが必要な場合だけ、バックアップを作成します。",
+    "復元ポイントやバックアップが必要な場合だけ使います。",
   "app.deploys.backup": "バックアップを作成",
   "app.deploys.backupCreated": "バックアップを作成しました。",
   "app.deploys.backupSupportRef": "バックアップ ID",
@@ -270,25 +270,25 @@ export const ja = {
   "app.recentActivity.empty": "最近の更新はありません。",
   "app.recentActivity.open": "詳細",
   "app.recentActivity.releaseActivation": "アプリ公開",
-  "app.bindings.title": "Provider 接続",
+  "app.bindings.title": "接続済みアカウント",
   "app.bindings.subtitle":
-    "このサービスがホスト先で使う provider 認証情報です。通常は変更不要です。",
-  "app.bindings.none": "Provider 接続は紐づいていません。",
-  "app.bindings.editAdvanced": "Provider 接続の割り当てを変更",
-  "app.bindings.add": "Provider 接続を追加",
-  "app.bindings.providerPlaceholder": "Provider",
+    "このサービスが公開時に使う外部サービスのアクセスです。通常は変更不要です。",
+  "app.bindings.none": "接続済みアカウントは紐づいていません。",
+  "app.bindings.editAdvanced": "接続済みアカウントの割り当てを変更",
+  "app.bindings.add": "接続済みアカウントを追加",
+  "app.bindings.providerPlaceholder": "接続先",
   "app.bindings.aliasPlaceholder": "対象名（任意）",
-  "app.bindings.selectConnection": "Provider 接続を選択",
-  "app.bindings.technicalTarget": "技術的な対象",
+  "app.bindings.selectConnection": "接続済みアカウントを選択",
+  "app.bindings.technicalTarget": "接続先の詳細",
   "app.bindings.remove": "削除",
-  "app.bindings.errorProvider": "{index} 行目の Provider を入力してください。",
+  "app.bindings.errorProvider": "{index} 行目の接続先を入力してください。",
   "app.bindings.errorConnection":
-    "{provider} の利用可能な Provider 接続を選択してください。",
+    "{provider} の利用可能な接続済みアカウントを選択してください。",
   "app.settings.removeTitle": "このサービスを削除しますか？",
   "app.settings.removeBody":
     "削除は別の確認画面から行います。何が取り除かれるかを確認してから実行できます。",
   "app.settings.removeCta": "削除オプションを開く",
-  "app.settings.openCta": "サービスの管理を開く",
+  "app.settings.openCta": "設定を開く",
   "app.settings.supportDetails": "参照情報",
   "app.danger.destroyTitle": "サービスを削除",
   "app.danger.destroyBody":
@@ -382,17 +382,17 @@ export const ja = {
   "run.details.debug": "識別情報",
   "run.inputs.title": "連携サービスからの値",
   "run.inputs.empty": "連携サービスから受け取った値はありません。",
-  "run.connections.title": "ホスト接続",
-  "run.connections.reviewTitle": "ホスト接続の確認が必要です",
+  "run.connections.title": "接続済みアカウント",
+  "run.connections.reviewTitle": "接続済みアカウントの確認が必要です",
   "run.connections.reviewBody":
-    "続行する前に確認が必要なホスト接続があります。非公開の値は表示しません。",
-  "run.connections.provider": "Provider",
+    "続行する前に確認が必要な接続済みアカウントがあります。非公開の値は表示しません。",
+  "run.connections.provider": "接続先",
   "run.connections.connection": "アクセス",
   "run.connections.status": "状態",
   "run.connections.statusResolved": "利用できます",
   "run.connections.statusMissing": "アクセスが必要",
   "run.connections.statusBlocked": "ポリシーで停止",
-  "run.connections.empty": "Provider 接続の確認情報はありません。",
+  "run.connections.empty": "接続済みアカウントの確認情報はありません。",
   "run.diagnostics.title": "診断",
   "run.diagnostics.empty": "診断はありません。",
   "run.diag.severity.error": "エラー",
@@ -417,6 +417,12 @@ export const ja = {
 
   // --- add flow (/new) -------------------------------------------------------
   "new.title": "サービスを追加",
+  "new.discovery.aria": "追加するサービスを探す",
+  "new.discovery.title": "追加するサービスを選ぶ",
+  "new.discovery.subtitle":
+    "よく使うサービスを選ぶか、インストールリンクを貼り付けて追加します。",
+  "new.discovery.linkPlaceholder": "リンクまたは Git URL",
+  "new.discovery.linkCta": "リンクから追加",
   "new.advancedImport.title": "リンクから追加",
   "new.advancedImport.subtitle": "インストールリンクを貼り付けて追加します。",
   "new.selection.subtitle":
@@ -489,7 +495,7 @@ export const ja = {
   "new.vars.errorNameRequired":
     "変数名を入力するか、空の行を削除してください。",
   "new.vars.errorUnsafeName":
-    "「{name}」はリンク/入力値として渡せません。非公開の値は Provider 接続から渡してください。",
+    "「{name}」はリンク/入力値として渡せません。非公開の値は接続済みアカウントから渡してください。",
   "new.vars.errorUnsafeValue":
     "「{name}」の値が長すぎるか、使えない文字を含んでいます。",
   "new.vars.errorProjectNameReserved":
@@ -518,9 +524,9 @@ export const ja = {
   "new.compat.patch": "手直しが必要です",
   "new.compat.unsupported": "今は追加できません",
   "new.compat.diagnostic.technicalNote":
-    "技術的な詳細です。対応が必要な場合は、表示された内容を確認してください。",
+    "詳しい確認結果です。対応が必要な場合だけ確認してください。",
   "new.compat.patchHelp":
-    "表示された内容を確認してください。アプリ側の修正が必要な場合と、Provider 接続の設定で進められる場合があります。",
+    "表示された内容を確認してください。アプリ側の修正が必要な場合と、接続済みアカウントの設定で進められる場合があります。",
   "new.compat.summary.providerCredentials":
     "{provider} の非公開値を取得元から外す必要があります。",
   "new.compat.summary.reviewRequired":
@@ -528,11 +534,11 @@ export const ja = {
   "new.compat.issue.providerCredentials.message":
     "{provider} の非公開値が取得元の中に書かれています。",
   "new.compat.issue.providerCredentials.detail":
-    "API トークンやアカウント ID はコードに置かず、{provider} の Provider 接続からデプロイ時だけ渡してください。値を外して接続すると続行できます。",
+    "API トークンやアカウント ID はコードに置かず、{provider} の接続済みアカウントからデプロイ時だけ渡してください。値を外して接続すると続行できます。",
   "new.compat.issue.providerLift.message":
-    "{provider} の Provider 設定は、非公開値を外せば安全な実行用設定として扱えます。",
+    "{provider} の接続設定は、非公開値を外せば安全な実行用設定として扱えます。",
   "new.compat.issue.lockfile.message":
-    "利用する Provider の固定情報が含まれています。非公開値を外したあと、追加時に固定内容を確認します。",
+    "利用する接続先の固定情報が含まれています。非公開値を外したあと、追加時に固定内容を確認します。",
   "new.compat.issue.reviewRequired.message":
     "追加前に確認が必要な項目があります。",
   "new.proceed": "追加内容を確認する",
@@ -574,14 +580,15 @@ export const ja = {
     "この確認結果ではまだ追加できません。表示された手直し内容を解消してから、もう一度確認してください。",
 
   // --- workspace settings ---------------------------------------------------------
-  "workspaceSettings.title": "チーム設定",
+  "workspaceSettings.title": "設定",
   "workspaceSettings.subtitle":
-    "ワークスペース名、メンバー、接続、使用量設定を管理します。",
+    "チーム名、メンバー、接続、使用量を確認します。",
   "workspaceSettings.tab.general": "一般",
   "workspaceSettings.tab.members": "メンバー",
   "workspaceSettings.tab.connections": "接続",
   "workspaceSettings.tab.billing": "お支払い",
   "workspaceSettings.tab.usageQuota": "使用量 / 上限",
+  "workspaceSettings.tab.cloud": "クラウドリソース / キー",
   "workspaceSettings.tab.backups": "バックアップ",
   "workspaceSettings.tab.shares": "共有値",
   "workspaceSettings.general.displayName": "表示名",
@@ -591,7 +598,7 @@ export const ja = {
   "workspaceSettings.general.updated": "更新日時",
   "workspaceSettings.general.advancedDetails": "詳細情報",
   "workspaceSettings.general.policyAdvanced": "ポリシー JSON（詳細）",
-  "workspaceSettings.general.saved": "ワークスペース設定を保存しました。",
+  "workspaceSettings.general.saved": "設定を保存しました。",
   "workspaceSettings.general.archive": "ワークスペースをアーカイブ",
   "workspaceSettings.general.archiveConfirm":
     "このワークスペースを通常の一覧から外します。あとから管理用APIで確認できます。",
@@ -639,9 +646,9 @@ export const ja = {
 
   // --- connections -------------------------------------------------------------
   "conn.subtitle":
-    "このチームがサービスのホスト時に使うクラウドアカウントやアクセスキーを接続します。",
-  "conn.providerConnections.title": "ホスト接続",
-  "conn.providerConnections.provider": "Provider",
+    "サービス公開に使うクラウドアカウントやアクセスキーを保存します。",
+  "conn.providerConnections.title": "接続済みアカウント",
+  "conn.providerConnections.provider": "接続先",
   "conn.providerConnections.name": "名前",
   "conn.providerConnections.status": "状態",
   "conn.expiresAt": "期限: {date}",
@@ -649,18 +656,18 @@ export const ja = {
   "conn.oauth.failed": "接続に失敗しました。もう一度お試しください。",
   "conn.return.title": "{name} の追加に戻る",
   "conn.return.subtitle":
-    "ホスト接続を保存してから、サービス追加の続きに戻ります。",
+    "接続済みアカウントを保存してから、サービス追加の続きに戻ります。",
   "conn.return.cta": "サービス追加に戻る",
   "conn.saved.message": "{name} を保存しました。",
   "conn.saved.needsTest":
     "{name} を保存しました。サービス追加に戻る前に、接続確認を完了してください。",
   "conn.saved.testCta": "接続を確認",
   "conn.saved.returnCta": "追加に戻る",
-  "conn.add.title": "ホスト接続を追加",
-  "conn.add.open": "ホスト接続を追加",
+  "conn.add.title": "アカウントを接続",
+  "conn.add.open": "アカウントを接続",
   "conn.add.close": "閉じる",
-  "conn.add.provider": "Provider",
-  "conn.add.genericEnvOption": "任意の OpenTofu provider",
+  "conn.add.provider": "接続先",
+  "conn.add.genericEnvOption": "その他の接続（詳細）",
   "conn.add.optionalSettings": "この接続に名前をつける",
   "conn.add.displayName": "接続名",
   "conn.add.displayNamePlaceholder": "任意の名前",
@@ -723,12 +730,15 @@ export const ja = {
   "conn.guided.pastePlaceholder": "ここにトークンを貼り付け",
   "conn.guided.connect": "接続を保存",
   "conn.guided.connecting": "接続中...",
-  "conn.custom.back": "案内付き接続を使う",
+  "conn.custom.back": "よく使う接続に戻る",
   "conn.advanced.summary": "アクセス情報を入力",
   "conn.advanced.register": "アクセス情報を保存",
   "conn.register": "接続を保存",
   "conn.registering": "保存中...",
-  "conn.genericEnv.option": "任意の OpenTofu provider",
+  "conn.genericEnv.summary": "その他の接続",
+  "conn.genericEnv.body":
+    "一覧にない接続先だけ、Provider source と必要な環境変数を指定します。",
+  "conn.genericEnv.option": "その他の接続を設定",
   "conn.genericEnv.providerName": "Provider source",
   "conn.genericEnv.providerPlaceholder": "snowflake-labs/snowflake",
   "conn.genericEnv.envName": "env 名",
@@ -736,7 +746,7 @@ export const ja = {
   "conn.genericEnv.value": "値",
   "conn.genericEnv.valuePlaceholder": "値を貼り付け",
   "conn.genericEnv.addRow": "値を追加",
-  "conn.genericEnv.providerRequired": "OpenTofu provider を入力してください。",
+  "conn.genericEnv.providerRequired": "Provider source を入力してください。",
   "conn.genericEnv.nameRequired": "値のある行には環境変数名が必要です。",
   "conn.genericEnv.invalidName":
     "SNOWFLAKE_PASSWORD のような大文字の env 名を使ってください。",
@@ -744,17 +754,17 @@ export const ja = {
     "“{name}” は runner が使う予約名です。provider 固有の env 名を使ってください。",
   "conn.genericEnv.duplicateName": "“{name}” はすでに追加されています。",
   "conn.genericEnv.oneRequired": "環境変数を 1 つ以上入力してください。",
-  "conn.error.invalidProvider": "Provider が不正です。",
+  "conn.error.invalidProvider": "接続先が不正です。",
   "conn.error.tokenRequired": "トークンを貼り付けてください。",
   "conn.error.fieldRequired": "{field} は必須です。",
-  "conn.empty.title": "ホスト接続はまだありません",
+  "conn.empty.title": "接続済みアカウントはまだありません",
   "conn.empty.message":
-    "サービスがクラウドアカウントやキーを必要とするときに追加します。",
+    "サービスがクラウドアカウントやキーを必要とするときに接続します。",
   "conn.test": "アクセス確認",
   "conn.testing": "確認中...",
   "conn.test.notReady":
     "このアカウントはまだ利用できません（状態: {status}）。",
-  "conn.remove.confirmTitle": "ホスト接続を削除",
+  "conn.remove.confirmTitle": "接続済みアカウントを削除",
   "conn.remove.confirmMessage":
     "本当に {name} を削除しますか？保存されたアクセス値も削除され、取り消せません。",
 
@@ -839,10 +849,12 @@ export const ja = {
   "notif.event.driftDetail": "再デプロイが必要かもしれません",
   "notif.event.stale": "依存先の更新で再デプロイが必要になりました",
   "notif.event.staleDetail": "更新元: {producer}",
-  "notif.event.connCreated": "Provider 接続「{provider}」を追加しました",
-  "notif.event.connCreatedGeneric": "Provider 接続を追加しました",
-  "notif.event.connRevoked": "Provider 接続「{provider}」が無効になりました",
-  "notif.event.connRevokedGeneric": "Provider 接続が無効になりました",
+  "notif.event.connCreated":
+    "接続済みアカウント「{provider}」を追加しました",
+  "notif.event.connCreatedGeneric": "接続済みアカウントを追加しました",
+  "notif.event.connRevoked":
+    "接続済みアカウント「{provider}」が無効になりました",
+  "notif.event.connRevokedGeneric": "接続済みアカウントが無効になりました",
   "notif.event.backupCreated": "バックアップを作成しました",
   "notif.event.depCreated": "サービス間の連携を追加しました",
   "notif.event.depDeleted": "サービス間の連携を解除しました",
@@ -912,7 +924,7 @@ export const ja = {
   // --- cloud resources -------------------------------------------------------------
   "cloudResources.title": "Takosumi Cloud",
   "cloudResources.subtitle":
-    "APIキー、エンドポイント、クラウドリソースを管理します。",
+    "外部キーと利用中のリソースを確認します。",
   "cloudResources.unavailable.title": "Takosumi Cloud 専用です",
   "cloudResources.unavailable.body":
     "この実行環境では Cloud 専用エンドポイントは提供されていません。",
@@ -931,20 +943,20 @@ export const ja = {
   "cloudResources.copied": "コピーしました。",
   "cloudResources.status.ready": "利用可能",
   "cloudResources.status.check": "確認が必要",
-  "cloudResources.baseUrl": "ベースURL",
-  "cloudResources.keys.title": "APIキー",
+  "cloudResources.baseUrl": "接続先URL",
+  "cloudResources.keys.title": "外部APIキー",
   "cloudResources.keys.subtitle":
     "Takosumi Cloud API を呼び出す外部アプリ用のキーを発行・確認します。",
   "cloudResources.keys.scope": "読み取り / 書き込み",
-  "cloudResources.keys.defaultName": "Takosumi Cloud APIキー",
+  "cloudResources.keys.defaultName": "Takosumi Cloud 外部APIキー",
   "cloudResources.keys.name": "キー名",
   "cloudResources.keys.nameRequired": "キー名を入力してください。",
-  "cloudResources.keys.create": "APIキーを作成",
-  "cloudResources.keys.created": "作成されたAPIキー",
+  "cloudResources.keys.create": "キーを作成",
+  "cloudResources.keys.created": "作成されたキー",
   "cloudResources.keys.lastUsed": "最終利用",
-  "cloudResources.keys.empty": "まだ APIキーはありません。",
+  "cloudResources.keys.empty": "まだ外部APIキーはありません。",
   "cloudResources.keys.revoke": "取り消し",
-  "cloudResources.keys.revokeTitle": "APIキーを取り消し",
+  "cloudResources.keys.revokeTitle": "外部APIキーを取り消し",
   "cloudResources.keys.revokeMessage":
     "「{name}」を取り消します。このキーを使っているアプリは接続できなくなります。",
   "cloudResources.ai.title": "AI Gateway",
@@ -953,15 +965,15 @@ export const ja = {
   "cloudResources.ai.providers": "接続先数",
   "cloudResources.ai.models": "モデル",
   "cloudResources.ai.modelDetails": "モデル一覧",
-  "cloudResources.compat.title": "OpenTofu import endpoint",
+  "cloudResources.compat.title": "外部デプロイURL",
   "cloudResources.compat.subtitle":
-    "Cloudflare-compatible deploy path と virtual account",
+    "外部ツールからデプロイするための接続先です。",
   "cloudResources.compat.token": "認証状態",
-  "cloudResources.compat.account": "Virtual account",
-  "cloudResources.s3.title": "Object Storage endpoint",
-  "cloudResources.s3.subtitle": "Managed storage 用の S3-compatible API",
-  "cloudResources.s3.protocol": "プロトコル",
-  "cloudResources.s3.capability": "Capability",
+  "cloudResources.compat.account": "アカウント",
+  "cloudResources.s3.title": "オブジェクトストレージ接続",
+  "cloudResources.s3.subtitle": "オブジェクトストレージ接続の状態です。",
+  "cloudResources.s3.protocol": "方式",
+  "cloudResources.s3.capability": "対応機能",
   "cloudResources.s3.buckets": "Bucket数",
   "cloudResources.s3.configuredBuckets": "利用可能Bucket",
   "cloudResources.inventory.title": "クラウドリソース",

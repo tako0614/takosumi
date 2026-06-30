@@ -507,7 +507,7 @@ function DependencyList(props: {
           <For each={props.rows}>
             {(row) => (
               <li>
-                <code>{row.name}</code>
+                <span>{row.name}</span>
               </li>
             )}
           </For>

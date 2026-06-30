@@ -1,5 +1,5 @@
 /**
- * Global Workspace switcher — TopBar control, the single owner of "which Workspace am I
+ * Global Workspace switcher: the single owner of "which Workspace am I
  * working in" for the whole dashboard (GitHub org-switcher analogue).
  *
  * Replaces the per-view `lib/workspace-state.ts` signal: every view
@@ -28,7 +28,11 @@ import {
 import { t } from "../../../../i18n/index.ts";
 import { Select } from "../../../../components/ui/Form.tsx";
 
-export default function WorkspaceSwitcher() {
+interface Props {
+  readonly compact?: boolean;
+}
+
+export default function WorkspaceSwitcher(props: Props = {}) {
   const [workspaces, { refetch }] = createResource(listWorkspaces);
   const loadedWorkspaces = createMemo(() => workspaces() ?? []);
   const selectedWorkspaceId = createMemo(() =>
@@ -63,9 +67,12 @@ export default function WorkspaceSwitcher() {
   }
 
   return (
-    <div class="topbar-workspace">
+    <div class="topbar-workspace" classList={{ compact: props.compact }}>
+      <Show when={!props.compact}>
+        <span class="topbar-workspace-label">{t("workspace.label")}</span>
+      </Show>
       <Show
-        when={!workspaces.loading && loadedWorkspaces().length > 1}
+        when={!workspaces.loading && loadedWorkspaces().length > 0}
         fallback={
           <Show when={!workspaces.loading && loadedWorkspaces().length === 0}>
             <span class="topbar-workspace-empty">{t("workspace.none")}</span>
@@ -78,6 +85,7 @@ export default function WorkspaceSwitcher() {
           class="topbar-workspace-select"
           aria-label={t("workspace.label")}
           value={selectedWorkspaceId()}
+          disabled={loadedWorkspaces().length < 2}
           onChange={(e) => setCurrentWorkspaceId(e.currentTarget.value)}
         >
           <For each={loadedWorkspaces()}>

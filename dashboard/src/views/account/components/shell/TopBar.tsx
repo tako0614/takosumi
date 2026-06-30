@@ -10,6 +10,7 @@ import { A, useLocation } from "@solidjs/router";
 import { createMemo, createResource, Show } from "solid-js";
 import { Bell, Plus } from "lucide-solid";
 import UserMenu from "../auth/UserMenu.tsx";
+import WorkspaceSwitcher from "./WorkspaceSwitcher.tsx";
 import { currentWorkspaceId } from "../../../../lib/workspace-state.ts";
 import {
   type Capsule,
@@ -27,7 +28,6 @@ const SECTION_TITLES: ReadonlyArray<readonly [RegExp, MessageKey]> = [
   [/^\/$/, "nav.apps"],
   [/^\/services(\/|$)/, "nav.services"],
   [/^\/new(\/|$)/, "nav.add"],
-  [/^\/store(\/|$)/, "nav.store"],
   [/^\/cloud(\/|$)/, "nav.cloudResources"],
   [/^\/connections(\/|$)/, "nav.connections"],
   [/^\/advanced\/workspace(\/|$)/, "nav.workspaceSettings"],
@@ -64,6 +64,9 @@ export default function TopBar() {
       <Show when={sectionTitle()}>
         {(title) => <span class="topbar-title">{title()}</span>}
       </Show>
+      <div class="topbar-mobile-workspace">
+        <WorkspaceSwitcher compact />
+      </div>
       <div class="topbar-actions">
         <A
           href="/new"

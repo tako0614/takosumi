@@ -55,12 +55,17 @@ describe("/new flow guidance", () => {
     expect(appViewsCssSource).not.toContain(".av-new-flow-step");
   });
 
-  test("keeps /new as a focused add form while browsing lives in the store", () => {
-    expect(newAppViewSource).not.toContain('class="av-store"');
-    expect(newAppViewSource).not.toContain('class="av-store-hero"');
-    expect(newAppViewSource).not.toContain('class="av-store-search"');
-    expect(newAppViewSource).not.toContain('class="av-catalog-grid"');
-    expect(newAppViewSource).not.toContain('class="av-catalog-card"');
+  test("integrates service browsing and link install into /new", () => {
+    expect(newAppViewSource).toContain("StoreBrowser");
+    expect(newAppViewSource).toContain("localStoreListings");
+    expect(newAppViewSource).toContain("catalogEntryToListing");
+    expect(newAppViewSource).toContain("pickStoreListing");
+    expect(newAppViewSource).toContain("startLinkImport");
+    expect(newAppViewSource).toContain('class="av-add-discovery"');
+    expect(newAppViewSource).toContain('class="av-link-entry"');
+    expect(newAppViewSource).toContain("showSourceControls={false}");
+    expect(newAppViewSource).toContain("showSortControl={false}");
+    expect(newAppViewSource).toContain("showKindFilters={false}");
     expect(newAppViewSource).toContain("function CatalogIcon");
     expect(newAppViewSource).not.toContain("function catalogKindLabel");
     expect(newAppViewSource).not.toContain("function CatalogCard");
@@ -105,6 +110,9 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).not.toContain('t("new.selection.sourceDetails")');
     expect(newAppViewSource).not.toContain("sourceSummaryMeta");
     expect(newAppViewSource).toContain("<Show when={!usingSelectedService()}>");
+    expect(newAppViewSource).toContain("<Show when={!hasChosenSource()}>");
+    expect(newAppViewSource).toContain("<Show\n          when={hasChosenSource()}");
+    expect(newAppViewSource).toContain('activeTab() === "git"');
     expect(newAppViewSource).toContain('setActiveTab("catalog")');
     expect(newAppViewSource).not.toContain('<code class="av-catalog-src"');
     expect(newAppViewSource).not.toContain('t("new.catalog.provider"');
@@ -125,6 +133,8 @@ describe("/new flow guidance", () => {
     expect(en).not.toHaveProperty("new.store.blocksTitle");
     expect(en).not.toHaveProperty("new.store.examplesTitle");
     expect(en).not.toHaveProperty("new.advancedImport.open");
+    expect(en["new.discovery.title"]).toBe("Choose a service to add");
+    expect(ja["new.discovery.title"]).toBe("追加するサービスを選ぶ");
     expect(ja).not.toHaveProperty("new.tab.catalog");
     expect(ja).not.toHaveProperty("new.tab.git");
     expect(ja).not.toHaveProperty("new.catalog.select");
@@ -150,10 +160,10 @@ describe("/new flow guidance", () => {
     expect(ja["new.providers.alias"]).toBe("対象: {alias}");
   });
 
-  test("opens /new on the install-link form while store handoffs preselect a service", () => {
+  test("opens /new on service discovery while install links prefill the add flow", () => {
     expect(newAppViewSource).toContain("function initialAddTab");
     expect(newAppViewSource).toContain(
-      'return parseInitialInstallConfigId(search) ? "catalog" : "git"',
+      'return parseInitialInstallConfigId(search) || !hasInstallPrefillParams(search)',
     );
     expect(newAppViewSource).not.toContain('if (hasPrefill) return "git"');
     expect(newAppViewSource).not.toContain('params.get("mode") === "link"');

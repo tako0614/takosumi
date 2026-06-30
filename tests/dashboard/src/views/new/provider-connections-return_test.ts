@@ -149,8 +149,8 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).not.toContain("error" + "OperatorManaged");
     expect(en["new.providers.missingBody"]).toContain("connected account");
     expect(ja["new.providers.missingBody"]).toContain("接続済みアカウント");
-    expect(en["conn.providerConnections.title"]).toBe("Hosting access");
-    expect(ja["conn.providerConnections.title"]).toBe("ホスト接続");
+    expect(en["conn.providerConnections.title"]).toBe("Connected accounts");
+    expect(ja["conn.providerConnections.title"]).toBe("接続済みアカウント");
   });
 
   test("/new explains rejected external install links instead of silently opening the catalog", () => {
@@ -391,6 +391,8 @@ describe("/new Provider Connections return context", () => {
   test("custom ProviderConnection path asks for provider source and env variables", () => {
     expect(connectionsTabSource).toContain("GENERIC_ENV_PROVIDER_OPTION");
     expect(connectionsTabSource).toContain('"conn.genericEnv.option"');
+    expect(connectionsTabSource).toContain('"conn.genericEnv.summary"');
+    expect(connectionsTabSource).toContain('"conn.genericEnv.body"');
     expect(connectionsTabSource).toContain(
       'placeholder={t("conn.genericEnv.providerPlaceholder")}',
     );
@@ -408,7 +410,7 @@ describe("/new Provider Connections return context", () => {
     expect(connectionsTabSource).not.toContain(
       "const value = pair.value.trim();",
     );
-    expect(en["conn.genericEnv.option"]).toBe("Any OpenTofu provider");
+    expect(en["conn.genericEnv.option"]).toBe("Set up other connection");
     expect(en["conn.genericEnv.providerName"]).toBe("Provider source");
     expect(en["conn.genericEnv.providerPlaceholder"]).toBe(
       "snowflake-labs/snowflake",
@@ -420,7 +422,7 @@ describe("/new Provider Connections return context", () => {
       "reserved for the runner",
     );
     expect(en["conn.genericEnv.duplicateName"]).toContain("already added");
-    expect(ja["conn.genericEnv.option"]).toBe("任意の OpenTofu provider");
+    expect(ja["conn.genericEnv.option"]).toBe("その他の接続を設定");
     expect(ja["conn.genericEnv.envName"]).toBe("env 名");
     expect(ja["conn.genericEnv.reservedName"]).toContain("予約名");
     expect(connectionsTabSource).not.toContain('placeholder="private-api"');

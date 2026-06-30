@@ -68,10 +68,20 @@ import type { TakosumiAccountsPatMetadata } from "@takosjp/takosumi-accounts-con
 const RESOURCE_PREVIEW_LIMIT = 5;
 
 export default function CloudResourcesView() {
-  return <Page title={t("cloudResources.title")}>{() => <Inner />}</Page>;
+  return (
+    <Page title={t("cloudResources.title")}>
+      {() => (
+        <AppShell>
+          <CloudResourcesPanel showHeader />
+        </AppShell>
+      )}
+    </Page>
+  );
 }
 
-function Inner() {
+export function CloudResourcesPanel(props: {
+  readonly showHeader?: boolean;
+}) {
   const [snapshot, { refetch: refetchSnapshot }] = createResource(
     () => (isTakosumiCloudRuntime() ? true : undefined),
     getCloudResourcesSnapshot,
@@ -95,7 +105,8 @@ function Inner() {
   };
 
   return (
-    <AppShell>
+    <>
+      <Show when={props.showHeader}>
       <PageHeader
         title={t("cloudResources.title")}
         subtitle={t("cloudResources.subtitle")}
@@ -110,6 +121,7 @@ function Inner() {
           </Button>
         }
       />
+      </Show>
 
       <Show
         when={isTakosumiCloudRuntime()}
@@ -150,7 +162,7 @@ function Inner() {
           </Match>
         </Switch>
       </Show>
-    </AppShell>
+    </>
   );
 }
 

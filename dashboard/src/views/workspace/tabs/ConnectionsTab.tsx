@@ -636,28 +636,48 @@ export default function ConnectionsTab(props: { readonly workspaceId: string }) 
             }
           />
           <div class="wc-form">
-            <FormField label={t("conn.add.provider")}>
-              <Select
-                id="connection-provider"
-                name="provider"
-                value={provider()}
-                onChange={(e) => {
-                  setProvider(e.currentTarget.value);
-                  // Switching provider drops any half-entered secret values.
-                  setValues({});
-                  setHelperToken("");
-                  setGenericEnvProvider("");
-                  setEnvPairs([{ name: "", value: "" }]);
-                }}
-              >
-                <For each={PROVIDERS}>
-                  {(p) => <option value={p.provider}>{p.label}</option>}
-                </For>
-                <option value={GENERIC_ENV_PROVIDER_OPTION}>
-                  {t("conn.genericEnv.option")}
-                </option>
-              </Select>
-            </FormField>
+            <Show when={!isGenericEnvProvider()}>
+              <FormField label={t("conn.add.provider")}>
+                <Select
+                  id="connection-provider"
+                  name="provider"
+                  value={provider()}
+                  onChange={(e) => {
+                    setProvider(e.currentTarget.value);
+                    // Switching provider drops any half-entered secret values.
+                    setValues({});
+                    setHelperToken("");
+                    setGenericEnvProvider("");
+                    setEnvPairs([{ name: "", value: "" }]);
+                  }}
+                >
+                  <For each={PROVIDERS}>
+                    {(p) => <option value={p.provider}>{p.label}</option>}
+                  </For>
+                </Select>
+              </FormField>
+
+              <details class="connection-advanced">
+                <summary>{t("conn.genericEnv.summary")}</summary>
+                <p class="muted">{t("conn.genericEnv.body")}</p>
+                <div class="wc-form-actions">
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    type="button"
+                    onClick={() => {
+                      setProvider(GENERIC_ENV_PROVIDER_OPTION);
+                      setValues({});
+                      setHelperToken("");
+                      setGenericEnvProvider("");
+                      setEnvPairs([{ name: "", value: "" }]);
+                    }}
+                  >
+                    {t("conn.genericEnv.option")}
+                  </Button>
+                </div>
+              </details>
+            </Show>
 
             <details class="connection-advanced">
               <summary>{t("conn.add.optionalSettings")}</summary>
@@ -867,7 +887,11 @@ export default function ConnectionsTab(props: { readonly workspaceId: string }) 
                   <Button
                     variant="ghost"
                     type="button"
-                    onClick={() => setProvider(PROVIDERS[0]?.provider ?? "")}
+                    onClick={() => {
+                      setProvider(PROVIDERS[0]?.provider ?? "");
+                      setGenericEnvProvider("");
+                      setEnvPairs([{ name: "", value: "" }]);
+                    }}
                   >
                     {t("conn.custom.back")}
                   </Button>
