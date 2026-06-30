@@ -17,6 +17,7 @@ import { t } from "../../../../i18n/index.ts";
 
 interface Props {
   children: (session: SessionRecord) => JSX.Element;
+  loadingFallback?: JSX.Element;
 }
 
 type AuthState = "loading" | "authenticated" | "unauthenticated";
@@ -86,13 +87,15 @@ export default function AuthGuard(props: Props) {
   return (
     <Switch>
       <Match when={state() === "loading"}>
-        <div
-          class="auth-loading"
-          role="status"
-          aria-label={t("common.loading")}
-        >
-          <span class="tg-spinner" aria-hidden="true" />
-        </div>
+        {props.loadingFallback ?? (
+          <div
+            class="auth-loading"
+            role="status"
+            aria-label={t("common.loading")}
+          >
+            <span class="tg-spinner" aria-hidden="true" />
+          </div>
+        )}
       </Match>
       <Match when={state() === "authenticated" && session()}>
         {(s) => props.children(s())}
