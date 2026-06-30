@@ -37,92 +37,189 @@ func TestServiceShapeToResourceCarriesTargetPoolName(t *testing.T) {
 	}
 }
 
-func TestServiceShapeCreatePutsResourceOnce(t *testing.T) {
-	ctx := context.Background()
-	putCount := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPut {
-			t.Errorf("expected PUT, got %s", r.Method)
-		}
-		if r.URL.Path != "/v1/resources/ObjectBucket/assets" {
-			t.Errorf("unexpected path %q", r.URL.Path)
-		}
-		putCount++
-		var got client.Resource
-		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
-			t.Errorf("decode request: %v", err)
-		}
-		if got.Metadata.ManagedBy != client.ManagedByOpenTofu {
-			t.Errorf("expected managedBy=opentofu, got %q", got.Metadata.ManagedBy)
-		}
-		if got.Spec["name"] != "assets" {
-			t.Errorf("expected spec.name=assets, got %#v", got.Spec["name"])
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(client.Resource{
-			APIVersion: client.APIVersion,
-			Kind:       client.KindObjectBucket,
-			Metadata: client.Metadata{
-				Name:  "assets",
-				Space: "prod",
-			},
-			Spec: got.Spec,
-			Status: &client.Status{
-				Phase: "Ready",
-				Resolution: client.Resolution{
-					SelectedImplementation: "cloudflare_r2_bucket",
-					Target:                 "cloudflare-main",
-					Locked:                 true,
-					Portability:            "mostly_portable",
-				},
-				Outputs: map[string]any{"bucket_name": "assets"},
-			},
-		})
-	}))
-	defer srv.Close()
-
-	r := &serviceShapeResource{
-		data: &providerData{
-			client:       client.New(srv.URL, "", srv.Client()),
-			defaultSpace: "prod",
-			capabilities: client.ProductCapabilities{
-				Resources: map[string]bool{client.KindObjectBucket: true},
-			},
-		},
-		cfg: serviceShapeConfig{
+func TestServiceShapeCreatePutsEachResourceOnce(t *testing.T) {
+	tests := []struct {
+		name     string
+		kind     string
+		spec     serviceShapeSpecKind
+		resource any
+	}{
+		{
+			name: "object bucket",
 			kind: client.KindObjectBucket,
 			spec: specObjectBucket,
+			resource: objectBucketModel{
+				ID:                     types.StringUnknown(),
+				Name:                   types.StringValue("assets"),
+				Interfaces:             types.SetNull(types.StringType),
+				Space:                  types.StringNull(),
+				TargetPool:             types.StringNull(),
+				SelectedImplementation: types.StringUnknown(),
+				Target:                 types.StringUnknown(),
+				Locked:                 types.BoolUnknown(),
+				Portability:            types.StringUnknown(),
+				Outputs:                types.MapUnknown(types.StringType),
+			},
+		},
+		{
+			name: "kv store",
+			kind: client.KindKVStore,
+			spec: specKVStore,
+			resource: kvStoreModel{
+				ID:                     types.StringUnknown(),
+				Name:                   types.StringValue("cache"),
+				Consistency:            types.StringNull(),
+				Space:                  types.StringNull(),
+				TargetPool:             types.StringNull(),
+				SelectedImplementation: types.StringUnknown(),
+				Target:                 types.StringUnknown(),
+				Locked:                 types.BoolUnknown(),
+				Portability:            types.StringUnknown(),
+				Outputs:                types.MapUnknown(types.StringType),
+			},
+		},
+		{
+			name: "queue",
+			kind: client.KindQueue,
+			spec: specQueue,
+			resource: queueModel{
+				ID:                     types.StringUnknown(),
+				Name:                   types.StringValue("delivery"),
+				MaxRetries:             types.Int64Null(),
+				MaxBatchSize:           types.Int64Null(),
+				Space:                  types.StringNull(),
+				TargetPool:             types.StringNull(),
+				SelectedImplementation: types.StringUnknown(),
+				Target:                 types.StringUnknown(),
+				Locked:                 types.BoolUnknown(),
+				Portability:            types.StringUnknown(),
+				Outputs:                types.MapUnknown(types.StringType),
+			},
+		},
+		{
+			name: "sql database",
+			kind: client.KindSQLDatabase,
+			spec: specSQLDatabase,
+			resource: sqlDatabaseModel{
+				ID:                     types.StringUnknown(),
+				Name:                   types.StringValue("main"),
+				Engine:                 types.StringNull(),
+				MigrationsPath:         types.StringNull(),
+				Space:                  types.StringNull(),
+				TargetPool:             types.StringNull(),
+				SelectedImplementation: types.StringUnknown(),
+				Target:                 types.StringUnknown(),
+				Locked:                 types.BoolUnknown(),
+				Portability:            types.StringUnknown(),
+				Outputs:                types.MapUnknown(types.StringType),
+			},
+		},
+		{
+			name: "container service",
+			kind: client.KindContainerService,
+			spec: specContainerService,
+			resource: containerServiceModel{
+				ID:                     types.StringUnknown(),
+				Name:                   types.StringValue("agent"),
+				Image:                  types.StringValue("ghcr.io/example/agent:1.0.0"),
+				Ports:                  types.SetNull(types.Int64Type),
+				PublicHTTP:             types.BoolNull(),
+				Environment:            types.MapNull(types.StringType),
+				Space:                  types.StringNull(),
+				TargetPool:             types.StringNull(),
+				SelectedImplementation: types.StringUnknown(),
+				Target:                 types.StringUnknown(),
+				Locked:                 types.BoolUnknown(),
+				Portability:            types.StringUnknown(),
+				Outputs:                types.MapUnknown(types.StringType),
+			},
 		},
 	}
-	var schemaResp frameworkresource.SchemaResponse
-	r.Schema(ctx, frameworkresource.SchemaRequest{}, &schemaResp)
-	if schemaResp.Diagnostics.HasError() {
-		t.Fatalf("schema diagnostics: %v", schemaResp.Diagnostics)
-	}
-	plan := tfsdk.Plan{Schema: schemaResp.Schema}
-	diags := plan.Set(ctx, objectBucketModel{
-		ID:                     types.StringUnknown(),
-		Name:                   types.StringValue("assets"),
-		Interfaces:             types.SetNull(types.StringType),
-		Space:                  types.StringNull(),
-		TargetPool:             types.StringNull(),
-		SelectedImplementation: types.StringUnknown(),
-		Target:                 types.StringUnknown(),
-		Locked:                 types.BoolUnknown(),
-		Portability:            types.StringUnknown(),
-		Outputs:                types.MapUnknown(types.StringType),
-	})
-	if diags.HasError() {
-		t.Fatalf("plan diagnostics: %v", diags)
-	}
-	resp := frameworkresource.CreateResponse{
-		State: tfsdk.State{Schema: schemaResp.Schema},
-	}
-	r.Create(ctx, frameworkresource.CreateRequest{Plan: plan}, &resp)
-	if resp.Diagnostics.HasError() {
-		t.Fatalf("create diagnostics: %v", resp.Diagnostics)
-	}
-	if putCount != 1 {
-		t.Fatalf("expected exactly one PUT during create, got %d", putCount)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			putCount := 0
+			var gotName string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPut {
+					t.Errorf("expected PUT, got %s", r.Method)
+				}
+				putCount++
+				var got client.Resource
+				if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+					t.Errorf("decode request: %v", err)
+				}
+				gotName, _ = got.Spec["name"].(string)
+				wantPath := "/v1/resources/" + tt.kind + "/" + gotName
+				if r.URL.Path != wantPath {
+					t.Errorf("unexpected path %q, want %q", r.URL.Path, wantPath)
+				}
+				if got.Kind != tt.kind {
+					t.Errorf("expected kind %q, got %q", tt.kind, got.Kind)
+				}
+				if got.Metadata.ManagedBy != client.ManagedByOpenTofu {
+					t.Errorf("expected managedBy=opentofu, got %q", got.Metadata.ManagedBy)
+				}
+				if gotName == "" {
+					t.Errorf("expected spec.name to be set, got %#v", got.Spec["name"])
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(client.Resource{
+					APIVersion: client.APIVersion,
+					Kind:       tt.kind,
+					Metadata: client.Metadata{
+						Name:  gotName,
+						Space: "prod",
+					},
+					Spec: got.Spec,
+					Status: &client.Status{
+						Phase: "Ready",
+						Resolution: client.Resolution{
+							SelectedImplementation: "test_implementation",
+							Target:                 "test-target",
+							Locked:                 true,
+							Portability:            "portable",
+						},
+						Outputs: map[string]any{"name": gotName},
+					},
+				})
+			}))
+			defer srv.Close()
+
+			r := &serviceShapeResource{
+				data: &providerData{
+					client:       client.New(srv.URL, "", srv.Client()),
+					defaultSpace: "prod",
+					capabilities: client.ProductCapabilities{
+						Resources: map[string]bool{tt.kind: true},
+					},
+				},
+				cfg: serviceShapeConfig{
+					kind: tt.kind,
+					spec: tt.spec,
+				},
+			}
+			var schemaResp frameworkresource.SchemaResponse
+			r.Schema(ctx, frameworkresource.SchemaRequest{}, &schemaResp)
+			if schemaResp.Diagnostics.HasError() {
+				t.Fatalf("schema diagnostics: %v", schemaResp.Diagnostics)
+			}
+			plan := tfsdk.Plan{Schema: schemaResp.Schema}
+			diags := plan.Set(ctx, tt.resource)
+			if diags.HasError() {
+				t.Fatalf("plan diagnostics: %v", diags)
+			}
+			resp := frameworkresource.CreateResponse{
+				State: tfsdk.State{Schema: schemaResp.Schema},
+			}
+			r.Create(ctx, frameworkresource.CreateRequest{Plan: plan}, &resp)
+			if resp.Diagnostics.HasError() {
+				t.Fatalf("create diagnostics: %v", resp.Diagnostics)
+			}
+			if putCount != 1 {
+				t.Fatalf("expected exactly one PUT during create, got %d", putCount)
+			}
+		})
 	}
 }
