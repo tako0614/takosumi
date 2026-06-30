@@ -17,6 +17,7 @@ import type {
 import { RESOURCE_SHAPE_KINDS } from "takosumi-contract";
 import { apiError, readJsonObject, requestIdFromContext } from "./errors.ts";
 import type { ApiEndpoint } from "./route_families.ts";
+import { constantTimeEqualsString } from "../shared/constant_time.ts";
 import {
   type ApplyResourceRequest,
   formatResourceShapeId,
@@ -31,6 +32,20 @@ export interface RegisterResourceShapeRoutesOptions {
    * self-host owner actor; operator/Cloud composition injects real auth.
    */
   readonly resolveActor?: (c: Context) => ActorContext | Promise<ActorContext>;
+  /**
+   * Bearer used by self-host/operator deployments that expose the Resource
+   * Shape API directly. When omitted, the routes retain the single-tenant local
+   * default for tests and explicit unsafe dev setups.
+   */
+  readonly getResourceShapeBearerToken?: () => string | undefined;
+  /**
+   * Optional scoped bearer resolver supplied by an operator/account plane. It
+   * receives the raw bearer and returns the request actor when allowed.
+   */
+  readonly authorizeResourceShapeBearer?: (input: {
+    readonly token: string;
+    readonly request: Request;
+  }) => ActorContext | undefined | Promise<ActorContext | undefined>;
 }
 
 /** Route inventory for the resource-shape family (not yet OpenAPI-published). */
@@ -54,7 +69,9 @@ export function registerResourceShapeRoutes(
   const { service } = options;
 
   app.post("/v1/resources/preview", async (c) => {
-    const parsed = await parseResourceBody(c);
+    const auth = await authorizeResourceShape(c, options);
+    if (!auth.ok) return auth.response;
+    const parsed = await parseResourceBody(c, auth.actor);
     if ("response" in parsed) return parsed.response;
     const result = await service.preview(parsed.request);
     if (!result.ok) return errorResponse(c, result.error);
@@ -62,7 +79,9 @@ export function registerResourceShapeRoutes(
   });
 
   app.put("/v1/resources/:kind/:name", async (c) => {
-    const parsed = await parseResourceBody(c);
+    const auth = await authorizeResourceShape(c, options);
+    if (!auth.ok) return auth.response;
+    const parsed = await parseResourceBody(c, auth.actor);
     if ("response" in parsed) return parsed.response;
     const result = await service.apply(parsed.request);
     if (!result.ok) return errorResponse(c, result.error);
@@ -70,6 +89,8 @@ export function registerResourceShapeRoutes(
   });
 
   app.get("/v1/resources/:kind/:name", async (c) => {
+    const auth = await authorizeResourceShape(c, options);
+    if (!auth.ok) return auth.response;
     const kind = parseKind(c);
     if ("response" in kind) return kind.response;
     const space = requireQuery(c, "space");
@@ -90,6 +111,8 @@ export function registerResourceShapeRoutes(
   });
 
   app.get("/v1/resources", async (c) => {
+    const auth = await authorizeResourceShape(c, options);
+    if (!auth.ok) return auth.response;
     const space = requireQuery(c, "space");
     if ("response" in space) return space.response;
     const resources = await service.list(space.value);
@@ -97,22 +120,25 @@ export function registerResourceShapeRoutes(
   });
 
   app.delete("/v1/resources/:kind/:name", async (c) => {
+    const auth = await authorizeResourceShape(c, options);
+    if (!auth.ok) return auth.response;
     const kind = parseKind(c);
     if ("response" in kind) return kind.response;
     const space = requireQuery(c, "space");
     if ("response" in space) return space.response;
-    const actor = await resolveActor(c, options);
     const result = await service.delete(
       space.value,
       kind.value,
       c.req.param("name"),
-      actor,
+      auth.actor,
     );
     if (!result.ok) return errorResponse(c, result.error);
     return c.body(null, 204);
   });
 
   app.put("/v1/target-pools/:name", async (c) => {
+    const auth = await authorizeResourceShape(c, options);
+    if (!auth.ok) return auth.response;
     const body = await readJsonObject(c.req.raw);
     const space = stringField(body, "space");
     if (!space) return badRequest(c, "space is required");
@@ -128,6 +154,8 @@ export function registerResourceShapeRoutes(
   });
 
   app.get("/v1/target-pools", async (c) => {
+    const auth = await authorizeResourceShape(c, options);
+    if (!auth.ok) return auth.response;
     const space = requireQuery(c, "space");
     if ("response" in space) return space.response;
     const pools = await service.listTargetPools(space.value);
@@ -135,6 +163,8 @@ export function registerResourceShapeRoutes(
   });
 
   app.get("/v1/target-pools/:name", async (c) => {
+    const auth = await authorizeResourceShape(c, options);
+    if (!auth.ok) return auth.response;
     const space = requireQuery(c, "space");
     if ("response" in space) return space.response;
     const record = await service.getTargetPool(
@@ -151,6 +181,8 @@ export function registerResourceShapeRoutes(
   });
 
   app.delete("/v1/target-pools/:name", async (c) => {
+    const auth = await authorizeResourceShape(c, options);
+    if (!auth.ok) return auth.response;
     const space = requireQuery(c, "space");
     if ("response" in space) return space.response;
     await service.deleteTargetPool(space.value, c.req.param("name"));
@@ -158,6 +190,8 @@ export function registerResourceShapeRoutes(
   });
 
   app.put("/v1/space-policies/:name", async (c) => {
+    const auth = await authorizeResourceShape(c, options);
+    if (!auth.ok) return auth.response;
     const body = await readJsonObject(c.req.raw);
     const space = stringField(body, "space");
     if (!space) return badRequest(c, "space is required");
@@ -172,6 +206,7 @@ export function registerResourceShapeRoutes(
 
   async function parseResourceBody(
     c: Context,
+    actor: ActorContext,
   ): Promise<
     { readonly request: ApplyResourceRequest } | { readonly response: Response }
   > {
@@ -215,7 +250,6 @@ export function registerResourceShapeRoutes(
     const space = stringValue(metadata.space) ?? stringField(body, "space");
     if (!space)
       return { response: badRequest(c, "metadata.space is required") };
-    const actor = await resolveActor(c, options);
     return {
       request: {
         actor,
@@ -244,6 +278,59 @@ async function resolveActor(
     actorAccountId: "self-host",
     roles: ["owner"],
     requestId: requestIdFromContext(c),
+  };
+}
+
+type ResourceShapeAuthResult =
+  | { readonly ok: true; readonly actor: ActorContext }
+  | { readonly ok: false; readonly response: Response };
+
+async function authorizeResourceShape(
+  c: Context,
+  options: RegisterResourceShapeRoutesOptions,
+): Promise<ResourceShapeAuthResult> {
+  const configuredToken = options.getResourceShapeBearerToken?.();
+  if (!configuredToken && !options.authorizeResourceShapeBearer) {
+    return { ok: true, actor: await resolveActor(c, options) };
+  }
+
+  const bearer = bearerTokenFromAuthorization(c.req.header("authorization"));
+  if (!bearer) return invalidResourceShapeBearer(c);
+
+  if (options.authorizeResourceShapeBearer) {
+    const actor = await options.authorizeResourceShapeBearer({
+      token: bearer,
+      request: c.req.raw,
+    });
+    if (actor) return { ok: true, actor };
+    return invalidResourceShapeBearer(c);
+  }
+
+  if (!configuredToken || !constantTimeEqualsString(bearer, configuredToken)) {
+    return invalidResourceShapeBearer(c);
+  }
+  return { ok: true, actor: await resolveActor(c, options) };
+}
+
+function bearerTokenFromAuthorization(
+  value: string | undefined,
+): string | undefined {
+  const prefix = "Bearer ";
+  return value?.startsWith(prefix) ? value.slice(prefix.length) : undefined;
+}
+
+function invalidResourceShapeBearer(c: Context): ResourceShapeAuthResult {
+  return {
+    ok: false,
+    response: c.json(
+      apiError(
+        "unauthenticated",
+        "invalid resource shape bearer",
+        undefined,
+        requestIdFromContext(c),
+      ),
+      401,
+    ),
   };
 }
 
@@ -364,7 +451,7 @@ function endpoint(
     method,
     path,
     summary: `Resource Shape API: ${operationId}`,
-    auth: "none",
+    auth: "deploy-control-token",
     operationId,
     tag: "resource-shape",
     openapi: { okSchema: "ResourceShapeResponse" },

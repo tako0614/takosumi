@@ -276,6 +276,29 @@ function assertDurableDeployControlStoreOrWarn(input: {
   });
 }
 
+function assertResourceShapeApiAuthOrWarn(input: {
+  readonly environment?: string;
+  readonly exposed: boolean;
+  readonly bearerTokenPresent: boolean;
+}): void {
+  if (!input.exposed || input.bearerTokenPresent) return;
+  const strict =
+    input.environment === "production" || input.environment === "staging";
+  if (strict) {
+    throw new Error(
+      `${input.environment} runtime exposes the Resource Shape API but no ` +
+        `TAKOSUMI_DEPLOY_CONTROL_TOKEN is configured; /v1/resources would be ` +
+        `unauthenticated.`,
+    );
+  }
+  log.warn("service.resourceShape.unauthenticated_routes", {
+    environment: input.environment ?? "unknown",
+    hint:
+      "Resource Shape API routes are exposed without a bearer token. Set " +
+      "TAKOSUMI_DEPLOY_CONTROL_TOKEN before exposing this host.",
+  });
+}
+
 export { registerDefaultArtifactKinds };
 
 /**
@@ -608,9 +631,7 @@ export interface TakosumiOperations {
    * read-only plan that detects state drift. Never parks waiting_approval and can
    * never be applied; emits `installation.drift_detected` on a non-empty summary.
    */
-  createCapsuleDriftCheck(
-    installationId: string,
-  ): Promise<PlanRunResponse>;
+  createCapsuleDriftCheck(installationId: string): Promise<PlanRunResponse>;
   getPlanRun(id: string): Promise<PlanRunResponse>;
   createApplyRun(request: CreateApplyRunRequest): Promise<ApplyRunResponse>;
   getApplyRun(id: string): Promise<ApplyRunResponse>;
@@ -1005,7 +1026,8 @@ export async function createTakosumiService(
   });
   const resourceShapeService = resourceShapeAdapter
     ? new ResourceShapeService({
-        stores: options.resourceShapeStores ??
+        stores:
+          options.resourceShapeStores ??
           (options.sqlClient
             ? createSqlResourceShapeStores(options.sqlClient)
             : createInMemoryResourceShapeStores()),
@@ -1013,6 +1035,11 @@ export async function createTakosumiService(
         now: () => new Date().toISOString(),
       })
     : undefined;
+  assertResourceShapeApiAuthOrWarn({
+    environment: runtimeConfig.environment,
+    exposed: resourceShapeService !== undefined,
+    bearerTokenPresent: Boolean(deployControlToken),
+  });
   const connectionOAuthHelpers =
     createConnectionOAuthHelpersFromEnv(runtimeEnv);
   const app = await createApiApp({
@@ -1033,7 +1060,12 @@ export async function createTakosumiService(
     registerResourceShapeRoutes:
       role === "takosumi-api" && resourceShapeService !== undefined,
     resourceShapeRouteOptions: resourceShapeService
-      ? { service: resourceShapeService }
+      ? {
+          service: resourceShapeService,
+          ...(deployControlToken
+            ? { getResourceShapeBearerToken: () => deployControlToken }
+            : {}),
+        }
       : undefined,
     metricsRouteOptions: metricsScrapeToken
       ? {
@@ -1134,7 +1166,8 @@ export async function createTakosumiService(
     outputShares: outputSharesService,
     runGroups: runGroupsService,
     activity: activityService,
-    getWorkspaceBilling: (spaceId) => opentofuController.getSpaceBilling(spaceId),
+    getWorkspaceBilling: (spaceId) =>
+      opentofuController.getSpaceBilling(spaceId),
     listWorkspaceUsage: (spaceId, params) =>
       opentofuController.listSpaceUsage(spaceId, params),
     recordMeteredUsage: (spaceId, input) =>

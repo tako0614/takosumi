@@ -1,5 +1,8 @@
 import { test, expect } from "bun:test";
 import { createApiApp } from "../../../core/api/app.ts";
+import type { RegisterResourceShapeRoutesOptions } from "../../../core/api/resource_routes.ts";
+import { createInMemoryAppContext } from "../../../core/app_context.ts";
+import { createTakosumiService } from "../../../core/bootstrap.ts";
 import {
   createInMemoryResourceShapeStores,
   ResourceShapeService,
@@ -28,7 +31,9 @@ const POLICY: SpacePolicySpec = {
   resolution: { lockAfterCreate: true, allowAutoMigration: false },
 };
 
-async function buildApp() {
+async function buildApp(
+  routeOptions?: Partial<RegisterResourceShapeRoutesOptions>,
+) {
   const stores = createInMemoryResourceShapeStores();
   const service = new ResourceShapeService({
     stores,
@@ -41,13 +46,17 @@ async function buildApp() {
     role: "takosumi-api",
     registerOpenApiRoute: false,
     registerDeployControlInternalRoutes: false,
-    resourceShapeRouteOptions: { service },
+    resourceShapeRouteOptions: { service, ...routeOptions },
     requestCorrelation: false,
   });
   return { app, service };
 }
 
 const JSON_HEADERS = { "content-type": "application/json" };
+const AUTH_HEADERS = {
+  ...JSON_HEADERS,
+  authorization: "Bearer resource-token",
+};
 
 test("PUT /v1/resources/EdgeWorker/:name applies a first-class Worker shape", async () => {
   const { app } = await buildApp();
@@ -71,6 +80,86 @@ test("PUT /v1/resources/EdgeWorker/:name applies a first-class Worker shape", as
   );
   expect(body.status.resolution.target).toBe("cloudflare-main");
   expect(body.status.phase).toBe("Ready");
+});
+
+test("Resource Shape API requires bearer when a token is configured", async () => {
+  const { app } = await buildApp({
+    getResourceShapeBearerToken: () => "resource-token",
+  });
+
+  const unauthenticated = await app.request("/v1/resources/EdgeWorker/api", {
+    method: "PUT",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({
+      metadata: { space: "space_1" },
+      spec: {
+        name: "api",
+        source: { artifactPath: "/work/dist/worker.js" },
+      },
+    }),
+  });
+  expect(unauthenticated.status).toBe(401);
+
+  const wrong = await app.request("/v1/resources?space=space_1", {
+    headers: { authorization: "Bearer wrong-token" },
+  });
+  expect(wrong.status).toBe(401);
+
+  const authorized = await app.request("/v1/resources/EdgeWorker/api", {
+    method: "PUT",
+    headers: AUTH_HEADERS,
+    body: JSON.stringify({
+      metadata: { space: "space_1" },
+      spec: {
+        name: "api",
+        source: { artifactPath: "/work/dist/worker.js" },
+      },
+    }),
+  });
+  expect(authorized.status).toBe(200);
+
+  const listed = await app.request("/v1/resources?space=space_1", {
+    headers: { authorization: "Bearer resource-token" },
+  });
+  expect(listed.status).toBe(200);
+  expect((await listed.json()).resources).toHaveLength(1);
+});
+
+test("bootstrap fails closed when strict runtime exposes Resource Shape API without bearer", async () => {
+  const context = createInMemoryAppContext({
+    runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
+  });
+  await expect(
+    createTakosumiService({
+      role: "takosumi-api",
+      runtimeConfig: { environment: "production" },
+      context,
+      resourceShapeAdapter: new StubResourceShapeAdapter(),
+      startWorkerDaemon: false,
+    }),
+  ).rejects.toThrow(
+    "production runtime exposes the Resource Shape API but no TAKOSUMI_DEPLOY_CONTROL_TOKEN is configured",
+  );
+});
+
+test("bootstrap wires Resource Shape API bearer from deploy-control token", async () => {
+  const { app } = await createTakosumiService({
+    role: "takosumi-api",
+    runtimeEnv: {
+      TAKOSUMI_ENVIRONMENT: "test",
+      TAKOSUMI_DEV_MODE: "1",
+      TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
+    },
+    resourceShapeAdapter: new StubResourceShapeAdapter(),
+    startWorkerDaemon: false,
+  });
+
+  const rejected = await app.request("/v1/resources?space=space_1");
+  expect(rejected.status).toBe(401);
+
+  const accepted = await app.request("/v1/capabilities");
+  expect(accepted.status).toBe(200);
+  expect((await accepted.json()).resources.EdgeWorker).toBe(true);
 });
 
 test("PUT /v1/resources/ObjectBucket/:name applies a provider-neutral bucket shape", async () => {
