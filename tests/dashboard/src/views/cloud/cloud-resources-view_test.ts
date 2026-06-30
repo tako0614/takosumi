@@ -51,7 +51,9 @@ describe("Cloud resources view", () => {
     expect(ja["common.refresh"]).toBe("更新");
     expect(ja["cloudResources.inventory.title"]).toBe("クラウドリソース");
     expect(ja["cloudResources.keys.title"]).toBe("外部APIキー");
-    expect(ja["cloudResources.keys.empty"]).toBe("まだ外部APIキーはありません。");
+    expect(ja["cloudResources.keys.empty"]).toBe(
+      "まだ外部APIキーはありません。",
+    );
     expect(en["cloudResources.s3.buckets"]).toBe("Buckets");
     expect(en["cloudResources.s3.configuredBuckets"]).toBe("Ready buckets");
     expect(ja["cloudResources.s3.buckets"]).toBe("Bucket数");
@@ -62,12 +64,8 @@ describe("Cloud resources view", () => {
     expect(cloudResourcesViewSource).toContain(
       "export function CloudResourcesPanel",
     );
-    expect(cloudResourcesViewSource).toContain(
-      "getCloudResourcesSnapshot",
-    );
-    expect(cloudResourcesViewSource).toContain(
-      "getCloudflareCompatInventory",
-    );
+    expect(cloudResourcesViewSource).toContain("getCloudResourcesSnapshot");
+    expect(cloudResourcesViewSource).toContain("getCloudflareCompatInventory");
     expect(cloudResourcesViewSource).toContain("inventoryLoading");
   });
 
@@ -107,6 +105,9 @@ describe("Cloud resources view", () => {
       "const { confirm } = useConfirmDialog()",
     );
     expect(cloudResourcesViewSource).toContain(
+      "activeCloudApiTokens(props.snapshot.accountTokens.data)",
+    );
+    expect(cloudResourcesViewSource).toContain(
       'title: t("cloudResources.keys.revokeTitle")',
     );
     expect(cloudResourcesViewSource).toContain(
@@ -116,6 +117,7 @@ describe("Cloud resources view", () => {
     expect(cloudResourcesViewSource).toContain(
       't("cloudResources.keys.revoke")',
     );
+    expect(cloudResourcesViewSource).toContain("setCreatedToken(null)");
     expect(en["cloudResources.keys.revoke"]).toBe("Revoke");
     expect(ja["cloudResources.keys.revoke"]).toBe("取り消し");
   });

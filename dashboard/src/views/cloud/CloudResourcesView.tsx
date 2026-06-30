@@ -42,6 +42,7 @@ import {
   type CloudflareCompatInventory,
   type CloudResourceResult,
   type CloudResourcesSnapshot,
+  activeCloudApiTokens,
   createCloudApiKey,
   deleteCloudflareResource,
   getCloudflareCompatInventory,
@@ -79,9 +80,7 @@ export default function CloudResourcesView() {
   );
 }
 
-export function CloudResourcesPanel(props: {
-  readonly showHeader?: boolean;
-}) {
+export function CloudResourcesPanel(props: { readonly showHeader?: boolean }) {
   const [snapshot, { refetch: refetchSnapshot }] = createResource(
     () => (isTakosumiCloudRuntime() ? true : undefined),
     getCloudResourcesSnapshot,
@@ -107,20 +106,20 @@ export function CloudResourcesPanel(props: {
   return (
     <>
       <Show when={props.showHeader}>
-      <PageHeader
-        title={t("cloudResources.title")}
-        subtitle={t("cloudResources.subtitle")}
-        actions={
-          <Button
-            variant="secondary"
-            icon={<RefreshCw size={16} />}
-            onClick={refreshAll}
-            disabled={!isTakosumiCloudRuntime() || snapshot.loading}
-          >
-            {t("common.refresh")}
-          </Button>
-        }
-      />
+        <PageHeader
+          title={t("cloudResources.title")}
+          subtitle={t("cloudResources.subtitle")}
+          actions={
+            <Button
+              variant="secondary"
+              icon={<RefreshCw size={16} />}
+              onClick={refreshAll}
+              disabled={!isTakosumiCloudRuntime() || snapshot.loading}
+            >
+              {t("common.refresh")}
+            </Button>
+          }
+        />
       </Show>
 
       <Show
@@ -222,7 +221,9 @@ function CloudResourceBody(props: {
       : undefined,
   );
   const tokens = createMemo(() =>
-    props.snapshot.accountTokens.ok ? props.snapshot.accountTokens.data : [],
+    props.snapshot.accountTokens.ok
+      ? activeCloudApiTokens(props.snapshot.accountTokens.data)
+      : [],
   );
 
   return (
@@ -423,6 +424,7 @@ function ApiKeysCard(props: {
     setError(null);
     try {
       await revokeCloudApiKey(tokenId);
+      setCreatedToken(null);
       props.refetch();
     } catch (err) {
       setError(errorMessage(err));

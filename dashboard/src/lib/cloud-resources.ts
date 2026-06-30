@@ -201,20 +201,20 @@ export async function getCloudResourcesSnapshot(): Promise<CloudResourcesSnapsho
   const s3Route = s3CompatibleRoute(catalog);
   const [aiStatus, aiModels, s3Status, compatToken, accountTokens] =
     await Promise.all([
-    resultFor<AiGatewayStatus>(
-      aiRoute ? `${aiRoute.basePath}/__takosumi/status` : undefined,
-    ),
-    resultFor<OpenAiModelList>(
-      aiRoute ? `${aiRoute.basePath}/models` : undefined,
-    ),
-    resultFor<S3CompatStatus>(
-      s3Route ? `${s3Route.basePath}/__takosumi/status` : undefined,
-    ),
-    resultFor<CloudflareTokenVerify>(
-      compatRoute ? `${compatRoute.basePath}/user/tokens/verify` : undefined,
-    ),
-    getAccountTokens(),
-  ]);
+      resultFor<AiGatewayStatus>(
+        aiRoute ? `${aiRoute.basePath}/__takosumi/status` : undefined,
+      ),
+      resultFor<OpenAiModelList>(
+        aiRoute ? `${aiRoute.basePath}/models` : undefined,
+      ),
+      resultFor<S3CompatStatus>(
+        s3Route ? `${s3Route.basePath}/__takosumi/status` : undefined,
+      ),
+      resultFor<CloudflareTokenVerify>(
+        compatRoute ? `${compatRoute.basePath}/user/tokens/verify` : undefined,
+      ),
+      getAccountTokens(),
+    ]);
   return {
     catalog,
     aiRoute,
@@ -354,6 +354,18 @@ export const CLOUD_API_KEY_SCOPES = [
   "read",
   "write",
 ] as const satisfies readonly TakosumiAccountsPatScope[];
+
+export function activeCloudApiTokens(
+  tokens: readonly TakosumiAccountsPatMetadata[],
+  now = Date.now(),
+): readonly TakosumiAccountsPatMetadata[] {
+  return tokens.filter((token) => {
+    if (token.revoked_at) return false;
+    if (!token.expires_at) return true;
+    const expiresAt = Date.parse(token.expires_at);
+    return Number.isFinite(expiresAt) && expiresAt > now;
+  });
+}
 
 export async function createCloudApiKey(input: {
   readonly name: string;
