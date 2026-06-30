@@ -125,7 +125,7 @@ POST /v1/capsule-projections/:capsuleId/services/takosumi.ai.gateway/rotate-toke
 ```
 
 This is a supporting runtime-token vending route for the hosted Cloud extension,
-not a stable Takosumi OSS customer API or a restored Service Graph catalog.
+not a stable Takosumi OSS customer API or a restored service catalog.
 
 Body:
 

@@ -372,9 +372,9 @@ test("apply allowlists service_exports and service_bindings outputs that project
     planRunId: planRun.id,
     expected: applyExpectedGuardFromPlanRun(planRun),
   });
-  // Deploy decision D3: there is no persisted Service Graph ledger. The
-  // allowlisted outputs are projected to TRANSIENT services from the
-  // Deployment's public outputs.
+  // Deploy decision D3: there is no persisted service ledger. The allowlisted
+  // outputs are projected to TRANSIENT services from the Deployment's public
+  // outputs.
   const { serviceExports, serviceBindings } = projectServicesFromOutputs(
     applied.deployment!.outputsPublic as Readonly<Record<string, JsonValue>>,
     { producerCapsuleId: applied.installation!.id },

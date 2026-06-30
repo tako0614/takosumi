@@ -8,8 +8,8 @@
  * module only reads output values and shapes them so a host (e.g. the Takos
  * product) can render or wire workload services from deployment Outputs.
  *
- * This replaces the removed OSS "Service Graph" domain ledger. Output projection
- * is NOT one of the OSS nouns; it is read-only state derived from Output.
+ * Output projection is NOT one of the OSS nouns; it is read-only state derived
+ * from Output and deliberately does not recreate a service ledger.
  */
 
 import type { JsonObject, JsonValue } from "../../../contract/types.ts";
