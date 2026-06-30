@@ -101,6 +101,11 @@ interface D1DocumentRow {
   readonly document: string;
 }
 
+interface D1DocumentWithKeyRow {
+  readonly document_key: string;
+  readonly document: string;
+}
+
 const d1AccountsDocuments = sqliteTable(
   "takosumi_accounts_documents",
   {
@@ -331,6 +336,176 @@ interface RefreshChainAccessTokenDocument {
 interface PasskeyChallengeDocument {
   readonly challenge: string;
   readonly expiresAt: number;
+}
+
+interface StoredCapsuleRecordContext {
+  readonly documentKey?: string;
+  readonly workspaceId?: string;
+  readonly billingAccountId?: string;
+}
+
+function capsuleRecordFromStoredDocument(
+  value: unknown,
+  context: StoredCapsuleRecordContext = {},
+): CapsuleRecord {
+  const record = objectRecord(value);
+  if (
+    typeof record.capsuleId === "string" &&
+    typeof record.accountId === "string" &&
+    typeof record.workspaceId === "string" &&
+    typeof record.appId === "string"
+  ) {
+    return record as unknown as CapsuleRecord;
+  }
+
+  const source = objectRecord(record.source);
+  const capsuleId =
+    stringField(record.capsuleId) ??
+    context.documentKey ??
+    stringField(record.id) ??
+    stringField(record.installation_id);
+  const appId =
+    stringField(record.appId) ??
+    stringField(record.app_id) ??
+    stringField(record.capsule_id) ??
+    stringField(source.appId) ??
+    requiredStoredString(capsuleId, "capsuleId");
+
+  return {
+    capsuleId: requiredStoredString(capsuleId, "capsuleId"),
+    accountId: requiredStoredString(
+      stringField(record.accountId) ?? stringField(record.account_id),
+      "accountId",
+    ),
+    workspaceId: requiredStoredString(
+      stringField(record.workspaceId) ??
+        stringField(record.spaceId) ??
+        stringField(record.workspace_id) ??
+        stringField(record.space_id) ??
+        context.workspaceId,
+      "workspaceId",
+    ),
+    appId,
+    sourceGitUrl: requiredStoredString(
+      stringField(record.sourceGitUrl) ??
+        stringField(record.source_git_url) ??
+        stringField(source.gitUrl) ??
+        stringField(source.url),
+      "sourceGitUrl",
+    ),
+    sourceRef: requiredStoredString(
+      stringField(record.sourceRef) ??
+        stringField(record.source_ref) ??
+        stringField(source.ref),
+      "sourceRef",
+    ),
+    sourceCommit: requiredStoredString(
+      stringField(record.sourceCommit) ??
+        stringField(record.source_commit) ??
+        stringField(source.commit),
+      "sourceCommit",
+    ),
+    ...((stringField(record.sourcePath) ??
+    stringField(record.source_path) ??
+    stringField(source.path))
+      ? {
+          sourcePath: requiredStoredString(
+            stringField(record.sourcePath) ??
+              stringField(record.source_path) ??
+              stringField(source.path),
+            "sourcePath",
+          ),
+        }
+      : {}),
+    planDigest: requiredStoredString(
+      stringField(record.planDigest) ?? stringField(record.plan_digest),
+      "planDigest",
+    ),
+    ...((stringField(record.artifactDigest) ??
+    stringField(record.artifact_digest))
+      ? {
+          artifactDigest: requiredStoredString(
+            stringField(record.artifactDigest) ??
+              stringField(record.artifact_digest),
+            "artifactDigest",
+          ),
+        }
+      : {}),
+    mode: requiredStoredString(
+      stringField(record.mode),
+      "mode",
+    ) as CapsuleRecord["mode"],
+    ...((stringField(record.runtimeBindingId) ??
+    stringField(record.runtime_target_id))
+      ? {
+          runtimeBindingId: requiredStoredString(
+            stringField(record.runtimeBindingId) ??
+              stringField(record.runtime_target_id),
+            "runtimeBindingId",
+          ),
+        }
+      : {}),
+    ...((stringField(record.billingAccountId) ??
+    stringField(record.billing_account_id) ??
+    context.billingAccountId)
+      ? {
+          billingAccountId: requiredStoredString(
+            stringField(record.billingAccountId) ??
+              stringField(record.billing_account_id) ??
+              context.billingAccountId,
+            "billingAccountId",
+          ),
+        }
+      : {}),
+    status: requiredStoredString(
+      stringField(record.status),
+      "status",
+    ) as CapsuleRecord["status"],
+    createdBySubject: requiredStoredString(
+      stringField(record.createdBySubject) ??
+        stringField(record.created_by_subject),
+      "createdBySubject",
+    ) as TakosumiSubject,
+    createdAt: requiredStoredTimestamp(
+      record.createdAt ?? record.created_at,
+      "createdAt",
+    ),
+    updatedAt: requiredStoredTimestamp(
+      record.updatedAt ?? record.updated_at,
+      "updatedAt",
+    ),
+  };
+}
+
+function objectRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function stringField(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function requiredStoredString(
+  value: string | undefined,
+  fieldName: string,
+): string {
+  if (value) return value;
+  throw new Error(
+    `invalid D1 app_installations document: ${fieldName} missing`,
+  );
+}
+
+function requiredStoredTimestamp(value: unknown, fieldName: string): number {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.length > 0) {
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  throw new Error(
+    `invalid D1 app_installations document: ${fieldName} missing`,
+  );
 }
 
 export class D1AccountsStore implements AccountsStore {
@@ -1398,7 +1573,9 @@ export class D1AccountsStore implements AccountsStore {
     return this.#get("spaces", workspaceId);
   }
 
-  listWorkspacesForAccount(accountId: string): Promise<readonly WorkspaceRecord[]> {
+  listWorkspacesForAccount(
+    accountId: string,
+  ): Promise<readonly WorkspaceRecord[]> {
     return this.#listByIndex("spaces_by_account", accountId);
   }
 
@@ -1487,30 +1664,27 @@ export class D1AccountsStore implements AccountsStore {
         sortKey: record.createdAt,
       });
     }
-    return this.#put(
-      "app_installations",
-      record.capsuleId,
-      record,
-      indexes,
-    );
+    return this.#put("app_installations", record.capsuleId, record, indexes);
   }
 
-  findAppCapsule(
-    capsuleId: string,
-  ): Promise<CapsuleRecord | undefined> {
-    return this.#get("app_installations", capsuleId);
+  findAppCapsule(capsuleId: string): Promise<CapsuleRecord | undefined> {
+    return this.#get<unknown>("app_installations", capsuleId).then((record) =>
+      record === undefined
+        ? undefined
+        : capsuleRecordFromStoredDocument(record, { documentKey: capsuleId }),
+    );
   }
 
   listAppCapsulesForWorkspace(
     workspaceId: string,
   ): Promise<readonly CapsuleRecord[]> {
-    return this.#listByIndex("installations_by_space", workspaceId);
+    return this.#listAppCapsulesByIndex("installations_by_space", workspaceId);
   }
 
   listAppCapsulesForBillingAccount(
     billingAccountId: string,
   ): Promise<readonly CapsuleRecord[]> {
-    return this.#listByIndex(
+    return this.#listAppCapsulesByIndex(
       "installations_by_billing_account",
       billingAccountId,
     );
@@ -1578,9 +1752,7 @@ export class D1AccountsStore implements AccountsStore {
     return Promise.resolve([]);
   }
 
-  async appendCapsuleEvent(
-    record: CapsuleEventRecord,
-  ): Promise<void> {
+  async appendCapsuleEvent(record: CapsuleEventRecord): Promise<void> {
     // SECURITY (audit hash-chain fork): D1 has no per-installation row lock, so
     // two concurrent appends that read the same chain tail would each INSERT a
     // successor sharing previousEventHash, forking the tamper-evident ledger.
@@ -1611,13 +1783,8 @@ export class D1AccountsStore implements AccountsStore {
     }
   }
 
-  listCapsuleEvents(
-    capsuleId: string,
-  ): Promise<readonly CapsuleEventRecord[]> {
-    return this.#listByIndex(
-      "installation_events_by_installation",
-      capsuleId,
-    );
+  listCapsuleEvents(capsuleId: string): Promise<readonly CapsuleEventRecord[]> {
+    return this.#listByIndex("installation_events_by_installation", capsuleId);
   }
 
   async #put<T>(
@@ -1759,6 +1926,30 @@ export class D1AccountsStore implements AccountsStore {
   async #listByIndex<T>(indexName: string, indexKey: string): Promise<T[]> {
     await this.initialize();
     return await this.#documents.listByIndex<T>(indexName, indexKey);
+  }
+
+  async #listAppCapsulesByIndex(
+    indexName: string,
+    indexKey: string,
+  ): Promise<CapsuleRecord[]> {
+    await this.initialize();
+    const rows = await this.#db
+      .prepare(
+        "SELECT i.document_key, d.document FROM takosumi_accounts_indexes i INNER JOIN takosumi_accounts_documents d ON d.bucket = i.bucket AND d.key = i.document_key WHERE i.index_name = ? AND i.index_key = ? ORDER BY i.sort_key, i.document_key",
+      )
+      .bind(indexName, indexKey)
+      .all<D1DocumentWithKeyRow>();
+    return (rows.results ?? []).map((row) =>
+      capsuleRecordFromStoredDocument(JSON.parse(row.document) as unknown, {
+        documentKey: row.document_key,
+        ...(indexName === "installations_by_space"
+          ? { workspaceId: indexKey }
+          : {}),
+        ...(indexName === "installations_by_billing_account"
+          ? { billingAccountId: indexKey }
+          : {}),
+      }),
+    );
   }
 
   async #listBucket<T>(bucket: string): Promise<T[]> {
