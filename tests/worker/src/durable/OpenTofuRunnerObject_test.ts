@@ -194,7 +194,7 @@ test("OpenTofu runner Durable Object forwards non-secret performance env to the 
   assert.equal(runner.envVars.TAKOSUMI_SOURCE_ARCHIVE_ZSTD_LEVEL, "1");
 });
 
-test("OpenTofu runner Durable Object keeps a successful run container warm by default", async () => {
+test("OpenTofu runner Durable Object destroys a successful run container by default", async () => {
   const calls: string[] = [];
   const runner = runnerWithContainer(
     new FakeR2Bucket(),
@@ -229,8 +229,8 @@ test("OpenTofu runner Durable Object keeps a successful run container warm by de
     status: "succeeded",
     run: "plan_1",
   });
-  assert.equal(runner.sleepAfter, "120s");
-  assert.deepEqual(calls, ["fetch POST /runs/plan_1"]);
+  assert.equal(runner.sleepAfter, "1s");
+  assert.deepEqual(calls, ["fetch POST /runs/plan_1", "destroy"]);
 });
 
 test("OpenTofu runner Durable Object destroys after a successful run when keepalive is disabled", async () => {
@@ -364,7 +364,7 @@ test("OpenTofu runner Durable Object destroys the container when activity expire
 
   await runner.onActivityExpired();
 
-  assert.equal(runner.sleepAfter, "120s");
+  assert.equal(runner.sleepAfter, "1s");
   assert.deepEqual(calls, ["destroy"]);
 });
 
