@@ -18,13 +18,15 @@ import {
   createWorkspace,
   getDeployment,
   type Capsule,
+  type ActivityEvent,
   type Workspace,
+  listActivity,
   listCapsules,
   listInstallConfigs,
 } from "../../lib/control-api.ts";
 import {
   type AppSurface,
-  appSurfacesFromOutputs,
+  appSurfacesFromDeployment,
   isUrlString,
   isVisibleServiceCapsule,
   needsAttention,
@@ -78,6 +80,7 @@ function Inner() {
   const visibleCapsules = createMemo(() =>
     (capsules() ?? []).filter(isVisibleServiceCapsule),
   );
+  const [activity] = createResource(workspaceId, (id) => listActivity(id, 100));
 
   // Map each Capsule to a type-specific icon via its install config's
   // catalog kind (site / storage / worker) — the fallback when a surface
@@ -99,11 +102,20 @@ function Inner() {
   // Declared app surfaces per service, read from its current Deployment's
   // public outputs. A service with no app metadata contributes no tiles.
   const [surfacesByCapsule] = createResource(
-    visibleCapsules,
-    async (list) => {
+    () =>
+      activity.loading
+        ? undefined
+        : {
+            list: visibleCapsules(),
+            events: activity() ?? [],
+          },
+    async (input: {
+      readonly list: readonly Capsule[];
+      readonly events: readonly ActivityEvent[];
+    }) => {
       const map = new Map<string, AppSurface[]>();
       await Promise.all(
-        list
+        input.list
           .filter(
             (inst): inst is Capsule & { currentStateVersionId: string } =>
               Boolean(inst.currentStateVersionId),
@@ -111,7 +123,11 @@ function Inner() {
           .map(async (inst) => {
             try {
               const deployment = await getDeployment(inst.currentStateVersionId);
-              const surfaces = appSurfacesFromOutputs(deployment.outputsPublic);
+              const surfaces = appSurfacesFromDeployment(
+                deployment,
+                input.events,
+                inst.id,
+              );
               if (surfaces.length > 0) map.set(inst.id, surfaces);
             } catch {
               // A failed read just means this service contributes no app tiles.

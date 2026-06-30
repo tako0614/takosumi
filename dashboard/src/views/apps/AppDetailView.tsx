@@ -66,8 +66,10 @@ import {
 } from "../../lib/labels.ts";
 import {
   effectiveCapsuleStatus,
+  isDeploymentPubliclyOpenable,
   isUrlString,
-  launchUrlFromOutputs,
+  launchUrlFromDeployment,
+  releaseActivationStatusForDeployment,
   outputLabel,
 } from "../../lib/capsules-ui.ts";
 import { formatDateTime, setDocumentTitle, t } from "../../i18n/index.ts";
@@ -167,15 +169,24 @@ function Inner() {
   const otherPublicOutputs = createMemo(() =>
     publicOutputs().filter(([, value]) => !isUrlString(value)),
   );
+  const releaseActivationStatus = createMemo(() =>
+    releaseActivationStatusForDeployment(
+      currentDeployment(),
+      activity() ?? [],
+      capsuleId(),
+    ),
+  );
   const serviceOpenable = createMemo(
     () =>
       capsule()?.status !== "destroyed" &&
-      currentDeployment()?.status !== "destroyed",
+      isDeploymentPubliclyOpenable(
+        currentDeployment(),
+        activity() ?? [],
+        capsuleId(),
+      ),
   );
   const launchUrl = createMemo(() =>
-    serviceOpenable()
-      ? launchUrlFromOutputs(currentDeployment()?.outputsPublic ?? {})
-      : undefined,
+    launchUrlFromDeployment(currentDeployment(), activity() ?? [], capsuleId()),
   );
 
   /** Recent run/release events for THIS app (activity carries metadata.capsuleId). */
@@ -183,7 +194,7 @@ function Inner() {
     (activity() ?? [])
       .filter(
         (event) =>
-          event.metadata.capsuleId === capsuleId() &&
+          activityBelongsToCapsule(event, capsuleId()) &&
           (event.targetType === "run" ||
             event.action.startsWith("release_activation.")),
       )
@@ -299,6 +310,7 @@ function Inner() {
                       otherPublicOutputs={otherPublicOutputs()}
                       hasDeployment={currentDeployment() !== undefined}
                       serviceOpenable={serviceOpenable()}
+                      releaseActivationStatus={releaseActivationStatus()}
                       outputsLoading={deployments.loading}
                       producers={producers()}
                       consumers={consumers()}
@@ -421,6 +433,11 @@ function OverviewTab(props: {
   readonly otherPublicOutputs: readonly [string, unknown][];
   readonly hasDeployment: boolean;
   readonly serviceOpenable: boolean;
+  readonly releaseActivationStatus:
+    | "not_required"
+    | "pending"
+    | "succeeded"
+    | "failed";
   readonly outputsLoading: boolean;
   readonly producers: readonly DependencyRow[];
   readonly consumers: readonly DependencyRow[];
@@ -431,9 +448,13 @@ function OverviewTab(props: {
         <CardHeader
           title={t("app.outputs.title")}
           subtitle={
-            props.serviceOpenable
-              ? t("app.outputs.subtitle")
-              : t("app.outputs.deletedSubtitle")
+            props.releaseActivationStatus === "pending"
+              ? t("app.outputs.activationPending")
+              : props.releaseActivationStatus === "failed"
+                ? t("app.outputs.activationFailed")
+                : props.serviceOpenable
+                  ? t("app.outputs.subtitle")
+                  : t("app.outputs.deletedSubtitle")
           }
         />
         <Switch>
@@ -766,6 +787,17 @@ function activityEventTitle(event: ActivityEvent): string {
     typeof event.metadata.operation === "string"
       ? event.metadata.operation
       : undefined,
+  );
+}
+
+function activityBelongsToCapsule(
+  event: ActivityEvent,
+  capsuleId: string,
+): boolean {
+  return (
+    event.metadata.capsuleId === capsuleId ||
+    event.metadata.installationId === capsuleId ||
+    event.targetId === capsuleId
   );
 }
 

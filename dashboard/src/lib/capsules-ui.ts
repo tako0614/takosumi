@@ -98,6 +98,117 @@ export function launchUrlFromOutputs(
   return undefined;
 }
 
+type ReleaseActivationStatus =
+  | "not_required"
+  | "pending"
+  | "succeeded"
+  | "failed";
+
+interface LaunchableDeployment {
+  readonly id: string;
+  readonly installationId?: string;
+  readonly applyRunId: string;
+  readonly outputsPublic: Readonly<Record<string, unknown>>;
+  readonly status: string;
+}
+
+function releaseActivationActionStatus(
+  action: string,
+): Exclude<ReleaseActivationStatus, "not_required"> | undefined {
+  switch (action) {
+    case "release_activation.succeeded":
+      return "succeeded";
+    case "release_activation.failed":
+      return "failed";
+    case "release_activation.pending":
+      return "pending";
+    default:
+      return undefined;
+  }
+}
+
+function activityString(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function releaseActivationEventMatchesDeployment(
+  event: ActivityEvent,
+  deployment: LaunchableDeployment,
+  capsuleId?: string,
+): boolean {
+  if (!releaseActivationActionStatus(event.action)) return false;
+  const metadata = event.metadata;
+  const applyRunId = activityString(metadata.applyRunId);
+  const deploymentId = activityString(metadata.deploymentId);
+  const eventCapsuleId =
+    activityString(metadata.capsuleId) ?? activityString(metadata.installationId);
+  return (
+    event.runId === deployment.applyRunId ||
+    applyRunId === deployment.applyRunId ||
+    deploymentId === deployment.id ||
+    (capsuleId !== undefined && eventCapsuleId === capsuleId) ||
+    (deployment.installationId !== undefined &&
+      eventCapsuleId === deployment.installationId)
+  );
+}
+
+function latestReleaseActivationEvent(
+  deployment: LaunchableDeployment,
+  events: readonly ActivityEvent[],
+  capsuleId?: string,
+): ActivityEvent | undefined {
+  return events
+    .filter((event) =>
+      releaseActivationEventMatchesDeployment(event, deployment, capsuleId),
+    )
+    .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))[0];
+}
+
+export function releaseActivationStatusForDeployment(
+  deployment: LaunchableDeployment | undefined,
+  events: readonly ActivityEvent[] = [],
+  capsuleId?: string,
+): ReleaseActivationStatus {
+  if (!deployment) return "not_required";
+  const event = latestReleaseActivationEvent(deployment, events, capsuleId);
+  const eventStatus = event
+    ? releaseActivationActionStatus(event.action)
+    : undefined;
+  if (eventStatus) return eventStatus;
+  return Object.prototype.hasOwnProperty.call(
+    deployment.outputsPublic,
+    "takosumi_release",
+  )
+    ? "pending"
+    : "not_required";
+}
+
+export function isDeploymentPubliclyOpenable(
+  deployment: LaunchableDeployment | undefined,
+  events: readonly ActivityEvent[] = [],
+  capsuleId?: string,
+): boolean {
+  if (!deployment || deployment.status === "destroyed") return false;
+  const activation = releaseActivationStatusForDeployment(
+    deployment,
+    events,
+    capsuleId,
+  );
+  return activation === "not_required" || activation === "succeeded";
+}
+
+export function launchUrlFromDeployment(
+  deployment: LaunchableDeployment | undefined,
+  events: readonly ActivityEvent[] = [],
+  capsuleId?: string,
+): string | undefined {
+  if (!deployment) return undefined;
+  if (!isDeploymentPubliclyOpenable(deployment, events, capsuleId)) {
+    return undefined;
+  }
+  return launchUrlFromOutputs(deployment.outputsPublic);
+}
+
 /**
  * A declared app surface (a launchable screen) from a Capsule's public outputs.
  * One service may declare several — e.g. a blog's public site plus its admin
@@ -184,6 +295,18 @@ export function appSurfacesFromOutputs(
   }
 
   return surfaces;
+}
+
+export function appSurfacesFromDeployment(
+  deployment: LaunchableDeployment,
+  events: readonly ActivityEvent[] = [],
+  capsuleId?: string,
+): AppSurface[] {
+  const surfaces = appSurfacesFromOutputs(deployment.outputsPublic);
+  if (isDeploymentPubliclyOpenable(deployment, events, capsuleId)) {
+    return surfaces;
+  }
+  return surfaces.map((surface) => ({ ...surface, url: undefined }));
 }
 
 /** Friendly label for a well-known public output key; humanized key otherwise. */

@@ -224,6 +224,10 @@ export const ja = {
   "app.outputs.subtitle": "開ける画面やアドレスがある場合に表示します。",
   "app.outputs.deletedSubtitle":
     "このサービスは削除済みです。以前のアドレスは記録としてだけ表示します。",
+  "app.outputs.activationPending":
+    "公開処理が完了すると、このアドレスを開けます。",
+  "app.outputs.activationFailed":
+    "公開処理に失敗しました。最近の更新から詳細を確認できます。",
   "app.outputs.empty": "デプロイ後に表示されます。",
   "app.outputs.none": "このサービスには公開リンクがありません。",
   "app.outputs.valuesTitle": "その他の値",
