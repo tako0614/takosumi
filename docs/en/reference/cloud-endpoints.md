@@ -1,7 +1,7 @@
 # Takosumi Cloud endpoints
 
 Takosumi Cloud endpoints are Cloud-only routes/handlers plus managed-resource
-backends. They are not part of the Takosumi OSS or Takosumi for Operators
+backends. They are not part of the Takosumi OSS or Takosumi for Operator
 public contract.
 
 Use [Takosumi Cloud](../cloud/index.md) and
@@ -30,9 +30,9 @@ screen:
 - this month's usage, Cloud resource usage, and available balance
 - usage history (the usage event ledger)
 
-Deleting a resource calls the compat gateway's DELETE. It requires a
+Deleting a resource calls the compatible import endpoint's DELETE. It requires a
 `write`-scoped session and only takes effect when the Cloud backend has
-materialized it; otherwise the gateway answers 501 fail-closed. DELETE cleanup is
+materialized it; otherwise the endpoint answers 501 fail-closed. DELETE cleanup is
 not a billable fallback operation, so a Workspace that has run out of credit can
 still destroy or remove already-created managed resources. The app does not carry
 the full specification — provider compatibility scope, OpenTofu provider
@@ -46,7 +46,7 @@ Compatibility API framework, and Adapter system.
 Only the Takosumi for Operator / Cloud operation layer has:
 
 - AI Gateway
-- Takosumi Cloud managed resources
+- Takosumi Cloud resources
 - official hosted Cloudflare-compatible import endpoint backend
 - official S3-compatible Object Storage endpoint backend
 - official managed target / native resource backends

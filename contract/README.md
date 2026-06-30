@@ -24,7 +24,7 @@ The target public contract is centered on the final Takosumi model:
 - `Runner` - local/docker/remote/operator/cloud execution boundary for checkout,
   OpenTofu execution, state sync, output extraction, and cleanup.
 - `AuditEvent` - actor/action/target/result evidence.
-- `Operator` - the party operating an OSS Takosumi for Operators instance.
+- `Operator` - the party operating a Takosumi for Operator instance.
 
 The root contract facade exports canonical names only. Internal stores may still
 read old physical columns while operator data is migrated, but that storage
