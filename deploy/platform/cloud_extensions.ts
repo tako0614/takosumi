@@ -37,6 +37,13 @@ export interface PlatformCloudExtensionRoute {
   /** Public smoke-check labels the closed Cloud delta can run/report. */
   readonly smokeChecks?: readonly string[];
   /**
+   * Who authenticates the customer request. `platform` is the default for
+   * session/PAT/service-token APIs. `handler` is for standard signed protocols
+   * such as S3 where the Cloud extension must receive and verify the protocol
+   * Authorization header itself.
+   */
+  readonly authMode?: "platform" | "handler";
+  /**
    * Optional scopes the authenticated caller must hold for this descriptor.
    * When omitted, any authenticated platform session may reach the binding.
    */
@@ -146,6 +153,7 @@ function platformCloudExtensionRouteFromJson(
     label,
     "smokeChecks",
   );
+  const authMode = platformCloudExtensionAuthMode(record.authMode, label);
   const requiredScopes = platformCloudExtensionRequiredScopes(
     record.requiredScopes,
     label,
@@ -169,9 +177,19 @@ function platformCloudExtensionRouteFromJson(
     handlerKey,
     ...(capabilities ? { capabilities } : {}),
     ...(smokeChecks ? { smokeChecks } : {}),
+    ...(authMode ? { authMode } : {}),
     ...(requiredScopes ? { requiredScopes } : {}),
     ...(fallbackUsage ? { fallbackUsage } : {}),
   };
+}
+
+function platformCloudExtensionAuthMode(
+  value: unknown,
+  label: string,
+): "platform" | "handler" | undefined {
+  if (value === undefined) return undefined;
+  if (value === "platform" || value === "handler") return value;
+  throw new TypeError(`${label}.authMode must be platform or handler`);
 }
 
 function mergePlatformCloudExtensionRoutes(

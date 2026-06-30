@@ -1026,6 +1026,7 @@ test("platformCloudExtensionRoutes parses opaque descriptors", () => {
           handlerKey: "TAKOSUMI_CLOUD_AI",
           capabilities: ["openai.chat_completions", "openai.embeddings"],
           smokeChecks: ["models", "chat"],
+          authMode: "platform",
           requiredScopes: ["ai.chat"],
           fallbackUsage: [
             {
@@ -1050,6 +1051,7 @@ test("platformCloudExtensionRoutes parses opaque descriptors", () => {
       handlerKey: "TAKOSUMI_CLOUD_AI",
       capabilities: ["openai.chat_completions", "openai.embeddings"],
       smokeChecks: ["models", "chat"],
+      authMode: "platform",
       requiredScopes: ["ai.chat"],
       fallbackUsage: [
         {
@@ -1318,6 +1320,107 @@ test("a configured cloud extension 404s when its handler is absent", async () =>
   );
   expect(response.status).toBe(404);
   expect(await response.json()).toEqual({ error: "not found" });
+});
+
+test("handler-auth cloud extensions preserve signed protocol auth and strip spoofed context", async () => {
+  const forwarded: {
+    readonly authorization: string | null;
+    readonly cookie: string | null;
+    readonly rawCloudflareKey: string | null;
+    readonly spoofedSpace: string | null;
+    readonly billingSpace: string | null;
+  }[] = [];
+  const recorded: { readonly spaceId: string; readonly input: unknown }[] = [];
+  const response = await handlePlatformCloudExtensionRouteRequest(
+    new Request("https://app.takosumi.com/compat/s3/v1/assets/object.txt", {
+      method: "PUT",
+      headers: {
+        authorization:
+          "AWS4-HMAC-SHA256 Credential=AKID/20260629/auto/s3/aws4_request, SignedHeaders=host;x-amz-date, Signature=abc",
+        cookie: "takosumi_session=sess_cookie",
+        "x-auth-key": "raw-cloudflare-key",
+        "x-takosumi-cloud-space-id": "space_attacker",
+        "x-takosumi-cloud-billing-workspace-id": "space_attacker",
+      },
+      body: "hello",
+    }),
+    {
+      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
+      TAKOSUMI_CLOUD_S3: {
+        fetch: async (request: Request) => {
+          forwarded.push({
+            authorization: request.headers.get("authorization"),
+            cookie: request.headers.get("cookie"),
+            rawCloudflareKey: request.headers.get("x-auth-key"),
+            spoofedSpace: request.headers.get("x-takosumi-cloud-space-id"),
+            billingSpace: request.headers.get(
+              "x-takosumi-cloud-billing-workspace-id",
+            ),
+          });
+          return Response.json(
+            { ok: true },
+            {
+              headers: {
+                "x-takosumi-cloud-usage-space-id": "space_storage",
+                "x-takosumi-cloud-usage-period-start":
+                  "2026-06-29T00:00:00.000Z",
+                "x-takosumi-cloud-usage-period-end": "2026-06-29T00:00:01.000Z",
+                "x-takosumi-cloud-usage-meters": JSON.stringify([
+                  {
+                    meterId: "cloudflare:r2:object_write",
+                    resourceFamily: "cloudflare.r2",
+                    resourceId: "bucket:assets",
+                    operation: "object_write",
+                    kind: "gateway_compute",
+                    quantity: 1,
+                  },
+                ]),
+              },
+            },
+          );
+        },
+      },
+    } as never,
+    {
+      basePath: "/compat/s3/v1",
+      handlerKey: "TAKOSUMI_CLOUD_S3",
+      authMode: "handler",
+    },
+    async () => {
+      throw new Error("handler-auth routes must not use platform session auth");
+    },
+    async (spaceId, input) => {
+      recorded.push({ spaceId, input });
+    },
+  );
+
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual({ ok: true });
+  expect(forwarded).toEqual([
+    {
+      authorization:
+        "AWS4-HMAC-SHA256 Credential=AKID/20260629/auto/s3/aws4_request, SignedHeaders=host;x-amz-date, Signature=abc",
+      cookie: null,
+      rawCloudflareKey: null,
+      spoofedSpace: null,
+      billingSpace: null,
+    },
+  ]);
+  expect(recorded).toEqual([
+    {
+      spaceId: "space_storage",
+      input: expect.objectContaining({
+        meterId: "cloudflare:r2:object_write",
+        resourceFamily: "cloudflare.r2",
+        resourceId: "bucket:assets",
+        operation: "object_write",
+        kind: "gateway_compute",
+        quantity: 1,
+        usdMicros: 500,
+        spendRequired: true,
+      }),
+    },
+  ]);
 });
 
 test("cloud extension route injects verified session context and strips raw credentials", async () => {

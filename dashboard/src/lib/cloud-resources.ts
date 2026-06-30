@@ -21,6 +21,7 @@ export interface CloudExtensionCatalogItem {
   readonly configured: boolean;
   readonly capabilities?: readonly string[];
   readonly smokeChecks?: readonly string[];
+  readonly authMode?: "platform" | "handler";
   readonly requiredScopes?: readonly string[];
 }
 
@@ -70,6 +71,16 @@ export interface OpenAiModelList {
     readonly owned_by: string;
     readonly metadata?: Readonly<Record<string, unknown>>;
   }[];
+}
+
+export interface S3CompatStatus {
+  readonly kind: "takosumi.s3-compat-status@v1";
+  readonly configured: boolean;
+  readonly protocol?: string;
+  readonly basePath?: string;
+  readonly bucketCount: number;
+  readonly configuredBucketCount?: number;
+  readonly error?: string;
 }
 
 export interface CloudflareTokenVerify {
@@ -163,6 +174,7 @@ export interface CloudResourcesSnapshot {
   readonly s3Route?: CloudExtensionCatalogItem;
   readonly aiStatus: CloudResourceResult<AiGatewayStatus>;
   readonly aiModels: CloudResourceResult<OpenAiModelList>;
+  readonly s3Status: CloudResourceResult<S3CompatStatus>;
   readonly compatToken: CloudResourceResult<CloudflareTokenVerify>;
   readonly compatInventory: CloudflareCompatInventory;
   readonly accountTokens: CloudResourceResult<
@@ -187,20 +199,29 @@ export async function getCloudResourcesSnapshot(): Promise<CloudResourcesSnapsho
   const aiRoute = aiGatewayRoute(catalog);
   const compatRoute = cloudflareCompatRoute(catalog);
   const s3Route = s3CompatibleRoute(catalog);
-  const [aiStatus, aiModels, compatToken, compatInventory, accountTokens] =
-    await Promise.all([
-      resultFor<AiGatewayStatus>(
-        aiRoute ? `${aiRoute.basePath}/__takosumi/status` : undefined,
-      ),
-      resultFor<OpenAiModelList>(
-        aiRoute ? `${aiRoute.basePath}/models` : undefined,
-      ),
-      resultFor<CloudflareTokenVerify>(
-        compatRoute ? `${compatRoute.basePath}/user/tokens/verify` : undefined,
-      ),
-      getCloudflareCompatInventory(compatRoute),
-      getAccountTokens(),
-    ]);
+  const [
+    aiStatus,
+    aiModels,
+    s3Status,
+    compatToken,
+    compatInventory,
+    accountTokens,
+  ] = await Promise.all([
+    resultFor<AiGatewayStatus>(
+      aiRoute ? `${aiRoute.basePath}/__takosumi/status` : undefined,
+    ),
+    resultFor<OpenAiModelList>(
+      aiRoute ? `${aiRoute.basePath}/models` : undefined,
+    ),
+    resultFor<S3CompatStatus>(
+      s3Route ? `${s3Route.basePath}/__takosumi/status` : undefined,
+    ),
+    resultFor<CloudflareTokenVerify>(
+      compatRoute ? `${compatRoute.basePath}/user/tokens/verify` : undefined,
+    ),
+    getCloudflareCompatInventory(compatRoute),
+    getAccountTokens(),
+  ]);
   return {
     catalog,
     aiRoute,
@@ -208,6 +229,7 @@ export async function getCloudResourcesSnapshot(): Promise<CloudResourcesSnapsho
     s3Route,
     aiStatus,
     aiModels,
+    s3Status,
     compatToken,
     compatInventory,
     accountTokens,

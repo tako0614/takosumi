@@ -167,7 +167,12 @@ function CloudResourceBody(props: {
       props.snapshot.compatToken.ok &&
       props.snapshot.compatToken.data.success === true,
   );
-  const s3Ready = createMemo(() => props.snapshot.s3Route?.configured === true);
+  const s3Ready = createMemo(
+    () =>
+      props.snapshot.s3Route?.configured === true &&
+      props.snapshot.s3Status.ok &&
+      props.snapshot.s3Status.data.configured === true,
+  );
   const providers = createMemo(() =>
     props.snapshot.aiStatus.ok
       ? props.snapshot.aiStatus.data.summary.providers
@@ -316,8 +321,23 @@ function CloudResourceBody(props: {
                 label: t("cloudResources.s3.capability"),
                 value: props.snapshot.s3Route?.capabilities?.join(", ") || "—",
               },
+              {
+                label: t("cloudResources.s3.buckets"),
+                value: props.snapshot.s3Status.ok
+                  ? String(props.snapshot.s3Status.data.bucketCount)
+                  : "—",
+              },
+              {
+                label: t("cloudResources.s3.configuredBuckets"),
+                value: props.snapshot.s3Status.ok
+                  ? String(
+                      props.snapshot.s3Status.data.configuredBucketCount ?? 0,
+                    )
+                  : "—",
+              },
             ]}
           />
+          <ResultNotice result={props.snapshot.s3Status} />
         </Card>
       </div>
     </div>

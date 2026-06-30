@@ -949,6 +949,8 @@ export const en: Record<keyof typeof ja, string> = {
   "cloudResources.s3.subtitle": "S3-compatible API for managed storage",
   "cloudResources.s3.protocol": "Protocol",
   "cloudResources.s3.capability": "Capability",
+  "cloudResources.s3.buckets": "Buckets",
+  "cloudResources.s3.configuredBuckets": "Ready buckets",
   "cloudResources.inventory.title": "Cloud resources",
   "cloudResources.inventory.subtitle":
     "Current Workers and managed bindings in Takosumi Cloud.",
