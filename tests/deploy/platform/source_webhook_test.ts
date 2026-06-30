@@ -1307,6 +1307,7 @@ test("platform Resource Shape API discovery is gated by deploy-control token and
   const env = {
     TAKOSUMI_CONTROL_DB: new SqliteFakeD1(),
     TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
+    TAKOSUMI_DEV_MODE: "1",
     TAKOSUMI_RESOURCE_SHAPES: "EdgeWorker,ObjectBucket,KVStore,Queue,SQLDatabase",
     TAKOSUMI_RESOURCE_ADAPTERS: "cloudflare",
   } as never;
@@ -1331,6 +1332,28 @@ test("platform Resource Shape API discovery is gated by deploy-control token and
   expect(body.resources.ContainerService).toBe(false);
   expect(body.adapters.cloudflare).toBe(true);
   expect(body.adapters.takosumi_native).toBe(false);
+
+  const disabledShape = await handlePlatformResourceShapeApiRequest(
+    new Request("https://app.takosumi.com/v1/resources/ContainerService/api", {
+      method: "PUT",
+      headers: {
+        "content-type": "application/json",
+        authorization: "Bearer resource-token",
+      },
+      body: JSON.stringify({
+        metadata: { space: "space_1" },
+        spec: {
+          name: "api",
+          image: "ghcr.io/example/api:1.0.0",
+        },
+      }),
+    }),
+    env,
+  );
+  expect(disabledShape.status).toBe(400);
+  expect((await disabledShape.json()).error.message).toContain(
+    "resource kind is not enabled: ContainerService",
+  );
 
   const discovery = await worker.fetch(
     new Request(`https://app.takosumi.com${TAKOSUMI_WELL_KNOWN_PATH}`),

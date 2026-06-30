@@ -8,7 +8,7 @@ evidence. It does not call AWS, Cloudflare, Kubernetes, or VM APIs directly. The
 Takosumi endpoint owns resolver decisions, credentials, state, drift, and
 adapter execution.
 
-Current v1alpha1 resources:
+Current v1alpha1 Resource Shape resources:
 
 | Resource                     | Shape              | Purpose                                             |
 | ---------------------------- | ------------------ | --------------------------------------------------- |
@@ -18,7 +18,12 @@ Current v1alpha1 resources:
 | `takosumi_queue`             | `Queue`            | Async delivery and event fan-out                    |
 | `takosumi_sql_database`      | `SQLDatabase`      | D1-like sqlite, or operator-supported SQL targets   |
 | `takosumi_container_service` | `ContainerService` | OCI container service, separate from EdgeWorker     |
-| `takosumi_target_pool`       | `TargetPool`       | Operator/admin target capability evidence           |
+
+Current operator/admin resources:
+
+| Resource               | Object       | Purpose                                   |
+| ---------------------- | ------------ | ----------------------------------------- |
+| `takosumi_target_pool` | `TargetPool` | Operator/admin target capability evidence |
 
 AI Gateway is intentionally not a provider resource. Use ProviderConnection,
 Secret, output projection, or generic env to pass values such as
@@ -128,10 +133,8 @@ resource "takosumi_target_pool" "default" {
 
     implementation = [{
       shape                = "ContainerService"
-      implementation       = "custom_container_runtime"
-      native_resource_type = "custom.container_service"
-      plugin               = "takosumi-container-plugin"
-      options_json         = jsonencode({ runtimeClass = "edge" })
+      implementation       = "kubernetes_deployment"
+      native_resource_type = "kubernetes.deployment"
 
       interfaces = {
         oci_container = "native"
@@ -208,7 +211,19 @@ Shape-specific fields:
 | `takosumi_queue`             | `name`                       | `target_pool`, `max_retries`, `max_batch_size`                                |
 | `takosumi_sql_database`      | `name`                       | `target_pool`, `engine`, `migrations_path`                                    |
 | `takosumi_container_service` | `name`, `image`              | `target_pool`, `ports`, `public_http`, `environment`                          |
-| `takosumi_target_pool`       | `name`, one or more `target` | `credential_ref`, operator-defined `implementation`, `plugin`, `options_json` |
+
+Operator/admin fields:
+
+| Resource               | Required fields              | Optional fields                                                               |
+| ---------------------- | ---------------------------- | ----------------------------------------------------------------------------- |
+| `takosumi_target_pool` | `name`, one or more `target` | `credential_ref`, operator-defined `implementation`, `plugin`, `options_json` |
+
+`TargetPool` may declare operator-specific `implementation` capability
+evidence. The built-in OpenTofu-backed adapter can execute first-party
+implementation tokens such as `cloudflare_workers` and `kubernetes_deployment`.
+The optional `plugin` field is reserved for hosts that inject a plugin-aware
+Resource Shape adapter; the stock adapter rejects plugin-backed implementations
+instead of silently ignoring them.
 
 Secrets must not be placed in Resource Shape specs. Use ProviderConnection,
 CredentialRecipe, Secret, or generic env materialization.

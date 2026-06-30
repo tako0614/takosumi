@@ -188,7 +188,7 @@ func (r *targetPoolResource) Schema(_ context.Context, _ resource.SchemaRequest,
 									},
 									"plugin": schema.StringAttribute{
 										Optional:    true,
-										Description: "Optional adapter plugin id for this implementation. This is a Vite-style extension hook: the plugin supplies preview/apply/observe/delete behavior for the implementation token.",
+										Description: "Optional adapter plugin id for this implementation. This is a Vite-style extension hook for hosts that inject a plugin-aware Resource Shape adapter; the stock OpenTofu-backed adapter rejects plugin-backed implementations instead of silently ignoring them.",
 										Validators: []validator.String{
 											StringToken(),
 										},

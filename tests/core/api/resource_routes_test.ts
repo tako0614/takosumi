@@ -125,6 +125,52 @@ test("Resource Shape API requires bearer when a token is configured", async () =
   expect((await listed.json()).resources).toHaveLength(1);
 });
 
+test("Resource Shape routes reject shape kinds outside the host allowlist", async () => {
+  const { app } = await buildApp({
+    enabledResourceShapeKinds: ["EdgeWorker"],
+  });
+
+  const accepted = await app.request("/v1/resources/EdgeWorker/api", {
+    method: "PUT",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({
+      metadata: { space: "space_1" },
+      spec: {
+        name: "api",
+        source: { artifactPath: "/work/dist/worker.js" },
+      },
+    }),
+  });
+  expect(accepted.status).toBe(200);
+
+  const rejectedPath = await app.request("/v1/resources/ObjectBucket/assets", {
+    method: "PUT",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({
+      metadata: { space: "space_1" },
+      spec: { name: "assets", interfaces: ["s3_api"] },
+    }),
+  });
+  expect(rejectedPath.status).toBe(400);
+  expect((await rejectedPath.json()).error.message).toContain(
+    "resource kind is not enabled: ObjectBucket",
+  );
+
+  const rejectedPreview = await app.request("/v1/resources/preview", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({
+      kind: "Queue",
+      metadata: { space: "space_1" },
+      spec: { name: "jobs" },
+    }),
+  });
+  expect(rejectedPreview.status).toBe(400);
+  expect((await rejectedPreview.json()).error.message).toContain(
+    "resource kind is not enabled: Queue",
+  );
+});
+
 test("bootstrap fails closed when strict runtime exposes Resource Shape API without bearer", async () => {
   const context = createInMemoryAppContext({
     runtimeEnv: { TAKOSUMI_DEV_MODE: "1" },
@@ -517,6 +563,9 @@ test("GET /v1/capabilities advertises enabled Resource Shapes", async () => {
   expect(body.resources.Queue).toBe(true);
   expect(body.resources.SQLDatabase).toBe(true);
   expect(body.resources.ContainerService).toBe(true);
+  expect(body.adapters.opentofu).toBe(true);
+  expect(body.adapters.cloudflare).toBe(false);
+  expect(body.adapters.takosumi_native).toBe(false);
   expect(Object.keys(body.resources).sort()).toEqual([
     "ContainerService",
     "EdgeWorker",

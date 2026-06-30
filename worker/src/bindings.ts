@@ -85,6 +85,16 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
   readonly TAKOSUMI_PROVIDER_REGISTRY_EVIDENCE_DIGEST?: string;
   readonly TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_REF?: string;
   readonly TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_DIGEST?: string;
+  /**
+   * Operator allowlist for Resource Shape kinds exposed by `/v1/resources`.
+   * CSV/whitespace list or `all`; unset means no public shape kinds.
+   */
+  readonly TAKOSUMI_RESOURCE_SHAPES?: string;
+  /**
+   * Operator allowlist for Resource Shape adapter families advertised through
+   * `/v1/capabilities`. CSV/whitespace list or `all`.
+   */
+  readonly TAKOSUMI_RESOURCE_ADAPTERS?: string;
 }
 
 export type OpenTofuRunAction =

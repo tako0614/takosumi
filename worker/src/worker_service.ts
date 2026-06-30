@@ -49,6 +49,14 @@ import {
   ControllerOpentofuRunPort,
   OpentofuResourceShapeAdapter,
 } from "../../core/domains/resource-shape/opentofu_adapter.ts";
+import {
+  RESOURCE_SHAPE_KINDS,
+  type ResourceShapeKind,
+} from "takosumi-contract";
+import type {
+  TakosumiAdapterCapabilities,
+  TakosumiResourceCapabilities,
+} from "takosumi-contract/capabilities";
 
 export async function createWorkerServiceApp(
   env: CloudflareWorkerEnv,
@@ -114,6 +122,7 @@ export async function createWorkerServiceApp(
       runner: runnerReleaseActivator,
     });
   const officialCatalogSource = officialCatalogSourceFromEnv(env);
+  const resourceShapeCapabilities = resourceShapeCapabilitiesFromEnv(env);
   return await createTakosumiService({
     role,
     runtimeEnv,
@@ -132,6 +141,9 @@ export async function createWorkerServiceApp(
           }),
         }),
       ),
+    enabledResourceShapeKinds: resourceShapeCapabilities.enabledKinds,
+    resourceCapabilities: resourceShapeCapabilities.resources,
+    adapterCapabilities: resourceShapeCapabilities.adapters,
     ...(officialCatalogSource ? { officialCatalogSource } : {}),
     opentofuRunner,
     providerEnvRunner: opentofuRunner,
@@ -181,6 +193,93 @@ function officialCatalogSourceFromEnv(
       ? env.TAKOSUMI_OFFICIAL_CATALOG_REF.trim()
       : "";
   return git && ref ? { git, ref } : undefined;
+}
+
+const RESOURCE_CAPABILITY_KEYS: readonly ResourceShapeKind[] =
+  RESOURCE_SHAPE_KINDS;
+
+const ADAPTER_CAPABILITY_KEYS: readonly (keyof TakosumiAdapterCapabilities)[] = [
+  "opentofu",
+  "aws",
+  "cloudflare",
+  "kubernetes",
+  "vm",
+  "takosumi_native",
+];
+
+function resourceShapeCapabilitiesFromEnv(env: CloudflareWorkerEnv): {
+  readonly enabledKinds: readonly ResourceShapeKind[];
+  readonly resources: Partial<TakosumiResourceCapabilities>;
+  readonly adapters: Partial<TakosumiAdapterCapabilities>;
+} {
+  const enabledKinds = parseCapabilityList(
+    env.TAKOSUMI_RESOURCE_SHAPES,
+    RESOURCE_CAPABILITY_KEYS,
+  );
+  const resources: Partial<TakosumiResourceCapabilities> = {
+    EdgeWorker: false,
+    ObjectBucket: false,
+    KVStore: false,
+    Queue: false,
+    SQLDatabase: false,
+    ContainerService: false,
+  };
+  for (const kind of enabledKinds) resources[kind] = true;
+
+  const adapters: Partial<TakosumiAdapterCapabilities> = {
+    opentofu: enabledKinds.length > 0,
+    aws: false,
+    cloudflare: false,
+    kubernetes: false,
+    vm: false,
+    takosumi_native: false,
+  };
+  if (enabledKinds.length > 0) {
+    for (const key of parseCapabilityList(
+      env.TAKOSUMI_RESOURCE_ADAPTERS,
+      ADAPTER_CAPABILITY_KEYS,
+    )) {
+      adapters[key] = true;
+    }
+  }
+  return { enabledKinds, resources, adapters };
+}
+
+function parseCapabilityList<T extends string>(
+  value: unknown,
+  allowed: readonly T[],
+): readonly T[] {
+  if (typeof value !== "string" || value.trim().length === 0) return [];
+  const raw = value.trim();
+  const allowedSet = new Set<T>(allowed);
+  const tokens = raw === "all" ? [...allowed] : parseCapabilityTokens(raw);
+  const out: T[] = [];
+  const seen = new Set<T>();
+  for (const token of tokens) {
+    if (!allowedSet.has(token as T)) continue;
+    const key = token as T;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(key);
+  }
+  return out;
+}
+
+function parseCapabilityTokens(raw: string): readonly string[] {
+  if (raw.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed.filter((item): item is string => typeof item === "string");
+      }
+    } catch {
+      return [];
+    }
+  }
+  return raw
+    .split(/[,\s]+/u)
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 /**
