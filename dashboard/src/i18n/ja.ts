@@ -909,9 +909,9 @@ export const ja = {
   "account.preferences.body": "言語と見た目を変更できます。",
 
   // --- cloud resources -------------------------------------------------------------
-  "cloudResources.title": "Takosumi Cloud Workers",
+  "cloudResources.title": "Takosumi Cloud",
   "cloudResources.subtitle":
-    "APIキー、Worker-compatible resource、managed binding を管理します。",
+    "APIキー、エンドポイント、クラウドリソースを管理します。",
   "cloudResources.unavailable.title": "Takosumi Cloud 専用です",
   "cloudResources.unavailable.body":
     "この実行環境では Cloud 専用エンドポイントは提供されていません。",
@@ -965,7 +965,7 @@ export const ja = {
   "cloudResources.s3.configuredBuckets": "利用可能Bucket",
   "cloudResources.inventory.title": "クラウドリソース",
   "cloudResources.inventory.subtitle":
-    "Takosumi Cloud 側の Workers と managed binding です。",
+    "Takosumi Cloud 側で使えるリソースです。",
   "cloudResources.inventory.kv": "KV",
   "cloudResources.inventory.r2": "オブジェクトストレージ",
   "cloudResources.inventory.d1": "データベース",

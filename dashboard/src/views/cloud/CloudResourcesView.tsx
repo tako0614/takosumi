@@ -1,9 +1,9 @@
 /**
  * Cloud screen (`/cloud`) — Takosumi Cloud only. Two management surfaces:
  *   - Cloud API keys (create / list / revoke)
- *   - Takosumi Cloud Workers and managed bindings (KV / Object Storage /
- *     Database / Queue / Workflow / Worker): list, copy identifiers, and
- *     DELETE through the Cloud import endpoint.
+ *   - managed cloud resources (KV / Object Storage / Database / Queue /
+ *     Workflow / Worker): list, copy identifiers, and DELETE through the Cloud
+ *     import endpoint.
  * Plus compact endpoint reference cards (AI gateway, OpenTofu import path).
  *
  * Usage / billing intentionally lives on the Billing (支払い) tab, not here, so
@@ -39,10 +39,12 @@ import { isTakosumiCloudRuntime } from "../../lib/deployment-brand.ts";
 import { useConfirmDialog } from "../../lib/confirm-dialog.ts";
 import {
   type CloudflareResourceKind,
+  type CloudflareCompatInventory,
   type CloudResourceResult,
   type CloudResourcesSnapshot,
   createCloudApiKey,
   deleteCloudflareResource,
+  getCloudflareCompatInventory,
   getCloudResourcesSnapshot,
   revokeCloudApiKey,
 } from "../../lib/cloud-resources.ts";
@@ -70,11 +72,19 @@ export default function CloudResourcesView() {
 }
 
 function Inner() {
-  const [snapshot, { refetch }] = createResource(
+  const [snapshot, { refetch: refetchSnapshot }] = createResource(
     () => (isTakosumiCloudRuntime() ? true : undefined),
     getCloudResourcesSnapshot,
   );
+  const [inventory, { refetch: refetchInventory }] = createResource(
+    () => snapshot()?.compatRoute,
+    getCloudflareCompatInventory,
+  );
   const [copied, setCopied] = createSignal<string | null>(null);
+  const refreshAll = () => {
+    void refetchSnapshot();
+    void refetchInventory();
+  };
 
   const copyText = async (key: string, value: string) => {
     await navigator.clipboard.writeText(value);
@@ -93,7 +103,7 @@ function Inner() {
           <Button
             variant="secondary"
             icon={<RefreshCw size={16} />}
-            onClick={() => void refetch()}
+            onClick={refreshAll}
             disabled={!isTakosumiCloudRuntime() || snapshot.loading}
           >
             {t("common.refresh")}
@@ -128,9 +138,13 @@ function Inner() {
             {(loaded) => (
               <CloudResourceBody
                 snapshot={loaded()}
+                inventory={inventory()}
+                inventoryLoading={inventory.loading}
+                inventoryError={inventory.error}
                 copied={copied()}
                 copyText={copyText}
-                refetch={() => void refetch()}
+                refetchSnapshot={() => void refetchSnapshot()}
+                refetchInventory={() => void refetchInventory()}
               />
             )}
           </Match>
@@ -142,9 +156,13 @@ function Inner() {
 
 function CloudResourceBody(props: {
   readonly snapshot: CloudResourcesSnapshot;
+  readonly inventory: CloudflareCompatInventory | undefined;
+  readonly inventoryLoading: boolean;
+  readonly inventoryError: unknown;
   readonly copied: string | null;
   readonly copyText: (key: string, value: string) => Promise<void>;
-  readonly refetch: () => void;
+  readonly refetchSnapshot: () => void;
+  readonly refetchInventory: () => void;
 }) {
   const aiBaseUrl = createMemo(() =>
     endpointUrl(props.snapshot.catalog.serviceUrl, props.snapshot.aiRoute),
@@ -205,15 +223,18 @@ function CloudResourceBody(props: {
         tokens={tokens()}
         copied={props.copied}
         copyText={props.copyText}
-        refetch={props.refetch}
+        refetch={props.refetchSnapshot}
         result={props.snapshot.accountTokens}
       />
 
       <ResourcesCard
         snapshot={props.snapshot}
+        inventory={props.inventory}
+        inventoryLoading={props.inventoryLoading}
+        inventoryError={props.inventoryError}
         copied={props.copied}
         copyText={props.copyText}
-        refetch={props.refetch}
+        refetch={props.refetchInventory}
       />
 
       <div class="av-cloud-grid">
@@ -286,7 +307,7 @@ function CloudResourceBody(props: {
               },
               {
                 label: t("cloudResources.compat.account"),
-                value: props.snapshot.compatInventory.selectedAccountId ?? "—",
+                value: props.inventory?.selectedAccountId ?? "—",
               },
             ]}
           />
@@ -500,6 +521,9 @@ interface ResourceGroup {
 
 function ResourcesCard(props: {
   readonly snapshot: CloudResourcesSnapshot;
+  readonly inventory: CloudflareCompatInventory | undefined;
+  readonly inventoryLoading: boolean;
+  readonly inventoryError: unknown;
   readonly copied: string | null;
   readonly copyText: (key: string, value: string) => Promise<void>;
   readonly refetch: () => void;
@@ -515,7 +539,13 @@ function ResourcesCard(props: {
     workflow: false,
     worker: false,
   });
-  const inventory = () => props.snapshot.compatInventory;
+  const inventory = () =>
+    props.inventory ??
+    emptyCloudflareCompatInventory(
+      props.inventoryError
+        ? errorMessage(props.inventoryError)
+        : t("common.loading"),
+    );
   const accountId = () => inventory().selectedAccountId;
   const compatBasePath = () => props.snapshot.compatRoute?.basePath;
   const canManage = () => Boolean(accountId() && compatBasePath());
@@ -627,6 +657,11 @@ function ResourcesCard(props: {
           />
         }
         subtitle={t("cloudResources.inventory.subtitle")}
+        actions={
+          props.inventoryLoading ? (
+            <Badge tone="neutral">{t("common.loading")}</Badge>
+          ) : undefined
+        }
       />
       <Show when={!canManage()}>
         <CardSection>
@@ -791,6 +826,20 @@ function mapResult<T, U>(
   fn: (item: T) => U,
 ): CloudResourceResult<readonly U[]> {
   return result.ok ? { ok: true, data: result.data.map(fn) } : result;
+}
+
+function emptyCloudflareCompatInventory(
+  error: string,
+): CloudflareCompatInventory {
+  return {
+    accounts: { ok: false, error },
+    kvNamespaces: { ok: false, error },
+    d1Databases: { ok: false, error },
+    r2Buckets: { ok: false, error },
+    queues: { ok: false, error },
+    workflows: { ok: false, error },
+    workerScripts: { ok: false, error },
+  };
 }
 
 function IconTitle(props: {

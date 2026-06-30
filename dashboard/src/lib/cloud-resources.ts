@@ -162,10 +162,11 @@ export interface CloudflareCompatInventory {
 }
 
 /**
- * Material for the Cloud screen (`/cloud`): Cloud API keys, the AI gateway,
- * the OpenTofu import endpoint, and Takosumi Cloud Workers / managed binding
- * inventory. Usage/billing is intentionally NOT part of this snapshot — it
- * lives on the Billing (支払い) tab via `getWorkspaceBilling` / `listWorkspaceUsage`.
+ * Fast material for the Cloud screen (`/cloud`): Cloud API keys, endpoint
+ * status, and route metadata. The heavier Cloudflare-compatible inventory is
+ * loaded separately so the page can become useful before every resource list
+ * returns. Usage/billing intentionally lives on the Billing (支払い) tab via
+ * `getWorkspaceBilling` / `listWorkspaceUsage`.
  */
 export interface CloudResourcesSnapshot {
   readonly catalog: CloudExtensionCatalog;
@@ -176,7 +177,6 @@ export interface CloudResourcesSnapshot {
   readonly aiModels: CloudResourceResult<OpenAiModelList>;
   readonly s3Status: CloudResourceResult<S3CompatStatus>;
   readonly compatToken: CloudResourceResult<CloudflareTokenVerify>;
-  readonly compatInventory: CloudflareCompatInventory;
   readonly accountTokens: CloudResourceResult<
     readonly TakosumiAccountsPatMetadata[]
   >;
@@ -199,14 +199,8 @@ export async function getCloudResourcesSnapshot(): Promise<CloudResourcesSnapsho
   const aiRoute = aiGatewayRoute(catalog);
   const compatRoute = cloudflareCompatRoute(catalog);
   const s3Route = s3CompatibleRoute(catalog);
-  const [
-    aiStatus,
-    aiModels,
-    s3Status,
-    compatToken,
-    compatInventory,
-    accountTokens,
-  ] = await Promise.all([
+  const [aiStatus, aiModels, s3Status, compatToken, accountTokens] =
+    await Promise.all([
     resultFor<AiGatewayStatus>(
       aiRoute ? `${aiRoute.basePath}/__takosumi/status` : undefined,
     ),
@@ -219,7 +213,6 @@ export async function getCloudResourcesSnapshot(): Promise<CloudResourcesSnapsho
     resultFor<CloudflareTokenVerify>(
       compatRoute ? `${compatRoute.basePath}/user/tokens/verify` : undefined,
     ),
-    getCloudflareCompatInventory(compatRoute),
     getAccountTokens(),
   ]);
   return {
@@ -231,7 +224,6 @@ export async function getCloudResourcesSnapshot(): Promise<CloudResourcesSnapsho
     aiModels,
     s3Status,
     compatToken,
-    compatInventory,
     accountTokens,
   };
 }
@@ -273,7 +265,7 @@ export function s3CompatibleRoute(
   });
 }
 
-async function getCloudflareCompatInventory(
+export async function getCloudflareCompatInventory(
   route: CloudExtensionCatalogItem | undefined,
 ): Promise<CloudflareCompatInventory> {
   if (!route) {
