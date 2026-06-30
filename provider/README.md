@@ -139,13 +139,15 @@ resource "takosumi_target_pool" "default" {
 resource "takosumi_edge_worker" "api" {
   name               = "api"
   artifact_path      = "/work/dist/worker.js"
+  target_pool        = "default"
   compatibility_date = "2026-06-29"
   profiles           = ["workers_bindings"]
 }
 
 resource "takosumi_object_bucket" "assets" {
-  name       = "assets"
-  interfaces = ["s3_api", "signed_url"]
+  name        = "assets"
+  target_pool = "default"
+  interfaces  = ["s3_api", "signed_url"]
 }
 
 resource "takosumi_kv_store" "cache" {
@@ -194,12 +196,12 @@ Shape-specific fields:
 
 | Resource                     | Required fields              | Optional fields                                             |
 | ---------------------------- | ---------------------------- | ----------------------------------------------------------- |
-| `takosumi_edge_worker`       | `name`, `artifact_path`      | `compatibility_date`, `compatibility_flags`, `profiles`     |
-| `takosumi_object_bucket`     | `name`                       | `interfaces`                                                |
-| `takosumi_kv_store`          | `name`                       | `consistency`                                               |
-| `takosumi_queue`             | `name`                       | `max_retries`, `max_batch_size`                             |
-| `takosumi_sql_database`      | `name`                       | `engine`, `migrations_path`                                 |
-| `takosumi_container_service` | `name`, `image`              | `ports`, `public_http`, `environment`                       |
+| `takosumi_edge_worker`       | `name`, `artifact_path`      | `target_pool`, `compatibility_date`, `compatibility_flags`, `profiles` |
+| `takosumi_object_bucket`     | `name`                       | `target_pool`, `interfaces`                                 |
+| `takosumi_kv_store`          | `name`                       | `target_pool`, `consistency`                                |
+| `takosumi_queue`             | `name`                       | `target_pool`, `max_retries`, `max_batch_size`              |
+| `takosumi_sql_database`      | `name`                       | `target_pool`, `engine`, `migrations_path`                  |
+| `takosumi_container_service` | `name`, `image`              | `target_pool`, `ports`, `public_http`, `environment`        |
 | `takosumi_target_pool`       | `name`, one or more `target` | operator-defined `implementation`, `plugin`, `options_json` |
 
 Secrets must not be placed in Resource Shape specs. Use ProviderConnection,

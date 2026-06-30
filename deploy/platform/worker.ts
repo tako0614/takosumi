@@ -233,22 +233,29 @@ function platformDiscoveryOptions(
   env: CloudflareWorkerEnv,
 ): CreateTakosumiDiscoveryOptions {
   const extensionCapabilities = platformCloudExtensionCapabilities(env);
+  // The platform worker currently exposes Cloud endpoints (AI Gateway,
+  // Cloudflare-compatible import, S3-compatible object storage) through the
+  // Cloud extension seam, but it does not mount the Resource Shape API nor wire
+  // the production ResourceShape adapter/backing-Capsule seam. Do not advertise
+  // `takosumi_*` provider resources until `/v1/resources/*` is actually routed
+  // and authenticated in this worker.
+  const resourceShapes = false;
   return {
     origin,
     operatorTenants: true,
     commercialBilling: true,
     paymentEnforcement: true,
     resources: {
-      EdgeWorker: extensionCapabilities.cloudflareCompat,
-      ObjectBucket: extensionCapabilities.cloudManagedResources,
-      KVStore: extensionCapabilities.cloudManagedResources,
-      Queue: extensionCapabilities.cloudManagedResources,
-      SQLDatabase: extensionCapabilities.cloudManagedResources,
-      ContainerService: extensionCapabilities.cloudManagedResources,
+      EdgeWorker: resourceShapes,
+      ObjectBucket: resourceShapes,
+      KVStore: resourceShapes,
+      Queue: resourceShapes,
+      SQLDatabase: resourceShapes,
+      ContainerService: resourceShapes,
     },
     adapters: {
-      cloudflare: extensionCapabilities.cloudflareCompat,
-      takosumi_native: extensionCapabilities.cloudManagedResources,
+      cloudflare: resourceShapes,
+      takosumi_native: resourceShapes,
     },
     compat: {
       s3: extensionCapabilities.s3Compat,
@@ -259,6 +266,7 @@ function platformDiscoveryOptions(
         ? { s3: new URL(extensionCapabilities.s3Endpoint, origin).toString() }
         : {}),
     },
+    resourceShapesEnabled: resourceShapes,
   };
 }
 

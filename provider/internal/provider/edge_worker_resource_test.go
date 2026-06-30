@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"context"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
@@ -43,5 +44,24 @@ func TestRefreshEdgeWorkerSpecClearsAbsentOptionalFields(t *testing.T) {
 	}
 	if !m.Profiles.IsNull() {
 		t.Fatalf("expected profiles to be cleared")
+	}
+}
+
+func TestEdgeWorkerToResourceCarriesTargetPoolName(t *testing.T) {
+	model := edgeWorkerModel{
+		Name:         types.StringValue("api"),
+		ArtifactPath: types.StringValue("/work/dist/worker.js"),
+		TargetPool:   types.StringValue("containers"),
+	}
+
+	resource, space, diags := model.toResource(context.Background(), "prod")
+	if diags.HasError() {
+		t.Fatalf("toResource diagnostics: %v", diags)
+	}
+	if space != "prod" {
+		t.Fatalf("expected prod space, got %q", space)
+	}
+	if resource.TargetPoolName != "containers" {
+		t.Fatalf("expected targetPoolName to be carried, got %#v", resource)
 	}
 }

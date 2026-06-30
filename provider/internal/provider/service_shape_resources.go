@@ -61,6 +61,7 @@ type serviceShapeModel struct {
 	PublicHTTP             types.Bool   `tfsdk:"public_http"`
 	Environment            types.Map    `tfsdk:"environment"`
 	Space                  types.String `tfsdk:"space"`
+	TargetPool             types.String `tfsdk:"target_pool"`
 	SelectedImplementation types.String `tfsdk:"selected_implementation"`
 	Target                 types.String `tfsdk:"target"`
 	Locked                 types.Bool   `tfsdk:"locked"`
@@ -195,6 +196,11 @@ func commonServiceShapeAttributes() map[string]schema.Attribute {
 				stringplanmodifier.RequiresReplace(),
 				stringplanmodifier.UseStateForUnknown(),
 			},
+		},
+		"target_pool": schema.StringAttribute{
+			Optional:    true,
+			Description: "Optional TargetPool name. Defaults to the server-side default TargetPool for the Space.",
+			Validators:  []validator.String{StringToken()},
 		},
 		"id": schema.StringAttribute{
 			Computed:    true,
@@ -455,6 +461,10 @@ func (m serviceShapeModel) toResource(ctx context.Context, defaultSpace, kind st
 			}
 		}
 	}
+	targetPool := ""
+	if !m.TargetPool.IsNull() && !m.TargetPool.IsUnknown() {
+		targetPool = m.TargetPool.ValueString()
+	}
 	return &client.Resource{
 		APIVersion: client.APIVersion,
 		Kind:       kind,
@@ -463,7 +473,8 @@ func (m serviceShapeModel) toResource(ctx context.Context, defaultSpace, kind st
 			Space:     space,
 			ManagedBy: client.ManagedByOpenTofu,
 		},
-		Spec: spec,
+		Spec:           spec,
+		TargetPoolName: targetPool,
 	}, space, diags
 }
 

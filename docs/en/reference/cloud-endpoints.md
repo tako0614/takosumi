@@ -597,7 +597,11 @@ Compatibility API. It should show at least:
 - Workers
 
 Inventory is for operational inspection. The authoritative lifecycle contract
-is the Compatibility API plus the OpenTofu provider plan/apply result.
+is the Compatibility API plus the Cloudflare-compatible OpenTofu provider
+plan/apply result. The `takosumi/takosumi` provider Resource Shape API
+(`/v1/resources/*`) is a separate surface and is advertised through the
+`resource_shapes` capability only when the production host mounts a real
+ResourceShape adapter and routes it.
 
 ## Security contract
 
