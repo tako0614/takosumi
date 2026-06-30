@@ -337,9 +337,9 @@ bun run cli -- internal installations import-plan \
   --bundle-file takos-export/bundle.json \
   --target-issuer https://selfhost.example.com \
   --target-account acct_target \
-  --target-space space_target \
+  --target-workspace workspace_target \
   --created-by-subject tsub_target \
-  --target-installation-id inst_target \
+  --target-capsule-id cap_target \
   --out-file import-plan.json
 ```
 
@@ -347,7 +347,7 @@ The generated plan is review input. It is not a network import and does not by
 itself satisfy clean-import or post-import-login readiness evidence.
 
 To execute the clean import path on a target that has an Accounts bearer with
-write access to the target Space, run:
+write access to the target Workspace, run:
 
 ```bash
 bun run cli -- internal installations import-apply \
