@@ -63,7 +63,7 @@
   display: grid;
   gap: var(--tg-s-4);
 }
-/* Manageable resource lists on the Cloud screen (KV / R2 / D1 / Workers). */
+/* Manageable resource lists on the Cloud screen (KV / R2 / D1 / edge apps). */
 .av-cloud-res-groups {
   display: grid;
   gap: var(--tg-s-4);

@@ -960,7 +960,7 @@ export const en: Record<keyof typeof ja, string> = {
   "cloudResources.inventory.d1": "Database",
   "cloudResources.inventory.queues": "Queues",
   "cloudResources.inventory.workflows": "Workflows",
-  "cloudResources.inventory.workers": "Workers",
+  "cloudResources.inventory.workers": "Edge apps",
   "cloudResources.inventory.names": "Names",
   "cloudResources.inventory.showAll": "Show all {count}",
   "cloudResources.inventory.showLess": "Collapse",

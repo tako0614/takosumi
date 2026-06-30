@@ -972,7 +972,7 @@ export const ja = {
   "cloudResources.inventory.d1": "データベース",
   "cloudResources.inventory.queues": "キュー",
   "cloudResources.inventory.workflows": "ワークフロー",
-  "cloudResources.inventory.workers": "Workers",
+  "cloudResources.inventory.workers": "Edgeアプリ",
   "cloudResources.inventory.names": "名前",
   "cloudResources.inventory.showAll": "{count} 件すべて表示",
   "cloudResources.inventory.showLess": "折りたたむ",
