@@ -39,6 +39,10 @@ describe("Cloud resources view", () => {
   });
 
   test("has compact inventory copy in both locales", () => {
+    expect(en["cloudResources.title"]).toBe("Takosumi Cloud");
+    expect(ja["cloudResources.title"]).toBe("Takosumi Cloud");
+    expect(en["cloudResources.subtitle"]).not.toContain("Worker-compatible");
+    expect(ja["cloudResources.subtitle"]).not.toContain("Worker-compatible");
     expect(en["cloudResources.inventory.showAll"]).toContain("{count}");
     expect(en["cloudResources.inventory.remaining"]).toContain("{count}");
     expect(ja["cloudResources.inventory.showAll"]).toContain("{count}");
@@ -52,6 +56,16 @@ describe("Cloud resources view", () => {
     expect(en["cloudResources.s3.configuredBuckets"]).toBe("Ready buckets");
     expect(ja["cloudResources.s3.buckets"]).toBe("Bucket数");
     expect(ja["cloudResources.s3.configuredBuckets"]).toBe("利用可能Bucket");
+  });
+
+  test("loads resource inventory separately from the endpoint overview", () => {
+    expect(cloudResourcesViewSource).toContain(
+      "getCloudResourcesSnapshot",
+    );
+    expect(cloudResourcesViewSource).toContain(
+      "getCloudflareCompatInventory",
+    );
+    expect(cloudResourcesViewSource).toContain("inventoryLoading");
   });
 
   test("keeps raw resource identifiers behind an explicit copy action", () => {

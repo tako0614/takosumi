@@ -898,9 +898,9 @@ export const en: Record<keyof typeof ja, string> = {
   "account.preferences.body": "Change language and appearance.",
 
   // --- cloud resources -------------------------------------------------------------
-  "cloudResources.title": "Takosumi Cloud Workers",
+  "cloudResources.title": "Takosumi Cloud",
   "cloudResources.subtitle":
-    "Manage API keys, Worker-compatible resources, and managed bindings.",
+    "Manage API keys, endpoints, and cloud resources.",
   "cloudResources.unavailable.title": "Takosumi Cloud only",
   "cloudResources.unavailable.body":
     "Cloud-only endpoints are not provided in this runtime.",
@@ -953,7 +953,7 @@ export const en: Record<keyof typeof ja, string> = {
   "cloudResources.s3.configuredBuckets": "Ready buckets",
   "cloudResources.inventory.title": "Cloud resources",
   "cloudResources.inventory.subtitle":
-    "Current Workers and managed bindings in Takosumi Cloud.",
+    "Resources available through Takosumi Cloud.",
   "cloudResources.inventory.kv": "KV",
   "cloudResources.inventory.r2": "Object Storage",
   "cloudResources.inventory.d1": "Database",
