@@ -155,6 +155,10 @@ const RESOURCE_DELETE_POLICIES: readonly ResourceDeletePolicy[] = [
   "snapshot_then_delete",
   "block",
 ];
+const SECRET_KEY_PATTERN =
+  /(^|[_-])(secret|token|password|passwd|api[_-]?key|private[_-]?key|credential|client[_-]?secret)([_-]|$)/i;
+const SECRET_VALUE_PATTERN =
+  /(-----BEGIN [A-Z ]*PRIVATE KEY-----|github_pat_[A-Za-z0-9_]{12,}|gh[pousr]_[A-Za-z0-9_]{12,}|xox[baprs]-[A-Za-z0-9-]{12,}|AKIA[0-9A-Z]{12,}|ASIA[0-9A-Z]{12,}|sk-[A-Za-z0-9_-]{12,})/;
 
 /** Map EdgeWorker implementation -> first-party Capsule module template id. */
 export const EDGE_WORKER_IMPLEMENTATION_TEMPLATE: Readonly<
@@ -1078,6 +1082,17 @@ function parseStringMap(
         error: {
           code: `invalid_${field}`,
           message: `spec.${field} must map non-empty string keys to string values`,
+        },
+      };
+    }
+    if (SECRET_KEY_PATTERN.test(key) || SECRET_VALUE_PATTERN.test(item)) {
+      return {
+        ok: false,
+        error: {
+          code: `invalid_${field}`,
+          message:
+            `spec.${field} must not contain secret-looking keys or values; ` +
+            "use Credential or ProviderConnection materialization instead",
         },
       };
     }

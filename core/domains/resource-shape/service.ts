@@ -22,7 +22,7 @@ import type {
   TargetPoolEntry,
   TargetPoolSpec,
 } from "takosumi-contract";
-import { TAKOSUMI_API_VERSION } from "takosumi-contract";
+import { RESOURCE_SHAPE_KINDS, TAKOSUMI_API_VERSION } from "takosumi-contract";
 import type { IsoTimestamp } from "../../shared/time.ts";
 import type { SpaceId } from "../../shared/ids.ts";
 import {
@@ -46,6 +46,17 @@ export type ResourceServiceErrorCode =
   | "invalid_name"
   | "invalid_interfaces"
   | "invalid_interface"
+  | "invalid_protocols"
+  | "invalid_protocol"
+  | "invalid_consistency"
+  | "invalid_delivery"
+  | "invalid_engine"
+  | "invalid_migrations_path"
+  | "invalid_image"
+  | "invalid_ports"
+  | "invalid_public_http"
+  | "invalid_environment"
+  | "invalid_compatibility_date"
   | "invalid_runtime"
   | "invalid_profile"
   | "invalid_source"
@@ -53,6 +64,7 @@ export type ResourceServiceErrorCode =
   | "invalid_model_policy"
   | "invalid_lifecycle_policy"
   | "invalid_delete_policy"
+  | "invalid_target_pool"
   | "target_pool_not_found"
   | "no_eligible_target"
   | "unsupported_shape"
@@ -119,7 +131,9 @@ export class ResourceShapeService {
     space: SpaceId,
     name: string,
     spec: TargetPoolSpec,
-  ): Promise<TargetPoolRecord> {
+  ): Promise<ServiceResult<TargetPoolRecord>> {
+    const validation = validateTargetPoolSpec(name, spec);
+    if (validation) return { ok: false, error: validation };
     const now = this.#now();
     const existing = await this.#stores.targetPools.getByName(space, name);
     const record: TargetPoolRecord = {
@@ -130,7 +144,7 @@ export class ResourceShapeService {
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     };
-    return this.#stores.targetPools.upsert(record);
+    return { ok: true, value: await this.#stores.targetPools.upsert(record) };
   }
 
   async putSpacePolicy(
@@ -345,14 +359,9 @@ export class ResourceShapeService {
       };
     }
     const lock = await this.#stores.locks.get(id);
-    const pool = await this.#stores.targetPools.getByName(
-      space,
-      DEFAULT_POOL_NAME,
-    );
-    const entry =
-      lock && pool
-        ? targetPoolSpecOf(pool).targets.find((t) => t.name === lock.target)
-        : undefined;
+    const entry = lock
+      ? await this.#findTargetPoolEntryForDelete(space, lock.target)
+      : undefined;
     if (lock && entry) {
       const specResult = parseResourceSpec(record.kind, record.spec);
       const deletePolicy = specResult.ok
@@ -536,6 +545,30 @@ export class ResourceShapeService {
       status,
     };
   }
+
+  async #findTargetPoolEntryForDelete(
+    space: SpaceId,
+    targetName: string,
+  ): Promise<TargetPoolEntry | undefined> {
+    const defaultPool = await this.#stores.targetPools.getByName(
+      space,
+      DEFAULT_POOL_NAME,
+    );
+    const defaultEntry = defaultPool
+      ? targetPoolSpecOf(defaultPool).targets.find((t) => t.name === targetName)
+      : undefined;
+    if (defaultEntry) return defaultEntry;
+
+    const pools = await this.#stores.targetPools.listBySpace(space);
+    for (const pool of pools) {
+      if (pool.name === DEFAULT_POOL_NAME) continue;
+      const entry = targetPoolSpecOf(pool).targets.find(
+        (t) => t.name === targetName,
+      );
+      if (entry) return entry;
+    }
+    return undefined;
+  }
 }
 
 // --- helpers (module-level, pure) ---------------------------------------------
@@ -551,6 +584,225 @@ function toTargetPool(record: TargetPoolRecord): TargetPool {
 
 function targetPoolSpecOf(record: TargetPoolRecord): TargetPoolSpec {
   return record.spec as unknown as TargetPoolSpec;
+}
+
+const CAPABILITY_LEVELS = new Set([
+  "native",
+  "shim",
+  "emulated",
+  "unsupported",
+]);
+const RESOURCE_SHAPE_KIND_SET = new Set(RESOURCE_SHAPE_KINDS);
+const SECRET_KEY_PATTERN =
+  /(^|[_-])(secret|token|password|passwd|api[_-]?key|private[_-]?key|credential|client[_-]?secret)([_-]|$)/i;
+const SECRET_VALUE_PATTERN =
+  /(-----BEGIN [A-Z ]*PRIVATE KEY-----|github_pat_[A-Za-z0-9_]{12,}|gh[pousr]_[A-Za-z0-9_]{12,}|xox[baprs]-[A-Za-z0-9-]{12,}|AKIA[0-9A-Z]{12,}|ASIA[0-9A-Z]{12,}|sk-[A-Za-z0-9_-]{12,})/;
+
+function validateTargetPoolSpec(
+  name: string,
+  spec: unknown,
+): ResourceServiceError | undefined {
+  const nameError = tokenError(name, "TargetPool name");
+  if (nameError) return nameError;
+  if (!isObject(spec)) {
+    return invalidTargetPool("TargetPool spec must be an object");
+  }
+  const targets = spec.targets;
+  if (!Array.isArray(targets) || targets.length === 0) {
+    return invalidTargetPool(
+      "TargetPool spec.targets must contain at least one target",
+    );
+  }
+  const seenTargets = new Set<string>();
+  for (const [index, raw] of targets.entries()) {
+    if (!isObject(raw)) {
+      return invalidTargetPool(`TargetPool target[${index}] must be an object`);
+    }
+    const targetName = raw.name;
+    if (typeof targetName !== "string") {
+      return invalidTargetPool(`TargetPool target[${index}].name is required`);
+    }
+    const targetNameError = tokenError(
+      targetName,
+      `TargetPool target[${index}].name`,
+    );
+    if (targetNameError) return targetNameError;
+    if (seenTargets.has(targetName)) {
+      return invalidTargetPool(
+        `TargetPool target name ${targetName} is duplicated`,
+      );
+    }
+    seenTargets.add(targetName);
+
+    const type = raw.type;
+    if (typeof type !== "string") {
+      return invalidTargetPool(`TargetPool target[${index}].type is required`);
+    }
+    const typeError = tokenError(type, `TargetPool target[${index}].type`);
+    if (typeError) return typeError;
+
+    if (typeof raw.priority !== "number" || !Number.isInteger(raw.priority)) {
+      return invalidTargetPool(
+        `TargetPool target[${index}].priority must be an integer`,
+      );
+    }
+
+    if (raw.ref !== undefined && typeof raw.ref !== "string") {
+      return invalidTargetPool(
+        `TargetPool target[${index}].ref must be a string`,
+      );
+    }
+    if (
+      raw.credentialRef !== undefined &&
+      typeof raw.credentialRef !== "string"
+    ) {
+      return invalidTargetPool(
+        `TargetPool target[${index}].credentialRef must be a string`,
+      );
+    }
+    if (raw.region !== undefined && typeof raw.region !== "string") {
+      return invalidTargetPool(
+        `TargetPool target[${index}].region must be a string`,
+      );
+    }
+
+    if (raw.implementations === undefined) continue;
+    if (!Array.isArray(raw.implementations)) {
+      return invalidTargetPool(
+        `TargetPool target[${index}].implementations must be an array`,
+      );
+    }
+    for (const [implIndex, impl] of raw.implementations.entries()) {
+      if (!isObject(impl)) {
+        return invalidTargetPool(
+          `TargetPool target[${index}].implementations[${implIndex}] must be an object`,
+        );
+      }
+      const shape = impl.shape;
+      if (
+        typeof shape !== "string" ||
+        !RESOURCE_SHAPE_KIND_SET.has(shape as ResourceShapeKind)
+      ) {
+        return invalidTargetPool(
+          `TargetPool target[${index}].implementations[${implIndex}].shape must be a supported Resource Shape kind`,
+        );
+      }
+      const implementation = impl.implementation;
+      if (typeof implementation !== "string") {
+        return invalidTargetPool(
+          `TargetPool target[${index}].implementations[${implIndex}].implementation is required`,
+        );
+      }
+      const implError = tokenError(
+        implementation,
+        `TargetPool target[${index}].implementations[${implIndex}].implementation`,
+      );
+      if (implError) return implError;
+
+      if (impl.nativeResourceType !== undefined) {
+        if (typeof impl.nativeResourceType !== "string") {
+          return invalidTargetPool(
+            `TargetPool target[${index}].implementations[${implIndex}].nativeResourceType must be a string`,
+          );
+        }
+        const nativeTypeError = tokenError(
+          impl.nativeResourceType,
+          `TargetPool target[${index}].implementations[${implIndex}].nativeResourceType`,
+        );
+        if (nativeTypeError) return nativeTypeError;
+      }
+
+      if (impl.plugin !== undefined) {
+        if (typeof impl.plugin !== "string") {
+          return invalidTargetPool(
+            `TargetPool target[${index}].implementations[${implIndex}].plugin must be a string`,
+          );
+        }
+        const pluginError = tokenError(
+          impl.plugin,
+          `TargetPool target[${index}].implementations[${implIndex}].plugin`,
+        );
+        if (pluginError) return pluginError;
+      }
+
+      const interfaces = impl.interfaces;
+      if (!isObject(interfaces) || Object.keys(interfaces).length === 0) {
+        return invalidTargetPool(
+          `TargetPool target[${index}].implementations[${implIndex}].interfaces must be a non-empty object`,
+        );
+      }
+      for (const [iface, level] of Object.entries(interfaces)) {
+        const ifaceError = tokenError(
+          iface,
+          `TargetPool target[${index}].implementations[${implIndex}].interfaces key`,
+        );
+        if (ifaceError) return ifaceError;
+        if (typeof level !== "string" || !CAPABILITY_LEVELS.has(level)) {
+          return invalidTargetPool(
+            `TargetPool target[${index}].implementations[${implIndex}].interfaces.${iface} must be native, shim, emulated, or unsupported`,
+          );
+        }
+      }
+
+      if (impl.options !== undefined) {
+        if (!isObject(impl.options)) {
+          return invalidTargetPool(
+            `TargetPool target[${index}].implementations[${implIndex}].options must be an object`,
+          );
+        }
+        const secret = findSecretLikeJson(
+          impl.options,
+          `TargetPool target[${index}].implementations[${implIndex}].options`,
+        );
+        if (secret) return invalidTargetPool(secret);
+      }
+    }
+  }
+  return undefined;
+}
+
+function invalidTargetPool(message: string): ResourceServiceError {
+  return { code: "invalid_target_pool", message };
+}
+
+function tokenError(
+  value: string,
+  field: string,
+): ResourceServiceError | undefined {
+  if (value.trim() === "")
+    return invalidTargetPool(`${field} must not be blank`);
+  if (/\s/.test(value)) {
+    return invalidTargetPool(`${field} must not contain whitespace`);
+  }
+  return undefined;
+}
+
+function findSecretLikeJson(value: unknown, path: string): string | undefined {
+  if (typeof value === "string") {
+    return SECRET_VALUE_PATTERN.test(value)
+      ? `${path} contains a secret-looking value; use Credential or ProviderConnection materialization instead`
+      : undefined;
+  }
+  if (Array.isArray(value)) {
+    for (const [index, item] of value.entries()) {
+      const found = findSecretLikeJson(item, `${path}[${index}]`);
+      if (found) return found;
+    }
+    return undefined;
+  }
+  if (!isObject(value)) return undefined;
+  for (const [key, item] of Object.entries(value)) {
+    if (SECRET_KEY_PATTERN.test(key)) {
+      return `${path}.${key} is secret-looking; use Credential or ProviderConnection materialization instead`;
+    }
+    const found = findSecretLikeJson(item, `${path}.${key}`);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function toSpacePolicy(record: SpacePolicyRecord): SpacePolicy {

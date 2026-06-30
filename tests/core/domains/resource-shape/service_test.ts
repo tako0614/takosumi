@@ -2,6 +2,7 @@ import { test, expect } from "bun:test";
 import type { ActorContext } from "takosumi-contract";
 import {
   type AdapterApplyInput,
+  type AdapterDeleteInput,
   createInMemoryResourceShapeStores,
   type AdapterApplyResult,
   ResourceShapeService,
@@ -29,10 +30,16 @@ function makeService() {
 
 class PluginSpyAdapter extends StubResourceShapeAdapter {
   applyInputs: AdapterApplyInput[] = [];
+  deleteInputs: AdapterDeleteInput[] = [];
 
   override async apply(input: AdapterApplyInput): Promise<AdapterApplyResult> {
     this.applyInputs.push(input);
     return super.apply(input);
+  }
+
+  override async delete(input: AdapterDeleteInput): Promise<void> {
+    this.deleteInputs.push(input);
+    return super.delete(input);
   }
 }
 
@@ -316,6 +323,105 @@ test("apply passes TargetPool credentialRef separately from target ref", async (
   expect(adapter.applyInputs).toHaveLength(1);
   expect(adapter.applyInputs[0]?.target.ref).toBe("cf-account-id");
   expect(adapter.applyInputs[0]?.credentialRef).toBe("conn_cf_main");
+});
+
+test("putTargetPool rejects malformed capability evidence and secret-like options", async () => {
+  const { service } = makeService();
+
+  const empty = await service.putTargetPool("space_1", "empty", {
+    targets: [],
+  });
+  expect(empty.ok).toBe(false);
+  if (!empty.ok) expect(empty.error.code).toBe("invalid_target_pool");
+
+  const badShape = await service.putTargetPool("space_1", "bad-shape", {
+    targets: [
+      {
+        name: "plugin-main",
+        type: "kubernetes",
+        priority: 90,
+        implementations: [
+          {
+            shape: "AIGateway",
+            implementation: "custom_ai_gateway",
+            interfaces: { api: "native" },
+          },
+        ],
+      },
+    ],
+  } as TargetPoolSpec);
+  expect(badShape.ok).toBe(false);
+  if (!badShape.ok) expect(badShape.error.code).toBe("invalid_target_pool");
+
+  const secretOptions = await service.putTargetPool("space_1", "secret", {
+    targets: [
+      {
+        name: "plugin-main",
+        type: "kubernetes",
+        priority: 90,
+        implementations: [
+          {
+            shape: "ContainerService",
+            implementation: "custom_container_runtime",
+            interfaces: { oci_container: "native" },
+            options: { apiToken: "sk-secret-should-not-live-here" },
+          },
+        ],
+      },
+    ],
+  });
+  expect(secretOptions.ok).toBe(false);
+  if (!secretOptions.ok)
+    expect(secretOptions.error.message).toContain("secret-looking");
+});
+
+test("delete resolves native target from the non-default TargetPool that created the lock", async () => {
+  const stores = createInMemoryResourceShapeStores();
+  const adapter = new PluginSpyAdapter();
+  const service = new ResourceShapeService({
+    stores,
+    adapter,
+    now: () => NOW,
+  });
+  await service.putTargetPool("space_1", "notifications", {
+    targets: [
+      {
+        name: "native-main",
+        type: "takosumi_native",
+        ref: "native-prod",
+        credentialRef: "conn_native",
+        priority: 90,
+      },
+    ],
+  });
+  await service.putSpacePolicy("space_1", "default", POLICY);
+
+  const created = await service.apply({
+    actor: ACTOR,
+    space: "space_1",
+    kind: "PushNotification",
+    name: "push",
+    targetPoolName: "notifications",
+    spec: {
+      name: "push",
+      protocols: ["web_push"],
+    },
+  });
+  expect(created.ok).toBe(true);
+
+  const deleted = await service.delete(
+    "space_1",
+    "PushNotification",
+    "push",
+    ACTOR,
+  );
+  expect(deleted.ok).toBe(true);
+  expect(adapter.deleteInputs).toHaveLength(1);
+  expect(adapter.deleteInputs[0]?.target.name).toBe("native-main");
+  expect(adapter.deleteInputs[0]?.credentialRef).toBe("conn_native");
+  expect(adapter.deleteInputs[0]?.nativeResources).toEqual([
+    { type: "takosumi.push_notification", id: "push" },
+  ]);
 });
 
 test("get returns the applied resource with resolution status", async () => {

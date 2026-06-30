@@ -202,6 +202,24 @@ test("parseContainerServiceSpec accepts an OCI image with ports and env", () => 
   expect(r.spec.ports).toEqual([8080]);
 });
 
+test("parseContainerServiceSpec rejects secret-looking environment entries", () => {
+  const byKey = parseContainerServiceSpec({
+    name: "agent",
+    image: "ghcr.io/example/agent:1.0.0",
+    environment: { API_TOKEN: "plain-value" },
+  });
+  expect(byKey.ok).toBe(false);
+  if (!byKey.ok) expect(byKey.error.code).toBe("invalid_environment");
+
+  const byValue = parseContainerServiceSpec({
+    name: "agent",
+    image: "ghcr.io/example/agent:1.0.0",
+    environment: { UPSTREAM_KEY: "sk-secret-should-not-live-here" },
+  });
+  expect(byValue.ok).toBe(false);
+  if (!byValue.ok) expect(byValue.error.code).toBe("invalid_environment");
+});
+
 test("service-shape planners map Cloudflare resources to focused modules", () => {
   const target: TargetPoolEntry = {
     name: "cf-main",
