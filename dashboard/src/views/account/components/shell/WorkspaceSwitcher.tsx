@@ -17,9 +17,12 @@ import {
 } from "solid-js";
 import {
   type ControlApiError,
-  listWorkspaces,
   type Workspace,
 } from "../../../../lib/control-api.ts";
+import {
+  clearWorkspaceListCache,
+  listWorkspacesCached,
+} from "../../../../lib/workspace-list.ts";
 import {
   currentWorkspaceId,
   selectAvailableWorkspaceId,
@@ -33,7 +36,9 @@ interface Props {
 }
 
 export default function WorkspaceSwitcher(props: Props = {}) {
-  const [workspaces, { refetch }] = createResource(listWorkspaces);
+  const [workspaces, { refetch }] = createResource(() =>
+    listWorkspacesCached(),
+  );
   const loadedWorkspaces = createMemo(() => workspaces() ?? []);
   const selectedWorkspaceId = createMemo(() =>
     selectAvailableWorkspaceId(currentWorkspaceId(), loadedWorkspaces()),
@@ -56,7 +61,10 @@ export default function WorkspaceSwitcher(props: Props = {}) {
   });
 
   if (typeof window !== "undefined") {
-    const refreshWorkspaces = () => void refetch();
+    const refreshWorkspaces = () => {
+      clearWorkspaceListCache();
+      void refetch();
+    };
     window.addEventListener("takosumi:workspaces-changed", refreshWorkspaces);
     onCleanup(() =>
       window.removeEventListener(
