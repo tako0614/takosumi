@@ -80,6 +80,12 @@ export interface TargetPoolEntry {
   readonly name: string;
   readonly type: TargetType;
   readonly ref?: string;
+  /**
+   * ProviderConnection / Credential id used by the opentofu-adapter. Kept
+   * separate from `ref`: `ref` is the target-native reference such as a
+   * Cloudflare account id or Kubernetes cluster ref.
+   */
+  readonly credentialRef?: string;
   readonly region?: string;
   readonly priority: number;
   /**

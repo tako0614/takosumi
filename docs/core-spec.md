@@ -278,6 +278,7 @@ targets:
   - name: containers-main
     type: kubernetes
     ref: cluster-prod
+    credentialRef: conn_k8s_prod
     priority: 80
     implementations:
       - shape: ContainerService
@@ -290,6 +291,11 @@ targets:
           public_http: shim
           custom.mesh: native
 ```
+
+`ref` is the target-native reference such as an account id, cluster id, or
+fleet id. `credentialRef` is the ProviderConnection / Credential id used by the
+opentofu-adapter. They are deliberately separate so account ids, cluster refs,
+and credentials cannot be confused.
 
 The Resource Shape parser validates shape-specific structure and rejects empty
 or whitespace-bearing AI tokens, but it does not reject unknown AI

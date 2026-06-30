@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { SqliteFakeD1 } from "../../helpers/deploy-control/sqlite_fake_d1.ts";
 
 import { TAKOSUMI_API_VERSION } from "../../../contract/capabilities.ts";
 import {
@@ -17,15 +18,18 @@ import {
   handlePlatformCloudUsageRecordRequest,
   handlePlatformMetricsDashboardRequest,
   handlePlatformMetricsRequest,
+  handlePlatformResourceShapeApiRequest,
   handlePlatformRuntimeCellDrillRequest,
   handleSourceWebhookRequest,
   isOperatorBillingPath,
   isOidcMetricPath,
   isPlatformCloudUsageRecordPath,
   isPlatformCloudExtensionCatalogPath,
+  isPlatformResourceShapeApiPath,
   matchPlatformCloudExtensionRoute,
   platformCloudExtensionCatalog,
   platformCloudExtensionRoutes,
+  platformResourceShapeApiEnabled,
   isPlatformMetricsDashboardPath,
   isPlatformMetricsPath,
   oidcMetricRoute,
@@ -1299,6 +1303,87 @@ test("platform worker product discovery exposes Cloud endpoint capabilities with
   expect(discoveryBody.endpoints.s3).toBe(
     "https://app.takosumi.com/compat/s3/v1",
   );
+});
+
+test("platform Resource Shape API discovery is gated by deploy-control token and D1", async () => {
+  const worker = (await import("../../../deploy/platform/worker.ts")).default;
+  const env = {
+    TAKOSUMI_CONTROL_DB: new SqliteFakeD1(),
+    TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
+  } as never;
+
+  expect(platformResourceShapeApiEnabled({} as never)).toBe(false);
+  expect(platformResourceShapeApiEnabled(env)).toBe(true);
+
+  const capabilities = await worker.fetch(
+    new Request(
+      `https://app.takosumi.com${TAKOSUMI_PRODUCT_CAPABILITIES_PATH}`,
+    ),
+    env,
+  );
+
+  expect(capabilities.status).toBe(200);
+  const body = await capabilities.json();
+  expect(body.resources.EdgeWorker).toBe(true);
+  expect(body.resources.ObjectBucket).toBe(true);
+  expect(body.resources.KVStore).toBe(true);
+  expect(body.resources.Queue).toBe(true);
+  expect(body.resources.PushNotification).toBe(true);
+  expect(body.resources.SQLDatabase).toBe(true);
+  expect(body.resources.ContainerService).toBe(true);
+  expect(body.adapters.cloudflare).toBe(true);
+  expect(body.adapters.takosumi_native).toBe(true);
+
+  const discovery = await worker.fetch(
+    new Request(`https://app.takosumi.com${TAKOSUMI_WELL_KNOWN_PATH}`),
+    env,
+  );
+  expect(discovery.status).toBe(200);
+  expect((await discovery.json()).features.resource_shapes).toBe(true);
+});
+
+test("platform Resource Shape API routes are routed before accounts and bearer-gated", async () => {
+  expect(isPlatformResourceShapeApiPath("/v1/resources")).toBe(true);
+  expect(isPlatformResourceShapeApiPath("/v1/target-pools/default")).toBe(true);
+  expect(isPlatformResourceShapeApiPath("/v1/space-policies/default")).toBe(
+    true,
+  );
+  expect(isPlatformResourceShapeApiPath("/api/v1/workspaces")).toBe(false);
+
+  const disabled = await handlePlatformResourceShapeApiRequest(
+    new Request("https://app.takosumi.com/v1/target-pools/default"),
+    {} as never,
+  );
+  expect(disabled.status).toBe(404);
+
+  const env = {
+    TAKOSUMI_CONTROL_DB: new SqliteFakeD1(),
+    TAKOSUMI_ENVIRONMENT: "test",
+    TAKOSUMI_DEV_MODE: "1",
+    TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
+  } as never;
+  const unauthenticated = await handlePlatformResourceShapeApiRequest(
+    new Request("https://app.takosumi.com/v1/target-pools/default", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ space: "space_1", spec: { targets: [] } }),
+    }),
+    env,
+  );
+  expect(unauthenticated.status).toBe(401);
+
+  const authorized = await handlePlatformResourceShapeApiRequest(
+    new Request("https://app.takosumi.com/v1/target-pools/default", {
+      method: "PUT",
+      headers: {
+        "content-type": "application/json",
+        authorization: "Bearer resource-token",
+      },
+      body: JSON.stringify({ space: "space_1", spec: { targets: [] } }),
+    }),
+    env,
+  );
+  expect(authorized.status).toBe(200);
 });
 
 test("a configured cloud extension dispatches to the named handler through worker.fetch", async () => {

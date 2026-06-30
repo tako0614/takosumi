@@ -179,7 +179,7 @@ export class ResourceShapeService {
       resourceId: output.resolutionLock.resourceId,
       plan,
       target: entry,
-      credentialRef: entry.ref,
+      credentialRef: entry.credentialRef,
       nativeResources: output.nativeResourcePlan,
       ...(output.selectedImplementationPlugin
         ? { implementationPlugin: output.selectedImplementationPlugin }
@@ -257,7 +257,7 @@ export class ResourceShapeService {
         resourceId: id,
         plan,
         target: entry,
-        credentialRef: entry.ref,
+        credentialRef: entry.credentialRef,
         nativeResources: output.nativeResourcePlan,
         ...(output.selectedImplementationPlugin
           ? { implementationPlugin: output.selectedImplementationPlugin }
@@ -371,7 +371,7 @@ export class ResourceShapeService {
         resourceId: id,
         nativeResources: lock.nativeResources ?? [],
         target: entry,
-        credentialRef: entry.ref,
+        credentialRef: entry.credentialRef,
         deletePolicy,
         actor,
       });

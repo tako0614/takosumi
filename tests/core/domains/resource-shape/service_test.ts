@@ -280,6 +280,44 @@ test("apply passes selected implementation plugin metadata to the adapter", asyn
   });
 });
 
+test("apply passes TargetPool credentialRef separately from target ref", async () => {
+  const stores = createInMemoryResourceShapeStores();
+  const adapter = new PluginSpyAdapter();
+  const service = new ResourceShapeService({
+    stores,
+    adapter,
+    now: () => NOW,
+  });
+  await service.putTargetPool("space_1", "default", {
+    targets: [
+      {
+        name: "cloudflare-main",
+        type: "cloudflare",
+        ref: "cf-account-id",
+        credentialRef: "conn_cf_main",
+        priority: 90,
+      },
+    ],
+  });
+  await service.putSpacePolicy("space_1", "default", POLICY);
+
+  const result = await service.apply({
+    actor: ACTOR,
+    space: "space_1",
+    kind: "EdgeWorker",
+    name: "api",
+    spec: {
+      name: "api",
+      source: { artifactPath: "/work/dist/worker.js" },
+    },
+  });
+
+  expect(result.ok).toBe(true);
+  expect(adapter.applyInputs).toHaveLength(1);
+  expect(adapter.applyInputs[0]?.target.ref).toBe("cf-account-id");
+  expect(adapter.applyInputs[0]?.credentialRef).toBe("conn_cf_main");
+});
+
 test("get returns the applied resource with resolution status", async () => {
   const { service } = makeService();
   await seed(service);

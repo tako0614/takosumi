@@ -111,15 +111,17 @@ resource "takosumi_target_pool" "default" {
   name = "default"
 
   target = [{
-    name     = "cloudflare-main"
-    type     = "cloudflare"
-    ref      = "cf-account-id"
-    priority = 80
+    name           = "cloudflare-main"
+    type           = "cloudflare"
+    ref            = "cf-account-id"
+    credential_ref = "conn_cloudflare_main"
+    priority       = 80
   }, {
-    name     = "containers-main"
-    type     = "kubernetes"
-    ref      = "cluster-prod"
-    priority = 70
+    name           = "containers-main"
+    type           = "kubernetes"
+    ref            = "cluster-prod"
+    credential_ref = "conn_k8s_prod"
+    priority       = 70
 
     implementation = [{
       shape                = "ContainerService"
@@ -201,16 +203,16 @@ Common computed fields:
 
 Shape-specific fields:
 
-| Resource                     | Required fields              | Optional fields                                                        |
-| ---------------------------- | ---------------------------- | ---------------------------------------------------------------------- |
-| `takosumi_edge_worker`       | `name`, `artifact_path`      | `target_pool`, `compatibility_date`, `compatibility_flags`, `profiles` |
-| `takosumi_object_bucket`     | `name`                       | `target_pool`, `interfaces`                                            |
-| `takosumi_kv_store`          | `name`                       | `target_pool`, `consistency`                                           |
-| `takosumi_queue`             | `name`                       | `target_pool`, `max_retries`, `max_batch_size`                         |
-| `takosumi_push_notification` | `name`                       | `target_pool`, `protocols`, `ttl_seconds`                              |
-| `takosumi_sql_database`      | `name`                       | `target_pool`, `engine`, `migrations_path`                             |
-| `takosumi_container_service` | `name`, `image`              | `target_pool`, `ports`, `public_http`, `environment`                   |
-| `takosumi_target_pool`       | `name`, one or more `target` | operator-defined `implementation`, `plugin`, `options_json`            |
+| Resource                     | Required fields              | Optional fields                                                               |
+| ---------------------------- | ---------------------------- | ----------------------------------------------------------------------------- |
+| `takosumi_edge_worker`       | `name`, `artifact_path`      | `target_pool`, `compatibility_date`, `compatibility_flags`, `profiles`        |
+| `takosumi_object_bucket`     | `name`                       | `target_pool`, `interfaces`                                                   |
+| `takosumi_kv_store`          | `name`                       | `target_pool`, `consistency`                                                  |
+| `takosumi_queue`             | `name`                       | `target_pool`, `max_retries`, `max_batch_size`                                |
+| `takosumi_push_notification` | `name`                       | `target_pool`, `protocols`, `ttl_seconds`                                     |
+| `takosumi_sql_database`      | `name`                       | `target_pool`, `engine`, `migrations_path`                                    |
+| `takosumi_container_service` | `name`, `image`              | `target_pool`, `ports`, `public_http`, `environment`                          |
+| `takosumi_target_pool`       | `name`, one or more `target` | `credential_ref`, operator-defined `implementation`, `plugin`, `options_json` |
 
 Secrets must not be placed in Resource Shape specs. Use ProviderConnection,
 CredentialRecipe, Secret, or generic env materialization.
