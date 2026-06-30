@@ -22,7 +22,7 @@ process.env.TAKOSUMI_DEV_MODE = "1";
 
 /**
  * Regression coverage for composed-app routing. The account-plane owns
- * `/v1/installation-projections/*` for identity/billing/export projections,
+ * `/v1/capsule-projections/*` for identity/billing/export projections,
  * while the embedded service owns the primary `/api/v1/*` deploy-control
  * surface. `buildComposedApp` mounts the projection route on the outer app so it
  * reaches the accounts handler while service routes stay reachable.
@@ -98,10 +98,10 @@ async function buildTestApp() {
   return { app: created.app, spy };
 }
 
-test("composed app routes POST /v1/installation-projections to the account plane, not the service", async () => {
+test("composed app routes POST /v1/capsule-projections to the account plane, not the service", async () => {
   const { app, spy } = await buildTestApp();
   const res = await app.fetch(
-    new Request("http://localhost/v1/installation-projections", {
+    new Request("http://localhost/v1/capsule-projections", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ spaceId: "space_1" }),
@@ -113,7 +113,7 @@ test("composed app routes POST /v1/installation-projections to the account plane
   assert.deepEqual(spy.calls, [
     {
       method: "POST",
-      pathname: "/v1/installation-projections",
+      pathname: "/v1/capsule-projections",
     },
   ]);
 });
@@ -159,7 +159,7 @@ test("composed app routes per-installation deployment mutation to the account pl
   // `inst_<uuid>` is the account-plane id shape; the service id guard rejects it.
   const res = await app.fetch(
     new Request(
-      "http://localhost/v1/installation-projections/inst_abc123/deployments",
+      "http://localhost/v1/capsule-projections/inst_abc123/revisions",
       {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -171,21 +171,19 @@ test("composed app routes per-installation deployment mutation to the account pl
   assert.deepEqual(spy.calls, [
     {
       method: "POST",
-      pathname: "/v1/installation-projections/inst_abc123/deployments",
+      pathname: "/v1/capsule-projections/inst_abc123/revisions",
     },
   ]);
 });
 
-test("composed app routes GET /v1/installation-projections list to the account plane", async () => {
+test("composed app routes GET /v1/capsule-projections list to the account plane", async () => {
   const { app, spy } = await buildTestApp();
   const res = await app.fetch(
-    new Request(
-      "http://localhost/v1/installation-projections?space_id=space_1",
-    ),
+    new Request("http://localhost/v1/capsule-projections?space_id=space_1"),
   );
   assert.equal(res.headers.get("x-handled-by"), "accounts");
   assert.equal(spy.calls.length, 1);
-  assert.equal(spy.calls[0].pathname, "/v1/installation-projections");
+  assert.equal(spy.calls[0].pathname, "/v1/capsule-projections");
 });
 
 test("composed app still serves an embedded service process route", async () => {

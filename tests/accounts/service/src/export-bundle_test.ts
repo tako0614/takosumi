@@ -196,7 +196,7 @@ test("installation export bundle import plan rewrites OIDC issuer", () => {
     !("secretRefs" in authBinding!.declaration.exportTemplate),
   ).toBeTruthy();
   expect(authBinding.declaration.exportTemplate.configRef).toEqual(
-    `${targetIssuer}/v1/installation-projections/inst_source/service-bindings/auth/oidc-client/toc_source`,
+    `${targetIssuer}/v1/capsule-projections/inst_source/service-bindings/auth/oidc-client/toc_source`,
   );
   expect(!JSON.stringify(request).includes(sourceIssuer)).toBeTruthy();
   expect(!JSON.stringify(bundle).includes("/secrets/")).toBeTruthy();
@@ -301,7 +301,7 @@ test("installation export import plan drops legacy secretRefs", () => {
   const sourceIssuer = "https://accounts.source.test";
   const stored = JSON.parse(JSON.stringify(sampleExportBundle(sourceIssuer)));
   stored.serviceBindings[0].template.secretRefs = [
-    `${sourceIssuer}/v1/installation-projections/inst_source/service-bindings/auth/secrets/client-secret`,
+    `${sourceIssuer}/v1/capsule-projections/inst_source/service-bindings/auth/secrets/client-secret`,
   ];
   const bundle = parseAccountsCapsuleExportBundle(stored);
 
@@ -360,7 +360,7 @@ test("installation export archive writer emits canonical bundle payload", async 
     serviceBinding: {
       name: "auth",
       kind: "identity.oidc",
-      configRef: `${sourceIssuer}/v1/installation-projections/inst_source/service-bindings/auth/oidc-client/toc_source`,
+      configRef: `${sourceIssuer}/v1/capsule-projections/inst_source/service-bindings/auth/oidc-client/toc_source`,
     },
   });
   const root = await makeTempDir({
@@ -1129,9 +1129,9 @@ function sampleExportBundle(sourceIssuer: string) {
         capsuleId: "inst_source",
         name: "auth",
         kind: "identity.oidc",
-        configRef: `${sourceIssuer}/v1/installation-projections/inst_source/service-bindings/auth/oidc-client/toc_source`,
+        configRef: `${sourceIssuer}/v1/capsule-projections/inst_source/service-bindings/auth/oidc-client/toc_source`,
         secretRefs: [
-          `${sourceIssuer}/v1/installation-projections/inst_source/service-bindings/auth/secrets/client-secret`,
+          `${sourceIssuer}/v1/capsule-projections/inst_source/service-bindings/auth/secrets/client-secret`,
         ],
         createdAt: 1778284800000,
         updatedAt: 1778284800000,

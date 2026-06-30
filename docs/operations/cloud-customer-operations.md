@@ -362,10 +362,10 @@ bun run cli -- internal installations import-apply \
 ```
 
 `import-apply` creates a target PlanRun through
-`/v1/installation-projections/plan-runs`, requires that reviewed plan to be
+`/v1/capsule-projections/plan-runs`, requires that reviewed plan to be
 `succeeded`, then creates the target Accounts projection through
-`/v1/installation-projections` with the reviewed expected guard. It does not
-call the retired `/v1/installation-projections/import` route, and it must not be
+`/v1/capsule-projections` with the reviewed expected guard. It does not
+call the retired `/v1/capsule-projections/import` route, and it must not be
 recorded as post-import-login or sample-data verification until the restored
 target has been opened and checked.
 

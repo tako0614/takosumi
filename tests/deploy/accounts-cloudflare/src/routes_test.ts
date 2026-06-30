@@ -22,8 +22,8 @@ describe("isAccountsApiPath", () => {
       "/v1/account/tokens",
       "/v1/auth/upstream/callback",
       "/v1/auth/passkeys/register/options",
-      "/v1/installation-projections",
-      "/v1/installation-projections/plan-runs",
+      "/v1/capsule-projections",
+      "/v1/capsule-projections/plan-runs",
       "/internal/service-graph/materials/resolve",
     ];
     for (const path of apiPaths) {
@@ -81,6 +81,6 @@ describe("isWorkerLocalPath", () => {
     expect(isWorkerLocalPath("/healthz")).toBe(true);
     expect(isWorkerLocalPath("/healthz/")).toBe(true);
     expect(isWorkerLocalPath("/")).toBe(false);
-    expect(isWorkerLocalPath("/v1/installation-projections")).toBe(false);
+    expect(isWorkerLocalPath("/v1/capsule-projections")).toBe(false);
   });
 });

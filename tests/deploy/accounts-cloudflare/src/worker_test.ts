@@ -835,7 +835,7 @@ test("Cloudflare Accounts Worker writes metadata exports to R2 with signed downl
   const exportStartedAt = Date.now();
   const exportResponse = await routeWorker.fetch(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_route_export/export",
+      "https://accounts.example.test/v1/capsule-projections/inst_route_export/export",
       {
         method: "POST",
         headers: {
@@ -868,7 +868,7 @@ test("Cloudflare Accounts Worker writes metadata exports to R2 with signed downl
   }
   assert.equal(
     exported.downloadUrl,
-    `/v1/installation-projections/inst_route_export/exports/${exported.operationId}/download`,
+    `/v1/capsule-projections/inst_route_export/exports/${exported.operationId}/download`,
   );
   assert.equal(
     routeBucket.puts[0]?.key,
@@ -881,7 +881,7 @@ test("Cloudflare Accounts Worker writes metadata exports to R2 with signed downl
 
   const operationDownloadResponse = await routeWorker.fetch(
     new Request(
-      `https://accounts.example.test/v1/installation-projections/inst_route_export/exports/${exported.operationId}/download`,
+      `https://accounts.example.test/v1/capsule-projections/inst_route_export/exports/${exported.operationId}/download`,
       { headers: { authorization: `Bearer ${sessionId}` } },
     ),
     routeEnv,
@@ -1295,7 +1295,7 @@ test("Cloudflare Accounts Worker seeds local-substrate account session and space
 
   const response = await worker.fetch(
     new Request(
-      "https://app.takosumi.test/v1/installation-projections?space_id=space_local",
+      "https://app.takosumi.test/v1/capsule-projections?space_id=space_local",
       {
         headers: { authorization: "Bearer sess_local_substrate" },
       },
@@ -1832,9 +1832,7 @@ class MemoryD1Statement implements D1PreparedStatement {
           const document = this.db.documents.get(
             documentKey(row.bucket, row.documentKey),
           );
-          return document
-            ? [{ document_key: row.documentKey, document }]
-            : [];
+          return document ? [{ document_key: row.documentKey, document }] : [];
         });
       return Promise.resolve({ success: true, results: rows as T[] });
     }

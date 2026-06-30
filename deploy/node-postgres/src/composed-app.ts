@@ -27,7 +27,7 @@ import {
   type CreatedTakosumiService,
 } from "../../../core/bootstrap.ts";
 import { selectSecretBoundaryCrypto } from "../../../core/adapters/secret-store/memory.ts";
-import { TAKOSUMI_ACCOUNTS_INSTALLATIONS_PATH } from "@takosjp/takosumi-accounts-contract";
+import { TAKOSUMI_ACCOUNTS_CAPSULE_PROJECTIONS_PATH } from "@takosjp/takosumi-accounts-contract";
 import { Hono } from "hono";
 import type { PostgresAccountsStore } from "@takosjp/takosumi-accounts-service";
 import type { NodeAccountsServerConfig } from "./handler.ts";
@@ -103,7 +103,7 @@ type CreateTakosumiServiceArg = NonNullable<
 
 /**
  * Build the one composed Hono app this distribution serves. Returns an outer
- * `app` that forwards the account-plane `/v1/installation-projections/*`
+ * `app` that forwards the account-plane `/v1/capsule-projections/*`
  * projection surface to the accounts handler, delegates the primary
  * `/api/v1/*` deploy-control surface to the embedded service app, and exposes
  * the in-process `operations` facade.
@@ -186,10 +186,10 @@ export async function buildComposedApp(
       await next();
     });
   }
-  app.all(TAKOSUMI_ACCOUNTS_INSTALLATIONS_PATH, (c) =>
+  app.all(TAKOSUMI_ACCOUNTS_CAPSULE_PROJECTIONS_PATH, (c) =>
     mountedAccountsHandler(c.req.raw),
   );
-  app.all(`${TAKOSUMI_ACCOUNTS_INSTALLATIONS_PATH}/*`, (c) =>
+  app.all(`${TAKOSUMI_ACCOUNTS_CAPSULE_PROJECTIONS_PATH}/*`, (c) =>
     mountedAccountsHandler(c.req.raw),
   );
   app.all("*", (c) => serviceApp.fetch(c.req.raw));

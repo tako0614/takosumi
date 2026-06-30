@@ -5,10 +5,7 @@
  * god-file; behavior is identical to the prior single-file handlers.
  */
 import { takosumiAccountsCapsuleEventsPath } from "@takosjp/takosumi-accounts-contract";
-import {
-  type CapsuleRecord,
-  transitionAppCapsuleStatus,
-} from "./ledger.ts";
+import { type CapsuleRecord, transitionAppCapsuleStatus } from "./ledger.ts";
 import type { AccountsStore } from "./store.ts";
 import {
   activatedHttpDomainProjectionFromEvents,
@@ -86,9 +83,7 @@ export async function handleUpdateAppCapsuleStatus(input: {
       400,
     );
   }
-  const installation = await input.store.findAppCapsule(
-    input.capsuleId,
-  );
+  const installation = await input.store.findAppCapsule(input.capsuleId);
   if (!installation)
     return errorJson("installation_not_found", "installation not found", 404);
 
@@ -313,16 +308,14 @@ export async function handleUninstallAppCapsule(input: {
 
 export async function handleUpdateAppCapsuleRevision(input: {
   capsuleId: string;
-  operation: "deployment" | "rollback";
+  operation: "revision" | "rollback";
   request: Request;
   store: AccountsStore;
   deployControl?: DeployControlFacadeOptions;
 }): Promise<Response> {
   const body = await readJsonObject(input.request);
   if (!body) return errorJson("invalid_request", "invalid request", 400);
-  const installation = await input.store.findAppCapsule(
-    input.capsuleId,
-  );
+  const installation = await input.store.findAppCapsule(input.capsuleId);
   if (!installation)
     return errorJson("installation_not_found", "installation not found", 404);
   if (installation.status !== "ready") {
@@ -351,7 +344,7 @@ export async function handleUpdateAppCapsuleRevision(input: {
 
 async function handleCoreDeployControlBackedRevision(input: {
   capsuleId: string;
-  operation: "deployment" | "rollback";
+  operation: "revision" | "rollback";
   body: Record<string, unknown>;
   store: AccountsStore;
   deployControl: DeployControlFacadeOptions;

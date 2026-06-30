@@ -45,11 +45,11 @@ export const TAKOSUMI_ACCOUNTS_PASSKEY_AUTHENTICATE_COMPLETE_PATH =
  * plane without competing with the public `/api/v1` control API or
  * reintroducing an app-store vocabulary.
  */
-const TAKOSUMI_ACCOUNTS_INSTALLATIONS_BASE_PATH =
-  "/v1/installation-projections";
-export const TAKOSUMI_ACCOUNTS_INSTALLATION_PLAN_RUNS_PATH = `${TAKOSUMI_ACCOUNTS_INSTALLATIONS_BASE_PATH}/plan-runs`;
-export const TAKOSUMI_ACCOUNTS_INSTALLATIONS_PATH =
-  TAKOSUMI_ACCOUNTS_INSTALLATIONS_BASE_PATH;
+const TAKOSUMI_ACCOUNTS_CAPSULE_PROJECTIONS_BASE_PATH =
+  "/v1/capsule-projections";
+export const TAKOSUMI_ACCOUNTS_CAPSULE_PROJECTION_PLAN_RUNS_PATH = `${TAKOSUMI_ACCOUNTS_CAPSULE_PROJECTIONS_BASE_PATH}/plan-runs`;
+export const TAKOSUMI_ACCOUNTS_CAPSULE_PROJECTIONS_PATH =
+  TAKOSUMI_ACCOUNTS_CAPSULE_PROJECTIONS_BASE_PATH;
 export const TAKOSUMI_ACCOUNTS_CAPSULE_EXPORT_BUNDLE_KIND =
   "takosumi.accounts.capsule-export-bundle@v1";
 
@@ -187,7 +187,7 @@ export interface TakosumiAccountsListPrivacyRequestsResponse {
 }
 
 export function takosumiAccountsCapsulePlanRunsPath(): string {
-  return TAKOSUMI_ACCOUNTS_INSTALLATION_PLAN_RUNS_PATH;
+  return TAKOSUMI_ACCOUNTS_CAPSULE_PROJECTION_PLAN_RUNS_PATH;
 }
 
 export function takosumiAccountsAccountTokenRevokePath(
@@ -213,7 +213,7 @@ export function takosumiAccountsPrivacyRequestCompletePath(
 }
 
 export function takosumiAccountsCapsulePath(capsuleId: string): string {
-  return `${TAKOSUMI_ACCOUNTS_INSTALLATIONS_PATH}/${pathSegment(
+  return `${TAKOSUMI_ACCOUNTS_CAPSULE_PROJECTIONS_PATH}/${pathSegment(
     capsuleId,
     "capsuleId",
   )}`;
@@ -223,16 +223,16 @@ export function takosumiAccountsCapsuleStatusPath(capsuleId: string): string {
   return `${takosumiAccountsCapsulePath(capsuleId)}/status`;
 }
 
-export function takosumiAccountsCapsuleDeploymentsPath(
+export function takosumiAccountsCapsuleRevisionsPath(
   capsuleId: string,
 ): string {
-  return `${takosumiAccountsCapsulePath(capsuleId)}/deployments`;
+  return `${takosumiAccountsCapsulePath(capsuleId)}/revisions`;
 }
 
-export function takosumiAccountsCapsuleDeploymentPlanRunsPath(
+export function takosumiAccountsCapsuleRevisionPlanRunsPath(
   capsuleId: string,
 ): string {
-  return `${takosumiAccountsCapsuleDeploymentsPath(capsuleId)}/plan-runs`;
+  return `${takosumiAccountsCapsuleRevisionsPath(capsuleId)}/plan-runs`;
 }
 
 export function takosumiAccountsCapsuleRollbackPath(capsuleId: string): string {

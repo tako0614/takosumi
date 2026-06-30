@@ -63,15 +63,13 @@ export async function handlePlanAppCapsuleDeployment(input: {
 }): Promise<Response> {
   const body = await readJsonObject(input.request);
   if (!body) return errorJson("invalid_request", "invalid request", 400);
-  const installation = await input.store.findAppCapsule(
-    input.capsuleId,
-  );
+  const installation = await input.store.findAppCapsule(input.capsuleId);
   if (!installation)
     return errorJson("installation_not_found", "installation not found", 404);
   if (installation.status !== "ready") {
     return errorJson(
       "state_conflict",
-      "deployment PlanRun requires a ready Capsule projection",
+      "revision PlanRun requires a ready Capsule projection",
       409,
     );
   }
@@ -117,7 +115,7 @@ export async function handlePlanAppCapsuleDeployment(input: {
     ) {
       return errorJson(
         "source_mismatch",
-        "deployment PlanRun must keep the installation source git URL",
+        "revision PlanRun must keep the installation source git URL",
         409,
       );
     }
@@ -128,7 +126,7 @@ export async function handlePlanAppCapsuleDeployment(input: {
     ) {
       return errorJson(
         "source_path_mismatch",
-        "deployment PlanRun must keep the installation source path",
+        "revision PlanRun must keep the installation source path",
         409,
       );
     }
@@ -136,7 +134,7 @@ export async function handlePlanAppCapsuleDeployment(input: {
     if (appId && appId !== installation.appId) {
       return errorJson(
         "app_mismatch",
-        "deployment PlanRun must keep the installation appId",
+        "revision PlanRun must keep the installation appId",
         409,
       );
     }
@@ -156,7 +154,7 @@ export async function handlePlanAppCapsuleDeployment(input: {
     if (requestedGrants instanceof Response) return requestedGrants;
 
     const permissionDigest = await appCapsuleRevisionPermissionDigest({
-      operation: "deployment",
+      operation: "revision",
       capsuleId: input.capsuleId,
       appId: installation.appId,
       sourceGitUrl,
@@ -170,7 +168,7 @@ export async function handlePlanAppCapsuleDeployment(input: {
     });
 
     return json({
-      operation: "deployment",
+      operation: "revision",
       capsuleId: input.capsuleId,
       source: {
         url: sourceGitUrl,
@@ -231,7 +229,7 @@ export async function handlePlanAppCapsuleDeployment(input: {
   ) {
     return errorJson(
       "source_mismatch",
-      "deployment PlanRun must keep the installation source git URL",
+      "revision PlanRun must keep the installation source git URL",
       409,
     );
   }
@@ -242,7 +240,7 @@ export async function handlePlanAppCapsuleDeployment(input: {
   ) {
     return errorJson(
       "source_path_mismatch",
-      "deployment PlanRun must keep the installation source path",
+      "revision PlanRun must keep the installation source path",
       409,
     );
   }
@@ -250,7 +248,7 @@ export async function handlePlanAppCapsuleDeployment(input: {
   if (appId && appId !== installation.appId) {
     return errorJson(
       "app_mismatch",
-      "deployment PlanRun must keep the installation appId",
+      "revision PlanRun must keep the installation appId",
       409,
     );
   }
@@ -270,7 +268,7 @@ export async function handlePlanAppCapsuleDeployment(input: {
   if (requestedGrants instanceof Response) return requestedGrants;
 
   const permissionDigest = await appCapsuleRevisionPermissionDigest({
-    operation: "deployment",
+    operation: "revision",
     capsuleId: input.capsuleId,
     appId: installation.appId,
     sourceGitUrl,
@@ -284,7 +282,7 @@ export async function handlePlanAppCapsuleDeployment(input: {
   });
 
   return json({
-    operation: "deployment",
+    operation: "revision",
     capsuleId: input.capsuleId,
     source: {
       gitUrl: sourceGitUrl,
@@ -378,9 +376,7 @@ export async function handleRequestAppCapsuleMaterialize(input: {
   const requestDigest =
     await installationOperationRequestDigest(requestPayload);
 
-  const installation = await input.store.findAppCapsule(
-    input.capsuleId,
-  );
+  const installation = await input.store.findAppCapsule(input.capsuleId);
   if (!installation)
     return errorJson("installation_not_found", "installation not found", 404);
   const preserve = await materializePreservationSnapshot({
@@ -492,9 +488,7 @@ export async function handleReportCapsuleBillingUsage(input: {
   });
   if (!billingAuth.ok) return billingAuth.response;
   const authRecord: TokenRecord = billingAuth.record;
-  const installation = await input.store.findAppCapsule(
-    input.capsuleId,
-  );
+  const installation = await input.store.findAppCapsule(input.capsuleId);
   if (!installation)
     return errorJson("installation_not_found", "installation not found", 404);
   if (installation.status !== "ready") {
@@ -637,9 +631,7 @@ export async function handleReportCapsuleBillingUsage(input: {
     idempotencyKey === undefined || explicitReportId === undefined
       ? undefined
       : (
-          await input.store.listBillingUsageRecordsForCapsule(
-            input.capsuleId,
-          )
+          await input.store.listBillingUsageRecordsForCapsule(input.capsuleId)
         ).find((record) => record.idempotencyKey === idempotencyKey);
   if (existingIdempotentReport) {
     if (existingIdempotentReport.requestDigest !== requestDigest) {

@@ -120,7 +120,7 @@ Stripe reconciliation use the Workspace usage ledger as the source of truth.
 Tokens are rotated through the account-plane Capsule projection route:
 
 ```text
-POST /v1/installation-projections/:capsuleId/services/takosumi.ai.gateway/rotate-token
+POST /v1/capsule-projections/:capsuleId/services/takosumi.ai.gateway/rotate-token
 ```
 
 This is a supporting runtime-token vending route for the hosted Cloud extension,

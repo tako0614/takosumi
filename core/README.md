@@ -40,8 +40,8 @@ legacy route names while the implementation migrates to the final public model:
 - `POST /internal/v1/installations/{id}/plan`
 - `POST /internal/v1/runs/{id}/approve`
 - `POST /internal/v1/installations/{id}/destroy-plan`
-- `GET /internal/v1/installations/{id}/deployments`
-- `GET /internal/v1/deployments/{id}`
+- `GET /internal/v1/installations/{id}/revisions`
+- `GET /internal/v1/revisions/{id}`
 - `GET /internal/v1/spaces/{spaceId}/activity`
 
 These route names are current implementation details. They are not the target
@@ -53,7 +53,7 @@ this migration seam.
 
 The `/internal/v1/plan-runs`, `/internal/v1/apply-runs`, `/internal/v1/runner-profiles`, and
 `/internal/v1/installations/*` ledger routes are part of the same internal seam dialed by the accounts plane / CLI. They
-are not surfaced through `/capabilities` or `/openapi.json`. (The account-plane product surface `/v1/installation-projections` and
+are not surfaced through `/capabilities` or `/openapi.json`. (The account-plane product surface `/v1/capsule-projections` and
 the session-authed control surface `/api/v1/connections` are a distinct edge API, owned by the accounts plane, not this
 seam. Connections are served only under `/api/v1/connections`; there is no `/v1/connections` edge.)
 

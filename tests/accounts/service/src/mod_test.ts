@@ -4,7 +4,7 @@ import {
   TAKOSUMI_ACCOUNTS_PRIVACY_REQUESTS_PATH,
   type TakosumiSubject,
   takosumiAccountsCapsuleBillingUsageReportsPath,
-  takosumiAccountsCapsuleDeploymentPlanRunsPath,
+  takosumiAccountsCapsuleRevisionPlanRunsPath,
   takosumiAccountsCapsuleEventsPath,
   takosumiAccountsCapsulePath,
   takosumiAccountsCapsuleServiceRotateTokenPath,
@@ -198,10 +198,7 @@ async function appCapsuleAuthSubjectForTest(
   store: AccountsStore,
 ): Promise<TakosumiSubject | undefined> {
   const url = new URL(request.url);
-  if (
-    url.pathname === "/v1/installation-projections" &&
-    request.method === "POST"
-  ) {
+  if (url.pathname === "/v1/capsule-projections" && request.method === "POST") {
     const body = await jsonRecordForTest(request.clone());
     return testSubjectValue(body?.createdBySubject);
   }
@@ -231,13 +228,13 @@ function testCapsuleRouteNeedsAccountBearer(
   method: string,
 ): boolean {
   if (kind === "billing-usage-reports") return false;
-  if (kind === "installation" && method === "GET") return false;
-  if (kind === "installation" && method === "DELETE") return true;
+  if (kind === "capsule" && method === "GET") return false;
+  if (kind === "capsule" && method === "DELETE") return true;
   if (kind === "status" && method === "PATCH") return true;
   if (
     method === "POST" &&
-    (kind === "deployment" ||
-      kind === "deployment-plan-run" ||
+    (kind === "revision" ||
+      kind === "revision-plan-run" ||
       kind === "rollback" ||
       kind === "materialize" ||
       kind === "service-rotate-token" ||
@@ -316,7 +313,7 @@ async function maybeSeedLegacyProjectionFixtureForTest(input: {
 }): Promise<Response | undefined> {
   const url = new URL(input.request.url);
   if (
-    url.pathname !== "/v1/installation-projections" ||
+    url.pathname !== "/v1/capsule-projections" ||
     input.request.method !== "POST"
   ) {
     return undefined;
@@ -603,7 +600,7 @@ async function maybeSeedLegacyProjectionFixtureForTest(input: {
     grants,
     runtimeBinding,
     oidcClient: oidcClient?.client,
-    eventsUrl: `/v1/installation-projections/${capsuleId}/events`,
+    eventsUrl: `/v1/capsule-projections/${capsuleId}/events`,
   });
   return testJson(
     {
@@ -613,7 +610,7 @@ async function maybeSeedLegacyProjectionFixtureForTest(input: {
         : {}),
     },
     202,
-    { location: `/v1/installation-projections/${capsuleId}` },
+    { location: `/v1/capsule-projections/${capsuleId}` },
   );
 }
 
@@ -1124,7 +1121,7 @@ async function testMaterializePermissionDigest(input: {
 }
 
 async function testRevisionPermissionDigest(input: {
-  operation: "deployment" | "rollback";
+  operation: "revision" | "rollback";
   capsuleId: string;
   appId: string;
   sourceGitUrl: string;
@@ -1320,7 +1317,7 @@ test("accounts handler proxies installation PlanRun to deployControl", async () 
 
   const response = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/plan-runs",
+      "https://accounts.example.test/v1/capsule-projections/plan-runs",
       {
         method: "POST",
         headers: {
@@ -1440,7 +1437,7 @@ test("accounts handler applies installation through space deployControl when con
   });
 
   const response = await handler(
-    new Request("https://accounts.example.test/v1/installation-projections", {
+    new Request("https://accounts.example.test/v1/capsule-projections", {
       method: "POST",
       body: JSON.stringify({
         accountId: "acct_core_apply",
@@ -1470,7 +1467,7 @@ test("accounts handler applies installation through space deployControl when con
 
   expect(response.status).toEqual(202);
   expect(response.headers.get("location")).toEqual(
-    "/v1/installation-projections/inst_core_apply",
+    "/v1/capsule-projections/inst_core_apply",
   );
   const body = await response.json();
   expect(body.installation.id).toEqual("inst_core_apply");
@@ -1490,7 +1487,7 @@ test("accounts handler applies installation through space deployControl when con
   );
   const detailResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_core_apply",
+      "https://accounts.example.test/v1/capsule-projections/inst_core_apply",
       { headers: accountSessionHeaders(ownerSession) },
     ),
   );
@@ -1600,7 +1597,7 @@ test("accounts handler projects space-direct apply responses without deployment 
   });
 
   const response = await handler(
-    new Request("https://accounts.example.test/v1/installation-projections", {
+    new Request("https://accounts.example.test/v1/capsule-projections", {
       method: "POST",
       body: JSON.stringify({
         accountId: "acct_space_direct",
@@ -1676,7 +1673,7 @@ test("accounts handler validates installation facade request before space deploy
   });
 
   const response = await handler(
-    new Request("https://accounts.example.test/v1/installation-projections", {
+    new Request("https://accounts.example.test/v1/capsule-projections", {
       method: "POST",
       body: JSON.stringify({
         accountId: "acct_core_preflight",
@@ -1772,7 +1769,7 @@ test("accounts handler applies local source through space deployControl with loc
   });
 
   const response = await handler(
-    new Request("https://accounts.example.test/v1/installation-projections", {
+    new Request("https://accounts.example.test/v1/capsule-projections", {
       method: "POST",
       body: JSON.stringify({
         accountId: "acct_core_local",
@@ -1900,7 +1897,7 @@ test("raw accounts handler requires account bearer for installation PlanRun", as
   });
 
   const unauthenticated = await handler(
-    new Request(`${testIssuer}/v1/installation-projections/plan-runs`, {
+    new Request(`${testIssuer}/v1/capsule-projections/plan-runs`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body,
@@ -1909,7 +1906,7 @@ test("raw accounts handler requires account bearer for installation PlanRun", as
   expect(unauthenticated.status).toEqual(401);
 
   const readPat = await handler(
-    new Request(`${testIssuer}/v1/installation-projections/plan-runs`, {
+    new Request(`${testIssuer}/v1/capsule-projections/plan-runs`, {
       method: "POST",
       headers: {
         authorization: "Bearer takpat_read_dry_run",
@@ -1921,7 +1918,7 @@ test("raw accounts handler requires account bearer for installation PlanRun", as
   expect(readPat.status).toEqual(403);
 
   const crossOwner = await handler(
-    new Request(`${testIssuer}/v1/installation-projections/plan-runs`, {
+    new Request(`${testIssuer}/v1/capsule-projections/plan-runs`, {
       method: "POST",
       headers: {
         ...accountSessionHeaders(otherSession),
@@ -1934,7 +1931,7 @@ test("raw accounts handler requires account bearer for installation PlanRun", as
   expect((await crossOwner.json()).error.code).toEqual("space_not_found");
 
   const owner = await handler(
-    new Request(`${testIssuer}/v1/installation-projections/plan-runs`, {
+    new Request(`${testIssuer}/v1/capsule-projections/plan-runs`, {
       method: "POST",
       headers: {
         ...accountSessionHeaders(ownerSession),
@@ -1954,7 +1951,7 @@ test("raw accounts handler requires account bearer for installation PlanRun", as
   // workspaceId). Previously this 404'd after `/install?git=...` sent cold visitors
   // through sign-in and into `/new`.
   const freshWorkspace = await handler(
-    new Request(`${testIssuer}/v1/installation-projections/plan-runs`, {
+    new Request(`${testIssuer}/v1/capsule-projections/plan-runs`, {
       method: "POST",
       headers: {
         ...accountSessionHeaders(ownerSession),
@@ -1991,7 +1988,7 @@ test("accounts handler does not launch-gate installation PlanRun when platform r
 
   const rawPlanRunResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/plan-runs",
+      "https://accounts.example.test/v1/capsule-projections/plan-runs",
       {
         method: "POST",
         body: JSON.stringify({
@@ -2023,7 +2020,7 @@ test("accounts handler blocks open platform readiness policy without evidence me
 
   const response = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_1/materialize",
+      "https://accounts.example.test/v1/capsule-projections/inst_1/materialize",
       {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -2070,7 +2067,7 @@ test("accounts handler rejects weak open platform readiness policy metadata", as
 
     const response = await handler(
       new Request(
-        "https://accounts.example.test/v1/installation-projections/inst_1/materialize",
+        "https://accounts.example.test/v1/capsule-projections/inst_1/materialize",
         {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -2093,14 +2090,11 @@ test("raw accounts handler defaults platform readiness access to closed", async 
   // The platform readiness materialize surface defaults to the launch-gated
   // 503 when no policy is supplied.
   const response = await handler(
-    new Request(
-      `${testIssuer}/v1/installation-projections/inst_1/materialize`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({}),
-      },
-    ),
+    new Request(`${testIssuer}/v1/capsule-projections/inst_1/materialize`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({}),
+    }),
   );
   expect(response.status).toEqual(503);
   const body = await response.json();
@@ -2111,7 +2105,7 @@ test("raw accounts handler defaults platform readiness access to closed", async 
   // with the default-closed policy: it proceeds to normal request validation
   // (an empty body is rejected for missing ownership fields, not launch-gated).
   const installResponse = await handler(
-    new Request(`${testIssuer}/v1/installation-projections`, {
+    new Request(`${testIssuer}/v1/capsule-projections`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({}),
@@ -2127,14 +2121,11 @@ test("ephemeral accounts handler defaults platform readiness access to closed", 
     allowEphemeralKeyOnHttpsIssuer: true,
   });
   const response = await handler(
-    new Request(
-      `${testIssuer}/v1/installation-projections/inst_1/materialize`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({}),
-      },
-    ),
+    new Request(`${testIssuer}/v1/capsule-projections/inst_1/materialize`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({}),
+    }),
   );
 
   expect(response.status).toEqual(503);
@@ -2168,13 +2159,13 @@ test("accounts handler keeps documented closed-gate exceptions reachable", async
     ],
     [
       "uninstall",
-      new Request(`${testIssuer}/v1/installation-projections/inst_1`, {
+      new Request(`${testIssuer}/v1/capsule-projections/inst_1`, {
         method: "DELETE",
       }),
     ],
     [
       "failed status completion",
-      new Request(`${testIssuer}/v1/installation-projections/inst_1/status`, {
+      new Request(`${testIssuer}/v1/capsule-projections/inst_1/status`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ status: "failed" }),
@@ -2182,7 +2173,7 @@ test("accounts handler keeps documented closed-gate exceptions reachable", async
     ],
     [
       "exported status completion",
-      new Request(`${testIssuer}/v1/installation-projections/inst_1/status`, {
+      new Request(`${testIssuer}/v1/capsule-projections/inst_1/status`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ status: "exported" }),
@@ -2191,7 +2182,7 @@ test("accounts handler keeps documented closed-gate exceptions reachable", async
     [
       "billing usage report",
       new Request(
-        `${testIssuer}/v1/installation-projections/inst_1/billing/usage-reports`,
+        `${testIssuer}/v1/capsule-projections/inst_1/billing/usage-reports`,
         {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -2272,7 +2263,7 @@ test("accounts handler rejects installation PlanRun when deployControl is not co
 
   const response = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/plan-runs",
+      "https://accounts.example.test/v1/capsule-projections/plan-runs",
       {
         method: "POST",
         headers: {
@@ -3081,9 +3072,7 @@ test("accounts handler rotates a Cloudflare compat runtime service token for pro
   const body = await response.json();
   expect(body.token_type).toEqual("Bearer");
   expect(body.token).toStartWith("taksrv_");
-  expect(body.scope).toEqual(
-    "cloudflare.compat.read cloudflare.compat.write",
-  );
+  expect(body.scope).toEqual("cloudflare.compat.read cloudflare.compat.write");
   expect(body.service).toEqual({
     id: "takosumi.cloudflare.compat",
     status: "active",
@@ -4601,7 +4590,7 @@ test("accounts handler manages AppCapsule lifecycle records", async () => {
   });
 
   const createResponse = await handler(
-    new Request("https://accounts.example.test/v1/installation-projections", {
+    new Request("https://accounts.example.test/v1/capsule-projections", {
       method: "POST",
       body: JSON.stringify({
         capsuleId: "inst_1",
@@ -4670,7 +4659,7 @@ test("accounts handler manages AppCapsule lifecycle records", async () => {
   );
   expect(createResponse.status).toEqual(202);
   expect(createResponse.headers.get("location")).toEqual(
-    "/v1/installation-projections/inst_1",
+    "/v1/capsule-projections/inst_1",
   );
   const created = await createResponse.json();
   expect(created.installation.status).toEqual("installing");
@@ -4722,7 +4711,7 @@ test("accounts handler manages AppCapsule lifecycle records", async () => {
 
   const updateResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_1/status",
+      "https://accounts.example.test/v1/capsule-projections/inst_1/status",
       {
         method: "PATCH",
         body: JSON.stringify({ status: "ready", reason: "healthcheck passed" }),
@@ -4733,12 +4722,9 @@ test("accounts handler manages AppCapsule lifecycle records", async () => {
   expect((await updateResponse.json()).installation.status).toEqual("ready");
 
   const inspectResponse = await handler(
-    new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_1",
-      {
-        headers: accountSessionHeaders(ownerSession),
-      },
-    ),
+    new Request("https://accounts.example.test/v1/capsule-projections/inst_1", {
+      headers: accountSessionHeaders(ownerSession),
+    }),
   );
   expect(inspectResponse.status).toEqual(200);
   const inspected = await inspectResponse.json();
@@ -4756,7 +4742,7 @@ test("accounts handler manages AppCapsule lifecycle records", async () => {
 
   const eventsResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_1/events",
+      "https://accounts.example.test/v1/capsule-projections/inst_1/events",
     ),
   );
   expect(eventsResponse.status).toEqual(200);
@@ -4782,7 +4768,7 @@ test("accounts handler validates install approval confirmation", async () => {
   });
 
   const costResponse = await handler(
-    new Request("https://accounts.example.test/v1/installation-projections", {
+    new Request("https://accounts.example.test/v1/capsule-projections", {
       method: "POST",
       body: JSON.stringify({
         capsuleId: "inst_confirm_cost",
@@ -4816,7 +4802,7 @@ test("accounts handler validates install approval confirmation", async () => {
   expect((await costResponse.json()).error.code).toEqual("cost_ack_required");
 
   const mismatchResponse = await handler(
-    new Request("https://accounts.example.test/v1/installation-projections", {
+    new Request("https://accounts.example.test/v1/capsule-projections", {
       method: "POST",
       body: JSON.stringify({
         capsuleId: "inst_confirm_mismatch",
@@ -4857,7 +4843,7 @@ test("accounts handler requires account-session ownership for installation reads
   const store = new InMemoryAccountsStore();
   const handler = createAccountsHandler({ store });
   const createResponse = await handler(
-    new Request("https://accounts.example.test/v1/installation-projections", {
+    new Request("https://accounts.example.test/v1/capsule-projections", {
       method: "POST",
       body: JSON.stringify({
         capsuleId: "inst_tenant_read",
@@ -4890,14 +4876,14 @@ test("accounts handler requires account-session ownership for installation reads
 
   const unauthenticated = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_tenant_read",
+      "https://accounts.example.test/v1/capsule-projections/inst_tenant_read",
     ),
   );
   expect(unauthenticated.status).toEqual(401);
 
   const ownerDetail = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_tenant_read",
+      "https://accounts.example.test/v1/capsule-projections/inst_tenant_read",
       { headers: accountSessionHeaders(ownerSession) },
     ),
   );
@@ -4905,7 +4891,7 @@ test("accounts handler requires account-session ownership for installation reads
 
   const crossDetail = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_tenant_read",
+      "https://accounts.example.test/v1/capsule-projections/inst_tenant_read",
       { headers: accountSessionHeaders(otherSession) },
     ),
   );
@@ -4916,7 +4902,7 @@ test("accounts handler requires account-session ownership for installation reads
 
   const ownerList = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections?space_id=space_tenant_read",
+      "https://accounts.example.test/v1/capsule-projections?space_id=space_tenant_read",
       { headers: accountSessionHeaders(ownerSession) },
     ),
   );
@@ -4925,7 +4911,7 @@ test("accounts handler requires account-session ownership for installation reads
 
   const crossList = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections?space_id=space_tenant_read",
+      "https://accounts.example.test/v1/capsule-projections?space_id=space_tenant_read",
       { headers: accountSessionHeaders(otherSession) },
     ),
   );
@@ -4967,7 +4953,7 @@ test("raw accounts handler requires account bearer for installation writes", asy
   };
 
   const unauthenticatedCreate = await handler(
-    new Request("https://accounts.example.test/v1/installation-projections", {
+    new Request("https://accounts.example.test/v1/capsule-projections", {
       method: "POST",
       body: JSON.stringify(createBody),
     }),
@@ -4975,7 +4961,7 @@ test("raw accounts handler requires account bearer for installation writes", asy
   expect(unauthenticatedCreate.status).toEqual(401);
 
   const crossCreate = await handler(
-    new Request("https://accounts.example.test/v1/installation-projections", {
+    new Request("https://accounts.example.test/v1/capsule-projections", {
       method: "POST",
       headers: accountSessionHeaders(otherSession),
       body: JSON.stringify(createBody),
@@ -4985,7 +4971,7 @@ test("raw accounts handler requires account bearer for installation writes", asy
   expect((await crossCreate.json()).error.code).toEqual("account_not_found");
 
   const createResponse = await handler(
-    new Request("https://accounts.example.test/v1/installation-projections", {
+    new Request("https://accounts.example.test/v1/capsule-projections", {
       method: "POST",
       headers: accountSessionHeaders(ownerSession),
       body: JSON.stringify(createBody),
@@ -4998,7 +4984,7 @@ test("raw accounts handler requires account bearer for installation writes", asy
 
   const seeded = await maybeSeedLegacyProjectionFixtureForTest({
     request: new Request(
-      "https://accounts.example.test/v1/installation-projections",
+      "https://accounts.example.test/v1/capsule-projections",
       {
         method: "POST",
         body: JSON.stringify(createBody),
@@ -5011,7 +4997,7 @@ test("raw accounts handler requires account bearer for installation writes", asy
 
   const unauthenticatedStatus = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_auth_write/status",
+      "https://accounts.example.test/v1/capsule-projections/inst_auth_write/status",
       {
         method: "PATCH",
         body: JSON.stringify({ status: "ready" }),
@@ -5030,7 +5016,7 @@ test("raw accounts handler requires account bearer for installation writes", asy
   });
   const readPatStatus = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_auth_write/status",
+      "https://accounts.example.test/v1/capsule-projections/inst_auth_write/status",
       {
         method: "PATCH",
         headers: { authorization: "Bearer takpat_read_auth" },
@@ -5051,7 +5037,7 @@ test("raw accounts handler requires account bearer for installation writes", asy
   });
   const writePatStatus = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_auth_write/status",
+      "https://accounts.example.test/v1/capsule-projections/inst_auth_write/status",
       {
         method: "PATCH",
         headers: { authorization: "Bearer takpat_write_auth" },
@@ -5066,7 +5052,7 @@ test("raw accounts handler requires account bearer for installation writes", asy
 
   const crossStatus = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_auth_write/status",
+      "https://accounts.example.test/v1/capsule-projections/inst_auth_write/status",
       {
         method: "PATCH",
         headers: accountSessionHeaders(otherSession),
@@ -5081,14 +5067,14 @@ test("raw accounts handler requires account bearer for installation writes", asy
 
   const unauthenticatedEvents = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_auth_write/events",
+      "https://accounts.example.test/v1/capsule-projections/inst_auth_write/events",
     ),
   );
   expect(unauthenticatedEvents.status).toEqual(401);
 
   const readPatEvents = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_auth_write/events",
+      "https://accounts.example.test/v1/capsule-projections/inst_auth_write/events",
       { headers: { authorization: "Bearer takpat_read_auth" } },
     ),
   );
@@ -5103,7 +5089,7 @@ test("accounts handler rejects removed serviceId aliases in install OIDC client 
   });
 
   const response = await handler(
-    new Request("https://accounts.example.test/v1/installation-projections", {
+    new Request("https://accounts.example.test/v1/capsule-projections", {
       method: "POST",
       body: JSON.stringify({
         capsuleId: "inst_oidc_alias_create",
@@ -5404,7 +5390,7 @@ test("accounts handler accepts billing usage reports from scoped installation to
 
   const response = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_usage/billing/usage-reports",
+      "https://accounts.example.test/v1/capsule-projections/inst_usage/billing/usage-reports",
       {
         method: "POST",
         headers: { authorization: "Bearer access-usage" },
@@ -5438,7 +5424,7 @@ test("accounts handler accepts billing usage reports from scoped installation to
 
   const duplicate = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_usage/billing/usage-reports",
+      "https://accounts.example.test/v1/capsule-projections/inst_usage/billing/usage-reports",
       {
         method: "POST",
         headers: { authorization: "Bearer access-usage" },
@@ -5469,7 +5455,7 @@ test("accounts handler accepts billing usage reports from scoped installation to
 
   const internalBackendMeter = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_usage/billing/usage-reports",
+      "https://accounts.example.test/v1/capsule-projections/inst_usage/billing/usage-reports",
       {
         method: "POST",
         headers: { authorization: "Bearer access-usage" },
@@ -5491,7 +5477,7 @@ test("accounts handler accepts billing usage reports from scoped installation to
 
   const conflictingIdempotency = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_usage/billing/usage-reports",
+      "https://accounts.example.test/v1/capsule-projections/inst_usage/billing/usage-reports",
       {
         method: "POST",
         headers: { authorization: "Bearer access-usage" },
@@ -5556,7 +5542,7 @@ test("accounts handler accepts billing usage reports from scoped installation to
   });
   const crossCapsuleReportId = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_usage_2/billing/usage-reports",
+      "https://accounts.example.test/v1/capsule-projections/inst_usage_2/billing/usage-reports",
       {
         method: "POST",
         headers: { authorization: "Bearer access-usage-2" },
@@ -5634,7 +5620,7 @@ test("accounts handler no longer gates installation access tokens on ServiceGran
 
   const response = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_usage/billing/usage-reports",
+      "https://accounts.example.test/v1/capsule-projections/inst_usage/billing/usage-reports",
       {
         method: "POST",
         headers: { authorization: "Bearer access-usage" },
@@ -5668,7 +5654,7 @@ test("accounts handler auto-assigns shared-cell RuntimeBinding from warm pool", 
   });
 
   const createResponse = await handler(
-    new Request("https://accounts.example.test/v1/installation-projections", {
+    new Request("https://accounts.example.test/v1/capsule-projections", {
       method: "POST",
       body: JSON.stringify({
         capsuleId: "inst_shared_auto",
@@ -5706,7 +5692,7 @@ test("accounts handler auto-assigns shared-cell RuntimeBinding from warm pool", 
   ).toEqual(["installation.created", "runtime_target.assigned"]);
 
   const exhausted = await handler(
-    new Request("https://accounts.example.test/v1/installation-projections", {
+    new Request("https://accounts.example.test/v1/capsule-projections", {
       method: "POST",
       body: JSON.stringify({
         capsuleId: "inst_shared_exhausted",
@@ -5735,7 +5721,7 @@ test("accounts handler records AppCapsule deployment and rollback revisions", as
   const store = new InMemoryAccountsStore();
   const handler = createAccountsHandler({ store });
   const createResponse = await handler(
-    new Request("https://accounts.example.test/v1/installation-projections", {
+    new Request("https://accounts.example.test/v1/capsule-projections", {
       method: "POST",
       body: JSON.stringify({
         capsuleId: "inst_revision",
@@ -5757,7 +5743,7 @@ test("accounts handler records AppCapsule deployment and rollback revisions", as
   expect(createResponse.status).toEqual(202);
   const readyResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_revision/status",
+      "https://accounts.example.test/v1/capsule-projections/inst_revision/status",
       {
         method: "PATCH",
         body: JSON.stringify({ status: "ready" }),
@@ -5768,7 +5754,7 @@ test("accounts handler records AppCapsule deployment and rollback revisions", as
 
   const deploymentPlanRunResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_revision/deployments/plan-runs",
+      "https://accounts.example.test/v1/capsule-projections/inst_revision/revisions/plan-runs",
       {
         method: "POST",
         body: JSON.stringify({
@@ -5785,12 +5771,12 @@ test("accounts handler records AppCapsule deployment and rollback revisions", as
   );
   expect(deploymentPlanRunResponse.status).toEqual(200);
   const deploymentPlanRun = await deploymentPlanRunResponse.json();
-  expect(deploymentPlanRun.operation).toEqual("deployment");
+  expect(deploymentPlanRun.operation).toEqual("revision");
   expect(deploymentPlanRun.expected.permissionDigest).toStartWith("sha256:");
 
   const deploymentResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_revision/deployments",
+      "https://accounts.example.test/v1/capsule-projections/inst_revision/revisions",
       {
         method: "POST",
         body: JSON.stringify({
@@ -5818,7 +5804,7 @@ test("accounts handler records AppCapsule deployment and rollback revisions", as
   );
   const rollbackResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_revision/rollback",
+      "https://accounts.example.test/v1/capsule-projections/inst_revision/rollback",
       {
         method: "POST",
         body: JSON.stringify({
@@ -5840,7 +5826,7 @@ test("accounts handler records AppCapsule deployment and rollback revisions", as
 
   const eventsResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_revision/events",
+      "https://accounts.example.test/v1/capsule-projections/inst_revision/events",
     ),
   );
   expect(eventsResponse.status).toEqual(200);
@@ -6097,7 +6083,7 @@ test("accounts handler brokers deployment and rollback through space deployContr
 
   const planRunResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_core_revision/deployments/plan-runs",
+      "https://accounts.example.test/v1/capsule-projections/inst_core_revision/revisions/plan-runs",
       {
         method: "POST",
         body: JSON.stringify({
@@ -6120,7 +6106,7 @@ test("accounts handler brokers deployment and rollback through space deployContr
 
   const deployResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_core_revision/deployments",
+      "https://accounts.example.test/v1/capsule-projections/inst_core_revision/revisions",
       {
         method: "POST",
         body: JSON.stringify({
@@ -6162,7 +6148,7 @@ test("accounts handler brokers deployment and rollback through space deployContr
 
   const rollbackResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_core_revision/rollback",
+      "https://accounts.example.test/v1/capsule-projections/inst_core_revision/rollback",
       {
         method: "POST",
         body: JSON.stringify({
@@ -6221,7 +6207,7 @@ test("accounts handler rejects invalid AppCapsule revision mutations", async () 
     deployControl: { operations: deployControlOperationsStub() },
   });
   const createResponse = await handler(
-    new Request("https://accounts.example.test/v1/installation-projections", {
+    new Request("https://accounts.example.test/v1/capsule-projections", {
       method: "POST",
       body: JSON.stringify({
         capsuleId: "inst_revision_guard",
@@ -6243,7 +6229,7 @@ test("accounts handler rejects invalid AppCapsule revision mutations", async () 
 
   const pendingDeployment = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_revision_guard/deployments",
+      "https://accounts.example.test/v1/capsule-projections/inst_revision_guard/revisions",
       {
         method: "POST",
         body: JSON.stringify({
@@ -6261,7 +6247,7 @@ test("accounts handler rejects invalid AppCapsule revision mutations", async () 
 
   const readyResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_revision_guard/status",
+      "https://accounts.example.test/v1/capsule-projections/inst_revision_guard/status",
       {
         method: "PATCH",
         body: JSON.stringify({ status: "ready" }),
@@ -6272,7 +6258,7 @@ test("accounts handler rejects invalid AppCapsule revision mutations", async () 
 
   const missingConfirm = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_revision_guard/deployments",
+      "https://accounts.example.test/v1/capsule-projections/inst_revision_guard/revisions",
       {
         method: "POST",
         body: JSON.stringify({
@@ -6290,7 +6276,7 @@ test("accounts handler rejects invalid AppCapsule revision mutations", async () 
 
   const digestMismatch = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_revision_guard/deployments",
+      "https://accounts.example.test/v1/capsule-projections/inst_revision_guard/revisions",
       {
         method: "POST",
         body: JSON.stringify({
@@ -6324,7 +6310,7 @@ test("accounts handler rejects invalid AppCapsule revision mutations", async () 
     secretRefs: [],
   }));
   const meteredDigest = await testRevisionPermissionDigest({
-    operation: "deployment",
+    operation: "revision",
     capsuleId: "inst_revision_guard",
     appId: "takos.chat",
     sourceGitUrl: "https://github.com/takos/takos.git",
@@ -6335,7 +6321,7 @@ test("accounts handler rejects invalid AppCapsule revision mutations", async () 
   });
   const missingCostAck = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_revision_guard/deployments",
+      "https://accounts.example.test/v1/capsule-projections/inst_revision_guard/revisions",
       {
         method: "POST",
         body: JSON.stringify({
@@ -6357,7 +6343,7 @@ test("accounts handler rejects invalid AppCapsule revision mutations", async () 
 
   const sourceMismatch = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_revision_guard/deployments",
+      "https://accounts.example.test/v1/capsule-projections/inst_revision_guard/revisions",
       {
         method: "POST",
         body: JSON.stringify({
@@ -6387,7 +6373,7 @@ test("accounts handler does not launch-gate AppCapsule creation when platform re
   });
 
   const response = await handler(
-    new Request("https://accounts.example.test/v1/installation-projections", {
+    new Request("https://accounts.example.test/v1/capsule-projections", {
       method: "POST",
       body: JSON.stringify({
         capsuleId: "inst_open_platform",
@@ -6423,22 +6409,17 @@ test("accounts handler does not expose retired installation projection import ro
   });
 
   const response = await handler(
-    new Request(
-      "https://accounts.example.test/v1/installation-projections/import",
-      {
-        method: "POST",
-        body: JSON.stringify({
-          bundle: { kind: "takosumi.accounts.export-bundle@v1" },
-          target: { issuer: "https://accounts.target.test" },
-        }),
-      },
-    ),
+    new Request("https://accounts.example.test/v1/capsule-projections/import", {
+      method: "POST",
+      body: JSON.stringify({
+        bundle: { kind: "takosumi.accounts.export-bundle@v1" },
+        target: { issuer: "https://accounts.target.test" },
+      }),
+    }),
   );
 
   expect(response.status).toEqual(404);
-  expect(matchCapsuleRoute("/v1/installation-projections/import")).toEqual(
-    null,
-  );
+  expect(matchCapsuleRoute("/v1/capsule-projections/import")).toEqual(null);
 });
 
 test("accounts handler keeps export un-launch-gated but gates materialize when platform readiness access is closed", async () => {
@@ -6454,33 +6435,33 @@ test("accounts handler keeps export un-launch-gated but gates materialize when p
   // auth (401) when unauthenticated.
   const ungatedRequests = [
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_1/deployments",
+      "https://accounts.example.test/v1/capsule-projections/inst_1/revisions",
       {
         method: "POST",
       },
     ),
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_1/rollback",
+      "https://accounts.example.test/v1/capsule-projections/inst_1/rollback",
       {
         method: "POST",
       },
     ),
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_1/status",
+      "https://accounts.example.test/v1/capsule-projections/inst_1/status",
       {
         method: "PATCH",
         body: JSON.stringify({ status: "ready" }),
       },
     ),
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_1/status",
+      "https://accounts.example.test/v1/capsule-projections/inst_1/status",
       {
         method: "PATCH",
         body: JSON.stringify({ status: "installing" }),
       },
     ),
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_1/export",
+      "https://accounts.example.test/v1/capsule-projections/inst_1/export",
       {
         method: "POST",
       },
@@ -6497,7 +6478,7 @@ test("accounts handler keeps export un-launch-gated but gates materialize when p
   // launch-gated while the offering is closed.
   const gatedRequests = [
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_1/materialize",
+      "https://accounts.example.test/v1/capsule-projections/inst_1/materialize",
       {
         method: "POST",
       },
@@ -6522,7 +6503,7 @@ test("accounts handler lets operator materialize drill bypass only the readiness
   });
 
   await handler(
-    new Request("https://accounts.example.test/v1/installation-projections", {
+    new Request("https://accounts.example.test/v1/capsule-projections", {
       method: "POST",
       body: JSON.stringify({
         capsuleId: "inst_materialize_drill",
@@ -6557,7 +6538,7 @@ test("accounts handler lets operator materialize drill bypass only the readiness
 
   const invalidToken = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_materialize_drill/materialize",
+      "https://accounts.example.test/v1/capsule-projections/inst_materialize_drill/materialize",
       {
         method: "POST",
         headers: {
@@ -6575,7 +6556,7 @@ test("accounts handler lets operator materialize drill bypass only the readiness
 
   const invalidSession = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_materialize_drill/materialize",
+      "https://accounts.example.test/v1/capsule-projections/inst_materialize_drill/materialize",
       {
         method: "POST",
         headers: {
@@ -6592,7 +6573,7 @@ test("accounts handler lets operator materialize drill bypass only the readiness
 
   const materializeResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_materialize_drill/materialize",
+      "https://accounts.example.test/v1/capsule-projections/inst_materialize_drill/materialize",
       {
         method: "POST",
         headers: {
@@ -6608,7 +6589,7 @@ test("accounts handler lets operator materialize drill bypass only the readiness
 
   const cancelResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_materialize_drill/status",
+      "https://accounts.example.test/v1/capsule-projections/inst_materialize_drill/status",
       {
         method: "PATCH",
         body: JSON.stringify({
@@ -6644,7 +6625,7 @@ test("accounts handler allows authenticated owner export while platform readines
   });
 
   const createResponse = await handler(
-    new Request("https://accounts.example.test/v1/installation-projections", {
+    new Request("https://accounts.example.test/v1/capsule-projections", {
       method: "POST",
       body: JSON.stringify({
         capsuleId: "inst_closed_export",
@@ -6667,7 +6648,7 @@ test("accounts handler allows authenticated owner export while platform readines
 
   const exportResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_closed_export/export",
+      "https://accounts.example.test/v1/capsule-projections/inst_closed_export/export",
       {
         method: "POST",
         headers: { "Idempotency-Key": "idem-closed-export" },
@@ -6795,7 +6776,7 @@ test("accounts handler mirrors control deploy projection and exports after apply
 
   const prematureExportResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_control_export/export",
+      "https://accounts.example.test/v1/capsule-projections/inst_control_export/export",
       {
         method: "POST",
         headers: { "Idempotency-Key": "idem-control-export-early" },
@@ -6826,7 +6807,7 @@ test("accounts handler mirrors control deploy projection and exports after apply
 
   const exportResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_control_export/export",
+      "https://accounts.example.test/v1/capsule-projections/inst_control_export/export",
       {
         method: "POST",
         headers: { "Idempotency-Key": "idem-control-export-ready" },
@@ -6911,7 +6892,7 @@ test("accounts handler completes AppCapsule ready suspended exported lifecycle",
   const handler = createAccountsHandler({ store });
 
   const createResponse = await handler(
-    new Request("https://accounts.example.test/v1/installation-projections", {
+    new Request("https://accounts.example.test/v1/capsule-projections", {
       method: "POST",
       body: JSON.stringify({
         capsuleId: "inst_lifecycle",
@@ -6942,7 +6923,7 @@ test("accounts handler completes AppCapsule ready suspended exported lifecycle",
   ] as const) {
     const response = await handler(
       new Request(
-        "https://accounts.example.test/v1/installation-projections/inst_lifecycle/status",
+        "https://accounts.example.test/v1/capsule-projections/inst_lifecycle/status",
         {
           method: "PATCH",
           body: JSON.stringify({ status, reason }),
@@ -6955,7 +6936,7 @@ test("accounts handler completes AppCapsule ready suspended exported lifecycle",
 
   const exportedToReadyResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_lifecycle/status",
+      "https://accounts.example.test/v1/capsule-projections/inst_lifecycle/status",
       {
         method: "PATCH",
         body: JSON.stringify({ status: "ready" }),
@@ -6967,7 +6948,7 @@ test("accounts handler completes AppCapsule ready suspended exported lifecycle",
 
   const inspectResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_lifecycle",
+      "https://accounts.example.test/v1/capsule-projections/inst_lifecycle",
       { headers: accountSessionHeaders(ownerSession) },
     ),
   );
@@ -6978,7 +6959,7 @@ test("accounts handler completes AppCapsule ready suspended exported lifecycle",
 
   const eventsResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_lifecycle/events",
+      "https://accounts.example.test/v1/capsule-projections/inst_lifecycle/events",
     ),
   );
   expect(eventsResponse.status).toEqual(200);
@@ -6998,7 +6979,7 @@ test("accounts handler records uninstall for already terminal installations", as
   const handler = createAccountsHandler({ store });
 
   const createResponse = await handler(
-    new Request("https://accounts.example.test/v1/installation-projections", {
+    new Request("https://accounts.example.test/v1/capsule-projections", {
       method: "POST",
       body: JSON.stringify({
         capsuleId: "inst_failed_uninstall",
@@ -7021,7 +7002,7 @@ test("accounts handler records uninstall for already terminal installations", as
 
   const uninstallResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_failed_uninstall",
+      "https://accounts.example.test/v1/capsule-projections/inst_failed_uninstall",
       { method: "DELETE" },
     ),
   );
@@ -7039,7 +7020,7 @@ test("accounts handler accepts AppCapsule materialize requests idempotently", as
   const handler = createAccountsHandler({ store });
 
   await handler(
-    new Request("https://accounts.example.test/v1/installation-projections", {
+    new Request("https://accounts.example.test/v1/capsule-projections", {
       method: "POST",
       body: JSON.stringify({
         capsuleId: "inst_materialize_request",
@@ -7101,7 +7082,7 @@ test("accounts handler accepts AppCapsule materialize requests idempotently", as
 
   const missingKeyResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_materialize_request/materialize",
+      "https://accounts.example.test/v1/capsule-projections/inst_materialize_request/materialize",
       {
         method: "POST",
         body: JSON.stringify({
@@ -7116,7 +7097,7 @@ test("accounts handler accepts AppCapsule materialize requests idempotently", as
 
   const missingPermissionDigestResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_materialize_request/materialize",
+      "https://accounts.example.test/v1/capsule-projections/inst_materialize_request/materialize",
       {
         method: "POST",
         headers: { "Idempotency-Key": "idem-materialize-missing-digest" },
@@ -7135,7 +7116,7 @@ test("accounts handler accepts AppCapsule materialize requests idempotently", as
 
   const mismatchedPermissionDigestResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_materialize_request/materialize",
+      "https://accounts.example.test/v1/capsule-projections/inst_materialize_request/materialize",
       {
         method: "POST",
         headers: { "Idempotency-Key": "idem-materialize-bad-digest" },
@@ -7169,7 +7150,7 @@ test("accounts handler accepts AppCapsule materialize requests idempotently", as
     cutover: materializeCutover,
   });
   const request = new Request(
-    "https://accounts.example.test/v1/installation-projections/inst_materialize_request/materialize",
+    "https://accounts.example.test/v1/capsule-projections/inst_materialize_request/materialize",
     {
       method: "POST",
       headers: { "Idempotency-Key": "idem-materialize-1" },
@@ -7214,7 +7195,7 @@ test("accounts handler accepts AppCapsule materialize requests idempotently", as
 
   const repeatedResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_materialize_request/materialize",
+      "https://accounts.example.test/v1/capsule-projections/inst_materialize_request/materialize",
       {
         method: "POST",
         headers: { "Idempotency-Key": "idem-materialize-1" },
@@ -7238,7 +7219,7 @@ test("accounts handler accepts AppCapsule materialize requests idempotently", as
 
   const bodyMismatchResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_materialize_request/materialize",
+      "https://accounts.example.test/v1/capsule-projections/inst_materialize_request/materialize",
       {
         method: "POST",
         headers: { "Idempotency-Key": "idem-materialize-1" },
@@ -7263,7 +7244,7 @@ test("accounts handler accepts AppCapsule materialize requests idempotently", as
 
   const conflictingResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_materialize_request/materialize",
+      "https://accounts.example.test/v1/capsule-projections/inst_materialize_request/materialize",
       {
         method: "POST",
         headers: { "Idempotency-Key": "idem-materialize-2" },
@@ -7298,7 +7279,7 @@ test("accounts handler accepts AppCapsule materialize requests idempotently", as
 
   const filteredEventsResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_materialize_request/events?types=installation.materialize-requested",
+      "https://accounts.example.test/v1/capsule-projections/inst_materialize_request/events?types=installation.materialize-requested",
     ),
   );
   expect(filteredEventsResponse.status).toEqual(200);
@@ -7313,7 +7294,7 @@ test("accounts handler accepts AppCapsule materialize requests idempotently", as
 
   const mismatchedCompleteResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_materialize_request/status",
+      "https://accounts.example.test/v1/capsule-projections/inst_materialize_request/status",
       {
         method: "PATCH",
         body: JSON.stringify({
@@ -7337,7 +7318,7 @@ test("accounts handler accepts AppCapsule materialize requests idempotently", as
 
   const completeResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_materialize_request/status",
+      "https://accounts.example.test/v1/capsule-projections/inst_materialize_request/status",
       {
         method: "PATCH",
         body: JSON.stringify({
@@ -7368,7 +7349,7 @@ test("accounts handler accepts AppCapsule materialize requests idempotently", as
 
   const repeatedCompleteResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_materialize_request/status",
+      "https://accounts.example.test/v1/capsule-projections/inst_materialize_request/status",
       {
         method: "PATCH",
         body: JSON.stringify({
@@ -7388,7 +7369,7 @@ test("accounts handler records AppCapsule materialize operation failures", async
   const handler = createAccountsHandler({ store });
 
   await handler(
-    new Request("https://accounts.example.test/v1/installation-projections", {
+    new Request("https://accounts.example.test/v1/capsule-projections", {
       method: "POST",
       body: JSON.stringify({
         capsuleId: "inst_materialize_failure",
@@ -7411,7 +7392,7 @@ test("accounts handler records AppCapsule materialize operation failures", async
 
   const materializeResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_materialize_failure/materialize",
+      "https://accounts.example.test/v1/capsule-projections/inst_materialize_failure/materialize",
       {
         method: "POST",
         headers: { "Idempotency-Key": "idem-materialize-failure" },
@@ -7434,7 +7415,7 @@ test("accounts handler records AppCapsule materialize operation failures", async
 
   const failedResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_materialize_failure/status",
+      "https://accounts.example.test/v1/capsule-projections/inst_materialize_failure/status",
       {
         method: "PATCH",
         body: JSON.stringify({
@@ -7480,7 +7461,7 @@ test("accounts handler can close materialize operation before cutover without fa
   const handler = createAccountsHandler({ store });
 
   await handler(
-    new Request("https://accounts.example.test/v1/installation-projections", {
+    new Request("https://accounts.example.test/v1/capsule-projections", {
       method: "POST",
       body: JSON.stringify({
         capsuleId: "inst_materialize_cancel",
@@ -7503,7 +7484,7 @@ test("accounts handler can close materialize operation before cutover without fa
 
   const materializeResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_materialize_cancel/materialize",
+      "https://accounts.example.test/v1/capsule-projections/inst_materialize_cancel/materialize",
       {
         method: "POST",
         headers: { "Idempotency-Key": "idem-materialize-cancel" },
@@ -7526,7 +7507,7 @@ test("accounts handler can close materialize operation before cutover without fa
 
   const cancelResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_materialize_cancel/status",
+      "https://accounts.example.test/v1/capsule-projections/inst_materialize_cancel/status",
       {
         method: "PATCH",
         body: JSON.stringify({
@@ -7564,7 +7545,7 @@ test("accounts handler can close materialize operation before cutover without fa
 
   const repeatedCancelResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_materialize_cancel/status",
+      "https://accounts.example.test/v1/capsule-projections/inst_materialize_cancel/status",
       {
         method: "PATCH",
         body: JSON.stringify({
@@ -7648,7 +7629,7 @@ test("accounts handler runs configured materialize worker and swaps runtime bind
   });
 
   await handler(
-    new Request("https://accounts.example.test/v1/installation-projections", {
+    new Request("https://accounts.example.test/v1/capsule-projections", {
       method: "POST",
       body: JSON.stringify({
         capsuleId: "inst_materialize_worker",
@@ -7705,7 +7686,7 @@ test("accounts handler runs configured materialize worker and swaps runtime bind
 
   const response = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_materialize_worker/materialize",
+      "https://accounts.example.test/v1/capsule-projections/inst_materialize_worker/materialize",
       {
         method: "POST",
         headers: { "Idempotency-Key": "idem-materialize-worker" },
@@ -7776,7 +7757,7 @@ test("accounts handler rejects materialize worker continuity mismatch before cut
   });
 
   await handler(
-    new Request("https://accounts.example.test/v1/installation-projections", {
+    new Request("https://accounts.example.test/v1/capsule-projections", {
       method: "POST",
       body: JSON.stringify({
         capsuleId: "inst_materialize_mismatch",
@@ -7805,7 +7786,7 @@ test("accounts handler rejects materialize worker continuity mismatch before cut
 
   const response = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_materialize_mismatch/materialize",
+      "https://accounts.example.test/v1/capsule-projections/inst_materialize_mismatch/materialize",
       {
         method: "POST",
         headers: { "Idempotency-Key": "idem-materialize-mismatch" },
@@ -7851,7 +7832,7 @@ test("accounts handler keeps shared-cell runtime ready when materialize worker f
   });
 
   await handler(
-    new Request("https://accounts.example.test/v1/installation-projections", {
+    new Request("https://accounts.example.test/v1/capsule-projections", {
       method: "POST",
       body: JSON.stringify({
         capsuleId: "inst_materialize_worker_failure",
@@ -7880,7 +7861,7 @@ test("accounts handler keeps shared-cell runtime ready when materialize worker f
 
   const response = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_materialize_worker_failure/materialize",
+      "https://accounts.example.test/v1/capsule-projections/inst_materialize_worker_failure/materialize",
       {
         method: "POST",
         headers: { "Idempotency-Key": "idem-materialize-worker-failure" },
@@ -7925,7 +7906,7 @@ test("accounts handler rejects operation completion without request event", asyn
   const handler = createAccountsHandler({ store });
 
   await handler(
-    new Request("https://accounts.example.test/v1/installation-projections", {
+    new Request("https://accounts.example.test/v1/capsule-projections", {
       method: "POST",
       body: JSON.stringify({
         capsuleId: "inst_missing_operation",
@@ -7948,7 +7929,7 @@ test("accounts handler rejects operation completion without request event", asyn
 
   const exportedResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_missing_operation/status",
+      "https://accounts.example.test/v1/capsule-projections/inst_missing_operation/status",
       {
         method: "PATCH",
         body: JSON.stringify({
@@ -7968,7 +7949,7 @@ test("accounts handler rejects operation completion without request event", asyn
 
   const failedResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_missing_operation/status",
+      "https://accounts.example.test/v1/capsule-projections/inst_missing_operation/status",
       {
         method: "PATCH",
         body: JSON.stringify({
@@ -7996,7 +7977,7 @@ test("accounts handler accepts AppCapsule export requests and exposes pending op
   });
 
   await handler(
-    new Request("https://accounts.example.test/v1/installation-projections", {
+    new Request("https://accounts.example.test/v1/capsule-projections", {
       method: "POST",
       body: JSON.stringify({
         capsuleId: "inst_export_request",
@@ -8019,7 +8000,7 @@ test("accounts handler accepts AppCapsule export requests and exposes pending op
 
   const acceptedResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_export_request/export",
+      "https://accounts.example.test/v1/capsule-projections/inst_export_request/export",
       {
         method: "POST",
         headers: { "Idempotency-Key": "idem-export-1" },
@@ -8044,12 +8025,12 @@ test("accounts handler accepts AppCapsule export requests and exposes pending op
   expect(accepted.status).toEqual("preparing");
   expect(accepted.downloadUrl).toEqual(null);
   expect(acceptedResponse.headers.get("location") ?? "").toContain(
-    `/v1/installation-projections/inst_export_request/exports/${accepted.operationId}`,
+    `/v1/capsule-projections/inst_export_request/exports/${accepted.operationId}`,
   );
 
   const operationResponse = await handler(
     new Request(
-      `https://accounts.example.test/v1/installation-projections/inst_export_request/exports/${accepted.operationId}`,
+      `https://accounts.example.test/v1/capsule-projections/inst_export_request/exports/${accepted.operationId}`,
     ),
   );
   expect(operationResponse.status).toEqual(200);
@@ -8059,7 +8040,7 @@ test("accounts handler accepts AppCapsule export requests and exposes pending op
 
   const pendingDownloadResponse = await handler(
     new Request(
-      `https://accounts.example.test/v1/installation-projections/inst_export_request/exports/${accepted.operationId}/download`,
+      `https://accounts.example.test/v1/capsule-projections/inst_export_request/exports/${accepted.operationId}/download`,
     ),
   );
   expect(pendingDownloadResponse.status).toEqual(409);
@@ -8069,7 +8050,7 @@ test("accounts handler accepts AppCapsule export requests and exposes pending op
 
   const repeatedResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_export_request/export",
+      "https://accounts.example.test/v1/capsule-projections/inst_export_request/export",
       {
         method: "POST",
         headers: { "Idempotency-Key": "idem-export-1" },
@@ -8095,7 +8076,7 @@ test("accounts handler accepts AppCapsule export requests and exposes pending op
 
   const bodyMismatchResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_export_request/export",
+      "https://accounts.example.test/v1/capsule-projections/inst_export_request/export",
       {
         method: "POST",
         headers: { "Idempotency-Key": "idem-export-1" },
@@ -8114,7 +8095,7 @@ test("accounts handler accepts AppCapsule export requests and exposes pending op
 
   const insecureExportedResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_export_request/status",
+      "https://accounts.example.test/v1/capsule-projections/inst_export_request/status",
       {
         method: "PATCH",
         body: JSON.stringify({
@@ -8134,7 +8115,7 @@ test("accounts handler accepts AppCapsule export requests and exposes pending op
 
   const exportedResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_export_request/status",
+      "https://accounts.example.test/v1/capsule-projections/inst_export_request/status",
       {
         method: "PATCH",
         body: JSON.stringify({
@@ -8152,7 +8133,7 @@ test("accounts handler accepts AppCapsule export requests and exposes pending op
   const exportedStatusBody = await exportedResponse.json();
   expect(exportedStatusBody.event.type).toEqual("installation.exported");
   expect(exportedStatusBody.event.payload.downloadUrl).toEqual(
-    `/v1/installation-projections/inst_export_request/exports/${accepted.operationId}/download`,
+    `/v1/capsule-projections/inst_export_request/exports/${accepted.operationId}/download`,
   );
   expect(exportedStatusBody.event.payload.archiveDigest).toEqual(
     `sha256:${"c".repeat(64)}`,
@@ -8163,7 +8144,7 @@ test("accounts handler accepts AppCapsule export requests and exposes pending op
 
   const completedOperationResponse = await handler(
     new Request(
-      `https://accounts.example.test/v1/installation-projections/inst_export_request/exports/${accepted.operationId}`,
+      `https://accounts.example.test/v1/capsule-projections/inst_export_request/exports/${accepted.operationId}`,
     ),
   );
   expect(completedOperationResponse.status).toEqual(200);
@@ -8171,12 +8152,12 @@ test("accounts handler accepts AppCapsule export requests and exposes pending op
   expect(completedOperation.status).toEqual("exported");
   expect(completedOperation.archiveDigest).toEqual(`sha256:${"c".repeat(64)}`);
   expect(completedOperation.downloadUrl).toEqual(
-    `/v1/installation-projections/inst_export_request/exports/${accepted.operationId}/download`,
+    `/v1/capsule-projections/inst_export_request/exports/${accepted.operationId}/download`,
   );
 
   const downloadResponse = await handler(
     new Request(
-      `https://accounts.example.test/v1/installation-projections/inst_export_request/exports/${accepted.operationId}/download`,
+      `https://accounts.example.test/v1/capsule-projections/inst_export_request/exports/${accepted.operationId}/download`,
     ),
   );
   // The public operation status returns only the account-plane download route.
@@ -8192,7 +8173,7 @@ test("accounts handler accepts AppCapsule export requests and exposes pending op
 
   const repeatedExportedResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_export_request/status",
+      "https://accounts.example.test/v1/capsule-projections/inst_export_request/status",
       {
         method: "PATCH",
         body: JSON.stringify({
@@ -8224,7 +8205,7 @@ test("accounts handler rejects data export without age encryption", async () => 
   const handler = createAccountsHandler({ store });
 
   await handler(
-    new Request("https://accounts.example.test/v1/installation-projections", {
+    new Request("https://accounts.example.test/v1/capsule-projections", {
       method: "POST",
       body: JSON.stringify({
         capsuleId: "inst_export_plain_data",
@@ -8247,7 +8228,7 @@ test("accounts handler rejects data export without age encryption", async () => 
 
   const response = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_export_plain_data/export",
+      "https://accounts.example.test/v1/capsule-projections/inst_export_plain_data/export",
       {
         method: "POST",
         headers: { "Idempotency-Key": "idem-export-plain-data" },
@@ -8275,7 +8256,7 @@ test("accounts handler rejects malformed export request fields", async () => {
   const handler = createAccountsHandler({ store });
 
   await handler(
-    new Request("https://accounts.example.test/v1/installation-projections", {
+    new Request("https://accounts.example.test/v1/capsule-projections", {
       method: "POST",
       body: JSON.stringify({
         capsuleId: "inst_export_malformed",
@@ -8362,7 +8343,7 @@ test("accounts handler rejects malformed export request fields", async () => {
   for (const testCase of cases) {
     const response = await handler(
       new Request(
-        "https://accounts.example.test/v1/installation-projections/inst_export_malformed/export",
+        "https://accounts.example.test/v1/capsule-projections/inst_export_malformed/export",
         {
           method: "POST",
           headers: { "Idempotency-Key": `idem-export-${testCase.name}` },
@@ -8414,7 +8395,7 @@ test("accounts handler runs configured export worker and closes operation", asyn
   });
 
   const createResponse = await handler(
-    new Request("https://accounts.example.test/v1/installation-projections", {
+    new Request("https://accounts.example.test/v1/capsule-projections", {
       method: "POST",
       body: JSON.stringify({
         capsuleId: "inst_export_worker",
@@ -8461,7 +8442,7 @@ test("accounts handler runs configured export worker and closes operation", asyn
 
   const exportResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_export_worker/export",
+      "https://accounts.example.test/v1/capsule-projections/inst_export_worker/export",
       {
         method: "POST",
         headers: { "Idempotency-Key": "idem-export-worker" },
@@ -8479,12 +8460,12 @@ test("accounts handler runs configured export worker and closes operation", asyn
   expect(exported.status).toEqual("exported");
   expect(exported.downloadExpiresAt).toEqual("2999-05-10T00:00:00.000Z");
   expect(exported.downloadUrl).toEqual(
-    `/v1/installation-projections/inst_export_worker/exports/${exported.operationId}/download`,
+    `/v1/capsule-projections/inst_export_worker/exports/${exported.operationId}/download`,
   );
   expect(exported.archiveDigest).toEqual(`sha256:${"b".repeat(64)}`);
   expect(exported.event.type).toEqual("installation.exported");
   expect(exported.event.payload.downloadUrl).toEqual(
-    `/v1/installation-projections/inst_export_worker/exports/${exported.operationId}/download`,
+    `/v1/capsule-projections/inst_export_worker/exports/${exported.operationId}/download`,
   );
   expect(exported.event.payload.archiveDigest).toEqual(
     `sha256:${"b".repeat(64)}`,
@@ -8514,7 +8495,7 @@ test("accounts handler runs configured export worker and closes operation", asyn
 
   const operationResponse = await handler(
     new Request(
-      `https://accounts.example.test/v1/installation-projections/inst_export_worker/exports/${exported.operationId}`,
+      `https://accounts.example.test/v1/capsule-projections/inst_export_worker/exports/${exported.operationId}`,
     ),
   );
   expect(operationResponse.status).toEqual(200);
@@ -8524,7 +8505,7 @@ test("accounts handler runs configured export worker and closes operation", asyn
 
   const repeatedResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_export_worker/export",
+      "https://accounts.example.test/v1/capsule-projections/inst_export_worker/export",
       {
         method: "POST",
         headers: { "Idempotency-Key": "idem-export-worker" },
@@ -8542,7 +8523,7 @@ test("accounts handler runs configured export worker and closes operation", asyn
 
   const downloadResponse = await handler(
     new Request(
-      `https://accounts.example.test/v1/installation-projections/inst_export_worker/exports/${exported.operationId}/download`,
+      `https://accounts.example.test/v1/capsule-projections/inst_export_worker/exports/${exported.operationId}/download`,
     ),
   );
   // Download endpoint signs the raw artifact URL only at redirect time.
@@ -8563,7 +8544,7 @@ test("accounts handler records configured export worker failures", async () => {
   });
 
   await handler(
-    new Request("https://accounts.example.test/v1/installation-projections", {
+    new Request("https://accounts.example.test/v1/capsule-projections", {
       method: "POST",
       body: JSON.stringify({
         capsuleId: "inst_export_worker_failure",
@@ -8586,7 +8567,7 @@ test("accounts handler records configured export worker failures", async () => {
 
   const exportResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_export_worker_failure/export",
+      "https://accounts.example.test/v1/capsule-projections/inst_export_worker_failure/export",
       {
         method: "POST",
         headers: { "Idempotency-Key": "idem-export-worker-failure" },
@@ -8611,7 +8592,7 @@ test("accounts handler records configured export worker failures", async () => {
 
   const operationResponse = await handler(
     new Request(
-      `https://accounts.example.test/v1/installation-projections/inst_export_worker_failure/exports/${body.operationId}`,
+      `https://accounts.example.test/v1/capsule-projections/inst_export_worker_failure/exports/${body.operationId}`,
     ),
   );
   expect(operationResponse.status).toEqual(200);
@@ -8691,7 +8672,7 @@ test("accounts handler moves AppCapsule through materialize and export lifecycle
   });
 
   const createResponse = await sourceHandler(
-    new Request("https://accounts.source.test/v1/installation-projections", {
+    new Request("https://accounts.source.test/v1/capsule-projections", {
       method: "POST",
       body: JSON.stringify({
         capsuleId: "inst_lifecycle",
@@ -8740,7 +8721,7 @@ test("accounts handler moves AppCapsule through materialize and export lifecycle
 
   const materializeResponse = await sourceHandler(
     new Request(
-      "https://accounts.source.test/v1/installation-projections/inst_lifecycle/materialize",
+      "https://accounts.source.test/v1/capsule-projections/inst_lifecycle/materialize",
       {
         method: "POST",
         headers: { "Idempotency-Key": "idem-lifecycle-materialize" },
@@ -8786,7 +8767,7 @@ test("accounts handler moves AppCapsule through materialize and export lifecycle
 
   const exportResponse = await sourceHandler(
     new Request(
-      "https://accounts.source.test/v1/installation-projections/inst_lifecycle/export",
+      "https://accounts.source.test/v1/capsule-projections/inst_lifecycle/export",
       {
         method: "POST",
         headers: { "Idempotency-Key": "idem-lifecycle-export" },
@@ -8804,7 +8785,7 @@ test("accounts handler moves AppCapsule through materialize and export lifecycle
   expect(exported.status).toEqual("exported");
   expect(exported.event.type).toEqual("installation.exported");
   expect(exported.downloadUrl).toEqual(
-    `/v1/installation-projections/inst_lifecycle/exports/${exported.operationId}/download`,
+    `/v1/capsule-projections/inst_lifecycle/exports/${exported.operationId}/download`,
   );
   if (!exportedBundle) {
     throw new Error("expected export worker to receive installation bundle");
@@ -8833,20 +8814,17 @@ test("accounts handler moves AppCapsule through materialize and export lifecycle
     issuer: "https://accounts.target.test",
   });
   const importResponse = await targetHandler(
-    new Request(
-      "https://accounts.target.test/v1/installation-projections/import",
-      {
-        method: "POST",
-        body: JSON.stringify({
-          bundle: exportedBundle,
-          targetIssuer: "https://accounts.target.test",
-          targetAccountId: "acct_target",
-          targetWorkspaceId: "space_target",
-          targetCapsuleId: "inst_lifecycle_imported",
-          createdBySubject: "tsub_target",
-        }),
-      },
-    ),
+    new Request("https://accounts.target.test/v1/capsule-projections/import", {
+      method: "POST",
+      body: JSON.stringify({
+        bundle: exportedBundle,
+        targetIssuer: "https://accounts.target.test",
+        targetAccountId: "acct_target",
+        targetWorkspaceId: "space_target",
+        targetCapsuleId: "inst_lifecycle_imported",
+        createdBySubject: "tsub_target",
+      }),
+    }),
   );
   expect(importResponse.status).toEqual(404);
 });
@@ -8856,7 +8834,7 @@ test("accounts handler records AppCapsule export operation failures", async () =
   const handler = createAccountsHandler({ store });
 
   await handler(
-    new Request("https://accounts.example.test/v1/installation-projections", {
+    new Request("https://accounts.example.test/v1/capsule-projections", {
       method: "POST",
       body: JSON.stringify({
         capsuleId: "inst_export_failure",
@@ -8879,7 +8857,7 @@ test("accounts handler records AppCapsule export operation failures", async () =
 
   const exportResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_export_failure/export",
+      "https://accounts.example.test/v1/capsule-projections/inst_export_failure/export",
       {
         method: "POST",
         headers: { "Idempotency-Key": "idem-export-failure" },
@@ -8896,7 +8874,7 @@ test("accounts handler records AppCapsule export operation failures", async () =
 
   const failedResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_export_failure/status",
+      "https://accounts.example.test/v1/capsule-projections/inst_export_failure/status",
       {
         method: "PATCH",
         body: JSON.stringify({
@@ -8915,7 +8893,7 @@ test("accounts handler records AppCapsule export operation failures", async () =
 
   const operationResponse = await handler(
     new Request(
-      `https://accounts.example.test/v1/installation-projections/inst_export_failure/exports/${operationId}`,
+      `https://accounts.example.test/v1/capsule-projections/inst_export_failure/exports/${operationId}`,
     ),
   );
   expect(operationResponse.status).toEqual(200);
@@ -8936,7 +8914,7 @@ test("accounts handler materializes launch token binding config", async () => {
   });
 
   const createResponse = await handler(
-    new Request("https://accounts.example.test/v1/installation-projections", {
+    new Request("https://accounts.example.test/v1/capsule-projections", {
       method: "POST",
       body: JSON.stringify({
         capsuleId: "inst_launch_binding",
@@ -9001,7 +8979,7 @@ test("accounts handler connects shared-cell runtime binding to launch token boot
   });
 
   const createResponse = await handler(
-    new Request("https://accounts.example.test/v1/installation-projections", {
+    new Request("https://accounts.example.test/v1/capsule-projections", {
       method: "POST",
       body: JSON.stringify({
         capsuleId: "inst_shared_launch",
@@ -9072,7 +9050,7 @@ test("accounts handler isolates shared-cell namespaces and launch tokens", async
   });
   async function createSharedInstall(capsuleId: string): Promise<unknown> {
     const response = await handler(
-      new Request("https://accounts.example.test/v1/installation-projections", {
+      new Request("https://accounts.example.test/v1/capsule-projections", {
         method: "POST",
         body: JSON.stringify({
           capsuleId,
@@ -9211,7 +9189,7 @@ test("accounts handler isolates per-installation data oidc grants and billing", 
     }[];
   }> {
     const response = await handler(
-      new Request("https://accounts.example.test/v1/installation-projections", {
+      new Request("https://accounts.example.test/v1/capsule-projections", {
         method: "POST",
         body: JSON.stringify({
           capsuleId: input.capsuleId,
@@ -9392,7 +9370,7 @@ test("accounts handler materializes configured provider env bindings", async () 
   });
 
   const response = await handler(
-    new Request("https://accounts.example.test/v1/installation-projections", {
+    new Request("https://accounts.example.test/v1/capsule-projections", {
       method: "POST",
       body: JSON.stringify({
         capsuleId: "inst_materialized",
@@ -9493,7 +9471,7 @@ test("accounts handler rejects secret-bearing service binding env material", asy
   });
 
   const response = await handler(
-    new Request("https://accounts.example.test/v1/installation-projections", {
+    new Request("https://accounts.example.test/v1/capsule-projections", {
       method: "POST",
       body: JSON.stringify({
         capsuleId: "inst_secret_env_rejected",
@@ -9530,7 +9508,7 @@ test("accounts handler rejects secret-bearing service binding env material", asy
 test("accounts handler rejects internal ServiceBindingMaterial secretRefs in public request bodies", async () => {
   const handler = createAccountsHandler();
   const response = await handler(
-    new Request("https://accounts.example.test/v1/installation-projections", {
+    new Request("https://accounts.example.test/v1/capsule-projections", {
       method: "POST",
       body: JSON.stringify({
         capsuleId: "inst_bad_empty_refs",
@@ -9566,7 +9544,7 @@ test("accounts handler rejects internal ServiceBindingMaterial secretRefs in pub
 test("accounts handler rejects ServiceBindingMaterial secret handles in public request bodies", async () => {
   const handler = createAccountsHandler();
   const response = await handler(
-    new Request("https://accounts.example.test/v1/installation-projections", {
+    new Request("https://accounts.example.test/v1/capsule-projections", {
       method: "POST",
       body: JSON.stringify({
         capsuleId: "inst_bad",
@@ -9602,7 +9580,7 @@ test("accounts handler rejects ServiceBindingMaterial secret handles in public r
 test("accounts handler rejects ServiceGrantMaterial records outside the catalog contract", async () => {
   const handler = createAccountsHandler();
   const response = await handler(
-    new Request("https://accounts.example.test/v1/installation-projections", {
+    new Request("https://accounts.example.test/v1/capsule-projections", {
       method: "POST",
       body: JSON.stringify({
         capsuleId: "inst_bad_grant",
@@ -9732,7 +9710,7 @@ test("accounts handler paginates AppCapsule list via cursor and limit", async ()
   const handler = createAccountsHandler({ store });
   const firstPage = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections?space_id=space_page&limit=2",
+      "https://accounts.example.test/v1/capsule-projections?space_id=space_page&limit=2",
       { headers: accountSessionHeaders(session) },
     ),
   );
@@ -9743,7 +9721,7 @@ test("accounts handler paginates AppCapsule list via cursor and limit", async ()
 
   const secondPage = await handler(
     new Request(
-      `https://accounts.example.test/v1/installation-projections?space_id=space_page&limit=2&cursor=${encodeURIComponent(
+      `https://accounts.example.test/v1/capsule-projections?space_id=space_page&limit=2&cursor=${encodeURIComponent(
         firstBody.next_cursor,
       )}`,
       { headers: accountSessionHeaders(session) },
@@ -9758,7 +9736,7 @@ test("accounts handler paginates AppCapsule list via cursor and limit", async ()
 
   const malformedCursor = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections?space_id=space_page&cursor=%21%21%21",
+      "https://accounts.example.test/v1/capsule-projections?space_id=space_page&cursor=%21%21%21",
       { headers: accountSessionHeaders(session) },
     ),
   );
@@ -9766,7 +9744,7 @@ test("accounts handler paginates AppCapsule list via cursor and limit", async ()
 
   const overlimit = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections?space_id=space_page&limit=-3",
+      "https://accounts.example.test/v1/capsule-projections?space_id=space_page&limit=-3",
       { headers: accountSessionHeaders(session) },
     ),
   );
@@ -9784,7 +9762,7 @@ test("accounts handler signs export download redirects", async () => {
     }),
   });
   await handler(
-    new Request("https://accounts.example.test/v1/installation-projections", {
+    new Request("https://accounts.example.test/v1/capsule-projections", {
       method: "POST",
       body: JSON.stringify({
         capsuleId: "inst_signed_download",
@@ -9805,7 +9783,7 @@ test("accounts handler signs export download redirects", async () => {
   );
   const exportResponse = await handler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_signed_download/export",
+      "https://accounts.example.test/v1/capsule-projections/inst_signed_download/export",
       {
         method: "POST",
         headers: { "Idempotency-Key": "idem-signed-export" },
@@ -9823,7 +9801,7 @@ test("accounts handler signs export download redirects", async () => {
 
   const downloadResponse = await handler(
     new Request(
-      `https://accounts.example.test/v1/installation-projections/inst_signed_download/exports/${exported.operationId}/download`,
+      `https://accounts.example.test/v1/capsule-projections/inst_signed_download/exports/${exported.operationId}/download`,
     ),
   );
   expect(downloadResponse.status).toEqual(302);
@@ -9841,7 +9819,7 @@ test("accounts handler signs export download redirects", async () => {
   });
   const noSecretDownload = await noSecretHandler(
     new Request(
-      `https://accounts.example.test/v1/installation-projections/inst_signed_download/exports/${exported.operationId}/download`,
+      `https://accounts.example.test/v1/capsule-projections/inst_signed_download/exports/${exported.operationId}/download`,
     ),
   );
   expect(noSecretDownload.status).toEqual(503);
@@ -9856,7 +9834,7 @@ test("accounts handler signs export download redirects", async () => {
     }),
   });
   await insecureHandler(
-    new Request("https://accounts.example.test/v1/installation-projections", {
+    new Request("https://accounts.example.test/v1/capsule-projections", {
       method: "POST",
       body: JSON.stringify({
         capsuleId: "inst_insecure_download",
@@ -9877,7 +9855,7 @@ test("accounts handler signs export download redirects", async () => {
   );
   const insecureExportResponse = await insecureHandler(
     new Request(
-      "https://accounts.example.test/v1/installation-projections/inst_insecure_download/export",
+      "https://accounts.example.test/v1/capsule-projections/inst_insecure_download/export",
       {
         method: "POST",
         headers: { "Idempotency-Key": "idem-insecure-export" },
@@ -9898,7 +9876,7 @@ test("accounts handler signs export download redirects", async () => {
   );
   const insecureDownloadResponse = await insecureHandler(
     new Request(
-      `https://accounts.example.test/v1/installation-projections/inst_insecure_download/exports/${insecureExported.operationId}/download`,
+      `https://accounts.example.test/v1/capsule-projections/inst_insecure_download/exports/${insecureExported.operationId}/download`,
     ),
   );
   expect(insecureDownloadResponse.status).toEqual(409);
@@ -9950,7 +9928,7 @@ async function createReadyLaunchCapsule(
   capsuleId: string,
 ): Promise<void> {
   const response = await handler(
-    new Request("https://accounts.example.test/v1/installation-projections", {
+    new Request("https://accounts.example.test/v1/capsule-projections", {
       method: "POST",
       body: JSON.stringify({
         capsuleId,

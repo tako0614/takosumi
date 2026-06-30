@@ -466,7 +466,7 @@ test("Accounts service graph material resolver projects BillingPort material", a
     TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_BILLING_USAGE,
   );
   expect(material.usageReportEndpoint).toEqual(
-    "https://cloud.example.test/v1/installation-projections/inst_billing/billing/usage-reports",
+    "https://cloud.example.test/v1/capsule-projections/inst_billing/billing/usage-reports",
   );
   expect(material.billingSubjectRef).toEqual(
     "takosumi-accounts://billing-accounts/billing_1",

@@ -152,7 +152,7 @@ export interface ServiceGrantMaterialRecord {
 /**
  * @internal v1 contract reset: event records are an internal ledger detail;
  * the account-plane projection surface exposes events via the
- * `/v1/installation-projections/{id}/events` view envelope, not this row shape.
+ * `/v1/capsule-projections/{id}/events` view envelope, not this row shape.
  */
 export interface CapsuleEventRecord {
   eventId: string;

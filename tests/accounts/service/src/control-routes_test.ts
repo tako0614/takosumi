@@ -988,7 +988,7 @@ test("isControlRoutePath owns /api/v1 and its subtree only", () => {
   expect(isControlRoutePath("/api/v1/workspaces")).toEqual(true);
   expect(isControlRoutePath("/api/v1/runs/plan_1/logs")).toEqual(true);
   expect(isControlRoutePath("/api/v1x")).toEqual(false);
-  expect(isControlRoutePath("/v1/installation-projections")).toEqual(false);
+  expect(isControlRoutePath("/v1/capsule-projections")).toEqual(false);
   expect(isControlRoutePath("/v1/account/session/me")).toEqual(false);
 });
 
@@ -1092,9 +1092,9 @@ test("retired public control route roots are not accepted", async () => {
     ["GET", "/api/v1/spaces"],
     ["GET", "/api/v1/spaces/space_a/members"],
     ["GET", "/api/v1/installations/inst_1"],
-    ["GET", "/api/v1/installations/inst_1/deployments"],
+    ["GET", "/api/v1/installations/inst_1/revisions"],
     ["GET", "/api/v1/install-configs"],
-    ["GET", "/api/v1/deployments/dep_1"],
+    ["GET", "/api/v1/revisions/dep_1"],
   ];
 
   for (const [method, path] of retired) {

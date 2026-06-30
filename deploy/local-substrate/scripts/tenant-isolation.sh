@@ -126,7 +126,7 @@ CREATE_RESP=$(curl -sk --cacert "$CA" -X POST \
 	-b "$JAR_A" \
 	-H "Content-Type: application/json" \
 	-d "$INSTALL_PAYLOAD" \
-	"$BASE/v1/installation-projections")
+	"$BASE/v1/capsule-projections")
 INST_ID=$(echo "$CREATE_RESP" | python3 -c "
 import json, sys
 d = json.loads(sys.stdin.read())
@@ -140,14 +140,14 @@ fi
 cleanup() {
 	curl -sk --cacert "$CA" -X DELETE \
 		-b "$JAR_A" \
-		"$BASE/v1/installation-projections/$INST_ID" >/dev/null 2>&1 || true
+		"$BASE/v1/capsule-projections/$INST_ID" >/dev/null 2>&1 || true
 	cleanup_jars
 }
 trap cleanup EXIT
 
 STATUS_A=$(curl -sk --cacert "$CA" -o /dev/null -w "%{http_code}" \
 	-b "$JAR_A" \
-	"$BASE/v1/installation-projections/$INST_ID")
+	"$BASE/v1/capsule-projections/$INST_ID")
 if [[ "$STATUS_A" != "200" ]]; then
 	echo "FAIL: subject A can't read own installation: $STATUS_A" >&2
 	exit 1
@@ -155,7 +155,7 @@ fi
 
 STATUS_B=$(curl -sk --cacert "$CA" -o /dev/null -w "%{http_code}" \
 	-H "Authorization: Bearer $LOCAL_DEV_SESSION_ID" \
-	"$BASE/v1/installation-projections/$INST_ID")
+	"$BASE/v1/capsule-projections/$INST_ID")
 
 if [[ "$STATUS_B" == "200" ]]; then
 	echo "FAIL: TENANT ISOLATION VIOLATION - subject B read subject A's installation" >&2

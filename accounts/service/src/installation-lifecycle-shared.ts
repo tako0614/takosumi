@@ -204,7 +204,7 @@ export async function planCoreDeploymentForCloudProjection(input: {
     const upstream = sanitizeUpstreamErrorPayload(result.payload);
     return errorJson(
       "failed_precondition",
-      "Takosumi deployment PlanRun failed",
+      "Takosumi revision PlanRun failed",
       result.status,
       undefined,
       {},
@@ -454,7 +454,7 @@ export function coreDeploymentProjectionFromPlanRun(
   if (!isRecord(payload)) {
     return errorJson(
       "feature_unavailable",
-      "Takosumi deployment PlanRun returned a non-object response",
+      "Takosumi revision PlanRun returned a non-object response",
       502,
     );
   }
@@ -837,7 +837,7 @@ export function installationRecordFromCoreDeploymentProjection(input: {
 export async function revisionEnvelopeResponse(input: {
   store: AccountsStore;
   installation: CapsuleRecord;
-  operation: "deployment" | "rollback";
+  operation: "revision" | "rollback";
   event: CapsuleEventRecord;
 }): Promise<Response> {
   const bindings = await input.store.listServiceBindingMaterialsForCapsule(
@@ -1016,7 +1016,7 @@ export function serviceGrantMaterialRecordsFromValue(input: {
 
 export async function appCapsuleRevisionConfirmFromValue(input: {
   value: unknown;
-  operation: "deployment" | "rollback";
+  operation: "revision" | "rollback";
   capsuleId: string;
   appId: string;
   sourceGitUrl: string;
@@ -1074,7 +1074,7 @@ export async function appCapsuleRevisionConfirmFromValue(input: {
 }
 
 export async function appCapsuleRevisionPermissionDigest(input: {
-  operation: "deployment" | "rollback";
+  operation: "revision" | "rollback";
   capsuleId: string;
   appId: string;
   sourceGitUrl: string;

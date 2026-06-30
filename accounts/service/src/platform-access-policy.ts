@@ -165,8 +165,8 @@ function platformReadinessSummaryLooksSensitive(summary: string): boolean {
 // Only the platform-cell `materialize` installation mutation is an offering
 // surface. Export is data portability / launch evidence plumbing, so it must
 // keep working for authenticated owners while the managed offering is closed.
-// Generic deployment / deployment-plan-run / rollback mutations are also part
-// of the non-gated platform and must work while the managed offering is closed.
+// Generic revision / revision-plan-run / rollback mutations are also part of
+// the non-gated platform and must work while the managed offering is closed.
 export function platformGuardedCapsuleMutation(
   kind: CapsuleRoute["kind"],
   method: string,
