@@ -80,7 +80,11 @@ export default function WorkspaceSwitcher(props: Props = {}) {
         }
       >
         <Select
-          id="workspace-switcher"
+          id={
+            props.compact
+              ? "workspace-switcher-compact"
+              : "workspace-switcher-sidebar"
+          }
           name="workspaceId"
           class="topbar-workspace-select"
           aria-label={t("workspace.label")}
