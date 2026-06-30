@@ -514,6 +514,7 @@ resource "takosumi_target_pool" "default" {
     name     = "containers-main"
     type     = "kubernetes"
     ref      = "cluster-prod"
+    credential_ref = "conn_k8s_prod"
     priority = 80
 
     implementation = [{
@@ -534,6 +535,11 @@ resource "takosumi_target_pool" "default" {
   }]
 }
 ```
+
+`ref` is a target-native reference such as a Cloudflare account id, Kubernetes
+cluster ref, VM fleet id, or operator target handle. `credential_ref` is the
+ProviderConnection / Credential id used when the selected adapter needs
+provider credentials. These are separate fields.
 
 Plugin options are non-secret configuration. Secrets and tokens stay in
 Credential or ProviderConnection.

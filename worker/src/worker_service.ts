@@ -43,6 +43,12 @@ import {
   releaseActivatorFromEnv,
 } from "./release_activator.ts";
 import { CloudflareD1MetricObservabilitySink } from "./d1_observability.ts";
+import { createD1ResourceShapeStores } from "../../core/domains/resource-shape/d1_stores.ts";
+import { createResourceShapeBackingCapsuleResolver } from "../../core/domains/resource-shape/backing_capsule.ts";
+import {
+  ControllerOpentofuRunPort,
+  OpentofuResourceShapeAdapter,
+} from "../../core/domains/resource-shape/opentofu_adapter.ts";
 
 export async function createWorkerServiceApp(
   env: CloudflareWorkerEnv,
@@ -116,6 +122,16 @@ export async function createWorkerServiceApp(
     takosumiDeploymentRecordStore: deployStores.deploymentRecordStore,
     takosumiRevokeDebtStore: deployStores.revokeDebtStore,
     opentofuDeploymentStore,
+    resourceShapeStores: createD1ResourceShapeStores(env.TAKOSUMI_CONTROL_DB),
+    resourceShapeAdapterFactory: ({ controller, capsules }) =>
+      new OpentofuResourceShapeAdapter(
+        new ControllerOpentofuRunPort({
+          driver: controller,
+          resolveCapsuleBinding: createResourceShapeBackingCapsuleResolver({
+            installations: capsules,
+          }),
+        }),
+      ),
     ...(officialCatalogSource ? { officialCatalogSource } : {}),
     opentofuRunner,
     providerEnvRunner: opentofuRunner,

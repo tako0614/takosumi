@@ -237,7 +237,7 @@ export interface InstallConfig {
   readonly runnerId?: string;
   /** Internal service-side config rows are addressable by id but not selectable. */
   readonly internal?: {
-    readonly reason: "per_install_overrides";
+    readonly reason: "per_install_overrides" | "resource_shape_backing_capsule";
   };
   readonly variableMapping: Readonly<Record<string, unknown>>;
   readonly outputAllowlist: Readonly<Record<string, OutputAllowlistEntry>>;

@@ -316,6 +316,12 @@ export function defaultBundledImplementations(): readonly OperatorImplementation
   return [];
 }
 
+export interface ResourceShapeAdapterFactoryDeps {
+  readonly controller: OpenTofuDeploymentController;
+  readonly capsules: CapsulesService;
+  readonly workspaces: WorkspacesService;
+}
+
 export interface CreateTakosumiServiceOptions extends AppContextOptions {
   readonly role?: TakosumiProcessRole;
   readonly runtimeEnv?: Record<string, string | undefined>;
@@ -349,6 +355,15 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
    * setting `enableResourceShapeApi`.
    */
   readonly resourceShapeAdapter?: ResourceAdapter;
+  /**
+   * Builds a Resource Shape adapter after the Flow A controller and Capsule
+   * services exist. Host workers use this to wire the real opentofu-adapter,
+   * whose run port needs the controller plus an internal backing-Capsule
+   * resolver.
+   */
+  readonly resourceShapeAdapterFactory?: (
+    deps: ResourceShapeAdapterFactoryDeps,
+  ) => ResourceAdapter | Promise<ResourceAdapter>;
   /** Enables the Resource Shape API with the dev/test stub when no adapter is supplied. */
   readonly enableResourceShapeApi?: boolean;
   /**
@@ -1019,8 +1034,17 @@ export async function createTakosumiService(
       ? { serviceDataRunner: options.serviceDataBackupRunner }
       : {}),
   });
+  const injectedResourceShapeAdapter =
+    options.resourceShapeAdapter ??
+    (options.resourceShapeAdapterFactory
+      ? await options.resourceShapeAdapterFactory({
+          controller: opentofuController,
+          capsules: installationsService,
+          workspaces: spacesService,
+        })
+      : undefined);
   const resourceShapeAdapter = resolveResourceShapeAdapter({
-    adapter: options.resourceShapeAdapter,
+    adapter: injectedResourceShapeAdapter,
     enableResourceShapeApi: options.enableResourceShapeApi,
     environment: runtimeConfig.environment,
   });

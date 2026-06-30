@@ -61,6 +61,7 @@ type targetPoolTargetModel struct {
 	Name            types.String `tfsdk:"name"`
 	Type            types.String `tfsdk:"type"`
 	Ref             types.String `tfsdk:"ref"`
+	CredentialRef   types.String `tfsdk:"credential_ref"`
 	Region          types.String `tfsdk:"region"`
 	Priority        types.Int64  `tfsdk:"priority"`
 	Implementations types.List   `tfsdk:"implementation"`
@@ -88,6 +89,7 @@ var targetPoolTargetAttrTypes = map[string]attr.Type{
 	"name":           types.StringType,
 	"type":           types.StringType,
 	"ref":            types.StringType,
+	"credential_ref": types.StringType,
 	"region":         types.StringType,
 	"priority":       types.Int64Type,
 	"implementation": types.ListType{ElemType: types.ObjectType{AttrTypes: targetPoolImplementationAttrTypes}},
@@ -142,6 +144,10 @@ func (r *targetPoolResource) Schema(_ context.Context, _ resource.SchemaRequest,
 						"ref": schema.StringAttribute{
 							Optional:    true,
 							Description: "Type-specific external reference, such as an account id, cluster id, endpoint URL, or provider base URL.",
+						},
+						"credential_ref": schema.StringAttribute{
+							Optional:    true,
+							Description: "ProviderConnection or Credential id used by adapters that need provider credentials. This is deliberately separate from ref, which is the target-native reference.",
 						},
 						"region": schema.StringAttribute{
 							Optional:    true,
@@ -361,6 +367,9 @@ func (m targetPoolModel) toSpec(ctx context.Context, defaultSpace string) (strin
 		}
 		if !target.Ref.IsNull() && !target.Ref.IsUnknown() {
 			entry.Ref = target.Ref.ValueString()
+		}
+		if !target.CredentialRef.IsNull() && !target.CredentialRef.IsUnknown() {
+			entry.CredentialRef = target.CredentialRef.ValueString()
 		}
 		if !target.Region.IsNull() && !target.Region.IsUnknown() {
 			entry.Region = target.Region.ValueString()

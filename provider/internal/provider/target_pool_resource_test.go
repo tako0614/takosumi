@@ -40,6 +40,7 @@ func TestTargetPoolModelToSpecAcceptsAdminDefinedImplementations(t *testing.T) {
 		"name":           types.StringValue("containers-main"),
 		"type":           types.StringValue("kubernetes"),
 		"ref":            types.StringValue("cluster-prod"),
+		"credential_ref": types.StringValue("conn_k8s_prod"),
 		"region":         types.StringValue("jp"),
 		"priority":       types.Int64Value(90),
 		"implementation": implementations,
@@ -72,6 +73,9 @@ func TestTargetPoolModelToSpecAcceptsAdminDefinedImplementations(t *testing.T) {
 	gotTarget := spec.Targets[0]
 	if gotTarget.Type != "kubernetes" || gotTarget.Name != "containers-main" {
 		t.Fatalf("unexpected target %#v", gotTarget)
+	}
+	if gotTarget.Ref != "cluster-prod" || gotTarget.CredentialRef != "conn_k8s_prod" {
+		t.Fatalf("expected ref and credential_ref to pass separately, got %#v", gotTarget)
 	}
 	if len(gotTarget.Implementations) != 1 {
 		t.Fatalf("expected one implementation, got %#v", gotTarget.Implementations)
@@ -121,6 +125,7 @@ func TestTargetPoolModelToSpecRejectsInvalidCapabilityLevel(t *testing.T) {
 		"name":           types.StringValue("custom-container"),
 		"type":           types.StringValue("kubernetes"),
 		"ref":            types.StringNull(),
+		"credential_ref": types.StringNull(),
 		"region":         types.StringNull(),
 		"priority":       types.Int64Value(1),
 		"implementation": implementations,

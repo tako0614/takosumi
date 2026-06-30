@@ -144,6 +144,7 @@ type TargetPoolEntry struct {
 	Name            string                     `json:"name"`
 	Type            string                     `json:"type"`
 	Ref             string                     `json:"ref,omitempty"`
+	CredentialRef   string                     `json:"credentialRef,omitempty"`
 	Region          string                     `json:"region,omitempty"`
 	Priority        int64                      `json:"priority"`
 	Implementations []TargetPoolImplementation `json:"implementations,omitempty"`

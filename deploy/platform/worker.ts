@@ -197,6 +197,9 @@ export default {
         verifyPlatformCloudExtensionSession,
       );
     }
+    if (isPlatformResourceShapeApiPath(url.pathname)) {
+      return await handlePlatformResourceShapeApiRequest(request, env);
+    }
     // Source webhook surface (Core Specification §6). This is a NEW top-level
     // prefix the accounts handler does not own; handle it here via the
     // deploy-control service seam BEFORE delegating to the accounts handler.
@@ -233,13 +236,7 @@ function platformDiscoveryOptions(
   env: CloudflareWorkerEnv,
 ): CreateTakosumiDiscoveryOptions {
   const extensionCapabilities = platformCloudExtensionCapabilities(env);
-  // The platform worker currently exposes Cloud endpoints (AI Gateway,
-  // Cloudflare-compatible import, S3-compatible object storage) through the
-  // Cloud extension seam, but it does not mount the Resource Shape API nor wire
-  // the production ResourceShape adapter/backing-Capsule seam. Do not advertise
-  // `takosumi_*` provider resources until `/v1/resources/*` is actually routed
-  // and authenticated in this worker.
-  const resourceShapes = false;
+  const resourceShapes = platformResourceShapeApiEnabled(env);
   return {
     origin,
     operatorTenants: true,
@@ -269,6 +266,36 @@ function platformDiscoveryOptions(
     },
     resourceShapesEnabled: resourceShapes,
   };
+}
+
+export function platformResourceShapeApiEnabled(
+  env: CloudflareWorkerEnv,
+): boolean {
+  return Boolean(env.TAKOSUMI_DEPLOY_CONTROL_TOKEN && env.TAKOSUMI_CONTROL_DB);
+}
+
+export function isPlatformResourceShapeApiPath(pathname: string): boolean {
+  return (
+    pathname === "/v1/resources" ||
+    pathname.startsWith("/v1/resources/") ||
+    pathname === "/v1/target-pools" ||
+    pathname.startsWith("/v1/target-pools/") ||
+    pathname === "/v1/space-policies" ||
+    pathname.startsWith("/v1/space-policies/")
+  );
+}
+
+export async function handlePlatformResourceShapeApiRequest(
+  request: Request,
+  env: CloudflareWorkerEnv,
+): Promise<Response> {
+  if (!platformResourceShapeApiEnabled(env)) {
+    return Response.json({ error: "not found" }, { status: 404 });
+  }
+  const service = await cachedDeployControlService(
+    env as unknown as DeployControlEnv,
+  );
+  return await service.app.fetch(request);
 }
 
 function platformCloudExtensionCapabilities(env: CloudflareWorkerEnv): {
