@@ -11,11 +11,13 @@
  */
 import "../../styles/wave-c.css";
 import {
+  createEffect,
   createMemo,
   createResource,
   createSignal,
   For,
   Match,
+  onCleanup,
   Show,
   Switch,
 } from "solid-js";
@@ -34,8 +36,11 @@ import {
   Trash2,
 } from "lucide-solid";
 import AppShell from "../account/components/shell/AppShell.tsx";
-import Page from "../account/components/auth/Page.tsx";
-import { isTakosumiCloudRuntime } from "../../lib/deployment-brand.ts";
+import AuthGuard from "../account/components/auth/AuthGuard.tsx";
+import {
+  dashboardProductName,
+  isTakosumiCloudRuntime,
+} from "../../lib/deployment-brand.ts";
 import { useConfirmDialog } from "../../lib/confirm-dialog.ts";
 import { currentWorkspaceId } from "../../lib/workspace-state.ts";
 import {
@@ -70,19 +75,47 @@ import type { TakosumiAccountsPatMetadata } from "@takosjp/takosumi-accounts-con
 
 const RESOURCE_PREVIEW_LIMIT = 5;
 
+interface CloudRefreshState {
+  readonly refresh: () => void;
+  readonly disabled: boolean;
+}
+
+const IDLE_REFRESH_STATE: CloudRefreshState = {
+  refresh: () => undefined,
+  disabled: true,
+};
+
 export default function CloudResourcesView() {
+  createEffect(() => {
+    if (typeof document !== "undefined") {
+      document.title = `${t("cloudResources.title")} — ${dashboardProductName()}`;
+    }
+  });
+  const [refreshState, setRefreshState] =
+    createSignal<CloudRefreshState>(IDLE_REFRESH_STATE);
+
   return (
-    <Page title={t("cloudResources.title")}>
-      {() => (
-        <AppShell>
-          <CloudResourcesPanel showHeader />
-        </AppShell>
-      )}
-    </Page>
+    <AppShell>
+      <CloudResourcesHeader
+        refresh={() => refreshState().refresh()}
+        disabled={refreshState().disabled}
+      />
+      <AuthGuard loadingFallback={<CloudResourcesLoading />}>
+        {() => (
+          <CloudResourcesPanel
+            showHeader={false}
+            onRefreshState={setRefreshState}
+          />
+        )}
+      </AuthGuard>
+    </AppShell>
   );
 }
 
-export function CloudResourcesPanel(props: { readonly showHeader?: boolean }) {
+export function CloudResourcesPanel(props: {
+  readonly showHeader?: boolean;
+  readonly onRefreshState?: (state: CloudRefreshState) => void;
+}) {
   const cloudContext = createMemo<CloudRequestContext>(() => {
     const workspaceId = currentWorkspaceId();
     return workspaceId ? { workspaceId } : {};
@@ -105,6 +138,15 @@ export function CloudResourcesPanel(props: { readonly showHeader?: boolean }) {
     void refetchSnapshot();
     void refetchInventory();
   };
+  const refreshDisabled = () => !isTakosumiCloudRuntime() || snapshot.loading;
+
+  createEffect(() => {
+    props.onRefreshState?.({
+      refresh: refreshAll,
+      disabled: refreshDisabled(),
+    });
+  });
+  onCleanup(() => props.onRefreshState?.(IDLE_REFRESH_STATE));
 
   const copyText = async (key: string, value: string) => {
     await navigator.clipboard.writeText(value);
@@ -117,19 +159,9 @@ export function CloudResourcesPanel(props: { readonly showHeader?: boolean }) {
   return (
     <>
       <Show when={props.showHeader}>
-        <PageHeader
-          title={t("cloudResources.title")}
-          subtitle={t("cloudResources.subtitle")}
-          actions={
-            <Button
-              variant="secondary"
-              icon={<RefreshCw size={16} />}
-              onClick={refreshAll}
-              disabled={!isTakosumiCloudRuntime() || snapshot.loading}
-            >
-              {t("common.refresh")}
-            </Button>
-          }
+        <CloudResourcesHeader
+          refresh={refreshAll}
+          disabled={refreshDisabled()}
         />
       </Show>
 
@@ -145,9 +177,7 @@ export function CloudResourcesPanel(props: { readonly showHeader?: boolean }) {
       >
         <Switch>
           <Match when={snapshot.loading}>
-            <div class="av-cloud-grid">
-              <Skeleton variant="card" count={3} />
-            </div>
+            <CloudResourcesLoading />
           </Match>
           <Match when={snapshot.error}>
             <Toast tone="error">
@@ -174,6 +204,38 @@ export function CloudResourcesPanel(props: { readonly showHeader?: boolean }) {
         </Switch>
       </Show>
     </>
+  );
+}
+
+function CloudResourcesHeader(props: {
+  readonly refresh: () => void;
+  readonly disabled: boolean;
+}): JSX.Element {
+  return (
+    <PageHeader
+      title={t("cloudResources.title")}
+      subtitle={t("cloudResources.subtitle")}
+      actions={
+        <Button
+          variant="secondary"
+          icon={<RefreshCw size={16} />}
+          onClick={props.refresh}
+          disabled={props.disabled}
+        >
+          {t("common.refresh")}
+        </Button>
+      }
+    />
+  );
+}
+
+function CloudResourcesLoading(): JSX.Element {
+  return (
+    <div class="av-cloud-stack" role="status" aria-label={t("common.loading")}>
+      <div class="av-cloud-grid">
+        <Skeleton variant="card" count={3} />
+      </div>
+    </div>
   );
 }
 

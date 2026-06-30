@@ -69,6 +69,19 @@ describe("Cloud resources view", () => {
     expect(cloudResourcesViewSource).toContain("inventoryLoading");
   });
 
+  test("renders the page header before the auth-gated cloud body", () => {
+    const headerIndex = cloudResourcesViewSource.indexOf(
+      "<CloudResourcesHeader",
+    );
+    const authIndex = cloudResourcesViewSource.indexOf(
+      "<AuthGuard loadingFallback={<CloudResourcesLoading />}>",
+    );
+    expect(headerIndex).toBeGreaterThan(-1);
+    expect(authIndex).toBeGreaterThan(-1);
+    expect(headerIndex).toBeLessThan(authIndex);
+    expect(cloudResourcesViewSource).toContain("showHeader={false}");
+  });
+
   test("keeps raw resource identifiers behind an explicit copy action", () => {
     expect(cloudResourcesViewSource).toContain(
       't("cloudResources.resources.copyId")',
