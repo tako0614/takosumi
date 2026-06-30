@@ -37,9 +37,11 @@ import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import { isTakosumiCloudRuntime } from "../../lib/deployment-brand.ts";
 import { useConfirmDialog } from "../../lib/confirm-dialog.ts";
+import { currentWorkspaceId } from "../../lib/workspace-state.ts";
 import {
   type CloudflareResourceKind,
   type CloudflareCompatInventory,
+  type CloudRequestContext,
   type CloudResourceResult,
   type CloudResourcesSnapshot,
   activeCloudApiTokens,
@@ -81,13 +83,22 @@ export default function CloudResourcesView() {
 }
 
 export function CloudResourcesPanel(props: { readonly showHeader?: boolean }) {
+  const cloudContext = createMemo<CloudRequestContext>(() => {
+    const workspaceId = currentWorkspaceId();
+    return workspaceId ? { workspaceId } : {};
+  });
   const [snapshot, { refetch: refetchSnapshot }] = createResource(
-    () => (isTakosumiCloudRuntime() ? true : undefined),
+    () => (isTakosumiCloudRuntime() ? cloudContext() : undefined),
     getCloudResourcesSnapshot,
   );
   const [inventory, { refetch: refetchInventory }] = createResource(
-    () => snapshot()?.compatRoute,
-    getCloudflareCompatInventory,
+    () => {
+      const compatRoute = snapshot()?.compatRoute;
+      return compatRoute
+        ? { route: compatRoute, context: cloudContext() }
+        : undefined;
+    },
+    ({ route, context }) => getCloudflareCompatInventory(route, context),
   );
   const [copied, setCopied] = createSignal<string | null>(null);
   const refreshAll = () => {
@@ -152,6 +163,7 @@ export function CloudResourcesPanel(props: { readonly showHeader?: boolean }) {
                 inventory={inventory()}
                 inventoryLoading={inventory.loading}
                 inventoryError={inventory.error}
+                context={cloudContext()}
                 copied={copied()}
                 copyText={copyText}
                 refetchSnapshot={() => void refetchSnapshot()}
@@ -170,6 +182,7 @@ function CloudResourceBody(props: {
   readonly inventory: CloudflareCompatInventory | undefined;
   readonly inventoryLoading: boolean;
   readonly inventoryError: unknown;
+  readonly context: CloudRequestContext;
   readonly copied: string | null;
   readonly copyText: (key: string, value: string) => Promise<void>;
   readonly refetchSnapshot: () => void;
@@ -245,6 +258,7 @@ function CloudResourceBody(props: {
         inventory={props.inventory}
         inventoryLoading={props.inventoryLoading}
         inventoryError={props.inventoryError}
+        context={props.context}
         copied={props.copied}
         copyText={props.copyText}
         refetch={props.refetchInventory}
@@ -538,6 +552,7 @@ function ResourcesCard(props: {
   readonly inventory: CloudflareCompatInventory | undefined;
   readonly inventoryLoading: boolean;
   readonly inventoryError: unknown;
+  readonly context: CloudRequestContext;
   readonly copied: string | null;
   readonly copyText: (key: string, value: string) => Promise<void>;
   readonly refetch: () => void;
@@ -651,6 +666,7 @@ function ResourcesCard(props: {
         accountId: account,
         kind: group.kind,
         id: item.id,
+        context: props.context,
       });
       setDeleted(item.name || item.id);
       props.refetch();

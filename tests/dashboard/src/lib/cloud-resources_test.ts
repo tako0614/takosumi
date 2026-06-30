@@ -3,6 +3,7 @@ import {
   activeCloudApiTokens,
   aiGatewayRoute,
   cloudflareCompatRoute,
+  getCloudflareCompatInventory,
   s3CompatibleRoute,
   type CloudExtensionCatalog,
 } from "../../../../dashboard/src/lib/cloud-resources.ts";
@@ -98,5 +99,44 @@ describe("dashboard cloud resources route selection", () => {
 
     expect(aiGatewayRoute(catalog)?.basePath).toBe("/custom/ai");
     expect(cloudflareCompatRoute(catalog)?.basePath).toBe("/custom/cloudflare");
+  });
+
+  test("scopes Cloudflare compat inventory to the selected workspace", async () => {
+    const originalFetch = globalThis.fetch;
+    const requests: { readonly url: string; readonly headers: Headers }[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const path = new URL(url, "https://app.takosumi.com").pathname;
+      requests.push({ url, headers: new Headers(init?.headers) });
+      const result = path.endsWith("/accounts")
+        ? [{ id: "ts_acc_takosumi_cloud", name: "Takosumi Cloud" }]
+        : [];
+      return Response.json({
+        success: true,
+        errors: [],
+        messages: [],
+        result,
+      });
+    }) as typeof fetch;
+    try {
+      await getCloudflareCompatInventory(
+        {
+          basePath: "/compat/cloudflare/client/v4",
+          configured: true,
+        },
+        { workspaceId: "space_selected" },
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+
+    expect(requests.length).toBeGreaterThan(1);
+    expect(
+      requests.every(
+        (request) =>
+          request.headers.get("x-takosumi-cloud-billing-workspace-id") ===
+          "space_selected",
+      ),
+    ).toBe(true);
   });
 });

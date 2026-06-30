@@ -161,6 +161,11 @@ export interface CloudflareCompatInventory {
   >;
 }
 
+export interface CloudRequestContext {
+  readonly workspaceId?: string;
+  readonly installationId?: string;
+}
+
 /**
  * Fast material for the Cloud screen (`/cloud`): Cloud API keys, endpoint
  * status, and route metadata. The heavier Cloudflare-compatible inventory is
@@ -192,7 +197,9 @@ export class CloudResourceError extends Error {
   }
 }
 
-export async function getCloudResourcesSnapshot(): Promise<CloudResourcesSnapshot> {
+export async function getCloudResourcesSnapshot(
+  context: CloudRequestContext = {},
+): Promise<CloudResourcesSnapshot> {
   const catalog = await cloudFetch<CloudExtensionCatalog>(
     "/__takosumi/cloud/extensions",
   );
@@ -203,15 +210,19 @@ export async function getCloudResourcesSnapshot(): Promise<CloudResourcesSnapsho
     await Promise.all([
       resultFor<AiGatewayStatus>(
         aiRoute ? `${aiRoute.basePath}/__takosumi/status` : undefined,
+        context,
       ),
       resultFor<OpenAiModelList>(
         aiRoute ? `${aiRoute.basePath}/models` : undefined,
+        context,
       ),
       resultFor<S3CompatStatus>(
         s3Route ? `${s3Route.basePath}/__takosumi/status` : undefined,
+        context,
       ),
       resultFor<CloudflareTokenVerify>(
         compatRoute ? `${compatRoute.basePath}/user/tokens/verify` : undefined,
+        context,
       ),
       getAccountTokens(),
     ]);
@@ -267,12 +278,14 @@ export function s3CompatibleRoute(
 
 export async function getCloudflareCompatInventory(
   route: CloudExtensionCatalogItem | undefined,
+  context: CloudRequestContext = {},
 ): Promise<CloudflareCompatInventory> {
   if (!route) {
     return emptyCloudflareCompatInventory("not configured");
   }
   const accounts = await cloudflareListResult<CloudflareCompatAccount>(
     `${route.basePath}/accounts`,
+    context,
   );
   if (!accounts.ok) {
     return {
@@ -313,15 +326,27 @@ export async function getCloudflareCompatInventory(
   ] = await Promise.all([
     cloudflareListResult<CloudflareCompatKvNamespace>(
       `${accountPath}/storage/kv/namespaces`,
+      context,
     ),
     cloudflareListResult<CloudflareCompatD1Database>(
       `${accountPath}/d1/database`,
+      context,
     ),
-    cloudflareListResult<CloudflareCompatR2Bucket>(`${accountPath}/r2/buckets`),
-    cloudflareListResult<CloudflareCompatQueue>(`${accountPath}/queues`),
-    cloudflareListResult<CloudflareCompatWorkflow>(`${accountPath}/workflows`),
+    cloudflareListResult<CloudflareCompatR2Bucket>(
+      `${accountPath}/r2/buckets`,
+      context,
+    ),
+    cloudflareListResult<CloudflareCompatQueue>(
+      `${accountPath}/queues`,
+      context,
+    ),
+    cloudflareListResult<CloudflareCompatWorkflow>(
+      `${accountPath}/workflows`,
+      context,
+    ),
     cloudflareListResult<CloudflareCompatWorkerScript>(
       `${accountPath}/workers/scripts`,
+      context,
     ),
   ]);
   return {
@@ -431,6 +456,7 @@ export async function deleteCloudflareResource(input: {
   readonly accountId: string;
   readonly kind: CloudflareResourceKind;
   readonly id: string;
+  readonly context?: CloudRequestContext;
 }): Promise<void> {
   const path = cloudflareResourcePath(
     input.compatBasePath,
@@ -440,6 +466,7 @@ export async function deleteCloudflareResource(input: {
   );
   const body = await cloudFetch<CloudflareCompatEnvelope<unknown>>(path, {
     method: "DELETE",
+    context: input.context,
   });
   // cloudFetch already throws on non-2xx (incl. 501). Guard the 200-with-
   // success:false envelope the Cloudflare API can return on a soft failure.
@@ -480,8 +507,12 @@ async function getAccountTokens(): Promise<
 
 async function cloudflareListResult<T>(
   path: string,
+  context: CloudRequestContext = {},
 ): Promise<CloudResourceResult<readonly T[]>> {
-  const result = await resultFor<CloudflareCompatEnvelope<unknown>>(path);
+  const result = await resultFor<CloudflareCompatEnvelope<unknown>>(
+    path,
+    context,
+  );
   if (!result.ok) return result;
   try {
     return { ok: true, data: cloudflareResultArray<T>(result.data) };
@@ -530,10 +561,11 @@ function firstString(values: readonly unknown[]): string | undefined {
 
 async function resultFor<T>(
   path: string | undefined,
+  context: CloudRequestContext = {},
 ): Promise<CloudResourceResult<T>> {
   if (!path) return { ok: false, error: "not configured" };
   try {
-    return { ok: true, data: await cloudFetch<T>(path) };
+    return { ok: true, data: await cloudFetch<T>(path, { context }) };
   } catch (error) {
     return { ok: false, error: errorMessage(error) };
   }
@@ -542,6 +574,7 @@ async function resultFor<T>(
 interface CloudFetchOptions {
   readonly method?: string;
   readonly body?: unknown;
+  readonly context?: CloudRequestContext;
 }
 
 async function cloudFetch<T>(
@@ -549,6 +582,10 @@ async function cloudFetch<T>(
   options: CloudFetchOptions = {},
 ): Promise<T> {
   const headers: Record<string, string> = { accept: "application/json" };
+  const contextHeaders = cloudContextHeaders(options.context);
+  for (const [key, value] of Object.entries(contextHeaders)) {
+    headers[key] = value;
+  }
   let requestBody: BodyInit | undefined;
   if (options.body !== undefined) {
     headers["content-type"] = "application/json";
@@ -576,6 +613,27 @@ async function cloudFetch<T>(
     );
   }
   return responseBody as T;
+}
+
+function cloudContextHeaders(
+  context: CloudRequestContext | undefined,
+): Record<string, string> {
+  const workspaceId = safeContextId(context?.workspaceId);
+  const installationId = safeContextId(context?.installationId);
+  return {
+    ...(workspaceId
+      ? { "x-takosumi-cloud-billing-workspace-id": workspaceId }
+      : {}),
+    ...(installationId
+      ? { "x-takosumi-cloud-billing-installation-id": installationId }
+      : {}),
+  };
+}
+
+function safeContextId(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  return /^[A-Za-z0-9_.:-]{1,128}$/u.test(trimmed) ? trimmed : undefined;
 }
 
 function responseErrorMessage(body: unknown): string | undefined {
