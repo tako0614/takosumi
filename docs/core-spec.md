@@ -95,10 +95,10 @@ Plan / Apply / Destroy are guarded Run operations, not separate ledgers.
 | Environment    | Deployment environment within a Space/Project                 |
 | Stack          | Git-backed OpenTofu stack or resource-shape bundle            |
 | Resource       | Kubernetes-like desired/observed resource object              |
-| ResourceShape  | Resource form such as EdgeWorker or AIEndpoint                |
-| Interface      | External protocol/API such as web_fetch or openai_chat        |
+| ResourceShape  | Resource form such as EdgeWorker, ObjectBucket, or Queue      |
+| Interface      | External protocol/API such as web_fetch, s3_api, or queue     |
 | Profile        | Ecosystem compatibility surface such as workers_bindings      |
-| Implementation | Concrete backend such as cloudflare_workers or ai_gateway     |
+| Implementation | Concrete backend such as cloudflare_workers or cloudflare_r2  |
 | Target         | Southbound account/cluster/fleet/runtime endpoint             |
 | TargetPool     | Candidate targets used by the resolver                        |
 | Credential     | Target or workload credential configuration                   |
@@ -270,25 +270,25 @@ compliance rules
 ```
 
 TargetPool entries may include operator-declared implementations. This is how
-an operator enables broad AI providers or other custom adapters without waiting
-for the `takosumi` OpenTofu provider binary to know the vendor name.
+an operator enables custom adapters without waiting for the `takosumi`
+OpenTofu provider binary to know the backend name.
 
 ```yaml
 targets:
-  - name: gemini-main
-    type: ai_provider
-    ref: https://generativelanguage.googleapis.com/v1beta/openai
+  - name: containers-main
+    type: kubernetes
+    ref: cluster-prod
     priority: 80
     implementations:
-      - shape: AIEndpoint
-        implementation: gemini_openai_compatible
-        plugin: takosumi-plugin-openai-compatible
+      - shape: ContainerService
+        implementation: custom_container_runtime
+        plugin: takosumi-plugin-container-runtime
         options:
-          base_url: https://generativelanguage.googleapis.com/v1beta/openai
+          runtime_class: edge
         interfaces:
-          openai_chat_completions: native
-          openai_embeddings: native
-          provider.gemini.responses.v1: shim
+          oci_container: native
+          public_http: shim
+          custom.mesh: native
 ```
 
 The Resource Shape parser validates shape-specific structure and rejects empty
@@ -452,7 +452,8 @@ isolation, quota, network egress policy, admin audit, and usage metering.
 2. OpenTofu Stack controller: Git, runner, state, logs, approval, credentials.
 3. ProviderConnection / CredentialRecipe / generic env / OIDC federation.
 4. Resource object schema, Resource API preview/apply/status, ResolutionLock.
-5. EdgeWorker / AIEndpoint planner and provider schemas.
+5. EdgeWorker / ObjectBucket / KVStore / Queue / SQLDatabase /
+   ContainerService planner and provider schemas.
 6. TargetPool implementation plugin fields.
 7. Add scoped compatibility profiles only where existing providers are not
    enough for import, binding, policy, or metering.

@@ -103,9 +103,10 @@ Ordinary VM, Kubernetes, or container infrastructure:
 Provider-neutral Worker-compatible application hosting:
   use takosumi_edge_worker.
 
-OpenAI-compatible AI endpoint with operator-side routing, model policy, credit
-enforcement, or fallback:
-  use takosumi_ai_endpoint.
+AI Gateway or OpenAI-compatible upstream access:
+  do not create a Takosumi Resource Shape by default.
+  pass the endpoint URL, model name, and API key through ProviderConnection,
+  Secret, output projection, or generic env.
 ```
 
 Do not add a Takosumi-owned resource just because another cloud already has a
@@ -179,7 +180,11 @@ The v1alpha1 default public shapes are:
 
 ```text
 EdgeWorker
-AIEndpoint
+ObjectBucket
+KVStore
+Queue
+SQLDatabase
+ContainerService
 ```
 
 Future shapes are added only when they have a real schema, planner, adapter
@@ -317,10 +322,13 @@ Takosumi Cloud Workers may be backed by Cloudflare Workers for Platforms and a
 Takosumi-managed dispatch layer. That detail should be documented in runtime
 docs, but the product headline should remain Worker-compatible hosting.
 
-### 4.2 S3-Compatible Object Storage
+### 4.2 ObjectBucket And S3-Compatible Object Storage
 
-S3-compatible API support is required, but it is a compatibility/data-plane
-surface, not a default `takosumi_*` Resource Shape.
+`ObjectBucket` is the provider-neutral service form for object storage when
+Takosumi owns binding projection, policy, metering, managed-target placement,
+or compatibility import/data paths.
+
+It does not replace ordinary object-storage providers.
 
 Why it exists:
 
@@ -346,62 +354,74 @@ GCS / MinIO / other S3-compatible storage:
 Takosumi enables `compat.s3.v1` only when the operator intentionally exposes an
 object-storage import/data path, binding projection, policy, metering, or
 managed target control. This lets Takosumi-provided storage be received and used
-through the same S3-compatible provider/SDK surface without inventing a bucket
-resource in `takosumi_provider`.
+through the same S3-compatible provider/SDK surface. `takosumi_object_bucket`
+exists for the control-plane shape; S3-compatible APIs remain the data-plane
+surface.
 
-### 4.3 AIEndpoint
+### 4.3 KVStore / Queue / SQLDatabase / ContainerService
 
-`AIEndpoint` is the provider-neutral service form for AI endpoints.
+These are minimum service forms needed by Takos and yurucommu-style apps.
 
 ```hcl
-resource "takosumi_ai_endpoint" "main" {
-  name = "ai"
+resource "takosumi_kv_store" "cache" {
+  name = "cache"
+}
 
-  interfaces = [
-    "openai_chat_completions",
-    "openai_embeddings",
-  ]
+resource "takosumi_queue" "delivery" {
+  name        = "delivery"
+  max_retries = 5
+}
 
-  profiles = [
-    "openai_compatible",
-  ]
+resource "takosumi_sql_database" "main" {
+  name            = "main"
+  engine          = "sqlite"
+  migrations_path = "migrations"
+}
 
-  provider_preferences = [
-    "provider.deepseek",
-    "provider.gemini",
-    "provider.bedrock",
-  ]
-
-  routing_policy = {
-    strategy       = "lowest_latency"
-    allow_fallback = true
-  }
-
-  model_policy = {
-    default_model  = "fast/chat"
-    allowed_models = ["fast/chat", "embed/text"]
-  }
+resource "takosumi_container_service" "agent" {
+  name        = "agent"
+  image       = "ghcr.io/example/agent:1.0.0"
+  public_http = true
 }
 ```
 
-`AIEndpoint` is broad by design. The provider validates the shape and basic
-token syntax. The endpoint capabilities, TargetPool, policy, credentials, and
-engine/admin configuration decide whether it can be backed by:
+Rules:
 
 ```text
-Cloudflare AI Gateway
-Workers AI
-OpenAI-compatible upstream
-DeepSeek
-GLM
-Gemini / Vertex AI
-AWS Bedrock
-Takosumi native AI gateway
-operator-provided adapter plugin
+KVStore:
+  provider-neutral key-value state/binding surface.
+
+Queue:
+  async delivery and event fan-out.
+
+SQLDatabase:
+  D1-like sqlite first, postgres/mysql only when an operator target supports it.
+
+ContainerService:
+  OCI container service. It is separate from EdgeWorker.
 ```
 
-Upstream API keys are Credential/ProviderConnection material. They must not be
-stored in the Resource Shape spec or OpenTofu state.
+Do not collapse these into a generic `service` or into EdgeWorker. The service
+form is the user-facing contract; the backend is selected by TargetPool,
+Policy, capability evidence, and ResolutionLock.
+
+### 4.4 AI Gateway Is Not A Resource Shape
+
+AI Gateway remains a Takosumi Cloud / operator service endpoint, not a default
+`takosumi_*` resource.
+
+Apps should receive AI configuration like any other external service:
+
+```text
+TAKOSUMI_AI_BASE_URL
+TAKOSUMI_AI_API_KEY
+TAKOSUMI_AI_DEFAULT_MODEL
+OPENAI_BASE_URL
+OPENAI_API_KEY
+```
+
+The values come from ProviderConnection, Secret, output projection, or generic
+env. They must not be stored in Resource Shape specs or OpenTofu state.
 
 ## 5. Future Shape Families
 
@@ -421,12 +441,8 @@ compatibility import.
 Route
 Connection
 Secret
-KVStore
-Queue
-SQLDatabase
 RelationalDatabase
 DurableWorkflow
-ContainerService
 Job
 Machine
 MachinePool
@@ -470,7 +486,6 @@ proxmox
 libvirt
 ssh
 takosumi_native
-ai_provider
 opentofu
 operator-defined target type
 ```
@@ -482,24 +497,24 @@ resource "takosumi_target_pool" "default" {
   name = "default"
 
   target = [{
-    name     = "gemini-main"
-    type     = "ai_provider"
-    ref      = "https://generativelanguage.googleapis.com/v1beta/openai"
+    name     = "containers-main"
+    type     = "kubernetes"
+    ref      = "cluster-prod"
     priority = 80
 
     implementation = [{
-      shape          = "AIEndpoint"
-      implementation = "gemini_openai_compatible"
-      plugin         = "takosumi-plugin-openai-compatible"
+      shape          = "ContainerService"
+      implementation = "custom_container_runtime"
+      plugin         = "takosumi-plugin-container-runtime"
 
       options_json = jsonencode({
-        base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
+        runtime_class = "edge"
       })
 
       interfaces = {
-        openai_chat_completions = "native"
-        openai_embeddings       = "native"
-        provider.gemini.v1      = "shim"
+        oci_container = "native"
+        public_http   = "shim"
+        "custom.mesh" = "native"
       }
     }]
   }]
@@ -516,8 +531,8 @@ export default {
   name: "takosumi-plugin-example",
   implementations: [
     {
-      shape: "AIEndpoint",
-      implementation: "example_openai_compatible",
+      shape: "ContainerService",
+      implementation: "example_container_runtime",
     },
   ],
   async preview(ctx) {},
@@ -677,15 +692,18 @@ Example:
   "resources": {
     "Stack": true,
     "EdgeWorker": true,
-    "AIEndpoint": true
+    "ObjectBucket": true,
+    "KVStore": true,
+    "Queue": true,
+    "SQLDatabase": true,
+    "ContainerService": true
   },
   "adapters": {
     "aws": true,
     "cloudflare": true,
     "kubernetes": true,
     "vm": false,
-    "takosumi_native": true,
-    "ai_provider": true
+    "takosumi_native": true
   },
   "compat": {
     "s3": false,
@@ -741,16 +759,17 @@ Stable:
   EdgeWorker deploy
   routes
   secrets / vars
-  AIEndpoint OpenAI-compatible surface
-  Object Storage through existing providers / standard endpoints
+  ObjectBucket with S3-compatible data-plane surface
+  AI Gateway as an OpenAI-compatible env/endpoint surface
 
 Preview:
   KV
   Queue
+  SQLDatabase
+  ContainerService
   DurableWorkflow
 
 Planned:
-  ContainerService
   Database extensions
   custom domains beyond basic routing
 
@@ -836,7 +855,8 @@ clear OSS / Operator / Cloud boundaries
 1. Keep plain OpenTofu Stack execution reliable.
 2. Keep arbitrary provider support through generic-env ProviderConnections.
 3. Finish Resource API, planner, resolver, state, and ResolutionLock for
-   EdgeWorker and AIEndpoint.
+   EdgeWorker, ObjectBucket, KVStore, Queue, SQLDatabase, and
+   ContainerService.
 4. Finish `takosumi/takosumi` provider schemas for those default shapes.
 5. Finish extensible TargetPool implementation plugin fields.
 6. Add compatibility profiles only where they are actually needed.

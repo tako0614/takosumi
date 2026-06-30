@@ -45,9 +45,9 @@ const POOL: TargetPoolSpec = {
       priority: 80,
     },
     {
-      name: "aws-main",
-      type: "aws",
-      region: "ap-northeast-1",
+      name: "k8s-main",
+      type: "kubernetes",
+      ref: "cluster-prod",
       priority: 70,
     },
   ],
@@ -65,16 +65,15 @@ async function seed(service: ResourceShapeService, policy = POLICY) {
 const APPLY = {
   actor: ACTOR,
   space: "space_1",
-  kind: "AIEndpoint" as const,
-  name: "ai",
+  kind: "ObjectBucket" as const,
+  name: "assets",
   spec: {
-    name: "ai",
-    interfaces: ["openai_chat_completions", "openai_embeddings"],
-    profiles: ["openai_compatible"],
+    name: "assets",
+    interfaces: ["s3_api"],
   },
 };
 
-test("apply resolves AIEndpoint to the highest-priority target and locks it", async () => {
+test("apply resolves ObjectBucket to the highest-priority target and locks it", async () => {
   const { service } = makeService();
   await seed(service);
 
@@ -85,12 +84,12 @@ test("apply resolves AIEndpoint to the highest-priority target and locks it", as
   const status = result.value.status;
   expect(status?.phase).toBe("Ready");
   expect(status?.resolution?.selectedImplementation).toBe(
-    "cloudflare_ai_gateway",
+    "cloudflare_r2_bucket",
   );
   expect(status?.resolution?.target).toBe("cloudflare-main");
   expect(status?.resolution?.locked).toBe(true);
   expect(status?.observedGeneration).toBe(1);
-  expect(Object.keys(status?.outputs ?? {}).length).toBeGreaterThan(0);
+  expect(status?.outputs?.bucket_name).toContain("ObjectBucket:assets");
 });
 
 test("apply resolves EdgeWorker as a first-class shape", async () => {
@@ -117,24 +116,54 @@ test("apply resolves EdgeWorker as a first-class shape", async () => {
   expect(result.value.status?.resolution?.target).toBe("cloudflare-main");
 });
 
-test("apply resolves AIEndpoint with admin-declared provider implementation", async () => {
+test("apply resolves Queue and SQLDatabase as concrete Cloudflare-backed shapes", async () => {
+  const { service } = makeService();
+  await seed(service);
+
+  const queue = await service.apply({
+    actor: ACTOR,
+    space: "space_1",
+    kind: "Queue",
+    name: "delivery",
+    spec: { name: "delivery", delivery: { maxRetries: 5 } },
+  });
+  expect(queue.ok).toBe(true);
+  if (!queue.ok) return;
+  expect(queue.value.status?.resolution?.selectedImplementation).toBe(
+    "cloudflare_queue",
+  );
+
+  const db = await service.apply({
+    actor: ACTOR,
+    space: "space_1",
+    kind: "SQLDatabase",
+    name: "main",
+    spec: { name: "main", engine: "sqlite", migrationsPath: "migrations" },
+  });
+  expect(db.ok).toBe(true);
+  if (!db.ok) return;
+  expect(db.value.status?.resolution?.selectedImplementation).toBe(
+    "cloudflare_d1_database",
+  );
+});
+
+test("apply resolves ContainerService with admin-declared implementation", async () => {
   const { service } = makeService();
   await service.putTargetPool("space_1", "default", {
     targets: [
       {
-        name: "deepseek-main",
-        type: "ai_provider",
-        ref: "https://api.deepseek.example/v1",
+        name: "custom-main",
+        type: "kubernetes",
+        ref: "cluster-prod",
         priority: 90,
         implementations: [
           {
-            shape: "AIEndpoint",
-            implementation: "deepseek_openai_gateway",
-            nativeResourceType: "ai.deepseek_endpoint",
+            shape: "ContainerService",
+            implementation: "custom_container_runtime",
+            nativeResourceType: "custom.container_service",
             interfaces: {
-              openai_chat_completions: "native",
-              "vendor.deepseek.responses.v1": "native",
-              openai_embeddings: "shim",
+              oci_container: "native",
+              public_http: "native",
             },
           },
         ],
@@ -146,32 +175,22 @@ test("apply resolves AIEndpoint with admin-declared provider implementation", as
   const result = await service.apply({
     actor: ACTOR,
     space: "space_1",
-    kind: "AIEndpoint",
-    name: "ai",
+    kind: "ContainerService",
+    name: "agent",
     spec: {
-      name: "ai",
-      interfaces: ["openai_chat_completions", "vendor.deepseek.responses.v1"],
-      profiles: ["openai_compatible", "provider.deepseek"],
-      providerPreferences: ["provider.deepseek"],
-      routingPolicy: {
-        strategy: "lowest_latency",
-        allowFallback: true,
-        preferredRegions: ["jp"],
-      },
-      modelPolicy: {
-        defaultModel: "deepseek/chat",
-        allowedModels: ["deepseek/chat"],
-      },
+      name: "agent",
+      image: "ghcr.io/example/agent:1.0.0",
+      publicHttp: true,
     },
   });
   expect(result.ok).toBe(true);
   if (!result.ok) return;
   expect(result.value.status?.resolution?.selectedImplementation).toBe(
-    "deepseek_openai_gateway",
+    "custom_container_runtime",
   );
-  expect(result.value.status?.resolution?.target).toBe("deepseek-main");
-  expect(result.value.status?.outputs?.base_url).toContain(
-    "AIEndpoint:ai/base_url",
+  expect(result.value.status?.resolution?.target).toBe("custom-main");
+  expect(result.value.status?.outputs?.service_name).toContain(
+    "ContainerService:agent",
   );
 });
 
@@ -186,19 +205,19 @@ test("apply passes selected implementation plugin metadata to the adapter", asyn
   await service.putTargetPool("space_1", "default", {
     targets: [
       {
-        name: "glm-main",
-        type: "ai_provider",
-        ref: "https://glm.example/v1",
+        name: "custom-main",
+        type: "kubernetes",
+        ref: "cluster-prod",
         priority: 90,
         implementations: [
           {
-            shape: "AIEndpoint",
-            implementation: "glm_openai_gateway",
-            nativeResourceType: "ai.glm_endpoint",
-            plugin: "takosumi-ai-provider-glm",
-            options: { route: "jp", timeoutMs: 30000 },
+            shape: "ContainerService",
+            implementation: "custom_container_runtime",
+            nativeResourceType: "custom.container_service",
+            plugin: "takosumi-container-plugin",
+            options: { runtimeClass: "edge", timeoutMs: 30000 },
             interfaces: {
-              openai_chat_completions: "native",
+              oci_container: "native",
             },
           },
         ],
@@ -210,21 +229,17 @@ test("apply passes selected implementation plugin metadata to the adapter", asyn
   const result = await service.apply({
     actor: ACTOR,
     space: "space_1",
-    kind: "AIEndpoint",
-    name: "ai",
-    spec: {
-      name: "ai",
-      interfaces: ["openai_chat_completions"],
-      profiles: ["openai_compatible", "provider.glm"],
-    },
+    kind: "ContainerService",
+    name: "agent",
+    spec: { name: "agent", image: "ghcr.io/example/agent:1.0.0" },
   });
   expect(result.ok).toBe(true);
   expect(adapter.applyInputs).toHaveLength(1);
   expect(adapter.applyInputs[0]?.implementationPlugin).toBe(
-    "takosumi-ai-provider-glm",
+    "takosumi-container-plugin",
   );
   expect(adapter.applyInputs[0]?.implementationOptions).toEqual({
-    route: "jp",
+    runtimeClass: "edge",
     timeoutMs: 30000,
   });
 });
@@ -234,10 +249,10 @@ test("get returns the applied resource with resolution status", async () => {
   await seed(service);
   await service.apply(APPLY);
 
-  const got = await service.get("space_1", "AIEndpoint", "ai");
+  const got = await service.get("space_1", "ObjectBucket", "assets");
   expect(got.ok).toBe(true);
   if (!got.ok) return;
-  expect(got.value.metadata.name).toBe("ai");
+  expect(got.value.metadata.name).toBe("assets");
   expect(got.value.status?.resolution?.target).toBe("cloudflare-main");
 });
 
@@ -250,12 +265,12 @@ test("a locked resolution is not silently re-targeted on re-apply", async () => 
   expect(reResult.ok).toBe(true);
   if (!reResult.ok) return;
   expect(reResult.value.status?.resolution?.selectedImplementation).toBe(
-    "cloudflare_ai_gateway",
+    "cloudflare_r2_bucket",
   );
   expect(reResult.value.status?.observedGeneration).toBe(2);
 });
 
-test("SpacePolicy deniedTargets steers resolution to the allowed target", async () => {
+test("SpacePolicy deniedTargets steers ContainerService to the allowed target", async () => {
   const { service } = makeService();
   await service.putTargetPool("space_1", "default", POOL);
   await service.putSpacePolicy("space_1", "default", {
@@ -263,13 +278,23 @@ test("SpacePolicy deniedTargets steers resolution to the allowed target", async 
     resolution: { lockAfterCreate: false, allowAutoMigration: true },
   });
 
-  const result = await service.apply(APPLY);
+  const result = await service.apply({
+    actor: ACTOR,
+    space: "space_1",
+    kind: "ContainerService",
+    name: "agent",
+    spec: {
+      name: "agent",
+      image: "ghcr.io/example/agent:1.0.0",
+      publicHttp: true,
+    },
+  });
   expect(result.ok).toBe(true);
   if (!result.ok) return;
   expect(result.value.status?.resolution?.selectedImplementation).toBe(
-    "aws_bedrock_openai_gateway",
+    "kubernetes_deployment",
   );
-  expect(result.value.status?.resolution?.target).toBe("aws-main");
+  expect(result.value.status?.resolution?.target).toBe("k8s-main");
 });
 
 test("preview resolves without persisting", async () => {
@@ -279,9 +304,9 @@ test("preview resolves without persisting", async () => {
   const preview = await service.preview(APPLY);
   expect(preview.ok).toBe(true);
   if (!preview.ok) return;
-  expect(preview.value.selectedImplementation).toBe("cloudflare_ai_gateway");
+  expect(preview.value.selectedImplementation).toBe("cloudflare_r2_bucket");
   expect(preview.value.nativeResourcePlan.length).toBeGreaterThan(0);
-  const stored = await stores.resources.get("tkrn:space_1:AIEndpoint:ai");
+  const stored = await stores.resources.get("tkrn:space_1:ObjectBucket:assets");
   expect(stored).toBeUndefined();
 });
 
@@ -293,16 +318,16 @@ test("apply without a target pool returns target_pool_not_found", async () => {
   expect(result.error.code).toBe("target_pool_not_found");
 });
 
-test("invalid spec (empty interfaces) is rejected before resolution", async () => {
+test("invalid spec is rejected before resolution", async () => {
   const { service } = makeService();
   await seed(service);
   const result = await service.apply({
     ...APPLY,
-    spec: { name: "ai", interfaces: [] },
+    spec: { name: "assets", interfaces: ["bad interface"] },
   });
   expect(result.ok).toBe(false);
   if (result.ok) return;
-  expect(result.error.code).toBe("invalid_interfaces");
+  expect(result.error.code).toBe("invalid_interface");
 });
 
 test("delete respects lifecyclePolicy.delete=block", async () => {
@@ -311,18 +336,23 @@ test("delete respects lifecyclePolicy.delete=block", async () => {
   const created = await service.apply({
     ...APPLY,
     spec: {
-      name: "ai",
-      interfaces: ["openai_chat_completions"],
+      name: "assets",
+      interfaces: ["s3_api"],
       lifecyclePolicy: { delete: "block" },
     },
   });
   expect(created.ok).toBe(true);
 
-  const deleted = await service.delete("space_1", "AIEndpoint", "ai", ACTOR);
+  const deleted = await service.delete(
+    "space_1",
+    "ObjectBucket",
+    "assets",
+    ACTOR,
+  );
   expect(deleted.ok).toBe(false);
   if (deleted.ok) return;
   expect(deleted.error.code).toBe("delete_blocked");
 
-  const stillThere = await service.get("space_1", "AIEndpoint", "ai");
+  const stillThere = await service.get("space_1", "ObjectBucket", "assets");
   expect(stillThere.ok).toBe(true);
 });

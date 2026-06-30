@@ -231,19 +231,155 @@ output "url" {
 }
 `;
 
-const takosumiAiEndpointMainTf = hcl`variable "endpointName" {
+const cloudflareR2BucketMainTf = hcl`terraform {
+  required_providers {
+    cloudflare = {
+      source = "cloudflare/cloudflare"
+    }
+  }
+}
+
+variable "accountId" {
   type        = string
-  description = "Logical AI endpoint name."
+  description = "Cloudflare account id that owns the R2 bucket."
+}
+
+variable "bucketName" {
+  type        = string
+  description = "R2 bucket name."
+}
+
+resource "cloudflare_r2_bucket" "this" {
+  account_id = var.accountId
+  name       = var.bucketName
+}
+
+output "bucket_name" {
+  description = "Created object bucket name."
+  value       = cloudflare_r2_bucket.this.name
+}
+
+output "s3_endpoint" {
+  description = "S3-compatible endpoint base URL for the account-level R2 API."
+  value       = "https://\${var.accountId}.r2.cloudflarestorage.com"
+}
+`;
+
+const cloudflareKVStoreMainTf = hcl`terraform {
+  required_providers {
+    cloudflare = {
+      source = "cloudflare/cloudflare"
+    }
+  }
+}
+
+variable "accountId" {
+  type        = string
+  description = "Cloudflare account id that owns the KV namespace."
+}
+
+variable "namespaceTitle" {
+  type        = string
+  description = "Workers KV namespace title."
+}
+
+resource "cloudflare_workers_kv_namespace" "this" {
+  account_id = var.accountId
+  title      = var.namespaceTitle
+}
+
+output "namespace_id" {
+  description = "Workers KV namespace id."
+  value       = cloudflare_workers_kv_namespace.this.id
+}
+
+output "namespace_title" {
+  description = "Workers KV namespace title."
+  value       = cloudflare_workers_kv_namespace.this.title
+}
+`;
+
+const cloudflareQueueMainTf = hcl`terraform {
+  required_providers {
+    cloudflare = {
+      source = "cloudflare/cloudflare"
+    }
+  }
+}
+
+variable "accountId" {
+  type        = string
+  description = "Cloudflare account id that owns the queue."
+}
+
+variable "queueName" {
+  type        = string
+  description = "Cloudflare Queue name."
+}
+
+resource "cloudflare_queue" "this" {
+  account_id = var.accountId
+  queue_name = var.queueName
+}
+
+output "queue_name" {
+  description = "Cloudflare Queue name."
+  value       = cloudflare_queue.this.queue_name
+}
+`;
+
+const cloudflareSQLDatabaseMainTf = hcl`terraform {
+  required_providers {
+    cloudflare = {
+      source = "cloudflare/cloudflare"
+    }
+  }
+}
+
+variable "accountId" {
+  type        = string
+  description = "Cloudflare account id that owns the D1 database."
+}
+
+variable "databaseName" {
+  type        = string
+  description = "D1 database name."
+}
+
+resource "cloudflare_d1_database" "this" {
+  account_id = var.accountId
+  name       = var.databaseName
+}
+
+output "database_id" {
+  description = "D1 database id."
+  value       = cloudflare_d1_database.this.id
+}
+
+output "database_name" {
+  description = "D1 database name."
+  value       = cloudflare_d1_database.this.name
+}
+`;
+
+const takosumiServiceShapeMainTf = hcl`variable "resourceName" {
+  type        = string
+  description = "Logical resource name."
+}
+
+variable "shape" {
+  type        = string
+  description = "Takosumi Resource Shape kind."
 }
 
 variable "implementation" {
   type        = string
-  description = "Resolver-selected implementation, such as cloudflare_ai_gateway or openai_compatible_ai_endpoint."
+  description = "Resolver-selected implementation."
 }
 
 variable "targetName" {
   type        = string
-  description = "Resolver-selected TargetPool entry name."
+  description = "Resolver-selected Target name."
 }
 
 variable "targetType" {
@@ -251,71 +387,63 @@ variable "targetType" {
   description = "Resolver-selected Target type."
 }
 
-variable "baseUrl" {
+output "resource_name" {
+  description = "Logical resource name."
+  value       = var.resourceName
+}
+`;
+
+const takosumiContainerServiceMainTf = hcl`variable "serviceName" {
   type        = string
-  description = "Public or internal base URL projected by the selected target/adapter. Empty means the adapter owns projection."
-  default     = ""
+  description = "Logical container service name."
 }
 
-variable "defaultModel" {
+variable "implementation" {
   type        = string
-  description = "Optional public default model alias."
-  default     = ""
+  description = "Resolver-selected implementation."
 }
 
-variable "allowedModels" {
-  type        = list(string)
-  description = "Optional public model alias allow-list."
+variable "targetName" {
+  type        = string
+  description = "Resolver-selected Target name."
+}
+
+variable "targetType" {
+  type        = string
+  description = "Resolver-selected Target type."
+}
+
+variable "image" {
+  type        = string
+  description = "OCI image reference."
+}
+
+variable "ports" {
+  type        = list(number)
+  description = "Container ports."
   default     = []
 }
 
-variable "interfaces" {
-  type        = list(string)
-  description = "Requested AI API interfaces, for example openai_chat_completions."
-}
-
-variable "profiles" {
-  type        = list(string)
-  description = "Requested compatibility profiles, for example openai_compatible."
-  default     = []
-}
-
-variable "providerPreferences" {
-  type        = list(string)
-  description = "Optional provider/capability preference tokens. Resolver and operator policy decide whether they are accepted."
-  default     = []
-}
-
-variable "routingStrategy" {
-  type        = string
-  description = "Optional routing strategy token such as operator_default, fallback, lowest_cost, lowest_latency, or highest_quality."
-  default     = ""
-}
-
-variable "allowFallback" {
+variable "publicHttp" {
   type        = bool
-  description = "Whether fallback to another eligible provider is preferred when policy permits it."
+  description = "Whether this service asks for public HTTP exposure."
   default     = false
 }
 
-variable "preferredRegions" {
-  type        = list(string)
-  description = "Optional serving/data region preference tokens."
-  default     = []
+variable "environment" {
+  type        = map(string)
+  description = "Non-secret environment variables."
+  default     = {}
 }
 
-locals {
-  projected_base_url = var.baseUrl
+output "service_name" {
+  description = "Logical container service name."
+  value       = var.serviceName
 }
 
-output "base_url" {
-  description = "OpenAI-compatible or profile-specific endpoint base URL when projected by the selected adapter."
-  value       = local.projected_base_url
-}
-
-output "default_model" {
-  description = "Default public model alias for this endpoint, if configured."
-  value       = var.defaultModel
+output "url" {
+  description = "Public URL if projected by the selected adapter."
+  value       = ""
 }
 `;
 
@@ -332,5 +460,16 @@ export const firstPartyModuleFilesByTemplateId: Readonly<
   "cloudflare-static-site": [
     { path: "main.tf", text: cloudflareStaticSiteMainTf },
   ],
-  "takosumi-ai-endpoint": [{ path: "main.tf", text: takosumiAiEndpointMainTf }],
+  "cloudflare-r2-bucket": [{ path: "main.tf", text: cloudflareR2BucketMainTf }],
+  "cloudflare-kv-store": [{ path: "main.tf", text: cloudflareKVStoreMainTf }],
+  "cloudflare-queue": [{ path: "main.tf", text: cloudflareQueueMainTf }],
+  "cloudflare-sql-database": [
+    { path: "main.tf", text: cloudflareSQLDatabaseMainTf },
+  ],
+  "takosumi-service-shape": [
+    { path: "main.tf", text: takosumiServiceShapeMainTf },
+  ],
+  "takosumi-container-service": [
+    { path: "main.tf", text: takosumiContainerServiceMainTf },
+  ],
 });

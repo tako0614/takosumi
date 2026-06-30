@@ -27,8 +27,12 @@ func discoveryHandler(t *testing.T, resourceShapes bool) http.HandlerFunc {
 			body = map[string]any{
 				"apiVersion": "takosumi.dev/v1alpha1",
 				"resources": map[string]bool{
-					"EdgeWorker":   resourceShapes,
-					"AIEndpoint":   resourceShapes,
+					"EdgeWorker":       resourceShapes,
+					"ObjectBucket":     resourceShapes,
+					"KVStore":          resourceShapes,
+					"Queue":            resourceShapes,
+					"SQLDatabase":      resourceShapes,
+					"ContainerService": resourceShapes,
 				},
 			}
 		default:
@@ -59,7 +63,8 @@ func versionedDiscoveryHandler(t *testing.T, discoveryVersion string, capability
 			body = map[string]any{
 				"apiVersion": capabilityVersion,
 				"resources": map[string]bool{
-					"AIEndpoint":   false,
+					"EdgeWorker":       false,
+					"ContainerService": false,
 				},
 			}
 		default:
@@ -73,7 +78,7 @@ func versionedDiscoveryHandler(t *testing.T, discoveryVersion string, capability
 	}
 }
 
-func TestConfigureClient_AcceptsAIEndpointOnlyCapabilities(t *testing.T) {
+func TestConfigureClient_AcceptsContainerServiceOnlyCapabilities(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		switch r.URL.Path {
@@ -89,8 +94,8 @@ func TestConfigureClient_AcceptsAIEndpointOnlyCapabilities(t *testing.T) {
 			body = map[string]any{
 				"apiVersion": "takosumi.dev/v1alpha1",
 				"resources": map[string]bool{
-					"EdgeWorker":   false,
-					"AIEndpoint":   true,
+					"EdgeWorker":       false,
+					"ContainerService": true,
 				},
 			}
 		default:
@@ -108,8 +113,8 @@ func TestConfigureClient_AcceptsAIEndpointOnlyCapabilities(t *testing.T) {
 	if err != nil {
 		t.Fatalf("configureClient: %v", err)
 	}
-	if !c.Capabilities.SupportsResource("AIEndpoint") {
-		t.Fatalf("expected AIEndpoint capability cached")
+	if !c.Capabilities.SupportsResource("ContainerService") {
+		t.Fatalf("expected ContainerService capability cached")
 	}
 }
 

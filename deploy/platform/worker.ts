@@ -239,12 +239,16 @@ function platformDiscoveryOptions(
     commercialBilling: true,
     paymentEnforcement: true,
     resources: {
-      AIEndpoint: extensionCapabilities.aiGateway,
+      EdgeWorker: extensionCapabilities.cloudflareCompat,
+      ObjectBucket: extensionCapabilities.cloudManagedResources,
+      KVStore: extensionCapabilities.cloudManagedResources,
+      Queue: extensionCapabilities.cloudManagedResources,
+      SQLDatabase: extensionCapabilities.cloudManagedResources,
+      ContainerService: extensionCapabilities.cloudManagedResources,
     },
     adapters: {
       cloudflare: extensionCapabilities.cloudflareCompat,
       takosumi_native: extensionCapabilities.cloudManagedResources,
-      ai_provider: extensionCapabilities.aiGateway,
     },
     compat: {
       s3: extensionCapabilities.s3Compat,

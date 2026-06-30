@@ -301,7 +301,11 @@ function createProductDiscoveryOptions(input: {
     resources: {
       Stack: stacks,
       EdgeWorker: resourceShapes,
-      AIEndpoint: resourceShapes,
+      ObjectBucket: resourceShapes,
+      KVStore: resourceShapes,
+      Queue: resourceShapes,
+      SQLDatabase: resourceShapes,
+      ContainerService: resourceShapes,
     },
     adapters: {
       opentofu: stacks || resourceShapes,
@@ -310,7 +314,6 @@ function createProductDiscoveryOptions(input: {
       kubernetes: resourceShapes,
       vm: resourceShapes,
       takosumi_native: resourceShapes,
-      ai_provider: resourceShapes,
     },
     resourceShapesEnabled: resourceShapes,
   };

@@ -28,8 +28,8 @@ test("runner provider mirror uses exact versions for offline-only providers", as
 
   expect(config).toContain('version = "= 3.9.0"');
   expect(config).toContain('version = "= 4.3.0"');
-  expect(config).toContain('version = "= 6.51.0"');
   expect(config).not.toContain('version = "~> 6.0"');
+  expect(config).not.toContain("hashicorp/aws");
 });
 
 test("runner provider mirror and tofu.rc stay lockstep for baked offline providers", async () => {
@@ -39,7 +39,6 @@ test("runner provider mirror and tofu.rc stay lockstep for baked offline provide
 
   expect(providers).toEqual([
     "registry.opentofu.org/cloudflare/cloudflare",
-    "registry.opentofu.org/hashicorp/aws",
     "registry.opentofu.org/hashicorp/random",
     "registry.opentofu.org/hashicorp/tls",
   ]);

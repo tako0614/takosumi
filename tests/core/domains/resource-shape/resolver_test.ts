@@ -28,21 +28,15 @@ function edgeWorkerResource(name = "api"): ResourceObject {
   };
 }
 
-function aiEndpointResource(
-  name = "ai",
-  interfaces: readonly string[] = [
-    "openai_chat_completions",
-    "openai_embeddings",
-  ],
-): ResourceObject {
+function containerResource(name = "agent"): ResourceObject {
   return {
     apiVersion: TAKOSUMI_API_VERSION,
-    kind: "AIEndpoint",
+    kind: "ContainerService",
     metadata: { name, space: "prod", managedBy: "api" },
     spec: {
       name,
-      interfaces,
-      profiles: ["openai_compatible"],
+      image: "ghcr.io/example/agent:1.0.0",
+      publicHttp: true,
     },
   };
 }
@@ -77,16 +71,21 @@ function spacePolicy(
 
 function input(over: Partial<ResolverInput> = {}): ResolverInput {
   return {
-    resource: aiEndpointResource(),
-    interfaces: ["openai_chat_completions", "openai_embeddings"],
+    resource: containerResource(),
+    interfaces: ["oci_container", "public_http"],
     targetPool: targetPool([
       {
-        name: "deepseek-main",
-        type: "ai_provider",
-        ref: "https://api.deepseek.example/v1",
+        name: "k8s-main",
+        type: "kubernetes",
+        ref: "cluster-prod",
         priority: 20,
       },
-      { name: "cf-ai", type: "cloudflare", ref: "cf-acct", priority: 10 },
+      {
+        name: "cf-containers",
+        type: "cloudflare",
+        ref: "cf-acct",
+        priority: 10,
+      },
     ]),
     ...over,
   };
@@ -98,14 +97,19 @@ function expectOk(outcome: ReturnType<typeof resolve>) {
   return outcome.output;
 }
 
-test("EdgeWorker and AIEndpoint carry shape-specific interface requirements", () => {
+test("current public shapes carry shape-specific interface requirements", () => {
   expect(SHAPE_INTERFACE_REQUIREMENTS.EdgeWorker?.required).toEqual([
     "worker_fetch",
   ]);
-  expect(SHAPE_INTERFACE_REQUIREMENTS.AIEndpoint?.required).toEqual([]);
-  expect(SHAPE_INTERFACE_REQUIREMENTS.AIEndpoint?.preferred).toContain(
-    "openai_chat_completions",
-  );
+  expect(SHAPE_INTERFACE_REQUIREMENTS.ObjectBucket?.required).toEqual([
+    "object_store",
+  ]);
+  expect(SHAPE_INTERFACE_REQUIREMENTS.KVStore?.required).toEqual(["kv_store"]);
+  expect(SHAPE_INTERFACE_REQUIREMENTS.Queue?.required).toEqual(["queue"]);
+  expect(SHAPE_INTERFACE_REQUIREMENTS.SQLDatabase?.required).toEqual(["sql"]);
+  expect(SHAPE_INTERFACE_REQUIREMENTS.ContainerService?.required).toEqual([
+    "oci_container",
+  ]);
 });
 
 test("resolve maps EdgeWorker to cloudflare_workers on a Cloudflare target", () => {
@@ -126,12 +130,12 @@ test("resolve maps EdgeWorker to cloudflare_workers on a Cloudflare target", () 
   ]);
 });
 
-test("resolve picks the highest-priority eligible AI target", () => {
+test("resolve picks the highest-priority eligible container target", () => {
   const out = expectOk(resolve(input()));
-  expect(out.selectedImplementation).toBe("openai_compatible_ai_endpoint");
-  expect(out.selectedTarget).toBe("deepseek-main");
+  expect(out.selectedImplementation).toBe("kubernetes_deployment");
+  expect(out.selectedTarget).toBe("k8s-main");
   expect(out.nativeResourcePlan).toEqual([
-    { type: "ai.openai_compatible_endpoint", id: "ai" },
+    { type: "kubernetes.deployment", id: "agent" },
   ]);
 });
 
@@ -140,18 +144,8 @@ test("resolve tie-breaks equal priority by name ascending", () => {
     resolve(
       input({
         targetPool: targetPool([
-          {
-            name: "zeta",
-            type: "ai_provider",
-            ref: "https://z.example/v1",
-            priority: 7,
-          },
-          {
-            name: "alpha",
-            type: "ai_provider",
-            ref: "https://a.example/v1",
-            priority: 7,
-          },
+          { name: "zeta", type: "cloudflare", ref: "z", priority: 7 },
+          { name: "alpha", type: "cloudflare", ref: "a", priority: 7 },
         ]),
       }),
     ),
@@ -162,11 +156,11 @@ test("resolve tie-breaks equal priority by name ascending", () => {
 test("denied target type is excluded", () => {
   const out = expectOk(
     resolve(
-      input({ spacePolicy: spacePolicy({ deniedTargets: ["ai_provider"] }) }),
+      input({ spacePolicy: spacePolicy({ deniedTargets: ["kubernetes"] }) }),
     ),
   );
-  expect(out.selectedTarget).toBe("cf-ai");
-  expect(out.selectedImplementation).toBe("cloudflare_ai_gateway");
+  expect(out.selectedTarget).toBe("cf-containers");
+  expect(out.selectedImplementation).toBe("cloudflare_container");
 });
 
 test("allowedTargets keeps only allowed entries", () => {
@@ -175,80 +169,76 @@ test("allowedTargets keeps only allowed entries", () => {
       input({ spacePolicy: spacePolicy({ allowedTargets: ["cloudflare"] }) }),
     ),
   );
-  expect(out.selectedTarget).toBe("cf-ai");
+  expect(out.selectedTarget).toBe("cf-containers");
 });
 
-test("a target whose implementation lacks a requested AI interface is excluded", () => {
+test("a target whose implementation lacks a requested interface is excluded", () => {
   const out = expectOk(
     resolve(
       input({
-        interfaces: ["openai_chat_completions", "openai_responses"],
-        resource: aiEndpointResource("ai", [
-          "openai_chat_completions",
-          "openai_responses",
-        ]),
+        interfaces: ["oci_container", "public_http", "env_projection"],
         targetPool: targetPool([
           {
-            name: "deepseek-main",
-            type: "ai_provider",
-            ref: "https://api.deepseek.example/v1",
+            name: "custom-main",
+            type: "kubernetes",
+            ref: "cluster-prod",
             priority: 20,
             implementations: [
               {
-                shape: "AIEndpoint",
-                implementation: "deepseek_openai_gateway",
-                nativeResourceType: "ai.deepseek_endpoint",
+                shape: "ContainerService",
+                implementation: "custom_container",
+                nativeResourceType: "custom.container",
                 interfaces: {
-                  openai_chat_completions: "native",
-                  openai_responses: "unsupported",
+                  oci_container: "native",
+                  public_http: "native",
+                  env_projection: "unsupported",
                 },
               },
             ],
           },
-          { name: "cf-ai", type: "cloudflare", ref: "cf-acct", priority: 10 },
+          {
+            name: "cf-containers",
+            type: "cloudflare",
+            ref: "cf-acct",
+            priority: 10,
+          },
         ]),
       }),
     ),
   );
-  expect(out.selectedTarget).toBe("cf-ai");
+  expect(out.selectedTarget).toBe("cf-containers");
 });
 
 test("no eligible target returns a no_eligible_target error", () => {
   const outcome = resolve(
     input({
-      targetPool: targetPool([
-        { name: "k8s-main", type: "kubernetes", priority: 9 },
-      ]),
+      targetPool: targetPool([{ name: "aws-main", type: "aws", priority: 9 }]),
     }),
   );
   expect(outcome.ok).toBe(false);
   if (!outcome.ok) expect(outcome.error.code).toBe("no_eligible_target");
 });
 
-test("resolve uses admin-declared AI provider implementations from TargetPool", () => {
+test("resolve uses admin-declared implementation capabilities from TargetPool", () => {
   const out = expectOk(
     resolve(
       input({
-        interfaces: ["openai_chat_completions", "vendor.deepseek.responses.v1"],
-        resource: aiEndpointResource("ai", [
-          "openai_chat_completions",
-          "vendor.deepseek.responses.v1",
-        ]),
+        interfaces: ["oci_container", "custom.mesh"],
         targetPool: targetPool([
           {
-            name: "deepseek-main",
-            type: "ai_provider",
-            ref: "https://api.deepseek.example/v1",
+            name: "custom-main",
+            type: "kubernetes",
+            ref: "cluster-prod",
             priority: 20,
             implementations: [
               {
-                shape: "AIEndpoint",
-                implementation: "deepseek_openai_gateway",
-                nativeResourceType: "ai.deepseek_endpoint",
+                shape: "ContainerService",
+                implementation: "custom_container_runtime",
+                nativeResourceType: "custom.container_service",
                 interfaces: {
-                  openai_chat_completions: "native",
-                  "vendor.deepseek.responses.v1": "native",
-                  openai_embeddings: "unsupported",
+                  oci_container: "native",
+                  "custom.mesh": "native",
+                  public_http: "shim",
                 },
               },
             ],
@@ -257,10 +247,10 @@ test("resolve uses admin-declared AI provider implementations from TargetPool", 
       }),
     ),
   );
-  expect(out.selectedImplementation).toBe("deepseek_openai_gateway");
-  expect(out.selectedTarget).toBe("deepseek-main");
+  expect(out.selectedImplementation).toBe("custom_container_runtime");
+  expect(out.selectedTarget).toBe("custom-main");
   expect(out.nativeResourcePlan).toEqual([
-    { type: "ai.deepseek_endpoint", id: "ai" },
+    { type: "custom.container_service", id: "agent" },
   ]);
 });
 
@@ -268,23 +258,22 @@ test("resolve preserves operator implementation plugin metadata", () => {
   const out = expectOk(
     resolve(
       input({
-        interfaces: ["openai_chat_completions"],
-        resource: aiEndpointResource("ai", ["openai_chat_completions"]),
+        interfaces: ["oci_container"],
         targetPool: targetPool([
           {
-            name: "glm-main",
-            type: "ai_provider",
-            ref: "https://glm.example/v1",
+            name: "custom-main",
+            type: "kubernetes",
+            ref: "cluster-prod",
             priority: 20,
             implementations: [
               {
-                shape: "AIEndpoint",
-                implementation: "glm_openai_gateway",
-                nativeResourceType: "ai.glm_endpoint",
-                plugin: "takosumi-ai-provider-glm",
-                options: { route: "jp", timeoutMs: 30000 },
+                shape: "ContainerService",
+                implementation: "custom_container_runtime",
+                nativeResourceType: "custom.container_service",
+                plugin: "takosumi-container-plugin",
+                options: { runtimeClass: "edge", timeoutMs: 30000 },
                 interfaces: {
-                  openai_chat_completions: "native",
+                  oci_container: "native",
                 },
               },
             ],
@@ -293,10 +282,10 @@ test("resolve preserves operator implementation plugin metadata", () => {
       }),
     ),
   );
-  expect(out.selectedImplementation).toBe("glm_openai_gateway");
-  expect(out.selectedImplementationPlugin).toBe("takosumi-ai-provider-glm");
+  expect(out.selectedImplementation).toBe("custom_container_runtime");
+  expect(out.selectedImplementationPlugin).toBe("takosumi-container-plugin");
   expect(out.selectedImplementationOptions).toEqual({
-    route: "jp",
+    runtimeClass: "edge",
     timeoutMs: 30000,
   });
 });
@@ -309,7 +298,9 @@ test("resolutionLock carries resourceId and does NOT stamp lockedAt", () => {
       }),
     ),
   );
-  expect(out.resolutionLock.resourceId).toBe("tkrn:prod:AIEndpoint:ai");
+  expect(out.resolutionLock.resourceId).toBe(
+    "tkrn:prod:ContainerService:agent",
+  );
   expect(out.resolutionLock.locked).toBe(true);
   expect(out.resolutionLock.lockedAt).toBeUndefined();
   expect(out.resolutionLock.reason.length).toBeGreaterThan(0);
@@ -324,28 +315,23 @@ test("portability is mostly_portable when an interface is a shim", () => {
   const out = expectOk(
     resolve(
       input({
-        interfaces: ["openai_chat_completions", "openai_responses"],
-        resource: aiEndpointResource("ai", [
-          "openai_chat_completions",
-          "openai_responses",
-        ]),
-        spacePolicy: spacePolicy({ allowedTargets: ["cloudflare"] }),
+        spacePolicy: spacePolicy({ allowedTargets: ["kubernetes"] }),
       }),
     ),
   );
   expect(out.portability).toBe("mostly_portable");
-  expect(out.riskNotes.some((n) => n.includes("openai_responses"))).toBe(true);
+  expect(out.riskNotes.some((n) => n.includes("public_http"))).toBe(true);
 });
 
 function existingCloudflareLock(): ResolutionLock {
   return {
-    resourceId: "tkrn:prod:AIEndpoint:ai",
-    selectedImplementation: "cloudflare_ai_gateway",
-    target: "cf-ai",
+    resourceId: "tkrn:prod:ContainerService:agent",
+    selectedImplementation: "cloudflare_container",
+    target: "cf-containers",
     locked: true,
     reason: ["initial resolution"],
     portability: "mostly_portable",
-    nativeResources: [{ type: "cloudflare.ai_gateway", id: "ai" }],
+    nativeResources: [{ type: "cloudflare.container", id: "agent" }],
     lockedAt: "2026-01-01T00:00:00.000Z",
   };
 }
@@ -360,11 +346,11 @@ test("a locked resolution is returned unchanged and is NOT re-targeted", () => {
       }),
     ),
   );
-  expect(out.selectedTarget).toBe("cf-ai");
-  expect(out.selectedImplementation).toBe("cloudflare_ai_gateway");
+  expect(out.selectedTarget).toBe("cf-containers");
+  expect(out.selectedImplementation).toBe("cloudflare_container");
   expect(out.resolutionLock).toBe(lock);
   expect(out.resolutionLock.lockedAt).toBe("2026-01-01T00:00:00.000Z");
-  expect(out.riskNotes.some((n) => n.includes("deepseek-main"))).toBe(true);
+  expect(out.riskNotes.some((n) => n.includes("k8s-main"))).toBe(true);
 });
 
 test("allowAutoMigration lets the resolver re-target a locked resolution", () => {
@@ -376,8 +362,8 @@ test("allowAutoMigration lets the resolver re-target a locked resolution", () =>
       }),
     ),
   );
-  expect(out.selectedTarget).toBe("deepseek-main");
-  expect(out.selectedImplementation).toBe("openai_compatible_ai_endpoint");
+  expect(out.selectedTarget).toBe("k8s-main");
+  expect(out.selectedImplementation).toBe("kubernetes_deployment");
 });
 
 test("resolve is deterministic across repeated calls", () => {
@@ -388,6 +374,15 @@ test("resolve is deterministic across repeated calls", () => {
 
 test("DEFAULT_RESOURCE_SHAPE_CAPABILITIES advertises the current public shapes", () => {
   expect(
-    [...new Set(DEFAULT_RESOURCE_SHAPE_CAPABILITIES.map((c) => c.shape))].sort(),
-  ).toEqual(["AIEndpoint", "EdgeWorker"]);
+    [
+      ...new Set(DEFAULT_RESOURCE_SHAPE_CAPABILITIES.map((c) => c.shape)),
+    ].sort(),
+  ).toEqual([
+    "ContainerService",
+    "EdgeWorker",
+    "KVStore",
+    "ObjectBucket",
+    "Queue",
+    "SQLDatabase",
+  ]);
 });

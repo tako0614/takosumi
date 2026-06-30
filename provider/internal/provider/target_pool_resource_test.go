@@ -8,22 +8,22 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
-func TestTargetPoolModelToSpecAcceptsAdminDefinedAIProviders(t *testing.T) {
+func TestTargetPoolModelToSpecAcceptsAdminDefinedImplementations(t *testing.T) {
 	ctx := context.Background()
 	interfaces, diags := types.MapValue(types.StringType, map[string]attr.Value{
-		"openai_chat_completions":      types.StringValue("native"),
-		"openai_embeddings":            types.StringValue("shim"),
-		"vendor.deepseek.responses.v1": types.StringValue("native"),
+		"oci_container": types.StringValue("native"),
+		"public_http":   types.StringValue("shim"),
+		"custom.mesh":   types.StringValue("native"),
 	})
 	if diags.HasError() {
 		t.Fatalf("interfaces diagnostics: %v", diags)
 	}
 	implementation, diags := types.ObjectValue(targetPoolImplementationAttrTypes, map[string]attr.Value{
-		"shape":                types.StringValue("AIEndpoint"),
-		"implementation":       types.StringValue("deepseek_openai_gateway"),
-		"native_resource_type": types.StringValue("ai.deepseek_endpoint"),
-		"plugin":               types.StringValue("deepseek-plugin"),
-		"options_json":         types.StringValue(`{"basePath":"/v1"}`),
+		"shape":                types.StringValue("ContainerService"),
+		"implementation":       types.StringValue("custom_container_runtime"),
+		"native_resource_type": types.StringValue("custom.container_service"),
+		"plugin":               types.StringValue("container-plugin"),
+		"options_json":         types.StringValue(`{"runtimeClass":"edge"}`),
 		"interfaces":           interfaces,
 	})
 	if diags.HasError() {
@@ -37,9 +37,9 @@ func TestTargetPoolModelToSpecAcceptsAdminDefinedAIProviders(t *testing.T) {
 		t.Fatalf("implementations diagnostics: %v", diags)
 	}
 	target, diags := types.ObjectValue(targetPoolTargetAttrTypes, map[string]attr.Value{
-		"name":           types.StringValue("deepseek-main"),
-		"type":           types.StringValue("ai_provider"),
-		"ref":            types.StringValue("https://api.deepseek.example/v1"),
+		"name":           types.StringValue("containers-main"),
+		"type":           types.StringValue("kubernetes"),
+		"ref":            types.StringValue("cluster-prod"),
 		"region":         types.StringValue("jp"),
 		"priority":       types.Int64Value(90),
 		"implementation": implementations,
@@ -70,23 +70,23 @@ func TestTargetPoolModelToSpecAcceptsAdminDefinedAIProviders(t *testing.T) {
 		t.Fatalf("expected one target, got %#v", spec.Targets)
 	}
 	gotTarget := spec.Targets[0]
-	if gotTarget.Type != "ai_provider" || gotTarget.Name != "deepseek-main" {
+	if gotTarget.Type != "kubernetes" || gotTarget.Name != "containers-main" {
 		t.Fatalf("unexpected target %#v", gotTarget)
 	}
 	if len(gotTarget.Implementations) != 1 {
 		t.Fatalf("expected one implementation, got %#v", gotTarget.Implementations)
 	}
 	gotImplementation := gotTarget.Implementations[0]
-	if gotImplementation.Implementation != "deepseek_openai_gateway" {
+	if gotImplementation.Implementation != "custom_container_runtime" {
 		t.Fatalf("expected custom implementation to pass through, got %#v", gotImplementation)
 	}
-	if gotImplementation.Interfaces["vendor.deepseek.responses.v1"] != "native" {
-		t.Fatalf("expected custom AI interface capability, got %#v", gotImplementation.Interfaces)
+	if gotImplementation.Interfaces["custom.mesh"] != "native" {
+		t.Fatalf("expected custom interface capability, got %#v", gotImplementation.Interfaces)
 	}
-	if gotImplementation.Plugin != "deepseek-plugin" {
+	if gotImplementation.Plugin != "container-plugin" {
 		t.Fatalf("expected plugin to pass through, got %#v", gotImplementation)
 	}
-	if gotImplementation.Options["basePath"] != "/v1" {
+	if gotImplementation.Options["runtimeClass"] != "edge" {
 		t.Fatalf("expected options_json to pass through, got %#v", gotImplementation.Options)
 	}
 }
@@ -94,14 +94,14 @@ func TestTargetPoolModelToSpecAcceptsAdminDefinedAIProviders(t *testing.T) {
 func TestTargetPoolModelToSpecRejectsInvalidCapabilityLevel(t *testing.T) {
 	ctx := context.Background()
 	interfaces, diags := types.MapValue(types.StringType, map[string]attr.Value{
-		"openai_chat_completions": types.StringValue("maybe"),
+		"oci_container": types.StringValue("maybe"),
 	})
 	if diags.HasError() {
 		t.Fatalf("interfaces diagnostics: %v", diags)
 	}
 	implementation, diags := types.ObjectValue(targetPoolImplementationAttrTypes, map[string]attr.Value{
-		"shape":                types.StringValue("AIEndpoint"),
-		"implementation":       types.StringValue("custom_ai"),
+		"shape":                types.StringValue("ContainerService"),
+		"implementation":       types.StringValue("custom_container"),
 		"native_resource_type": types.StringNull(),
 		"plugin":               types.StringNull(),
 		"options_json":         types.StringNull(),
@@ -118,8 +118,8 @@ func TestTargetPoolModelToSpecRejectsInvalidCapabilityLevel(t *testing.T) {
 		t.Fatalf("implementations diagnostics: %v", diags)
 	}
 	target, diags := types.ObjectValue(targetPoolTargetAttrTypes, map[string]attr.Value{
-		"name":           types.StringValue("custom-ai"),
-		"type":           types.StringValue("ai_provider"),
+		"name":           types.StringValue("custom-container"),
+		"type":           types.StringValue("kubernetes"),
 		"ref":            types.StringNull(),
 		"region":         types.StringNull(),
 		"priority":       types.Int64Value(1),

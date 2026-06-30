@@ -1303,8 +1303,9 @@ test("Cloudflare Accounts Worker seeds local-substrate account session and space
     env,
   );
 
-  assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), {
+  const body = await response.text();
+  assert.equal(response.status, 200, body);
+  assert.deepEqual(JSON.parse(body), {
     installations: [],
     next_cursor: null,
   });
@@ -1809,6 +1810,31 @@ class MemoryD1Statement implements D1PreparedStatement {
             documentKey(row.bucket, row.documentKey),
           );
           return document ? [{ document }] : [];
+        });
+      return Promise.resolve({ success: true, results: rows as T[] });
+    }
+    if (
+      query.startsWith(
+        "SELECT i.document_key, d.document FROM takosumi_accounts_indexes",
+      )
+    ) {
+      const [indexName, indexKey] = this.#stringValues(2);
+      const rows = [...this.db.indexes.values()]
+        .filter(
+          (row) => row.indexName === indexName && row.indexKey === indexKey,
+        )
+        .sort(
+          (left, right) =>
+            left.sortKey - right.sortKey ||
+            left.documentKey.localeCompare(right.documentKey),
+        )
+        .flatMap((row): Array<{ document_key: string; document: string }> => {
+          const document = this.db.documents.get(
+            documentKey(row.bucket, row.documentKey),
+          );
+          return document
+            ? [{ document_key: row.documentKey, document }]
+            : [];
         });
       return Promise.resolve({ success: true, results: rows as T[] });
     }

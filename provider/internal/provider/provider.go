@@ -70,7 +70,7 @@ func (p *takosumiProvider) Metadata(_ context.Context, _ provider.MetadataReques
 
 func (p *takosumiProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *provider.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "The Takosumi provider resolves Takosumi Resource Shapes such as EdgeWorker and AIEndpoint " +
+		Description: "The Takosumi provider resolves Takosumi Resource Shapes such as EdgeWorker, ObjectBucket, Queue, SQLDatabase, and ContainerService " +
 			"through a Takosumi control plane. It is a thin client over the Resource Shape API; " +
 			"the server-side Resolver selects the backend implementation.",
 		Attributes: map[string]schema.Attribute{
@@ -144,7 +144,11 @@ func (p *takosumiProvider) Configure(ctx context.Context, req provider.Configure
 func (p *takosumiProvider) Resources(_ context.Context) []func() resource.Resource {
 	return []func() resource.Resource{
 		NewEdgeWorkerResource,
-		NewAIEndpointResource,
+		NewObjectBucketResource,
+		NewKVStoreResource,
+		NewQueueResource,
+		NewSQLDatabaseResource,
+		NewContainerServiceResource,
 		NewTargetPoolResource,
 	}
 }

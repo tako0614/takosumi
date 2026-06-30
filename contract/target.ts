@@ -20,7 +20,6 @@ export type KnownTargetType =
   | "libvirt"
   | "ssh"
   | "takosumi_native"
-  | "ai_provider"
   | "opentofu";
 
 /** Target backend type token. Not a closed enum; plugin-defined tokens are allowed. */
@@ -37,7 +36,6 @@ export const TARGET_TYPES: readonly KnownTargetType[] = [
   "libvirt",
   "ssh",
   "takosumi_native",
-  "ai_provider",
   "opentofu",
 ] as const;
 

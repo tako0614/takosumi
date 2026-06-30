@@ -32,7 +32,6 @@ var (
 		"libvirt",
 		"ssh",
 		"takosumi_native",
-		"ai_provider",
 		"opentofu",
 	}
 	targetCapabilityLevels = []string{"native", "shim", "emulated", "unsupported"}
@@ -162,21 +161,21 @@ func (r *targetPoolResource) Schema(_ context.Context, _ resource.SchemaRequest,
 								Attributes: map[string]schema.Attribute{
 									"shape": schema.StringAttribute{
 										Required:    true,
-										Description: "Resource shape kind this implementation can materialize, for example AIEndpoint.",
+										Description: "Resource shape kind this implementation can materialize, for example ContainerService.",
 										Validators: []validator.String{
 											StringToken(),
 										},
 									},
 									"implementation": schema.StringAttribute{
 										Required:    true,
-										Description: "Implementation token, for example deepseek_openai_gateway or gemini_openai_compatible. This is not a provider-binary enum.",
+										Description: "Implementation token, for example kubernetes_deployment or an operator-defined plugin token. This is not a provider-binary enum.",
 										Validators: []validator.String{
 											StringToken(),
 										},
 									},
 									"native_resource_type": schema.StringAttribute{
 										Optional:    true,
-										Description: "Optional native resource type exposed in ResolutionLock evidence, for example ai.deepseek_endpoint.",
+										Description: "Optional native resource type exposed in ResolutionLock evidence, for example kubernetes.deployment.",
 										Validators: []validator.String{
 											StringToken(),
 										},

@@ -10,11 +10,21 @@ import type { Condition, JsonObject } from "./types.ts";
 import { TAKOSUMI_API_VERSION } from "./capabilities.ts";
 
 /** Resource shape kinds the Resource Shape API can host. */
-export type ResourceShapeKind = "EdgeWorker" | "AIEndpoint";
+export type ResourceShapeKind =
+  | "EdgeWorker"
+  | "ObjectBucket"
+  | "KVStore"
+  | "Queue"
+  | "SQLDatabase"
+  | "ContainerService";
 
 export const RESOURCE_SHAPE_KINDS: readonly ResourceShapeKind[] = [
   "EdgeWorker",
-  "AIEndpoint",
+  "ObjectBucket",
+  "KVStore",
+  "Queue",
+  "SQLDatabase",
+  "ContainerService",
 ] as const;
 
 /**
@@ -137,61 +147,62 @@ export interface EdgeWorkerSpec {
 
 export type EdgeWorkerResource = ResourceObject<"EdgeWorker", EdgeWorkerSpec>;
 
-// --- AIEndpoint shape (`docs/final-plan.md` §5 / §12) ------------------------
+// --- Data / runtime shapes ---------------------------------------------------
 
-/**
- * AI interfaces/profiles are extensible capability tokens. Takosumi publishes
- * well-known tokens, but the endpoint's engine/admin may add more through
- * TargetPool implementation capabilities. The provider must not block future
- * Gemini/DeepSeek/GLM/Bedrock/Vertex/native gateway profiles before the
- * endpoint advertises support.
- */
-export type AIEndpointInterface = string;
+export type ObjectBucketInterface = "s3_api" | "signed_url" | "object_events";
 
-export const WELL_KNOWN_AI_ENDPOINT_INTERFACES: readonly AIEndpointInterface[] =
-  ["openai_chat_completions", "openai_responses", "openai_embeddings"] as const;
-
-export type AIEndpointProfile = string;
-
-export const WELL_KNOWN_AI_ENDPOINT_PROFILES: readonly AIEndpointProfile[] = [
-  "openai_compatible",
-  "workers_ai",
-  "anthropic_messages",
-  "gemini_compat",
-] as const;
-
-export interface AIEndpointModelPolicy {
-  readonly defaultModel?: string;
-  readonly allowedModels?: readonly string[];
-}
-
-export type AIEndpointProviderPreference = string;
-
-export interface AIEndpointRoutingPolicy {
-  /**
-   * Extensible routing strategy token. Well-known values include
-   * `operator_default`, `fixed`, `fallback`, `lowest_cost`, `lowest_latency`,
-   * and `highest_quality`, but endpoint policy decides which values are valid.
-   */
-  readonly strategy?: string;
-  /**
-   * Whether the resolver/runtime may use another eligible provider when the
-   * preferred route is unavailable. This is a preference; policy may still
-   * force fail-closed behavior for regulated spaces.
-   */
-  readonly allowFallback?: boolean;
-  /** Preferred serving/data regions expressed as operator-defined tokens. */
-  readonly preferredRegions?: readonly string[];
-}
-
-export interface AIEndpointSpec {
+export interface ObjectBucketSpec {
   readonly name: string;
-  readonly interfaces: readonly AIEndpointInterface[];
-  readonly profiles?: readonly AIEndpointProfile[];
-  readonly providerPreferences?: readonly AIEndpointProviderPreference[];
-  readonly routingPolicy?: AIEndpointRoutingPolicy;
-  readonly modelPolicy?: AIEndpointModelPolicy;
+  readonly interfaces?: readonly ObjectBucketInterface[];
   readonly lifecyclePolicy?: ResourceLifecyclePolicy;
 }
 
-export type AIEndpointResource = ResourceObject<"AIEndpoint", AIEndpointSpec>;
+export type ObjectBucketResource = ResourceObject<
+  "ObjectBucket",
+  ObjectBucketSpec
+>;
+
+export interface KVStoreSpec {
+  readonly name: string;
+  readonly consistency?: "eventual" | "strong";
+  readonly lifecyclePolicy?: ResourceLifecyclePolicy;
+}
+
+export type KVStoreResource = ResourceObject<"KVStore", KVStoreSpec>;
+
+export interface QueueSpec {
+  readonly name: string;
+  readonly delivery?: {
+    readonly maxRetries?: number;
+    readonly maxBatchSize?: number;
+  };
+  readonly lifecyclePolicy?: ResourceLifecyclePolicy;
+}
+
+export type QueueResource = ResourceObject<"Queue", QueueSpec>;
+
+export interface SQLDatabaseSpec {
+  readonly name: string;
+  readonly engine?: "sqlite" | "postgres" | "mysql";
+  readonly migrationsPath?: string;
+  readonly lifecyclePolicy?: ResourceLifecyclePolicy;
+}
+
+export type SQLDatabaseResource = ResourceObject<
+  "SQLDatabase",
+  SQLDatabaseSpec
+>;
+
+export interface ContainerServiceSpec {
+  readonly name: string;
+  readonly image: string;
+  readonly ports?: readonly number[];
+  readonly publicHttp?: boolean;
+  readonly environment?: Readonly<Record<string, string>>;
+  readonly lifecyclePolicy?: ResourceLifecyclePolicy;
+}
+
+export type ContainerServiceResource = ResourceObject<
+  "ContainerService",
+  ContainerServiceSpec
+>;

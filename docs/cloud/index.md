@@ -40,7 +40,8 @@ Takosumi Cloud Workers =
 HTTP app は Takosumi Cloud Workers として動きます。これは
 Cloudflare Workers for Platforms を基盤にした Worker-compatible runtime です。
 ユーザーの app は Worker-like script としてデプロイされ、Takosumi が管理する
-dispatch layer 経由で実行されます。
+dispatch layer 経由で実行されます。Cloudflare compatibility entrypoints は
+same platform worker に合流し、not deployed as separate Workers です。
 
 Durable workflow は、利用可能な場合に Dynamic Workers と
 `@cloudflare/dynamic-workflows` を使います。operator/internal jobs は normal
