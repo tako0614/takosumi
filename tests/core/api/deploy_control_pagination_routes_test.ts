@@ -53,10 +53,7 @@ function installationFixture(i: number): Installation {
   } satisfies Installation;
 }
 
-function installConfigFixture(
-  i: number,
-  spaceId?: string,
-): InstallConfig {
+function installConfigFixture(i: number, spaceId?: string): InstallConfig {
   const seq = String(i).padStart(4, "0");
   return {
     id: `cfg_${seq}`,
@@ -72,7 +69,9 @@ function installConfigFixture(
   } satisfies InstallConfig;
 }
 
-async function makeApp(seed: (store: InMemoryOpenTofuDeploymentStore) => Promise<void>) {
+async function makeApp(
+  seed: (store: InMemoryOpenTofuDeploymentStore) => Promise<void>,
+) {
   const store = new InMemoryOpenTofuDeploymentStore();
   await seed(store);
   const controller = new OpenTofuDeploymentController({ store });
@@ -132,15 +131,17 @@ test("GET /internal/v1/connections caps the default page at 100 and pages the re
   expect(pages).toBe(3); // 100 + 100 + 50
   expect(seen).toHaveLength(total);
   expect(new Set(seen).size).toBe(total); // no dupes
-  const expected = Array.from({ length: total }, (_, i) =>
-    `conn_${String(i).padStart(4, "0")}`,
+  const expected = Array.from(
+    { length: total },
+    (_, i) => `conn_${String(i).padStart(4, "0")}`,
   );
   expect(seen).toEqual(expected); // ordered, no gaps
 });
 
 test("GET /internal/v1/connections honours an explicit ?limit=", async () => {
   const app = await makeApp(async (store) => {
-    for (let i = 0; i < 10; i += 1) await store.putConnection(connectionFixture(i));
+    for (let i = 0; i < 10; i += 1)
+      await store.putConnection(connectionFixture(i));
   });
   const res = await app.request(
     `/internal/v1/connections?spaceId=${SPACE_ID}&limit=3`,
@@ -184,10 +185,10 @@ test("GET /internal/v1/workspaces/:id/capsules caps the default page at 100 and 
   );
   expect(res.status).toBe(200);
   const body = (await res.json()) as {
-    installations: { id: string }[];
+    capsules: { id: string }[];
     nextCursor?: string;
   };
-  expect(body.installations).toHaveLength(DEFAULT_PAGE_LIMIT);
+  expect(body.capsules).toHaveLength(DEFAULT_PAGE_LIMIT);
   expect(body.nextCursor).toBeDefined();
 
   const next = await app.request(
@@ -195,14 +196,14 @@ test("GET /internal/v1/workspaces/:id/capsules caps the default page at 100 and 
     { headers: AUTH },
   );
   const nextBody = (await next.json()) as {
-    installations: { id: string }[];
+    capsules: { id: string }[];
     nextCursor?: string;
   };
-  expect(nextBody.installations).toHaveLength(total - DEFAULT_PAGE_LIMIT);
+  expect(nextBody.capsules).toHaveLength(total - DEFAULT_PAGE_LIMIT);
   expect(nextBody.nextCursor).toBeUndefined();
   // No overlap across the page boundary.
-  const firstIds = new Set(body.installations.map((r) => r.id));
-  for (const row of nextBody.installations) {
+  const firstIds = new Set(body.capsules.map((r) => r.id));
+  for (const row of nextBody.capsules) {
     expect(firstIds.has(row.id)).toBe(false);
   }
 });
