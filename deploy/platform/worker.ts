@@ -65,7 +65,11 @@ import {
   platformCloudExtensionRoutes,
   type PlatformCloudExtensionRoute,
 } from "./cloud_extensions.ts";
-import type { CreateTakosumiDiscoveryOptions } from "takosumi-contract/capabilities";
+import type {
+  CreateTakosumiDiscoveryOptions,
+  TakosumiAdapterCapabilities,
+  TakosumiResourceCapabilities,
+} from "takosumi-contract/capabilities";
 export {
   isPlatformCloudExtensionCatalogPath,
   matchPlatformCloudExtensionRoute,
@@ -236,25 +240,17 @@ function platformDiscoveryOptions(
   env: CloudflareWorkerEnv,
 ): CreateTakosumiDiscoveryOptions {
   const extensionCapabilities = platformCloudExtensionCapabilities(env);
-  const resourceShapes = platformResourceShapeApiEnabled(env);
+  const resourceShapeApi = platformResourceShapeApiEnabled(env);
+  const resources = platformResourceCapabilities(env, resourceShapeApi);
+  const resourceShapes = resourceShapeApi && resourceCapabilitiesEnabled(resources);
+  const adapters = platformAdapterCapabilities(env, resourceShapes);
   return {
     origin,
     operatorTenants: true,
     commercialBilling: true,
     paymentEnforcement: true,
-    resources: {
-      EdgeWorker: resourceShapes,
-      ObjectBucket: resourceShapes,
-      KVStore: resourceShapes,
-      Queue: resourceShapes,
-      PushNotification: resourceShapes,
-      SQLDatabase: resourceShapes,
-      ContainerService: resourceShapes,
-    },
-    adapters: {
-      cloudflare: resourceShapes,
-      takosumi_native: resourceShapes,
-    },
+    resources,
+    adapters,
     compat: {
       s3: extensionCapabilities.s3Compat,
       cloudflare_subset: extensionCapabilities.cloudflareCompat,
@@ -266,6 +262,106 @@ function platformDiscoveryOptions(
     },
     resourceShapesEnabled: resourceShapes,
   };
+}
+
+const RESOURCE_CAPABILITY_KEYS: readonly (Exclude<
+  keyof TakosumiResourceCapabilities,
+  "Stack"
+>)[] = [
+  "EdgeWorker",
+  "ObjectBucket",
+  "KVStore",
+  "Queue",
+  "PushNotification",
+  "SQLDatabase",
+  "ContainerService",
+];
+
+const ADAPTER_CAPABILITY_KEYS: readonly (keyof TakosumiAdapterCapabilities)[] = [
+  "opentofu",
+  "aws",
+  "cloudflare",
+  "kubernetes",
+  "vm",
+  "takosumi_native",
+];
+
+function platformResourceCapabilities(
+  env: CloudflareWorkerEnv,
+  apiEnabled: boolean,
+): Partial<TakosumiResourceCapabilities> {
+  const base = Object.fromEntries(
+    RESOURCE_CAPABILITY_KEYS.map((key) => [key, false]),
+  ) as Partial<TakosumiResourceCapabilities>;
+  if (!apiEnabled) return base;
+  for (const key of parseCapabilityList(
+    env.TAKOSUMI_RESOURCE_SHAPES,
+    RESOURCE_CAPABILITY_KEYS,
+  )) {
+    base[key] = true;
+  }
+  return base;
+}
+
+function platformAdapterCapabilities(
+  env: CloudflareWorkerEnv,
+  resourceShapesEnabled: boolean,
+): Partial<TakosumiAdapterCapabilities> {
+  const base = Object.fromEntries(
+    ADAPTER_CAPABILITY_KEYS.map((key) => [key, false]),
+  ) as Partial<TakosumiAdapterCapabilities>;
+  if (!resourceShapesEnabled) return base;
+  base.opentofu = true;
+  for (const key of parseCapabilityList(
+    env.TAKOSUMI_RESOURCE_ADAPTERS,
+    ADAPTER_CAPABILITY_KEYS,
+  )) {
+    base[key] = true;
+  }
+  return base;
+}
+
+function resourceCapabilitiesEnabled(
+  resources: Partial<TakosumiResourceCapabilities>,
+): boolean {
+  return RESOURCE_CAPABILITY_KEYS.some((key) => resources[key] === true);
+}
+
+function parseCapabilityList<T extends string>(
+  value: unknown,
+  allowed: readonly T[],
+): readonly T[] {
+  if (typeof value !== "string" || value.trim().length === 0) return [];
+  const raw = value.trim();
+  const allowedSet = new Set<T>(allowed);
+  const tokens = raw === "all" ? [...allowed] : parseCapabilityTokens(raw);
+  const out: T[] = [];
+  const seen = new Set<T>();
+  for (const token of tokens) {
+    if (!allowedSet.has(token as T)) continue;
+    const key = token as T;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(key);
+  }
+  return out;
+}
+
+function parseCapabilityTokens(raw: string): readonly string[] {
+  if (raw.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return parsed.filter((item): item is string => typeof item === "string");
+      }
+    } catch {
+      return [];
+    }
+  }
+  return raw
+    .split(/[,\s]+/u)
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 export function platformResourceShapeApiEnabled(

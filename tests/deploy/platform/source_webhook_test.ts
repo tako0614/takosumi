@@ -1310,6 +1310,8 @@ test("platform Resource Shape API discovery is gated by deploy-control token and
   const env = {
     TAKOSUMI_CONTROL_DB: new SqliteFakeD1(),
     TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
+    TAKOSUMI_RESOURCE_SHAPES: "EdgeWorker,ObjectBucket,KVStore,Queue,SQLDatabase",
+    TAKOSUMI_RESOURCE_ADAPTERS: "cloudflare",
   } as never;
 
   expect(platformResourceShapeApiEnabled({} as never)).toBe(false);
@@ -1328,11 +1330,11 @@ test("platform Resource Shape API discovery is gated by deploy-control token and
   expect(body.resources.ObjectBucket).toBe(true);
   expect(body.resources.KVStore).toBe(true);
   expect(body.resources.Queue).toBe(true);
-  expect(body.resources.PushNotification).toBe(true);
+  expect(body.resources.PushNotification).toBe(false);
   expect(body.resources.SQLDatabase).toBe(true);
-  expect(body.resources.ContainerService).toBe(true);
+  expect(body.resources.ContainerService).toBe(false);
   expect(body.adapters.cloudflare).toBe(true);
-  expect(body.adapters.takosumi_native).toBe(true);
+  expect(body.adapters.takosumi_native).toBe(false);
 
   const discovery = await worker.fetch(
     new Request(`https://app.takosumi.com${TAKOSUMI_WELL_KNOWN_PATH}`),
@@ -1340,6 +1342,36 @@ test("platform Resource Shape API discovery is gated by deploy-control token and
   );
   expect(discovery.status).toBe(200);
   expect((await discovery.json()).features.resource_shapes).toBe(true);
+});
+
+test("platform Resource Shape API does not advertise shapes without an operator list", async () => {
+  const worker = (await import("../../../deploy/platform/worker.ts")).default;
+  const env = {
+    TAKOSUMI_CONTROL_DB: new SqliteFakeD1(),
+    TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
+  } as never;
+
+  const capabilities = await worker.fetch(
+    new Request(
+      `https://app.takosumi.com${TAKOSUMI_PRODUCT_CAPABILITIES_PATH}`,
+    ),
+    env,
+  );
+
+  expect(capabilities.status).toBe(200);
+  const body = await capabilities.json();
+  expect(body.resources.EdgeWorker).toBe(false);
+  expect(body.resources.ObjectBucket).toBe(false);
+  expect(body.resources.PushNotification).toBe(false);
+  expect(body.adapters.opentofu).toBe(false);
+  expect(body.adapters.cloudflare).toBe(false);
+
+  const discovery = await worker.fetch(
+    new Request(`https://app.takosumi.com${TAKOSUMI_WELL_KNOWN_PATH}`),
+    env,
+  );
+  expect(discovery.status).toBe(200);
+  expect((await discovery.json()).features.resource_shapes).toBe(false);
 });
 
 test("platform Resource Shape API routes are routed before accounts and bearer-gated", async () => {
@@ -1366,7 +1398,19 @@ test("platform Resource Shape API routes are routed before accounts and bearer-g
     new Request("https://app.takosumi.com/v1/target-pools/default", {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ space: "space_1", spec: { targets: [] } }),
+      body: JSON.stringify({
+        space: "space_1",
+        spec: {
+          targets: [
+            {
+              name: "cf-main",
+              type: "cloudflare",
+              ref: "account_test",
+              priority: 100,
+            },
+          ],
+        },
+      }),
     }),
     env,
   );
@@ -1379,7 +1423,19 @@ test("platform Resource Shape API routes are routed before accounts and bearer-g
         "content-type": "application/json",
         authorization: "Bearer resource-token",
       },
-      body: JSON.stringify({ space: "space_1", spec: { targets: [] } }),
+      body: JSON.stringify({
+        space: "space_1",
+        spec: {
+          targets: [
+            {
+              name: "cf-main",
+              type: "cloudflare",
+              ref: "account_test",
+              priority: 100,
+            },
+          ],
+        },
+      }),
     }),
     env,
   );

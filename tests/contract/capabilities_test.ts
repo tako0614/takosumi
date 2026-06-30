@@ -14,7 +14,7 @@ test("Takosumi discovery document exposes v1alpha1 endpoint metadata", () => {
   assert.deepEqual(document.api_versions, [TAKOSUMI_API_VERSION]);
   assert.equal(document.edition, undefined);
   assert.equal(document.features.stacks, true);
-  assert.equal(document.features.resource_shapes, true);
+  assert.equal(document.features.resource_shapes, false);
   assert.equal(document.features.compat_framework, true);
   assert.equal(document.features.compat_s3, false);
   assert.equal(document.endpoints.api, "https://takosumi.example.com/api");
@@ -27,16 +27,16 @@ test("Takosumi discovery document exposes v1alpha1 endpoint metadata", () => {
 
 test("Takosumi product capabilities separate framework from enabled profiles", () => {
   const capabilities = createTakosumiProductCapabilities({
-    resources: { EdgeWorker: false },
+    resources: { EdgeWorker: true, ObjectBucket: true },
     compat: { s3: true },
   });
 
   assert.equal(capabilities.apiVersion, TAKOSUMI_API_VERSION);
   assert.equal(capabilities.resources.Stack, true);
-  assert.equal(capabilities.resources.EdgeWorker, false);
+  assert.equal(capabilities.resources.EdgeWorker, true);
   assert.equal(capabilities.resources.ObjectBucket, true);
-  assert.equal(capabilities.resources.PushNotification, true);
-  assert.equal(capabilities.resources.ContainerService, true);
+  assert.equal(capabilities.resources.PushNotification, false);
+  assert.equal(capabilities.resources.ContainerService, false);
   assert.equal(capabilities.adapters.opentofu, true);
   assert.equal(capabilities.compat.framework, true);
   assert.equal(capabilities.compat.s3, true);
@@ -59,9 +59,11 @@ test("Takosumi discovery can publish a scoped S3-compatible endpoint", () => {
 });
 
 test("S3 compatibility is separate from the ObjectBucket Resource Shape", () => {
-  const capabilities = createTakosumiProductCapabilities();
+  const capabilities = createTakosumiProductCapabilities({
+    resources: { ObjectBucket: true },
+  });
 
-  assert.equal(capabilities.resources.EdgeWorker, true);
+  assert.equal(capabilities.resources.EdgeWorker, false);
   assert.equal(capabilities.resources.ObjectBucket, true);
   assert.equal(capabilities.compat.s3, false);
 });

@@ -166,6 +166,30 @@ test("preview returns summary + nativeResources + runId from a simulated plan", 
   expect(preview.runId).toBeDefined();
 });
 
+test("built-in opentofu adapter rejects operator plugin implementations instead of ignoring them", async () => {
+  const port = new FakeOpentofuRunPort();
+  const adapter = new OpentofuResourceShapeAdapter(port);
+  const plan = edgeWorkerPlan();
+
+  await expect(
+    adapter.preview(
+      applyInput(plan, cloudflareTarget, {
+        implementationPlugin: "takosumi-container-plugin",
+      }),
+    ),
+  ).rejects.toThrow("plugin-aware Resource Shape adapter");
+  await expect(
+    adapter.apply(
+      applyInput(plan, cloudflareTarget, {
+        implementationPlugin: "takosumi-container-plugin",
+      }),
+    ),
+  ).rejects.toThrow("plugin-aware Resource Shape adapter");
+
+  expect(port.planRequests.length).toBe(0);
+  expect(port.applyRequests.length).toBe(0);
+});
+
 test("apply without a credentialRef leaves the ProviderBinding connectionId unset", async () => {
   const port = new FakeOpentofuRunPort();
   const adapter = new OpentofuResourceShapeAdapter(port);
@@ -213,6 +237,25 @@ test("delete with a retain or block policy never destroys", async () => {
 
   await adapter.delete(deleteInput({ deletePolicy: "retain" }));
   await adapter.delete(deleteInput({ deletePolicy: "block" }));
+  expect(port.destroyRequests.length).toBe(0);
+});
+
+test("built-in opentofu adapter rejects plugin-backed destroy unless deletion is retained", async () => {
+  const port = new FakeOpentofuRunPort();
+  const adapter = new OpentofuResourceShapeAdapter(port);
+
+  await expect(
+    adapter.delete(
+      deleteInput({ implementationPlugin: "takosumi-container-plugin" }),
+    ),
+  ).rejects.toThrow("plugin-aware Resource Shape adapter");
+  await adapter.delete(
+    deleteInput({
+      implementationPlugin: "takosumi-container-plugin",
+      deletePolicy: "retain",
+    }),
+  );
+
   expect(port.destroyRequests.length).toBe(0);
 });
 
