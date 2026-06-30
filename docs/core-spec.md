@@ -452,8 +452,8 @@ isolation, quota, network egress policy, admin audit, and usage metering.
 2. OpenTofu Stack controller: Git, runner, state, logs, approval, credentials.
 3. ProviderConnection / CredentialRecipe / generic env / OIDC federation.
 4. Resource object schema, Resource API preview/apply/status, ResolutionLock.
-5. EdgeWorker / ObjectBucket / KVStore / Queue / SQLDatabase /
-   ContainerService planner and provider schemas.
+5. EdgeWorker / ObjectBucket / KVStore / Queue / PushNotification /
+   SQLDatabase / ContainerService planner and provider schemas.
 6. TargetPool implementation plugin fields.
 7. Add scoped compatibility profiles only where existing providers are not
    enough for import, binding, policy, or metering.

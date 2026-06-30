@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	frameworkresource "github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -34,6 +35,41 @@ func TestServiceShapeToResourceCarriesTargetPoolName(t *testing.T) {
 	}
 	if resource.TargetPoolName != "storage" {
 		t.Fatalf("expected targetPoolName to be carried, got %#v", resource)
+	}
+}
+
+func TestPushNotificationToResourceCarriesProtocolsAndTTL(t *testing.T) {
+	model := serviceShapeModel{
+		Name: types.StringValue("push"),
+		Protocols: types.SetValueMust(types.StringType, []attr.Value{
+			types.StringValue("web_push"),
+			types.StringValue("fcm"),
+		}),
+		TTLSeconds: types.Int64Value(600),
+	}
+
+	resource, _, diags := model.toResource(
+		context.Background(),
+		"prod",
+		client.KindPushNotification,
+		specPushNotification,
+	)
+	if diags.HasError() {
+		t.Fatalf("toResource diagnostics: %v", diags)
+	}
+	protocols, ok := resource.Spec["protocols"].([]string)
+	if !ok {
+		t.Fatalf("expected protocols []string, got %#v", resource.Spec["protocols"])
+	}
+	if len(protocols) != 2 || protocols[0] != "web_push" || protocols[1] != "fcm" {
+		t.Fatalf("unexpected protocols %#v", protocols)
+	}
+	delivery, ok := resource.Spec["delivery"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected delivery map, got %#v", resource.Spec["delivery"])
+	}
+	if delivery["ttlSeconds"] != int64(600) {
+		t.Fatalf("expected ttlSeconds=600, got %#v", delivery["ttlSeconds"])
 	}
 }
 
@@ -87,6 +123,24 @@ func TestServiceShapeCreatePutsEachResourceOnce(t *testing.T) {
 				Name:                   types.StringValue("delivery"),
 				MaxRetries:             types.Int64Null(),
 				MaxBatchSize:           types.Int64Null(),
+				Space:                  types.StringNull(),
+				TargetPool:             types.StringNull(),
+				SelectedImplementation: types.StringUnknown(),
+				Target:                 types.StringUnknown(),
+				Locked:                 types.BoolUnknown(),
+				Portability:            types.StringUnknown(),
+				Outputs:                types.MapUnknown(types.StringType),
+			},
+		},
+		{
+			name: "push notification",
+			kind: client.KindPushNotification,
+			spec: specPushNotification,
+			resource: pushNotificationModel{
+				ID:                     types.StringUnknown(),
+				Name:                   types.StringValue("push"),
+				Protocols:              types.SetNull(types.StringType),
+				TTLSeconds:             types.Int64Null(),
 				Space:                  types.StringNull(),
 				TargetPool:             types.StringNull(),
 				SelectedImplementation: types.StringUnknown(),

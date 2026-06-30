@@ -31,6 +31,7 @@ func discoveryHandler(t *testing.T, resourceShapes bool) http.HandlerFunc {
 					"ObjectBucket":     resourceShapes,
 					"KVStore":          resourceShapes,
 					"Queue":            resourceShapes,
+					"PushNotification": resourceShapes,
 					"SQLDatabase":      resourceShapes,
 					"ContainerService": resourceShapes,
 				},

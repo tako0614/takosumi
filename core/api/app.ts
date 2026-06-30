@@ -304,6 +304,7 @@ function createProductDiscoveryOptions(input: {
       ObjectBucket: resourceShapes,
       KVStore: resourceShapes,
       Queue: resourceShapes,
+      PushNotification: resourceShapes,
       SQLDatabase: resourceShapes,
       ContainerService: resourceShapes,
     },

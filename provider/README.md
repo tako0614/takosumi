@@ -16,6 +16,7 @@ Current v1alpha1 resources:
 | `takosumi_object_bucket`     | `ObjectBucket`     | Object storage when Takosumi owns projection/policy |
 | `takosumi_kv_store`          | `KVStore`          | Key-value runtime binding/state                     |
 | `takosumi_queue`             | `Queue`            | Async delivery and event fan-out                    |
+| `takosumi_push_notification` | `PushNotification` | Web Push, APNs, or FCM notification channel         |
 | `takosumi_sql_database`      | `SQLDatabase`      | D1-like sqlite, or operator-supported SQL targets   |
 | `takosumi_container_service` | `ContainerService` | OCI container service, separate from EdgeWorker     |
 | `takosumi_target_pool`       | `TargetPool`       | Operator/admin target capability evidence           |
@@ -161,6 +162,12 @@ resource "takosumi_queue" "delivery" {
   max_batch_size = 25
 }
 
+resource "takosumi_push_notification" "push" {
+  name        = "push"
+  protocols   = ["web_push", "fcm"]
+  ttl_seconds = 3600
+}
+
 resource "takosumi_sql_database" "main" {
   name            = "main"
   engine          = "sqlite"
@@ -194,15 +201,16 @@ Common computed fields:
 
 Shape-specific fields:
 
-| Resource                     | Required fields              | Optional fields                                             |
-| ---------------------------- | ---------------------------- | ----------------------------------------------------------- |
+| Resource                     | Required fields              | Optional fields                                                        |
+| ---------------------------- | ---------------------------- | ---------------------------------------------------------------------- |
 | `takosumi_edge_worker`       | `name`, `artifact_path`      | `target_pool`, `compatibility_date`, `compatibility_flags`, `profiles` |
-| `takosumi_object_bucket`     | `name`                       | `target_pool`, `interfaces`                                 |
-| `takosumi_kv_store`          | `name`                       | `target_pool`, `consistency`                                |
-| `takosumi_queue`             | `name`                       | `target_pool`, `max_retries`, `max_batch_size`              |
-| `takosumi_sql_database`      | `name`                       | `target_pool`, `engine`, `migrations_path`                  |
-| `takosumi_container_service` | `name`, `image`              | `target_pool`, `ports`, `public_http`, `environment`        |
-| `takosumi_target_pool`       | `name`, one or more `target` | operator-defined `implementation`, `plugin`, `options_json` |
+| `takosumi_object_bucket`     | `name`                       | `target_pool`, `interfaces`                                            |
+| `takosumi_kv_store`          | `name`                       | `target_pool`, `consistency`                                           |
+| `takosumi_queue`             | `name`                       | `target_pool`, `max_retries`, `max_batch_size`                         |
+| `takosumi_push_notification` | `name`                       | `target_pool`, `protocols`, `ttl_seconds`                              |
+| `takosumi_sql_database`      | `name`                       | `target_pool`, `engine`, `migrations_path`                             |
+| `takosumi_container_service` | `name`, `image`              | `target_pool`, `ports`, `public_http`, `environment`                   |
+| `takosumi_target_pool`       | `name`, one or more `target` | operator-defined `implementation`, `plugin`, `options_json`            |
 
 Secrets must not be placed in Resource Shape specs. Use ProviderConnection,
 CredentialRecipe, Secret, or generic env materialization.

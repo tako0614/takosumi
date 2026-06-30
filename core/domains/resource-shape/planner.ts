@@ -15,6 +15,8 @@ import type {
   KVStoreSpec,
   ObjectBucketInterface,
   ObjectBucketSpec,
+  PushNotificationProtocol,
+  PushNotificationSpec,
   QueueSpec,
   ResourceDeletePolicy,
   ResourceShapeKind,
@@ -58,6 +60,12 @@ export type ParsedResourceSpec =
       readonly spec: QueueSpec;
       readonly interfaces: readonly string[];
       readonly lifecyclePolicy?: QueueSpec["lifecyclePolicy"];
+    }
+  | {
+      readonly kind: "PushNotification";
+      readonly spec: PushNotificationSpec;
+      readonly interfaces: readonly string[];
+      readonly lifecyclePolicy?: PushNotificationSpec["lifecyclePolicy"];
     }
   | {
       readonly kind: "SQLDatabase";
@@ -107,6 +115,13 @@ export type ParseQueueSpecResult =
       readonly error: { readonly code: string; readonly message: string };
     };
 
+export type ParsePushNotificationSpecResult =
+  | { readonly ok: true; readonly spec: PushNotificationSpec }
+  | {
+      readonly ok: false;
+      readonly error: { readonly code: string; readonly message: string };
+    };
+
 export type ParseSQLDatabaseSpecResult =
   | { readonly ok: true; readonly spec: SQLDatabaseSpec }
   | {
@@ -126,6 +141,12 @@ const EDGE_WORKER_PROFILES: readonly EdgeWorkerProfile[] = [
   "node_compat",
   "service_bindings",
   "static_assets",
+];
+
+const PUSH_NOTIFICATION_PROTOCOLS: readonly PushNotificationProtocol[] = [
+  "web_push",
+  "apns",
+  "fcm",
 ];
 
 const RESOURCE_DELETE_POLICIES: readonly ResourceDeletePolicy[] = [
@@ -233,6 +254,20 @@ export function parseResourceSpec(
               kind,
               spec: r.spec,
               interfaces: requiredQueueInterfaces(r.spec),
+              lifecyclePolicy: r.spec.lifecyclePolicy,
+            },
+          }
+        : r;
+    }
+    case "PushNotification": {
+      const r = parsePushNotificationSpec(spec);
+      return r.ok
+        ? {
+            ok: true,
+            parsed: {
+              kind,
+              spec: r.spec,
+              interfaces: requiredPushNotificationInterfaces(r.spec),
               lifecyclePolicy: r.spec.lifecyclePolicy,
             },
           }
@@ -358,6 +393,45 @@ export function parseQueueSpec(spec: unknown): ParseQueueSpecResult {
     ok: true,
     spec: {
       name: name.value,
+      ...(delivery.value ? { delivery: delivery.value } : {}),
+      ...(lifecyclePolicy.value
+        ? { lifecyclePolicy: lifecyclePolicy.value }
+        : {}),
+    },
+  };
+}
+
+export function parsePushNotificationSpec(
+  spec: unknown,
+): ParsePushNotificationSpecResult {
+  const base = objectCandidate(spec);
+  if (!base.ok) return base;
+  const candidate = base.value;
+  const name = parseName(candidate);
+  if (!name.ok) return name;
+  const protocols =
+    candidate.protocols === undefined
+      ? undefined
+      : parseStringList(
+          candidate.protocols,
+          "protocols",
+          PUSH_NOTIFICATION_PROTOCOLS,
+          false,
+        );
+  if (protocols && !protocols.ok) return protocols;
+  const delivery = parsePushNotificationDelivery(candidate.delivery);
+  if (!delivery.ok) return delivery;
+  const lifecyclePolicy = parseLifecyclePolicy(candidate.lifecyclePolicy);
+  if (!lifecyclePolicy.ok) return lifecyclePolicy;
+  return {
+    ok: true,
+    spec: {
+      name: name.value,
+      ...(protocols?.value
+        ? {
+            protocols: protocols.value as readonly PushNotificationProtocol[],
+          }
+        : {}),
       ...(delivery.value ? { delivery: delivery.value } : {}),
       ...(lifecyclePolicy.value
         ? { lifecyclePolicy: lifecyclePolicy.value }
@@ -559,6 +633,8 @@ export function planResourceShape(
       return planKVStore(implementation, parsed.spec, target);
     case "Queue":
       return planQueue(implementation, parsed.spec, target);
+    case "PushNotification":
+      return planPushNotification(implementation, parsed.spec, target);
     case "SQLDatabase":
       return planSQLDatabase(implementation, parsed.spec, target);
     case "ContainerService":
@@ -662,6 +738,28 @@ export function planQueue(
   };
 }
 
+export function planPushNotification(
+  implementation: string,
+  spec: PushNotificationSpec,
+  target: TargetPoolEntry,
+): ResourceShapePlan {
+  const plan = planGenericServiceShape(
+    "PushNotification",
+    implementation,
+    spec,
+    target,
+  );
+  return {
+    ...plan,
+    inputs: {
+      ...plan.inputs,
+      protocols: spec.protocols ?? ["web_push"],
+      ttlSeconds: spec.delivery?.ttlSeconds ?? null,
+    },
+    publicOutputs: ["resource_name"],
+  };
+}
+
 export function planSQLDatabase(
   implementation: string,
   spec: SQLDatabaseSpec,
@@ -750,6 +848,12 @@ function requiredQueueInterfaces(_spec: QueueSpec): readonly string[] {
   return ["queue", "publish", "consume"];
 }
 
+function requiredPushNotificationInterfaces(
+  spec: PushNotificationSpec,
+): readonly string[] {
+  return ["push_notification", ...(spec.protocols ?? ["web_push"])];
+}
+
 function requiredSQLDatabaseInterfaces(
   spec: SQLDatabaseSpec,
 ): readonly string[] {
@@ -833,7 +937,7 @@ function parseStringList<T extends string>(
     return {
       ok: false,
       error: {
-        code: field === "interfaces" ? "invalid_interfaces" : "invalid_profile",
+        code: invalidListCode(field, true),
         message: `spec.${field} must be ${requireNonEmpty ? "a non-empty" : "an"} array`,
       },
     };
@@ -843,14 +947,24 @@ function parseStringList<T extends string>(
       return {
         ok: false,
         error: {
-          code:
-            field === "interfaces" ? "invalid_interface" : "invalid_profile",
+          code: invalidListCode(field, false),
           message: `unknown ${field} value: ${String(item)}`,
         },
       };
     }
   }
   return { ok: true, value: value as readonly T[] };
+}
+
+function invalidListCode(field: string, plural: boolean): string {
+  switch (field) {
+    case "interfaces":
+      return plural ? "invalid_interfaces" : "invalid_interface";
+    case "protocols":
+      return plural ? "invalid_protocols" : "invalid_protocol";
+    default:
+      return "invalid_profile";
+  }
 }
 
 function parseExtensibleTokenList(
@@ -1017,6 +1131,48 @@ function parseQueueDelivery(value: unknown):
       ...(typeof delivery.maxBatchSize === "number"
         ? { maxBatchSize: delivery.maxBatchSize }
         : {}),
+    },
+  };
+}
+
+function parsePushNotificationDelivery(value: unknown):
+  | {
+      readonly ok: true;
+      readonly value: { readonly ttlSeconds?: number } | undefined;
+    }
+  | {
+      readonly ok: false;
+      readonly error: { readonly code: string; readonly message: string };
+    } {
+  if (value === undefined) return { ok: true, value: undefined };
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return {
+      ok: false,
+      error: {
+        code: "invalid_delivery",
+        message: "spec.delivery must be an object",
+      },
+    };
+  }
+  const ttlSeconds = (value as Record<string, unknown>).ttlSeconds;
+  if (
+    ttlSeconds !== undefined &&
+    (typeof ttlSeconds !== "number" ||
+      !Number.isInteger(ttlSeconds) ||
+      ttlSeconds < 0)
+  ) {
+    return {
+      ok: false,
+      error: {
+        code: "invalid_delivery",
+        message: "spec.delivery.ttlSeconds must be a non-negative integer",
+      },
+    };
+  }
+  return {
+    ok: true,
+    value: {
+      ...(typeof ttlSeconds === "number" ? { ttlSeconds } : {}),
     },
   };
 }

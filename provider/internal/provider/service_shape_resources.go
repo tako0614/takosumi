@@ -39,9 +39,12 @@ const (
 	specObjectBucket     serviceShapeSpecKind = "object_bucket"
 	specKVStore          serviceShapeSpecKind = "kv_store"
 	specQueue            serviceShapeSpecKind = "queue"
+	specPushNotification serviceShapeSpecKind = "push_notification"
 	specSQLDatabase      serviceShapeSpecKind = "sql_database"
 	specContainerService serviceShapeSpecKind = "container_service"
 )
+
+var pushNotificationProtocols = []string{"web_push", "apns", "fcm"}
 
 type serviceShapeResource struct {
 	data *providerData
@@ -55,6 +58,8 @@ type serviceShapeModel struct {
 	Consistency            types.String `tfsdk:"consistency"`
 	MaxRetries             types.Int64  `tfsdk:"max_retries"`
 	MaxBatchSize           types.Int64  `tfsdk:"max_batch_size"`
+	Protocols              types.Set    `tfsdk:"protocols"`
+	TTLSeconds             types.Int64  `tfsdk:"ttl_seconds"`
 	Engine                 types.String `tfsdk:"engine"`
 	MigrationsPath         types.String `tfsdk:"migrations_path"`
 	Image                  types.String `tfsdk:"image"`
@@ -101,6 +106,20 @@ type queueModel struct {
 	Name                   types.String `tfsdk:"name"`
 	MaxRetries             types.Int64  `tfsdk:"max_retries"`
 	MaxBatchSize           types.Int64  `tfsdk:"max_batch_size"`
+	Space                  types.String `tfsdk:"space"`
+	TargetPool             types.String `tfsdk:"target_pool"`
+	SelectedImplementation types.String `tfsdk:"selected_implementation"`
+	Target                 types.String `tfsdk:"target"`
+	Locked                 types.Bool   `tfsdk:"locked"`
+	Portability            types.String `tfsdk:"portability"`
+	Outputs                types.Map    `tfsdk:"outputs"`
+}
+
+type pushNotificationModel struct {
+	ID                     types.String `tfsdk:"id"`
+	Name                   types.String `tfsdk:"name"`
+	Protocols              types.Set    `tfsdk:"protocols"`
+	TTLSeconds             types.Int64  `tfsdk:"ttl_seconds"`
 	Space                  types.String `tfsdk:"space"`
 	TargetPool             types.String `tfsdk:"target_pool"`
 	SelectedImplementation types.String `tfsdk:"selected_implementation"`
@@ -204,6 +223,32 @@ func queueModelFromServiceShape(m serviceShapeModel) queueModel {
 		Name:                   m.Name,
 		MaxRetries:             m.MaxRetries,
 		MaxBatchSize:           m.MaxBatchSize,
+		Space:                  m.Space,
+		TargetPool:             m.TargetPool,
+		SelectedImplementation: m.SelectedImplementation,
+		Target:                 m.Target,
+		Locked:                 m.Locked,
+		Portability:            m.Portability,
+		Outputs:                m.Outputs,
+	}
+}
+
+func (m pushNotificationModel) toServiceShapeModel() serviceShapeModel {
+	base := serviceShapeModelFromCommon(
+		m.ID, m.Name, m.Space, m.TargetPool, m.SelectedImplementation,
+		m.Target, m.Locked, m.Portability, m.Outputs,
+	)
+	base.Protocols = m.Protocols
+	base.TTLSeconds = m.TTLSeconds
+	return base
+}
+
+func pushNotificationModelFromServiceShape(m serviceShapeModel) pushNotificationModel {
+	return pushNotificationModel{
+		ID:                     m.ID,
+		Name:                   m.Name,
+		Protocols:              m.Protocols,
+		TTLSeconds:             m.TTLSeconds,
 		Space:                  m.Space,
 		TargetPool:             m.TargetPool,
 		SelectedImplementation: m.SelectedImplementation,
@@ -321,6 +366,15 @@ func NewQueueResource() resource.Resource {
 	}}
 }
 
+func NewPushNotificationResource() resource.Resource {
+	return &serviceShapeResource{cfg: serviceShapeConfig{
+		typeSuffix:  "push_notification",
+		kind:        client.KindPushNotification,
+		description: "Provider-neutral push notification channel for Web Push, APNs, and FCM delivery. Credentials are supplied by Takosumi Target/Credential wiring, not by this resource spec.",
+		spec:        specPushNotification,
+	}}
+}
+
 func NewSQLDatabaseResource() resource.Resource {
 	return &serviceShapeResource{cfg: serviceShapeConfig{
 		typeSuffix:  "sql_database",
@@ -367,6 +421,17 @@ func (r *serviceShapeResource) Schema(_ context.Context, _ resource.SchemaReques
 		attrs["max_batch_size"] = schema.Int64Attribute{
 			Optional:    true,
 			Description: "Optional consumer batch size preference. The selected adapter decides support.",
+		}
+	case specPushNotification:
+		attrs["protocols"] = schema.SetAttribute{
+			Optional:    true,
+			ElementType: types.StringType,
+			Description: "Optional push protocols. Allowed values: web_push, apns, fcm. Defaults to web_push when omitted.",
+			Validators:  []validator.Set{SetStringsOneOf(0, pushNotificationProtocols...)},
+		}
+		attrs["ttl_seconds"] = schema.Int64Attribute{
+			Optional:    true,
+			Description: "Optional notification TTL in seconds. The selected adapter decides support and limits.",
 		}
 	case specSQLDatabase:
 		attrs["engine"] = schema.StringAttribute{
@@ -592,6 +657,10 @@ func (r *serviceShapeResource) modelFromPlan(ctx context.Context, plan tfsdk.Pla
 		var m queueModel
 		diags := plan.Get(ctx, &m)
 		return m.toServiceShapeModel(), diags
+	case specPushNotification:
+		var m pushNotificationModel
+		diags := plan.Get(ctx, &m)
+		return m.toServiceShapeModel(), diags
 	case specSQLDatabase:
 		var m sqlDatabaseModel
 		diags := plan.Get(ctx, &m)
@@ -621,6 +690,10 @@ func (r *serviceShapeResource) modelFromState(ctx context.Context, state tfsdk.S
 		var m queueModel
 		diags := state.Get(ctx, &m)
 		return m.toServiceShapeModel(), diags
+	case specPushNotification:
+		var m pushNotificationModel
+		diags := state.Get(ctx, &m)
+		return m.toServiceShapeModel(), diags
 	case specSQLDatabase:
 		var m sqlDatabaseModel
 		diags := state.Get(ctx, &m)
@@ -644,6 +717,8 @@ func (r *serviceShapeResource) setState(ctx context.Context, state *tfsdk.State,
 		return state.Set(ctx, kvStoreModelFromServiceShape(m))
 	case specQueue:
 		return state.Set(ctx, queueModelFromServiceShape(m))
+	case specPushNotification:
+		return state.Set(ctx, pushNotificationModelFromServiceShape(m))
 	case specSQLDatabase:
 		return state.Set(ctx, sqlDatabaseModelFromServiceShape(m))
 	case specContainerService:
@@ -731,6 +806,22 @@ func (m serviceShapeModel) toResource(ctx context.Context, defaultSpace, kind st
 		}
 		if len(delivery) > 0 {
 			spec["delivery"] = delivery
+		}
+	case specPushNotification:
+		if !m.Protocols.IsNull() && !m.Protocols.IsUnknown() {
+			var protocols []string
+			diags.Append(m.Protocols.ElementsAs(ctx, &protocols, false)...)
+			if diags.HasError() {
+				return nil, "", diags
+			}
+			if len(protocols) > 0 {
+				spec["protocols"] = protocols
+			}
+		}
+		if !m.TTLSeconds.IsNull() && !m.TTLSeconds.IsUnknown() {
+			spec["delivery"] = map[string]any{
+				"ttlSeconds": m.TTLSeconds.ValueInt64(),
+			}
 		}
 	case specSQLDatabase:
 		if !m.Engine.IsNull() && !m.Engine.IsUnknown() && m.Engine.ValueString() != "" {
@@ -836,6 +927,19 @@ func refreshServiceShapeSpec(ctx context.Context, res *client.Resource, specKind
 		} else {
 			m.MaxRetries = types.Int64Null()
 			m.MaxBatchSize = types.Int64Null()
+		}
+	case specPushNotification:
+		if raw, ok := res.Spec["protocols"]; ok {
+			set, d := types.SetValueFrom(ctx, types.StringType, toStringSlice(raw))
+			diags.Append(d...)
+			m.Protocols = set
+		} else {
+			m.Protocols = types.SetNull(types.StringType)
+		}
+		if raw, ok := res.Spec["delivery"].(map[string]any); ok {
+			m.TTLSeconds = int64FromSpec(raw["ttlSeconds"])
+		} else {
+			m.TTLSeconds = types.Int64Null()
 		}
 	case specSQLDatabase:
 		if v, ok := res.Spec["engine"].(string); ok && v != "" {
