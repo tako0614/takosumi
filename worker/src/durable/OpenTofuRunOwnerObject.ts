@@ -5,7 +5,6 @@ import { InstallationLeaseBusyError } from "../../../core/domains/deploy-control
 const RUN_OWNER_RECORD_KEY = "run";
 const RUN_OWNER_MAX_ATTEMPTS = 3;
 const RUN_OWNER_RETRY_BASE_DELAY_MS = 10_000;
-const RUN_OWNER_CONTROLLER_RETRY_DELAY_MS = 250;
 const RUN_OWNER_LEASE_BUSY_DELAY_MS = 10_000;
 // This is the recovery window for a RunOwner DO that resets after the
 // controller already put the run ledger back to queued. Normal long dispatches
@@ -136,7 +135,7 @@ export class OpenTofuRunOwnerObject {
 
   async alarm(): Promise<void> {
     try {
-      await this.#dispatchDueRun();
+      await this.#dispatchDueRun({ drainControllerRetry: true });
     } catch {
       const retryAt = this.#now() + RUN_OWNER_RETRY_BASE_DELAY_MS;
       await this.#scheduleAlarm(retryAt);
@@ -155,12 +154,11 @@ export class OpenTofuRunOwnerObject {
     if (existing) {
       if (input.cause === "controller_retry") {
         const now = this.#now();
-        const retryAt = now + RUN_OWNER_CONTROLLER_RETRY_DELAY_MS;
         const retryRecord: RunOwnerRecord = {
           ...existing,
           status: "scheduled",
           updatedAt: new Date(now).toISOString(),
-          nextAttemptAt: new Date(retryAt).toISOString(),
+          nextAttemptAt: new Date(now).toISOString(),
           ...(input.queueAttempt !== undefined
             ? { queueAttempt: input.queueAttempt }
             : {}),
@@ -169,7 +167,7 @@ export class OpenTofuRunOwnerObject {
           lastError: "controller-managed retry",
         };
         await this.#writeRecord(retryRecord);
-        await this.#scheduleAlarm(retryAt);
+        await this.#scheduleAlarm(now);
         return retryRecord;
       }
       const alarmAt =
@@ -205,7 +203,9 @@ export class OpenTofuRunOwnerObject {
     return record;
   }
 
-  async #dispatchDueRun(): Promise<void> {
+  async #dispatchDueRun(
+    options: { readonly drainControllerRetry?: boolean } = {},
+  ): Promise<void> {
     const record = await this.#readRecord();
     if (!record) return;
     if (record.status === "succeeded" || record.status === "failed") {
@@ -254,14 +254,17 @@ export class OpenTofuRunOwnerObject {
       });
       await this.state.storage.deleteAlarm?.();
     } catch (error) {
-      await this.#recordDispatchFailure(record, error);
+      const retryReady = await this.#recordDispatchFailure(record, error);
+      if (retryReady && options.drainControllerRetry === true) {
+        await this.#dispatchDueRun({ drainControllerRetry: false });
+      }
     }
   }
 
   async #recordDispatchFailure(
     record: RunOwnerRecord,
     error: unknown,
-  ): Promise<void> {
+  ): Promise<boolean> {
     if (error instanceof InstallationLeaseBusyError) {
       const nextAttemptAt = new Date(
         this.#now() + RUN_OWNER_LEASE_BUSY_DELAY_MS,
@@ -274,14 +277,12 @@ export class OpenTofuRunOwnerObject {
         lastError: "installation lease busy",
       });
       await this.#scheduleAlarm(Date.parse(nextAttemptAt));
-      return;
+      return false;
     }
     if (isControllerManagedRetryError(error)) {
       const existing = await this.#readRecord();
       const now = this.#now();
-      const nextAttemptAt = new Date(
-        now + RUN_OWNER_CONTROLLER_RETRY_DELAY_MS,
-      ).toISOString();
+      const nextAttemptAt = new Date(now).toISOString();
       const next: RunOwnerRecord = {
         ...(existing?.runId === record.runId ? existing : record),
         status: "scheduled",
@@ -292,7 +293,7 @@ export class OpenTofuRunOwnerObject {
       };
       await this.#writeRecord(next);
       await this.#scheduleAlarm(Date.parse(nextAttemptAt));
-      return;
+      return true;
     }
     const attempts = record.attempts + 1;
     if (attempts >= record.maxAttempts) {
@@ -319,7 +320,7 @@ export class OpenTofuRunOwnerObject {
         lastError: "opentofu run dispatch failed",
       });
       await this.state.storage.deleteAlarm?.();
-      return;
+      return false;
     }
     const nextAttemptAt = new Date(
       this.#now() + RUN_OWNER_RETRY_BASE_DELAY_MS * attempts,
@@ -333,6 +334,7 @@ export class OpenTofuRunOwnerObject {
       lastError: "opentofu run dispatch failed",
     });
     await this.#scheduleAlarm(Date.parse(nextAttemptAt));
+    return false;
   }
 
   async #readRecord(): Promise<RunOwnerRecord | undefined> {
