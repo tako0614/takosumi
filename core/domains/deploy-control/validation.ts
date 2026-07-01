@@ -97,6 +97,11 @@ export function normalizeVariables(
 }
 
 const VARIABLE_PATH_SEGMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const RESERVED_OBJECT_KEYS = new Set([
+  "__proto__",
+  "constructor",
+  "prototype",
+]);
 
 export function normalizeVariablePathRecord(
   variables: Readonly<Record<string, unknown>>,
@@ -110,9 +115,7 @@ export function normalizeVariablePathRecord(
         `${fieldName}.${rawKey} must be a JSON value`,
       );
     }
-    const path = rawKey.includes(".")
-      ? normalizedVariablePath(rawKey, fieldName)
-      : [rawKey];
+    const path = normalizedVariablePath(rawKey, fieldName);
     writeVariablePath(out, path, value, fieldName);
   }
   return out;
@@ -124,8 +127,8 @@ function normalizedVariablePath(
 ): readonly string[] {
   const path = rawKey.split(".");
   if (
-    path.length < 2 ||
-    path.some((segment) => !VARIABLE_PATH_SEGMENT_RE.test(segment))
+    path.length === 0 ||
+    path.some((segment) => !isSafeVariablePathSegment(segment))
   ) {
     throw new OpenTofuControllerError(
       "invalid_argument",
@@ -133,6 +136,12 @@ function normalizedVariablePath(
     );
   }
   return path;
+}
+
+function isSafeVariablePathSegment(segment: string): boolean {
+  return (
+    VARIABLE_PATH_SEGMENT_RE.test(segment) && !RESERVED_OBJECT_KEYS.has(segment)
+  );
 }
 
 function writeVariablePath(
@@ -211,7 +220,9 @@ function isJsonValue(value: unknown): value is JsonValue {
   if (type === "number") return Number.isFinite(value);
   if (Array.isArray(value)) return value.every(isJsonValue);
   if (type !== "object") return false;
-  return Object.values(value as Record<string, unknown>).every(isJsonValue);
+  return Object.entries(value as Record<string, unknown>).every(
+    ([key, nested]) => !RESERVED_OBJECT_KEYS.has(key) && isJsonValue(nested),
+  );
 }
 
 function isJsonObject(

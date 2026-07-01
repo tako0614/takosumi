@@ -117,6 +117,7 @@ interface ProviderConnectionRow {
 interface InputVariableRow {
   readonly name: string;
   readonly value: string;
+  readonly jsonValue?: JsonValue;
 }
 
 function CatalogIcon(props: { readonly entry: CatalogEntry }) {
@@ -478,13 +479,21 @@ function isJsonRecord(
   );
 }
 
+function installVariableDisplayValue(value: JsonValue): string {
+  return typeof value === "string" ? value : JSON.stringify(value);
+}
+
 function inputVariableRowsFromPrefill(
-  vars: Readonly<Record<string, string>> | undefined,
+  vars: Readonly<Record<string, JsonValue>> | undefined,
 ): readonly InputVariableRow[] {
   return Object.entries(vars ?? {})
     .filter(([name]) => name !== "project_name")
     .sort(([a], [b]) => a.localeCompare(b))
-    .map(([name, value]) => ({ name, value }));
+    .map(([name, value]) => ({
+      name,
+      value: installVariableDisplayValue(value),
+      ...(typeof value === "string" ? {} : { jsonValue: value }),
+    }));
 }
 
 function sourceIdFromControlError(error: ControlApiError | undefined): string {
@@ -631,12 +640,15 @@ function Inner() {
     ? (initialInstallPrefill.name ??
       capsuleNameFromUrl(initialInstallPrefill.git))
     : "";
+  const initialProjectName =
+    typeof initialInstallPrefill?.vars?.project_name === "string"
+      ? initialInstallPrefill.vars.project_name
+      : "";
   const [name, setName] = createSignal(initialName);
-  const [resourcePrefix, setResourcePrefix] = createSignal(
-    initialInstallPrefill?.vars?.project_name ?? "",
-  );
+  const [resourcePrefix, setResourcePrefix] =
+    createSignal(initialProjectName);
   const [resourcePrefixTouched, setResourcePrefixTouched] = createSignal(
-    initialInstallPrefill?.vars?.project_name !== undefined,
+    initialProjectName !== "",
   );
   const [inputVariables, setInputVariables] = createSignal<
     readonly InputVariableRow[]
@@ -921,8 +933,10 @@ function Inner() {
   };
   const sourcePath = () =>
     currentInstallPrefill()?.path || path().trim() || ".";
-  const prefilledProjectName = () =>
-    currentInstallPrefill()?.vars?.project_name;
+  const prefilledProjectName = () => {
+    const value = currentInstallPrefill()?.vars?.project_name;
+    return typeof value === "string" ? value : undefined;
+  };
   const supportsProjectNameInput = () => prefilledProjectName() !== undefined;
   const defaultProjectName = () => {
     const base = slugInputValue(name() || capsuleNameFromUrl(sourceGitUrl()));
@@ -938,7 +952,11 @@ function Inner() {
     patch: Partial<InputVariableRow>,
   ) => {
     setInputVariables((rows) =>
-      rows.map((row, i) => (i === index ? { ...row, ...patch } : row)),
+      rows.map((row, i) => {
+        if (i !== index) return row;
+        const next = { ...row, ...patch };
+        return "value" in patch ? { name: next.name, value: next.value } : next;
+      }),
     );
     resetCompatibility();
   };
@@ -948,13 +966,17 @@ function Inner() {
     setInputVariables((rows) => rows.filter((_, i) => i !== index));
     resetCompatibility();
   };
-  const normalizedInputVariables = () => {
-    const variables: Record<string, string> = {};
+  const normalizedInputVariables = (): Record<string, JsonValue> => {
+    const variables: Record<string, JsonValue> = {};
     for (const row of inputVariables()) {
       const variableName = row.name.trim();
       const value = row.value.trim();
       if (!variableName && !value) continue;
-      variables[variableName] = value;
+      variables[variableName] =
+        row.jsonValue !== undefined &&
+        value === installVariableDisplayValue(row.jsonValue)
+          ? row.jsonValue
+          : value;
     }
     return variables;
   };
@@ -986,8 +1008,8 @@ function Inner() {
     return null;
   };
   const shouldOpenServiceAdvanced = () => inputVariables().length > 0;
-  const installReturnVariables = (): Readonly<Record<string, string>> => {
-    const variables: Record<string, string> = {};
+  const installReturnVariables = (): Readonly<Record<string, JsonValue>> => {
+    const variables: Record<string, JsonValue> = {};
     if (supportsProjectNameInput()) {
       variables.project_name = projectNameVariable();
     }
@@ -1329,8 +1351,12 @@ function Inner() {
       setName(next.name ?? capsuleNameFromUrl(next.git));
     }
     setInputVariables(inputVariableRowsFromPrefill(next.vars));
-    if (next.vars?.project_name) {
-      setResourcePrefix(next.vars.project_name);
+    const nextProjectName =
+      typeof next.vars?.project_name === "string"
+        ? next.vars.project_name
+        : undefined;
+    if (nextProjectName) {
+      setResourcePrefix(nextProjectName);
       setResourcePrefixTouched(true);
     } else {
       setResourcePrefix("");
