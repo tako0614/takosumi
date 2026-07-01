@@ -4021,6 +4021,7 @@ test("Sources: GET requires workspaceId, POST + sync return 201", async () => {
   });
   expect(syncResp?.status).toEqual(201);
   expect(operations.calls.createSourceSync?.[0]).toEqual("src_x");
+  expect(operations.calls.createSourceSync?.[1]).toEqual({ dedupe: true });
 
   const snapshots = request("GET", "/api/v1/sources/src_x/snapshots", {
     cookie,

@@ -211,7 +211,10 @@ export async function handleSources(
         subject: ctx.session.subject,
       });
       if (!auth.ok) return auth.response;
-      return jsonStatus(await operations.createSourceSync(sourceId), 201);
+      return jsonStatus(
+        await operations.createSourceSync(sourceId, { dedupe: true }),
+        201,
+      );
     }
     if (segments.length === 3 && segments[2] === "snapshots") {
       const sourceId = decodeURIComponent(segments[1] ?? "");
