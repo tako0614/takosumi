@@ -173,6 +173,160 @@ test("source_sync consumer reuses an unchanged SourceSnapshot archive", async ()
   expect(reused?.archiveSizeBytes).toBe(2048);
 });
 
+test("source_sync consumer reuses an unchanged public Git archive from a sibling Source in the same space", async () => {
+  const { store, sourcesService, runner, controller } = build();
+  const { source: firstSource } = await sourcesService.createSource({
+    spaceId: "space_1",
+    name: "repo-a",
+    url: "https://github.com/acme/repo.git",
+  });
+  const { source: secondSource } = await sourcesService.createSource({
+    spaceId: "space_1",
+    name: "repo-b",
+    url: "https://github.com/acme/repo.git",
+  });
+  const previousArchiveKey =
+    "spaces/space_1/sources/src_prev/snapshots/snap_prev/source.tar.zst";
+  const previousDigest = "sha256:" + "b".repeat(64);
+  await store.putSourceSnapshot({
+    id: "snap_prev",
+    origin: "git",
+    workspaceId: "space_1",
+    spaceId: "space_1",
+    sourceId: firstSource.id,
+    url: "https://github.com/acme/repo.git",
+    ref: "main",
+    resolvedCommit: "abc123def456",
+    path: ".",
+    archiveObjectKey: previousArchiveKey,
+    archiveDigest: previousDigest,
+    archiveSizeBytes: 2048,
+    fetchedByRunId: "ssr_prev",
+    fetchedAt: "1970-01-01T00:00:00.000Z",
+  });
+  runner.onSourceSync = async (job) => {
+    expect(job.reuseSnapshot).toEqual({
+      id: "snap_prev",
+      resolvedCommit: "abc123def456",
+      archiveObjectKey: previousArchiveKey,
+      archiveDigest: previousDigest,
+      archiveSizeBytes: 2048,
+    });
+    runner.result = {
+      resolvedCommit: job.reuseSnapshot!.resolvedCommit,
+      archiveDigest: job.reuseSnapshot!.archiveDigest,
+      archiveSizeBytes: job.reuseSnapshot!.archiveSizeBytes,
+      archiveObjectKey: job.reuseSnapshot!.archiveObjectKey,
+    };
+  };
+  const { run } = await controller.createSourceSync(secondSource.id);
+
+  await controller.dispatchQueuedRun({
+    action: "source_sync",
+    runId: run.id,
+    spaceId: "space_1",
+  });
+
+  const snapshots = await store.listSourceSnapshots(secondSource.id);
+  expect(snapshots).toHaveLength(1);
+  expect(snapshots[0]?.archiveObjectKey).toBe(previousArchiveKey);
+  expect(snapshots[0]?.archiveDigest).toBe(previousDigest);
+});
+
+test("source_sync consumer does not reuse sibling Git archives across credential or space boundaries", async () => {
+  const { store, sourcesService, vault, runner, controller } = build();
+  const conn = await vault.register({
+    spaceId: "space_1",
+    provider: "source_git_https_token",
+    kind: "source_git_https_token",
+    authMethod: "static_secret",
+    scope: { username: "git-bot" },
+    values: { GIT_HTTPS_TOKEN: "ghp_super_secret" },
+  });
+  await store.putConnection({
+    ...conn,
+    status: "verified",
+    verifiedAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
+  const { source: publicSource } = await sourcesService.createSource({
+    spaceId: "space_1",
+    name: "public",
+    url: "https://github.com/acme/repo.git",
+  });
+  const { source: privateSource } = await sourcesService.createSource({
+    spaceId: "space_1",
+    name: "private",
+    url: "https://github.com/acme/repo.git",
+    authConnectionId: conn.id,
+  });
+  const otherSpaceStoreSource = {
+    id: "src_other_space",
+    workspaceId: "space_2",
+    spaceId: "space_2",
+    name: "repo-other-space",
+    url: "https://github.com/acme/repo.git",
+    defaultRef: "main",
+    defaultPath: ".",
+    status: "active" as const,
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+    hookSecretHash: "hash",
+    autoSync: false,
+  };
+  await store.putSource(otherSpaceStoreSource);
+  await store.putSourceSnapshot({
+    id: "snap_public",
+    origin: "git",
+    workspaceId: "space_1",
+    spaceId: "space_1",
+    sourceId: publicSource.id,
+    url: "https://github.com/acme/repo.git",
+    ref: "main",
+    resolvedCommit: "abc123def456",
+    path: ".",
+    archiveObjectKey:
+      "spaces/space_1/sources/src_public/snapshots/snap_public/source.tar.zst",
+    archiveDigest: "sha256:" + "b".repeat(64),
+    archiveSizeBytes: 2048,
+    fetchedByRunId: "ssr_public",
+    fetchedAt: "1970-01-01T00:00:00.000Z",
+  });
+  await store.putSourceSnapshot({
+    id: "snap_other_space",
+    origin: "git",
+    workspaceId: "space_2",
+    spaceId: "space_2",
+    sourceId: otherSpaceStoreSource.id,
+    url: "https://github.com/acme/repo.git",
+    ref: "main",
+    resolvedCommit: "abc123def456",
+    path: ".",
+    archiveObjectKey:
+      "spaces/space_2/sources/src_other/snapshots/snap_other/source.tar.zst",
+    archiveDigest: "sha256:" + "c".repeat(64),
+    archiveSizeBytes: 4096,
+    fetchedByRunId: "ssr_other",
+    fetchedAt: "1970-01-02T00:00:00.000Z",
+  });
+  runner.onSourceSync = async (job) => {
+    expect(job.reuseSnapshot).toBeUndefined();
+  };
+  const { run } = await controller.createSourceSync(privateSource.id);
+
+  await controller.dispatchQueuedRun({
+    action: "source_sync",
+    runId: run.id,
+    spaceId: "space_1",
+  });
+
+  expect(runner.calls).toHaveLength(1);
+  expect((await store.getSourceSyncRun(run.id))?.status).toBe("succeeded");
+  const snapshots = await store.listSourceSnapshots(privateSource.id);
+  expect(snapshots).toHaveLength(1);
+  expect(snapshots[0]?.archiveDigest).toBe(runner.result.archiveDigest);
+});
+
 test("source_sync consumer rejects a reused archive outside the requested snapshot boundary", async () => {
   const { store, sourcesService, runner, controller } = build();
   const { source } = await sourcesService.createSource({

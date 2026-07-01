@@ -30,7 +30,7 @@ import type {
 } from "takosumi-contract/sources";
 import type { ConnectionVault } from "../../adapters/vault/mod.ts";
 import type { SourcesService } from "../sources/mod.ts";
-import type { OpenTofuDeploymentStore } from "./store.ts";
+import type { OpenTofuDeploymentStore, StoredSource } from "./store.ts";
 import type { OpenTofuRunner, OpenTofuSourceSyncResult } from "./mod.ts";
 import { mapVaultError, OpenTofuControllerError } from "./errors.ts";
 import { errorMessage } from "./projection.ts";
@@ -145,7 +145,10 @@ export class SourceLifecycleService {
     }
 
     try {
-      const reuseSnapshot = await this.#latestReusableSourceSnapshot(running);
+      const reuseSnapshot = await this.#latestReusableSourceSnapshot(
+        running,
+        stored,
+      );
       const result = await this.#withSourceSyncRenewal(
         running,
         leaseToken,
@@ -308,21 +311,34 @@ export class SourceLifecycleService {
 
   async #latestReusableSourceSnapshot(
     running: SourceSyncRun,
+    stored: StoredSource,
   ): Promise<SourceSnapshot | undefined> {
     const snapshots = await this.#store.listSourceSnapshots(running.sourceId);
     for (let index = snapshots.length - 1; index >= 0; index -= 1) {
       const snapshot = snapshots[index]!;
-      if (
-        snapshot.origin === "git" &&
-        snapshot.sourceId === running.sourceId &&
-        snapshot.url === running.url &&
-        snapshot.ref === running.ref &&
-        snapshot.path === running.path
-      ) {
+      if (sourceSnapshotMatchesRun(snapshot, running)) {
         return snapshot;
       }
     }
-    return undefined;
+    if (stored.authConnectionId) return undefined;
+    const siblingSources = (await this.#store.listSources(running.spaceId))
+      .filter((source) => source.id !== running.sourceId)
+      .filter((source) => !source.authConnectionId)
+      .filter(
+        (source) =>
+          source.status === "active" &&
+          source.url === running.url &&
+          source.defaultRef === running.ref &&
+          source.defaultPath === running.path,
+      );
+    if (siblingSources.length === 0) return undefined;
+    const siblingSnapshots = await this.#store.listSourceSnapshotsBySourceIds(
+      siblingSources.map((source) => source.id),
+    );
+    const reusable = siblingSnapshots
+      .filter((snapshot) => sourceSnapshotMatchesRun(snapshot, running))
+      .sort((a, b) => compareIso(a.fetchedAt, b.fetchedAt));
+    return reusable.at(-1);
   }
 
   async #failSourceSyncRun(
@@ -420,4 +436,23 @@ export class SourceLifecycleService {
       createdAt: new Date(this.#now()).toISOString(),
     });
   }
+}
+
+function sourceSnapshotMatchesRun(
+  snapshot: SourceSnapshot,
+  running: SourceSyncRun,
+): boolean {
+  return (
+    snapshot.origin === "git" &&
+    snapshot.spaceId === running.spaceId &&
+    snapshot.url === running.url &&
+    snapshot.ref === running.ref &&
+    snapshot.path === running.path
+  );
+}
+
+function compareIso(a: string, b: string): number {
+  if (a < b) return -1;
+  if (a > b) return 1;
+  return 0;
 }
