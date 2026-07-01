@@ -268,6 +268,134 @@ test("a runner failure records the run failed and never persists the minted cred
   expect(dump).not.toContain(SECRET_TOKEN);
 });
 
+test("a retryable runner infrastructure reset requeues plan without dropping inputs", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  let planCalls = 0;
+  const controller = new OpenTofuDeploymentController({
+    store,
+    now: monotonicNow(5250),
+    newId: deterministicIds(),
+    runner: {
+      plan: () => {
+        planCalls++;
+        if (planCalls === 1) {
+          return Promise.reject(
+            new Error("Durable Object reset because its code was updated."),
+          );
+        }
+        return Promise.resolve({
+          planDigest: PLAN_DIGEST,
+          planArtifact: planArtifact(),
+          providerLockDigest: LOCK_DIGEST,
+          requiredProviders: [CLOUDFLARE],
+          providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+        });
+      },
+      apply: () => Promise.resolve({}),
+    },
+    vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
+    enqueueRun: noopEnqueue,
+  });
+  const request = await seedUpdatable(store, {
+    installationId: "inst_plan_retry",
+  });
+  const { planRun: queuedPlan } = await controller.createPlanRun(request);
+  expect(queuedPlan.status).toEqual("queued");
+  expect(await store.getPlanRunInputs(queuedPlan.id)).toBeDefined();
+
+  await expect(
+    controller.dispatchQueuedRun({
+      action: "plan",
+      runId: queuedPlan.id,
+      spaceId: queuedPlan.spaceId,
+    }),
+  ).rejects.toThrow(/retryable_runner_infrastructure_error/);
+
+  const requeued = (await store.getPlanRun(queuedPlan.id))!;
+  expect(requeued.status).toEqual("queued");
+  expect(requeued.diagnostics).toBeUndefined();
+  expect(await store.getPlanRunInputs(queuedPlan.id)).toBeDefined();
+  expect(
+    requeued.auditEvents.some((event) => event.type === "plan.retry_scheduled"),
+  ).toEqual(true);
+  expect(planCalls).toEqual(1);
+
+  await controller.dispatchQueuedRun({
+    action: "plan",
+    runId: queuedPlan.id,
+    spaceId: queuedPlan.spaceId,
+  });
+  const completed = (await store.getPlanRun(queuedPlan.id))!;
+  expect(completed.status).toEqual("succeeded");
+  expect(planCalls).toEqual(2);
+});
+
+test("a retryable runner infrastructure reset requeues destroy plan without failing terminally", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  let planCalls = 0;
+  const controller = new OpenTofuDeploymentController({
+    store,
+    now: monotonicNow(5375),
+    newId: deterministicIds(),
+    runner: {
+      plan: () => {
+        planCalls++;
+        if (planCalls === 1) {
+          return Promise.reject(
+            new Error("Durable Object reset because its code was updated."),
+          );
+        }
+        return Promise.resolve({
+          planDigest: PLAN_DIGEST,
+          planArtifact: planArtifact(),
+          providerLockDigest: LOCK_DIGEST,
+          requiredProviders: [CLOUDFLARE],
+          providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+        });
+      },
+      apply: () => Promise.resolve({}),
+    },
+    vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
+    enqueueRun: noopEnqueue,
+  });
+  const request = await seedUpdatable(store, {
+    installationId: "inst_destroy_plan_retry",
+  });
+  const { planRun: queuedPlan } = await controller.createPlanRun({
+    ...request,
+    operation: "destroy",
+  });
+  expect(queuedPlan.status).toEqual("queued");
+
+  await expect(
+    controller.dispatchQueuedRun({
+      action: "plan",
+      runId: queuedPlan.id,
+      spaceId: queuedPlan.spaceId,
+    }),
+  ).rejects.toThrow(/retryable_runner_infrastructure_error/);
+
+  const requeued = (await store.getPlanRun(queuedPlan.id))!;
+  expect(requeued.status).toEqual("queued");
+  expect(requeued.diagnostics).toBeUndefined();
+  expect(await store.getPlanRunInputs(queuedPlan.id)).toBeDefined();
+  expect(
+    requeued.auditEvents.some(
+      (event) => event.type === "destroy_plan.retry_scheduled",
+    ),
+  ).toEqual(true);
+  expect(planCalls).toEqual(1);
+
+  await controller.dispatchQueuedRun({
+    action: "plan",
+    runId: queuedPlan.id,
+    spaceId: queuedPlan.spaceId,
+  });
+  const completed = (await store.getPlanRun(queuedPlan.id))!;
+  expect(completed.status).toEqual("waiting_approval");
+  expect(planCalls).toEqual(2);
+});
+
 test("a retryable runner infrastructure reset requeues apply without failing terminally", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   let applyCalls = 0;
