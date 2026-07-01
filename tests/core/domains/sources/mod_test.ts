@@ -317,7 +317,7 @@ test("createSync dedupe does not re-enqueue a fresh running run", async () => {
   expect(dispatched).toEqual([]);
 });
 
-test("createSync dedupe re-enqueues a stale running run", async () => {
+test("createSync dedupe replaces a stale running run with a fresh run", async () => {
   const dispatched: unknown[] = [];
   const { store, service } = makeService({
     enqueueSourceSync: async (d) => {
@@ -349,15 +349,17 @@ test("createSync dedupe re-enqueues a stale running run", async () => {
   dispatched.length = 0;
   const second = await service.createSync(source.id, { dedupe: true });
 
-  expect(second.run.id).toBe(first.run.id);
-  expect(second.run.status).toBe("running");
+  expect(second.run.id).not.toBe(first.run.id);
+  expect(second.run.status).toBe("queued");
+  const stale = await store.getSourceSyncRun(first.run.id);
+  expect(stale?.status).toBe("failed");
+  expect(stale?.error).toBe("stale_source_sync_replaced");
   expect(dispatched).toEqual([
     {
       action: "source_sync",
-      runId: first.run.id,
+      runId: second.run.id,
       spaceId: "space_1",
       sourceId: source.id,
-      cause: "controller_retry",
     },
   ]);
 });

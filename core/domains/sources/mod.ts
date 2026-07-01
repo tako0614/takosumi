@@ -69,7 +69,6 @@ export type EnqueueSourceSync = (dispatch: {
   readonly runId: string;
   readonly spaceId: string;
   readonly sourceId: string;
-  readonly cause?: "controller_retry";
 }) => Promise<void>;
 
 export type ReadCapsuleSourceFiles = (
@@ -299,22 +298,27 @@ export class SourcesService {
     if (options.dedupe) {
       const existing = await this.#activeSyncRun(sourceId);
       if (existing) {
-        const reenqueue = shouldReenqueueActiveSyncRun(
-          existing,
-          this.#now().getTime(),
-        );
-        if (reenqueue) {
+        if (existing.status === "queued") {
           await this.#enqueue({
             action: "source_sync",
             runId: existing.id,
             spaceId: existing.spaceId,
             sourceId: existing.sourceId,
-            ...(existing.status === "running"
-              ? { cause: "controller_retry" as const }
-              : {}),
           });
+          return { run: existing };
         }
-        return { run: existing };
+        if (shouldReplaceStaleRunningSyncRun(existing, this.#now().getTime())) {
+          const replaced = await this.#failStaleSyncRun(existing);
+          if (!replaced) {
+            const current = await this.#activeSyncRun(sourceId);
+            return { run: current ?? existing };
+          }
+          // Fall through and create a fresh run. A per-run owner Durable Object
+          // may have terminal state for the old run id, so replacing is more
+          // reliable than trying to revive the same id.
+        } else {
+          return { run: existing };
+        }
       }
     }
     const runId = this.#newId("ssr");
@@ -825,6 +829,28 @@ export class SourcesService {
     return run;
   }
 
+  async #failStaleSyncRun(run: SourceSyncRun): Promise<boolean> {
+    const now = this.#now();
+    const failed: SourceSyncRun = {
+      ...run,
+      status: "failed",
+      updatedAt: now.toISOString(),
+      finishedAt: now.toISOString(),
+      heartbeatAt: now.getTime(),
+      error: "stale_source_sync_replaced",
+    };
+    const result = await this.#store.transitionRun({
+      id: run.id,
+      kind: "source_sync",
+      expectFrom: ["running"],
+      expectHeartbeatAt: run.heartbeatAt ?? null,
+      run: failed,
+      clearLeaseToken: true,
+      heartbeatAt: failed.heartbeatAt,
+    });
+    return result.won;
+  }
+
   async #resolveCompatibilitySnapshot(
     sourceId: string,
     requestedSnapshotId: string | undefined,
@@ -997,11 +1023,10 @@ function defaultId(prefix: string): string {
   return `${prefix}_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
 }
 
-function shouldReenqueueActiveSyncRun(
+function shouldReplaceStaleRunningSyncRun(
   run: SourceSyncRun,
   nowMs: number,
 ): boolean {
-  if (run.status === "queued") return true;
   if (run.status !== "running") return false;
   return nowMs - (run.heartbeatAt ?? 0) > SOURCE_SYNC_REQUEUE_STALE_MS;
 }
