@@ -2317,6 +2317,45 @@ test("POST /api/v1/spaces/:id/installations stores per-install vars in a scoped 
   expect(createCall.installConfigId).toEqual(config.id);
 });
 
+test("POST /api/v1/spaces/:id/installations expands dotted per-install vars in a scoped InstallConfig", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const { request: req, url } = request(
+    "POST",
+    "/api/v1/spaces/space_a/installations",
+    {
+      cookie,
+      body: {
+        name: "takos",
+        environment: "production",
+        sourceId: "src_x",
+        installConfigId: "cfg_x",
+        vars: {
+          project_name: "takos-space-a",
+          "cloudflare.workers_subdomain": "shoutatomiyama0614",
+        },
+      },
+    },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(201);
+  const config = operations.calls.putInstallConfig?.[0] as {
+    variableMapping: Record<string, unknown>;
+  };
+  expect(config.variableMapping).toEqual({
+    project_name: "takos-space-a",
+    cloudflare: {
+      workers_subdomain: "shoutatomiyama0614",
+    },
+  });
+});
+
 test("POST /api/v1/spaces/:id/installations rejects non-JSON vars", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);

@@ -30,6 +30,7 @@ import {
   SPACE_ID_PATTERN,
 } from "./deploy_control_shared.ts";
 import { OpenTofuControllerError } from "../domains/deploy-control/errors.ts";
+import { normalizeVariablePathRecord } from "../domains/deploy-control/validation.ts";
 import { defaultCapsuleOutputAllowlist } from "../domains/installations/official_seed.ts";
 import { pageSorted } from "takosumi-contract/pagination";
 import {
@@ -307,7 +308,7 @@ export function mountDeployControlInstallationRoutes(
           "vars"
         > & { readonly vars?: unknown };
         const vars =
-          rawVars === undefined ? undefined : jsonRecordValue(rawVars);
+          rawVars === undefined ? undefined : normalizedVarsValue(rawVars);
         if (rawVars !== undefined && vars === undefined) {
           throw new OpenTofuControllerError(
             "invalid_argument",
@@ -683,16 +684,15 @@ function isJsonValue(value: unknown): value is JsonValue {
   return Object.values(value as Record<string, unknown>).every(isJsonValue);
 }
 
-function jsonRecordValue(
+function normalizedVarsValue(
   value: unknown,
 ): Readonly<Record<string, JsonValue>> | undefined {
   if (!isPlainJsonObject(value)) return undefined;
-  const out: Record<string, JsonValue> = {};
-  for (const [key, item] of Object.entries(value)) {
-    if (!isJsonValue(item)) return undefined;
-    out[key] = item;
+  try {
+    return normalizeVariablePathRecord(value, "vars");
+  } catch {
+    return undefined;
   }
-  return out;
 }
 
 function isPlainJsonObject(
