@@ -3,7 +3,7 @@
 // These are the durable projections of the public contract objects
 // (`takosumi-contract` Resource / ResolutionLock / TargetPool / SpacePolicy).
 // They live on the deploy-control persistence plane (D1 + Postgres) alongside
-// the Flow A ledger, because `docs/final-plan.md` §10 mandates that resolution
+// the Flow A ledger, because `docs/internal/final-plan.md` §10 mandates that resolution
 // locks, native resource refs, and observed status are stored durably.
 //
 // Complex sub-objects (spec, conditions, outputs, native resources, target
