@@ -304,6 +304,14 @@ export async function handleWorkspaces(
       }
       return methodNotAllowed("GET, POST");
     }
+    if (leaf === "current-state-versions" && segments.length === 3) {
+      if (method !== "GET") return methodNotAllowed("GET");
+      return await listWorkspaceCurrentStateVersions(
+        operations,
+        workspaceId,
+        url,
+      );
+    }
     if (leaf === "graph" && segments.length === 3) {
       if (method !== "GET") return methodNotAllowed("GET");
       return await spaceGraph(operations, workspaceId);
@@ -932,6 +940,26 @@ function actorFor(caller: PublicWorkspaceMember): MembershipActor {
 
 // --- Capsules ---------------------------------------------------------
 
+function parseIncludeDestroyed(url: URL):
+  | { readonly ok: true; readonly includeDestroyed: boolean }
+  | { readonly ok: false; readonly response: Response } {
+  const raw = url.searchParams.get("includeDestroyed");
+  if (raw === null || raw === "" || raw === "true") {
+    return { ok: true, includeDestroyed: true };
+  }
+  if (raw === "false") {
+    return { ok: true, includeDestroyed: false };
+  }
+  return {
+    ok: false,
+    response: errorJson(
+      "invalid_request",
+      "includeDestroyed must be true or false",
+      400,
+    ),
+  };
+}
+
 async function listWorkspaceCapsules(
   operations: ControlPlaneOperations,
   workspaceId: string,
@@ -939,12 +967,140 @@ async function listWorkspaceCapsules(
 ): Promise<Response> {
   const page = parseControlPageParams(url);
   if (!page.ok) return page.response;
+  const includeDestroyed = parseIncludeDestroyed(url);
+  if (!includeDestroyed.ok) return includeDestroyed.response;
   const { items, nextCursor } =
-    await operations.installations.listCapsulesPage(workspaceId, page.params);
+    await operations.installations.listCapsulesPage(workspaceId, {
+      ...page.params,
+      includeDestroyed: includeDestroyed.includeDestroyed,
+    });
   return json({
     capsules: items.map(publicCapsule),
     ...(nextCursor !== undefined ? { nextCursor } : {}),
   });
+}
+
+async function listWorkspaceCurrentStateVersions(
+  operations: ControlPlaneOperations,
+  workspaceId: string,
+  url: URL,
+): Promise<Response> {
+  const page = parseControlPageParams(url);
+  if (!page.ok) return page.response;
+  const includeDestroyed = parseIncludeDestroyed(url);
+  if (!includeDestroyed.ok) return includeDestroyed.response;
+  const { items, nextCursor } =
+    await operations.installations.listCapsulesPage(workspaceId, {
+      ...page.params,
+      includeDestroyed: includeDestroyed.includeDestroyed,
+    });
+  const deployments = operations.listDeploymentsByIds
+    ? await listCurrentStateVersionsFromIdsRead(operations, workspaceId, items)
+    : operations.listDeploymentsBySpace
+      ? await listCurrentStateVersionsFromWorkspaceRead(
+          operations,
+          workspaceId,
+          items,
+        )
+      : await listCurrentStateVersionsFromSingleReads(
+          operations,
+          workspaceId,
+          items,
+        );
+  return json({
+    deployments,
+    ...(nextCursor !== undefined ? { nextCursor } : {}),
+  });
+}
+
+async function listCurrentStateVersionsFromWorkspaceRead(
+  operations: ControlPlaneOperations,
+  workspaceId: string,
+  capsules: readonly Capsule[],
+): Promise<readonly PublicDeployment[]> {
+  const currentIds = new Set(currentStateVersionIds(capsules));
+  if (currentIds.size === 0) return [];
+  const byId = publicDeploymentMap(
+    (await operations.listDeploymentsBySpace!(workspaceId)).filter(
+      (deployment) => currentIds.has(deployment.id),
+    ),
+    workspaceId,
+  );
+  return currentDeploymentsInCapsuleOrder(capsules, byId);
+}
+
+async function listCurrentStateVersionsFromIdsRead(
+  operations: ControlPlaneOperations,
+  workspaceId: string,
+  capsules: readonly Capsule[],
+): Promise<readonly PublicDeployment[]> {
+  const currentIds = currentStateVersionIds(capsules);
+  if (currentIds.length === 0) return [];
+  const byId = publicDeploymentMap(
+    await operations.listDeploymentsByIds!(currentIds),
+    workspaceId,
+  );
+  return currentDeploymentsInCapsuleOrder(capsules, byId);
+}
+
+function currentStateVersionIds(capsules: readonly Capsule[]): readonly string[] {
+  return capsules
+    .map((capsule) => capsule.currentStateVersionId)
+    .filter((id): id is string => id !== undefined && id.length > 0);
+}
+
+function publicDeploymentMap(
+  deployments: readonly Deployment[],
+  workspaceId: string,
+): ReadonlyMap<string, PublicDeployment> {
+  return new Map(
+    deployments
+      .filter((deployment) => deploymentWorkspaceId(deployment) === workspaceId)
+      .map((deployment) => [deployment.id, publicDeployment(deployment)]),
+  );
+}
+
+function currentDeploymentsInCapsuleOrder(
+  capsules: readonly Capsule[],
+  deploymentsById: ReadonlyMap<string, PublicDeployment>,
+): readonly PublicDeployment[] {
+  return capsules
+    .map((capsule) =>
+      capsule.currentStateVersionId
+        ? deploymentsById.get(capsule.currentStateVersionId)
+        : undefined,
+    )
+    .filter((row): row is PublicDeployment => row !== undefined);
+}
+
+async function listCurrentStateVersionsFromSingleReads(
+  operations: ControlPlaneOperations,
+  workspaceId: string,
+  capsules: readonly Capsule[],
+): Promise<readonly PublicDeployment[]> {
+  const deployments = await Promise.all(
+    capsules.map(async (capsule) => {
+      const currentId = capsule.currentStateVersionId;
+      if (!currentId) return undefined;
+      try {
+        const deployment = await operations.getDeployment(currentId);
+        if (deploymentWorkspaceId(deployment) !== workspaceId) return undefined;
+        return publicDeployment(deployment);
+      } catch {
+        return undefined;
+      }
+    }),
+  );
+  return deployments.filter(
+    (row): row is PublicDeployment => row !== undefined,
+  );
+}
+
+function deploymentWorkspaceId(deployment: Deployment): string | undefined {
+  return (
+    deployment.spaceId ??
+    (deployment as { readonly workspaceId?: string }).workspaceId
+  );
 }
 
 async function createCapsule(

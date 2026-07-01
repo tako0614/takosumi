@@ -81,6 +81,12 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
       auth: "account-session",
     },
     {
+      method: "GET",
+      path: "/api/v1/workspaces/{workspaceId}/current-state-versions",
+      summary: "List current StateVersions for Workspace Capsules",
+      auth: "account-session",
+    },
+    {
       method: "POST",
       path: "/api/v1/workspaces/{workspaceId}/capsules",
       summary: "Create a Capsule",

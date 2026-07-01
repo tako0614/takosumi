@@ -21,6 +21,7 @@ import {
   extractRunId,
   getDeployment,
   listDeployments,
+  listWorkspaceCurrentStateVersions,
   type PublicDeployment,
 } from "../../../../dashboard/src/lib/control-api.ts";
 
@@ -90,6 +91,26 @@ describe("listDeployments", () => {
     expect("outputSnapshotId" in (row as object)).toBe(false);
     // Only the allowlist-projected public outputs are present.
     expect(row?.outputsPublic).toEqual({ launch_url: "https://example.com" });
+  });
+});
+
+describe("listWorkspaceCurrentStateVersions", () => {
+  test("GETs the Workspace current-state-versions route and unwraps deployments", async () => {
+    const captured = stubFetch({ deployments: [DEPLOYMENT] });
+    const rows = await listWorkspaceCurrentStateVersions("space 1", {
+      includeDestroyed: false,
+    });
+    const req = captured();
+    expect(req.method).toBe("GET");
+    expect(req.url).toBe(
+      "/api/v1/workspaces/space%201/current-state-versions?includeDestroyed=false",
+    );
+    expect(rows).toEqual([DEPLOYMENT]);
+  });
+
+  test("defaults to an empty list when the body omits deployments", async () => {
+    stubFetch({});
+    expect(await listWorkspaceCurrentStateVersions("space_1")).toEqual([]);
   });
 });
 

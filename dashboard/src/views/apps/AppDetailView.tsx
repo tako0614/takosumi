@@ -44,6 +44,7 @@ import {
   createCapsuleBackup,
   destroyPlanCapsule,
   extractRunId,
+  getDeployment,
   getCapsuleProviderConnectionSet,
   getCapsule,
   getWorkspaceGraph,
@@ -112,18 +113,41 @@ function Inner() {
     getCapsule,
   );
   const workspaceId = () => capsule()?.workspaceId;
+  const settingsCapsuleId = () => (tab() === "settings" ? capsuleId() : null);
+  const settingsWorkspaceId = () =>
+    tab() === "settings" ? (workspaceId() ?? null) : null;
+  const deploysCapsuleId = () => (tab() === "deploys" ? capsuleId() : null);
+  const graphWorkspaceId = () =>
+    tab() === "overview" ? (workspaceId() ?? null) : null;
+  const currentStateVersionId = () => capsule()?.currentStateVersionId ?? null;
   const [profile, { refetch: refetchProfile }] = createResource(
-    capsuleId,
+    settingsCapsuleId,
     getCapsuleProviderConnectionSet,
   );
-  const [sources] = createResource(workspaceId, listSources);
-  const [deployments] = createResource(capsuleId, listDeployments);
-  const [graph] = createResource(workspaceId, getWorkspaceGraph);
+  const [sources] = createResource(settingsWorkspaceId, listSources);
+  const [deployments] = createResource(deploysCapsuleId, listDeployments);
+  const [currentStateVersion] = createResource(
+    currentStateVersionId,
+    getDeployment,
+  );
+  const [graph] = createResource(graphWorkspaceId, getWorkspaceGraph);
   const [providerConnections] = createResource(
-    workspaceId,
+    settingsWorkspaceId,
     listProviderConnections,
   );
-  const [activity] = createResource(workspaceId, (id) => listActivity(id, 100));
+  const activityWorkspaceId = () => {
+    const id = workspaceId();
+    if (!id) return null;
+    if (tab() === "deploys") return id;
+    const outputs = currentDeployment()?.outputsPublic;
+    return outputs &&
+      Object.prototype.hasOwnProperty.call(outputs, "takosumi_release")
+      ? id
+      : null;
+  };
+  const [activity] = createResource(activityWorkspaceId, (id) =>
+    listActivity(id, 100),
+  );
 
   const source = createMemo(() =>
     (sources() ?? []).find((item) => item.id === capsule()?.sourceId),
@@ -152,6 +176,8 @@ function Inner() {
     ),
   );
   const currentDeployment = createMemo(() => {
+    const current = currentStateVersion();
+    if (current) return current;
     const list = deploymentHistory();
     const currentId = capsule()?.currentStateVersionId;
     return (
@@ -311,7 +337,7 @@ function Inner() {
                       hasDeployment={currentDeployment() !== undefined}
                       serviceOpenable={serviceOpenable()}
                       releaseActivationStatus={releaseActivationStatus()}
-                      outputsLoading={deployments.loading}
+                      outputsLoading={currentStateVersion.loading}
                       producers={producers()}
                       consumers={consumers()}
                     />

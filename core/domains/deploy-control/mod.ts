@@ -1412,6 +1412,18 @@ export class OpenTofuDeploymentController {
     return await this.#deployments.listDeployments(installationId, params);
   }
 
+  async listDeploymentsBySpace(
+    spaceId: string,
+  ): Promise<readonly Deployment[]> {
+    return await this.#deployments.listDeploymentsBySpace(spaceId);
+  }
+
+  async listDeploymentsByIds(
+    ids: readonly string[],
+  ): Promise<readonly Deployment[]> {
+    return await this.#deployments.listDeploymentsByIds(ids);
+  }
+
   async listDeploymentOutputs(
     installationId: string,
   ): Promise<ListDeploymentOutputsResponse> {

@@ -18,11 +18,11 @@ import type { JSX } from "solid-js";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import { currentWorkspaceId } from "../../lib/workspace-state.ts";
+import { listCapsulesCached } from "../../lib/capsule-list.ts";
+import { listInstallConfigsCached } from "../../lib/install-config-list.ts";
 import {
   type ControlApiError,
   type Capsule,
-  listCapsules,
-  listInstallConfigs,
 } from "../../lib/control-api.ts";
 import {
   effectiveCapsuleStatus,
@@ -58,12 +58,14 @@ function Inner() {
   const navigate = useNavigate();
   const workspaceId = () => (currentWorkspaceId() ? currentWorkspaceId() : null);
 
-  const [capsules] = createResource(workspaceId, listCapsules);
+  const [capsules] = createResource(workspaceId, (id) =>
+    listCapsulesCached(id, { includeDestroyed: false }),
+  );
   const visible = createMemo(() =>
     (capsules() ?? []).filter(isVisibleServiceCapsule),
   );
   const [installConfigs] = createResource(workspaceId, (id) =>
-    listInstallConfigs(id),
+    listInstallConfigsCached(id),
   );
   const kindByConfigId = createMemo(() => {
     const map = new Map<string, string>();

@@ -40,6 +40,9 @@ describe("AppListView app launcher", () => {
     expect(appListSource).toContain("appSurfacesFromDeployment");
     expect(appListSource).toContain("listActivity");
     expect(appListSource).toContain("surfacesByCapsule");
+    expect(appListSource).toContain("listCurrentStateVersionsCached");
+    expect(appListSource).toContain("currentStateVersions");
+    expect(appListSource).not.toMatch(/\bgetDeployment\(/);
     expect(appListSource).toContain("const appTiles = createMemo");
     expect(appListSource).toContain("function AppLauncher");
     expect(appListSource).toContain("function AppTileView");

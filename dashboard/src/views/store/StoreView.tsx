@@ -14,7 +14,7 @@ import {
   selectAvailableWorkspaceId,
   setCurrentWorkspaceId,
 } from "../../lib/workspace-state.ts";
-import { listWorkspaces } from "../../lib/control-api.ts";
+import { listWorkspacesCached } from "../../lib/workspace-list.ts";
 import { StoreBrowser } from "./StoreBrowser.tsx";
 import { buildNewQuery } from "./store-link.ts";
 import type { TcsListing } from "../../lib/tcs-client.ts";
@@ -25,7 +25,7 @@ function Inner() {
   onMount(async () => {
     if (currentWorkspaceId()) return;
     try {
-      const workspaces = await listWorkspaces();
+      const workspaces = await listWorkspacesCached();
       const chosen = selectAvailableWorkspaceId(currentWorkspaceId(), workspaces);
       if (chosen) setCurrentWorkspaceId(chosen);
     } catch {

@@ -107,6 +107,7 @@ import type {
   StoredSource,
   ClaimBillingAutoRechargeAttemptInput,
   ClaimBillingAutoRechargeAttemptResult,
+  CapsuleListPageParams,
   CreditAmountInput,
   SettleBillingAutoRechargeAttemptInput,
   SettleBillingAutoRechargeAttemptResult,
@@ -689,15 +690,22 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
 
   async listInstallationsPage(
     spaceId: string,
-    params: PageParams,
+    params: CapsuleListPageParams,
   ): Promise<Page<Installation>> {
     const limit = clampPageLimit(params.limit);
+    const baseWhere =
+      params.includeDestroyed === false
+        ? and(
+            eq(schema.installations.spaceId, spaceId),
+            ne(schema.installations.status, "destroyed"),
+          )
+        : eq(schema.installations.spaceId, spaceId);
     const rows = await this.#drizzleManyJson<Installation>(
       schema.installations,
       schema.installations.recordJson,
       {
         where: d1KeysetWhere(
-          eq(schema.installations.spaceId, spaceId),
+          baseWhere,
           schema.installations.createdAt,
           schema.installations.id,
           decodeCursor(params.cursor),
@@ -1037,6 +1045,19 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
       .where(eq(schema.deployments.id, id))
       .get();
     return row ? deploymentFromDrizzleRow(row) : undefined;
+  }
+
+  async listDeploymentsByIds(
+    ids: readonly string[],
+  ): Promise<readonly Deployment[]> {
+    await this.#ensureSchema();
+    const uniqueIds = [...new Set(ids.filter((id) => id.length > 0))];
+    if (uniqueIds.length === 0) return [];
+    const rows = await this.#orm
+      .select()
+      .from(schema.deployments)
+      .where(inArray(schema.deployments.id, uniqueIds));
+    return rows.map(deploymentFromDrizzleRow);
   }
 
   async listDeployments(
