@@ -2595,6 +2595,45 @@ test("POST /api/v1/workspaces/:id/capsules stores per-install vars in a scoped I
   expect(createCall.installConfigId).toEqual(config.id);
 });
 
+test("POST /api/v1/workspaces/:id/capsules expands dotted per-install vars in a scoped InstallConfig", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const { request: req, url } = request(
+    "POST",
+    "/api/v1/workspaces/space_a/capsules",
+    {
+      cookie,
+      body: {
+        name: "takos",
+        environment: "production",
+        sourceId: "src_x",
+        installConfigId: "cfg_x",
+        vars: {
+          project_name: "takos-space-a",
+          "cloudflare.workers_subdomain": "shoutatomiyama0614",
+        },
+      },
+    },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(201);
+  const config = operations.calls.putInstallConfig?.[0] as {
+    variableMapping: Record<string, unknown>;
+  };
+  expect(config.variableMapping).toEqual({
+    project_name: "takos-space-a",
+    cloudflare: {
+      workers_subdomain: "shoutatomiyama0614",
+    },
+  });
+});
+
 test("POST /api/v1/workspaces/:id/capsules stores runnerId and outputAllowlist in a scoped InstallConfig", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
