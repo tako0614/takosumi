@@ -30,7 +30,7 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
       items: [
         { text: "Model", link: "/reference/model" },
         { text: "API", link: "/reference/api" },
-        { text: "Cloud Workers", link: "/reference/cloud-workers" },
+        { text: "Cloud resources", link: "/reference/cloud-resources" },
         { text: "Cloud endpoints", link: "/reference/cloud-endpoints" },
         { text: "Deploy Control API", link: "/reference/deploy-control-api" },
         {
@@ -62,7 +62,7 @@ const enSidebar: DefaultTheme.SidebarMulti = {
       items: [
         { text: "Model", link: "/en/reference/model" },
         { text: "API", link: "/en/reference/api" },
-        { text: "Cloud Workers", link: "/en/reference/cloud-workers" },
+        { text: "Cloud resources", link: "/en/reference/cloud-resources" },
         { text: "Cloud endpoints", link: "/en/reference/cloud-endpoints" },
         {
           text: "Deploy Control API",
@@ -88,8 +88,6 @@ export default defineConfig({
   srcExclude: [
     "internal/**/*.md",
     "operations/**/*.md",
-    "reference/ai-gateway.md",
-    "reference/gateway-opentofu-architecture.md",
   ],
   cleanUrls: true,
   lastUpdated: true,

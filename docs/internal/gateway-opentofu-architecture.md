@@ -24,8 +24,7 @@ Operator/Cloud:
   official managed capacity and hosted Cloud extension backends
 ```
 
-See [Takosumi Final Plan](../internal/final-plan.md) and
-[Core Spec](../internal/core-spec.md).
+See [Takosumi Final Plan](./final-plan.md) and [Core Spec](./core-spec.md).
 
 ## Cloud Scope
 
