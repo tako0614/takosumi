@@ -169,7 +169,7 @@ export async function runAccountsMigrate(
  * historical; Wrangler 4's `d1 execute` positional is a database name or
  * binding. Tests can substitute a different `D1ExecuteCommand` through the
  * optional second argument to keep the suite hermetic (the production code path
- * shells out to `npx wrangler d1 execute`, which would hit the real Cloudflare
+ * shells out to `bunx wrangler d1 execute`, which would hit the real Cloudflare
  * API).
  *
  * Exit codes:
