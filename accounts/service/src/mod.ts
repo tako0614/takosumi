@@ -46,9 +46,11 @@ import type {
   CapsuleRecord,
 } from "./ledger.ts";
 import {
+  type AccountSessionRecord,
   type AccountsStore,
   InMemoryAccountsStore,
   type OidcClientAuthMethod,
+  type TakosumiAccountRecord,
 } from "./store.ts";
 import type { SharedCellRuntimeAllocator } from "./runtime.ts";
 import type { UpstreamOAuthProvider } from "./upstream.ts";
@@ -615,6 +617,67 @@ export async function createEphemeralAccountsHandler(
   });
 }
 
+function createRequestScopedAccountsStore(
+  baseStore: AccountsStore,
+): AccountsStore {
+  const sessionCache = new Map<
+    string,
+    Promise<AccountSessionRecord | undefined>
+  >();
+  const accountCache = new Map<
+    string,
+    Promise<TakosumiAccountRecord | undefined>
+  >();
+
+  return new Proxy(baseStore as AccountsStore & Record<PropertyKey, unknown>, {
+    get(target, property, receiver) {
+      if (property === "findAccountSession") {
+        return (sessionId: string) => {
+          let cached = sessionCache.get(sessionId);
+          if (!cached) {
+            cached = Promise.resolve(baseStore.findAccountSession(sessionId));
+            sessionCache.set(sessionId, cached);
+          }
+          return cached;
+        };
+      }
+      if (property === "findAccount") {
+        return (subject: TakosumiAccountRecord["subject"]) => {
+          let cached = accountCache.get(subject);
+          if (!cached) {
+            cached = Promise.resolve(baseStore.findAccount(subject));
+            accountCache.set(subject, cached);
+          }
+          return cached;
+        };
+      }
+      if (property === "saveAccountSession") {
+        return async (record: AccountSessionRecord) => {
+          sessionCache.delete(record.sessionId);
+          await baseStore.saveAccountSession(record);
+          sessionCache.delete(record.sessionId);
+        };
+      }
+      if (property === "deleteAccountSession") {
+        return async (sessionId: string) => {
+          sessionCache.delete(sessionId);
+          await baseStore.deleteAccountSession(sessionId);
+          sessionCache.delete(sessionId);
+        };
+      }
+      if (property === "saveAccount") {
+        return async (record: TakosumiAccountRecord) => {
+          accountCache.delete(record.subject);
+          await baseStore.saveAccount(record);
+          accountCache.delete(record.subject);
+        };
+      }
+      const value = Reflect.get(target, property, receiver);
+      return typeof value === "function" ? value.bind(baseStore) : value;
+    },
+  }) as AccountsStore;
+}
+
 export function createAccountsHandler(
   options: AccountsHandlerOptions = {},
 ): AccountsHandler {
@@ -624,7 +687,7 @@ export function createAccountsHandler(
   const clients = new Map(
     (options.clients ?? []).map((client) => [client.clientId, client]),
   );
-  const store = options.store ?? new InMemoryAccountsStore();
+  const baseStore = options.store ?? new InMemoryAccountsStore();
   const isProductionIssuer = isHttpsIssuer(issuer);
   const loginEmailAllowlist = options.loginEmailAllowlist;
 
@@ -644,6 +707,7 @@ export function createAccountsHandler(
 
   const inner = async (request: Request): Promise<Response> => {
     const url = new URL(request.url);
+    const store = createRequestScopedAccountsStore(baseStore);
 
     if (url.pathname === "/healthz") {
       if (!isGetOrHead(request)) return methodNotAllowed("GET, HEAD");
