@@ -55,6 +55,7 @@ import { canonicalProviderAddress } from "@takosumi/providers";
 const DEFAULT_REF = "main";
 const DEFAULT_PATH = ".";
 const NORMALIZED_CAPSULE_ARTIFACT_BUCKET = "takos-artifacts";
+const SOURCE_SYNC_REQUEUE_STALE_MS = 10 * 60 * 1000;
 
 /**
  * Out-of-process source-sync dispatch seam. Mirrors the deploy-control
@@ -296,7 +297,17 @@ export class SourcesService {
     const stored = await this.#requireSource(sourceId);
     if (options.dedupe) {
       const existing = await this.#activeSyncRun(sourceId);
-      if (existing) return { run: existing };
+      if (existing) {
+        if (shouldReenqueueActiveSyncRun(existing, this.#now().getTime())) {
+          await this.#enqueue({
+            action: "source_sync",
+            runId: existing.id,
+            spaceId: existing.spaceId,
+            sourceId: existing.sourceId,
+          });
+        }
+        return { run: existing };
+      }
     }
     const runId = this.#newId("ssr");
     const snapshotId = this.#newId("snap");
@@ -976,6 +987,15 @@ function nonEmpty(value: string | undefined): string | undefined {
 
 function defaultId(prefix: string): string {
   return `${prefix}_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
+}
+
+function shouldReenqueueActiveSyncRun(
+  run: SourceSyncRun,
+  nowMs: number,
+): boolean {
+  if (run.status === "queued") return true;
+  if (run.status !== "running") return false;
+  return nowMs - (run.heartbeatAt ?? 0) > SOURCE_SYNC_REQUEUE_STALE_MS;
 }
 
 function defaultHookSecret(): string {
