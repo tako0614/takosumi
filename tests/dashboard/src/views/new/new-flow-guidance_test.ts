@@ -207,9 +207,15 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain("gitUrl: sourceGitUrl()");
     expect(newAppViewSource).toContain("ref: sourceRef()");
     expect(newAppViewSource).toContain("path: sourcePath()");
+    expect(newAppViewSource).toContain('defaultPath: "."');
+    expect(newAppViewSource).toContain("modulePath: flowInput.path");
     expect(newAppViewSource).toContain("<dd>{displayRef(sourceRef())}</dd>");
     expect(newAppViewSource).toContain(
       "<dd>{displayModulePath(sourcePath())}</dd>",
+    );
+    expect(controlApiSource).toContain('defaultPath: "."');
+    expect(controlApiSource).toContain(
+      'input.path && input.path !== "." ? { modulePath: input.path } : {}',
     );
   });
 
