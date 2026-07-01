@@ -292,14 +292,14 @@ and Workflows. Internal backend names must not become the user-facing billing
 or usage-ledger family. Worker script usage is reported with
 `resourceFamily: "cloudflare.workers_script"` as `gateway_compute` or
 `gateway_storage_gb_hour`. Queues are reported as `cloudflare.queues`, and
-Workflows are reported as `cloudflare.workflows`. Data-plane subpaths for KV
-values, R2 objects, D1 query, Queue messages, and Workflow instances are opened
-only when the corresponding public meter and platform `fallbackUsage` precharge
-coverage exist. R2 bucket lifecycle, object read/write operations, and storage
-inventory are metered. R2 object DELETE is treated as cleanup and intentionally
-emits no fallback usage meter so depleted credits do not strand user data.
-Unsupported managed subpaths still return 501 instead of proxying to Cloudflare
-for free.
+Workflows are reported as `cloudflare.workflows`. Subpaths for KV values, R2
+objects, D1 query, Queue messages, Queue consumers, and Workflow instances are
+opened only when the corresponding public meter and platform `fallbackUsage`
+precharge coverage exist. R2 bucket lifecycle, object read/write operations,
+and storage inventory are metered. R2 object DELETE is treated as cleanup and
+intentionally emits no fallback usage meter so depleted credits do not strand
+user data. Unsupported managed subpaths still return 501 instead of proxying to
+Cloudflare for free.
 Additional families such as Containers and Durable Objects can report
 backend-measured usage through `/cloud/usage/resource-meters`. That billing
 path does not by itself make the managed resource generally available: catalog
