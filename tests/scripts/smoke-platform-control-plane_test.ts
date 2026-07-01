@@ -570,6 +570,61 @@ test("platform control-plane smoke uses configured public checks for app Workers
   ]);
 });
 
+test("platform control-plane smoke verifies Cloudflare script for OpenTofu app public checks", async () => {
+  const options = await resolveOptions(
+    {
+      dryRun: true,
+      url: "https://app-staging.takosumi.com",
+      space: "@scratch",
+      appName: "takos-opentofu-public-url-test",
+      cloudflareConnectionMode: "guided",
+      verificationMode: "opentofu",
+      cloudflareAccountId: "account",
+      cloudflareWorkersSubdomain: "takosumi-smoke",
+      outputAllowlistJson: JSON.stringify({
+        url: { from: "url", type: "url", required: true },
+        worker_name: { from: "worker_name", type: "string", required: true },
+      }),
+      publicUrlChecksJson: JSON.stringify([
+        {
+          name: "health",
+          output: "url",
+          path: "/health",
+          expectedStatus: 200,
+          bodyIncludes: ['"status":"ok"'],
+        },
+      ]),
+    },
+    {
+      TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token",
+      CLOUDFLARE_API_TOKEN: "cloudflare-token",
+    },
+  );
+
+  const result = dryRunResult(options);
+
+  expect(result.steps).toEqual([
+    "spaceScopedProviderConnection",
+    "connectionVerified",
+    "sourceRegistered",
+    "sourceSynced",
+    "scratchInstall",
+    "plan",
+    "apply",
+    "opentofuApplyVerified",
+    "deploymentVerified",
+    "deploymentLedgerVerified",
+    "publicUrlVerified",
+    "destroy",
+    "connectionRevoked",
+  ]);
+  expect(result.workerUrl).toBe(
+    "https://takos-opentofu-public-url-test.<redacted>.workers.dev",
+  );
+  expect(result.deploymentVerified).toBe(true);
+  expect(result.publicUrlVerified).toBe(true);
+});
+
 test("platform control-plane smoke cleanup only marks failed pending upload remnants", () => {
   expect(
     shouldMarkPendingSmokeInstallationError(

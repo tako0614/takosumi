@@ -868,11 +868,11 @@ export function dryRunResult(
     capsuleGateStatus: "passed",
     policyStatus: "passed",
     workerUrl:
-      options.verificationMode === "cloudflare-worker"
+      shouldVerifyCloudflareDeployment(options)
         ? publicWorkerUrl(options)
         : "",
     opentofuApplyVerified: options.verificationMode === "opentofu",
-    deploymentVerified: options.verificationMode === "cloudflare-worker",
+    deploymentVerified: shouldVerifyCloudflareDeployment(options),
     publicUrlVerified:
       options.verificationMode === "cloudflare-worker" ||
       options.publicUrlChecks.length > 0,
@@ -1135,10 +1135,12 @@ export async function runPlatformControlPlaneSmoke(
       });
       completeStep("releaseActivationVerified");
     }
-    if (options.verificationMode === "cloudflare-worker") {
+    if (shouldVerifyCloudflareDeployment(options)) {
       beginStep("deploymentVerified");
       await assertCloudflareWorkerExists(options);
       completeStep("deploymentVerified");
+    }
+    if (options.verificationMode === "cloudflare-worker") {
       beginStep("publicUrlVerified");
       if (options.publicUrlChecks.length > 0) {
         publicUrlChecks = await assertConfiguredPublicUrls(
@@ -1174,8 +1176,7 @@ export async function runPlatformControlPlaneSmoke(
     const destroyResult = await destroySmokeInstallation(options, {
       installationId,
       reason: "Layer-2 platform-control-plane smoke cleanup",
-      verifyCloudflareWorkerGone:
-        options.verificationMode === "cloudflare-worker",
+      verifyCloudflareWorkerGone: shouldVerifyCloudflareDeployment(options),
     });
     destroyPlanRunId = destroyResult.destroyPlanRun.id;
     destroyApplyRunId = destroyResult.destroyApplyRun.id;
@@ -1241,11 +1242,11 @@ export async function runPlatformControlPlaneSmoke(
       capsuleGateStatus: "passed",
       policyStatus: policyStatus === "denied" ? failPolicy() : "passed",
       workerUrl:
-        options.verificationMode === "cloudflare-worker"
+        shouldVerifyCloudflareDeployment(options)
           ? publicWorkerUrl(options)
           : "",
       opentofuApplyVerified: options.verificationMode === "opentofu",
-      deploymentVerified: options.verificationMode === "cloudflare-worker",
+      deploymentVerified: shouldVerifyCloudflareDeployment(options),
       publicUrlVerified:
         options.verificationMode === "cloudflare-worker" ||
         options.publicUrlChecks.length > 0,
@@ -3792,7 +3793,12 @@ function requiredSteps(
     "plan",
     "apply",
     ...(options?.verificationMode === "opentofu"
-      ? ["opentofuApplyVerified"]
+      ? [
+          "opentofuApplyVerified",
+          ...(shouldVerifyCloudflareDeployment(options)
+            ? ["deploymentVerified"]
+            : []),
+        ]
       : ["deploymentVerified", "publicUrlVerified"]),
     "deploymentLedgerVerified",
   ];
@@ -3817,6 +3823,26 @@ function requiredSteps(
     steps.push("connectionRevoked");
   }
   return steps;
+}
+
+function shouldVerifyCloudflareDeployment(
+  options?: Pick<
+    PlatformControlPlaneSmokeOptions,
+    | "verificationMode"
+    | "cloudflareConnectionMode"
+    | "publicUrlChecks"
+    | "outputAllowlist"
+  >,
+): boolean {
+  if (!options) return false;
+  if (options.verificationMode === "cloudflare-worker") return true;
+  if (options.verificationMode !== "opentofu") return false;
+  if (options.cloudflareConnectionMode === "none") return false;
+  if (options.publicUrlChecks.length === 0) return false;
+  return Object.prototype.hasOwnProperty.call(
+    options.outputAllowlist,
+    "worker_name",
+  );
 }
 
 async function writeResult(
