@@ -180,6 +180,33 @@ test("OpenTofu run owner marks source_sync retries exhausted after owner retry b
   assert.equal(storage.alarmAt, undefined);
 });
 
+test("OpenTofu run owner recovers stuck running records quickly", async () => {
+  const storage = new FakeDoStorage();
+  const started = Date.parse("2026-06-22T08:00:00.000Z");
+  await storage.put("run", {
+    kind: "takosumi.opentofu-run-owner@v1",
+    action: "apply",
+    requestedAction: "destroy",
+    runId: "run_1",
+    spaceId: "space_1",
+    status: "running",
+    attempts: 1,
+    maxAttempts: 3,
+    createdAt: new Date(started).toISOString(),
+    updatedAt: new Date(started).toISOString(),
+    startedAt: new Date(started).toISOString(),
+  });
+  const owner = new OpenTofuRunOwnerObject(
+    { storage },
+    {} as CloudflareWorkerEnv,
+    { now: () => started + 1_000 },
+  );
+
+  await start(owner, "destroy");
+
+  assert.equal(storage.alarmAt, started + 90_000);
+});
+
 test("OpenTofu run owner does not echo invalid request details", async () => {
   const owner = new OpenTofuRunOwnerObject(
     { storage: new FakeDoStorage() },
