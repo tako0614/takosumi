@@ -326,7 +326,12 @@ test("a retryable runner infrastructure reset requeues plan without dropping inp
   ).toEqual(true);
   expect(planCalls).toEqual(1);
   expect(retryDispatches).toEqual([
-    { action: "plan", runId: queuedPlan.id, spaceId: queuedPlan.spaceId },
+    {
+      action: "plan",
+      runId: queuedPlan.id,
+      spaceId: queuedPlan.spaceId,
+      cause: "controller_retry",
+    },
   ]);
 
   await controller.dispatchQueuedRun({
@@ -401,7 +406,12 @@ test("a retryable runner infrastructure reset requeues destroy plan without fail
   ).toEqual(true);
   expect(planCalls).toEqual(1);
   expect(retryDispatches).toEqual([
-    { action: "plan", runId: queuedPlan.id, spaceId: queuedPlan.spaceId },
+    {
+      action: "plan",
+      runId: queuedPlan.id,
+      spaceId: queuedPlan.spaceId,
+      cause: "controller_retry",
+    },
   ]);
 
   await controller.dispatchQueuedRun({
@@ -492,7 +502,12 @@ test("a retryable runner infrastructure reset requeues apply without failing ter
   ).toEqual(true);
   expect(applyCalls).toEqual(1);
   expect(retryDispatches).toEqual([
-    { action: "apply", runId: applyRun.id, spaceId: applyRun.spaceId },
+    {
+      action: "apply",
+      runId: applyRun.id,
+      spaceId: applyRun.spaceId,
+      cause: "controller_retry",
+    },
   ]);
 
   await controller.dispatchQueuedRun({
@@ -592,7 +607,12 @@ test("a retryable runner infrastructure reset requeues destroy apply without fai
   ).toEqual(true);
   expect(destroyCalls).toEqual(1);
   expect(retryDispatches).toEqual([
-    { action: "apply", runId: applyRun.id, spaceId: applyRun.spaceId },
+    {
+      action: "apply",
+      runId: applyRun.id,
+      spaceId: applyRun.spaceId,
+      cause: "controller_retry",
+    },
   ]);
 
   await controller.dispatchQueuedRun({

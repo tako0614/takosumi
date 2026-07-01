@@ -119,6 +119,7 @@ export interface OpenTofuRunQueueMessage {
   readonly action: OpenTofuRunAction;
   readonly runId: string;
   readonly spaceId: string;
+  readonly cause?: "controller_retry";
   readonly requestedAt?: string;
   readonly request?: Record<string, unknown>;
 }

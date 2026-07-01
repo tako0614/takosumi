@@ -183,6 +183,7 @@ async function dispatchOpenTofuRun(
         action: run.action,
         runId: run.runId,
         spaceId: run.spaceId,
+        ...(run.cause ? { cause: run.cause } : {}),
         queueAttempt: metadata.queueAttempt,
         messageId: metadata.messageId,
       }),
@@ -327,6 +328,8 @@ function parseOpenTofuRunQueueMessage(
     throw new Error("OpenTofu run queue message spaceId is required");
   }
   const requestedAt = nonEmptyString(record.requestedAt);
+  const cause =
+    record.cause === "controller_retry" ? "controller_retry" : undefined;
   const request = record.request;
   const requestObject =
     typeof request === "object" && request !== null && !Array.isArray(request)
@@ -337,6 +340,7 @@ function parseOpenTofuRunQueueMessage(
     action,
     runId,
     spaceId,
+    ...(cause ? { cause } : {}),
     ...(requestedAt ? { requestedAt } : {}),
     ...(requestObject ? { request: requestObject } : {}),
   };

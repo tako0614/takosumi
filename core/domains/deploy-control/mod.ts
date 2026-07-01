@@ -640,6 +640,7 @@ export interface OpenTofuRunDispatch {
   readonly action: "plan" | "apply" | "source_sync" | "restore";
   readonly runId: string;
   readonly spaceId: string;
+  readonly cause?: "controller_retry";
 }
 
 export type EnqueueRun = (dispatch: OpenTofuRunDispatch) => Promise<void>;

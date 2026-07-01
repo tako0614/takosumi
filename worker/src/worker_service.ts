@@ -387,6 +387,7 @@ function openTofuRunOwnerEnqueuer(
       spaceId: dispatch.spaceId,
       messageId: directRunOwnerMessageId(dispatch.runId),
       queueAttempt: 1,
+      cause: dispatch.cause,
     });
   };
 }
@@ -414,6 +415,7 @@ async function scheduleOpenTofuRunOwner(
     readonly spaceId: string;
     readonly queueAttempt: number;
     readonly messageId: string;
+    readonly cause?: "controller_retry";
   },
 ): Promise<void> {
   const namespace = env.RUN_OWNER;
@@ -433,6 +435,7 @@ async function scheduleOpenTofuRunOwner(
           spaceId: dispatch.spaceId,
           queueAttempt: dispatch.queueAttempt,
           messageId: dispatch.messageId,
+          ...(dispatch.cause ? { cause: dispatch.cause } : {}),
         }),
       }),
     );
@@ -459,6 +462,7 @@ function openTofuRunEnqueuer(env: CloudflareWorkerEnv): EnqueueRun | undefined {
       action: dispatch.action,
       runId: dispatch.runId,
       spaceId: dispatch.spaceId,
+      ...(dispatch.cause ? { cause: dispatch.cause } : {}),
       requestedAt: new Date().toISOString(),
     });
   };
