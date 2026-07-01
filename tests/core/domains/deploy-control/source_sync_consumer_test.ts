@@ -167,7 +167,9 @@ test("source_sync consumer reuses an unchanged SourceSnapshot archive", async ()
   expect(finished?.archiveDigest).toBe(previousDigest);
   const snapshots = await store.listSourceSnapshots(source.id);
   expect(snapshots).toHaveLength(2);
-  const reused = snapshots.find((snapshot) => snapshot.fetchedByRunId === run.id);
+  const reused = snapshots.find(
+    (snapshot) => snapshot.fetchedByRunId === run.id,
+  );
   expect(reused?.archiveObjectKey).toBe(previousArchiveKey);
   expect(reused?.archiveDigest).toBe(previousDigest);
   expect(reused?.archiveSizeBytes).toBe(2048);
@@ -231,6 +233,60 @@ test("source_sync consumer reuses an unchanged public Git archive from a sibling
   expect(snapshots).toHaveLength(1);
   expect(snapshots[0]?.archiveObjectKey).toBe(previousArchiveKey);
   expect(snapshots[0]?.archiveDigest).toBe(previousDigest);
+});
+
+test("source_sync consumer fast-reuses a pinned commit SourceSnapshot without dispatching the runner", async () => {
+  const { store, sourcesService, runner, controller } = build();
+  const pinnedCommit = "ccee6dea39e0797148ec0061fc738a693073890d";
+  const { source: firstSource } = await sourcesService.createSource({
+    spaceId: "space_1",
+    name: "repo-a",
+    url: "https://github.com/acme/repo.git",
+    defaultRef: pinnedCommit,
+  });
+  const { source: secondSource } = await sourcesService.createSource({
+    spaceId: "space_1",
+    name: "repo-b",
+    url: "https://github.com/acme/repo.git",
+    defaultRef: pinnedCommit,
+  });
+  const previousArchiveKey =
+    "spaces/space_1/sources/src_prev/snapshots/snap_prev/source.tar.zst";
+  const previousDigest = "sha256:" + "b".repeat(64);
+  await store.putSourceSnapshot({
+    id: "snap_prev",
+    origin: "git",
+    workspaceId: "space_1",
+    spaceId: "space_1",
+    sourceId: firstSource.id,
+    url: "https://github.com/acme/repo.git",
+    ref: pinnedCommit,
+    resolvedCommit: pinnedCommit,
+    path: ".",
+    archiveObjectKey: previousArchiveKey,
+    archiveDigest: previousDigest,
+    archiveSizeBytes: 2048,
+    fetchedByRunId: "ssr_prev",
+    fetchedAt: "1970-01-01T00:00:00.000Z",
+  });
+  const { run } = await controller.createSourceSync(secondSource.id);
+
+  await controller.dispatchQueuedRun({
+    action: "source_sync",
+    runId: run.id,
+    spaceId: "space_1",
+  });
+
+  expect(runner.calls).toHaveLength(0);
+  const finished = await store.getSourceSyncRun(run.id);
+  expect(finished?.status).toBe("succeeded");
+  expect(finished?.resolvedCommit).toBe(pinnedCommit);
+  expect(finished?.archiveDigest).toBe(previousDigest);
+  const snapshots = await store.listSourceSnapshots(secondSource.id);
+  expect(snapshots).toHaveLength(1);
+  expect(snapshots[0]?.archiveObjectKey).toBe(previousArchiveKey);
+  expect(snapshots[0]?.archiveDigest).toBe(previousDigest);
+  expect(snapshots[0]?.resolvedCommit).toBe(pinnedCommit);
 });
 
 test("source_sync consumer does not reuse sibling Git archives across credential or space boundaries", async () => {

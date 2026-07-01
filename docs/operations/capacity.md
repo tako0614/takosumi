@@ -71,11 +71,11 @@ planning に使う conservative capacity:
 provider apply のどこに時間が寄っているかで分けて見る。Takosumi 側で使える
 speed knob は OpenTofu 実行基盤に限定する。
 
-| Knob                                | Default                         | 速くなる箇所                                             | コスト/注意点                                                                 |
-| ----------------------------------- | ------------------------------- | -------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `TAKOSUMI_RUNNER_KEEPALIVE_SECONDS` | `0`                             | run-scoped container lifetime                            | run ごとに破棄して `max_instances` 枯渇を避ける。positive value は current run container を短時間残すだけ |
-| `TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR` | `/tmp/takosumi-provider-cache`  | `tofu init` の direct provider install                   | provider binary 専用。credential / tfplan / state / outputs は入れない        |
-| `TAKOSUMI_SOURCE_ARCHIVE_ZSTD_LEVEL` | runner default `3`, template `1` | SourceSnapshot archive 作成                              | 低いほど速いが R2 object が大きくなる                                         |
+| Knob                                 | Default                          | 速くなる箇所                           | コスト/注意点                                                                                             |
+| ------------------------------------ | -------------------------------- | -------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `TAKOSUMI_RUNNER_KEEPALIVE_SECONDS`  | `0`                              | run-scoped container lifetime          | run ごとに破棄して `max_instances` 枯渇を避ける。positive value は current run container を短時間残すだけ |
+| `TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR` | `/tmp/takosumi-provider-cache`   | `tofu init` の direct provider install | provider binary 専用。credential / tfplan / state / outputs は入れない                                    |
+| `TAKOSUMI_SOURCE_ARCHIVE_ZSTD_LEVEL` | runner default `3`, template `1` | SourceSnapshot archive 作成            | 低いほど速いが R2 object が大きくなる                                                                     |
 
 Git source sync は、同じ Source の同一 ref/path だけでなく、同じ Space 内の
 public Git Source で URL/ref/path が一致する場合も既存 SourceSnapshot archive
@@ -83,6 +83,11 @@ public Git Source で URL/ref/path が一致する場合も既存 SourceSnapshot
 再検証するケースは `git clone` と deterministic archive 作成を避けられる。
 credential 付き Source は reuse 対象外にし、private repo bytes を別 Source へ
 横流ししない。
+
+Git ref が commit SHA として固定され、既存 SourceSnapshot の `resolvedCommit`
+と一致する場合は、controller が runner container へ dispatch せずに
+SourceSyncRun を成功させる。tag / branch のように動く ref は runner の
+`git ls-remote` で現在 commit を確認してから archive reuse する。
 
 失敗した run は keepalive 設定に関係なく container を落とす。これは crash や
 relay error のあとに一時 credential file を温存しないための fail-closed 動作。
