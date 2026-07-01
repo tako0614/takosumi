@@ -453,7 +453,13 @@ export class RunEngine {
         installationId: installation.id,
         environment: installation.environment,
       };
-    validateSourceAllowedByProfile(request.source, profile);
+    // Resource Shape adapters pass an internal generated root that fully
+    // overrides the backing Capsule's nominal Source. Keep local source
+    // rejection for user-supplied Capsule runs, but do not reject the internal
+    // placeholder source when the runner will execute generatedRoot instead.
+    if (!internal.genericRootDispatch?.generatedRoot) {
+      validateSourceAllowedByProfile(request.source, profile);
+    }
     const now = this.#now();
     const variables = normalizeVariables(request.variables);
     // Cloud-only gateway materialization is rejected here; OSS Takosumi never
@@ -507,13 +513,21 @@ export class RunEngine {
     const sourceDigest = await stableJsonDigest(request.source);
     const variablesDigest = await stableJsonDigest(variables);
     const policyDecisionDigest = await stableJsonDigest(policy);
+    const planRunId = this.#newId("plan");
     const sourceSnapshotId =
       internal.sourceSnapshotId ??
-      (await this.#resolvePlanSourceSnapshotId(installation));
+      (internal.genericRootDispatch?.generatedRoot
+        ? await this.#recordGeneratedRootSourceSnapshot({
+            workspaceId,
+            planRunId,
+            generatedRoot: internal.genericRootDispatch.generatedRoot,
+            now,
+          })
+        : await this.#resolvePlanSourceSnapshotId(installation));
     const baseStateGeneration =
       internal.baseStateGeneration ?? installation.currentStateGeneration;
     let planRun: PlanRun = {
-      id: this.#newId("plan"),
+      id: planRunId,
       workspaceId,
       spaceId: workspaceId,
       ...(requestCapsuleId
@@ -691,10 +705,10 @@ export class RunEngine {
   }
 
   /**
-   * Installation-driven drift check (spec §19 `drift_check` run type; Phase 8
+   * Capsule-driven drift check (spec §19 `drift_check` run type; Phase 8
    * advanced). Creates a plan-kind internal run flagged
    * {@link PlanRun.driftCheck} that:
-   *   - resolves the Installation -> InstallConfig -> Source -> latest snapshot
+   *   - resolves the Capsule config -> Source -> latest snapshot
    *     exactly like {@link createInstallationPlan} (an `update`-kind plan), so
    *     the runner produces a real `tofu plan` against the live state;
    *   - NEVER parks `waiting_approval` (`RunQueryService.planAwaitsApproval`
@@ -1009,6 +1023,36 @@ export class RunEngine {
         `source_sync_required: installation ${installation.id} has no SourceSnapshot for source ${source.id} ref ${source.defaultRef} path ${source.defaultPath}; run a source sync first`,
       );
     }
+    return snapshot.id;
+  }
+
+  async #recordGeneratedRootSourceSnapshot(input: {
+    readonly workspaceId: string;
+    readonly planRunId: string;
+    readonly generatedRoot: DispatchGeneratedRoot;
+    readonly now: number;
+  }): Promise<string> {
+    const snapshotId = this.#newId("snap");
+    const digest = await stableJsonDigest(input.generatedRoot);
+    const bytes = new TextEncoder().encode(
+      JSON.stringify(input.generatedRoot),
+    );
+    const snapshot: SourceSnapshot = {
+      id: snapshotId,
+      origin: "upload",
+      workspaceId: input.workspaceId,
+      spaceId: input.workspaceId,
+      url: `takosumi://generated-root/${input.planRunId}`,
+      ref: "generated-root",
+      resolvedCommit: digest,
+      path: ".",
+      archiveObjectKey: `spaces/${input.workspaceId}/generated-roots/${snapshotId}/generated-root.json`,
+      archiveDigest: digest,
+      archiveSizeBytes: bytes.byteLength,
+      fetchedByRunId: input.planRunId,
+      fetchedAt: new Date(input.now).toISOString(),
+    };
+    await this.#store.putSourceSnapshot(snapshot);
     return snapshot.id;
   }
 
@@ -1622,7 +1666,7 @@ export class RunEngine {
 
   /**
    * Run-scoped provider env binding resolution. Required providers must be
-   * covered by explicit Installation provider env bindings.
+   * covered by explicit ProviderBindings.
    * Lazily constructs the shared {@link ConnectionsService} so the SAME instance
    * resolves provider env bindings for rootgen (via {@link PlanResolutionService}) and for the
    * mint path (`#resolveRunInstallationProviderEnvBindings`).
@@ -2479,6 +2523,9 @@ export class RunEngine {
           `SourceSnapshot ${planRun.sourceSnapshotId} which is no longer present`,
       );
     }
+    if (isGeneratedRootSourceSnapshot(snapshot)) {
+      return planRun;
+    }
     const source = installation.sourceId
       ? await this.#requireSourceForInstallation(installation)
       : syntheticUploadSource(installation, snapshot);
@@ -2870,7 +2917,7 @@ export class RunEngine {
       allowOperatorBackedProviderEnvs: this.#allowOperatorBackedProviderEnvs,
     });
     const profile = await this.#requireRunnerProfile(planRun.runnerProfileId);
-    // Run-scoped: explicit Installation provider env bindings only. The same
+    // Run-scoped: explicit ProviderBindings only. The same
     // resolution feeds rootgen, so the minted TF_VAR credentials line up with the
     // generated provider blocks.
     return await this.#connectionsService.resolveProviderEnvBindingsForRun(
@@ -5534,4 +5581,8 @@ export class RunEngine {
     validatePlannedInstallationCurrent({ planRun, installation });
     return installation;
   }
+}
+
+function isGeneratedRootSourceSnapshot(snapshot: SourceSnapshot): boolean {
+  return snapshot.url.startsWith("takosumi://generated-root/");
 }

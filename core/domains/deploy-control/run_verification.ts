@@ -132,11 +132,17 @@ export class RunVerificationService {
       environment: ctx.environment,
       generation,
     };
-    const sourceArchive = await this.#dispatchSourceArchive(planRun, snapshot);
     // remote_state dependencies (spec §15): for each remote_state edge, dispatch
     // the producer StateSnapshot pinned by the plan's DependencySnapshot so
     // apply/destroy use the same state bytes the plan reviewed.
     const depStates = await this.#resolveRemoteStateDispatch(planRun);
+    if (isGeneratedRootOnlySnapshot(snapshot)) {
+      return {
+        stateScope,
+        ...(depStates.length > 0 ? { depStates } : {}),
+      };
+    }
+    const sourceArchive = await this.#dispatchSourceArchive(planRun, snapshot);
     return {
       stateScope,
       sourceArchive,
@@ -572,4 +578,8 @@ export class RunVerificationService {
       }
     }
   }
+}
+
+function isGeneratedRootOnlySnapshot(snapshot: SourceSnapshot): boolean {
+  return snapshot.url.startsWith("takosumi://generated-root/");
 }

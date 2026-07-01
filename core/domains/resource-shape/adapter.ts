@@ -56,6 +56,12 @@ export interface AdapterApplyResult {
 
 export interface AdapterDeleteInput {
   readonly resourceId: string;
+  /**
+   * The same implementation plan used to create the resource. OpenTofu-backed
+   * resources need it again for destroy because the backing Capsule is only a
+   * state/identity anchor; the generated root remains the executable module.
+   */
+  readonly plan?: ResourceShapePlan;
   readonly nativeResources: readonly NativeResourceRef[];
   readonly target: TargetPoolEntry;
   readonly credentialRef?: string;
