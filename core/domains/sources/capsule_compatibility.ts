@@ -73,9 +73,6 @@ const DEFAULT_GUIDED_PROVIDER_SOURCES = defaultGuidedProviderSources();
 // Capsule's own data plane and affect other domains / tenants:
 //   - cloudflare_dns_record  : can repoint arbitrary hostnames (domain / record
 //                              takeover on any zone the token can write).
-//   - cloudflare_workers_route: binds a Worker to an arbitrary hostname/route
-//                              pattern on a zone (production-traffic hijack on
-//                              any zone the token can touch).
 //   - cloudflare_zone / cloudflare_account / *_member / zone- or account-level
 //     settings: account/zone configuration and other-tenant-affecting types are
 //     never allowed by the default OSS resource-type policy.
@@ -90,6 +87,7 @@ const DEFAULT_ALLOWED_RESOURCE_TYPES = new Set([
   // provider v5, so no separate assets resource type is required.
   "cloudflare_workers_script",
   "cloudflare_workers_script_subdomain",
+  "cloudflare_workers_route",
   "cloudflare_pages_project",
   "cloudflare_d1_database",
   "cloudflare_queue",
@@ -104,13 +102,15 @@ const DEFAULT_ALLOWED_RESOURCE_TYPES = new Set([
 
 const DEFAULT_DENIED_RESOURCE_TYPES = new Set([
   "cloudflare_dns_record",
-  "cloudflare_workers_route",
   "cloudflare_zone",
   "cloudflare_account",
   "cloudflare_account_member",
 ]);
 
-const DEFAULT_ALLOWED_DATA_SOURCE_TYPES = new Set(["terraform_remote_state"]);
+const DEFAULT_ALLOWED_DATA_SOURCE_TYPES = new Set([
+  "terraform_remote_state",
+  "http",
+]);
 
 const CREDENTIAL_PROVIDER_ATTRIBUTES = new Set([
   "access_key",
@@ -654,17 +654,24 @@ function collectDependencyLockFindings(
   });
 }
 
-const FILESYSTEM_SENSITIVE_PATTERNS: readonly {
+const MODULE_LOCAL_FILESYSTEM_PATTERNS: readonly {
   readonly pattern: RegExp;
   readonly label: string;
 }[] = [
   { pattern: /\bfile\s*\(/, label: "file()" },
   { pattern: /\bfileset\s*\(/, label: "fileset()" },
+  { pattern: /\bfilesha256\s*\(/, label: "filesha256()" },
   { pattern: /\btemplatefile\s*\(/, label: "templatefile()" },
+  { pattern: /\bpath\.module\b/, label: "path.module" },
+];
+
+const HOST_FILESYSTEM_PATTERNS: readonly {
+  readonly pattern: RegExp;
+  readonly label: string;
+}[] = [
   { pattern: /\babspath\s*\(/, label: "abspath()" },
   { pattern: /\bpathexpand\s*\(/, label: "pathexpand()" },
   { pattern: /\bpath\.root\b/, label: "path.root" },
-  { pattern: /\bpath\.module\b/, label: "path.module" },
 ];
 
 function collectFilesystemSensitiveExpressionFindings(
@@ -672,20 +679,37 @@ function collectFilesystemSensitiveExpressionFindings(
   findings: CapsuleGateFinding[],
 ): void {
   for (const file of files) {
-    const hits = FILESYSTEM_SENSITIVE_PATTERNS.filter((entry) =>
+    const moduleLocalHits = MODULE_LOCAL_FILESYSTEM_PATTERNS.filter((entry) =>
       entry.pattern.test(file.text),
     );
-    if (hits.length === 0) continue;
-    findings.push({
-      severity: "warning",
-      code: "filesystem_sensitive_expression",
-      message: `Filesystem-sensitive OpenTofu expressions were detected: ${hits
-        .map((hit) => hit.label)
-        .join(", ")}.`,
-      path: file.path,
-      suggestion:
-        "Keep Capsule inputs explicit as variables or ensure file reads are confined to files shipped inside the normalized module.",
-    });
+    if (moduleLocalHits.length > 0) {
+      findings.push({
+        severity: "warning",
+        code: "filesystem_sensitive_expression",
+        message: `Module-local OpenTofu filesystem expressions were detected: ${moduleLocalHits
+          .map((hit) => hit.label)
+          .join(", ")}.`,
+        path: file.path,
+        suggestion:
+          "Keep artifact paths explicit and confined to files shipped inside the normalized module.",
+      });
+    }
+
+    const hostHits = HOST_FILESYSTEM_PATTERNS.filter((entry) =>
+      entry.pattern.test(file.text),
+    );
+    if (hostHits.length > 0) {
+      findings.push({
+        severity: "warning",
+        code: "filesystem_host_path_expression",
+        message: `Host-path-sensitive OpenTofu expressions were detected: ${hostHits
+          .map((hit) => hit.label)
+          .join(", ")}.`,
+        path: file.path,
+        suggestion:
+          "Avoid host-path expansion in reusable Capsules; pass explicit files through the module source or variables.",
+      });
+    }
   }
 }
 
@@ -712,7 +736,7 @@ function compatibilityLevel(
         (finding.code === "required_providers_missing" ||
           finding.code === "outputs_missing" ||
           finding.code === "provider_credentials_in_source" ||
-          finding.code === "filesystem_sensitive_expression" ||
+          finding.code === "filesystem_host_path_expression" ||
           finding.code === "remote_module_unpinned" ||
           finding.code === "local_module_source_missing"),
     )
