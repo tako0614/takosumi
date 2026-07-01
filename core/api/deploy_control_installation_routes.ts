@@ -36,6 +36,7 @@ import {
   SPACE_ID_PATTERN,
 } from "./deploy_control_shared.ts";
 import { OpenTofuControllerError } from "../domains/deploy-control/errors.ts";
+import { normalizeVariablePathRecord } from "../domains/deploy-control/validation.ts";
 import {
   DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
   defaultCapsuleOutputAllowlist,
@@ -425,6 +426,10 @@ export function mountDeployControlInstallationRoutes(
             "vars must be an object of JSON values keyed by OpenTofu variable names",
           );
         }
+        const normalizedVars =
+          vars === undefined
+            ? undefined
+            : normalizeVariablePathRecord(vars, "vars");
         const runnerProfileId =
           rawRunnerId === undefined
             ? undefined
@@ -433,7 +438,8 @@ export function mountDeployControlInstallationRoutes(
           ensureRunnerProfilePermission(principal, runnerProfileId);
         }
         const installConfigId =
-          (vars !== undefined && Object.keys(vars).length > 0) ||
+          (normalizedVars !== undefined &&
+            Object.keys(normalizedVars).length > 0) ||
           modulePath !== undefined ||
           runnerProfileId ||
           outputAllowlist !== undefined
@@ -444,7 +450,7 @@ export function mountDeployControlInstallationRoutes(
                   baseInstallConfigId: request.installConfigId,
                   installationName: request.name,
                   modulePath,
-                  vars: vars ?? {},
+                  vars: normalizedVars ?? {},
                   outputAllowlist,
                   runnerProfileId,
                 })

@@ -640,6 +640,59 @@ test("requested Cloudflare Capsule input can be filled from provider scope hints
   expect(mainTf).not.toContain("fixture-provider-token");
 });
 
+test("dotted Cloudflare Capsule input merges with provider scope hints", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  const seeded = await seedInstallationModel(store, {
+    environment: "preview",
+    installConfig: {
+      variableMapping: {
+        "cloudflare.workers_subdomain": "shoutatomiyama0614",
+      },
+    },
+  });
+  await putConnectionWithProviderEnv(store, {
+    ...cloudflareConnection(
+      "conn_cloudflare_scope",
+      seeded.installation.spaceId,
+    ),
+    scopeHints: { accountId: "acct_scope_123" },
+  });
+  await store.putInstallationProviderEnvBindingSet({
+    id: "profile_cloudflare_scope",
+    spaceId: seeded.installation.spaceId,
+    installationId: seeded.installation.id,
+    environment: seeded.installation.environment,
+    bindings: [
+      {
+        provider: "cloudflare",
+        alias: "main",
+        connectionId: "conn_cloudflare_scope",
+      },
+    ],
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
+  const profile = multiProviderRunnerProfile();
+  const controller = controllerWith(store, runner, {
+    runnerProfiles: [profile],
+    defaultRunnerProfileId: profile.id,
+  });
+
+  const { planRun } = await controller.createInstallationPlan(
+    seeded.installation.id,
+  );
+
+  expect(planRun.status).toEqual("succeeded");
+  const mainTf = runner.planJobs[0]!.generatedRoot!.files["main.tf"]!;
+  expect(mainTf).toContain('\\"account_id\\":\\"acct_scope_123\\"');
+  expect(mainTf).toContain(
+    '\\"workers_subdomain\\":\\"shoutatomiyama0614\\"',
+  );
+  expect(mainTf).not.toContain("cloudflare.workers_subdomain");
+  expect(mainTf).not.toContain("fixture-provider-token");
+});
+
 test("requested scalar Cloudflare Capsule inputs can be filled from provider scope hints", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   const runner = recordingRunner();

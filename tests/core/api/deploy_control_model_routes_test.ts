@@ -236,6 +236,47 @@ test("model e2e: create Installation with vars clones a Space-scoped InstallConf
   });
 });
 
+test("model e2e: create Installation expands dotted vars into object inputs", async () => {
+  const { app, operations } = await service();
+  const spaceId = await createSpace(app, "dotted-vars");
+  const sourceId = await createSource(app, spaceId);
+  const installConfigId = await seedInstallConfig(operations, spaceId);
+
+  const createRes = await app.request(
+    `/internal/v1/workspaces/${spaceId}/capsules`,
+    {
+      method: "POST",
+      headers: headers({ "content-type": "application/json" }),
+      body: JSON.stringify({
+        name: "takos",
+        environment: "production",
+        sourceId,
+        installConfigId,
+        vars: {
+          project_name: "takos-vars",
+          cloudflare: { zone_id: "zone_123" },
+          "cloudflare.workers_subdomain": "shoutatomiyama0614",
+        },
+      }),
+    },
+  );
+  expect(createRes.status).toBe(201);
+  const capsule = (await createRes.json()).capsule as {
+    installConfigId: string;
+  };
+
+  const config = await operations.installations.getInstallConfig(
+    capsule.installConfigId,
+  );
+  expect(config.variableMapping).toEqual({
+    project_name: "takos-vars",
+    cloudflare: {
+      zone_id: "zone_123",
+      workers_subdomain: "shoutatomiyama0614",
+    },
+  });
+});
+
 test("model e2e: create Installation with runnerId and outputAllowlist stores a scoped InstallConfig", async () => {
   const { app, operations } = await service();
   const spaceId = await createSpace(app, "runner-profile");
@@ -350,6 +391,34 @@ test("model e2e: create Installation rejects non-object vars", async () => {
   expect(createRes.status).toBe(400);
   const body = await createRes.json();
   expect(body.error.message).toContain("vars must be an object");
+});
+
+test("model e2e: create Installation rejects conflicting dotted vars", async () => {
+  const { app, operations } = await service();
+  const spaceId = await createSpace(app, "bad-dotted-vars");
+  const sourceId = await createSource(app, spaceId);
+  const installConfigId = await seedInstallConfig(operations, spaceId);
+
+  const createRes = await app.request(
+    `/internal/v1/workspaces/${spaceId}/capsules`,
+    {
+      method: "POST",
+      headers: headers({ "content-type": "application/json" }),
+      body: JSON.stringify({
+        name: "takos",
+        environment: "production",
+        sourceId,
+        installConfigId,
+        vars: {
+          cloudflare: "not-an-object",
+          "cloudflare.workers_subdomain": "shoutatomiyama0614",
+        },
+      }),
+    },
+  );
+  expect(createRes.status).toBe(400);
+  const body = await createRes.json();
+  expect(body.error.message).toContain("conflicts with another variable path");
 });
 
 test("model e2e: GET /internal/v1/capsules/{id} returns the new shape", async () => {

@@ -1464,11 +1464,14 @@ export class RunEngine {
       input.snapshot,
       input.installConfig.modulePath,
     );
+    const explicitVariables = normalizeVariables(
+      input.installConfig.variableMapping,
+    );
     const variables = normalizeVariables(
       mergeJsonVariableDefaults(
         installTypePlan.providerInputDefaults,
         requestedGenericCapsuleVariables(
-          input.installConfig.variableMapping,
+          explicitVariables,
           installTypePlan.providerInputDefaults,
           moduleFiles,
         ),
