@@ -287,6 +287,70 @@ test("OpenTofu run owner recovers stuck running records quickly", async () => {
   assert.equal(storage.alarmAt, started + 90_000);
 });
 
+test("OpenTofu run owner accepts controller retry over a terminal owner record", async () => {
+  const storage = new FakeDoStorage();
+  const old = Date.parse("2026-06-22T08:00:00.000Z");
+  const now = old + 120_000;
+  await storage.put("run", {
+    kind: "takosumi.opentofu-run-owner@v1",
+    action: "source_sync",
+    requestedAction: "source_sync",
+    runId: "run_1",
+    spaceId: "space_1",
+    status: "succeeded",
+    attempts: 1,
+    maxAttempts: 3,
+    createdAt: new Date(old).toISOString(),
+    updatedAt: new Date(old).toISOString(),
+    startedAt: new Date(old).toISOString(),
+    finishedAt: new Date(old + 1_000).toISOString(),
+  });
+  const calls: unknown[] = [];
+  const owner = new OpenTofuRunOwnerObject(
+    { storage },
+    {} as CloudflareWorkerEnv,
+    {
+      now: () => now,
+      dispatch: (dispatch) => {
+        calls.push(dispatch);
+        return Promise.resolve();
+      },
+      readRunStatus: () => Promise.resolve("succeeded"),
+    },
+  );
+
+  const response = await owner.fetch(
+    new Request("https://run-owner/start", {
+      method: "POST",
+      body: JSON.stringify({
+        kind: "takosumi.opentofu-run-owner.start@v1",
+        action: "source_sync",
+        runId: "run_1",
+        spaceId: "space_1",
+        cause: "controller_retry",
+        messageId: "retry_msg_1",
+      }),
+    }),
+  );
+
+  assert.equal(response.status, 202);
+  let record = await storage.get<Record<string, unknown>>("run");
+  assert.equal(record?.status, "scheduled");
+  assert.equal(record?.lastScheduleCause, "controller_retry");
+  assert.equal(record?.finishedAt, undefined);
+  assert.equal(storage.alarmAt, now);
+
+  await owner.alarm();
+
+  assert.deepEqual(calls, [
+    { action: "source_sync", runId: "run_1", spaceId: "space_1" },
+  ]);
+  record = await storage.get<Record<string, unknown>>("run");
+  assert.equal(record?.status, "succeeded");
+  assert.equal(record?.lastScheduleCause, undefined);
+  assert.equal(storage.alarmAt, undefined);
+});
+
 test("OpenTofu run owner does not echo invalid request details", async () => {
   const owner = new OpenTofuRunOwnerObject(
     { storage: new FakeDoStorage() },
