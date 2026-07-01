@@ -383,6 +383,10 @@ test("delete resolves native target from the non-default TargetPool that created
   expect(adapter.deleteInputs).toHaveLength(1);
   expect(adapter.deleteInputs[0]?.target.name).toBe("native-main");
   expect(adapter.deleteInputs[0]?.credentialRef).toBe("conn_native");
+  expect(adapter.deleteInputs[0]?.plan?.templateId).toBe(
+    "takosumi-service-shape",
+  );
+  expect(adapter.deleteInputs[0]?.plan?.inputs.resourceName).toBe("assets");
   expect(adapter.deleteInputs[0]?.nativeResources).toEqual([
     { type: "takosumi.object_bucket", id: "assets" },
   ]);

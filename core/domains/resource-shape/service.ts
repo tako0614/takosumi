@@ -367,6 +367,15 @@ export class ResourceShapeService {
       const deletePolicy = specResult.ok
         ? specResult.parsed.lifecyclePolicy?.delete
         : undefined;
+      if (!specResult.ok) {
+        return {
+          ok: false,
+          error: {
+            code: specResult.error.code as ResourceServiceErrorCode,
+            message: specResult.error.message,
+          },
+        };
+      }
       if (deletePolicy === "block") {
         return {
           ok: false,
@@ -378,6 +387,11 @@ export class ResourceShapeService {
       }
       await this.#adapter.delete({
         resourceId: id,
+        plan: planResourceShape(
+          lock.selectedImplementation,
+          specResult.parsed,
+          entry,
+        ),
         nativeResources: lock.nativeResources ?? [],
         target: entry,
         credentialRef: entry.credentialRef,

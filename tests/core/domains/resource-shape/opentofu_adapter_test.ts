@@ -84,10 +84,14 @@ test("provider mapping covers cloudflare/aws/gcp and falls through", () => {
   expect(providerLocalNameForTargetType("kubernetes")).toBe("kubernetes");
 
   expect(providerSourceForLocalName("cloudflare")).toBe(
-    "cloudflare/cloudflare",
+    "registry.opentofu.org/cloudflare/cloudflare",
   );
-  expect(providerSourceForLocalName("aws")).toBe("hashicorp/aws");
-  expect(providerSourceForLocalName("google")).toBe("hashicorp/google");
+  expect(providerSourceForLocalName("aws")).toBe(
+    "registry.opentofu.org/hashicorp/aws",
+  );
+  expect(providerSourceForLocalName("google")).toBe(
+    "registry.opentofu.org/hashicorp/google",
+  );
 });
 
 test("augmentInputsForTarget fills cloudflare accountId from target.ref when absent", () => {
@@ -126,7 +130,9 @@ test("apply maps cloudflare target to provider+inputs and threads moduleFiles/te
   const req = port.applyRequests[0]!;
 
   expect(req.providerBinding.provider).toBe("cloudflare");
-  expect(req.providerBinding.providerSource).toBe("cloudflare/cloudflare");
+  expect(req.providerBinding.providerSource).toBe(
+    "registry.opentofu.org/cloudflare/cloudflare",
+  );
   expect(req.providerBinding.connectionId).toBe("conn_cf_1");
   expect(req.inputs.appName).toBe("api");
   expect(req.inputs.accountId).toBe("cf-account-123");
@@ -218,13 +224,20 @@ function deleteInput(
 test("delete with the delete policy drives destroy on the port", async () => {
   const port = new FakeOpentofuRunPort();
   const adapter = new OpentofuResourceShapeAdapter(port);
+  const plan = edgeWorkerPlan();
 
-  await adapter.delete(deleteInput());
+  await adapter.delete(deleteInput({ plan }));
 
   expect(port.destroyRequests.length).toBe(1);
   const req = port.destroyRequests[0]!;
   expect(req.providerBinding.provider).toBe("cloudflare");
   expect(req.providerBinding.connectionId).toBe("conn_cf_1");
+  expect(req.templateId).toBe(plan.templateId);
+  expect(req.moduleFiles?.map((file) => file.path)).toEqual(
+    plan.moduleFiles.map((file) => file.path),
+  );
+  expect(req.inputs?.accountId).toBe("cf-account-123");
+  expect(req.publicOutputs).toEqual(plan.publicOutputs);
   expect(req.nativeResources).toEqual([
     { type: "cloudflare_workers_script", id: "api" },
   ]);
@@ -267,7 +280,12 @@ interface RecordedPlanCall {
 class FakeDeployControlDriver implements DeployControlRunDriver {
   readonly planCalls: RecordedPlanCall[] = [];
   readonly applyCalls: CreateApplyRunRequest[] = [];
+  readonly approveCalls: {
+    readonly id: string;
+    readonly input?: { readonly approvedBy?: string; readonly reason?: string };
+  }[] = [];
   readonly #plans = new Map<string, PublicPlanRun>();
+  readonly #applies = new Map<string, ApplyRunResponse["applyRun"]>();
   #seq = 0;
 
   createPlanRun(
@@ -301,9 +319,11 @@ class FakeDeployControlDriver implements DeployControlRunDriver {
 
   runQueuedPlan(runId: string): Promise<unknown> {
     const planRun = this.#plans.get(runId)!;
+    const completedStatus =
+      planRun.operation === "destroy" ? "waiting_approval" : "succeeded";
     const completed = {
       ...planRun,
-      status: "succeeded",
+      status: completedStatus,
       planDigest: "sha256:plan",
       planArtifact: {
         kind: "object-storage",
@@ -331,6 +351,24 @@ class FakeDeployControlDriver implements DeployControlRunDriver {
     return Promise.resolve({ planRun: this.#plans.get(id)! });
   }
 
+  approveRun(
+    id: string,
+    input?: { readonly approvedBy?: string; readonly reason?: string },
+  ): Promise<unknown> {
+    this.approveCalls.push({ id, ...(input ? { input } : {}) });
+    const planRun = this.#plans.get(id)!;
+    this.#plans.set(id, {
+      ...planRun,
+      status: "succeeded",
+      approval: {
+        ...(input?.approvedBy ? { approvedBy: input.approvedBy } : {}),
+        ...(input?.reason ? { reason: input.reason } : {}),
+        approvedAt: 1,
+      },
+    } as unknown as PublicPlanRun);
+    return Promise.resolve({});
+  }
+
   createApplyRun(
     request: CreateApplyRunRequest,
     _context?: DeployControlActorContext,
@@ -350,6 +388,7 @@ class FakeDeployControlDriver implements DeployControlRunDriver {
       createdAt: 0,
       updatedAt: 0,
     } as unknown as ApplyRunResponse["applyRun"];
+    this.#applies.set(applyRun.id, applyRun);
     return Promise.resolve({ applyRun });
   }
 
@@ -375,7 +414,12 @@ class FakeDeployControlDriver implements DeployControlRunDriver {
       createdAt: 0,
       updatedAt: 0,
     } as unknown as ApplyRunResponse["applyRun"];
+    this.#applies.set(runId, applyRun);
     return Promise.resolve({ applyRun });
+  }
+
+  getApplyRun(id: string): Promise<ApplyRunResponse> {
+    return Promise.resolve({ applyRun: this.#applies.get(id)! });
   }
 }
 
@@ -400,7 +444,9 @@ test("ControllerOpentofuRunPort.plan builds a real generated-root dispatch and m
   const { request, internal } = driver.planCalls[0]!;
   expect(request.workspaceId).toBe("ws_1");
   expect(request.capsuleId).toBe("cap_1");
-  expect(request.requiredProviders).toEqual(["cloudflare/cloudflare"]);
+  expect(request.requiredProviders).toEqual([
+    "registry.opentofu.org/cloudflare/cloudflare",
+  ]);
   expect(request.variables?.accountId).toBe("cf-account-123");
   expect(request.variables?.appName).toBe("api");
 
@@ -449,4 +495,44 @@ test("ControllerOpentofuRunPort.apply drives plan->apply and maps outputs+native
     },
   ]);
   expect(result.runId).toBeDefined();
+});
+
+test("ControllerOpentofuRunPort.destroy replays generated root before apply", async () => {
+  const driver = new FakeDeployControlDriver();
+  const port = new ControllerOpentofuRunPort({
+    driver,
+    resolveCapsuleBinding: () => capsuleBinding,
+  });
+  const adapter = new OpentofuResourceShapeAdapter(port);
+  const plan = edgeWorkerPlan();
+
+  await adapter.delete(deleteInput({ plan }));
+
+  expect(driver.planCalls.length).toBe(1);
+  const { request, internal } = driver.planCalls[0]!;
+  expect(request.operation).toBe("destroy");
+  expect(request.variables?.accountId).toBe("cf-account-123");
+  expect(request.requiredProviders).toEqual([
+    "registry.opentofu.org/cloudflare/cloudflare",
+  ]);
+  expect(internal?.genericRootDispatch?.generatedRoot.files["main.tf"]).toContain(
+    'module "app"',
+  );
+  expect(
+    internal?.genericRootDispatch?.generatedRoot.moduleFiles?.map(
+      (file) => file.path,
+    ),
+  ).toEqual(plan.moduleFiles.map((file) => file.path));
+  expect(driver.applyCalls.length).toBe(1);
+  expect(driver.applyCalls[0]?.expected.planRunId).toBe("plan_1");
+  expect(driver.applyCalls[0]?.confirmDestructive).toBe(true);
+  expect(driver.approveCalls).toEqual([
+    {
+      id: "plan_1",
+      input: {
+        approvedBy: actor.actorAccountId,
+        reason: "resource-shape-delete",
+      },
+    },
+  ]);
 });

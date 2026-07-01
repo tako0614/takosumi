@@ -51,6 +51,29 @@ test("pre-init policy still fails closed when no root-only provider credential w
   ).toThrow("required credential env for provider");
 });
 
+test("pre-init policy allows generated-root runs to use nominal local source anchors", () => {
+  expect(() =>
+    assertRunnerPolicyForRequest(
+      {
+        ...REQUEST,
+        planRun: {
+          ...REQUEST.planRun,
+          source: { kind: "local", path: "/resource-shape/generated-root" },
+        },
+        generatedRoot: {
+          files: {
+            "main.tf": 'terraform { required_version = ">= 1.6.0" }',
+          },
+        },
+        credentials: {
+          TF_VAR_cloudflare_main_api_token: "run-scoped-token",
+        },
+      },
+      DEFAULT_STYLE_CLOUDFLARE_PROFILE,
+    ),
+  ).not.toThrow();
+});
+
 test("pre-init policy accepts declared-env provider credentials under real env names", () => {
   const provider = "registry.opentofu.org/snowflake-labs/snowflake";
   expect(() =>

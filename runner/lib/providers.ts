@@ -158,6 +158,7 @@ export function assertRunnerPolicyBeforeInit(
   const source = parseSource(request);
   if (
     source.kind === "local" &&
+    !hasGeneratedRoot(request) &&
     recordField(
       recordField(runnerProfile, "sourcePolicy"),
       "allowLocalSource",
@@ -200,6 +201,11 @@ export function assertRunnerPolicyBeforeInit(
     }
   }
   assertCredentialEnvAvailable(requiredProviders, runnerProfile, context.env);
+}
+
+function hasGeneratedRoot(request: unknown): boolean {
+  const generatedRoot = recordField(request, "generatedRoot");
+  return isRecord(generatedRoot) && isRecord(recordField(generatedRoot, "files"));
 }
 
 export async function generatedRootTreeHasNoProviderUsage(

@@ -85,6 +85,7 @@ import {
   generateGenericCapsuleRoot,
   type RootInstallationProviderEnvBinding,
 } from "takosumi-rootgen";
+import { canonicalProviderAddress } from "@takosumi/providers";
 import type {
   AdapterApplyInput,
   AdapterApplyResult,
@@ -102,7 +103,7 @@ import type {
 export interface OpentofuProviderBinding {
   /** OpenTofu provider local name, e.g. `cloudflare`, `aws`, `google`. */
   readonly provider: string;
-  /** Fully-qualified registry source, e.g. `cloudflare/cloudflare`, `hashicorp/aws`. */
+  /** Canonical registry source, e.g. `registry.opentofu.org/cloudflare/cloudflare`. */
   readonly providerSource: string;
   readonly alias?: string;
   /**
@@ -135,6 +136,14 @@ export interface OpentofuRunRequest {
 /** Destroy a previously materialized Resource Shape implementation. */
 export interface OpentofuDestroyRequest {
   readonly resourceId: string;
+  /** Re-generated implementation plan. Present for OpenTofu-backed shapes. */
+  readonly templateId?: string;
+  readonly moduleFiles?: readonly {
+    readonly path: string;
+    readonly text: string;
+  }[];
+  readonly inputs?: Readonly<Record<string, JsonValue>>;
+  readonly publicOutputs?: readonly string[];
   readonly providerBinding: OpentofuProviderBinding;
   /** Native resources recorded for the Resource (audit / scope only). */
   readonly nativeResources: readonly NativeResourceRef[];
@@ -186,9 +195,11 @@ export function providerLocalNameForTargetType(type: TargetType): string {
   return PROVIDER_LOCAL_NAME_BY_TARGET_TYPE[type] ?? type;
 }
 
-/** Fully-qualified registry source for an OpenTofu provider local name. */
+/** Canonical registry source for an OpenTofu provider local name. */
 export function providerSourceForLocalName(localName: string): string {
-  return PROVIDER_SOURCE_BY_LOCAL_NAME[localName] ?? localName;
+  return canonicalProviderAddress(
+    PROVIDER_SOURCE_BY_LOCAL_NAME[localName] ?? localName,
+  );
 }
 
 function isNonEmptyString(value: unknown): value is string {
@@ -305,6 +316,14 @@ export class OpentofuResourceShapeAdapter implements ResourceAdapter {
     const provider = providerLocalNameForTargetType(input.target.type);
     await this.#port.destroy({
       resourceId: input.resourceId,
+      ...(input.plan
+        ? {
+            templateId: input.plan.templateId,
+            moduleFiles: input.plan.moduleFiles,
+            inputs: augmentInputsForTarget(input.plan.inputs, input.target),
+            publicOutputs: input.plan.publicOutputs,
+          }
+        : {}),
       providerBinding: {
         provider,
         providerSource: providerSourceForLocalName(provider),
@@ -421,6 +440,11 @@ export interface DeployControlRunDriver {
     request: CreateApplyRunRequest,
     context?: DeployControlActorContext,
   ): Promise<ApplyRunResponse>;
+  getApplyRun(id: string): Promise<ApplyRunResponse>;
+  approveRun(
+    id: string,
+    input?: { readonly approvedBy?: string; readonly reason?: string },
+  ): Promise<unknown>;
   runQueuedPlan(runId: string): Promise<unknown>;
   runQueuedApply(runId: string): Promise<ApplyRunResponse>;
 }
@@ -442,17 +466,23 @@ export interface ControllerOpentofuRunPortDeps {
    * the port returns after enqueue and the caller polls.
    */
   readonly driveRunsSynchronously?: boolean;
+  readonly pollIntervalMs?: number;
+  readonly waitTimeoutMs?: number;
 }
 
 export class ControllerOpentofuRunPort implements OpentofuRunPort {
   readonly #driver: DeployControlRunDriver;
   readonly #resolveCapsuleBinding: ControllerOpentofuRunPortDeps["resolveCapsuleBinding"];
   readonly #drive: boolean;
+  readonly #pollIntervalMs: number;
+  readonly #waitTimeoutMs: number;
 
   constructor(deps: ControllerOpentofuRunPortDeps) {
     this.#driver = deps.driver;
     this.#resolveCapsuleBinding = deps.resolveCapsuleBinding;
     this.#drive = deps.driveRunsSynchronously ?? true;
+    this.#pollIntervalMs = deps.pollIntervalMs ?? 1000;
+    this.#waitTimeoutMs = deps.waitTimeoutMs ?? 60_000;
   }
 
   async plan(request: OpentofuRunRequest): Promise<OpentofuRunResult> {
@@ -483,6 +513,7 @@ export class ControllerOpentofuRunPort implements OpentofuRunPort {
     if (this.#drive && applyRun.status === "queued") {
       applyRun = (await this.#driver.runQueuedApply(applyRun.id)).applyRun;
     }
+    applyRun = await this.#waitForApplyCompletion(applyRun);
     return {
       runId: applyRun.id,
       summary: `applied ${nativeResources.length} native resource(s) for ${request.resourceId}`,
@@ -493,38 +524,60 @@ export class ControllerOpentofuRunPort implements OpentofuRunPort {
 
   async destroy(request: OpentofuDestroyRequest): Promise<OpentofuRunResult> {
     const binding = await this.#resolveCapsuleBinding(request);
-    // Destroy reuses the backing Capsule's persisted state (its moduleFiles +
-    // tfstate); there is no caller-supplied generated root for a teardown. We
-    // drive a `destroy` plan over the Capsule, then apply it. The integration
-    // may alternatively call `controller.createInstallationDestroyPlan(capsuleId)`
-    // (which re-derives the generated root from the Capsule's InstallConfig) — we
-    // keep the explicit-request form so the destroy stays on this port's seam.
+    // Destroy must replay the same generated root used to create the resource.
+    // The backing Capsule is only an identity/state anchor, so its nominal local
+    // Source is not executable by itself.
+    const generatedRootDispatch =
+      request.templateId &&
+      request.moduleFiles &&
+      request.inputs &&
+      request.publicOutputs
+        ? this.#genericRootDispatch({
+            resourceId: request.resourceId,
+            templateId: request.templateId,
+            moduleFiles: request.moduleFiles,
+            inputs: request.inputs,
+            publicOutputs: request.publicOutputs,
+            providerBinding: request.providerBinding,
+            actor: request.actor,
+          })
+        : undefined;
     const planResponse = await this.#driver.createPlanRun(
       {
         workspaceId: binding.workspaceId,
         capsuleId: binding.capsuleId,
         source: binding.source,
         operation: "destroy",
+        ...(request.inputs ? { variables: request.inputs } : {}),
         requiredProviders: [request.providerBinding.providerSource],
         ...(binding.runnerProfileId
           ? { runnerProfileId: binding.runnerProfileId }
           : {}),
       },
       { actor: request.actor.actorAccountId },
+      generatedRootDispatch
+        ? { genericRootDispatch: generatedRootDispatch }
+        : undefined,
     );
     let planRun = planResponse.planRun;
     if (this.#drive && planRun.status === "queued") {
       await this.#driver.runQueuedPlan(planRun.id);
       planRun = (await this.#driver.getPlanRun(planRun.id)).planRun;
     }
+    planRun = await this.#approvePlanIfWaiting(planRun, request.actor);
     const applyResponse = await this.#driver.createApplyRun(
-      { planRunId: planRun.id, expected: applyGuardFromPlanRun(planRun) },
+      {
+        planRunId: planRun.id,
+        expected: applyGuardFromPlanRun(planRun),
+        confirmDestructive: true,
+      },
       { actor: request.actor.actorAccountId },
     );
     let applyRun = applyResponse.applyRun;
     if (this.#drive && applyRun.status === "queued") {
       applyRun = (await this.#driver.runQueuedApply(applyRun.id)).applyRun;
     }
+    applyRun = await this.#waitForApplyCompletion(applyRun);
     return {
       runId: applyRun.id,
       summary: `destroyed ${request.nativeResources.length} native resource(s) for ${request.resourceId}`,
@@ -555,9 +608,39 @@ export class ControllerOpentofuRunPort implements OpentofuRunPort {
     );
     if (this.#drive && response.planRun.status === "queued") {
       await this.#driver.runQueuedPlan(response.planRun.id);
-      return (await this.#driver.getPlanRun(response.planRun.id)).planRun;
+      return await this.#waitForPlanCompletion(
+        (await this.#driver.getPlanRun(response.planRun.id)).planRun,
+      );
     }
-    return response.planRun;
+    return await this.#waitForPlanCompletion(response.planRun);
+  }
+
+  async #approvePlanIfWaiting(
+    planRun: PublicPlanRun,
+    actor: ActorContext,
+  ): Promise<PublicPlanRun> {
+    let current = planRun;
+    const deadline = Date.now() + this.#waitTimeoutMs;
+    while (current.status === "queued" || current.status === "running") {
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `plan ${current.id} did not complete within ${this.#waitTimeoutMs}ms`,
+        );
+      }
+      await sleep(this.#pollIntervalMs);
+      current = (await this.#driver.getPlanRun(current.id)).planRun;
+    }
+    if (current.status === "waiting_approval") {
+      await this.#driver.approveRun(current.id, {
+        approvedBy: actor.actorAccountId,
+        reason: "resource-shape-delete",
+      });
+      current = (await this.#driver.getPlanRun(current.id)).planRun;
+    }
+    if (current.status !== "succeeded") {
+      throw new Error(`plan ${current.id} finished with status ${current.status}`);
+    }
+    return current;
   }
 
   /**
@@ -589,6 +672,46 @@ export class ControllerOpentofuRunPort implements OpentofuRunPort {
     };
     return { generatedRoot: dispatch, outputAllowlist };
   }
+
+  async #waitForPlanCompletion(planRun: PublicPlanRun): Promise<PublicPlanRun> {
+    let current = planRun;
+    const deadline = Date.now() + this.#waitTimeoutMs;
+    while (current.status === "queued" || current.status === "running") {
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `plan ${current.id} did not complete within ${this.#waitTimeoutMs}ms`,
+        );
+      }
+      await sleep(this.#pollIntervalMs);
+      current = (await this.#driver.getPlanRun(current.id)).planRun;
+    }
+    if (current.status !== "succeeded") {
+      throw new Error(`plan ${current.id} finished with status ${current.status}`);
+    }
+    return current;
+  }
+
+  async #waitForApplyCompletion(
+    applyRun: ApplyRunResponse["applyRun"],
+  ): Promise<ApplyRunResponse["applyRun"]> {
+    let current = applyRun;
+    const deadline = Date.now() + this.#waitTimeoutMs;
+    while (current.status === "queued" || current.status === "running") {
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `apply ${current.id} did not complete within ${this.#waitTimeoutMs}ms`,
+        );
+      }
+      await sleep(this.#pollIntervalMs);
+      current = (await this.#driver.getApplyRun(current.id)).applyRun;
+    }
+    if (current.status !== "succeeded") {
+      throw new Error(
+        `apply ${current.id} finished with status ${current.status}`,
+      );
+    }
+    return current;
+  }
 }
 
 /** One `generated_root_variable` provider binding per bound ProviderConnection. */
@@ -619,6 +742,10 @@ export function outputAllowlistFromPublicOutputs(
 function summarizePlan(planRun: PublicPlanRun): string {
   const refs = nativeResourcesFromPlanChanges(planRun.planResourceChanges);
   return `plan ${planRun.id}: create ${refs.length} native resource(s)`;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /**

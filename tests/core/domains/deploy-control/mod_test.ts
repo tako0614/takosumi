@@ -13,6 +13,7 @@ import type {
 } from "@takosumi/internal/deploy-control-api";
 import { InMemoryOpenTofuDeploymentStore } from "../../../../core/domains/deploy-control/store.ts";
 import { projectServicesFromOutputs } from "../../../../core/domains/output-projection/mod.ts";
+import { SourcesService } from "../../../../core/domains/sources/mod.ts";
 import type { JsonValue } from "../../../../contract/types.ts";
 import {
   fakeProviderVault,
@@ -768,6 +769,93 @@ test("local source requires runner profile opt-in", async () => {
   });
   const { planRun } = await localController.createPlanRun(allowing.request);
   expect(planRun.status).toEqual("queued");
+});
+
+test("internal generated-root dispatch may use a nominal local source", async () => {
+  const seeded = await seedUpdatableInstallation({
+    source: { kind: "local", path: "/resource-shape/generated-root-anchor" },
+  });
+  const controller = new OpenTofuDeploymentController({
+    vault: fakeProviderVault() as never,
+    store: seeded.store,
+    now: sequenceNow(60),
+    newId: deterministicIds(),
+  });
+
+  const { planRun } = await controller.createPlanRun(
+    seeded.request,
+    {},
+    {
+      genericRootDispatch: {
+        generatedRoot: {
+          files: {
+            "main.tf": [
+              "terraform {",
+              "  required_version = \">= 1.6.0\"",
+              "}",
+            ].join("\n"),
+          },
+        },
+        outputAllowlist: [],
+      },
+    },
+  );
+
+  expect(planRun.status).toEqual("queued");
+  expect(planRun.source).toEqual({
+    kind: "local",
+    path: "/resource-shape/generated-root-anchor",
+  });
+  expect(planRun.sourceSnapshotId).toMatch(/^snap_/);
+  const snapshot = await seeded.store.getSourceSnapshot(
+    planRun.sourceSnapshotId!,
+  );
+  expect(snapshot?.url).toEqual(`takosumi://generated-root/${planRun.id}`);
+  expect(snapshot?.archiveObjectKey).toContain("/generated-roots/");
+});
+
+test("internal generated-root dispatch skips source compatibility preflight", async () => {
+  const seeded = await seedUpdatableInstallation({
+    source: { kind: "local", path: "/resource-shape/generated-root-anchor" },
+  });
+  let readSourceFiles = 0;
+  const controller = new OpenTofuDeploymentController({
+    vault: fakeProviderVault() as never,
+    store: seeded.store,
+    now: sequenceNow(70),
+    newId: deterministicIds(),
+    runner: fakeRunner(),
+    sourcesService: new SourcesService({
+      store: seeded.store,
+      readCapsuleSourceFiles: () => {
+        readSourceFiles += 1;
+        throw new Error("generated-root snapshots must not be source-checked");
+      },
+    }),
+  });
+
+  const { planRun } = await controller.createPlanRun(
+    seeded.request,
+    {},
+    {
+      genericRootDispatch: {
+        generatedRoot: {
+          files: {
+            "main.tf": [
+              "terraform {",
+              "  required_version = \">= 1.6.0\"",
+              "}",
+            ].join("\n"),
+          },
+        },
+        outputAllowlist: [],
+      },
+    },
+  );
+
+  expect(planRun.status).toEqual("succeeded");
+  expect(planRun.compatibilityReportId).toBeUndefined();
+  expect(readSourceFiles).toBe(0);
 });
 
 test("runner diagnostics are redacted before PlanRun and ApplyRun persistence", async () => {
