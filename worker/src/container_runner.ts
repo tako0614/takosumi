@@ -473,11 +473,21 @@ function runnerFailureDetail(
   const error = stringFromRecord(payload, "error");
   if (error) return redactRunnerDiagnosticText(error);
   const stderr = stringFromRecord(payload, "stderr");
-  if (stderr?.trim()) return redactRunnerDiagnosticText(stderr.trim());
   const stdout = stringFromRecord(payload, "stdout");
+  if (stderr?.trim() && stdout?.trim()) {
+    return redactRunnerDiagnosticText(
+      `${stderr.trim()}\n\n--- runner stdout ---\n${tailText(stdout.trim(), 12000)}`,
+    );
+  }
+  if (stderr?.trim()) return redactRunnerDiagnosticText(stderr.trim());
   if (stdout?.trim()) return redactRunnerDiagnosticText(stdout.trim());
   const trimmed = redactedText.trim();
   return trimmed.length > 0 ? trimmed.slice(0, 500) : undefined;
+}
+
+function tailText(text: string, maxLength: number): string {
+  if (text.length <= maxLength) return text;
+  return `...${text.slice(text.length - maxLength)}`;
 }
 
 function diagnosticsFromContainerResult(
