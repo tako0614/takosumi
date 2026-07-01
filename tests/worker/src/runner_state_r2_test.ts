@@ -239,6 +239,162 @@ test("apply with stateScope encrypts the raw outputs envelope to R2_ARTIFACTS an
   );
 });
 
+test("apply with stateScope adopts same-run completed state without reapplying", async () => {
+  const artifacts = new FakeR2Bucket();
+  const state = new FakeR2Bucket();
+  const crypto = StateArtifactCrypto.fromEnv({
+    TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE,
+  });
+  const targetScope = { ...SCOPE, generation: 1 };
+  const targetStateKey = `${STATE_PREFIX}/00000001.tfstate.enc`;
+  const completedState = new TextEncoder().encode('{"version":4,"serial":1}');
+  const sealedState = await crypto.seal(completedState);
+  await state.put(targetStateKey, sealedState.ciphertext, {
+    customMetadata: {
+      "takosumi-run-id": "plan_1",
+      "takosumi-content-digest": sealedState.contentDigest,
+      "takosumi-ciphertext-length": String(sealedState.ciphertextLength),
+    },
+  });
+  await state.put(
+    CURRENT_KEY,
+    JSON.stringify({
+      generation: 1,
+      objectKey: targetStateKey,
+      digest: sealedState.contentDigest,
+      runId: "plan_1",
+      ciphertextLength: sealedState.ciphertextLength,
+    }),
+    {
+      customMetadata: { "takosumi-run-id": "plan_1" },
+    },
+  );
+  const outputsEnvelope = {
+    launch_url: { sensitive: false, value: "https://x.example" },
+  };
+  const rawOutputsKey =
+    "spaces/spc_1/installations/inst_1/runs/plan_1/outputs.raw.json.enc";
+  const sealedOutputs = await crypto.seal(
+    new TextEncoder().encode(JSON.stringify(outputsEnvelope)),
+  );
+  await artifacts.put(rawOutputsKey, sealedOutputs.ciphertext, {
+    customMetadata: {
+      "takosumi-run-id": "plan_1",
+      "takosumi-content-digest": sealedOutputs.contentDigest,
+      "takosumi-ciphertext-length": String(sealedOutputs.ciphertextLength),
+    },
+  });
+
+  let containerCalled = false;
+  const runner = runnerWithContainer(artifacts, state, {
+    containerFetch() {
+      containerCalled = true;
+      return Promise.resolve(
+        Response.json({ error: "should not reapply" }, { status: 500 }),
+      );
+    },
+  });
+
+  const response = await runner.fetch(
+    new Request("https://runner/runs/plan_1", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "takosumi.opentofu-run@v1",
+        action: "apply",
+        runId: "plan_1",
+        request: {
+          stateScope: targetScope,
+          planArtifact: {
+            kind: "object-storage",
+            ref: "r2://takos-artifacts/opentofu-plan-runs/plan_1/tfplan",
+            digest: PLAN_DIGEST,
+          },
+        },
+      }),
+    }),
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(containerCalled, false);
+  const payload = (await response.json()) as Record<string, unknown>;
+  assert.deepEqual(payload.outputs, outputsEnvelope);
+  assert.equal(payload.rawOutputsKey, rawOutputsKey);
+  const stateField = payload.state as Record<string, unknown>;
+  assert.equal(stateField.generation, 1);
+  assert.equal(stateField.objectKey, targetStateKey);
+  assert.equal(stateField.digest, sealedState.contentDigest);
+});
+
+test("apply with stateScope does not adopt another run's target generation", async () => {
+  const calls: string[] = [];
+  const artifacts = new FakeR2Bucket();
+  const state = new FakeR2Bucket();
+  const crypto = StateArtifactCrypto.fromEnv({
+    TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE,
+  });
+  const targetStateKey = `${STATE_PREFIX}/00000001.tfstate.enc`;
+  const completedState = new TextEncoder().encode('{"version":4,"serial":1}');
+  const sealedState = await crypto.seal(completedState);
+  await state.put(targetStateKey, sealedState.ciphertext, {
+    customMetadata: {
+      "takosumi-run-id": "other_apply",
+      "takosumi-content-digest": sealedState.contentDigest,
+    },
+  });
+  await state.put(
+    CURRENT_KEY,
+    JSON.stringify({
+      generation: 1,
+      objectKey: targetStateKey,
+      digest: sealedState.contentDigest,
+      runId: "other_apply",
+    }),
+  );
+  const sealedPlan = await crypto.seal(PLAN_BYTES);
+  await artifacts.put(
+    "opentofu-plan-runs/plan_1/tfplan.enc",
+    sealedPlan.ciphertext,
+  );
+
+  const runner = runnerWithContainer(artifacts, state, {
+    async containerFetch(request) {
+      const path = new URL(request.url).pathname;
+      calls.push(`${request.method} ${path}`);
+      if (
+        request.method === "PUT" &&
+        path === "/runs/plan_1/artifacts/tfplan"
+      ) {
+        return Response.json({ ok: true });
+      }
+      return Response.json({ error: "should not run" }, { status: 500 });
+    },
+  });
+
+  const response = await runner.fetch(
+    new Request("https://runner/runs/plan_1", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "takosumi.opentofu-run@v1",
+        action: "apply",
+        runId: "plan_1",
+        request: {
+          stateScope: { ...SCOPE, generation: 1 },
+          planArtifact: {
+            kind: "object-storage",
+            ref: "r2://takos-artifacts/opentofu-plan-runs/plan_1/tfplan",
+            digest: PLAN_DIGEST,
+          },
+        },
+      }),
+    }),
+  );
+
+  assert.equal(response.status, 500);
+  assert.deepEqual(calls, ["PUT /runs/plan_1/artifacts/tfplan"]);
+});
+
 test("apply with stateScope restores the encrypted current state before apply", async () => {
   const calls: string[] = [];
   const artifacts = new FakeR2Bucket();

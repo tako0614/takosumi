@@ -409,6 +409,13 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     const stateKeys = stateScope
       ? []
       : await stateArtifactKeys(envelope.request);
+    if (envelope.action === "apply" && stateScope) {
+      const adopted = await this.#adoptCompletedApplyFromR2State(
+        runId,
+        stateScope,
+      );
+      if (adopted) return adopted;
+    }
     // M2: restore the snapshotted source tree into the container before any
     // build/plan phase (mirrors the plan-artifact restore protocol).
     if (sourceArchive) {
@@ -785,6 +792,8 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       generation: scope.generation,
       objectKey,
       digest: sealed.contentDigest,
+      runId,
+      ciphertextLength: sealed.ciphertextLength,
     };
     await bucket.put(currentStateKey(scope), JSON.stringify(current), {
       httpMetadata: { contentType: "application/json" },
@@ -838,6 +847,73 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     return key;
   }
 
+  async #adoptCompletedApplyFromR2State(
+    runId: string,
+    scope: StateScope,
+  ): Promise<Response | undefined> {
+    const bucket = this.#r2State();
+    const current = await readCurrentStatePointer(bucket, scope);
+    if (!current || current.generation !== scope.generation) return undefined;
+    const object = await bucket.get(current.objectKey);
+    if (!object) return undefined;
+    const persistedRunId =
+      object.customMetadata?.["takosumi-run-id"] ?? current.runId;
+    if (persistedRunId !== runId) return undefined;
+    const metadataDigest =
+      object.customMetadata?.["takosumi-content-digest"] ??
+      object.customMetadata?.["takosumi-digest"];
+    if (metadataDigest && metadataDigest !== current.digest) {
+      throw new Error(
+        `completed apply state digest mismatch for ${current.objectKey}`,
+      );
+    }
+    await this.#stateCrypto().open(
+      new Uint8Array(await object.arrayBuffer()),
+      current.digest,
+    );
+    const rawOutputs = await this.#readPersistedRawOutputs(runId, scope);
+    const ciphertextLength =
+      current.ciphertextLength ??
+      Number(object.customMetadata?.["takosumi-ciphertext-length"]);
+    return jsonResponse(
+      {
+        status: "succeeded",
+        exitCode: 0,
+        state: {
+          generation: current.generation,
+          objectKey: current.objectKey,
+          digest: current.digest,
+          ...(Number.isFinite(ciphertextLength) ? { ciphertextLength } : {}),
+        },
+        ...(rawOutputs
+          ? { outputs: rawOutputs.outputs, rawOutputsKey: rawOutputs.key }
+          : {}),
+      },
+      200,
+    );
+  }
+
+  async #readPersistedRawOutputs(
+    runId: string,
+    scope: StateScope,
+  ): Promise<
+    | { readonly key: string; readonly outputs: Record<string, unknown> }
+    | undefined
+  > {
+    const key = rawOutputsKey(scope, runId);
+    const object = await this.env.R2_ARTIFACTS.get(key);
+    if (!object) return undefined;
+    const plaintext = await this.#stateCrypto().open(
+      new Uint8Array(await object.arrayBuffer()),
+      object.customMetadata?.["takosumi-content-digest"],
+    );
+    const parsed = JSON.parse(new TextDecoder().decode(plaintext)) as unknown;
+    if (!isRecord(parsed)) {
+      throw new Error("raw output artifact must be a JSON object");
+    }
+    return { key, outputs: parsed };
+  }
+
   async #restoreStateGeneration(
     runId: string,
     scope: StateScope,
@@ -871,6 +947,8 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       generation: scope.generation,
       objectKey,
       digest: sealed.contentDigest,
+      runId,
+      ciphertextLength: sealed.ciphertextLength,
     };
     await bucket.put(currentStateKey(scope), JSON.stringify(current), {
       httpMetadata: { contentType: "application/json" },
@@ -1214,6 +1292,8 @@ interface CurrentStatePointer {
   readonly generation: number;
   readonly objectKey: string;
   readonly digest: string;
+  readonly runId?: string;
+  readonly ciphertextLength?: number;
 }
 
 async function readCurrentState(
@@ -1221,8 +1301,25 @@ async function readCurrentState(
   scope: StateScope,
   maxGeneration: number,
 ): Promise<CurrentStatePointer | undefined> {
+  const current = await readCurrentStatePointer(bucket, scope);
+  if (!current) return await recoverCurrentState(bucket, scope, maxGeneration);
+  if (
+    !Number.isInteger(current.generation) ||
+    current.generation > maxGeneration
+  ) {
+    throw new Error(
+      `current.json generation is outside restore window: ${current.generation}`,
+    );
+  }
+  return current;
+}
+
+async function readCurrentStatePointer(
+  bucket: NonNullable<CloudflareWorkerEnv["R2_STATE"]>,
+  scope: StateScope,
+): Promise<CurrentStatePointer | undefined> {
   const object = await bucket.get(currentStateKey(scope));
-  if (!object) return await recoverCurrentState(bucket, scope, maxGeneration);
+  if (!object) return undefined;
   const text = new TextDecoder().decode(
     new Uint8Array(await object.arrayBuffer()),
   );
@@ -1233,6 +1330,7 @@ async function readCurrentState(
   const objectKey = stringField(parsed, "objectKey");
   const digest = stringField(parsed, "digest");
   const generation = parsed.generation;
+  const ciphertextLength = parsed.ciphertextLength;
   if (!objectKey || !digest || typeof generation !== "number") {
     throw new Error("current.json is missing generation/objectKey/digest");
   }
@@ -1243,12 +1341,25 @@ async function readCurrentState(
       `current.json objectKey escapes state prefix: ${objectKey}`,
     );
   }
-  if (!Number.isInteger(generation) || generation > maxGeneration) {
+  if (!Number.isInteger(generation) || generation < 0) {
     throw new Error(
       `current.json generation is outside restore window: ${generation}`,
     );
   }
-  return { generation, objectKey, digest };
+  return {
+    generation,
+    objectKey,
+    digest,
+    ...(stringField(parsed, "runId")
+      ? { runId: stringField(parsed, "runId") }
+      : object.customMetadata?.["takosumi-run-id"]
+        ? { runId: object.customMetadata["takosumi-run-id"] }
+        : {}),
+    ...(typeof ciphertextLength === "number" &&
+    Number.isFinite(ciphertextLength)
+      ? { ciphertextLength }
+      : {}),
+  };
 }
 
 async function readCurrentStateObject(
@@ -1290,7 +1401,20 @@ async function recoverCurrentState(
       object.customMetadata?.["takosumi-digest"];
     if (!digest) continue;
     if (!best || generation > best.generation) {
-      best = { generation, objectKey: object.key, digest };
+      const ciphertextLength = Number(
+        object.customMetadata?.["takosumi-ciphertext-length"],
+      );
+      best = {
+        generation,
+        objectKey: object.key,
+        digest,
+        ...(object.customMetadata?.["takosumi-run-id"]
+          ? { runId: object.customMetadata["takosumi-run-id"] }
+          : {}),
+        ...(Number.isFinite(ciphertextLength)
+          ? { ciphertextLength }
+          : {}),
+      };
     }
   }
   if (!best) return undefined;
