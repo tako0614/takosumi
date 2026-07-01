@@ -354,6 +354,96 @@ test("a retryable runner infrastructure reset requeues apply without failing ter
   ).toEqual(1);
 });
 
+test("a retryable runner infrastructure reset requeues destroy apply without failing terminally", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  let destroyCalls = 0;
+  const controller = new OpenTofuDeploymentController({
+    store,
+    now: monotonicNow(5750),
+    newId: deterministicIds(),
+    runner: {
+      plan: () =>
+        Promise.resolve({
+          planDigest: PLAN_DIGEST,
+          planArtifact: planArtifact(),
+          providerLockDigest: LOCK_DIGEST,
+          requiredProviders: [CLOUDFLARE],
+          providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+        }),
+      apply: () =>
+        Promise.resolve({
+          outputs: {
+            launch_url: {
+              sensitive: false,
+              value: "https://app.example.test",
+            },
+          },
+        }),
+      destroy: () => {
+        destroyCalls++;
+        if (destroyCalls === 1) {
+          return Promise.reject(
+            new Error("Durable Object reset because its code was updated."),
+          );
+        }
+        return Promise.resolve({});
+      },
+    },
+    vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
+    enqueueRun: noopEnqueue,
+  });
+  const request = await seedUpdatable(store, {
+    installationId: "inst_destroy",
+  });
+  const { planRun: queuedPlan } = await controller.createPlanRun({
+    ...request,
+    operation: "destroy",
+  });
+  await controller.dispatchQueuedRun({
+    action: "plan",
+    runId: queuedPlan.id,
+    spaceId: queuedPlan.spaceId,
+  });
+  const planRun = (await store.getPlanRun(queuedPlan.id))!;
+  expect(planRun.status).toEqual("waiting_approval");
+  await controller.approveRun(planRun.id, { approvedBy: "ops" });
+
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+  expect(applyRun.status).toEqual("queued");
+
+  await controller.dispatchQueuedRun({
+    action: "apply",
+    runId: applyRun.id,
+    spaceId: applyRun.spaceId,
+  });
+
+  const requeued = (await store.getApplyRun(applyRun.id))!;
+  expect(requeued.status).toEqual("queued");
+  expect(requeued.operation).toEqual("destroy");
+  expect(requeued.diagnostics).toBeUndefined();
+  expect(
+    requeued.auditEvents.some(
+      (event) => event.type === "destroy.retry_scheduled",
+    ),
+  ).toEqual(true);
+  expect(destroyCalls).toEqual(1);
+
+  await controller.dispatchQueuedRun({
+    action: "apply",
+    runId: applyRun.id,
+    spaceId: applyRun.spaceId,
+  });
+  const completed = (await store.getApplyRun(applyRun.id))!;
+  expect(completed.status).toEqual("succeeded");
+  expect(destroyCalls).toEqual(2);
+  expect(
+    (await store.getInstallation(request.installationId!))?.status,
+  ).toEqual("destroyed");
+});
+
 test("DLQ backstop marks a non-terminal run failed (retries-exhausted)", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   const controller = new OpenTofuDeploymentController({

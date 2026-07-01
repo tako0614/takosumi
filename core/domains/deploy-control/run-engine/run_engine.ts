@@ -3709,8 +3709,10 @@ export class RunEngine {
     profile: RunnerProfile,
     startedAt: number,
     error: unknown,
+    operationKind: "apply" | "destroy_apply" = "apply",
   ): Promise<ApplyRun | undefined> {
     const now = this.#now();
+    const phase = operationKind === "destroy_apply" ? "destroy_apply" : "apply";
     const queued: ApplyRun = {
       ...running,
       status: "queued",
@@ -3724,10 +3726,17 @@ export class RunEngine {
       diagnostics: undefined,
       auditEvents: [
         ...running.auditEvents,
-        auditEvent(running.id, "apply.retry_scheduled", now, {
-          reason: "runner_infrastructure_error",
-          errorCode: compactErrorCode(errorMessage(error)),
-        }),
+        auditEvent(
+          running.id,
+          operationKind === "destroy_apply"
+            ? "destroy.retry_scheduled"
+            : "apply.retry_scheduled",
+          now,
+          {
+            reason: "runner_infrastructure_error",
+            errorCode: compactErrorCode(errorMessage(error)),
+          },
+        ),
       ],
       updatedAt: now,
       finishedAt: undefined,
@@ -3743,7 +3752,7 @@ export class RunEngine {
     if (!result.won) return undefined;
     await this.#recordDeployOperationMetric({
       run: queued,
-      operationKind: "apply",
+      operationKind,
       status: "queued",
       startedAt,
       finishedAt: now,
@@ -3756,7 +3765,7 @@ export class RunEngine {
       targetId: queued.id,
       runId: queued.id,
       metadata: {
-        phase: "apply",
+        phase,
         operation: queued.operation,
         errorCode: compactErrorCode(errorMessage(error)),
         ...(queued.installationId
@@ -5604,10 +5613,38 @@ export class RunEngine {
         installation: publicInstallation(patched ?? installation),
       };
     } catch (error) {
-      await this.#billing.releaseApplyBillingReservation(planRun);
       if (error instanceof InstallationPatchGuardConflict) {
+        await this.#billing.releaseApplyBillingReservation(planRun);
         throw new OpenTofuControllerError("failed_precondition", error.message);
       }
+      if (runnerDispatched && isRetryableRunnerInfrastructureError(error)) {
+        const queued =
+          await this.#requeueApplyRunAfterRunnerInfrastructureError(
+            runEnvironmentFailedRun(running, error),
+            leaseToken,
+            profile,
+            startedAt,
+            error,
+            "destroy_apply",
+          );
+        if (queued) {
+          const retryError = new OpenTofuControllerError(
+            "failed_precondition",
+            `retryable_runner_infrastructure_error: destroy apply run ${queued.id} requeued after runner reset`,
+          );
+          if (queued.updatedAt !== undefined) {
+            await this.#recordRunnerMinuteUsage({
+              spaceId: queued.workspaceId,
+              runId: queued.id,
+              installationId: queued.installationId,
+              startedAt,
+              finishedAt: queued.updatedAt,
+            });
+          }
+          throw retryError;
+        }
+      }
+      await this.#billing.releaseApplyBillingReservation(planRun);
       const failed = await this.#failApplyRun(
         running,
         leaseToken,
