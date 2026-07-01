@@ -260,7 +260,8 @@ Cloud extension の usage report は `meterId`、`kind`、`quantity`、resource 
 単価・原価見積もり・最低粗利を検証して確定します。extension request body や header
 には `usdMicros` / `credits` を書かせません。price book に meter がない、または
 最低粗利を満たさない meter は fail closed し、WfP / AI の未課金成功を返しません。
-価格表と無料枠の運用正本は `docs/operations/cloud-pricing.md` です。
+公開価格と無料枠は Cloud docs と Dashboard の billing 表示に出します。operator
+price book の実値と変更手順は公開 reference ではなく運用メモ側で管理します。
 
 内部 header:
 
