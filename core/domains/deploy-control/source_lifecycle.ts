@@ -149,6 +149,17 @@ export class SourceLifecycleService {
         running,
         stored,
       );
+      if (
+        reuseSnapshot &&
+        canReusePinnedSourceSnapshotWithoutRunner(running, reuseSnapshot)
+      ) {
+        return await this.#succeedSourceSyncRun(
+          running,
+          leaseToken,
+          sourceSyncResultFromSnapshot(reuseSnapshot),
+          reuseSnapshot,
+        );
+      }
       const result = await this.#withSourceSyncRenewal(
         running,
         leaseToken,
@@ -185,9 +196,7 @@ export class SourceLifecycleService {
     }
   }
 
-  async #claimSourceSyncRun(
-    run: SourceSyncRun,
-  ): Promise<
+  async #claimSourceSyncRun(run: SourceSyncRun): Promise<
     | {
         readonly won: true;
         readonly running: SourceSyncRun;
@@ -292,7 +301,8 @@ export class SourceLifecycleService {
     result: OpenTofuSourceSyncResult,
     reuseSnapshot: SourceSnapshot | undefined,
   ): string {
-    const archiveObjectKey = result.archiveObjectKey ?? running.archiveObjectKey;
+    const archiveObjectKey =
+      result.archiveObjectKey ?? running.archiveObjectKey;
     if (archiveObjectKey === running.archiveObjectKey) return archiveObjectKey;
     if (
       reuseSnapshot &&
@@ -449,6 +459,37 @@ function sourceSnapshotMatchesRun(
     snapshot.ref === running.ref &&
     snapshot.path === running.path
   );
+}
+
+function canReusePinnedSourceSnapshotWithoutRunner(
+  running: SourceSyncRun,
+  snapshot: SourceSnapshot,
+): boolean {
+  return (
+    sourceSnapshotMatchesRun(snapshot, running) &&
+    isPinnedGitCommit(running.ref) &&
+    normalizeGitObjectId(running.ref) ===
+      normalizeGitObjectId(snapshot.resolvedCommit)
+  );
+}
+
+function sourceSyncResultFromSnapshot(
+  snapshot: SourceSnapshot,
+): OpenTofuSourceSyncResult {
+  return {
+    resolvedCommit: snapshot.resolvedCommit,
+    archiveDigest: snapshot.archiveDigest,
+    archiveSizeBytes: snapshot.archiveSizeBytes,
+    archiveObjectKey: snapshot.archiveObjectKey,
+  };
+}
+
+function isPinnedGitCommit(value: string): boolean {
+  return /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/i.test(value);
+}
+
+function normalizeGitObjectId(value: string): string {
+  return value.toLowerCase();
 }
 
 function compareIso(a: string, b: string): number {
