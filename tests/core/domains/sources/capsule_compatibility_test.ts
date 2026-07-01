@@ -518,7 +518,7 @@ output "attachments_bucket" {
   );
 });
 
-test("requires patch for filesystem-sensitive OpenTofu expressions", () => {
+test("warns without blocking module-local artifact filesystem expressions", () => {
   const result = analyzeOpenTofuCapsuleFiles({
     sourceId: "src_test",
     sourceSnapshot: snapshot,
@@ -536,6 +536,50 @@ terraform {
 
 resource "aws_s3_bucket" "attachments" {
   bucket = jsondecode(file("\${path.module}/bucket.json")).name
+  tags = {
+    bundle_hash = filesha256("\${path.module}/dist/worker.js")
+  }
+}
+
+output "attachments_bucket" {
+  value = aws_s3_bucket.attachments.bucket
+}
+`,
+      },
+    ],
+  });
+
+  expect(result.level).toBe("ready");
+  const filesystemFinding = result.findings.find(
+    (finding) => finding.code === "filesystem_sensitive_expression",
+  );
+  expect(filesystemFinding).toMatchObject({
+    severity: "warning",
+    path: "main.tf",
+  });
+  expect(filesystemFinding?.message).toContain("file()");
+  expect(filesystemFinding?.message).toContain("filesha256()");
+  expect(filesystemFinding?.message).toContain("path.module");
+});
+
+test("requires patch for host-path-sensitive OpenTofu expressions", () => {
+  const result = analyzeOpenTofuCapsuleFiles({
+    sourceId: "src_test",
+    sourceSnapshot: snapshot,
+    files: [
+      {
+        path: "main.tf",
+        text: `
+terraform {
+  required_providers {
+    aws = {
+      source = "hashicorp/aws"
+    }
+  }
+}
+
+resource "aws_s3_bucket" "attachments" {
+  bucket = jsondecode(file(abspath("../bucket.json"))).name
 }
 
 output "attachments_bucket" {
@@ -548,14 +592,13 @@ output "attachments_bucket" {
 
   expect(result.level).toBe("needs_patch");
   const filesystemFinding = result.findings.find(
-    (finding) => finding.code === "filesystem_sensitive_expression",
+    (finding) => finding.code === "filesystem_host_path_expression",
   );
   expect(filesystemFinding).toMatchObject({
     severity: "warning",
     path: "main.tf",
   });
-  expect(filesystemFinding?.message).toContain("file()");
-  expect(filesystemFinding?.message).toContain("path.module");
+  expect(filesystemFinding?.message).toContain("abspath()");
 });
 
 test("admits standard Cloudflare data-plane resource types by default", () => {
@@ -587,6 +630,12 @@ resource "cloudflare_workers_script_subdomain" "this" {
   account_id  = var.account_id
   script_name = cloudflare_workers_script.this.script_name
   enabled     = true
+}
+
+resource "cloudflare_workers_route" "this" {
+  zone_id = var.zone_id
+  pattern = var.route_pattern
+  script  = cloudflare_workers_script.this.script_name
 }
 
 resource "cloudflare_pages_project" "site" {
@@ -630,6 +679,7 @@ output "url" {
     "cloudflare_queue",
     "cloudflare_r2_bucket",
     "cloudflare_workers_kv_namespace",
+    "cloudflare_workers_route",
     "cloudflare_workers_script",
     "cloudflare_workers_script_subdomain",
   ]);
@@ -642,9 +692,10 @@ output "url" {
 
 test("still rejects domain-takeover Cloudflare resource types by default", () => {
   // The default allowlist deliberately excludes cross-domain / cross-tenant
-  // reaching types: a DNS record (record/domain takeover) and a Worker route
-  // (binds a Worker to an arbitrary hostname on a zone). These require an
-  // explicit Space/InstallConfig allowlist to ever run.
+  // reaching types like DNS records. Worker routes are part of the standard
+  // Worker-compatible app surface and remain controlled by provider
+  // credentials, scope policy, and route ownership checks outside this static
+  // resource-type gate.
   const result = analyzeOpenTofuCapsuleFiles({
     sourceId: "src_test",
     sourceSnapshot: snapshot,
@@ -667,12 +718,6 @@ resource "cloudflare_dns_record" "evil" {
   content = "attacker.example.net"
 }
 
-resource "cloudflare_workers_route" "hijack" {
-  zone_id = var.zone_id
-  pattern = "*.victim.example.com/*"
-  script  = var.name
-}
-
 output "url" {
   value = "https://example.workers.dev"
 }
@@ -685,7 +730,6 @@ output "url" {
   const denied = result.resources.filter((resource) => !resource.allowed);
   expect(denied.map((resource) => resource.type).sort()).toEqual([
     "cloudflare_dns_record",
-    "cloudflare_workers_route",
   ]);
   expect(
     result.findings.some(
@@ -783,6 +827,43 @@ output "database_name" {
       (finding) => finding.code === "generic_provider_connection_required",
     ),
   ).toBe(true);
+});
+
+test("admits http data sources for explicit release artifact retrieval", () => {
+  const result = analyzeOpenTofuCapsuleFiles({
+    sourceId: "src_test",
+    sourceSnapshot: snapshot,
+    files: [
+      {
+        path: "main.tf",
+        text: `
+terraform {
+  required_providers {
+    http = {
+      source = "hashicorp/http"
+    }
+  }
+}
+
+data "http" "worker_bundle" {
+  url = var.worker_bundle_url
+}
+
+output "worker_bundle_sha256" {
+  value = sha256(data.http.worker_bundle.response_body)
+}
+`,
+      },
+    ],
+  });
+
+  expect(result.level).toBe("ready");
+  expect(result.dataSources).toEqual([{ type: "http", allowed: true }]);
+  expect(
+    result.findings.some(
+      (finding) => finding.code === "data_source_not_allowed",
+    ),
+  ).toBe(false);
 });
 
 test("marks one-touch unsafe constructs as unsupported", () => {
