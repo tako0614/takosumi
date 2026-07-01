@@ -162,14 +162,13 @@ export class OpenTofuRunOwnerObject {
       throw new Error("unsupported run action");
     }
     const existing = await this.#readRecord();
-    if (existing?.status === "succeeded" || existing?.status === "failed") {
-      return existing;
-    }
     if (existing) {
       if (input.cause === "controller_retry") {
         const now = this.#now();
+        const { finishedAt, ...retryBase } = existing;
+        void finishedAt;
         const retryRecord: RunOwnerRecord = {
-          ...existing,
+          ...retryBase,
           status: "scheduled",
           updatedAt: new Date(now).toISOString(),
           nextAttemptAt: new Date(now).toISOString(),
@@ -183,6 +182,9 @@ export class OpenTofuRunOwnerObject {
         await this.#writeRecord(retryRecord);
         await this.#scheduleAlarm(now);
         return retryRecord;
+      }
+      if (existing.status === "succeeded" || existing.status === "failed") {
+        return existing;
       }
       const alarmAt =
         existing.status === "running"

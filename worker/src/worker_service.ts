@@ -492,6 +492,7 @@ function openTofuSourceSyncEnqueuer(
       action: "source_sync",
       runId: dispatch.runId,
       spaceId: dispatch.spaceId,
+      ...(dispatch.cause ? { cause: dispatch.cause } : {}),
       requestedAt: new Date().toISOString(),
     });
   };

@@ -69,6 +69,7 @@ export type EnqueueSourceSync = (dispatch: {
   readonly runId: string;
   readonly spaceId: string;
   readonly sourceId: string;
+  readonly cause?: "controller_retry";
 }) => Promise<void>;
 
 export type ReadCapsuleSourceFiles = (
@@ -298,12 +299,19 @@ export class SourcesService {
     if (options.dedupe) {
       const existing = await this.#activeSyncRun(sourceId);
       if (existing) {
-        if (shouldReenqueueActiveSyncRun(existing, this.#now().getTime())) {
+        const reenqueue = shouldReenqueueActiveSyncRun(
+          existing,
+          this.#now().getTime(),
+        );
+        if (reenqueue) {
           await this.#enqueue({
             action: "source_sync",
             runId: existing.id,
             spaceId: existing.spaceId,
             sourceId: existing.sourceId,
+            ...(existing.status === "running"
+              ? { cause: "controller_retry" as const }
+              : {}),
           });
         }
         return { run: existing };

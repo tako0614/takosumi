@@ -357,6 +357,7 @@ test("createSync dedupe re-enqueues a stale running run", async () => {
       runId: first.run.id,
       spaceId: "space_1",
       sourceId: source.id,
+      cause: "controller_retry",
     },
   ]);
 });
