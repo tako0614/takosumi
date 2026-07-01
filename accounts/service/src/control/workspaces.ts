@@ -158,7 +158,6 @@ import {
   isJsonValue,
   isOutputsMapping,
   isPlainJsonObject,
-  jsonRecordValue,
   modulePathValue,
   outputAllowlistValue,
   outputShareEntries,
@@ -170,6 +169,7 @@ import {
   stringRecord,
   stringRecordValue,
 } from "./parse.ts";
+import { normalizeVariablePathRecord } from "../../../../core/domains/deploy-control/validation.ts";
 import {
   DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
   defaultCapsuleOutputAllowlist,
@@ -978,7 +978,7 @@ async function createCapsule(
       400,
     );
   }
-  const vars = jsonRecordValue(body.vars);
+  const vars = normalizedVarsValue(body.vars);
   if (body.vars !== undefined && vars === undefined) {
     return errorJson(
       "invalid_request",
@@ -1060,6 +1060,18 @@ function scopedCloneOutputAllowlist(
   return baseConfig.sourceKind === "generic_capsule"
     ? defaultCapsuleOutputAllowlist()
     : baseConfig.outputAllowlist;
+}
+
+function normalizedVarsValue(
+  value: unknown,
+): Readonly<Record<string, JsonValue>> | undefined {
+  if (value === undefined) return undefined;
+  if (!isPlainJsonObject(value)) return undefined;
+  try {
+    return normalizeVariablePathRecord(value, "vars");
+  } catch {
+    return undefined;
+  }
 }
 
 async function createRestoreRun(
