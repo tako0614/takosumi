@@ -211,6 +211,21 @@ export interface InstallationProviderEnvBindingMintEntry {
   readonly connectionId: string;
 }
 
+export type InstallationProviderEnvBindingDelivery =
+  ProviderCredentialMintEvidence["delivery"];
+
+export interface InstallationProviderEnvBindingMintOptions {
+  readonly phase?: MintPhase;
+  /**
+   * `generated_root_variable` is the normal OpenTofu plan/apply path: provider
+   * credentials become TF_VAR_<provider>_<alias>_<arg> so only the generated
+   * root provider block sees them. `provider_env` is for runner-executed release
+   * commands such as wrangler, which need the provider's native process env
+   * names after the app explicitly declared a release command.
+   */
+  readonly delivery?: InstallationProviderEnvBindingDelivery;
+}
+
 export interface ConnectionVault {
   register(input: RegisterConnectionInput): Promise<Connection>;
   test(connectionId: string): Promise<TestConnectionResult>;
@@ -250,7 +265,7 @@ export interface ConnectionVault {
   mintForInstallationProviderEnvBindings(
     spaceId: string,
     entries: readonly InstallationProviderEnvBindingMintEntry[],
-    options?: { readonly phase?: MintPhase },
+    options?: InstallationProviderEnvBindingMintOptions,
   ): Promise<PhaseMintBundle>;
 }
 
@@ -770,7 +785,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
   async mintForInstallationProviderEnvBindings(
     spaceId: string,
     entries: readonly InstallationProviderEnvBindingMintEntry[],
-    options?: { readonly phase?: MintPhase },
+    options?: InstallationProviderEnvBindingMintOptions,
   ): Promise<PhaseMintBundle> {
     requireNonEmpty(spaceId, "spaceId");
     // Phase rule: per-alias provider credentials are tofu-phase only. A source /
@@ -790,6 +805,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     const env: Record<string, string> = {};
     const files: MintedFileInternal[] = [];
     const evidence: ProviderCredentialMintEvidence[] = [];
+    const delivery = options?.delivery ?? "generated_root_variable";
     for (const entry of entries) {
       requireNonEmpty(entry.provider, "provider");
       requireNonEmpty(entry.connectionId, "connectionId");
@@ -827,9 +843,15 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         entry.alias,
       );
       if (customBundle) {
-        Object.assign(env, customBundle.env);
+        mergeCredentialEnv(env, customBundle.env, entry);
         files.push(...customBundle.files);
         evidence.push(customBundle.evidence);
+        continue;
+      }
+      if (delivery === "provider_env") {
+        const minted = await this.#mintProviderValues(connection, delivery);
+        evidence.push(minted.evidence);
+        mergeCredentialEnv(env, minted.values, entry);
         continue;
       }
       const argMap = providerCredentialArgs(connection.provider);
@@ -848,9 +870,14 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       for (const { envName, arg } of argMap) {
         const value = minted.values[envName];
         if (typeof value !== "string") continue;
-        env[
-          `TF_VAR_${providerCredentialVarName(localProvider, entry.alias, arg)}`
-        ] = value;
+        mergeCredentialEnv(
+          env,
+          {
+            [`TF_VAR_${providerCredentialVarName(localProvider, entry.alias, arg)}`]:
+              value,
+          },
+          entry,
+        );
       }
     }
     return new PhaseMintBundle(
@@ -1214,6 +1241,25 @@ function providerCredentialVarName(
   arg: string,
 ): string {
   return alias ? `${localProvider}_${alias}_${arg}` : `${localProvider}_${arg}`;
+}
+
+function mergeCredentialEnv(
+  target: Record<string, string>,
+  source: Readonly<Record<string, string>>,
+  entry: InstallationProviderEnvBindingMintEntry,
+): void {
+  for (const [name, value] of Object.entries(source)) {
+    const existing = target[name];
+    if (existing !== undefined && existing !== value) {
+      throw new ConnectionVaultError(
+        "failed_precondition",
+        `provider credential env ${name} has conflicting values for provider ${entry.provider}` +
+          `${entry.alias ? ` alias ${entry.alias}` : ""}` +
+          ` connection ${entry.connectionId}`,
+      );
+    }
+    target[name] = value;
+  }
 }
 
 function selectConnectionForProvider(

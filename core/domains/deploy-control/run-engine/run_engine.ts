@@ -66,6 +66,10 @@ import { validateProjectedServiceExportsFromOutputSnapshot } from "../../output-
 import type { ActivityRecorder } from "../../activity/mod.ts";
 import type { RecordActivityInput } from "../../activity/mod.ts";
 import type { SourcesService } from "../../sources/mod.ts";
+import {
+  collectRootModuleOutputNames,
+  collectRootModuleVariableNames,
+} from "../../sources/capsule_compatibility.ts";
 import type { TemplateRegistry } from "../../templates/mod.ts";
 import type { ObservabilitySink } from "../../observability/mod.ts";
 import { DeploymentQuery, requireInstallation } from "../deployment_query.ts";
@@ -220,6 +224,37 @@ type RecordActivityArgs = Omit<
   readonly workspaceId?: string;
   readonly spaceId?: string;
 };
+
+function requestedGenericCapsuleVariables(
+  explicit: Readonly<Record<string, unknown>>,
+  providerInputDefaults: Readonly<Record<string, JsonValue>>,
+  moduleFiles: readonly OpenTofuCapsuleSourceFile[] | undefined,
+): Readonly<Record<string, unknown>> {
+  if (!moduleFiles || moduleFiles.length === 0) return explicit;
+  const declaredInputs = new Set(collectRootModuleVariableNames(moduleFiles));
+  if (declaredInputs.size === 0) return explicit;
+  const requested: Record<string, unknown> = { ...explicit };
+  for (const key of Object.keys(providerInputDefaults)) {
+    if (!declaredInputs.has(key)) continue;
+    if (Object.prototype.hasOwnProperty.call(requested, key)) continue;
+    requested[key] = null;
+  }
+  return requested;
+}
+
+function genericCapsuleOutputAllowlist(
+  configured: InstallConfig["outputAllowlist"],
+  moduleFiles: readonly OpenTofuCapsuleSourceFile[] | undefined,
+): InstallConfig["outputAllowlist"] {
+  if (!moduleFiles || moduleFiles.length === 0) return configured;
+  const allowlist: Record<string, OutputAllowlistEntry> = { ...configured };
+  for (const name of collectRootModuleOutputNames(moduleFiles)) {
+    if (name === "takosumi_release") continue;
+    if (Object.prototype.hasOwnProperty.call(allowlist, name)) continue;
+    allowlist[name] = { from: name, type: "json" };
+  }
+  return allowlist;
+}
 
 /** Shared dependencies the controller injects into its single RunEngine. */
 export interface RunEngineDependencies {
@@ -1393,6 +1428,7 @@ export class RunEngine {
       readonly operation: "create" | "update" | "destroy";
       readonly runnerProfileId?: string;
       readonly compatibilityReport?: CapsuleCompatibilityReport;
+      readonly snapshot: SourceSnapshot;
     },
     moduleSource: OpenTofuModuleSource,
   ): Promise<{
@@ -1423,11 +1459,24 @@ export class RunEngine {
         providersRequiringProviderEnvBindings(requiredProviders, profile),
       );
     }
+    const moduleFiles = await this.#sourceModuleFilesForGenericCapsule(
+      input.compatibilityReport,
+      input.snapshot,
+      input.installConfig.modulePath,
+    );
     const variables = normalizeVariables(
       mergeJsonVariableDefaults(
         installTypePlan.providerInputDefaults,
-        input.installConfig.variableMapping,
+        requestedGenericCapsuleVariables(
+          input.installConfig.variableMapping,
+          installTypePlan.providerInputDefaults,
+          moduleFiles,
+        ),
       ),
+    );
+    const outputAllowlist = genericCapsuleOutputAllowlist(
+      input.installConfig.outputAllowlist,
+      moduleFiles,
     );
     return {
       request: {
@@ -1441,7 +1490,8 @@ export class RunEngine {
       },
       genericRootPlan: {
         providerEnvBindings: installTypePlan.providerEnvBindings,
-        outputAllowlist: input.installConfig.outputAllowlist,
+        outputAllowlist,
+        ...(moduleFiles && moduleFiles.length > 0 ? { moduleFiles } : {}),
       },
     };
   }
@@ -1544,6 +1594,27 @@ export class RunEngine {
       objectKey: report.normalizedObjectKey,
       digest: report.normalizedDigest as `sha256:${string}`,
     });
+  }
+
+  async #sourceModuleFilesForGenericCapsule(
+    report: CapsuleCompatibilityReport | undefined,
+    sourceSnapshot: SourceSnapshot,
+    modulePath: string | undefined,
+  ): Promise<readonly OpenTofuCapsuleSourceFile[] | undefined> {
+    if (!report) return undefined;
+    if (report.level === "auto_capsulized") {
+      return await this.#normalizedModuleFilesForReport(report, sourceSnapshot);
+    }
+    if (report.level !== "ready") return undefined;
+    if (!this.#sourcesService) return undefined;
+    try {
+      return await this.#sourcesService.readCapsuleSourceFiles(
+        sourceSnapshot,
+        modulePath ? { modulePath } : undefined,
+      );
+    } catch {
+      return undefined;
+    }
   }
 
   /**
@@ -4948,6 +5019,7 @@ export class RunEngine {
         planRun: input.planRun,
         phase: input.phase,
         auditRunId: releaseCommandRunId(input.applyRun.id),
+        credentialContext: "release_command",
       })
     ).credentials;
   }

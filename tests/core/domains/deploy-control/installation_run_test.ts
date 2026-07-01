@@ -213,11 +213,14 @@ function fakeProviderVault() {
   const evidenceForEntry = (entry: {
     readonly provider: string;
     readonly connectionId: string;
+    readonly delivery?: "provider_env" | "generated_root_variable";
   }) => ({
     provider: canonicalProviderForFixture(entry.provider),
     connectionId: entry.connectionId,
-    delivery: "generated_root_variable" as const,
-    rootOnly: true,
+    delivery: entry.delivery ?? ("generated_root_variable" as const),
+    rootOnly:
+      (entry.delivery ?? "generated_root_variable") ===
+      "generated_root_variable",
     temporary: true,
     ttlEnforced: true,
     phase: "plan" as const,
@@ -225,8 +228,22 @@ function fakeProviderVault() {
   const envForEntry = (entry: {
     readonly provider: string;
     readonly connectionId: string;
+    readonly delivery?: "provider_env" | "generated_root_variable";
   }) => {
     const shortName = providerShortNameForFixture(entry.provider);
+    if (entry.delivery === "provider_env") {
+      if (shortName === "aws") {
+        return {
+          AWS_ACCESS_KEY_ID: "fixture-provider-token",
+          AWS_SECRET_ACCESS_KEY: "fixture-provider-token",
+          AWS_SESSION_TOKEN: "fixture-provider-token",
+        };
+      }
+      if (shortName === "cloudflare") {
+        return { CLOUDFLARE_API_TOKEN: "fixture-provider-token" };
+      }
+      return { [`${shortName.toUpperCase()}_TOKEN`]: "fixture-provider-token" };
+    }
     if (shortName === "aws") {
       return {
         TF_VAR_aws_main_access_key_id: "fixture-provider-token",
@@ -282,13 +299,20 @@ function fakeProviderVault() {
     mintForInstallationProviderEnvBindings: (
       _spaceId: string,
       entries: readonly { provider: string; connectionId: string }[] = [],
+      options?: {
+        readonly delivery?: "provider_env" | "generated_root_variable";
+      },
     ) => {
       const resolvedEntries =
         entries.length > 0
           ? entries
           : [{ provider: "cloudflare", connectionId: "fixture" }];
-      const env = Object.assign({}, ...resolvedEntries.map(envForEntry));
-      const evidence = resolvedEntries.map(evidenceForEntry);
+      const entriesWithDelivery = resolvedEntries.map((entry) => ({
+        ...entry,
+        delivery: options?.delivery ?? ("generated_root_variable" as const),
+      }));
+      const env = Object.assign({}, ...entriesWithDelivery.map(envForEntry));
+      const evidence = entriesWithDelivery.map(evidenceForEntry);
       return Promise.resolve(new PhaseMintBundle({ env }, [], evidence));
     },
   };
@@ -669,6 +693,125 @@ test("requested scalar Cloudflare Capsule inputs can be filled from provider sco
   expect(mainTf).not.toContain("fixture-provider-token");
 });
 
+test("declared generic Capsule Cloudflare inputs and outputs are wired from source shape", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  const seeded = await seedInstallationModel(store, {
+    environment: "preview",
+    installConfig: {
+      variableMapping: {
+        project_name: "yuru-e2e",
+        enable_cloudflare_resources: true,
+      },
+      outputAllowlist: {
+        url: { from: "url", type: "url" },
+      },
+    },
+  });
+  await putConnectionWithProviderEnv(store, {
+    ...cloudflareConnection(
+      "conn_cloudflare_scope",
+      seeded.installation.spaceId,
+    ),
+    scopeHints: { accountId: "acct_scope_123" },
+  });
+  await store.putInstallationProviderEnvBindingSet({
+    id: "profile_cloudflare_scope",
+    spaceId: seeded.installation.spaceId,
+    installationId: seeded.installation.id,
+    environment: seeded.installation.environment,
+    bindings: [
+      {
+        provider: "cloudflare",
+        alias: "main",
+        connectionId: "conn_cloudflare_scope",
+      },
+    ],
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
+  const sourcesService = new SourcesService({
+    store,
+    now: () => new Date("2026-06-07T00:00:00.000Z"),
+    newId: (prefix) => `${prefix}_source_shape`,
+    readCapsuleSourceFiles: () =>
+      Promise.resolve([
+        {
+          path: "main.tf",
+          text: `
+terraform {
+  required_providers {
+    cloudflare = {
+      source = "cloudflare/cloudflare"
+    }
+  }
+}
+
+variable "project_name" {
+  type = string
+}
+
+variable "enable_cloudflare_resources" {
+  type = bool
+}
+
+variable "cloudflare_account_id" {
+  type = string
+}
+
+output "url" {
+  value = "https://yuru-e2e.example"
+}
+
+output "cloudflare_d1_database_id" {
+  value = "db-id"
+}
+
+output "cloudflare_kv_namespace_id" {
+  value = "kv-id"
+}
+
+output "takosumi_release" {
+  value = {
+    post_apply = []
+  }
+}
+`,
+        },
+        {
+          path: "modules/child/variables.tf",
+          text: `
+variable "account_id" {
+  type = string
+}
+`,
+        },
+      ]),
+  });
+  const profile = multiProviderRunnerProfile();
+  const controller = controllerWith(store, runner, {
+    runnerProfiles: [profile],
+    defaultRunnerProfileId: profile.id,
+    sourcesService,
+  });
+
+  const { planRun } = await controller.createInstallationPlan(
+    seeded.installation.id,
+  );
+
+  expect(planRun.status).toEqual("succeeded");
+  const root = runner.planJobs[0]!.generatedRoot!.files;
+  expect(root["main.tf"]).toContain('project_name = "yuru-e2e"');
+  expect(root["main.tf"]).toContain("enable_cloudflare_resources = true");
+  expect(root["main.tf"]).toContain('cloudflare_account_id = "acct_scope_123"');
+  expect(root["main.tf"]).not.toContain('\n  account_id = "acct_scope_123"');
+  expect(root["outputs.tf"]).toContain('output "cloudflare_d1_database_id"');
+  expect(root["outputs.tf"]).toContain('output "cloudflare_kv_namespace_id"');
+  expect(root["outputs.tf"]!.match(/output "takosumi_release"/g)).toHaveLength(
+    1,
+  );
+});
+
 test("standard Git Capsule variables stay ordinary OpenTofu inputs", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   const runner = recordingRunner();
@@ -717,9 +860,7 @@ test("standard Git Capsule variables stay ordinary OpenTofu inputs", async () =>
   expect(planRun.status).toEqual("succeeded");
   const planJob = runner.planJobs[0]!;
   const mainTf = planJob.generatedRoot!.files["main.tf"]!;
-  expect(mainTf).toContain(
-    'image_ref = "registry.example.com/app@sha256:abc"',
-  );
+  expect(mainTf).toContain('image_ref = "registry.example.com/app@sha256:abc"');
   expect(mainTf).toContain('release_tag = "v1.2.3"');
   expect(mainTf).toContain('version = "1.2.3"');
   expect(planJob.build).toBeUndefined();
@@ -2465,7 +2606,7 @@ test("runner release commands receive dispatch-only provider credentials", async
     },
   ]);
   expect(activations[0]?.credentials).toEqual({
-    TF_VAR_cloudflare_main_api_token: "fixture-provider-token",
+    CLOUDFLARE_API_TOKEN: "fixture-provider-token",
   });
 
   const activity = (await store.listActivityEvents("space_test")).find(
@@ -3051,9 +3192,7 @@ test("billing block is delegated to the injected enforcement port (Seam B)", asy
     reservePlanBilling: async (ctx) => {
       reservePlanBillingCalls.push(ctx);
       return {
-        reasons: [
-          "USD balance reservation failed: available 0 < estimated 1",
-        ],
+        reasons: ["USD balance reservation failed: available 0 < estimated 1"],
         audit: { mode: "enforce", reservationStatus: "insufficient_credits" },
       };
     },
