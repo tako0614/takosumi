@@ -42,6 +42,11 @@ test("local OpenTofu runner executes generic release commands in restored source
       nonSensitiveOutputs: {
         public_url: "https://app.example.test",
       },
+      credentials: {
+        env: {
+          CLOUDFLARE_API_TOKEN: "fixture-cloudflare-release-token",
+        },
+      },
       commands: [
         {
           id: "activate",
@@ -52,7 +57,9 @@ test("local OpenTofu runner executes generic release commands in restored source
             "-e",
             [
               "const outputs = JSON.parse(Bun.env.TAKOSUMI_OUTPUTS_JSON)",
+              "if (Bun.env.CLOUDFLARE_API_TOKEN !== 'fixture-cloudflare-release-token') process.exit(7)",
               "console.log(`${Bun.env.TAKOSUMI_APPLY_RUN_ID}:${outputs.public_url}`)",
+              "console.log(`token=${Bun.env.CLOUDFLARE_API_TOKEN}`)",
             ].join(";"),
           ],
           workingDirectory: ".",
@@ -64,6 +71,10 @@ test("local OpenTofu runner executes generic release commands in restored source
     expect(result.runId).toBe("release_apply_1");
     expect(result.commandCount).toBe(1);
     expect(result.stdout).toContain("apply_1:https://app.example.test");
+    expect(result.stdout).toContain("token=[redacted]");
+    expect(JSON.stringify(result)).not.toContain(
+      "fixture-cloudflare-release-token",
+    );
   } finally {
     await rm(tempDir, { recursive: true, force: true });
   }

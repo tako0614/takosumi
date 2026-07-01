@@ -93,6 +93,10 @@ export class SourcesService {
   readonly #enqueue: EnqueueSourceSync;
   readonly #compatibilityAnalyzer: CapsuleCompatibilityAnalyzer;
   readonly #readCapsuleSourceFiles: ReadCapsuleSourceFiles;
+  readonly #sourceFilesCache = new Map<
+    string,
+    Promise<readonly CapsuleSourceFile[]>
+  >();
   readonly #normalizedArtifactStorage?: ObjectStoragePort;
   readonly #normalizedArtifactBucket: string;
   readonly #newId: (prefix: string) => string;
@@ -482,7 +486,7 @@ export class SourcesService {
     readonly diagnosticMessage?: string;
   }> {
     try {
-      const files = await this.#readCapsuleSourceFiles(
+      const files = await this.#readCapsuleSourceFilesCached(
         snapshot,
         modulePath ? { modulePath } : undefined,
       );
@@ -759,6 +763,35 @@ export class SourcesService {
       );
     }
     return artifact.files;
+  }
+
+  /**
+   * Expands a SourceSnapshot archive through the same runner boundary used by
+   * compatibility checks. Callers use this for source-derived execution wiring
+   * that must not require a Takosumi-specific manifest in the user repo.
+   */
+  readCapsuleSourceFiles(
+    sourceSnapshot: SourceSnapshot,
+    options?: { readonly modulePath?: string },
+  ): Promise<readonly CapsuleSourceFile[]> {
+    return this.#readCapsuleSourceFilesCached(sourceSnapshot, options);
+  }
+
+  #readCapsuleSourceFilesCached(
+    sourceSnapshot: SourceSnapshot,
+    options?: { readonly modulePath?: string },
+  ): Promise<readonly CapsuleSourceFile[]> {
+    const key = `${sourceSnapshot.id}\0${options?.modulePath ?? ""}`;
+    const existing = this.#sourceFilesCache.get(key);
+    if (existing) return existing;
+    const pending = this.#readCapsuleSourceFiles(sourceSnapshot, options).catch(
+      (error: unknown) => {
+        this.#sourceFilesCache.delete(key);
+        throw error;
+      },
+    );
+    this.#sourceFilesCache.set(key, pending);
+    return pending;
   }
 
   async getSyncRun(id: string): Promise<SourceSyncRun> {

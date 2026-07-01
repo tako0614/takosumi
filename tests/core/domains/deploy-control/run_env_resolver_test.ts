@@ -66,13 +66,22 @@ function resolver(input: {
   readonly resolved:
     readonly ResolvedInstallationProviderEnvBinding[] | undefined;
   readonly credentials: () => RunCredentials | undefined;
-  readonly calls?: Array<{ phase: string; auditRunId: string }>;
+  readonly releaseCredentials?: () => RunCredentials | undefined;
+  readonly calls?: Array<{
+    phase: string;
+    auditRunId: string;
+    context: "opentofu" | "release_command";
+  }>;
 }): RunEnvResolver {
   return new RunEnvResolver({
     credentials: {
       mintRunCredentials: async (_planRun, phase, auditRunId) => {
-        input.calls?.push({ phase, auditRunId });
+        input.calls?.push({ phase, auditRunId, context: "opentofu" });
         return input.credentials();
+      },
+      mintReleaseCommandCredentials: async (_planRun, phase, auditRunId) => {
+        input.calls?.push({ phase, auditRunId, context: "release_command" });
+        return input.releaseCredentials?.() ?? input.credentials();
       },
     },
     resolveRunInstallationProviderEnvBindings: async () => input.resolved,
@@ -81,7 +90,11 @@ function resolver(input: {
 
 test("RunEnvResolver resolves secret Provider Connections without hashing secret values", async () => {
   let secret = "first-secret";
-  const calls: Array<{ phase: string; auditRunId: string }> = [];
+  const calls: Array<{
+    phase: string;
+    auditRunId: string;
+    context: "opentofu" | "release_command";
+  }> = [];
   const conn = connection();
   const subject = resolver({
     calls,
@@ -108,8 +121,8 @@ test("RunEnvResolver resolves secret Provider Connections without hashing secret
   });
 
   expect(calls).toEqual([
-    { phase: "plan", auditRunId: "plan_1" },
-    { phase: "plan", auditRunId: "plan_1" },
+    { phase: "plan", auditRunId: "plan_1", context: "opentofu" },
+    { phase: "plan", auditRunId: "plan_1", context: "opentofu" },
   ]);
   expect(first.credentials?.CLOUDFLARE_API_TOKEN).toBe("first-secret");
   expect(second.credentials?.CLOUDFLARE_API_TOKEN).toBe("second-secret");
@@ -137,6 +150,49 @@ test("RunEnvResolver resolves secret Provider Connections without hashing secret
   expect(first.runEnvironmentEvidenceDigest).toMatch(/^sha256:/);
 });
 
+test("RunEnvResolver mints provider env for release command context", async () => {
+  const calls: Array<{
+    phase: string;
+    auditRunId: string;
+    context: "opentofu" | "release_command";
+  }> = [];
+  const subject = resolver({
+    calls,
+    resolved: [
+      {
+        provider: "cloudflare",
+        materialization: "secret",
+        connection: connection(),
+      },
+    ],
+    credentials: () => ({
+      TF_VAR_cloudflare_main_api_token: "fixture-provider-token",
+    }),
+    releaseCredentials: () => ({
+      CLOUDFLARE_API_TOKEN: "fixture-provider-token",
+    }),
+  });
+
+  const result = await subject.resolveRunEnvironment({
+    planRun: planRun(),
+    phase: "apply",
+    auditRunId: "release_apply_1",
+    credentialContext: "release_command",
+  });
+
+  expect(calls).toEqual([
+    {
+      phase: "apply",
+      auditRunId: "release_apply_1",
+      context: "release_command",
+    },
+  ]);
+  expect(result.credentials).toEqual({
+    CLOUDFLARE_API_TOKEN: "fixture-provider-token",
+  });
+  expect(result.runEnvironmentEvidenceDigest).toMatch(/^sha256:/);
+});
+
 test("RunEnvResolver blocks Cloud-only gateway materialization in OSS", async () => {
   const subject = resolver({
     resolved: [
@@ -159,7 +215,11 @@ test("RunEnvResolver blocks Cloud-only gateway materialization in OSS", async ()
 });
 
 test("RunEnvResolver treats unresolved installation providers as no-credential providers after policy resolution", async () => {
-  const calls: Array<{ phase: string; auditRunId: string }> = [];
+  const calls: Array<{
+    phase: string;
+    auditRunId: string;
+    context: "opentofu" | "release_command";
+  }> = [];
   const subject = resolver({
     calls,
     resolved: [],
@@ -172,14 +232,20 @@ test("RunEnvResolver treats unresolved installation providers as no-credential p
     auditRunId: "plan_1",
   });
 
-  expect(calls).toEqual([{ phase: "plan", auditRunId: "plan_1" }]);
+  expect(calls).toEqual([
+    { phase: "plan", auditRunId: "plan_1", context: "opentofu" },
+  ]);
   expect(result.credentials).toBeUndefined();
   expect(result.providerResolutions).toEqual([]);
   expect(result.runEnvironmentEvidenceDigest).toMatch(/^sha256:/);
 });
 
 test("RunEnvResolver does not require Provider Connections for credential-free providers", async () => {
-  const calls: Array<{ phase: string; auditRunId: string }> = [];
+  const calls: Array<{
+    phase: string;
+    auditRunId: string;
+    context: "opentofu" | "release_command";
+  }> = [];
   const subject = resolver({
     calls,
     resolved: [],
@@ -195,7 +261,9 @@ test("RunEnvResolver does not require Provider Connections for credential-free p
     auditRunId: "plan_1",
   });
 
-  expect(calls).toEqual([{ phase: "plan", auditRunId: "plan_1" }]);
+  expect(calls).toEqual([
+    { phase: "plan", auditRunId: "plan_1", context: "opentofu" },
+  ]);
   expect(result.credentials).toBeUndefined();
   expect(result.providerResolutions).toEqual([]);
   expect(result.runEnvironmentEvidenceDigest).toMatch(/^sha256:/);

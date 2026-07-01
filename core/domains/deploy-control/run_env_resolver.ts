@@ -25,7 +25,10 @@ import type { RunCredentialBroker } from "./run_credential_broker.ts";
 
 export const RUN_ENV_REDACTION_PROFILE_ID = "redact_provider_material" as const;
 
-type RunCredentialMintPort = Pick<RunCredentialBroker, "mintRunCredentials">;
+type RunCredentialMintPort = Pick<
+  RunCredentialBroker,
+  "mintRunCredentials" | "mintReleaseCommandCredentials"
+>;
 
 export interface RunEnvResolverDependencies {
   readonly credentials: RunCredentialMintPort;
@@ -38,6 +41,7 @@ export interface ResolveRunEnvironmentInput {
   readonly planRun: PlanRun;
   readonly phase: "plan" | "apply" | "destroy";
   readonly auditRunId: string;
+  readonly credentialContext?: "opentofu" | "release_command";
 }
 
 export interface ResolvedRunEnvironment {
@@ -88,11 +92,18 @@ export class RunEnvResolver {
         runEnvironment,
       );
     }
-    const credentials = await this.#credentials.mintRunCredentials(
-      input.planRun,
-      input.phase,
-      input.auditRunId,
-    );
+    const credentials =
+      input.credentialContext === "release_command"
+        ? await this.#credentials.mintReleaseCommandCredentials(
+            input.planRun,
+            releaseCommandCredentialPhase(input.phase),
+            input.auditRunId,
+          )
+        : await this.#credentials.mintRunCredentials(
+            input.planRun,
+            input.phase,
+            input.auditRunId,
+          );
     return await this.#buildRunEnvironmentEvidence(
       input,
       providerResolutions,
@@ -110,6 +121,7 @@ export class RunEnvResolver {
     const runEnvironmentEvidenceDigest = await stableJsonDigest({
       runId: input.auditRunId,
       phase: input.phase,
+      credentialContext: input.credentialContext ?? "opentofu",
       providerResolutions,
       credentialEnvNames,
       redactionProfileId: RUN_ENV_REDACTION_PROFILE_ID,
@@ -180,6 +192,15 @@ export class RunEnvResolver {
     }
     return resolutions;
   }
+}
+
+function releaseCommandCredentialPhase(
+  phase: ResolveRunEnvironmentInput["phase"],
+): "apply" | "destroy" {
+  if (phase === "apply" || phase === "destroy") return phase;
+  throw new Error(
+    "release command credentials are only valid for apply/destroy",
+  );
 }
 
 function credentialEnvNamesFromRunCredentials(

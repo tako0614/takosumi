@@ -37,6 +37,7 @@ import {
 import { CredentialBundle } from "../../adapters/vault/mod.ts";
 import type {
   InstallationProviderEnvBindingMintEntry,
+  InstallationProviderEnvBindingDelivery,
   ConnectionVault,
 } from "../../adapters/vault/mod.ts";
 import type { OpenTofuDeploymentStore } from "./store.ts";
@@ -103,6 +104,33 @@ export class RunCredentialBroker {
     planRun: PlanRun,
     phase: "plan" | "apply" | "destroy",
     auditRunId: string,
+  ): Promise<RunCredentials | undefined> {
+    return await this.#mintCredentials(
+      planRun,
+      phase,
+      auditRunId,
+      "generated_root_variable",
+    );
+  }
+
+  async mintReleaseCommandCredentials(
+    planRun: PlanRun,
+    phase: "apply" | "destroy",
+    auditRunId: string,
+  ): Promise<RunCredentials | undefined> {
+    return await this.#mintCredentials(
+      planRun,
+      phase,
+      auditRunId,
+      "provider_env",
+    );
+  }
+
+  async #mintCredentials(
+    planRun: PlanRun,
+    phase: "plan" | "apply" | "destroy",
+    auditRunId: string,
+    delivery: InstallationProviderEnvBindingDelivery,
   ): Promise<RunCredentials | undefined> {
     if (planRun.requiredProviders.length === 0) {
       return undefined;
@@ -191,9 +219,9 @@ export class RunCredentialBroker {
         return { ...bundle.env };
       }
       const perAlias = await vault!.mintForInstallationProviderEnvBindings(
-        (planRun.workspaceId ?? planRun.spaceId),
+        planRun.workspaceId ?? planRun.spaceId,
         providerEntries,
-        { phase },
+        { phase, delivery },
       );
       const evidence = [
         ...bundle.providerCredentialEvidence,

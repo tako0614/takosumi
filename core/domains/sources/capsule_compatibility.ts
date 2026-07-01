@@ -735,6 +735,36 @@ function hasOutputBlock(files: readonly CapsuleSourceFile[]): boolean {
   return files.some((file) => matchNamedBlocks(file.text, "output").length > 0);
 }
 
+export function collectRootModuleVariableNames(
+  files: readonly CapsuleSourceFile[],
+): readonly string[] {
+  return collectRootModuleNamedBlocks(files, "variable");
+}
+
+export function collectRootModuleOutputNames(
+  files: readonly CapsuleSourceFile[],
+): readonly string[] {
+  return collectRootModuleNamedBlocks(files, "output");
+}
+
+function collectRootModuleNamedBlocks(
+  files: readonly CapsuleSourceFile[],
+  blockType: "variable" | "output",
+): readonly string[] {
+  const names = new Set<string>();
+  for (const file of files) {
+    if (!isRootModuleTfFile(file.path)) continue;
+    for (const block of matchNamedBlocks(file.text, blockType)) {
+      names.add(block.name);
+    }
+  }
+  return Array.from(names).sort();
+}
+
+function isRootModuleTfFile(path: string): boolean {
+  return path.endsWith(".tf") && !path.includes("/");
+}
+
 function providerAllowed(
   source: string,
   allowedProviders: ReadonlySet<string>,
