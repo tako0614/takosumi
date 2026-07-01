@@ -12,17 +12,19 @@ import { Box, Database, Globe, LayoutGrid, Plus, Sparkles } from "lucide-solid";
 import type { JSX } from "solid-js";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
-import { currentWorkspaceId, setCurrentWorkspaceId } from "../../lib/workspace-state.ts";
+import {
+  currentWorkspaceId,
+  setCurrentWorkspaceId,
+} from "../../lib/workspace-state.ts";
+import { listCapsulesCached } from "../../lib/capsule-list.ts";
+import { listCurrentStateVersionsCached } from "../../lib/current-state-versions.ts";
+import { listInstallConfigsCached } from "../../lib/install-config-list.ts";
 import {
   type ControlApiError,
   createWorkspace,
-  getDeployment,
   type Capsule,
-  type ActivityEvent,
   type Workspace,
   listActivity,
-  listCapsules,
-  listInstallConfigs,
 } from "../../lib/control-api.ts";
 import {
   type AppSurface,
@@ -76,17 +78,28 @@ function Inner() {
   const navigate = useNavigate();
   const workspaceId = () => (currentWorkspaceId() ? currentWorkspaceId() : null);
 
-  const [capsules] = createResource(workspaceId, listCapsules);
+  const [capsules] = createResource(workspaceId, (id) =>
+    listCapsulesCached(id, { includeDestroyed: false }),
+  );
   const visibleCapsules = createMemo(() =>
     (capsules() ?? []).filter(isVisibleServiceCapsule),
   );
-  const [activity] = createResource(workspaceId, (id) => listActivity(id, 100));
+  const activityWorkspaceId = createMemo(() => {
+    const id = workspaceId();
+    return id && visibleCapsules().length > 0 ? id : null;
+  });
+  const [activity] = createResource(activityWorkspaceId, (id) =>
+    listActivity(id, 50),
+  );
+  const [currentStateVersions] = createResource(workspaceId, (id) =>
+    listCurrentStateVersionsCached(id, { includeDestroyed: false }),
+  );
 
   // Map each Capsule to a type-specific icon via its install config's
   // catalog kind (site / storage / worker) — the fallback when a surface
   // declares no image or icon of its own.
   const [installConfigs] = createResource(workspaceId, (id) =>
-    listInstallConfigs(id),
+    listInstallConfigsCached(id),
   );
   const kindByConfigId = createMemo(() => {
     const map = new Map<string, string>();
@@ -99,44 +112,25 @@ function Inner() {
   const iconForCapsule = (inst: Capsule): JSX.Element =>
     serviceKindIcon(kindByConfigId().get(inst.installConfigId));
 
-  // Declared app surfaces per service, read from its current Deployment's
-  // public outputs. A service with no app metadata contributes no tiles.
-  const [surfacesByCapsule] = createResource(
-    () =>
-      activity.loading
-        ? undefined
-        : {
-            list: visibleCapsules(),
-            events: activity() ?? [],
-          },
-    async (input: {
-      readonly list: readonly Capsule[];
-      readonly events: readonly ActivityEvent[];
-    }) => {
-      const map = new Map<string, AppSurface[]>();
-      await Promise.all(
-        input.list
-          .filter(
-            (inst): inst is Capsule & { currentStateVersionId: string } =>
-              Boolean(inst.currentStateVersionId),
-          )
-          .map(async (inst) => {
-            try {
-              const deployment = await getDeployment(inst.currentStateVersionId);
-              const surfaces = appSurfacesFromDeployment(
-                deployment,
-                input.events,
-                inst.id,
-              );
-              if (surfaces.length > 0) map.set(inst.id, surfaces);
-            } catch {
-              // A failed read just means this service contributes no app tiles.
-            }
-          }),
-      );
-      return map;
-    },
-  );
+  // Declared app surfaces per service. The current StateVersion rows are loaded
+  // through one Workspace projection request instead of N `getDeployment` reads.
+  const surfacesByCapsule = createMemo(() => {
+    const events = activity() ?? [];
+    const deployments = new Map(
+      (currentStateVersions() ?? []).map((deployment) => [
+        deployment.installationId,
+        deployment,
+      ]),
+    );
+    const map = new Map<string, AppSurface[]>();
+    for (const inst of visibleCapsules()) {
+      const deployment = deployments.get(inst.id);
+      if (!deployment) continue;
+      const surfaces = appSurfacesFromDeployment(deployment, events, inst.id);
+      if (surfaces.length > 0) map.set(inst.id, surfaces);
+    }
+    return map;
+  });
 
   const appTiles = createMemo<AppTile[]>(() => {
     const map = surfacesByCapsule();
@@ -196,7 +190,7 @@ function Inner() {
               fallback={<WorkspaceStartPanel />}
             >
               <Switch>
-                <Match when={surfacesByCapsule.loading}>
+                <Match when={currentStateVersions.loading}>
                   <LauncherSkeleton />
                 </Match>
                 <Match when={appTiles().length === 0}>

@@ -92,6 +92,10 @@ import type { JsonValue } from "takosumi-contract";
 import { currentRuntime } from "../../shared/runtime/index.ts";
 import { log } from "../../shared/log.ts";
 
+export interface CapsuleListPageParams extends PageParams {
+  readonly includeDestroyed?: boolean;
+}
+
 /**
  * Internal (non-public) plan inputs persisted alongside a PlanRun so the queue
  * consumer can re-run the plan after the create call returns. The public PlanRun
@@ -546,7 +550,7 @@ export interface OpenTofuDeploymentStore {
    */
   listInstallationsPage(
     spaceId: string,
-    params: PageParams,
+    params: CapsuleListPageParams,
   ): Promise<Page<Installation>>;
   patchInstallation(
     id: string,
@@ -575,6 +579,7 @@ export interface OpenTofuDeploymentStore {
 
   putDeployment(deployment: Deployment): Promise<Deployment>;
   getDeployment(id: string): Promise<Deployment | undefined>;
+  listDeploymentsByIds(ids: readonly string[]): Promise<readonly Deployment[]>;
   listDeployments(installationId: string): Promise<readonly Deployment[]>;
   /**
    * Lists ALL Deployments for a Space in one query (space-scoped read used by
@@ -664,8 +669,8 @@ export interface OpenTofuDeploymentStore {
     },
   ): Promise<CapsuleCompatibilityReport | undefined>;
 
-  // Installation provider env binding records, one row per
-  // (installation, environment), with that pair as the upsert key.
+  // Legacy-named ProviderBinding records, one row per
+  // (capsule, environment), with that pair as the upsert key.
   putInstallationProviderEnvBindingSet(
     profile: InstallationProviderEnvBindingSet,
   ): Promise<InstallationProviderEnvBindingSet>;
@@ -1264,9 +1269,14 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
 
   async listInstallationsPage(
     spaceId: string,
-    params: PageParams,
+    params: CapsuleListPageParams,
   ): Promise<Page<Installation>> {
-    return pageSorted(await this.listInstallations(spaceId), params);
+    const rows = await this.listInstallations(spaceId);
+    const visibleRows =
+      params.includeDestroyed === false
+        ? rows.filter((row) => row.status !== "destroyed")
+        : rows;
+    return pageSorted(visibleRows, params);
   }
 
   patchInstallation(
@@ -1419,6 +1429,17 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
 
   getDeployment(id: string): Promise<Deployment | undefined> {
     return Promise.resolve(this.#deployments.get(id));
+  }
+
+  listDeploymentsByIds(ids: readonly string[]): Promise<readonly Deployment[]> {
+    const uniqueIds = [...new Set(ids.filter((id) => id.length > 0))];
+    return Promise.resolve(
+      uniqueIds
+        .map((id) => this.#deployments.get(id))
+        .filter(
+          (deployment): deployment is Deployment => deployment !== undefined,
+        ),
+    );
   }
 
   listDeployments(installationId: string): Promise<readonly Deployment[]> {

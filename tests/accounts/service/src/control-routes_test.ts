@@ -1235,7 +1235,7 @@ test("GET /api/v1/workspaces/:id/capsules serves the Capsule list route", async 
   const operations = fakeOperations();
   const { request: req, url } = request(
     "GET",
-    "/api/v1/workspaces/space_a/capsules",
+    "/api/v1/workspaces/space_a/capsules?includeDestroyed=false&limit=25",
     { cookie },
   );
   const response = await handleControlRoute({
@@ -1248,6 +1248,99 @@ test("GET /api/v1/workspaces/:id/capsules serves the Capsule list route", async 
   const body = (await response!.json()) as { capsules: unknown[] };
   expect(body.capsules.length).toEqual(1);
   expect(operations.calls.listCapsulesPage?.[0]).toEqual("space_a");
+  expect(operations.calls.listCapsulesPage?.[1]).toEqual({
+    limit: 25,
+    includeDestroyed: false,
+  });
+});
+
+test("GET /api/v1/workspaces/:id/current-state-versions reads current StateVersions in one route", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = deploymentOperations("space_a");
+  operations.installations.listCapsulesPage = async (workspaceId, params) => {
+    operations.calls.listCapsulesPage = [workspaceId, params];
+    return {
+      items: [
+        {
+          id: "inst_1",
+          workspaceId,
+          name: "app",
+          slug: "app",
+          sourceId: "src_x",
+          installConfigId: "cfg_x",
+          environment: "prod",
+          currentStateVersionId: "dep_1",
+          currentStateGeneration: 3,
+          status: "active",
+          createdAt: "2026-01-01T00:00:00Z",
+          updatedAt: "2026-01-01T00:00:00Z",
+        },
+        {
+          id: "inst_empty",
+          workspaceId,
+          name: "empty",
+          slug: "empty",
+          sourceId: "src_x",
+          installConfigId: "cfg_x",
+          environment: "prod",
+          currentStateGeneration: 0,
+          status: "pending",
+          createdAt: "2026-01-01T00:00:00Z",
+          updatedAt: "2026-01-01T00:00:00Z",
+        },
+      ],
+    } as Awaited<
+      ReturnType<ControlPlaneOperations["installations"]["listCapsulesPage"]>
+    >;
+  };
+  const { request: req, url } = request(
+    "GET",
+    "/api/v1/workspaces/space_a/current-state-versions?includeDestroyed=false&limit=25",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(200);
+  const body = (await response!.json()) as {
+    deployments: Array<Record<string, unknown>>;
+  };
+  expect(body.deployments.length).toEqual(1);
+  expect(body.deployments[0]?.id).toEqual("dep_1");
+  expect(body.deployments[0]?.outputSnapshotId).toBeUndefined();
+  expect(body.deployments[0]?.outputsPublic).toEqual({
+    launch_url: "https://app.example.test",
+  });
+  expect(operations.calls.listCapsulesPage).toEqual([
+    "space_a",
+    { limit: 25, includeDestroyed: false },
+  ]);
+  expect(operations.calls.listDeploymentsByIds).toEqual(["dep_1"]);
+  expect(operations.calls.listDeploymentsBySpace).toBeUndefined();
+  expect(operations.calls.getDeployment).toBeUndefined();
+});
+
+test("GET /api/v1/workspaces/:id/capsules rejects malformed includeDestroyed", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const { request: req, url } = request(
+    "GET",
+    "/api/v1/workspaces/space_a/capsules?includeDestroyed=maybe",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(400);
+  expect(operations.calls.listCapsulesPage).toBeUndefined();
 });
 
 test("GET /api/v1/workspaces/:id/runs lists the Workspace Run ledger", async () => {
@@ -5756,6 +5849,21 @@ function deploymentOperations(
     calls.getDeployment = [id];
     return deploymentRow(id, workspaceId) as unknown as Awaited<
       ReturnType<ControlPlaneOperations["getDeployment"]>
+    >;
+  };
+  operations.listDeploymentsByIds = async (ids: readonly string[]) => {
+    calls.listDeploymentsByIds = [...ids];
+    return ids.map((id) => deploymentRow(id, workspaceId)) as unknown as
+      Awaited<
+        ReturnType<NonNullable<ControlPlaneOperations["listDeploymentsByIds"]>>
+      >;
+  };
+  operations.listDeploymentsBySpace = async (id: string) => {
+    calls.listDeploymentsBySpace = [id];
+    return [deploymentRow("dep_1", id)] as unknown as Awaited<
+      ReturnType<
+        NonNullable<ControlPlaneOperations["listDeploymentsBySpace"]>
+      >
     >;
   };
   operations.createDeploymentRollbackPlan = async (deploymentId: string) => {

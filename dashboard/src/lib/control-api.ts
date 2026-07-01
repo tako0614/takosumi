@@ -1149,10 +1149,31 @@ export async function removeMember(
 
 export async function listCapsules(
   workspaceId: string,
+  options: { readonly includeDestroyed?: boolean } = {},
 ): Promise<readonly Capsule[]> {
+  const qs = query({
+    ...(options.includeDestroyed === false
+      ? { includeDestroyed: "false" }
+      : {}),
+  });
   return await fetchAllPages<Capsule>(
-    `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/capsules`,
+    `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/capsules${qs}`,
     (body) => (body.capsules as readonly Capsule[]) ?? [],
+  );
+}
+
+export async function listWorkspaceCurrentStateVersions(
+  workspaceId: string,
+  options: { readonly includeDestroyed?: boolean } = {},
+): Promise<readonly PublicDeployment[]> {
+  const qs = query({
+    ...(options.includeDestroyed === false
+      ? { includeDestroyed: "false" }
+      : {}),
+  });
+  return await fetchAllPages<PublicDeployment>(
+    `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/current-state-versions${qs}`,
+    (body) => (body.deployments as readonly PublicDeployment[]) ?? [],
   );
 }
 

@@ -105,6 +105,10 @@ import type {
 import type { JsonValue } from "takosumi-contract";
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 
+interface CapsuleListPageParams extends PageParams {
+  readonly includeDestroyed?: boolean;
+}
+
 // --- Membership (Workspace members / roles) ------------------------------------
 //
 // Structural mirror of the in-process membership domain
@@ -206,7 +210,7 @@ export interface ControlPlaneOperations {
     listCapsules(workspaceId: string): Promise<readonly Capsule[]>;
     listCapsulesPage(
       workspaceId: string,
-      params: PageParams,
+      params: CapsuleListPageParams,
     ): Promise<Page<Capsule>>;
     createCapsule(request: {
       readonly workspaceId: string;
@@ -468,6 +472,16 @@ export interface ControlPlaneOperations {
     capsuleId: string,
     params?: PageParams,
   ): Promise<ListDeploymentsResponse>;
+  /**
+   * Optional in-process fast path for dashboard Workspace list projections.
+   * Hosts that wire the deployment store can answer current StateVersion rows
+   * by id in one read; tests and older hosts can omit it and the route falls
+   * back to Workspace-scoped or single-record reads.
+   */
+  listDeploymentsByIds?(
+    deploymentIds: readonly string[],
+  ): Promise<readonly Deployment[]>;
+  listDeploymentsBySpace?(spaceId: string): Promise<readonly Deployment[]>;
   /**
    * Reads one Deployment ledger record by id (§30 `GET /internal/v1/state-versions/:id`).
    * Used by the control surface to resolve a Deployment's owning Workspace (for the

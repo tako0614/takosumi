@@ -131,6 +131,19 @@ export class DeploymentQuery {
     };
   }
 
+  async listDeploymentsBySpace(
+    spaceId: string,
+  ): Promise<readonly Deployment[]> {
+    requireNonEmptyString(spaceId, "spaceId");
+    return await this.#store.listDeploymentsBySpace(spaceId);
+  }
+
+  async listDeploymentsByIds(
+    ids: readonly string[],
+  ): Promise<readonly Deployment[]> {
+    return await this.#store.listDeploymentsByIds(ids);
+  }
+
   async listDeploymentOutputs(
     installationId: string,
   ): Promise<ListDeploymentOutputsResponse> {

@@ -1206,7 +1206,7 @@ test("Installation patch: guard fences on currentDeploymentId", async () => {
   }
 });
 
-test("Deployment store: put/get/list-by-installation are symmetric", async () => {
+test("Deployment store: put/get/list-by-id/list-by-installation are symmetric", async () => {
   for (const [label, store] of await forEachStore()) {
     await store.putDeployment(
       deployment({ id: "dep_a", installationId: "inst_1" }),
@@ -1227,6 +1227,16 @@ test("Deployment store: put/get/list-by-installation are symmetric", async () =>
       1,
     );
     expect(await store.getDeployment("missing"), label).toBeUndefined();
+    const byIds = await store.listDeploymentsByIds([
+      "dep_b",
+      "missing",
+      "dep_a",
+      "dep_b",
+    ]);
+    expect(
+      byIds.map((d) => d.id).sort(),
+      label,
+    ).toEqual(["dep_a", "dep_b"]);
     const forInst = await store.listDeployments("inst_1");
     expect(
       forInst.map((d) => d.id),

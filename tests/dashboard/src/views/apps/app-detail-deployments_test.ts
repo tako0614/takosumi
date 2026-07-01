@@ -104,7 +104,20 @@ describe("Installation detail deployment surface", () => {
   });
 
   test("reads the Deployment ledger through the session client fn", () => {
-    expect(source).toMatch(/createResource\(capsuleId,\s*listDeployments\)/);
+    expect(source).toContain("const deploysCapsuleId");
+    expect(source).toMatch(
+      /createResource\(\s*deploysCapsuleId,\s*listDeployments\s*\)/,
+    );
+    expect(source).toMatch(
+      /createResource\(\s*currentStateVersionId,\s*getDeployment,\s*\)/,
+    );
+    expect(source).toContain("const settingsWorkspaceId");
+    expect(source).toMatch(
+      /createResource\(\s*settingsWorkspaceId,\s*listSources\s*\)/,
+    );
+    expect(source).toMatch(
+      /createResource\(\s*settingsWorkspaceId,\s*listProviderConnections,\s*\)/,
+    );
   });
 
   test("gates public open actions on release activation evidence", () => {

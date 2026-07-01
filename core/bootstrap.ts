@@ -636,9 +636,9 @@ export interface TakosumiOperations {
   listRunnerProfiles(): Promise<ListRunnerProfilesResponse>;
   createPlanRun(request: CreatePlanRunRequest): Promise<PlanRunResponse>;
   /**
-   * Installation-driven plan (spec §23): resolves the Installation ->
-   * InstallConfig -> Source, picks the latest SourceSnapshot, and dispatches
-   * with installation state scope.
+   * Capsule-driven plan (legacy implementation path): resolves the Capsule's
+   * service-side config to Source, picks the latest SourceSnapshot, and
+   * dispatches with Capsule state scope.
    */
   createCapsulePlan(
     installationId: string,
@@ -670,6 +670,8 @@ export interface TakosumiOperations {
     installationId: string,
     params?: PageParams,
   ): Promise<ListDeploymentsResponse>;
+  listDeploymentsByIds(ids: readonly string[]): Promise<readonly Deployment[]>;
+  listDeploymentsBySpace(spaceId: string): Promise<readonly Deployment[]>;
   listDeploymentOutputs(
     installationId: string,
   ): Promise<ListDeploymentOutputsResponse>;
@@ -1301,6 +1303,10 @@ export async function createTakosumiService(
     getInstallation: (id) => opentofuController.getInstallation(id),
     listDeployments: (installationId, params) =>
       opentofuController.listDeployments(installationId, params),
+    listDeploymentsByIds: (ids) =>
+      opentofuController.listDeploymentsByIds(ids),
+    listDeploymentsBySpace: (spaceId) =>
+      opentofuController.listDeploymentsBySpace(spaceId),
     listDeploymentOutputs: (installationId) =>
       opentofuController.listDeploymentOutputs(installationId),
     getDeployment: (id) => opentofuController.getDeployment(id),

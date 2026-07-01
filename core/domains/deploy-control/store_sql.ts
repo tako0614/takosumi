@@ -96,6 +96,7 @@ import type {
   StoredSource,
   ClaimBillingAutoRechargeAttemptInput,
   ClaimBillingAutoRechargeAttemptResult,
+  CapsuleListPageParams,
   CreditAmountInput,
   SettleBillingAutoRechargeAttemptInput,
   SettleBillingAutoRechargeAttemptResult,
@@ -756,15 +757,22 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
 
   async listInstallationsPage(
     spaceId: string,
-    params: PageParams,
+    params: CapsuleListPageParams,
   ): Promise<Page<Installation>> {
     const limit = clampPageLimit(params.limit);
+    const baseWhere =
+      params.includeDestroyed === false
+        ? and(
+            eq(pgSchema.installations.spaceId, spaceId),
+            ne(pgSchema.installations.status, "destroyed"),
+          )
+        : eq(pgSchema.installations.spaceId, spaceId);
     const rows = await this.#pgManyJson<Installation>(
       pgSchema.installations,
       pgSchema.installations.installationJson,
       {
         where: pgKeysetWhere(
-          eq(pgSchema.installations.spaceId, spaceId),
+          baseWhere,
           pgSchema.installations.createdAt,
           pgSchema.installations.id,
           decodeCursor(params.cursor),
@@ -1125,6 +1133,20 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       pgSchema.deployments,
       pgSchema.deployments.deploymentJson,
       eq(pgSchema.deployments.id, id),
+    );
+  }
+
+  async listDeploymentsByIds(
+    ids: readonly string[],
+  ): Promise<readonly Deployment[]> {
+    const uniqueIds = [...new Set(ids.filter((id) => id.length > 0))];
+    if (uniqueIds.length === 0) return [];
+    return await this.#pgManyJson<Deployment>(
+      pgSchema.deployments,
+      pgSchema.deployments.deploymentJson,
+      {
+        where: inArray(pgSchema.deployments.id, uniqueIds),
+      },
     );
   }
 
