@@ -410,7 +410,6 @@ function openTofuRunOwnerSourceSyncEnqueuer(
       spaceId: dispatch.spaceId,
       messageId: directRunOwnerMessageId(dispatch.runId),
       queueAttempt: 1,
-      cause: dispatch.cause,
     });
   };
 }
@@ -493,7 +492,6 @@ function openTofuSourceSyncEnqueuer(
       action: "source_sync",
       runId: dispatch.runId,
       spaceId: dispatch.spaceId,
-      ...(dispatch.cause ? { cause: dispatch.cause } : {}),
       requestedAt: new Date().toISOString(),
     });
   };
