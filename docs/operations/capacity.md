@@ -77,6 +77,13 @@ speed knob は OpenTofu 実行基盤に限定する。
 | `TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR` | `/tmp/takosumi-provider-cache`  | `tofu init` の direct provider install                   | provider binary 専用。credential / tfplan / state / outputs は入れない        |
 | `TAKOSUMI_SOURCE_ARCHIVE_ZSTD_LEVEL` | runner default `3`, template `1` | SourceSnapshot archive 作成                              | 低いほど速いが R2 object が大きくなる                                         |
 
+Git source sync は、同じ Source の同一 ref/path だけでなく、同じ Space 内の
+public Git Source で URL/ref/path が一致する場合も既存 SourceSnapshot archive
+を再利用できる。これにより `/new?git=...` から同じ public app を再 install /
+再検証するケースは `git clone` と deterministic archive 作成を避けられる。
+credential 付き Source は reuse 対象外にし、private repo bytes を別 Source へ
+横流ししない。
+
 失敗した run は keepalive 設定に関係なく container を落とす。これは crash や
 relay error のあとに一時 credential file を温存しないための fail-closed 動作。
 current Cloudflare runner は `idFromName(runId)` の run-scoped Durable Object
