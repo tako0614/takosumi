@@ -1656,7 +1656,7 @@ function Inner() {
           name: flowInput.name,
           url: flowInput.gitUrl,
           defaultRef: flowInput.ref,
-          defaultPath: flowInput.path,
+          defaultPath: ".",
           autoSync: true,
           authConnectionId: flowInput.authConnectionId,
         });
@@ -1729,6 +1729,9 @@ function Inner() {
           environment: "production",
           sourceId,
           installConfigId: flowInput.installConfigId,
+          ...(flowInput.path && flowInput.path !== "."
+            ? { modulePath: flowInput.path }
+            : {}),
           ...(flowInput.vars ? { vars: flowInput.vars } : {}),
         });
         throwIfStaleFlow(flow);

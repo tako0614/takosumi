@@ -1169,6 +1169,7 @@ export async function createCapsule(input: {
   readonly environment: string;
   readonly sourceId: string;
   readonly installConfigId: string;
+  readonly modulePath?: string;
   readonly vars?: Readonly<Record<string, ContractJsonValue>>;
 }): Promise<Capsule> {
   const body = await controlFetch<{
@@ -1180,6 +1181,9 @@ export async function createCapsule(input: {
       environment: input.environment,
       sourceId: input.sourceId,
       installConfigId: input.installConfigId,
+      ...(input.modulePath && input.modulePath !== "."
+        ? { modulePath: input.modulePath }
+        : {}),
       ...(input.vars && Object.keys(input.vars).length > 0
         ? { vars: input.vars }
         : {}),
@@ -1258,7 +1262,7 @@ export async function checkCapsuleCompatibility(input: {
         name: input.name,
         url: input.gitUrl,
         defaultRef: input.ref,
-        defaultPath: input.path,
+        defaultPath: ".",
         autoSync: true,
         ...(input.authConnectionId
           ? { authConnectionId: input.authConnectionId }
@@ -1305,6 +1309,7 @@ export async function checkCapsuleCompatibility(input: {
       ...(input.installConfigId
         ? { installConfigId: input.installConfigId }
         : {}),
+      ...(input.path && input.path !== "." ? { modulePath: input.path } : {}),
     },
   });
   const diagnostics = (body.report.findings ?? []).map((finding) => ({
