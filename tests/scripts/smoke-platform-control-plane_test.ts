@@ -248,6 +248,7 @@ test("platform control-plane smoke records Cloudflare account resource preflight
       "cloudflare.r2.bucket.list",
       "cloudflare.queue.list",
       "cloudflare.workflow.list",
+      "cloudflare.vectorize.index.list",
     ],
   });
 });
