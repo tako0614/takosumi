@@ -372,7 +372,7 @@ export function accountsMigrateD1HelpText(): string {
     "takosumi accounts migrate-d1",
     "",
     "Apply Takosumi Accounts D1 (Cloudflare Workers) migrations via wrangler.",
-    "Calls `npx wrangler d1 execute <database-name-or-binding> --command ...` once per",
+    "Calls `bunx wrangler d1 execute <database-name-or-binding> --command ...` once per",
     "pending migration and records each applied version in",
     "takosumi_accounts_schema_migrations.",
     "",

@@ -8239,7 +8239,7 @@ test("internal installations import-apply rejects metadata-only upload sources",
 // accounts migrate-d1 (Cloudflare D1 migration runner)
 //
 // The runner is built around the injectable `D1ExecuteCommand` seam so the
-// real `npx wrangler d1 execute` shell-out can be replaced with a hermetic
+// real `bunx wrangler d1 execute` shell-out can be replaced with a hermetic
 // fake. These tests exercise the forward-only apply path, version-skip
 // de-dup, the wrangler `--json` envelope parsing, and the fail-without-insert
 // behaviour on a mid-flight error — none of which the production code path

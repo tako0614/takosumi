@@ -374,7 +374,7 @@ export interface D1ExecuteCommand {
    * from wrangler so callers can attach it to the JSON report if needed.
    * Throws on non-zero exit so callers can surface the wrangler diagnostic.
    *
-   * The default implementation shells out to `npx wrangler d1 execute`. A
+   * The default implementation shells out to `bunx wrangler d1 execute`. A
    * caller may inject an alternative implementation in tests to avoid the
    * real Cloudflare API.
    */
@@ -417,7 +417,7 @@ export type D1ExecuteTarget = "remote" | "local";
 
 /**
  * Build the default D1 execute command that shells out to
- * `npx wrangler d1 execute`. Tests inject their own implementation to keep
+ * `bunx wrangler d1 execute`. Tests inject their own implementation to keep
  * the suite hermetic.
  *
  * `databaseId` is the historical field name in this CLI API. Wrangler 4's
@@ -441,11 +441,17 @@ export function defaultD1ExecuteCommand(
   const configArgs = options.wranglerConfig
     ? ["--config", options.wranglerConfig]
     : [];
+  const wranglerBin = process.env.TAKOSUMI_WRANGLER_BIN?.trim() || "bunx";
+  const wranglerPrefix = wranglerBin === "wrangler" ? [] : ["wrangler"];
   async function runWrangler(
     args: readonly string[],
     env: Readonly<Record<string, string>> = {},
   ): Promise<{ readonly stdout: string }> {
-    const output = await commandOutput("npx", ["wrangler", ...args], env);
+    const output = await commandOutput(
+      wranglerBin,
+      [...wranglerPrefix, ...args],
+      env,
+    );
     const stdout = new TextDecoder().decode(output.stdout);
     const stderr = new TextDecoder().decode(output.stderr);
     if (!output.success) {
