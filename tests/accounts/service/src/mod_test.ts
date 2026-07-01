@@ -1267,6 +1267,58 @@ test("accounts handler deletes existing sessions outside the pre-GA email allowl
   expect(response.headers.get("set-cookie") ?? "").toContain("Max-Age=0");
 });
 
+test("accounts handler reuses session and account reads within a request", async () => {
+  class CountingAccountsStore extends InMemoryAccountsStore {
+    sessionReads = 0;
+    accountReads = 0;
+
+    override findAccountSession(sessionId: string) {
+      this.sessionReads += 1;
+      return super.findAccountSession(sessionId);
+    }
+
+    override findAccount(subject: TakosumiSubject) {
+      this.accountReads += 1;
+      return super.findAccount(subject);
+    }
+  }
+
+  const store = new CountingAccountsStore();
+  store.saveAccount({
+    subject: "tsub_allowed",
+    email: "allowed@example.test",
+    emailVerified: true,
+    createdAt: 1000,
+    updatedAt: 1000,
+  });
+  store.saveAccountSession({
+    sessionId: "sess_allowed",
+    subject: "tsub_allowed",
+    createdAt: 1000,
+    expiresAt: Date.now() + 60_000,
+  });
+  const handler = createRawAccountsHandler({
+    issuer: testIssuer,
+    platformAccess: testPlatformReadinessOpenAccess,
+    store,
+    loginEmailAllowlist: {
+      emails: ["allowed@example.test"],
+      requireVerifiedEmail: true,
+    },
+  });
+
+  const response = await handler(
+    new Request(`${testIssuer}/v1/account/session/me`, {
+      headers: { authorization: "Bearer sess_allowed" },
+    }),
+  );
+
+  expect(response.status).toEqual(200);
+  expect((await response.json()).subject).toEqual("tsub_allowed");
+  expect(store.sessionReads).toEqual(1);
+  expect(store.accountReads).toEqual(1);
+});
+
 test("accounts handler proxies installation PlanRun to deployControl", async () => {
   const createPlanRunCalls: unknown[] = [];
   const store = new InMemoryAccountsStore();
