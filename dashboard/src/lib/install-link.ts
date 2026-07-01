@@ -18,12 +18,16 @@
  * (non-https, embedded credentials, unparsable URLs).
  */
 
+import type { JsonValue } from "takosumi-contract";
+
+export type InstallPrefillVariableValue = JsonValue;
+
 export interface InstallPrefill {
   readonly git: string;
   readonly ref: string;
   readonly path: string;
   readonly name?: string;
-  readonly vars?: Readonly<Record<string, string>>;
+  readonly vars?: Readonly<Record<string, InstallPrefillVariableValue>>;
 }
 
 /** True when a URL query is trying to prefill the install flow. */
@@ -81,28 +85,96 @@ function parseOptionalName(value: string | null): string | undefined {
 
 function parseVariableParams(
   params: URLSearchParams,
-): Readonly<Record<string, string>> {
-  const vars: Record<string, string> = {};
+): Readonly<Record<string, InstallPrefillVariableValue>> {
+  const vars: Record<string, InstallPrefillVariableValue> = {};
   for (const [key, value] of params) {
-    if (!key.startsWith("var.")) continue;
-    const name = key.slice("var.".length);
-    if (!isSafeInstallVariableName(name)) continue;
-    if (!isSafeInstallVariableValue(value)) continue;
-    vars[name] = value;
+    if (key.startsWith("varjson.")) {
+      const name = key.slice("varjson.".length);
+      if (!isSafeInstallVariableName(name)) continue;
+      const jsonValue = parseSafeInstallJsonVariableValue(value);
+      if (jsonValue === undefined) continue;
+      vars[name] = jsonValue;
+      continue;
+    }
+    if (key.startsWith("var.")) {
+      const name = key.slice("var.".length);
+      if (!isSafeInstallVariableName(name)) continue;
+      if (!isSafeInstallVariableValue(value)) continue;
+      vars[name] = value;
+    }
   }
   return vars;
 }
 
 export function isSafeInstallVariableName(name: string): boolean {
   const trimmed = name.trim();
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(trimmed)) return false;
-  return !/(secret|token|password|credential|private_?key|api_?key)/iu.test(
-    trimmed,
-  );
+  if (!trimmed) return false;
+  return trimmed.split(".").every(isSafeInstallVariablePathSegment);
 }
 
 export function isSafeInstallVariableValue(value: string): boolean {
   return value.length <= 512 && !/[\r\n\0]/u.test(value);
+}
+
+function parseSafeInstallJsonVariableValue(
+  raw: string,
+): InstallPrefillVariableValue | undefined {
+  if (!isSafeInstallVariableValue(raw)) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+  return isSafeInstallJsonValue(parsed) ? parsed : undefined;
+}
+
+function isSafeInstallJsonValue(
+  value: unknown,
+  depth = 0,
+): value is InstallPrefillVariableValue {
+  if (depth > 8) return false;
+  if (value === null) return true;
+  switch (typeof value) {
+    case "string":
+      return isSafeInstallVariableValue(value);
+    case "number":
+      return Number.isFinite(value);
+    case "boolean":
+      return true;
+    case "object":
+      if (Array.isArray(value)) {
+        return (
+          value.length <= 64 &&
+          value.every((item) => isSafeInstallJsonValue(item, depth + 1))
+        );
+      }
+      return Object.entries(value as Record<string, unknown>).every(
+        ([key, nested]) =>
+          isSafeInstallJsonObjectKey(key) &&
+          isSafeInstallJsonValue(nested, depth + 1),
+      );
+    default:
+      return false;
+  }
+}
+
+function isSafeInstallJsonObjectKey(key: string): boolean {
+  return isSafeInstallVariablePathSegment(key);
+}
+
+function isSafeInstallVariablePathSegment(segment: string): boolean {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(segment)) return false;
+  if (
+    segment === "__proto__" ||
+    segment === "constructor" ||
+    segment === "prototype"
+  ) {
+    return false;
+  }
+  return !/(secret|token|password|credential|private_?key|api_?key)/iu.test(
+    segment,
+  );
 }
 
 /** `source=git::<url>//<path>?ref=<ref>` (Terraform/OpenTofu module address). */

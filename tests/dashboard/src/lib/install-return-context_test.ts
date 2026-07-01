@@ -100,6 +100,29 @@ describe("installReturnContext", () => {
     });
   });
 
+  test("preserves typed OpenTofu variables in canonical return paths", () => {
+    const returnPath = installReturnPathFromPrefill({
+      git: "https://github.com/acme/worker.git",
+      ref: "main",
+      path: "deploy/opentofu",
+      vars: {
+        cloudflare: {},
+        enable_cloudflare_resources: true,
+        project_name: "takos-space",
+      },
+    });
+    expect(returnPath).toEqual(
+      "/new?git=https%3A%2F%2Fgithub.com%2Facme%2Fworker.git&ref=main&path=deploy%2Fopentofu&varjson.cloudflare=%7B%7D&varjson.enable_cloudflare_resources=true&var.project_name=takos-space",
+    );
+    expect(installReturnContext(returnPath)).toMatchObject({
+      vars: {
+        cloudflare: {},
+        enable_cloudflare_resources: true,
+        project_name: "takos-space",
+      },
+    });
+  });
+
   test("preserves the typed Capsule name through install return links", () => {
     const returnPath = installReturnPathFromPrefill({
       git: "https://github.com/acme/worker.git",

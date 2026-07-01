@@ -2,6 +2,7 @@ import {
   capsuleNameFromUrl,
   parseInstallPrefill,
   type InstallPrefill,
+  type InstallPrefillVariableValue,
 } from "./install-link.ts";
 
 export interface InstallReturnContext {
@@ -9,7 +10,7 @@ export interface InstallReturnContext {
   readonly ref: string;
   readonly path: string;
   readonly name?: string;
-  readonly vars?: Readonly<Record<string, string>>;
+  readonly vars?: Readonly<Record<string, InstallPrefillVariableValue>>;
   readonly label: string;
   readonly host: string;
   readonly sourceLabel: string;
@@ -59,7 +60,11 @@ export function installReturnPathFromPrefill(
   const name = prefill.name?.trim();
   if (name) params.set("name", name);
   for (const [key, value] of Object.entries(prefill.vars ?? {}).sort()) {
-    params.set(`var.${key}`, value);
+    if (typeof value === "string") {
+      params.set(`var.${key}`, value);
+    } else {
+      params.set(`varjson.${key}`, JSON.stringify(value));
+    }
   }
 
   const safe = parseInstallPrefill(`?${params.toString()}`);
@@ -71,7 +76,11 @@ export function installReturnPathFromPrefill(
   canonical.set("path", safe.path || ".");
   if (safe.name) canonical.set("name", safe.name);
   for (const [key, value] of Object.entries(safe.vars ?? {}).sort()) {
-    canonical.set(`var.${key}`, value);
+    if (typeof value === "string") {
+      canonical.set(`var.${key}`, value);
+    } else {
+      canonical.set(`varjson.${key}`, JSON.stringify(value));
+    }
   }
   return `/new?${canonical.toString()}`;
 }
