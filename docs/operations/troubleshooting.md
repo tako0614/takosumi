@@ -5,7 +5,7 @@
 > (source / plan / apply / destroy) を起点に、 原因切り分け → 暫定復旧 →
 > 恒久対策の順に確認する。
 
-正本 model は [`../core-spec.md`](../core-spec.md)。 Run の確認は dashboard の Activity か
+正本 model は [`../internal/core-spec.md`](../internal/core-spec.md)。 Run の確認は dashboard の Activity か
 `GET /api/v1/runs/:runId` / `GET /api/v1/runs/:runId/logs` を使う。
 
 ## 早見表
@@ -56,7 +56,7 @@
 
 ## 関連ドキュメント
 
-- [Core Specification](../core-spec.md)
+- [Core Specification](../internal/core-spec.md)
 - [Incident Response](incident-response.md)
 - [Rollback SOP](rollback-sop.md)
 - [Secret Rotation Policy](secret-rotation-policy.md)

@@ -84,17 +84,16 @@ Same shape, different target.
 ```
 
 This does not mean Takosumi should recreate every provider or standard API. If
-an adequate generic OpenTofu provider or standard endpoint already exists, use
-it through the Stack flow. Before adding a new `takosumi_*` resource, check
-whether an existing provider, a standard endpoint, or a generic-env
-ProviderConnection is enough. Takosumi shapes are for provider-neutral service
-forms where Takosumi must own bindings, policy, metering, import paths, or
-managed target placement.
-The reverse is scoped too: if a generic provider does not exist, Takosumi still
-does not add a catch-all provider by default. One-off gaps stay in generic-env
-ProviderConnections and ordinary OpenTofu modules. New `takosumi_*` resources
-are added only for repeated service forms with a typed schema, planner, adapter,
-state/import/drift behavior, and capability evidence.
+an industry-standard API, protocol, or OpenTofu provider already fits, use that
+surface through the Stack flow or a scoped compatibility profile. Before adding
+a new `takosumi_*` resource, check whether an existing provider, standard
+surface, or generic-env ProviderConnection is enough. Takosumi shapes are added
+only for repeated service forms with no adequate standard surface and a clear
+schema, planner, adapter, state/import/drift behavior, and capability evidence.
+S3-compatible APIs, OCI registries, Kubernetes CRDs, CloudEvents, and
+OpenAI-compatible endpoints remain external standard surfaces.
+
+The public API boundary is documented in [Takosumi API](./reference/api.md).
 
 ## What OSS Includes
 
@@ -119,8 +118,8 @@ ordinary S3/R2/GCS use should go through existing providers or standard
 endpoints. They are scoped and versioned subsets, not a claim of full AWS or
 full Cloudflare compatibility.
 
-Detailed Resource Shape and compatibility capability model lives in the
-[Takosumi Final Plan](https://github.com/tako0614/takosumi/blob/main/docs/final-plan.md).
+The public API boundary is documented in [Takosumi API](./reference/api.md).
+Resource Shape vocabulary is documented in the [Model reference](./reference/model.md).
 
 ## Operator and Cloud Operation
 
@@ -147,4 +146,5 @@ API compatibility.
 - [Quickstart](./getting-started/quickstart.md)
 - [Takosumi Cloud](./cloud/index.md)
 - [Model reference](./reference/model.md)
+- [Takosumi API](./reference/api.md)
 - [CLI reference](./reference/cli.md)

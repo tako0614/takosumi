@@ -202,17 +202,75 @@ Generic env is a required escape hatch so arbitrary providers can run with
 explicit env/file declarations, runner policy, provider plugin policy, and
 egress policy.
 
-If an adequate generic OpenTofu provider or standard API already exists,
-Takosumi should use it through this Stack flow instead of creating a
-Takosumi-owned clone. Resource Shapes are for provider-neutral service forms
-where Takosumi needs resolution, binding projection, policy, metering, or
-managed target control.
+If an industry-standard protocol, API, or OpenTofu provider already expresses
+the service cleanly, Takosumi should use that standard surface through the
+Stack flow or a scoped compatibility profile instead of creating a
+Takosumi-owned clone. S3-compatible object storage, OCI registry, Kubernetes
+CRDs, CloudEvents, OpenAI-compatible APIs, and scoped Cloudflare
+Workers-compatible import/deploy paths are examples of standard-conscious
+surfaces.
 
-If no generic provider exists, that is still not enough by itself. One-off cases
-should use generic-env ProviderConnections and ordinary OpenTofu modules. Add a
-Takosumi provider resource only when the missing surface is a repeated service
-form with a clear schema, validation, planner, adapter path, state/import/drift
-story, and capability evidence.
+If a durable service form has no adequate standard surface, Takosumi should
+define it as a typed Resource Shape. One-off gaps still stay in generic-env
+ProviderConnections and ordinary OpenTofu modules. Add a Takosumi provider
+resource only when the missing surface is a repeated service form with a clear
+schema, validation, planner, adapter path, state/import/drift story, and
+capability evidence. A provider resource that is neither a Takosumi-owned
+service form nor a standard compatibility surface has no reason to exist.
+
+## Takosumi Provider And API Contract
+
+`takosumi/takosumi` is a Takosumi-native OpenTofu provider. Every public
+`takosumi_*` resource is a typed Takosumi Resource Shape or operator/admin
+object. It is not a wrapper around existing provider resources, and it must not
+call AWS, Cloudflare, Kubernetes, VM, AI, or storage-provider APIs directly.
+
+Provider responsibilities:
+
+```text
+HCL schema for Takosumi-owned shapes
+local validation
+discovery from /.well-known/takosumi and /v1/capabilities
+Resource API preview/apply/delete/status calls
+status polling and output projection
+minimal OpenTofu state mapping
+```
+
+Provider non-responsibilities:
+
+```text
+vendor API calls
+backend selection
+credential minting
+adapter execution
+secret storage
+catch-all generic resource handling
+edition branching
+```
+
+The Resource API is Takosumi-native, but the wire model follows standard
+control-plane conventions:
+
+```text
+apiVersion / kind / metadata / spec / status
+stable ids and names
+idempotent create/update semantics
+preview before apply
+explicit delete
+observe/refresh for drift
+import for adoption
+structured error codes
+capability discovery
+cursor pagination
+```
+
+Compatibility APIs are different from the Resource API. They exist specifically
+to preserve industry-standard surfaces when Takosumi provides the backend or
+import path: S3-compatible object storage, OCI registry, CloudEvents,
+Kubernetes CRDs, OpenAI-compatible AI gateway endpoints, or scoped Cloudflare
+Workers-compatible import/deploy paths. Those facades enter Takosumi
+capabilities; they do not become the canonical internal model and they do not
+imply full vendor API compatibility.
 
 ## Resource Objects
 
