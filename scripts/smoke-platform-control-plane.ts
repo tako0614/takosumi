@@ -867,10 +867,9 @@ export function dryRunResult(
       : {}),
     capsuleGateStatus: "passed",
     policyStatus: "passed",
-    workerUrl:
-      shouldVerifyCloudflareDeployment(options)
-        ? publicWorkerUrl(options)
-        : "",
+    workerUrl: shouldVerifyCloudflareDeployment(options)
+      ? publicWorkerUrl(options)
+      : "",
     opentofuApplyVerified: options.verificationMode === "opentofu",
     deploymentVerified: shouldVerifyCloudflareDeployment(options),
     publicUrlVerified:
@@ -1241,10 +1240,9 @@ export async function runPlatformControlPlaneSmoke(
       publicUrlChecks,
       capsuleGateStatus: "passed",
       policyStatus: policyStatus === "denied" ? failPolicy() : "passed",
-      workerUrl:
-        shouldVerifyCloudflareDeployment(options)
-          ? publicWorkerUrl(options)
-          : "",
+      workerUrl: shouldVerifyCloudflareDeployment(options)
+        ? publicWorkerUrl(options)
+        : "",
       opentofuApplyVerified: options.verificationMode === "opentofu",
       deploymentVerified: shouldVerifyCloudflareDeployment(options),
       publicUrlVerified:
@@ -2422,22 +2420,7 @@ async function assertConfiguredPublicUrls(
       );
     }
     const url = publicCheckUrl(rawUrl, check);
-    const response = await fetch(url, { headers: { accept: "text/html,*/*" } });
-    const body = await response.text();
-    if (response.status !== check.expectedStatus) {
-      throw new Error(
-        `public URL check ${check.name} returned HTTP ${response.status}; expected ${check.expectedStatus}`,
-      );
-    }
-    for (const marker of check.bodyIncludes) {
-      if (!body.includes(marker)) {
-        throw new Error(
-          `public URL check ${check.name} response did not include marker ${JSON.stringify(
-            marker,
-          )}: ${redactResponseSnippet(body)}`,
-        );
-      }
-    }
+    const { response, body } = await fetchPublicUrlCheckWithRetry(url, check);
     results.push({
       name: check.name,
       output: check.output,
@@ -2449,6 +2432,36 @@ async function assertConfiguredPublicUrls(
     });
   }
   return results;
+}
+
+async function fetchPublicUrlCheckWithRetry(
+  url: string,
+  check: PublicUrlCheck,
+): Promise<{ readonly response: Response; readonly body: string }> {
+  let lastError: Error | undefined;
+  for (let attempt = 0; attempt < 16; attempt += 1) {
+    const response = await fetch(url, {
+      headers: { accept: "text/html,*/*" },
+    });
+    const body = await response.text();
+    if (response.status === check.expectedStatus) {
+      const missing = check.bodyIncludes.find(
+        (marker) => !body.includes(marker),
+      );
+      if (!missing) return { response, body };
+      lastError = new Error(
+        `public URL check ${check.name} response did not include marker ${JSON.stringify(
+          missing,
+        )}: ${redactResponseSnippet(body)}`,
+      );
+    } else {
+      lastError = new Error(
+        `public URL check ${check.name} returned HTTP ${response.status}; expected ${check.expectedStatus}`,
+      );
+    }
+    await sleep(Math.min(5_000, 500 + attempt * 500));
+  }
+  throw lastError ?? new Error(`public URL check ${check.name} failed`);
 }
 
 function publicCheckUrl(rawUrl: string, check: PublicUrlCheck): string {
