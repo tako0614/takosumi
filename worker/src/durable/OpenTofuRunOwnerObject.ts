@@ -1,5 +1,5 @@
 import type { CloudflareWorkerEnv, OpenTofuRunAction } from "../bindings.ts";
-import { cachedDeployControlService } from "../deploy_control_seam.ts";
+import { cachedRunOwnerDeployControlService } from "../deploy_control_seam.ts";
 import { InstallationLeaseBusyError } from "../../../core/domains/deploy-control/installation_lease.ts";
 
 const RUN_OWNER_RECORD_KEY = "run";
@@ -361,7 +361,7 @@ async function dispatchToController(
   },
   env: CloudflareWorkerEnv,
 ): Promise<void> {
-  const service = await cachedDeployControlService(env);
+  const service = await cachedRunOwnerDeployControlService(env);
   await service.operations.dispatchQueuedRun(dispatch);
 }
 
@@ -374,7 +374,7 @@ async function markRunRetriesExhausted(
   env: CloudflareWorkerEnv,
 ): Promise<void> {
   try {
-    const service = await cachedDeployControlService(env);
+    const service = await cachedRunOwnerDeployControlService(env);
     await service.operations.controller.markRunFailed(
       dispatch.action,
       dispatch.runId,
