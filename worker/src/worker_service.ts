@@ -410,6 +410,7 @@ function openTofuRunOwnerSourceSyncEnqueuer(
       spaceId: dispatch.spaceId,
       messageId: directRunOwnerMessageId(dispatch.runId),
       queueAttempt: 1,
+      cause: dispatch.cause,
     });
   };
 }
