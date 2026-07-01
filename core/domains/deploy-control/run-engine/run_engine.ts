@@ -3707,6 +3707,7 @@ export class RunEngine {
           : {}),
       },
     });
+    await this.#enqueueRequeuedRun("plan", queued);
     return result.run as PlanRun;
   }
 
@@ -3843,7 +3844,27 @@ export class RunEngine {
           : {}),
       },
     });
+    await this.#enqueueRequeuedRun("apply", queued);
     return result.run as ApplyRun;
+  }
+
+  async #enqueueRequeuedRun(
+    action: "plan" | "apply",
+    run: PlanRun | ApplyRun,
+  ): Promise<void> {
+    try {
+      await this.#enqueueRun({
+        action,
+        runId: run.id,
+        spaceId: run.workspaceId ?? run.spaceId,
+      });
+    } catch (error) {
+      log.warn("deploy_control.retry_enqueue_failed", {
+        action,
+        runId: run.id,
+        error: errorMessage(error),
+      });
+    }
   }
 
   async #executePlan(

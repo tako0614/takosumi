@@ -271,6 +271,11 @@ test("a runner failure records the run failed and never persists the minted cred
 test("a retryable runner infrastructure reset requeues plan without dropping inputs", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   let planCalls = 0;
+  const retryDispatches: Parameters<EnqueueRun>[0][] = [];
+  const enqueueRun: EnqueueRun = (dispatch) => {
+    retryDispatches.push(dispatch);
+    return Promise.resolve();
+  };
   const controller = new OpenTofuDeploymentController({
     store,
     now: monotonicNow(5250),
@@ -294,7 +299,7 @@ test("a retryable runner infrastructure reset requeues plan without dropping inp
       apply: () => Promise.resolve({}),
     },
     vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
-    enqueueRun: noopEnqueue,
+    enqueueRun,
   });
   const request = await seedUpdatable(store, {
     installationId: "inst_plan_retry",
@@ -302,6 +307,7 @@ test("a retryable runner infrastructure reset requeues plan without dropping inp
   const { planRun: queuedPlan } = await controller.createPlanRun(request);
   expect(queuedPlan.status).toEqual("queued");
   expect(await store.getPlanRunInputs(queuedPlan.id)).toBeDefined();
+  retryDispatches.length = 0;
 
   await expect(
     controller.dispatchQueuedRun({
@@ -319,6 +325,9 @@ test("a retryable runner infrastructure reset requeues plan without dropping inp
     requeued.auditEvents.some((event) => event.type === "plan.retry_scheduled"),
   ).toEqual(true);
   expect(planCalls).toEqual(1);
+  expect(retryDispatches).toEqual([
+    { action: "plan", runId: queuedPlan.id, spaceId: queuedPlan.spaceId },
+  ]);
 
   await controller.dispatchQueuedRun({
     action: "plan",
@@ -333,6 +342,11 @@ test("a retryable runner infrastructure reset requeues plan without dropping inp
 test("a retryable runner infrastructure reset requeues destroy plan without failing terminally", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   let planCalls = 0;
+  const retryDispatches: Parameters<EnqueueRun>[0][] = [];
+  const enqueueRun: EnqueueRun = (dispatch) => {
+    retryDispatches.push(dispatch);
+    return Promise.resolve();
+  };
   const controller = new OpenTofuDeploymentController({
     store,
     now: monotonicNow(5375),
@@ -356,7 +370,7 @@ test("a retryable runner infrastructure reset requeues destroy plan without fail
       apply: () => Promise.resolve({}),
     },
     vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
-    enqueueRun: noopEnqueue,
+    enqueueRun,
   });
   const request = await seedUpdatable(store, {
     installationId: "inst_destroy_plan_retry",
@@ -366,6 +380,7 @@ test("a retryable runner infrastructure reset requeues destroy plan without fail
     operation: "destroy",
   });
   expect(queuedPlan.status).toEqual("queued");
+  retryDispatches.length = 0;
 
   await expect(
     controller.dispatchQueuedRun({
@@ -385,6 +400,9 @@ test("a retryable runner infrastructure reset requeues destroy plan without fail
     ),
   ).toEqual(true);
   expect(planCalls).toEqual(1);
+  expect(retryDispatches).toEqual([
+    { action: "plan", runId: queuedPlan.id, spaceId: queuedPlan.spaceId },
+  ]);
 
   await controller.dispatchQueuedRun({
     action: "plan",
@@ -399,6 +417,11 @@ test("a retryable runner infrastructure reset requeues destroy plan without fail
 test("a retryable runner infrastructure reset requeues apply without failing terminally", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   let applyCalls = 0;
+  const retryDispatches: Parameters<EnqueueRun>[0][] = [];
+  const enqueueRun: EnqueueRun = (dispatch) => {
+    retryDispatches.push(dispatch);
+    return Promise.resolve();
+  };
   const controller = new OpenTofuDeploymentController({
     store,
     now: monotonicNow(5500),
@@ -430,7 +453,7 @@ test("a retryable runner infrastructure reset requeues apply without failing ter
       },
     },
     vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
-    enqueueRun: noopEnqueue,
+    enqueueRun,
   });
   const request = await seedUpdatable(store, { installationId: "inst_retry" });
   const { planRun: queuedPlan } = await controller.createPlanRun(request);
@@ -449,6 +472,7 @@ test("a retryable runner infrastructure reset requeues apply without failing ter
     expected: applyExpectedGuardFromPlanRun(planRun),
   });
   expect(applyRun.status).toEqual("queued");
+  retryDispatches.length = 0;
 
   await expect(
     controller.dispatchQueuedRun({
@@ -467,6 +491,9 @@ test("a retryable runner infrastructure reset requeues apply without failing ter
     ),
   ).toEqual(true);
   expect(applyCalls).toEqual(1);
+  expect(retryDispatches).toEqual([
+    { action: "apply", runId: applyRun.id, spaceId: applyRun.spaceId },
+  ]);
 
   await controller.dispatchQueuedRun({
     action: "apply",
@@ -485,6 +512,11 @@ test("a retryable runner infrastructure reset requeues apply without failing ter
 test("a retryable runner infrastructure reset requeues destroy apply without failing terminally", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   let destroyCalls = 0;
+  const retryDispatches: Parameters<EnqueueRun>[0][] = [];
+  const enqueueRun: EnqueueRun = (dispatch) => {
+    retryDispatches.push(dispatch);
+    return Promise.resolve();
+  };
   const controller = new OpenTofuDeploymentController({
     store,
     now: monotonicNow(5750),
@@ -518,7 +550,7 @@ test("a retryable runner infrastructure reset requeues destroy apply without fai
       },
     },
     vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
-    enqueueRun: noopEnqueue,
+    enqueueRun,
   });
   const request = await seedUpdatable(store, {
     installationId: "inst_destroy",
@@ -541,6 +573,7 @@ test("a retryable runner infrastructure reset requeues destroy apply without fai
     expected: applyExpectedGuardFromPlanRun(planRun),
   });
   expect(applyRun.status).toEqual("queued");
+  retryDispatches.length = 0;
 
   await controller.dispatchQueuedRun({
     action: "apply",
@@ -558,6 +591,9 @@ test("a retryable runner infrastructure reset requeues destroy apply without fai
     ),
   ).toEqual(true);
   expect(destroyCalls).toEqual(1);
+  expect(retryDispatches).toEqual([
+    { action: "apply", runId: applyRun.id, spaceId: applyRun.spaceId },
+  ]);
 
   await controller.dispatchQueuedRun({
     action: "apply",
