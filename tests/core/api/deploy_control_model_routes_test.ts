@@ -67,6 +67,7 @@ async function seedInstallConfig(
     };
   },
   spaceId: string,
+  variableMapping: InstallConfig["variableMapping"] = {},
 ): Promise<string> {
   const nowIso = new Date(0).toISOString();
   const config: InstallConfig = {
@@ -76,7 +77,7 @@ async function seedInstallConfig(
     sourceKind: "generic_capsule",
     installType: "opentofu_module",
     trustLevel: "space",
-    variableMapping: {},
+    variableMapping,
     outputAllowlist: {},
     policy: {},
     createdAt: nowIso,
@@ -233,6 +234,115 @@ test("model e2e: create Installation with vars clones a Space-scoped InstallConf
     url: { from: "url", type: "url" },
     worker_name: { from: "worker_name", type: "string" },
   });
+});
+
+test("model e2e: create Installation expands dotted vars into object inputs", async () => {
+  const { app, operations } = await service();
+  const spaceId = await createSpace(app, "dotted-vars");
+  const sourceId = await createSource(app, spaceId);
+  const installConfigId = await seedInstallConfig(operations, spaceId);
+
+  const createRes = await app.request(
+    `/internal/v1/spaces/${spaceId}/installations`,
+    {
+      method: "POST",
+      headers: headers({ "content-type": "application/json" }),
+      body: JSON.stringify({
+        name: "takos",
+        environment: "production",
+        sourceId,
+        installConfigId,
+        vars: {
+          project_name: "takos-vars",
+          cloudflare: { zone_id: "zone_123" },
+          "cloudflare.workers_subdomain": "shoutatomiyama0614",
+        },
+      }),
+    },
+  );
+  expect(createRes.status).toBe(201);
+  const installation = (await createRes.json()).installation as {
+    installConfigId: string;
+  };
+
+  const config = await operations.installations.getInstallConfig(
+    installation.installConfigId,
+  );
+  expect(config.variableMapping).toEqual({
+    project_name: "takos-vars",
+    cloudflare: {
+      zone_id: "zone_123",
+      workers_subdomain: "shoutatomiyama0614",
+    },
+  });
+});
+
+test("model e2e: create Installation deep-merges dotted vars into base InstallConfig variables", async () => {
+  const { app, operations } = await service();
+  const spaceId = await createSpace(app, "dotted-vars-base");
+  const sourceId = await createSource(app, spaceId);
+  const installConfigId = await seedInstallConfig(operations, spaceId, {
+    cloudflare: {
+      zone_id: "zone_123",
+    },
+  });
+
+  const createRes = await app.request(
+    `/internal/v1/spaces/${spaceId}/installations`,
+    {
+      method: "POST",
+      headers: headers({ "content-type": "application/json" }),
+      body: JSON.stringify({
+        name: "takos",
+        environment: "production",
+        sourceId,
+        installConfigId,
+        vars: {
+          "cloudflare.workers_subdomain": "shoutatomiyama0614",
+        },
+      }),
+    },
+  );
+  expect(createRes.status).toBe(201);
+  const installation = (await createRes.json()).installation as {
+    installConfigId: string;
+  };
+
+  const config = await operations.installations.getInstallConfig(
+    installation.installConfigId,
+  );
+  expect(config.variableMapping).toEqual({
+    cloudflare: {
+      zone_id: "zone_123",
+      workers_subdomain: "shoutatomiyama0614",
+    },
+  });
+});
+
+test("model e2e: create Installation rejects prototype-polluting dotted vars", async () => {
+  const { app, operations } = await service();
+  const spaceId = await createSpace(app, "bad-proto-vars");
+  const sourceId = await createSource(app, spaceId);
+  const installConfigId = await seedInstallConfig(operations, spaceId);
+
+  const createRes = await app.request(
+    `/internal/v1/spaces/${spaceId}/installations`,
+    {
+      method: "POST",
+      headers: headers({ "content-type": "application/json" }),
+      body: JSON.stringify({
+        name: "takos",
+        environment: "production",
+        sourceId,
+        installConfigId,
+        vars: {
+          "__proto__.polluted": true,
+        },
+      }),
+    },
+  );
+  expect(createRes.status).toBe(400);
+  expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
 });
 
 test("model e2e: create Installation rejects non-object vars", async () => {
