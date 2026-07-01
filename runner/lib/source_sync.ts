@@ -424,10 +424,14 @@ export function sourceUrlHost(url: string): string {
   return new URL(url).hostname;
 }
 
+const IMPLICIT_DEFAULT_REF = "main";
+
 // Resolve the requested ref to a full commit sha. A full 40/64-hex ref is taken
 // verbatim (it is a commit id already); otherwise ls-remote resolves the
 // branch/tag. The ref is passed as a literal arg (never interpolated into a
-// shell string) and is validated by assertSafeGitSelector.
+// shell string) and is validated by assertSafeGitSelector. When Takosumi's
+// implicit default `main` does not exist, fall back to the remote default HEAD
+// so older repositories with `master` still install without source metadata.
 export async function resolveSourceCommit(
   source: SourceSyncSource,
   git: SourceGitContext,
@@ -446,6 +450,22 @@ export async function resolveSourceCommit(
   }
   const commit = parseLsRemoteCommit(result.stdout, source.ref);
   if (!commit) {
+    if (source.ref === IMPLICIT_DEFAULT_REF) {
+      const head = await runCommand(
+        ["git", "ls-remote", "--symref", "--", source.url, "HEAD"],
+        { cwd: RUN_ROOT, context: git.context },
+      );
+      if (head.exitCode !== 0) {
+        throw new Error(
+          `git ls-remote HEAD fallback failed: ${redactCredentialOutput(
+            head.stderr || head.stdout,
+            git.context,
+          )}`,
+        );
+      }
+      const headCommit = parseLsRemoteCommit(head.stdout, "HEAD");
+      if (headCommit) return headCommit;
+    }
     throw new Error(`source ref did not resolve to a commit: ${source.ref}`);
   }
   return commit;
@@ -513,10 +533,34 @@ export async function shallowCloneAtCommit(
     });
     return;
   }
-  await runRequiredCommand(
+  const fetchRef = await runCommand(
     ["git", "fetch", "--depth", "1", "--no-tags", "origin", "--", source.ref],
     { cwd: sourceRoot, context: git.context },
   );
+  if (fetchRef.exitCode !== 0 && source.ref === IMPLICIT_DEFAULT_REF) {
+    const fetchHead = await runCommand(
+      ["git", "fetch", "--depth", "1", "--no-tags", "origin", "--", "HEAD"],
+      { cwd: sourceRoot, context: git.context },
+    );
+    if (fetchHead.exitCode !== 0) {
+      throw new Error(
+        `git fetch failed with ${fetchHead.exitCode}: ${redactCredentialOutput(
+          fetchHead.stderr ||
+            fetchHead.stdout ||
+            fetchRef.stderr ||
+            fetchRef.stdout,
+          git.context,
+        )}`,
+      );
+    }
+  } else if (fetchRef.exitCode !== 0) {
+    throw new Error(
+      `git fetch failed with ${fetchRef.exitCode}: ${redactCredentialOutput(
+        fetchRef.stderr || fetchRef.stdout,
+        git.context,
+      )}`,
+    );
+  }
   await runRequiredCommand(["git", "checkout", "-q", "--detach", commit], {
     cwd: sourceRoot,
     context: git.context,

@@ -278,12 +278,13 @@ user-facing family には出しません。
 Worker script の使用量は `resourceFamily: "cloudflare.workers_script"` として
 `gateway_compute` または `gateway_storage_gb_hour` を報告します。Queues は
 `cloudflare.queues`、Workflows は `cloudflare.workflows` として報告します。
-KV value、R2 object、D1 query、Queue message、Workflow instance の data-plane
-subpath は、対応する public meter と platform `fallbackUsage` precharge がある場合
-だけ開きます。R2 は bucket lifecycle、object read/write、storage inventory を
-課金対象にします。R2 object DELETE は cleanup として扱い、残高切れで user data が
-取り残されないよう fallback usage meter を出しません。未対応 managed subpath は
-501 で閉じ、Cloudflare upstream へ素通しして無料利用できる状態にはしません。
+KV value、R2 object、D1 query、Queue message、Queue consumer、Workflow
+instance の subpath は、対応する public meter と platform `fallbackUsage`
+precharge がある場合だけ開きます。R2 は bucket lifecycle、object read/write、
+storage inventory を課金対象にします。R2 object DELETE は cleanup として扱い、
+残高切れで user data が取り残されないよう fallback usage meter を出しません。
+未対応 managed subpath は 501 で閉じ、Cloudflare upstream へ素通しして無料利用
+できる状態にはしません。
 Containers / Durable Objects などの追加 family は、closed backend が発生させた
 usage を `/cloud/usage/resource-meters` で課金 ledger に流せます。ただし、
 customer-facing managed resource として catalog / 画面に出すには、別途 lifecycle

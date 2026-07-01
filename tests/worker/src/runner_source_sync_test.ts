@@ -1,4 +1,5 @@
-import { rm, stat } from "node:fs/promises";
+import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "bun:test";
 import {
@@ -10,7 +11,36 @@ import {
   parseSourceSyncSource,
 } from "../../../runner/entrypoint.ts";
 import { RUN_ROOT } from "../../../runner/lib/constants.ts";
-import { runSourceSync } from "../../../runner/lib/source_sync.ts";
+import {
+  resolveSourceCommit,
+  runSourceSync,
+  shallowCloneAtCommit,
+} from "../../../runner/lib/source_sync.ts";
+
+const decoder = new TextDecoder();
+
+function commandEnv(): Record<string, string> {
+  return Object.fromEntries(
+    Object.entries(process.env).filter(
+      (entry): entry is [string, string] => typeof entry[1] === "string",
+    ),
+  );
+}
+
+function git(cwd: string, args: readonly string[]): string {
+  const proc = Bun.spawnSync(["git", ...args], {
+    cwd,
+    stdout: "pipe",
+    stderr: "pipe",
+    env: commandEnv(),
+  });
+  if (proc.exitCode !== 0) {
+    throw new Error(
+      `git ${args.join(" ")} failed: ${decoder.decode(proc.stderr)}`,
+    );
+  }
+  return decoder.decode(proc.stdout).trim();
+}
 
 // ---------------------------------------------------------------------------
 // URL policy (spec 7.1) — defense-in-depth re-check inside the runner.
@@ -176,6 +206,38 @@ test("parseLsRemoteCommit returns undefined when no commit matches", () => {
   expect(
     parseLsRemoteCommit("not-a-sha\trefs/heads/main\n", "main"),
   ).toBeUndefined();
+});
+
+test("resolveSourceCommit falls back from implicit main to remote HEAD", async () => {
+  const root = await mkdtemp(join(tmpdir(), "takosumi-source-sync-"));
+  try {
+    git(root, ["init", "-b", "master", "repo"]);
+    const repo = join(root, "repo");
+    await writeFile(join(repo, "main.tf"), "terraform {}\n");
+    git(repo, ["add", "main.tf"]);
+    git(repo, [
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "user.name=Takosumi Test",
+      "commit",
+      "-m",
+      "initial",
+    ]);
+    const expectedCommit = git(repo, ["rev-parse", "HEAD"]);
+    const context = { env: commandEnv() };
+    const source = { url: repo, ref: "main", path: "." };
+
+    await expect(resolveSourceCommit(source, { context })).resolves.toBe(
+      expectedCommit,
+    );
+
+    const clone = join(root, "clone");
+    await shallowCloneAtCommit(source, expectedCommit, clone, { context });
+    expect(git(clone, ["rev-parse", "HEAD"])).toBe(expectedCommit);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 // ---------------------------------------------------------------------------
