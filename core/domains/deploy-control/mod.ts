@@ -1819,7 +1819,7 @@ export function installConfigTemplateBinding(config: InstallConfig):
     }
   | undefined {
   if (!config.templateBinding) return undefined;
-  const inputs = config.variableMapping;
+  const inputs = normalizeVariables(config.variableMapping);
   return {
     templateId: config.templateBinding.templateId,
     templateVersion: config.templateBinding.templateVersion,

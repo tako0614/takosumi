@@ -84,7 +84,7 @@ export function normalizeProviders(
 }
 
 export function normalizeVariables(
-  variables: Readonly<Record<string, JsonValue>> | undefined,
+  variables: Readonly<Record<string, unknown>> | undefined,
 ): Readonly<Record<string, JsonValue>> {
   if (variables === undefined) return {};
   if (!isRecord(variables) || Array.isArray(variables)) {
@@ -93,7 +93,136 @@ export function normalizeVariables(
       "variables must be a JSON object",
     );
   }
-  return variables;
+  return normalizeVariablePathRecord(variables, "variables");
+}
+
+const VARIABLE_PATH_SEGMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+export function normalizeVariablePathRecord(
+  variables: Readonly<Record<string, unknown>>,
+  fieldName = "variables",
+): Readonly<Record<string, JsonValue>> {
+  const out: Record<string, JsonValue> = {};
+  for (const [rawKey, value] of Object.entries(variables)) {
+    if (!isJsonValue(value)) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        `${fieldName}.${rawKey} must be a JSON value`,
+      );
+    }
+    const path = rawKey.includes(".")
+      ? normalizedVariablePath(rawKey, fieldName)
+      : [rawKey];
+    writeVariablePath(out, path, value, fieldName);
+  }
+  return out;
+}
+
+function normalizedVariablePath(
+  rawKey: string,
+  fieldName: string,
+): readonly string[] {
+  const path = rawKey.split(".");
+  if (
+    path.length < 2 ||
+    path.some((segment) => !VARIABLE_PATH_SEGMENT_RE.test(segment))
+  ) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      `${fieldName}.${rawKey} must use dot-separated OpenTofu variable identifier segments`,
+    );
+  }
+  return path;
+}
+
+function writeVariablePath(
+  target: Record<string, JsonValue>,
+  path: readonly string[],
+  value: JsonValue,
+  fieldName: string,
+): void {
+  let cursor = target;
+  for (let index = 0; index < path.length; index += 1) {
+    const segment = path[index]!;
+    const fieldPath = `${fieldName}.${path.slice(0, index + 1).join(".")}`;
+    if (index === path.length - 1) {
+      cursor[segment] = mergeVariableValue(cursor[segment], value, fieldPath);
+      return;
+    }
+    const existing = cursor[segment];
+    if (existing === undefined) {
+      const next: Record<string, JsonValue> = {};
+      cursor[segment] = next;
+      cursor = next;
+      continue;
+    }
+    if (!isJsonObject(existing)) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        `${fieldPath} conflicts with another variable path`,
+      );
+    }
+    cursor = existing as Record<string, JsonValue>;
+  }
+}
+
+function mergeVariableValue(
+  existing: JsonValue | undefined,
+  incoming: JsonValue,
+  fieldPath: string,
+): JsonValue {
+  if (existing === undefined) return cloneJsonValue(incoming);
+  if (isJsonObject(existing) && isJsonObject(incoming)) {
+    const merged: Record<string, JsonValue> = { ...existing };
+    for (const [key, value] of Object.entries(incoming)) {
+      merged[key] = mergeVariableValue(
+        merged[key],
+        value,
+        `${fieldPath}.${key}`,
+      );
+    }
+    return merged;
+  }
+  if (JSON.stringify(existing) === JSON.stringify(incoming)) {
+    return cloneJsonValue(existing);
+  }
+  throw new OpenTofuControllerError(
+    "invalid_argument",
+    `${fieldPath} conflicts with another variable path`,
+  );
+}
+
+function cloneJsonValue(value: JsonValue): JsonValue {
+  if (Array.isArray(value)) return value.map(cloneJsonValue);
+  if (isJsonObject(value)) {
+    const out: Record<string, JsonValue> = {};
+    for (const [key, item] of Object.entries(value)) {
+      out[key] = cloneJsonValue(item);
+    }
+    return out;
+  }
+  return value;
+}
+
+function isJsonValue(value: unknown): value is JsonValue {
+  if (value === null) return true;
+  const type = typeof value;
+  if (type === "string" || type === "boolean") return true;
+  if (type === "number") return Number.isFinite(value);
+  if (Array.isArray(value)) return value.every(isJsonValue);
+  if (type !== "object") return false;
+  return Object.values(value as Record<string, unknown>).every(isJsonValue);
+}
+
+function isJsonObject(
+  value: JsonValue | undefined,
+): value is Readonly<Record<string, JsonValue>> {
+  return (
+    value !== undefined &&
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value)
+  );
 }
 
 export function validateOperation(operation: OpenTofuOperation): void {
