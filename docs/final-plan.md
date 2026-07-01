@@ -164,6 +164,22 @@ approval
 policy
 ```
 
+Deployable cloud resources are still OpenTofu resources when the selected
+provider can express them. For example, a Cloudflare Worker app should declare
+its `cloudflare_workers_script`, bindings, queue consumers, routes, and durable
+backing resources in the app repository's `.tf` when those provider resources
+are adequate. Takosumi should not replace that with a hidden release API.
+
+Application build and artifact creation happen before apply in the app repo,
+CI/release pipeline, or an explicitly declared OpenTofu step. Takosumi can run
+the resulting OpenTofu plan and inject credentials, but it does not secretly
+decide where the artifact comes from.
+
+App-owned post-apply hooks are allowed only as a narrow compatibility bridge for
+provider gaps or app initialization that is not a cloud resource itself, such as
+database migrations. They are not the primary deploy model and should shrink as
+the app's OpenTofu module and the underlying providers gain coverage.
+
 Generic env remains a required escape hatch. Any OpenTofu provider can be used
 when the user declares the provider source, allowed provider policy, egress
 policy, and explicit env/file materialization.
