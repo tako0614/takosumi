@@ -2,7 +2,8 @@
 #
 # provider_installation:
 #   filesystem_mirror is authoritative for the providers pre-mirrored into the
-#   image at build time (cloudflare/cloudflare, hashicorp/random, hashicorp/tls).
+#   image at build time (cloudflare/cloudflare, hashicorp/random, hashicorp/tls,
+#   hashicorp/http).
 #   `direct { exclude = [...] }` forbids the registry/network path
 #   for exactly those providers, so a `tofu init` for bundled first-party modules
 #   resolves them from disk with no network. Any provider NOT in these lists
@@ -19,6 +20,7 @@ provider_installation {
       "registry.opentofu.org/cloudflare/cloudflare",
       "registry.opentofu.org/hashicorp/random",
       "registry.opentofu.org/hashicorp/tls",
+      "registry.opentofu.org/hashicorp/http",
     ]
   }
   direct {
@@ -26,6 +28,7 @@ provider_installation {
       "registry.opentofu.org/cloudflare/cloudflare",
       "registry.opentofu.org/hashicorp/random",
       "registry.opentofu.org/hashicorp/tls",
+      "registry.opentofu.org/hashicorp/http",
     ]
   }
 }

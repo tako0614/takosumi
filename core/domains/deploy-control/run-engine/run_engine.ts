@@ -205,6 +205,12 @@ function releaseCommandRunId(applyRunId: string): string {
   return `release_${applyRunId.replace(/[^A-Za-z0-9._-]+/g, "_")}`;
 }
 
+function isRetryableRunnerInfrastructureError(error: unknown): boolean {
+  return /Durable Object reset because its code was updated/i.test(
+    errorMessage(error),
+  );
+}
+
 /**
  * The single-owner run-serialization port. The controller owns the only
  * `#mutationChains` map + `#runSerialized` implementation and passes this
@@ -1034,9 +1040,7 @@ export class RunEngine {
   }): Promise<string> {
     const snapshotId = this.#newId("snap");
     const digest = await stableJsonDigest(input.generatedRoot);
-    const bytes = new TextEncoder().encode(
-      JSON.stringify(input.generatedRoot),
-    );
+    const bytes = new TextEncoder().encode(JSON.stringify(input.generatedRoot));
     const snapshot: SourceSnapshot = {
       id: snapshotId,
       origin: "upload",
@@ -3699,6 +3703,70 @@ export class RunEngine {
     return failed;
   }
 
+  async #requeueApplyRunAfterRunnerInfrastructureError(
+    running: ApplyRun,
+    leaseToken: string | undefined,
+    profile: RunnerProfile,
+    startedAt: number,
+    error: unknown,
+  ): Promise<ApplyRun | undefined> {
+    const now = this.#now();
+    const queued: ApplyRun = {
+      ...running,
+      status: "queued",
+      stateLock: stateLockEvidence(
+        profile.stateBackend,
+        startedAt,
+        now,
+        "recorded",
+      ),
+      heartbeatAt: undefined,
+      diagnostics: undefined,
+      auditEvents: [
+        ...running.auditEvents,
+        auditEvent(running.id, "apply.retry_scheduled", now, {
+          reason: "runner_infrastructure_error",
+          errorCode: compactErrorCode(errorMessage(error)),
+        }),
+      ],
+      updatedAt: now,
+      finishedAt: undefined,
+    };
+    const result = await this.#store.transitionRun({
+      id: running.id,
+      kind: "apply",
+      expectFrom: ["running"],
+      ...(leaseToken ? { expectLeaseToken: leaseToken } : {}),
+      run: queued,
+      clearLeaseToken: true,
+    });
+    if (!result.won) return undefined;
+    await this.#recordDeployOperationMetric({
+      run: queued,
+      operationKind: "apply",
+      status: "queued",
+      startedAt,
+      finishedAt: now,
+      recordApplyDuration: true,
+    });
+    await this.#recordActivity({
+      spaceId: queued.spaceId,
+      action: "run.retry_scheduled",
+      targetType: "run",
+      targetId: queued.id,
+      runId: queued.id,
+      metadata: {
+        phase: "apply",
+        operation: queued.operation,
+        errorCode: compactErrorCode(errorMessage(error)),
+        ...(queued.installationId
+          ? { installationId: queued.installationId }
+          : {}),
+      },
+    });
+    return result.run as ApplyRun;
+  }
+
   async #executePlan(
     running: PlanRun,
     leaseToken: string,
@@ -4482,6 +4550,32 @@ export class RunEngine {
         now,
       });
     } catch (error) {
+      if (runnerDispatched && isRetryableRunnerInfrastructureError(error)) {
+        const queued =
+          await this.#requeueApplyRunAfterRunnerInfrastructureError(
+            runEnvironmentFailedRun(runningForFailure, error),
+            leaseToken,
+            profile,
+            startedAt,
+            error,
+          );
+        if (queued) {
+          const retryError = new OpenTofuControllerError(
+            "failed_precondition",
+            `retryable_runner_infrastructure_error: apply run ${queued.id} requeued after runner reset`,
+          );
+          if (queued.updatedAt !== undefined) {
+            await this.#recordRunnerMinuteUsage({
+              spaceId: queued.workspaceId,
+              runId: queued.id,
+              installationId: queued.installationId,
+              startedAt,
+              finishedAt: queued.updatedAt,
+            });
+          }
+          throw retryError;
+        }
+      }
       await this.#billing.releaseApplyBillingReservation(planRun);
       const failed = await this.#failApplyRun(
         runEnvironmentFailedRun(runningForFailure, error),
