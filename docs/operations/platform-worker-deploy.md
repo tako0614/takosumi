@@ -125,16 +125,31 @@ Runner speed vars は secret ではないが、production の cost/performance b
 ```toml
 [vars]
 TAKOSUMI_RUNNER_KEEPALIVE_SECONDS = "0"
+# Official Cloud realized config also sets:
+# TAKOSUMI_RUNNER_CAPACITY_RETRY_ATTEMPTS = "6"
+# TAKOSUMI_RUNNER_CAPACITY_RETRY_BASE_MS = "2000"
 TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR = "/tmp/takosumi-provider-cache"
 TAKOSUMI_SOURCE_ARCHIVE_ZSTD_LEVEL = "1"
+# TAKOSUMI_COMPATIBILITY_CHECK_TIMEOUT_MS = "90000"
 ```
 
 `TAKOSUMI_RUNNER_KEEPALIVE_SECONDS = "0"` は run ごとに container を破棄する。
-Cloudflare runner は現在 `idFromName(runId)` の run-scoped Durable Object を
-使うため、positive value は次の source_sync / compatibility / plan / apply
-には再利用されず、burst 時に `max_instances` を埋めやすい。stable runner
-affinity を導入するまでは production は `0` を推奨する。失敗 run は keepalive
-値に関係なく shutdown される。
+公式 Takosumi Cloud の realized production / staging config は、install 体感を
+優先して `TAKOSUMI_RUNNER_KEEPALIVE_SECONDS = "120"` を使う。plan の
+`planArtifact` は plan run id を保持し、apply / destroy apply は同じ runner
+Durable Object に戻るため、承認後すぐの apply で container startup と provider
+init/cache の一部を避けられる。成功した plan 以外の source_sync /
+compatibility_check / apply / destroy / release / backup と、失敗 run は
+keepalive 値に関係なく shutdown される。source_sync / compatibility_check /
+新しい plan の cold start はこの knob では消えないので、SourceSnapshot reuse、
+provider mirror、app repo 側の artifact/build 最適化と分けて見る。
+Cloudflare Containers の一時的な `max_instances` 飽和は retry で吸収する。
+公式 Cloud realized config は
+`TAKOSUMI_RUNNER_CAPACITY_RETRY_ATTEMPTS = "6"` /
+`TAKOSUMI_RUNNER_CAPACITY_RETRY_BASE_MS = "2000"` を設定する。
+公式 Cloud は deploy 直後の cold runner でも preflight を誤って
+`unsupported` にしないため、realized config で
+`TAKOSUMI_COMPATIBILITY_CHECK_TIMEOUT_MS = "90000"` も設定する。
 
 ## Secrets
 

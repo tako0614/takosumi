@@ -263,6 +263,83 @@ test("OpenTofu runner Durable Object keeps a minimum activity grace while startu
   assert.equal(runner.sleepAfter, "30s");
 });
 
+test("OpenTofu runner Durable Object keeps only successful plan containers warm when keepalive is enabled", async () => {
+  const calls: string[] = [];
+  const runner = runnerWithContainer(
+    new FakeR2Bucket(),
+    {
+      async containerFetch(request) {
+        calls.push(`fetch ${request.method} ${new URL(request.url).pathname}`);
+        return Response.json({
+          status: "succeeded",
+          planArtifact: {
+            kind: "object-storage",
+            ref: "r2://takos-artifacts/opentofu-plan-runs/plan_warm/tfplan",
+            digest: PLAN_DIGEST,
+          },
+        });
+      },
+    },
+    {
+      env: { TAKOSUMI_RUNNER_KEEPALIVE_SECONDS: "120" },
+      async destroy() {
+        calls.push("destroy");
+      },
+    },
+  );
+
+  const response = await runner.fetch(
+    new Request("https://runner/runs/plan_warm", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "takosumi.opentofu-run@v1",
+        action: "plan",
+        runId: "plan_warm",
+        request: {},
+      }),
+    }),
+  );
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(calls, ["fetch POST /runs/plan_warm"]);
+});
+
+test("OpenTofu runner Durable Object destroys non-plan containers even when keepalive is enabled", async () => {
+  const calls: string[] = [];
+  const runner = runnerWithContainer(
+    new FakeR2Bucket(),
+    {
+      async containerFetch(request) {
+        calls.push(`fetch ${request.method} ${new URL(request.url).pathname}`);
+        return Response.json({ status: "succeeded", files: [] });
+      },
+    },
+    {
+      env: { TAKOSUMI_RUNNER_KEEPALIVE_SECONDS: "120" },
+      async destroy() {
+        calls.push("destroy");
+      },
+    },
+  );
+
+  const response = await runner.fetch(
+    new Request("https://runner/runs/compatibility_snap_1", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "takosumi.opentofu-run@v1",
+        action: "compatibility_check",
+        runId: "compatibility_snap_1",
+        request: {},
+      }),
+    }),
+  );
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(calls, ["fetch POST /runs/compatibility_snap_1", "destroy"]);
+});
+
 test("OpenTofu runner Durable Object destroys a successful run container by default", async () => {
   const calls: string[] = [];
   const runner = runnerWithContainer(

@@ -21,7 +21,7 @@
 | unknown provider が runnable にならない | Compatibility Report の provider finding / missing Provider Connection                                     | declared-env CredentialRecipe、ProviderConnection status、runner profile provider allowlist、egress policy を確認   |
 | producer 更新後に downstream が古い     | Capsule `stale` マーク                                                                                     | dependency graph を確認し、 Workspace update として DAG 順に plan/apply                                              |
 | Runner Container が起動しない           | dispatch timeout / container error                                                                         | runner image / Container 設定を確認、 queue DLQ を確認                                                               |
-| install / deploy が遅い                 | phase timings で `source_clone` / `tofu_init` / `tofu_apply` のどれかが長い                                | SourceSnapshot reuse、provider mirror/cache、app repo 側の image/build 最適化を分けて確認。run-scoped Cloudflare runner では keepalive は cross-run cache にならない |
+| install / deploy が遅い                 | phase timings で `source_clone` / `tofu_init` / `tofu_apply` のどれかが長い                                | SourceSnapshot reuse、provider mirror/cache、app repo 側の image/build 最適化を分けて確認。keepalive は plan->apply / destroy-plan->destroy-apply の warm window にだけ効く |
 
 ## 切り分けの基本
 
@@ -41,11 +41,16 @@
 5. **遅さは phase timings で見る**: `source_clone` が長いなら Git/ref/path と
    SourceSnapshot reuse、`tofu_init` が長いなら provider mirror/cache、
    `tofu_apply` が長いなら provider 側 API / resource 作成待ちを確認する。
-   `TAKOSUMI_RUNNER_KEEPALIVE_SECONDS` は current run container の寿命だけを
-   変える。Cloudflare runner が run-scoped の間は positive value が
-   `max_instances` を埋めやすいので、production は `0` を優先する。app bundle /
-   container image / DB migration の最適化は app repo / CI / OpenTofu module 側で
-   行う。
+   `TAKOSUMI_RUNNER_KEEPALIVE_SECONDS` は apply / destroy apply が plan
+   runner object に戻る短い window を温める設定。source_sync や別 plan の
+   cold start 対策ではない。温存対象は成功した plan のみで、source_sync /
+   compatibility_check / apply / destroy は成功後に破棄される。deploy 直後の
+   compatibility preflight timeout は `TAKOSUMI_COMPATIBILITY_CHECK_TIMEOUT_MS`
+   を確認する。Cloudflare Containers の transient capacity error は
+   `TAKOSUMI_RUNNER_CAPACITY_RETRY_ATTEMPTS` /
+   `TAKOSUMI_RUNNER_CAPACITY_RETRY_BASE_MS`、恒常的な飽和は quota /
+   `max_instances` / runner profile を確認する。app bundle / container image /
+   DB migration の最適化は app repo / CI / OpenTofu module 側で行う。
 
 ## エスカレーション
 

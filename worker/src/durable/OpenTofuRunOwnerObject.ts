@@ -1,11 +1,13 @@
 import type { CloudflareWorkerEnv, OpenTofuRunAction } from "../bindings.ts";
 import { cachedRunOwnerDeployControlService } from "../deploy_control_seam.ts";
 import { InstallationLeaseBusyError } from "../../../core/domains/deploy-control/installation_lease.ts";
+import type { RunStatus } from "takosumi-contract/runs";
 
 const RUN_OWNER_RECORD_KEY = "run";
 const RUN_OWNER_MAX_ATTEMPTS = 3;
 const RUN_OWNER_RETRY_BASE_DELAY_MS = 10_000;
 const RUN_OWNER_LEASE_BUSY_DELAY_MS = 10_000;
+const RUN_OWNER_CONTROLLER_REQUEUE_DELAY_MS = 1_000;
 // This is the recovery window for a RunOwner DO that resets after the
 // controller already put the run ledger back to queued. Normal long dispatches
 // stay serialized by the same DO event, so a shorter alarm mainly reduces the
@@ -66,6 +68,14 @@ export interface OpenTofuRunOwnerObjectDeps {
     },
     env: CloudflareWorkerEnv,
   ) => Promise<void>;
+  readonly readRunStatus?: (
+    dispatch: {
+      readonly action: DispatchableRunAction;
+      readonly runId: string;
+      readonly spaceId: string;
+    },
+    env: CloudflareWorkerEnv,
+  ) => Promise<RunStatus | undefined>;
   readonly markRetriesExhausted?: (
     dispatch: {
       readonly action: DispatchableRunAction;
@@ -87,6 +97,9 @@ export interface OpenTofuRunOwnerObjectDeps {
 export class OpenTofuRunOwnerObject {
   readonly #now: () => number;
   readonly #dispatch: NonNullable<OpenTofuRunOwnerObjectDeps["dispatch"]>;
+  readonly #readRunStatus: NonNullable<
+    OpenTofuRunOwnerObjectDeps["readRunStatus"]
+  >;
   readonly #markRetriesExhausted: NonNullable<
     OpenTofuRunOwnerObjectDeps["markRetriesExhausted"]
   >;
@@ -98,6 +111,7 @@ export class OpenTofuRunOwnerObject {
   ) {
     this.#now = deps.now ?? (() => Date.now());
     this.#dispatch = deps.dispatch ?? dispatchToController;
+    this.#readRunStatus = deps.readRunStatus ?? readRunStatusFromController;
     this.#markRetriesExhausted =
       deps.markRetriesExhausted ?? markRunRetriesExhausted;
   }
@@ -235,14 +249,29 @@ export class OpenTofuRunOwnerObject {
     });
     await this.#scheduleAlarm(now + RUN_OWNER_RUNNING_STALE_MS);
     try {
-      await this.#dispatch(
-        {
-          action: record.action,
-          runId: record.runId,
-          spaceId: record.spaceId,
-        },
-        this.env,
+      const dispatch = {
+        action: record.action,
+        runId: record.runId,
+        spaceId: record.spaceId,
+      };
+      await this.#dispatch(dispatch, this.env);
+      const runStatus = await this.#readRunStatus(dispatch, this.env).catch(
+        () => undefined,
       );
+      if (isRunStillDispatchable(runStatus)) {
+        const requeueAt = this.#now() + RUN_OWNER_CONTROLLER_REQUEUE_DELAY_MS;
+        await this.#writeRecord({
+          ...base,
+          status: "scheduled",
+          startedAt: record.startedAt ?? startedAt,
+          updatedAt: new Date(this.#now()).toISOString(),
+          nextAttemptAt: new Date(requeueAt).toISOString(),
+          lastScheduleCause: "controller_retry",
+          lastError: `run remained ${runStatus} after dispatch`,
+        });
+        await this.#scheduleAlarm(requeueAt);
+        return;
+      }
       const finishedAt = new Date(this.#now()).toISOString();
       await this.#writeRecord({
         ...base,
@@ -254,7 +283,11 @@ export class OpenTofuRunOwnerObject {
       });
       await this.state.storage.deleteAlarm?.();
     } catch (error) {
-      const retryReady = await this.#recordDispatchFailure(record, error);
+      const retryReady = await this.#recordDispatchFailure(
+        record,
+        error,
+        options.drainControllerRetry === true,
+      );
       if (retryReady && options.drainControllerRetry === true) {
         await this.#dispatchDueRun({ drainControllerRetry: false });
       }
@@ -264,6 +297,7 @@ export class OpenTofuRunOwnerObject {
   async #recordDispatchFailure(
     record: RunOwnerRecord,
     error: unknown,
+    immediateControllerRetry: boolean,
   ): Promise<boolean> {
     if (error instanceof InstallationLeaseBusyError) {
       const nextAttemptAt = new Date(
@@ -282,7 +316,12 @@ export class OpenTofuRunOwnerObject {
     if (isControllerManagedRetryError(error)) {
       const existing = await this.#readRecord();
       const now = this.#now();
-      const nextAttemptAt = new Date(now).toISOString();
+      const nextAttemptAt = new Date(
+        now +
+          (immediateControllerRetry
+            ? 0
+            : RUN_OWNER_CONTROLLER_REQUEUE_DELAY_MS),
+      ).toISOString();
       const next: RunOwnerRecord = {
         ...(existing?.runId === record.runId ? existing : record),
         status: "scheduled",
@@ -363,6 +402,18 @@ async function dispatchToController(
 ): Promise<void> {
   const service = await cachedRunOwnerDeployControlService(env);
   await service.operations.dispatchQueuedRun(dispatch);
+}
+
+async function readRunStatusFromController(
+  dispatch: {
+    readonly action: DispatchableRunAction;
+    readonly runId: string;
+    readonly spaceId: string;
+  },
+  env: CloudflareWorkerEnv,
+): Promise<RunStatus | undefined> {
+  const service = await cachedRunOwnerDeployControlService(env);
+  return (await service.operations.getRun(dispatch.runId)).status;
 }
 
 async function markRunRetriesExhausted(
@@ -460,6 +511,10 @@ function isControllerManagedRetryError(error: unknown): boolean {
     error instanceof Error &&
     /retryable_runner_infrastructure_error/i.test(error.message)
   );
+}
+
+function isRunStillDispatchable(status: RunStatus | undefined): boolean {
+  return status === "queued" || status === "running";
 }
 
 function parseIsoMs(value: string, fallback: number): number {

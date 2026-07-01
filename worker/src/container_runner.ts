@@ -35,6 +35,12 @@ import { recordWorkerMetric, type WorkerMetricSink } from "./metrics.ts";
  * shape. Credential values and run bodies are never logged.
  */
 const DEFAULT_COMPATIBILITY_CHECK_TIMEOUT_MS = 45_000;
+const DEFAULT_RUNNER_CAPACITY_RETRY_ATTEMPTS = 5;
+const DEFAULT_RUNNER_CAPACITY_RETRY_BASE_MS = 2_000;
+const MAX_RUNNER_CAPACITY_RETRY_ATTEMPTS = 10;
+const MAX_RUNNER_CAPACITY_RETRY_DELAY_MS = 10_000;
+const RUNNER_CAPACITY_EXCEEDED_PATTERN =
+  /maximum number of running container instances exceeded/i;
 const RUNNER_STARTUP_SECONDS_HEADER = "x-takosumi-runner-startup-seconds";
 type ContainerRunnerAction = OpenTofuRunQueueMessage["action"] | "release";
 
@@ -376,51 +382,70 @@ export class CloudflareContainerOpenTofuRunner
     }
     try {
       await this.#recordActiveRuns(action, 1);
-      const response = await this.env.RUNNER.get(id).fetch(
-        new Request(
-          `https://opentofu-runner.internal/runs/${encodeURIComponent(runId)}`,
-          {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({
-              kind: "takosumi.opentofu-run@v1",
-              action,
-              runId,
-              requestedAt: new Date().toISOString(),
-              request,
-            }),
-            ...(controller ? { signal: controller.signal } : {}),
-          },
-        ),
+      const attempts = runnerCapacityRetryAttempts(this.env);
+      for (let attempt = 1; attempt <= attempts; attempt += 1) {
+        try {
+          const response = await this.env.RUNNER.get(id).fetch(
+            new Request(
+              `https://opentofu-runner.internal/runs/${encodeURIComponent(runId)}`,
+              {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify({
+                  kind: "takosumi.opentofu-run@v1",
+                  action,
+                  runId,
+                  requestedAt: new Date().toISOString(),
+                  request,
+                }),
+                ...(controller ? { signal: controller.signal } : {}),
+              },
+            ),
+          );
+          const { payload, redactedText } =
+            await readResponseJsonObject(response);
+          const startupSeconds = positiveNumberHeader(
+            response.headers.get(RUNNER_STARTUP_SECONDS_HEADER),
+          );
+          if (startupSeconds !== undefined) {
+            await recordWorkerMetric({
+              observability: this.options.observability,
+              env: this.env,
+              name: "takosumi_runner_container_startup_seconds",
+              kind: "histogram",
+              value: startupSeconds,
+              tags: { operationKind: action, status: "ready" },
+            });
+          }
+          if (!response.ok) {
+            const detail = runnerFailureDetail(payload, redactedText);
+            const message = `OpenTofu runner rejected ${action} run ${runId}: ${response.status}${detail ? ` (${detail})` : ""}`;
+            if (
+              attempt < attempts &&
+              isRunnerCapacityExceededMessage(message)
+            ) {
+              await sleepBeforeCapacityRetry(this.env, attempt, controller);
+              continue;
+            }
+            throw new Error(message);
+          }
+          return payload;
+        } catch (error) {
+          if (controller?.signal.aborted && timeoutMs) {
+            throw new Error(
+              `OpenTofu runner ${action} run ${runId} exceeded ${timeoutMs}ms timeout`,
+            );
+          }
+          if (attempt < attempts && isRunnerCapacityExceededError(error)) {
+            await sleepBeforeCapacityRetry(this.env, attempt, controller);
+            continue;
+          }
+          throw error;
+        }
+      }
+      throw new Error(
+        `OpenTofu runner ${action} run ${runId} exhausted capacity retries`,
       );
-      const { payload, redactedText } = await readResponseJsonObject(response);
-      const startupSeconds = positiveNumberHeader(
-        response.headers.get(RUNNER_STARTUP_SECONDS_HEADER),
-      );
-      if (startupSeconds !== undefined) {
-        await recordWorkerMetric({
-          observability: this.options.observability,
-          env: this.env,
-          name: "takosumi_runner_container_startup_seconds",
-          kind: "histogram",
-          value: startupSeconds,
-          tags: { operationKind: action, status: "ready" },
-        });
-      }
-      if (!response.ok) {
-        const detail = runnerFailureDetail(payload, redactedText);
-        throw new Error(
-          `OpenTofu runner rejected ${action} run ${runId}: ${response.status}${detail ? ` (${detail})` : ""}`,
-        );
-      }
-      return payload;
-    } catch (error) {
-      if (controller?.signal.aborted && timeoutMs) {
-        throw new Error(
-          `OpenTofu runner ${action} run ${runId} exceeded ${timeoutMs}ms timeout`,
-        );
-      }
-      throw error;
     } finally {
       if (timeout) clearTimeout(timeout);
       await this.#recordActiveRuns(action, -1);
@@ -445,6 +470,68 @@ export class CloudflareContainerOpenTofuRunner
       tags: { operationKind: action, status: "running" },
     });
   }
+}
+
+async function sleepBeforeCapacityRetry(
+  env: CloudflareWorkerEnv,
+  attempt: number,
+  controller: AbortController | undefined,
+): Promise<void> {
+  await abortableSleep(
+    runnerCapacityRetryDelayMs(env, attempt),
+    controller?.signal,
+  );
+}
+
+async function abortableSleep(
+  delayMs: number,
+  signal: AbortSignal | undefined,
+): Promise<void> {
+  if (signal?.aborted) {
+    throw new DOMException("Aborted", "AbortError");
+  }
+  await new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, delayMs);
+    const onAbort = () => {
+      clearTimeout(timeout);
+      reject(new DOMException("Aborted", "AbortError"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function runnerCapacityRetryAttempts(env: CloudflareWorkerEnv): number {
+  const configured = positiveTimeoutMs(
+    env.TAKOSUMI_RUNNER_CAPACITY_RETRY_ATTEMPTS,
+  );
+  const attempts = configured ?? DEFAULT_RUNNER_CAPACITY_RETRY_ATTEMPTS;
+  return Math.min(MAX_RUNNER_CAPACITY_RETRY_ATTEMPTS, Math.max(1, attempts));
+}
+
+function runnerCapacityRetryDelayMs(
+  env: CloudflareWorkerEnv,
+  attempt: number,
+): number {
+  const base =
+    positiveTimeoutMs(env.TAKOSUMI_RUNNER_CAPACITY_RETRY_BASE_MS) ??
+    DEFAULT_RUNNER_CAPACITY_RETRY_BASE_MS;
+  return Math.min(
+    MAX_RUNNER_CAPACITY_RETRY_DELAY_MS,
+    base * 2 ** (attempt - 1),
+  );
+}
+
+function isRunnerCapacityExceededError(error: unknown): boolean {
+  return (
+    error instanceof Error && isRunnerCapacityExceededMessage(error.message)
+  );
+}
+
+function isRunnerCapacityExceededMessage(message: string): boolean {
+  return RUNNER_CAPACITY_EXCEEDED_PATTERN.test(message);
 }
 
 function compatibilityCheckTimeoutMs(env: CloudflareWorkerEnv): number {
@@ -528,11 +615,21 @@ function runnerFailureDetail(
   const error = stringFromRecord(payload, "error");
   if (error) return redactRunnerDiagnosticText(error);
   const stderr = stringFromRecord(payload, "stderr");
-  if (stderr?.trim()) return redactRunnerDiagnosticText(stderr.trim());
   const stdout = stringFromRecord(payload, "stdout");
+  if (stderr?.trim() && stdout?.trim()) {
+    return redactRunnerDiagnosticText(
+      `${stderr.trim()}\n\n--- runner stdout ---\n${tailText(stdout.trim(), 12000)}`,
+    );
+  }
+  if (stderr?.trim()) return redactRunnerDiagnosticText(stderr.trim());
   if (stdout?.trim()) return redactRunnerDiagnosticText(stdout.trim());
   const trimmed = redactedText.trim();
   return trimmed.length > 0 ? trimmed.slice(0, 500) : undefined;
+}
+
+function tailText(text: string, maxLength: number): string {
+  if (text.length <= maxLength) return text;
+  return `...${text.slice(text.length - maxLength)}`;
 }
 
 function diagnosticsFromContainerResult(
