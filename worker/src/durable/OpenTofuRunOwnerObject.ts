@@ -6,7 +6,11 @@ const RUN_OWNER_RECORD_KEY = "run";
 const RUN_OWNER_MAX_ATTEMPTS = 3;
 const RUN_OWNER_RETRY_BASE_DELAY_MS = 10_000;
 const RUN_OWNER_LEASE_BUSY_DELAY_MS = 10_000;
-const RUN_OWNER_RUNNING_STALE_MS = 10 * 60 * 1000;
+// This is the recovery window for a RunOwner DO that resets after the
+// controller already put the run ledger back to queued. Normal long dispatches
+// stay serialized by the same DO event, so a shorter alarm mainly reduces the
+// user-visible stall after runner infrastructure resets.
+const RUN_OWNER_RUNNING_STALE_MS = 90 * 1000;
 
 type DispatchableRunAction = "plan" | "apply" | "source_sync" | "restore";
 

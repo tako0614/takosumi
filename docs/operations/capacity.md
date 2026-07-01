@@ -88,6 +88,10 @@ credential 付き Source は reuse 対象外にし、private repo bytes を別 S
 relay error のあとに一時 credential file を温存しないための fail-closed 動作。
 current Cloudflare runner は `idFromName(runId)` の run-scoped Durable Object
 を使うため、positive keepalive は cross-run provider cache reuse にはならない。
+RunOwner Durable Object が controller dispatch 中に reset した場合は、run ledger
+が `queued` に戻ったあと最大 90 秒で stale running owner を再試行する。これは
+OpenTofu 実行そのものを短縮する設定ではなく、runner infrastructure reset 後の
+cleanup / destroy が 10 分単位で詰まることを避ける recovery window。
 container image、Worker bundle、DB migration、app index 作成などの最適化は
 各 app repo / CI / registry / OpenTofu module 側の責務として扱う。
 
