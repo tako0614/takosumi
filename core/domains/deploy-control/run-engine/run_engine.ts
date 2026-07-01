@@ -211,6 +211,13 @@ function isRetryableRunnerInfrastructureError(error: unknown): boolean {
   );
 }
 
+function isRetryableRunnerRequeueError(error: unknown): boolean {
+  return (
+    error instanceof OpenTofuControllerError &&
+    /retryable_runner_infrastructure_error/i.test(error.message)
+  );
+}
+
 /**
  * The single-owner run-serialization port. The controller owns the only
  * `#mutationChains` map + `#runSerialized` implementation and passes this
@@ -2399,6 +2406,7 @@ export class RunEngine {
         dispatch,
       );
     } catch (error) {
+      if (isRetryableRunnerRequeueError(error)) throw error;
       await this.#store.deletePlanRunInputs(runId);
       const failedRun = runEnvironmentFailedRun(running, error);
       return await this.#failPlanRun(failedRun, claim.leaseToken, error);
@@ -3640,6 +3648,68 @@ export class RunEngine {
     return failed;
   }
 
+  async #requeuePlanRunAfterRunnerInfrastructureError(
+    running: PlanRun,
+    leaseToken: string | undefined,
+    error: unknown,
+  ): Promise<PlanRun | undefined> {
+    const now = this.#now();
+    const retryEvent =
+      running.operation === "destroy"
+        ? "destroy_plan.retry_scheduled"
+        : "plan.retry_scheduled";
+    const queued: PlanRun = {
+      ...running,
+      status: "queued",
+      heartbeatAt: undefined,
+      diagnostics: undefined,
+      auditEvents: [
+        ...running.auditEvents,
+        auditEvent(running.id, retryEvent, now, {
+          reason: "runner_infrastructure_error",
+          errorCode: compactErrorCode(errorMessage(error)),
+        }),
+      ],
+      updatedAt: now,
+      finishedAt: undefined,
+    };
+    const result = await this.#store.transitionRun({
+      id: running.id,
+      kind: "plan",
+      expectFrom: ["running"],
+      ...(leaseToken ? { expectLeaseToken: leaseToken } : {}),
+      run: queued,
+      clearLeaseToken: true,
+    });
+    if (!result.won) return undefined;
+    await this.#recordDeployOperationMetric({
+      run: queued,
+      operationKind: "plan",
+      status: "queued",
+    });
+    await this.#recordActivity({
+      spaceId: queued.spaceId,
+      action: "run.retry_scheduled",
+      targetType: "run",
+      targetId: queued.id,
+      runId: queued.id,
+      metadata: {
+        phase:
+          queued.driftCheck === true
+            ? "drift_check"
+            : queued.operation === "destroy"
+              ? "destroy_plan"
+              : "plan",
+        operation: queued.operation,
+        errorCode: compactErrorCode(errorMessage(error)),
+        ...(queued.installationId
+          ? { installationId: queued.installationId }
+          : {}),
+      },
+    });
+    return result.run as PlanRun;
+  }
+
   async #failApplyRun(
     running: ApplyRun,
     leaseToken: string | undefined,
@@ -3882,6 +3952,19 @@ export class RunEngine {
       }
       return updated;
     } catch (error) {
+      if (isRetryableRunnerInfrastructureError(error)) {
+        const queued = await this.#requeuePlanRunAfterRunnerInfrastructureError(
+          running,
+          leaseToken,
+          error,
+        );
+        if (queued) {
+          throw new OpenTofuControllerError(
+            "failed_precondition",
+            `retryable_runner_infrastructure_error: plan run ${queued.id} requeued after runner reset`,
+          );
+        }
+      }
       return await this.#failPlanRun(running, leaseToken, error);
     }
   }
