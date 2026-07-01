@@ -20,12 +20,35 @@ import { createWorkerServiceApp } from "./worker_service.ts";
 export function createDeployControlService(
   env: CloudflareWorkerEnv,
 ): Promise<CreatedTakosumiService> {
-  return createWorkerServiceApp(env, "takosumi-api", {
+  return createWorkerServiceApp(
+    env,
+    "takosumi-api",
+    deployControlServiceOptions(env),
+  );
+}
+
+function deployControlServiceOptions(env: CloudflareWorkerEnv): {
+  readonly runnerProfiles: readonly RunnerProfile[];
+  readonly defaultRunnerProfileId?: string;
+} {
+  return {
     runnerProfiles: resolveEnabledRunnerProfilesFromEnv(env),
     ...(typeof env.TAKOSUMI_DEFAULT_RUNNER_PROFILE_ID === "string" &&
     env.TAKOSUMI_DEFAULT_RUNNER_PROFILE_ID.trim()
-      ? { defaultRunnerProfileId: env.TAKOSUMI_DEFAULT_RUNNER_PROFILE_ID.trim() }
+      ? {
+          defaultRunnerProfileId: env.TAKOSUMI_DEFAULT_RUNNER_PROFILE_ID.trim(),
+        }
       : {}),
+  };
+}
+
+export function createRunOwnerDeployControlService(
+  env: CloudflareWorkerEnv,
+): Promise<CreatedTakosumiService> {
+  return createWorkerServiceApp(env, "takosumi-api", {
+    ...deployControlServiceOptions(env),
+    enqueueRun: async () => {},
+    enqueueSourceSync: async () => {},
   });
 }
 
@@ -99,6 +122,22 @@ export function cachedDeployControlService(
   if (!service) {
     service = createDeployControlService(env);
     inProcessDeployControlServices.set(env, service);
+  }
+  return service;
+}
+
+const runOwnerDeployControlServices = new WeakMap<
+  CloudflareWorkerEnv,
+  Promise<CreatedTakosumiService>
+>();
+
+export function cachedRunOwnerDeployControlService(
+  env: CloudflareWorkerEnv,
+): Promise<CreatedTakosumiService> {
+  let service = runOwnerDeployControlServices.get(env);
+  if (!service) {
+    service = createRunOwnerDeployControlService(env);
+    runOwnerDeployControlServices.set(env, service);
   }
   return service;
 }

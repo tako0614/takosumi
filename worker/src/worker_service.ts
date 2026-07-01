@@ -65,6 +65,8 @@ export async function createWorkerServiceApp(
     readonly runnerProfiles?: readonly RunnerProfile[];
     readonly defaultRunnerProfileId?: string;
     readonly releaseActivator?: ReleaseActivator;
+    readonly enqueueRun?: EnqueueRun;
+    readonly enqueueSourceSync?: EnqueueSourceSync;
   } = {},
 ): Promise<CreatedTakosumiService> {
   const runtimeEnv = cloudflareRuntimeEnv(env, role);
@@ -80,9 +82,14 @@ export async function createWorkerServiceApp(
     runtimeEnv,
     storage,
   });
-  const enqueueRun = openTofuRunOwnerEnqueuer(env) ?? openTofuRunEnqueuer(env);
+  const enqueueRun =
+    options.enqueueRun ??
+    openTofuRunOwnerEnqueuer(env) ??
+    openTofuRunEnqueuer(env);
   const enqueueSourceSync =
-    openTofuRunOwnerSourceSyncEnqueuer(env) ?? openTofuSourceSyncEnqueuer(env);
+    options.enqueueSourceSync ??
+    openTofuRunOwnerSourceSyncEnqueuer(env) ??
+    openTofuSourceSyncEnqueuer(env);
   const installationCoordination = durableObjectInstallationCoordination(env);
   const opentofuRunner = new CloudflareContainerOpenTofuRunner(env, {
     observability: adapters.observability,
