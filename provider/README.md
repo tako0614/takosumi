@@ -2,9 +2,20 @@
 
 A thin OpenTofu/Terraform provider for the **Takosumi Resource Shape API**.
 
-It exposes typed `takosumi_*` resources only for service forms Takosumi must
-resolve, lock, project, meter, or materialize through TargetPool capability
-evidence. It does not call AWS, Cloudflare, Kubernetes, or VM APIs directly. The
+Every resource in this provider is Takosumi-owned. It exposes typed
+`takosumi_*` resources only for Resource Shapes and operator/admin objects that
+Takosumi must resolve, lock, project, meter, or materialize through TargetPool
+capability evidence. It does not wrap AWS, Cloudflare, Kubernetes, S3, OpenAI,
+VM, or other provider resources, and it does not call those APIs directly. A
+resource that is neither a Takosumi-owned service form nor an operator/admin
+object should not exist in this provider.
+
+The standard rule is simple: if an industry-standard surface fits, use that
+surface. If the service form is real but no adequate standard surface exists,
+define a typed Takosumi shape. S3-compatible object storage, OCI registries,
+Kubernetes CRDs, CloudEvents, OpenAI-compatible APIs, and scoped Cloudflare
+Workers-compatible import/deploy paths are standard-conscious compatibility
+surfaces; they are not reasons to add duplicate `takosumi_*` resources. The
 Takosumi endpoint owns resolver decisions, credentials, state, drift, and
 adapter execution.
 
@@ -36,6 +47,46 @@ API, a normal OpenTofu module/provider, or generic env.
 Ordinary S3/R2/GCS/MinIO buckets, Kubernetes resources, VMs, and provider-owned
 cloud services should use existing OpenTofu providers through the plain Stack
 flow when that is enough.
+
+## Provider / API Boundary
+
+`provider-neutral` in Takosumi docs means vendor-independent as a Takosumi
+service contract. It does not mean this provider is a generic provider catalog.
+
+The provider does:
+
+```text
+typed HCL schemas for Takosumi-owned shapes
+local validation
+Takosumi discovery and capability checks
+Resource API preview/apply/delete/status calls
+status polling
+minimal OpenTofu state mapping
+```
+
+The provider does not:
+
+```text
+call vendor APIs directly
+choose a backend in the provider binary
+mint credentials
+store secrets in state
+expose takosumi_resource { type, spec }
+branch on OSS / Operator / Cloud edition names
+```
+
+The Resource API is Takosumi-native and follows standard control-plane API
+conventions: `apiVersion`, `kind`, `metadata`, `spec`, `status`,
+`conditions`, stable resource ids, idempotent create/update, preview before
+apply, explicit delete, observe/refresh for drift, import for adoption,
+capability discovery, cursor pagination, and structured error codes.
+
+Compatibility APIs are separate. They preserve standard surfaces when Takosumi
+provides the backend or import path. When Takosumi exposes S3-compatible
+storage, OCI registry, CloudEvents, Kubernetes CRDs, OpenAI-compatible AI
+Gateway, or a Cloudflare Workers-compatible subset, those facades enter
+Takosumi-managed capabilities. They are not this provider's internal model and
+not promises of full vendor API compatibility.
 
 ## Build And Test
 

@@ -1,0 +1,303 @@
+# Takosumi API
+
+The Takosumi API exposes the Git-based OpenTofu control plane and the Resource
+Shape API.
+
+It is not a combined clone of Cloudflare, AWS, Kubernetes, or other vendor APIs.
+When an industry-standard surface exists, Takosumi keeps that surface. When a
+durable service form has no adequate standard surface, Takosumi defines a typed
+shape.
+
+## Rule
+
+```text
+Standard API / protocol / OpenTofu provider exists:
+  use that surface.
+
+No standard surface exists, and the service form is repeated:
+  define a Takosumi Resource Shape.
+
+One-off gap:
+  use generic-env ProviderConnection and an ordinary OpenTofu module.
+```
+
+`takosumi/takosumi` is a thin client for this API. The provider does not call
+vendor APIs directly and does not choose backends. It sends preview / apply /
+delete / status requests to the Resource API, and the Takosumi endpoint runs the
+Resolver, Adapter, TargetPool, and Policy logic.
+
+## Discovery
+
+Every Takosumi endpoint exposes discovery.
+
+```http
+GET /.well-known/takosumi
+GET /v1/capabilities
+```
+
+The provider, CLI, and dashboard branch on capabilities, not edition names.
+
+Example:
+
+```json
+{
+  "apiVersions": ["takosumi.dev/v1alpha1"],
+  "features": {
+    "stacks": true,
+    "resourceShapes": true,
+    "opentofuRunner": true,
+    "oidc": true,
+    "compatS3": true,
+    "compatCloudflareWorkers": false,
+    "billing": false
+  },
+  "endpoints": {
+    "api": "https://takosumi.example.com",
+    "oidcIssuer": "https://takosumi.example.com"
+  }
+}
+```
+
+## Object Model
+
+Resource Shape objects use a Kubernetes-style shape.
+
+```json
+{
+  "apiVersion": "takosumi.dev/v1alpha1",
+  "kind": "EdgeWorker",
+  "metadata": {
+    "name": "api",
+    "space": "prod",
+    "labels": {
+      "app": "example"
+    }
+  },
+  "spec": {
+    "artifact": {
+      "path": "dist/worker.js"
+    },
+    "profiles": ["workers_bindings"]
+  },
+  "status": {
+    "phase": "Ready",
+    "observedGeneration": 3,
+    "conditions": [
+      {
+        "type": "Ready",
+        "status": "True"
+      }
+    ]
+  }
+}
+```
+
+`spec` is desired state. `status` is observed state. Secret material is never
+stored in `spec`, `status`, OpenTofu state, logs, or audit records.
+
+## Authentication
+
+API clients use a session cookie or bearer token depending on the endpoint.
+
+```http
+Authorization: Bearer <token>
+```
+
+Cloud API keys are Takosumi Accounts personal access tokens. Endpoints with
+their own standard signing model, such as S3-compatible storage, use that
+protocol's signature instead.
+
+## OpenTofu Stack API
+
+The Stack API runs plain OpenTofu / Terraform modules from Git. Existing
+providers run as-is in this flow.
+
+Representative operations:
+
+```http
+POST   /v1/workspaces
+GET    /v1/workspaces/{workspaceId}
+
+POST   /v1/projects
+GET    /v1/projects/{projectId}
+
+POST   /v1/capsules
+GET    /v1/capsules/{capsuleId}
+PATCH  /v1/capsules/{capsuleId}
+
+POST   /v1/provider-connections
+GET    /v1/provider-connections
+GET    /v1/provider-connections/{connectionId}
+DELETE /v1/provider-connections/{connectionId}
+
+POST   /v1/runs
+GET    /v1/runs/{runId}
+GET    /v1/runs/{runId}/logs
+POST   /v1/runs/{runId}/approve
+POST   /v1/runs/{runId}/cancel
+
+GET    /v1/capsules/{capsuleId}/state-versions
+GET    /v1/capsules/{capsuleId}/outputs
+GET    /v1/audit-events
+```
+
+A Run is one ledger entry with a `plan`, `apply`, `destroy`, `refresh`, or
+`output` operation. Plan / Apply / Destroy are not separate ledgers.
+
+A Run stores:
+
+```text
+source snapshot
+OpenTofu version
+provider lock digest
+ProviderBinding
+injected env metadata, not values
+plan/apply result
+state version
+outputs
+logs
+actor
+audit evidence
+```
+
+## Resource Shape API
+
+The Resource Shape API is the canonical API used by `takosumi_*` provider
+resources, CLI, dashboard, and compatibility facades.
+
+```http
+POST   /v1/resources/preview
+PUT    /v1/resources/{kind}/{name}
+GET    /v1/resources/{kind}/{name}
+DELETE /v1/resources/{kind}/{name}
+GET    /v1/resources
+GET    /v1/resources/{id}/events
+POST   /v1/resources/{id}/refresh
+POST   /v1/resources/{id}/import
+```
+
+The Resource Shape API is typed. Takosumi does not expose a catch-all
+`takosumi_resource { type, spec }` as the normal interface.
+
+Current v1alpha1 public shapes:
+
+```text
+EdgeWorker
+ObjectBucket
+KVStore
+Queue
+SQLDatabase
+ContainerService
+```
+
+Even when `ObjectBucket` exists, the data plane remains S3-compatible. AI
+Gateway is not a provider resource; apps consume it as an OpenAI-compatible
+endpoint through env/secret projection.
+
+## Target / Credential / Policy API
+
+Backends are resolved through TargetPool, Policy, capability evidence, and
+ResolutionLock. Normal `takosumi_*` HCL does not hard-code backend placement.
+
+```http
+POST /v1/targets
+GET  /v1/targets
+PUT  /v1/targets/{targetId}
+
+POST /v1/target-pools
+GET  /v1/target-pools
+PUT  /v1/target-pools/{targetPoolId}
+
+POST /v1/credentials
+GET  /v1/credentials
+POST /v1/credentials/{credentialId}/rotate
+
+POST /v1/policies
+GET  /v1/policies
+```
+
+Credentials can use `static`, `oidc`, `agent`, or `managed` modes. Secret
+values are write-only.
+
+## OIDC / Workload Identity
+
+Takosumi can expose an OIDC issuer for service accounts, runners, agents, and
+external cloud federation.
+
+```http
+GET  /.well-known/openid-configuration
+GET  /oauth/jwks
+POST /oauth/token
+
+POST /v1/identity/service-accounts
+POST /v1/identity/tokens
+POST /v1/identity/federation/aws
+POST /v1/identity/federation/gcp
+POST /v1/identity/federation/kubernetes
+```
+
+Operator / Cloud can add Enterprise SSO, SCIM, and commercial audit export, but
+the workload identity contract belongs to standard Takosumi.
+
+## Compatibility API
+
+Compatibility APIs preserve standard protocol/API facades. The internal
+canonical model remains the Resource API.
+
+```text
+compat.s3.v1
+  S3-compatible Object Storage data/control path
+
+compat.oci.v1
+  Artifact / ContainerImage lifecycle
+
+compat.cloudevents.v1
+  Queue / EventHandler event ingress
+
+compat.kubernetes.crd.v1
+  Kubernetes northbound API
+
+compat.cloudflare.workers.v1
+  scoped Workers-compatible import/deploy path
+```
+
+These are not full AWS or full Cloudflare compatibility claims. Scope is
+published through capabilities and a compatibility matrix.
+
+Takosumi Cloud-specific endpoint examples live in
+[Cloud endpoints](./cloud-endpoints.md).
+
+## Error Shape
+
+Failures return structured errors.
+
+```json
+{
+  "error": {
+    "code": "capability_not_available",
+    "message": "compat.cloudflare.workers.v1 is not enabled for this endpoint",
+    "requestId": "req_123"
+  }
+}
+```
+
+Secret values, temporary credentials, and internal adapter credentials are never
+included in errors.
+
+## Versioning
+
+The current API version is `takosumi.dev/v1alpha1`.
+
+```text
+v1alpha1:
+  breaking changes are allowed. Update docs and conformance together.
+
+v1beta1:
+  core shape is fixed. Migration path required.
+
+v1:
+  backward compatibility maintained. No field removals.
+```
+
+OSS / Operator / Cloud differences are represented by capabilities, not API
+version.

@@ -87,13 +87,14 @@ Same shape, different target.
 同じ `.tf` を使い、Provider Binding だけを変えて dev/prod、別 account、別 provider alias に流せます。
 同じ Resource Shape を使い、TargetPool / policy / Adapter によって、operator が有効化した target へ解決できます。
 
-ただし、既存の汎用 OpenTofu provider や標準 API で足りるものは Takosumi が作り直しません。新しい
-`takosumi_*` resource を増やす前に、既存 provider / 標準 endpoint / generic-env ProviderConnection
-で足りるかを先に確認します。Takosumi の shape は、provider-neutral な service form、binding、policy、
-metering、import path、managed target placement を Takosumi が所有する必要があるときだけ使います。
-逆に、汎用 provider がないだけで即 `takosumi_*` resource にするわけでもありません。一回限りの不足は
-generic-env ProviderConnection と通常の OpenTofu module で扱い、繰り返し使う service form として schema /
-planner / adapter / state / import / drift の意味が固まるものだけを Takosumi provider に追加します。
+ただし、既存の industry-standard API / protocol / OpenTofu provider で足りるものは Takosumi が作り直しません。
+新しい `takosumi_*` resource を増やす前に、既存 provider / 標準 surface / generic-env
+ProviderConnection で足りるかを先に確認します。Takosumi の shape は、標準 surface がなく、繰り返し使う
+service form として schema / planner / adapter / state / import / drift の意味が固まるものだけに追加します。
+S3-compatible API、OCI registry、Kubernetes CRD、CloudEvents、OpenAI-compatible endpoint などの標準面は
+そのまま外部 surface として使います。
+
+公開 API の詳しい境界は [Takosumi API](./reference/api.md) にまとめています。
 
 ## OSS に含まれること
 
@@ -118,8 +119,8 @@ operator が object-storage の data/control compatibility を意図的に公開
 S3/R2/GCS 利用は既存 provider や標準 endpoint を使います。
 full AWS compatibility や full Cloudflare compatibility を名乗らず、scope と version を明示します。
 
-詳細な Resource Shape / compatibility capability model は
-[Takosumi Final Plan](https://github.com/tako0614/takosumi/blob/main/docs/final-plan.md) を参照してください。
+公開 API の境界は [Takosumi API](./reference/api.md)、Resource Shape の語彙は
+[Model reference](./reference/model.md) を参照してください。
 
 ## Operator / Cloud の運用
 
@@ -170,4 +171,5 @@ POST /gateway/ai/v1/embeddings
 - [Quickstart](./getting-started/quickstart.md)
 - [Takosumi Cloud](./cloud/index.md)
 - [Model reference](./reference/model.md)
+- [Takosumi API](./reference/api.md)
 - [CLI reference](./reference/cli.md)

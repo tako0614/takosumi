@@ -4,9 +4,9 @@ This repository is **Takosumi**, an OSS Git-based OpenTofu control plane.
 Takosumi can run existing OpenTofu/Terraform provider ecosystems as-is, and it
 also owns the Resource Shape API, Resolver / Planner / Runner / Reconciler,
 Target / Credential / OIDC / Secret / Policy, Compatibility API framework, and
-Adapter system described in `docs/final-plan.md`.
+Adapter system described in `docs/internal/final-plan.md`.
 
-The authoritative product direction is [`docs/final-plan.md`](docs/final-plan.md). It supersedes older designs that made
+The authoritative product direction is [`docs/internal/final-plan.md`](docs/internal/final-plan.md). It supersedes older designs that made
 all compatibility APIs Cloud-only. The new boundary is:
 
 ```text
@@ -94,8 +94,8 @@ display, identity, and output projection.
 
 ## Core Specification
 
-The product direction is [`docs/final-plan.md`](docs/final-plan.md). The core spec is
-[`docs/core-spec.md`](docs/core-spec.md), and adoption status lives in [`docs/core-conformance.md`](docs/core-conformance.md).
+The product direction is [`docs/internal/final-plan.md`](docs/internal/final-plan.md). The core spec is
+[`docs/internal/core-spec.md`](docs/internal/core-spec.md), and adoption status lives in [`docs/internal/core-conformance.md`](docs/internal/core-conformance.md).
 The implementation has landed on the Final Plan model; the old Space / Installation / Gateway / `takos_provided` wording
 is retired, not a vocabulary to migrate toward.
 

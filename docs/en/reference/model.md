@@ -140,18 +140,25 @@ which Targets are available, which Adapters are enabled, and which policies
 control placement. Resolver decisions are recorded as ResolutionLocks and do
 not move without an explicit migration.
 
-Resource Shapes are not a replacement for every existing provider. If an
-adequate generic OpenTofu provider or standard API already exists, use it
-through the OpenTofu Stack flow. Add a Takosumi shape only when Takosumi needs a
-provider-neutral service form, binding projection, resolution lock, policy,
-metering, or import path.
+Resource Shapes are not a replacement for every existing provider or standard
+surface. If an industry-standard protocol/API or adequate OpenTofu provider
+already expresses the service cleanly, use that surface through the OpenTofu
+Stack flow or a scoped compatibility profile. S3-compatible object storage,
+OCI registry, Kubernetes CRDs, CloudEvents, OpenAI-compatible APIs, and scoped
+Cloudflare Workers-compatible import/deploy paths are examples of surfaces that
+should remain standard-facing.
 
-The inverse is also scoped: when a generic provider does not exist, Takosumi
-does not automatically create a catch-all provider. One-off provider gaps should
-stay in generic-env ProviderConnections and normal OpenTofu modules. A new
-`takosumi_*` resource is justified only for a repeated service form that needs a
-typed schema, planner, adapter, import/drift/state behavior, and capability
-evidence.
+Add a Takosumi shape when the service form is durable, no adequate standard
+surface exists, and Takosumi needs to own binding projection, resolution lock,
+policy, metering, import path, or managed target placement.
+
+The inverse is also scoped: when a standard surface does not exist, Takosumi
+does not automatically create a catch-all provider. One-off gaps should stay in
+generic-env ProviderConnections and normal OpenTofu modules. A new
+`takosumi_*` resource is justified only for a repeated Takosumi-owned service
+form that needs a typed schema, planner, adapter, import/drift/state behavior,
+and capability evidence. A provider resource that does not map to either a
+Takosumi-owned service form or an operator/admin object has no reason to exist.
 
 Adapters report capabilities and perform preview/apply/observe/delete work.
 Initial adapter families can include OpenTofu, Cloudflare, AWS, Kubernetes, VM,
@@ -178,14 +185,14 @@ compat.kubernetes.crd.v1
 compat.cloudflare.workers.v1
 ```
 
-They map narrow import/API facades into enabled Resource Shapes or
-operator-provided adapters only when the generic provider or standard endpoint
-path is inadequate. They are not a claim of full AWS compatibility, full
-Cloudflare compatibility, a provider-specific internal model, or a reason to
-recreate standards that already work through existing providers.
+They preserve narrow standard facades when Takosumi provides the backend,
+import path, or managed-target control. They are not a claim of full AWS
+compatibility, full Cloudflare compatibility, a provider-specific internal
+model, or a reason to recreate standards that already work through existing
+providers.
 
-Detailed Resource Shape and compatibility capability definitions live in the
-[Takosumi Final Plan](https://github.com/tako0614/takosumi/blob/main/docs/final-plan.md).
+The public API boundary is documented in [Takosumi API](./api.md). Internal
+planning and conformance notes live outside the published docs surface.
 
 ## Operator / Cloud Concepts
 

@@ -42,7 +42,7 @@ behind the one handler, not an alternate distribution.
 The product flow is deliberately small: choose a **Workspace** and **Project**, register a Git **Source**, create a
 **Capsule**, bind provider aliases through **ProviderConnections**, **CredentialRecipes**, and **ProviderBindings**,
 review a **Run**, then inspect **StateVersions**, **Outputs**, and **AuditEvents**. See [AGENTS.md](AGENTS.md) "Public
-Surface" and [docs/final-plan.md](docs/final-plan.md) for the current model.
+Surface" and [docs/internal/final-plan.md](docs/internal/final-plan.md) for the current model.
 
 | Concept              | Meaning                                                                                                                         |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------- |

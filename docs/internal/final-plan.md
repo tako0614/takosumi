@@ -42,30 +42,37 @@ separate product core.
 
 ## 1. The Key Rule
 
-Use existing generic providers and standards when they are enough.
+Use industry-standard surfaces when they exist. Define Takosumi-owned typed
+shapes when the service form is real but no adequate standard surface exists.
 
 ```text
-If an adequate generic OpenTofu provider or standard API exists:
-  use it through the plain OpenTofu Stack flow.
+If an adequate industry-standard protocol, API, or OpenTofu provider exists:
+  use that standard surface through the plain OpenTofu Stack flow or a scoped
+  compatibility profile.
 
-If no adequate generic provider-neutral surface exists:
-  do not immediately create a Takosumi provider resource. First prove that the
-  need is not served by a normal OpenTofu provider, standard endpoint, or
-  generic-env ProviderConnection.
+If the service form is durable but no adequate standard surface exists:
+  define a typed Takosumi Resource Shape with schema, validation, planner,
+  adapter, state/import/drift behavior, and capability evidence.
 ```
 
 This is not "Takosumi should create every missing provider." It is:
 
 ```text
-generic exists:
+standard surface exists:
   do not recreate it in takosumi_provider.
+  Examples: S3-compatible object storage, OCI registry, Kubernetes CRD,
+  CloudEvents, OpenAI-compatible API, scoped Cloudflare Workers-compatible API.
 
-generic does not exist, but the need is one-off:
+standard surface does not exist, but the need is one-off:
   use generic-env ProviderConnection and a normal OpenTofu provider/module.
 
-generic does not exist, and the need is a durable service form:
+standard surface does not exist, and the need is a durable service form:
   add a typed Takosumi shape with schema, validation, planner, adapter,
   import/drift/state story, and capability evidence.
+
+provider does not correspond to a Takosumi-owned service form or a standard
+compatibility surface:
+  do not add it. It has no reason to exist in the Takosumi provider.
 ```
 
 Before adding any `takosumi_*` resource, the design must pass a prior-art gate:
@@ -73,8 +80,8 @@ Before adding any `takosumi_*` resource, the design must pass a prior-art gate:
 ```text
 1. Is there an existing OpenTofu/Terraform provider that users can run through
    the Stack flow?
-2. Is there a standard protocol/endpoint that should remain the product
-   surface instead of a Takosumi resource?
+2. Is there an industry-standard protocol/API that should remain the user
+   surface even when Takosumi provides the backend?
 3. Can the gap be handled by generic-env ProviderConnection plus an ordinary
    module?
 4. Does Takosumi need to own resolution lock, binding projection, policy,
@@ -82,6 +89,7 @@ Before adding any `takosumi_*` resource, the design must pass a prior-art gate:
 ```
 
 If answers 1-3 are yes and answer 4 is no, do not add a Takosumi resource.
+If no standard surface exists and answer 4 is yes, define the Takosumi shape.
 
 Examples:
 
@@ -211,6 +219,69 @@ Queue
 SQLDatabase
 ContainerService
 ```
+
+### 2.3 Takosumi Provider And Resource API
+
+`takosumi/takosumi` is a Takosumi-native provider. All `takosumi_*`
+resources are Takosumi-owned Resource Shape or operator/admin objects. They are
+not wrappers around AWS, Cloudflare, Kubernetes, S3, OpenAI, or any other
+vendor provider.
+
+```text
+takosumi/takosumi provider:
+  typed HCL schema for Takosumi-owned Resource Shapes
+  Resource API client
+  capability discovery
+  preview/apply/status polling
+  minimal OpenTofu state mapping
+
+not:
+  a generic cloud abstraction provider
+  a clone of existing OpenTofu providers
+  a place to call vendor APIs directly
+  a catch-all takosumi_resource { type, spec } provider
+```
+
+When this document says a shape is provider-neutral, it means
+vendor-independent as a Takosumi-owned service contract. It does not mean the
+`takosumi` provider is a generic third-party provider catalog. Ordinary
+provider resources remain in the plain Stack flow. Industry-standard surfaces
+such as S3-compatible APIs, OCI registry APIs, Kubernetes CRDs, CloudEvents, or
+OpenAI-compatible endpoints should stay the external surface when they fit.
+When no adequate standard exists for a repeated service form, Takosumi defines
+the shape itself.
+
+The public Resource API is Takosumi-native but should follow standard API
+conventions:
+
+```text
+object shape:
+  apiVersion / kind / metadata / spec / status
+
+operations:
+  preview before apply
+  idempotent create/update by stable name
+  explicit delete
+  observe/refresh for drift
+  import when adopting existing resources
+
+tooling:
+  discovery through /.well-known/takosumi and /v1/capabilities
+  capability-based behavior, not edition branching
+  schema-backed validation
+  cursor pagination for lists
+  structured error codes
+  no secret material in specs, status, logs, or OpenTofu state
+```
+
+Compatibility APIs should use real standards where they are intentionally
+exposed: S3-compatible APIs for object storage data-plane, OCI registry APIs
+for artifacts/images, CloudEvents for event ingress, Kubernetes CRDs for
+Kubernetes northbound integration, OpenAI-compatible endpoints for AI gateway
+access, and a scoped Cloudflare Workers-compatible subset for Worker import /
+deploy paths. These compatibility APIs are standard-conscious facades into
+Takosumi-managed capabilities; they are not the internal canonical model and
+not promises of full vendor API compatibility.
 
 Future shapes are added only when they have a real schema, planner, adapter
 path, and user value. Do not expose `takosumi_resource { type, spec }` as the
@@ -900,7 +971,8 @@ clear OSS / Operator / Cloud boundaries
 ## 15. Final Sentence
 
 Takosumi is an open Git + OpenTofu control plane with first-class resource
-shapes only where provider-neutral service semantics are needed. Existing
-generic providers and standards remain the default path; Takosumi adds
+shapes for durable service forms that need Takosumi-owned semantics. Existing
+industry-standard APIs and providers remain the external surface when they fit;
+when no adequate standard exists, Takosumi defines the typed shape and adds
 resolution, policy, credentials, state, compatibility import paths, and
-operator-managed targets around them.
+operator-managed targets around it.
