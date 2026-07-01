@@ -81,9 +81,10 @@ function seedLedgerSpace(
 
 /** A spy-able fake facade. Records the last call args for assertions. */
 type ControlPlaneOperationsOverride = Partial<
-  Omit<ControlPlaneOperations, "spaces">
+  Omit<ControlPlaneOperations, "spaces" | "installations">
 > & {
   readonly spaces?: Partial<ControlPlaneOperations["spaces"]>;
+  readonly installations?: Partial<ControlPlaneOperations["installations"]>;
 };
 
 function fakeOperations(
@@ -881,6 +882,7 @@ function fakeOperations(
   };
   return Object.assign({ calls }, base, overrides, {
     spaces: { ...base.spaces, ...overrides.spaces },
+    installations: { ...base.installations, ...overrides.installations },
   }) as ControlPlaneOperations & {
     calls: Record<string, unknown[]>;
   };
@@ -2354,6 +2356,98 @@ test("POST /api/v1/spaces/:id/installations expands dotted per-install vars in a
       workers_subdomain: "shoutatomiyama0614",
     },
   });
+});
+
+test("POST /api/v1/spaces/:id/installations deep-merges dotted vars into base InstallConfig", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations({
+    installations: {
+      getInstallConfig: async (id) => {
+        operations.calls.getInstallConfig = [id];
+        return {
+          id,
+          name: "opentofu-capsule",
+          sourceKind: "generic_capsule",
+          installType: "opentofu_module",
+          trustLevel: "trusted",
+          variableMapping: {
+            cloudflare: {
+              zone_id: "zone_123",
+            },
+          },
+          outputAllowlist: {},
+          policy: {},
+          createdAt: "2026-01-01T00:00:00Z",
+          updatedAt: "2026-01-01T00:00:00Z",
+        };
+      },
+    },
+  });
+  const { request: req, url } = request(
+    "POST",
+    "/api/v1/spaces/space_a/installations",
+    {
+      cookie,
+      body: {
+        name: "takos",
+        environment: "production",
+        sourceId: "src_x",
+        installConfigId: "cfg_x",
+        vars: {
+          "cloudflare.workers_subdomain": "shoutatomiyama0614",
+        },
+      },
+    },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(201);
+  const config = operations.calls.putInstallConfig?.[0] as {
+    variableMapping: Record<string, unknown>;
+  };
+  expect(config.variableMapping).toEqual({
+    cloudflare: {
+      zone_id: "zone_123",
+      workers_subdomain: "shoutatomiyama0614",
+    },
+  });
+});
+
+test("POST /api/v1/spaces/:id/installations rejects prototype-polluting vars", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const { request: req, url } = request(
+    "POST",
+    "/api/v1/spaces/space_a/installations",
+    {
+      cookie,
+      body: {
+        name: "takos",
+        environment: "production",
+        sourceId: "src_x",
+        installConfigId: "cfg_x",
+        vars: {
+          "__proto__.polluted": true,
+        },
+      },
+    },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(400);
+  expect(operations.calls.putInstallConfig).toBeUndefined();
+  expect(operations.calls.createInstallation).toBeUndefined();
+  expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
 });
 
 test("POST /api/v1/spaces/:id/installations rejects non-JSON vars", async () => {

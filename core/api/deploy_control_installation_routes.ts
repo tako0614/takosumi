@@ -30,7 +30,10 @@ import {
   SPACE_ID_PATTERN,
 } from "./deploy_control_shared.ts";
 import { OpenTofuControllerError } from "../domains/deploy-control/errors.ts";
-import { normalizeVariablePathRecord } from "../domains/deploy-control/validation.ts";
+import {
+  mergeVariableRecords,
+  normalizeVariablePathRecord,
+} from "../domains/deploy-control/validation.ts";
 import { defaultCapsuleOutputAllowlist } from "../domains/installations/official_seed.ts";
 import { pageSorted } from "takosumi-contract/pagination";
 import {
@@ -652,7 +655,11 @@ async function createScopedInstallConfigWithVariables(input: {
     id: `cfg_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`,
     spaceId: input.spaceId,
     name: `${input.installationName}-config`,
-    variableMapping: { ...baseConfig.variableMapping, ...input.vars },
+    variableMapping: mergeVariableRecords(
+      baseConfig.variableMapping,
+      input.vars,
+      "vars",
+    ),
     outputAllowlist: scopedCloneOutputAllowlist(baseConfig),
     createdAt: now,
     updatedAt: now,

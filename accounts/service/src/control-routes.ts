@@ -80,7 +80,10 @@ import type {
 } from "takosumi-contract/dependencies";
 import type { ActivityEvent } from "takosumi-contract/activity";
 import { defaultCapsuleOutputAllowlist } from "../../../core/domains/installations/official_seed.ts";
-import { normalizeVariablePathRecord } from "../../../core/domains/deploy-control/validation.ts";
+import {
+  mergeVariableRecords,
+  normalizeVariablePathRecord,
+} from "../../../core/domains/deploy-control/validation.ts";
 import {
   decodeCursor,
   type Page,
@@ -2338,7 +2341,11 @@ async function createInstallation(
       id: `icfg_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`,
       spaceId,
       name: `${name}-config`,
-      variableMapping: { ...baseConfig.variableMapping, ...vars },
+      variableMapping: mergeVariableRecords(
+        baseConfig.variableMapping,
+        vars,
+        "vars",
+      ),
       outputAllowlist: scopedCloneOutputAllowlist(baseConfig),
       createdAt: now,
       updatedAt: now,
