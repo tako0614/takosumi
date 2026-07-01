@@ -91,6 +91,63 @@ test("OpenTofu run owner maps destroy queue work to apply dispatch", async () =>
   ]);
 });
 
+test("OpenTofu run owner immediately reschedules controller-managed retries", async () => {
+  const storage = new FakeDoStorage();
+  let now = Date.parse("2026-06-22T08:00:00.000Z");
+  let calls = 0;
+  let owner!: OpenTofuRunOwnerObject;
+  owner = new OpenTofuRunOwnerObject(
+    { storage },
+    {} as CloudflareWorkerEnv,
+    {
+      now: () => now,
+      dispatch: async () => {
+        calls += 1;
+        if (calls === 1) {
+          const response = await owner.fetch(
+            new Request("https://run-owner/start", {
+              method: "POST",
+              body: JSON.stringify({
+                kind: "takosumi.opentofu-run-owner.start@v1",
+                action: "apply",
+                runId: "run_1",
+                spaceId: "space_1",
+                cause: "controller_retry",
+                messageId: "retry_msg_1",
+              }),
+            }),
+          );
+          assert.equal(response.status, 202);
+          throw new Error(
+            "retryable_runner_infrastructure_error: apply run run_1 requeued after runner reset",
+          );
+        }
+      },
+    },
+  );
+
+  await start(owner, "apply");
+  await owner.alarm();
+
+  let record = await storage.get<Record<string, unknown>>("run");
+  assert.equal(record?.status, "scheduled");
+  assert.equal(record?.attempts, 0);
+  assert.equal(record?.messageId, "retry_msg_1");
+  assert.equal(record?.lastScheduleCause, "controller_retry");
+  assert.equal(record?.lastError, "controller-managed retry");
+  assert.equal(storage.alarmAt, now + 250);
+
+  now = storage.alarmAt!;
+  await owner.alarm();
+
+  assert.equal(calls, 2);
+  record = await storage.get<Record<string, unknown>>("run");
+  assert.equal(record?.status, "succeeded");
+  assert.equal(record?.attempts, 1);
+  assert.equal(record?.lastScheduleCause, undefined);
+  assert.equal(storage.alarmAt, undefined);
+});
+
 test("OpenTofu run owner reschedules lease-busy work without burning attempts", async () => {
   const storage = new FakeDoStorage();
   const now = Date.parse("2026-06-22T08:00:00.000Z");

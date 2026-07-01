@@ -5,6 +5,7 @@ import { InstallationLeaseBusyError } from "../../../core/domains/deploy-control
 const RUN_OWNER_RECORD_KEY = "run";
 const RUN_OWNER_MAX_ATTEMPTS = 3;
 const RUN_OWNER_RETRY_BASE_DELAY_MS = 10_000;
+const RUN_OWNER_CONTROLLER_RETRY_DELAY_MS = 250;
 const RUN_OWNER_LEASE_BUSY_DELAY_MS = 10_000;
 // This is the recovery window for a RunOwner DO that resets after the
 // controller already put the run ledger back to queued. Normal long dispatches
@@ -19,6 +20,7 @@ interface RunOwnerStartRequest {
   readonly action: OpenTofuRunAction;
   readonly runId: string;
   readonly spaceId: string;
+  readonly cause?: "controller_retry";
   readonly queueAttempt?: number;
   readonly messageId?: string;
 }
@@ -39,6 +41,7 @@ interface RunOwnerRecord {
   readonly nextAttemptAt?: string;
   readonly queueAttempt?: number;
   readonly messageId?: string;
+  readonly lastScheduleCause?: "controller_retry";
   readonly lastError?: string;
 }
 
@@ -150,6 +153,25 @@ export class OpenTofuRunOwnerObject {
       return existing;
     }
     if (existing) {
+      if (input.cause === "controller_retry") {
+        const now = this.#now();
+        const retryAt = now + RUN_OWNER_CONTROLLER_RETRY_DELAY_MS;
+        const retryRecord: RunOwnerRecord = {
+          ...existing,
+          status: "scheduled",
+          updatedAt: new Date(now).toISOString(),
+          nextAttemptAt: new Date(retryAt).toISOString(),
+          ...(input.queueAttempt !== undefined
+            ? { queueAttempt: input.queueAttempt }
+            : {}),
+          ...(input.messageId ? { messageId: input.messageId } : {}),
+          lastScheduleCause: "controller_retry",
+          lastError: "controller-managed retry",
+        };
+        await this.#writeRecord(retryRecord);
+        await this.#scheduleAlarm(retryAt);
+        return retryRecord;
+      }
       const alarmAt =
         existing.status === "running"
           ? parseIsoMs(existing.updatedAt, this.#now()) +
@@ -251,6 +273,24 @@ export class OpenTofuRunOwnerObject {
         nextAttemptAt,
         lastError: "installation lease busy",
       });
+      await this.#scheduleAlarm(Date.parse(nextAttemptAt));
+      return;
+    }
+    if (isControllerManagedRetryError(error)) {
+      const existing = await this.#readRecord();
+      const now = this.#now();
+      const nextAttemptAt = new Date(
+        now + RUN_OWNER_CONTROLLER_RETRY_DELAY_MS,
+      ).toISOString();
+      const next: RunOwnerRecord = {
+        ...(existing?.runId === record.runId ? existing : record),
+        status: "scheduled",
+        updatedAt: new Date(now).toISOString(),
+        nextAttemptAt,
+        lastScheduleCause: "controller_retry",
+        lastError: "controller-managed retry",
+      };
+      await this.#writeRecord(next);
       await this.#scheduleAlarm(Date.parse(nextAttemptAt));
       return;
     }
@@ -362,11 +402,14 @@ function parseStartRequest(
       ? Math.max(1, Math.floor(record.queueAttempt))
       : undefined;
   const messageId = nonEmptyString(record.messageId);
+  const cause =
+    record.cause === "controller_retry" ? "controller_retry" : undefined;
   return {
     kind: "takosumi.opentofu-run-owner.start@v1",
     action,
     runId,
     spaceId,
+    ...(cause ? { cause } : {}),
     ...(queueAttempt !== undefined ? { queueAttempt } : {}),
     ...(messageId ? { messageId } : {}),
   };
@@ -403,10 +446,18 @@ function dispatchableAction(
 }
 
 function clearRetryState(record: RunOwnerRecord): RunOwnerRecord {
-  const { nextAttemptAt, lastError, ...cleaned } = record;
+  const { nextAttemptAt, lastError, lastScheduleCause, ...cleaned } = record;
   void nextAttemptAt;
   void lastError;
+  void lastScheduleCause;
   return cleaned as RunOwnerRecord;
+}
+
+function isControllerManagedRetryError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    /retryable_runner_infrastructure_error/i.test(error.message)
+  );
 }
 
 function parseIsoMs(value: string, fallback: number): number {

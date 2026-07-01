@@ -3857,6 +3857,7 @@ export class RunEngine {
         action,
         runId: run.id,
         spaceId: run.workspaceId ?? run.spaceId,
+        cause: "controller_retry",
       });
     } catch (error) {
       log.warn("deploy_control.retry_enqueue_failed", {
