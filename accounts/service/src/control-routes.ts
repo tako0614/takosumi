@@ -81,6 +81,10 @@ import type {
 import type { ActivityEvent } from "takosumi-contract/activity";
 import { defaultCapsuleOutputAllowlist } from "../../../core/domains/installations/official_seed.ts";
 import {
+  mergeVariableRecords,
+  normalizeVariablePathRecord,
+} from "../../../core/domains/deploy-control/validation.ts";
+import {
   decodeCursor,
   type Page,
   type PageParams,
@@ -2290,7 +2294,7 @@ async function createInstallation(
   const environment = stringValue(body.environment);
   const sourceId = stringValue(body.sourceId);
   const installConfigId = stringValue(body.installConfigId);
-  const vars = jsonRecordValue(body.vars);
+  const vars = normalizedVarsValue(body.vars);
   if (body.vars !== undefined && vars === undefined) {
     return errorJson(
       "invalid_request",
@@ -2337,7 +2341,11 @@ async function createInstallation(
       id: `icfg_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`,
       spaceId,
       name: `${name}-config`,
-      variableMapping: { ...baseConfig.variableMapping, ...vars },
+      variableMapping: mergeVariableRecords(
+        baseConfig.variableMapping,
+        vars,
+        "vars",
+      ),
       outputAllowlist: scopedCloneOutputAllowlist(baseConfig),
       createdAt: now,
       updatedAt: now,
@@ -4071,20 +4079,16 @@ function stringRecordValue(
   return out;
 }
 
-function jsonRecordValue(
+function normalizedVarsValue(
   value: unknown,
 ): Readonly<Record<string, JsonValue>> | undefined {
   if (value === undefined) return undefined;
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  if (!isPlainJsonObject(value)) return undefined;
+  try {
+    return normalizeVariablePathRecord(value, "vars");
+  } catch {
     return undefined;
   }
-  const out: Record<string, JsonValue> = {};
-  for (const [key, item] of Object.entries(value)) {
-    if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(key)) return undefined;
-    if (!isJsonValue(item)) return undefined;
-    out[key] = item;
-  }
-  return out;
 }
 
 function outputAllowlistValue(
