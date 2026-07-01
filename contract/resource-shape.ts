@@ -1,7 +1,7 @@
 // Resource Shape API public vocabulary (`takosumi.dev/v1alpha1`).
 //
 // The Resource object mirrors the Kubernetes-style shape mandated by
-// `docs/final-plan.md` §4 (Resource Object Model) and §5 (Resource Shapes):
+// `docs/internal/final-plan.md` §4 (Resource Object Model) and §5 (Resource Shapes):
 // a desired `spec`, an observed `status`, the `resolution` decision, and
 // `conditions`. Kinds in this file are only public when they have a planner and
 // adapter path; future shapes should be added when they can actually materialize.
@@ -29,12 +29,12 @@ export const RESOURCE_SHAPE_KINDS: readonly ResourceShapeKind[] = [
 
 /**
  * Entry point that produced/owns a resource. `managedBy` gates field ownership
- * across the multiple authoring surfaces (`docs/final-plan.md` §15): an
+ * across the multiple authoring surfaces (`docs/internal/final-plan.md` §15): an
  * OpenTofu-managed resource is not directly mutable from the console.
  */
 export type ResourceManagedBy = "opentofu" | "console" | "api" | "compat";
 
-/** `metadata` keys are verbatim from `docs/final-plan.md` §4. */
+/** `metadata` keys are verbatim from `docs/internal/final-plan.md` §4. */
 export interface ResourceMetadata {
   readonly name: string;
   readonly space: string;
@@ -57,7 +57,7 @@ export type ResourcePhase =
   | "Deleting"
   | "Deleted";
 
-/** Condition type enum from `docs/final-plan.md` §4 / `core-spec.md`. */
+/** Condition type enum from `docs/internal/final-plan.md` §4 / `core-spec.md`. */
 export type ResourceConditionType =
   "Ready" | "Reconciling" | "Drifted" | "Degraded" | "Blocked";
 
@@ -68,7 +68,7 @@ export type ResourceConditionType =
 export type ResourcePortability =
   "portable" | "mostly_portable" | "partial" | "locked_in";
 
-/** `status.resolution` keys are verbatim from `docs/final-plan.md` §4. */
+/** `status.resolution` keys are verbatim from `docs/internal/final-plan.md` §4. */
 export interface ResourceResolutionStatus {
   readonly selectedImplementation: string;
   readonly target: string;
@@ -99,7 +99,7 @@ export interface ResourceObject<
   readonly status?: ResourceStatus;
 }
 
-// --- Data-resource deletion policy (general, `docs/final-plan.md` §7.3) -------
+// --- Data-resource deletion policy (general, `docs/internal/final-plan.md` §7.3) -------
 
 /** Allowed `lifecycle_policy.delete` values, verbatim from §7.3. */
 export type ResourceDeletePolicy =
@@ -109,7 +109,7 @@ export interface ResourceLifecyclePolicy {
   readonly delete: ResourceDeletePolicy;
 }
 
-// --- Connection / grant / projection vocabulary (`docs/final-plan.md` §10) ---
+// --- Connection / grant / projection vocabulary (`docs/internal/final-plan.md` §10) ---
 
 export type ResourceConnectionPermission =
   "read" | "write" | "connect" | "publish" | "consume";
@@ -123,7 +123,7 @@ export interface ResourceConnectionSpec {
   readonly projection: ResourceProjectionKind;
 }
 
-// --- EdgeWorker shape (`docs/final-plan.md` §5 / §10.1) ---------------------
+// --- EdgeWorker shape (`docs/internal/final-plan.md` §5 / §10.1) ---------------------
 
 export type EdgeWorkerProfile =
   "workers_bindings" | "node_compat" | "service_bindings" | "static_assets";

@@ -2,7 +2,7 @@
 //
 // The Resolver turns a desired Resource shape + interface set into a concrete
 // implementation on a concrete Target, scored against a TargetCapabilityMatrix
-// (`docs/final-plan.md` §8). The decision is frozen as a ResolutionLock (§3.5):
+// (`docs/internal/final-plan.md` §8). The decision is frozen as a ResolutionLock (§3.5):
 // once a resource is locked, Takosumi must not silently re-target it — migration
 // is an explicit operation. This module performs NO I/O and never reads the
 // clock or RNG; the service layer stamps `lockedAt`.
@@ -329,7 +329,7 @@ function byName(a: string, b: string): number {
   return 0;
 }
 
-/** Native resource graph for the selected implementation (`docs/final-plan.md` §8/§16). */
+/** Native resource graph for the selected implementation (`docs/internal/final-plan.md` §8/§16). */
 function nativeResourcesFor(
   shape: string,
   implementation: string,
@@ -664,7 +664,7 @@ function buildFreshOutput(
 
 /**
  * Re-derive the resolver output for an already-locked resolution WITHOUT
- * re-targeting it (`docs/final-plan.md` §3.5). If the current request would have
+ * re-targeting it (`docs/internal/final-plan.md` §3.5). If the current request would have
  * picked a different Target, append a risk note recording the divergence but
  * keep the locked decision intact.
  */

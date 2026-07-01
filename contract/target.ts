@@ -1,6 +1,6 @@
 // Target / TargetPool / SpacePolicy vocabulary (`takosumi.dev/v1alpha1`).
 //
-// Field shapes are verbatim from `docs/final-plan.md` §7 (Target, Credential,
+// Field shapes are verbatim from `docs/internal/final-plan.md` §7 (Target, Credential,
 // And Policy). A Target names a place a resource can be materialized; a
 // TargetPool ranks the candidate Targets for a Space; a SpacePolicy constrains
 // and biases which Target the Resolver may pick.
@@ -69,7 +69,7 @@ export interface TargetMetadata {
   readonly space: string;
 }
 
-// --- TargetPool (`docs/final-plan.md` §7.2) -----------------------------------
+// --- TargetPool (`docs/internal/final-plan.md` §7.2) -----------------------------------
 
 /**
  * One ranked Target entry. `ref` carries the type-specific reference
@@ -123,7 +123,7 @@ export interface TargetPool {
   readonly spec: TargetPoolSpec;
 }
 
-// --- SpacePolicy (`docs/final-plan.md` §7.3 / §14.1) --------------------------
+// --- SpacePolicy (`docs/internal/final-plan.md` §7.3 / §14.1) --------------------------
 
 export interface SpacePolicyConstraints {
   readonly dataResidency?: string;

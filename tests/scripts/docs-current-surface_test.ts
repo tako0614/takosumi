@@ -4,24 +4,32 @@ import { test } from "bun:test";
 
 const ROOT = new URL("../../", import.meta.url);
 
-const REQUIRED_DOCS = [
+const REQUIRED_PUBLIC_DOCS = [
   "docs/index.md",
-  "docs/final-plan.md",
-  "docs/core-spec.md",
-  "docs/core-conformance.md",
+  "docs/cloud/index.md",
   "docs/getting-started/quickstart.md",
+  "docs/reference/api.md",
   "docs/reference/model.md",
   "docs/reference/deploy-control-api.md",
   "docs/reference/operator-execution-boundaries.md",
   "docs/reference/operator.md",
   "docs/reference/cli.md",
   "docs/en/index.md",
+  "docs/en/cloud/index.md",
   "docs/en/getting-started/quickstart.md",
+  "docs/en/reference/api.md",
   "docs/en/reference/model.md",
   "docs/en/reference/deploy-control-api.md",
   "docs/en/reference/operator-execution-boundaries.md",
   "docs/en/reference/operator.md",
   "docs/en/reference/cli.md",
+] as const;
+
+const REQUIRED_INTERNAL_DOCS = [
+  "docs/internal/README.md",
+  "docs/internal/final-plan.md",
+  "docs/internal/core-spec.md",
+  "docs/internal/core-conformance.md",
 ] as const;
 
 const RETIRED_DOC_PATHS = [
@@ -111,8 +119,8 @@ const MINIMAL_API_ROUTES = [
   "GET    /audit",
 ] as const;
 
-test("Takosumi docs are rebuilt around the Final Plan surface", async () => {
-  for (const path of REQUIRED_DOCS) {
+test("Takosumi public docs are rebuilt around the current public surface", async () => {
+  for (const path of REQUIRED_PUBLIC_DOCS) {
     const entry = await stat(new URL(path, ROOT));
     assert.equal(entry.isFile(), true, `missing ${path}`);
   }
@@ -124,24 +132,18 @@ test("Takosumi docs are rebuilt around the Final Plan surface", async () => {
     );
   }
 
-  const docs = await readDocs();
+  const docs = await readPublicDocs();
   for (const term of RETIRED_DOC_TERMS) {
     const hit =
       typeof term === "string" ? docs.includes(term) : term.test(docs);
     assert.equal(hit, false, `retired docs term: ${term}`);
   }
 
-  assert.match(docs, /OpenTofu\/Terraform control plane/);
+  assert.match(docs, /OpenTofu control plane|OpenTofu\/Terraform control plane/);
   assert.match(docs, /plain OpenTofu stacks as-is/);
   assert.match(docs, /Same manifest, different connection/);
-  assert.match(
-    docs,
-    /Compatibility APIs are framework capabilities in standard Takosumi/,
-  );
-  assert.match(
-    docs,
-    /specific compatibility profile is enabled is reported through capabilities/,
-  );
+  assert.match(docs, /Compatibility API framework/);
+  assert.match(docs, /versioned subset|versioned capabilities/);
   assert.match(docs, /official managed capacity/);
   assert.match(docs, /cloud_extensions/);
   assert.match(docs, /takosumi-cloud\/platform\/worker\.ts/);
@@ -149,6 +151,37 @@ test("Takosumi docs are rebuilt around the Final Plan surface", async () => {
   for (const concept of FINAL_PUBLIC_CONCEPTS) {
     assert.match(docs, new RegExp(`\\b${concept}\\b`), `missing ${concept}`);
   }
+});
+
+test("Takosumi internal authority docs stay outside the public docs surface", async () => {
+  for (const path of REQUIRED_INTERNAL_DOCS) {
+    const entry = await stat(new URL(path, ROOT));
+    assert.equal(entry.isFile(), true, `missing ${path}`);
+  }
+
+  const vitepressConfig = await readText(
+    new URL("docs/.vitepress/config.ts", ROOT),
+  );
+  assert.match(vitepressConfig, /srcExclude/);
+  assert.match(vitepressConfig, /"internal\/\*\*\/\*\.md"/);
+  assert.match(vitepressConfig, /"operations\/\*\*\/\*\.md"/);
+
+  const internalReadme = await readText(
+    new URL("docs/internal/README.md", ROOT),
+  );
+  assert.match(internalReadme, /intentionally excluded/);
+  assert.match(internalReadme, /development authority documents/);
+
+  const finalPlan = await readText(new URL("docs/internal/final-plan.md", ROOT));
+  assert.match(finalPlan, /authoritative Takosumi product direction/);
+  assert.match(
+    finalPlan,
+    /Compatibility APIs are framework capabilities in standard Takosumi/,
+  );
+  assert.match(
+    finalPlan,
+    /specific compatibility profile is enabled is reported through capabilities/,
+  );
 });
 
 test("source docs keep current source-module and modulePath vocabulary", async () => {
@@ -188,7 +221,7 @@ test("deploy-control API docs enumerate the public session route inventory and c
 });
 
 test("core spec names the final OSS model and excludes official managed capacity", async () => {
-  const coreSpec = await readText(new URL("docs/core-spec.md", ROOT));
+  const coreSpec = await readText(new URL("docs/internal/core-spec.md", ROOT));
 
   for (const concept of FINAL_PUBLIC_CONCEPTS) {
     assert.match(coreSpec, new RegExp(`\\b${concept}\\b`), `missing ${concept}`);
@@ -221,10 +254,12 @@ test("workspace packages stay private source modules", async () => {
   }
 });
 
-async function readDocs(): Promise<string> {
+async function readPublicDocs(): Promise<string> {
   const chunks: string[] = [];
   for await (const file of walk(new URL("docs/", ROOT))) {
     if (!file.pathname.endsWith(".md")) continue;
+    if (file.pathname.includes("/docs/internal/")) continue;
+    if (file.pathname.includes("/docs/operations/")) continue;
     chunks.push(await readText(file));
   }
   return chunks.join("\n");

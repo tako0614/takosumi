@@ -1,6 +1,6 @@
 // REAL opentofu-adapter for the Resource Shape API.
 //
-// `docs/final-plan.md` §9/§17 ("opentofu-adapter broad first"): a resolved
+// `docs/internal/final-plan.md` §9/§17 ("opentofu-adapter broad first"): a resolved
 // Resource Shape is materialized by LOWERING it to an internal OpenTofu module
 // call and driving the EXISTING Flow A runner (Source / Capsule / Run /
 // StateVersion / Output), instead of a bespoke per-provider SDK path. This file
@@ -243,7 +243,7 @@ function coerceJsonValue(value: unknown): JsonValue | undefined {
 
 /**
  * Augment the planner's module inputs with Target-derived values the planner may
- * not have emitted (`docs/final-plan.md` §8): Cloudflare-backed modules often
+ * not have emitted (`docs/internal/final-plan.md` §8): Cloudflare-backed modules often
  * need `accountId` (carried by the TargetPool entry `ref`); AWS-backed modules
  * commonly take a `region` from the Target. Existing non-empty values are never
  * overwritten.

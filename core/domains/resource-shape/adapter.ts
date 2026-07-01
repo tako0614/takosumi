@@ -1,4 +1,4 @@
-// Resource Shape adapter port (`docs/final-plan.md` §9 Adapter Contract).
+// Resource Shape adapter port (`docs/internal/final-plan.md` §9 Adapter Contract).
 //
 // An adapter turns a resolved implementation plan into native resources on a
 // Target. The opentofu-adapter (broad-first, §9/§17) drives the existing Flow A

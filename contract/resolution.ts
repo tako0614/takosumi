@@ -2,7 +2,7 @@
 // (`takosumi.dev/v1alpha1`).
 //
 // The Resolver turns a desired Resource shape into a concrete implementation on
-// a concrete Target (`docs/final-plan.md` §8). The decision is frozen as a
+// a concrete Target (`docs/internal/final-plan.md` §8). The decision is frozen as a
 // ResolutionLock (§3.5, §10): once a resource is created, its implementation is
 // pinned and never silently re-targeted — migration is an explicit operation.
 
@@ -16,7 +16,7 @@ import type {
 } from "./target.ts";
 
 /**
- * How well a Target satisfies an interface (`docs/final-plan.md` §8):
+ * How well a Target satisfies an interface (`docs/internal/final-plan.md` §8):
  * `native` (provided directly), `shim` (adapter/runtime shim), `emulated`
  * (Takosumi substitutes), `unsupported`.
  */
@@ -55,7 +55,7 @@ export interface ResourceCostEstimate {
 }
 
 /**
- * The pinned resolution decision (`docs/final-plan.md` §3.5). Stored durably;
+ * The pinned resolution decision (`docs/internal/final-plan.md` §3.5). Stored durably;
  * `locked` resolutions are not re-targeted without an explicit migration.
  */
 export interface ResolutionLock {
@@ -69,7 +69,7 @@ export interface ResolutionLock {
   readonly lockedAt?: IsoTimestamp;
 }
 
-/** Resolver inputs, verbatim from `docs/final-plan.md` §8. */
+/** Resolver inputs, verbatim from `docs/internal/final-plan.md` §8. */
 export interface ResolverInput {
   readonly resource: ResourceObject;
   readonly interfaces: readonly string[];
@@ -80,7 +80,7 @@ export interface ResolverInput {
   readonly targetCapabilities?: TargetCapabilityMatrix;
 }
 
-/** Resolver outputs, verbatim from `docs/final-plan.md` §8. */
+/** Resolver outputs, verbatim from `docs/internal/final-plan.md` §8. */
 export interface ResolverOutput {
   readonly selectedImplementation: string;
   readonly selectedImplementationPlugin?: string;
