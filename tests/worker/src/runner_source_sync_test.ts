@@ -1,4 +1,6 @@
-import { rm, stat } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "bun:test";
 import {
@@ -8,6 +10,9 @@ import {
   parseLsRemoteCommit,
   parseSourceCredentials,
   parseSourceSyncSource,
+  resolveSourceCommit,
+  shallowCloneAtCommit,
+  type CommandContext,
 } from "../../../runner/entrypoint.ts";
 import { RUN_ROOT } from "../../../runner/lib/constants.ts";
 import { runSourceSync } from "../../../runner/lib/source_sync.ts";
@@ -177,6 +182,59 @@ test("parseLsRemoteCommit returns undefined when no commit matches", () => {
     parseLsRemoteCommit("not-a-sha\trefs/heads/main\n", "main"),
   ).toBeUndefined();
 });
+
+test("resolveSourceCommit falls back from implicit main to remote HEAD", async () => {
+  const root = await mkdtemp(join(tmpdir(), "takosumi-source-sync-"));
+  try {
+    git(root, ["init", "-b", "master", "repo"]);
+    const repo = join(root, "repo");
+    await writeFile(join(repo, "main.tf"), "terraform {}\n");
+    git(repo, ["add", "main.tf"]);
+    git(repo, [
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "user.name=Takosumi Test",
+      "commit",
+      "-m",
+      "initial",
+    ]);
+    const expectedCommit = git(repo, ["rev-parse", "HEAD"]);
+    const context: CommandContext = { env: commandEnv() };
+    const source = { url: repo, ref: "main", path: "." };
+
+    await expect(resolveSourceCommit(source, { context })).resolves.toBe(
+      expectedCommit,
+    );
+
+    const clone = join(root, "clone");
+    await shallowCloneAtCommit(source, expectedCommit, clone, { context });
+    expect(git(clone, ["rev-parse", "HEAD"])).toBe(expectedCommit);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+function git(cwd: string, args: readonly string[]): string {
+  return execFileSync("git", [...args], {
+    cwd,
+    env: commandEnv(),
+    encoding: "utf8",
+  }).trim();
+}
+
+function commandEnv(): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [name, value] of Object.entries(process.env)) {
+    if (typeof value === "string") env[name] = value;
+  }
+  return {
+    ...env,
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_NOSYSTEM: "1",
+  };
+}
 
 // ---------------------------------------------------------------------------
 // archive object key safety (R2_SOURCE key layout).

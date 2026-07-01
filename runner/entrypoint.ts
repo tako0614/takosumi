@@ -19,6 +19,8 @@ export {
   parseSourceSyncSource,
   parseSourceCredentials,
   parseLsRemoteCommit,
+  resolveSourceCommit,
+  shallowCloneAtCommit,
   handleDepStateRestoreRequest,
 } from "./lib/source_sync.ts";
 export {
