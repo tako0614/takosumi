@@ -129,19 +129,8 @@ test("OpenTofu run owner immediately reschedules controller-managed retries", as
   await start(owner, "apply");
   await owner.alarm();
 
-  let record = await storage.get<Record<string, unknown>>("run");
-  assert.equal(record?.status, "scheduled");
-  assert.equal(record?.attempts, 0);
-  assert.equal(record?.messageId, "retry_msg_1");
-  assert.equal(record?.lastScheduleCause, "controller_retry");
-  assert.equal(record?.lastError, "controller-managed retry");
-  assert.equal(storage.alarmAt, now + 250);
-
-  now = storage.alarmAt!;
-  await owner.alarm();
-
   assert.equal(calls, 2);
-  record = await storage.get<Record<string, unknown>>("run");
+  const record = await storage.get<Record<string, unknown>>("run");
   assert.equal(record?.status, "succeeded");
   assert.equal(record?.attempts, 1);
   assert.equal(record?.lastScheduleCause, undefined);
