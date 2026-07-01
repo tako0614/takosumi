@@ -91,6 +91,69 @@ test("renderPrometheusMetrics aggregates counters and histograms", () => {
   );
 });
 
+test("renderPrometheusMetrics exposes zero dashboard series for missing families", () => {
+  const rendered = renderPrometheusMetrics(
+    [],
+    new Date("2026-05-04T00:00:00.000Z"),
+    {
+      defaultTags: {
+        environment: "production",
+        runtime_cell_id: "cell_a",
+      },
+    },
+  );
+
+  assert.match(
+    rendered,
+    /takosumi_runner_queue_age_seconds\{environment="production",runtime_cell_id="cell_a",operationKind="none",status="idle",space_id="none"\} 0/,
+  );
+  assert.match(
+    rendered,
+    /takosumi_api_request_duration_seconds_bucket\{environment="production",runtime_cell_id="cell_a",method="GET",route="\/api\/\*",status="200",le="\+Inf"\} 0/,
+  );
+  assert.match(
+    rendered,
+    /takosumi_oidc_request_count\{environment="production",runtime_cell_id="cell_a",method="GET",route="\/\.well-known\/openid-configuration",status="200"\} 0/,
+  );
+});
+
+test("renderPrometheusMetrics keeps real families instead of adding defaults", () => {
+  const rendered = renderPrometheusMetrics(
+    [
+      {
+        id: "metric:queue:1",
+        name: "takosumi_runner_queue_age_seconds",
+        kind: "gauge",
+        value: 12,
+        tags: {
+          environment: "production",
+          operationKind: "apply",
+          runtime_cell_id: "cell_a",
+          space_id: "space_live",
+          status: "dequeued",
+        },
+        observedAt: "2026-05-04T00:00:00.000Z",
+      },
+    ],
+    new Date("2026-05-04T00:00:00.000Z"),
+    {
+      defaultTags: {
+        environment: "production",
+        runtime_cell_id: "cell_a",
+      },
+    },
+  );
+
+  assert.match(
+    rendered,
+    /takosumi_runner_queue_age_seconds\{environment="production",operationKind="apply",runtime_cell_id="cell_a",space_id="space_live",status="dequeued"\} 12/,
+  );
+  assert.doesNotMatch(
+    rendered,
+    /takosumi_runner_queue_age_seconds\{environment="production",operationKind="none"/,
+  );
+});
+
 function createApp(
   token: string | undefined,
   observability = new InMemoryObservabilitySink(),

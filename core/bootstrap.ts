@@ -1117,6 +1117,7 @@ export async function createTakosumiService(
       ? {
           observability: context.adapters.observability,
           getScrapeToken: () => metricsScrapeToken,
+          metricTags,
         }
       : undefined,
     artifactRouteOptions:
