@@ -46,7 +46,7 @@ export const METRICS_ENDPOINTS: readonly ApiEndpoint[] = [
             description: "JSON response",
             content: {
               "application/json": {
-                schema: { "$ref": "#/components/schemas/ErrorResponse" },
+                schema: { $ref: "#/components/schemas/ErrorResponse" },
               },
             },
           },
@@ -54,7 +54,7 @@ export const METRICS_ENDPOINTS: readonly ApiEndpoint[] = [
             description: "JSON response",
             content: {
               "application/json": {
-                schema: { "$ref": "#/components/schemas/ErrorResponse" },
+                schema: { $ref: "#/components/schemas/ErrorResponse" },
               },
             },
           },
@@ -69,6 +69,7 @@ export const METRICS_ENDPOINTS: readonly ApiEndpoint[] = [
 export interface RegisterMetricsRoutesOptions {
   readonly observability: Pick<ObservabilitySink, "listMetrics">;
   readonly getScrapeToken?: () => string | undefined;
+  readonly metricTags?: Record<string, string>;
   readonly now?: () => Date;
 }
 
@@ -87,16 +88,27 @@ export function registerMetricsRoutes(
       return c.json(apiError("unauthenticated", "invalid scrape token"), 401);
     }
     const metrics = await options.observability.listMetrics();
-    return new Response(renderPrometheusMetrics(metrics, options.now?.()), {
-      status: 200,
-      headers: { "content-type": PROMETHEUS_CONTENT_TYPE },
-    });
+    const now = options.now?.() ?? new Date();
+    return new Response(
+      renderPrometheusMetrics(metrics, now, {
+        defaultTags: options.metricTags,
+      }),
+      {
+        status: 200,
+        headers: { "content-type": PROMETHEUS_CONTENT_TYPE },
+      },
+    );
   });
+}
+
+export interface RenderPrometheusMetricsOptions {
+  readonly defaultTags?: Record<string, string>;
 }
 
 export function renderPrometheusMetrics(
   events: readonly MetricEvent[],
   _now: Date = new Date(),
+  options: RenderPrometheusMetricsOptions = {},
 ): string {
   const byName = new Map<string, MetricEvent[]>();
   for (const event of events) {
@@ -108,7 +120,9 @@ export function renderPrometheusMetrics(
     "# TYPE takosumi_metrics_scrape_info gauge",
     "takosumi_metrics_scrape_info 1",
   ];
+  const renderedNames = new Set<string>();
   for (const [name, namedEvents] of [...byName.entries()].sort()) {
+    renderedNames.add(name);
     const kind = namedEvents[0]?.kind ?? "gauge";
     if (kind === "histogram") {
       renderHistogram(lines, name, namedEvents);
@@ -121,22 +135,19 @@ export function renderPrometheusMetrics(
       lines.push(`${name}${sample.labels} ${formatNumber(sample.value)}`);
     }
   }
+  const defaultSeries = options.defaultTags
+    ? defaultDashboardMetricSeries(options.defaultTags)
+    : [];
+  for (const series of defaultSeries) {
+    const name = sanitizeMetricName(series.name);
+    if (renderedNames.has(name)) continue;
+    renderDefaultSeries(lines, { ...series, name });
+  }
   return `${lines.join("\n")}\n`;
 }
 
 const HISTOGRAM_BUCKETS = [
-  0.005,
-  0.01,
-  0.025,
-  0.05,
-  0.1,
-  0.25,
-  0.5,
-  1,
-  2.5,
-  5,
-  10,
-  30,
+  0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30,
 ] as const;
 
 function renderHistogram(
@@ -152,15 +163,15 @@ function renderHistogram(
     for (const bucket of HISTOGRAM_BUCKETS) {
       const count = samples.filter((event) => event.value <= bucket).length;
       lines.push(
-        `${name}_bucket${renderLabels({ ...labels, le: String(bucket) })} ${
-          formatNumber(count)
-        }`,
+        `${name}_bucket${renderLabels({ ...labels, le: String(bucket) })} ${formatNumber(
+          count,
+        )}`,
       );
     }
     lines.push(
-      `${name}_bucket${renderLabels({ ...labels, le: "+Inf" })} ${
-        formatNumber(samples.length)
-      }`,
+      `${name}_bucket${renderLabels({ ...labels, le: "+Inf" })} ${formatNumber(
+        samples.length,
+      )}`,
     );
     lines.push(`${name}_sum${renderLabels(labels)} ${formatNumber(sum)}`);
     lines.push(
@@ -169,15 +180,125 @@ function renderHistogram(
   }
 }
 
+interface DefaultMetricSeries {
+  readonly name: string;
+  readonly kind: MetricEvent["kind"];
+  readonly tags: Record<string, string>;
+}
+
+function defaultDashboardMetricSeries(
+  inputTags: Record<string, string>,
+): readonly DefaultMetricSeries[] {
+  const baseTags = {
+    environment: normalizedDefaultTag(inputTags.environment) ?? "local",
+    runtime_cell_id:
+      normalizedDefaultTag(inputTags.runtime_cell_id) ?? "platform-default",
+  };
+  const deployTags = {
+    ...baseTags,
+    space_id: "none",
+    capsule_id: "none",
+    operationKind: "none",
+    status: "idle",
+  };
+  const runnerTags = {
+    ...baseTags,
+    operationKind: "none",
+    status: "idle",
+  };
+  return [
+    {
+      name: "takosumi_deploy_operation_count",
+      kind: "counter",
+      tags: deployTags,
+    },
+    {
+      name: "takosumi_apply_duration_seconds",
+      kind: "histogram",
+      tags: deployTags,
+    },
+    {
+      name: "takosumi_runner_queue_age_seconds",
+      kind: "gauge",
+      tags: {
+        ...runnerTags,
+        space_id: "none",
+      },
+    },
+    {
+      name: "takosumi_runner_active_runs",
+      kind: "gauge",
+      tags: runnerTags,
+    },
+    {
+      name: "takosumi_runner_container_startup_seconds",
+      kind: "histogram",
+      tags: runnerTags,
+    },
+    {
+      name: "takosumi_api_request_duration_seconds",
+      kind: "histogram",
+      tags: {
+        ...baseTags,
+        method: "GET",
+        route: "/api/*",
+        status: "200",
+      },
+    },
+    {
+      name: "takosumi_oidc_request_count",
+      kind: "counter",
+      tags: {
+        ...baseTags,
+        method: "GET",
+        route: "/.well-known/openid-configuration",
+        status: "200",
+      },
+    },
+  ];
+}
+
+function renderDefaultSeries(
+  lines: string[],
+  series: DefaultMetricSeries,
+): void {
+  if (series.kind === "histogram") {
+    lines.push(`# TYPE ${series.name} histogram`);
+    for (const bucket of HISTOGRAM_BUCKETS) {
+      lines.push(
+        `${series.name}_bucket${renderLabels({
+          ...series.tags,
+          le: String(bucket),
+        })} 0`,
+      );
+    }
+    lines.push(
+      `${series.name}_bucket${renderLabels({ ...series.tags, le: "+Inf" })} 0`,
+    );
+    lines.push(`${series.name}_sum${renderLabels(series.tags)} 0`);
+    lines.push(`${series.name}_count${renderLabels(series.tags)} 0`);
+    return;
+  }
+  const type = series.kind === "counter" ? "counter" : "gauge";
+  lines.push(`# TYPE ${series.name} ${type}`);
+  lines.push(`${series.name}${renderLabels(series.tags)} 0`);
+}
+
+function normalizedDefaultTag(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized ? normalized : undefined;
+}
+
 function aggregateSamples(
   events: readonly MetricEvent[],
   kind: MetricEvent["kind"],
 ): readonly { readonly labels: string; readonly value: number }[] {
   const byLabels = groupByLabels(events);
   return [...byLabels.entries()].map(([labelKey, samples]) => {
-    const value = kind === "counter"
-      ? samples.reduce((total, event) => total + event.value, 0)
-      : samples.at(-1)?.value ?? 0;
+    const value =
+      kind === "counter"
+        ? samples.reduce((total, event) => total + event.value, 0)
+        : (samples.at(-1)?.value ?? 0);
     return { labels: renderLabels(parseLabelKey(labelKey)), value };
   });
 }
@@ -211,11 +332,12 @@ function parseLabelKey(key: string): Record<string, string> {
 function renderLabels(labels: Record<string, string>): string {
   const entries = Object.entries(labels);
   if (entries.length === 0) return "";
-  return `{${
-    entries.map(([key, value]) =>
-      `${sanitizeLabelName(key)}="${escapeLabelValue(value)}"`
-    ).join(",")
-  }}`;
+  return `{${entries
+    .map(
+      ([key, value]) =>
+        `${sanitizeLabelName(key)}="${escapeLabelValue(value)}"`,
+    )
+    .join(",")}}`;
 }
 
 function sanitizeMetricName(name: string): string {
@@ -229,10 +351,10 @@ function sanitizeLabelName(name: string): string {
 }
 
 function escapeLabelValue(value: string): string {
-  return value.replace(/\\/g, "\\\\").replace(/\n/g, "\\n").replace(
-    /"/g,
-    '\\"',
-  );
+  return value
+    .replace(/\\/g, "\\\\")
+    .replace(/\n/g, "\\n")
+    .replace(/"/g, '\\"');
 }
 
 function formatNumber(value: number): string {
