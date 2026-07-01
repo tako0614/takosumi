@@ -115,12 +115,13 @@ container images, release URLs, object keys, digests, and build pipelines belong
 to the app repo, CI/release pipeline, registry, provider, or ordinary
 OpenTofu/Terraform module variables.
 
-The reference runner keeps successful containers warm for
-`TAKOSUMI_RUNNER_KEEPALIVE_SECONDS` seconds (default `0`; positive values keep
-the current run-scoped container alive briefly but do not provide cross-run
-affinity yet) and shuts down failed runs immediately. Operators can also pass
-`TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR` and `TAKOSUMI_SOURCE_ARCHIVE_ZSTD_LEVEL`
-as non-secret speed settings.
+The reference runner keeps successful plan containers warm for
+`TAKOSUMI_RUNNER_KEEPALIVE_SECONDS` seconds (default `0`; official Cloud uses
+`120` so apply / destroy apply can return to the plan runner object while it is
+warm) and shuts down non-plan runs after success plus all failed runs
+immediately. Operators can also pass `TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR`,
+`TAKOSUMI_SOURCE_ARCHIVE_ZSTD_LEVEL`, and runner capacity retry knobs as
+non-secret speed settings. This is not a cross-run source-sync cache.
 
 ## Resource Shape Resolution
 

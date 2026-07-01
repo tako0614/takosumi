@@ -36,6 +36,8 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
    * binaries only, and keepalive only controls warm container lifetime.
    */
   readonly TAKOSUMI_RUNNER_KEEPALIVE_SECONDS?: string;
+  readonly TAKOSUMI_RUNNER_CAPACITY_RETRY_ATTEMPTS?: string;
+  readonly TAKOSUMI_RUNNER_CAPACITY_RETRY_BASE_MS?: string;
   readonly TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR?: string;
   readonly TAKOSUMI_SOURCE_ARCHIVE_ZSTD_LEVEL?: string;
   /**

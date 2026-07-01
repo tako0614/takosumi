@@ -166,6 +166,90 @@ test("container runner records active run and startup metrics", async () => {
   expect(startup[0]?.value).toBe(1.25);
 });
 
+test("container runner applies and destroys through the plan runner object for warm reuse", async () => {
+  const runnerIds: string[] = [];
+  const requests: { readonly id: string; readonly path: string }[] = [];
+  const runner = new CloudflareContainerOpenTofuRunner({
+    RUNNER: {
+      idFromName: (name: string) => {
+        runnerIds.push(name);
+        return name;
+      },
+      get: (id: string) => ({
+        fetch: async (request: Request) => {
+          requests.push({ id, path: new URL(request.url).pathname });
+          return Response.json({});
+        },
+      }),
+    },
+  } as unknown as CloudflareWorkerEnv);
+
+  await runner.apply({
+    applyRun: { id: "apply_cache" },
+    planRun: { id: "plan_cache" },
+    planArtifact: {
+      kind: "object-storage",
+      ref: "r2://takos-artifacts/opentofu-plan-runs/plan_cache/tfplan",
+      digest: PLAN_DIGEST,
+    },
+  } as Parameters<CloudflareContainerOpenTofuRunner["apply"]>[0]);
+  await runner.destroy({
+    applyRun: { id: "destroy_cache" },
+    planRun: { id: "destroy_plan_cache" },
+    planArtifact: {
+      kind: "runner-local",
+      ref: "runner-local://destroy_plan_cache/tfplan",
+      digest: PLAN_DIGEST,
+    },
+  } as Parameters<CloudflareContainerOpenTofuRunner["destroy"]>[0]);
+
+  expect(runnerIds).toEqual(["plan_cache", "destroy_plan_cache"]);
+  expect(requests).toEqual([
+    { id: "plan_cache", path: "/runs/plan_cache" },
+    { id: "destroy_plan_cache", path: "/runs/destroy_plan_cache" },
+  ]);
+});
+
+test("container runner retries transient Cloudflare container capacity exhaustion", async () => {
+  let attempts = 0;
+  const runner = new CloudflareContainerOpenTofuRunner({
+    TAKOSUMI_RUNNER_CAPACITY_RETRY_ATTEMPTS: "2",
+    TAKOSUMI_RUNNER_CAPACITY_RETRY_BASE_MS: "1",
+    RUNNER: {
+      idFromName: (name: string) => name,
+      get: () => ({
+        fetch: async () => {
+          attempts += 1;
+          if (attempts === 1) {
+            return Response.json(
+              {
+                detail:
+                  "Maximum number of running container instances exceeded. Try again later, or try configuring a higher value for max_instances",
+              },
+              { status: 500 },
+            );
+          }
+          return Response.json({
+            planDigest: PLAN_DIGEST,
+            planArtifact: {
+              kind: "runner-local",
+              ref: "runner-local://capacity_retry/tfplan",
+              digest: PLAN_DIGEST,
+            },
+          });
+        },
+      }),
+    },
+  } as unknown as CloudflareWorkerEnv);
+
+  const result = await runner.plan({
+    planRun: { id: "capacity_retry" },
+  } as Parameters<CloudflareContainerOpenTofuRunner["plan"]>[0]);
+
+  expect(attempts).toBe(2);
+  expect(result.planDigest).toBe(PLAN_DIGEST);
+});
+
 test("container runner returns provider installation attestation from apply and destroy results", async () => {
   const providerInstallation = [
     {

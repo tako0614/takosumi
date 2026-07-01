@@ -217,8 +217,12 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       );
     }
     const runDispatch = isRunDispatchRequest(request);
+    const runAction = runDispatch
+      ? await readRunDispatchAction(request.clone())
+      : undefined;
     const shutdownAfterRun =
-      runDispatch && runnerKeepaliveSeconds(this.env) === 0;
+      runDispatch &&
+      runnerShouldShutdownAfterRun(runAction, runnerKeepaliveSeconds(this.env));
     let runSucceeded = false;
     try {
       this.#lastStartupSeconds = undefined;
@@ -1173,6 +1177,24 @@ function isRunDispatchRequest(request: Request): boolean {
   return /^\/runs\/[^/]+$/.test(new URL(request.url).pathname);
 }
 
+async function readRunDispatchAction(
+  request: Request,
+): Promise<string | undefined> {
+  try {
+    return parseRunEnvelope(await request.text()).action;
+  } catch {
+    return undefined;
+  }
+}
+
+function runnerShouldShutdownAfterRun(
+  action: string | undefined,
+  keepaliveSeconds: number,
+): boolean {
+  if (keepaliveSeconds <= 0) return true;
+  return action !== "plan";
+}
+
 async function bufferedResponse(response: Response): Promise<Response> {
   const body = await response.arrayBuffer();
   return new Response(body, {
@@ -1191,8 +1213,7 @@ function containerHealthUrl(baseUrl: URL): string {
 
 function isContainerNotRunningError(error: unknown): boolean {
   return (
-    error instanceof Error &&
-    CONTAINER_NOT_RUNNING_PATTERN.test(error.message)
+    error instanceof Error && CONTAINER_NOT_RUNNING_PATTERN.test(error.message)
   );
 }
 
@@ -1411,9 +1432,7 @@ async function recoverCurrentState(
         ...(object.customMetadata?.["takosumi-run-id"]
           ? { runId: object.customMetadata["takosumi-run-id"] }
           : {}),
-        ...(Number.isFinite(ciphertextLength)
-          ? { ciphertextLength }
-          : {}),
+        ...(Number.isFinite(ciphertextLength) ? { ciphertextLength } : {}),
       };
     }
   }
@@ -1667,11 +1686,7 @@ function positiveIntegerField(
   key: string,
 ): number {
   const field = value[key];
-  if (
-    typeof field !== "number" ||
-    !Number.isSafeInteger(field) ||
-    field <= 0
-  ) {
+  if (typeof field !== "number" || !Number.isSafeInteger(field) || field <= 0) {
     throw new Error(`${key} must be a positive integer`);
   }
   return field;

@@ -73,9 +73,12 @@ speed knob は OpenTofu 実行基盤に限定する。
 
 | Knob                                 | Default                          | 速くなる箇所                           | コスト/注意点                                                                                             |
 | ------------------------------------ | -------------------------------- | -------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `TAKOSUMI_RUNNER_KEEPALIVE_SECONDS`  | `0`                              | run-scoped container lifetime          | run ごとに破棄して `max_instances` 枯渇を避ける。positive value は current run container を短時間残すだけ |
-| `TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR` | `/tmp/takosumi-provider-cache`   | `tofu init` の direct provider install | provider binary 専用。credential / tfplan / state / outputs は入れない                                    |
-| `TAKOSUMI_SOURCE_ARCHIVE_ZSTD_LEVEL` | runner default `3`, template `1` | SourceSnapshot archive 作成            | 低いほど速いが R2 object が大きくなる                                                                     |
+| `TAKOSUMI_RUNNER_KEEPALIVE_SECONDS`       | OSS template `0`; Cloud `120`    | plan->apply / destroy-plan->destroy-apply warm reuse | positive value は apply が plan runner object に戻る短い window を温める。温存対象は成功した plan のみで、source_sync / compatibility_check / apply / destroy は成功後に破棄する |
+| `TAKOSUMI_RUNNER_CAPACITY_RETRY_ATTEMPTS` | Cloud `6`                        | transient Cloudflare Containers capacity errors | `max_instances` を即増やす前に短い retry で吸収する。恒常的に出るなら quota / max_instances / runner profile を見直す |
+| `TAKOSUMI_RUNNER_CAPACITY_RETRY_BASE_MS`  | Cloud `2000`                     | capacity retry backoff                 | exponential backoff。request timeout 内に収める                                                            |
+| `TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR`      | `/tmp/takosumi-provider-cache`   | `tofu init` の direct provider install | provider binary 専用。credential / tfplan / state / outputs は入れない                                    |
+| `TAKOSUMI_SOURCE_ARCHIVE_ZSTD_LEVEL`      | runner default `3`, template `1` | SourceSnapshot archive 作成            | 低いほど速いが R2 object が大きくなる                                                                     |
+| `TAKOSUMI_COMPATIBILITY_CHECK_TIMEOUT_MS` | Cloud `90000`                    | deploy 直後の cold compatibility preflight | timeout を伸ばすだけで実行自体は速くしない。cold runner を誤って unsupported にしないための安定化 |
 
 Git source sync は、同じ Source の同一 ref/path だけでなく、同じ Space 内の
 public Git Source で URL/ref/path が一致する場合も既存 SourceSnapshot archive
@@ -89,10 +92,13 @@ Git ref が commit SHA として固定され、既存 SourceSnapshot の `resolv
 SourceSyncRun を成功させる。tag / branch のように動く ref は runner の
 `git ls-remote` で現在 commit を確認してから archive reuse する。
 
-失敗した run は keepalive 設定に関係なく container を落とす。これは crash や
-relay error のあとに一時 credential file を温存しないための fail-closed 動作。
-current Cloudflare runner は `idFromName(runId)` の run-scoped Durable Object
-を使うため、positive keepalive は cross-run provider cache reuse にはならない。
+成功した plan 以外の run と、失敗した run は keepalive 設定に関係なく
+container を落とす。これは source_sync / compatibility_check の短命 run や
+crash / relay error のあとに一時 credential file を温存しないための
+fail-closed 動作。
+apply / destroy apply は plan artifact から plan run id を復元して同じ runner
+Durable Object に戻るため、positive keepalive は承認直後の apply 体感を短縮できる。
+source_sync、compatibility_check、別 plan の cross-run cache reuse にはならない。
 RunOwner Durable Object が controller dispatch 中に reset した場合は、run ledger
 が `queued` に戻ったあと最大 90 秒で stale running owner を再試行する。これは
 OpenTofu 実行そのものを短縮する設定ではなく、runner infrastructure reset 後の
