@@ -10,7 +10,9 @@
 # Cloudflare is pinned to 5.19.1 because the GA Takos install Capsule lockfile
 # currently selects that version. Do not loosen this to `~> 5.0`: `tofu providers
 # mirror` would bake only the latest 5.x provider and older reviewed lockfiles
-# would stop installing in the runner image.
+# would stop installing in the runner image. hashicorp/http is pinned to the
+# Yurucommu OpenTofu lockfile version so prebuilt bundle URL fetches do not pay a
+# registry install on first deploy.
 #
 # Generic AWS/S3/GCS stacks install through the ordinary provider install/cache
 # path. google is still omitted for size; it falls through to `direct`
@@ -28,6 +30,10 @@ terraform {
     tls = {
       source  = "registry.opentofu.org/hashicorp/tls"
       version = "= 4.3.0"
+    }
+    http = {
+      source  = "registry.opentofu.org/hashicorp/http"
+      version = "= 3.6.0"
     }
   }
 }

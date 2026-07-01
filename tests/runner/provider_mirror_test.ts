@@ -5,10 +5,22 @@ const ROOT = new URL("../../", import.meta.url);
 const MIRROR_PROVIDERS = new URL("runner/mirror-providers.tf", ROOT);
 const TOFU_RC = new URL("runner/tofu.rc", ROOT);
 const RUNNER_DOCKERFILE = new URL("runner/Dockerfile", ROOT);
+const PROVIDERS_TS = new URL("runner/lib/providers.ts", ROOT);
 
 function providerSourcesFromMirrorConfig(config: string): readonly string[] {
   return Array.from(
     config.matchAll(/\bsource\s*=\s*"([^"]+)"/gu),
+    (match) => match[1]!,
+  ).sort();
+}
+
+function defaultMirroredProvidersFromSource(source: string): readonly string[] {
+  const block = source.match(
+    /const DEFAULT_MIRRORED_PROVIDERS = \[([\s\S]*?)\] as const;/u,
+  )?.[1];
+  expect(block).toBeString();
+  return Array.from(
+    block!.matchAll(/"([^"]+)"/gu),
     (match) => match[1]!,
   ).sort();
 }
@@ -28,6 +40,7 @@ test("runner provider mirror uses exact versions for offline-only providers", as
 
   expect(config).toContain('version = "= 3.9.0"');
   expect(config).toContain('version = "= 4.3.0"');
+  expect(config).toContain('version = "= 3.6.0"');
   expect(config).not.toContain('version = "~> 6.0"');
   expect(config).not.toContain("hashicorp/aws");
 });
@@ -35,13 +48,16 @@ test("runner provider mirror uses exact versions for offline-only providers", as
 test("runner provider mirror and tofu.rc stay lockstep for baked offline providers", async () => {
   const mirror = await readFile(MIRROR_PROVIDERS, "utf8");
   const tofuRc = await readFile(TOFU_RC, "utf8");
+  const providersTs = await readFile(PROVIDERS_TS, "utf8");
   const providers = providerSourcesFromMirrorConfig(mirror);
 
   expect(providers).toEqual([
     "registry.opentofu.org/cloudflare/cloudflare",
+    "registry.opentofu.org/hashicorp/http",
     "registry.opentofu.org/hashicorp/random",
     "registry.opentofu.org/hashicorp/tls",
   ]);
+  expect(defaultMirroredProvidersFromSource(providersTs)).toEqual(providers);
   for (const provider of providers) {
     expect(tofuRc).toContain(JSON.stringify(provider));
   }

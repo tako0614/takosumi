@@ -35,16 +35,13 @@ import {
   commandContextFromRequest,
   assertCredentialEnvAvailable,
 } from "./credentials.ts";
-import {
-  parseSource,
-  parseRequiredProviders,
-} from "./parsing.ts";
+import { parseSource, parseRequiredProviders } from "./parsing.ts";
 
 const DEFAULT_MIRRORED_PROVIDERS = [
   "registry.opentofu.org/cloudflare/cloudflare",
   "registry.opentofu.org/hashicorp/random",
   "registry.opentofu.org/hashicorp/tls",
-  "registry.opentofu.org/hashicorp/aws",
+  "registry.opentofu.org/hashicorp/http",
 ] as const;
 
 const providerCacheInitLocks = new Map<string, Promise<void>>();
@@ -205,7 +202,9 @@ export function assertRunnerPolicyBeforeInit(
 
 function hasGeneratedRoot(request: unknown): boolean {
   const generatedRoot = recordField(request, "generatedRoot");
-  return isRecord(generatedRoot) && isRecord(recordField(generatedRoot, "files"));
+  return (
+    isRecord(generatedRoot) && isRecord(recordField(generatedRoot, "files"))
+  );
 }
 
 export async function generatedRootTreeHasNoProviderUsage(
@@ -333,7 +332,8 @@ export async function prepareStrictProviderMirrorInit(
   policy: { readonly requireMirror: boolean } | undefined,
 ): Promise<ProviderMirrorInit | undefined> {
   const canonicalProviders = normalizedProviderList(providers);
-  const strict = policy?.requireMirror === true && canonicalProviders.length > 0;
+  const strict =
+    policy?.requireMirror === true && canonicalProviders.length > 0;
   const mirrorRoot =
     Bun.env.OPENTOFU_PROVIDER_MIRROR ?? DEFAULT_PROVIDER_MIRROR_PATH;
   const providerCache = providerPluginCacheForWorkspace(workspace);
@@ -371,9 +371,10 @@ export async function prepareStrictProviderMirrorInit(
   };
 }
 
-export function providerPluginCacheForWorkspace(
-  workspace: RunWorkspace,
-): { readonly path: string; readonly shared: boolean } {
+export function providerPluginCacheForWorkspace(workspace: RunWorkspace): {
+  readonly path: string;
+  readonly shared: boolean;
+} {
   const configured = Bun.env[PROVIDER_PLUGIN_CACHE_DIR_ENV]?.trim();
   if (configured) {
     return { path: configured, shared: true };
