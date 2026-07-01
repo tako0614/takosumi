@@ -249,8 +249,13 @@ test("createSync persists a queued run, precomputes the archive key, and enqueue
   expect(stored?.id).toBe(run.id);
 });
 
-test("createSync dedupe returns the existing queued run", async () => {
-  const { service } = makeService();
+test("createSync dedupe returns and re-enqueues the existing queued run", async () => {
+  const dispatched: unknown[] = [];
+  const { service } = makeService({
+    enqueueSourceSync: async (d) => {
+      dispatched.push(d);
+    },
+  });
   const { source } = await service.createSource({
     spaceId: "space_1",
     name: "a",
@@ -259,6 +264,101 @@ test("createSync dedupe returns the existing queued run", async () => {
   const first = await service.createSync(source.id, { dedupe: true });
   const second = await service.createSync(source.id, { dedupe: true });
   expect(second.run.id).toBe(first.run.id);
+  expect(dispatched).toEqual([
+    {
+      action: "source_sync",
+      runId: first.run.id,
+      spaceId: "space_1",
+      sourceId: source.id,
+    },
+    {
+      action: "source_sync",
+      runId: first.run.id,
+      spaceId: "space_1",
+      sourceId: source.id,
+    },
+  ]);
+});
+
+test("createSync dedupe does not re-enqueue a fresh running run", async () => {
+  const dispatched: unknown[] = [];
+  const { store, service } = makeService({
+    enqueueSourceSync: async (d) => {
+      dispatched.push(d);
+    },
+  });
+  const { source } = await service.createSource({
+    spaceId: "space_1",
+    name: "a",
+    url: "https://github.com/a/b",
+  });
+  const first = await service.createSync(source.id, { dedupe: true });
+  const heartbeatAt = new Date("2026-06-06T00:00:00.000Z").getTime();
+  await store.transitionRun({
+    id: first.run.id,
+    kind: "source_sync",
+    expectFrom: ["queued"],
+    run: {
+      ...first.run,
+      status: "running",
+      startedAt: "2026-06-06T00:00:00.000Z",
+      updatedAt: "2026-06-06T00:00:00.000Z",
+      heartbeatAt,
+    },
+    setLeaseToken: "lease_running",
+    heartbeatAt,
+  });
+
+  dispatched.length = 0;
+  const second = await service.createSync(source.id, { dedupe: true });
+
+  expect(second.run.id).toBe(first.run.id);
+  expect(second.run.status).toBe("running");
+  expect(dispatched).toEqual([]);
+});
+
+test("createSync dedupe re-enqueues a stale running run", async () => {
+  const dispatched: unknown[] = [];
+  const { store, service } = makeService({
+    enqueueSourceSync: async (d) => {
+      dispatched.push(d);
+    },
+  });
+  const { source } = await service.createSource({
+    spaceId: "space_1",
+    name: "a",
+    url: "https://github.com/a/b",
+  });
+  const first = await service.createSync(source.id, { dedupe: true });
+  const heartbeatAt = new Date("2026-06-05T23:48:00.000Z").getTime();
+  await store.transitionRun({
+    id: first.run.id,
+    kind: "source_sync",
+    expectFrom: ["queued"],
+    run: {
+      ...first.run,
+      status: "running",
+      startedAt: "2026-06-05T23:48:00.000Z",
+      updatedAt: "2026-06-05T23:48:00.000Z",
+      heartbeatAt,
+    },
+    setLeaseToken: "lease_stale",
+    heartbeatAt,
+  });
+
+  dispatched.length = 0;
+  const second = await service.createSync(source.id, { dedupe: true });
+
+  expect(second.run.id).toBe(first.run.id);
+  expect(second.run.status).toBe("running");
+  expect(dispatched).toEqual([
+    {
+      action: "source_sync",
+      runId: first.run.id,
+      spaceId: "space_1",
+      sourceId: source.id,
+    },
+  ]);
 });
 
 test("verifyHookSecret accepts the right bearer and rejects others", async () => {
