@@ -647,6 +647,23 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     return parseRow(rows[0]) as Space | undefined;
   }
 
+  async listSpacesByIds(ids: readonly string[]): Promise<readonly Space[]> {
+    if (ids.length === 0) return [];
+    const rows = await this.#db
+      .select({ json: pgSchema.spaces.spaceJson })
+      .from(pgSchema.spaces)
+      .where(inArray(pgSchema.spaces.id, [...new Set(ids)]));
+    const byId = new Map(
+      rows.map((row) => {
+        const value = parseRow(row) as Space;
+        return [value.id, value] as const;
+      }),
+    );
+    return ids
+      .map((id) => byId.get(id))
+      .filter((row): row is Space => row !== undefined);
+  }
+
   async getSpaceByHandle(handle: string): Promise<Space | undefined> {
     const rows = await this.#db
       .select({ json: pgSchema.spaces.spaceJson })

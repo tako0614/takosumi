@@ -106,6 +106,16 @@ export class WorkspacesService {
     return workspace;
   }
 
+  async listWorkspacesByIds(
+    ids: readonly string[],
+  ): Promise<readonly Workspace[]> {
+    const normalizedIds = ids.filter((id) => {
+      requireNonEmptyString(id, "id");
+      return true;
+    });
+    return await this.#store.listSpacesByIds(normalizedIds);
+  }
+
   /**
    * Updates the mutable, non-identity fields of a Workspace (spec §30 `PATCH
    * /internal/v1/workspaces/:workspaceId`). The handle, type, owner, and billing
@@ -243,9 +253,7 @@ export class WorkspacesService {
   }
 
   /** @deprecated transient alias for {@link listWorkspacesByOwner}. */
-  async listSpacesByOwner(
-    ownerUserId: string,
-  ): Promise<readonly Workspace[]> {
+  async listSpacesByOwner(ownerUserId: string): Promise<readonly Workspace[]> {
     return await this.listWorkspacesByOwner(ownerUserId);
   }
 

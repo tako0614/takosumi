@@ -77,10 +77,7 @@ import type {
   ProviderResolution,
   PublicProviderResolution,
 } from "takosumi-contract/provider-resolution";
-import type {
-  OutputShare,
-  OutputShareEntry,
-} from "takosumi-contract/outputs";
+import type { OutputShare, OutputShareEntry } from "takosumi-contract/outputs";
 import type { PublicDeployment } from "takosumi-contract/deployments";
 import type {
   BackupRecord,
@@ -159,6 +156,7 @@ export interface ControlPlaneOperations {
   readonly spaces: {
     listWorkspaces(): Promise<readonly Workspace[]>;
     listWorkspacesByOwner(ownerUserId: string): Promise<readonly Workspace[]>;
+    listWorkspacesByIds?(ids: readonly string[]): Promise<readonly Workspace[]>;
     getWorkspace(id: string): Promise<Workspace>;
     createWorkspace(request: {
       readonly handle: string;
@@ -222,10 +220,7 @@ export interface ControlPlaneOperations {
     putInstallConfig(config: InstallConfig): Promise<InstallConfig>;
     getInstallConfig(id: string): Promise<InstallConfig>;
     listInstallConfigs(workspaceId?: string): Promise<readonly InstallConfig[]>;
-    patchCapsuleStatus(
-      id: string,
-      status: Capsule["status"],
-    ): Promise<Capsule>;
+    patchCapsuleStatus(id: string, status: Capsule["status"]): Promise<Capsule>;
     putCapsuleProviderEnvBindingSet(
       profile: CapsuleProviderEnvBindingSet,
     ): Promise<CapsuleProviderEnvBindingSet>;
@@ -255,7 +250,9 @@ export interface ControlPlaneOperations {
    * Workspace-wide dependency edge listing for the graph projection. Added to the
    * facade in M10 (mirrors the store's `listDependenciesByWorkspace`).
    */
-  listDependenciesByWorkspace(workspaceId: string): Promise<readonly Dependency[]>;
+  listDependenciesByWorkspace(
+    workspaceId: string,
+  ): Promise<readonly Dependency[]>;
   // --- RunGroups (§19 / §24) ---
   readonly runGroups: {
     createWorkspaceUpdate(workspaceId: string): Promise<RunGroupWithRunsLike>;
@@ -271,7 +268,10 @@ export interface ControlPlaneOperations {
     record?(
       event: Omit<ActivityEvent, "id" | "createdAt">,
     ): Promise<ActivityEvent | undefined>;
-    list(workspaceId: string, limit?: number): Promise<readonly ActivityEvent[]>;
+    list(
+      workspaceId: string,
+      limit?: number,
+    ): Promise<readonly ActivityEvent[]>;
   };
   // --- Backups (§29) ---
   readonly backups: {
@@ -444,9 +444,7 @@ export interface ControlPlaneOperations {
       readonly runnerProfileId?: string;
     },
   ): Promise<PlanRunResponse>;
-  createCapsuleDriftCheck(
-    capsuleId: string,
-  ): Promise<PlanRunResponse>;
+  createCapsuleDriftCheck(capsuleId: string): Promise<PlanRunResponse>;
   /**
    * Reads the internal PlanRun projection by id. The control surface uses it to
    * resolve a plan run's owning Workspace (for the apply space-permission gate) and

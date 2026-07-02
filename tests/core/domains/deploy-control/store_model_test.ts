@@ -924,6 +924,12 @@ test("Space store: put/get/get-by-handle/list are symmetric", async () => {
       (await store.listSpaces()).map((s) => s.id),
       label,
     ).toEqual(["space_a", "space_b"]);
+    expect(
+      (await store.listSpacesByIds(["space_b", "missing", "space_a"])).map(
+        (s) => s.id,
+      ),
+      label,
+    ).toEqual(["space_b", "space_a"]);
   }
 });
 

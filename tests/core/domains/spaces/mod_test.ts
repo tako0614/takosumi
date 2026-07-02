@@ -194,17 +194,22 @@ test("ensurePersonalSpace creates once and is idempotent by handle", async () =>
 
 test("listSpaces returns all created spaces", async () => {
   const { service } = build();
-  await service.createSpace({
+  const shota = await service.createSpace({
     handle: "shota",
     displayName: "Shota",
     type: "personal",
     ownerUserId: "user_1",
   });
-  await service.createSpace({
+  const acme = await service.createSpace({
     handle: "acme",
     displayName: "Acme",
     type: "organization",
     ownerUserId: "user_2",
   });
   expect((await service.listSpaces()).length).toBe(2);
+  expect(
+    (
+      await service.listWorkspacesByIds([acme.id, "space_missing", shota.id])
+    ).map((workspace) => workspace.id),
+  ).toEqual([acme.id, shota.id]);
 });
