@@ -180,6 +180,32 @@ function billingCheckoutOperations(
   } as unknown as ControlPlaneOperations;
 }
 
+test("accounts handler emits dashboard Server-Timing without identity material", async () => {
+  const store = new InMemoryAccountsStore();
+  const sessionId = seedAccountSession(store, "tsub_owner");
+  const handler = createAccountsHandler({
+    store,
+    controlPlaneOperations: {} as ControlPlaneOperations,
+  });
+
+  const response = await handler(
+    new Request(
+      `${testIssuer}/api/v1/dashboard/bootstrap?includeWorkspaces=false`,
+      { headers: accountSessionHeaders(sessionId) },
+    ),
+  );
+
+  expect(response.status).toEqual(200);
+  const timing = response.headers.get("server-timing") ?? "";
+  expect(timing).toContain("tk_allowlist;dur=");
+  expect(timing).toContain("tk_control_total;dur=");
+  expect(timing).toContain("tk_control_auth;dur=");
+  expect(timing).toContain("tk_control_dispatch;dur=");
+  expect(timing).toContain("tk_dashboard;dur=");
+  expect(timing).not.toContain("sess_");
+  expect(timing).not.toContain("tsub_owner");
+});
+
 async function withTestAppCapsuleAuth(
   request: Request,
   store: AccountsStore,

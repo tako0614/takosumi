@@ -1486,6 +1486,12 @@ test("GET /api/v1/dashboard/bootstrap can skip Workspaces for fast session proof
   expect(body.session.subject).toEqual(subject);
   expect(body.workspaces).toBeUndefined();
   expect(operations.calls.listWorkspacesByOwner).toBeUndefined();
+  const timing = response?.headers.get("server-timing") ?? "";
+  expect(timing).toContain("tk_control_auth;dur=");
+  expect(timing).toContain("tk_control_dispatch;dur=");
+  expect(timing).toContain("tk_dashboard;dur=");
+  expect(timing).not.toContain("sess_");
+  expect(timing).not.toContain(subject);
 });
 
 test("GET /api/v1/workspaces/:id/capsules rejects malformed includeDestroyed", async () => {
