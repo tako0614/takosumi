@@ -39,6 +39,18 @@ test("parseMobileConnectInput accepts JSON QR payloads", () => {
   });
 });
 
+test("parseMobileConnectInput accepts Host Center return payloads without a Takosumi app scheme", () => {
+  expect(
+    parseMobileConnectInput(
+      "notesapp://connect?host_url=https%3A%2F%2Fnotes.example&product=notes-app",
+    ),
+  ).toEqual({
+    hostUrl: "https://notes.example",
+    product: "notes-app",
+    setupTicket: undefined,
+  });
+});
+
 test("parseMobileRouteInput accepts mobile open URLs", () => {
   expect(
     parseMobileRouteInput(
@@ -65,12 +77,41 @@ test("parseMobileRouteInput infers host from absolute route URLs", () => {
   });
 });
 
-test("parseMobileRouteInput ignores connect URLs and rejects mismatched products", () => {
+test("parseMobileRouteInput accepts direct hosted route URLs", () => {
   expect(
-    parseMobileRouteInput("takos://connect?host_url=https%3A%2F%2Fhost.example", {
+    parseMobileRouteInput("https://host.example/chat?thread=1#latest", {
       mobileScheme: "takos",
       product: "takos",
     }),
+  ).toEqual({
+    path: "/chat?thread=1#latest",
+    hostUrl: "https://host.example",
+    product: undefined,
+  });
+});
+
+test("parseMobileRouteInput accepts generic product mobile open URLs", () => {
+  expect(
+    parseMobileRouteInput(
+      "notesapp://open?path=%2Fruns&host_url=https%3A%2F%2Fnotes.example&product=notes-app",
+      { mobileScheme: "notesapp", product: "notes-app" },
+    ),
+  ).toEqual({
+    path: "/runs",
+    hostUrl: "https://notes.example",
+    product: "notes-app",
+  });
+});
+
+test("parseMobileRouteInput ignores connect URLs and rejects mismatched products", () => {
+  expect(
+    parseMobileRouteInput(
+      "takos://connect?host_url=https%3A%2F%2Fhost.example",
+      {
+        mobileScheme: "takos",
+        product: "takos",
+      },
+    ),
   ).toBeUndefined();
   expect(() =>
     parseMobileRouteInput("takos://open?path=%2Fchat&product=yurucommu", {

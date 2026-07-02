@@ -63,6 +63,9 @@ The normal UI does not lead with internal control-plane nouns.
 | Restore point | A state version you can recover from                 |
 
 Technical details are still available in the [Model reference](./reference/model.md).
+Use the [App Handoff Protocol](./reference/app-handoff.md) when an external web,
+desktop, mobile, or CLI client needs to create a hosted service and receive the
+resulting host URL.
 
 ## What Takosumi Manages
 
@@ -147,4 +150,5 @@ API compatibility.
 - [Takosumi Cloud](./cloud/index.md)
 - [Model reference](./reference/model.md)
 - [Takosumi API](./reference/api.md)
+- [App Handoff Protocol](./reference/app-handoff.md)
 - [CLI reference](./reference/cli.md)

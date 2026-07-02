@@ -339,6 +339,39 @@
 .wb-action-callout ul {
   padding-left: var(--tg-s-5);
 }
+.wb-app-handoff {
+  border-color: color-mix(in srgb, var(--tg-accent) 34%, var(--tg-line));
+}
+.wb-app-handoff > div:first-child {
+  display: grid;
+  gap: var(--tg-s-1);
+}
+.wb-app-handoff-kicker {
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+  font-weight: 700;
+}
+.wb-app-handoff-meta {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--tg-s-2);
+  margin: 0;
+}
+.wb-app-handoff-meta div {
+  min-width: 0;
+}
+.wb-app-handoff-meta dt {
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+  font-weight: 700;
+}
+.wb-app-handoff-meta dd {
+  margin: var(--tg-s-1) 0 0;
+  overflow-wrap: anywhere;
+}
+.wb-app-handoff-meta code {
+  overflow-wrap: anywhere;
+}
 .wb-status-panel {
   border-color: color-mix(in srgb, var(--tg-accent) 34%, var(--tg-line));
 }
@@ -410,6 +443,9 @@
     grid-template-columns: 1fr;
   }
   .wb-provider-row {
+    grid-template-columns: 1fr;
+  }
+  .wb-app-handoff-meta {
     grid-template-columns: 1fr;
   }
   .wb-variable-row {

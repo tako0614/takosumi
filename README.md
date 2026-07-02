@@ -65,21 +65,20 @@ Legacy Space / Installation / Deployment / OutputSnapshot / `takos_provided` / G
 in migration notes or internal implementation names, but it is not the current public surface.
 
 Takosumi does not replace OpenTofu or Terraform providers. Existing providers run as-is; Takosumi records the reviewable
-and auditable control-plane layer around those operations. Compatibility gateways and managed resources belong only to
-Takosumi Cloud.
+and auditable control-plane layer around those operations. OSS Takosumi owns the Resource Shape API, Compatibility API
+framework, and Adapter system. Official managed target pools, Takosumi-owned native resource internals, enforced
+billing, support/SLA, and official resource backends belong to Takosumi for Operator / Takosumi Cloud.
 
 ## Editions
 
 | Edition                                   | What it is                                                                                                                                                                                                                                           |
 | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Takosumi OSS / Takosumi for Operators** | This repository: a multi-tenant OpenTofu/Terraform control plane over existing providers — Workspace/team, runner pool, admin console, basic quota, audit. Billing is **showback** or **disabled** and never blocks apply.                           |
-| **Takosumi Cloud**                        | The closed delta in the sibling `takosumi-cloud/` package, composed **on top of** the OSS for-Operators control plane. It adds the Cloudflare Compatibility Gateway, Managed Resources, the AI Gateway, and Stripe-enforced billing / quota / usage. |
+| **Takosumi OSS**                          | This repository: Git-based OpenTofu/Terraform control plane, Resource Shape API, Compatibility API framework, Adapter system, ProviderConnections, runner pool, state/output/audit, and disabled/showback billing that never blocks apply.          |
+| **Takosumi for Operator**                 | OSS/commercial operator edition for hosting Takosumi for users or customers: multi-tenant customer management, quota/metering/plans, operator console, managed target catalog, support tooling, and commercial audit.                               |
+| **Takosumi Cloud**                        | The official hosted Takosumi for Operator at `app.takosumi.com`, with official managed targets, Takosumi-owned native resource internals, AI Gateway, Stripe-enforced billing, quota, usage, support, abuse controls, and SLA.                    |
 
-The dependency direction is **one-way Cloud -> OSS**: `takosumi-cloud/` consumes only the OSS composition root and the
-public contract (`takosumi-contract`), at two seams — an additive HTTP route proxy (Seam A) and in-process composition
-ports such as `BillingEnforcement` / `QuotaPolicy` (Seam B). OSS supplies safe no-op / open defaults so it runs
-standalone; the AI Gateway and Stripe-enforced billing live only in the closed package. The OSS platform ships and runs
-with nothing from `takosumi-cloud/` present.
+The dependency direction is **one-way Cloud -> OSS**: the hosted Cloud operation consumes OSS contracts and composition
+points. OSS ships and runs with nothing from the hosted Cloud operation present.
 
 ## Local control-plane quickstart
 

@@ -178,6 +178,7 @@ export interface StoreBrowserProps {
   readonly showSourceControls?: boolean;
   readonly showSortControl?: boolean;
   readonly showKindFilters?: boolean;
+  readonly loadRemoteOnMount?: boolean;
 }
 
 export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
@@ -217,7 +218,9 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
     if (token === reqToken) setAgg(next);
   }
 
-  onMount(rebuild);
+  onMount(() => {
+    if (props.loadRemoteOnMount ?? true) void rebuild();
+  });
   // Re-sort (cheap) on locale change without a refetch.
   createEffect(() => {
     const loc = props.locale;

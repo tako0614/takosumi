@@ -1727,7 +1727,7 @@ drop table if exists takosumi_sources;`,
       version: 33,
       domain: "deploy",
       description:
-        "Create the historical lane ledger. App / Environment / InstallProfile columns are compatibility table names; the current public model is Space / Source / Installation / InstallConfig plus Installation provider env bindings, with no secret values in connection rows.",
+        "Create the historical lane ledger. App / Environment / InstallProfile columns are compatibility table names; the current public model is Workspace / Project / Source / Capsule / Run / StateVersion / Output plus ProviderConnection / ProviderBinding, with no secret values in connection rows.",
       sql: `create table if not exists takosumi_apps (
   id                 text   primary key,
   space_id           text   not null,

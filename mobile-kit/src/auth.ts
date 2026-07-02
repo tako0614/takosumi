@@ -17,6 +17,8 @@ import {
   fetchOidcMetadata,
   parseOidcCallback,
 } from "./oidc.ts";
+import { isMobileProductKind } from "../../contract/mobile.ts";
+import { requireMobileProductKey } from "./product-key.ts";
 
 export interface BeginMobileOidcSignInInput {
   readonly adapter: MobileProductAdapter;
@@ -57,11 +59,11 @@ export interface EnsureFreshMobileSessionInput extends RefreshMobileSessionInput
 export function mobileAuthRequestStorageKey(
   adapter: MobileProductAdapter,
 ): string {
-  return `takosumi.mobile.${adapter.product}.auth.pending`;
+  return `takosumi.mobile.${requireMobileProductKey(adapter.product)}.auth.pending`;
 }
 
 export function mobileSessionStorageKey(adapter: MobileProductAdapter): string {
-  return `takosumi.mobile.${adapter.product}.session`;
+  return `takosumi.mobile.${requireMobileProductKey(adapter.product)}.session`;
 }
 
 export async function beginMobileOidcSignIn(
@@ -319,7 +321,7 @@ function parseMobileSession(raw: string): MobileSession {
   const parsed = JSON.parse(raw) as Partial<MobileSession>;
   if (
     typeof parsed.hostUrl !== "string" ||
-    (parsed.product !== "takos" && parsed.product !== "yurucommu") ||
+    !isMobileProductKind(parsed.product) ||
     typeof parsed.oidcIssuer !== "string" ||
     !isOptionalProductEndpoints(parsed.productEndpoints) ||
     typeof parsed.accessToken !== "string" ||

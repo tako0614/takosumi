@@ -1,8 +1,10 @@
 import { expect, test } from "bun:test";
 import {
+  clearMobileKnownHosts,
   loadMobileKnownHosts,
   mobileKnownHostsStorageKey,
   rememberMobileKnownHost,
+  removeMobileKnownHost,
   type MobileProductAdapter,
   type NativeBridge,
 } from "../../../mobile-kit/src/index.ts";
@@ -12,6 +14,10 @@ const adapter: MobileProductAdapter = {
   appName: "Takos",
   hostNoun: "Takos host",
   hostCenterLabel: "Host Takos",
+  hostCenterSource: {
+    git: "https://github.com/acme/takos.git",
+    path: "deploy/opentofu",
+  },
   urlPlaceholder: "https://workspace.example.com",
   primaryActionLabel: "Connect",
   accentColor: "#166534",
@@ -88,6 +94,62 @@ test("rememberMobileKnownHost keeps the latest eight hosts", async () => {
   expect(hosts.at(-1)?.hostUrl).toBe("https://host-2.example");
 });
 
+test("removeMobileKnownHost deletes one normalized host", async () => {
+  const bridge = memoryBridge();
+  await bridge.storage?.set(
+    mobileKnownHostsStorageKey(adapter),
+    JSON.stringify([
+      {
+        hostUrl: "https://keep.example",
+        product: "takos",
+        lastSeenAt: "2026-06-30T00:00:00.000Z",
+      },
+      {
+        hostUrl: "https://remove.example/path",
+        product: "takos",
+        lastSeenAt: "2026-06-29T00:00:00.000Z",
+      },
+    ]),
+  );
+
+  expect(
+    await removeMobileKnownHost({
+      adapter,
+      nativeBridge: bridge,
+      hostUrl: "https://remove.example/other-path",
+    }),
+  ).toEqual([
+    {
+      hostUrl: "https://keep.example",
+      product: "takos",
+      oidcIssuer: undefined,
+      lastSeenAt: "2026-06-30T00:00:00.000Z",
+      label: undefined,
+    },
+  ]);
+});
+
+test("clearMobileKnownHosts clears product-local history", async () => {
+  const bridge = memoryBridge();
+  await bridge.storage?.set(
+    mobileKnownHostsStorageKey(adapter),
+    JSON.stringify([
+      {
+        hostUrl: "https://host.example",
+        product: "takos",
+        lastSeenAt: "2026-06-30T00:00:00.000Z",
+      },
+    ]),
+  );
+
+  expect(
+    await clearMobileKnownHosts({ adapter, nativeBridge: bridge }),
+  ).toEqual([]);
+  expect(
+    await bridge.storage?.get(mobileKnownHostsStorageKey(adapter)),
+  ).toBeUndefined();
+});
+
 test("loadMobileKnownHosts ignores corrupt storage", async () => {
   const bridge = memoryBridge();
   await bridge.storage?.set(mobileKnownHostsStorageKey(adapter), "{");
@@ -109,6 +171,7 @@ function memoryBridge(): NativeBridge {
       pushNotifications: false,
       biometricAuth: false,
       callIntent: false,
+      clipboardText: false,
       secureStorage: false,
       persistentStorage: true,
     },

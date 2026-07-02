@@ -421,10 +421,11 @@ export type CloudflareResourceKind =
   "kv" | "r2" | "d1" | "queue" | "workflow" | "worker";
 
 /**
- * Compat-API path for a single managed resource. The compat gateway mirrors the
- * Cloudflare REST shape; deletes ride the same forwarding the inventory list
- * uses, so they require a `write`-scoped session and only materialize when the
- * Cloud backend implements them (otherwise the gateway answers 501 fail-closed).
+ * Compatibility-profile path for a single managed resource. The scoped
+ * Cloudflare-compatible profile mirrors the relevant REST shape; deletes ride
+ * the same forwarding the inventory list uses, so they require a `write`-scoped
+ * session and only materialize when the Cloud backend implements them
+ * (otherwise the profile answers 501 fail-closed).
  */
 function cloudflareResourcePath(
   compatBasePath: string,
@@ -450,7 +451,7 @@ function cloudflareResourcePath(
   }
 }
 
-/** Delete one managed Cloudflare resource through the compat gateway. */
+/** Delete one managed Cloudflare resource through the scoped compatibility profile. */
 export async function deleteCloudflareResource(input: {
   readonly compatBasePath: string;
   readonly accountId: string;

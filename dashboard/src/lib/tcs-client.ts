@@ -38,7 +38,7 @@ export interface TcsListingOutput {
   readonly required?: boolean;
 }
 
-export type TcsListingKind = "worker" | "storage" | "site";
+export type TcsListingKind = "app" | "worker" | "storage" | "site";
 export type TcsListingSurface = "service" | "building_block" | "example";
 
 export interface TcsListing {

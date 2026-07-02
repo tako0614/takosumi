@@ -1,8 +1,8 @@
 /**
- * Substrate-level structured logger for the Takosumi service.
+ * Bootstrap-level structured logger for the Takosumi service.
  *
- * The Takosumi service is the deploy substrate: it boots before apps are
- * wired and emits diagnostics before `createTakosumiService` returns. A logger
+ * The Takosumi service is the OpenTofu control-plane bootstrap layer: it boots
+ * before apps are wired and emits diagnostics before `createTakosumiService` returns. A logger
  * that depended on the runtime context would not be reachable from the
  * earliest startup hooks (env validation, encryption guards, retention
  * GC) so this module is intentionally:

@@ -12,14 +12,17 @@ describe("Store labels", () => {
     expect(tcsCategoryLabel("example", "ja")).toBe("サンプル");
     expect(tcsCategoryLabel("service", "ja")).toBe("アプリ");
     expect(tcsCategoryLabel("productivity", "ja")).toBe("仕事・文書");
+    expect(tcsCategoryLabel("workspace", "ja")).toBe("ワークスペース");
 
     expect(tcsCategoryLabel("building_block", "en")).toBe("Building blocks");
     expect(tcsCategoryLabel("custom_provider", "en")).toBe("Custom Provider");
   });
 
   test("renders provider, kind, and badge values without raw catalog tokens", () => {
+    expect(tcsKindLabel("app", "ja")).toBe("アプリ");
     expect(tcsKindLabel("worker", "ja")).toBe("Webアプリ");
     expect(tcsKindLabel("site", "en")).toBe("Website");
+    expect(tcsProviderLabel("takosumi")).toBe("Takosumi");
     expect(tcsProviderLabel("cloudflare")).toBe("Cloudflare");
     expect(tcsProviderLabel("aws")).toBe("AWS");
     expect(tcsBadgeLabel("official", "ja")).toBe("公式");

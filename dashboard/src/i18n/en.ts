@@ -334,6 +334,7 @@ export const en: Record<keyof typeof ja, string> = {
   "run.deployBlocked": "Deploy blocked",
   "run.retryPlan": "Review changes again",
   "run.backToApp": "Back to service",
+  "run.appHandoff.open": "Open in {app}",
   "run.destructiveWarning":
     "This change replaces or deletes existing resources. Running it may lose data.",
   "run.destructiveConfirm": "Proceed, accepting the destructive changes",
@@ -510,6 +511,12 @@ export const en: Record<keyof typeof ja, string> = {
   "new.deeplink.invalidTitle": "This install link cannot be used",
   "new.deeplink.invalidBody":
     "The link is not a safe HTTPS link, or it includes information this browser cannot open. Choose a starter or paste another link.",
+  "new.appHandoff.title": "Create a service for {app}",
+  "new.appHandoff.body":
+    "Takosumi Host Center will create the OpenTofu-backed service here, then return the host URL to the client when deploy completes.",
+  "new.appHandoff.kicker": "App Handoff",
+  "new.appHandoff.app": "Client",
+  "new.appHandoff.return": "Return target",
   "new.compat.check": "Start adding",
   "new.installCta": "Add service",
   "new.installing": "Adding...",
@@ -576,8 +583,11 @@ export const en: Record<keyof typeof ja, string> = {
   "new.error.configLoading": "Loading add configuration.",
   "new.error.syncPending":
     "The source has not finished syncing. Wait a moment, then retry.",
+  "new.error.sourceRefNotFound":
+    "The selected version “{ref}” was not found. Check the GitHub branch, tag, or commit.",
   "new.error.sourceFetchFailed":
-    "The app contents could not be fetched. Check the link, version, folder, or private link access.",
+    "The app contents could not be fetched. Check the link, version, folder, or private link access. Details: {message}",
+  "new.error.sourceFetchFailedUnknown": "No detailed cause was returned.",
   "new.error.generic":
     "The service could not be added. Check the details and try again.",
   "new.error.alreadyExists":

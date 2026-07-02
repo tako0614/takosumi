@@ -205,14 +205,10 @@ function officialCatalogSourceFromEnv(
 const RESOURCE_CAPABILITY_KEYS: readonly ResourceShapeKind[] =
   RESOURCE_SHAPE_KINDS;
 
-const ADAPTER_CAPABILITY_KEYS: readonly (keyof TakosumiAdapterCapabilities)[] = [
-  "opentofu",
-  "aws",
-  "cloudflare",
-  "kubernetes",
-  "vm",
-  "takosumi_native",
-];
+const ADAPTER_CAPABILITY_KEYS: readonly (keyof TakosumiAdapterCapabilities)[] =
+  ["opentofu", "aws", "cloudflare", "kubernetes", "vm", "takosumi_native"];
+
+type MutablePartial<T> = { -readonly [K in keyof T]?: T[K] };
 
 function resourceShapeCapabilitiesFromEnv(env: CloudflareWorkerEnv): {
   readonly enabledKinds: readonly ResourceShapeKind[];
@@ -223,7 +219,7 @@ function resourceShapeCapabilitiesFromEnv(env: CloudflareWorkerEnv): {
     env.TAKOSUMI_RESOURCE_SHAPES,
     RESOURCE_CAPABILITY_KEYS,
   );
-  const resources: Partial<TakosumiResourceCapabilities> = {
+  const resources: MutablePartial<TakosumiResourceCapabilities> = {
     EdgeWorker: false,
     ObjectBucket: false,
     KVStore: false,
@@ -233,7 +229,7 @@ function resourceShapeCapabilitiesFromEnv(env: CloudflareWorkerEnv): {
   };
   for (const kind of enabledKinds) resources[kind] = true;
 
-  const adapters: Partial<TakosumiAdapterCapabilities> = {
+  const adapters: MutablePartial<TakosumiAdapterCapabilities> = {
     opentofu: enabledKinds.length > 0,
     aws: false,
     cloudflare: false,
@@ -277,7 +273,9 @@ function parseCapabilityTokens(raw: string): readonly string[] {
     try {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) {
-        return parsed.filter((item): item is string => typeof item === "string");
+        return parsed.filter(
+          (item): item is string => typeof item === "string",
+        );
       }
     } catch {
       return [];

@@ -30,6 +30,7 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
       items: [
         { text: "Model", link: "/reference/model" },
         { text: "API", link: "/reference/api" },
+        { text: "App Handoff", link: "/reference/app-handoff" },
         { text: "Cloud resources", link: "/reference/cloud-resources" },
         { text: "Cloud endpoints", link: "/reference/cloud-endpoints" },
         { text: "Deploy Control API", link: "/reference/deploy-control-api" },
@@ -62,6 +63,7 @@ const enSidebar: DefaultTheme.SidebarMulti = {
       items: [
         { text: "Model", link: "/en/reference/model" },
         { text: "API", link: "/en/reference/api" },
+        { text: "App Handoff", link: "/en/reference/app-handoff" },
         { text: "Cloud resources", link: "/en/reference/cloud-resources" },
         { text: "Cloud endpoints", link: "/en/reference/cloud-endpoints" },
         {

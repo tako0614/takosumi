@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { firstPartyStoreListings } from "../../../dashboard/src/views/store/first-party-listings.ts";
+import { buildNewQuery } from "../../../dashboard/src/views/store/store-link.ts";
 import { officialInstallConfigs } from "../../../core/domains/capsules/official_seed.ts";
 import { defaultTemplateRegistry } from "../../../core/domains/templates/mod.ts";
 
@@ -24,7 +26,7 @@ describe("dashboard catalog", () => {
     );
   });
 
-  test("the primary web app starter is browser-openable after apply", () => {
+  test("the internal web app template is browser-openable after apply", () => {
     const hello = catalogEntries().find(
       (entry) => entry.templateId === "cloudflare-hello-worker",
     );
@@ -44,7 +46,7 @@ describe("dashboard catalog", () => {
     expect(template.outputs.public.url?.from).toBe("url");
   });
 
-  test("catalog keeps only runnable first-party service starters", () => {
+  test("internal starter catalog stays narrow and template-backed", () => {
     const entries = catalogEntries();
     const services = entries.filter((entry) => entry.surface === "service");
     const buildingBlocks = entries.filter(
@@ -88,7 +90,7 @@ describe("dashboard catalog", () => {
     }
   });
 
-  test("visible cards resolve to seeded official template configs", () => {
+  test("starter catalog entries resolve to seeded official template configs", () => {
     const seededConfigs = officialInstallConfigs();
     for (const entry of catalogEntries()) {
       const config = seededConfigs.find(
@@ -117,5 +119,55 @@ describe("dashboard catalog", () => {
         }
       }
     }
+  });
+
+  test("/new first-party listings show actual apps instead of generic templates", () => {
+    expect(firstPartyStoreListings.map((listing) => listing.id).sort()).toEqual(
+      ["takos", "yurucommu"],
+    );
+    expect(
+      firstPartyStoreListings.map((listing) => [
+        listing.id,
+        listing.kind,
+        listing.source.git,
+        listing.source.ref,
+        listing.source.path,
+      ]),
+    ).toEqual([
+      [
+        "yurucommu",
+        "app",
+        "https://github.com/tako0614/yurucommu.git",
+        "master",
+        ".",
+      ],
+      [
+        "takos",
+        "app",
+        "https://github.com/tako0614/takos.git",
+        "main",
+        "deploy/opentofu",
+      ],
+    ]);
+    for (const listing of firstPartyStoreListings) {
+      expect(
+        listing.source.resolvedCommit,
+        `${listing.id} resolved commit`,
+      ).toMatch(/^[0-9a-f]{40}$/);
+      expect(
+        new URLSearchParams(buildNewQuery(listing)).get("ref"),
+        `${listing.id} install handoff ref`,
+      ).toBe(listing.source.resolvedCommit);
+    }
+    expect(
+      firstPartyStoreListings.some((listing) =>
+        listing.name.ja.includes("Webアプリを公開"),
+      ),
+    ).toBe(false);
+    expect(
+      firstPartyStoreListings.some(
+        (listing) => listing.id === "cloudflare-hello-worker",
+      ),
+    ).toBe(false);
   });
 });

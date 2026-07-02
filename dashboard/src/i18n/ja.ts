@@ -335,6 +335,7 @@ export const ja = {
   "run.deployBlocked": "実行できません",
   "run.retryPlan": "もう一度変更を確認",
   "run.backToApp": "サービスへ戻る",
+  "run.appHandoff.open": "{app} で開く",
   "run.destructiveWarning":
     "この変更には既存リソースの置き換え・削除が含まれます。実行するとデータが失われる場合があります。",
   "run.destructiveConfirm": "破壊的な変更を承知のうえで実行",
@@ -514,6 +515,12 @@ export const ja = {
   "new.deeplink.invalidTitle": "このインストールリンクは利用できません",
   "new.deeplink.invalidBody":
     "安全な HTTPS リンクではないか、ブラウザで開けない情報が含まれています。おすすめから選ぶか、別のリンクを貼り付けてください。",
+  "new.appHandoff.title": "{app} に接続するサービスを作成します",
+  "new.appHandoff.body":
+    "Takosumi Host Center がこの画面で OpenTofu ベースのサービスを作成し、デプロイ完了後にホストURLをクライアントへ返します。",
+  "new.appHandoff.kicker": "App Handoff",
+  "new.appHandoff.app": "クライアント",
+  "new.appHandoff.return": "戻り先",
   "new.compat.check": "追加を始める",
   "new.installCta": "サービスを追加",
   "new.installing": "追加中...",
@@ -578,8 +585,11 @@ export const ja = {
   "new.error.configLoading": "追加設定を読み込み中です。",
   "new.error.syncPending":
     "ソースの取得がまだ完了していません。少し待ってから「再試行」してください。",
+  "new.error.sourceRefNotFound":
+    "指定されたバージョン「{ref}」が見つかりません。GitHub の branch、tag、commit を確認してください。",
   "new.error.sourceFetchFailed":
-    "アプリの内容を取得できませんでした。リンク、バージョン、フォルダ、または非公開リンクの接続を確認してください。",
+    "アプリの内容を取得できませんでした。リンク、バージョン、フォルダ、または非公開リンクの接続を確認してください。詳細: {message}",
+  "new.error.sourceFetchFailedUnknown": "原因を取得できませんでした。",
   "new.error.generic":
     "サービスの追加に失敗しました。内容を確認して、もう一度お試しください。",
   "new.error.alreadyExists":

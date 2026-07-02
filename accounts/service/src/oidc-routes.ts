@@ -785,8 +785,8 @@ export async function handleUserInfo(input: {
         ...(record.workspaceId ? { space_id: record.workspaceId } : {}),
         ...(record.role ? { role: record.role } : {}),
       };
-      // Emit a flat `space_memberships` claim that bundled apps
-      // (takos-docs / takos-slide / takos-excel) read directly for their
+      // Emit a flat `space_memberships` claim that bundled apps, including
+      // takos-office's docs / slide / sheet surfaces, read directly for their
       // membership checks. The token record binds a single accessible
       // space, so the claim is a one-element array derived from it. Apps
       // keep reading the nested `takosumi.space_id` as a fallback.

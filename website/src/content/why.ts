@@ -10,7 +10,7 @@ export const PILLARS: readonly Pillar[] = [
   },
   {
     title: "cloud でも VM でも同じ形",
-    body: "OSS は AWS、GCP、Cloudflare、Hetzner などの既存 provider をそのまま使います。Cloud 専用の互換 gateway と managed resources は Takosumi Cloud だけに置きます。",
+    body: "OSS は AWS、GCP、Cloudflare、Hetzner などの既存 provider をそのまま使います。scoped compatibility profile と adapter framework は Takosumi OSS の能力で、official managed targets / native backends / enforced billing は Takosumi for Operator / Cloud の運用層です。",
   },
   {
     title: "lock-in しない、引っ越せる、終わらない",

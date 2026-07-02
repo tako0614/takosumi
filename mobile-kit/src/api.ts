@@ -9,6 +9,8 @@ import {
 } from "../../contract/mobile.ts";
 import { hostEndpoint } from "./url.ts";
 
+export { MOBILE_PUSH_REGISTRATION_PATH };
+
 export interface MobileApiClient {
   readonly session: MobileSession;
   readonly json: <T = unknown>(path: string, init?: RequestInit) => Promise<T>;
@@ -68,9 +70,8 @@ async function sendMobilePushRegistrationToHost(
   input: MobileHostPushRegistrationInput,
   method: "DELETE" | "POST",
 ): Promise<void> {
-  const path = input.path ?? resolveMobilePushRegistrationEndpoint(
-    input.session,
-  );
+  const path =
+    input.path ?? resolveMobilePushRegistrationEndpoint(input.session);
   const client = createMobileApiClient({
     session: input.session,
     fetch: input.fetch,

@@ -29,6 +29,18 @@ test("browser native bridge reads OAuth callback launch payloads", async () => {
   );
 });
 
+test("browser native bridge reads route handoff query payloads", async () => {
+  const bridge = createBrowserNativeBridge({
+    window: fakeWindow(
+      "https://mobile.example/start?url=https%3A%2F%2Fhost.example%2Fchat%3Fthread%3D1",
+    ),
+  });
+
+  expect(await bridge.getLaunchPayload()).toBe(
+    "https://host.example/chat?thread=1",
+  );
+});
+
 test("browser native bridge opens external URLs through the browser", async () => {
   const opened: string[] = [];
   const bridge = createBrowserNativeBridge({

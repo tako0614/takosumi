@@ -3,12 +3,15 @@ import type {
   MobileBiometricPrompt,
   MobileKeyValueStore,
   MobileLocalNotification,
+  MobileProductAdapter,
   MobilePushNotification,
   MobilePushRegistration,
   MobilePushRegistrationInput,
+  MobileClipboardText,
   NativeBridge,
 } from "./types.ts";
 import { createBrowserNativeBridge } from "./native.ts";
+import { requireMobileProductKey } from "./product-key.ts";
 
 export interface TauriDeepLinkAdapter {
   readonly getCurrent: () => Promise<string[] | null>;
@@ -60,9 +63,7 @@ export interface TauriStrongholdStore {
   readonly remove: (key: string) => Promise<Uint8Array | null>;
 }
 
-export type TauriStrongholdPassword =
-  | string
-  | (() => string | Promise<string>);
+export type TauriStrongholdPassword = string | (() => string | Promise<string>);
 
 export interface CreateTauriStrongholdSecureStoreOptions {
   readonly stronghold: TauriStrongholdAdapter;
@@ -212,6 +213,13 @@ export interface TauriCallIntentAdapter {
   readonly requestCall: (input: MobileCallIntent) => Promise<void>;
 }
 
+export interface TauriClipboardTextAdapter {
+  readonly writeText: (
+    text: string,
+    options?: { readonly label?: string },
+  ) => Promise<void>;
+}
+
 export interface TauriBiometricAuthOptions {
   readonly allowDeviceCredential?: boolean;
   readonly cancelTitle?: string;
@@ -263,6 +271,7 @@ export interface CreateTauriPluginNativeBridgeOptions {
   readonly pushNotifications?: TauriPushNotificationsAdapter;
   readonly biometric?: TauriBiometricAdapter;
   readonly callIntent?: TauriCallIntentAdapter;
+  readonly clipboard?: TauriClipboardTextAdapter;
   readonly preferInAppBrowser?: boolean;
   readonly isTauriRuntime?: () => boolean;
   readonly browserFallback?: NativeBridge;
@@ -271,6 +280,22 @@ export interface CreateTauriPluginNativeBridgeOptions {
 export interface TauriPathAdapter {
   readonly appDataDir: () => Promise<string>;
   readonly join: (...paths: string[]) => Promise<string>;
+}
+
+export interface TauriMobileProductStorageNames {
+  readonly storePath: string;
+  readonly strongholdVaultFileName: string;
+  readonly strongholdClientName: string;
+  readonly strongholdPasswordKey: string;
+  readonly strongholdPasswordPrefix: string;
+}
+
+export interface CreateTauriMobileProductStorageNamesOptions {
+  readonly storePath?: string;
+  readonly strongholdVaultFileName?: string;
+  readonly strongholdClientName?: string;
+  readonly strongholdPasswordKey?: string;
+  readonly strongholdPasswordPrefix?: string;
 }
 
 export interface CreateTauriMobileProductBridgeOptions<
@@ -292,9 +317,53 @@ export interface CreateTauriMobileProductBridgeOptions<
   readonly pushNotifications?: TauriPushNotificationsAdapter;
   readonly biometric?: TauriBiometricAdapter;
   readonly callIntent?: TauriCallIntentAdapter;
+  readonly clipboard?: TauriClipboardTextAdapter;
   readonly preferInAppBrowser?: boolean;
   readonly isTauriRuntime?: () => boolean;
   readonly browserFallback?: NativeBridge;
+}
+
+export interface CreateTauriMobileDefaultProductBridgeOptions<
+  BarcodeFormat = unknown,
+> {
+  readonly productAdapter: Pick<MobileProductAdapter, "product" | "appName">;
+  readonly keychainService: string;
+  readonly keychainUser?: string;
+  readonly invoke: TauriInvokeAdapter["invoke"];
+  readonly path: TauriPathAdapter;
+  readonly deepLink: TauriDeepLinkAdapter;
+  readonly opener: TauriOpenerAdapter;
+  readonly store: TauriStoreAdapter;
+  readonly stronghold: TauriStrongholdAdapter;
+  readonly platform?: TauriPlatformAdapter;
+  readonly notification?: TauriNotificationAdapter;
+  readonly barcodeScanner?: TauriBarcodeScannerModule<BarcodeFormat>;
+  readonly pushNotifications?: TauriPushNotificationsAdapter;
+  readonly mobilePush?: TauriMobilePushPluginModule;
+  readonly biometric?: TauriBiometricAdapter;
+  readonly callIntent?: TauriCallIntentAdapter;
+  readonly clipboard?: TauriClipboardTextAdapter;
+  readonly preferInAppBrowser?: boolean;
+  readonly isTauriRuntime?: () => boolean;
+  readonly browserFallback?: NativeBridge;
+}
+
+export function createTauriMobileProductStorageNames(
+  adapter: Pick<MobileProductAdapter, "product">,
+  options: CreateTauriMobileProductStorageNamesOptions = {},
+): TauriMobileProductStorageNames {
+  const product = requireMobileProductKey(adapter.product);
+  const strongholdPasswordPrefix =
+    options.strongholdPasswordPrefix ?? `${product}-mobile-stronghold`;
+  return {
+    storePath: options.storePath ?? `${product}-mobile-session.json`,
+    strongholdVaultFileName:
+      options.strongholdVaultFileName ?? `${product}-mobile.hold`,
+    strongholdClientName: options.strongholdClientName ?? `${product}-mobile`,
+    strongholdPasswordKey:
+      options.strongholdPasswordKey ?? `${product}.mobile.stronghold.password`,
+    strongholdPasswordPrefix,
+  };
 }
 
 export function createTauriPluginNativeBridge(
@@ -314,6 +383,7 @@ export function createTauriPluginNativeBridge(
     : undefined;
   const biometricAdapter = mobileRuntime ? options.biometric : undefined;
   const callAdapter = options.callIntent;
+  const clipboardAdapter = options.clipboard;
 
   return {
     capabilities: {
@@ -326,6 +396,7 @@ export function createTauriPluginNativeBridge(
       pushNotifications: Boolean(pushAdapter),
       biometricAuth: Boolean(biometricAdapter),
       callIntent: Boolean(callAdapter),
+      clipboardText: Boolean(clipboardAdapter),
       secureStorage: Boolean(secureStore),
       persistentStorage: true,
     },
@@ -380,6 +451,11 @@ export function createTauriPluginNativeBridge(
           await callAdapter.requestCall(input);
         }
       : undefined,
+    writeClipboardText: clipboardAdapter
+      ? async (input) => {
+          await writeClipboardText(clipboardAdapter, input);
+        }
+      : undefined,
   };
 }
 
@@ -389,10 +465,8 @@ export function createTauriPushNotificationsAdapter(
   return {
     async register(input) {
       const result = await options.tokenSource.requestToken(input);
-      if (!result) return undefined;
-      const registration =
-        typeof result === "string" ? { token: result } : result;
-      if (!registration.token) return undefined;
+      const registration = normalizePushTokenResult(result);
+      if (!registration) return undefined;
       return {
         token: registration.token,
         environment:
@@ -461,6 +535,16 @@ export function createTauriOpenerCallIntentAdapter(
   };
 }
 
+async function writeClipboardText(
+  clipboard: TauriClipboardTextAdapter,
+  input: MobileClipboardText,
+): Promise<void> {
+  await clipboard.writeText(
+    input.text,
+    input.label ? { label: input.label } : undefined,
+  );
+}
+
 export function createTauriMobileProductBridge<BarcodeFormat = unknown>(
   options: CreateTauriMobileProductBridgeOptions<BarcodeFormat>,
 ): NativeBridge {
@@ -488,9 +572,60 @@ export function createTauriMobileProductBridge<BarcodeFormat = unknown>(
     pushNotifications: options.pushNotifications,
     biometric: options.biometric,
     callIntent: options.callIntent,
+    clipboard: options.clipboard,
     preferInAppBrowser: options.preferInAppBrowser ?? true,
     isTauriRuntime: options.isTauriRuntime,
     browserFallback: options.browserFallback ?? createBrowserNativeBridge(),
+  });
+}
+
+export function createTauriMobileDefaultProductBridge<BarcodeFormat = unknown>(
+  options: CreateTauriMobileDefaultProductBridgeOptions<BarcodeFormat>,
+): NativeBridge {
+  const storageNames = createTauriMobileProductStorageNames(
+    options.productAdapter,
+  );
+  const storePath = storageNames.storePath;
+  const pushNotifications =
+    options.pushNotifications ??
+    (options.mobilePush
+      ? createTauriMobilePushPluginAdapter({ mobilePush: options.mobilePush })
+      : undefined);
+
+  return createTauriMobileProductBridge({
+    appName: options.productAdapter.appName,
+    storePath,
+    strongholdVaultFileName: storageNames.strongholdVaultFileName,
+    strongholdPassword: createTauriKeystoreStrongholdPassword({
+      keystore: createTauriInvokeKeystoreAdapter({ invoke: options.invoke }),
+      service: options.keychainService,
+      user: options.keychainUser ?? "stronghold-password",
+      fallback: {
+        store: options.store,
+        storePath,
+        key: storageNames.strongholdPasswordKey,
+        prefix: storageNames.strongholdPasswordPrefix,
+      },
+      prefix: storageNames.strongholdPasswordPrefix,
+    }),
+    strongholdClientName: storageNames.strongholdClientName,
+    path: options.path,
+    deepLink: options.deepLink,
+    opener: options.opener,
+    store: options.store,
+    stronghold: options.stronghold,
+    platform: options.platform,
+    notification: options.notification,
+    barcodeScanner: options.barcodeScanner,
+    pushNotifications,
+    biometric: options.biometric,
+    callIntent:
+      options.callIntent ??
+      createTauriOpenerCallIntentAdapter({ opener: options.opener }),
+    clipboard: options.clipboard,
+    preferInAppBrowser: options.preferInAppBrowser,
+    isTauriRuntime: options.isTauriRuntime,
+    browserFallback: options.browserFallback,
   });
 }
 
@@ -697,9 +832,10 @@ async function loadPersistentStrongholdPassword(
   const existing = await handle.get<unknown>(key);
   if (isUsableStrongholdPassword(existing)) return existing;
 
-  const password = `${options.prefix ?? "takosumi-mobile-stronghold"}.${
-    randomHex(options.byteLength ?? 32, options.crypto)
-  }`;
+  const password = `${options.prefix ?? "takosumi-mobile-stronghold"}.${randomHex(
+    options.byteLength ?? 32,
+    options.crypto,
+  )}`;
   await handle.set(key, password);
   await handle.save();
   return password;
@@ -724,9 +860,10 @@ async function loadKeystoreStrongholdPassword(
     return fallbackPassword;
   }
 
-  const password = `${options.prefix ?? "takosumi-mobile-stronghold"}.${
-    randomHex(options.byteLength ?? 32, options.crypto)
-  }`;
+  const password = `${options.prefix ?? "takosumi-mobile-stronghold"}.${randomHex(
+    options.byteLength ?? 32,
+    options.crypto,
+  )}`;
   await options.keystore.store(password);
   return password;
 }
@@ -779,9 +916,31 @@ function resolvePushEnvironment(
     | CreateTauriMobilePushPluginAdapterOptions,
   input: MobilePushRegistrationInput,
 ): string | undefined {
-  return typeof options.environment === "function"
-    ? options.environment(input)
-    : options.environment;
+  return normalizePushEnvironment(
+    typeof options.environment === "function"
+      ? options.environment(input)
+      : options.environment,
+  );
+}
+
+function normalizePushTokenResult(
+  result: TauriPushTokenResult | undefined,
+): MobilePushRegistration | undefined {
+  if (typeof result === "string") {
+    return result ? { token: result } : undefined;
+  }
+  if (!result?.token) return undefined;
+  return {
+    token: result.token,
+    environment: normalizePushEnvironment(result.environment),
+  };
+}
+
+function normalizePushEnvironment(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const environment = value.trim();
+  if (!environment || environment.length > 64) return undefined;
+  return /^[a-z0-9._:-]+$/i.test(environment) ? environment : undefined;
 }
 
 function isMobilePushPermissionGranted(
@@ -789,6 +948,7 @@ function isMobilePushPermissionGranted(
 ): boolean {
   if (typeof permission === "boolean") return permission;
   if (typeof permission === "string") return permission === "granted";
+  if (!isRecord(permission)) return false;
   if (typeof permission.granted === "boolean") return permission.granted;
   return permission.permission === "granted";
 }

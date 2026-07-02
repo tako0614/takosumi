@@ -185,6 +185,19 @@ describe("installReturnContext", () => {
     });
   });
 
+  test("preserves App Handoff params through Provider Connections return hrefs", () => {
+    const returnPath =
+      "/new?git=https%3A%2F%2Fgithub.com%2Facme%2Fworker.git&ref=main&path=deploy%2Fopentofu&product=notes-app&return_uri=notesapp%3A%2F%2Fconnect";
+    const href = providerConnectionsHrefForInstallReturn(returnPath);
+    const url = new URL(href, "https://app.takosumi.test");
+
+    expect(url.pathname).toEqual("/connections");
+    expect(url.searchParams.get("return")).toEqual(returnPath);
+    expect(
+      installReturnPathFromReturnParam(url.searchParams.get("return")),
+    ).toEqual(returnPath);
+  });
+
   test("omits return parameters for unsafe install return material", () => {
     expect(
       installReturnPathFromPrefill({
@@ -203,5 +216,12 @@ describe("installReturnContext", () => {
         "//evil.example/new?git=https://github.com/acme/worker.git",
       ),
     ).toEqual("/connections");
+    expect(
+      installReturnPathFromReturnParam(
+        "/new?git=https%3A%2F%2Fgithub.com%2Facme%2Fworker.git&ref=main&path=deploy&product=notes-app&return_uri=http%3A%2F%2Fexample.com%2Fconnect",
+      ),
+    ).toEqual(
+      "/new?git=https%3A%2F%2Fgithub.com%2Facme%2Fworker.git&ref=main&path=deploy",
+    );
   });
 });

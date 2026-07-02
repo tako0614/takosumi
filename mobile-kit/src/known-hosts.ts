@@ -6,6 +6,7 @@ import type {
   NativeBridge,
 } from "./types.ts";
 import { normalizeHostUrl } from "./url.ts";
+import { requireMobileProductKey } from "./product-key.ts";
 
 const knownHostsLimit = 8;
 
@@ -14,16 +15,19 @@ export interface MobileKnownHostsStorageInput {
   readonly nativeBridge: NativeBridge;
 }
 
-export interface RememberMobileKnownHostInput
-  extends MobileKnownHostsStorageInput {
+export interface RememberMobileKnownHostInput extends MobileKnownHostsStorageInput {
   readonly host: HostDiscovery | MobileSession | MobileKnownHost;
   readonly now?: () => Date;
+}
+
+export interface RemoveMobileKnownHostInput extends MobileKnownHostsStorageInput {
+  readonly hostUrl: string;
 }
 
 export function mobileKnownHostsStorageKey(
   adapter: MobileProductAdapter,
 ): string {
-  return `takosumi.mobile.${adapter.product}.known-hosts`;
+  return `takosumi.mobile.${requireMobileProductKey(adapter.product)}.known-hosts`;
 }
 
 export async function loadMobileKnownHosts(
@@ -51,8 +55,36 @@ export async function rememberMobileKnownHost(
     remembered,
     ...current.filter((host) => host.hostUrl !== remembered.hostUrl),
   ].slice(0, knownHostsLimit);
-  await store.set(mobileKnownHostsStorageKey(input.adapter), JSON.stringify(next));
+  await store.set(
+    mobileKnownHostsStorageKey(input.adapter),
+    JSON.stringify(next),
+  );
   return next;
+}
+
+export async function removeMobileKnownHost(
+  input: RemoveMobileKnownHostInput,
+): Promise<readonly MobileKnownHost[]> {
+  const store = input.nativeBridge.storage;
+  if (!store) return [];
+  const normalizedHostUrl = normalizeHostUrl(input.hostUrl);
+  const next = (await loadMobileKnownHosts(input)).filter(
+    (host) => host.hostUrl !== normalizedHostUrl,
+  );
+  await store.set(
+    mobileKnownHostsStorageKey(input.adapter),
+    JSON.stringify(next),
+  );
+  return next;
+}
+
+export async function clearMobileKnownHosts(
+  input: MobileKnownHostsStorageInput,
+): Promise<readonly MobileKnownHost[]> {
+  const store = input.nativeBridge.storage;
+  if (!store) return [];
+  await store.delete(mobileKnownHostsStorageKey(input.adapter));
+  return [];
 }
 
 function normalizeKnownHosts(

@@ -63,6 +63,12 @@ import {
 } from "../../lib/run-logs.ts";
 import { launchUrlFromDeployment } from "../../lib/capsules-ui.ts";
 import {
+  appendAppHandoff,
+  createAppHandoffConnectHref,
+  appHandoffFromSearch,
+  appHandoffProductLabel,
+} from "../../lib/app-handoff.ts";
+import {
   diagnosticSeverityLabel,
   operationLabel,
   policyStatusLabel,
@@ -563,6 +569,9 @@ function Inner() {
   const params = useParams();
   const navigate = useNavigate();
   const runId = () => params.id ?? "";
+  const appHandoff = appHandoffFromSearch(
+    typeof location === "undefined" ? "" : location.search,
+  );
 
   const [run, { refetch: refetchRun }] = createResource(runId, getRun);
   const [logs, { refetch: refetchLogs }] = createResource(runId, getRunLogs);
@@ -720,7 +729,10 @@ function Inner() {
     // applied notice (the legacy behaviour).
     const applyRunId = extractRunId(envelope);
     if (applyRunId && applyRunId !== runId()) {
-      navigate(`/runs/${applyRunId}`);
+      navigate(
+        appendAppHandoff(`/runs/${applyRunId}`, appHandoff) ??
+          `/runs/${applyRunId}`,
+      );
       return;
     }
     await Promise.all([refetchRun(), refetchLogs()]);
@@ -731,11 +743,18 @@ function Inner() {
     if (!instId) return;
     const envelope = await planCapsule(instId);
     const newRunId = extractRunId(envelope);
-    if (newRunId) navigate(`/runs/${newRunId}`);
+    if (newRunId) {
+      navigate(
+        appendAppHandoff(`/runs/${newRunId}`, appHandoff) ??
+          `/runs/${newRunId}`,
+      );
+    }
   });
 
   const costInfo = () => cost.latest;
   const costBlocked = () => costInfo()?.blocked === true;
+  const appConnectHref = () =>
+    createAppHandoffConnectHref(appHandoff, completedRunLaunchUrl());
 
   // --- summary layer ---------------------------------------------------------
 
@@ -1079,6 +1098,17 @@ function Inner() {
                               icon={<ExternalLink size={16} />}
                             >
                               {t("apps.openApp")}
+                            </Button>
+                          )}
+                        </Show>
+                        <Show when={appConnectHref()}>
+                          {(href) => (
+                            <Button variant="secondary" href={href()}>
+                              {t("run.appHandoff.open", {
+                                app: appHandoffProductLabel(
+                                  appHandoff!.product,
+                                ),
+                              })}
                             </Button>
                           )}
                         </Show>

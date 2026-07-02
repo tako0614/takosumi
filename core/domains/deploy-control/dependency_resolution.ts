@@ -2,13 +2,13 @@
  * Plan-time dependency + output-share resolution (spec §15 / §17 / §18).
  *
  * A cohesive collaborator pulled out of `OpenTofuDeploymentController`: it owns
- * the plan-time resolution of a consumer Installation's Dependencies into the
+ * the plan-time resolution of a consumer Capsule's Dependencies into the
  * injected variable values + pinned `DependencySnapshot` entries
  * ({@link DependencyResolutionService.resolveConsumerDependencies}), the ACTIVE
  * OutputShare coverage lookup for a `published_output` edge
  * ({@link DependencyResolutionService.resolveShareCoverage}), and the per-output
  * value resolution that pulls a producer output (cleartext via the
- * OutputSnapshot projection, or sensitive via the
+ * Output projection, or sensitive via the
  * {@link SensitiveOutputResolver}) into the consumer inputs.
  *
  * Behavior is identical to the prior inline controller methods: the seam moves

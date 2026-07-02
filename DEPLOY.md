@@ -6,7 +6,7 @@ This runbook covers the public Takosumi website/docs property and the managed ac
 | -------------- | ---------------- | --------------------- | ----------------------- |
 | `takosumi.com` | Cloudflare Pages | `takosumi-website`    | `website/` merged build |
 
-The account plane (OIDC issuer / dashboard API / Installation ledger / billing) no
+The account plane (OIDC issuer / dashboard API / Capsule Run projection / billing) no
 longer ships as a separate account-plane Worker. It runs **in-process** inside
 the host worker: the operator Takosumi platform worker at `app.takosumi.com`, or
 the self-hosted Takos product worker at the self-hoster's own origin. The
@@ -81,7 +81,7 @@ curl -I https://takosumi.com/docs/reference/cloud-endpoints
 ## Account plane (in-process)
 
 The account plane (managed dashboard, OIDC, billing, deploy facade, account-facing
-Installation projection) is part of the Takosumi distribution, not a separate public
+Capsule / Run / Output projection) is part of the Takosumi distribution, not a separate public
 core layer. It no longer deploys as a standalone account-plane Worker: it runs
 in-process inside the host worker. D1/R2 provisioning, secrets
 (`TAKOSUMI_ACCOUNTS_*`), the

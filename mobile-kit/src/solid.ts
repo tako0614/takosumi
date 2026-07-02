@@ -1,9 +1,11 @@
 export {
+  defineMobileHostActions,
   MobileClientShell,
   type MobileClientShellProps,
   type MobileShellCopy,
   type MobileShellHostAction,
   type MobileShellHostActionContext,
+  type MobileShellHomeExtraContext,
   type MobileShellMetric,
   type MobileShellNativeIntent,
 } from "./solid-shell.tsx";
@@ -13,3 +15,22 @@ export {
   type MobileClientAppProps,
   type RenderMobileClientAppOptions,
 } from "./solid-app.tsx";
+export {
+  MobileComposeField,
+  MobileComposeFooter,
+  MobileComposeForm,
+  MobileComposeSection,
+  MobilePreviewCard,
+  MobilePreviewList,
+  MobilePreviewSection,
+  MobileSegmentedControl,
+  type MobileComposeFieldProps,
+  type MobileComposeFooterProps,
+  type MobileComposeFormProps,
+  type MobileComposeSectionProps,
+  type MobilePreviewCardProps,
+  type MobilePreviewListProps,
+  type MobilePreviewSectionProps,
+  type MobileSegmentedControlOption,
+  type MobileSegmentedControlProps,
+} from "./solid-primitives.tsx";

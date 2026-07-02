@@ -1044,7 +1044,7 @@ export interface BundleStateSnapshot {
   readonly createdAt: string;
 }
 
-/** OutputSnapshot projection (no raw output VALUES) as captured in a bundle. */
+/** Output projection (no raw output VALUES) as captured in a bundle. */
 export interface BundleOutputSnapshot {
   readonly id: string;
   readonly spaceId: string;

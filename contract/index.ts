@@ -5,7 +5,9 @@ export {
   TAKOSUMI_WELL_KNOWN_PATH,
 } from "./api-surface.ts";
 export * from "./capabilities.ts";
+export * from "./app-handoff.ts";
 export * from "./mobile.ts";
+export * from "./notification-pushers.ts";
 export * from "./resource-shape.ts";
 export * from "./target.ts";
 export * from "./resolution.ts";

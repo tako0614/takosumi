@@ -10,9 +10,11 @@ const CATEGORY_LABELS: Record<string, { ja: string; en: string }> = {
   starter: { ja: "スターター", en: "Starters" },
   storage: { ja: "ストレージ", en: "Storage" },
   tools: { ja: "ツール", en: "Tools" },
+  workspace: { ja: "ワークスペース", en: "Workspace" },
 };
 
 const KIND_LABELS: Record<string, { ja: string; en: string }> = {
+  app: { ja: "アプリ", en: "App" },
   worker: { ja: "Webアプリ", en: "Web app" },
   storage: { ja: "ストレージ", en: "Storage" },
   site: { ja: "Webサイト", en: "Website" },
@@ -28,6 +30,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   hetzner: "Hetzner",
   openstack: "OpenStack",
   scaleway: "Scaleway",
+  takosumi: "Takosumi",
   vultr: "Vultr",
 };
 

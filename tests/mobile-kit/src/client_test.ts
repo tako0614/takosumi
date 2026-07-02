@@ -4,6 +4,7 @@ import {
   mobileKnownHostsStorageKey,
   mobileSessionStorageKey,
   type FetchLike,
+  type MobilePushRegistration,
   type MobileProductAdapter,
   type NativeBridge,
 } from "../../../mobile-kit/src/index.ts";
@@ -13,6 +14,10 @@ const adapter: MobileProductAdapter = {
   appName: "Takos",
   hostNoun: "Takos host",
   hostCenterLabel: "Host Takos",
+  hostCenterSource: {
+    git: "https://github.com/acme/takos.git",
+    path: "deploy/opentofu",
+  },
   urlPlaceholder: "https://workspace.example.com",
   primaryActionLabel: "Connect",
   accentColor: "#166534",
@@ -97,6 +102,54 @@ test("mobile client controller loads recent hosts and reconnects from them", asy
   expect(controller.getState().knownHosts[0]?.hostUrl).toBe(
     "https://known.example",
   );
+});
+
+test("mobile client controller forgets and clears recent hosts", async () => {
+  const bridge = memoryBridge();
+  await bridge.storage?.set(
+    mobileKnownHostsStorageKey(adapter),
+    JSON.stringify([
+      {
+        hostUrl: "https://keep.example",
+        product: "takos",
+        oidcIssuer: "https://keep.example",
+        lastSeenAt: "2026-06-30T00:00:00.000Z",
+      },
+      {
+        hostUrl: "https://forget.example",
+        product: "takos",
+        oidcIssuer: "https://forget.example",
+        lastSeenAt: "2026-06-29T00:00:00.000Z",
+      },
+    ]),
+  );
+  const controller = createMobileClientController({
+    adapter,
+    nativeBridge: bridge,
+    fetch: fixtureFetch(),
+  });
+
+  await controller.start();
+  await controller.forgetKnownHost("https://forget.example/path");
+
+  expect(controller.getState().knownHosts).toEqual([
+    {
+      hostUrl: "https://keep.example",
+      product: "takos",
+      oidcIssuer: "https://keep.example",
+      lastSeenAt: "2026-06-30T00:00:00.000Z",
+      label: undefined,
+    },
+  ]);
+  expect(controller.getState().status).toBe("Recent host removed.");
+
+  await controller.clearKnownHosts();
+
+  expect(controller.getState().knownHosts).toEqual([]);
+  expect(controller.getState().status).toBe("Recent hosts cleared.");
+  expect(
+    await bridge.storage?.get(mobileKnownHostsStorageKey(adapter)),
+  ).toBeUndefined();
 });
 
 test("mobile client controller restores session on start", async () => {
@@ -187,6 +240,40 @@ test("mobile client controller keeps mobile routes pending until sign-in", async
   expect(controller.getState().session?.accessToken).toBe("access-1");
   expect(controller.getState().pendingRoute).toBeUndefined();
   expect(bridge.opened.at(-1)).toBe("https://host.example/apps");
+  expect(controller.getState().status).toBe("Opened requested route.");
+});
+
+test("mobile client controller treats hosted route URLs as route handoffs", async () => {
+  const bridge = memoryBridge();
+  const controller = createMobileClientController({
+    adapter,
+    nativeBridge: bridge,
+    fetch: fixtureFetch(),
+    loadHome: async (session) => ({ title: session.hostUrl }),
+  });
+
+  await controller.handleLaunchPayload("https://host.example/chat?thread=1");
+
+  expect(controller.getState().discovery?.hostUrl).toBe("https://host.example");
+  expect(controller.getState().pendingRoute).toEqual({
+    path: "/chat?thread=1",
+    hostUrl: "https://host.example",
+    product: undefined,
+  });
+  expect(controller.getState().status).toBe(
+    "Sign in to open the requested route.",
+  );
+
+  await controller.startSignIn();
+  const authorizeUrl = bridge.opened.at(-1);
+  const state = new URL(authorizeUrl ?? "").searchParams.get("state");
+  await controller.completeSignIn(
+    `takos://oauth/callback?code=code-1&state=${state}`,
+  );
+
+  expect(controller.getState().session?.accessToken).toBe("access-1");
+  expect(controller.getState().pendingRoute).toBeUndefined();
+  expect(bridge.opened.at(-1)).toBe("https://host.example/chat?thread=1");
   expect(controller.getState().status).toBe("Opened requested route.");
 });
 
@@ -383,7 +470,7 @@ test("mobile client controller keeps Host Center setup handoff state", async () 
     fetch: fixtureFetch(),
   });
 
-  await controller.connectWithInput(
+  await controller.handleLaunchPayload(
     "takos://connect?host_url=https%3A%2F%2Fhost.example&product=takos&setup_ticket=ticket-1",
   );
 
@@ -395,6 +482,54 @@ test("mobile client controller keeps Host Center setup handoff state", async () 
   expect(controller.getState().status).toBe(
     "Takos host found. Host Center handoff received.",
   );
+});
+
+test("mobile client controller rejects cross-product Host Center handoffs", async () => {
+  const bridge = memoryBridge();
+  const controller = createMobileClientController({
+    adapter,
+    nativeBridge: bridge,
+    fetch: fixtureFetch(),
+  });
+
+  await controller.handleLaunchPayload(
+    "takos://connect?host_url=https%3A%2F%2Fhost.example&product=yurucommu",
+  );
+
+  expect(controller.getState().connectPayload).toBeUndefined();
+  expect(controller.getState().discovery).toBeUndefined();
+  expect(controller.getState().status).toBe(
+    "Mobile connect payload product mismatch.",
+  );
+});
+
+test("mobile client controller can accept any product payload when the adapter opts in", async () => {
+  const bridge = memoryBridge();
+  const controller = createMobileClientController({
+    adapter: {
+      ...adapter,
+      product: "notes-app",
+      appName: "Notes",
+      hostNoun: "Notes host",
+      hostCenterLabel: undefined,
+      mobileScheme: "notesapp",
+      strictDiscoveryProduct: false,
+      acceptAnyConnectProduct: true,
+    },
+    nativeBridge: bridge,
+    fetch: fixtureFetch(),
+  });
+
+  await controller.handleLaunchPayload(
+    "notesapp://connect?host_url=https%3A%2F%2Fhost.example&product=yurucommu",
+  );
+
+  expect(controller.getState().connectPayload).toEqual({
+    hostUrl: "https://host.example",
+    product: "yurucommu",
+    setupTicket: undefined,
+  });
+  expect(controller.getState().discovery?.hostUrl).toBe("https://host.example");
 });
 
 test("mobile client controller registers push notifications through product callback", async () => {
@@ -706,10 +841,7 @@ function memoryBridge(
       readonly data: Record<string, unknown>;
     },
   ) => void;
-  readonly emitPushTokenRefresh: (registration: {
-    readonly token: string;
-    readonly environment?: string;
-  }) => void;
+  readonly emitPushTokenRefresh: (registration: MobilePushRegistration) => void;
 } {
   const storage = new Map<string, string>();
   const opened: string[] = [];
@@ -729,10 +861,7 @@ function memoryBridge(
     }) => void
   >();
   const tokenRefreshHandlers = new Set<
-    (registration: {
-      readonly token: string;
-      readonly environment?: string;
-    }) => void
+    (registration: MobilePushRegistration) => void
   >();
   return {
     opened,
@@ -754,6 +883,7 @@ function memoryBridge(
       pushNotifications: Boolean(options.pushRegistration),
       biometricAuth: Boolean(options.biometricAuth),
       callIntent: false,
+      clipboardText: false,
       secureStorage: true,
       persistentStorage: true,
     },

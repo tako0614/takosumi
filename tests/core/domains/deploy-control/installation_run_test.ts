@@ -1362,6 +1362,7 @@ test("installation plan reuses a preflight CompatibilityReport hint without rech
   expect(installation?.compatibilityReportId).toBe("caprep_preflight");
   expect(installation?.compatibilityStatus).toBe("ready");
   expect(runner.planJobs).toHaveLength(1);
+  expect(runner.planJobs[0]?.generatedRoot?.moduleFiles).toBeUndefined();
 });
 
 test("installation plan reuses the latest matching preflight CompatibilityReport when the client omits the hint", async () => {

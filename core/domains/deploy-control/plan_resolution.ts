@@ -137,7 +137,7 @@ export class PlanResolutionService {
   /**
    * Derives the §13 install-type plan context for a template-bound installation
    * config: the generated-root install type and the provider aliases from the
-   * installation's resolved provider env bindings.
+   * Capsule's resolved ProviderBindings.
    * Provider Env bindings resolve through the {@link ConnectionsService} so
    * connection changes take effect on the next plan.
    */
@@ -148,7 +148,7 @@ export class PlanResolutionService {
     credentialRequiredProviders: readonly string[],
   ): Promise<InstallTypePlanContext> {
     // Run-scoped resolution so generated-root provider blocks come from the
-    // reviewed Installation provider env bindings only. The caller filters the
+    // reviewed ProviderBinding records only. The caller filters the
     // full required provider set down to providers that require credential
     // material; no-credential providers remain on PlanRun.requiredProviders but
     // do not force a ProviderConnection.

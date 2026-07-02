@@ -4,12 +4,14 @@ import type {
   MobileProductKind,
   MobileRoutePayload,
 } from "./types.ts";
+import { isMobileProductKind } from "../../contract/mobile.ts";
+import { requireMobileProductKey } from "./product-key.ts";
 import { normalizeHostUrl } from "./url.ts";
 
 export function parseMobileProductKind(
   value: unknown,
 ): MobileProductKind | undefined {
-  return value === "takos" || value === "yurucommu" ? value : undefined;
+  return isMobileProductKind(value) ? value : undefined;
 }
 
 export function parseMobileConnectInput(input: string): MobileConnectPayload {
@@ -55,6 +57,10 @@ export function parseMobileRouteInput(
   input: string,
   adapter: Pick<MobileProductAdapter, "mobileScheme" | "product">,
 ): MobileRoutePayload | undefined {
+  const expectedProduct = requireMobileProductKey(
+    adapter.product,
+    "Expected product",
+  );
   const raw = input.trim();
   if (!raw) return undefined;
 
@@ -70,12 +76,18 @@ export function parseMobileRouteInput(
       ),
       hostUrl: firstString(parsed.host_url, parsed.hostUrl),
       product: parseMobileProductKind(parsed.product),
-      expectedProduct: adapter.product,
+      expectedProduct,
     });
   }
 
   if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) return undefined;
   const url = new URL(raw);
+  if (url.protocol === "https:" || url.protocol === "http:") {
+    return normalizeRoutePayload({
+      routeValue: raw,
+      expectedProduct,
+    });
+  }
   if (url.protocol !== `${adapter.mobileScheme}:`) return undefined;
   if (url.hostname !== "open" && url.hostname !== "route") {
     return undefined;
@@ -93,7 +105,7 @@ export function parseMobileRouteInput(
       url.searchParams.get("hostUrl") ??
       undefined,
     product: parseMobileProductKind(url.searchParams.get("product")),
-    expectedProduct: adapter.product,
+    expectedProduct,
   });
 }
 
