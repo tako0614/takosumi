@@ -224,8 +224,9 @@ export function mountDeployControlSourceRoutes(
             c,
             "sourceCompatibilityCheck",
           );
-        const modulePath = modulePathValue(body.modulePath);
-        if (body.modulePath !== undefined && modulePath === undefined) {
+        const { modulePath: rawModulePath, ...request } = body;
+        const modulePath = modulePathValue(rawModulePath);
+        if (rawModulePath !== undefined && modulePath === undefined) {
           throw new OpenTofuControllerError(
             "invalid_argument",
             "modulePath must be a safe relative path inside the SourceSnapshot",
@@ -233,7 +234,7 @@ export function mountDeployControlSourceRoutes(
         }
         return c.json(
           await controller.createSourceCompatibilityCheck(id, {
-            ...body,
+            ...request,
             ...(modulePath ? { modulePath } : {}),
           }),
           201,
@@ -325,9 +326,8 @@ function modulePathValue(value: unknown): string | undefined {
     .replace(/\\/gu, "/")
     .replace(/^\.\/+/u, "")
     .replace(/\/+$/u, "");
+  if (!normalized || normalized === ".") return "";
   if (
-    !normalized ||
-    normalized === "." ||
     normalized === ".." ||
     normalized.startsWith("../") ||
     normalized.includes("/../")

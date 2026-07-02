@@ -806,8 +806,12 @@ async function createScopedInstallConfigForInstallation(input: {
     );
   }
   const now = new Date().toISOString();
+  const { modulePath: _baseModulePath, ...baseConfigWithoutModulePath } =
+    baseConfig;
+  const configBase =
+    input.modulePath === "" ? baseConfigWithoutModulePath : baseConfig;
   return await input.installations.putInstallConfig({
-    ...baseConfig,
+    ...configBase,
     id: `cfg_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`,
     spaceId: input.spaceId,
     name: `${input.installationName}-config`,
@@ -852,9 +856,8 @@ function modulePathValue(value: unknown): string | undefined {
     .replaceAll("\\", "/")
     .replace(/^\.\//u, "")
     .replace(/\/+$/u, "");
+  if (normalized.length === 0 || normalized === ".") return "";
   if (
-    normalized.length === 0 ||
-    normalized === "." ||
     normalized === ".." ||
     normalized.startsWith("../") ||
     normalized.includes("/../")

@@ -368,6 +368,37 @@ test("model e2e: create Installation with modulePath stores a scoped InstallConf
   expect(config.modulePath).toBe("deploy/opentofu");
 });
 
+test("model e2e: create Installation accepts repo-root modulePath", async () => {
+  const { app, operations } = await service();
+  const spaceId = await createSpace(app, "module-root");
+  const sourceId = await createSource(app, spaceId);
+  const installConfigId = await seedInstallConfig(operations, spaceId);
+
+  const createRes = await app.request(
+    `/internal/v1/workspaces/${spaceId}/capsules`,
+    {
+      method: "POST",
+      headers: headers({ "content-type": "application/json" }),
+      body: JSON.stringify({
+        name: "yurucommu",
+        environment: "staging",
+        sourceId,
+        installConfigId,
+        modulePath: ".",
+      }),
+    },
+  );
+  expect(createRes.status).toBe(201);
+  const capsule = (await createRes.json()).capsule as {
+    installConfigId: string;
+  };
+  const config = await operations.installations.getInstallConfig(
+    capsule.installConfigId,
+  );
+  expect(config.internal).toEqual({ reason: "per_install_overrides" });
+  expect(config.modulePath).toBeUndefined();
+});
+
 test("model e2e: create Installation rejects non-object vars", async () => {
   const { app, operations } = await service();
   const spaceId = await createSpace(app, "bad-vars");
