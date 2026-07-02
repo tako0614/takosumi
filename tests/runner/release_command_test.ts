@@ -166,6 +166,80 @@ test("release action admits dispatch-only provider credentials", async () => {
   }
 });
 
+test("release action honors command timeoutSeconds", async () => {
+  const runId = `release_timeout_${crypto.randomUUID().replace(/-/g, "")}`;
+  const root = join(RUN_ROOT, safeRunId(runId));
+  const sourceRoot = join(root, "source");
+  try {
+    await mkdir(sourceRoot, { recursive: true });
+
+    const response = await handleRunnerRequest(
+      runnerRequest(runId, {
+        release: {
+          commands: [
+            {
+              id: "slow-release",
+              command: [
+                process.execPath,
+                "-e",
+                `await new Promise((resolve) => setTimeout(resolve, 2000))`,
+              ],
+              timeoutSeconds: 1,
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(response.status).toBe(500);
+    const body = await response.json();
+    expect(body).toMatchObject({
+      runId,
+      action: "release",
+      status: "failed",
+      phase: "release",
+      failedCommandId: "slow-release",
+    });
+    expect(body.stderr).toContain("command timed out after 1000ms");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("release action rejects invalid command timeoutSeconds", async () => {
+  const runId = `release_bad_timeout_${crypto.randomUUID().replace(/-/g, "")}`;
+  const root = join(RUN_ROOT, safeRunId(runId));
+  try {
+    const response = await handleRunnerRequest(
+      runnerRequest(runId, {
+        release: {
+          commands: [
+            {
+              id: "bad-timeout",
+              command: [process.execPath, "-e", `console.log("ran")`],
+              timeoutSeconds: 0,
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(response.status).toBe(500);
+    const body = await response.json();
+    expect(body).toMatchObject({
+      runId,
+      action: "release",
+      status: "failed",
+      exitCode: 1,
+    });
+    expect(body.stderr).toContain(
+      "release.commands[0].timeoutSeconds must be an integer between 1 and 21600",
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("release action rejects provider credential and reserved env", async () => {
   const runId = `release_secret_${crypto.randomUUID().replace(/-/g, "")}`;
   const root = join(RUN_ROOT, safeRunId(runId));

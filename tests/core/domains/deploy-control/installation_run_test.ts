@@ -2571,6 +2571,7 @@ test("release activator receives neutral post-apply commands as opaque argv", as
               executor: "operator",
               command: ["bun", "run", "app:activate", "--target", "runtime"],
               working_directory: ".",
+              timeout_seconds: 900,
               env: {
                 APP_RELEASE_TARGET: "runtime",
                 API_TOKEN: "sk-should-not-leak",
@@ -2610,6 +2611,7 @@ test("release activator receives neutral post-apply commands as opaque argv", as
       executor: "operator",
       command: ["bun", "run", "app:activate", "--target", "runtime"],
       workingDirectory: ".",
+      timeoutSeconds: 900,
       env: { APP_RELEASE_TARGET: "runtime" },
     },
   ]);
@@ -2638,6 +2640,7 @@ test("runner release commands receive dispatch-only provider credentials", async
               executor: "runner",
               command: ["bun", "run", "app:activate"],
               working_directory: ".",
+              timeoutSeconds: "1200",
             },
           ],
         },
@@ -2672,6 +2675,7 @@ test("runner release commands receive dispatch-only provider credentials", async
       executor: "runner",
       command: ["bun", "run", "app:activate"],
       workingDirectory: ".",
+      timeoutSeconds: 1200,
     },
   ]);
   expect(activations[0]?.credentials).toEqual({
@@ -2724,6 +2728,12 @@ test("release command descriptor validates only generic command shape", async ()
               id: "control-char-argv",
               executor: "operator",
               command: ["bun", "run\nactivate"],
+            },
+            {
+              id: "bad-timeout",
+              executor: "operator",
+              command: ["bun", "run", "activate"],
+              timeout_seconds: 0,
             },
           ],
         },

@@ -556,6 +556,7 @@ test("container runner dispatches post-apply release commands to the release act
         command: ["bun", "run", "app:activate"],
         workingDirectory: ".",
         env: { APP_RELEASE_TARGET: "runtime" },
+        timeoutSeconds: 1200,
       },
     ],
   } as Parameters<CloudflareContainerOpenTofuRunner["release"]>[0]);
@@ -575,6 +576,7 @@ test("container runner dispatches post-apply release commands to the release act
         command: ["bun", "run", "app:activate"],
         workingDirectory: ".",
         env: { APP_RELEASE_TARGET: "runtime" },
+        timeoutSeconds: 1200,
       },
     ],
   });

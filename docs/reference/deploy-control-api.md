@@ -131,6 +131,11 @@ dispatch-only provider credentials when the reviewed run had ProviderBindings.
 Operator commands are not attempted by the built-in runner activator; they
 remain pending unless the host configures an operator/Cloud release activator
 that owns the credential boundary for work outside the runner sandbox.
+Commands may also declare `timeout_seconds` / `timeoutSeconds` as an execution
+constraint. This is still part of the Git/OpenTofu-declared release descriptor:
+Takosumi does not interpret the command semantics, but the runner enforces the
+declared timeout for long app-owned activation bridges such as container
+artifact upload or provider-gap setup.
 
 The platform Worker can enable the generic webhook bridge with:
 

@@ -150,7 +150,10 @@ export async function runRelease(
           ...releaseBaseEnv(runId, release),
           ...(command.env ?? {}),
         },
-        timeoutMs: preparedCredentials.context.timeoutMs ?? 10 * 60 * 1000,
+        timeoutMs:
+          releaseCommandTimeoutMs(command) ??
+          preparedCredentials.context.timeoutMs ??
+          10 * 60 * 1000,
       };
       const result = await runCommand(command.command, { cwd, context });
       logs.push(
@@ -483,11 +486,16 @@ export function parseRelease(request: unknown): ReleaseSpec {
         );
       }
       const env = releaseCommandEnv(recordField(entry, "env"));
+      const timeoutSeconds = releaseCommandTimeoutSeconds(
+        entry.timeoutSeconds ?? entry.timeout_seconds,
+        `release.commands[${index}].timeoutSeconds`,
+      );
       return {
         id,
         command,
         ...(workingDirectory ? { workingDirectory } : {}),
         ...(env ? { env } : {}),
+        ...(timeoutSeconds ? { timeoutSeconds } : {}),
       };
     }),
     ...releaseOutputs(recordField(request, "outputs")),
@@ -548,6 +556,29 @@ export function releaseCommandEnv(
     }
   }
   return Object.keys(env).length > 0 ? env : undefined;
+}
+
+function releaseCommandTimeoutSeconds(
+  value: unknown,
+  label: string,
+): number | undefined {
+  if (value === undefined || value === null) return undefined;
+  const parsed =
+    typeof value === "number"
+      ? value
+      : typeof value === "string" && /^[1-9]\d*$/u.test(value.trim())
+        ? Number(value.trim())
+        : undefined;
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 6 * 60 * 60) {
+    throw new Error(`${label} must be an integer between 1 and 21600`);
+  }
+  return parsed;
+}
+
+function releaseCommandTimeoutMs(
+  command: ReleaseCommandSpec,
+): number | undefined {
+  return command.timeoutSeconds ? command.timeoutSeconds * 1000 : undefined;
 }
 
 export function releaseCommandCwd(
