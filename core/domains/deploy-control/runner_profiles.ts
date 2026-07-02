@@ -25,6 +25,38 @@ function providerAddressesFor(id: string): readonly string[] {
   return requireProvider(id).providerAddresses;
 }
 
+export const CREDENTIAL_FREE_UTILITY_PROVIDER_ADDRESSES = [
+  "registry.opentofu.org/hashicorp/http",
+  "registry.opentofu.org/hashicorp/random",
+  "registry.opentofu.org/hashicorp/tls",
+] as const;
+
+export function isCredentialFreeUtilityProvider(provider: string): boolean {
+  return (
+    CREDENTIAL_FREE_UTILITY_PROVIDER_ADDRESSES as readonly string[]
+  ).includes(provider);
+}
+
+function providerAddressesWithUtilities(id: string): readonly string[] {
+  return uniqueProviderAddresses([
+    ...providerAddressesFor(id),
+    ...CREDENTIAL_FREE_UTILITY_PROVIDER_ADDRESSES,
+  ]);
+}
+
+function uniqueProviderAddresses(
+  providers: readonly string[],
+): readonly string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const provider of providers) {
+    if (seen.has(provider)) continue;
+    seen.add(provider);
+    out.push(provider);
+  }
+  return out;
+}
+
 function requireProvider(id: string) {
   const provider = providerById(id);
   if (!provider) {
@@ -132,7 +164,7 @@ export function createDefaultRunnerProfiles(
       name: "Cloudflare default",
       description:
         "Reference Cloudflare Container runner for OpenTofu modules that use Cloudflare resources.",
-      allowedProviders: providerAddressesFor("cloudflare"),
+      allowedProviders: providerAddressesWithUtilities("cloudflare"),
       networkPolicy: networkFor("cloudflare"),
       labels: providerRunnerProfileLabels(),
     }),
@@ -141,7 +173,7 @@ export function createDefaultRunnerProfiles(
       name: "AWS Provider Env candidate",
       description:
         "Reference Cloudflare Container runner for OpenTofu modules that use AWS resources.",
-      allowedProviders: providerAddressesFor("aws"),
+      allowedProviders: providerAddressesWithUtilities("aws"),
       labels: candidateRunnerProfileLabels(),
       networkPolicy: networkFor("aws"),
     }),
@@ -150,7 +182,7 @@ export function createDefaultRunnerProfiles(
       name: "GCP Provider Env candidate",
       description:
         "Reference Cloudflare Container runner for OpenTofu modules that use Google Cloud resources with service-account JSON Provider Connections.",
-      allowedProviders: providerAddressesFor("gcp"),
+      allowedProviders: providerAddressesWithUtilities("gcp"),
       labels: candidateRunnerProfileLabels(),
       networkPolicy: networkFor("gcp"),
     }),
@@ -159,7 +191,7 @@ export function createDefaultRunnerProfiles(
       name: "Azure Provider Env candidate",
       description:
         "Future/custom reference Cloudflare Container runner for OpenTofu modules that use Azure resources.",
-      allowedProviders: providerAddressesFor("azure"),
+      allowedProviders: providerAddressesWithUtilities("azure"),
       labels: candidateRunnerProfileLabels(),
       networkPolicy: networkFor("azure"),
     }),
@@ -168,7 +200,7 @@ export function createDefaultRunnerProfiles(
       name: "Kubernetes Provider Env candidate",
       description:
         "Operator-managed OpenTofu runner for Kubernetes and Helm modules.",
-      allowedProviders: providerAddressesFor("kubernetes"),
+      allowedProviders: providerAddressesWithUtilities("kubernetes"),
       labels: candidateRunnerProfileLabels(),
       networkPolicy: networkFor("kubernetes"),
     }),
@@ -177,7 +209,7 @@ export function createDefaultRunnerProfiles(
       name: "GitHub Provider Env candidate",
       description:
         "Reference Cloudflare Container runner for OpenTofu modules that use GitHub resources.",
-      allowedProviders: providerAddressesFor("github"),
+      allowedProviders: providerAddressesWithUtilities("github"),
       labels: candidateRunnerProfileLabels(),
       networkPolicy: networkFor("github"),
     }),
@@ -186,7 +218,7 @@ export function createDefaultRunnerProfiles(
       name: "DigitalOcean Provider Env candidate",
       description:
         "Future/custom reference Cloudflare Container runner for OpenTofu modules that use DigitalOcean resources.",
-      allowedProviders: providerAddressesFor("digitalocean"),
+      allowedProviders: providerAddressesWithUtilities("digitalocean"),
       labels: candidateRunnerProfileLabels(),
       networkPolicy: networkFor("digitalocean"),
     }),
@@ -195,7 +227,7 @@ export function createDefaultRunnerProfiles(
       name: "Hetzner Cloud Provider Env candidate",
       description:
         "Reference Cloudflare Container runner for OpenTofu modules that use Hetzner Cloud resources.",
-      allowedProviders: providerAddressesFor("hcloud"),
+      allowedProviders: providerAddressesWithUtilities("hcloud"),
       labels: candidateRunnerProfileLabels(),
       networkPolicy: networkFor("hcloud"),
     }),
@@ -204,7 +236,7 @@ export function createDefaultRunnerProfiles(
       name: "Vultr Provider Env candidate",
       description:
         "Reference Cloudflare Container runner for OpenTofu modules that use Vultr resources.",
-      allowedProviders: providerAddressesFor("vultr"),
+      allowedProviders: providerAddressesWithUtilities("vultr"),
       labels: candidateRunnerProfileLabels(),
       networkPolicy: networkFor("vultr"),
     }),
@@ -213,7 +245,7 @@ export function createDefaultRunnerProfiles(
       name: "Scaleway Provider Env candidate",
       description:
         "Reference Cloudflare Container runner for OpenTofu modules that use Scaleway resources.",
-      allowedProviders: providerAddressesFor("scaleway"),
+      allowedProviders: providerAddressesWithUtilities("scaleway"),
       labels: candidateRunnerProfileLabels(),
       networkPolicy: networkFor("scaleway"),
     }),
@@ -223,7 +255,7 @@ export function createDefaultRunnerProfiles(
       substrate: "local",
       description:
         "Operator-managed OpenTofu runner for OpenStack providers whose API endpoints are deployment-specific.",
-      allowedProviders: providerAddressesFor("openstack"),
+      allowedProviders: providerAddressesWithUtilities("openstack"),
       cloudflareContainer: false,
       labels: candidateRunnerProfileLabels(),
       networkPolicy: networkFor("openstack"),
@@ -234,7 +266,7 @@ export function createDefaultRunnerProfiles(
       substrate: "local",
       description:
         "Generic-env provider example runner profile for OpenTofu modules that use a host Docker daemon.",
-      allowedProviders: providerAddressesFor("docker"),
+      allowedProviders: providerAddressesWithUtilities("docker"),
       credentialRefs: [],
       cloudflareContainer: false,
       labels: candidateRunnerProfileLabels(),
@@ -360,9 +392,11 @@ function credentialRefsForProfile(
   profileId: string,
   providers: readonly string[],
 ): NonNullable<RunnerProfile["credentialRefs"]> {
-  return providers.map((provider) => ({
-    provider,
-    ref: `secret://takosumi/${profileId}`,
-    required: true,
-  }));
+  return providers
+    .filter((provider) => !isCredentialFreeUtilityProvider(provider))
+    .map((provider) => ({
+      provider,
+      ref: `secret://takosumi/${profileId}`,
+      required: true,
+    }));
 }

@@ -15,6 +15,7 @@ import type {
   RunnerProfile,
 } from "@takosumi/internal/deploy-control-api";
 import { evaluateProviderAllowlist, providerMatches } from "takosumi-policy";
+import { isCredentialFreeUtilityProvider } from "./runner_profiles.ts";
 
 export function evaluatePolicy(input: {
   readonly profile: RunnerProfile;
@@ -62,6 +63,7 @@ export function evaluatePolicy(input: {
     for (const provider2 of input.requiredProviders) {
       if (providerDenied(provider2, input.profile.deniedProviders ?? []))
         continue;
+      if (isCredentialFreeUtilityProvider(provider2)) continue;
       if (
         !credentialRefPresent(provider2, input.profile.credentialRefs ?? [])
       ) {

@@ -36,7 +36,12 @@ receives temporary run-scoped material after policy allows a Run to execute.
     "ref": "state://takosumi/cloudflare",
     "lock": { "kind": "native", "ref": "lock://takosumi/cloudflare" }
   },
-  "allowedProviders": ["registry.opentofu.org/cloudflare/cloudflare"],
+  "allowedProviders": [
+    "registry.opentofu.org/cloudflare/cloudflare",
+    "registry.opentofu.org/hashicorp/http",
+    "registry.opentofu.org/hashicorp/random",
+    "registry.opentofu.org/hashicorp/tls"
+  ],
   "resourceLimits": {
     "maxRunSeconds": 900,
     "maxSourceArchiveBytes": 104857600,
@@ -50,6 +55,14 @@ receives temporary run-scoped material after policy allows a Run to execute.
   }
 }
 ```
+
+Provider-specific runner profiles may include credential-free utility providers
+such as `hashicorp/http`, `hashicorp/random`, and `hashicorp/tls`. These let a
+plain OpenTofu module fetch an explicit release artifact, create stable random
+suffixes, or generate TLS material without switching to the arbitrary
+`generic-opentofu-provider` profile. They do not receive ProviderConnection
+credential references; credentialed cloud providers still require explicit
+ProviderConnection / CredentialRecipe / ProviderBinding resolution.
 
 ## Secret Exposure
 

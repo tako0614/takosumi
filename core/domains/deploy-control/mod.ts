@@ -256,6 +256,7 @@ export {
   type OpenTofuControllerErrorCode,
 } from "./errors.ts";
 export {
+  CREDENTIAL_FREE_UTILITY_PROVIDER_ADDRESSES,
   createDefaultRunnerProfiles,
   parseEnabledRunnerProfileIds,
   resolveEnabledRunnerProfiles,
