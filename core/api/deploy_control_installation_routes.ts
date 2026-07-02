@@ -84,6 +84,7 @@ interface CreateInstallationRouteRequest extends Omit<
 }
 
 interface InstallationPlanRouteRequest {
+  readonly compatibilityReportId?: unknown;
   readonly runnerId?: string;
 }
 
@@ -145,6 +146,19 @@ function runnerIdFromBody(body: {
     );
   }
   return body.runnerId.trim();
+}
+
+function compatibilityReportIdFromBody(body: {
+  readonly compatibilityReportId?: unknown;
+}): string | undefined {
+  if (body.compatibilityReportId === undefined) return undefined;
+  if (!nonEmptyString(body.compatibilityReportId)) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "compatibilityReportId must be a non-empty string",
+    );
+  }
+  return body.compatibilityReportId.trim();
 }
 
 type InstallConfigListView = "all" | "starter-catalog";
@@ -694,12 +708,16 @@ export function mountDeployControlInstallationRoutes(
           "installationPlan",
         );
         const runnerProfileId = runnerIdFromBody(body);
+        const compatibilityReportId = compatibilityReportIdFromBody(body);
         const response = await controller.createInstallationPlan(
           id,
           {
             actor: principal.actor,
           },
-          runnerProfileId ? { runnerProfileId } : {},
+          {
+            ...(runnerProfileId ? { runnerProfileId } : {}),
+            ...(compatibilityReportId ? { compatibilityReportId } : {}),
+          },
         );
         return c.json(
           { run: await controller.getRun(response.planRun.id) },

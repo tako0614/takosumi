@@ -233,6 +233,7 @@ export interface PlatformControlPlaneSmokeResult {
   readonly sourceId?: string;
   readonly sourceSyncRunId?: string;
   readonly sourceSnapshotId?: string;
+  readonly compatibilityReportId?: string;
   readonly installationId?: string;
   readonly planRunId?: string;
   readonly applyRunId?: string;
@@ -1021,6 +1022,7 @@ export async function runPlatformControlPlaneSmoke(
   let sourceId: string | undefined;
   let sourceSyncRunId: string | undefined;
   let sourceSnapshotId: string | undefined;
+  let compatibilityReportId: string | undefined;
   let installationId: string | undefined;
   let planRunId: string | undefined;
   let applyRunId: string | undefined;
@@ -1071,6 +1073,7 @@ export async function runPlatformControlPlaneSmoke(
     beginStep("sourceRegistered");
     beginStep("sourceSynced");
     beginStep("scratchInstall");
+    beginStep("compatibilityChecked");
     beginStep("plan");
     const deploy = await deployGitSourceCapsule(options, {
       spaceId,
@@ -1079,11 +1082,13 @@ export async function runPlatformControlPlaneSmoke(
     sourceId = deploy.sourceId;
     sourceSyncRunId = deploy.sourceSyncRunId;
     sourceSnapshotId = deploy.sourceSnapshotId;
+    compatibilityReportId = deploy.compatibilityReportId;
     installationId = deploy.installation.id;
     planRunId = deploy.planRun?.id ?? deploy.run.id;
     completeStep("sourceRegistered");
     completeStep("sourceSynced");
     completeStep("scratchInstall");
+    completeStep("compatibilityChecked");
     capsuleGateStatus = "passed";
     const completedPlan = await ensurePlanReadyForApply(options, planRunId);
     policyStatus = publicPolicyStatus(completedPlan);
@@ -1228,6 +1233,7 @@ export async function runPlatformControlPlaneSmoke(
       sourceId,
       sourceSyncRunId,
       sourceSnapshotId,
+      compatibilityReportId,
       installationId,
       planRunId,
       applyRunId,
@@ -1349,6 +1355,7 @@ export async function runPlatformControlPlaneSmoke(
     sourceId,
     sourceSyncRunId,
     sourceSnapshotId,
+    compatibilityReportId,
     planRunId,
     applyRunId,
     destroyPlanRunId,
@@ -1384,6 +1391,7 @@ function failedResult(
     readonly sourceId?: string;
     readonly sourceSyncRunId?: string;
     readonly sourceSnapshotId?: string;
+    readonly compatibilityReportId?: string;
     readonly installationId?: string;
     readonly planRunId?: string;
     readonly applyRunId?: string;
@@ -1436,6 +1444,7 @@ function failedResult(
     sourceId: input.sourceId,
     sourceSyncRunId: input.sourceSyncRunId,
     sourceSnapshotId: input.sourceSnapshotId,
+    compatibilityReportId: input.compatibilityReportId,
     installationId: input.installationId,
     planRunId: input.planRunId,
     applyRunId: input.applyRunId,
@@ -1763,6 +1772,11 @@ async function deployGitSourceCapsule(
     sourceId: source.id,
     installConfigId,
   });
+  const compatibility = await createSmokeSourceCompatibilityCheck(options, {
+    sourceId: source.id,
+    sourceSnapshotId,
+    installationId: installation.id,
+  });
   if (input.providerConnectionId) {
     await putInstallationProviderConnections(options, {
       installationId: installation.id,
@@ -1777,8 +1791,9 @@ async function deployGitSourceCapsule(
     timeoutMs: options.deployTimeoutSeconds * 1000,
     body: {
       ...(options.runnerProfileId
-        ? { runnerProfileId: options.runnerProfileId }
+        ? { runnerId: options.runnerProfileId }
         : {}),
+      compatibilityReportId: compatibility.report.id,
     },
   });
   return {
@@ -1789,6 +1804,55 @@ async function deployGitSourceCapsule(
     sourceId: source.id,
     sourceSyncRunId: sourceSyncRun.id,
     sourceSnapshotId,
+    compatibilityReportId: compatibility.report.id,
+  };
+}
+
+async function createSmokeSourceCompatibilityCheck(
+  options: PlatformControlPlaneSmokeOptions,
+  input: {
+    readonly sourceId: string;
+    readonly sourceSnapshotId: string;
+    readonly installationId: string;
+  },
+): Promise<{
+  readonly report: {
+    readonly id: string;
+    readonly level?: string;
+  };
+  readonly run?: RunRecord;
+}> {
+  const response = await requestJson<{
+    readonly report?: {
+      readonly id?: string;
+      readonly level?: string;
+    };
+    readonly run?: RunRecord;
+  }>({
+    baseUrl: options.url,
+    token: options.accountSessionToken,
+    method: "POST",
+    path: `${API_PREFIX}/sources/${encodeURIComponent(
+      input.sourceId,
+    )}/compatibility-check`,
+    body: {
+      sourceSnapshotId: input.sourceSnapshotId,
+      installationId: input.installationId,
+      ...(options.modulePath ? { modulePath: options.modulePath } : {}),
+    },
+  });
+  const reportId = response.report?.id;
+  if (!reportId) {
+    throw new Error(
+      "source compatibility check response did not include report.id",
+    );
+  }
+  return {
+    report: {
+      id: reportId,
+      ...(response.report?.level ? { level: response.report.level } : {}),
+    },
+    ...(response.run ? { run: response.run } : {}),
   };
 }
 
@@ -3803,6 +3867,7 @@ function requiredSteps(
     ...(options?.sourceMode === "git" ? ["sourceRegistered"] : []),
     ...(options?.sourceMode === "git" ? ["sourceSynced"] : []),
     "scratchInstall",
+    "compatibilityChecked",
     "plan",
     "apply",
     ...(options?.verificationMode === "opentofu"
@@ -4099,8 +4164,14 @@ async function runSelfTest(): Promise<void> {
     {},
   );
   const defaultProviderlessResult = dryRunResult(defaultProviderlessOptions);
-  if (defaultProviderlessResult.capsuleModule !== "opentofu-basic") {
-    throw new Error("providerless self-test did not default to opentofu-basic");
+  if (
+    defaultProviderlessResult.capsuleModule !== "git-opentofu-capsule" ||
+    defaultProviderlessResult.sourceMode !== "git" ||
+    !defaultProviderlessResult.steps.includes("compatibilityChecked")
+  ) {
+    throw new Error(
+      "providerless self-test did not default to Git OpenTofu Capsule flow",
+    );
   }
   if (
     defaultProviderlessResult.inputs.runnerProfileId !==
