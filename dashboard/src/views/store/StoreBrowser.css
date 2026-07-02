@@ -140,15 +140,61 @@
 .tcs-card {
   background: var(--c-panel);
   border: 1px solid var(--c-border);
-  border-radius: 13px;
+  border-radius: 10px;
   padding: 14px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
+  min-height: 204px;
+}
+.tcs-card-top {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  min-width: 0;
+}
+.tcs-card-main {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+.tcs-app-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 54px;
+  height: 54px;
+  flex: none;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--c-border) 70%, transparent);
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--c-accent) 12%, var(--c-panel2));
+  color: var(--c-accent2);
+}
+.tcs-app-icon[data-kind="app"] {
+  background: color-mix(in srgb, var(--c-accent) 16%, var(--c-panel2));
+}
+.tcs-app-icon[data-kind="worker"] {
+  background: color-mix(in srgb, #0f766e 14%, var(--c-panel2));
+  color: #0f766e;
+}
+.tcs-app-icon[data-kind="storage"] {
+  background: color-mix(in srgb, #b45309 13%, var(--c-panel2));
+  color: #b45309;
+}
+.tcs-app-icon[data-kind="site"] {
+  background: color-mix(in srgb, #2563eb 13%, var(--c-panel2));
+  color: #2563eb;
+}
+.tcs-app-icon img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 .tcs-card-head {
   display: flex;
   gap: 6px;
+  min-width: 0;
 }
 .tcs-card-open {
   background: none;
@@ -157,10 +203,12 @@
   color: inherit;
   padding: 0;
   cursor: pointer;
+  min-width: 0;
 }
 .tcs-card-open h4 {
   margin: 0 0 4px;
   font-size: 1.02rem;
+  overflow-wrap: anywhere;
 }
 .tcs-card-open p {
   margin: 0;
@@ -183,6 +231,10 @@
   display: flex;
   align-items: center;
   gap: 8px;
+}
+.tcs-card-actions .tcs-btn {
+  min-height: 36px;
+  min-width: 112px;
 }
 
 .tcs-badge {
@@ -258,8 +310,16 @@
   align-items: flex-start;
   gap: 12px;
 }
+.tcs-detail-title {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
 .tcs-detail header h3 {
-  margin: 0;
+  margin: 6px 0 0;
+  overflow-wrap: anywhere;
 }
 .tcs-detail section {
   margin-top: 18px;
@@ -309,4 +369,23 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
+}
+
+@media (max-width: 520px) {
+  .tcs-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .tcs-card {
+    min-height: 0;
+  }
+
+  .tcs-card-actions .tcs-btn {
+    width: 100%;
+  }
+
+  .tcs-detail {
+    width: 100%;
+    border-left: 0;
+  }
 }

@@ -15,6 +15,12 @@ import {
   type Component,
 } from "solid-js";
 import {
+  AppWindow,
+  Box,
+  Globe2,
+  HardDrive,
+} from "lucide-solid";
+import {
   initTcsState,
   loadMoreTcs,
   mergeTcsListingBatches,
@@ -63,10 +69,10 @@ const STR = {
   remove: { ja: "削除", en: "Remove" },
   unreachable: { ja: "接続不可", en: "unreachable" },
   alsoOn: { ja: "他にもあり", en: "also elsewhere" },
-  install: { ja: "追加", en: "Add" },
-  installing: { ja: "追加中…", en: "Adding…" },
-  installed: { ja: "追加開始", en: "Started" },
-  configure: { ja: "追加する", en: "Add" },
+  install: { ja: "インストール", en: "Install" },
+  installing: { ja: "インストール中…", en: "Installing…" },
+  installed: { ja: "開始しました", en: "Started" },
+  configure: { ja: "インストール", en: "Install" },
   close: { ja: "閉じる", en: "Close" },
   summary: { ja: "概要", en: "Overview" },
   settings: { ja: "追加時の設定", en: "Setup" },
@@ -119,6 +125,36 @@ function listingSearchText(listing: TcsListing, locale: TcsLocale): string {
   ]
     .join(" ")
     .toLowerCase();
+}
+
+function listingIconComponent(
+  listing: TcsListing,
+): Component<{ readonly size?: number }> {
+  switch (listing.kind) {
+    case "app":
+      return AppWindow;
+    case "worker":
+      return Box;
+    case "storage":
+      return HardDrive;
+    case "site":
+      return Globe2;
+  }
+}
+
+function listingIcon(listing: TcsListing) {
+  const Icon = listingIconComponent(listing);
+  return (
+    <span
+      class="tcs-app-icon"
+      data-kind={listing.kind}
+      aria-hidden="true"
+    >
+      <Show when={listing.iconUrl} fallback={<Icon size={24} />}>
+        {(src) => <img src={src()} alt="" loading="lazy" />}
+      </Show>
+    </span>
+  );
 }
 
 const EMPTY: TcsAggregateState = {
@@ -443,19 +479,24 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
           <For each={displayed()}>
             {(listing) => (
               <div class="tcs-card">
-                <div class="tcs-card-head">
-                  <span class="tcs-badge">
-                    {pick(listing.badge, props.locale)}
-                  </span>
+                <div class="tcs-card-top">
+                  {listingIcon(listing)}
+                  <div class="tcs-card-main">
+                    <div class="tcs-card-head">
+                      <span class="tcs-badge">
+                        {pick(listing.badge, props.locale)}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      class="tcs-card-open"
+                      onClick={() => setSelected(listing)}
+                    >
+                      <h4>{pick(listing.name, props.locale)}</h4>
+                      <p>{pick(listing.description, props.locale)}</p>
+                    </button>
+                  </div>
                 </div>
-                <button
-                  type="button"
-                  class="tcs-card-open"
-                  onClick={() => setSelected(listing)}
-                >
-                  <h4>{pick(listing.name, props.locale)}</h4>
-                  <p>{pick(listing.description, props.locale)}</p>
-                </button>
                 <div class="tcs-card-meta">
                   <span class="tcs-tag">
                     {tcsProviderLabel(listing.provider)}
@@ -494,7 +535,15 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
           <div class="tcs-overlay" onClick={() => setSelected(null)}>
             <aside class="tcs-detail" onClick={(e) => e.stopPropagation()}>
               <header>
-                <h3>{pick(listing().name, props.locale)}</h3>
+                <div class="tcs-detail-title">
+                  {listingIcon(listing())}
+                  <div>
+                    <span class="tcs-badge">
+                      {pick(listing().badge, props.locale)}
+                    </span>
+                    <h3>{pick(listing().name, props.locale)}</h3>
+                  </div>
+                </div>
                 <button
                   type="button"
                   class="tcs-btn tcs-sm"
