@@ -2137,7 +2137,7 @@ export function providerInstallationAuditEvents(
 const RELEASE_ACTIVATION_SECRET_NAME_RE =
   /(?:^|[_-])(?:token|secret|password|passwd|credential|auth|bearer|session|cookie|key)(?:$|[_-])|(?:^|[_-])(?:database|db|postgres|postgresql|mysql|mariadb|redis|mongo|mongodb|libsql|sqlite)[_-]?(?:url|uri|dsn)(?:$|[_-])|(?:^|[_-])(?:dsn|connection[_-]?string)(?:$|[_-])/i;
 const RELEASE_ACTIVATION_SECRET_VALUE_RE =
-  /(?:token|secret|password|passwd|credential|auth|bearer|session|cookie|key|database[_-]?url|connection[_-]?string|\bdsn\b|(?:postgres(?:ql)?|mysql|mariadb|redis|mongo|mongodb|libsql|sqlite):\/\/|:\/\/[^/\s:@]+:[^@\s]+@)/i;
+  /(?:^|\s)(?:bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|\b(?:token|secret|password|passwd|credential|auth|session|cookie|key)\s*[:=]\s*[^&\s]{6,}|(?:postgres(?:ql)?|mysql|mariadb|redis|mongo|mongodb|libsql|sqlite):\/\/|:\/\/[^/\s:@]+:[^@\s]+@|\b(?:sk|rk|pk|sess|takpat|github_pat|gh[pousr]_|xox[baprs]-|AKIA|ASIA)[A-Za-z0-9._:-]{8,}/i;
 const RELEASE_ACTIVATION_ENV_NAME_RE = /^[A-Z_][A-Z0-9_]*$/u;
 const RELEASE_ACTIVATION_RESERVED_ENV_RE = /^(?:TAKOSUMI_|OPENTOFU_|TF_)/u;
 const RELEASE_ACTIVATION_RESERVED_ENV_NAMES = new Set(["PATH", "HOME", "PWD"]);
