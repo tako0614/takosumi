@@ -161,7 +161,7 @@ export const ja = {
   "status.deployment.destroyed": "削除済み",
   "status.connection.pending": "未確認",
   "status.connection.verified": "確認済み",
-  "status.connection.revoked": "無効化",
+  "status.connection.revoked": "削除済み",
   "status.connection.expired": "期限切れ",
   "status.connection.error": "エラー",
   "status.providerConnection.ready": "利用できます",

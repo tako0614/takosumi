@@ -85,6 +85,10 @@ export const connectionStatusLabel = (status?: string) =>
 
 /** ProviderConnection readiness status. */
 const PROVIDER_CONNECTION: Record<string, MessageKey> = {
+  pending: "status.connection.pending",
+  verified: "status.connection.verified",
+  revoked: "status.connection.revoked",
+  error: "status.connection.error",
   ready: "status.providerConnection.ready",
   needs_setup: "status.providerConnection.needs_setup",
   expired: "status.providerConnection.expired",
@@ -193,12 +197,16 @@ export function connectionTone(status: string | undefined): Tone {
 
 export function providerConnectionTone(status: string | undefined): Tone {
   switch (status) {
+    case "verified":
     case "ready":
       return "ok";
+    case "pending":
     case "needs_setup":
       return "warn";
+    case "error":
     case "blocked":
       return "danger";
+    case "revoked":
     case "expired":
       return "muted";
     default:
