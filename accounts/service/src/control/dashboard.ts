@@ -51,16 +51,13 @@ export async function handleDashboard(
   ) {
     if (method !== "GET") return methodNotAllowed("GET");
     const timings = serverTimingBucketForPath(ctx.url.pathname);
-    const response = await measureServerTiming(
-      timings,
-      "tk_dashboard",
-      () =>
-        dashboardBootstrap(
-          ctx.operations,
-          ctx.store,
-          ctx.session.subject,
-          ctx.url,
-        ),
+    const response = await measureServerTiming(timings, "tk_dashboard", () =>
+      dashboardBootstrap(
+        ctx.operations,
+        ctx.store,
+        ctx.session.subject,
+        ctx.url,
+      ),
     );
     return appendServerTiming(response, timings);
   }
@@ -71,16 +68,13 @@ export async function handleDashboard(
   ) {
     if (method !== "GET") return methodNotAllowed("GET");
     const timings = serverTimingBucketForPath(ctx.url.pathname);
-    const response = await measureServerTiming(
-      timings,
-      "tk_dashboard",
-      () =>
-        dashboardOverview(
-          ctx.operations,
-          ctx.store,
-          ctx.session.subject,
-          ctx.url,
-        ),
+    const response = await measureServerTiming(timings, "tk_dashboard", () =>
+      dashboardOverview(
+        ctx.operations,
+        ctx.store,
+        ctx.session.subject,
+        ctx.url,
+      ),
     );
     return appendServerTiming(response, timings);
   }
@@ -93,7 +87,8 @@ async function dashboardBootstrap(
   sessionSubject: string,
   url: URL,
 ): Promise<Response> {
-  const includeWorkspaces = url.searchParams.get("includeWorkspaces") !== "false";
+  const includeWorkspaces =
+    url.searchParams.get("includeWorkspaces") !== "false";
   const workspaces = includeWorkspaces
     ? await listWorkspacesForSession(operations, store, sessionSubject)
     : undefined;
@@ -227,15 +222,24 @@ async function listWorkspacesForSession(
   )) {
     byId.set(workspace.id, workspace);
   }
-  for (const ledgerWorkspace of await store.listWorkspacesForOwner(
+  const ledgerWorkspaces = await store.listWorkspacesForOwner(
     sessionSubject as TakosumiSubject,
-  )) {
-    if (byId.has(ledgerWorkspace.workspaceId)) continue;
+  );
+  const missingIds = uniqueMissingWorkspaceIds(
+    ledgerWorkspaces.map((workspace) => workspace.workspaceId),
+    byId,
+  );
+  if (missingIds.length > 0 && operations.spaces.listWorkspacesByIds) {
+    for (const workspace of await operations.spaces.listWorkspacesByIds(
+      missingIds,
+    )) {
+      byId.set(workspace.id, workspace);
+    }
+  }
+  for (const workspaceId of missingIds) {
+    if (byId.has(workspaceId)) continue;
     try {
-      byId.set(
-        ledgerWorkspace.workspaceId,
-        await operations.spaces.getWorkspace(ledgerWorkspace.workspaceId),
-      );
+      byId.set(workspaceId, await operations.spaces.getWorkspace(workspaceId));
     } catch {
       // The account ledger can briefly reference a Workspace before control
       // state catches up. Do not make the whole dashboard fail for that row.
@@ -245,6 +249,20 @@ async function listWorkspacesForSession(
     (a, b) =>
       a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
   );
+}
+
+function uniqueMissingWorkspaceIds(
+  ids: readonly string[],
+  existing: ReadonlyMap<string, Workspace>,
+): readonly string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const id of ids) {
+    if (seen.has(id) || existing.has(id)) continue;
+    seen.add(id);
+    result.push(id);
+  }
+  return result;
 }
 
 function isArchivedWorkspace(workspace: Workspace): boolean {

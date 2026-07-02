@@ -538,6 +538,7 @@ export interface OpenTofuDeploymentStore {
   // Space records (spec §4). The owner namespace Installations live under.
   putSpace(space: Space): Promise<Space>;
   getSpace(id: string): Promise<Space | undefined>;
+  listSpacesByIds(ids: readonly string[]): Promise<readonly Space[]>;
   getSpaceByHandle(handle: string): Promise<Space | undefined>;
   listSpaces(): Promise<readonly Space[]>;
   /**
@@ -1198,6 +1199,14 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
 
   getSpace(id: string): Promise<Space | undefined> {
     return Promise.resolve(this.#spaces.get(id));
+  }
+
+  listSpacesByIds(ids: readonly string[]): Promise<readonly Space[]> {
+    return Promise.resolve(
+      ids
+        .map((id) => this.#spaces.get(id))
+        .filter((row): row is Space => row !== undefined),
+    );
   }
 
   getSpaceByHandle(handle: string): Promise<Space | undefined> {

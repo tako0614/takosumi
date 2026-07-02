@@ -594,6 +594,19 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     );
   }
 
+  async listSpacesByIds(ids: readonly string[]): Promise<readonly Space[]> {
+    if (ids.length === 0) return [];
+    const rows = await this.#drizzleManyJson<Space>(
+      schema.spaces,
+      schema.spaces.recordJson,
+      { where: inArray(schema.spaces.id, [...new Set(ids)]) },
+    );
+    const byId = new Map(rows.map((row) => [row.id, row] as const));
+    return ids
+      .map((id) => byId.get(id))
+      .filter((row): row is Space => row !== undefined);
+  }
+
   async getSpaceByHandle(handle: string): Promise<Space | undefined> {
     return await this.#drizzleFirstJson<Space>(
       schema.spaces,

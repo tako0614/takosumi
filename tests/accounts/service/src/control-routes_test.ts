@@ -1046,6 +1046,75 @@ test("GET /api/v1/workspaces accepts a personal access token bearer", async () =
   );
 });
 
+test("GET /api/v1/workspaces batches ledger Workspace lookups", async () => {
+  const store = new InMemoryAccountsStore();
+  const token = "takpat_ledger_read";
+  const subject = "tsub_ledger";
+  seedPersonalAccessToken(store, { token, subject, scopes: ["read"] });
+  seedLedgerWorkspace(store, {
+    subject,
+    accountId: "acct_1",
+    workspaceId: "space_ledger_a",
+  });
+  seedLedgerWorkspace(store, {
+    subject,
+    accountId: "acct_2",
+    workspaceId: "space_ledger_b",
+  });
+  const operations = fakeOperations({
+    spaces: {
+      listWorkspacesByOwner: async (ownerUserId) => {
+        operations.calls.listWorkspacesByOwner = [ownerUserId];
+        return [];
+      },
+      listWorkspacesByIds: async (ids) => {
+        operations.calls.listWorkspacesByIds = [...ids];
+        return ids.map((id, index) => ({
+          id,
+          handle: id.replace("space_", ""),
+          displayName: id,
+          type: "personal" as const,
+          ownerUserId: subject,
+          createdAt: `2026-01-0${index + 1}T00:00:00Z`,
+          updatedAt: `2026-01-0${index + 1}T00:00:00Z`,
+        }));
+      },
+      getWorkspace: async (id) => {
+        operations.calls.getWorkspace = [
+          ...(operations.calls.getWorkspace ?? []),
+          id,
+        ];
+        throw new Error("unexpected single Workspace read");
+      },
+    },
+  });
+  const { request: req, url } = request("GET", "/api/v1/workspaces", {
+    authToken: token,
+  });
+
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+
+  expect(response?.status).toEqual(200);
+  const body = (await response!.json()) as {
+    spaces: Array<Record<string, unknown>>;
+  };
+  expect(body.spaces.map((workspace) => workspace.id)).toEqual([
+    "space_ledger_a",
+    "space_ledger_b",
+  ]);
+  expect(operations.calls.listWorkspacesByOwner).toEqual([subject]);
+  expect(operations.calls.listWorkspacesByIds).toEqual([
+    "space_ledger_a",
+    "space_ledger_b",
+  ]);
+  expect(operations.calls.getWorkspace).toBeUndefined();
+});
+
 test("mutation routes reject read-only personal access tokens", async () => {
   const store = new InMemoryAccountsStore();
   const token = "takpat_control_read_only";
@@ -1459,6 +1528,73 @@ test("GET /api/v1/dashboard/bootstrap returns session and Workspaces", async () 
   expect(body.session.subject).toEqual(subject);
   expect(body.workspaces.map((workspace) => workspace.id)).toEqual(["space_a"]);
   expect(operations.calls.listWorkspacesByOwner).toEqual([subject]);
+});
+
+test("GET /api/v1/dashboard/bootstrap batches ledger Workspace lookups", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie, subject } = seedSession(store, { subject: "tsub_ledger" });
+  seedLedgerWorkspace(store, {
+    subject,
+    accountId: "acct_1",
+    workspaceId: "space_ledger_a",
+  });
+  seedLedgerWorkspace(store, {
+    subject,
+    accountId: "acct_2",
+    workspaceId: "space_ledger_b",
+  });
+  const operations = fakeOperations({
+    spaces: {
+      listWorkspacesByOwner: async (ownerUserId) => {
+        operations.calls.listWorkspacesByOwner = [ownerUserId];
+        return [];
+      },
+      listWorkspacesByIds: async (ids) => {
+        operations.calls.listWorkspacesByIds = [...ids];
+        return ids.map((id, index) => ({
+          id,
+          handle: id.replace("space_", ""),
+          displayName: id,
+          type: "personal" as const,
+          ownerUserId: subject,
+          createdAt: `2026-01-0${index + 1}T00:00:00Z`,
+          updatedAt: `2026-01-0${index + 1}T00:00:00Z`,
+        }));
+      },
+      getWorkspace: async (id) => {
+        operations.calls.getWorkspace = [
+          ...(operations.calls.getWorkspace ?? []),
+          id,
+        ];
+        throw new Error("unexpected single Workspace read");
+      },
+    },
+  });
+  const { request: req, url } = request("GET", "/api/v1/dashboard/bootstrap", {
+    cookie,
+  });
+
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+
+  expect(response?.status).toEqual(200);
+  const body = (await response!.json()) as {
+    workspaces: Array<Record<string, unknown>>;
+  };
+  expect(body.workspaces.map((workspace) => workspace.id)).toEqual([
+    "space_ledger_a",
+    "space_ledger_b",
+  ]);
+  expect(operations.calls.listWorkspacesByOwner).toEqual([subject]);
+  expect(operations.calls.listWorkspacesByIds).toEqual([
+    "space_ledger_a",
+    "space_ledger_b",
+  ]);
+  expect(operations.calls.getWorkspace).toBeUndefined();
 });
 
 test("GET /api/v1/dashboard/bootstrap can skip Workspaces for fast session proof", async () => {

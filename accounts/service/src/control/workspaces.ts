@@ -77,10 +77,7 @@ import type {
   ProviderResolution,
   PublicProviderResolution,
 } from "takosumi-contract/provider-resolution";
-import type {
-  OutputShare,
-  OutputShareEntry,
-} from "takosumi-contract/outputs";
+import type { OutputShare, OutputShareEntry } from "takosumi-contract/outputs";
 import type { PublicDeployment } from "takosumi-contract/deployments";
 import type {
   BackupRecord,
@@ -214,7 +211,9 @@ export async function handleWorkspaces(
     if (!auth.ok) return auth.response;
     if (segments.length === 2) {
       if (method === "GET")
-        return json({ space: await operations.spaces.getWorkspace(workspaceId) });
+        return json({
+          space: await operations.spaces.getWorkspace(workspaceId),
+        });
       if (method === "PATCH")
         return await updateWorkspace(
           request,
@@ -364,11 +363,15 @@ export async function handleWorkspaces(
       if (method !== "GET") return methodNotAllowed("GET");
       const page = parseControlPageParams(url);
       if (!page.ok) return page.response;
-      return json(await operations.listWorkspaceUsage(workspaceId, page.params));
+      return json(
+        await operations.listWorkspaceUsage(workspaceId, page.params),
+      );
     }
     if (leaf === "credit-reservations" && segments.length === 3) {
       if (method !== "GET") return methodNotAllowed("GET");
-      return json(await operations.listWorkspaceCreditReservations(workspaceId));
+      return json(
+        await operations.listWorkspaceCreditReservations(workspaceId),
+      );
     }
     // NOTE: `credits/top-up` and `subscription/change` are intentionally NOT
     // on this session surface. Billing mode is operator-selected and credits
@@ -403,7 +406,6 @@ export async function handleWorkspaces(
   }
   return undefined;
 }
-
 
 /** 64 MiB cap on a single local Capsule upload archive. */
 const DEFAULT_UPLOAD_MAX_BYTES = 64 * 1024 * 1024;
@@ -446,15 +448,24 @@ async function listWorkspacesForSession(
   )) {
     byId.set(space.id, space);
   }
-  for (const ledgerWorkspace of await store.listWorkspacesForOwner(
+  const ledgerWorkspaces = await store.listWorkspacesForOwner(
     sessionSubject as TakosumiSubject,
-  )) {
-    if (byId.has(ledgerWorkspace.workspaceId)) continue;
+  );
+  const missingIds = uniqueMissingWorkspaceIds(
+    ledgerWorkspaces.map((workspace) => workspace.workspaceId),
+    byId,
+  );
+  if (missingIds.length > 0 && operations.spaces.listWorkspacesByIds) {
+    for (const space of await operations.spaces.listWorkspacesByIds(
+      missingIds,
+    )) {
+      byId.set(space.id, space);
+    }
+  }
+  for (const workspaceId of missingIds) {
+    if (byId.has(workspaceId)) continue;
     try {
-      byId.set(
-        ledgerWorkspace.workspaceId,
-        await operations.spaces.getWorkspace(ledgerWorkspace.workspaceId),
-      );
+      byId.set(workspaceId, await operations.spaces.getWorkspace(workspaceId));
     } catch {
       // The deploy-control Workspace may not exist (or is mid-creation); skip it.
     }
@@ -463,6 +474,20 @@ async function listWorkspacesForSession(
     (a, b) =>
       a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
   );
+}
+
+function uniqueMissingWorkspaceIds(
+  ids: readonly string[],
+  existing: ReadonlyMap<string, Workspace>,
+): readonly string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const id of ids) {
+    if (seen.has(id) || existing.has(id)) continue;
+    seen.add(id);
+    result.push(id);
+  }
+  return result;
 }
 
 function isArchivedWorkspace(space: Workspace): boolean {
@@ -552,7 +577,9 @@ async function updateWorkspace(
       operations.spaces.getWorkspace(workspaceId),
       listWorkspacesForSession(operations, store, sessionSubject),
     ]);
-    const activeWorkspaces = spaces.filter((space) => !isArchivedWorkspace(space));
+    const activeWorkspaces = spaces.filter(
+      (space) => !isArchivedWorkspace(space),
+    );
     if (!isArchivedWorkspace(target) && activeWorkspaces.length <= 1) {
       return errorJson(
         "failed_precondition",
@@ -940,7 +967,9 @@ function actorFor(caller: PublicWorkspaceMember): MembershipActor {
 
 // --- Capsules ---------------------------------------------------------
 
-function parseIncludeDestroyed(url: URL):
+function parseIncludeDestroyed(
+  url: URL,
+):
   | { readonly ok: true; readonly includeDestroyed: boolean }
   | { readonly ok: false; readonly response: Response } {
   const raw = url.searchParams.get("includeDestroyed");
@@ -969,11 +998,13 @@ async function listWorkspaceCapsules(
   if (!page.ok) return page.response;
   const includeDestroyed = parseIncludeDestroyed(url);
   if (!includeDestroyed.ok) return includeDestroyed.response;
-  const { items, nextCursor } =
-    await operations.installations.listCapsulesPage(workspaceId, {
+  const { items, nextCursor } = await operations.installations.listCapsulesPage(
+    workspaceId,
+    {
       ...page.params,
       includeDestroyed: includeDestroyed.includeDestroyed,
-    });
+    },
+  );
   return json({
     capsules: items.map(publicCapsule),
     ...(nextCursor !== undefined ? { nextCursor } : {}),
@@ -989,11 +1020,13 @@ async function listWorkspaceCurrentStateVersions(
   if (!page.ok) return page.response;
   const includeDestroyed = parseIncludeDestroyed(url);
   if (!includeDestroyed.ok) return includeDestroyed.response;
-  const { items, nextCursor } =
-    await operations.installations.listCapsulesPage(workspaceId, {
+  const { items, nextCursor } = await operations.installations.listCapsulesPage(
+    workspaceId,
+    {
       ...page.params,
       includeDestroyed: includeDestroyed.includeDestroyed,
-    });
+    },
+  );
   const deployments = operations.listDeploymentsByIds
     ? await listCurrentStateVersionsFromIdsRead(operations, workspaceId, items)
     : operations.listDeploymentsBySpace
@@ -1043,7 +1076,9 @@ async function listCurrentStateVersionsFromIdsRead(
   return currentDeploymentsInCapsuleOrder(capsules, byId);
 }
 
-function currentStateVersionIds(capsules: readonly Capsule[]): readonly string[] {
+function currentStateVersionIds(
+  capsules: readonly Capsule[],
+): readonly string[] {
   return capsules
     .map((capsule) => capsule.currentStateVersionId)
     .filter((id): id is string => id !== undefined && id.length > 0);
@@ -1173,7 +1208,10 @@ async function createCapsule(
   ) {
     const baseConfig =
       await operations.installations.getInstallConfig(installConfigId);
-    if (baseConfig.workspaceId !== undefined && baseConfig.workspaceId !== workspaceId) {
+    if (
+      baseConfig.workspaceId !== undefined &&
+      baseConfig.workspaceId !== workspaceId
+    ) {
       return errorJson(
         "invalid_request",
         "installConfigId is not available to the target Workspace.",
@@ -1410,5 +1448,8 @@ async function spacePlanUpdate(
   operations: ControlPlaneOperations,
   workspaceId: string,
 ): Promise<Response> {
-  return jsonStatus(await operations.runGroups.createWorkspaceUpdate(workspaceId), 201);
+  return jsonStatus(
+    await operations.runGroups.createWorkspaceUpdate(workspaceId),
+    201,
+  );
 }
