@@ -15,6 +15,7 @@ const RELEASE_ACTIVATION_KIND = "takosumi.operator.release-activation@v1";
 const DEFAULT_WORK_ROOT = join(tmpdir(), "takosumi-release-activator");
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 8797;
+const USAGE = "usage: operator-release-activator.ts <serve|run> ...";
 
 interface ReleaseActivationPayload {
   readonly kind: typeof RELEASE_ACTIVATION_KIND;
@@ -89,10 +90,7 @@ interface ReleaseActivationResponse {
 }
 
 type ReleaseActivationJobStatus =
-  | "pending"
-  | "running"
-  | "succeeded"
-  | "failed";
+  "pending" | "running" | "succeeded" | "failed";
 
 interface ReleaseActivationJob {
   readonly id: string;
@@ -665,6 +663,10 @@ function parseCommandEnvAllowlist(
 }
 
 async function main(argv = process.argv.slice(2)): Promise<void> {
+  if (argv[0] === "--help" || argv[0] === "-h") {
+    console.log(USAGE);
+    return;
+  }
   const { mode, values, flags } = parseCliArgs(argv);
   if (mode === "run") {
     const payloadPath = values.get("payload");
@@ -692,7 +694,7 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
     });
     return;
   }
-  throw new Error("usage: operator-release-activator.ts <serve|run> ...");
+  throw new Error(USAGE);
 }
 
 export function serveReleaseActivator(options: ServeOptions): void {

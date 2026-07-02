@@ -11,6 +11,23 @@ import {
   runReleaseActivation,
 } from "../../scripts/operator-release-activator.ts";
 
+test("operator release activator help exits successfully", () => {
+  const result = spawnSync(
+    "bun",
+    ["scripts/operator-release-activator.ts", "--help"],
+    {
+      cwd: new URL("../..", import.meta.url),
+      encoding: "utf8",
+    },
+  );
+
+  expect(result.status).toBe(0);
+  expect(result.stdout).toContain(
+    "usage: operator-release-activator.ts <serve|run> ...",
+  );
+  expect(result.stderr).toBe("");
+});
+
 test("operator release activator builds remote R2 object fetch args", () => {
   expect(
     buildWranglerR2GetArgs({
@@ -271,8 +288,7 @@ test("operator release activator accepts async jobs and exposes status", async (
   expect(accepted.statusUrl).toContain(`jobId=${accepted.jobId}`);
 
   let latest:
-    | { readonly status: string; readonly message?: string }
-    | undefined;
+    { readonly status: string; readonly message?: string } | undefined;
   for (let index = 0; index < 20; index += 1) {
     const status = await handler(
       new Request(accepted.statusUrl, {
