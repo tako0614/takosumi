@@ -22,7 +22,7 @@ export interface TakosumiWellKnownFeatures {
   readonly compat_s3: boolean;
   readonly compat_oci: boolean;
   readonly compat_cloudevents: boolean;
-  readonly compat_cloudflare_subset: boolean;
+  readonly compat_provider_cloudflare_workers: boolean;
 }
 
 export interface TakosumiWellKnownEndpoints {
@@ -66,7 +66,7 @@ export interface TakosumiCompatCapabilities {
   readonly s3: boolean;
   readonly oci: boolean;
   readonly cloudevents: boolean;
-  readonly cloudflare_subset: boolean;
+  readonly provider_cloudflare_workers: boolean;
 }
 
 export interface TakosumiIdentityCapabilities {
@@ -116,7 +116,7 @@ export function createTakosumiWellKnownDocument(
       compat_s3: capabilities.compat.s3,
       compat_oci: capabilities.compat.oci,
       compat_cloudevents: capabilities.compat.cloudevents,
-      compat_cloudflare_subset: capabilities.compat.cloudflare_subset,
+      compat_provider_cloudflare_workers: capabilities.compat.provider_cloudflare_workers,
     },
     endpoints: {
       api: `${trimTrailingSlash(options.origin)}/api`,
@@ -136,7 +136,7 @@ export function createTakosumiProductCapabilities(
     s3: false,
     oci: false,
     cloudevents: false,
-    cloudflare_subset: false,
+    provider_cloudflare_workers: false,
     ...(options.compat ?? {}),
   };
   return {

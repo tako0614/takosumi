@@ -65,8 +65,8 @@ export const TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_CONTROL_API =
   "takosumi.control.api";
 export const TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_AI_GATEWAY =
   "takosumi.ai.gateway";
-export const TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_CLOUDFLARE_COMPAT =
-  "takosumi.cloudflare.compat";
+export const TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_PROVIDER_COMPAT_CLOUDFLARE_WORKERS =
+  "takosumi.provider_compat.cloudflare_workers";
 export const TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOS_MCP_REGISTRY =
   "takos.mcp.registry";
 export const TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOS_STORAGE_WORKSPACE =

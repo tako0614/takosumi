@@ -61,8 +61,9 @@ Surface" and [docs/internal/final-plan.md](docs/internal/final-plan.md) for the 
 | `AuditEvent`         | Actor/action/target/result evidence.                                                                                            |
 | `Operator`           | The person or organization running Takosumi for their own users.                                                                |
 
-Legacy Space / Installation / Deployment / OutputSnapshot / `takos_provided` / Gateway-backed wording may still appear
-in migration notes or internal implementation names, but it is not the current public surface.
+Legacy Space / Installation / Deployment / OutputSnapshot / `takos_provided` /
+pre-v1 provider endpoint wording may still appear in migration notes or
+internal implementation names, but it is not the current public surface.
 
 Takosumi does not replace OpenTofu or Terraform providers. Existing providers run as-is; Takosumi records the reviewable
 and auditable control-plane layer around those operations. OSS Takosumi owns the Resource Shape API, Compatibility API

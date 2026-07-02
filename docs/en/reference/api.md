@@ -261,7 +261,7 @@ compat.cloudflare.workers.v1
   scoped Workers-compatible import/deploy path
 ```
 
-These are not full AWS or full Cloudflare compatibility claims. Scope is
+These are not full AWS API compatibility or full Cloudflare API compatibility claims. Scope is
 published through capabilities and a compatibility matrix.
 
 Takosumi Cloud-specific endpoint examples live in

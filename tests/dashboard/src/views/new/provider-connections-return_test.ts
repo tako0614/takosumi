@@ -325,6 +325,16 @@ describe("/new Provider Connections return context", () => {
     ).toHaveLength(1);
   });
 
+  test("/new clears add-flow busy state when a stale flow is aborted", () => {
+    expect(newAppViewSource).toContain(
+      "const currentFlow = isCurrentFlow(flow);",
+    );
+    expect(newAppViewSource).toContain(
+      "if (currentFlow || activeFlowAbort === undefined)",
+    );
+    expect(newAppViewSource).toContain("setBusy(false);");
+  });
+
   test("/new guards stale async add flows and validates service slugs before backend submit", () => {
     expect(newAppViewSource).toContain("type FlowRun");
     expect(newAppViewSource).toContain("const throwIfStaleFlow =");

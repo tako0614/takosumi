@@ -417,7 +417,7 @@ meter, and unit, then creates Stripe invoice items for those rollups. After a
 successful invoice item creation, the source usage reports are marked with
 `billingExportProvider: "stripe"`, the export id, the Stripe invoice item id,
 and the exported timestamp so the next sync does not charge the same reports
-again. For Cloudflare Workers compatibility, the billing name remains
+again. For Cloudflare Workers provider compatibility, the billing name remains
 `cloudflare.workers_script`; internal backend aliases must not be used as the
 billing name. Internal implementation hints such as `resourceMetadata.backend`
 must not appear in public usage or billing payloads.
@@ -625,8 +625,9 @@ The OSS repository contains:
 - dashboard Cloud endpoint client
 - smoke tests and provider E2E expectations
 
-The Cloudflare Compatibility backend and managed resource materialization are
-closed Takosumi Cloud handlers mounted in-process by the official platform worker.
-If AI Gateway / Cloudflare Compatibility handlers are not configured,
+The Cloudflare Workers provider compatibility profile backend and managed
+resource materialization are closed Takosumi Cloud handlers mounted in-process by
+the official platform worker.
+If AI Gateway / provider compatibility profile handlers are not configured,
 `/gateway/ai/v1/*` and `/compat/cloudflare/client/v4/*` intentionally return
 not found from the platform worker.

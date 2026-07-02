@@ -1329,7 +1329,7 @@ test("platform worker exposes product discovery before accounts handler", async 
     "Stack",
   ]);
   expect(capabilitiesBody.adapters.cloudflare).toBe(false);
-  expect(capabilitiesBody.compat.cloudflare_subset).toBe(false);
+  expect(capabilitiesBody.compat.provider_cloudflare_workers).toBe(false);
 });
 
 test("platform worker product discovery exposes Cloud endpoint capabilities without claiming Resource Shape API", async () => {
@@ -1396,7 +1396,7 @@ test("platform worker product discovery exposes Cloud endpoint capabilities with
   ]);
   expect(body.adapters.cloudflare).toBe(false);
   expect(body.adapters.takosumi_native).toBe(false);
-  expect(body.compat.cloudflare_subset).toBe(true);
+  expect(body.compat.provider_cloudflare_workers).toBe(true);
   expect(body.compat.s3).toBe(true);
   const discovery = await worker.fetch(
     new Request(`https://app.takosumi.com${TAKOSUMI_WELL_KNOWN_PATH}`),

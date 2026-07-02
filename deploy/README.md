@@ -5,8 +5,10 @@ dashboard/account-plane entry points, and reference operator deployment profiles
 The public service surface is centered on Workspace, Project, Capsule, Source,
 ProviderConnection, CredentialRecipe, ProviderBinding, Secret, Run,
 StateVersion, Output, Runner, AuditEvent, and Operator. OSS Takosumi runs
-existing OpenTofu/Terraform providers as-is; compatibility gateways and managed
-resources belong only to Takosumi Cloud.
+existing OpenTofu/Terraform providers as-is. Compatibility API framework and
+scoped provider compatibility profiles are Takosumi capabilities; official
+managed resources, billing enforcement, and operated backend capacity belong to
+Takosumi for Operator / Takosumi Cloud.
 
 The directories under `deploy/` are therefore **build-target templates and
 substrate runbooks**, not a separate public product surface. The canonical

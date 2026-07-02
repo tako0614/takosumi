@@ -1,10 +1,11 @@
-# Cloud Compatibility Import Path Note
+# Provider Compatibility Profile Import Path Note
 
 Last updated: 2026-06-19
 
 This document is intentionally not a general OSS Compatibility API framework
-spec. It describes the Cloud-hosted import/deploy route family for
-`compat.cloudflare.workers.v1`.
+spec. It describes how the `compat.cloudflare.workers.v1` provider
+compatibility profile is mounted by Takosumi Cloud and consumed by OpenTofu
+providers through a normal `base_url`.
 
 Takosumi OSS may provide the Compatibility API framework, scoped compatibility
 profiles such as `compat.s3.v1`, and adapter contracts. It does not provide the
@@ -32,9 +33,8 @@ The following belong to closed Takosumi Cloud:
 
 ```text
 Takosumi Cloud EdgeWorker runtime
-Cloudflare-shaped Workers import endpoint
+Cloudflare Workers provider compatibility profile
 Takosumi AI Gateway
-Cloudflare provider base_url endpoint
 OpenAI-compatible AI endpoint
 short-lived Cloud run keys
 virtual account/resource IDs
@@ -44,7 +44,7 @@ official billing/quota/usage/support
 ```
 
 If Takosumi Cloud implements these features, their production architecture,
-tests, deployment config, secrets, and provider-compatible endpoint behavior
+tests, deployment config, secrets, and provider-compatible profile behavior
 must live in the closed Cloud implementation, not in the OSS repo.
 
 The OSS platform worker may reserve public route seams through the Cloud
@@ -60,8 +60,8 @@ handlers in-process:
 ```text
 /compat/cloudflare/client/v4/*
   -> cloud_extensions registry
-  -> TAKOSUMI_CLOUD_CLOUDFLARE_COMPAT handler key
-  -> in-process Cloudflare compatibility handler
+  -> TAKOSUMI_CLOUD_PROVIDER_COMPAT_CLOUDFLARE_WORKERS handler key
+  -> in-process Cloudflare Workers provider compatibility profile handler
 
 /gateway/ai/v1/*
   -> cloud_extensions registry
@@ -80,12 +80,12 @@ handlers in-process:
 
 If no handler is mounted, the route returns `404 { "error": "not found" }`.
 Adding `TAKOSUMI_AI_GATEWAY_PROFILES` or provider-looking env vars to the OSS
-platform worker must not activate a gateway by itself.
+platform worker must not activate a provider compatibility profile by itself.
 
 The `/readyz` baseline does not require Cloud extension handlers. GA
-evidence for AI Gateway or Cloudflare compatibility must prove the corresponding
-route is mounted and reaches the closed Cloud handler inside the platform
-wrapper.
+evidence for AI Gateway or the Cloudflare Workers provider compatibility
+profile must prove the corresponding route is mounted and reaches the closed
+Cloud handler inside the platform wrapper.
 
 The current Cloud extension contract stops here: `compat.cloudflare.workers.v1`
 and Takosumi AI Gateway. Other Cloud extension routes require a new
@@ -98,8 +98,8 @@ If Takosumi Cloud later wants another hosted extension endpoint, it requires a
 new Operator/Cloud product spec and implementation. It must not be inferred from
 the OSS route seam or from adding env vars to the platform worker.
 
-The Cloudflare-shaped endpoint is an import/deploy path a Cloud Provider
-Connection can put into the Cloudflare provider `base_url`:
+The Cloudflare Workers provider compatibility endpoint is an import/deploy path
+a Cloud Provider Connection can put into the Cloudflare provider `base_url`:
 
 ```hcl
 provider "cloudflare" {

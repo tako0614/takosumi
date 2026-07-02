@@ -406,7 +406,7 @@ for Redis, Postgres, SQS, S3, OCI, or other standards. Existing providers and
 standard endpoints stay the default unless a Takosumi-managed import,
 projection, policy, or metering surface is actually needed.
 
-Do not claim complete AWS or Cloudflare compatibility. Specific surfaces are
+Do not claim complete AWS API or Cloudflare API compatibility. Specific surfaces are
 enabled or disabled by `/v1/capabilities`.
 
 For example, ordinary S3/R2/GCS object storage can use existing providers while

@@ -40,7 +40,7 @@ test("Takosumi product capabilities separate framework from enabled profiles", (
   assert.equal(capabilities.adapters.opentofu, true);
   assert.equal(capabilities.compat.framework, true);
   assert.equal(capabilities.compat.s3, true);
-  assert.equal(capabilities.compat.cloudflare_subset, false);
+  assert.equal(capabilities.compat.provider_cloudflare_workers, false);
   assert.equal(capabilities.commercial.payment_enforcement, false);
 });
 

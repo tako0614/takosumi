@@ -420,7 +420,7 @@ test("opentofu_module install leaves generic-env provider credentials in runner 
   expect(mainTf).not.toContain("  api_token = var.cloudflare_main_api_token");
 });
 
-// Cloud-only Gateway provider materialization is now structurally impossible in
+// Cloud-only provider endpoint materialization is now structurally impossible in
 // OSS: the credential record's `materialization` is `oauth | secret` at the
 // contract layer, and the run-env resolver fails closed on any non-{oauth,secret}
 // materialization (covered by run_env_resolver_test). There is no install-time

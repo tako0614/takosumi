@@ -98,10 +98,9 @@ export interface RootInstallationProviderEnvBinding {
    */
   readonly credentialDelivery?: "provider_env" | "generated_root_variable";
   /**
-   * Optional provider API base URL. The control plane sets this for a managed
-   * (platform-hosted) cloudflare run so the provider talks to the Takosumi
-   * Gateway provider endpoint, which materializes Workers Script resources on
-   * the Takosumi Cloud internal runtime instead of api.cloudflare.com directly.
+   * Optional provider API base URL. A composed operator can set this for a
+   * managed Cloudflare Workers provider compatibility profile so the Cloudflare
+   * provider uses an operator-owned `base_url` instead of api.cloudflare.com.
    * Rendered as `base_url = "…"` in the provider block. A capsule cannot
    * override it: the generated root passes providers in, so a capsule's own
    * provider block fails tofu plan (fail-closed redirect).

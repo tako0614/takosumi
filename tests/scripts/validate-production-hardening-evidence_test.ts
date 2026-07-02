@@ -375,7 +375,7 @@ function validManifest(): any {
           "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
         live: true,
         summary:
-          "Production Provider Connection evidence covers guided recipes plus generic env, with no Cloud-only Gateway or secret projection.",
+          "Production Provider Connection evidence covers guided recipes plus generic env, with no Cloud-only provider endpoint or secret projection.",
         providers: [
           {
             id: "aws",

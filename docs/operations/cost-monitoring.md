@@ -172,7 +172,7 @@ Operator showback / basic quota validation は `showback` audit evidence を記�
 Payment/credit enforcement is Takosumi Cloud-only and must not be presented as an OSS/operator feature. Takosumi cost
 attribution dashboard artifact と validator が本 runbook の metric contract / dashboard reference を検証する状態が必要です。
 Cloud-only compat managed-resource usage は
-Takosumi Cloud private `smoke:cloud-extensions --require-cloudflare-compat-usage-ledger` で
+Takosumi Cloud private `smoke:cloud-extensions --require-provider-compat-cloudflare-workers-usage-ledger` で
 `resource_meter` / `gateway_compute` または `gateway_storage_gb_hour` が
 対象 Workspace ledger に増えたことを private evidence として残します。
 Platform opening evidence では

@@ -257,7 +257,7 @@ function platformDiscoveryOptions(
     adapters,
     compat: {
       s3: extensionCapabilities.s3Compat,
-      cloudflare_subset: extensionCapabilities.cloudflareCompat,
+      provider_cloudflare_workers: extensionCapabilities.providerCompatCloudflareWorkers,
     },
     endpoints: {
       ...(extensionCapabilities.s3Endpoint
@@ -399,7 +399,7 @@ export async function handlePlatformResourceShapeApiRequest(
 
 function platformCloudExtensionCapabilities(env: CloudflareWorkerEnv): {
   readonly aiGateway: boolean;
-  readonly cloudflareCompat: boolean;
+  readonly providerCompatCloudflareWorkers: boolean;
   readonly s3Compat: boolean;
   readonly s3Endpoint?: string;
   readonly cloudManagedResources: boolean;
@@ -434,7 +434,7 @@ function platformCloudExtensionCapabilities(env: CloudflareWorkerEnv): {
       route.capabilities.has("openai-compatible") ||
       route.basePath.startsWith("/gateway/ai/"),
   );
-  const cloudflareCompat = routeSignals.some(
+  const providerCompatCloudflareWorkers = routeSignals.some(
     (route) =>
       route.kind === "provider_compat" ||
       route.provider === "cloudflare" ||
@@ -451,7 +451,7 @@ function platformCloudExtensionCapabilities(env: CloudflareWorkerEnv): {
   );
   return {
     aiGateway,
-    cloudflareCompat,
+    providerCompatCloudflareWorkers,
     s3Compat: Boolean(s3Route),
     ...(s3Route ? { s3Endpoint: s3Route.basePath } : {}),
     cloudManagedResources,

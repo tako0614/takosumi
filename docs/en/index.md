@@ -119,7 +119,7 @@ roadmap to rebuild standard APIs. `compat.s3.v1` is only needed when an
 operator intentionally exposes object-storage data/control compatibility;
 ordinary S3/R2/GCS use should go through existing providers or standard
 endpoints. They are scoped and versioned subsets, not a claim of full AWS or
-full Cloudflare compatibility.
+full Cloudflare Workers provider compatibility.
 
 The public API boundary is documented in [Takosumi API](./reference/api.md).
 Resource Shape vocabulary is documented in the [Model reference](./reference/model.md).

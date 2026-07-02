@@ -607,7 +607,7 @@ function processSchemas(): Record<string, Record<string, unknown>> {
         "compat_s3",
         "compat_oci",
         "compat_cloudevents",
-        "compat_cloudflare_subset",
+        "compat_provider_cloudflare_workers",
       ],
       properties: {
         stacks: { type: "boolean" },
@@ -621,7 +621,7 @@ function processSchemas(): Record<string, Record<string, unknown>> {
         compat_s3: { type: "boolean" },
         compat_oci: { type: "boolean" },
         compat_cloudevents: { type: "boolean" },
-        compat_cloudflare_subset: { type: "boolean" },
+        compat_provider_cloudflare_workers: { type: "boolean" },
       },
       additionalProperties: false,
     },
@@ -700,13 +700,13 @@ function processSchemas(): Record<string, Record<string, unknown>> {
     },
     TakosumiCompatCapabilities: {
       type: "object",
-      required: ["framework", "s3", "oci", "cloudevents", "cloudflare_subset"],
+      required: ["framework", "s3", "oci", "cloudevents", "provider_cloudflare_workers"],
       properties: {
         framework: { type: "boolean" },
         s3: { type: "boolean" },
         oci: { type: "boolean" },
         cloudevents: { type: "boolean" },
-        cloudflare_subset: { type: "boolean" },
+        provider_cloudflare_workers: { type: "boolean" },
       },
       additionalProperties: false,
     },

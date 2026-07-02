@@ -1931,8 +1931,11 @@ function Inner() {
       else if (stepSync() === "running") setStepSync("error");
       else if (stepSource() === "running") setStepSource("error");
     } finally {
-      if (isCurrentFlow(flow)) {
+      const currentFlow = isCurrentFlow(flow);
+      if (currentFlow) {
         finishAbortableFlow(flow);
+      }
+      if (currentFlow || activeFlowAbort === undefined) {
         clearSourceSyncSlowTimer();
         setBusy(false);
       }

@@ -40,8 +40,9 @@ Takosumi Cloud Resources =
 Edge JS app は `EdgeWorker` resource として動きます。Takosumi Cloud ではこれを
 Cloudflare Workers for Platforms を基盤にした runtime で実装できます。これは
 Cloud が提供する resource の一つであり、ContainerService、Object Storage、KV、
-Database、Queue、AI とは別の service form です。Cloudflare compatibility
-entrypoints は same platform worker に合流し、not deployed as separate Workers です。
+Database、Queue、AI とは別の service form です。Cloudflare Workers provider
+compatibility profile の entrypoints は same platform worker に合流し、not
+deployed as separate Workers です。
 
 Durable workflow は、利用可能な場合に Dynamic Workers と
 `@cloudflare/dynamic-workflows` を使います。operator/internal jobs は normal
@@ -149,9 +150,10 @@ Dashboard では次を確認できます。
 
 ## Compatibility Profiles
 
-Takosumi Cloud は profile ごとに互換範囲を分けます。Cloudflare-compatible API は
-`compat.cloudflare.workers.v1` の import / deploy path であり、Cloudflare API
-全体の互換ではありません。AI Gateway は別の OpenAI-compatible profile です。
+Takosumi Cloud は profile ごとに互換範囲を分けます。Cloudflare-compatible API
+surface は `compat.cloudflare.workers.v1` の provider compatibility profile で
+あり、Cloudflare API 全体の互換ではありません。AI Gateway は別の
+OpenAI-compatible profile です。
 
 ### `compat.cloudflare.workers.v1`
 
@@ -172,9 +174,9 @@ Takosumi Cloud は profile ごとに互換範囲を分けます。Cloudflare-com
 | Stable | `/gateway/ai/v1/chat/completions` |
 | Stable | `/gateway/ai/v1/embeddings`       |
 
-Cloudflare-compatible API は import / deploy path です。既存の Cloudflare Workers
-manifest を Takosumi Cloud の `EdgeWorker` と managed bindings に向けたいときに
-使います。
+Cloudflare Workers provider compatibility profile は import / deploy path です。
+既存の Cloudflare Workers manifest を Takosumi Cloud の `EdgeWorker` と managed
+bindings に向けたいときに使います。
 
 ```hcl
 provider "cloudflare" {

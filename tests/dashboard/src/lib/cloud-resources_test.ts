@@ -2,8 +2,8 @@ import { describe, expect, test } from "bun:test";
 import {
   activeCloudApiTokens,
   aiGatewayRoute,
-  cloudflareCompatRoute,
-  getCloudflareCompatInventory,
+  providerCompatCloudflareWorkersRoute,
+  getProviderCompatCloudflareWorkersInventory,
   s3CompatibleRoute,
   type CloudExtensionCatalog,
 } from "../../../../dashboard/src/lib/cloud-resources.ts";
@@ -66,7 +66,7 @@ describe("dashboard cloud resources route selection", () => {
     };
 
     expect(aiGatewayRoute(catalog)?.basePath).toBe("/gateway/ai/v1");
-    expect(cloudflareCompatRoute(catalog)?.basePath).toBe(
+    expect(providerCompatCloudflareWorkersRoute(catalog)?.basePath).toBe(
       "/compat/cloudflare/client/v4",
     );
     expect(s3CompatibleRoute(catalog)?.basePath).toBe("/compat/s3/v1");
@@ -98,10 +98,10 @@ describe("dashboard cloud resources route selection", () => {
     };
 
     expect(aiGatewayRoute(catalog)?.basePath).toBe("/custom/ai");
-    expect(cloudflareCompatRoute(catalog)?.basePath).toBe("/custom/cloudflare");
+    expect(providerCompatCloudflareWorkersRoute(catalog)?.basePath).toBe("/custom/cloudflare");
   });
 
-  test("scopes Cloudflare compat inventory to the selected workspace", async () => {
+  test("scopes Cloudflare Workers provider compatibility inventory to the selected workspace", async () => {
     const originalFetch = globalThis.fetch;
     const requests: { readonly url: string; readonly headers: Headers }[] = [];
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -119,7 +119,7 @@ describe("dashboard cloud resources route selection", () => {
       });
     }) as typeof fetch;
     try {
-      await getCloudflareCompatInventory(
+      await getProviderCompatCloudflareWorkersInventory(
         {
           basePath: "/compat/cloudflare/client/v4",
           configured: true,

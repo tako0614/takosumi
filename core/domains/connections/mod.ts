@@ -4,9 +4,9 @@
  * After the credential-model collapse a Provider Connection IS the stored
  * credential record (the former `Connection` substrate + `ProviderEnv` resolver
  * projection folded onto one row). OpenTofu provider execution is bound through
- * these rows; the vault opens the sealed material at run time. Takosumi Cloud
- * compatibility gateways and managed-resource backends are closed Cloud
- * extensions, not OSS resolver materializations.
+ * these rows; the vault opens the sealed material at run time. Official hosted
+ * provider compatibility profile handlers and managed-resource backends are
+ * Operator/Cloud extensions, not OSS resolver materializations.
  */
 import type {
   Connection,
