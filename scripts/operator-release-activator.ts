@@ -692,6 +692,9 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
         values.get("port") ?? process.env.TAKOSUMI_RELEASE_PORT ?? DEFAULT_PORT,
       ),
     });
+    await new Promise(() => {
+      // Keep the operator HTTP activator process alive after Bun.serve returns.
+    });
     return;
   }
   throw new Error(USAGE);
