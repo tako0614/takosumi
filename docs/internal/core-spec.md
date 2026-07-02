@@ -153,6 +153,11 @@ user-level progress phases
 App/container/bundle build optimization belongs in the app repo, CI/release
 pipeline, registry, provider, or OpenTofu module inputs.
 
+For hosted/operator materializers, prebuilt app/container artifacts should be
+required whenever the activation environment would otherwise build containers or
+bundles on operator capacity. Runner-local source builds remain a compatibility
+path only when explicitly selected by the OpenTofu module.
+
 ## Provider Connections
 
 A ProviderConnection stores credential material or a reference to credential

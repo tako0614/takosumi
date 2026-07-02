@@ -193,6 +193,13 @@ digest during plan/apply. Takosumi may store or pass those values as Capsule
 configuration, but it does not fetch, build, rewrite, or select application
 artifacts outside the declared OpenTofu module.
 
+Hosted/operator materializers should fail closed when the required CI-produced
+artifact input is absent. A self-hosted runner may still build from the reviewed
+Git source snapshot when the app's OpenTofu module explicitly chooses that
+path, but Takosumi Cloud should not spend first-install time or operator
+capacity creating container artifacts that belong to the app's Git CI/release
+pipeline.
+
 App-owned post-apply hooks are allowed only as a narrow compatibility bridge for
 provider gaps or app initialization that is not a cloud resource itself, such as
 database migrations. They are not the primary deploy model and should shrink as
