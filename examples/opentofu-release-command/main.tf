@@ -25,6 +25,12 @@ variable "release_executor" {
   }
 }
 
+variable "release_should_fail" {
+  type        = bool
+  description = "Set true to emit an intentionally failing post-apply command for release activation failure surfacing smoke tests."
+  default     = false
+}
+
 output "worker_name" {
   description = "Stable string output used by the generic Capsule smoke."
   value       = var.name
@@ -42,7 +48,7 @@ output "takosumi_release" {
       {
         id                = "activate"
         executor          = var.release_executor
-        command           = ["bun", "-e", "const outputs = JSON.parse(Bun.env.TAKOSUMI_OUTPUTS_JSON || '{}'); const context = JSON.parse(Bun.env.TAKOSUMI_RELEASE_CONTEXT_JSON || '{}'); if (!outputs.url || context.outputs?.url !== outputs.url || context.kind !== 'takosumi.release-context@v1') process.exit(12); console.log('activated ' + context.outputs.url);"]
+        command           = var.release_should_fail ? ["bun", "-e", "console.error('intentional release activation failure'); process.exit(12);"] : ["bun", "-e", "const outputs = JSON.parse(Bun.env.TAKOSUMI_OUTPUTS_JSON || '{}'); const context = JSON.parse(Bun.env.TAKOSUMI_RELEASE_CONTEXT_JSON || '{}'); if (!outputs.url || context.outputs?.url !== outputs.url || context.kind !== 'takosumi.release-context@v1') process.exit(12); console.log('activated ' + context.outputs.url);"]
         working_directory = "."
       },
     ]

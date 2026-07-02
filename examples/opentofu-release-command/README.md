@@ -16,6 +16,10 @@ Set `release_executor = "operator"` when proving the hosted/operator release
 activator webhook. The OpenTofu shape stays the same; only the executor that
 runs the opaque post-apply argv changes.
 
+Set `release_should_fail = true` only for evidence drills that prove failed
+release activation is surfaced without rolling back the committed OpenTofu
+apply ledger.
+
 Local check:
 
 ```bash
