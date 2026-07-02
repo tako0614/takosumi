@@ -24,6 +24,12 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
     },
     {
       method: "GET",
+      path: "/api/v1/dashboard/bootstrap",
+      summary: "Read the dashboard session bootstrap projection",
+      auth: "account-session",
+    },
+    {
+      method: "GET",
       path: "/api/v1/dashboard/overview",
       summary: "Read the dashboard Workspace overview projection",
       auth: "account-session",
