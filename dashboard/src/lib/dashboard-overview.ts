@@ -46,7 +46,9 @@ export async function getDashboardOverviewCached(
   const currentInflight = inflight.get(key);
   if (!options.force && currentInflight) return currentInflight;
 
-  const request = getDashboardOverview(workspaceId)
+  const request = getDashboardOverview(workspaceId, {
+    includeWorkspaces: workspaceId === undefined,
+  })
     .then((overview) => {
       cache.set(key, { overview, cachedAt: Date.now() });
       primeDerivedCaches(overview);
@@ -60,7 +62,9 @@ export async function getDashboardOverviewCached(
 }
 
 function primeDerivedCaches(overview: DashboardOverview): void {
-  primeWorkspaceListCache(overview.workspaces);
+  if (overview.workspaces.length > 0) {
+    primeWorkspaceListCache(overview.workspaces);
+  }
   const workspaceId = overview.workspace?.id;
   if (!workspaceId) return;
   primeCapsuleListCache(workspaceId, overview.capsules, {

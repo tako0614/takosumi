@@ -1405,6 +1405,36 @@ test("GET /api/v1/dashboard/overview batches launcher data for one Workspace", a
   expect(operations.calls.listDeploymentsByIds).toEqual(["dep_1"]);
 });
 
+test("GET /api/v1/dashboard/overview can skip Workspace list when Workspace is explicit", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const { request: req, url } = request(
+    "GET",
+    "/api/v1/dashboard/overview?workspaceId=space_a&includeWorkspaces=false",
+    { cookie },
+  );
+
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+
+  expect(response?.status).toEqual(200);
+  const body = (await response!.json()) as {
+    workspaces: Array<Record<string, unknown>>;
+    workspace: Record<string, unknown>;
+    capsules: Array<Record<string, unknown>>;
+  };
+  expect(body.workspaces).toEqual([]);
+  expect(body.workspace.id).toEqual("space_a");
+  expect(body.capsules.map((capsule) => capsule.id)).toEqual(["inst_1"]);
+  expect(operations.calls.listWorkspacesByOwner).toBeUndefined();
+  expect(operations.calls.getWorkspace).toEqual(["space_a"]);
+});
+
 test("GET /api/v1/dashboard/bootstrap returns session and Workspaces", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie, subject } = seedSession(store);

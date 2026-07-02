@@ -18,6 +18,7 @@ import {
 import {
   clearWorkspaceListCache,
   listWorkspacesCached,
+  primeWorkspaceListCache,
 } from "../../../../dashboard/src/lib/workspace-list.ts";
 
 const realFetch = globalThis.fetch;
@@ -115,7 +116,9 @@ describe("getDashboardOverviewCached", () => {
     ]);
 
     expect(a).toEqual(b);
-    expect(calls()).toEqual(["/api/v1/dashboard/overview?workspaceId=space_1"]);
+    expect(calls()).toEqual([
+      "/api/v1/dashboard/overview?workspaceId=space_1&includeWorkspaces=false",
+    ]);
 
     expect((await listWorkspacesCached())[0]?.id).toBe("space_1");
     expect(
@@ -136,5 +139,50 @@ describe("getDashboardOverviewCached", () => {
       "cfg_yurucommu",
     );
     expect(calls()).toHaveLength(1);
+  });
+
+  test("does not clear the primed Workspace list when overview omits Workspaces", async () => {
+    primeWorkspaceListCache([
+      {
+        id: "space_1",
+        handle: "prod",
+        displayName: "Production",
+        type: "personal",
+        ownerUserId: "user_1",
+        createdAt: "2026-07-02T00:00:00.000Z",
+        updatedAt: "2026-07-02T00:00:00.000Z",
+      },
+    ]);
+    const calls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const path = typeof input === "string" ? input : String(input);
+      calls.push(path);
+      return new Response(
+        JSON.stringify({
+          workspaces: [],
+          workspace: {
+            id: "space_1",
+            handle: "prod",
+            displayName: "Production",
+            type: "personal",
+            ownerUserId: "user_1",
+            createdAt: "2026-07-02T00:00:00.000Z",
+            updatedAt: "2026-07-02T00:00:00.000Z",
+          },
+          capsules: [],
+          currentStateVersions: [],
+          activity: [],
+          installConfigs: [],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+
+    await getDashboardOverviewCached("space_1");
+
+    expect((await listWorkspacesCached())[0]?.id).toBe("space_1");
+    expect(calls).toEqual([
+      "/api/v1/dashboard/overview?workspaceId=space_1&includeWorkspaces=false",
+    ]);
   });
 });

@@ -93,13 +93,17 @@ async function dashboardOverview(
   sessionSubject: string,
   url: URL,
 ): Promise<Response> {
-  const workspaces = await listWorkspacesForSession(
-    operations,
-    store,
-    sessionSubject,
+  const requestedWorkspaceId = stringValue(
+    url.searchParams.get("workspaceId") ?? undefined,
   );
+  const includeWorkspaces =
+    url.searchParams.get("includeWorkspaces") !== "false" ||
+    requestedWorkspaceId === undefined;
+  const workspaces = includeWorkspaces
+    ? await listWorkspacesForSession(operations, store, sessionSubject)
+    : [];
   const selectedWorkspaceId =
-    stringValue(url.searchParams.get("workspaceId") ?? undefined) ??
+    requestedWorkspaceId ??
     workspaces.find((workspace) => !isArchivedWorkspace(workspace))?.id;
 
   if (!selectedWorkspaceId) {
