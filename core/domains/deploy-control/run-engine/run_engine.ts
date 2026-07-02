@@ -269,6 +269,18 @@ function genericCapsuleOutputAllowlist(
   return allowlist;
 }
 
+function workspaceOutputsWithReleaseDescriptor(
+  workspaceOutputs: Readonly<Record<string, JsonValue>>,
+  outputs: OpenTofuApplyResult["outputs"],
+): Readonly<Record<string, JsonValue>> {
+  const descriptor = releaseActivationOutputs(outputs).takosumi_release;
+  if (descriptor === undefined) return workspaceOutputs;
+  return {
+    ...workspaceOutputs,
+    takosumi_release: descriptor,
+  };
+}
+
 /** Shared dependencies the controller injects into its single RunEngine. */
 export interface RunEngineDependencies {
   readonly store: OpenTofuDeploymentStore;
@@ -2753,7 +2765,7 @@ export class RunEngine {
     readonly stateGeneration: number;
     readonly now: number;
   }): Promise<OutputSnapshot> {
-    const spaceOutputs = input.outputAllowlist
+    const projectedWorkspaceOutputs = input.outputAllowlist
       ? projectOutputAllowlistSpaceOutputs(
           input.outputAllowlist,
           input.result.outputs,
@@ -2761,11 +2773,15 @@ export class RunEngine {
       : Object.fromEntries(
           input.publicOutputs.map((output) => [output.name, output.value]),
         );
+    const workspaceOutputs = workspaceOutputsWithReleaseDescriptor(
+      projectedWorkspaceOutputs,
+      input.result.outputs,
+    );
     const publicOutputs = Object.fromEntries(
       input.publicOutputs.map((output) => [output.name, output.value]),
     );
     const outputDigest = await stableJsonDigest({
-      spaceOutputs,
+      spaceOutputs: workspaceOutputs,
       publicOutputs,
     });
     const snapshot: OutputSnapshot = {
@@ -2783,8 +2799,8 @@ export class RunEngine {
           runId: input.applyRun.id,
         }),
       publicOutputs,
-      workspaceOutputs: spaceOutputs,
-      spaceOutputs,
+      workspaceOutputs,
+      spaceOutputs: workspaceOutputs,
       outputDigest,
       createdAt: new Date(input.now).toISOString(),
     };
@@ -5190,9 +5206,12 @@ export class RunEngine {
       deployment.outputSnapshotId,
     );
     if (!outputSnapshot) return;
-    const nonSensitiveOutputs = jsonRecordFromPublicOutputs(
-      deployment.outputsPublic,
-    );
+    const nonSensitiveOutputs = {
+      ...jsonRecordFromPublicOutputs(deployment.outputsPublic),
+      ...jsonRecordFromPublicOutputs(
+        outputSnapshot.workspaceOutputs as Readonly<Record<string, unknown>>,
+      ),
+    };
     const commands = releaseActivationCommandsFromPublicOutputs(
       nonSensitiveOutputs,
       "pre_destroy",

@@ -2804,15 +2804,7 @@ test("pre-destroy release commands run before OpenTofu destroy", async () => {
     events.push("destroy");
     return originalDestroy(job);
   };
-  await seedRunnableInstallationModel(store, {
-    environment: "preview",
-    installConfig: {
-      outputAllowlist: {
-        launch_url: { from: "launch_url", type: "url" },
-        takosumi_release: { from: "takosumi_release", type: "json" },
-      },
-    },
-  });
+  await seedRunnableInstallationModel(store, { environment: "preview" });
   const activations: ReleaseActivationInput[] = [];
   const controller = controllerWith(store, runner, {
     activity: activityRecorderFor(store),
@@ -2826,10 +2818,17 @@ test("pre-destroy release commands run before OpenTofu destroy", async () => {
   });
 
   const create = await controller.createInstallationPlan("inst_fixture");
-  await controller.createApplyRun({
+  const createApply = await controller.createApplyRun({
     planRunId: create.planRun.id,
     expected: applyExpectedGuardFromPlanRun(create.planRun),
   });
+  expect(createApply.deployment?.outputsPublic).not.toHaveProperty(
+    "takosumi_release",
+  );
+  const outputSnapshot = await store.getOutputSnapshot(
+    createApply.deployment!.outputSnapshotId,
+  );
+  expect(outputSnapshot?.workspaceOutputs).toHaveProperty("takosumi_release");
   activations.length = 0;
   events.length = 0;
 
@@ -2879,15 +2878,7 @@ test("pre-destroy release command failures do not block OpenTofu destroy", async
       launch_url: { sensitive: false, value: "https://x.example" },
     },
   );
-  await seedRunnableInstallationModel(store, {
-    environment: "preview",
-    installConfig: {
-      outputAllowlist: {
-        launch_url: { from: "launch_url", type: "url" },
-        takosumi_release: { from: "takosumi_release", type: "json" },
-      },
-    },
-  });
+  await seedRunnableInstallationModel(store, { environment: "preview" });
   const controller = controllerWith(store, runner, {
     activity: activityRecorderFor(store),
     releaseActivator: {
@@ -2946,15 +2937,7 @@ test("pre-destroy release commands fail destroy when no release activator is con
       launch_url: { sensitive: false, value: "https://x.example" },
     },
   );
-  await seedRunnableInstallationModel(store, {
-    environment: "preview",
-    installConfig: {
-      outputAllowlist: {
-        launch_url: { from: "launch_url", type: "url" },
-        takosumi_release: { from: "takosumi_release", type: "json" },
-      },
-    },
-  });
+  await seedRunnableInstallationModel(store, { environment: "preview" });
   const controller = controllerWith(store, runner, {
     activity: activityRecorderFor(store),
   });
