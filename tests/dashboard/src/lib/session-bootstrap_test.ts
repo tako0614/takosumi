@@ -37,4 +37,30 @@ describe("dashboard session bootstrap", () => {
       "/api/v1/dashboard/bootstrap?includeWorkspaces=false",
     ]);
   });
+
+  test("shares concurrent session bootstrap requests", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const path = typeof input === "string" ? input : String(input);
+      calls.push(path);
+      if (path === "/api/v1/dashboard/bootstrap?includeWorkspaces=false") {
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        return new Response(
+          JSON.stringify({
+            session: { subject: "tsub_1" },
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      throw new Error(`unexpected fetch: ${path}`);
+    }) as typeof fetch;
+
+    const [a, b] = await Promise.all([refreshSession(), refreshSession()]);
+
+    expect(a).toEqual(b);
+    expect(a?.subject).toBe("tsub_1");
+    expect(calls).toEqual([
+      "/api/v1/dashboard/bootstrap?includeWorkspaces=false",
+    ]);
+  });
 });

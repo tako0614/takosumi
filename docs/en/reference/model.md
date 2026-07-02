@@ -108,12 +108,18 @@ single runner instance is alive; SourceSnapshot reuse and provider mirrors are
 the portable speed mechanisms.
 
 The user-facing flow should feel like installing an app, but the model remains
-Git-native and OpenTofu-native. Takosumi can reuse SourceSnapshots, provider
-mirrors, provider plugin caches, runner capacity controls, and clear progress
-phases. It must not decide what a deployable app artifact is. Worker bundles,
-container images, release URLs, object keys, digests, and build pipelines belong
-to the app repo, CI/release pipeline, registry, provider, or ordinary
-OpenTofu/Terraform module variables.
+Git-native and OpenTofu-native. Creating a new service uses the same guided
+install flow as adding an app: choose a starter or install link, configure the
+smallest visible inputs, review the plan, then deploy. Takosumi should not add a
+separate low-level "create service" CRUD surface for ordinary users; the full
+service list can expose details after creation, while the add path stays
+install-like.
+
+Takosumi can reuse SourceSnapshots, provider mirrors, provider plugin caches,
+runner capacity controls, and clear progress phases. It must not decide what a
+deployable app artifact is. Worker bundles, container images, release URLs,
+object keys, digests, and build pipelines belong to the app repo, CI/release
+pipeline, registry, provider, or ordinary OpenTofu/Terraform module variables.
 
 The reference runner keeps successful plan containers warm for
 `TAKOSUMI_RUNNER_KEEPALIVE_SECONDS` seconds (default `0`; official Cloud uses
