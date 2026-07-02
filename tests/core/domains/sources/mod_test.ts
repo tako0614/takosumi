@@ -615,9 +615,10 @@ test("createCompatibilityCheck lifts unsupported -> ready via a curated bounded 
   // resource type is OUTSIDE the instance-wide DEFAULT allowlist becomes
   // installable when its curated bounded InstallConfig is supplied, WITHOUT an
   // Installation and WITHOUT widening the default allowlist.
-  // cloudflare_dns_record stays OUTSIDE the Gateway-backed coverage allowlist (it can
-  // repoint arbitrary hostnames), so it is the right type to demonstrate that a
-  // curated bounded InstallConfig lifts a type the default rejects.
+  // cloudflare_dns_record stays OUTSIDE the provider compatibility coverage
+  // allowlist (it can repoint arbitrary hostnames), so it is the right type to
+  // demonstrate that a curated bounded InstallConfig lifts a type the default
+  // rejects.
   const curatedHcl = `
 terraform {
   required_providers {

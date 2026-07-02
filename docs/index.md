@@ -119,7 +119,7 @@ takosumi_provider-compatible API
 `compat.cloudflare.workers.v1`。これらは標準 API を作り直すロードマップではありません。`compat.s3.v1` は
 operator が object-storage の data/control compatibility を意図的に公開するときだけの profile であり、普通の
 S3/R2/GCS 利用は既存 provider や標準 endpoint を使います。
-full AWS compatibility や full Cloudflare compatibility を名乗らず、scope と version を明示します。
+full AWS API compatibility や full Cloudflare API compatibility を名乗らず、scope と version を明示します。
 
 公開 API の境界は [Takosumi API](./reference/api.md)、Resource Shape の語彙は
 [Model reference](./reference/model.md) を参照してください。

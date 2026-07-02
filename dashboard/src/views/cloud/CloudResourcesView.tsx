@@ -45,14 +45,14 @@ import { useConfirmDialog } from "../../lib/confirm-dialog.ts";
 import { currentWorkspaceId } from "../../lib/workspace-state.ts";
 import {
   type CloudflareResourceKind,
-  type CloudflareCompatInventory,
+  type ProviderCompatCloudflareWorkersInventory,
   type CloudRequestContext,
   type CloudResourceResult,
   type CloudResourcesSnapshot,
   activeCloudApiTokens,
   createCloudApiKey,
   deleteCloudflareResource,
-  getCloudflareCompatInventory,
+  getProviderCompatCloudflareWorkersInventory,
   getCloudResourcesSnapshot,
   revokeCloudApiKey,
 } from "../../lib/cloud-resources.ts";
@@ -131,7 +131,7 @@ export function CloudResourcesPanel(props: {
         ? { route: compatRoute, context: cloudContext() }
         : undefined;
     },
-    ({ route, context }) => getCloudflareCompatInventory(route, context),
+    ({ route, context }) => getProviderCompatCloudflareWorkersInventory(route, context),
   );
   const [copied, setCopied] = createSignal<string | null>(null);
   const refreshAll = () => {
@@ -241,7 +241,7 @@ function CloudResourcesLoading(): JSX.Element {
 
 function CloudResourceBody(props: {
   readonly snapshot: CloudResourcesSnapshot;
-  readonly inventory: CloudflareCompatInventory | undefined;
+  readonly inventory: ProviderCompatCloudflareWorkersInventory | undefined;
   readonly inventoryLoading: boolean;
   readonly inventoryError: unknown;
   readonly context: CloudRequestContext;
@@ -611,7 +611,7 @@ interface ResourceGroup {
 
 function ResourcesCard(props: {
   readonly snapshot: CloudResourcesSnapshot;
-  readonly inventory: CloudflareCompatInventory | undefined;
+  readonly inventory: ProviderCompatCloudflareWorkersInventory | undefined;
   readonly inventoryLoading: boolean;
   readonly inventoryError: unknown;
   readonly context: CloudRequestContext;
@@ -632,7 +632,7 @@ function ResourcesCard(props: {
   });
   const inventory = () =>
     props.inventory ??
-    emptyCloudflareCompatInventory(
+    emptyProviderCompatCloudflareWorkersInventory(
       props.inventoryError
         ? errorMessage(props.inventoryError)
         : t("common.loading"),
@@ -931,9 +931,9 @@ function mapResult<T, U>(
   return result.ok ? { ok: true, data: result.data.map(fn) } : result;
 }
 
-function emptyCloudflareCompatInventory(
+function emptyProviderCompatCloudflareWorkersInventory(
   error: string,
-): CloudflareCompatInventory {
+): ProviderCompatCloudflareWorkersInventory {
   return {
     accounts: { ok: false, error },
     kvNamespaces: { ok: false, error },

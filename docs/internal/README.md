@@ -50,5 +50,5 @@ final-plan.md
 core-spec.md
 core-conformance.md
 ai-gateway.md
-gateway-opentofu-architecture.md
+provider-compat-opentofu-architecture.md
 ```

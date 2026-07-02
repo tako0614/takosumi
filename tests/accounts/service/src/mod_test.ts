@@ -9,7 +9,7 @@ import {
   takosumiAccountsCapsulePath,
   takosumiAccountsCapsuleServiceRotateTokenPath,
   TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_AI_GATEWAY,
-  TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_CLOUDFLARE_COMPAT,
+  TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_PROVIDER_COMPAT_CLOUDFLARE_WORKERS,
   takosumiAccountsPrivacyRequestCompletePath,
   takosumiAccountsPrivacyRequestPath,
 } from "@takosjp/takosumi-accounts-contract";
@@ -3142,7 +3142,7 @@ test("accounts handler rotates an AI Gateway runtime service token for an owned 
   });
 });
 
-test("accounts handler rotates a Cloudflare compat runtime service token for provider runs", async () => {
+test("accounts handler rotates a Cloudflare Workers provider-compat runtime service token", async () => {
   const store = new InMemoryAccountsStore();
   const handler = createAccountsHandler({
     store,
@@ -3185,7 +3185,7 @@ test("accounts handler rotates a Cloudflare compat runtime service token for pro
     new Request(
       `${testIssuer}${takosumiAccountsCapsuleServiceRotateTokenPath(
         "inst_runtime",
-        TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_CLOUDFLARE_COMPAT,
+        TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_PROVIDER_COMPAT_CLOUDFLARE_WORKERS,
       )}`,
       {
         method: "POST",
@@ -3194,7 +3194,10 @@ test("accounts handler rotates a Cloudflare compat runtime service token for pro
           "content-type": "application/json",
         },
         body: JSON.stringify({
-          scopes: ["cloudflare.compat.read", "cloudflare.compat.write"],
+          scopes: [
+            "provider.compat.cloudflare_workers.read",
+            "provider.compat.cloudflare_workers.write",
+          ],
           ttlSeconds: 900,
         }),
       },
@@ -3205,11 +3208,16 @@ test("accounts handler rotates a Cloudflare compat runtime service token for pro
   const body = await response.json();
   expect(body.token_type).toEqual("Bearer");
   expect(body.token).toStartWith("taksrv_");
-  expect(body.scope).toEqual("cloudflare.compat.read cloudflare.compat.write");
+  expect(body.scope).toEqual(
+    "provider.compat.cloudflare_workers.read provider.compat.cloudflare_workers.write",
+  );
   expect(body.service).toEqual({
-    id: "takosumi.cloudflare.compat",
+    id: "takosumi.provider_compat.cloudflare_workers",
     status: "active",
-    scopes: ["cloudflare.compat.read", "cloudflare.compat.write"],
+    scopes: [
+      "provider.compat.cloudflare_workers.read",
+      "provider.compat.cloudflare_workers.write",
+    ],
   });
 
   const introspection = await handler(
@@ -3228,8 +3236,9 @@ test("accounts handler rotates a Cloudflare compat runtime service token for pro
   expect(introspectionBody).toMatchObject({
     active: true,
     client_id: "takosumi-cloud-extensions",
-    sub: "svc:takosumi.cloudflare.compat:inst_runtime",
-    scope: "cloudflare.compat.read cloudflare.compat.write",
+    sub: "svc:takosumi.provider_compat.cloudflare_workers:inst_runtime",
+    scope:
+      "provider.compat.cloudflare_workers.read provider.compat.cloudflare_workers.write",
     takosumi: {
       installation_id: "inst_runtime",
       app_id: "example.runtime",

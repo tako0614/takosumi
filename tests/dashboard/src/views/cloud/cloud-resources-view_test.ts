@@ -65,7 +65,7 @@ describe("Cloud resources view", () => {
       "export function CloudResourcesPanel",
     );
     expect(cloudResourcesViewSource).toContain("getCloudResourcesSnapshot");
-    expect(cloudResourcesViewSource).toContain("getCloudflareCompatInventory");
+    expect(cloudResourcesViewSource).toContain("getProviderCompatCloudflareWorkersInventory");
     expect(cloudResourcesViewSource).toContain("inventoryLoading");
   });
 
@@ -90,7 +90,7 @@ describe("Cloud resources view", () => {
     expect(appViewsCssSource).not.toContain(".av-cloud-res-id");
   });
 
-  test("only exposes currently materialized Cloudflare compat resource groups", () => {
+  test("only exposes currently materialized Cloudflare Workers provider compatibility resource groups", () => {
     for (const key of ["kv", "r2", "d1", "queues", "workflows", "workers"]) {
       expect(cloudResourcesViewSource).toContain(
         `t("cloudResources.inventory.${key}")`,

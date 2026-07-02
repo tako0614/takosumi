@@ -4873,7 +4873,8 @@ test("Connections create: registers a Workspace-owned connection; token never ec
       workspaceId: "space_a",
       provider: "cloudflare",
       displayName: "本番 Cloudflare",
-      // caller tries to widen to Gateway-backed operator coverage; ignore it.
+      // caller tries to widen to operator-level provider compatibility
+      // coverage; ignore it.
       scope: "operator",
       values: {
         CLOUDFLARE_API_TOKEN: "super-secret-token-value",

@@ -300,9 +300,9 @@ test("generateInstallationRoot wires multiple aliases for one child provider", (
   );
 });
 
-test("generateInstallationRoot renders base_url in the provider block when set (Gateway-backed provider endpoint)", () => {
+test("generateInstallationRoot renders base_url in the provider block when set for a provider compatibility endpoint", () => {
   const baseUrl =
-    "https://app.takosumi.com/internal/v1/gateway/Gateway provider endpoint/takosumi-tenants/app/client/v4";
+    "https://app.takosumi.com/compat/cloudflare/client/v4";
   const { files } = generateInstallationRoot({
     template: WORKER_TEMPLATE,
     inputs: {

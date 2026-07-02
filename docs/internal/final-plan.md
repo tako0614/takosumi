@@ -815,7 +815,7 @@ Example:
     "s3": false,
     "oci": true,
     "cloudevents": true,
-    "cloudflare_subset": true
+    "provider_cloudflare_workers": true
   },
   "identity": {
     "oidc_issuer": true,

@@ -33,7 +33,7 @@ metadata file, component graph, provider selector, or repository metadata field.
 
 Legacy names such as Space, Installation, Deployment, OutputSnapshot,
 RunGroup, Activity, Provider Catalog, `own_key`, `takos_provided`, and
-Gateway-backed provider wording may appear only when documenting migration or
+pre-v1 provider endpoint wording may appear only when documenting migration or
 internal compatibility with older implementation names. Do not present them as
 the current public product surface.
 

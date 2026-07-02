@@ -268,7 +268,7 @@ export function productionHardeningEvidenceTemplate(): ProductionHardeningEviden
         evidenceDigest: "sha256:<64-lowercase-hex>",
         live: true,
         summary:
-          "Production Provider Connection evidence covers guided recipes plus generic env, with no Cloud-only Gateway or secret projection.",
+          "Production Provider Connection evidence covers guided recipes plus generic env, with no Cloud-only provider endpoint or secret projection.",
         providers: [
           {
             id: "aws",

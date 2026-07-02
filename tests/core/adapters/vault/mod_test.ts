@@ -151,9 +151,10 @@ test("register rejects unknown providers without a declared generic-env recipe",
 
 test("register rejects a hybrid { spaceId, scope: operator } privilege escalation", async () => {
   const { store, vault } = makeVault();
-  // Gateway-backed operator coverage has NO owning Space, so a caller-supplied
-  // `scope: "operator"` must never win against a present spaceId — otherwise the
-  // row would bypass the cross-tenant mint guard and let any Space bind it.
+  // Operator-level provider compatibility coverage has NO owning Space, so a
+  // caller-supplied `scope: "operator"` must never win against a present
+  // spaceId — otherwise the row would bypass the cross-tenant mint guard and
+  // let any Space bind it.
   const err = await vault
     .register({
       spaceId: "space_a",

@@ -367,7 +367,8 @@ test("provider-connection connection pool mints an operator connection from any 
     }),
   );
   // The space itself has NO cloudflare connection: only the resolved
-  // provider-connection pool supplies one through Gateway-backed operator coverage.
+  // provider-connection pool supplies one through operator-level provider
+  // compatibility coverage.
   const bundle = await vault.mintForPhase({
     spaceId: "space_other",
     phase: "plan",

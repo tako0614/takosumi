@@ -194,7 +194,7 @@ compat.cloudflare.workers.v1
 
 They preserve narrow standard facades when Takosumi provides the backend,
 import path, or managed-target control. They are not a claim of full AWS
-compatibility, full Cloudflare compatibility, a provider-specific internal
+compatibility, full Cloudflare API compatibility, an internal provider-specific
 model, or a reason to recreate standards that already work through existing
 providers.
 

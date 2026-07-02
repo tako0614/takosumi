@@ -56,7 +56,7 @@ test("platform scaffold exposes production hardening evidence gates", async () =
   // config-driven (TAKOSUMI_CLOUD_EXTENSIONS + Cloud-supplied handler keys),
   // so no `TAKOSUMI_CLOUD_*` extension handler is hardcoded in the OSS wrangler.
   assert.doesNotMatch(wrangler, /TAKOSUMI_CLOUD_AI_GATEWAY/);
-  assert.doesNotMatch(wrangler, /TAKOSUMI_CLOUD_CLOUDFLARE_COMPAT/);
+  assert.doesNotMatch(wrangler, /TAKOSUMI_CLOUD_PROVIDER_COMPAT_CLOUDFLARE_WORKERS/);
   assert.match(worker, /\/internal\/platform\/hardening-gates/);
   assert.match(worker, /evaluateProductionHardeningGates/);
 });

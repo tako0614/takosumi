@@ -93,7 +93,7 @@ export interface CloudflareTokenVerify {
   };
 }
 
-export interface CloudflareCompatEnvelope<T> {
+export interface ProviderCompatCloudflareWorkersEnvelope<T> {
   readonly success: boolean;
   readonly errors?: readonly unknown[];
   readonly messages?: readonly unknown[];
@@ -101,29 +101,29 @@ export interface CloudflareCompatEnvelope<T> {
   readonly result_info?: unknown;
 }
 
-export interface CloudflareCompatAccount {
+export interface ProviderCompatCloudflareWorkersAccount {
   readonly id?: string;
   readonly name?: string;
 }
 
-export interface CloudflareCompatKvNamespace {
+export interface ProviderCompatCloudflareWorkersKvNamespace {
   readonly id?: string;
   readonly title?: string;
 }
 
-export interface CloudflareCompatD1Database {
+export interface ProviderCompatCloudflareWorkersD1Database {
   readonly uuid?: string;
   readonly id?: string;
   readonly name?: string;
 }
 
-export interface CloudflareCompatR2Bucket {
+export interface ProviderCompatCloudflareWorkersR2Bucket {
   readonly name?: string;
   readonly creation_date?: string;
   readonly created_at?: string;
 }
 
-export interface CloudflareCompatQueue {
+export interface ProviderCompatCloudflareWorkersQueue {
   readonly id?: string;
   readonly queue_id?: string;
   readonly queue_name?: string;
@@ -131,7 +131,7 @@ export interface CloudflareCompatQueue {
   readonly modified_on?: string;
 }
 
-export interface CloudflareCompatWorkflow {
+export interface ProviderCompatCloudflareWorkersWorkflow {
   readonly id?: string;
   readonly name?: string;
   readonly workflow_name?: string;
@@ -142,22 +142,22 @@ export interface CloudflareCompatWorkflow {
   readonly modified_on?: string;
 }
 
-export type CloudflareCompatWorkerScript = Readonly<Record<string, unknown>>;
+export type ProviderCompatCloudflareWorkersWorkerScript = Readonly<Record<string, unknown>>;
 
-export interface CloudflareCompatInventory {
-  readonly accounts: CloudResourceResult<readonly CloudflareCompatAccount[]>;
+export interface ProviderCompatCloudflareWorkersInventory {
+  readonly accounts: CloudResourceResult<readonly ProviderCompatCloudflareWorkersAccount[]>;
   readonly selectedAccountId?: string;
   readonly kvNamespaces: CloudResourceResult<
-    readonly CloudflareCompatKvNamespace[]
+    readonly ProviderCompatCloudflareWorkersKvNamespace[]
   >;
   readonly d1Databases: CloudResourceResult<
-    readonly CloudflareCompatD1Database[]
+    readonly ProviderCompatCloudflareWorkersD1Database[]
   >;
-  readonly r2Buckets: CloudResourceResult<readonly CloudflareCompatR2Bucket[]>;
-  readonly queues: CloudResourceResult<readonly CloudflareCompatQueue[]>;
-  readonly workflows: CloudResourceResult<readonly CloudflareCompatWorkflow[]>;
+  readonly r2Buckets: CloudResourceResult<readonly ProviderCompatCloudflareWorkersR2Bucket[]>;
+  readonly queues: CloudResourceResult<readonly ProviderCompatCloudflareWorkersQueue[]>;
+  readonly workflows: CloudResourceResult<readonly ProviderCompatCloudflareWorkersWorkflow[]>;
   readonly workerScripts: CloudResourceResult<
-    readonly CloudflareCompatWorkerScript[]
+    readonly ProviderCompatCloudflareWorkersWorkerScript[]
   >;
 }
 
@@ -204,7 +204,7 @@ export async function getCloudResourcesSnapshot(
     "/__takosumi/cloud/extensions",
   );
   const aiRoute = aiGatewayRoute(catalog);
-  const compatRoute = cloudflareCompatRoute(catalog);
+  const compatRoute = providerCompatCloudflareWorkersRoute(catalog);
   const s3Route = s3CompatibleRoute(catalog);
   const [aiStatus, aiModels, s3Status, compatToken, accountTokens] =
     await Promise.all([
@@ -249,7 +249,7 @@ export function aiGatewayRoute(
   );
 }
 
-export function cloudflareCompatRoute(
+export function providerCompatCloudflareWorkersRoute(
   catalog: CloudExtensionCatalog,
 ): CloudExtensionCatalogItem | undefined {
   return catalog.extensions.find(
@@ -276,14 +276,14 @@ export function s3CompatibleRoute(
   });
 }
 
-export async function getCloudflareCompatInventory(
+export async function getProviderCompatCloudflareWorkersInventory(
   route: CloudExtensionCatalogItem | undefined,
   context: CloudRequestContext = {},
-): Promise<CloudflareCompatInventory> {
+): Promise<ProviderCompatCloudflareWorkersInventory> {
   if (!route) {
-    return emptyCloudflareCompatInventory("not configured");
+    return emptyProviderCompatCloudflareWorkersInventory("not configured");
   }
-  const accounts = await cloudflareListResult<CloudflareCompatAccount>(
+  const accounts = await cloudflareListResult<ProviderCompatCloudflareWorkersAccount>(
     `${route.basePath}/accounts`,
     context,
   );
@@ -324,27 +324,27 @@ export async function getCloudflareCompatInventory(
     workflows,
     workerScripts,
   ] = await Promise.all([
-    cloudflareListResult<CloudflareCompatKvNamespace>(
+    cloudflareListResult<ProviderCompatCloudflareWorkersKvNamespace>(
       `${accountPath}/storage/kv/namespaces`,
       context,
     ),
-    cloudflareListResult<CloudflareCompatD1Database>(
+    cloudflareListResult<ProviderCompatCloudflareWorkersD1Database>(
       `${accountPath}/d1/database`,
       context,
     ),
-    cloudflareListResult<CloudflareCompatR2Bucket>(
+    cloudflareListResult<ProviderCompatCloudflareWorkersR2Bucket>(
       `${accountPath}/r2/buckets`,
       context,
     ),
-    cloudflareListResult<CloudflareCompatQueue>(
+    cloudflareListResult<ProviderCompatCloudflareWorkersQueue>(
       `${accountPath}/queues`,
       context,
     ),
-    cloudflareListResult<CloudflareCompatWorkflow>(
+    cloudflareListResult<ProviderCompatCloudflareWorkersWorkflow>(
       `${accountPath}/workflows`,
       context,
     ),
-    cloudflareListResult<CloudflareCompatWorkerScript>(
+    cloudflareListResult<ProviderCompatCloudflareWorkersWorkerScript>(
       `${accountPath}/workers/scripts`,
       context,
     ),
@@ -361,9 +361,9 @@ export async function getCloudflareCompatInventory(
   };
 }
 
-function emptyCloudflareCompatInventory(
+function emptyProviderCompatCloudflareWorkersInventory(
   error: string,
-): CloudflareCompatInventory {
+): ProviderCompatCloudflareWorkersInventory {
   return {
     accounts: { ok: false, error },
     kvNamespaces: { ok: false, error },
@@ -416,7 +416,7 @@ export async function revokeCloudApiKey(
   );
 }
 
-/** The Cloudflare compatibility resources the Cloud screen can manage. */
+/** The Cloudflare Workers provider compatibility resources the Cloud screen can manage. */
 export type CloudflareResourceKind =
   "kv" | "r2" | "d1" | "queue" | "workflow" | "worker";
 
@@ -465,7 +465,7 @@ export async function deleteCloudflareResource(input: {
     input.kind,
     input.id,
   );
-  const body = await cloudFetch<CloudflareCompatEnvelope<unknown>>(path, {
+  const body = await cloudFetch<ProviderCompatCloudflareWorkersEnvelope<unknown>>(path, {
     method: "DELETE",
     context: input.context,
   });
@@ -510,7 +510,7 @@ async function cloudflareListResult<T>(
   path: string,
   context: CloudRequestContext = {},
 ): Promise<CloudResourceResult<readonly T[]>> {
-  const result = await resultFor<CloudflareCompatEnvelope<unknown>>(
+  const result = await resultFor<ProviderCompatCloudflareWorkersEnvelope<unknown>>(
     path,
     context,
   );
@@ -523,7 +523,7 @@ async function cloudflareListResult<T>(
 }
 
 function cloudflareResultArray<T>(
-  envelope: CloudflareCompatEnvelope<unknown>,
+  envelope: ProviderCompatCloudflareWorkersEnvelope<unknown>,
 ): readonly T[] {
   if (envelope.success !== true) {
     throw new Error(cloudflareEnvelopeError(envelope) ?? "request failed");
@@ -541,7 +541,7 @@ function cloudflareResultArray<T>(
 }
 
 function cloudflareEnvelopeError(
-  envelope: CloudflareCompatEnvelope<unknown>,
+  envelope: ProviderCompatCloudflareWorkersEnvelope<unknown>,
 ): string | undefined {
   const first = envelope.errors?.[0];
   if (!first) return undefined;

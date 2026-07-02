@@ -62,11 +62,12 @@ seam. Connections are served only under `/api/v1/connections`; there is no `/v1/
 - `/internal/v1/runtime/agents/*` — compatibility fleet ledger for private operator distributions
 - `TakosumiDeploymentRecordStore` — internal apply evidence and status for reference implementation workflows
 
-These extensions must not introduce OSS Cloudflare Compatibility Gateway,
-AWS/GCP compatibility APIs, S3 gateway, Resource Driver systems, Compat Pack
-systems, managed resources, or official resource backends. OSS Takosumi runs
-existing OpenTofu/Terraform providers as-is; Cloud-only gateway and managed
-resource behavior belongs outside this repo's public control-plane contract.
+These extensions must not introduce full AWS/GCP/Cloudflare clone APIs,
+Resource Driver systems, Compat Pack systems, managed resources, official
+resource backends, or hard-coded Cloud behavior. OSS Takosumi may expose scoped
+compatibility profile framework/capabilities, but official hosted profile
+implementations and managed-resource behavior belong outside this repo's public
+control-plane contract.
 
 ## Required env (production)
 

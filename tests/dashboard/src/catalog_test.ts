@@ -61,7 +61,7 @@ describe("dashboard catalog", () => {
     expect(entries.some((entry) => entry.surface === "example")).toBe(false);
   });
 
-  test("primary catalog services stay inside the Cloudflare compat MVP surface", () => {
+  test("primary catalog services stay inside the Cloudflare Workers provider compatibility MVP surface", () => {
     const compatMvpResourceTypes = new Set([
       "cloudflare_workers_script",
       "cloudflare_workers_script_subdomain",
