@@ -483,6 +483,45 @@ test("deployControl e2e exposes OpenTofu plan and apply runs", async () => {
   ]);
 });
 
+test("capsule plan route honors a compatibilityReportId body hint", async () => {
+  const { app, installationId, store } =
+    await seedInstallationViaRoutes(fakeRunner());
+  const hintedReport: CapsuleCompatibilityReport = {
+    id: "caprep_routehint0001",
+    sourceSnapshotId: "snap_e2e000001",
+    installationId,
+    level: "ready",
+    findings: [],
+    providers: [],
+    resources: [],
+    dataSources: [],
+    provisioners: [],
+    createdAt: new Date(0).toISOString(),
+  };
+  await store.putCapsuleCompatibilityReport(hintedReport);
+
+  const planRes = await app.request(
+    `/internal/v1/capsules/${installationId}/plan`,
+    {
+      method: "POST",
+      headers: headers({ "content-type": "application/json" }),
+      body: JSON.stringify({ compatibilityReportId: hintedReport.id }),
+    },
+  );
+
+  const planText = await planRes.text();
+  if (planRes.status !== 201) {
+    throw new Error(planText);
+  }
+  const planRun = (JSON.parse(planText) as { run: Run }).run;
+  expect(planRun.compatibilityReportId).toEqual(hintedReport.id);
+  const persisted = await readInternalPlanRun(app, planRun.id);
+  expect(persisted.planRun.compatibilityReportId).toEqual(hintedReport.id);
+  expect(
+    (await store.getInstallation(installationId))?.compatibilityReportId,
+  ).toEqual(hintedReport.id);
+});
+
 test("bootstrap wires host release activator into apply lifecycle", async () => {
   const activations: ReleaseActivationInput[] = [];
   const { app, installationId, store, spaceId } =
