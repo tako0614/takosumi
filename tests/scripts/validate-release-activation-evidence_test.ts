@@ -28,11 +28,12 @@ test("release activation evidence template carries every required check", () => 
     projectId: "<project-id>",
     capsuleId: "<capsule-id>",
   });
-  expect(template.checks.successfulActivation.legacyRuntimeIds).toMatchObject({
-    spaceId: "<space-id>",
-    installationId: "<installation-id>",
-    outputSnapshotId: "<output-snapshot-id>",
-  });
+  expect(Object.keys(template.checks.successfulActivation)).not.toContain(
+    `legacy${"Runtime"}Ids`,
+  );
+  expect(template.checks.successfulActivation.activationRecordId).toBe(
+    "<activation-record-id>",
+  );
   expect(template.checks.payloadBoundary.forbiddenSecretClasses).toEqual([
     "providerCredentials",
     "runnerEnv",
@@ -241,13 +242,8 @@ function validManifest(): any {
           stateVersionId: "state_1",
           outputId: "output_1",
         },
-        legacyRuntimeIds: {
-          spaceId: "space_1",
-          installationId: "inst_1",
-          outputSnapshotId: "out_1",
-        },
         providerConnectionId: "pc_1",
-        deploymentId: "dep_1",
+        activationRecordId: "actrec_1",
         sourceSnapshotId: "snap_1",
         stateGeneration: 3,
         materializedResourceKind: "cloudflare-worker-script",
@@ -271,7 +267,7 @@ function validManifest(): any {
         surfacedIn: ["activity", "runTimeline"],
         messageRedacted: true,
         applyRunStatus: "succeeded",
-        deploymentStatus: "active",
+        activationRecordStatus: "active",
       },
       ledgerIndependence: {
         evidenceRef:
@@ -280,16 +276,16 @@ function validManifest(): any {
           "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
         live: true,
         summary:
-          "Apply ledger, StateVersion, Output, and Deployment stayed committed after activation failure.",
+          "Apply ledger, StateVersion, Output, and activation record stayed committed after activation failure.",
         applyRunId: "run_apply_1",
         activityEventId: "act_release_1",
         stateVersionId: "state_1",
         outputId: "output_1",
-        deploymentId: "dep_1",
+        activationRecordId: "actrec_1",
         applyCommittedBeforeActivation: true,
-        stateSnapshotRetained: true,
-        outputSnapshotRetained: true,
-        deploymentRetained: true,
+        stateVersionRetained: true,
+        outputRetained: true,
+        activationRecordRetained: true,
         activationDoesNotRollbackApplyLedger: true,
       },
       payloadBoundary: {

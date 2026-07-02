@@ -290,7 +290,7 @@ v1alpha1:
   破壊的変更あり。docs と conformance を同時更新する。
 
 v1beta1:
-  大枠固定。migration path 必須。
+  大枠固定。upgrade / conversion guidance 必須。
 
 v1:
   後方互換を維持。field 削除なし。

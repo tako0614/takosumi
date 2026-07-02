@@ -45,21 +45,14 @@ export interface FinalModelRefs {
   readonly outputId: string;
 }
 
-export interface LegacyRuntimeIds {
-  readonly spaceId: string;
-  readonly installationId: string;
-  readonly outputSnapshotId: string;
-}
-
 export interface SuccessfulActivationEvidence extends BaseEvidence {
   readonly platformUrl: string;
   readonly webhookPayloadKind: typeof RELEASE_ACTIVATION_WEBHOOK_KIND;
   readonly planRunId: string;
   readonly applyRunId: string;
   readonly finalModel: FinalModelRefs;
-  readonly legacyRuntimeIds: LegacyRuntimeIds;
   readonly providerConnectionId: string;
-  readonly deploymentId: string;
+  readonly activationRecordId: string;
   readonly sourceSnapshotId: string;
   readonly stateGeneration: number;
   readonly materializedResourceKind: string;
@@ -77,7 +70,7 @@ export interface FailureSurfacingEvidence extends BaseEvidence {
   readonly surfacedIn: readonly string[];
   readonly messageRedacted: true;
   readonly applyRunStatus: "succeeded";
-  readonly deploymentStatus: "active";
+  readonly activationRecordStatus: "active";
 }
 
 export interface LedgerIndependenceEvidence extends BaseEvidence {
@@ -85,11 +78,11 @@ export interface LedgerIndependenceEvidence extends BaseEvidence {
   readonly activityEventId: string;
   readonly stateVersionId: string;
   readonly outputId: string;
-  readonly deploymentId: string;
+  readonly activationRecordId: string;
   readonly applyCommittedBeforeActivation: true;
-  readonly stateSnapshotRetained: true;
-  readonly outputSnapshotRetained: true;
-  readonly deploymentRetained: true;
+  readonly stateVersionRetained: true;
+  readonly outputRetained: true;
+  readonly activationRecordRetained: true;
   readonly activationDoesNotRollbackApplyLedger: true;
 }
 
@@ -140,13 +133,8 @@ export function releaseActivationEvidenceTemplate(): ReleaseActivationEvidenceMa
           stateVersionId: "<state-version-id>",
           outputId: "<output-id>",
         },
-        legacyRuntimeIds: {
-          spaceId: "<space-id>",
-          installationId: "<installation-id>",
-          outputSnapshotId: "<output-snapshot-id>",
-        },
         providerConnectionId: "<provider-connection-id>",
-        deploymentId: "<deployment-id>",
+        activationRecordId: "<activation-record-id>",
         sourceSnapshotId: "<source-snapshot-id>",
         stateGeneration: 1,
         materializedResourceKind: "<materialized-resource-kind>",
@@ -168,23 +156,23 @@ export function releaseActivationEvidenceTemplate(): ReleaseActivationEvidenceMa
         surfacedIn: ["activity", "runTimeline"],
         messageRedacted: true,
         applyRunStatus: "succeeded",
-        deploymentStatus: "active",
+        activationRecordStatus: "active",
       },
       ledgerIndependence: {
         evidenceRef: `${evidenceRefBase}#evidence/release-activation-ledger-independence.md`,
         evidenceDigest: "sha256:<64-lowercase-hex>",
         live: true,
         summary:
-          "Release activation status did not roll back the committed apply ledger, StateVersion, Output, or Deployment.",
+          "Release activation status did not roll back the committed apply ledger, StateVersion, Output, or activation record.",
         applyRunId: "<apply-run-id>",
         activityEventId: "<activity-event-id>",
         stateVersionId: "<state-version-id>",
         outputId: "<output-id>",
-        deploymentId: "<deployment-id>",
+        activationRecordId: "<activation-record-id>",
         applyCommittedBeforeActivation: true,
-        stateSnapshotRetained: true,
-        outputSnapshotRetained: true,
-        deploymentRetained: true,
+        stateVersionRetained: true,
+        outputRetained: true,
+        activationRecordRetained: true,
         activationDoesNotRollbackApplyLedger: true,
       },
       payloadBoundary: {
@@ -433,17 +421,13 @@ function readSuccessfulActivation(
       row.finalModel,
       "successfulActivation.finalModel",
     ),
-    legacyRuntimeIds: readLegacyRuntimeIds(
-      row.legacyRuntimeIds,
-      "successfulActivation.legacyRuntimeIds",
-    ),
     providerConnectionId: nonEmpty(
       row.providerConnectionId,
       "successfulActivation.providerConnectionId",
     ),
-    deploymentId: nonEmpty(
-      row.deploymentId,
-      "successfulActivation.deploymentId",
+    activationRecordId: nonEmpty(
+      row.activationRecordId,
+      "successfulActivation.activationRecordId",
     ),
     sourceSnapshotId: nonEmpty(
       row.sourceSnapshotId,
@@ -482,8 +466,8 @@ function readFailureSurfacing(value: unknown): FailureSurfacingEvidence {
   if (row.applyRunStatus !== "succeeded") {
     throw new Error("failureSurfacing.applyRunStatus must be succeeded");
   }
-  if (row.deploymentStatus !== "active") {
-    throw new Error("failureSurfacing.deploymentStatus must be active");
+  if (row.activationRecordStatus !== "active") {
+    throw new Error("failureSurfacing.activationRecordStatus must be active");
   }
   return {
     ...base,
@@ -496,7 +480,7 @@ function readFailureSurfacing(value: unknown): FailureSurfacingEvidence {
     surfacedIn,
     messageRedacted: true,
     applyRunStatus: "succeeded",
-    deploymentStatus: "active",
+    activationRecordStatus: "active",
   };
 }
 
@@ -505,9 +489,9 @@ function readLedgerIndependence(value: unknown): LedgerIndependenceEvidence {
   const row = record(value, "ledgerIndependence evidence");
   for (const key of [
     "applyCommittedBeforeActivation",
-    "stateSnapshotRetained",
-    "outputSnapshotRetained",
-    "deploymentRetained",
+    "stateVersionRetained",
+    "outputRetained",
+    "activationRecordRetained",
     "activationDoesNotRollbackApplyLedger",
   ] as const) {
     if (row[key] !== true) {
@@ -529,14 +513,14 @@ function readLedgerIndependence(value: unknown): LedgerIndependenceEvidence {
       row.outputId,
       "ledgerIndependence.outputId",
     ),
-    deploymentId: nonEmpty(
-      row.deploymentId,
-      "ledgerIndependence.deploymentId",
+    activationRecordId: nonEmpty(
+      row.activationRecordId,
+      "ledgerIndependence.activationRecordId",
     ),
     applyCommittedBeforeActivation: true,
-    stateSnapshotRetained: true,
-    outputSnapshotRetained: true,
-    deploymentRetained: true,
+    stateVersionRetained: true,
+    outputRetained: true,
+    activationRecordRetained: true,
     activationDoesNotRollbackApplyLedger: true,
   };
 }
@@ -549,15 +533,6 @@ function readFinalModelRefs(value: unknown, name: string): FinalModelRefs {
     capsuleId: nonEmpty(row.capsuleId, `${name}.capsuleId`),
     stateVersionId: nonEmpty(row.stateVersionId, `${name}.stateVersionId`),
     outputId: nonEmpty(row.outputId, `${name}.outputId`),
-  };
-}
-
-function readLegacyRuntimeIds(value: unknown, name: string): LegacyRuntimeIds {
-  const row = record(value, name);
-  return {
-    spaceId: nonEmpty(row.spaceId, `${name}.spaceId`),
-    installationId: nonEmpty(row.installationId, `${name}.installationId`),
-    outputSnapshotId: nonEmpty(row.outputSnapshotId, `${name}.outputSnapshotId`),
   };
 }
 

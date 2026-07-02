@@ -665,7 +665,7 @@ validator は以下を fail-closed にする:
 - release activation 証跡 ref が commit-pinned `git+...@<commit>#path` ではない、または fixture / todo / localhost を指す
 - successful activation が `takosumi.operator.release-activation@v1` payload、`succeeded` status、public launch URL、200 health check を記録していない
 - failure surfacing が Activity と run timeline の両方に failed/pending activation を記録していない
-- apply ledger / StateVersion / Output / Deployment が release activation status によって rollback されないことを示していない
+- apply ledger / StateVersion / Output / activation record が release activation status によって rollback されないことを示していない
 - captured payload / evidence が provider credentials、runner env、secret outputs、release activator token を含まないことを示していない
 
 validator は証跡ファイル本文の意味解析はしない。operator が manifest に記録した structured evidence claim と、
