@@ -1858,6 +1858,47 @@ test("runs table: plan/apply/source_sync/compatibility_check/backup rows verify 
   }
 });
 
+test("runs table: listRunsBySpace sorts mixed epoch and ISO timestamps before limiting", async () => {
+  for (const [label, store] of await forEachStore()) {
+    const newestAt = Date.parse("2026-06-09T00:00:00.000Z");
+    const oldestAt = Date.parse("2026-06-07T00:00:00.000Z");
+    await store.putPlanRun({
+      ...makePlanRun("run_numeric_newest"),
+      createdAt: newestAt,
+      updatedAt: newestAt,
+    });
+    await store.putCompatibilityCheckRun({
+      id: "run_iso_middle",
+      spaceId: "space_1",
+      sourceId: "src_1",
+      type: "compatibility_check",
+      status: "succeeded",
+      createdBy: "system",
+      createdAt: "2026-06-08T00:00:00.000Z",
+    });
+    await store.putPlanRun({
+      ...makePlanRun("run_numeric_oldest"),
+      createdAt: oldestAt,
+      updatedAt: oldestAt,
+    });
+    await store.putCompatibilityCheckRun({
+      id: "run_other_space_newer",
+      spaceId: "space_other",
+      sourceId: "src_other",
+      type: "compatibility_check",
+      status: "succeeded",
+      createdBy: "system",
+      createdAt: "2026-06-10T00:00:00.000Z",
+    });
+
+    const rows = await store.listRunsBySpace("space_1", { limit: 2 });
+    expect(
+      rows.map((run) => run.id),
+      label,
+    ).toEqual(["run_numeric_newest", "run_iso_middle"]);
+  }
+});
+
 test("runs table: recoverable OpenTofu run listing scans oldest dispatchable non-terminal rows", async () => {
   for (const [label, store] of await forEachStore()) {
     const oldPlan = {
