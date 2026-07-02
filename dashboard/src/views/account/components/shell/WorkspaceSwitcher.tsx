@@ -7,10 +7,13 @@
  * via `GET /api/v1/workspaces` and defaults to the first Workspace when none is
  * selected. Creation belongs in setup/admin flows, not in the everyday topbar.
  */
+import { A } from "@solidjs/router";
+import { Settings } from "lucide-solid";
 import {
   createEffect,
   createMemo,
   createResource,
+  createSignal,
   For,
   onCleanup,
   Show,
@@ -39,10 +42,22 @@ export default function WorkspaceSwitcher(props: Props = {}) {
   const [workspaces, { refetch }] = createResource(() =>
     listWorkspacesCached(),
   );
+  const [switcherOpen, setSwitcherOpen] = createSignal(false);
   const loadedWorkspaces = createMemo(() => workspaces() ?? []);
   const selectedWorkspaceId = createMemo(() =>
     selectAvailableWorkspaceId(currentWorkspaceId(), loadedWorkspaces()),
   );
+  const selectedWorkspace = createMemo(() =>
+    loadedWorkspaces().find(
+      (workspace) => workspace.id === selectedWorkspaceId(),
+    ),
+  );
+  const selectedWorkspaceName = createMemo(() => {
+    const workspace = selectedWorkspace();
+    return workspace?.displayName || workspace?.handle || t("workspace.none");
+  });
+  const switcherId = () =>
+    props.compact ? "workspace-switcher-compact" : "workspace-switcher-sidebar";
 
   // Reconcile persisted Workspace selection after sign-in. A browser can keep
   // the previous user's localStorage value, so never keep an id that is absent
@@ -52,6 +67,7 @@ export default function WorkspaceSwitcher(props: Props = {}) {
     if (next !== currentWorkspaceId()) {
       setCurrentWorkspaceId(next);
     }
+    if (!next) setSwitcherOpen(false);
     return list;
   };
 
@@ -77,41 +93,80 @@ export default function WorkspaceSwitcher(props: Props = {}) {
   return (
     <div class="topbar-workspace" classList={{ compact: props.compact }}>
       <Show when={!props.compact}>
-        <span class="topbar-workspace-label">{t("workspace.label")}</span>
-      </Show>
-      <Show
-        when={!workspaces.loading && loadedWorkspaces().length > 0}
-        fallback={
-          <Show when={!workspaces.loading && loadedWorkspaces().length === 0}>
-            <span class="topbar-workspace-empty">{t("workspace.none")}</span>
+        <div class="topbar-workspace-header">
+          <span class="topbar-workspace-label">{t("workspace.label")}</span>
+          <Show when={loadedWorkspaces().length > 1}>
+            <span class="topbar-workspace-count">{t("workspace.change")}</span>
           </Show>
-        }
-      >
-        <Select
-          id={
-            props.compact
-              ? "workspace-switcher-compact"
-              : "workspace-switcher-sidebar"
-          }
-          name="workspaceId"
-          class="topbar-workspace-select"
-          aria-label={t("workspace.label")}
-          value={selectedWorkspaceId()}
-          disabled={loadedWorkspaces().length < 2}
-          onChange={(e) => setCurrentWorkspaceId(e.currentTarget.value)}
-        >
-          <For each={loadedWorkspaces()}>
-            {(workspace) => (
-              <option
-                value={workspace.id}
-                selected={workspace.id === selectedWorkspaceId()}
-              >
-                {workspace.displayName || workspace.handle}
-              </option>
-            )}
-          </For>
-        </Select>
+        </div>
       </Show>
+      <div class="topbar-workspace-row">
+        <Show
+          when={!workspaces.loading && loadedWorkspaces().length > 0}
+          fallback={
+            <span class="topbar-workspace-empty">
+              {workspaces.loading
+                ? t("workspace.loading")
+                : t("workspace.none")}
+            </span>
+          }
+        >
+          <div class="topbar-workspace-picker">
+            <button
+              type="button"
+              class="topbar-workspace-current"
+              aria-expanded={switcherOpen()}
+              aria-controls={switcherId()}
+              onClick={() => setSwitcherOpen((open) => !open)}
+            >
+              <span class="topbar-workspace-name">
+                {selectedWorkspaceName()}
+              </span>
+              <Show when={loadedWorkspaces().length > 1}>
+                <span class="topbar-workspace-current-action">
+                  {t("workspace.change")}
+                </span>
+              </Show>
+            </button>
+            <Show when={switcherOpen()}>
+              <Select
+                id={switcherId()}
+                name="workspaceId"
+                class="topbar-workspace-select"
+                aria-label={t("workspace.select")}
+                value={selectedWorkspaceId()}
+                onChange={(e) => {
+                  setCurrentWorkspaceId(e.currentTarget.value);
+                  setSwitcherOpen(false);
+                }}
+              >
+                <For each={loadedWorkspaces()}>
+                  {(workspace) => (
+                    <option
+                      value={workspace.id}
+                      selected={workspace.id === selectedWorkspaceId()}
+                    >
+                      {workspace.displayName || workspace.handle}
+                    </option>
+                  )}
+                </For>
+              </Select>
+            </Show>
+          </div>
+        </Show>
+        <Show
+          when={!props.compact && !workspaces.loading && selectedWorkspaceId()}
+        >
+          <A
+            href="/advanced/workspace"
+            class="topbar-workspace-settings"
+            aria-label={t("workspace.settings")}
+            title={t("workspace.settings")}
+          >
+            <Settings size={16} />
+          </A>
+        </Show>
+      </div>
 
       <Show when={workspaces.error}>
         <span class="topbar-workspace-error" role="alert">

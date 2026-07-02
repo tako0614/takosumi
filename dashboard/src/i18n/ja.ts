@@ -77,6 +77,10 @@ export const ja = {
   "workspace.select": "ワークスペースを選択してください",
   "workspace.selectMessage":
     "サイドバーのワークスペース選択からワークスペースを選ぶと表示されます。",
+  "workspace.loading": "ワークスペースを読み込み中...",
+  "workspace.count": "{n} 件",
+  "workspace.change": "切り替え",
+  "workspace.settings": "ワークスペース設定",
   "workspace.defaultName": "自分のワークスペース",
   "workspace.start.aria": "ワークスペースの開始",
   "workspace.start.kicker": "ワークスペースがありません",
