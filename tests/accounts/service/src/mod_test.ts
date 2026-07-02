@@ -44,6 +44,7 @@ import {
   type AccountsStore,
   InMemoryAccountsStore,
 } from "../../../../accounts/service/src/store.ts";
+import { rejectDisallowedPresentedSession } from "../../../../accounts/service/src/login-email-allowlist.ts";
 import { handleUserInfo } from "../../../../accounts/service/src/oidc-routes.ts";
 import {
   type CapsuleRoute,
@@ -1341,6 +1342,60 @@ test("accounts handler reuses session and account reads within a request", async
 
   expect(response.status).toEqual(200);
   expect((await response.json()).subject).toEqual("tsub_allowed");
+  expect(store.sessionReads).toEqual(1);
+  expect(store.accountReads).toEqual(1);
+});
+
+test("pre-GA email allowlist shares concurrent checks for the same allowed session", async () => {
+  class CountingAccountsStore extends InMemoryAccountsStore {
+    sessionReads = 0;
+    accountReads = 0;
+
+    override findAccountSession(sessionId: string) {
+      this.sessionReads += 1;
+      return super.findAccountSession(sessionId);
+    }
+
+    override findAccount(subject: TakosumiSubject) {
+      this.accountReads += 1;
+      return super.findAccount(subject);
+    }
+  }
+
+  const store = new CountingAccountsStore();
+  store.saveAccount({
+    subject: "tsub_parallel_allowed",
+    email: "allowed-parallel@example.test",
+    emailVerified: true,
+    createdAt: 1000,
+    updatedAt: 1000,
+  });
+  store.saveAccountSession({
+    sessionId: "sess_parallel_allowed",
+    subject: "tsub_parallel_allowed",
+    createdAt: 1000,
+    expiresAt: Date.now() + 60_000,
+  });
+
+  const request = new Request(`${testIssuer}/api/v1/workspaces`, {
+    headers: { authorization: "Bearer sess_parallel_allowed" },
+  });
+  const results = await Promise.all(
+    [0, 1, 2].map(() =>
+      rejectDisallowedPresentedSession({
+        request,
+        store,
+        sessionId: "sess_parallel_allowed",
+        allowlist: {
+          emails: ["allowed-parallel@example.test"],
+          requireVerifiedEmail: true,
+        },
+        secureCookie: true,
+      }),
+    ),
+  );
+
+  expect(results).toEqual([undefined, undefined, undefined]);
   expect(store.sessionReads).toEqual(1);
   expect(store.accountReads).toEqual(1);
 });
