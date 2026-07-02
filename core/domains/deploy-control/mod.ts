@@ -444,6 +444,7 @@ export interface ReleaseActivationCommand {
   readonly workingDirectory?: string;
   readonly env?: Readonly<Record<string, string>>;
   readonly executor?: "runner" | "operator";
+  readonly timeoutSeconds?: number;
 }
 
 export interface ReleaseCommandRunJob {
@@ -2232,6 +2233,15 @@ function parseReleaseCommand(
   if (rawWorkingDirectory && !workingDirectory) return undefined;
   const env = releaseCommandEnv(value.env);
   const executor = releaseCommandExecutor(value.executor);
+  const rawTimeoutSeconds = value.timeoutSeconds ?? value.timeout_seconds;
+  const timeoutSeconds = releaseCommandTimeoutSeconds(rawTimeoutSeconds);
+  if (
+    rawTimeoutSeconds !== undefined &&
+    rawTimeoutSeconds !== null &&
+    timeoutSeconds === undefined
+  ) {
+    return undefined;
+  }
   return {
     id,
     phase,
@@ -2239,7 +2249,20 @@ function parseReleaseCommand(
     ...(workingDirectory ? { workingDirectory } : {}),
     ...(env ? { env } : {}),
     ...(executor ? { executor } : {}),
+    ...(timeoutSeconds ? { timeoutSeconds } : {}),
   };
+}
+
+function releaseCommandTimeoutSeconds(value: unknown): number | undefined {
+  const numberValue =
+    typeof value === "number"
+      ? value
+      : typeof value === "string" && /^[1-9]\d*$/u.test(value.trim())
+        ? Number(value.trim())
+        : undefined;
+  if (!Number.isInteger(numberValue)) return undefined;
+  if (numberValue < 1 || numberValue > 6 * 60 * 60) return undefined;
+  return numberValue;
 }
 
 function releaseCommandExecutor(

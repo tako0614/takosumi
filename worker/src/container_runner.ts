@@ -187,6 +187,9 @@ export class CloudflareContainerOpenTofuRunner
             ? { workingDirectory: command.workingDirectory }
             : {}),
           ...(command.env ? { env: command.env } : {}),
+          ...(command.timeoutSeconds
+            ? { timeoutSeconds: command.timeoutSeconds }
+            : {}),
         })),
       },
       sourceArchive: {

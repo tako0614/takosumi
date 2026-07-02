@@ -142,6 +142,7 @@ test("runner release activator runs opaque post-apply commands", async () => {
         id: "activate",
         phase: "post_apply",
         command: ["bun", "run", "app:activate"],
+        timeoutSeconds: 1200,
       },
     ],
   });
@@ -475,6 +476,7 @@ function fakeRunnerActivationInput(): ReleaseActivationInput {
         id: "activate",
         phase: "post_apply",
         command: ["bun", "run", "app:activate"],
+        timeoutSeconds: 1200,
       },
     ]),
     credentials: {
