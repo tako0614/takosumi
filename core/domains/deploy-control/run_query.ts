@@ -27,7 +27,10 @@ import type {
   RunEventsResponse,
   RunLogsResponse,
 } from "takosumi-contract/runs";
-import type { OpenTofuDeploymentStore } from "./store.ts";
+import type {
+  OpenTofuDeploymentStore,
+  RecoverableOpenTofuRunListOptions,
+} from "./store.ts";
 import { OpenTofuControllerError, requireNonEmptyString } from "./errors.ts";
 import {
   projectApplyRun,
@@ -103,6 +106,13 @@ export class RunQueryService {
   ): Promise<readonly Run[]> {
     requireNonEmptyString(spaceId, "spaceId");
     const rows = await this.#store.listRunsBySpace(spaceId, options);
+    return await Promise.all(rows.map((row) => this.getRun(row.id)));
+  }
+
+  async listRecoverableOpenTofuRuns(
+    options: RecoverableOpenTofuRunListOptions,
+  ): Promise<readonly Run[]> {
+    const rows = await this.#store.listRecoverableOpenTofuRuns(options);
     return await Promise.all(rows.map((row) => this.getRun(row.id)));
   }
 

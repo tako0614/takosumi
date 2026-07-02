@@ -3680,6 +3680,7 @@ export class RunEngine {
       ...(leaseToken ? { expectLeaseToken: leaseToken } : {}),
       run: queued,
       clearLeaseToken: true,
+      clearHeartbeat: true,
     });
     if (!result.won) return undefined;
     await this.#recordDeployOperationMetric({
@@ -3819,6 +3820,7 @@ export class RunEngine {
       ...(leaseToken ? { expectLeaseToken: leaseToken } : {}),
       run: queued,
       clearLeaseToken: true,
+      clearHeartbeat: true,
     });
     if (!result.won) return undefined;
     await this.#recordDeployOperationMetric({

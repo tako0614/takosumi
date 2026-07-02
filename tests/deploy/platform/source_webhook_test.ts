@@ -34,6 +34,7 @@ import {
   isPlatformMetricsPath,
   oidcMetricRoute,
   pollAutoSyncSources,
+  repairStaleOpenTofuRuns,
   summarizePrometheusMetrics,
   verifyPlatformCloudExtensionPersonalAccessToken,
   verifyPlatformCloudExtensionServiceAccessToken,
@@ -144,6 +145,19 @@ const TEST_CLOUD_USAGE_PRICE_BOOK = JSON.stringify({
     },
   ],
 });
+
+function runRecord(overrides: Record<string, unknown>): never {
+  return {
+    id: "run_1",
+    workspaceId: "space_a",
+    spaceId: "space_a",
+    type: "plan",
+    status: "queued",
+    createdBy: "system",
+    createdAt: "2026-07-01T00:00:00.000Z",
+    ...overrides,
+  } as never;
+}
 
 function makeWebhookOps(
   overrides: {
@@ -263,6 +277,111 @@ test("scheduled poll enqueues a deduped sync per autoSync source, capped", async
   };
   await pollAutoSyncSources(ops, 50);
   expect(syncCalls).toEqual(["src_a", "src_b"]);
+});
+
+test("scheduled run repair reschedules only stale dispatchable OpenTofu runs", async () => {
+  const now = Date.parse("2026-07-01T23:40:00.000Z");
+  const recoveryQueries: unknown[] = [];
+  const scheduled: unknown[] = [];
+  const result = await repairStaleOpenTofuRuns(
+    {
+      spaces: {
+        listWorkspaces: () =>
+          Promise.resolve([
+            { id: "space_a" },
+            { id: "space_archived", archivedAt: "2026-07-01T00:00:00.000Z" },
+          ]),
+      },
+      controller: {
+        listRecoverableOpenTofuRuns: (options) => {
+          recoveryQueries.push(options);
+          return Promise.resolve([
+            runRecord({
+              id: "apply_stale_destroy",
+              type: "destroy_apply",
+              status: "queued",
+              createdAt: new Date(now - 10_000).toISOString(),
+            }),
+            runRecord({
+              id: "plan_stale_running",
+              type: "destroy_plan",
+              status: "running",
+              createdAt: new Date(now - 20_000).toISOString(),
+              heartbeatAt: now - 10_000,
+            }),
+            runRecord({
+              id: "sync_stale",
+              type: "source_sync",
+              status: "queued",
+              sourceId: "src_abcdef0123456789",
+              createdAt: new Date(now - 10_000).toISOString(),
+            }),
+            runRecord({
+              id: "apply_fresh",
+              type: "apply",
+              status: "queued",
+              createdAt: new Date(now - 100).toISOString(),
+            }),
+            runRecord({
+              id: "backup_stale_but_not_dispatchable",
+              type: "backup",
+              status: "queued",
+              createdAt: new Date(now - 10_000).toISOString(),
+            }),
+            runRecord({
+              id: "compat_stale_but_not_dispatchable",
+              type: "compatibility_check",
+              status: "queued",
+              createdAt: new Date(now - 10_000).toISOString(),
+            }),
+            runRecord({
+              id: "plan_terminal",
+              type: "plan",
+              status: "succeeded",
+              createdAt: new Date(now - 10_000).toISOString(),
+            }),
+            runRecord({
+              id: "archived_space_run",
+              workspaceId: "space_archived",
+              spaceId: "space_archived",
+              type: "apply",
+              status: "queued",
+              createdAt: new Date(now - 10_000).toISOString(),
+            }),
+          ]);
+        },
+      },
+    },
+    {
+      schedule: (dispatch) => {
+        scheduled.push(dispatch);
+        return Promise.resolve();
+      },
+    },
+    {
+      now,
+      queuedStaleMs: 1_000,
+      runningStaleMs: 1_000,
+    },
+  );
+
+  expect(recoveryQueries).toEqual([
+    {
+      staleQueuedBeforeMs: now - 1_000,
+      staleRunningBeforeMs: now - 1_000,
+      limit: 50,
+    },
+  ]);
+  expect(scheduled).toEqual([
+    { action: "apply", runId: "apply_stale_destroy", spaceId: "space_a" },
+    { action: "plan", runId: "plan_stale_running", spaceId: "space_a" },
+    { action: "source_sync", runId: "sync_stale", spaceId: "space_a" },
+  ]);
+  expect(result).toEqual({
+    workspacesScanned: 1,
+    runsScanned: 8,
+    rescheduled: 3,
+  });
 });
 
 test("drift sweep is OFF by default and only enabled by the =1 flag", () => {
@@ -1308,7 +1427,8 @@ test("platform Resource Shape API discovery is gated by deploy-control token and
     TAKOSUMI_CONTROL_DB: new SqliteFakeD1(),
     TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
     TAKOSUMI_DEV_MODE: "1",
-    TAKOSUMI_RESOURCE_SHAPES: "EdgeWorker,ObjectBucket,KVStore,Queue,SQLDatabase",
+    TAKOSUMI_RESOURCE_SHAPES:
+      "EdgeWorker,ObjectBucket,KVStore,Queue,SQLDatabase",
     TAKOSUMI_RESOURCE_ADAPTERS: "cloudflare",
   } as never;
 

@@ -898,6 +898,13 @@ async function forEachStore(): Promise<
   ];
 }
 
+function runJsonRecord(value: unknown): Record<string, unknown> {
+  if (typeof value === "string") {
+    return JSON.parse(value) as Record<string, unknown>;
+  }
+  return (value ?? {}) as Record<string, unknown>;
+}
+
 test("Space store: put/get/get-by-handle/list are symmetric", async () => {
   for (const [label, store] of await forEachStore()) {
     await store.putSpace(space({ id: "space_a", handle: "alice" }));
@@ -1119,10 +1126,8 @@ test("Installation store: put/get/get-by-name/list/unique are symmetric", async 
 
 test("Workspace mirror fields are restored for Capsules and SourceSnapshots", async () => {
   for (const [label, store] of await forEachStore()) {
-    const {
-      spaceId: _legacySpaceId,
-      ...workspaceOnlyInstallation
-    } = installation({ id: "inst_workspace_only" });
+    const { spaceId: _legacySpaceId, ...workspaceOnlyInstallation } =
+      installation({ id: "inst_workspace_only" });
     await store.putInstallation(workspaceOnlyInstallation as Installation);
     const rereadInstallation = await store.getInstallation(
       "inst_workspace_only",
@@ -1130,10 +1135,8 @@ test("Workspace mirror fields are restored for Capsules and SourceSnapshots", as
     expect(rereadInstallation?.workspaceId, label).toBe("space_1");
     expect(rereadInstallation?.spaceId, label).toBe("space_1");
 
-    const {
-      workspaceId: _canonicalWorkspaceId,
-      ...legacyOnlySnapshot
-    } = sourceSnapshot({ id: "snap_legacy_only", sourceId: "src_1" });
+    const { workspaceId: _canonicalWorkspaceId, ...legacyOnlySnapshot } =
+      sourceSnapshot({ id: "snap_legacy_only", sourceId: "src_1" });
     await store.putSourceSnapshot(legacyOnlySnapshot as SourceSnapshot);
     const rereadSnapshot = await store.getSourceSnapshot("snap_legacy_only");
     expect(rereadSnapshot?.workspaceId, label).toBe("space_1");
@@ -1233,10 +1236,7 @@ test("Deployment store: put/get/list-by-id/list-by-installation are symmetric", 
       "dep_a",
       "dep_b",
     ]);
-    expect(
-      byIds.map((d) => d.id).sort(),
-      label,
-    ).toEqual(["dep_a", "dep_b"]);
+    expect(byIds.map((d) => d.id).sort(), label).toEqual(["dep_a", "dep_b"]);
     const forInst = await store.listDeployments("inst_1");
     expect(
       forInst.map((d) => d.id),
@@ -1858,6 +1858,117 @@ test("runs table: plan/apply/source_sync/compatibility_check/backup rows verify 
   }
 });
 
+test("runs table: recoverable OpenTofu run listing scans oldest dispatchable non-terminal rows", async () => {
+  for (const [label, store] of await forEachStore()) {
+    const oldPlan = {
+      ...makePlanRun("run_repair_plan_old"),
+      createdAt: 1_000,
+      updatedAt: 1_000,
+      status: "queued" as const,
+    };
+    const oldApply = {
+      ...makeApplyRun("run_repair_apply_old", "run_repair_plan_old"),
+      createdAt: 2_000,
+      updatedAt: 2_000,
+      status: "running" as const,
+      startedAt: 2_500,
+      heartbeatAt: 3_000,
+    };
+    const freshPlan = {
+      ...makePlanRun("run_repair_plan_fresh"),
+      createdAt: 9_700,
+      updatedAt: 9_700,
+      status: "queued" as const,
+    };
+    const terminalPlan = {
+      ...makePlanRun("run_repair_plan_terminal"),
+      createdAt: 500,
+      updatedAt: 500,
+      status: "succeeded" as const,
+    };
+    const oldSourceSync: SourceSyncRun = {
+      id: "run_repair_source_sync_old",
+      kind: "source_sync",
+      workspaceId: "space_1",
+      spaceId: "space_1",
+      sourceId: "src_repair",
+      url: "https://example.com/repo.git",
+      ref: "main",
+      path: ".",
+      archiveObjectKey: "sources/src_repair/archive.tgz",
+      status: "queued",
+      createdAt: new Date(4_000).toISOString(),
+      updatedAt: new Date(4_000).toISOString(),
+    };
+    const oldRestore: Run = {
+      id: "run_repair_restore_old",
+      workspaceId: "space_1",
+      spaceId: "space_1",
+      type: "restore",
+      status: "queued",
+      backupId: "bkp_1",
+      restoreStateGeneration: 1,
+      createdBy: "system",
+      createdAt: new Date(3_500).toISOString(),
+    };
+    const oldBackup: Run = {
+      id: "run_repair_backup_ignored",
+      workspaceId: "space_1",
+      spaceId: "space_1",
+      type: "backup",
+      status: "queued",
+      backupId: "bkp_ignored",
+      createdBy: "system",
+      createdAt: new Date(100).toISOString(),
+    };
+    const oldCompatibilityCheck: Run = {
+      id: "run_repair_compat_ignored",
+      workspaceId: "space_1",
+      spaceId: "space_1",
+      type: "compatibility_check",
+      status: "queued",
+      compatibilityReportId: "caprep_ignored",
+      sourceId: "src_repair",
+      createdBy: "system",
+      createdAt: new Date(100).toISOString(),
+    };
+
+    await store.putPlanRun(oldPlan);
+    await store.putApplyRun(oldApply);
+    await store.putPlanRun(freshPlan);
+    await store.putPlanRun(terminalPlan);
+    await store.putSourceSyncRun(oldSourceSync);
+    await store.putBackupRun(oldRestore);
+    await store.putBackupRun(oldBackup);
+    await store.putCompatibilityCheckRun(oldCompatibilityCheck);
+
+    const recoverable = await store.listRecoverableOpenTofuRuns({
+      staleQueuedBeforeMs: 5_000,
+      staleRunningBeforeMs: 5_000,
+      limit: 10,
+    });
+    expect(
+      recoverable.map((run) => run.id),
+      label,
+    ).toEqual([
+      "run_repair_plan_old",
+      "run_repair_apply_old",
+      "run_repair_restore_old",
+      "run_repair_source_sync_old",
+    ]);
+
+    const limited = await store.listRecoverableOpenTofuRuns({
+      staleQueuedBeforeMs: 5_000,
+      staleRunningBeforeMs: 5_000,
+      limit: 2,
+    });
+    expect(
+      limited.map((run) => run.id),
+      label,
+    ).toEqual(["run_repair_plan_old", "run_repair_apply_old"]);
+  }
+});
+
 test("runs table: restore run physical discriminator is restore", async () => {
   const restoreRun = {
     id: "restore_physical_1",
@@ -1980,6 +2091,94 @@ test("transitionRun: a stale lease fence token loses, the correct token wins", a
       "succeeded",
     );
   }
+});
+
+test("transitionRun: clearHeartbeat clears the physical heartbeat column and run JSON", async () => {
+  const pgClient = await PGliteSqlClient.create();
+  pgClients.push(pgClient);
+  const pgStore = new SqlOpenTofuDeploymentStore({ client: pgClient });
+  await pgStore.putApplyRun({
+    ...makeApplyRun("run_clear_hb_pg", "run_plan_clear_hb_pg"),
+    status: "queued",
+  });
+  const pgClaim = await pgStore.transitionRun({
+    id: "run_clear_hb_pg",
+    kind: "apply",
+    expectFrom: ["queued"],
+    run: {
+      ...makeApplyRun("run_clear_hb_pg", "run_plan_clear_hb_pg"),
+      status: "running",
+    },
+    setLeaseToken: "lease_pg",
+    heartbeatAt: 10,
+  });
+  expect(pgClaim.won).toBe(true);
+  const pgRequeue = await pgStore.transitionRun({
+    id: "run_clear_hb_pg",
+    kind: "apply",
+    expectFrom: ["running"],
+    expectLeaseToken: "lease_pg",
+    run: {
+      ...makeApplyRun("run_clear_hb_pg", "run_plan_clear_hb_pg"),
+      status: "queued",
+    },
+    clearLeaseToken: true,
+    clearHeartbeat: true,
+  });
+  expect(pgRequeue.won).toBe(true);
+  const pgRow = await pgClient.query<{
+    heartbeatAt: number | null;
+    runJson: unknown;
+  }>(
+    `select heartbeat_at as "heartbeatAt", run_json as "runJson"
+     from takosumi_runs
+     where id = $1`,
+    ["run_clear_hb_pg"],
+  );
+  expect(pgRow.rows[0]?.heartbeatAt).toBeNull();
+  expect(runJsonRecord(pgRow.rows[0]?.runJson).heartbeatAt).toBeUndefined();
+
+  const d1 = new SqliteFakeD1();
+  const d1Store = new CloudflareD1OpenTofuDeploymentStore(d1);
+  await d1Store.putApplyRun({
+    ...makeApplyRun("run_clear_hb_d1", "run_plan_clear_hb_d1"),
+    status: "queued",
+  });
+  const d1Claim = await d1Store.transitionRun({
+    id: "run_clear_hb_d1",
+    kind: "apply",
+    expectFrom: ["queued"],
+    run: {
+      ...makeApplyRun("run_clear_hb_d1", "run_plan_clear_hb_d1"),
+      status: "running",
+    },
+    setLeaseToken: "lease_d1",
+    heartbeatAt: 20,
+  });
+  expect(d1Claim.won).toBe(true);
+  const d1Requeue = await d1Store.transitionRun({
+    id: "run_clear_hb_d1",
+    kind: "apply",
+    expectFrom: ["running"],
+    expectLeaseToken: "lease_d1",
+    run: {
+      ...makeApplyRun("run_clear_hb_d1", "run_plan_clear_hb_d1"),
+      status: "queued",
+    },
+    clearLeaseToken: true,
+    clearHeartbeat: true,
+  });
+  expect(d1Requeue.won).toBe(true);
+  const d1Row = await d1
+    .prepare(
+      `select heartbeat_at as heartbeatAt, run_json as runJson
+       from runs
+       where id = ?`,
+    )
+    .bind("run_clear_hb_d1")
+    .first<{ heartbeatAt: number | null; runJson: unknown }>();
+  expect(d1Row?.heartbeatAt).toBeNull();
+  expect(runJsonRecord(d1Row?.runJson).heartbeatAt).toBeUndefined();
 });
 
 test("transitionRun: stale-running takeover is fenced on the observed heartbeat", async () => {
