@@ -12,6 +12,12 @@ export interface LoginEmailIdentity {
   readonly emailVerified?: boolean;
 }
 
+const ALLOWED_SESSION_CACHE_TTL_MS = 5_000;
+const MAX_ALLOWED_SESSION_CACHE_ENTRIES = 512;
+
+const allowedSessionCache = new Map<string, number>();
+const pendingAllowlistChecks = new Map<string, Promise<Response | undefined>>();
+
 export function normalizeLoginEmail(
   value: string | undefined,
 ): string | undefined {
@@ -82,14 +88,57 @@ export async function rejectDisallowedPresentedSession(input: {
   if (!input.allowlist || !input.sessionId?.startsWith("sess_")) {
     return undefined;
   }
+  const sessionId = input.sessionId;
+  const now = Date.now();
+  const cachedUntil = allowedSessionCache.get(sessionId);
+  if (cachedUntil !== undefined && cachedUntil > now) return undefined;
+  if (cachedUntil !== undefined) allowedSessionCache.delete(sessionId);
+
+  const pending = pendingAllowlistChecks.get(sessionId);
+  if (pending) return await pending;
+
+  const check = rejectDisallowedPresentedSessionUncached(
+    { ...input, sessionId, allowlist: input.allowlist },
+    now,
+  );
+  pendingAllowlistChecks.set(sessionId, check);
+  try {
+    return await check;
+  } finally {
+    pendingAllowlistChecks.delete(sessionId);
+  }
+}
+
+async function rejectDisallowedPresentedSessionUncached(
+  input: {
+    readonly request: Request;
+    readonly store: AccountsStore;
+    readonly sessionId: string;
+    readonly allowlist: LoginEmailAllowlist;
+    readonly secureCookie: boolean;
+  },
+  now: number,
+): Promise<Response | undefined> {
   const session = await input.store.findAccountSession(input.sessionId);
-  if (!session || session.expiresAt < Date.now()) return undefined;
+  if (!session || session.expiresAt < now) return undefined;
   const account = await input.store.findAccount(session.subject);
   if (account && loginEmailIsAllowed(account, input.allowlist)) {
+    rememberAllowedSession(
+      input.sessionId,
+      Math.min(session.expiresAt, now + ALLOWED_SESSION_CACHE_TTL_MS),
+    );
     return undefined;
   }
   await input.store.deleteAccountSession(input.sessionId);
+  allowedSessionCache.delete(input.sessionId);
   return accountLoginNotAllowedResponse(input.request, input.secureCookie);
+}
+
+function rememberAllowedSession(sessionId: string, expiresAt: number): void {
+  allowedSessionCache.set(sessionId, expiresAt);
+  if (allowedSessionCache.size <= MAX_ALLOWED_SESSION_CACHE_ENTRIES) return;
+  const oldest = allowedSessionCache.keys().next().value;
+  if (oldest) allowedSessionCache.delete(oldest);
 }
 
 export function accountMatchesLoginAllowlist(
