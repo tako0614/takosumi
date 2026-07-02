@@ -569,7 +569,12 @@ function releaseCommandTimeoutSeconds(
       : typeof value === "string" && /^[1-9]\d*$/u.test(value.trim())
         ? Number(value.trim())
         : undefined;
-  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 6 * 60 * 60) {
+  if (
+    parsed === undefined ||
+    !Number.isInteger(parsed) ||
+    parsed < 1 ||
+    parsed > 6 * 60 * 60
+  ) {
     throw new Error(`${label} must be an integer between 1 and 21600`);
   }
   return parsed;

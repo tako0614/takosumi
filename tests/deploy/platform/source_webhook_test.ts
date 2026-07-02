@@ -29,6 +29,7 @@ import {
   matchPlatformCloudExtensionRoute,
   platformCloudExtensionCatalog,
   platformCloudExtensionRoutes,
+  platformCloudExtensionSessionCanAccessCapsuleProjection,
   platformResourceShapeApiEnabled,
   isPlatformMetricsDashboardPath,
   isPlatformMetricsPath,
@@ -1817,6 +1818,38 @@ test("cloud extension route rejects spoofed billing Workspace context", async ()
     reason: "usage_workspace_id_mismatch",
   });
   expect(forwarded).toBe(false);
+});
+
+test("cloud extension billing context accepts Capsule projection ids", async () => {
+  const seenPaths: string[] = [];
+  const allowed = await platformCloudExtensionSessionCanAccessCapsuleProjection(
+    new Request("https://app.takosumi.com/compat/cloudflare/client/v4", {
+      headers: {
+        authorization: "Bearer session-token",
+      },
+    }),
+    {} as never,
+    "inst_projection",
+    "space_cloud",
+    async (request) => {
+      seenPaths.push(new URL(request.url).pathname);
+      if (new URL(request.url).pathname.startsWith("/api/v1/capsules/")) {
+        return Response.json({ error: "not_found" }, { status: 404 });
+      }
+      return Response.json({
+        installation: {
+          id: "inst_projection",
+          space_id: "space_cloud",
+        },
+      });
+    },
+  );
+
+  expect(allowed).toBe(true);
+  expect(seenPaths).toEqual([
+    "/api/v1/capsules/inst_projection",
+    "/v1/capsule-projections/inst_projection",
+  ]);
 });
 
 test("cloud extension requiredScopes gate token auth", async () => {

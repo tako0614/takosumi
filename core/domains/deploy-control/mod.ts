@@ -2278,7 +2278,9 @@ function releaseCommandTimeoutSeconds(value: unknown): number | undefined {
       : typeof value === "string" && /^[1-9]\d*$/u.test(value.trim())
         ? Number(value.trim())
         : undefined;
-  if (!Number.isInteger(numberValue)) return undefined;
+  if (numberValue === undefined || !Number.isInteger(numberValue)) {
+    return undefined;
+  }
   if (numberValue < 1 || numberValue > 6 * 60 * 60) return undefined;
   return numberValue;
 }
