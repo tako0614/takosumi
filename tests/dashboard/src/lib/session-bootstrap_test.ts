@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { listWorkspacesCached } from "../../../../dashboard/src/lib/workspace-list.ts";
 import {
   clearSession,
   refreshSession,
@@ -15,26 +14,15 @@ afterEach(() => {
 });
 
 describe("dashboard session bootstrap", () => {
-  test("refreshSession primes the Workspace cache from bootstrap", async () => {
+  test("refreshSession uses the lightweight dashboard session bootstrap", async () => {
     const calls: string[] = [];
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       const path = typeof input === "string" ? input : String(input);
       calls.push(path);
-      if (path === "/api/v1/dashboard/bootstrap") {
+      if (path === "/api/v1/dashboard/bootstrap?includeWorkspaces=false") {
         return new Response(
           JSON.stringify({
             session: { subject: "tsub_1" },
-            workspaces: [
-              {
-                id: "space_1",
-                handle: "prod",
-                displayName: "Production",
-                type: "personal",
-                ownerUserId: "tsub_1",
-                createdAt: "2026-07-02T00:00:00.000Z",
-                updatedAt: "2026-07-02T00:00:00.000Z",
-              },
-            ],
           }),
           { status: 200, headers: { "content-type": "application/json" } },
         );
@@ -45,8 +33,8 @@ describe("dashboard session bootstrap", () => {
     const session = await refreshSession();
     expect(session?.subject).toBe("tsub_1");
 
-    const workspaces = await listWorkspacesCached();
-    expect(workspaces[0]?.id).toBe("space_1");
-    expect(calls).toEqual(["/api/v1/dashboard/bootstrap"]);
+    expect(calls).toEqual([
+      "/api/v1/dashboard/bootstrap?includeWorkspaces=false",
+    ]);
   });
 });

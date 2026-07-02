@@ -1461,6 +1461,33 @@ test("GET /api/v1/dashboard/bootstrap returns session and Workspaces", async () 
   expect(operations.calls.listWorkspacesByOwner).toEqual([subject]);
 });
 
+test("GET /api/v1/dashboard/bootstrap can skip Workspaces for fast session proof", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie, subject } = seedSession(store);
+  const operations = fakeOperations();
+  const { request: req, url } = request(
+    "GET",
+    "/api/v1/dashboard/bootstrap?includeWorkspaces=false",
+    { cookie },
+  );
+
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+
+  expect(response?.status).toEqual(200);
+  const body = (await response!.json()) as {
+    session: Record<string, unknown>;
+    workspaces?: Array<Record<string, unknown>>;
+  };
+  expect(body.session.subject).toEqual(subject);
+  expect(body.workspaces).toBeUndefined();
+  expect(operations.calls.listWorkspacesByOwner).toBeUndefined();
+});
+
 test("GET /api/v1/workspaces/:id/capsules rejects malformed includeDestroyed", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);

@@ -49,6 +49,7 @@ export async function handleDashboard(
       ctx.operations,
       ctx.store,
       ctx.session.subject,
+      ctx.url,
     );
   }
   if (
@@ -71,16 +72,16 @@ async function dashboardBootstrap(
   operations: ControlPlaneOperations,
   store: AccountsStore,
   sessionSubject: string,
+  url: URL,
 ): Promise<Response> {
-  const workspaces = await listWorkspacesForSession(
-    operations,
-    store,
-    sessionSubject,
-  );
+  const includeWorkspaces = url.searchParams.get("includeWorkspaces") !== "false";
+  const workspaces = includeWorkspaces
+    ? await listWorkspacesForSession(operations, store, sessionSubject)
+    : undefined;
   return json(
     {
       session: { subject: sessionSubject },
-      workspaces,
+      ...(workspaces ? { workspaces } : {}),
     } satisfies DashboardBootstrapResponse,
     200,
     { "cache-control": "no-store" },
@@ -193,7 +194,7 @@ interface DashboardOverviewResponse {
 
 interface DashboardBootstrapResponse {
   readonly session: { readonly subject: string };
-  readonly workspaces: readonly Workspace[];
+  readonly workspaces?: readonly Workspace[];
 }
 
 async function listWorkspacesForSession(
