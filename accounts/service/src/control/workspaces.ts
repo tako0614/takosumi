@@ -1169,7 +1169,7 @@ async function createCapsule(
     (vars !== undefined && Object.keys(vars).length > 0) ||
     runnerProfileId ||
     outputAllowlist !== undefined ||
-    modulePath
+    modulePath !== undefined
   ) {
     const baseConfig =
       await operations.installations.getInstallConfig(installConfigId);
@@ -1181,8 +1181,12 @@ async function createCapsule(
       );
     }
     const now = new Date().toISOString();
+    const { modulePath: _baseModulePath, ...baseConfigWithoutModulePath } =
+      baseConfig;
+    const configBase =
+      modulePath === "" ? baseConfigWithoutModulePath : baseConfig;
     const config = await operations.installations.putInstallConfig({
-      ...baseConfig,
+      ...configBase,
       id: `icfg_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`,
       workspaceId,
       name: `${name}-config`,

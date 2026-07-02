@@ -204,12 +204,15 @@ async function refreshInstallConfigVars(
   now: () => Date,
 ): Promise<InstallConfig> {
   const existing = await deps.installations.getInstallConfig(installConfigId);
+  const { modulePath: _existingModulePath, ...existingWithoutModulePath } =
+    existing;
+  const base = modulePath === "" ? existingWithoutModulePath : existing;
   return await deps.installations.putInstallConfig({
-    ...existing,
+    ...base,
     variableMapping: { ...(vars ?? {}) },
     outputAllowlist: refreshedOutputAllowlist(existing, outputAllowlist),
     ...(runnerProfileId !== undefined ? { runnerId: runnerProfileId } : {}),
-    ...(modulePath !== undefined ? { modulePath } : {}),
+    ...(modulePath ? { modulePath } : {}),
     updatedAt: now().toISOString(),
   });
 }
@@ -248,7 +251,8 @@ function modulePathValue(value: string | undefined): string | undefined {
     .replace(/^\.\/+/u, "")
     .split("/")
     .filter((part) => part.length > 0 && part !== ".");
-  if (parts.length === 0 || parts.some((part) => part === "..")) {
+  if (parts.length === 0) return "";
+  if (parts.some((part) => part === "..")) {
     return undefined;
   }
   return parts.join("/");

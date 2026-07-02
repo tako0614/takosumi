@@ -2812,6 +2812,43 @@ test("POST /api/v1/workspaces/:id/capsules stores modulePath in a scoped Install
   expect(config.modulePath).toEqual("deploy/opentofu");
 });
 
+test("POST /api/v1/workspaces/:id/capsules accepts repo-root modulePath", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const { request: req, url } = request(
+    "POST",
+    "/api/v1/workspaces/space_a/capsules",
+    {
+      cookie,
+      body: {
+        name: "yurucommu",
+        environment: "staging",
+        sourceId: "src_x",
+        installConfigId: "cfg_x",
+        modulePath: ".",
+      },
+    },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(201);
+  const config = operations.calls.putInstallConfig?.[0] as
+    | {
+        id: string;
+        internal?: unknown;
+        modulePath?: string;
+      }
+    | undefined;
+  expect(config?.id.startsWith("icfg_")).toEqual(true);
+  expect(config?.internal).toEqual({ reason: "per_install_overrides" });
+  expect(config?.modulePath).toBeUndefined();
+});
+
 test("POST /api/v1/workspaces/:id/capsules rejects non-JSON vars", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);

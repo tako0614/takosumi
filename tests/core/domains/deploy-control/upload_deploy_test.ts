@@ -912,6 +912,24 @@ test("deployUpload is idempotent on name: a second deploy updates, not creates",
   expect(config.outputAllowlist).toEqual({
     url: { from: "url", type: "url", required: true },
   });
+
+  const r3 = await deployUpload(
+    { installations, controller },
+    {
+      spaceId: "space_test",
+      name: "iter",
+      environment: "preview",
+      snapshotId: second.id,
+      modulePath: ".",
+      vars: { root: "yes" },
+      outputAllowlist: {
+        url: { from: "url", type: "url", required: true },
+      },
+    },
+  );
+  const rootConfig = await installations.getInstallConfig(r3.installConfigId);
+  expect(rootConfig.modulePath).toBeUndefined();
+  expect(rootConfig.variableMapping).toEqual({ root: "yes" });
 });
 
 test("deployUpload rejects provider env bindings without connectionId before persistence", async () => {

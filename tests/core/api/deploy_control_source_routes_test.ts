@@ -417,6 +417,21 @@ output "attachments_bucket" {
     providers: [{ source: "hashicorp/aws", aliases: [], allowed: true }],
     resources: [{ type: "aws_s3_bucket", count: 1, allowed: true }],
   });
+
+  sourceFileReadOptions.length = 0;
+  const rootChecked = await app.request(
+    `/internal/v1/sources/${source.id}/compatibility-check`,
+    {
+      method: "POST",
+      headers: HEADERS,
+      body: JSON.stringify({
+        sourceSnapshotId: snapshot.id,
+        modulePath: ".",
+      }),
+    },
+  );
+  expect(rootChecked.status).toBe(201);
+  expect(sourceFileReadOptions).toEqual([undefined]);
 });
 
 test("PATCH /internal/v1/sources updates fields", async () => {
