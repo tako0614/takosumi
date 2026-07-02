@@ -1120,6 +1120,70 @@ test("GET /api/v1/workspaces batches ledger Workspace lookups", async () => {
   expect(operations.calls.getWorkspace).toBeUndefined();
 });
 
+test("GET /api/v1/workspaces skips empty legacy ledger Workspace ids", async () => {
+  const store = new InMemoryAccountsStore();
+  const token = "takpat_legacy_ledger_read";
+  const subject = "tsub_legacy_ledger";
+  seedPersonalAccessToken(store, { token, subject, scopes: ["read"] });
+  seedLedgerWorkspace(store, {
+    subject,
+    accountId: "acct_empty",
+    workspaceId: "",
+  });
+  seedLedgerWorkspace(store, {
+    subject,
+    accountId: "acct_valid",
+    workspaceId: "space_ledger_valid",
+  });
+  const operations = fakeOperations({
+    spaces: {
+      listWorkspacesByOwner: async (ownerUserId) => {
+        operations.calls.listWorkspacesByOwner = [ownerUserId];
+        return [];
+      },
+      listWorkspacesByIds: async (ids) => {
+        operations.calls.listWorkspacesByIds = [...ids];
+        return ids.map((id) => ({
+          id,
+          handle: id.replace("space_", ""),
+          displayName: id,
+          type: "personal" as const,
+          ownerUserId: subject,
+          createdAt: "2026-01-01T00:00:00Z",
+          updatedAt: "2026-01-01T00:00:00Z",
+        }));
+      },
+      getWorkspace: async (id) => {
+        operations.calls.getWorkspace = [
+          ...(operations.calls.getWorkspace ?? []),
+          id,
+        ];
+        throw new Error("unexpected single Workspace read");
+      },
+    },
+  });
+  const { request: req, url } = request("GET", "/api/v1/workspaces", {
+    authToken: token,
+  });
+
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+
+  expect(response?.status).toEqual(200);
+  const body = (await response!.json()) as {
+    spaces: Array<Record<string, unknown>>;
+  };
+  expect(body.spaces.map((workspace) => workspace.id)).toEqual([
+    "space_ledger_valid",
+  ]);
+  expect(operations.calls.listWorkspacesByIds).toEqual(["space_ledger_valid"]);
+  expect(operations.calls.getWorkspace).toBeUndefined();
+});
+
 test("mutation routes reject read-only personal access tokens", async () => {
   const store = new InMemoryAccountsStore();
   const token = "takpat_control_read_only";
@@ -1598,6 +1662,72 @@ test("GET /api/v1/dashboard/bootstrap batches ledger Workspace lookups", async (
   expect(operations.calls.listWorkspacesByIds).toEqual([
     "space_ledger_a",
     "space_ledger_b",
+  ]);
+  expect(operations.calls.getWorkspace).toBeUndefined();
+});
+
+test("GET /api/v1/dashboard/bootstrap skips empty legacy ledger Workspace ids", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie, subject } = seedSession(store, {
+    subject: "tsub_dashboard_legacy_ledger",
+  });
+  seedLedgerWorkspace(store, {
+    subject,
+    accountId: "acct_empty",
+    workspaceId: "",
+  });
+  seedLedgerWorkspace(store, {
+    subject,
+    accountId: "acct_valid",
+    workspaceId: "space_dashboard_valid",
+  });
+  const operations = fakeOperations({
+    spaces: {
+      listWorkspacesByOwner: async (ownerUserId) => {
+        operations.calls.listWorkspacesByOwner = [ownerUserId];
+        return [];
+      },
+      listWorkspacesByIds: async (ids) => {
+        operations.calls.listWorkspacesByIds = [...ids];
+        return ids.map((id) => ({
+          id,
+          handle: id.replace("space_", ""),
+          displayName: id,
+          type: "personal" as const,
+          ownerUserId: subject,
+          createdAt: "2026-01-01T00:00:00Z",
+          updatedAt: "2026-01-01T00:00:00Z",
+        }));
+      },
+      getWorkspace: async (id) => {
+        operations.calls.getWorkspace = [
+          ...(operations.calls.getWorkspace ?? []),
+          id,
+        ];
+        throw new Error("unexpected single Workspace read");
+      },
+    },
+  });
+  const { request: req, url } = request("GET", "/api/v1/dashboard/bootstrap", {
+    cookie,
+  });
+
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+
+  expect(response?.status).toEqual(200);
+  const body = (await response!.json()) as {
+    workspaces: Array<Record<string, unknown>>;
+  };
+  expect(body.workspaces.map((workspace) => workspace.id)).toEqual([
+    "space_dashboard_valid",
+  ]);
+  expect(operations.calls.listWorkspacesByIds).toEqual([
+    "space_dashboard_valid",
   ]);
   expect(operations.calls.getWorkspace).toBeUndefined();
 });
