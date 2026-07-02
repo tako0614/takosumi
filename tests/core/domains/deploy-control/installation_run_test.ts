@@ -686,9 +686,7 @@ test("dotted Cloudflare Capsule input merges with provider scope hints", async (
   expect(planRun.status).toEqual("succeeded");
   const mainTf = runner.planJobs[0]!.generatedRoot!.files["main.tf"]!;
   expect(mainTf).toContain('\\"account_id\\":\\"acct_scope_123\\"');
-  expect(mainTf).toContain(
-    '\\"workers_subdomain\\":\\"shoutatomiyama0614\\"',
-  );
+  expect(mainTf).toContain('\\"workers_subdomain\\":\\"shoutatomiyama0614\\"');
   expect(mainTf).not.toContain("cloudflare.workers_subdomain");
   expect(mainTf).not.toContain("fixture-provider-token");
 });
@@ -1333,12 +1331,14 @@ test("installation plan reuses a preflight CompatibilityReport hint without rech
     provisioners: [],
     createdAt: "2026-06-07T00:00:00.000Z",
   });
+  let sourceFileReadCount = 0;
   const sourcesService = new SourcesService({
     store,
     now: () => new Date("2026-06-07T00:00:00.000Z"),
     newId: (prefix) => `${prefix}_unexpected`,
     readCapsuleSourceFiles: () => {
-      throw new Error("preflight report hint should avoid source recheck");
+      sourceFileReadCount += 1;
+      return [];
     },
   });
   const controller = new OpenTofuDeploymentController({
@@ -1361,6 +1361,7 @@ test("installation plan reuses a preflight CompatibilityReport hint without rech
   const installation = await store.getInstallation("inst_fixture");
   expect(installation?.compatibilityReportId).toBe("caprep_preflight");
   expect(installation?.compatibilityStatus).toBe("ready");
+  expect(sourceFileReadCount).toBe(0);
   expect(runner.planJobs).toHaveLength(1);
   expect(runner.planJobs[0]?.generatedRoot?.moduleFiles).toBeUndefined();
 });
@@ -1395,12 +1396,14 @@ test("installation plan reuses the latest matching preflight CompatibilityReport
     provisioners: [],
     createdAt: "2026-06-07T00:00:00.000Z",
   });
+  let sourceFileReadCount = 0;
   const sourcesService = new SourcesService({
     store,
     now: () => new Date("2026-06-07T00:00:00.000Z"),
     newId: (prefix) => `${prefix}_unexpected`,
     readCapsuleSourceFiles: () => {
-      throw new Error("matching preflight report should avoid source recheck");
+      sourceFileReadCount += 1;
+      return [];
     },
   });
   const controller = new OpenTofuDeploymentController({
@@ -1422,6 +1425,7 @@ test("installation plan reuses the latest matching preflight CompatibilityReport
   const installation = await store.getInstallation("inst_fixture");
   expect(installation?.compatibilityReportId).toBe("caprep_preflight");
   expect(installation?.compatibilityStatus).toBe("ready");
+  expect(sourceFileReadCount).toBe(1);
   expect(runner.planJobs).toHaveLength(1);
 });
 
