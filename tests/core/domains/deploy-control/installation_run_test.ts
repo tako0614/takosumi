@@ -2485,7 +2485,20 @@ test("mirror-required policy is dispatched to plan and apply runner jobs", async
 
 test("release activator runs after apply with only non-sensitive outputs", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
-  const runner = recordingRunner();
+  const runner = recordingRunner(
+    {},
+    {
+      launch_url: {
+        sensitive: false,
+        value: "https://yuru-smoke-secret.example",
+      },
+      public_url: { sensitive: false, value: "https://public.example" },
+      public_status: { sensitive: false, value: "sk-output-raw-token" },
+      worker_name: { sensitive: false, value: "yuru-smoke-secret" },
+      bucket_name: { sensitive: false, value: "my-bucket" },
+      admin_token: { sensitive: true, value: "super-secret-token" },
+    },
+  );
   await seedRunnableInstallationModel(store, { environment: "preview" });
   const activations: ReleaseActivationInput[] = [];
   const controller = controllerWith(store, runner, {
@@ -2512,8 +2525,9 @@ test("release activator runs after apply with only non-sensitive outputs", async
   expect(applyRun.status).toBe("succeeded");
   expect(activations).toHaveLength(1);
   expect(activations[0]?.nonSensitiveOutputs).toEqual({
-    launch_url: "https://x.example",
+    launch_url: "https://yuru-smoke-secret.example",
     public_url: "https://public.example",
+    worker_name: "yuru-smoke-secret",
     bucket_name: "my-bucket",
   });
   expect(JSON.stringify(activations[0])).not.toContain("admin_token");
@@ -2530,14 +2544,16 @@ test("release activator runs after apply with only non-sensitive outputs", async
     metadata: {
       installationId: "inst_fixture",
       applyRunId: applyRun.id,
-      outputCount: 3,
+      outputCount: 4,
       activationKind: "operator.release",
       hasLaunchUrl: true,
       hasHealthUrl: false,
       metadataKeys: ["artifactName"],
     },
   });
-  expect(JSON.stringify(activity)).not.toContain("https://x.example");
+  expect(JSON.stringify(activity)).not.toContain(
+    "https://yuru-smoke-secret.example",
+  );
   expect(JSON.stringify(activity)).not.toContain("super-secret-token");
 });
 
