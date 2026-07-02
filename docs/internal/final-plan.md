@@ -740,8 +740,9 @@ S3 API:
   or control-plane compatibility. It is not mandatory for normal S3/R2/GCS use.
 
 OCI registry:
-  useful for Artifact / ContainerImage flows when Takosumi owns artifact
-  lifecycle.
+  useful when an app or operator exposes ContainerImage / Artifact flows
+  through an explicit Git CI or release pipeline. Takosumi may reference and
+  validate those artifacts, but it does not own hidden build semantics.
 
 CloudEvents:
   useful for Queue / EventHandler / DurableWorkflow trigger import.
