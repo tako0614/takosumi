@@ -39,6 +39,8 @@ export interface SessionRecord {
 
 const SESSION_ME_PATH = "/v1/account/session/me";
 const DASHBOARD_BOOTSTRAP_PATH = "/api/v1/dashboard/bootstrap";
+const DASHBOARD_SESSION_BOOTSTRAP_PATH =
+  `${DASHBOARD_BOOTSTRAP_PATH}?includeWorkspaces=false`;
 const CACHE_TTL_MS = 30_000;
 
 const listeners = new Set<(s: SessionRecord | null) => void>();
@@ -108,7 +110,7 @@ function pickResponseRecord(data: SessionMeResponse): SessionRecord | null {
 async function fetchSessionMe(): Promise<SessionRecord | null> {
   if (typeof fetch === "undefined") return null;
   try {
-    const res = await fetch(DASHBOARD_BOOTSTRAP_PATH, {
+    const res = await fetch(DASHBOARD_SESSION_BOOTSTRAP_PATH, {
       method: "GET",
       headers: { accept: "application/json" },
       credentials: "include",
