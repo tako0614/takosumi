@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import type { OpenTofuRunner } from "../../../../core/domains/deploy-control/mod.ts";
 import {
   applyExpectedGuardFromPlanRun,
+  CREDENTIAL_FREE_UTILITY_PROVIDER_ADDRESSES,
   createDefaultRunnerProfiles,
   OpenTofuControllerError,
   OpenTofuDeploymentController,
@@ -25,6 +26,12 @@ const SOURCE = {
   url: "https://github.com/example/app.git",
   ref: "main",
 } as const;
+
+function expectedProviderProfileProviders(
+  providers: readonly string[],
+): readonly string[] {
+  return [...providers, ...CREDENTIAL_FREE_UTILITY_PROVIDER_ADDRESSES];
+}
 
 /**
  * Installation-first model setup (spec §5). Seeds Space + Source + Snapshot +
@@ -791,7 +798,7 @@ test("internal generated-root dispatch may use a nominal local source", async ()
           files: {
             "main.tf": [
               "terraform {",
-              "  required_version = \">= 1.6.0\"",
+              '  required_version = ">= 1.6.0"',
               "}",
             ].join("\n"),
           },
@@ -843,7 +850,7 @@ test("internal generated-root dispatch skips source compatibility preflight", as
           files: {
             "main.tf": [
               "terraform {",
-              "  required_version = \">= 1.6.0\"",
+              '  required_version = ">= 1.6.0"',
               "}",
             ].join("\n"),
           },
@@ -1411,6 +1418,18 @@ test("default Cloudflare runner is an OSS provider runner without Cloud-only hos
   });
   expect(cloudflare?.cloudflareWorkersForPlatforms).toBeUndefined();
   expect(cloudflare?.labels?.["takosumi.com/provider-runner"]).toEqual("true");
+  expect(cloudflare?.allowedProviders).toEqual(
+    expectedProviderProfileProviders([
+      "registry.opentofu.org/cloudflare/cloudflare",
+    ]),
+  );
+  expect(cloudflare?.credentialRefs).toEqual([
+    {
+      provider: "registry.opentofu.org/cloudflare/cloudflare",
+      ref: "secret://takosumi/cloudflare-default",
+      required: true,
+    },
+  ]);
   expect(cloudflare?.secretExposurePolicy).toEqual({
     providerCredentials: "runner-only",
     tenantWorkerOperatorSecrets: "forbidden",
@@ -1438,33 +1457,51 @@ test("default runner profile seeds cover provider-env targets and future/custom 
     "docker-custom-example",
     "generic-opentofu-provider",
   ]);
-  expect(byId.get("azure-provider-env-candidate")?.allowedProviders).toEqual([
-    "registry.opentofu.org/hashicorp/azurerm",
-  ]);
+  expect(byId.get("azure-provider-env-candidate")?.allowedProviders).toEqual(
+    expectedProviderProfileProviders([
+      "registry.opentofu.org/hashicorp/azurerm",
+    ]),
+  );
   expect(
     byId.get("kubernetes-provider-env-candidate")?.allowedProviders,
-  ).toEqual([
-    "registry.opentofu.org/hashicorp/kubernetes",
-    "registry.opentofu.org/hashicorp/helm",
-  ]);
-  expect(byId.get("github-provider-env-candidate")?.allowedProviders).toEqual([
-    "registry.opentofu.org/integrations/github",
-  ]);
+  ).toEqual(
+    expectedProviderProfileProviders([
+      "registry.opentofu.org/hashicorp/kubernetes",
+      "registry.opentofu.org/hashicorp/helm",
+    ]),
+  );
+  expect(byId.get("github-provider-env-candidate")?.allowedProviders).toEqual(
+    expectedProviderProfileProviders([
+      "registry.opentofu.org/integrations/github",
+    ]),
+  );
   expect(
     byId.get("digitalocean-provider-env-candidate")?.allowedProviders,
-  ).toEqual(["registry.opentofu.org/digitalocean/digitalocean"]);
-  expect(byId.get("hcloud-provider-env-candidate")?.allowedProviders).toEqual([
-    "registry.opentofu.org/hetznercloud/hcloud",
-  ]);
-  expect(byId.get("vultr-provider-env-candidate")?.allowedProviders).toEqual([
-    "registry.opentofu.org/vultr/vultr",
-  ]);
+  ).toEqual(
+    expectedProviderProfileProviders([
+      "registry.opentofu.org/digitalocean/digitalocean",
+    ]),
+  );
+  expect(byId.get("hcloud-provider-env-candidate")?.allowedProviders).toEqual(
+    expectedProviderProfileProviders([
+      "registry.opentofu.org/hetznercloud/hcloud",
+    ]),
+  );
+  expect(byId.get("vultr-provider-env-candidate")?.allowedProviders).toEqual(
+    expectedProviderProfileProviders(["registry.opentofu.org/vultr/vultr"]),
+  );
   expect(byId.get("scaleway-provider-env-candidate")?.allowedProviders).toEqual(
-    ["registry.opentofu.org/scaleway/scaleway"],
+    expectedProviderProfileProviders([
+      "registry.opentofu.org/scaleway/scaleway",
+    ]),
   );
   expect(
     byId.get("openstack-provider-env-candidate")?.allowedProviders,
-  ).toEqual(["registry.opentofu.org/terraform-provider-openstack/openstack"]);
+  ).toEqual(
+    expectedProviderProfileProviders([
+      "registry.opentofu.org/terraform-provider-openstack/openstack",
+    ]),
+  );
   expect(byId.get("openstack-provider-env-candidate")?.substrate).toEqual(
     "local",
   );

@@ -45,6 +45,40 @@ test("pre-init policy accepts root-only TF_VAR provider credentials", () => {
   ).not.toThrow();
 });
 
+test("pre-init policy admits credential-free utility providers without utility secrets", () => {
+  expect(() =>
+    assertRunnerPolicyForRequest(
+      {
+        ...REQUEST,
+        planRun: {
+          ...REQUEST.planRun,
+          requiredProviders: [
+            "registry.opentofu.org/cloudflare/cloudflare",
+            "registry.opentofu.org/hashicorp/http",
+          ],
+        },
+        credentials: {
+          TF_VAR_cloudflare_main_api_token: "run-scoped-token",
+        },
+      },
+      {
+        ...DEFAULT_STYLE_CLOUDFLARE_PROFILE,
+        allowedProviders: [
+          "registry.opentofu.org/cloudflare/cloudflare",
+          "registry.opentofu.org/hashicorp/http",
+        ],
+        credentialRefs: [
+          {
+            provider: "registry.opentofu.org/cloudflare/cloudflare",
+            ref: "secret://takosumi/cloudflare-default",
+            required: true,
+          },
+        ],
+      },
+    ),
+  ).not.toThrow();
+});
+
 test("pre-init policy still fails closed when no root-only provider credential was minted", () => {
   expect(() =>
     assertRunnerPolicyForRequest(REQUEST, DEFAULT_STYLE_CLOUDFLARE_PROFILE),

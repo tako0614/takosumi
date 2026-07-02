@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import {
+  CREDENTIAL_FREE_UTILITY_PROVIDER_ADDRESSES,
   createDefaultRunnerProfiles,
   parseEnabledRunnerProfileIds,
   resolveEnabledRunnerProfiles,
@@ -67,9 +68,7 @@ test("gcp candidate can be explicitly enabled", () => {
     "gcp-provider-env-candidate",
   );
   expect(idsOf(enabled)).toEqual(["gcp-provider-env-candidate"]);
-  expect(
-    enabled[0]?.labels?.["takosumi.com/profile-enabled"],
-  ).toEqual("true");
+  expect(enabled[0]?.labels?.["takosumi.com/profile-enabled"]).toEqual("true");
 });
 
 test("generic OpenTofu provider profile can be explicitly enabled", () => {
@@ -84,9 +83,7 @@ test("generic OpenTofu provider profile can be explicitly enabled", () => {
   expect(enabled[0]?.labels?.["takosumi.com/provider-surface"]).toEqual(
     "generic",
   );
-  expect(
-    enabled[0]?.labels?.["takosumi.com/profile-enabled"],
-  ).toEqual("true");
+  expect(enabled[0]?.labels?.["takosumi.com/profile-enabled"]).toEqual("true");
 });
 
 test("Cloud GA surface admits arbitrary providers only through the generic env profile", () => {
@@ -109,6 +106,21 @@ test("Cloud GA surface admits arbitrary providers only through the generic env p
   expect(cloudflareDecision.reasons.join("\n")).toContain(
     "provider registry.opentofu.org/vercel/vercel is not allowed",
   );
+
+  const utilityDecision = evaluatePolicy({
+    profile: byId.get("cloudflare-default")!,
+    requiredProviders: [
+      "registry.opentofu.org/cloudflare/cloudflare",
+      "registry.opentofu.org/hashicorp/http",
+    ],
+    checkedAt: 123,
+  });
+  expect(utilityDecision.status).toBe("passed");
+  expect(utilityDecision.reasons).toEqual([]);
+  expect(byId.get("cloudflare-default")?.allowedProviders).toEqual([
+    "registry.opentofu.org/cloudflare/cloudflare",
+    ...CREDENTIAL_FREE_UTILITY_PROVIDER_ADDRESSES,
+  ]);
 
   const genericDecision = evaluatePolicy({
     profile: byId.get("generic-opentofu-provider")!,
