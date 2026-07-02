@@ -1723,7 +1723,7 @@ async function platformCloudExtensionVerifiedBillingSession(
       if (
         !verifiedSpaceId ||
         session.authKind !== "session" ||
-        !(await platformCloudExtensionSessionCanAccessInstallation(
+        !(await platformCloudExtensionSessionCanAccessCapsuleProjection(
           request,
           env,
           requested.installationId,
@@ -1797,36 +1797,61 @@ async function platformCloudExtensionSessionCanAccessWorkspace(
   }
 }
 
-async function platformCloudExtensionSessionCanAccessInstallation(
+type PlatformCloudExtensionAccountsFetch = (
   request: Request,
   env: CloudflareWorkerEnv,
-  installationId: string,
+) => Promise<Response>;
+
+export async function platformCloudExtensionSessionCanAccessCapsuleProjection(
+  request: Request,
+  env: CloudflareWorkerEnv,
+  capsuleProjectionId: string,
   workspaceId: string,
+  accountsFetch: PlatformCloudExtensionAccountsFetch = async (
+    accountsRequest,
+    accountsEnv,
+  ) => await accountsWorker.fetch(accountsRequest, accountsEnv),
 ): Promise<boolean> {
   const headers = sessionMirrorHeaders(request);
   if (!headers) return false;
-  try {
-    const response = await accountsWorker.fetch(
-      new Request(
-        new URL(
-          `/api/v1/capsules/${encodeURIComponent(installationId)}`,
-          request.url,
-        ),
-        { method: "GET", headers },
-      ),
-      env,
-    );
-    if (!response.ok) return false;
-    const body = await response.json().catch(() => undefined);
-    const installation = objectRecord(objectRecord(body).installation);
-    const resolvedWorkspaceId = safePlatformCloudExtensionContextId(
-      valueString(installation.workspaceId) ??
-        valueString(installation.spaceId),
-    );
-    return resolvedWorkspaceId === workspaceId;
-  } catch {
-    return false;
+  for (const path of [
+    `/api/v1/capsules/${encodeURIComponent(capsuleProjectionId)}`,
+    `/v1/capsule-projections/${encodeURIComponent(capsuleProjectionId)}`,
+  ]) {
+    try {
+      const response = await accountsFetch(
+        new Request(new URL(path, request.url), {
+          method: "GET",
+          headers,
+        }),
+        env,
+      );
+      if (!response.ok) continue;
+      const body = await response.json().catch(() => undefined);
+      if (workspaceIdFromCapsuleAccessBody(body) === workspaceId) return true;
+    } catch {
+      continue;
+    }
   }
+  return false;
+}
+
+function workspaceIdFromCapsuleAccessBody(value: unknown): string | undefined {
+  const body = objectRecord(value);
+  for (const candidate of [
+    objectRecord(body.capsule),
+    objectRecord(body.installation),
+    body,
+  ]) {
+    const workspaceId = safePlatformCloudExtensionContextId(
+      valueString(candidate.workspaceId) ??
+        valueString(candidate.spaceId) ??
+        valueString(candidate.workspace_id) ??
+        valueString(candidate.space_id),
+    );
+    if (workspaceId) return workspaceId;
+  }
+  return undefined;
 }
 
 function clonePlatformCloudExtensionRequest(
