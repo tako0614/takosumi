@@ -483,6 +483,7 @@ function uniqueMissingWorkspaceIds(
   const seen = new Set<string>();
   const result: string[] = [];
   for (const id of ids) {
+    if (typeof id !== "string" || id.trim().length === 0) continue;
     if (seen.has(id) || existing.has(id)) continue;
     seen.add(id);
     result.push(id);
