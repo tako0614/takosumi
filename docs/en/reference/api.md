@@ -293,7 +293,7 @@ v1alpha1:
   breaking changes are allowed. Update docs and conformance together.
 
 v1beta1:
-  core shape is fixed. Migration path required.
+  core shape is fixed. Upgrade and conversion guidance required.
 
 v1:
   backward compatibility maintained. No field removals.

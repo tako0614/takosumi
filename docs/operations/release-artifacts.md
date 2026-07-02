@@ -78,9 +78,9 @@ bun run release-activation:evidence -- --print-template \
   > "$TAKOSUMI_PRIVATE/evidence/release-activation.json"
 
 # Fill the four evidence/*.md files and replace run ids, StateVersion / Output
-# ids, deployment ids, health URLs, and evidence refs with live operator values.
-# If the live runtime still emits Space / Installation / OutputSnapshot ids,
-# record them under `legacyRuntimeIds` rather than as the public claim shape.
+# ids, activation record ids, health URLs, and evidence refs with live operator
+# values. Do not add legacy runtime ids to the manifest; compatibility rows can
+# stay in operator notes, but the structured claim uses the final model only.
 bun run release-activation:evidence -- --update-digests \
   "$TAKOSUMI_PRIVATE/evidence/release-activation.json"
 ```
