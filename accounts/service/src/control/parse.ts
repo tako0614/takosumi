@@ -187,8 +187,14 @@ export function modulePathValue(value: unknown): string | undefined {
   }
   const normalized = normalize(raw)
     .replace(/\\/g, "/")
-    .replace(/^\.\/+/u, "");
-  if (!normalized || normalized === "." || normalized.startsWith("../")) {
+    .replace(/^\.\/+/u, "")
+    .replace(/\/+$/u, "");
+  if (!normalized || normalized === ".") return "";
+  if (
+    normalized === ".." ||
+    normalized.startsWith("../") ||
+    normalized.includes("/../")
+  ) {
     return undefined;
   }
   return normalized;
