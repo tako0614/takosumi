@@ -53,6 +53,7 @@ test("OpenTofu run owner alarm dispatches once and records success", async () =>
         calls.push(dispatch);
         return Promise.resolve();
       },
+      readRunStatus: () => Promise.resolve("succeeded"),
     },
   );
 
@@ -80,6 +81,7 @@ test("OpenTofu run owner maps destroy queue work to apply dispatch", async () =>
         calls.push(dispatch);
         return Promise.resolve();
       },
+      readRunStatus: () => Promise.resolve("succeeded"),
     },
   );
 
@@ -120,6 +122,7 @@ test("OpenTofu run owner immediately reschedules controller-managed retries", as
         );
       }
     },
+    readRunStatus: () => Promise.resolve("succeeded"),
   });
 
   await start(owner, "apply");
@@ -168,6 +171,47 @@ test("OpenTofu run owner reschedules when controller requeues without throwing",
   record = await storage.get<Record<string, unknown>>("run");
   assert.equal(record?.status, "succeeded");
   assert.equal(record?.lastScheduleCause, undefined);
+  assert.equal(storage.alarmAt, undefined);
+});
+
+test("OpenTofu run owner reschedules when status read fails after dispatch", async () => {
+  const storage = new FakeDoStorage();
+  let now = Date.parse("2026-06-22T08:00:00.000Z");
+  let calls = 0;
+  let statusReads = 0;
+  const owner = new OpenTofuRunOwnerObject(
+    { storage },
+    {} as CloudflareWorkerEnv,
+    {
+      now: () => now,
+      dispatch: () => {
+        calls += 1;
+        return Promise.resolve();
+      },
+      readRunStatus: () => {
+        statusReads += 1;
+        if (statusReads === 1) return Promise.reject(new Error("d1 timeout"));
+        return Promise.resolve("succeeded");
+      },
+    },
+  );
+
+  await start(owner, "apply");
+  await owner.alarm();
+
+  assert.equal(calls, 1);
+  let record = await storage.get<Record<string, unknown>>("run");
+  assert.equal(record?.status, "scheduled");
+  assert.equal(record?.lastScheduleCause, "controller_retry");
+  assert.equal(record?.lastError, "run status unavailable after dispatch");
+  assert.equal(storage.alarmAt, now + 1_000);
+
+  now = storage.alarmAt!;
+  await owner.alarm();
+
+  assert.equal(calls, 2);
+  record = await storage.get<Record<string, unknown>>("run");
+  assert.equal(record?.status, "succeeded");
   assert.equal(storage.alarmAt, undefined);
 });
 
@@ -348,6 +392,63 @@ test("OpenTofu run owner accepts controller retry over a terminal owner record",
   record = await storage.get<Record<string, unknown>>("run");
   assert.equal(record?.status, "succeeded");
   assert.equal(record?.lastScheduleCause, undefined);
+  assert.equal(storage.alarmAt, undefined);
+});
+
+test("OpenTofu run owner reschedules a terminal owner record when the ledger is still queued", async () => {
+  const storage = new FakeDoStorage();
+  const old = Date.parse("2026-06-22T08:00:00.000Z");
+  const now = old + 120_000;
+  await storage.put("run", {
+    kind: "takosumi.opentofu-run-owner@v1",
+    action: "apply",
+    requestedAction: "apply",
+    runId: "run_1",
+    spaceId: "space_1",
+    status: "succeeded",
+    attempts: 1,
+    maxAttempts: 3,
+    createdAt: new Date(old).toISOString(),
+    updatedAt: new Date(old).toISOString(),
+    startedAt: new Date(old).toISOString(),
+    finishedAt: new Date(old + 1_000).toISOString(),
+  });
+  const calls: unknown[] = [];
+  let statusReads = 0;
+  const owner = new OpenTofuRunOwnerObject(
+    { storage },
+    {} as CloudflareWorkerEnv,
+    {
+      now: () => now,
+      dispatch: (dispatch) => {
+        calls.push(dispatch);
+        return Promise.resolve();
+      },
+      readRunStatus: () => {
+        statusReads += 1;
+        return Promise.resolve(statusReads === 1 ? "queued" : "succeeded");
+      },
+    },
+  );
+
+  await start(owner, "apply");
+
+  let record = await storage.get<Record<string, unknown>>("run");
+  assert.equal(record?.status, "scheduled");
+  assert.equal(
+    record?.lastError,
+    "ledger remained queued after terminal owner record",
+  );
+  assert.equal(record?.finishedAt, undefined);
+  assert.equal(storage.alarmAt, now);
+
+  await owner.alarm();
+
+  assert.deepEqual(calls, [
+    { action: "apply", runId: "run_1", spaceId: "space_1" },
+  ]);
+  record = await storage.get<Record<string, unknown>>("run");
+  assert.equal(record?.status, "succeeded");
   assert.equal(storage.alarmAt, undefined);
 });
 

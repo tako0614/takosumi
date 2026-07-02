@@ -91,6 +91,7 @@ import type {
   OpenTofuDeploymentStore,
   PlanRunInputs,
   PutUsageEventAndSpendCreditsResult,
+  RecoverableOpenTofuRunListOptions,
   StoredRunRecord,
   StoredSecretBlob,
   StoredSource,
@@ -105,10 +106,13 @@ import type {
 } from "./store.ts";
 import {
   clampActivityLimit,
+  clampRecoverableOpenTofuRunListLimit,
   clampRunListLimit,
+  compareStoredRunRecordsAsc,
   compareStoredRunRecordsDesc,
   InstallationPatchGuardConflict,
   InstallationStateGenerationGuardConflict,
+  isRecoverableOpenTofuRunRecord,
 } from "./store.ts";
 import {
   artifactRecordFromRow,
@@ -280,8 +284,8 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
    * the row when its `status` is still in `expectFrom` (and, when set, its
    * `leaseToken` still equals `expectLeaseToken`). On a win the row's status /
    * run JSON advance to `input.run`; `setLeaseToken` / `clearLeaseToken` /
-   * `heartbeatAt` write the lease and heartbeat columns. A lost race (0 rows)
-   * re-reads the current row and returns it with `won: false`.
+   * `clearHeartbeat` / `heartbeatAt` write the lease and heartbeat columns. A
+   * lost race (0 rows) re-reads the current row and returns it with `won: false`.
    */
   async transitionRun(input: TransitionRunInput): Promise<TransitionRunResult> {
     const kinds =
@@ -292,17 +296,14 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
           : input.kind === "source_sync"
             ? [RUN_KIND_SOURCE_SYNC]
             : [RUN_KIND_RESTORE];
-    // Resolve the heartbeat (input override wins over the value on `run`) and
-    // bake it into the persisted run JSON so the column and run_json agree.
     const heartbeatAt = input.heartbeatAt ?? input.run.heartbeatAt;
     const persisted: PlanRun | ApplyRun | SourceSyncRun | Run =
-      heartbeatAt === undefined
-        ? input.run
-        : ({ ...input.run, heartbeatAt } as
-            | PlanRun
-            | ApplyRun
-            | SourceSyncRun
-            | Run);
+      input.clearHeartbeat
+        ? stripRunHeartbeat(input.run)
+        : heartbeatAt === undefined
+          ? input.run
+          : ({ ...input.run, heartbeatAt } as
+              PlanRun | ApplyRun | SourceSyncRun | Run);
     const leaseSet: { leaseToken?: string | null } = input.clearLeaseToken
       ? { leaseToken: null }
       : input.setLeaseToken !== undefined
@@ -313,7 +314,11 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       .set({
         status: persisted.status,
         runJson: persisted,
-        ...(heartbeatAt === undefined ? {} : { heartbeatAt }),
+        ...(input.clearHeartbeat
+          ? { heartbeatAt: null }
+          : heartbeatAt === undefined
+            ? {}
+            : { heartbeatAt }),
         ...leaseSet,
       })
       .where(
@@ -333,11 +338,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       )
       .returning({ json: pgSchema.runs.runJson });
     const won = parseRow(rows[0]) as
-      | PlanRun
-      | ApplyRun
-      | SourceSyncRun
-      | Run
-      | undefined;
+      PlanRun | ApplyRun | SourceSyncRun | Run | undefined;
     if (won) return { won: true, run: won };
     // Lost the CAS race (or the row vanished): re-read the now-current row so
     // callers observe the winning transition instead of clobbering it.
@@ -420,6 +421,33 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       .map((row) => parseRow(row) as StoredRunRecord)
       .filter((row): row is StoredRunRecord => Boolean(row))
       .sort(compareStoredRunRecordsDesc)
+      .slice(0, limit);
+  }
+
+  async listRecoverableOpenTofuRuns(
+    options: RecoverableOpenTofuRunListOptions,
+  ): Promise<readonly StoredRunRecord[]> {
+    const rows = await this.#db
+      .select({ json: pgSchema.runs.runJson })
+      .from(pgSchema.runs)
+      .where(
+        and(
+          inArray(pgSchema.runs.status, ["queued", "running"]),
+          inArray(pgSchema.runs.kind, [
+            ...RUN_KINDS_PLAN,
+            "drift_check",
+            ...RUN_KINDS_APPLY,
+            RUN_KIND_SOURCE_SYNC,
+            RUN_KIND_RESTORE,
+          ]),
+        ),
+      );
+    const limit = clampRecoverableOpenTofuRunListLimit(options.limit);
+    return rows
+      .map((row) => parseRow(row) as StoredRunRecord)
+      .filter((row): row is StoredRunRecord => Boolean(row))
+      .filter((row) => isRecoverableOpenTofuRunRecord(row, options))
+      .sort(compareStoredRunRecordsAsc)
       .slice(0, limit);
   }
 
@@ -2615,7 +2643,10 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
           return {
             settled: false,
             attempt: existing,
-            balance: await billingCreditBalanceForSpace(transaction, workspaceKeyOf(existing)),
+            balance: await billingCreditBalanceForSpace(
+              transaction,
+              workspaceKeyOf(existing),
+            ),
             skippedReason: "already_succeeded",
           };
         }
@@ -2687,7 +2718,10 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
         return {
           settled: true,
           attempt: next,
-          balance: await billingCreditBalanceForSpace(transaction, workspaceKeyOf(next)),
+          balance: await billingCreditBalanceForSpace(
+            transaction,
+            workspaceKeyOf(next),
+          ),
         };
       },
     );
@@ -2846,7 +2880,10 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
             if (!raced) return undefined;
             return {
               usageEvent: usageEventFromRow(raced),
-              balance: await billingCreditBalanceForSpace(transaction, workspaceKeyOf(normalized)),
+              balance: await billingCreditBalanceForSpace(
+                transaction,
+                workspaceKeyOf(normalized),
+              ),
               inserted: false,
             };
           }
@@ -2884,7 +2921,10 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
           );
           return {
             usageEvent: normalized,
-            balance: await billingCreditBalanceForSpace(transaction, workspaceKeyOf(normalized)),
+            balance: await billingCreditBalanceForSpace(
+              transaction,
+              workspaceKeyOf(normalized),
+            ),
             inserted: true,
           };
         },
@@ -3218,6 +3258,14 @@ function installationValues(installation: Installation) {
     createdAt: normalized.createdAt,
     updatedAt: normalized.updatedAt,
   };
+}
+
+function stripRunHeartbeat<R extends PlanRun | ApplyRun | SourceSyncRun | Run>(
+  run: R,
+): R {
+  const { heartbeatAt, ...withoutHeartbeat } = run;
+  void heartbeatAt;
+  return withoutHeartbeat as R;
 }
 
 // --- tx-aware upserts -------------------------------------------------------

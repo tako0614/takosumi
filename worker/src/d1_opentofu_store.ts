@@ -102,6 +102,7 @@ import type {
   OpenTofuDeploymentStore,
   PlanRunInputs,
   PutUsageEventAndSpendCreditsResult,
+  RecoverableOpenTofuRunListOptions,
   StoredRunRecord,
   StoredSecretBlob,
   StoredSource,
@@ -116,10 +117,13 @@ import type {
 } from "../../core/domains/deploy-control/store.ts";
 import {
   clampActivityLimit,
+  clampRecoverableOpenTofuRunListLimit,
   clampRunListLimit,
+  compareStoredRunRecordsAsc,
   compareStoredRunRecordsDesc,
   InstallationPatchGuardConflict,
   InstallationStateGenerationGuardConflict,
+  isRecoverableOpenTofuRunRecord,
 } from "../../core/domains/deploy-control/store.ts";
 import {
   artifactRecordFromRow,
@@ -284,9 +288,9 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
    * `type` (the run family), `status ∈ expectFrom`, and — when set —
    * `lease_token = expectLeaseToken`, so a concurrent claimer that already moved
    * the row loses deterministically. On a win the status / run_json advance to
-   * `input.run`; `setLeaseToken` / `clearLeaseToken` / `heartbeatAt` write the
-   * lease and heartbeat columns. A lost race (0 rows changed) re-reads the
-   * current row and returns it with `won: false`.
+   * `input.run`; `setLeaseToken` / `clearLeaseToken` / `clearHeartbeat` /
+   * `heartbeatAt` write the lease and heartbeat columns. A lost race (0 rows
+   * changed) re-reads the current row and returns it with `won: false`.
    */
   async transitionRun(input: TransitionRunInput): Promise<TransitionRunResult> {
     await this.#ensureSchema();
@@ -298,17 +302,14 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
           : input.kind === "source_sync"
             ? [RUN_KIND_SOURCE_SYNC]
             : [RUN_KIND_RESTORE];
-    // Resolve the heartbeat (input override wins over the value on `run`) and
-    // bake it into the persisted run JSON so the column and run_json agree.
     const heartbeatAt = input.heartbeatAt ?? input.run.heartbeatAt;
     const persisted: PlanRun | ApplyRun | SourceSyncRun | Run =
-      heartbeatAt === undefined
-        ? input.run
-        : ({ ...input.run, heartbeatAt } as
-            | PlanRun
-            | ApplyRun
-            | SourceSyncRun
-            | Run);
+      input.clearHeartbeat
+        ? stripRunHeartbeat(input.run)
+        : heartbeatAt === undefined
+          ? input.run
+          : ({ ...input.run, heartbeatAt } as
+              PlanRun | ApplyRun | SourceSyncRun | Run);
     const leaseSet: { leaseToken?: string | null } = input.clearLeaseToken
       ? { leaseToken: null }
       : input.setLeaseToken !== undefined
@@ -319,7 +320,11 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
       .set({
         status: persisted.status,
         runJson: persisted as unknown,
-        ...(heartbeatAt === undefined ? {} : { heartbeatAt }),
+        ...(input.clearHeartbeat
+          ? { heartbeatAt: null }
+          : heartbeatAt === undefined
+            ? {}
+            : { heartbeatAt }),
         ...leaseSet,
       })
       .where(
@@ -432,6 +437,34 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     );
     const limit = clampRunListLimit(options.limit);
     return [...rows].sort(compareStoredRunRecordsDesc).slice(0, limit);
+  }
+
+  async listRecoverableOpenTofuRuns(
+    options: RecoverableOpenTofuRunListOptions,
+  ): Promise<readonly StoredRunRecord[]> {
+    const rows = await this.#drizzleManyJson<StoredRunRecord>(
+      schema.runs,
+      schema.runs.runJson,
+      {
+        where: and(
+          inArray(schema.runs.status, ["queued", "running"]),
+          inArray(schema.runs.type, [
+            RUN_KIND_PLAN,
+            "destroy_plan",
+            "drift_check",
+            RUN_KIND_APPLY,
+            "destroy_apply",
+            RUN_KIND_SOURCE_SYNC,
+            RUN_KIND_RESTORE,
+          ]),
+        ),
+      },
+    );
+    const limit = clampRecoverableOpenTofuRunListLimit(options.limit);
+    return [...rows]
+      .filter((row) => isRecoverableOpenTofuRunRecord(row, options))
+      .sort(compareStoredRunRecordsAsc)
+      .slice(0, limit);
   }
 
   async listSourceSyncRuns(
@@ -1243,7 +1276,6 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
       eq(schema.secretBlobs.connectionId, connectionId),
     );
   }
-
 
   // -- Source (+ snapshots) ---------------------------------------------------
 
@@ -2484,7 +2516,9 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
       return {
         settled: false,
         attempt: existing,
-        balance: await this.getCreditBalance(existing.workspaceId ?? existing.spaceId),
+        balance: await this.getCreditBalance(
+          existing.workspaceId ?? existing.spaceId,
+        ),
         skippedReason: "already_succeeded",
       };
     }
@@ -2530,7 +2564,9 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
         return {
           settled: false,
           attempt: await this.#billingAutoRechargeAttemptById(next.id),
-          balance: await this.getCreditBalance(next.workspaceId ?? next.spaceId),
+          balance: await this.getCreditBalance(
+            next.workspaceId ?? next.spaceId,
+          ),
           skippedReason: "already_succeeded",
         };
       }
@@ -2583,7 +2619,9 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
         return {
           settled: false,
           attempt: await this.#billingAutoRechargeAttemptById(next.id),
-          balance: await this.getCreditBalance(next.workspaceId ?? next.spaceId),
+          balance: await this.getCreditBalance(
+            next.workspaceId ?? next.spaceId,
+          ),
           skippedReason: "already_succeeded",
         };
       }
@@ -2663,7 +2701,9 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     if (existing) {
       return {
         usageEvent: existing,
-        balance: await this.getCreditBalance(existing.workspaceId ?? existing.spaceId),
+        balance: await this.getCreditBalance(
+          existing.workspaceId ?? existing.spaceId,
+        ),
         inserted: false,
       };
     }
@@ -2740,7 +2780,9 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
       if (raced && isD1UsageEventIdempotencyError(error)) {
         return {
           usageEvent: raced,
-          balance: await this.getCreditBalance(raced.workspaceId ?? raced.spaceId),
+          balance: await this.getCreditBalance(
+            raced.workspaceId ?? raced.spaceId,
+          ),
           inserted: false,
         };
       }
@@ -2752,7 +2794,9 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     if (!recorded) return undefined;
     return {
       usageEvent: recorded,
-      balance: await this.getCreditBalance(recorded.workspaceId ?? recorded.spaceId),
+      balance: await this.getCreditBalance(
+        recorded.workspaceId ?? recorded.spaceId,
+      ),
       inserted: recorded.id === normalized.id,
     };
   }
@@ -3302,6 +3346,14 @@ function d1UpsertOutputSnapshotStmt(
     .insert(schema.outputSnapshots)
     .values(values)
     .onConflictDoUpdate({ target: schema.outputSnapshots.id, set: values });
+}
+
+function stripRunHeartbeat<R extends PlanRun | ApplyRun | SourceSyncRun | Run>(
+  run: R,
+): R {
+  const { heartbeatAt, ...withoutHeartbeat } = run;
+  void heartbeatAt;
+  return withoutHeartbeat as R;
 }
 
 // -- run-kind discriminators ---------------------------------------------------
@@ -4591,7 +4643,12 @@ stale pre-rename named indexes dropped (the canonical new-name indexes are (re)c
       // no JSON keys to rewrite — only outputs / output_shares / capsules do.
       await renameD1JsonKey(db, "outputs", "spaceId", "workspaceId");
       await renameD1JsonKey(db, "outputs", "installationId", "capsuleId");
-      await renameD1JsonKey(db, "output_shares", "fromSpaceId", "fromWorkspaceId");
+      await renameD1JsonKey(
+        db,
+        "output_shares",
+        "fromSpaceId",
+        "fromWorkspaceId",
+      );
       await renameD1JsonKey(db, "output_shares", "toSpaceId", "toWorkspaceId");
       await renameD1JsonKey(
         db,
@@ -4631,7 +4688,9 @@ async function renameD1ColumnIfNeeded(
   if (!(await d1TableExists(db, table))) return;
   const columns = await d1ColumnNames(db, table);
   if (columns.has(from) && !columns.has(to)) {
-    await db.prepare(`alter table ${table} rename column ${from} to ${to}`).run();
+    await db
+      .prepare(`alter table ${table} rename column ${from} to ${to}`)
+      .run();
   }
 }
 

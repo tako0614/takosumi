@@ -184,6 +184,35 @@ export class OpenTofuRunOwnerObject {
         return retryRecord;
       }
       if (existing.status === "succeeded" || existing.status === "failed") {
+        const runStatus = await this.#readRunStatus(
+          {
+            action,
+            runId: input.runId,
+            spaceId: input.spaceId,
+          },
+          this.env,
+        ).catch(() => undefined);
+        if (isRunStillDispatchable(runStatus)) {
+          const now = this.#now();
+          const { finishedAt, ...retryBase } = existing;
+          void finishedAt;
+          const retryRecord: RunOwnerRecord = {
+            ...retryBase,
+            action,
+            requestedAction: input.action,
+            status: "scheduled",
+            updatedAt: new Date(now).toISOString(),
+            nextAttemptAt: new Date(now).toISOString(),
+            ...(input.queueAttempt !== undefined
+              ? { queueAttempt: input.queueAttempt }
+              : {}),
+            ...(input.messageId ? { messageId: input.messageId } : {}),
+            lastError: `ledger remained ${runStatus} after terminal owner record`,
+          };
+          await this.#writeRecord(retryRecord);
+          await this.#scheduleAlarm(now);
+          return retryRecord;
+        }
         return existing;
       }
       const alarmAt =
@@ -258,8 +287,22 @@ export class OpenTofuRunOwnerObject {
       };
       await this.#dispatch(dispatch, this.env);
       const runStatus = await this.#readRunStatus(dispatch, this.env).catch(
-        () => undefined,
+        () => "unknown" as const,
       );
+      if (runStatus === "unknown") {
+        const requeueAt = this.#now() + RUN_OWNER_CONTROLLER_REQUEUE_DELAY_MS;
+        await this.#writeRecord({
+          ...base,
+          status: "scheduled",
+          startedAt: record.startedAt ?? startedAt,
+          updatedAt: new Date(this.#now()).toISOString(),
+          nextAttemptAt: new Date(requeueAt).toISOString(),
+          lastScheduleCause: "controller_retry",
+          lastError: "run status unavailable after dispatch",
+        });
+        await this.#scheduleAlarm(requeueAt);
+        return;
+      }
       if (isRunStillDispatchable(runStatus)) {
         const requeueAt = this.#now() + RUN_OWNER_CONTROLLER_REQUEUE_DELAY_MS;
         await this.#writeRecord({

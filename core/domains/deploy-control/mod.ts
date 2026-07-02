@@ -263,9 +263,7 @@ export {
 export { providerMatches } from "./policy.ts";
 export { deploymentOutputsFromOpenTofu } from "./projection.ts";
 
-export function publicInstallation(
-  installation: Capsule,
-): PublicCapsule {
+export function publicInstallation(installation: Capsule): PublicCapsule {
   const { installType: _installType, ...publicRecord } = installation;
   return publicRecord;
 }
@@ -1400,9 +1398,7 @@ export class OpenTofuDeploymentController {
    * bounded set and creates one drift check per Capsule. A non-positive
    * limit returns an empty list.
    */
-  async listActiveInstallations(
-    limit: number,
-  ): Promise<readonly Capsule[]> {
+  async listActiveInstallations(limit: number): Promise<readonly Capsule[]> {
     return await this.#deployments.listActiveInstallations(limit);
   }
 
@@ -1620,6 +1616,14 @@ export class OpenTofuDeploymentController {
     options: { readonly limit?: number } = {},
   ): Promise<readonly Run[]> {
     return await this.#runQuery.listRuns(spaceId, options);
+  }
+
+  async listRecoverableOpenTofuRuns(options: {
+    readonly staleQueuedBeforeMs: number;
+    readonly staleRunningBeforeMs: number;
+    readonly limit?: number;
+  }): Promise<readonly Run[]> {
+    return await this.#runQuery.listRecoverableOpenTofuRuns(options);
   }
 
   async getRunLogs(id: string): Promise<RunLogsResponse> {

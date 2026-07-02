@@ -56,6 +56,7 @@ import {
 import type { TakosumiOperations } from "../../core/bootstrap.ts";
 import {
   OpenTofuControllerError,
+  RUN_HEARTBEAT_STALE_MS,
   type RecordMeteredUsageInput,
 } from "../../core/domains/deploy-control/mod.ts";
 import {
@@ -70,6 +71,7 @@ import type {
   TakosumiAdapterCapabilities,
   TakosumiResourceCapabilities,
 } from "takosumi-contract/capabilities";
+import type { Run, RunStatus, RunType } from "takosumi-contract/runs";
 export {
   isPlatformCloudExtensionCatalogPath,
   matchPlatformCloudExtensionRoute,
@@ -229,6 +231,7 @@ export default {
   // current compatibility drift sweep for Workspaces with active Capsules.
   async scheduled(_event: unknown, env: CloudflareWorkerEnv): Promise<void> {
     await runScheduledSourcePoll(env as unknown as DeployControlEnv);
+    await runScheduledOpenTofuRunRepair(env as unknown as DeployControlEnv);
     if (driftCheckEnabled(env)) {
       await runScheduledDriftSweep(env as unknown as DeployControlEnv);
     }
@@ -242,7 +245,8 @@ function platformDiscoveryOptions(
   const extensionCapabilities = platformCloudExtensionCapabilities(env);
   const resourceShapeApi = platformResourceShapeApiEnabled(env);
   const resources = platformResourceCapabilities(env, resourceShapeApi);
-  const resourceShapes = resourceShapeApi && resourceCapabilitiesEnabled(resources);
+  const resourceShapes =
+    resourceShapeApi && resourceCapabilitiesEnabled(resources);
   const adapters = platformAdapterCapabilities(env, resourceShapes);
   return {
     origin,
@@ -264,10 +268,10 @@ function platformDiscoveryOptions(
   };
 }
 
-const RESOURCE_CAPABILITY_KEYS: readonly (Exclude<
+const RESOURCE_CAPABILITY_KEYS: readonly Exclude<
   keyof TakosumiResourceCapabilities,
   "Stack"
->)[] = [
+>[] = [
   "EdgeWorker",
   "ObjectBucket",
   "KVStore",
@@ -276,14 +280,8 @@ const RESOURCE_CAPABILITY_KEYS: readonly (Exclude<
   "ContainerService",
 ];
 
-const ADAPTER_CAPABILITY_KEYS: readonly (keyof TakosumiAdapterCapabilities)[] = [
-  "opentofu",
-  "aws",
-  "cloudflare",
-  "kubernetes",
-  "vm",
-  "takosumi_native",
-];
+const ADAPTER_CAPABILITY_KEYS: readonly (keyof TakosumiAdapterCapabilities)[] =
+  ["opentofu", "aws", "cloudflare", "kubernetes", "vm", "takosumi_native"];
 
 type MutablePartial<T> = {
   -readonly [K in keyof T]?: T[K];
@@ -355,7 +353,9 @@ function parseCapabilityTokens(raw: string): readonly string[] {
     try {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) {
-        return parsed.filter((item): item is string => typeof item === "string");
+        return parsed.filter(
+          (item): item is string => typeof item === "string",
+        );
       }
     } catch {
       return [];
@@ -3057,6 +3057,31 @@ export interface SourcePollOperations extends SourceWebhookOperations {
   };
 }
 
+export interface OpenTofuRunRepairOperations {
+  readonly spaces: {
+    listWorkspaces(): Promise<
+      readonly { readonly id: string; readonly archivedAt?: string }[]
+    >;
+  };
+  readonly controller: {
+    listRecoverableOpenTofuRuns(options: {
+      readonly staleQueuedBeforeMs: number;
+      readonly staleRunningBeforeMs: number;
+      readonly limit?: number;
+    }): Promise<readonly Run[]>;
+  };
+}
+
+type RepairRunAction = "plan" | "apply" | "source_sync" | "restore";
+
+export interface OpenTofuRunRepairScheduler {
+  schedule(dispatch: {
+    readonly action: RepairRunAction;
+    readonly runId: string;
+    readonly spaceId: string;
+  }): Promise<void>;
+}
+
 async function handleSourceWebhook(
   request: Request,
   url: URL,
@@ -3140,6 +3165,206 @@ export async function pollAutoSyncSources(
       // Best-effort: one bad source must not abort the whole poll.
     }
   }
+}
+
+const SCHEDULED_RUN_REPAIR_WORKSPACE_LIMIT = 100;
+const SCHEDULED_RUN_REPAIR_RUNS_PER_WORKSPACE = 50;
+const SCHEDULED_RUN_REPAIR_QUEUED_STALE_MS = 2 * 60 * 1000;
+
+export interface OpenTofuRunRepairResult {
+  readonly workspacesScanned: number;
+  readonly runsScanned: number;
+  readonly rescheduled: number;
+}
+
+async function runScheduledOpenTofuRunRepair(
+  env: DeployControlEnv,
+): Promise<void> {
+  if (!env.RUN_OWNER) return;
+  const operations = await deployControlSeam(env).operations();
+  await repairStaleOpenTofuRuns(
+    operations,
+    {
+      schedule: (dispatch) => scheduleRunOwnerRepair(env, dispatch),
+    },
+    {
+      now: Date.now(),
+      workspaceLimit: SCHEDULED_RUN_REPAIR_WORKSPACE_LIMIT,
+      runsPerWorkspace: SCHEDULED_RUN_REPAIR_RUNS_PER_WORKSPACE,
+    },
+  );
+}
+
+/**
+ * Scheduled run repair safety net. Creation already schedules the per-run owner
+ * directly for speed; this bounded sweep only re-pokes old non-terminal rows
+ * whose owner alarm/record was lost or terminalized while the ledger remained
+ * dispatchable. The controller consumers stay idempotent and own all state
+ * changes.
+ */
+export async function repairStaleOpenTofuRuns(
+  operations: OpenTofuRunRepairOperations,
+  scheduler: OpenTofuRunRepairScheduler,
+  options: {
+    readonly now?: number;
+    readonly workspaceLimit?: number;
+    readonly runsPerWorkspace?: number;
+    readonly queuedStaleMs?: number;
+    readonly runningStaleMs?: number;
+  } = {},
+): Promise<OpenTofuRunRepairResult> {
+  const now = options.now ?? Date.now();
+  const workspaceLimit =
+    options.workspaceLimit ?? SCHEDULED_RUN_REPAIR_WORKSPACE_LIMIT;
+  const runsPerWorkspace =
+    options.runsPerWorkspace ?? SCHEDULED_RUN_REPAIR_RUNS_PER_WORKSPACE;
+  const queuedStaleMs =
+    options.queuedStaleMs ?? SCHEDULED_RUN_REPAIR_QUEUED_STALE_MS;
+  const runningStaleMs = options.runningStaleMs ?? RUN_HEARTBEAT_STALE_MS;
+  const workspaces = (await operations.spaces.listWorkspaces())
+    .filter((workspace) => !workspace.archivedAt)
+    .slice(0, Math.max(0, Math.floor(workspaceLimit)));
+  const activeWorkspaceIds = new Set(
+    workspaces.map((workspace) => workspace.id),
+  );
+  const runLimit = Math.max(
+    0,
+    Math.floor(runsPerWorkspace) * Math.max(1, workspaces.length),
+  );
+  let runsScanned = 0;
+  let rescheduled = 0;
+  try {
+    const runs = await operations.controller.listRecoverableOpenTofuRuns({
+      staleQueuedBeforeMs: now - queuedStaleMs,
+      staleRunningBeforeMs: now - runningStaleMs,
+      limit: runLimit,
+    });
+    runsScanned = runs.length;
+    for (const run of runs) {
+      const spaceId = run.workspaceId ?? run.spaceId;
+      if (!spaceId || !activeWorkspaceIds.has(spaceId)) continue;
+      const dispatch = recoverableRunDispatch(run, now, {
+        queuedStaleMs,
+        runningStaleMs,
+        fallbackSpaceId: spaceId,
+      });
+      if (!dispatch) continue;
+      await scheduler.schedule(dispatch);
+      rescheduled += 1;
+    }
+  } catch {
+    // Best-effort: a repair failure must not abort the cron tick.
+  }
+  return { workspacesScanned: workspaces.length, runsScanned, rescheduled };
+}
+
+function recoverableRunDispatch(
+  run: Pick<
+    Run,
+    | "id"
+    | "type"
+    | "status"
+    | "workspaceId"
+    | "spaceId"
+    | "createdAt"
+    | "startedAt"
+    | "heartbeatAt"
+  >,
+  now: number,
+  options: {
+    readonly queuedStaleMs: number;
+    readonly runningStaleMs: number;
+    readonly fallbackSpaceId: string;
+  },
+):
+  | {
+      readonly action: RepairRunAction;
+      readonly runId: string;
+      readonly spaceId: string;
+    }
+  | undefined {
+  if (!isRecoverableRunStatus(run.status)) return undefined;
+  const action = repairActionForRunType(run.type);
+  if (!action) return undefined;
+  const ageMs =
+    run.status === "queued"
+      ? runAgeMs(now, run.createdAt)
+      : runAgeMs(
+          now,
+          run.heartbeatAt ?? runTimestampMs(run.startedAt) ?? run.createdAt,
+        );
+  const staleMs =
+    run.status === "queued" ? options.queuedStaleMs : options.runningStaleMs;
+  if (!Number.isFinite(ageMs) || ageMs < staleMs) return undefined;
+  return {
+    action,
+    runId: run.id,
+    spaceId: run.workspaceId ?? run.spaceId ?? options.fallbackSpaceId,
+  };
+}
+
+function isRecoverableRunStatus(
+  status: RunStatus,
+): status is "queued" | "running" {
+  return status === "queued" || status === "running";
+}
+
+function repairActionForRunType(type: RunType): RepairRunAction | undefined {
+  if (type === "plan" || type === "destroy_plan" || type === "drift_check") {
+    return "plan";
+  }
+  if (type === "apply" || type === "destroy_apply") return "apply";
+  if (type === "source_sync") return "source_sync";
+  if (type === "restore") return "restore";
+  return undefined;
+}
+
+async function scheduleRunOwnerRepair(
+  env: DeployControlEnv,
+  dispatch: {
+    readonly action: RepairRunAction;
+    readonly runId: string;
+    readonly spaceId: string;
+  },
+): Promise<void> {
+  const namespace = env.RUN_OWNER;
+  if (!namespace) return;
+  const response = await namespace
+    .get(namespace.idFromName(dispatch.runId))
+    .fetch(
+      new Request("https://opentofu-run-owner/start", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          kind: "takosumi.opentofu-run-owner.start@v1",
+          action: dispatch.action,
+          runId: dispatch.runId,
+          spaceId: dispatch.spaceId,
+          cause: "controller_retry",
+          queueAttempt: 1,
+          messageId: `scheduled-repair:${dispatch.runId}:${Date.now().toString(36)}`,
+        }),
+      }),
+    );
+  if (!response.ok) {
+    throw new Error("opentofu run owner repair scheduling failed");
+  }
+}
+
+function runAgeMs(now: number, value: string | number | undefined): number {
+  const at = runTimestampMs(value);
+  return at === undefined ? Number.NaN : now - at;
+}
+
+function runTimestampMs(
+  value: string | number | undefined,
+): number | undefined {
+  if (value === undefined || value === "") return undefined;
+  if (typeof value === "number") return value;
+  const numeric = Number(value);
+  if (Number.isFinite(numeric)) return numeric;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 // Cap so a single cron tick never creates an unbounded number of drift checks.

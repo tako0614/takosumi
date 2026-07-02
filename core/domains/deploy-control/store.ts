@@ -383,6 +383,9 @@ export interface CommitRestoredStateInput {
  *   - `setLeaseToken` / `clearLeaseToken` — the lease column write on a win:
  *     `setLeaseToken` stamps a new fence token, `clearLeaseToken` nulls it.
  *     Mutually exclusive; omit both to leave the lease column unchanged.
+ *   - `clearHeartbeat` — clears both the indexed heartbeat column and the
+ *     persisted run JSON's heartbeat on a win. Used when a retryable runner reset
+ *     parks a run back at `queued`.
  *   - `heartbeatAt` — when provided, the heartbeat column (and the persisted run
  *     JSON's `heartbeatAt`) move to this value on a win; omit to take the
  *     heartbeat carried on `run`.
@@ -401,6 +404,7 @@ export interface TransitionRunInput {
   readonly run: PlanRun | ApplyRun | SourceSyncRun | Run;
   readonly setLeaseToken?: string;
   readonly clearLeaseToken?: boolean;
+  readonly clearHeartbeat?: boolean;
   readonly heartbeatAt?: number;
 }
 
@@ -410,6 +414,12 @@ export interface TransitionRunResult {
 }
 
 export type StoredRunRecord = PlanRun | ApplyRun | SourceSyncRun | Run;
+
+export interface RecoverableOpenTofuRunListOptions {
+  readonly staleQueuedBeforeMs: number;
+  readonly staleRunningBeforeMs: number;
+  readonly limit?: number;
+}
 
 export interface CreditAmountInput {
   readonly usdMicros?: number;
@@ -508,6 +518,15 @@ export interface OpenTofuDeploymentStore {
   listRunsBySpace(
     spaceId: string,
     options?: { readonly limit?: number },
+  ): Promise<readonly StoredRunRecord[]>;
+  /**
+   * Internal scheduler safety net read: returns oldest-first dispatchable
+   * non-terminal OpenTofu run rows whose owner may need to be re-poked. This is
+   * intentionally not the public newest-first run list, because repair must find
+   * very old active rows even when they are far outside dashboard pagination.
+   */
+  listRecoverableOpenTofuRuns(
+    options: RecoverableOpenTofuRunListOptions,
   ): Promise<readonly StoredRunRecord[]>;
 
   // Artifact ledger rows (spec §30 artifacts). Artifact bytes live in object
@@ -1055,13 +1074,13 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     if (!statusMatches || !leaseMatches || !heartbeatMatches) {
       return Promise.resolve({ won: false, run: current });
     }
-    // Resolve the heartbeat the same way the SQL / D1 legs do: the input's
-    // explicit `heartbeatAt` wins, else the heartbeat carried on `run`.
-    const heartbeatAt = input.heartbeatAt ?? input.run.heartbeatAt;
-    const persisted: PlanRun | ApplyRun | SourceSyncRun | Run = {
-      ...input.run,
-      ...(heartbeatAt === undefined ? {} : { heartbeatAt }),
-    } as PlanRun | ApplyRun | SourceSyncRun | Run;
+    const persisted: PlanRun | ApplyRun | SourceSyncRun | Run =
+      input.clearHeartbeat
+        ? stripRunHeartbeat(input.run)
+        : ({
+            ...input.run,
+            ...resolvedHeartbeat(input),
+          } as PlanRun | ApplyRun | SourceSyncRun | Run);
     map.set(input.id, persisted);
     if (input.clearLeaseToken) {
       this.#runLeases.delete(input.id);
@@ -1135,6 +1154,24 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     ].filter((row) => row.spaceId === spaceId);
     return Promise.resolve(
       rows.sort(compareStoredRunRecordsDesc).slice(0, limit),
+    );
+  }
+
+  listRecoverableOpenTofuRuns(
+    options: RecoverableOpenTofuRunListOptions,
+  ): Promise<readonly StoredRunRecord[]> {
+    const limit = clampRecoverableOpenTofuRunListLimit(options.limit);
+    const rows: StoredRunRecord[] = [
+      ...this.#planRuns.values(),
+      ...this.#applyRuns.values(),
+      ...this.#sourceSyncRuns.values(),
+      ...this.#backupRuns.values(),
+    ];
+    return Promise.resolve(
+      rows
+        .filter((row) => isRecoverableOpenTofuRunRecord(row, options))
+        .sort(compareStoredRunRecordsAsc)
+        .slice(0, limit),
     );
   }
 
@@ -2412,23 +2449,114 @@ export function clampRunListLimit(limit: number | undefined): number {
   return floored;
 }
 
+const RECOVERABLE_RUN_LIST_DEFAULT_LIMIT = 100;
+const RECOVERABLE_RUN_LIST_MAX_LIMIT = 5_000;
+
+export function clampRecoverableOpenTofuRunListLimit(
+  limit: number | undefined,
+): number {
+  if (limit === undefined || !Number.isFinite(limit)) {
+    return RECOVERABLE_RUN_LIST_DEFAULT_LIMIT;
+  }
+  const floored = Math.floor(limit);
+  if (floored < 1) return 1;
+  if (floored > RECOVERABLE_RUN_LIST_MAX_LIMIT) {
+    return RECOVERABLE_RUN_LIST_MAX_LIMIT;
+  }
+  return floored;
+}
+
 /** Newest-first sort across internal numeric timestamps and ISO public rows. */
 export function compareStoredRunRecordsDesc(
   a: StoredRunRecord,
   b: StoredRunRecord,
 ): number {
   return (
-    runRecordTimestamp(b) - runRecordTimestamp(a) || b.id.localeCompare(a.id)
+    storedRunRecordTimestamp(b) - storedRunRecordTimestamp(a) ||
+    b.id.localeCompare(a.id)
   );
 }
 
-function runRecordTimestamp(row: StoredRunRecord): number {
-  const value = row.createdAt;
+/** Oldest-first sort across internal numeric timestamps and ISO public rows. */
+export function compareStoredRunRecordsAsc(
+  a: StoredRunRecord,
+  b: StoredRunRecord,
+): number {
+  return (
+    storedRunRecordTimestamp(a) - storedRunRecordTimestamp(b) ||
+    a.id.localeCompare(b.id)
+  );
+}
+
+export function isRecoverableOpenTofuRunRecord(
+  row: StoredRunRecord,
+  options: RecoverableOpenTofuRunListOptions,
+): boolean {
+  if (row.status !== "queued" && row.status !== "running") return false;
+  if (!isDispatchableOpenTofuRunRecord(row)) return false;
+  const createdAt = storedRunRecordTimestamp(row);
+  if (!Number.isFinite(createdAt) || createdAt <= 0) return false;
+  if (row.status === "queued") {
+    return createdAt <= options.staleQueuedBeforeMs;
+  }
+  const reference =
+    typeof row.heartbeatAt === "number" && Number.isFinite(row.heartbeatAt)
+      ? row.heartbeatAt
+      : (runTimestampValue(row.startedAt) ?? createdAt);
+  return reference <= options.staleRunningBeforeMs;
+}
+
+export function storedRunRecordTimestamp(row: StoredRunRecord): number {
+  return runTimestampValue(row.createdAt) ?? 0;
+}
+
+function runTimestampValue(
+  value: number | string | undefined,
+): number | undefined {
   if (typeof value === "number") return value;
+  if (value === undefined) return undefined;
   const numeric = Number(value);
   if (Number.isFinite(numeric)) return numeric;
   const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : 0;
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function isDispatchableOpenTofuRunRecord(row: StoredRunRecord): boolean {
+  if (isPlanRunRecord(row)) return true;
+  if (isApplyRunRecord(row)) return true;
+  if (isSourceSyncRunRecord(row)) return true;
+  return isRestoreRunRecord(row);
+}
+
+function isPlanRunRecord(row: StoredRunRecord): row is PlanRun {
+  return "sourceDigest" in row && "variablesDigest" in row;
+}
+
+function isApplyRunRecord(row: StoredRunRecord): row is ApplyRun {
+  return "planRunId" in row && "expected" in row;
+}
+
+function isSourceSyncRunRecord(row: StoredRunRecord): row is SourceSyncRun {
+  return "kind" in row && row.kind === "source_sync";
+}
+
+function isRestoreRunRecord(row: StoredRunRecord): row is Run {
+  return "type" in row && row.type === "restore";
+}
+
+function resolvedHeartbeat(
+  input: Pick<TransitionRunInput, "heartbeatAt" | "run">,
+): { readonly heartbeatAt?: number } {
+  const heartbeatAt = input.heartbeatAt ?? input.run.heartbeatAt;
+  return heartbeatAt === undefined ? {} : { heartbeatAt };
+}
+
+function stripRunHeartbeat<R extends PlanRun | ApplyRun | SourceSyncRun | Run>(
+  run: R,
+): R {
+  const { heartbeatAt, ...withoutHeartbeat } = run;
+  void heartbeatAt;
+  return withoutHeartbeat as R;
 }
 
 /**
@@ -2438,7 +2566,9 @@ function runRecordTimestamp(row: StoredRunRecord): number {
  * `currentOutputSnapshotId`) names. Callers (tests, older writers) may set only
  * one side; this keeps reads on either name resolvable during the rename.
  */
-export function normalizeInstallation(installation: Installation): Installation {
+export function normalizeInstallation(
+  installation: Installation,
+): Installation {
   // Workspace identity is never independently cleared, so fill both names from
   // whichever side a writer set. The state-version / output pointers CAN be
   // cleared (destroy), and the writers patch the legacy `currentDeploymentId` /
