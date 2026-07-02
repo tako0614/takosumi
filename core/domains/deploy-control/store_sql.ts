@@ -109,7 +109,6 @@ import {
   clampRecoverableOpenTofuRunListLimit,
   clampRunListLimit,
   compareStoredRunRecordsAsc,
-  compareStoredRunRecordsDesc,
   InstallationPatchGuardConflict,
   InstallationStateGenerationGuardConflict,
   isRecoverableOpenTofuRunRecord,
@@ -145,6 +144,16 @@ const RUN_KIND_SOURCE_SYNC = "source_sync";
 const RUN_KIND_COMPATIBILITY_CHECK = "compatibility_check";
 const RUN_KIND_BACKUP = "backup";
 const RUN_KIND_RESTORE = "restore";
+
+function pgRunCreatedAtMillisOrder(): SQL {
+  return sql`
+    CASE
+      WHEN ${pgSchema.runs.createdAt} ~ '^[0-9]+$'
+        THEN ${pgSchema.runs.createdAt}::double precision
+      ELSE EXTRACT(EPOCH FROM ${pgSchema.runs.createdAt}::timestamptz) * 1000
+    END
+  `;
+}
 
 /**
  * Builds the keyset WHERE predicate `(createdAt, id) > (cursor)` over the given
@@ -412,16 +421,16 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     spaceId: string,
     options: { readonly limit?: number } = {},
   ): Promise<readonly StoredRunRecord[]> {
-    const rows = await this.#db
-      .select({ json: pgSchema.runs.runJson })
-      .from(pgSchema.runs)
-      .where(eq(pgSchema.runs.spaceId, spaceId));
     const limit = clampRunListLimit(options.limit);
-    return rows
-      .map((row) => parseRow(row) as StoredRunRecord)
-      .filter((row): row is StoredRunRecord => Boolean(row))
-      .sort(compareStoredRunRecordsDesc)
-      .slice(0, limit);
+    return await this.#pgManyJson<StoredRunRecord>(
+      pgSchema.runs,
+      pgSchema.runs.runJson,
+      {
+        where: eq(pgSchema.runs.spaceId, spaceId),
+        orderBy: [desc(pgRunCreatedAtMillisOrder()), desc(pgSchema.runs.id)],
+        limit,
+      },
+    );
   }
 
   async listRecoverableOpenTofuRuns(

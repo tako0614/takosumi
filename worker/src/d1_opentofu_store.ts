@@ -120,7 +120,6 @@ import {
   clampRecoverableOpenTofuRunListLimit,
   clampRunListLimit,
   compareStoredRunRecordsAsc,
-  compareStoredRunRecordsDesc,
   InstallationPatchGuardConflict,
   InstallationStateGenerationGuardConflict,
   isRecoverableOpenTofuRunRecord,
@@ -159,6 +158,19 @@ const RUN_KIND_SOURCE_SYNC = "source_sync" as const;
 const RUN_KIND_COMPATIBILITY_CHECK = "compatibility_check" as const;
 const RUN_KIND_BACKUP = "backup" as const;
 const RUN_KIND_RESTORE = "restore" as const;
+
+function d1RunCreatedAtMillisOrder(): SQL {
+  return sql`
+    CASE
+      WHEN ${schema.runs.createdAt} <> '' AND ${schema.runs.createdAt} NOT GLOB '*[^0-9]*'
+        THEN CAST(${schema.runs.createdAt} AS INTEGER)
+      ELSE (
+        CAST(strftime('%s', ${schema.runs.createdAt}) AS INTEGER) * 1000
+        + CAST(substr(strftime('%f', ${schema.runs.createdAt}), 4, 3) AS INTEGER)
+      )
+    END
+  `;
+}
 
 /**
  * Builds the keyset WHERE predicate `(createdAt, id) > (cursor)` over the
@@ -428,15 +440,16 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     spaceId: string,
     options: { readonly limit?: number } = {},
   ): Promise<readonly StoredRunRecord[]> {
-    const rows = await this.#drizzleManyJson<StoredRunRecord>(
+    const limit = clampRunListLimit(options.limit);
+    return await this.#drizzleManyJson<StoredRunRecord>(
       schema.runs,
       schema.runs.runJson,
       {
         where: eq(schema.runs.spaceId, spaceId),
+        orderBy: [desc(d1RunCreatedAtMillisOrder()), desc(schema.runs.id)],
+        limit,
       },
     );
-    const limit = clampRunListLimit(options.limit);
-    return [...rows].sort(compareStoredRunRecordsDesc).slice(0, limit);
   }
 
   async listRecoverableOpenTofuRuns(
