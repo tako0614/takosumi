@@ -174,7 +174,9 @@ async function controlFetch<T>(
   return data as T;
 }
 
-function query(params: Record<string, string | number | undefined>): string {
+function query(
+  params: Record<string, string | number | boolean | undefined>,
+): string {
   const sp = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
     if (v === undefined) continue;
@@ -951,9 +953,13 @@ export async function listWorkspaces(): Promise<readonly Workspace[]> {
 
 export async function getDashboardOverview(
   workspaceId?: string,
+  options: { readonly includeWorkspaces?: boolean } = {},
 ): Promise<DashboardOverview> {
   return await controlFetch<DashboardOverview>(
-    `${BASE}/dashboard/overview${query({ workspaceId })}`,
+    `${BASE}/dashboard/overview${query({
+      workspaceId,
+      includeWorkspaces: options.includeWorkspaces,
+    })}`,
   );
 }
 
