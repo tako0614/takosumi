@@ -7,15 +7,12 @@
  * needing attention in the current Workspace.
  */
 import { A, useLocation } from "@solidjs/router";
-import { createMemo, createResource, Show } from "solid-js";
+import { createMemo, createSignal, onCleanup, Show } from "solid-js";
 import { Bell, Plus } from "lucide-solid";
 import UserMenu from "../auth/UserMenu.tsx";
 import WorkspaceSwitcher from "./WorkspaceSwitcher.tsx";
 import { currentWorkspaceId } from "../../../../lib/workspace-state.ts";
-import {
-  type Capsule,
-  listCapsules,
-} from "../../../../lib/control-api.ts";
+import { peekCapsulesCached } from "../../../../lib/capsule-list.ts";
 import {
   isVisibleServiceCapsule,
   needsAttention,
@@ -46,13 +43,23 @@ export default function TopBar() {
     return hit ? t(hit[1]) : "";
   };
 
-  const [capsules] = createResource(
-    () => currentWorkspaceId() || null,
-    async (workspaceId): Promise<readonly Capsule[]> =>
-      workspaceId ? listCapsules(workspaceId) : [],
-  );
+  const [cacheVersion, setCacheVersion] = createSignal(0);
+  if (typeof window !== "undefined") {
+    const onCacheChanged = () => setCacheVersion((version) => version + 1);
+    window.addEventListener("takosumi:capsules-cache-changed", onCacheChanged);
+    onCleanup(() =>
+      window.removeEventListener(
+        "takosumi:capsules-cache-changed",
+        onCacheChanged,
+      ),
+    );
+  }
   const badge = createMemo(() => {
-    const list = capsules();
+    cacheVersion();
+    const workspaceId = currentWorkspaceId();
+    const list = workspaceId
+      ? peekCapsulesCached(workspaceId, { includeDestroyed: false })
+      : undefined;
     if (!list) return 0;
     return list.filter(
       (inst) => isVisibleServiceCapsule(inst) && needsAttention(inst),

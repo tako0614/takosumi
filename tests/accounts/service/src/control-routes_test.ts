@@ -996,7 +996,9 @@ test("GET /api/v1/workspaces serves the session control surface", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
-  const { request: req, url } = request("GET", "/api/v1/workspaces", { cookie });
+  const { request: req, url } = request("GET", "/api/v1/workspaces", {
+    cookie,
+  });
   const response = await handleControlRoute({
     request: req,
     url,
@@ -1324,6 +1326,85 @@ test("GET /api/v1/workspaces/:id/current-state-versions reads current StateVersi
   expect(operations.calls.getDeployment).toBeUndefined();
 });
 
+test("GET /api/v1/dashboard/overview batches launcher data for one Workspace", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = deploymentOperations("space_a");
+  operations.installations.listCapsulesPage = async (workspaceId, params) => {
+    operations.calls.listCapsulesPage = [workspaceId, params];
+    return {
+      items: [
+        {
+          id: "inst_1",
+          workspaceId,
+          name: "app",
+          slug: "app",
+          sourceId: "src_x",
+          installConfigId: "cfg_x",
+          environment: "prod",
+          currentStateVersionId: "dep_1",
+          currentStateGeneration: 3,
+          status: "active",
+          createdAt: "2026-01-01T00:00:00Z",
+          updatedAt: "2026-01-01T00:00:00Z",
+        },
+      ],
+    } as Awaited<
+      ReturnType<ControlPlaneOperations["installations"]["listCapsulesPage"]>
+    >;
+  };
+  operations.installations.listInstallConfigs = async (workspaceId) => {
+    operations.calls.listInstallConfigs = [workspaceId];
+    return [
+      {
+        id: "cfg_x",
+        name: "opentofu-capsule",
+        sourceKind: "generic_capsule",
+        trustLevel: "trusted",
+        variableMapping: {},
+        outputAllowlist: {},
+        policy: {},
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      },
+    ];
+  };
+  const { request: req, url } = request(
+    "GET",
+    "/api/v1/dashboard/overview?workspaceId=space_a",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(200);
+  const body = (await response!.json()) as {
+    workspaces: Array<Record<string, unknown>>;
+    workspace: Record<string, unknown>;
+    capsules: Array<Record<string, unknown>>;
+    currentStateVersions: Array<Record<string, unknown>>;
+    activity: unknown[];
+    installConfigs: unknown[];
+  };
+  expect(body.workspaces.map((workspace) => workspace.id)).toEqual(["space_a"]);
+  expect(body.workspace.id).toEqual("space_a");
+  expect(body.capsules.map((capsule) => capsule.id)).toEqual(["inst_1"]);
+  expect(body.currentStateVersions[0]?.id).toEqual("dep_1");
+  expect(body.currentStateVersions[0]?.outputSnapshotId).toBeUndefined();
+  expect(body.activity).toEqual([]);
+  expect(body.installConfigs).toHaveLength(1);
+  expect(operations.calls.listCapsulesPage).toEqual([
+    "space_a",
+    { limit: 100, includeDestroyed: false },
+  ]);
+  expect(operations.calls.activityList).toEqual(["space_a", 50]);
+  expect(operations.calls.listInstallConfigs).toEqual(["space_a"]);
+  expect(operations.calls.listDeploymentsByIds).toEqual(["dep_1"]);
+});
+
 test("GET /api/v1/workspaces/:id/capsules rejects malformed includeDestroyed", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
@@ -1387,9 +1468,13 @@ test("GET /api/v1/workspaces/:id a session cannot access is 403", async () => {
   const { cookie } = seedSession(store, { subject: "tsub_outsider" });
   // The Workspace is owned by a DIFFERENT subject; the outsider session is denied.
   const operations = fakeOperations();
-  const { request: req, url } = request("GET", "/api/v1/workspaces/space_other", {
-    cookie,
-  });
+  const { request: req, url } = request(
+    "GET",
+    "/api/v1/workspaces/space_other",
+    {
+      cookie,
+    },
+  );
   const response = await handleControlRoute({
     request: req,
     url,
@@ -1499,7 +1584,9 @@ test("POST /api/v1/workspaces/:id/uploads returns gone on the public facade", as
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
-  const url = new URL(`${ORIGIN}/api/v1/workspaces/space_a/uploads?path=deploy`);
+  const url = new URL(
+    `${ORIGIN}/api/v1/workspaces/space_a/uploads?path=deploy`,
+  );
   const req = new Request(url, {
     method: "POST",
     headers: {
@@ -1684,7 +1771,9 @@ test("GET /api/v1/workspaces unions directly-owned + legal-owner spaces, exclude
     },
   });
 
-  const { request: req, url } = request("GET", "/api/v1/workspaces", { cookie });
+  const { request: req, url } = request("GET", "/api/v1/workspaces", {
+    cookie,
+  });
   const response = await handleControlRoute({
     request: req,
     url,
@@ -1770,9 +1859,13 @@ test("GET /api/v1/workspaces/:id/usage returns usage events", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
-  const { request: req, url } = request("GET", "/api/v1/workspaces/space_a/usage", {
-    cookie,
-  });
+  const { request: req, url } = request(
+    "GET",
+    "/api/v1/workspaces/space_a/usage",
+    {
+      cookie,
+    },
+  );
   const response = await handleControlRoute({
     request: req,
     url,
@@ -2882,9 +2975,13 @@ test("GET /api/v1/workspaces/:id/graph projects nodes + edges", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
-  const { request: req, url } = request("GET", "/api/v1/workspaces/space_a/graph", {
-    cookie,
-  });
+  const { request: req, url } = request(
+    "GET",
+    "/api/v1/workspaces/space_a/graph",
+    {
+      cookie,
+    },
+  );
   const response = await handleControlRoute({
     request: req,
     url,
@@ -3465,11 +3562,9 @@ test("Capsule session routes patch status, delete via destroy-plan, drift-check,
   expect(driftResp?.status).toEqual(201);
   expect(operations.calls.createCapsuleDriftCheck?.[0]).toEqual("inst_1");
 
-  const dependencies = request(
-    "GET",
-    "/api/v1/capsules/inst_1/dependencies",
-    { cookie },
-  );
+  const dependencies = request("GET", "/api/v1/capsules/inst_1/dependencies", {
+    cookie,
+  });
   const dependenciesResp = await handleControlRoute({
     request: dependencies.request,
     url: dependencies.url,
@@ -4036,7 +4131,8 @@ test("Sources: GET requires workspaceId, POST + sync return 201", async () => {
   });
   expect(createResp?.status).toEqual(201);
   expect(
-    (operations.calls.createSource?.[0] as { workspaceId?: string }).workspaceId,
+    (operations.calls.createSource?.[0] as { workspaceId?: string })
+      .workspaceId,
   ).toEqual("space_a");
   expect(
     (operations.calls.createSource?.[0] as { spaceId?: string }).spaceId,
@@ -5891,17 +5987,16 @@ function deploymentOperations(
   };
   operations.listDeploymentsByIds = async (ids: readonly string[]) => {
     calls.listDeploymentsByIds = [...ids];
-    return ids.map((id) => deploymentRow(id, workspaceId)) as unknown as
-      Awaited<
-        ReturnType<NonNullable<ControlPlaneOperations["listDeploymentsByIds"]>>
-      >;
+    return ids.map((id) =>
+      deploymentRow(id, workspaceId),
+    ) as unknown as Awaited<
+      ReturnType<NonNullable<ControlPlaneOperations["listDeploymentsByIds"]>>
+    >;
   };
   operations.listDeploymentsBySpace = async (id: string) => {
     calls.listDeploymentsBySpace = [id];
     return [deploymentRow("dep_1", id)] as unknown as Awaited<
-      ReturnType<
-        NonNullable<ControlPlaneOperations["listDeploymentsBySpace"]>
-      >
+      ReturnType<NonNullable<ControlPlaneOperations["listDeploymentsBySpace"]>>
     >;
   };
   operations.createDeploymentRollbackPlan = async (deploymentId: string) => {

@@ -16,15 +16,12 @@ import {
   currentWorkspaceId,
   setCurrentWorkspaceId,
 } from "../../lib/workspace-state.ts";
-import { listCapsulesCached } from "../../lib/capsule-list.ts";
-import { listCurrentStateVersionsCached } from "../../lib/current-state-versions.ts";
-import { listInstallConfigsCached } from "../../lib/install-config-list.ts";
+import { getDashboardOverviewCached } from "../../lib/dashboard-overview.ts";
 import {
   type ControlApiError,
   createWorkspace,
   type Capsule,
   type Workspace,
-  listActivity,
 } from "../../lib/control-api.ts";
 import {
   type AppSurface,
@@ -76,31 +73,24 @@ function appIconColor(index: number): readonly [string, string] {
 
 function Inner() {
   const navigate = useNavigate();
-  const workspaceId = () => (currentWorkspaceId() ? currentWorkspaceId() : null);
+  const workspaceId = () => currentWorkspaceId() || undefined;
 
-  const [capsules] = createResource(workspaceId, (id) =>
-    listCapsulesCached(id, { includeDestroyed: false }),
+  const [overview] = createResource(workspaceId, (id) =>
+    getDashboardOverviewCached(id),
   );
+  const capsules = createMemo(() => overview()?.capsules ?? []);
   const visibleCapsules = createMemo(() =>
     (capsules() ?? []).filter(isVisibleServiceCapsule),
   );
-  const activityWorkspaceId = createMemo(() => {
-    const id = workspaceId();
-    return id && visibleCapsules().length > 0 ? id : null;
-  });
-  const [activity] = createResource(activityWorkspaceId, (id) =>
-    listActivity(id, 50),
-  );
-  const [currentStateVersions] = createResource(workspaceId, (id) =>
-    listCurrentStateVersionsCached(id, { includeDestroyed: false }),
+  const activity = createMemo(() => overview()?.activity ?? []);
+  const currentStateVersions = createMemo(
+    () => overview()?.currentStateVersions ?? [],
   );
 
   // Map each Capsule to a type-specific icon via its install config's
   // catalog kind (site / storage / worker) — the fallback when a surface
   // declares no image or icon of its own.
-  const [installConfigs] = createResource(workspaceId, (id) =>
-    listInstallConfigsCached(id),
-  );
+  const installConfigs = createMemo(() => overview()?.installConfigs ?? []);
   const kindByConfigId = createMemo(() => {
     const map = new Map<string, string>();
     for (const config of installConfigs() ?? []) {
@@ -174,25 +164,22 @@ function Inner() {
         }
       >
         <Switch>
-          <Match when={capsules.loading}>
+          <Match when={overview.loading}>
             <LauncherSkeleton />
           </Match>
-          <Match when={capsules.error}>
+          <Match when={overview.error}>
             <Toast tone="error">
               {t("common.fetchFailed", {
-                message: (capsules.error as ControlApiError).message,
+                message: (overview.error as ControlApiError).message,
               })}
             </Toast>
           </Match>
-          <Match when={capsules()}>
+          <Match when={overview()}>
             <Show
               when={visibleCapsules().length > 0}
               fallback={<WorkspaceStartPanel />}
             >
               <Switch>
-                <Match when={currentStateVersions.loading}>
-                  <LauncherSkeleton />
-                </Match>
                 <Match when={appTiles().length === 0}>
                   <AppsEmptyPanel />
                 </Match>
@@ -247,7 +234,9 @@ function NoWorkspaceStartPanel(props: {
         icon={<Plus size={18} />}
         onClick={props.onCreate}
       >
-        {props.busy ? t("workspace.start.creating") : t("workspace.start.create")}
+        {props.busy
+          ? t("workspace.start.creating")
+          : t("workspace.start.create")}
       </Button>
       <Show when={props.error}>
         {(message) => <Toast tone="error">{message()}</Toast>}

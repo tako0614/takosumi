@@ -1,7 +1,4 @@
-import {
-  listInstallConfigs,
-  type InstallConfig,
-} from "./control-api.ts";
+import { listInstallConfigs, type InstallConfig } from "./control-api.ts";
 
 const CACHE_TTL_MS = 10_000;
 
@@ -39,6 +36,17 @@ export function clearInstallConfigListCache(workspaceId?: string): void {
   for (const key of [...inflight.keys()]) {
     if (key.startsWith(`${workspaceId}:`)) inflight.delete(key);
   }
+}
+
+export function primeInstallConfigListCache(
+  workspaceId: string | undefined,
+  installConfigs: readonly InstallConfig[],
+  options: { readonly view?: "starter-catalog" } = {},
+): void {
+  cache.set(cacheKey(workspaceId, options), {
+    installConfigs,
+    cachedAt: Date.now(),
+  });
 }
 
 export async function listInstallConfigsCached(
