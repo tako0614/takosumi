@@ -20,6 +20,13 @@ export function clearWorkspaceListCache(): void {
   inflight = undefined;
 }
 
+export function primeWorkspaceListCache(
+  workspaces: readonly Workspace[],
+): void {
+  cachedWorkspaces = workspaces;
+  cachedAt = Date.now();
+}
+
 export async function listWorkspacesCached(
   options: { readonly force?: boolean } = {},
 ): Promise<readonly Workspace[]> {

@@ -1,9 +1,5 @@
 export type PublicSessionControlEndpointMethod =
-  | "GET"
-  | "POST"
-  | "PUT"
-  | "PATCH"
-  | "DELETE";
+  "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
 export interface PublicSessionControlEndpoint {
   readonly method: PublicSessionControlEndpointMethod;
@@ -24,6 +20,12 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
       method: "GET",
       path: "/api/v1/billing/plans",
       summary: "List public billing plans",
+      auth: "account-session",
+    },
+    {
+      method: "GET",
+      path: "/api/v1/dashboard/overview",
+      summary: "Read the dashboard Workspace overview projection",
       auth: "account-session",
     },
     {

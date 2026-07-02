@@ -58,6 +58,7 @@ import {
 } from "./control/connections.ts";
 import { handleOutputShares } from "./control/output-shares.ts";
 import { handleBilling } from "./control/billing.ts";
+import { handleDashboard } from "./control/dashboard.ts";
 
 // Re-exports keep the pre-split import surface stable for in-tree consumers
 // (`mod.ts`, `control-personal-space.ts`, and the control-route tests).
@@ -100,6 +101,7 @@ const RESOURCE_HANDLERS: Partial<Record<string, ControlResourceHandler>> = {
   connections: handleConnections,
   "output-shares": handleOutputShares,
   billing: handleBilling,
+  dashboard: handleDashboard,
 };
 
 /**

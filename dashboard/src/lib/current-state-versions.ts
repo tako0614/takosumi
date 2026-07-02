@@ -41,6 +41,17 @@ export function clearCurrentStateVersionCache(workspaceId?: string): void {
   }
 }
 
+export function primeCurrentStateVersionCache(
+  workspaceId: string,
+  deployments: readonly PublicDeployment[],
+  options: { readonly includeDestroyed?: boolean } = {},
+): void {
+  cache.set(cacheKey(workspaceId, options), {
+    deployments,
+    cachedAt: Date.now(),
+  });
+}
+
 export async function listCurrentStateVersionsCached(
   workspaceId: string,
   options: {

@@ -490,6 +490,16 @@ export interface WorkspaceGraph {
   readonly edges: readonly GraphEdge[];
 }
 
+export interface DashboardOverview {
+  readonly workspaces: readonly Workspace[];
+  readonly workspace: Workspace | null;
+  readonly capsules: readonly Capsule[];
+  readonly currentStateVersions: readonly PublicDeployment[];
+  readonly activity: readonly ActivityEvent[];
+  readonly installConfigs: readonly InstallConfig[];
+  readonly nextCapsuleCursor?: string;
+}
+
 export interface GraphNode {
   readonly capsuleId: string;
   readonly name: string;
@@ -937,6 +947,14 @@ type WorkspaceEnvelope = {
 export async function listWorkspaces(): Promise<readonly Workspace[]> {
   const body = await controlFetch<WorkspaceListEnvelope>(`${BASE}/workspaces`);
   return body.workspaces ?? body.spaces ?? [];
+}
+
+export async function getDashboardOverview(
+  workspaceId?: string,
+): Promise<DashboardOverview> {
+  return await controlFetch<DashboardOverview>(
+    `${BASE}/dashboard/overview${query({ workspaceId })}`,
+  );
 }
 
 export async function listWorkspacesIncludingArchived(): Promise<readonly Workspace[]> {

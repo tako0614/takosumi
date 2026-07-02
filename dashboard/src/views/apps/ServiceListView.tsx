@@ -18,12 +18,8 @@ import type { JSX } from "solid-js";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import { currentWorkspaceId } from "../../lib/workspace-state.ts";
-import { listCapsulesCached } from "../../lib/capsule-list.ts";
-import { listInstallConfigsCached } from "../../lib/install-config-list.ts";
-import {
-  type ControlApiError,
-  type Capsule,
-} from "../../lib/control-api.ts";
+import { getDashboardOverviewCached } from "../../lib/dashboard-overview.ts";
+import { type ControlApiError, type Capsule } from "../../lib/control-api.ts";
 import {
   effectiveCapsuleStatus,
   isVisibleServiceCapsule,
@@ -56,17 +52,16 @@ function serviceKindIcon(kind: string | undefined): JSX.Element {
 
 function Inner() {
   const navigate = useNavigate();
-  const workspaceId = () => (currentWorkspaceId() ? currentWorkspaceId() : null);
+  const workspaceId = () => currentWorkspaceId() || undefined;
 
-  const [capsules] = createResource(workspaceId, (id) =>
-    listCapsulesCached(id, { includeDestroyed: false }),
+  const [overview] = createResource(workspaceId, (id) =>
+    getDashboardOverviewCached(id),
   );
+  const capsules = createMemo(() => overview()?.capsules ?? []);
   const visible = createMemo(() =>
     (capsules() ?? []).filter(isVisibleServiceCapsule),
   );
-  const [installConfigs] = createResource(workspaceId, (id) =>
-    listInstallConfigsCached(id),
-  );
+  const installConfigs = createMemo(() => overview()?.installConfigs ?? []);
   const kindByConfigId = createMemo(() => {
     const map = new Map<string, string>();
     for (const config of installConfigs() ?? []) {
@@ -93,19 +88,19 @@ function Inner() {
         fallback={<Toast tone="neutral">{t("workspace.selectMessage")}</Toast>}
       >
         <Switch>
-          <Match when={capsules.loading}>
+          <Match when={overview.loading}>
             <div class="av-service-rows">
               <Skeleton variant="row" count={5} />
             </div>
           </Match>
-          <Match when={capsules.error}>
+          <Match when={overview.error}>
             <Toast tone="error">
               {t("common.fetchFailed", {
-                message: (capsules.error as ControlApiError).message,
+                message: (overview.error as ControlApiError).message,
               })}
             </Toast>
           </Match>
-          <Match when={capsules()}>
+          <Match when={overview()}>
             <Show when={visible().length > 0} fallback={<ServicesEmpty />}>
               <ul class="av-service-rows">
                 <For each={visible()}>
