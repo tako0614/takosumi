@@ -17,7 +17,7 @@
 | Dashboard SPA                                 | `takosumi/dashboard`                                                     | `bun run build`; served through worker `ASSETS`        | dashboard build output, asset digest / deploy log                                       |
 | Runner container                              | `takosumi/runner/Dockerfile`                                             | built by Cloudflare Containers during deploy           | image digest / Cloudflare Container smoke evidence                                      |
 | Platform control DB migrations / schema       | `takosumi/core/adapters/storage`                                         | applied by platform deploy / migration runner          | storage migration transcript, schema mirror test                                        |
-| CredentialRecipe seed / provider policy packs | schema/store/policy packages and `docs/internal/core-spec.md`                     | shipped with platform worker and Takosumi storage seed | recipe seed diff, provider allowlist diff, ProviderConnection policy evidence           |
+| CredentialRecipe seed / provider policy packs | schema/store/policy packages and `docs/internal/core-spec.md`            | shipped with platform worker and Takosumi storage seed | recipe seed diff, provider allowlist diff, ProviderConnection policy evidence           |
 | Custom provider runner policy                 | runner image / operator boundary policy                                  | shipped with runner and policy code                    | secret-backed provider policy / egress / custom runner class evidence                   |
 | Release activator materializer                | operator/Cloud deployment outside OSS                                    | optional webhook target for post-apply app publication | activation success/failure surfacing, app URL/health proof, no rollback of apply ledger |
 | Official OpenTofu modules                     | `takosumi/opentofu-modules`                                              | shipped as repo source; consumed by Source / runner    | commit SHA, fixture plan evidence where available                                       |
@@ -68,6 +68,21 @@ publication is enabled through `TAKOSUMI_RELEASE_ACTIVATOR_URL`, add release
 activation materializer evidence: successful activation, failed/pending
 activation surfacing, and proof that the OpenTofu apply ledger remains committed
 independently of app publication status.
+
+From the ecosystem root on the operator machine, write the stable activator
+endpoint and bearer token to the private repo before enabling the platform
+worker setting:
+
+```bash
+bun run write:takosumi-release-activator-secrets -- \
+  --url https://<stable-operator-release-activator>/activate \
+  --generate-token
+```
+
+The helper writes `TAKOSUMI_RELEASE_ACTIVATOR_URL` and
+`TAKOSUMI_RELEASE_ACTIVATOR_TOKEN` as `0600` files under `takosumi-private` and
+does not print the token. It rejects localhost and trycloudflare URLs because
+GA evidence must point at a stable operator endpoint.
 
 Validate release activation evidence before promotion:
 
