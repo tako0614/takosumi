@@ -13,11 +13,11 @@ import {
   Switch,
 } from "solid-js";
 import { Share2 } from "lucide-solid";
+import { listCapsulesCached } from "../../../lib/capsule-list.ts";
 import {
   type ControlApiError,
   approveOutputShare,
   createOutputShare,
-  listCapsules,
   listOutputShares,
   listWorkspaces,
   type OutputShare,
@@ -69,7 +69,9 @@ export default function SharesTab(props: { readonly workspaceId: string }) {
   const workspaceId = () => props.workspaceId;
   const [shares, { refetch }] = createResource(workspaceId, listOutputShares);
   const [workspaces] = createResource(listWorkspaces);
-  const [capsules] = createResource(workspaceId, listCapsules);
+  const [capsules] = createResource(workspaceId, (id) =>
+    listCapsulesCached(id, { includeDestroyed: false }),
+  );
 
   const [toWorkspaceId, setToWorkspaceId] = createSignal("");
   const [producerCapsuleId, setProducerCapsuleId] = createSignal("");

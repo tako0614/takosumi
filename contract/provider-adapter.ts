@@ -123,7 +123,7 @@ export interface PlatformContext {
  * shape's published union (e.g. `WebServiceCapabilityTerm`). Adapters that
  * type-parameterize this generic catch capability typos at compile time;
  * untyped adapters fall back to `string`.
- * This is not the public OpenTofu Capsule or Service Graph authoring surface.
+ * This is not the public OpenTofu Capsule or runtime projection authoring surface.
  * First-party native kind implementations use `OperatorImplementation` /
  * `NativeKindOperations`; ProviderAdapter stays scoped to internal runtime
  * adapter lookup where a shape/provider selector is the right key.

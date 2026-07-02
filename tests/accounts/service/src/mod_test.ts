@@ -10272,8 +10272,8 @@ function base64UrlDecodeBytes(value: string): Uint8Array<ArrayBuffer> {
 }
 
 test("handleUserInfo emits a flat space_memberships claim from the token's space", async () => {
-  // Regression guard for the bundled-app integration break: bundled apps
-  // (takos-docs / takos-slide / takos-excel) read a flat `space_memberships`
+  // Regression guard for the bundled-app integration break: Office surfaces
+  // read a flat `space_memberships`
   // claim for membership checks. UserInfo must expose it derived from the
   // token's accessible space, alongside the canonical `takosumi.space_id`
   // namespace claim.

@@ -1,4 +1,13 @@
-export type MobileProductKind = "takos" | "yurucommu";
+import type { TakosumiAppProductKey } from "./app-handoff.ts";
+import { isTakosumiAppProductKey } from "./app-handoff.ts";
+import {
+  parseNotificationPusherSetRequest,
+  type NotificationPusher,
+} from "./notification-pushers.ts";
+
+export type MobileHostableProductKind = TakosumiAppProductKey;
+
+export type MobileProductKind = TakosumiAppProductKey;
 
 export const MOBILE_PUSH_REGISTRATION_PATH =
   "/api/mobile/push-registrations" as const;
@@ -6,6 +15,7 @@ export const MOBILE_PUSH_REGISTRATION_PATH =
 export interface MobilePushClientRegistration {
   readonly token: string;
   readonly environment?: string;
+  readonly pusher?: NotificationPusher;
 }
 
 export interface MobileProductWellKnownEndpoints {
@@ -16,6 +26,7 @@ export interface MobileProductWellKnownEndpoints {
   readonly apps?: string;
   readonly timeline?: string;
   readonly notifications?: string;
+  readonly notificationPushers?: string;
   readonly mobilePushRegistrations?: string;
   readonly [key: string]: string | undefined;
 }
@@ -34,6 +45,7 @@ export interface MobilePushHostRegistrationRequest {
   readonly token: string;
   readonly environment?: string;
   readonly host_url?: string | null;
+  readonly pusher?: NotificationPusher;
 }
 
 export interface ParsedMobilePushHostRegistrationRequest {
@@ -41,6 +53,7 @@ export interface ParsedMobilePushHostRegistrationRequest {
   readonly token: string;
   readonly environment: string;
   readonly hostUrl: string | null;
+  readonly pusher?: NotificationPusher;
 }
 
 export interface MobilePushHostRegistration {
@@ -90,6 +103,7 @@ export function createMobilePushHostRegistrationRequest(
     token: input.registration.token,
     environment: input.registration.environment,
     host_url: input.hostUrl,
+    pusher: input.registration.pusher,
   };
 }
 
@@ -113,9 +127,10 @@ export function parseMobilePushHostRegistrationRequest(
     return badRequest("token is invalid", "token");
   }
 
-  const environment = body.environment == null
-    ? "production"
-    : parseShortIdentifier(body.environment);
+  const environment =
+    body.environment == null
+      ? "production"
+      : parseShortIdentifier(body.environment);
   if (!environment) {
     return badRequest("environment is invalid", "environment");
   }
@@ -125,6 +140,18 @@ export function parseMobilePushHostRegistrationRequest(
     return badRequest("host_url is invalid", "host_url");
   }
 
+  let pusher: NotificationPusher | undefined;
+  if (body.pusher != null) {
+    const parsedPusher = parseNotificationPusherSetRequest(
+      { product: body.product, pusher: body.pusher },
+      { product: body.product },
+    );
+    if (!parsedPusher.ok) {
+      return badRequest(parsedPusher.error.error, "pusher");
+    }
+    pusher = parsedPusher.value.pusher;
+  }
+
   return {
     ok: true,
     value: {
@@ -132,12 +159,15 @@ export function parseMobilePushHostRegistrationRequest(
       token,
       environment,
       hostUrl,
+      pusher,
     },
   };
 }
 
-export function isMobileProductKind(value: unknown): value is MobileProductKind {
-  return value === "takos" || value === "yurucommu";
+export function isMobileProductKind(
+  value: unknown,
+): value is MobileProductKind {
+  return isTakosumiAppProductKey(value);
 }
 
 function badRequest(

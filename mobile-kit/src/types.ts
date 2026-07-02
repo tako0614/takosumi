@@ -1,18 +1,37 @@
 import type {
+  MobileHostableProductKind as ContractMobileHostableProductKind,
   MobileProductKind as ContractMobileProductKind,
   MobileProductWellKnown as ContractMobileProductWellKnown,
   MobileProductWellKnownEndpoints,
+  MobilePushClientRegistration,
 } from "../../contract/mobile.ts";
 
+export type MobileHostableProductKind = ContractMobileHostableProductKind;
 export type MobileProductKind = ContractMobileProductKind;
+
 export type ProductWellKnown = ContractMobileProductWellKnown;
 export type ProductWellKnownEndpoints = MobileProductWellKnownEndpoints;
+
+export interface MobileHostCenterSource {
+  readonly source?: string;
+  readonly git?: string;
+  readonly installConfigId?: string;
+  readonly ref?: string;
+  readonly path?: string;
+  readonly name?: string;
+  readonly vars?: Readonly<Record<string, string>>;
+}
 
 export interface MobileProductAdapter {
   readonly product: MobileProductKind;
   readonly appName: string;
   readonly hostNoun: string;
-  readonly hostCenterLabel: string;
+  readonly hostCenterLabel?: string;
+  readonly hostCenterProduct?: MobileHostableProductKind;
+  readonly hostCenterSource?: MobileHostCenterSource;
+  readonly strictDiscoveryProduct?: boolean;
+  readonly acceptAnyConnectProduct?: boolean;
+  readonly acceptedConnectProducts?: readonly MobileProductKind[];
   readonly urlPlaceholder: string;
   readonly primaryActionLabel: string;
   readonly accentColor: string;
@@ -139,6 +158,7 @@ export interface NativeBridgeCapabilities {
   readonly pushNotifications: boolean;
   readonly biometricAuth: boolean;
   readonly callIntent: boolean;
+  readonly clipboardText: boolean;
   readonly secureStorage: boolean;
   readonly persistentStorage: boolean;
 }
@@ -183,10 +203,7 @@ export interface MobilePushRegistrationInput {
   readonly accountId?: string;
 }
 
-export interface MobilePushRegistration {
-  readonly token: string;
-  readonly environment?: string;
-}
+export type MobilePushRegistration = MobilePushClientRegistration;
 
 export interface MobilePushNotification {
   readonly title?: string;
@@ -201,6 +218,11 @@ export type MobilePushNotificationEventKind = "received" | "tapped";
 export interface MobileCallIntent {
   readonly roomUrl: string;
   readonly title?: string;
+}
+
+export interface MobileClipboardText {
+  readonly text: string;
+  readonly label?: string;
 }
 
 export interface MobileLocalNotification {
@@ -223,8 +245,7 @@ export type MobileSessionUnlockMode = "off" | "if-available" | "required";
 export interface MobileSessionUnlockOptions {
   readonly restoreMode?: MobileSessionUnlockMode;
   readonly prompt?:
-    | MobileBiometricPrompt
-    | ((session: MobileSession) => MobileBiometricPrompt);
+    MobileBiometricPrompt | ((session: MobileSession) => MobileBiometricPrompt);
 }
 
 export interface NativeBridge {
@@ -258,4 +279,5 @@ export interface NativeBridge {
     prompt: MobileBiometricPrompt,
   ) => Promise<boolean>;
   readonly requestCall?: (input: MobileCallIntent) => Promise<void>;
+  readonly writeClipboardText?: (input: MobileClipboardText) => Promise<void>;
 }

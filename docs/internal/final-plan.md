@@ -119,11 +119,14 @@ AI Gateway or OpenAI-compatible upstream access:
 
 Push notification delivery:
   do not create a Takosumi Resource Shape or takosumi_provider resource.
-  APNs, FCM, Web Push, and product-native notification registration stay in
-  the product shell, a normal OpenTofu module/provider, or generic env.
-  A mobile shell may still post a product-owned device token to its own host
-  API, but Takosumi does not advertise a PushNotification capability, resolver
-  shape, or provider resource.
+  APNs, FCM, Web Push, email, webhook, Matrix-compatible push gateways, and
+  product-native notification delivery stay in the product host, a normal
+  OpenTofu module/provider, a client-owned gateway, or generic env. Takosumi may
+  define a product-neutral notification pusher contract, where a client registers
+  an HTTP pusher (`app_id`, `pushkey`, `data.url`, format) and the host sends a
+  minimal gateway envelope. Takosumi still does not advertise a
+  PushNotification capability, resolver shape, managed target, or provider
+  resource.
 ```
 
 Do not add a Takosumi-owned resource just because another cloud already has a

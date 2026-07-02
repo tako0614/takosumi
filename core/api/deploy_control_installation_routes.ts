@@ -199,6 +199,34 @@ function isStarterCatalogInstallConfig(config: InstallConfig): boolean {
   );
 }
 
+function parseIncludeDestroyed(
+  raw: string | undefined,
+):
+  | { readonly kind: "ok"; readonly includeDestroyed: boolean }
+  | { readonly kind: "invalid"; readonly response: Response } {
+  if (raw === undefined || raw === "" || raw === "true") {
+    return { kind: "ok", includeDestroyed: true };
+  }
+  if (raw === "false") {
+    return { kind: "ok", includeDestroyed: false };
+  }
+  return {
+    kind: "invalid",
+    response: new Response(
+      JSON.stringify({
+        error: {
+          code: "invalid_argument",
+          message: "includeDestroyed must be true or false",
+        },
+      }),
+      {
+        status: 400,
+        headers: { "content-type": "application/json; charset=utf-8" },
+      },
+    ),
+  };
+}
+
 export const DEPLOY_CONTROL_INSTALLATION_ENDPOINTS: readonly DeployControlEndpoint[] =
   [
     {
@@ -490,9 +518,18 @@ export function mountDeployControlInstallationRoutes(
         ensureSpacePermission(principal, id);
         const page = parsePageParams(c);
         if (page.kind === "invalid") return page.response;
+        const includeDestroyed = parseIncludeDestroyed(
+          c.req.query("includeDestroyed"),
+        );
+        if (includeDestroyed.kind === "invalid") {
+          return includeDestroyed.response;
+        }
         const result = await installations!.listCapsulesPage(
           id,
-          page.value,
+          {
+            ...page.value,
+            includeDestroyed: includeDestroyed.includeDestroyed,
+          },
         );
         return c.json(
           {

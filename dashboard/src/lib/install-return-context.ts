@@ -4,6 +4,7 @@ import {
   type InstallPrefill,
   type InstallPrefillVariableValue,
 } from "./install-link.ts";
+import { appendAppHandoff, appHandoffFromSearch } from "./app-handoff.ts";
 
 export interface InstallReturnContext {
   readonly git: string;
@@ -94,8 +95,14 @@ export function installReturnPathFromContext(
 export function installReturnPathFromReturnParam(
   returnTo: string | null | undefined,
 ): string | undefined {
-  const context = installReturnContext(returnTo);
-  return context ? installReturnPathFromContext(context) : undefined;
+  const safePath = safeLocalReturnPath(returnTo);
+  const context = installReturnContext(safePath);
+  if (!safePath || !context) return undefined;
+  const parsed = new URL(safePath, "https://takosumi.invalid");
+  return appendAppHandoff(
+    installReturnPathFromContext(context),
+    appHandoffFromSearch(parsed.search),
+  );
 }
 
 export function providerConnectionsHrefForInstallReturn(

@@ -40,9 +40,13 @@ import {
   Trash,
 } from "lucide-solid";
 import type { JsonValue } from "takosumi-contract";
+import { providerEnvRule } from "takosumi-contract/provider-env-rules";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
-import { currentWorkspaceId, setCurrentWorkspaceId } from "../../lib/workspace-state.ts";
+import {
+  currentWorkspaceId,
+  setCurrentWorkspaceId,
+} from "../../lib/workspace-state.ts";
 import {
   capsuleNameFromUrl,
   hasInstallPrefillParams,
@@ -56,6 +60,11 @@ import {
   installReturnPathFromPrefill,
   providerConnectionsHrefForInstallReturn,
 } from "../../lib/install-return-context.ts";
+import {
+  appendAppHandoff,
+  appHandoffFromSearch,
+  appHandoffProductLabel,
+} from "../../lib/app-handoff.ts";
 import {
   checkCapsuleCompatibility,
   ControlApiError,
@@ -73,7 +82,6 @@ import {
   type InstallConfig,
   listProviderConnections,
   listConnections,
-  listStarterCatalogInstallConfigs,
   planCapsule,
   putCapsuleProviderConnectionSet,
   syncSource,
@@ -87,8 +95,14 @@ import {
 } from "../../lib/control-api.ts";
 import { locale, t } from "../../i18n/index.ts";
 import { StoreBrowser } from "../store/StoreBrowser.tsx";
+import { firstPartyStoreListings } from "../store/first-party-listings.ts";
 import { buildNewQuery } from "../store/store-link.ts";
 import type { TcsListing } from "../../lib/tcs-client.ts";
+import {
+  clearCapsuleListCache,
+  listCapsulesCached,
+} from "../../lib/capsule-list.ts";
+import { listInstallConfigsCached } from "../../lib/install-config-list.ts";
 import {
   Badge,
   Button,
@@ -272,6 +286,21 @@ function compatibilitySummaryDisplay(
   return t("new.compat.summary.reviewRequired");
 }
 
+function sourceFetchErrorMessage(
+  apiError: ControlApiError | undefined,
+): string {
+  const message = apiError?.message.trim() ?? "";
+  const refMatch = /source ref did not resolve to a commit:\s*([^\s)]+)/iu.exec(
+    message,
+  );
+  if (refMatch?.[1]) {
+    return t("new.error.sourceRefNotFound", { ref: refMatch[1] });
+  }
+  return t("new.error.sourceFetchFailed", {
+    message: message || t("new.error.sourceFetchFailedUnknown"),
+  });
+}
+
 function shouldShowCompatibilityPanel(
   result: CapsuleCompatibilityResult,
 ): boolean {
@@ -337,7 +366,10 @@ function catalogConfigKey(config: CatalogInstallConfig): string {
 }
 
 function catalogConfigPriority(config: CatalogInstallConfig): number {
-  if (config.workspaceId === undefined || config.id.startsWith("cfg-official-")) {
+  if (
+    config.workspaceId === undefined ||
+    config.id.startsWith("cfg-official-")
+  ) {
     return 0;
   }
   return 1;
@@ -381,41 +413,6 @@ function catalogDefaultInputValue(
     default:
       return "";
   }
-}
-
-function catalogEntryToListing(
-  entry: CatalogEntry,
-  workspaceId: string | null,
-): TcsListing {
-  return {
-    id: entry.id,
-    installConfigId: entry.installConfigId,
-    source: {
-      git: entry.source.git,
-      ref: entry.source.ref,
-      path: entry.source.path,
-    },
-    kind: entry.kind,
-    surface: entry.surface,
-    provider: entry.provider,
-    category: entry.surface,
-    suggestedName: entry.suggestedName,
-    name: entry.name,
-    description: entry.description,
-    badge: entry.badge,
-    inputs: entry.inputs.map((field) => ({
-      name: field.name,
-      ...(field.type ? { type: field.type } : {}),
-      ...(field.required ? { required: field.required } : {}),
-      defaultValue: catalogDefaultInputValue(entry, field, workspaceId),
-      label: field.label,
-      ...(field.helper ? { helper: field.helper } : {}),
-      ...(field.placeholder ? { placeholder: field.placeholder } : {}),
-    })),
-    outputAllowlist: [],
-    createdAt: entry.createdAt,
-    updatedAt: entry.updatedAt,
-  };
 }
 
 function catalogVariablePath(name: string): readonly string[] | undefined {
@@ -555,7 +552,9 @@ function NoWorkspaceStartPanel(props: {
         icon={<Plus size={18} />}
         onClick={props.onCreate}
       >
-        {props.busy ? t("workspace.start.creating") : t("workspace.start.create")}
+        {props.busy
+          ? t("workspace.start.creating")
+          : t("workspace.start.create")}
       </Button>
       <Show when={props.error}>
         {(message) => <Toast tone="error">{message()}</Toast>}
@@ -593,6 +592,7 @@ function Inner() {
   // PRE-FILLS — the visitor still confirms in this client (compatibility
   // check, then the explicit add button).
   const initialSearch = typeof location === "undefined" ? "" : location.search;
+  const appHandoff = appHandoffFromSearch(initialSearch);
   const initialInstallPrefill =
     typeof location === "undefined"
       ? undefined
@@ -602,7 +602,9 @@ function Inner() {
     !initialInstallPrefill &&
     hasInstallPrefillParams(initialSearch);
   const initialInstallConfigId = parseInitialInstallConfigId(initialSearch);
-  const [linkDraft, setLinkDraft] = createSignal(initialInstallPrefill?.git ?? "");
+  const [linkDraft, setLinkDraft] = createSignal(
+    initialInstallPrefill?.git ?? "",
+  );
 
   // `/new` opens the install-link form. External `/install?git=…` redirects and
   // store hand-offs (`?installConfigId=…`) seed the same Git-backed flow.
@@ -645,8 +647,7 @@ function Inner() {
       ? initialInstallPrefill.vars.project_name
       : "";
   const [name, setName] = createSignal(initialName);
-  const [resourcePrefix, setResourcePrefix] =
-    createSignal(initialProjectName);
+  const [resourcePrefix, setResourcePrefix] = createSignal(initialProjectName);
   const [resourcePrefixTouched, setResourcePrefixTouched] = createSignal(
     initialProjectName !== "",
   );
@@ -661,16 +662,103 @@ function Inner() {
     [],
   );
 
-  const workspaceId = () => (currentWorkspaceId() ? currentWorkspaceId() : null);
-  const [configs] = createResource(workspaceId, listStarterCatalogInstallConfigs);
-  const [connections, { refetch: refetchConnections }] = createResource(
-    workspaceId,
-    listConnections,
+  const workspaceId = () =>
+    currentWorkspaceId() ? currentWorkspaceId() : null;
+  const shouldLoadStarterConfigs = () => {
+    const id = workspaceId();
+    return id && initialInstallConfigId ? id : null;
+  };
+  const shouldLoadInstallConfigs = () => {
+    const id = workspaceId();
+    if (!id) return null;
+    if (activeTab() === "git") return id;
+    if (gitUrl().trim() || activeInstallPrefill() || selectedCatalogId()) {
+      return id;
+    }
+    return null;
+  };
+  const [starterConfigs] = createResource(
+    shouldLoadStarterConfigs,
+    (id) => listInstallConfigsCached(id, { view: "starter-catalog" }),
   );
-  const [providerConnections] = createResource(
-    workspaceId,
-    listProviderConnections,
+  const [installConfigs] = createResource(shouldLoadInstallConfigs, (id) =>
+    listInstallConfigsCached(id),
   );
+  const [connections, setConnections] = createSignal<
+    readonly Connection[] | null
+  >(null);
+  const [providerConnections, setProviderConnections] = createSignal<
+    readonly ProviderConnection[] | null
+  >(null);
+  let loadedWorkspaceId: string | null = null;
+  let connectionsPromise: Promise<readonly Connection[]> | null = null;
+  let providerConnectionsPromise: Promise<
+    readonly ProviderConnection[]
+  > | null = null;
+
+  const resetLazyWorkspaceData = () => {
+    connectionsPromise = null;
+    providerConnectionsPromise = null;
+    setConnections(null);
+    setProviderConnections(null);
+  };
+
+  const loadConnections = async (
+    options: { readonly force?: boolean } = {},
+  ): Promise<readonly Connection[]> => {
+    const current = workspaceId();
+    if (!current) {
+      setConnections(null);
+      return [];
+    }
+    const cached = connections();
+    if (!options.force && cached) return cached;
+    if (!options.force && connectionsPromise) return connectionsPromise;
+    const request = listConnections(current)
+      .then((items) => {
+        if (workspaceId() === current) setConnections(items);
+        return items;
+      })
+      .finally(() => {
+        if (connectionsPromise === request) connectionsPromise = null;
+      });
+    connectionsPromise = request;
+    return request;
+  };
+
+  const loadProviderConnections = async (
+    options: { readonly force?: boolean } = {},
+  ): Promise<readonly ProviderConnection[]> => {
+    const current = workspaceId();
+    if (!current) {
+      setProviderConnections(null);
+      return [];
+    }
+    const cached = providerConnections();
+    if (!options.force && cached) return cached;
+    if (!options.force && providerConnectionsPromise) {
+      return providerConnectionsPromise;
+    }
+    const request = listProviderConnections(current)
+      .then((items) => {
+        if (workspaceId() === current) setProviderConnections(items);
+        return items;
+      })
+      .finally(() => {
+        if (providerConnectionsPromise === request) {
+          providerConnectionsPromise = null;
+        }
+      });
+    providerConnectionsPromise = request;
+    return request;
+  };
+
+  createEffect(() => {
+    const current = workspaceId();
+    if (current === loadedWorkspaceId) return;
+    loadedWorkspaceId = current;
+    resetLazyWorkspaceData();
+  });
   const createFirstWorkspace = createAction(async (): Promise<Workspace> => {
     const workspace = await createWorkspace({
       handle: defaultWorkspaceHandle(),
@@ -681,12 +769,15 @@ function Inner() {
     window.dispatchEvent(new Event("takosumi:workspaces-changed"));
     return workspace;
   });
-  const configList = createMemo<readonly InstallConfig[]>(
-    () => configs() ?? [],
+  const starterConfigList = createMemo<readonly InstallConfig[]>(
+    () => starterConfigs() ?? [],
+  );
+  const installConfigList = createMemo<readonly InstallConfig[]>(
+    () => installConfigs() ?? [],
   );
   const allCatalogEntries = createMemo<readonly CatalogEntry[]>(() =>
     dedupeCatalogConfigs(
-      configList().filter((config): config is CatalogInstallConfig =>
+      starterConfigList().filter((config): config is CatalogInstallConfig =>
         Boolean(config.catalog?.source),
       ),
     )
@@ -704,22 +795,21 @@ function Inner() {
           a.name[locale()].localeCompare(b.name[locale()]),
       ),
   );
-  const localStoreListings = createMemo<readonly TcsListing[]>(() =>
-    allCatalogEntries().map((entry) =>
-      catalogEntryToListing(entry, workspaceId()),
-    ),
+  const localStoreListings = createMemo<readonly TcsListing[]>(
+    () => firstPartyStoreListings,
   );
   const defaultGitInstallConfig = () =>
-    configList().find(
+    installConfigList().find(
       (config) => config.id === DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
     ) ??
-    configList().find(
+    installConfigList().find(
       (config) =>
-        config.sourceKind === "generic_capsule" && config.workspaceId === undefined,
+        config.sourceKind === "generic_capsule" &&
+        config.workspaceId === undefined,
     ) ??
-    configList().find((config) => config.sourceKind === "generic_capsule");
+    installConfigList().find((config) => config.sourceKind === "generic_capsule");
   const ensureConfigSelected = () => {
-    const list = configList();
+    const list = installConfigList();
     if (list.length === 0) return list;
     const current = installConfigId();
     if (!current || !list.some((config) => config.id === current)) {
@@ -728,7 +818,7 @@ function Inner() {
     return list;
   };
   const installConfigLoading = () =>
-    configs.loading && configList().length === 0;
+    installConfigs.loading && installConfigList().length === 0;
   const selectedInstallConfigId = () => {
     ensureConfigSelected();
     return installConfigId();
@@ -767,7 +857,10 @@ function Inner() {
     if (!entry) return {};
     const variables: Record<string, JsonValue> = {};
     for (const field of entry.inputs) {
-      const value = catalogInputJsonValue(field, catalogInputValue(entry, field));
+      const value = catalogInputJsonValue(
+        field,
+        catalogInputValue(entry, field),
+      );
       if (value !== undefined) {
         setCatalogJsonVariable(variables, field.name, value);
       }
@@ -832,11 +925,12 @@ function Inner() {
   const [createdSourceId, setCreatedSourceId] = createSignal<string | null>(
     null,
   );
-  const [createdCapsuleId, setCreatedCapsuleId] = createSignal<
-    string | null
-  >(null);
-  const [existingCapsule, setExistingCapsule] =
-    createSignal<Capsule | null>(null);
+  const [createdCapsuleId, setCreatedCapsuleId] = createSignal<string | null>(
+    null,
+  );
+  const [existingCapsule, setExistingCapsule] = createSignal<Capsule | null>(
+    null,
+  );
   const [stepSource, setStepSource] = createSignal<StepState>("idle");
   const [stepSync, setStepSync] = createSignal<StepState>("idle");
   const [stepInstall, setStepInstall] = createSignal<StepState>("idle");
@@ -939,9 +1033,7 @@ function Inner() {
   };
   const supportsProjectNameInput = () => prefilledProjectName() !== undefined;
   const defaultProjectName = () => {
-    const base = slugInputValue(name() || capsuleNameFromUrl(sourceGitUrl()));
-    const suffix = workspaceSuffix(workspaceId());
-    return suffix && base === "takos" ? `${base}-${suffix}` : base;
+    return slugInputValue(name() || capsuleNameFromUrl(sourceGitUrl()));
   };
   const projectNameVariable = () =>
     slugInputValue(
@@ -1018,8 +1110,7 @@ function Inner() {
     return variables;
   };
   const installVariables = ():
-    | Readonly<Record<string, JsonValue>>
-    | undefined => {
+    Readonly<Record<string, JsonValue>> | undefined => {
     const variables: Record<string, JsonValue> = {
       ...(currentInstallPrefill()?.vars ?? {}),
       ...selectedCatalogVariables(),
@@ -1031,17 +1122,20 @@ function Inner() {
     return Object.keys(variables).length > 0 ? variables : undefined;
   };
   const currentInstallReturnPath = () =>
-    installReturnPathFromPrefill({
-      git: sourceGitUrl(),
-      ref: sourceRef(),
-      path: sourcePath(),
-      name: name().trim(),
-      vars: installReturnVariables(),
-    });
+    appendAppHandoff(
+      installReturnPathFromPrefill({
+        git: sourceGitUrl(),
+        ref: sourceRef(),
+        path: sourcePath(),
+        name: name().trim(),
+        vars: installReturnVariables(),
+      }),
+      appHandoff,
+    );
   const providerConnectionsHref = () =>
     providerConnectionsHrefForInstallReturn(currentInstallReturnPath());
 
-  const visibleConnections = () => connections() ?? connections.latest ?? [];
+  const visibleConnections = () => connections() ?? [];
   const catalogScopeHintValue = (
     entry: CatalogEntry,
     field: CatalogInputField,
@@ -1153,7 +1247,7 @@ function Inner() {
         token,
       });
       await testConnection(connection.id);
-      await refetchConnections();
+      await loadConnections({ force: true });
       setSourceAuthConnectionId(connection.id);
       setSourceAccessMode("existing");
       setSourceToken("");
@@ -1169,6 +1263,10 @@ function Inner() {
   createEffect(() => {
     if (!supportsProjectNameInput() || resourcePrefixTouched()) return;
     setResourcePrefix(defaultProjectName());
+  });
+
+  createEffect(() => {
+    if (sourceAccessMode() === "existing") void loadConnections();
   });
 
   createEffect(() => {
@@ -1191,6 +1289,8 @@ function Inner() {
   };
   const providerLabel = (provider: string) =>
     providerDisplayName(providerTail(provider));
+  const providerRequiresConnection = (provider: string) =>
+    providerEnvRule(provider) !== undefined;
   const sameProviderFamily = (
     requiredProvider: string,
     connectionProvider: string,
@@ -1201,8 +1301,7 @@ function Inner() {
     return providerTail(required) === providerTail(connection);
   };
 
-  const visibleProviderConnections = () =>
-    providerConnections() ?? providerConnections.latest ?? [];
+  const visibleProviderConnections = () => providerConnections() ?? [];
   const readyProviderConnections = () =>
     visibleProviderConnections().filter(
       (connection) => connection.status === "verified",
@@ -1212,12 +1311,14 @@ function Inner() {
       sameProviderFamily(provider, connection.providerSource),
     );
   const providerNeedsConnection = (row: ProviderConnectionRow) =>
+    providerRequiresConnection(row.provider) &&
     providerConnectionsForProvider(row.provider).length === 0;
   const needsCloudCredential = () =>
     compatibility() !== null && providerRows().some(providerNeedsConnection);
   const missingProviderRows = () =>
     providerRows().filter(providerNeedsConnection);
   const providerRowNeedsVisibleChoice = (row: ProviderConnectionRow) => {
+    if (!providerRequiresConnection(row.provider)) return false;
     const candidates = providerConnectionsForProvider(row.provider);
     if (candidates.length !== 1) return true;
     return row.connectionId !== candidates[0]?.id;
@@ -1275,7 +1376,10 @@ function Inner() {
     result: CapsuleCompatibilityResult,
   ): ProviderConnectionRow[] =>
     result.providers
-      .filter((provider) => provider.allowed)
+      .filter(
+        (provider) =>
+          provider.allowed && providerRequiresConnection(provider.source),
+      )
       .flatMap((provider) => {
         const aliases = provider.aliases.length > 0 ? provider.aliases : [""];
         const resourceTypes = result.resources
@@ -1322,9 +1426,10 @@ function Inner() {
     return null;
   };
 
-  const providerConnectionsPayload =
-    (): CapsuleProviderConnectionBindings =>
-      providerRows().map((row) => ({
+  const providerConnectionsPayload = (): CapsuleProviderConnectionBindings =>
+    providerRows()
+      .filter((row) => providerRequiresConnection(row.provider))
+      .map((row) => ({
         provider: row.provider,
         ...(row.alias ? { alias: row.alias } : {}),
         connectionId: row.connectionId,
@@ -1367,6 +1472,7 @@ function Inner() {
 
   const pickCatalogEntry = (entry: CatalogEntry) => {
     if (!entry.source) return;
+    void loadConnections();
     setActiveInstallPrefill(null);
     setLinkDraft("");
     setGitUrl(entry.source.git);
@@ -1531,6 +1637,7 @@ function Inner() {
       // The check failed or could not resolve a result; its own error is shown.
       if (!compatibility()) return;
     }
+    await loadProviderConnections().catch(() => []);
     await settleProviderConnectionRows();
     // Blockers render inline from compatibility state (compat result panel /
     // cloud-account callout). Stop here so the user can resolve them first.
@@ -1542,7 +1649,9 @@ function Inner() {
     capsuleName: string,
     environment: string,
   ): Promise<Capsule | null> => {
-    const capsules = await listCapsules(workspace);
+    const capsules = await listCapsulesCached(workspace, {
+      includeDestroyed: false,
+    });
     return (
       capsules.find(
         (capsule) =>
@@ -1570,6 +1679,8 @@ function Inner() {
     startSourceSyncSlowTimer();
     const flow = startAbortableFlow();
     try {
+      await loadProviderConnections().catch(() => []);
+      throwIfStaleFlow(flow);
       const result = await checkCapsuleCompatibility({
         workspaceId: workspaceId()!,
         sourceId: createdSourceId() ?? undefined,
@@ -1621,9 +1732,7 @@ function Inner() {
         apiError?.isSourceSyncRequired
           ? t("new.error.syncPending")
           : apiError?.code === "source_sync_failed"
-            ? t("new.error.sourceFetchFailed", {
-                message: apiError.message,
-              })
+            ? sourceFetchErrorMessage(apiError)
             : t("new.error.generic"),
       );
     } finally {
@@ -1641,10 +1750,7 @@ function Inner() {
       setError(validationError);
       return;
     }
-    if (!canContinue()) {
-      setError(proceedBlocker());
-      return;
-    }
+    await loadProviderConnections().catch(() => []);
     await settleProviderConnectionRows();
     if (!canContinue()) {
       setError(proceedBlocker());
@@ -1761,6 +1867,7 @@ function Inner() {
           ...(flowInput.vars ? { vars: flowInput.vars } : {}),
         });
         throwIfStaleFlow(flow);
+        clearCapsuleListCache(workspace);
         capsuleId = capsule.id;
         setCreatedCapsuleId(capsuleId);
       } else {
@@ -1784,7 +1891,11 @@ function Inner() {
       throwIfStaleFlow(flow);
       setStepPlan("done");
       const runId = extractRunId(planEnvelope);
-      navigate(runId ? `/runs/${runId}` : "/");
+      navigate(
+        runId
+          ? (appendAppHandoff(`/runs/${runId}`, appHandoff) ?? `/runs/${runId}`)
+          : "/",
+      );
     } catch (err) {
       if (isAbortError(err) || !isCurrentFlow(flow)) {
         return;
@@ -1796,11 +1907,7 @@ function Inner() {
         setError(t("new.error.syncPending"));
       } else if (apiError?.code === "source_sync_failed") {
         setStepSync("error");
-        setError(
-          t("new.error.sourceFetchFailed", {
-            message: apiError.message,
-          }),
-        );
+        setError(sourceFetchErrorMessage(apiError));
       } else if (isDuplicateServiceError(apiError)) {
         setStepInstall(INSTALLATION_DONE);
         setStepPlan("idle");
@@ -2096,8 +2203,41 @@ function Inner() {
           </div>
         </Show>
 
+        <Show when={appHandoff}>
+          {(handoff) => (
+            <div class="wb-action-callout wb-app-handoff" role="status">
+              <div>
+                <span class="wb-app-handoff-kicker">
+                  {t("new.appHandoff.kicker")}
+                </span>
+                <strong>
+                  {t("new.appHandoff.title", {
+                    app: appHandoffProductLabel(handoff().product),
+                  })}
+                </strong>
+              </div>
+              <p>{t("new.appHandoff.body")}</p>
+              <dl class="wb-app-handoff-meta">
+                <div>
+                  <dt>{t("new.appHandoff.app")}</dt>
+                  <dd>{appHandoffProductLabel(handoff().product)}</dd>
+                </div>
+                <div>
+                  <dt>{t("new.appHandoff.return")}</dt>
+                  <dd>
+                    <code>{handoff().returnUri}</code>
+                  </dd>
+                </div>
+              </dl>
+            </div>
+          )}
+        </Show>
+
         <Show when={!hasChosenSource()}>
-          <section class="av-add-discovery" aria-label={t("new.discovery.aria")}>
+          <section
+            class="av-add-discovery"
+            aria-label={t("new.discovery.aria")}
+          >
             <header class="av-add-discovery-head">
               <div class="av-add-discovery-title">
                 <span class="av-add-discovery-icon" aria-hidden="true">
@@ -2138,13 +2278,12 @@ function Inner() {
               showSourceControls={false}
               showSortControl={false}
               showKindFilters={false}
+              loadRemoteOnMount={false}
             />
           </section>
         </Show>
 
-        <Show
-          when={hasChosenSource()}
-        >
+        <Show when={hasChosenSource()}>
           <section class="av-add-flow" aria-label={t("new.title")}>
             <div class="av-add-flow-header">
               <div class="av-add-flow-selected">
@@ -2404,7 +2543,13 @@ function Inner() {
                   </section>
                 </details>
 
-                <Show when={!configs.loading && configList().length === 0}>
+                <Show
+                  when={
+                    !starterConfigs.loading &&
+                    starterConfigList().length === 0 &&
+                    !hasChosenSource()
+                  }
+                >
                   <p class="wb-error" role="alert">
                     {t("new.error.configMissing")}
                   </p>

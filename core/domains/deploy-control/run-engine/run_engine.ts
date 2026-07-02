@@ -865,6 +865,10 @@ export class RunEngine {
       : installation.currentDeploymentId
         ? "update"
         : "create";
+    const compatibilityReportFromHint =
+      !internal.deferCompatibilityReport && internal.compatibilityReportId
+        ? true
+        : false;
     const compatibilityReport = internal.deferCompatibilityReport
       ? undefined
       : internal.compatibilityReportId
@@ -892,6 +896,7 @@ export class RunEngine {
       operation,
       ...(runnerProfileId ? { runnerProfileId } : {}),
       ...(compatibilityReport ? { compatibilityReport } : {}),
+      skipReadySourceFileDiscovery: compatibilityReportFromHint,
     });
     const installationContext: PlanRunInstallationContext = {
       workspaceId: installation.workspaceId,
@@ -1418,6 +1423,7 @@ export class RunEngine {
     readonly operation: "create" | "update" | "destroy";
     readonly runnerProfileId?: string;
     readonly compatibilityReport?: CapsuleCompatibilityReport;
+    readonly skipReadySourceFileDiscovery?: boolean;
   }): Promise<{
     readonly request: CreatePlanRunRequest;
     readonly installTypePlan?: InstallTypePlanContext;
@@ -1496,6 +1502,7 @@ export class RunEngine {
       readonly runnerProfileId?: string;
       readonly compatibilityReport?: CapsuleCompatibilityReport;
       readonly snapshot: SourceSnapshot;
+      readonly skipReadySourceFileDiscovery?: boolean;
     },
     moduleSource: OpenTofuModuleSource,
   ): Promise<{
@@ -1530,6 +1537,7 @@ export class RunEngine {
       input.compatibilityReport,
       input.snapshot,
       input.installConfig.modulePath,
+      { skipReady: input.skipReadySourceFileDiscovery === true },
     );
     const explicitVariables = normalizeVariables(
       input.installConfig.variableMapping,
@@ -1561,7 +1569,11 @@ export class RunEngine {
       genericRootPlan: {
         providerEnvBindings: installTypePlan.providerEnvBindings,
         outputAllowlist,
-        ...(moduleFiles && moduleFiles.length > 0 ? { moduleFiles } : {}),
+        ...(input.compatibilityReport?.level === "auto_capsulized" &&
+        moduleFiles &&
+        moduleFiles.length > 0
+          ? { moduleFiles }
+          : {}),
       },
     };
   }
@@ -1670,12 +1682,14 @@ export class RunEngine {
     report: CapsuleCompatibilityReport | undefined,
     sourceSnapshot: SourceSnapshot,
     modulePath: string | undefined,
+    options: { readonly skipReady?: boolean } = {},
   ): Promise<readonly OpenTofuCapsuleSourceFile[] | undefined> {
     if (!report) return undefined;
     if (report.level === "auto_capsulized") {
       return await this.#normalizedModuleFilesForReport(report, sourceSnapshot);
     }
     if (report.level !== "ready") return undefined;
+    if (options.skipReady) return undefined;
     if (!this.#sourcesService) return undefined;
     try {
       return await this.#sourcesService.readCapsuleSourceFiles(

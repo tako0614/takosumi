@@ -12,6 +12,10 @@ const storeBrowserCss = readFileSync(
   resolve(here, "../../../../../dashboard/src/views/store/StoreBrowser.css"),
   "utf8",
 );
+const storeViewSource = readFileSync(
+  resolve(here, "../../../../../dashboard/src/views/store/StoreView.tsx"),
+  "utf8",
+);
 
 describe("StoreBrowser install UI", () => {
   test("presents service choices like installable apps", () => {
@@ -41,5 +45,12 @@ describe("StoreBrowser install UI", () => {
     expect(storeBrowserCss).toContain("@media (max-width: 520px)");
     expect(storeBrowserCss).toContain("grid-template-columns: 1fr");
     expect(storeBrowserCss).toContain("width: 100%");
+  });
+
+  test("passes official first-party listings into the standalone Store tab", () => {
+    expect(storeViewSource).toContain("firstPartyStoreListings");
+    expect(storeViewSource).toContain(
+      "localListings={firstPartyStoreListings}",
+    );
   });
 });

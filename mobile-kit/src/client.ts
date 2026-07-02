@@ -24,8 +24,10 @@ import {
 import { discoverHost } from "./discovery.ts";
 import { parseMobileConnectInput, parseMobileRouteInput } from "./handoff.ts";
 import {
+  clearMobileKnownHosts,
   loadMobileKnownHosts,
   rememberMobileKnownHost,
+  removeMobileKnownHost,
 } from "./known-hosts.ts";
 import {
   createFirstRunActions,
@@ -33,6 +35,7 @@ import {
   createMobileReturnUri,
   type FirstRunAction,
 } from "./shell.ts";
+import { mobileErrorMessage } from "./error.ts";
 import { normalizeHostUrl, openMobileHostRoute } from "./url.ts";
 
 export interface MobileClientState<Home = unknown> {
@@ -89,6 +92,8 @@ export interface MobileClientCopy {
   readonly routeNeedsSessionStatus?: string;
   readonly routeFailedStatus?: string;
   readonly knownHostsLabel?: string;
+  readonly knownHostRemovedStatus?: string;
+  readonly knownHostsClearedStatus?: string;
 }
 
 export interface MobilePushRegistrationCallbackInput {
@@ -138,6 +143,8 @@ export interface MobileClientController<Home = unknown> {
   readonly connect: () => Promise<void>;
   readonly connectWithInput: (input: string) => Promise<void>;
   readonly connectKnownHost: (hostUrl: string) => Promise<void>;
+  readonly forgetKnownHost: (hostUrl: string) => Promise<void>;
+  readonly clearKnownHosts: () => Promise<void>;
   readonly openHostCenter: () => Promise<void>;
   readonly startSignIn: () => Promise<MobileClientActionResult>;
   readonly completeSignIn: (callbackUrl: string) => Promise<void>;
@@ -194,7 +201,7 @@ export function createMobileClientController<Home = unknown>(
       lastPushNotification: undefined,
       pushStatus: "",
       pushLoading: false,
-      status: error instanceof Error ? error.message : copy.signInFailedStatus,
+      status: mobileErrorMessage(error, copy.signInFailedStatus),
     });
   }
 
@@ -257,11 +264,7 @@ export function createMobileClientController<Home = unknown>(
       if (bridge.onPushNotificationReceived) {
         nextUnlisteners.push(
           await bridge.onPushNotificationReceived((notification) => {
-            void handlePushNotificationEvent(
-              session,
-              "received",
-              notification,
-            );
+            void handlePushNotificationEvent(session, "received", notification);
           }),
         );
       }
@@ -289,8 +292,7 @@ export function createMobileClientController<Home = unknown>(
     } catch (error) {
       await stopRegisteredPushEventListeners(nextUnlisteners);
       publish({
-        pushStatus:
-          error instanceof Error ? error.message : copy.pushEventsFailedStatus,
+        pushStatus: mobileErrorMessage(error, copy.pushEventsFailedStatus),
       });
     }
   }
@@ -329,8 +331,7 @@ export function createMobileClientController<Home = unknown>(
       });
     } catch (error) {
       publish({
-        pushStatus:
-          error instanceof Error ? error.message : copy.pushEventsFailedStatus,
+        pushStatus: mobileErrorMessage(error, copy.pushEventsFailedStatus),
       });
     }
   }
@@ -353,8 +354,7 @@ export function createMobileClientController<Home = unknown>(
       });
     } catch (error) {
       publish({
-        pushStatus:
-          error instanceof Error ? error.message : copy.pushFailedStatus,
+        pushStatus: mobileErrorMessage(error, copy.pushFailedStatus),
       });
     } finally {
       publish({ pushLoading: false });
@@ -378,8 +378,7 @@ export function createMobileClientController<Home = unknown>(
         });
       } catch (error) {
         publish({
-          status:
-            error instanceof Error ? error.message : copy.routeFailedStatus,
+          status: mobileErrorMessage(error, copy.routeFailedStatus),
         });
       }
       return;
@@ -407,7 +406,9 @@ export function createMobileClientController<Home = unknown>(
     session: MobileSession,
   ): boolean {
     if (!route.hostUrl) return true;
-    return normalizeHostUrl(route.hostUrl) === normalizeHostUrl(session.hostUrl);
+    return (
+      normalizeHostUrl(route.hostUrl) === normalizeHostUrl(session.hostUrl)
+    );
   }
 
   async function loadKnownHosts() {
@@ -435,6 +436,29 @@ export function createMobileClientController<Home = unknown>(
     }
   }
 
+  async function removeKnownHost(hostUrl: string) {
+    try {
+      return await removeMobileKnownHost({
+        adapter: options.adapter,
+        nativeBridge: options.nativeBridge,
+        hostUrl,
+      });
+    } catch {
+      return state.knownHosts;
+    }
+  }
+
+  async function clearKnownHostList() {
+    try {
+      return await clearMobileKnownHosts({
+        adapter: options.adapter,
+        nativeBridge: options.nativeBridge,
+      });
+    } catch {
+      return state.knownHosts;
+    }
+  }
+
   async function connectToInput(input: string, preservePendingRoute = false) {
     publish({
       status: copy.checkingStatus,
@@ -444,9 +468,26 @@ export function createMobileClientController<Home = unknown>(
     });
     try {
       const payload = parseMobileConnectInput(input);
+      const acceptedProducts = options.adapter.acceptAnyConnectProduct
+        ? undefined
+        : new Set(
+            options.adapter.acceptedConnectProducts ?? [
+              options.adapter.product,
+            ],
+          );
+      if (
+        payload.product &&
+        acceptedProducts &&
+        !acceptedProducts.has(payload.product)
+      ) {
+        throw new Error("Mobile connect payload product mismatch.");
+      }
       const discovery = await discoverHost({
         hostUrl: payload.hostUrl,
-        expectedProduct: options.adapter.product,
+        expectedProduct:
+          options.adapter.strictDiscoveryProduct === false
+            ? undefined
+            : options.adapter.product,
         fetch: options.fetch,
       });
       const knownHosts = await rememberKnownHost(discovery);
@@ -461,8 +502,7 @@ export function createMobileClientController<Home = unknown>(
     } catch (error) {
       publish({
         connectPayload: undefined,
-        status:
-          error instanceof Error ? error.message : "Host connection failed.",
+        status: mobileErrorMessage(error, "Host connection failed."),
       });
     }
   }
@@ -532,8 +572,7 @@ export function createMobileClientController<Home = unknown>(
         }
       } catch (error) {
         publish({
-          status:
-            error instanceof Error ? error.message : copy.routeFailedStatus,
+          status: mobileErrorMessage(error, copy.routeFailedStatus),
         });
         return;
       }
@@ -549,6 +588,18 @@ export function createMobileClientController<Home = unknown>(
     async connectKnownHost(hostUrl) {
       controller.setConnectInput(hostUrl);
       await connectToInput(hostUrl);
+    },
+    async forgetKnownHost(hostUrl) {
+      publish({
+        knownHosts: await removeKnownHost(hostUrl),
+        status: copy.knownHostRemovedStatus,
+      });
+    },
+    async clearKnownHosts() {
+      publish({
+        knownHosts: await clearKnownHostList(),
+        status: copy.knownHostsClearedStatus,
+      });
     },
     async openHostCenter() {
       await options.nativeBridge.openExternalUrl(
@@ -576,8 +627,7 @@ export function createMobileClientController<Home = unknown>(
         await options.nativeBridge.openExternalUrl(result.authorizationUrl);
       } catch (error) {
         publish({
-          status:
-            error instanceof Error ? error.message : copy.signInFailedStatus,
+          status: mobileErrorMessage(error, copy.signInFailedStatus),
         });
       }
       return {};
@@ -594,8 +644,7 @@ export function createMobileClientController<Home = unknown>(
         await activateSession(session, copy.signedInStatus);
       } catch (error) {
         publish({
-          status:
-            error instanceof Error ? error.message : copy.signInFailedStatus,
+          status: mobileErrorMessage(error, copy.signInFailedStatus),
         });
       }
     },
@@ -603,10 +652,7 @@ export function createMobileClientController<Home = unknown>(
       const current = state.lockedSession;
       if (!current) return;
       const unlocker = options.nativeBridge.authenticateBiometric;
-      if (
-        !options.nativeBridge.capabilities.biometricAuth ||
-        !unlocker
-      ) {
+      if (!options.nativeBridge.capabilities.biometricAuth || !unlocker) {
         if (sessionUnlockMode(options) === "required") {
           publish({ status: copy.sessionUnlockUnavailableStatus });
           return;
@@ -631,10 +677,7 @@ export function createMobileClientController<Home = unknown>(
         await activateSession(current, copy.sessionUnlockedStatus);
       } catch (error) {
         publish({
-          status:
-            error instanceof Error
-              ? error.message
-              : copy.sessionUnlockFailedStatus,
+          status: mobileErrorMessage(error, copy.sessionUnlockFailedStatus),
         });
       } finally {
         publish({ unlockLoading: false });
@@ -653,8 +696,7 @@ export function createMobileClientController<Home = unknown>(
       } catch (error) {
         publish({
           home: undefined,
-          homeStatus:
-            error instanceof Error ? error.message : copy.homeFailedStatus,
+          homeStatus: mobileErrorMessage(error, copy.homeFailedStatus),
         });
       } finally {
         publish({ homeLoading: false });
@@ -685,8 +727,7 @@ export function createMobileClientController<Home = unknown>(
       } catch (error) {
         publish({
           pushRegistration: undefined,
-          pushStatus:
-            error instanceof Error ? error.message : copy.pushFailedStatus,
+          pushStatus: mobileErrorMessage(error, copy.pushFailedStatus),
         });
       } finally {
         publish({ pushLoading: false });
@@ -755,9 +796,7 @@ function createClientCopy(
   options: CreateMobileClientControllerOptions,
 ): Required<MobileClientCopy> {
   const hostNoun = options.adapter.hostNoun;
-  const homeLabel =
-    options.homeLabel ??
-    (options.adapter.product === "takos" ? "workspace" : "instance");
+  const homeLabel = options.homeLabel ?? "home";
   return {
     initialStatus:
       options.copy?.initialStatus ??
@@ -785,10 +824,8 @@ function createClientCopy(
       options.copy?.sessionUnlockUnavailableStatus ??
       "Session unlock is not available on this device.",
     sessionUnlockFailedStatus:
-      options.copy?.sessionUnlockFailedStatus ??
-      "Session unlock was canceled.",
-    unlockSessionLabel:
-      options.copy?.unlockSessionLabel ?? "Unlock session",
+      options.copy?.sessionUnlockFailedStatus ?? "Session unlock was canceled.",
+    unlockSessionLabel: options.copy?.unlockSessionLabel ?? "Unlock session",
     signedOutStatus: options.copy?.signedOutStatus ?? "Signed out.",
     qrFallbackStatus:
       options.copy?.qrFallbackStatus ??
@@ -819,8 +856,7 @@ function createClientCopy(
       options.copy?.pushNotificationReceivedStatus ??
       "Push notification received.",
     pushNotificationTappedStatus:
-      options.copy?.pushNotificationTappedStatus ??
-      "Push notification opened.",
+      options.copy?.pushNotificationTappedStatus ?? "Push notification opened.",
     pushEventsFailedStatus:
       options.copy?.pushEventsFailedStatus ??
       "Push notification events are unavailable.",
@@ -835,6 +871,10 @@ function createClientCopy(
     routeFailedStatus:
       options.copy?.routeFailedStatus ?? "Mobile route open failed.",
     knownHostsLabel: options.copy?.knownHostsLabel ?? "Recent hosts",
+    knownHostRemovedStatus:
+      options.copy?.knownHostRemovedStatus ?? "Recent host removed.",
+    knownHostsClearedStatus:
+      options.copy?.knownHostsClearedStatus ?? "Recent hosts cleared.",
   };
 }
 

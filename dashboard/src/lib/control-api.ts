@@ -363,12 +363,7 @@ export interface WorkspaceBilling {
 export type TrustLevel = "official" | "trusted" | "space" | "raw";
 
 export type CapsuleStatus =
-  | "pending"
-  | "active"
-  | "stale"
-  | "error"
-  | "disabled"
-  | "destroyed";
+  "pending" | "active" | "stale" | "error" | "disabled" | "destroyed";
 
 export interface Capsule {
   readonly id: string;
@@ -444,10 +439,7 @@ export interface InstallConfig {
       readonly type?: "string" | "number" | "boolean";
       readonly required?: boolean;
       readonly defaultValue?:
-        | "service-name"
-        | "service-name-with-space"
-        | "main"
-        | "us-east-1";
+        "service-name" | "service-name-with-space" | "main" | "us-east-1";
       readonly label: { readonly ja: string; readonly en: string };
       readonly helper?: { readonly ja: string; readonly en: string };
       readonly placeholder?: string;
@@ -458,9 +450,7 @@ export interface InstallConfig {
 }
 
 export type DependencyMode =
-  | "remote_state"
-  | "variable_injection"
-  | "published_output";
+  "remote_state" | "variable_injection" | "published_output";
 
 export type DependencyVisibility = "space" | "cross_space";
 
@@ -729,10 +719,7 @@ export interface SourceSnapshot {
 }
 
 export type DeploymentStatus =
-  | "active"
-  | "superseded"
-  | "rolled_back"
-  | "destroyed";
+  "active" | "superseded" | "rolled_back" | "destroyed";
 
 /**
  * Public projection of a Deployment as returned by the session control surface
@@ -795,11 +782,7 @@ export interface ActivityEvent {
 }
 
 export type ConnectionStatus =
-  | "pending"
-  | "verified"
-  | "revoked"
-  | "expired"
-  | "error";
+  "pending" | "verified" | "revoked" | "expired" | "error";
 export type ConnectionScopeKind = "operator" | "space";
 
 export interface ConnectionScopeHints {
@@ -858,10 +841,7 @@ export interface ProviderListing {
 }
 
 export type CapsuleCompatibilityLevel =
-  | "ready"
-  | "auto_capsulized"
-  | "needs_patch"
-  | "unsupported";
+  "ready" | "auto_capsulized" | "needs_patch" | "unsupported";
 
 export interface CapsuleCompatibilityDiagnostic {
   readonly code?: string;
@@ -963,7 +943,9 @@ export async function getDashboardOverview(
   );
 }
 
-export async function listWorkspacesIncludingArchived(): Promise<readonly Workspace[]> {
+export async function listWorkspacesIncludingArchived(): Promise<
+  readonly Workspace[]
+> {
   const body = await controlFetch<WorkspaceListEnvelope>(
     `${BASE}/workspaces${query({ includeArchived: "true" })}`,
   );
@@ -1008,7 +990,9 @@ export async function updateWorkspace(
   return (body.workspace ?? body.space)!;
 }
 
-export async function getWorkspaceBilling(workspaceId: string): Promise<WorkspaceBilling> {
+export async function getWorkspaceBilling(
+  workspaceId: string,
+): Promise<WorkspaceBilling> {
   const body = await controlFetch<{ billing: WorkspaceBilling }>(
     `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/billing`,
   );
@@ -1029,7 +1013,9 @@ export async function listWorkspaceCreditReservations(
 ): Promise<readonly CreditReservation[]> {
   const body = await controlFetch<{
     creditReservations?: readonly CreditReservation[];
-  }>(`${BASE}/workspaces/${encodeURIComponent(workspaceId)}/credit-reservations`);
+  }>(
+    `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/credit-reservations`,
+  );
   return body.creditReservations ?? [];
 }
 
@@ -1101,9 +1087,9 @@ export interface PublicWorkspaceMember {
 export async function listMembers(
   workspaceId: string,
 ): Promise<readonly PublicWorkspaceMember[]> {
-  const body = await controlFetch<{ members?: readonly PublicWorkspaceMember[] }>(
-    `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/members`,
-  );
+  const body = await controlFetch<{
+    members?: readonly PublicWorkspaceMember[];
+  }>(`${BASE}/workspaces/${encodeURIComponent(workspaceId)}/members`);
   return body.members ?? [];
 }
 
@@ -1242,9 +1228,7 @@ export async function getCapsuleProviderConnectionSet(
 ): Promise<CapsuleProviderConnectionSet | null> {
   const body = await controlFetch<{
     providerConnectionSet: CapsuleProviderConnectionSet | null;
-  }>(
-    `${BASE}/capsules/${encodeURIComponent(capsuleId)}/provider-connections`,
-  );
+  }>(`${BASE}/capsules/${encodeURIComponent(capsuleId)}/provider-connections`);
   return body.providerConnectionSet;
 }
 
@@ -1254,10 +1238,10 @@ export async function putCapsuleProviderConnectionSet(
 ): Promise<CapsuleProviderConnectionSet> {
   const body = await controlFetch<{
     providerConnectionSet: CapsuleProviderConnectionSet;
-  }>(
-    `${BASE}/capsules/${encodeURIComponent(capsuleId)}/provider-connections`,
-    { method: "PUT", body: { connections } },
-  );
+  }>(`${BASE}/capsules/${encodeURIComponent(capsuleId)}/provider-connections`, {
+    method: "PUT",
+    body: { connections },
+  });
   return body.providerConnectionSet;
 }
 
@@ -1401,7 +1385,9 @@ export async function checkCapsuleCompatibility(input: {
 
 // --- Graph -----------------------------------------------------------------
 
-export async function getWorkspaceGraph(workspaceId: string): Promise<WorkspaceGraph> {
+export async function getWorkspaceGraph(
+  workspaceId: string,
+): Promise<WorkspaceGraph> {
   return await controlFetch<WorkspaceGraph>(
     `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/graph`,
   );
@@ -1519,7 +1505,9 @@ export async function listRuns(
 
 // --- Sources ---------------------------------------------------------------
 
-export async function listSources(workspaceId: string): Promise<readonly Source[]> {
+export async function listSources(
+  workspaceId: string,
+): Promise<readonly Source[]> {
   return await fetchAllPages<Source>(
     `${BASE}/sources${query({ workspaceId: workspaceId })}`,
     (body) => (body.sources as readonly Source[]) ?? [],
@@ -1626,14 +1614,11 @@ export async function waitForLatestSourceSnapshot(
         run?.status === "cancelled" ||
         run?.status === "expired"
       ) {
-        throw new ControlApiError(
-          409,
-          "source_sync_failed",
-          run.errorCode
-            ? `Source sync ${run.status}: ${run.errorCode}`
-            : `Source sync ${run.status}.`,
-          { run, snapshots: lastSnapshots },
-        );
+        const message = await sourceSyncFailureMessage(run, options.signal);
+        throw new ControlApiError(409, "source_sync_failed", message, {
+          run,
+          snapshots: lastSnapshots,
+        });
       }
     }
 
@@ -1654,6 +1639,28 @@ export async function waitForLatestSourceSnapshot(
   );
 }
 
+async function sourceSyncFailureMessage(
+  run: Run,
+  signal?: AbortSignal,
+): Promise<string> {
+  const fallback = run.errorCode
+    ? `Source sync ${run.status}: ${run.errorCode}`
+    : `Source sync ${run.status}.`;
+  try {
+    const logs = await getRunLogsWithOptions(run.id, { signal });
+    const diagnostic =
+      logs.diagnostics.find((entry) => entry.severity === "error") ??
+      logs.diagnostics[0];
+    if (!diagnostic) return fallback;
+    const message = diagnostic.detail
+      ? `${diagnostic.message}: ${diagnostic.detail}`
+      : diagnostic.message;
+    return message.trim() || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 // --- Runs ------------------------------------------------------------------
 
 /** Create a plan run for an Capsule. Returns the opaque Run envelope. */
@@ -1672,9 +1679,7 @@ export async function planCapsule(
   );
 }
 
-export async function destroyPlanCapsule(
-  capsuleId: string,
-): Promise<unknown> {
+export async function destroyPlanCapsule(capsuleId: string): Promise<unknown> {
   return await controlFetch<unknown>(
     `${BASE}/capsules/${encodeURIComponent(capsuleId)}/destroy-plan`,
     { method: "POST" },
@@ -1707,10 +1712,18 @@ export async function approveRun(
   return body.run;
 }
 
-export async function getRunLogs(id: string): Promise<RunLogs> {
+async function getRunLogsWithOptions(
+  id: string,
+  options: { readonly signal?: AbortSignal } = {},
+): Promise<RunLogs> {
   return await controlFetch<RunLogs>(
     `${BASE}/runs/${encodeURIComponent(id)}/logs`,
+    { signal: options.signal },
   );
+}
+
+export async function getRunLogs(id: string): Promise<RunLogs> {
+  return await getRunLogsWithOptions(id);
 }
 
 /**

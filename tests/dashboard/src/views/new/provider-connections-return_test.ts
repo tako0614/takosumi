@@ -168,14 +168,41 @@ describe("/new Provider Connections return context", () => {
     expect(ja["new.deeplink.invalidBody"]).not.toContain("リポジトリ");
   });
 
+  test("/new preserves App Handoff context through install and Provider Connections flows", () => {
+    expect(newAppViewSource).toContain("appHandoffFromSearch");
+    expect(newAppViewSource).toContain("appendAppHandoff");
+    expect(newAppViewSource).toContain("appHandoffProductLabel");
+    expect(newAppViewSource).toContain("wb-app-handoff");
+    expect(newAppViewSource).toContain("handoff().returnUri");
+    expect(newAppViewSource).toContain('"new.appHandoff.title"');
+    expect(newAppViewSource).toContain('"new.appHandoff.body"');
+    expect(newAppViewSource).toContain('"new.appHandoff.kicker"');
+    expect(newAppViewSource).toContain('"new.appHandoff.return"');
+    expect(en["new.appHandoff.title"]).toContain("{app}");
+    expect(ja["new.appHandoff.title"]).toContain("{app}");
+    expect(en["new.appHandoff.body"]).toContain("OpenTofu");
+    expect(ja["new.appHandoff.body"]).toContain("OpenTofu");
+    expect(en["new.appHandoff.kicker"]).toBe("App Handoff");
+    expect(ja["new.appHandoff.kicker"]).toBe("App Handoff");
+  });
+
+  test("/runs can return successful App Handoff deploys back to the client", () => {
+    expect(runViewSource).toContain("appHandoffFromSearch");
+    expect(runViewSource).toContain("appendAppHandoff");
+    expect(runViewSource).toContain("createAppHandoffConnectHref");
+    expect(runViewSource).toContain("completedRunLaunchUrl()");
+    expect(runViewSource).toContain('"run.appHandoff.open"');
+    expect(en["run.appHandoff.open"]).toContain("{app}");
+    expect(ja["run.appHandoff.open"]).toContain("{app}");
+  });
+
   test("/new defaults a ready ProviderConnection after asynchronous loading", () => {
     expect(newAppViewSource).toContain(
       "defaultProviderRowsWithReadyConnections",
     );
+    expect(newAppViewSource).toContain("loadProviderConnections");
     expect(newAppViewSource).toContain("const visibleProviderConnections = ()");
-    expect(newAppViewSource).toContain(
-      "providerConnections() ?? providerConnections.latest ?? []",
-    );
+    expect(newAppViewSource).toContain("providerConnections() ?? []");
     expect(newAppViewSource).toContain("createEffect(() =>");
     expect(newAppViewSource).toContain("const defaultedRows =");
     expect(newAppViewSource).toContain(
@@ -184,6 +211,22 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).toContain("selected={!row.connectionId}");
     expect(newAppViewSource).toContain("connection.id === row.connectionId");
     expect(newAppViewSource).toContain("setProviderRows(defaultedRows)");
+  });
+
+  test("/new only asks for Provider Connections when the provider has credential env rules", () => {
+    expect(newAppViewSource).toContain(
+      'from "takosumi-contract/provider-env-rules"',
+    );
+    expect(newAppViewSource).toContain("const providerRequiresConnection =");
+    expect(newAppViewSource).toContain(
+      "providerEnvRule(provider) !== undefined",
+    );
+    expect(newAppViewSource).toContain(
+      "provider.allowed && providerRequiresConnection(provider.source)",
+    );
+    expect(newAppViewSource).toContain(
+      ".filter((row) => providerRequiresConnection(row.provider))",
+    );
   });
 
   test("Cloudflare connection form requires and forwards account id as a scope hint", () => {
@@ -220,6 +263,20 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).toContain("onSourceCreated");
     expect(newAppViewSource).toContain("const retryAfterSyncWait = () =>");
     expect(newAppViewSource).toContain("else void runCompatibilityCheck()");
+  });
+
+  test("/new surfaces source-sync diagnostics instead of hiding ref errors", () => {
+    expect(controlApiSource).toContain("sourceSyncFailureMessage");
+    expect(controlApiSource).toContain("getRunLogsWithOptions");
+    expect(newAppViewSource).toContain("sourceFetchErrorMessage");
+    expect(newAppViewSource).toContain(
+      "source ref did not resolve to a commit",
+    );
+    expect(newAppViewSource).toContain('"new.error.sourceRefNotFound"');
+    expect(en["new.error.sourceRefNotFound"]).toContain("{ref}");
+    expect(ja["new.error.sourceRefNotFound"]).toContain("{ref}");
+    expect(en["new.error.sourceFetchFailed"]).toContain("{message}");
+    expect(ja["new.error.sourceFetchFailed"]).toContain("{message}");
   });
 
   test("/new can use a Source Git credential for private repositories", () => {
@@ -264,8 +321,7 @@ describe("/new Provider Connections return context", () => {
     expect(saveIndex).toBeGreaterThan(setCreatedIndex);
     expect(doneIndex).toBeGreaterThan(saveIndex);
     expect(
-      newAppViewSource.match(/await putCapsuleProviderConnectionSet\(/g) ??
-        [],
+      newAppViewSource.match(/await putCapsuleProviderConnectionSet\(/g) ?? [],
     ).toHaveLength(1);
   });
 
@@ -296,9 +352,7 @@ describe("/new Provider Connections return context", () => {
     expect(controlApiSource).toContain("function controlErrorDetails");
     expect(controlApiSource).toContain('"duplicate_installation"');
     expect(newAppViewSource).toContain("error?.isDuplicateService");
-    expect(installationsServiceSource).toContain(
-      'reason: "duplicate_capsule"',
-    );
+    expect(installationsServiceSource).toContain('reason: "duplicate_capsule"');
     expect(installationsServiceSource).toContain("capsuleId: existing.id");
     expect(controlSharedSource).toContain("error.details");
     expect(controlSharedSource).toContain("function isRecord");

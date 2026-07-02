@@ -208,6 +208,47 @@ test("GET /internal/v1/workspaces/:id/capsules caps the default page at 100 and 
   }
 });
 
+test("GET /internal/v1/workspaces/:id/capsules can exclude destroyed Capsules before paging", async () => {
+  const app = await makeApp(async (store) => {
+    await store.putInstallation(installationFixture(0));
+    await store.putInstallation({
+      ...installationFixture(1),
+      status: "destroyed",
+    });
+    await store.putInstallation(installationFixture(2));
+  });
+
+  const res = await app.request(
+    `/internal/v1/workspaces/${SPACE_ID}/capsules?includeDestroyed=false&limit=10`,
+    { headers: AUTH },
+  );
+  expect(res.status).toBe(200);
+  const body = (await res.json()) as {
+    capsules: { id: string; status: string }[];
+    nextCursor?: string;
+  };
+  expect(body.capsules.map((capsule) => capsule.id)).toEqual([
+    "inst_0000",
+    "inst_0002",
+  ]);
+  expect(body.capsules.every((capsule) => capsule.status !== "destroyed")).toBe(
+    true,
+  );
+  expect(body.nextCursor).toBeUndefined();
+});
+
+test("GET /internal/v1/workspaces/:id/capsules rejects malformed includeDestroyed", async () => {
+  const app = await makeApp(async (store) => {
+    await store.putInstallation(installationFixture(0));
+  });
+
+  const res = await app.request(
+    `/internal/v1/workspaces/${SPACE_ID}/capsules?includeDestroyed=maybe`,
+    { headers: AUTH },
+  );
+  expect(res.status).toBe(400);
+});
+
 test("GET /internal/v1/install-configs caps the official+scoped union at 100 and pages the rest", async () => {
   // 80 stored official (spaceId-less) + built-in official fallback configs +
   // 170 space-scoped configs are merged into one sorted, paginated union.

@@ -80,10 +80,10 @@ export class DriftService {
   }
 
   /**
-   * Installation-driven drift check (spec §19 `drift_check` run type; Phase 8
+   * Capsule-driven drift check (spec §19 `drift_check` run type; Phase 8
    * advanced). Creates a plan-kind internal run flagged {@link PlanRun.driftCheck}
    * that:
-   *   - resolves the Installation -> InstallConfig -> Source -> latest snapshot
+   *   - resolves the Capsule config -> Source -> latest snapshot
    *     exactly like `createInstallationPlan` (an `update`-kind plan), so the
    *     runner produces a real `tofu plan` against the live state;
    *   - NEVER parks `waiting_approval` (`#planAwaitsApproval` short-circuits a

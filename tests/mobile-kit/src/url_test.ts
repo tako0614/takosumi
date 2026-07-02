@@ -18,15 +18,38 @@ test("hostEndpoint rejects cross-origin absolute endpoints", () => {
   expect(hostEndpoint("https://host.example", "/api/auth/me")).toBe(
     "https://host.example/api/auth/me",
   );
+  expect(
+    hostEndpoint(
+      "https://host.example/base",
+      "https://host.example/api/mobile/push-registrations",
+    ),
+  ).toBe("https://host.example/api/mobile/push-registrations");
   expect(() =>
     hostEndpoint("https://host.example", "https://evil.example/api"),
   ).toThrow("Host endpoint must stay on the connected host.");
 });
 
 test("createTakosumiHostCenterUrl points at Host Center entry", () => {
-  expect(createTakosumiHostCenterUrl({ product: "takos" })).toBe(
-    "https://app.takosumi.com/new?product=takos",
+  expect(
+    createTakosumiHostCenterUrl({
+      product: "notes-app",
+      source: {
+        git: "https://github.com/acme/notes.git",
+        ref: "main",
+        path: "deploy/opentofu",
+      },
+      returnUri: "notesapp://connect",
+    }),
+  ).toBe(
+    "https://app.takosumi.com/install?product=notes-app&return_uri=notesapp%3A%2F%2Fconnect&git=https%3A%2F%2Fgithub.com%2Facme%2Fnotes.git&ref=main&path=deploy%2Fopentofu",
   );
+  expect(() =>
+    createTakosumiHostCenterUrl({
+      product: "bad/product",
+      source: { git: "https://github.com/acme/notes.git" },
+      returnUri: "notesapp://connect",
+    }),
+  ).toThrow("Host Center product key is invalid.");
 });
 
 test("createMobileConnectUrl carries only host, product, and setup ticket", () => {

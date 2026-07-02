@@ -1,10 +1,14 @@
 import type {
+  MobileHostCenterSource,
+  MobileHostableProductKind,
   MobileProductKind,
   MobileSession,
   NativeBridge,
 } from "./types.ts";
+import { createTakosumiAppHandoffUrl } from "../../contract/app-handoff.ts";
+import { requireMobileProductKey } from "./product-key.ts";
 
-const hostCenterUrl = "https://app.takosumi.com/new";
+const hostCenterUrl = "https://app.takosumi.com/install";
 
 export function normalizeHostUrl(input: string): string {
   const raw = input.trim();
@@ -60,13 +64,16 @@ export async function openMobileHostRoute(
 }
 
 export function createTakosumiHostCenterUrl(input: {
-  readonly product: MobileProductKind;
-  readonly returnUri?: string;
+  readonly product: MobileHostableProductKind;
+  readonly source: MobileHostCenterSource;
+  readonly returnUri: string;
 }): string {
-  const url = new URL(hostCenterUrl);
-  url.searchParams.set("product", input.product);
-  if (input.returnUri) url.searchParams.set("return_uri", input.returnUri);
-  return url.toString();
+  return createTakosumiAppHandoffUrl({
+    baseUrl: hostCenterUrl,
+    ...input.source,
+    product: requireMobileProductKey(input.product, "Host Center product"),
+    returnUri: input.returnUri,
+  });
 }
 
 export function createMobileConnectUrl(input: {

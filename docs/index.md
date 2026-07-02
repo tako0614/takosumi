@@ -62,6 +62,8 @@ Operator / Cloud は商用運用と managed capacity を持つ。
 | Restore point | state version を使った復元点                      |
 
 詳細を見たい場合は、OpenTofu/Terraform の model を [Model reference](./reference/model.md) で確認できます。
+外部の web / desktop / mobile / CLI からサービス作成へつなぐ場合は
+[App Handoff Protocol](./reference/app-handoff.md) を使います。
 
 ## Takosumi が管理すること
 
@@ -172,4 +174,5 @@ POST /gateway/ai/v1/embeddings
 - [Takosumi Cloud](./cloud/index.md)
 - [Model reference](./reference/model.md)
 - [Takosumi API](./reference/api.md)
+- [App Handoff Protocol](./reference/app-handoff.md)
 - [CLI reference](./reference/cli.md)

@@ -13,12 +13,15 @@ import {
   type MobileClientState,
 } from "./client.ts";
 import type {
+  MobileKnownHost,
   MobileProductAdapter,
   MobileSession,
   MobileSessionUnlockOptions,
   NativeBridge,
 } from "./types.ts";
 import { createMobileHostRouteUrl, openMobileHostRoute } from "./url.ts";
+import { mobileErrorMessage } from "./error.ts";
+import { copyMobileText } from "./shell.ts";
 
 export interface MobileShellMetric<Home> {
   readonly label: string;
@@ -41,16 +44,47 @@ export interface MobileShellHostAction<Home = unknown> {
   readonly nativeIntent?: MobileShellNativeIntent;
 }
 
+export function defineMobileHostActions<Home>(
+  actions: readonly MobileShellHostAction<Home>[],
+): readonly MobileShellHostAction<Home>[] {
+  for (const action of actions) {
+    if (!action.label.trim()) {
+      throw new Error("Host action label is required.");
+    }
+    if (!action.description.trim()) {
+      throw new Error(`Host action description is required: ${action.label}`);
+    }
+    if (typeof action.path === "string") {
+      validateHostActionPath(action.path, action.label);
+    }
+  }
+  return actions;
+}
+
+export interface MobileShellHomeExtraContext<Home> {
+  readonly home: Home | undefined;
+  readonly session: MobileSession;
+  readonly refreshHome: () => Promise<void>;
+  readonly openHostRoute: (path: string) => Promise<void>;
+  readonly openExternalUrl: (url: string) => Promise<void>;
+  readonly writeClipboardText?: NativeBridge["writeClipboardText"];
+}
+
 export interface MobileShellCopy<Home> {
   readonly eyebrow?: string;
   readonly summary: string;
   readonly connectLabel: string;
   readonly knownHostsLabel?: string;
+  readonly knownHostsClearLabel?: string;
+  readonly knownHostForgetLabel?: (host: MobileKnownHost) => string;
   readonly discoveredHeading: string;
   readonly homeFallbackTitle: string;
   readonly lockedSessionTitle?: string;
   readonly unlockSessionLabel?: string;
   readonly refreshLabel: string;
+  readonly copyHostUrlLabel?: string;
+  readonly copyHostUrlSuccessStatus?: string;
+  readonly copyHostUrlFailedStatus?: string;
   readonly homeTitle: (home: Home | undefined) => string | undefined;
   readonly metricsLabel: string;
   readonly shortcutsLabel: string;
@@ -74,7 +108,9 @@ export interface MobileClientShellProps<Home> {
   readonly copy: MobileShellCopy<Home>;
   readonly metrics: readonly MobileShellMetric<Home>[];
   readonly hostActions: readonly MobileShellHostAction<Home>[];
-  readonly renderHomeExtra?: (home: Home | undefined) => JSX.Element;
+  readonly renderHomeExtra?: (
+    context: MobileShellHomeExtraContext<Home>,
+  ) => JSX.Element;
 }
 
 export function MobileClientShell<Home>(props: MobileClientShellProps<Home>) {
@@ -98,6 +134,9 @@ export function MobileClientShell<Home>(props: MobileClientShellProps<Home>) {
   const [state, setState] = createSignal<MobileClientState<Home>>(
     controller.getState(),
   );
+  const [hostCopyStatus, setHostCopyStatus] = createSignal<
+    string | undefined
+  >();
   let inputRef: HTMLInputElement | undefined;
   let unsubscribe: (() => void) | undefined;
 
@@ -127,6 +166,14 @@ export function MobileClientShell<Home>(props: MobileClientShellProps<Home>) {
     await controller.connectKnownHost(hostUrl);
   }
 
+  async function forgetKnownHost(hostUrl: string) {
+    await controller.forgetKnownHost(hostUrl);
+  }
+
+  async function clearKnownHosts() {
+    await controller.clearKnownHosts();
+  }
+
   async function openHostAction(
     session: MobileSession,
     action: MobileShellHostAction<Home>,
@@ -144,6 +191,26 @@ export function MobileClientShell<Home>(props: MobileClientShellProps<Home>) {
       return;
     }
     await openMobileHostRoute(props.nativeBridge, session, routePath);
+  }
+
+  async function copyHostUrl(session: MobileSession) {
+    try {
+      await copyMobileText({
+        text: session.hostUrl,
+        label: `${props.adapter.appName} host URL`,
+        writeClipboardText: props.nativeBridge.writeClipboardText,
+      });
+      setHostCopyStatus(
+        props.copy.copyHostUrlSuccessStatus ?? "Host URL copied.",
+      );
+    } catch (error) {
+      setHostCopyStatus(
+        mobileErrorMessage(
+          error,
+          props.copy.copyHostUrlFailedStatus ?? "Host URL copy failed.",
+        ),
+      );
+    }
   }
 
   const homeTitle = () =>
@@ -172,41 +239,70 @@ export function MobileClientShell<Home>(props: MobileClientShellProps<Home>) {
         </For>
       </section>
 
-      <section class="connect-panel">
+      <form
+        class="connect-panel"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void controller.connect();
+        }}
+      >
         <label for="connect-input">{props.copy.connectLabel}</label>
         <input
           id="connect-input"
+          name="mobile-connect"
           ref={inputRef}
+          inputMode="url"
           value={state().connectInput}
           placeholder={props.adapter.urlPlaceholder}
           onInput={(event) =>
             controller.setConnectInput(event.currentTarget.value)
           }
         />
-        <button
-          type="button"
-          class="primary"
-          onClick={() => void controller.connect()}
-        >
+        <button type="submit" class="primary">
           {props.adapter.primaryActionLabel}
         </button>
         <p class="status">{state().status}</p>
-      </section>
+      </form>
 
       <Show when={!state().session && state().knownHosts.length > 0}>
-        <section class="known-hosts" aria-label={props.copy.knownHostsLabel ?? "Recent hosts"}>
-          <h2>{props.copy.knownHostsLabel ?? "Recent hosts"}</h2>
+        <section
+          class="known-hosts"
+          aria-label={props.copy.knownHostsLabel ?? "Recent hosts"}
+        >
+          <div class="known-hosts-header">
+            <h2>{props.copy.knownHostsLabel ?? "Recent hosts"}</h2>
+            <button
+              type="button"
+              class="text-button"
+              onClick={() => void clearKnownHosts()}
+            >
+              {props.copy.knownHostsClearLabel ?? "Clear"}
+            </button>
+          </div>
           <div class="known-host-list">
             <For each={state().knownHosts}>
               {(host) => (
-                <button
-                  type="button"
-                  class="known-host"
-                  onClick={() => void connectKnownHost(host.hostUrl)}
-                >
-                  <span>{host.label ?? host.hostUrl}</span>
-                  <small>{formatKnownHostDate(host.lastSeenAt)}</small>
-                </button>
+                <div class="known-host-row">
+                  <button
+                    type="button"
+                    class="known-host"
+                    onClick={() => void connectKnownHost(host.hostUrl)}
+                  >
+                    <span>{host.label ?? host.hostUrl}</span>
+                    <small>{formatKnownHostDate(host.lastSeenAt)}</small>
+                  </button>
+                  <button
+                    type="button"
+                    class="known-host-remove"
+                    aria-label={
+                      props.copy.knownHostForgetLabel?.(host) ??
+                      `Remove ${host.label ?? host.hostUrl}`
+                    }
+                    onClick={() => void forgetKnownHost(host.hostUrl)}
+                  >
+                    Remove
+                  </button>
+                </div>
               )}
             </For>
           </div>
@@ -251,9 +347,7 @@ export function MobileClientShell<Home>(props: MobileClientShellProps<Home>) {
           <section class="result-panel">
             <div class="panel-header">
               <div>
-                <h2>
-                  {props.copy.lockedSessionTitle ?? "Session locked"}
-                </h2>
+                <h2>{props.copy.lockedSessionTitle ?? "Session locked"}</h2>
                 <p>{lockedSession().hostUrl}</p>
               </div>
               <button
@@ -278,15 +372,27 @@ export function MobileClientShell<Home>(props: MobileClientShellProps<Home>) {
                 <h2>{homeTitle()}</h2>
                 <p>{current().hostUrl}</p>
               </div>
-              <button
-                type="button"
-                class="icon-button"
-                aria-label={props.copy.refreshLabel}
-                disabled={state().homeLoading}
-                onClick={() => void controller.refreshHome()}
-              >
-                Refresh
-              </button>
+              <div class="panel-actions">
+                <Show when={props.nativeBridge.writeClipboardText}>
+                  <button
+                    type="button"
+                    class="icon-button"
+                    aria-label={props.copy.copyHostUrlLabel ?? "Copy URL"}
+                    onClick={() => void copyHostUrl(current())}
+                  >
+                    {props.copy.copyHostUrlLabel ?? "Copy URL"}
+                  </button>
+                </Show>
+                <button
+                  type="button"
+                  class="icon-button"
+                  aria-label={props.copy.refreshLabel}
+                  disabled={state().homeLoading}
+                  onClick={() => void controller.refreshHome()}
+                >
+                  Refresh
+                </button>
+              </div>
             </div>
             <div class="metrics" aria-label={props.copy.metricsLabel}>
               <For each={props.metrics}>
@@ -312,7 +418,15 @@ export function MobileClientShell<Home>(props: MobileClientShellProps<Home>) {
                 )}
               </For>
             </div>
-            {props.renderHomeExtra?.(state().home)}
+            {props.renderHomeExtra?.({
+              home: state().home,
+              session: current(),
+              refreshHome: () => controller.refreshHome(current()),
+              openHostRoute: (path) =>
+                openMobileHostRoute(props.nativeBridge, current(), path),
+              openExternalUrl: (url) => props.nativeBridge.openExternalUrl(url),
+              writeClipboardText: props.nativeBridge.writeClipboardText,
+            })}
             <dl>
               <div>
                 <dt>Token type</dt>
@@ -328,6 +442,9 @@ export function MobileClientShell<Home>(props: MobileClientShellProps<Home>) {
               </Show>
             </dl>
             <p class="status">{state().homeStatus}</p>
+            <Show when={hostCopyStatus()}>
+              {(copyStatus) => <p class="status">{copyStatus()}</p>}
+            </Show>
             <Show when={state().pushStatus}>
               {(pushStatus) => <p class="status">{pushStatus()}</p>}
             </Show>
@@ -363,6 +480,12 @@ function resolveHostActionPath<Home>(
   context: MobileShellHostActionContext<Home>,
 ): string | undefined {
   return typeof action.path === "function" ? action.path(context) : action.path;
+}
+
+function validateHostActionPath(path: string, label: string): void {
+  if (!path.startsWith("/") || path.startsWith("//")) {
+    throw new Error(`Host action path must be same-origin: ${label}`);
+  }
 }
 
 function resolvePushNotificationPath(

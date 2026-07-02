@@ -3,9 +3,11 @@ import {
   authenticateBiometric,
   createTauriInvokeKeystoreAdapter,
   createTauriKeystoreStrongholdPassword,
+  createTauriMobileDefaultProductBridge,
   createTauriMobilePushPluginAdapter,
   createTauriOpenerCallIntentAdapter,
   createTauriMobileProductBridge,
+  createTauriMobileProductStorageNames,
   createTauriPluginNativeBridge,
   createTauriPersistentStrongholdPassword,
   createTauriPushNotificationsAdapter,
@@ -23,20 +25,21 @@ test("tauri plugin bridge maps typed native plugins to NativeBridge", async () =
   const refreshedPushTokens: unknown[] = [];
   const biometrics: unknown[] = [];
   const calls: unknown[] = [];
+  const clips: unknown[] = [];
   let openHandler: ((urls: string[]) => void) | undefined;
-  let receivedPushHandler: ((notification: {
-    readonly title?: string;
-    readonly body?: string;
-    readonly data: Record<string, unknown>;
-  }) => void) | undefined;
+  let receivedPushHandler:
+    | ((notification: {
+        readonly title?: string;
+        readonly body?: string;
+        readonly data: Record<string, unknown>;
+      }) => void)
+    | undefined;
   let tappedPushHandler: typeof receivedPushHandler;
   let refreshedPushTokenHandler:
-    | ((
-        registration: {
-          readonly token: string;
-          readonly environment?: string;
-        },
-      ) => void)
+    | ((registration: {
+        readonly token: string;
+        readonly environment?: string;
+      }) => void)
     | undefined;
   const bridge = createTauriPluginNativeBridge({
     appName: "Takos",
@@ -118,6 +121,11 @@ test("tauri plugin bridge maps typed native plugins to NativeBridge", async () =
         calls.push(input);
       },
     },
+    clipboard: {
+      async writeText(text, options) {
+        clips.push({ text, options });
+      },
+    },
   });
 
   expect(bridge.capabilities.launchPayloadEvents).toBe(true);
@@ -125,6 +133,7 @@ test("tauri plugin bridge maps typed native plugins to NativeBridge", async () =
   expect(bridge.capabilities.pushNotifications).toBe(true);
   expect(bridge.capabilities.biometricAuth).toBe(true);
   expect(bridge.capabilities.callIntent).toBe(true);
+  expect(bridge.capabilities.clipboardText).toBe(true);
   expect(bridge.capabilities.secureStorage).toBe(true);
   expect(bridge.storage?.kind).toBe("device-persistent");
   expect(bridge.secureStore?.kind).toBe("secure");
@@ -255,6 +264,16 @@ test("tauri plugin bridge maps typed native plugins to NativeBridge", async () =
       title: "Daily sync",
     },
   ]);
+  await bridge.writeClipboardText?.({
+    text: "https://host.example/stories/1",
+    label: "Story URL",
+  });
+  expect(clips).toEqual([
+    {
+      text: "https://host.example/stories/1",
+      options: { label: "Story URL" },
+    },
+  ]);
   expect(await bridge.requestLocalNotificationPermission?.()).toBe(true);
   await bridge.sendLocalNotification?.({ title: "Takos", body: "Connected" });
   expect(notifications).toEqual([{ title: "Takos", body: "Connected" }]);
@@ -342,6 +361,181 @@ test("tauri mobile product bridge builds the shared product native bridge", asyn
   ]);
   expect(await bridge.scanConnectionPayload?.()).toBe("https://host.example");
   expect(scannedOptions).toEqual([{ formats: ["qr-code"] }]);
+});
+
+test("tauri default product bridge assembles product storage, keystore, push, and call adapters", async () => {
+  const password = "notes-mobile-stronghold.0123456789abcdef0123456789abcdef";
+  const invocations: Array<[string, Record<string, unknown> | undefined]> = [];
+  const loadedStrongholds: Array<[string, string]> = [];
+  const opened: Array<[string | URL, string | undefined]> = [];
+  const clips: unknown[] = [];
+  let permissionRequested = false;
+
+  const bridge = createTauriMobileDefaultProductBridge({
+    productAdapter: {
+      product: "notes-app",
+      appName: "Notes",
+    },
+    keychainService: "jp.takos.notes.mobile",
+    invoke: async <T>(
+      command: string,
+      args?: Record<string, unknown>,
+    ): Promise<T> => {
+      invocations.push([command, args]);
+      if (command === "plugin:keystore|retrieve") {
+        return { value: password } as T;
+      }
+      return undefined as T;
+    },
+    isTauriRuntime: () => true,
+    path: {
+      async appDataDir() {
+        return "/data/app";
+      },
+      async join(...paths) {
+        return paths.join("/");
+      },
+    },
+    platform: {
+      platform: () => "android",
+    },
+    deepLink: {
+      async getCurrent() {
+        return null;
+      },
+      async onOpenUrl() {
+        return () => {};
+      },
+    },
+    opener: {
+      async openUrl(url, openWith) {
+        opened.push([url, openWith]);
+      },
+    },
+    store: {
+      async load() {
+        return memoryStore();
+      },
+    },
+    stronghold: {
+      async load(path, strongholdPassword) {
+        loadedStrongholds.push([path, strongholdPassword]);
+        return {
+          async loadClient() {
+            return {
+              getStore() {
+                return memoryStrongholdStore();
+              },
+            };
+          },
+          async createClient() {
+            throw new Error("loadClient should be used");
+          },
+          async save() {},
+        };
+      },
+    },
+    mobilePush: {
+      async requestPermission() {
+        permissionRequested = true;
+        return true;
+      },
+      async getToken() {
+        return "push-token";
+      },
+    },
+    clipboard: {
+      async writeText(text, options) {
+        clips.push({ text, options });
+      },
+    },
+  });
+
+  expect(bridge.capabilities.secureStorage).toBe(true);
+  expect(bridge.capabilities.pushNotifications).toBe(true);
+  expect(bridge.capabilities.callIntent).toBe(true);
+  expect(bridge.capabilities.clipboardText).toBe(true);
+
+  await bridge.secureStore?.set("session", "secret");
+  expect(invocations).toEqual([
+    [
+      "plugin:keystore|retrieve",
+      {
+        payload: {
+          service: "jp.takos.notes.mobile",
+          user: "stronghold-password",
+        },
+      },
+    ],
+  ]);
+  expect(loadedStrongholds).toEqual([
+    ["/data/app/notes-app-mobile.hold", password],
+  ]);
+
+  await expect(
+    bridge.registerPushNotifications?.({
+      hostUrl: "https://host.example",
+      product: "notes-app",
+    }),
+  ).resolves.toEqual({
+    token: "push-token",
+    environment: undefined,
+  });
+  expect(permissionRequested).toBe(true);
+
+  await bridge.requestCall?.({
+    roomUrl: "https://host.example/calls/room-1",
+    title: "Daily sync",
+  });
+  expect(opened).toEqual([
+    ["https://host.example/calls/room-1", "inAppBrowser"],
+  ]);
+  await bridge.writeClipboardText?.({
+    text: "https://host.example/stories/1",
+  });
+  expect(clips).toEqual([
+    {
+      text: "https://host.example/stories/1",
+      options: undefined,
+    },
+  ]);
+});
+
+test("tauri mobile product storage names are derived from product keys", () => {
+  expect(createTauriMobileProductStorageNames({ product: "takos" })).toEqual({
+    storePath: "takos-mobile-session.json",
+    strongholdVaultFileName: "takos-mobile.hold",
+    strongholdClientName: "takos-mobile",
+    strongholdPasswordKey: "takos.mobile.stronghold.password",
+    strongholdPasswordPrefix: "takos-mobile-stronghold",
+  });
+  expect(
+    createTauriMobileProductStorageNames({ product: "notes-app" }),
+  ).toEqual({
+    storePath: "notes-app-mobile-session.json",
+    strongholdVaultFileName: "notes-app-mobile.hold",
+    strongholdClientName: "notes-app-mobile",
+    strongholdPasswordKey: "notes-app.mobile.stronghold.password",
+    strongholdPasswordPrefix: "notes-app-mobile-stronghold",
+  });
+  expect(
+    createTauriMobileProductStorageNames(
+      { product: "notes-app" },
+      {
+        storePath: "custom.json",
+        strongholdVaultFileName: "custom.hold",
+        strongholdClientName: "custom-client",
+        strongholdPasswordKey: "custom.password",
+        strongholdPasswordPrefix: "custom-prefix",
+      },
+    ),
+  ).toEqual({
+    storePath: "custom.json",
+    strongholdVaultFileName: "custom.hold",
+    strongholdClientName: "custom-client",
+    strongholdPasswordKey: "custom.password",
+    strongholdPasswordPrefix: "custom-prefix",
+  });
 });
 
 test("tauri bridge disables mobile-only native plugins on desktop platforms", async () => {
@@ -433,7 +627,7 @@ test("tauri helper adapters normalize push tokens and call intents", async () =>
       async requestToken() {
         return {
           token: "ios-token",
-          environment: "simulator",
+          environment: " simulator ",
         };
       },
     },
@@ -446,6 +640,27 @@ test("tauri helper adapters normalize push tokens and call intents", async () =>
   ).resolves.toEqual({
     token: "ios-token",
     environment: "simulator",
+  });
+
+  const invalidEnvironmentPush = createTauriPushNotificationsAdapter({
+    environment: "fallback-env",
+    tokenSource: {
+      async requestToken() {
+        return {
+          token: "android-token",
+          environment: "prod env",
+        };
+      },
+    },
+  });
+  await expect(
+    invalidEnvironmentPush.register({
+      hostUrl: "https://host.example",
+      product: "takos",
+    }),
+  ).resolves.toEqual({
+    token: "android-token",
+    environment: "fallback-env",
   });
 
   const opened: Array<[string | URL, string | undefined]> = [];
@@ -482,17 +697,14 @@ test("tauri biometric helper returns false when native auth rejects", async () =
 test("tauri mobile-push plugin adapter requests permission and normalizes tokens", async () => {
   const calls: string[] = [];
   let receivedHandler:
-    | ((
-        notification: {
-          readonly title?: string;
-          readonly data: Record<string, unknown>;
-        },
-      ) => void)
+    | ((notification: {
+        readonly title?: string;
+        readonly data: Record<string, unknown>;
+      }) => void)
     | undefined;
   let tappedHandler: typeof receivedHandler;
   let refreshHandler:
-    | ((payload: { readonly token: string }) => void)
-    | undefined;
+    ((payload: { readonly token: string }) => void) | undefined;
   const notifications: unknown[] = [];
   const taps: unknown[] = [];
   const refreshes: unknown[] = [];
@@ -615,6 +827,30 @@ test("tauri mobile-push plugin adapter skips host registration when denied", asy
     push.register({
       hostUrl: "https://host.example",
       product: "yurucommu",
+    }),
+  ).resolves.toBeUndefined();
+  expect(calls).toEqual(["permission"]);
+});
+
+test("tauri mobile-push plugin adapter treats malformed permission as denied", async () => {
+  const calls: string[] = [];
+  const push = createTauriMobilePushPluginAdapter({
+    mobilePush: {
+      async requestPermission() {
+        calls.push("permission");
+        return undefined as unknown as { readonly granted: boolean };
+      },
+      async getToken() {
+        calls.push("token");
+        return "device-token";
+      },
+    },
+  });
+
+  await expect(
+    push.register({
+      hostUrl: "https://host.example",
+      product: "takos",
     }),
   ).resolves.toBeUndefined();
   expect(calls).toEqual(["permission"]);

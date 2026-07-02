@@ -32,6 +32,7 @@ const unsupportedCapabilities: NativeBridgeCapabilities = {
   pushNotifications: false,
   biometricAuth: false,
   callIntent: false,
+  clipboardText: false,
   secureStorage: false,
   persistentStorage: false,
 };
@@ -55,7 +56,11 @@ export function createBrowserNativeBridge(
       if (!windowRef) return undefined;
       const url = new URL(windowRef.location.href);
       const directPayload =
-        url.searchParams.get("connect") ?? url.searchParams.get("payload");
+        url.searchParams.get("connect") ??
+        url.searchParams.get("payload") ??
+        url.searchParams.get("route") ??
+        url.searchParams.get("url") ??
+        url.searchParams.get("href");
       if (directPayload) return directPayload;
       if (url.searchParams.has("code") || url.searchParams.has("error")) {
         return url.toString();

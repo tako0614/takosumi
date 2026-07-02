@@ -111,6 +111,13 @@ h1 {
   margin: 14px 0 18px;
 }
 
+.known-hosts-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .known-hosts h2 {
   font-size: 0.95rem;
 }
@@ -118,6 +125,13 @@ h1 {
 .known-host-list {
   display: grid;
   gap: 8px;
+}
+
+.known-host-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: stretch;
 }
 
 .known-host {
@@ -142,11 +156,39 @@ h1 {
   font-size: 0.76rem;
 }
 
+.known-host-remove,
+.text-button {
+  border: 1px solid var(--shell-control-border);
+  border-radius: 6px;
+  background: var(--shell-bg);
+  color: var(--shell-strong);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.known-host-remove {
+  min-width: 76px;
+  padding: 0 10px;
+}
+
+.text-button {
+  min-height: 32px;
+  padding: 0 10px;
+}
+
 .panel-header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
+}
+
+.panel-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .panel-header p {
@@ -256,6 +298,260 @@ input {
   color: var(--shell-subtle);
   font-size: 0.75rem;
   line-height: 1.25;
+}
+
+.compose-section {
+  display: grid;
+  gap: 8px;
+}
+
+.compose-section h3 {
+  margin: 0;
+  color: var(--shell-label);
+  font-size: 0.92rem;
+}
+
+.compose-form {
+  display: grid;
+  gap: 9px;
+}
+
+.compose-field,
+.compose-target,
+.compose-select-field {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+}
+
+.compose-field span,
+.compose-target span,
+.compose-select-field span {
+  color: var(--shell-label);
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.compose-field input,
+.compose-field select,
+.compose-target input,
+.compose-target select,
+.compose-select-field select {
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid var(--shell-input-border);
+  border-radius: 6px;
+  padding: 0 10px;
+  background: var(--shell-card);
+  color: var(--shell-strong);
+  font: inherit;
+}
+
+.compose-field input:focus-visible,
+.compose-field select:focus-visible,
+.compose-target input:focus-visible,
+.compose-target select:focus-visible,
+.compose-select-field select:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 36%, transparent);
+  outline-offset: 2px;
+}
+
+.segmented-control {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 2px;
+  border: 1px solid var(--shell-control-border);
+  border-radius: 6px;
+  padding: 2px;
+  background: var(--shell-soft);
+}
+
+.segment {
+  min-width: 0;
+  min-height: 36px;
+  border: 0;
+  border-radius: 4px;
+  padding: 0 8px;
+  background: transparent;
+  color: var(--shell-muted);
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 650;
+  line-height: 1.1;
+  cursor: pointer;
+}
+
+.segment span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.segment[aria-pressed="true"] {
+  background: var(--accent);
+  color: white;
+}
+
+.segment:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.compose-form textarea {
+  width: 100%;
+  min-height: 112px;
+  resize: vertical;
+  border: 1px solid var(--shell-input-border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  background: var(--shell-card);
+  color: var(--shell-strong);
+  font: inherit;
+  line-height: 1.4;
+}
+
+.compose-form textarea:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 36%, transparent);
+  outline-offset: 2px;
+}
+
+.compose-footer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(96px, auto);
+  gap: 10px;
+  align-items: center;
+}
+
+.compose-footer small {
+  color: var(--shell-subtle);
+  font-size: 0.78rem;
+}
+
+.compose-open {
+  justify-self: start;
+}
+
+.preview-section {
+  display: grid;
+  gap: 8px;
+}
+
+.preview-section-heading {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.preview-section-heading > div {
+  min-width: 0;
+}
+
+.preview-section-heading small {
+  display: block;
+  margin-top: 2px;
+  color: var(--shell-subtle);
+  font-size: 0.76rem;
+}
+
+.preview-section-actions {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.preview-section h3 {
+  margin: 0;
+  color: var(--shell-label);
+  font-size: 0.92rem;
+}
+
+.preview-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.preview-list > li {
+  display: block;
+}
+
+.preview-item {
+  display: flex;
+  width: 100%;
+  min-height: 58px;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  appearance: none;
+  border: 1px solid var(--shell-metric-border);
+  border-radius: 6px;
+  padding: 10px;
+  font: inherit;
+  text-align: left;
+  overflow-wrap: anywhere;
+  background: var(--shell-soft);
+  color: var(--shell-strong);
+}
+
+.preview-button {
+  cursor: pointer;
+}
+
+.preview-button:hover {
+  border-color: color-mix(
+    in srgb,
+    var(--accent) 34%,
+    var(--shell-metric-border)
+  );
+  background: color-mix(in srgb, var(--accent) 7%, var(--shell-soft));
+}
+
+.preview-button:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  outline-offset: 2px;
+}
+
+.preview-content {
+  min-width: 0;
+}
+
+.preview-item strong,
+.preview-item p,
+.preview-item small {
+  display: block;
+}
+
+.preview-item strong {
+  font-size: 0.9rem;
+}
+
+.preview-item p {
+  margin-top: 3px;
+  line-height: 1.35;
+}
+
+.preview-item small {
+  margin-top: 3px;
+  color: var(--shell-subtle);
+  font-size: 0.74rem;
+}
+
+.preview-badge {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  padding: 3px 7px;
+  background: var(--accent);
+  color: white;
+  font-size: 0.68rem;
+  font-weight: 800;
 }
 
 .status {

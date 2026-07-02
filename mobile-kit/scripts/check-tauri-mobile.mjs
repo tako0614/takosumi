@@ -32,6 +32,10 @@ const libRs = readText("src-tauri/src/lib.rs");
 const iosPlist = readText("src-tauri/Info.ios.plist");
 const viteConfig = readText("vite.config.ts");
 const nativeTs = readText("src/native.ts");
+const mobileKitTauriBridgeTs = readFileSync(
+  new URL("../src/tauri-bridge.ts", import.meta.url),
+  "utf8",
+);
 
 checkPackage(packageJson);
 checkTauriConfig(tauriConfig);
@@ -40,7 +44,7 @@ checkCargoToml(cargoToml);
 checkRustEntry(libRs);
 checkIosPlist(iosPlist);
 checkViteConfig(viteConfig);
-checkNativeBridge(nativeTs);
+checkNativeBridge(nativeTs, mobileKitTauriBridgeTs);
 checkRemotePushPlugin(remotePushPlugin, {
   packageJson,
   defaultCapability,
@@ -64,6 +68,7 @@ function checkPackage(pkg) {
   expectDependency(pkg, "@tauri-apps/api");
   expectDependency(pkg, "@tauri-apps/plugin-barcode-scanner");
   expectDependency(pkg, "@tauri-apps/plugin-biometric");
+  expectDependency(pkg, "@tauri-apps/plugin-clipboard-manager");
   expectDependency(pkg, "@tauri-apps/plugin-deep-link");
   expectDependency(pkg, "@tauri-apps/plugin-notification");
   expectDependency(pkg, "@tauri-apps/plugin-opener");
@@ -79,6 +84,34 @@ function checkPackage(pkg) {
   expectScript(pkg, "tauri:ios:init");
   expectScript(pkg, "tauri:ios:dev");
   expectScript(pkg, "tauri:ios:build");
+  expectScript(pkg, "release:native-check");
+  expect(
+    pkg.scripts?.["release:native-check"]?.includes(
+      "check-tauri-mobile-release.mjs",
+    ),
+    "script release:native-check runs the shared native release checker",
+  );
+  expectScript(pkg, "release:evidence-check");
+  expect(
+    pkg.scripts?.["release:evidence-check"]?.includes(
+      "check-mobile-release-evidence.mjs",
+    ),
+    "script release:evidence-check runs the shared release evidence checker",
+  );
+  expectScript(pkg, "release:check");
+  expect(
+    pkg.scripts?.["release:check"]?.includes(
+      "check-mobile-full-release.mjs",
+    ),
+    "script release:check runs native and evidence release checks",
+  );
+  expectScript(pkg, "tauri:native-push:apply");
+  expectScript(pkg, "tauri:native-push:verify");
+  expect(
+    pkg.scripts?.["tauri:native-push:verify"]?.includes("--dry-run") &&
+      pkg.scripts?.["tauri:native-push:verify"]?.includes("--strict"),
+    "script tauri:native-push:verify checks generated native push wiring without mutation",
+  );
   expect(
     pkg.scripts?.["tauri:android:dev"]?.includes("--host"),
     "script tauri:android:dev exposes the dev server host to devices",
@@ -160,6 +193,7 @@ function checkCapabilities(defaultCapability, mobileCapability) {
     "core:default",
     "core:event:default",
     "core:path:default",
+    "clipboard-manager:allow-write-text",
     "deep-link:default",
     "notification:default",
     "opener:allow-default-urls",
@@ -171,6 +205,7 @@ function checkCapabilities(defaultCapability, mobileCapability) {
     "barcode-scanner:allow-cancel",
     "barcode-scanner:allow-scan",
     "biometric:default",
+    "clipboard-manager:allow-write-text",
     "core:event:default",
     "core:path:default",
     "deep-link:default",
@@ -203,6 +238,10 @@ function checkCapabilities(defaultCapability, mobileCapability) {
 
 function checkCargoToml(cargoToml) {
   expect(cargoToml.includes("tauri ="), "Cargo.toml depends on tauri");
+  expect(
+    cargoToml.includes("tauri-plugin-clipboard-manager"),
+    "Cargo.toml registers clipboard-manager plugin dependency",
+  );
   expect(
     cargoToml.includes("tauri-plugin-deep-link"),
     "Cargo.toml registers deep-link plugin dependency",
@@ -251,6 +290,10 @@ function checkRustEntry(libRs) {
     "Rust entry registers stronghold plugin",
   );
   expect(
+    libRs.includes("tauri_plugin_clipboard_manager::init"),
+    "Rust entry registers clipboard-manager plugin",
+  );
+  expect(
     libRs.includes("Builder::with_argon2"),
     "Rust entry uses Stronghold's built-in argon2 password hashing",
   );
@@ -284,8 +327,11 @@ function checkIosPlist(iosPlist) {
 }
 
 function checkViteConfig(viteConfig) {
+  const usesSharedViteConfig =
+    viteConfig.includes("createTauriMobileViteConfig") &&
+    viteConfig.includes("importMetaUrl: import.meta.url");
   expect(
-    viteConfig.includes("TAURI_DEV_HOST"),
+    usesSharedViteConfig || viteConfig.includes("TAURI_DEV_HOST"),
     "Vite config reads TAURI_DEV_HOST for mobile devices",
   );
   expect(
@@ -293,31 +339,44 @@ function checkViteConfig(viteConfig) {
     "Vite config declares the doctor-checked dev port",
   );
   expect(
-    viteConfig.includes("host: host || false"),
+    usesSharedViteConfig || viteConfig.includes("host: host || false"),
     "Vite config exposes the dev server through the selected mobile host",
   );
   expect(
-    viteConfig.includes("hmr: host"),
+    usesSharedViteConfig || viteConfig.includes("hmr: host"),
     "Vite config pins HMR to the selected mobile host",
   );
 }
 
-function checkNativeBridge(nativeTs) {
+function checkNativeBridge(nativeTs, mobileKitTauriBridgeTs) {
   expect(
-    nativeTs.includes("createTauriKeystoreStrongholdPassword"),
+    nativeTs.includes("createTauriMobileDefaultProductBridge"),
+    "native bridge uses the shared default Tauri product bridge",
+  );
+  expect(
+    nativeTs.includes("keychainService:") &&
+      mobileKitTauriBridgeTs.includes("createTauriKeystoreStrongholdPassword"),
     "native bridge derives Stronghold password through product-local keystore source",
   );
   expect(
-    nativeTs.includes("createTauriInvokeKeystoreAdapter"),
+    mobileKitTauriBridgeTs.includes("createTauriInvokeKeystoreAdapter"),
     "native bridge wires Tauri keystore commands through a typed adapter",
   );
   expect(
-    nativeTs.includes(`${product}.mobile.stronghold.password`),
+    mobileKitTauriBridgeTs.includes("createTauriMobileProductStorageNames") &&
+      mobileKitTauriBridgeTs.includes("storageNames.strongholdPasswordKey"),
     "native bridge keeps a product-scoped Store fallback for Stronghold password migration",
   );
   expect(
-    !nativeTs.includes(`${product}-mobile-stronghold-v1`),
+    !nativeTs.includes(`${product}-mobile-stronghold-v1`) &&
+      !mobileKitTauriBridgeTs.includes(`${product}-mobile-stronghold-v1`),
     "native bridge does not use the checked-in Stronghold development password",
+  );
+  expect(
+    nativeTs.includes("@tauri-apps/plugin-clipboard-manager") &&
+      nativeTs.includes("writeText") &&
+      nativeTs.includes("clipboard:"),
+    "native bridge wires clipboard-manager text writes through the shared bridge",
   );
 }
 
@@ -363,7 +422,7 @@ function checkIosPushEntitlement() {
   const appleDir = path.join(appDir, "src-tauri/gen/apple");
   if (!existsSync(appleDir)) {
     warn(
-      "iOS Push Notifications capability and aps-environment entitlement must be enabled after tauri ios init",
+      "iOS Push Notifications capability and aps-environment entitlement must be enabled after tauri ios init; run tauri:native-push:apply after init",
       true,
     );
     return;
@@ -374,7 +433,7 @@ function checkIosPushEntitlement() {
   );
   if (entitlementFiles.length === 0) {
     warn(
-      "iOS aps-environment entitlement file is missing after tauri ios init",
+      "iOS aps-environment entitlement file is missing after tauri ios init; add Push Notifications in Xcode, then run tauri:native-push:apply",
       true,
     );
     return;
@@ -388,11 +447,15 @@ function checkIosPushEntitlement() {
 }
 
 function checkAndroidFirebaseProjectFiles() {
-  if (existsSync(path.join(appDir, "src-tauri/gen/android/app/google-services.json"))) {
+  if (
+    existsSync(
+      path.join(appDir, "src-tauri/gen/android/app/google-services.json"),
+    )
+  ) {
     ok("Android google-services.json exists for Firebase Cloud Messaging");
   } else {
     warn(
-      "Android FCM needs src-tauri/gen/android/app/google-services.json after tauri android init",
+      "Android FCM needs src-tauri/gen/android/app/google-services.json after tauri android init; run tauri:native-push:apply after adding it",
       true,
     );
   }
@@ -400,7 +463,7 @@ function checkAndroidFirebaseProjectFiles() {
   const androidDir = path.join(appDir, "src-tauri/gen/android");
   if (!existsSync(androidDir)) {
     warn(
-      "Android Firebase Gradle and FCM service wiring must be added after tauri android init",
+      "Android Firebase Gradle and FCM service wiring must be added after tauri android init; run tauri:native-push:apply after init",
       true,
     );
     return;
@@ -450,11 +513,11 @@ function collectFiles(directory) {
 function checkCliSurface() {
   const version = run("bunx", ["tauri", "--version"]);
   if (version.ok) ok(`Tauri CLI: ${version.output.trim()}`);
-  else warn("Tauri CLI is unavailable");
+  else warn("Tauri CLI is unavailable", true);
 
   const androidHelp = run("bunx", ["tauri", "android", "--help"]);
   if (androidHelp.ok) ok("Tauri Android subcommand is available");
-  else warn("Tauri Android subcommand is unavailable");
+  else warn("Tauri Android subcommand is unavailable", true);
 
   const iosHelp = run("bunx", ["tauri", "ios", "--help"]);
   if (iosHelp.ok) ok("Tauri iOS subcommand is available");
@@ -478,7 +541,8 @@ function checkNativeEnvironment() {
   if (process.platform === "darwin") {
     const xcodebuild = run("xcodebuild", ["-version"]);
     if (xcodebuild.ok) ok("Xcode command line tools are available");
-    else warn("Xcode command line tools are missing; tauri ios cannot run", true);
+    else
+      warn("Xcode command line tools are missing; tauri ios cannot run", true);
 
     const simctl = run("xcrun", ["simctl", "help"]);
     if (simctl.ok) ok("xcrun simctl is available for iOS simulators");
@@ -508,7 +572,8 @@ function checkNativeEnvironment() {
 
 function checkRustTargets(platform, installed, targets) {
   for (const target of targets) {
-    if (installed.has(target)) ok(`${platform} Rust target installed: ${target}`);
+    if (installed.has(target))
+      ok(`${platform} Rust target installed: ${target}`);
     else warn(`${platform} Rust target missing: ${target}`, true);
   }
 }

@@ -3,13 +3,16 @@ export type {
   HostCapabilities,
   HostDiscovery,
   MobileConnectPayload,
+  MobileHostCenterSource,
   MobileKeyValueStore,
   MobileKnownHost,
   MobileCallIntent,
+  MobileClipboardText,
   MobileBiometricPrompt,
   MobileSessionUnlockMode,
   MobileSessionUnlockOptions,
   MobileLocalNotification,
+  MobileHostableProductKind,
   MobilePushNotification,
   MobilePushNotificationEventKind,
   MobilePushRegistration,
@@ -36,6 +39,7 @@ export type {
 export { discoverHost } from "./discovery.ts";
 export {
   createMobileApiClient,
+  MOBILE_PUSH_REGISTRATION_PATH,
   registerMobilePushWithHost,
   resolveMobilePushRegistrationEndpoint,
   unregisterMobilePushWithHost,
@@ -43,23 +47,6 @@ export {
   type MobileHostPushRegistrationInput,
   type MobileHostPushUnregistrationInput,
 } from "./api.ts";
-export {
-  MOBILE_PUSH_REGISTRATION_PATH,
-  createMobilePushHostRegistrationRequest,
-  isMobileProductKind,
-  parseMobilePushHostRegistrationRequest,
-  type MobilePushClientRegistration,
-  type MobileProductWellKnown,
-  type MobileProductWellKnownEndpoints,
-  type MobilePushHostRegistration,
-  type MobilePushHostRegistrationParseError,
-  type MobilePushHostRegistrationParseResult,
-  type MobilePushHostRegistrationRequest,
-  type MobilePushHostRegistrationRequestInput,
-  type MobilePushHostRegistrationResponse,
-  type MobilePushHostUnregistrationResponse,
-  type ParsedMobilePushHostRegistrationRequest,
-} from "../../contract/mobile.ts";
 export {
   createMobileClientController,
   type CreateMobileClientControllerOptions,
@@ -76,10 +63,13 @@ export {
   parseMobileRouteInput,
 } from "./handoff.ts";
 export {
+  clearMobileKnownHosts,
   loadMobileKnownHosts,
   mobileKnownHostsStorageKey,
   rememberMobileKnownHost,
+  removeMobileKnownHost,
   type MobileKnownHostsStorageInput,
+  type RemoveMobileKnownHostInput,
   type RememberMobileKnownHostInput,
 } from "./known-hosts.ts";
 export {
@@ -115,9 +105,43 @@ export {
   normalizeHostUrl,
 } from "./url.ts";
 export {
+  appendUniqueMobileItemsByKey,
+  appendUniqueMobileItemsById,
+  formatMobilePreviewDate,
+  prependUniqueMobileItemsByKey,
+} from "./preview.ts";
+export {
+  canSubmitMobileText,
+  isMobileTextPresent,
+  mobileOptionalText,
+  mobilePlainText,
+  mobileTextRemaining,
+  type CanSubmitMobileTextInput,
+  type MobilePlainTextOptions,
+} from "./text.ts";
+export {
+  mobileNumber,
+  mobileRecord,
+  type MobileNumberOptions,
+} from "./data.ts";
+export { isMobileAbortError, mobileErrorMessage } from "./error.ts";
+export {
+  confirmMobileAction,
+  type ConfirmMobileActionInput,
+} from "./confirm.ts";
+export {
+  shareMobileUrl,
+  type MobileShareData,
+  type MobileShareNavigator,
+  type MobileShareUrlInput,
+} from "./share.ts";
+export { requireMobileProductKey } from "./product-key.ts";
+export {
+  copyMobileText,
   createFirstRunActions,
   createHostCenterHref,
   createMobileReturnUri,
+  type CopyMobileTextInput,
   type FirstRunAction,
 } from "./shell.ts";
 export {
@@ -132,7 +156,9 @@ export {
   authenticateBiometric,
   createTauriInvokeKeystoreAdapter,
   createTauriKeystoreStrongholdPassword,
+  createTauriMobileDefaultProductBridge,
   createTauriMobileProductBridge,
+  createTauriMobileProductStorageNames,
   createTauriPersistentStrongholdPassword,
   createTauriPluginNativeBridge,
   createTauriPushNotificationsAdapter,
@@ -141,6 +167,8 @@ export {
   isTauriMobilePlatform,
   type CreateTauriInvokeKeystoreAdapterOptions,
   type CreateTauriKeystoreStrongholdPasswordOptions,
+  type CreateTauriMobileDefaultProductBridgeOptions,
+  type CreateTauriMobileProductStorageNamesOptions,
   type CreateTauriPersistentStrongholdPasswordOptions,
   type CreateTauriMobilePushPluginAdapterOptions,
   type CreateTauriOpenerCallIntentAdapterOptions,
@@ -158,6 +186,7 @@ export {
   type TauriNotificationAdapter,
   type TauriOpenerAdapter,
   type TauriCallIntentAdapter,
+  type TauriClipboardTextAdapter,
   type TauriMobilePushPermission,
   type TauriMobilePushNotification,
   type TauriMobilePushPluginModule,
@@ -171,6 +200,7 @@ export {
   type TauriPushTokenSource,
   type TauriPushNotificationsAdapter,
   type TauriSecureStoreAdapter,
+  type TauriMobileProductStorageNames,
   type TauriStrongholdAdapter,
   type TauriStrongholdClient,
   type TauriStrongholdHandle,

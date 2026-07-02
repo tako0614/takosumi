@@ -6,7 +6,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./solid": "./src/solid.ts"
+    "./solid": "./src/solid.ts",
+    "./vite": "./src/vite.ts"
   },
   "peerDependencies": {
     "solid-js": "^1.9.0"

@@ -26,12 +26,15 @@ import type {
   CapsuleProviderEnvBindingSet,
   InstallConfig,
 } from "takosumi-contract/install-configs";
-import type { Page, PageParams } from "takosumi-contract/pagination";
+import type { Page } from "takosumi-contract/pagination";
 import {
   OpenTofuControllerError,
   requireNonEmptyString,
 } from "../deploy-control/errors.ts";
-import type { OpenTofuDeploymentStore } from "../deploy-control/store.ts";
+import type {
+  CapsuleListPageParams,
+  OpenTofuDeploymentStore,
+} from "../deploy-control/store.ts";
 import {
   type ActivityRecorder,
   NOOP_ACTIVITY_RECORDER,
@@ -221,7 +224,7 @@ export class CapsulesService {
 
   async listCapsulesPage(
     workspaceId: string,
-    params: PageParams,
+    params: CapsuleListPageParams,
   ): Promise<Page<Capsule>> {
     requireNonEmptyString(workspaceId, "workspaceId");
     return await this.#store.listInstallationsPage(workspaceId, params);
@@ -400,7 +403,7 @@ export class CapsulesService {
   /** @deprecated transient alias for {@link listCapsulesPage}. */
   async listInstallationsPage(
     workspaceId: string,
-    params: PageParams,
+    params: CapsuleListPageParams,
   ): Promise<Page<Capsule>> {
     return await this.listCapsulesPage(workspaceId, params);
   }

@@ -48,9 +48,7 @@ test("registerMobilePushWithHost posts typed push registration to host API", asy
     },
   });
 
-  expect(requests[0].url).toBe(
-    "https://host.example/custom/mobile-push",
-  );
+  expect(requests[0].url).toBe("https://host.example/custom/mobile-push");
   expect(requests[0].method).toBe("POST");
   expect(requests[0].headers.get("authorization")).toBe("Bearer access-1");
   expect(requests[0].headers.get("content-type")).toBe("application/json");
@@ -60,6 +58,32 @@ test("registerMobilePushWithHost posts typed push registration to host API", asy
     product: "takos",
     host_url: "https://host.example",
   });
+});
+
+test("registerMobilePushWithHost accepts same-origin advertised absolute endpoints", async () => {
+  const requests: Request[] = [];
+
+  await registerMobilePushWithHost({
+    session: session({
+      productEndpoints: {
+        mobilePushRegistrations:
+          "https://host.example/api/mobile/push-registrations",
+      },
+    }),
+    registration: {
+      token: "push-token",
+    },
+    fetch: async (input, init) => {
+      requests.push(new Request(input, init));
+      return new Response(JSON.stringify({ ok: true }), {
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+
+  expect(requests[0].url).toBe(
+    "https://host.example/api/mobile/push-registrations",
+  );
 });
 
 test("unregisterMobilePushWithHost deletes typed push registration from host API", async () => {

@@ -8,6 +8,7 @@ import type {
 } from "./types.ts";
 import { parseMobileProductKind } from "./handoff.ts";
 import { hostEndpoint, normalizeHostUrl } from "./url.ts";
+import { requireMobileProductKey } from "./product-key.ts";
 
 const takosumiWellKnownPath = "/.well-known/takosumi";
 const capabilitiesPath = "/v1/capabilities";
@@ -19,8 +20,11 @@ export async function discoverHost(input: {
 }): Promise<HostDiscovery> {
   const fetcher = input.fetch ?? globalThis.fetch.bind(globalThis);
   const hostUrl = normalizeHostUrl(input.hostUrl);
-  const productPath = input.expectedProduct
-    ? `/.well-known/${input.expectedProduct}`
+  const expectedProduct = input.expectedProduct
+    ? requireMobileProductKey(input.expectedProduct, "Expected product")
+    : undefined;
+  const productPath = expectedProduct
+    ? `/.well-known/${expectedProduct}`
     : undefined;
 
   const [takosumi, capabilities, product] = await Promise.all([
@@ -37,18 +41,16 @@ export async function discoverHost(input: {
           fetcher,
           hostEndpoint(hostUrl, productPath),
         )
-      : discoverAnyProduct(fetcher, hostUrl),
+      : undefined,
   ]);
 
   const detectedProduct = detectProduct(takosumi, capabilities, product);
   if (
-    input.expectedProduct &&
+    expectedProduct &&
     detectedProduct &&
-    detectedProduct !== input.expectedProduct
+    detectedProduct !== expectedProduct
   ) {
-    throw new Error(
-      `Host is ${detectedProduct}, not ${input.expectedProduct}.`,
-    );
+    throw new Error(`Host is ${detectedProduct}, not ${expectedProduct}.`);
   }
 
   const oidcIssuer =
@@ -59,7 +61,7 @@ export async function discoverHost(input: {
 
   return {
     hostUrl,
-    expectedProduct: input.expectedProduct,
+    expectedProduct,
     detectedProduct,
     takosumi,
     capabilities,
@@ -70,21 +72,6 @@ export async function discoverHost(input: {
       "/.well-known/openid-configuration",
     ),
   };
-}
-
-async function discoverAnyProduct(
-  fetcher: FetchLike,
-  hostUrl: string,
-): Promise<ProductWellKnown | undefined> {
-  const takos = await fetchOptionalJson<ProductWellKnown>(
-    fetcher,
-    hostEndpoint(hostUrl, "/.well-known/takos"),
-  );
-  if (takos) return takos;
-  return fetchOptionalJson<ProductWellKnown>(
-    fetcher,
-    hostEndpoint(hostUrl, "/.well-known/yurucommu"),
-  );
 }
 
 async function fetchOptionalJson<T>(

@@ -8,9 +8,9 @@ import { Activity } from "lucide-solid";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import { currentWorkspaceId } from "../../lib/workspace-state.ts";
+import { listCapsulesCached } from "../../lib/capsule-list.ts";
 import {
   type ControlApiError,
-  listCapsules,
   listRuns,
   type Capsule,
   type Run,
@@ -47,7 +47,9 @@ export default function RunsListView() {
 function Inner() {
   const workspaceId = () => currentWorkspaceId() || null;
   const [runs] = createResource(workspaceId, (id) => listRuns(id, RUN_LIST_LIMIT));
-  const [capsules] = createResource(workspaceId, listCapsules);
+  const [capsules] = createResource(workspaceId, (id) =>
+    listCapsulesCached(id, { includeDestroyed: false }),
+  );
   const capsuleNames = createMemo(() => {
     const map = new Map<string, string>();
     for (const capsule of capsules() ?? []) {

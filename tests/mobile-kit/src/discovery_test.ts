@@ -40,6 +40,38 @@ test("discoverHost reads Takosumi, capabilities, product, and OIDC issuer", asyn
   );
 });
 
+test("discoverHost reads Yurucommu product discovery", async () => {
+  const fetcher: FetchLike = async (input) => {
+    const url = String(input);
+    if (url.endsWith("/.well-known/yurucommu")) {
+      return json({
+        product: "yurucommu",
+        name: "Yurucommu",
+        issuer: "https://accounts.example",
+        apiBaseUrl: "https://social.example",
+        endpoints: {
+          currentUser: "https://social.example/api/auth/me",
+          mobilePushRegistrations:
+            "https://social.example/api/mobile/push-registrations",
+        },
+      });
+    }
+    return new Response("", { status: 404 });
+  };
+
+  const discovery = await discoverHost({
+    hostUrl: "https://social.example",
+    expectedProduct: "yurucommu",
+    fetch: fetcher,
+  });
+
+  expect(discovery.detectedProduct).toBe("yurucommu");
+  expect(discovery.oidcIssuer).toBe("https://accounts.example");
+  expect(discovery.product?.endpoints?.mobilePushRegistrations).toBe(
+    "https://social.example/api/mobile/push-registrations",
+  );
+});
+
 test("discoverHost reads the current Takosumi well-known endpoints shape", async () => {
   const fetcher: FetchLike = async (input) => {
     const url = String(input);
@@ -68,6 +100,33 @@ test("discoverHost reads the current Takosumi well-known endpoints shape", async
   expect(discovery.oidcDiscoveryUrl).toBe(
     "https://host.example/.well-known/openid-configuration",
   );
+});
+
+test("discoverHost accepts product discovery from the Takosumi well-known document", async () => {
+  const fetcher: FetchLike = async (input) => {
+    const url = String(input);
+    if (url.endsWith("/.well-known/takosumi")) {
+      return json({
+        product: "notes-app",
+        issuer: "https://notes.example",
+        endpoints: {
+          api: "https://notes.example/api",
+          oidc_issuer: "https://notes.example",
+        },
+      });
+    }
+    if (url.endsWith("/v1/capabilities")) return json({});
+    return new Response("", { status: 404 });
+  };
+
+  const discovery = await discoverHost({
+    hostUrl: "https://notes.example",
+    expectedProduct: "notes-app",
+    fetch: fetcher,
+  });
+
+  expect(discovery.detectedProduct).toBe("notes-app");
+  expect(discovery.oidcIssuer).toBe("https://notes.example");
 });
 
 test("discoverHost rejects mismatched products", async () => {

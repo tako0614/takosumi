@@ -20,6 +20,9 @@
         "../accounts/contract/src/mod.ts"
       ],
       "takosumi-contract": ["../contract/index.ts"],
+      "takosumi-contract/provider-env-rules": [
+        "../contract/provider-env-rules.ts"
+      ],
       "takosumi-contract/deployments": ["../contract/deployments.ts"]
     }
   },
