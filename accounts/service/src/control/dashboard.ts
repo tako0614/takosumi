@@ -42,6 +42,18 @@ export async function handleDashboard(
   if (
     segments.length === 2 &&
     segments[0] === "dashboard" &&
+    segments[1] === "bootstrap"
+  ) {
+    if (method !== "GET") return methodNotAllowed("GET");
+    return await dashboardBootstrap(
+      ctx.operations,
+      ctx.store,
+      ctx.session.subject,
+    );
+  }
+  if (
+    segments.length === 2 &&
+    segments[0] === "dashboard" &&
     segments[1] === "overview"
   ) {
     if (method !== "GET") return methodNotAllowed("GET");
@@ -53,6 +65,26 @@ export async function handleDashboard(
     );
   }
   return undefined;
+}
+
+async function dashboardBootstrap(
+  operations: ControlPlaneOperations,
+  store: AccountsStore,
+  sessionSubject: string,
+): Promise<Response> {
+  const workspaces = await listWorkspacesForSession(
+    operations,
+    store,
+    sessionSubject,
+  );
+  return json(
+    {
+      session: { subject: sessionSubject },
+      workspaces,
+    } satisfies DashboardBootstrapResponse,
+    200,
+    { "cache-control": "no-store" },
+  );
 }
 
 async function dashboardOverview(
@@ -153,6 +185,11 @@ interface DashboardOverviewResponse {
   readonly activity: readonly ActivityEvent[];
   readonly installConfigs: readonly InstallConfig[];
   readonly nextCapsuleCursor?: string;
+}
+
+interface DashboardBootstrapResponse {
+  readonly session: { readonly subject: string };
+  readonly workspaces: readonly Workspace[];
 }
 
 async function listWorkspacesForSession(

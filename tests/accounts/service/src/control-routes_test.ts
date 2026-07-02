@@ -1405,6 +1405,32 @@ test("GET /api/v1/dashboard/overview batches launcher data for one Workspace", a
   expect(operations.calls.listDeploymentsByIds).toEqual(["dep_1"]);
 });
 
+test("GET /api/v1/dashboard/bootstrap returns session and Workspaces", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie, subject } = seedSession(store);
+  const operations = fakeOperations();
+  const { request: req, url } = request("GET", "/api/v1/dashboard/bootstrap", {
+    cookie,
+  });
+
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+
+  expect(response?.status).toEqual(200);
+  expect(response?.headers.get("cache-control")).toEqual("no-store");
+  const body = (await response!.json()) as {
+    session: Record<string, unknown>;
+    workspaces: Array<Record<string, unknown>>;
+  };
+  expect(body.session.subject).toEqual(subject);
+  expect(body.workspaces.map((workspace) => workspace.id)).toEqual(["space_a"]);
+  expect(operations.calls.listWorkspacesByOwner).toEqual([subject]);
+});
+
 test("GET /api/v1/workspaces/:id/capsules rejects malformed includeDestroyed", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
