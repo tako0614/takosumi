@@ -124,6 +124,11 @@ import {
   type LoginEmailAllowlist,
   rejectDisallowedPresentedSession,
 } from "./login-email-allowlist.ts";
+import {
+  appendServerTiming,
+  measureServerTiming,
+  serverTimingBucketForPath,
+} from "./server-timing.ts";
 import { handleConsumeLaunchToken } from "./installation-routes-internal.ts";
 import {
   handleAuthProvidersRequest,
@@ -708,6 +713,7 @@ export function createAccountsHandler(
   const inner = async (request: Request): Promise<Response> => {
     const url = new URL(request.url);
     const store = createRequestScopedAccountsStore(baseStore);
+    const timings = serverTimingBucketForPath(url.pathname);
 
     if (url.pathname === "/healthz") {
       if (!isGetOrHead(request)) return methodNotAllowed("GET, HEAD");
@@ -767,14 +773,19 @@ export function createAccountsHandler(
     }
 
     if (!isLoginAllowlistBypassPath(url.pathname)) {
-      const rejectedSession = await rejectDisallowedPresentedSession({
-        request,
-        store,
-        sessionId: extractAccountSessionId(request),
-        allowlist: loginEmailAllowlist,
-        secureCookie: isProductionIssuer,
-      });
-      if (rejectedSession) return rejectedSession;
+      const rejectedSession = await measureServerTiming(
+        timings,
+        "tk_allowlist",
+        () =>
+          rejectDisallowedPresentedSession({
+            request,
+            store,
+            sessionId: extractAccountSessionId(request),
+            allowlist: loginEmailAllowlist,
+            secureCookie: isProductionIssuer,
+          }),
+      );
+      if (rejectedSession) return appendServerTiming(rejectedSession, timings);
     }
 
     if (url.pathname === TAKOSUMI_ACCOUNTS_AUTHORIZE_PATH) {
@@ -1262,15 +1273,20 @@ export function createAccountsHandler(
     // the generic 404; `handleControlRoute` returns `undefined` only for paths
     // it does not own.
     if (isControlRoutePath(url.pathname)) {
-      const controlResponse = await handleControlRoute({
-        request,
-        url,
-        store,
-        operations: options.controlPlaneOperations,
-        publicBillingPlans: options.publicBillingPlans,
-        sharedCellRuntime: options.sharedCellRuntime,
-      });
-      if (controlResponse) return controlResponse;
+      const controlResponse = await measureServerTiming(
+        timings,
+        "tk_control_total",
+        () =>
+          handleControlRoute({
+            request,
+            url,
+            store,
+            operations: options.controlPlaneOperations,
+            publicBillingPlans: options.publicBillingPlans,
+            sharedCellRuntime: options.sharedCellRuntime,
+          }),
+      );
+      if (controlResponse) return appendServerTiming(controlResponse, timings);
     }
 
     return errorJson("not_found", "not found", 404, request);

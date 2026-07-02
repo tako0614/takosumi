@@ -29,6 +29,11 @@ import {
   publicDeployment,
   requireWorkspaceAccess,
 } from "./shared.ts";
+import {
+  appendServerTiming,
+  measureServerTiming,
+  serverTimingBucketForPath,
+} from "../server-timing.ts";
 
 const DEFAULT_CAPSULE_LIMIT = 100;
 const DEFAULT_ACTIVITY_LIMIT = 50;
@@ -45,12 +50,19 @@ export async function handleDashboard(
     segments[1] === "bootstrap"
   ) {
     if (method !== "GET") return methodNotAllowed("GET");
-    return await dashboardBootstrap(
-      ctx.operations,
-      ctx.store,
-      ctx.session.subject,
-      ctx.url,
+    const timings = serverTimingBucketForPath(ctx.url.pathname);
+    const response = await measureServerTiming(
+      timings,
+      "tk_dashboard",
+      () =>
+        dashboardBootstrap(
+          ctx.operations,
+          ctx.store,
+          ctx.session.subject,
+          ctx.url,
+        ),
     );
+    return appendServerTiming(response, timings);
   }
   if (
     segments.length === 2 &&
@@ -58,12 +70,19 @@ export async function handleDashboard(
     segments[1] === "overview"
   ) {
     if (method !== "GET") return methodNotAllowed("GET");
-    return await dashboardOverview(
-      ctx.operations,
-      ctx.store,
-      ctx.session.subject,
-      ctx.url,
+    const timings = serverTimingBucketForPath(ctx.url.pathname);
+    const response = await measureServerTiming(
+      timings,
+      "tk_dashboard",
+      () =>
+        dashboardOverview(
+          ctx.operations,
+          ctx.store,
+          ctx.session.subject,
+          ctx.url,
+        ),
     );
+    return appendServerTiming(response, timings);
   }
   return undefined;
 }

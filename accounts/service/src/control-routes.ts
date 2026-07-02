@@ -59,6 +59,11 @@ import {
 import { handleOutputShares } from "./control/output-shares.ts";
 import { handleBilling } from "./control/billing.ts";
 import { handleDashboard } from "./control/dashboard.ts";
+import {
+  appendServerTiming,
+  measureServerTiming,
+  serverTimingBucketForPath,
+} from "./server-timing.ts";
 
 // Re-exports keep the pre-split import surface stable for in-tree consumers
 // (`mod.ts`, `control-personal-space.ts`, and the control-route tests).
@@ -164,6 +169,7 @@ export async function handleControlRoute(
 ): Promise<Response | undefined> {
   const { request, url, store } = context;
   if (!isApiV1Path(url.pathname)) return undefined;
+  const timings = serverTimingBucketForPath(url.pathname);
   const prefix = API_V1_PREFIX;
 
   // The credential-OAuth callback is the ONE control route reached by a
@@ -190,30 +196,38 @@ export async function handleControlRoute(
   // `takosumi_session` cookie; automation callers present a `takpat_*` bearer.
   // Workspace authorization is enforced per route below after the target Workspace is
   // known.
-  const bearer = await requireAccountsBearer({
-    request,
-    store,
-    scope: controlRouteRequiredScope(request),
-  });
-  if (!bearer.ok) return bearer.response;
+  const bearer = await measureServerTiming(timings, "tk_control_auth", () =>
+    requireAccountsBearer({
+      request,
+      store,
+      scope: controlRouteRequiredScope(request),
+    }),
+  );
+  if (!bearer.ok) return appendServerTiming(bearer.response, timings);
 
   const operations = context.operations;
-  if (!operations) return controlPlaneUnavailable();
+  if (!operations) return appendServerTiming(controlPlaneUnavailable(), timings);
 
   const tail = url.pathname.slice(prefix.length); // e.g. "/spaces"
   try {
-    return await dispatch({
-      request,
-      url,
-      tail,
-      operations,
-      store,
-      session: { subject: bearer.auth.subject },
-      sharedCellRuntime: context.sharedCellRuntime,
-      publicBillingPlans: context.publicBillingPlans,
-    });
+    const response = await measureServerTiming(
+      timings,
+      "tk_control_dispatch",
+      () =>
+        dispatch({
+          request,
+          url,
+          tail,
+          operations,
+          store,
+          session: { subject: bearer.auth.subject },
+          sharedCellRuntime: context.sharedCellRuntime,
+          publicBillingPlans: context.publicBillingPlans,
+        }),
+    );
+    return appendServerTiming(response, timings);
   } catch (error) {
-    return controllerErrorResponse(error);
+    return appendServerTiming(controllerErrorResponse(error), timings);
   }
 }
 
