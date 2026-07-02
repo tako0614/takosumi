@@ -38,10 +38,10 @@ describe("AppListView app launcher", () => {
     );
     expect(installationsUiSource).toContain('inst.status !== "destroyed"');
     expect(appListSource).toContain("appSurfacesFromDeployment");
-    expect(appListSource).toContain("listActivity");
+    expect(appListSource).toContain("getDashboardOverviewCached");
+    expect(appListSource).toContain("overview()?.activity");
     expect(appListSource).toContain("surfacesByCapsule");
-    expect(appListSource).toContain("listCurrentStateVersionsCached");
-    expect(appListSource).toContain("currentStateVersions");
+    expect(appListSource).toContain("overview()?.currentStateVersions");
     expect(appListSource).not.toMatch(/\bgetDeployment\(/);
     expect(appListSource).toContain("const appTiles = createMemo");
     expect(appListSource).toContain("function AppLauncher");

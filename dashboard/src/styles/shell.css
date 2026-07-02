@@ -63,8 +63,7 @@
 .sidebar-workspace {
   padding: 0 var(--tg-s-1) var(--tg-s-4);
 }
-.sidebar-workspace .topbar-workspace,
-.sidebar-workspace .topbar-workspace-select {
+.sidebar-workspace .topbar-workspace {
   width: 100%;
   max-width: none;
 }
@@ -184,27 +183,95 @@
   gap: var(--tg-s-2);
   min-width: 0;
   padding: var(--tg-s-2);
-  border: 1px solid var(--tg-line);
+  border: 1px solid color-mix(in srgb, var(--tg-line) 72%, transparent);
   border-radius: var(--tg-r-md);
-  background: color-mix(in srgb, var(--tg-bg-subtle) 70%, transparent);
+  background: color-mix(in srgb, var(--tg-fg) 3%, transparent);
 }
 .topbar-workspace.compact {
   padding: 0;
   border: 0;
   background: transparent;
 }
+.topbar-workspace-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--tg-s-2);
+  min-width: 0;
+}
 .topbar-workspace-label {
   color: var(--tg-fg-subtle);
   font-size: var(--tg-fs-xs);
   font-weight: 650;
 }
-.topbar-workspace-select {
+.topbar-workspace-count {
+  color: var(--tg-fg-subtle);
+  font-size: var(--tg-fs-xs);
+  white-space: nowrap;
+}
+.topbar-workspace-row {
+  display: flex;
+  align-items: center;
+  gap: var(--tg-s-2);
+  min-width: 0;
+}
+.topbar-workspace-picker {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-2);
+  min-width: 0;
+}
+.topbar-workspace-current {
   width: 100%;
-  max-width: 220px;
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--tg-s-2);
+  min-width: 0;
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-md);
+  padding: 0 var(--tg-s-2);
+  background: var(--tg-bg-elev);
+  color: var(--tg-fg);
   font-family: var(--tg-font-body);
   font-size: var(--tg-fs-sm);
+  font-weight: 650;
+  text-align: left;
+}
+.topbar-workspace-current:hover {
+  border-color: var(--tg-line-strong);
+  background: var(--tg-bg-subtle);
+}
+.topbar-workspace-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.topbar-workspace-current-action {
+  flex: none;
+  color: var(--tg-fg-subtle);
+  font-size: var(--tg-fs-xs);
+  font-weight: 700;
+  white-space: nowrap;
+}
+.topbar-workspace-select {
+  width: 100%;
+  max-width: none;
+  min-width: 0;
+  min-height: 34px;
+  font-family: var(--tg-font-body);
+  font-size: var(--tg-fs-sm);
+  font-weight: 600;
+  background: var(--tg-bg-elev);
 }
 .topbar-workspace-empty {
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  min-width: 0;
   color: var(--tg-fg-subtle);
   font-size: var(--tg-fs-sm);
 }
@@ -212,6 +279,27 @@
   color: var(--tg-danger);
   font-size: var(--tg-fs-xs);
   margin: 0;
+}
+.topbar-workspace-settings {
+  flex: none;
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-md);
+  background: var(--tg-bg-elev);
+  color: var(--tg-fg-muted);
+  transition:
+    background 120ms ease,
+    border-color 120ms ease,
+    color 120ms ease;
+}
+.topbar-workspace-settings:hover {
+  background: var(--tg-bg-subtle);
+  border-color: var(--tg-line-strong);
+  color: var(--tg-fg);
 }
 /* ===== Bell badge ===== */
 .topbar-bell {
@@ -387,7 +475,10 @@
     display: block;
     flex: 1;
     min-width: 0;
-    max-width: min(48vw, 240px);
+    max-width: none;
+  }
+  .topbar-mobile-workspace .topbar-workspace-row {
+    width: 100%;
   }
   .topbar-mobile-workspace .topbar-workspace-select {
     max-width: none;

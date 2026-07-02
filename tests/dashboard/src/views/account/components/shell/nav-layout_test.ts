@@ -65,6 +65,9 @@ describe("dashboard shell navigation layout", () => {
     expect(sidebarSource).not.toContain('href="/cloud"');
     // The workspace switcher moved out of the profile menu into the sidebar.
     expect(sidebarSource).toContain("WorkspaceSwitcher");
+    expect(sidebarSource.indexOf('class="sidebar-workspace"')).toBeLessThan(
+      sidebarSource.indexOf('class="sidebar-nav"'),
+    );
     // Notifications are still an attention affordance, not a sidebar item.
     expect(sidebarSource).not.toContain('href: "/notifications"');
   });
@@ -91,6 +94,7 @@ describe("dashboard shell navigation layout", () => {
     expect(topBarSource).toContain("<UserMenu />");
     expect(topBarSource).toContain("<WorkspaceSwitcher compact />");
     expect(shellCssSource).toContain(".topbar-mobile-workspace");
+    expect(shellCssSource).toContain("max-width: none;");
     expect(topBarSource).not.toContain("Wordmark");
     expect(topBarSource).not.toContain("topbar-brand");
   });
@@ -103,12 +107,12 @@ describe("dashboard shell navigation layout", () => {
     expect(userMenuSource).not.toContain('href="/connections"');
     expect(userMenuSource).not.toContain('href="/advanced/workspace"');
     expect(userMenuSource).not.toContain('href="/billing"');
-    // Switcher stays read/select only (no inline space creation), but remains
-    // visible even for a single workspace so the current Space is never hidden.
+    // Switcher stays read/select only (no inline workspace creation), but
+    // remains visibly current even when there is only one workspace.
     expect(spaceSwitcherSource).toContain("loadedWorkspaces().length > 0");
-    expect(spaceSwitcherSource).toContain(
-      "disabled={loadedWorkspaces().length < 2}",
-    );
+    expect(spaceSwitcherSource).toContain('href="/advanced/workspace"');
+    expect(spaceSwitcherSource).toContain("topbar-workspace-settings");
+    expect(spaceSwitcherSource).not.toContain("disabled={");
     expect(spaceSwitcherSource).not.toContain("createSpace");
     // Management vocabulary parity. Keys are flat with dots, so assert direct
     // access — toHaveProperty would treat "a.b" as a nested path.
@@ -118,6 +122,10 @@ describe("dashboard shell navigation layout", () => {
     expect(ja["nav.primary"]).toBeTruthy();
     expect(en["nav.workspaceSettings"]).toBeTruthy();
     expect(ja["nav.workspaceSettings"]).toBeTruthy();
+    expect(en["workspace.settings"]).toBe("Workspace settings");
+    expect(ja["workspace.settings"]).toBe("ワークスペース設定");
+    expect(en["workspace.change"]).toBe("Switch");
+    expect(ja["workspace.change"]).toBe("切り替え");
     expect(en["workspaceSettings.title"]).toBe("Settings");
     expect(ja["workspaceSettings.title"]).toBe("設定");
   });
@@ -126,10 +134,15 @@ describe("dashboard shell navigation layout", () => {
     expect(spaceSwitcherSource).toContain(
       "const selectedWorkspaceId = createMemo",
     );
+    expect(spaceSwitcherSource).toContain('class="topbar-workspace-row"');
+    expect(spaceSwitcherSource).toContain('class="topbar-workspace-current"');
+    expect(spaceSwitcherSource).toContain("selectedWorkspaceName()");
+    expect(spaceSwitcherSource).toContain("switcherOpen()");
     expect(spaceSwitcherSource).toContain("value={selectedWorkspaceId()}");
     expect(spaceSwitcherSource).toContain(
       "selected={workspace.id === selectedWorkspaceId()}",
     );
+    expect(spaceSwitcherSource).toContain("setSwitcherOpen(false)");
     expect(workspaceSettingsSource).toContain("when={workspaceId()}");
     expect(workspaceSettingsSource).toContain("keyed");
     expect(workspaceSettingsSource).toContain(

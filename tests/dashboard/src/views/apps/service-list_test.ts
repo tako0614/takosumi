@@ -14,7 +14,8 @@ const appViewsCssSource = read("styles/app-views.css");
 describe("ServiceListView (/services)", () => {
   test("lists every visible service as a row that opens its detail", () => {
     expect(serviceListSource).toContain("isVisibleServiceCapsule");
-    expect(serviceListSource).toContain("listCapsules");
+    expect(serviceListSource).toContain("getDashboardOverviewCached");
+    expect(serviceListSource).toContain("overview()?.capsules");
     expect(serviceListSource).toContain('class="av-service-rows"');
     expect(serviceListSource).toContain('class="av-service-row"');
     expect(serviceListSource).toContain(

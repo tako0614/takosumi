@@ -80,7 +80,8 @@ describe("History and notifications", () => {
 
   test("topbar badge counts current Workspace services needing attention", () => {
     expect(topBarSource).toContain("currentWorkspaceId");
-    expect(topBarSource).toContain("listCapsules(workspaceId)");
+    expect(topBarSource).toContain("peekCapsulesCached(workspaceId");
+    expect(topBarSource).toContain("includeDestroyed: false");
     expect(topBarSource).toContain("isVisibleServiceCapsule(inst)");
     expect(topBarSource).toContain("needsAttention(inst)");
     expect(topBarSource).not.toContain("loadNotificationFeed");
