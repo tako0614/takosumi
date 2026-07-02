@@ -158,7 +158,7 @@ export const en: Record<keyof typeof ja, string> = {
   "status.deployment.destroyed": "Destroyed",
   "status.connection.pending": "Unverified",
   "status.connection.verified": "Verified",
-  "status.connection.revoked": "Revoked",
+  "status.connection.revoked": "Removed",
   "status.connection.expired": "Expired",
   "status.connection.error": "Error",
   "status.providerConnection.ready": "Ready",
