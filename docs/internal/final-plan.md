@@ -186,6 +186,13 @@ CI/release pipeline, or an explicitly declared OpenTofu step. Takosumi can run
 the resulting OpenTofu plan and inject credentials, but it does not secretly
 decide where the artifact comes from.
 
+The preferred fast path is a Git CI or release pipeline that publishes a
+versioned, publicly fetchable artifact plus a SHA-256 digest. The OpenTofu
+module consumes that URL and digest as normal input variables and verifies the
+digest during plan/apply. Takosumi may store or pass those values as Capsule
+configuration, but it does not fetch, build, rewrite, or select application
+artifacts outside the declared OpenTofu module.
+
 App-owned post-apply hooks are allowed only as a narrow compatibility bridge for
 provider gaps or app initialization that is not a cloud resource itself, such as
 database migrations. They are not the primary deploy model and should shrink as
