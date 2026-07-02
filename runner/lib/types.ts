@@ -82,6 +82,7 @@ export interface ReleaseCommandSpec {
   readonly command: readonly string[];
   readonly workingDirectory?: string;
   readonly env?: Readonly<Record<string, string>>;
+  readonly timeoutSeconds?: number;
 }
 
 export interface ReleaseSpec {
