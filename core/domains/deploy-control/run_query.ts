@@ -17,10 +17,12 @@
  */
 
 import type {
+  ApplyRun,
   DeployControlAuditEvent,
   PlanRun,
   RunDiagnostic,
 } from "@takosumi/internal/deploy-control-api";
+import type { SourceSyncRun } from "takosumi-contract/sources";
 import type {
   Run,
   RunCostInfo,
@@ -30,6 +32,7 @@ import type {
 import type {
   OpenTofuDeploymentStore,
   RecoverableOpenTofuRunListOptions,
+  StoredRunRecord,
 } from "./store.ts";
 import { OpenTofuControllerError, requireNonEmptyString } from "./errors.ts";
 import {
@@ -96,9 +99,9 @@ export class RunQueryService {
 
   /**
    * Lists a Workspace's unified Run projections newest first. The store returns
-   * raw internal run rows, then each row is re-read through `getRun` so the
-   * public projection stays identical to `GET /runs/:id` and never exposes
-   * internal PlanRun / ApplyRun fields or credential material.
+   * raw internal run rows with DB-side limit/order. Project them directly so
+   * the dashboard list does not re-read every selected row by id; ApplyRun rows
+   * still read their source PlanRun once when they need installation context.
    */
   async listRuns(
     spaceId: string,
@@ -106,14 +109,35 @@ export class RunQueryService {
   ): Promise<readonly Run[]> {
     requireNonEmptyString(spaceId, "spaceId");
     const rows = await this.#store.listRunsBySpace(spaceId, options);
-    return await Promise.all(rows.map((row) => this.getRun(row.id)));
+    return await Promise.all(rows.map((row) => this.#projectStoredRun(row)));
   }
 
   async listRecoverableOpenTofuRuns(
     options: RecoverableOpenTofuRunListOptions,
   ): Promise<readonly Run[]> {
     const rows = await this.#store.listRecoverableOpenTofuRuns(options);
-    return await Promise.all(rows.map((row) => this.getRun(row.id)));
+    return await Promise.all(rows.map((row) => this.#projectStoredRun(row)));
+  }
+
+  async #projectStoredRun(row: StoredRunRecord): Promise<Run> {
+    if (isStoredPlanRun(row)) {
+      return projectPlanRun(row, {
+        awaitingApproval: await this.planAwaitsApproval(row),
+        ...this.installationProjection(row),
+      });
+    }
+    if (isStoredApplyRun(row)) {
+      const plan = await this.#store.getPlanRun(row.planRunId);
+      return projectApplyRun(
+        row,
+        plan ? this.installationProjection(plan) : {},
+      );
+    }
+    if (isStoredSourceSyncRun(row)) return projectSourceSyncRun(row);
+    if (isPublicRunRecord(row)) return row;
+    const _exhaustive: never = row;
+    void _exhaustive;
+    throw new OpenTofuControllerError("not_found", "unsupported run record");
   }
 
   /**
@@ -274,4 +298,31 @@ export class RunQueryService {
     }
     return Promise.resolve(false);
   }
+}
+
+function isStoredPlanRun(row: StoredRunRecord): row is PlanRun {
+  const candidate = row as Partial<PlanRun>;
+  return (
+    typeof candidate.sourceDigest === "string" &&
+    typeof candidate.variablesDigest === "string" &&
+    typeof candidate.policyDecisionDigest === "string" &&
+    candidate.policy !== undefined
+  );
+}
+
+function isStoredApplyRun(row: StoredRunRecord): row is ApplyRun {
+  const candidate = row as Partial<ApplyRun>;
+  return (
+    typeof candidate.planRunId === "string" &&
+    candidate.expected !== undefined &&
+    candidate.stateBackend !== undefined
+  );
+}
+
+function isStoredSourceSyncRun(row: StoredRunRecord): row is SourceSyncRun {
+  return (row as Partial<SourceSyncRun>).kind === "source_sync";
+}
+
+function isPublicRunRecord(row: StoredRunRecord): row is Run {
+  return typeof (row as Partial<Run>).type === "string";
 }
