@@ -1006,6 +1006,11 @@ test("GET /api/v1/workspaces serves the session control surface", async () => {
     operations,
   });
   expect(response?.status).toEqual(200);
+  const timing = response!.headers.get("server-timing") ?? "";
+  expect(timing).toContain("tk_control_auth;dur=");
+  expect(timing).toContain("tk_control_dispatch;dur=");
+  expect(timing).not.toContain("sess_");
+  expect(timing).not.toContain("tsub_ctrl");
   const body = (await response!.json()) as { spaces: unknown[] };
   expect(body.spaces.length).toEqual(1);
   // The session list scopes the read to the caller's own spaces; it must NOT

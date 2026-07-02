@@ -8,7 +8,7 @@ export type ServerTimingBucket = ServerTimingMetric[] | undefined;
 export function serverTimingBucketForPath(
   pathname: string,
 ): ServerTimingMetric[] | undefined {
-  return pathname.startsWith("/api/v1/dashboard/") ? [] : undefined;
+  return pathname.startsWith("/api/v1/") ? [] : undefined;
 }
 
 export async function measureServerTiming<T>(
