@@ -342,7 +342,7 @@
   border: 1px solid var(--tg-accent);
   border-radius: var(--tg-r-md);
   background: var(--tg-accent);
-  color: var(--tg-accent-text);
+  color: var(--tg-accent-fg);
   font-weight: 700;
   transition:
     border-color 120ms ease,
@@ -366,7 +366,7 @@
 .av-start-action:hover {
   border-color: var(--tg-accent-strong);
   background: var(--tg-accent-strong);
-  color: var(--tg-accent-text);
+  color: var(--tg-accent-fg);
 }
 .av-start-secondary:hover {
   border-color: var(--tg-line-strong);
