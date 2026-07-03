@@ -212,6 +212,11 @@ projection として扱います。
 
 Resource Shape の backend は HCL に直接書かせず、TargetPool / Policy /
 capability evidence / ResolutionLock で決めます。
+`/v1/capabilities.adapters` は既知 key (`opentofu`, `aws`, `cloudflare`,
+`kubernetes`, `vm`, `takosumi_native`) に加えて operator-defined adapter
+token を boolean key として返せます。これは既存 typed shape の実装先を増やす
+ための拡張であり、新しい `takosumi_*` HCL resource type を runtime に生やす
+仕組みではありません。新しい shape は schema/API/provider release が必要です。
 
 ```http
 POST /v1/targets

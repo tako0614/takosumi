@@ -186,6 +186,17 @@ Extensible surfaces use capability tokens. For example, a
 `ContainerService` target can publish an operator-defined implementation plugin
 with custom interface evidence. The endpoint accepts or rejects those tokens
 through resolver/policy, not through a hard-coded provider binary allow-list.
+That extension is for backends of an existing typed shape. Adding a new
+HCL-facing `takosumi_*` shape still requires a schema/API/provider release so
+OpenTofu can keep typed validation, plan diffs, import, and state upgrade
+behavior.
+
+Provider capability documents may include operator-defined adapter tokens as
+additional boolean keys under `adapters`. Known adapter keys remain
+`opentofu`, `aws`, `cloudflare`, `kubernetes`, `vm`, and `takosumi_native`;
+extra keys are endpoint-specific and must be backed by TargetPool evidence and a
+plugin-aware adapter.
+
 Secrets remain Credential/ProviderConnection material and are never placed in
 the Resource Shape spec or OpenTofu state. AI Gateway configuration follows the
 same secret/env projection rule; it is not a default Resource Shape.

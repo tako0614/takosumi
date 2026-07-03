@@ -287,5 +287,13 @@ The optional `plugin` field is reserved for hosts that inject a plugin-aware
 Resource Shape adapter; the stock adapter rejects plugin-backed implementations
 instead of silently ignoring them.
 
+Extension happens at the implementation layer, not by inventing live provider
+schemas. A new HCL resource such as `takosumi_workflow` requires a provider/API
+release. A new backend for an existing shape, such as another
+`ContainerService` runtime, is declared by the operator through TargetPool
+implementation capability evidence and an adapter plugin. Provider capability
+documents may advertise those operator-defined adapter tokens as additional
+boolean keys under `adapters`.
+
 Secrets must not be placed in Resource Shape specs. Use ProviderConnection,
 CredentialRecipe, Secret, or generic env materialization.

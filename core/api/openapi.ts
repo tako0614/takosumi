@@ -696,11 +696,17 @@ function processSchemas(): Record<string, Record<string, unknown>> {
         vm: { type: "boolean" },
         takosumi_native: { type: "boolean" },
       },
-      additionalProperties: false,
+      additionalProperties: { type: "boolean" },
     },
     TakosumiCompatCapabilities: {
       type: "object",
-      required: ["framework", "s3", "oci", "cloudevents", "provider_cloudflare_workers"],
+      required: [
+        "framework",
+        "s3",
+        "oci",
+        "cloudevents",
+        "provider_cloudflare_workers",
+      ],
       properties: {
         framework: { type: "boolean" },
         s3: { type: "boolean" },

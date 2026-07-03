@@ -52,7 +52,19 @@ export interface TakosumiResourceCapabilities {
   readonly ContainerService: boolean;
 }
 
-export interface TakosumiAdapterCapabilities {
+export type KnownTakosumiAdapterCapability =
+  "opentofu" | "aws" | "cloudflare" | "kubernetes" | "vm" | "takosumi_native";
+
+export const TAKOSUMI_ADAPTER_CAPABILITY_KEYS: readonly KnownTakosumiAdapterCapability[] =
+  ["opentofu", "aws", "cloudflare", "kubernetes", "vm", "takosumi_native"];
+
+/**
+ * Adapter capabilities are open-ended. Known keys describe built-in adapter
+ * families; operators may publish additional plugin-backed adapter tokens.
+ */
+export interface TakosumiAdapterCapabilities extends Readonly<
+  Record<string, boolean>
+> {
   readonly opentofu: boolean;
   readonly aws: boolean;
   readonly cloudflare: boolean;
@@ -116,7 +128,8 @@ export function createTakosumiWellKnownDocument(
       compat_s3: capabilities.compat.s3,
       compat_oci: capabilities.compat.oci,
       compat_cloudevents: capabilities.compat.cloudevents,
-      compat_provider_cloudflare_workers: capabilities.compat.provider_cloudflare_workers,
+      compat_provider_cloudflare_workers:
+        capabilities.compat.provider_cloudflare_workers,
     },
     endpoints: {
       api: `${trimTrailingSlash(options.origin)}/api`,

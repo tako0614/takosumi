@@ -228,6 +228,14 @@ schema, validation, planner, adapter path, state/import/drift story, and
 capability evidence. A provider resource that is neither a Takosumi-owned
 service form nor a standard compatibility surface has no reason to exist.
 
+Takosumi extension has two layers. Adding a new HCL-facing `takosumi_*`
+Resource Shape requires a schema/API/provider release so OpenTofu can keep
+typed plan diffs, validation, import, state upgrade, and completion. Adding a
+new backend for an existing shape is operator configuration: TargetPool entries
+can publish implementation tokens, adapter plugin ids, plugin-local non-secret
+options, and interface capability evidence. The Resolver and Adapter decide
+whether those tokens are supported by the endpoint.
+
 ## Takosumi Provider And API Contract
 
 `takosumi/takosumi` is a Takosumi-native OpenTofu provider. Every public
