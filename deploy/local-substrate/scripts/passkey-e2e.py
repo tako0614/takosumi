@@ -21,6 +21,7 @@ import base64
 import hashlib
 import json
 import secrets
+import socket
 import ssl
 import sys
 import time
@@ -53,6 +54,25 @@ atexit.register(lambda: cleanup_subject(_state["subject"], _state["credential_id
 RP_ID = "app.takosumi.test"
 ORIGIN = "https://app.takosumi.test"
 BASE = "https://app.takosumi.test"
+
+_ORIGINAL_GETADDRINFO = socket.getaddrinfo
+_LOCAL_HOST_OVERRIDES = {
+    "app.takosumi.test": "127.0.0.1",
+    "oauth-mock.test": "127.0.0.1",
+}
+
+
+def _local_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+    if isinstance(host, bytes):
+        decoded = host.decode()
+        target = _LOCAL_HOST_OVERRIDES.get(decoded, decoded)
+        host = target.encode()
+    elif isinstance(host, str):
+        host = _LOCAL_HOST_OVERRIDES.get(host, host)
+    return _ORIGINAL_GETADDRINFO(host, port, family, type, proto, flags)
+
+
+socket.getaddrinfo = _local_getaddrinfo
 
 if not CA_PATH.exists():
     sys.exit(f"Pebble CA not found at {CA_PATH} — run scripts/up.sh first")

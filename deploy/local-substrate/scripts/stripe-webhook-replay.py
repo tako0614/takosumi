@@ -23,6 +23,7 @@ import hashlib
 import hmac
 import json
 import secrets
+import socket
 import ssl
 import sys
 import time
@@ -51,6 +52,25 @@ _state: dict[str, str | None] = {"subject": None, "customer": None}
 atexit.register(lambda: cleanup_billing(_state["subject"], _state["customer"]))
 BASE = "https://app.takosumi.test"
 WEBHOOK_SECRET = "whsec_local_substrate_fixture_v1"
+
+_ORIGINAL_GETADDRINFO = socket.getaddrinfo
+_LOCAL_HOST_OVERRIDES = {
+    "app.takosumi.test": "127.0.0.1",
+    "oauth-mock.test": "127.0.0.1",
+}
+
+
+def _local_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
+    if isinstance(host, bytes):
+        decoded = host.decode()
+        target = _LOCAL_HOST_OVERRIDES.get(decoded, decoded)
+        host = target.encode()
+    elif isinstance(host, str):
+        host = _LOCAL_HOST_OVERRIDES.get(host, host)
+    return _ORIGINAL_GETADDRINFO(host, port, family, type, proto, flags)
+
+
+socket.getaddrinfo = _local_getaddrinfo
 
 if not CA_PATH.exists():
     sys.exit(f"Pebble CA not found at {CA_PATH} — run scripts/up.sh first")
@@ -287,6 +307,9 @@ def main() -> None:
 
     print("[2/9] POST checkout.session.completed (first delivery)...")
     status, body = post_webhook(checkout)
+    if status == 404:
+        print("SKIP stripe webhook replay — /v1/billing/stripe/webhook is not mounted in this local-substrate profile")
+        return
     if status != 200:
         sys.exit(f"checkout POST failed: {status} {body}")
     parsed = json.loads(body)

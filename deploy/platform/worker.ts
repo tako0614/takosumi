@@ -84,7 +84,6 @@ export {
   matchPlatformCloudExtensionRoute,
   pathIsUnderBase,
   platformCloudExtensionRoutes,
-  PLATFORM_CLOUD_EXTENSION_CATALOG_PATH,
 } from "./cloud_extensions.ts";
 
 export { CoordinationObject, OpenTofuRunOwnerObject, OpenTofuRunnerObject };

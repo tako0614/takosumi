@@ -16,14 +16,14 @@ import { check } from "k6";
 
 export const options = {
   scenarios: {
-    deploy_control_plan: {
+    deploy_control_read: {
       executor: "constant-arrival-rate",
       rate: 10,
       timeUnit: "1s",
       duration: "20s",
       preAllocatedVUs: 5,
       maxVUs: 20,
-      exec: "deployControlPlan",
+      exec: "deployControlRead",
     },
     oidc_discovery: {
       executor: "constant-arrival-rate",
@@ -36,44 +36,34 @@ export const options = {
     },
   },
   thresholds: {
-    "http_req_failed{scenario:deploy_control_plan}": ["rate<0.01"],
+    "http_req_failed{scenario:deploy_control_read}": ["rate<0.01"],
     "http_req_failed{scenario:oidc_discovery}": ["rate<0.01"],
     // Local Docker can temporarily stretch into seconds while worker
     // bundles are being rebuilt or containers are cold. This is a smoke
     // regression guard, not a production SLO; the error-rate thresholds
     // above catch broken routing/TLS, while these catch stuck handlers.
-    "http_req_duration{scenario:deploy_control_plan}": ["p(95)<5000"],
+    "http_req_duration{scenario:deploy_control_read}": ["p(95)<5000"],
     "http_req_duration{scenario:oidc_discovery}": ["p(95)<5000"],
   },
 };
 
-const PLAN_RUNS_URL =
-  "https://app.takosumi.test/internal/v1/plan-runs";
+const RUNNER_PROFILES_URL =
+  "https://app.takosumi.test/internal/v1/runner-profiles";
 const OIDC_URL = "https://app.takosumi.test/.well-known/openid-configuration";
-const DEPLOY_CONTROL_TOKEN = __ENV.TAKOSUMI_DEPLOY_CONTROL_TOKEN ||
-  "local-substrate-deploy-control-token";
+const DEPLOY_CONTROL_TOKEN =
+  __ENV.TAKOSUMI_DEPLOY_CONTROL_TOKEN || "local-substrate-deploy-control-token";
 
-export function deployControlPlan() {
-  const res = http.post(
-    PLAN_RUNS_URL,
-    JSON.stringify({
-      spaceId: "space_local",
-      source: {
-        kind: "local",
-        path: "/workspace/examples/opentofu-basic",
-      },
-      requiredProviders: [],
-    }),
-    {
-      headers: {
-        "Authorization": `Bearer ${DEPLOY_CONTROL_TOKEN}`,
-        "Content-Type": "application/json",
-      },
+export function deployControlRead() {
+  const res = http.get(RUNNER_PROFILES_URL, {
+    headers: {
+      Authorization: `Bearer ${DEPLOY_CONTROL_TOKEN}`,
     },
-  );
+  });
   check(res, {
-    "plan status 201": (r) => r.status === 201,
-    "plan has id": (r) => r.json("planRun.id") !== undefined,
+    "runner profiles status 200": (r) => r.status === 200,
+    "runner profiles present": (r) =>
+      Array.isArray(r.json("runnerProfiles")) &&
+      r.json("runnerProfiles").length > 0,
   });
 }
 

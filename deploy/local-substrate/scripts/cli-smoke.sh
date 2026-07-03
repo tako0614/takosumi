@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
-# Exercises the real upload deploy path used by `takosumi deploy`.
+# Exercises the real Git Source -> Capsule -> plan/apply path used by
+# `takosumi deploy`.
 #
 #   1. GET  /internal/v1/runner-profiles.
 #   2. POST /internal/v1/workspaces.
-#   3. tar.zst a plain OpenTofu Capsule.
-#   4. POST /internal/v1/workspaces/{workspaceId}/uploads.
-#   5. POST /internal/v1/deploy -> real plan Run.
-#   6. POST /internal/v1/runs/{planRunId}/approve when approval is required.
-#   7. POST /internal/v1/apply-runs -> real apply Run.
-#   8. GET  /internal/v1/capsules/{id} and state versions.
+#   3. POST /internal/v1/sources.
+#   4. POST /internal/v1/sources/{sourceId}/sync and wait for the snapshot.
+#   5. POST /internal/v1/workspaces/{workspaceId}/capsules.
+#   6. POST /internal/v1/capsules/{capsuleId}/plan.
+#   7. POST /internal/v1/runs/{planRunId}/approve when approval is required.
+#   8. POST /internal/v1/apply-runs -> real apply Run.
+#   9. GET  /internal/v1/capsules/{id} and state versions.
 #
 # Run: bash scripts/cli-smoke.sh
 set -euo pipefail
@@ -18,8 +20,15 @@ SUBSTRATE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 REPO_ROOT="$(cd "$SUBSTRATE_DIR/../.." && pwd)"
 CA="$SUBSTRATE_DIR/caddy/runtime/pebble-issuance-root.pem"
 TOKEN="${TAKOSUMI_DEPLOY_CONTROL_TOKEN:-local-substrate-deploy-control-token}"
-SOURCE_PATH="${TAKOSUMI_DEPLOY_CONTROL_SOURCE_PATH:-$REPO_ROOT/opentofu-modules/core/module}"
+SOURCE_GIT="${TAKOSUMI_DEPLOY_CONTROL_SOURCE_GIT:-https://github.com/tako0614/takosumi.git}"
+SOURCE_REF="${TAKOSUMI_DEPLOY_CONTROL_SOURCE_REF:-main}"
+SOURCE_MODULE_PATH="${TAKOSUMI_DEPLOY_CONTROL_SOURCE_PATH:-opentofu-modules/core/module}"
+INSTALL_CONFIG_ID="${TAKOSUMI_DEPLOY_CONTROL_INSTALL_CONFIG_ID:-cfg-default-opentofu-capsule}"
 SERVICE_URL="${TAKOSUMI_SERVICE_URL:-https://app.takosumi.test}"
+CURL_RESOLVE=()
+if [[ "$SERVICE_URL" == https://app.takosumi.test* ]]; then
+	CURL_RESOLVE=(--resolve "app.takosumi.test:443:127.0.0.1")
+fi
 RUN_SUFFIX="$(date +%s%N)"
 APP_NAME="cli-smoke-$RUN_SUFFIX"
 
@@ -28,15 +37,11 @@ if [[ ! -f "$CA" ]]; then
 	exit 1
 fi
 
-if [[ ! -d "$SOURCE_PATH" ]]; then
-	echo "OpenTofu source path not found: $SOURCE_PATH" >&2
-	exit 1
-fi
-
 post_json() {
 	local path="$1"
 	local body="$2"
 	curl -sk --cacert "$CA" \
+		"${CURL_RESOLVE[@]}" \
 		-H "Authorization: Bearer $TOKEN" \
 		-H "Content-Type: application/json" \
 		-d "$body" \
@@ -44,20 +49,10 @@ post_json() {
 		"$SERVICE_URL$path"
 }
 
-post_binary() {
-	local path="$1"
-	local file="$2"
-	curl -sk --cacert "$CA" \
-		-H "Authorization: Bearer $TOKEN" \
-		-H "Content-Type: application/zstd" \
-		--data-binary "@$file" \
-		-w "\n%{http_code}\n" \
-		"$SERVICE_URL$path"
-}
-
 get_json() {
 	local path="$1"
 	curl -sk --cacert "$CA" \
+		"${CURL_RESOLVE[@]}" \
 		-H "Authorization: Bearer $TOKEN" \
 		-H "Content-Type: application/json" \
 		-w "\n%{http_code}\n" \
@@ -90,6 +85,31 @@ json_field() {
 	python3 -c "import json,sys; data=json.load(sys.stdin); print($expression)"
 }
 
+wait_for_run() {
+	local run_id="$1"
+	local label="$2"
+	local response status
+	for _ in $(seq 1 120); do
+		response="$(get_json "/internal/v1/runs/$run_id")"
+		require_code "read $label run" "$response" "200"
+		status="$(response_body "$response" | json_field "data['run']['status']")"
+		case "$status" in
+			succeeded|waiting_approval)
+				printf '%s' "$(response_body "$response")"
+				return 0
+				;;
+			failed|canceled)
+				echo "FAIL: $label run $run_id ended with status=$status" >&2
+				echo "      response: $(response_body "$response")" >&2
+				exit 1
+				;;
+		esac
+		sleep 1
+	done
+	echo "FAIL: $label run $run_id did not finish within timeout" >&2
+	exit 1
+}
+
 PROFILES_RESPONSE="$(get_json "/internal/v1/runner-profiles")"
 require_code "runner profiles" "$PROFILES_RESPONSE" "200"
 PROFILE_IDS="$(response_body "$PROFILES_RESPONSE" | json_field "','.join(p['id'] for p in data.get('runnerProfiles') or [])")"
@@ -111,21 +131,40 @@ SPACE_RESPONSE="$(post_json "/internal/v1/workspaces" "$SPACE_REQUEST")"
 require_code "space create" "$SPACE_RESPONSE" "201"
 SPACE_ID="$(response_body "$SPACE_RESPONSE" | json_field "data['space']['id']")"
 
-ARCHIVE="$(mktemp -t takosumi-cli-smoke.XXXXXX.tar.zst)"
-trap 'rm -f "$ARCHIVE"' EXIT
-tar --zstd -cf "$ARCHIVE" -C "$SOURCE_PATH" .
-
-UPLOAD_RESPONSE="$(post_binary "/internal/v1/workspaces/$SPACE_ID/uploads?path=." "$ARCHIVE")"
-require_code "upload snapshot" "$UPLOAD_RESPONSE" "201"
-SNAPSHOT_ID="$(response_body "$UPLOAD_RESPONSE" | json_field "data['snapshot']['id']")"
-SNAPSHOT_DIGEST="$(response_body "$UPLOAD_RESPONSE" | json_field "data['snapshot']['archiveDigest']")"
-
-DEPLOY_REQUEST=$(cat <<EOF
+SOURCE_REQUEST=$(cat <<EOF
 {
   "spaceId": "$SPACE_ID",
   "name": "$APP_NAME",
+  "url": "$SOURCE_GIT",
+  "defaultRef": "$SOURCE_REF",
+  "defaultPath": "$SOURCE_MODULE_PATH"
+}
+EOF
+)
+SOURCE_RESPONSE="$(post_json "/internal/v1/sources" "$SOURCE_REQUEST")"
+require_code "source create" "$SOURCE_RESPONSE" "201"
+SOURCE_ID="$(response_body "$SOURCE_RESPONSE" | json_field "data['source']['id']")"
+
+SYNC_RESPONSE="$(post_json "/internal/v1/sources/$SOURCE_ID/sync" '{}')"
+require_code "source sync create" "$SYNC_RESPONSE" "201"
+SYNC_ID="$(response_body "$SYNC_RESPONSE" | json_field "data['run']['id']")"
+wait_for_run "$SYNC_ID" "source sync" >/dev/null
+SNAPSHOTS_RESPONSE="$(get_json "/internal/v1/sources/$SOURCE_ID/snapshots")"
+require_code "source snapshots" "$SNAPSHOTS_RESPONSE" "200"
+SNAPSHOT_COUNT="$(response_body "$SNAPSHOTS_RESPONSE" | json_field "len(data.get('snapshots') or [])")"
+[[ "$SNAPSHOT_COUNT" -gt 0 ]] || {
+	echo "FAIL: source sync recorded no snapshots for $SOURCE_ID" >&2
+	echo "      response: $(response_body "$SNAPSHOTS_RESPONSE")" >&2
+	exit 1
+}
+
+CAPSULE_REQUEST=$(cat <<EOF
+{
+  "name": "$APP_NAME",
   "environment": "preview",
-  "snapshotId": "$SNAPSHOT_ID",
+  "sourceId": "$SOURCE_ID",
+  "installConfigId": "$INSTALL_CONFIG_ID",
+  "runnerId": "generic-opentofu-provider",
   "vars": {
     "base_domain": "$APP_NAME.takosumi.test",
     "display_name": "CLI smoke"
@@ -133,12 +172,15 @@ DEPLOY_REQUEST=$(cat <<EOF
 }
 EOF
 )
-DEPLOY_RESPONSE="$(post_json "/internal/v1/deploy" "$DEPLOY_REQUEST")"
-require_code "deploy upload plan" "$DEPLOY_RESPONSE" "200"
-DEPLOY_BODY="$(response_body "$DEPLOY_RESPONSE")"
-PLAN_ID="$(printf '%s' "$DEPLOY_BODY" | json_field "(data.get('planRun') or data['run'])['id']")"
-PLAN_STATUS="$(printf '%s' "$DEPLOY_BODY" | json_field "(data.get('planRun') or data['run'])['status']")"
-INSTALLATION_ID="$(printf '%s' "$DEPLOY_BODY" | json_field "data['installation']['id']")"
+CAPSULE_RESPONSE="$(post_json "/internal/v1/workspaces/$SPACE_ID/capsules" "$CAPSULE_REQUEST")"
+require_code "capsule create" "$CAPSULE_RESPONSE" "201"
+INSTALLATION_ID="$(response_body "$CAPSULE_RESPONSE" | json_field "data['capsule']['id']")"
+
+PLAN_RESPONSE="$(post_json "/internal/v1/capsules/$INSTALLATION_ID/plan" '{}')"
+require_code "capsule plan create" "$PLAN_RESPONSE" "201"
+PLAN_BODY="$(response_body "$PLAN_RESPONSE")"
+PLAN_ID="$(printf '%s' "$PLAN_BODY" | json_field "data['run']['id']")"
+PLAN_STATUS="$(printf '%s' "$PLAN_BODY" | json_field "data['run']['status']")"
 
 if [[ "$PLAN_STATUS" == "waiting_approval" ]]; then
 	APPROVE_RESPONSE="$(post_json "/internal/v1/runs/$PLAN_ID/approve" '{"reason":"local-substrate cli smoke"}')"
@@ -151,7 +193,7 @@ elif [[ "$PLAN_STATUS" == "succeeded" ]]; then
 	require_code "read plan run" "$PLAN_RESPONSE" "200"
 else
 	echo "FAIL: plan run status=$PLAN_STATUS (expected succeeded or waiting_approval)" >&2
-	echo "      response: $DEPLOY_BODY" >&2
+	echo "      response: $PLAN_BODY" >&2
 	exit 1
 fi
 
@@ -187,4 +229,4 @@ DEPLOYMENT_COUNT="$(response_body "$LIST_DEPLOYMENTS_RESPONSE" | json_field "len
 	exit 1
 }
 
-echo "OK upload deploy space=$SPACE_ID installation=$INSTALLATION_ID plan=$PLAN_ID apply=$APPLY_ID snapshot=$SNAPSHOT_ID digest=$SNAPSHOT_DIGEST profiles=$PROFILE_IDS"
+echo "OK git capsule deploy space=$SPACE_ID source=$SOURCE_ID sync=$SYNC_ID installation=$INSTALLATION_ID plan=$PLAN_ID apply=$APPLY_ID snapshots=$SNAPSHOT_COUNT profiles=$PROFILE_IDS"
