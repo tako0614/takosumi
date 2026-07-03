@@ -2428,6 +2428,13 @@ function publicWorkerUrl(options: PlatformControlPlaneSmokeOptions): string {
   return `https://${options.appName}.${options.cloudflareWorkersSubdomain}.workers.dev`;
 }
 
+function isCurrentTakosumiHelloPage(body: string): boolean {
+  return (
+    body.includes("<h1>It works</h1>") &&
+    body.includes("provisioned by a Takosumi Capsule")
+  );
+}
+
 async function assertPublicWorkerUrl(
   options: PlatformControlPlaneSmokeOptions,
 ): Promise<void> {
@@ -2442,11 +2449,7 @@ async function assertPublicWorkerUrl(
       });
       lastStatus = response.status;
       lastBody = await response.text();
-      if (
-        response.ok &&
-        lastBody.includes("<h1>It works</h1>") &&
-        lastBody.includes("provisioned by a Takosumi Installation")
-      ) {
+      if (response.ok && isCurrentTakosumiHelloPage(lastBody)) {
         return;
       }
     } catch (error) {
@@ -2938,11 +2941,7 @@ async function assertPublicWorkerUrlGone(
       lastBody = await response.text();
       if (
         response.status === 404 ||
-        !(
-          response.ok &&
-          lastBody.includes("<h1>It works</h1>") &&
-          lastBody.includes("provisioned by a Takosumi Installation")
-        )
+        !(response.ok && isCurrentTakosumiHelloPage(lastBody))
       ) {
         return;
       }
