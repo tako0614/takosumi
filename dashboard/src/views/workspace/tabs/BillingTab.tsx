@@ -26,7 +26,7 @@ import { setCurrentWorkspaceId } from "../../../lib/workspace-state.ts";
 import {
   getWorkspaceBilling,
   listBillingPlans,
-  listWorkspaceUsage,
+  listWorkspaceUsagePage,
   type CreditBalance,
   type PublicBillingPlan,
   type UsageEvent,
@@ -56,31 +56,27 @@ const MODE_KEY: Record<string, MessageKey> = {
   enforce: "billing.mode.enforce",
 };
 
+const USAGE_LEDGER_PAGE_SIZE = 25;
+
 export default function BillingTab(props: { readonly workspaceId: string }) {
-  const [billing] = createResource(() => props.workspaceId, getWorkspaceBilling);
+  const [billing] = createResource(
+    () => props.workspaceId,
+    getWorkspaceBilling,
+  );
   const cloudBilling = createMemo(() => isTakosumiCloudRuntime());
   const [plans] = createResource(
     () => (cloudBilling() ? "cloud" : undefined),
     listBillingPlans,
   );
-  const [usage] = createResource(() => props.workspaceId, listWorkspaceUsage);
+  const [usageRequested, setUsageRequested] = createSignal(false);
+  const [usagePage] = createResource(
+    () => (usageRequested() ? props.workspaceId : undefined),
+    (workspaceId) =>
+      listWorkspaceUsagePage(workspaceId, { limit: USAGE_LEDGER_PAGE_SIZE }),
+  );
 
   const mode = createMemo(() => billing()?.settings?.mode);
   const balance = createMemo(() => billing()?.balance);
-  // This-month usage rollup, surfaced next to the balance so billing is the
-  // single home for usage (the detailed ledger stays folded below). Folded in
-  // from the retired standalone Cloud screen.
-  const monthUsdMicros = createMemo(() =>
-    sumBy((usage() ?? []).filter(isThisMonthUsage), usageUsdMicros),
-  );
-  const gatewayUsdMicros = createMemo(() =>
-    sumBy(
-      (usage() ?? []).filter(
-        (e) => isThisMonthUsage(e) && e.kind.startsWith("gateway_"),
-      ),
-      usageUsdMicros,
-    ),
-  );
   const subscriptions = createMemo(() =>
     (plans() ?? []).filter((plan) => plan.kind === "subscription"),
   );
@@ -285,18 +281,6 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
                   label: availableLabel(),
                   value: formatUsdMicros(balanceAvailableUsdMicros(balance())),
                 },
-                ...(cloudBilling()
-                  ? [
-                      {
-                        label: t("billing.usage.thisMonth"),
-                        value: formatUsdMicros(monthUsdMicros()),
-                      },
-                      {
-                        label: t("billing.usage.gateway"),
-                        value: formatUsdMicros(gatewayUsdMicros()),
-                      },
-                    ]
-                  : []),
               ]}
             />
             <Show when={balanceReservedUsdMicros(balance()) > 0}>
@@ -383,16 +367,24 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
       </Show>
 
       <Card>
-        <details class="wb-disclosure av-billing-ledger">
+        <details
+          class="wb-disclosure av-billing-ledger"
+          onToggle={(event) => {
+            if (event.currentTarget.open) setUsageRequested(true);
+          }}
+        >
           <summary>{t("billing.ledger.title")}</summary>
           <div class="wc-stack-sm">
             <section>
               <h2 class="tg-card-title">{t("billing.usage.title")}</h2>
               <Switch>
-                <Match when={usage.loading}>
+                <Match when={!usageRequested()}>
+                  <p class="muted">{t("billing.usage.openHint")}</p>
+                </Match>
+                <Match when={usagePage.loading}>
                   <p class="muted">{t("billing.usage.loading")}</p>
                 </Match>
-                <Match when={usage.error}>
+                <Match when={usagePage.error}>
                   {(error) => (
                     <Toast tone="error">
                       {t("billing.usage.error", {
@@ -401,17 +393,20 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
                     </Toast>
                   )}
                 </Match>
-                <Match when={usage()}>
-                  {(rows) => (
+                <Match when={usagePage()}>
+                  {(page) => (
                     <Show
-                      when={rows().length > 0}
+                      when={page().usageEvents.length > 0}
                       fallback={<p class="muted">{t("billing.usage.empty")}</p>}
                     >
                       <DataTable
                         columns={usageColumns()}
-                        rows={rows()}
+                        rows={page().usageEvents}
                         rowKey={(_e, i) => i}
                       />
+                      <Show when={page().nextCursor}>
+                        <p class="muted">{t("billing.usage.moreAvailable")}</p>
+                      </Show>
                     </Show>
                   )}
                 </Match>
@@ -500,18 +495,4 @@ function planUsdMicros(plan: PublicBillingPlan): number {
     return plan.usdMicros;
   }
   return Math.round((plan.credits ?? 0) * 1_000_000);
-}
-
-function isThisMonthUsage(event: UsageEvent): boolean {
-  const created = new Date(event.createdAt);
-  if (Number.isNaN(created.getTime())) return false;
-  const now = new Date();
-  return (
-    created.getUTCFullYear() === now.getUTCFullYear() &&
-    created.getUTCMonth() === now.getUTCMonth()
-  );
-}
-
-function sumBy<T>(items: readonly T[], fn: (item: T) => number): number {
-  return items.reduce((sum, item) => sum + fn(item), 0);
 }

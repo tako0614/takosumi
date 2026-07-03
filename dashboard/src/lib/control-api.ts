@@ -355,6 +355,11 @@ export interface UsageEvent {
   readonly createdAt: string;
 }
 
+export interface UsageEventsPage {
+  readonly usageEvents: readonly UsageEvent[];
+  readonly nextCursor?: string;
+}
+
 export interface WorkspaceBilling {
   readonly settings: BillingSettings;
   readonly balance?: CreditBalance;
@@ -999,13 +1004,27 @@ export async function getWorkspaceBilling(
   return body.billing;
 }
 
-export async function listWorkspaceUsage(
+export async function listWorkspaceUsagePage(
   workspaceId: string,
-): Promise<readonly UsageEvent[]> {
-  return await fetchAllPages<UsageEvent>(
-    `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/usage`,
-    (body) => (body.usageEvents as readonly UsageEvent[]) ?? [],
+  options: {
+    readonly cursor?: string;
+    readonly limit?: number;
+    readonly signal?: AbortSignal;
+  } = {},
+): Promise<UsageEventsPage> {
+  const body = await controlFetch<UsageEventsPage>(
+    `${BASE}/workspaces/${encodeURIComponent(workspaceId)}/usage${query({
+      cursor: options.cursor,
+      limit: options.limit,
+    })}`,
+    { signal: options.signal },
   );
+  return {
+    usageEvents: body.usageEvents ?? [],
+    ...(typeof body.nextCursor === "string" && body.nextCursor !== ""
+      ? { nextCursor: body.nextCursor }
+      : {}),
+  };
 }
 
 export async function listWorkspaceCreditReservations(

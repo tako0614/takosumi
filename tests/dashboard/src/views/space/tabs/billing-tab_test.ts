@@ -51,11 +51,26 @@ test("BillingTab keeps checkout plans Cloud-only and leaves usage visible", () =
   expect(source).toContain("<Show when={cloudBilling()}>");
   expect(source).toContain("const canStartCheckout = createMemo");
   expect(source).toContain("cloudBilling() && hasBillingCatalog()");
-  expect(source).toContain("listWorkspaceUsage");
+  expect(source).toContain("listWorkspaceUsagePage");
   expect(source).toContain('"billing.usage.title"');
   expect(source).toContain('"billing.plans.title"');
   expect(source).toContain('"billing.portal"');
   expect(source).not.toContain("createResource(listBillingPlans)");
+});
+
+test("BillingTab lazy-loads usage history instead of fetching every usage page on first paint", () => {
+  const source = readFileSync(sourcePath, "utf8");
+
+  expect(source).toContain("const [usageRequested, setUsageRequested]");
+  expect(source).toContain("usageRequested() ? props.workspaceId : undefined");
+  expect(source).toContain("USAGE_LEDGER_PAGE_SIZE = 25");
+  expect(source).toContain("{ limit: USAGE_LEDGER_PAGE_SIZE }");
+  expect(source).toContain("onToggle={(event) =>");
+  expect(source).toContain("setUsageRequested(true)");
+  expect(source).toContain('"billing.usage.openHint"');
+  expect(source).not.toContain(
+    "createResource(() => props.workspaceId, listWorkspaceUsage)",
+  );
 });
 
 test("BillingTab lets a new Cloud workspace start checkout before billing is active", () => {
