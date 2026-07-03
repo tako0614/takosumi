@@ -344,6 +344,24 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
                 <p class="muted av-plan-policy">
                   {t("billing.plans.nonRefundable")}
                 </p>
+                <nav
+                  class="av-billing-policy-links"
+                  aria-label={t("billing.policies.aria")}
+                >
+                  <a href="/legal/refund-policy">
+                    {t("billing.policies.refund")}
+                  </a>
+                  <a href="/legal/cancellation-policy">
+                    {t("billing.policies.cancellation")}
+                  </a>
+                  <a href="/legal/terms-of-service">
+                    {t("billing.policies.terms")}
+                  </a>
+                  <a href="/legal/privacy-policy">
+                    {t("billing.policies.privacy")}
+                  </a>
+                  <a href="/support">{t("billing.policies.support")}</a>
+                </nav>
                 <Show when={subscriptions().length > 0}>
                   <ul class="av-plan-list">
                     <For each={subscriptions()}>{planCard}</For>

@@ -82,6 +82,7 @@ test("BillingTab lets a new Cloud workspace start checkout before billing is act
   const nonRefundableIndex = source.indexOf(
     '<p class="muted av-plan-policy">\n                    {t("billing.plans.nonRefundable")}',
   );
+  const policyLinksIndex = source.indexOf('class="av-billing-policy-links"');
   const subscriptionListIndex = source.indexOf(
     "<Show when={subscriptions().length > 0}>",
   );
@@ -93,7 +94,13 @@ test("BillingTab lets a new Cloud workspace start checkout before billing is act
     'cloudBilling() && mode() !== undefined && mode() !== "disabled"',
   );
   expect(source).not.toContain("billing.plans.disabled");
+  expect(source).toContain('href="/legal/refund-policy"');
+  expect(source).toContain('href="/legal/cancellation-policy"');
+  expect(source).toContain('href="/legal/terms-of-service"');
+  expect(source).toContain('href="/legal/privacy-policy"');
+  expect(source).toContain('href="/support"');
+  expect(policyLinksIndex).toBeGreaterThan(nonRefundableIndex);
   expect(subscriptionListIndex).toBeGreaterThan(nonRefundableIndex);
-  expect(en["billing.plans.nonRefundable"]).toContain("non-refundable");
+  expect(en["billing.plans.nonRefundable"]).toContain("TAKOSUMI");
   expect(ja["billing.plans.nonRefundable"]).toContain("返金");
 });

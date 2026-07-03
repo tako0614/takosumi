@@ -633,43 +633,6 @@ section > .container {
   font-size: var(--tg-fs-xs);
   color: var(--tg-fg-subtle);
 }
-.billing-policy-note {
-  display: grid;
-  gap: var(--tg-s-4);
-  margin-top: var(--tg-s-5);
-  border: 1px solid var(--tg-line);
-  border-radius: var(--tg-r-md);
-  padding: var(--tg-s-5);
-  background: var(--tg-bg-elev);
-}
-@media (min-width: 860px) {
-  .billing-policy-note {
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: center;
-  }
-}
-.billing-policy-note h3 {
-  margin: 0 0 var(--tg-s-2);
-  font-size: var(--tg-fs-lg);
-}
-.billing-policy-note p {
-  margin: 0;
-  color: var(--tg-fg-muted);
-  font-size: var(--tg-fs-sm);
-  line-height: var(--tg-lh-normal);
-}
-.billing-policy-note nav {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--tg-s-3);
-}
-.billing-policy-note nav a {
-  font-size: var(--tg-fs-sm);
-  color: var(--tg-accent-text);
-}
-.billing-policy-note nav a:hover {
-  color: var(--tg-fg);
-}
 
 /* End CTA */
 .end-cta {

@@ -36,6 +36,7 @@ const SignInCallbackView = lazy(() =>
     default: m.SignInCallbackView,
   })),
 );
+const LegalView = lazy(() => import("./views/legal/LegalView.tsx"));
 const NotFoundView = lazy(() => import("./views/NotFoundView.tsx"));
 
 // --- Normal hosted-service surface --------------------------------------------
@@ -111,6 +112,8 @@ function App() {
       {/* Public — no session required. */}
       <Route path="/sign-in" component={SignInView} />
       <Route path="/sign-in/callback" component={SignInCallbackView} />
+      <Route path="/legal/:page" component={LegalView} />
+      <Route path="/support" component={() => <LegalView page="support" />} />
       {/* Legacy external aliases. Current website CTAs avoid open signup, but
           old links should still land on the only sign-in screen. */}
       <Route

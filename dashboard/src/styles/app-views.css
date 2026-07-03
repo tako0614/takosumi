@@ -46,6 +46,21 @@
   margin: 0 0 var(--tg-s-3);
   font-size: var(--tg-fs-sm);
 }
+.av-billing-policy-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--tg-s-2);
+  margin: calc(var(--tg-s-2) * -1) 0 var(--tg-s-4);
+  font-size: var(--tg-fs-sm);
+}
+.av-billing-policy-links a {
+  color: var(--tg-accent);
+  font-weight: 700;
+  text-decoration: none;
+}
+.av-billing-policy-links a:hover {
+  text-decoration: underline;
+}
 .av-plan-policy-disabled {
   padding: var(--tg-s-3);
   border: 1px solid color-mix(in srgb, var(--tg-warn) 36%, var(--tg-line));
@@ -56,6 +71,158 @@
 .av-billing-ledger {
   display: grid;
   gap: var(--tg-s-4);
+}
+
+/* ===== public Takosumi Cloud policy pages ===== */
+.legal-page {
+  min-height: 100vh;
+  padding: clamp(var(--tg-s-4), 4vw, var(--tg-s-8));
+  background:
+    radial-gradient(
+      circle at 16% 0%,
+      color-mix(in srgb, var(--tg-accent) 14%, transparent),
+      transparent 28rem
+    ),
+    var(--tg-bg);
+  color: var(--tg-fg);
+}
+.legal-card {
+  width: min(960px, 100%);
+  margin: 0 auto;
+  padding: clamp(var(--tg-s-4), 4vw, var(--tg-s-7));
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-lg);
+  background: color-mix(in srgb, var(--tg-bg-elev) 94%, transparent);
+  box-shadow: var(--tg-shadow-lg);
+}
+.legal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--tg-s-4);
+}
+.legal-brand {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--tg-s-3);
+  color: var(--tg-fg);
+  font-weight: 800;
+  text-decoration: none;
+}
+.legal-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--tg-s-2);
+}
+.legal-lang {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-md);
+}
+.legal-lang button,
+.legal-sign-in {
+  min-height: 34px;
+  border: 0;
+  padding: 0 var(--tg-s-3);
+  background: transparent;
+  color: var(--tg-fg-muted);
+  font: inherit;
+  font-size: var(--tg-fs-sm);
+  font-weight: 800;
+  text-decoration: none;
+}
+.legal-lang button {
+  cursor: pointer;
+}
+.legal-lang button.active {
+  background: var(--tg-accent);
+  color: var(--tg-on-accent);
+}
+.legal-sign-in {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-md);
+}
+.legal-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--tg-s-2);
+  margin: var(--tg-s-5) 0;
+}
+.legal-nav-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 var(--tg-s-3);
+  border: 1px solid var(--tg-line);
+  border-radius: var(--tg-r-md);
+  background: var(--tg-bg-subtle);
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+  font-weight: 800;
+  text-decoration: none;
+}
+.legal-nav-link.active {
+  border-color: color-mix(in srgb, var(--tg-accent) 48%, var(--tg-line));
+  background: color-mix(in srgb, var(--tg-accent) 10%, var(--tg-bg-elev));
+  color: var(--tg-fg);
+}
+.legal-content {
+  max-width: 760px;
+}
+.legal-kicker,
+.legal-updated {
+  margin: 0;
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+  font-weight: 800;
+}
+.legal-content h1 {
+  margin: var(--tg-s-2) 0 var(--tg-s-3);
+  font-size: clamp(2rem, 5vw, 3.5rem);
+  line-height: 0.96;
+}
+.legal-lead {
+  margin: 0 0 var(--tg-s-4);
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-lg);
+  line-height: 1.7;
+}
+.legal-section {
+  margin-top: var(--tg-s-6);
+}
+.legal-section h2 {
+  margin: 0 0 var(--tg-s-3);
+  font-size: var(--tg-fs-xl);
+}
+.legal-section p {
+  margin: 0 0 var(--tg-s-3);
+  color: var(--tg-fg-muted);
+  line-height: 1.8;
+}
+.legal-section a {
+  color: var(--tg-accent);
+  font-weight: 800;
+}
+
+@media (max-width: 640px) {
+  .legal-card {
+    padding: var(--tg-s-4);
+  }
+  .legal-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .legal-actions {
+    justify-content: flex-start;
+  }
+  .legal-content h1 {
+    font-size: 2.25rem;
+  }
 }
 
 /* ===== Takosumi Cloud resources ===== */

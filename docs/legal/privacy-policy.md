@@ -13,17 +13,6 @@ showback records, and dashboard session data. Raw OpenTofu state and raw outputs
 are treated as protected control-plane artifacts; public projections are
 allowlisted.
 
-For Takosumi Cloud, payment processing is handled by Stripe. Takosumi Cloud may
-store Stripe customer, subscription, checkout, invoice, receipt, payment status,
-and billing event identifiers needed to operate billing, support, refunds,
-fraud prevention, audit, and account recovery. Takosumi Cloud does not store
-raw card numbers in the Takosumi repository or control-plane database.
-
-Support requests may include account email, Workspace / Project / Capsule /
-Run identifiers, timestamps, invoice or receipt identifiers, and the message
-body provided by the requester. Customers should not send provider credentials,
-API keys, private keys, or other secret values through email support.
-
 Hosted operators are responsible for their own subprocessors, retention policy,
 incident response, legal notices, and any commercial billing they choose to run
 outside OSS Takosumi. Takosumi Cloud official billing and managed resources are
