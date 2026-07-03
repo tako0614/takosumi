@@ -2429,9 +2429,11 @@ function publicWorkerUrl(options: PlatformControlPlaneSmokeOptions): string {
 }
 
 function isCurrentTakosumiHelloPage(body: string): boolean {
+  const normalized = body.toLowerCase();
   return (
-    body.includes("<h1>It works</h1>") &&
-    body.includes("provisioned by a Takosumi Capsule")
+    normalized.includes("hello from takosumi") &&
+    normalized.includes("<h1>it works</h1>") &&
+    normalized.includes("takosumi")
   );
 }
 
@@ -4148,6 +4150,19 @@ async function runSelfTest(): Promise<void> {
   }
   if (serializedProviderless.includes("keyless-selftest")) {
     throw new Error("providerless self-test leaked vars content");
+  }
+  const currentHelloHtml =
+    '<!doctype html><meta charset="utf-8"><title>Hello from Takosumi</title>' +
+    "<h1>It works</h1><p>This Worker was provisioned by a Takosumi Capsule.</p>";
+  if (!isCurrentTakosumiHelloPage(currentHelloHtml)) {
+    throw new Error("self-test did not recognize the current hello Worker page");
+  }
+  if (
+    isCurrentTakosumiHelloPage(
+      "<!doctype html><title>It works</title><h1>It works</h1>",
+    )
+  ) {
+    throw new Error("self-test accepted a non-Takosumi hello page");
   }
   const defaultProviderlessOptions = await resolveOptions(
     {
