@@ -30,6 +30,7 @@ import {
   platformCloudExtensionCatalog,
   platformCloudExtensionRoutes,
   platformCloudExtensionSessionCanAccessCapsuleProjection,
+  platformCloudExtensionVerifiedBillingSession,
   platformResourceShapeApiEnabled,
   isPlatformMetricsDashboardPath,
   isPlatformMetricsPath,
@@ -146,6 +147,14 @@ const TEST_CLOUD_USAGE_PRICE_BOOK = JSON.stringify({
       chargeUsdMicrosPerUnit: 500,
       estimatedCostUsdMicrosPerUnit: 100,
       minimumChargeUsdMicros: 500,
+    },
+    {
+      meterIdPrefix: "takosumi:resource_shape:",
+      kind: "operation",
+      unit: "operation",
+      chargeUsdMicrosPerUnit: 2_000,
+      estimatedCostUsdMicrosPerUnit: 100,
+      minimumChargeUsdMicros: 2_000,
     },
   ],
 });
@@ -1710,6 +1719,143 @@ test("platform Resource Shape API routes are routed before accounts and bearer-g
   expect(authorized.status).toBe(200);
 });
 
+test("platform Resource Shape API accepts user tokens without installation registration and charges Workspace credits", async () => {
+  const recorded: {
+    readonly spaceId: string;
+    readonly input: unknown;
+  }[] = [];
+  const authorized: {
+    readonly spaceId: string;
+    readonly input: unknown;
+  }[] = [];
+  const env = {
+    TAKOSUMI_CONTROL_DB: new SqliteFakeD1(),
+    TAKOSUMI_ENVIRONMENT: "test",
+    TAKOSUMI_DEV_MODE: "1",
+    TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
+    TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
+    TAKOSUMI_RESOURCE_SHAPES: "EdgeWorker,ObjectBucket",
+    TAKOSUMI_RESOURCE_ADAPTERS: "cloudflare",
+  } as never;
+
+  const response = await handlePlatformResourceShapeApiRequest(
+    new Request("https://app.takosumi.com/v1/target-pools/default", {
+      method: "PUT",
+      headers: {
+        "content-type": "application/json",
+        authorization: "Bearer takpat_cloud",
+      },
+      body: JSON.stringify({
+        space: "space_cloud",
+        spec: {
+          targets: [
+            {
+              name: "cf-main",
+              type: "cloudflare",
+              ref: "account_test",
+              priority: 100,
+            },
+          ],
+        },
+      }),
+    }),
+    env,
+    async () => ({
+      authenticated: true,
+      authKind: "personal-access-token",
+      subject: "tsub_cloud",
+      spaceId: "space_cloud",
+      scopes: ["admin"],
+    }),
+    async (spaceId, input) => {
+      recorded.push({ spaceId, input });
+    },
+    async (spaceId, input) => {
+      authorized.push({ spaceId, input });
+    },
+  );
+
+  expect(response.status).toBe(200);
+  expect(authorized).toEqual([
+    {
+      spaceId: "space_cloud",
+      input: expect.objectContaining({
+        meterId: "takosumi:resource_shape:target_pool_put",
+        resourceFamily: "takosumi.target_pool",
+        resourceId: "target-pool:default",
+        operation: "target_pool_put",
+        kind: "operation",
+        quantity: 1,
+        usdMicros: 2_000,
+        source: "resource_meter",
+        spendRequired: true,
+      }),
+    },
+  ]);
+  expect(recorded).toEqual(authorized);
+  expect(
+    (recorded[0]?.input as { installationId?: string }).installationId,
+  ).toBeUndefined();
+});
+
+test("platform Resource Shape API fails closed before forwarding when Workspace credits are insufficient", async () => {
+  let recorded = false;
+  const env = {
+    TAKOSUMI_CONTROL_DB: new SqliteFakeD1(),
+    TAKOSUMI_ENVIRONMENT: "test",
+    TAKOSUMI_DEV_MODE: "1",
+    TAKOSUMI_DEPLOY_CONTROL_TOKEN: "resource-token",
+    TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
+    TAKOSUMI_RESOURCE_SHAPES: "EdgeWorker,ObjectBucket",
+    TAKOSUMI_RESOURCE_ADAPTERS: "cloudflare",
+  } as never;
+
+  const response = await handlePlatformResourceShapeApiRequest(
+    new Request("https://app.takosumi.com/v1/target-pools/default", {
+      method: "PUT",
+      headers: {
+        "content-type": "application/json",
+        authorization: "Bearer takpat_cloud",
+      },
+      body: JSON.stringify({
+        space: "space_cloud",
+        spec: {
+          targets: [],
+        },
+      }),
+    }),
+    env,
+    async () => ({
+      authenticated: true,
+      authKind: "personal-access-token",
+      subject: "tsub_cloud",
+      spaceId: "space_cloud",
+      scopes: ["admin"],
+    }),
+    async () => {
+      recorded = true;
+    },
+    async () => {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "metered usage spend failed: insufficient USD balance",
+        {
+          reason: "insufficient_credits",
+          workspaceId: "space_cloud",
+          usdMicros: 2_000,
+        },
+      );
+    },
+  );
+
+  expect(response.status).toBe(402);
+  expect(await response.json()).toEqual({
+    error: "cloud_extension_insufficient_credits",
+    reason: "insufficient_credits",
+  });
+  expect(recorded).toBe(false);
+});
+
 test("a configured cloud extension dispatches to the named handler through worker.fetch", async () => {
   const worker = (await import("../../../deploy/platform/worker.ts")).default;
   const forwarded: { url: string; authorization: string | null }[] = [];
@@ -1947,6 +2093,72 @@ test("cloud extension route rejects spoofed billing Workspace context", async ()
     reason: "usage_workspace_id_mismatch",
   });
   expect(forwarded).toBe(false);
+});
+
+test("cloud extension billing context lets personal access tokens select an accessible Workspace without installation registration", async () => {
+  const checked: string[] = [];
+  const verified = await platformCloudExtensionVerifiedBillingSession(
+    new Request("https://app.takosumi.com/compat/cloudflare/client/v4", {
+      headers: {
+        authorization: "Bearer takpat_cloud",
+        "x-takosumi-cloud-billing-workspace-id": "space_cloud",
+      },
+    }),
+    {} as never,
+    {
+      authenticated: true,
+      authKind: "personal-access-token",
+      subject: "tsub_cloud",
+      scopes: ["admin"],
+    },
+    async (_request, _env, workspaceId) => {
+      checked.push(workspaceId);
+      return workspaceId === "space_cloud";
+    },
+  );
+
+  expect(verified.ok).toBe(true);
+  if (!verified.ok) throw new Error("expected verified billing context");
+  expect(checked).toEqual(["space_cloud"]);
+  expect(verified.session).toEqual({
+    authenticated: true,
+    authKind: "personal-access-token",
+    subject: "tsub_cloud",
+    scopes: ["admin"],
+    spaceId: "space_cloud",
+  });
+});
+
+test("cloud extension billing context keeps service tokens bound to token metadata", async () => {
+  let checked = false;
+  const verified = await platformCloudExtensionVerifiedBillingSession(
+    new Request("https://app.takosumi.com/compat/cloudflare/client/v4", {
+      headers: {
+        authorization: "Bearer taksrv_cloud",
+        "x-takosumi-cloud-billing-workspace-id": "space_cloud",
+      },
+    }),
+    {} as never,
+    {
+      authenticated: true,
+      authKind: "service-token",
+      subject: "svc",
+      scopes: ["admin"],
+    },
+    async () => {
+      checked = true;
+      return true;
+    },
+  );
+
+  expect(verified.ok).toBe(false);
+  if (verified.ok) throw new Error("expected billing context rejection");
+  expect(checked).toBe(false);
+  expect(verified.response.status).toBe(403);
+  expect(await verified.response.json()).toEqual({
+    error: "cloud_extension_billing_context_mismatch",
+    reason: "usage_workspace_id_mismatch",
+  });
 });
 
 test("cloud extension billing context accepts Capsule projection ids", async () => {
@@ -2342,6 +2554,74 @@ test("cloud extension fallback usage records successful extension calls without 
       }),
     },
   ]);
+});
+
+test("cloud extension fallback usage supports unregistered provider calls with Workspace-only billing", async () => {
+  const recorded: {
+    readonly spaceId: string;
+    readonly input: unknown;
+  }[] = [];
+  const response = await handlePlatformCloudExtensionRouteRequest(
+    new Request(
+      "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/ts_acc/workers/scripts/api",
+      { method: "PUT" },
+    ),
+    {
+      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
+      TAKOSUMI_CLOUD_COMPAT: {
+        fetch: async () => Response.json({ success: true }, { status: 201 }),
+      },
+    } as never,
+    {
+      basePath: "/compat/cloudflare/client/v4",
+      handlerKey: "TAKOSUMI_CLOUD_COMPAT",
+      fallbackUsage: [
+        {
+          pathTemplate: "/accounts/*/workers/scripts/:resourceId",
+          methods: ["PUT"],
+          meterIdPrefix: "cloudflare:workers_script:",
+          resourceFamily: "cloudflare.workers_script",
+          resourceIdPrefix: "script:",
+          resourceIdParam: "resourceId",
+          kind: "gateway_compute",
+          quantity: 1,
+          operationByMethod: { PUT: "deploy" },
+        },
+      ],
+    },
+    async () => ({
+      authenticated: true,
+      authKind: "personal-access-token",
+      subject: "tsub_cloud",
+      spaceId: "space_cloud",
+      scopes: ["admin"],
+    }),
+    async (spaceId, input) => {
+      recorded.push({ spaceId, input });
+    },
+    async () => {},
+  );
+
+  expect(response.status).toBe(201);
+  expect(recorded).toEqual([
+    {
+      spaceId: "space_cloud",
+      input: expect.objectContaining({
+        meterId: "cloudflare:workers_script:deploy",
+        resourceFamily: "cloudflare.workers_script",
+        resourceId: "script:api",
+        operation: "deploy",
+        kind: "gateway_compute",
+        quantity: 1,
+        usdMicros: 1_000,
+        source: "resource_meter",
+        spendRequired: true,
+      }),
+    },
+  ]);
+  expect(
+    (recorded[0]?.input as { installationId?: string }).installationId,
+  ).toBeUndefined();
 });
 
 test("cloud extension fallback usage can meter nested data-plane value keys", async () => {

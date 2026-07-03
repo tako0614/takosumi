@@ -156,7 +156,7 @@ import type {
   UsageEvent,
 } from "takosumi-contract/billing";
 import type { ListProvidersResponse } from "takosumi-contract/providers";
-import type { ResourceShapeKind } from "takosumi-contract";
+import type { ActorContext, ResourceShapeKind } from "takosumi-contract";
 
 function resolveTakosumiDeploymentRecordStore(input: {
   readonly takosumiDeploymentRecordStore?: TakosumiDeploymentRecordStore;
@@ -379,6 +379,9 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
   readonly enabledResourceShapeKinds?: readonly ResourceShapeKind[];
   readonly resourceCapabilities?: Partial<TakosumiResourceCapabilities>;
   readonly adapterCapabilities?: Partial<TakosumiAdapterCapabilities>;
+  readonly resolveResourceShapeActor?: (
+    request: Request,
+  ) => ActorContext | Promise<ActorContext>;
   /**
    * Operator-selected public Git source for first-party catalog cards. The
    * default tracks the public development mirror, while hosted deployments can
@@ -1113,6 +1116,12 @@ export async function createTakosumiService(
           ...(deployControlToken
             ? { getResourceShapeBearerToken: () => deployControlToken }
             : {}),
+          ...(options.resolveResourceShapeActor
+            ? {
+                resolveActor: (c) =>
+                  options.resolveResourceShapeActor!(c.req.raw),
+              }
+            : {}),
         }
       : undefined,
     metricsRouteOptions: metricsScrapeToken
@@ -1303,8 +1312,7 @@ export async function createTakosumiService(
     getInstallation: (id) => opentofuController.getInstallation(id),
     listDeployments: (installationId, params) =>
       opentofuController.listDeployments(installationId, params),
-    listDeploymentsByIds: (ids) =>
-      opentofuController.listDeploymentsByIds(ids),
+    listDeploymentsByIds: (ids) => opentofuController.listDeploymentsByIds(ids),
     listDeploymentsBySpace: (spaceId) =>
       opentofuController.listDeploymentsBySpace(spaceId),
     listDeploymentOutputs: (installationId) =>

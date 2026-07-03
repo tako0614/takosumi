@@ -143,6 +143,28 @@ Takosumi Cloud public HTTP traffic for `*.app.takos.jp` and
 `takosumi-cloud/platform/worker.ts` hostname dispatch registry. It is not a
 separate Worker.
 
+## API key / Workspace billing context
+
+The Resource Shape API used by the `takosumi` provider (`/v1/resources`,
+`/v1/target-pools`, and `/v1/space-policies`) and the Cloudflare-compatible
+import endpoint (`/compat/cloudflare/client/v4`) can be used without creating a
+Capsule / app installation first. They are not anonymous endpoints. A request
+must authenticate with an account session, personal access token, or service
+token, and the billing Workspace must be verified.
+
+Sessions and personal access tokens may select the billing Workspace with
+`x-takosumi-cloud-billing-workspace-id`. The platform verifies that the token
+can read that Workspace in the accounts plane before forwarding to the Cloud
+handler or Resource Shape API. Service tokens may only use the Workspace encoded
+in token metadata.
+
+Billable writes are precharged against Workspace credits before forwarding. If
+the Workspace context is missing, the token does not match the Workspace, or the
+Workspace has insufficient credits, the request fails closed and is not
+forwarded to the downstream handler / apply path. Capsule / installation ids are
+optional. When omitted, provider / compatibility API usage is recorded as a
+Workspace usage event without `installationId`.
+
 ## S3-compatible Object Storage endpoint
 
 The S3-compatible endpoint is the data-plane for Object Storage provided by

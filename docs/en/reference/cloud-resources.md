@@ -147,3 +147,8 @@ Use Cloudflare-compatible Terraform/OpenTofu resources when importing Workers-or
 
 Switching between real Cloudflare and Takosumi Cloud belongs in Provider
 Binding / Provider Connection. Do not put raw secrets in the manifest.
+
+On Takosumi Cloud, this import path can be used without creating an app
+installation first. It still requires an authenticated token and a billing
+Workspace. Billable writes spend Workspace credits and are not forwarded to the
+compatibility handler when the Workspace has insufficient balance.
