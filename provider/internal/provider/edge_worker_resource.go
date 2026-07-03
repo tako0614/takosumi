@@ -235,6 +235,8 @@ func (r *edgeWorkerResource) Delete(ctx context.Context, req resource.DeleteRequ
 		return
 	}
 	deleteSpace := effectiveSpace(state.Space, r.data.defaultSpace)
+	r.data.resourceShapeMutate.Lock()
+	defer r.data.resourceShapeMutate.Unlock()
 	if err := r.data.client.DeleteResource(ctx, client.KindEdgeWorker, state.Name.ValueString(), deleteSpace); err != nil {
 		resp.Diagnostics.AddError("Failed to delete EdgeWorker", err.Error())
 	}
@@ -262,6 +264,8 @@ func (r *edgeWorkerResource) ModifyPlan(ctx context.Context, req resource.Modify
 	if diags.HasError() {
 		return
 	}
+	r.data.resourceShapeMutate.Lock()
+	defer r.data.resourceShapeMutate.Unlock()
 	_, _ = r.data.client.PreviewResource(ctx, body)
 }
 
@@ -289,6 +293,8 @@ func (r *edgeWorkerResource) put(ctx context.Context, plan *edgeWorkerModel, dia
 	if diags.HasError() {
 		return
 	}
+	r.data.resourceShapeMutate.Lock()
+	defer r.data.resourceShapeMutate.Unlock()
 	res, err := r.data.client.PutResource(ctx, client.KindEdgeWorker, plan.Name.ValueString(), body)
 	if err != nil {
 		diags.AddError("Failed to apply EdgeWorker", err.Error())
