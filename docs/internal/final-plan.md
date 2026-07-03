@@ -960,10 +960,16 @@ resource id
 meter id
 quantity
 unit
+usdMicros
 timestamp
 operation
 target
 ```
+
+The canonical amount field is `usdMicros` (1 USD = 1,000,000 micros). Legacy
+`credits` are only a compatibility alias. Runner execution emits fine-grained
+`runner_minute` usage from duration and the core default runner-minute meter
+price; it must not round a short run to a whole legacy credit.
 
 Takosumi for Operator and Takosumi Cloud turn those events into:
 
