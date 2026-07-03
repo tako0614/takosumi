@@ -3004,7 +3004,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       .select()
       .from(pgSchema.usageEvents)
       .where(
-        pgKeysetWhere(
+        pgKeysetWhereDesc(
           eq(pgSchema.usageEvents.spaceId, spaceId),
           pgSchema.usageEvents.createdAt,
           pgSchema.usageEvents.id,
@@ -3012,8 +3012,8 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
         ),
       )
       .orderBy(
-        asc(pgSchema.usageEvents.createdAt),
-        asc(pgSchema.usageEvents.id),
+        desc(pgSchema.usageEvents.createdAt),
+        desc(pgSchema.usageEvents.id),
       )
       .limit(limit + 1);
     return pageFromProbe(rows.map(usageEventFromRow), limit);
