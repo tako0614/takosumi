@@ -15,10 +15,11 @@ should do that work and expose ordinary OpenTofu variables when needed.
 This module targets `cloudflare/cloudflare` v5. The Worker content is uploaded
 through the `cloudflare_workers_script` resource:
 
-- `content` carries the **bundled** module JS verbatim (`content = file(...)`).
-  In v5, `content` conflicts with `content_file`; `content_file` would require a
-  paired `content_sha256`. We use `content = file(var.artifactPath)` so the
-  build artifact bytes are uploaded directly.
+- `content` carries the **bundled** module JS verbatim. Runner-local artifacts
+  use `file(var.artifactPath)`. CI/release artifacts use `data "http"` with
+  `artifactUrl` and fail closed unless `sha256(content) == artifactSha256`.
+  In v5, `content` conflicts with `content_file`; this module keeps the bytes
+  explicit inside OpenTofu instead of introducing a separate upload step.
 - `main_module = "index.js"` selects module syntax (the uploaded module that
   exports the `fetch` handler). The retired build phase expected a single
   bundled `dist/index.js` whose default export is the fetch handler.
@@ -39,14 +40,17 @@ bun install --frozen-lockfile
 bun run build      # must produce dist/index.js (a single bundled module)
 ```
 
-`artifactPath` is `dist/index.js`; older dispatch paths copied it to
-`/work/artifact`, which this module reads via `file(var.artifactPath)`. New
-Takosumi dispatch no longer runs or threads this build phase.
+`artifactPath` was historically `dist/index.js`; older dispatch paths copied it
+to `/work/artifact`. New Takosumi dispatch no longer runs or threads this build
+phase. External `takosumi_edge_worker` provider usage should prefer
+`artifactUrl` + `artifactSha256`, which the generated OpenTofu module fetches
+and verifies.
 
 ## Inputs / outputs
 
 - Inputs: `appName` (string, required), `accountId` (string, required),
-  `publicUrl` (string, optional).
+  `artifactPath` or `artifactUrl` + `artifactSha256`, `publicUrl` (string,
+  optional).
 - Outputs: `worker_name`, `url`.
 
 `url` returns `publicUrl`, or an empty string when no dispatcher/custom-route

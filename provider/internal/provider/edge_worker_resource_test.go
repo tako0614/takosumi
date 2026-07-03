@@ -14,6 +14,8 @@ func TestRefreshEdgeWorkerSpecClearsAbsentOptionalFields(t *testing.T) {
 	m := edgeWorkerModel{
 		Name:              types.StringValue("api"),
 		ArtifactPath:      types.StringValue("/old/dist/worker.js"),
+		ArtifactURL:       types.StringValue("https://example.com/old-worker.js"),
+		ArtifactSHA256:    types.StringValue("sha256:old"),
 		CompatibilityDate: types.StringValue("2026-06-29"),
 		CompatibilityFlags: types.SetValueMust(types.StringType, []attr.Value{
 			types.StringValue("nodejs_compat"),
@@ -35,6 +37,12 @@ func TestRefreshEdgeWorkerSpecClearsAbsentOptionalFields(t *testing.T) {
 	}
 	if !m.ArtifactPath.IsNull() {
 		t.Fatalf("expected artifact_path to be cleared, got %q", m.ArtifactPath.ValueString())
+	}
+	if !m.ArtifactURL.IsNull() {
+		t.Fatalf("expected artifact_url to be cleared, got %q", m.ArtifactURL.ValueString())
+	}
+	if !m.ArtifactSHA256.IsNull() {
+		t.Fatalf("expected artifact_sha256 to be cleared, got %q", m.ArtifactSHA256.ValueString())
 	}
 	if !m.CompatibilityDate.IsNull() {
 		t.Fatalf("expected compatibility_date to be cleared, got %q", m.CompatibilityDate.ValueString())
@@ -63,5 +71,54 @@ func TestEdgeWorkerToResourceCarriesTargetPoolName(t *testing.T) {
 	}
 	if resource.TargetPoolName != "containers" {
 		t.Fatalf("expected targetPoolName to be carried, got %#v", resource)
+	}
+}
+
+func TestEdgeWorkerToResourceAcceptsArtifactURLWithDigest(t *testing.T) {
+	model := edgeWorkerModel{
+		Name:           types.StringValue("api"),
+		ArtifactURL:    types.StringValue("https://example.com/releases/api-worker.js"),
+		ArtifactSHA256: types.StringValue("sha256:1111111111111111111111111111111111111111111111111111111111111111"),
+	}
+
+	resource, _, diags := model.toResource(context.Background(), "prod")
+	if diags.HasError() {
+		t.Fatalf("toResource diagnostics: %v", diags)
+	}
+	source, ok := resource.Spec["source"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected source map, got %#v", resource.Spec["source"])
+	}
+	if source["artifactUrl"] != "https://example.com/releases/api-worker.js" {
+		t.Fatalf("expected artifactUrl to be carried, got %#v", source)
+	}
+	if source["artifactSha256"] != "sha256:1111111111111111111111111111111111111111111111111111111111111111" {
+		t.Fatalf("expected artifactSha256 to be carried, got %#v", source)
+	}
+}
+
+func TestEdgeWorkerToResourceRejectsInvalidArtifactSources(t *testing.T) {
+	cases := []edgeWorkerModel{
+		{Name: types.StringValue("api")},
+		{
+			Name:         types.StringValue("api"),
+			ArtifactPath: types.StringValue("/work/dist/worker.js"),
+			ArtifactURL:  types.StringValue("https://example.com/releases/api-worker.js"),
+		},
+		{
+			Name:        types.StringValue("api"),
+			ArtifactURL: types.StringValue("https://example.com/releases/api-worker.js"),
+		},
+		{
+			Name:           types.StringValue("api"),
+			ArtifactURL:    types.StringValue("http://example.com/releases/api-worker.js"),
+			ArtifactSHA256: types.StringValue("1111111111111111111111111111111111111111111111111111111111111111"),
+		},
+	}
+	for _, model := range cases {
+		_, _, diags := model.toResource(context.Background(), "prod")
+		if !diags.HasError() {
+			t.Fatalf("expected diagnostics for %#v", model)
+		}
 	}
 }

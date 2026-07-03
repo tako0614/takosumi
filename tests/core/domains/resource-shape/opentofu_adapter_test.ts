@@ -139,13 +139,14 @@ test("apply maps cloudflare target to provider+inputs and threads moduleFiles/te
   expect(req.inputs.artifactPath).toBe("/work/dist/worker.js");
   expect(req.templateId).toBe("cloudflare-worker-service");
   expect(req.moduleFiles).toBe(plan.moduleFiles);
-  expect(req.publicOutputs).toEqual(["worker_name"]);
+  expect(req.publicOutputs).toEqual(["worker_name", "url"]);
 
   expect(result.nativeResources).toEqual([
     { type: "cloudflare_workers_script", id: "api" },
   ]);
   expect(result.outputs).toEqual({
     worker_name: "fake://tkrn:demo:EdgeWorker:api/worker_name",
+    url: "fake://tkrn:demo:EdgeWorker:api/url",
   });
   expect(result.runId).toBeDefined();
 });
@@ -294,10 +295,12 @@ class FakeDeployControlDriver implements DeployControlRunDriver {
   };
   #seq = 0;
 
-  constructor(options: {
-    readonly completePlanOnGet?: boolean;
-    readonly completeApplyOnGet?: boolean;
-  } = {}) {
+  constructor(
+    options: {
+      readonly completePlanOnGet?: boolean;
+      readonly completeApplyOnGet?: boolean;
+    } = {},
+  ) {
     this.#options = options;
   }
 
@@ -451,6 +454,12 @@ class FakeDeployControlDriver implements DeployControlRunDriver {
           value: "api",
           sensitive: false,
         },
+        {
+          name: "url",
+          kind: "service_url",
+          value: "https://api.example.test",
+          sensitive: false,
+        },
       ],
     } as unknown as ApplyRunResponse["applyRun"];
   }
@@ -492,6 +501,7 @@ test("ControllerOpentofuRunPort.plan builds a real generated-root dispatch and m
   expect(dispatch!.files["main.tf"]).toContain('appName = "api"');
   expect(dispatch!.files["main.tf"]).toContain('accountId = "cf-account-123"');
   expect(dispatch!.files["outputs.tf"]).toContain('output "worker_name"');
+  expect(dispatch!.files["outputs.tf"]).toContain('output "url"');
 
   expect(preview.nativeResources).toEqual([
     {
@@ -520,7 +530,10 @@ test("ControllerOpentofuRunPort.apply drives plan->apply and maps outputs+native
   expect(guard.planArtifactDigest).toBe("sha256:art");
   expect(guard.capsuleId).toBe("cap_1");
 
-  expect(result.outputs).toEqual({ worker_name: "api" });
+  expect(result.outputs).toEqual({
+    worker_name: "api",
+    url: "https://api.example.test",
+  });
   expect(result.nativeResources).toEqual([
     {
       type: "cloudflare_workers_script",
@@ -551,7 +564,10 @@ test("ControllerOpentofuRunPort can wait for an external queue owner instead of 
   expect(driver.runQueuedApplyCalls).toEqual([]);
   expect(driver.planCalls.length).toBe(1);
   expect(driver.applyCalls.length).toBe(1);
-  expect(result.outputs).toEqual({ worker_name: "api" });
+  expect(result.outputs).toEqual({
+    worker_name: "api",
+    url: "https://api.example.test",
+  });
   expect(result.nativeResources).toEqual([
     {
       type: "cloudflare_workers_script",
@@ -578,9 +594,9 @@ test("ControllerOpentofuRunPort.destroy replays generated root before apply", as
   expect(request.requiredProviders).toEqual([
     "registry.opentofu.org/cloudflare/cloudflare",
   ]);
-  expect(internal?.genericRootDispatch?.generatedRoot.files["main.tf"]).toContain(
-    'module "app"',
-  );
+  expect(
+    internal?.genericRootDispatch?.generatedRoot.files["main.tf"],
+  ).toContain('module "app"');
   expect(
     internal?.genericRootDispatch?.generatedRoot.moduleFiles?.map(
       (file) => file.path,

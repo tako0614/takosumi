@@ -298,7 +298,8 @@ Resource objects use `apiVersion: takosumi.dev/v1alpha1`.
   },
   "spec": {
     "source": {
-      "artifactPath": "/work/dist/worker.js"
+      "artifactUrl": "https://example.com/releases/api-worker.js",
+      "artifactSha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
     },
     "compatibilityDate": "2026-06-29",
     "profiles": ["workers_bindings"]
@@ -311,7 +312,8 @@ Resource objects use `apiVersion: takosumi.dev/v1alpha1`.
       "locked": true
     },
     "outputs": {
-      "worker_name": "api"
+      "worker_name": "api",
+      "url": "https://api.example.com"
     }
   }
 }

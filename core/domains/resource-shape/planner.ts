@@ -572,8 +572,10 @@ export function planResourceShape(
 
 /**
  * Plan a Worker-compatible EdgeWorker. The module reads a prebuilt artifact
- * with OpenTofu `file(var.artifactPath)`, so Takosumi does not own the build or
- * artifact-fetch decision; the Git/OpenTofu module remains the source of truth.
+ * with OpenTofu `file(var.artifactPath)` or fetches a CI/release artifact with
+ * the declared `artifactUrl` + `artifactSha256`. Takosumi does not own the
+ * build or choose the artifact; the generated OpenTofu module consumes the
+ * declared source of truth.
  */
 export function planEdgeWorker(
   implementation: string,
@@ -588,22 +590,26 @@ export function planEdgeWorker(
   }
   const moduleFiles = moduleFilesFor(templateId, "planEdgeWorker");
   const artifactPath = spec.source.artifactPath;
-  if (!artifactPath) {
+  const artifactUrl = spec.source.artifactUrl;
+  const artifactSha256 = spec.source.artifactSha256;
+  if (!artifactPath && !artifactUrl) {
     throw new Error(
-      "planEdgeWorker: cloudflare_workers requires source.artifactPath",
+      "planEdgeWorker: cloudflare_workers requires source.artifactPath or source.artifactUrl",
     );
   }
   const inputs: Record<string, unknown> = {
     appName: spec.name,
     accountId: target.ref ?? "",
-    artifactPath,
   };
+  if (artifactPath) inputs.artifactPath = artifactPath;
+  if (artifactUrl) inputs.artifactUrl = artifactUrl;
+  if (artifactSha256) inputs.artifactSha256 = artifactSha256;
   return {
     shape: "EdgeWorker",
     templateId,
     moduleFiles,
     inputs,
-    publicOutputs: ["worker_name"],
+    publicOutputs: ["worker_name", "url"],
   };
 }
 
@@ -1111,21 +1117,67 @@ function parseEdgeWorkerSource(value: unknown):
       ok: false,
       error: {
         code: "invalid_source",
-        message: "EdgeWorker currently supports source.artifactPath only",
+        message:
+          "EdgeWorker currently supports source.artifactPath or source.artifactUrl only",
       },
     };
   }
-  if (
+  const artifactPath =
     typeof source.artifactPath === "string" &&
-    source.artifactPath.length > 0
-  ) {
-    return { ok: true, value: { artifactPath: source.artifactPath } };
+    source.artifactPath.trim().length > 0
+      ? source.artifactPath
+      : undefined;
+  const artifactUrl =
+    typeof source.artifactUrl === "string" &&
+    source.artifactUrl.trim().length > 0
+      ? source.artifactUrl
+      : undefined;
+  if (artifactPath && artifactUrl) {
+    return {
+      ok: false,
+      error: {
+        code: "invalid_source",
+        message:
+          "spec.source must set only one of artifactPath or artifactUrl for EdgeWorker",
+      },
+    };
+  }
+  if (artifactPath) {
+    return { ok: true, value: { artifactPath } };
+  }
+  if (artifactUrl) {
+    if (!artifactUrl.startsWith("https://")) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_source",
+          message: "spec.source.artifactUrl must be an https URL",
+        },
+      };
+    }
+    const artifactSha256 =
+      typeof source.artifactSha256 === "string" &&
+      source.artifactSha256.trim().length > 0
+        ? source.artifactSha256
+        : undefined;
+    if (!artifactSha256) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_source",
+          message:
+            "spec.source.artifactSha256 is required when artifactUrl is set",
+        },
+      };
+    }
+    return { ok: true, value: { artifactUrl, artifactSha256 } };
   }
   return {
     ok: false,
     error: {
       code: "invalid_source",
-      message: "spec.source.artifactPath must be a non-empty string",
+      message:
+        "spec.source.artifactPath or spec.source.artifactUrl must be a non-empty string",
     },
   };
 }

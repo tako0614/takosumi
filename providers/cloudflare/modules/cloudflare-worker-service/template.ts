@@ -36,6 +36,27 @@ export const cloudflareWorkerServiceTemplate: TemplateDefinition = {
       required: true,
       description: "Account that will own the Worker.",
     },
+    artifactPath: {
+      type: "string",
+      title: "Runner-local artifact path",
+      required: false,
+      description:
+        "Runner-local bundled Worker JS path. Leave empty when artifactUrl is used.",
+    },
+    artifactUrl: {
+      type: "string",
+      title: "Release artifact URL",
+      required: false,
+      description:
+        "HTTPS URL for a CI/release-produced bundled Worker JS artifact.",
+    },
+    artifactSha256: {
+      type: "string",
+      title: "Release artifact SHA-256",
+      required: false,
+      description:
+        "Expected SHA-256 digest for artifactUrl, optionally prefixed with sha256:.",
+    },
     publicUrl: {
       type: "string",
       title: "Public URL",
@@ -51,7 +72,7 @@ export const cloudflareWorkerServiceTemplate: TemplateDefinition = {
     },
   },
   policy: {
-    allowedProviders: ["cloudflare/cloudflare"],
+    allowedProviders: ["cloudflare/cloudflare", "hashicorp/http"],
     allowedResourceTypes: ["cloudflare_workers_script"],
     destructiveChanges: { requireExplicitConfirmation: true },
   },

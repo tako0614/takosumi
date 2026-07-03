@@ -40,6 +40,8 @@ type edgeWorkerModel struct {
 	ID                     types.String `tfsdk:"id"`
 	Name                   types.String `tfsdk:"name"`
 	ArtifactPath           types.String `tfsdk:"artifact_path"`
+	ArtifactURL            types.String `tfsdk:"artifact_url"`
+	ArtifactSHA256         types.String `tfsdk:"artifact_sha256"`
 	CompatibilityDate      types.String `tfsdk:"compatibility_date"`
 	CompatibilityFlags     types.Set    `tfsdk:"compatibility_flags"`
 	Profiles               types.Set    `tfsdk:"profiles"`
@@ -68,8 +70,16 @@ func (r *edgeWorkerResource) Schema(_ context.Context, _ resource.SchemaRequest,
 				},
 			},
 			"artifact_path": schema.StringAttribute{
-				Required:    true,
-				Description: "OpenTofu-runner-local path to a prebuilt Worker artifact. Takosumi does not build or fetch it implicitly.",
+				Optional:    true,
+				Description: "OpenTofu-runner-local path to a prebuilt Worker artifact. Mutually exclusive with artifact_url.",
+			},
+			"artifact_url": schema.StringAttribute{
+				Optional:    true,
+				Description: "HTTPS URL to a CI/release-produced Worker artifact fetched by the generated OpenTofu module. Requires artifact_sha256.",
+			},
+			"artifact_sha256": schema.StringAttribute{
+				Optional:    true,
+				Description: "Expected Worker artifact SHA-256 hex digest, optionally prefixed with sha256:. Required with artifact_url.",
 			},
 			"compatibility_date": schema.StringAttribute{
 				Optional:    true,
@@ -245,7 +255,7 @@ func (r *edgeWorkerResource) ModifyPlan(ctx context.Context, req resource.Modify
 	}
 	var plan edgeWorkerModel
 	_ = req.Plan.Get(ctx, &plan)
-	if plan.Name.IsUnknown() || plan.ArtifactPath.IsUnknown() {
+	if plan.Name.IsUnknown() || plan.ArtifactPath.IsUnknown() || plan.ArtifactURL.IsUnknown() || plan.ArtifactSHA256.IsUnknown() {
 		return
 	}
 	body, _, diags := plan.toResource(ctx, r.data.defaultSpace)
@@ -303,11 +313,61 @@ func (m edgeWorkerModel) toResource(ctx context.Context, defaultSpace string) (*
 		return nil, "", diags
 	}
 	name := m.Name.ValueString()
+	source := map[string]any{}
+	artifactPath := ""
+	if !m.ArtifactPath.IsNull() && !m.ArtifactPath.IsUnknown() {
+		artifactPath = strings.TrimSpace(m.ArtifactPath.ValueString())
+	}
+	artifactURL := ""
+	if !m.ArtifactURL.IsNull() && !m.ArtifactURL.IsUnknown() {
+		artifactURL = strings.TrimSpace(m.ArtifactURL.ValueString())
+	}
+	artifactSHA256 := ""
+	if !m.ArtifactSHA256.IsNull() && !m.ArtifactSHA256.IsUnknown() {
+		artifactSHA256 = strings.TrimSpace(m.ArtifactSHA256.ValueString())
+	}
+	if artifactPath != "" && artifactURL != "" {
+		diags.AddAttributeError(
+			path.Root("artifact_url"),
+			"Ambiguous EdgeWorker artifact source",
+			"Set only one of artifact_path or artifact_url.",
+		)
+		return nil, "", diags
+	}
+	if artifactPath == "" && artifactURL == "" {
+		diags.AddAttributeError(
+			path.Root("artifact_path"),
+			"Missing EdgeWorker artifact source",
+			"Set artifact_path for a runner-local artifact or artifact_url with artifact_sha256 for a release artifact.",
+		)
+		return nil, "", diags
+	}
+	if artifactPath != "" {
+		source["artifactPath"] = artifactPath
+	}
+	if artifactURL != "" {
+		if !strings.HasPrefix(artifactURL, "https://") {
+			diags.AddAttributeError(
+				path.Root("artifact_url"),
+				"Invalid EdgeWorker artifact URL",
+				"artifact_url must be an https URL.",
+			)
+			return nil, "", diags
+		}
+		if artifactSHA256 == "" {
+			diags.AddAttributeError(
+				path.Root("artifact_sha256"),
+				"Missing EdgeWorker artifact digest",
+				"artifact_sha256 is required when artifact_url is set.",
+			)
+			return nil, "", diags
+		}
+		source["artifactUrl"] = artifactURL
+		source["artifactSha256"] = artifactSHA256
+	}
 	spec := map[string]any{
-		"name": name,
-		"source": map[string]any{
-			"artifactPath": m.ArtifactPath.ValueString(),
-		},
+		"name":   name,
+		"source": source,
 	}
 	if !m.CompatibilityDate.IsNull() && !m.CompatibilityDate.IsUnknown() && m.CompatibilityDate.ValueString() != "" {
 		spec["compatibilityDate"] = m.CompatibilityDate.ValueString()
@@ -387,8 +447,20 @@ func refreshEdgeWorkerSpec(res *client.Resource, m *edgeWorkerModel) diag.Diagno
 		} else {
 			m.ArtifactPath = types.StringNull()
 		}
+		if artifactURL, ok := raw["artifactUrl"].(string); ok {
+			m.ArtifactURL = types.StringValue(artifactURL)
+		} else {
+			m.ArtifactURL = types.StringNull()
+		}
+		if artifactSHA256, ok := raw["artifactSha256"].(string); ok {
+			m.ArtifactSHA256 = types.StringValue(artifactSHA256)
+		} else {
+			m.ArtifactSHA256 = types.StringNull()
+		}
 	} else {
 		m.ArtifactPath = types.StringNull()
+		m.ArtifactURL = types.StringNull()
+		m.ArtifactSHA256 = types.StringNull()
 	}
 	if compatibilityDate, ok := res.Spec["compatibilityDate"].(string); ok {
 		m.CompatibilityDate = types.StringValue(compatibilityDate)
