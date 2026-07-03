@@ -35,6 +35,57 @@ test("parseEdgeWorkerSpec accepts a Worker script artifact", () => {
   expect(r.spec.profiles).toEqual(["workers_bindings"]);
 });
 
+test("parseEdgeWorkerSpec accepts an HTTPS release artifact with SHA-256", () => {
+  const r = parseEdgeWorkerSpec({
+    name: "api",
+    source: {
+      artifactUrl: "https://example.com/releases/api-worker.js",
+      artifactSha256:
+        "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    },
+  });
+  expect(r.ok).toBe(true);
+  if (!r.ok) return;
+  expect(r.spec.source).toEqual({
+    artifactUrl: "https://example.com/releases/api-worker.js",
+    artifactSha256:
+      "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  });
+});
+
+test("parseEdgeWorkerSpec rejects ambiguous or unverifiable artifacts", () => {
+  const both = parseEdgeWorkerSpec({
+    name: "api",
+    source: {
+      artifactPath: "/work/dist/worker.js",
+      artifactUrl: "https://example.com/releases/api-worker.js",
+      artifactSha256:
+        "1111111111111111111111111111111111111111111111111111111111111111",
+    },
+  });
+  expect(both.ok).toBe(false);
+  if (!both.ok) expect(both.error.code).toBe("invalid_source");
+
+  const missingDigest = parseEdgeWorkerSpec({
+    name: "api",
+    source: { artifactUrl: "https://example.com/releases/api-worker.js" },
+  });
+  expect(missingDigest.ok).toBe(false);
+  if (!missingDigest.ok)
+    expect(missingDigest.error.message).toContain("artifactSha256");
+
+  const insecure = parseEdgeWorkerSpec({
+    name: "api",
+    source: {
+      artifactUrl: "http://example.com/releases/api-worker.js",
+      artifactSha256:
+        "1111111111111111111111111111111111111111111111111111111111111111",
+    },
+  });
+  expect(insecure.ok).toBe(false);
+  if (!insecure.ok) expect(insecure.error.message).toContain("https");
+});
+
 test("parseEdgeWorkerSpec rejects an unknown profile", () => {
   const r = parseEdgeWorkerSpec({
     name: "api",
@@ -104,10 +155,39 @@ test("planEdgeWorker maps cloudflare_workers to cloudflare-worker-service", () =
     accountId: "cf-account-123",
     artifactPath: "/work/dist/worker.js",
   });
-  expect(plan.publicOutputs).toEqual(["worker_name"]);
+  expect(plan.publicOutputs).toEqual(["worker_name", "url"]);
   expect(plan.moduleFiles).toBe(
     firstPartyModuleFilesByTemplateId["cloudflare-worker-service"],
   );
+});
+
+test("planEdgeWorker maps release artifact URL and digest to module inputs", () => {
+  const target: TargetPoolEntry = {
+    name: "cf-main",
+    type: "cloudflare",
+    ref: "cf-account-123",
+    priority: 10,
+  };
+  const plan = planEdgeWorker(
+    "cloudflare_workers",
+    {
+      name: "api",
+      source: {
+        artifactUrl: "https://example.com/releases/api-worker.js",
+        artifactSha256:
+          "1111111111111111111111111111111111111111111111111111111111111111",
+      },
+    },
+    target,
+  );
+
+  expect(plan.inputs).toEqual({
+    appName: "api",
+    accountId: "cf-account-123",
+    artifactUrl: "https://example.com/releases/api-worker.js",
+    artifactSha256:
+      "1111111111111111111111111111111111111111111111111111111111111111",
+  });
 });
 
 test("parseObjectBucketSpec accepts S3-compatible object storage interfaces", () => {

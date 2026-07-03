@@ -133,7 +133,15 @@ export interface EdgeWorkerSource {
    * OpenTofu-runner-local path for modules that upload a prebuilt artifact
    * through `file(...)`. This keeps Takosumi out of the build/fetch path.
    */
-  readonly artifactPath: string;
+  readonly artifactPath?: string;
+  /**
+   * HTTPS URL for a CI/release-produced Worker artifact. The generated
+   * OpenTofu module fetches this URL through the mirrored `hashicorp/http`
+   * provider and verifies `artifactSha256` before uploading it.
+   */
+  readonly artifactUrl?: string;
+  /** Expected artifact digest as a hex SHA-256 string, optionally prefixed with `sha256:`. */
+  readonly artifactSha256?: string;
 }
 
 export interface EdgeWorkerSpec {

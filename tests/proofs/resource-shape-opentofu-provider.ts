@@ -125,6 +125,8 @@ interface LiveProofOptions {
   readonly targetType: string;
   readonly targetRef: string;
   readonly credentialRef: string;
+  readonly edgeWorkerArtifactUrl?: string;
+  readonly edgeWorkerArtifactSha256?: string;
   readonly outputPath?: string;
   readonly now?: () => string;
 }
@@ -281,7 +283,7 @@ export async function runResourceShapeOpenTofuProviderLiveProof(
     );
 
     const capabilities = await fetchLiveCapabilities(options);
-    const livePlan = liveMaterializableShapes(capabilities.resources);
+    const livePlan = liveMaterializableShapes(capabilities.resources, options);
     const prefix =
       options.now?.().replace(/\D/g, "").slice(0, 14) ||
       new Date().toISOString().replace(/\D/g, "").slice(0, 14);
@@ -301,6 +303,8 @@ export async function runResourceShapeOpenTofuProviderLiveProof(
       TF_VAR_target_type: options.targetType,
       TF_VAR_target_ref: options.targetRef,
       TF_VAR_credential_ref: options.credentialRef,
+      TF_VAR_edge_worker_artifact_url: options.edgeWorkerArtifactUrl,
+      TF_VAR_edge_worker_artifact_sha256: options.edgeWorkerArtifactSha256,
       TAKOSUMI_ENDPOINT: options.endpoint,
       TAKOSUMI_SPACE: options.space,
       TAKOSUMI_TOKEN: options.token,
@@ -798,7 +802,13 @@ output "shape_urls" {
 `;
 }
 
-function liveMaterializableShapes(resources: Record<string, boolean>): {
+function liveMaterializableShapes(
+  resources: Record<string, boolean>,
+  options: Pick<
+    LiveProofOptions,
+    "edgeWorkerArtifactUrl" | "edgeWorkerArtifactSha256"
+  >,
+): {
   readonly shapes: readonly ShapeKind[];
   readonly skipped: readonly {
     readonly kind: ShapeKind;
@@ -813,11 +823,15 @@ function liveMaterializableShapes(resources: Record<string, boolean>): {
       continue;
     }
     if (kind === "EdgeWorker") {
-      skipped.push({
-        kind,
-        reason:
-          "live provider proof does not yet include runner-local prebuilt artifact materialization for artifact_path",
-      });
+      if (options.edgeWorkerArtifactUrl && options.edgeWorkerArtifactSha256) {
+        shapes.push(kind);
+      } else {
+        skipped.push({
+          kind,
+          reason:
+            "live provider proof requires --edge-worker-artifact-url and --edge-worker-artifact-sha256 so the server-side OpenTofu runner can fetch a declared release artifact",
+        });
+      }
       continue;
     }
     if (kind === "ContainerService") {
@@ -846,6 +860,17 @@ function liveModuleHcl({
   const resources: string[] = [];
   const idOutputs: string[] = [];
   const shapeOutputs: string[] = [];
+  if (shapes.includes("EdgeWorker")) {
+    resources.push(`resource "takosumi_edge_worker" "api" {
+  name            = "${resourcePrefix}-edge"
+  artifact_url    = var.edge_worker_artifact_url
+  artifact_sha256 = var.edge_worker_artifact_sha256
+  target_pool     = takosumi_target_pool.live.name
+}
+`);
+    idOutputs.push(`edge_worker = takosumi_edge_worker.api.id`);
+    shapeOutputs.push(`edge_worker = takosumi_edge_worker.api.outputs`);
+  }
   if (shapes.includes("ObjectBucket")) {
     resources.push(`resource "takosumi_object_bucket" "assets" {
   name        = "${resourcePrefix}-assets"
@@ -919,6 +944,16 @@ variable "target_ref" {
 
 variable "credential_ref" {
   type = string
+}
+
+variable "edge_worker_artifact_url" {
+  type    = string
+  default = ""
+}
+
+variable "edge_worker_artifact_sha256" {
+  type    = string
+  default = ""
 }
 
 provider "takosumi" {
@@ -1112,6 +1147,12 @@ if (import.meta.main) {
           "--credential-ref",
           "TAKOSUMI_LIVE_CREDENTIAL_REF",
         ),
+        edgeWorkerArtifactUrl:
+          argValue("--edge-worker-artifact-url") ??
+          process.env.TAKOSUMI_LIVE_EDGE_WORKER_ARTIFACT_URL,
+        edgeWorkerArtifactSha256:
+          argValue("--edge-worker-artifact-sha256") ??
+          process.env.TAKOSUMI_LIVE_EDGE_WORKER_ARTIFACT_SHA256,
         ...(outputPath ? { outputPath } : {}),
       })
     : await runResourceShapeOpenTofuProviderProof({

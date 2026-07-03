@@ -203,7 +203,8 @@ resource "takosumi_target_pool" "default" {
 
 resource "takosumi_edge_worker" "api" {
   name               = "api"
-  artifact_path      = "/work/dist/worker.js"
+  artifact_url       = "https://example.com/releases/api-worker.js"
+  artifact_sha256    = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
   target_pool        = "default"
   compatibility_date = "2026-06-29"
   profiles           = ["workers_bindings"]
@@ -259,14 +260,19 @@ Common computed fields:
 
 Shape-specific fields:
 
-| Resource                     | Required fields         | Optional fields                                                        |
-| ---------------------------- | ----------------------- | ---------------------------------------------------------------------- |
-| `takosumi_edge_worker`       | `name`, `artifact_path` | `target_pool`, `compatibility_date`, `compatibility_flags`, `profiles` |
-| `takosumi_object_bucket`     | `name`                  | `target_pool`, `interfaces`                                            |
-| `takosumi_kv_store`          | `name`                  | `target_pool`, `consistency`                                           |
-| `takosumi_queue`             | `name`                  | `target_pool`, `max_retries`, `max_batch_size`                         |
-| `takosumi_sql_database`      | `name`                  | `target_pool`, `engine`, `migrations_path`                             |
-| `takosumi_container_service` | `name`, `image`         | `target_pool`, `ports`, `public_http`, `environment`                   |
+| Resource                     | Required fields                                  | Optional fields                                                                           |
+| ---------------------------- | ------------------------------------------------ | ----------------------------------------------------------------------------------------- |
+| `takosumi_edge_worker`       | `name`, one of `artifact_path` or `artifact_url` | `artifact_sha256`, `target_pool`, `compatibility_date`, `compatibility_flags`, `profiles` |
+| `takosumi_object_bucket`     | `name`                                           | `target_pool`, `interfaces`                                                               |
+| `takosumi_kv_store`          | `name`                                           | `target_pool`, `consistency`                                                              |
+| `takosumi_queue`             | `name`                                           | `target_pool`, `max_retries`, `max_batch_size`                                            |
+| `takosumi_sql_database`      | `name`                                           | `target_pool`, `engine`, `migrations_path`                                                |
+| `takosumi_container_service` | `name`, `image`                                  | `target_pool`, `ports`, `public_http`, `environment`                                      |
+
+`artifact_path` is a runner-local path for Takosumi-run OpenTofu stacks.
+`artifact_url` is for CI/release artifacts consumed by the generated OpenTofu
+module through `hashicorp/http`; it requires `artifact_sha256` so the runner
+fails closed if the bytes change.
 
 Operator/admin fields:
 

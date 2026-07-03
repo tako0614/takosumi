@@ -403,7 +403,8 @@ container is a different service form. A VM is a different service form.
 ```hcl
 resource "takosumi_edge_worker" "api" {
   name               = "api"
-  artifact_path      = "/work/dist/worker.js"
+  artifact_url       = "https://example.com/releases/api-worker.js"
+  artifact_sha256    = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
   compatibility_date = "2026-06-29"
 
   profiles = [
@@ -418,6 +419,9 @@ Important rules:
 ```text
 Takosumi does not build the JavaScript bundle by default.
 The Git/OpenTofu module decides where the artifact comes from.
+When the provider is executed outside the Takosumi runner, use artifact_url +
+artifact_sha256 so the generated OpenTofu module fetches and verifies the
+declared CI/release artifact.
 Routes are separate resources.
 Bindings/connections are separate contracts.
 Secrets are Credential/Secret material, not spec fields.

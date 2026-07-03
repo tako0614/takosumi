@@ -244,7 +244,7 @@ describe("/new flow guidance", () => {
     expect(firstPartyListingsSource).toContain(
       'git: "https://github.com/tako0614/yurucommu.git"',
     );
-    expect(firstPartyListingsSource).toContain('ref: "master"');
+    expect(firstPartyListingsSource).toContain('ref: "main"');
     expect(firstPartyListingsSource).toContain("resolvedCommit:");
     expect(firstPartyListingsSource).toContain('id: "takos"');
     expect(firstPartyListingsSource).toContain(

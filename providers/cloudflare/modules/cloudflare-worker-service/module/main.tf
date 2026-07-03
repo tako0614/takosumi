@@ -3,6 +3,9 @@ terraform {
     cloudflare = {
       source = "cloudflare/cloudflare"
     }
+    http = {
+      source = "hashicorp/http"
+    }
   }
 }
 
@@ -18,8 +21,20 @@ variable "accountId" {
 
 variable "artifactPath" {
   type        = string
-  description = "Legacy first-party path to a bundled Worker module JS file."
-  default     = "/work/artifact"
+  description = "OpenTofu-runner-local path to a bundled Worker module JS file. Leave empty when artifactUrl is used."
+  default     = ""
+}
+
+variable "artifactUrl" {
+  type        = string
+  description = "HTTPS URL to a CI/release-produced Worker module JS artifact. Leave empty when artifactPath is used."
+  default     = ""
+}
+
+variable "artifactSha256" {
+  type        = string
+  description = "Expected artifact SHA-256 hex digest, optionally prefixed with sha256:. Required when artifactUrl is set."
+  default     = ""
 }
 
 variable "compatibilityDate" {
@@ -34,6 +49,24 @@ variable "publicUrl" {
   default     = ""
 }
 
+locals {
+  artifact_from_url        = trimspace(var.artifactUrl) != ""
+  expected_artifact_sha256 = replace(trimspace(var.artifactSha256), "sha256:", "")
+}
+
+data "http" "artifact" {
+  count = local.artifact_from_url ? 1 : 0
+  url   = var.artifactUrl
+
+  request_headers = {
+    Accept = "application/javascript, text/javascript, */*"
+  }
+}
+
+locals {
+  artifact_content = local.artifact_from_url ? data.http.artifact[0].response_body : (trimspace(var.artifactPath) != "" ? file(var.artifactPath) : "")
+}
+
 # cloudflare_workers_script (provider v5): module-syntax upload. `content` carries
 # the bundled JS verbatim; `main_module` names the uploaded module that exports
 # the fetch handler. Provider credentials are minted by Takosumi at dispatch via
@@ -41,9 +74,26 @@ variable "publicUrl" {
 resource "cloudflare_workers_script" "this" {
   account_id         = var.accountId
   script_name        = var.appName
-  content            = file(var.artifactPath)
+  content            = local.artifact_content
   main_module        = "index.js"
   compatibility_date = var.compatibilityDate
+
+  lifecycle {
+    precondition {
+      condition     = local.artifact_from_url || trimspace(var.artifactPath) != ""
+      error_message = "Either artifactPath or artifactUrl must be set."
+    }
+
+    precondition {
+      condition     = !local.artifact_from_url || local.expected_artifact_sha256 != ""
+      error_message = "artifactSha256 is required when artifactUrl is set."
+    }
+
+    precondition {
+      condition     = !local.artifact_from_url || sha256(local.artifact_content) == local.expected_artifact_sha256
+      error_message = "artifactSha256 does not match artifact content."
+    }
+  }
 }
 
 output "worker_name" {
