@@ -1,6 +1,6 @@
 # Takosumi Core Spec
 
-Last updated: 2026-06-29
+Last updated: 2026-07-03
 
 This document describes the OSS core specification. Product direction is fixed
 by [Takosumi Final Plan](./final-plan.md).
@@ -126,8 +126,13 @@ Git URL + ref/tag/commit + module path
 
 The runner may persist an immutable `SourceSnapshot` archive for reproducible
 plan/apply, but that snapshot is a copy of the Git module bytes selected by the
-source ref. `Source.autoSync` may prepare a newer immutable source snapshot; it
-does not apply changes by itself.
+source ref. `Source.autoSync` may prepare a newer immutable source snapshot.
+When the resolved Git commit differs from the SourceSnapshot currently applied
+by an active Capsule that tracks the Source, Takosumi marks that Capsule
+`stale`. The existing Workspace update / RunGroup flow can then create update
+plans in dependency order. Takosumi still does not apply Git changes silently;
+apply remains a reviewed Run unless an explicit operator policy adds a separate
+auto-apply gate.
 
 Takosumi does not decide app artifact semantics. If a module needs an image
 reference, release tag, object key, URL, or digest, the module declares a normal

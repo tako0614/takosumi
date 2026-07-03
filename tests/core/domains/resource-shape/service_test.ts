@@ -43,6 +43,13 @@ class PluginSpyAdapter extends StubResourceShapeAdapter {
   }
 }
 
+class FailingApplyAdapter extends PluginSpyAdapter {
+  override async apply(input: AdapterApplyInput): Promise<AdapterApplyResult> {
+    this.applyInputs.push(input);
+    throw new Error("simulated apply failure");
+  }
+}
+
 const POOL: TargetPoolSpec = {
   targets: [
     {
@@ -390,6 +397,35 @@ test("delete resolves native target from the non-default TargetPool that created
   expect(adapter.deleteInputs[0]?.nativeResources).toEqual([
     { type: "takosumi.object_bucket", id: "assets" },
   ]);
+});
+
+test("new resource apply failure rolls back the provisional lock so delete only clears the ledger", async () => {
+  const stores = createInMemoryResourceShapeStores();
+  const adapter = new FailingApplyAdapter();
+  const service = new ResourceShapeService({
+    stores,
+    adapter,
+    now: () => NOW,
+  });
+  await seed(service);
+
+  const created = await service.apply(APPLY);
+  expect(created.ok).toBe(false);
+
+  const lock = await stores.locks.get("tkrn:space_1:ObjectBucket:assets");
+  expect(lock).toBeUndefined();
+
+  const deleted = await service.delete(
+    "space_1",
+    "ObjectBucket",
+    "assets",
+    ACTOR,
+  );
+  expect(deleted.ok).toBe(true);
+  expect(adapter.deleteInputs).toHaveLength(0);
+
+  const remaining = await service.get("space_1", "ObjectBucket", "assets");
+  expect(remaining.ok).toBe(false);
 });
 
 test("get returns the applied resource with resolution status", async () => {

@@ -84,6 +84,51 @@ export interface ResourceShapeOpenTofuProviderProof {
   };
 }
 
+export interface ResourceShapeOpenTofuProviderLiveProof {
+  readonly kind: typeof PROOF_KIND;
+  readonly mode: "live";
+  readonly status: "passed";
+  readonly generatedAt: string;
+  readonly endpoint: string;
+  readonly space: string;
+  readonly target: {
+    readonly type: string;
+    readonly refDigest: string;
+    readonly credentialRefDigest: string;
+  };
+  readonly prefix: string;
+  readonly tofuVersion: string;
+  readonly providerBinaryDigest: string;
+  readonly capabilities: {
+    readonly resources: Record<string, boolean>;
+  };
+  readonly skipped: readonly {
+    readonly kind: ShapeKind;
+    readonly reason: string;
+  }[];
+  readonly evidence: {
+    readonly plannedResourceCount: number;
+    readonly stateResourceCount: number;
+    readonly appliedResourceKinds: readonly ShapeKind[];
+    readonly outputKeys: readonly string[];
+    readonly applyOutputDigest: string;
+    readonly destroyCompleted: boolean;
+    readonly remainingMatchingResourceCount: number;
+    readonly remainingMatchingTargetPoolCount: number;
+  };
+}
+
+interface LiveProofOptions {
+  readonly endpoint: string;
+  readonly space: string;
+  readonly token: string;
+  readonly targetType: string;
+  readonly targetRef: string;
+  readonly credentialRef: string;
+  readonly outputPath?: string;
+  readonly now?: () => string;
+}
+
 export async function runResourceShapeOpenTofuProviderProof(
   options: {
     readonly outputPath?: string;
@@ -207,6 +252,189 @@ export async function runResourceShapeOpenTofuProviderProof(
     return proof;
   } finally {
     server.stop(true);
+    await rm(temp, { recursive: true, force: true });
+  }
+}
+
+export async function runResourceShapeOpenTofuProviderLiveProof(
+  options: LiveProofOptions,
+): Promise<ResourceShapeOpenTofuProviderLiveProof> {
+  const temp = await mkdtemp(join(tmpdir(), "takosumi-provider-live-"));
+  try {
+    const providerDir = join(temp, "provider");
+    const moduleDir = join(temp, "module");
+    await mkdir(providerDir, { recursive: true });
+    await mkdir(moduleDir, { recursive: true });
+
+    const providerBinary = await buildProviderBinary(providerDir);
+    const providerBinaryDigest = digestBytes(await readFile(providerBinary));
+    const cliConfig = join(temp, "tofurc");
+    await writeFile(
+      cliConfig,
+      `provider_installation {
+  dev_overrides {
+    "registry.opentofu.org/${PROVIDER_SOURCE}" = "${escapeHclString(providerDir)}"
+  }
+  direct {}
+}
+`,
+    );
+
+    const capabilities = await fetchLiveCapabilities(options);
+    const livePlan = liveMaterializableShapes(capabilities.resources);
+    const prefix =
+      options.now?.().replace(/\D/g, "").slice(0, 14) ||
+      new Date().toISOString().replace(/\D/g, "").slice(0, 14);
+    const resourcePrefix = `live-${prefix}`;
+    await writeFile(
+      join(moduleDir, "main.tf"),
+      liveModuleHcl({ ...options, resourcePrefix, shapes: livePlan.shapes }),
+    );
+
+    const env = {
+      ...process.env,
+      TF_CLI_CONFIG_FILE: cliConfig,
+      TF_IN_AUTOMATION: "1",
+      TF_VAR_endpoint: options.endpoint,
+      TF_VAR_space: options.space,
+      TF_VAR_token: options.token,
+      TF_VAR_target_type: options.targetType,
+      TF_VAR_target_ref: options.targetRef,
+      TF_VAR_credential_ref: options.credentialRef,
+      TAKOSUMI_ENDPOINT: options.endpoint,
+      TAKOSUMI_SPACE: options.space,
+      TAKOSUMI_TOKEN: options.token,
+    };
+
+    let destroyCompleted = false;
+    let applied = false;
+    let outputsJson = "{}";
+    let stateList = "";
+    let plannedResourceCount = 0;
+
+    try {
+      await runCommand(
+        [
+          "tofu",
+          "plan",
+          "-input=false",
+          "-no-color",
+          "-parallelism=1",
+          "-out=tfplan",
+        ],
+        moduleDir,
+        env,
+      );
+      const planJson = await runCommand(
+        ["tofu", "show", "-json", "tfplan"],
+        moduleDir,
+        env,
+      );
+      plannedResourceCount = countManagedResourceChanges(planJson);
+      await runCommand(
+        [
+          "tofu",
+          "apply",
+          "-input=false",
+          "-no-color",
+          "-parallelism=1",
+          "tfplan",
+        ],
+        moduleDir,
+        env,
+      );
+      applied = true;
+      outputsJson = await runCommand(
+        ["tofu", "output", "-json"],
+        moduleDir,
+        env,
+      );
+      stateList = await runCommand(["tofu", "state", "list"], moduleDir, env);
+    } finally {
+      if (applied) {
+        await runCommand(
+          [
+            "tofu",
+            "destroy",
+            "-auto-approve",
+            "-input=false",
+            "-no-color",
+            "-parallelism=1",
+          ],
+          moduleDir,
+          env,
+        );
+        destroyCompleted = true;
+      }
+    }
+
+    const remaining = await fetchLiveMatches(options, resourcePrefix);
+    const outputKeys = Object.keys(
+      JSON.parse(outputsJson) as Record<string, unknown>,
+    ).sort();
+    const proof: ResourceShapeOpenTofuProviderLiveProof = {
+      kind: PROOF_KIND,
+      mode: "live",
+      status: "passed",
+      generatedAt: options.now?.() ?? new Date().toISOString(),
+      endpoint: options.endpoint,
+      space: options.space,
+      target: {
+        type: options.targetType,
+        refDigest: digestBytes(Buffer.from(options.targetRef)),
+        credentialRefDigest: digestBytes(Buffer.from(options.credentialRef)),
+      },
+      prefix: resourcePrefix,
+      tofuVersion: (
+        await runCommand(["tofu", "version", "-json"], moduleDir, env)
+      ).trim(),
+      providerBinaryDigest,
+      capabilities,
+      skipped: livePlan.skipped,
+      evidence: {
+        plannedResourceCount,
+        stateResourceCount: stateList
+          .split("\n")
+          .map((line) => line.trim())
+          .filter(Boolean).length,
+        appliedResourceKinds: livePlan.shapes,
+        outputKeys,
+        applyOutputDigest: digestBytes(Buffer.from(outputsJson)),
+        destroyCompleted,
+        remainingMatchingResourceCount: remaining.resources,
+        remainingMatchingTargetPoolCount: remaining.targetPools,
+      },
+    };
+
+    if (proof.evidence.plannedResourceCount < livePlan.shapes.length + 1) {
+      throw new Error(
+        `expected at least ${livePlan.shapes.length + 1} planned resources, got ${proof.evidence.plannedResourceCount}`,
+      );
+    }
+    if (proof.evidence.stateResourceCount < livePlan.shapes.length + 1) {
+      throw new Error(
+        `expected at least ${livePlan.shapes.length + 1} state resources, got ${proof.evidence.stateResourceCount}`,
+      );
+    }
+    if (!proof.evidence.destroyCompleted) {
+      throw new Error("live proof destroy did not complete");
+    }
+    if (
+      proof.evidence.remainingMatchingResourceCount > 0 ||
+      proof.evidence.remainingMatchingTargetPoolCount > 0
+    ) {
+      throw new Error(
+        `live proof cleanup left ${proof.evidence.remainingMatchingResourceCount} resources and ${proof.evidence.remainingMatchingTargetPoolCount} target pools`,
+      );
+    }
+    if (options.outputPath) {
+      await writeFile(
+        resolve(options.outputPath),
+        `${JSON.stringify(proof, null, 2)}\n`,
+      );
+    }
+    return proof;
+  } finally {
     await rm(temp, { recursive: true, force: true });
   }
 }
@@ -570,6 +798,220 @@ output "shape_urls" {
 `;
 }
 
+function liveMaterializableShapes(resources: Record<string, boolean>): {
+  readonly shapes: readonly ShapeKind[];
+  readonly skipped: readonly {
+    readonly kind: ShapeKind;
+    readonly reason: string;
+  }[];
+} {
+  const shapes: ShapeKind[] = [];
+  const skipped: { kind: ShapeKind; reason: string }[] = [];
+  for (const kind of SHAPES) {
+    if (!resources[kind]) {
+      skipped.push({ kind, reason: "endpoint capability is disabled" });
+      continue;
+    }
+    if (kind === "EdgeWorker") {
+      skipped.push({
+        kind,
+        reason:
+          "live provider proof does not yet include runner-local prebuilt artifact materialization for artifact_path",
+      });
+      continue;
+    }
+    if (kind === "ContainerService") {
+      skipped.push({
+        kind,
+        reason:
+          "live provider proof requires an enabled concrete container target; this production target currently advertises no ContainerService capability",
+      });
+      continue;
+    }
+    shapes.push(kind);
+  }
+  if (shapes.length === 0) {
+    throw new Error("no live-materializable Resource Shape capabilities found");
+  }
+  return { shapes, skipped };
+}
+
+function liveModuleHcl({
+  resourcePrefix,
+  shapes,
+}: LiveProofOptions & {
+  readonly resourcePrefix: string;
+  readonly shapes: readonly ShapeKind[];
+}): string {
+  const resources: string[] = [];
+  const idOutputs: string[] = [];
+  const shapeOutputs: string[] = [];
+  if (shapes.includes("ObjectBucket")) {
+    resources.push(`resource "takosumi_object_bucket" "assets" {
+  name        = "${resourcePrefix}-assets"
+  interfaces  = ["s3_api", "signed_url"]
+  target_pool = takosumi_target_pool.live.name
+}
+`);
+    idOutputs.push(`object_bucket = takosumi_object_bucket.assets.id`);
+    shapeOutputs.push(`object_bucket = takosumi_object_bucket.assets.outputs`);
+  }
+  if (shapes.includes("KVStore")) {
+    resources.push(`resource "takosumi_kv_store" "cache" {
+  name        = "${resourcePrefix}-cache"
+  consistency = "eventual"
+  target_pool = takosumi_target_pool.live.name
+}
+`);
+    idOutputs.push(`kv_store = takosumi_kv_store.cache.id`);
+    shapeOutputs.push(`kv_store = takosumi_kv_store.cache.outputs`);
+  }
+  if (shapes.includes("Queue")) {
+    resources.push(`resource "takosumi_queue" "delivery" {
+  name           = "${resourcePrefix}-queue"
+  max_retries    = 3
+  max_batch_size = 10
+  target_pool    = takosumi_target_pool.live.name
+}
+`);
+    idOutputs.push(`queue = takosumi_queue.delivery.id`);
+    shapeOutputs.push(`queue = takosumi_queue.delivery.outputs`);
+  }
+  if (shapes.includes("SQLDatabase")) {
+    resources.push(`resource "takosumi_sql_database" "main" {
+  name        = "${resourcePrefix}-db"
+  engine      = "sqlite"
+  target_pool = takosumi_target_pool.live.name
+}
+`);
+    idOutputs.push(`sql_database = takosumi_sql_database.main.id`);
+    shapeOutputs.push(`sql_database = takosumi_sql_database.main.outputs`);
+  }
+  return `terraform {
+  required_providers {
+    takosumi = {
+      source  = "${PROVIDER_SOURCE}"
+      version = "${PROVIDER_VERSION}"
+    }
+  }
+}
+
+variable "endpoint" {
+  type = string
+}
+
+variable "space" {
+  type = string
+}
+
+variable "token" {
+  type      = string
+  sensitive = true
+}
+
+variable "target_type" {
+  type = string
+}
+
+variable "target_ref" {
+  type = string
+}
+
+variable "credential_ref" {
+  type = string
+}
+
+provider "takosumi" {
+  endpoint = var.endpoint
+  space    = var.space
+  token    = var.token
+}
+
+resource "takosumi_target_pool" "live" {
+  name = "${resourcePrefix}"
+
+  target = [{
+    name           = "live-main"
+    type           = var.target_type
+    ref            = var.target_ref
+    credential_ref = var.credential_ref
+    priority       = 100
+  }]
+}
+
+${resources.join("\n")}
+output "shape_ids" {
+  value = {
+    ${idOutputs.join("\n    ")}
+    target_pool = takosumi_target_pool.live.id
+  }
+}
+
+output "shape_outputs" {
+  value = {
+    ${shapeOutputs.join("\n    ")}
+  }
+}
+`;
+}
+
+async function fetchLiveCapabilities(options: {
+  readonly endpoint: string;
+  readonly token: string;
+}): Promise<{ readonly resources: Record<string, boolean> }> {
+  const response = await fetch(`${options.endpoint}/v1/capabilities`, {
+    headers: { Authorization: `Bearer ${options.token}` },
+  });
+  if (!response.ok) {
+    throw new Error(
+      `/v1/capabilities failed with ${response.status}: ${await response.text()}`,
+    );
+  }
+  const body = (await response.json()) as {
+    readonly resources?: Record<string, boolean>;
+  };
+  return { resources: body.resources ?? {} };
+}
+
+async function fetchLiveMatches(
+  options: Pick<LiveProofOptions, "endpoint" | "space" | "token">,
+  prefix: string,
+): Promise<{ readonly resources: number; readonly targetPools: number }> {
+  const headers = { Authorization: `Bearer ${options.token}` };
+  const resourceResponse = await fetch(
+    `${options.endpoint}/v1/resources?space=${encodeURIComponent(options.space)}`,
+    { headers },
+  );
+  if (!resourceResponse.ok) {
+    throw new Error(
+      `/v1/resources failed with ${resourceResponse.status}: ${await resourceResponse.text()}`,
+    );
+  }
+  const targetPoolResponse = await fetch(
+    `${options.endpoint}/v1/target-pools?space=${encodeURIComponent(options.space)}`,
+    { headers },
+  );
+  if (!targetPoolResponse.ok) {
+    throw new Error(
+      `/v1/target-pools failed with ${targetPoolResponse.status}: ${await targetPoolResponse.text()}`,
+    );
+  }
+  const resourceBody = (await resourceResponse.json()) as {
+    readonly resources?: readonly ProofResource[];
+  };
+  const targetPoolBody = (await targetPoolResponse.json()) as {
+    readonly targetPools?: readonly ProofTargetPoolRecord[];
+  };
+  return {
+    resources: (resourceBody.resources ?? []).filter((record) =>
+      String(record.metadata?.name ?? record.id ?? "").startsWith(prefix),
+    ).length,
+    targetPools: (targetPoolBody.targetPools ?? []).filter((record) =>
+      String(record.name ?? record.id).startsWith(prefix),
+    ).length,
+  };
+}
+
 async function runCommand(
   command: readonly string[],
   cwd: string,
@@ -651,11 +1093,57 @@ function digestBytes(bytes: Uint8Array): string {
 }
 
 if (import.meta.main) {
-  const outputIndex = process.argv.indexOf("--output");
-  const outputPath =
-    outputIndex >= 0 ? process.argv[outputIndex + 1] : undefined;
-  const proof = await runResourceShapeOpenTofuProviderProof({
-    ...(outputPath ? { outputPath } : {}),
-  });
+  const outputPath = argValue("--output");
+  const live = process.argv.includes("--live");
+  const proof = live
+    ? await runResourceShapeOpenTofuProviderLiveProof({
+        endpoint:
+          argValue("--endpoint") ??
+          process.env.TAKOSUMI_ENDPOINT ??
+          "https://app.takosumi.com",
+        space: requiredArgOrEnv("--space", "TAKOSUMI_SPACE"),
+        token: await tokenFromArgs(),
+        targetType:
+          argValue("--target-type") ??
+          process.env.TAKOSUMI_LIVE_TARGET_TYPE ??
+          "cloudflare",
+        targetRef: requiredArgOrEnv("--target-ref", "TAKOSUMI_LIVE_TARGET_REF"),
+        credentialRef: requiredArgOrEnv(
+          "--credential-ref",
+          "TAKOSUMI_LIVE_CREDENTIAL_REF",
+        ),
+        ...(outputPath ? { outputPath } : {}),
+      })
+    : await runResourceShapeOpenTofuProviderProof({
+        ...(outputPath ? { outputPath } : {}),
+      });
   console.log(JSON.stringify(proof, null, 2));
+}
+
+function argValue(name: string): string | undefined {
+  const index = process.argv.indexOf(name);
+  if (index < 0) return undefined;
+  const value = process.argv[index + 1];
+  if (!value || value.startsWith("--")) {
+    throw new Error(`${name} requires a value`);
+  }
+  return value;
+}
+
+function requiredArgOrEnv(argName: string, envName: string): string {
+  const value = argValue(argName) ?? process.env[envName];
+  if (!value) {
+    throw new Error(`${argName} or ${envName} is required`);
+  }
+  return value;
+}
+
+async function tokenFromArgs(): Promise<string> {
+  const tokenFile = argValue("--token-file");
+  if (tokenFile) return (await readFile(resolve(tokenFile), "utf8")).trim();
+  const token = argValue("--token") ?? process.env.TAKOSUMI_TOKEN;
+  if (!token) {
+    throw new Error("--token-file, --token, or TAKOSUMI_TOKEN is required");
+  }
+  return token;
 }

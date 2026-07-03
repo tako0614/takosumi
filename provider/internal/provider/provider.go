@@ -31,6 +31,8 @@ const (
 	envEndpoint = "TAKOSUMI_ENDPOINT"
 	envSpace    = "TAKOSUMI_SPACE"
 	envToken    = "TAKOSUMI_TOKEN"
+
+	defaultResourceAPITimeout = 6 * time.Minute
 )
 
 // Ensure takosumiProvider satisfies the provider.Provider interface.
@@ -124,7 +126,7 @@ func (p *takosumiProvider) Configure(ctx context.Context, req provider.Configure
 	token := firstNonEmpty(cfg.Token.ValueString(), os.Getenv(envToken))
 	space := firstNonEmpty(cfg.Space.ValueString(), os.Getenv(envSpace))
 
-	httpClient := &http.Client{Timeout: 30 * time.Second}
+	httpClient := newResourceAPIHTTPClient()
 
 	c, err := configureClient(ctx, endpoint, token, httpClient)
 	if err != nil {
@@ -139,6 +141,10 @@ func (p *takosumiProvider) Configure(ctx context.Context, req provider.Configure
 	}
 	resp.ResourceData = data
 	resp.DataSourceData = data
+}
+
+func newResourceAPIHTTPClient() *http.Client {
+	return &http.Client{Timeout: defaultResourceAPITimeout}
 }
 
 func (p *takosumiProvider) Resources(_ context.Context) []func() resource.Resource {

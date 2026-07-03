@@ -79,6 +79,7 @@ speed knob は OpenTofu 実行基盤に限定する。
 | `TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR`      | `/tmp/takosumi-provider-cache`   | `tofu init` の direct provider install | provider binary 専用。credential / tfplan / state / outputs は入れない                                    |
 | `TAKOSUMI_SOURCE_ARCHIVE_ZSTD_LEVEL`      | runner default `3`, template `1` | SourceSnapshot archive 作成            | 低いほど速いが R2 object が大きくなる                                                                     |
 | `TAKOSUMI_COMPATIBILITY_CHECK_TIMEOUT_MS` | Cloud `90000`                    | deploy 直後の cold compatibility preflight | timeout を伸ばすだけで実行自体は速くしない。cold runner を誤って unsupported にしないための安定化 |
+| `TAKOSUMI_AUTO_PLAN_STALE_CAPSULES`       | `0`                              | scheduled update UX                    | `1` のとき、Git source sync 等で `stale` になった Capsule に queued/running/waiting approval の plan がなければ reviewable plan を自動作成する。apply は自動実行しない。 |
 
 Git source sync は、同じ Source の同一 ref/path だけでなく、同じ Space 内の
 public Git Source で URL/ref/path が一致する場合も既存 SourceSnapshot archive

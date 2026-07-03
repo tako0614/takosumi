@@ -64,6 +64,11 @@ status polling
 minimal OpenTofu state mapping
 ```
 
+Resource API apply/delete calls may wait for server-side OpenTofu plan/apply or
+destroy work to finish. The provider HTTP client therefore uses a multi-minute
+timeout; backend execution still belongs to the Takosumi endpoint, not to the
+provider binary.
+
 The provider does not:
 
 ```text

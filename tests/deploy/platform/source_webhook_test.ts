@@ -34,7 +34,9 @@ import {
   isPlatformMetricsDashboardPath,
   isPlatformMetricsPath,
   oidcMetricRoute,
+  autoPlanStaleCapsulesEnabled,
   pollAutoSyncSources,
+  planStaleCapsuleUpdates,
   repairStaleOpenTofuRuns,
   summarizePrometheusMetrics,
   verifyPlatformCloudExtensionPersonalAccessToken,
@@ -278,6 +280,113 @@ test("scheduled poll enqueues a deduped sync per autoSync source, capped", async
   };
   await pollAutoSyncSources(ops, 50);
   expect(syncCalls).toEqual(["src_a", "src_b"]);
+});
+
+test("stale Capsule auto-plan is opt-in", () => {
+  const base = { TAKOSUMI_ACCOUNTS_DB: {} } as never;
+  expect(autoPlanStaleCapsulesEnabled(base)).toBe(false);
+  expect(
+    autoPlanStaleCapsulesEnabled({
+      ...base,
+      TAKOSUMI_AUTO_PLAN_STALE_CAPSULES: "0",
+    } as never),
+  ).toBe(false);
+  expect(
+    autoPlanStaleCapsulesEnabled({
+      ...base,
+      TAKOSUMI_AUTO_PLAN_STALE_CAPSULES: "1",
+    } as never),
+  ).toBe(true);
+});
+
+test("stale Capsule auto-plan creates one pending update plan per stale Capsule", async () => {
+  const planned: string[] = [];
+  const result = await planStaleCapsuleUpdates(
+    {
+      spaces: {
+        listWorkspaces: () =>
+          Promise.resolve([
+            { id: "space_a" },
+            { id: "space_archived", archivedAt: "2026-07-01T00:00:00.000Z" },
+          ]),
+      },
+      installations: {
+        listCapsules: (workspaceId) =>
+          Promise.resolve(
+            workspaceId === "space_a"
+              ? [
+                  {
+                    id: "inst_needs_plan",
+                    workspaceId,
+                    spaceId: workspaceId,
+                    name: "needs-plan",
+                    slug: "needs-plan",
+                    installType: "opentofu_module",
+                    installConfigId: "cfg",
+                    environment: "production",
+                    currentStateGeneration: 1,
+                    status: "stale",
+                    createdAt: "2026-07-01T00:00:00.000Z",
+                    updatedAt: "2026-07-01T00:00:00.000Z",
+                  },
+                  {
+                    id: "inst_has_plan",
+                    workspaceId,
+                    spaceId: workspaceId,
+                    name: "has-plan",
+                    slug: "has-plan",
+                    installType: "opentofu_module",
+                    installConfigId: "cfg",
+                    environment: "production",
+                    currentStateGeneration: 1,
+                    status: "stale",
+                    createdAt: "2026-07-01T00:00:00.000Z",
+                    updatedAt: "2026-07-01T00:00:00.000Z",
+                  },
+                  {
+                    id: "inst_active",
+                    workspaceId,
+                    spaceId: workspaceId,
+                    name: "active",
+                    slug: "active",
+                    installType: "opentofu_module",
+                    installConfigId: "cfg",
+                    environment: "production",
+                    currentStateGeneration: 1,
+                    status: "active",
+                    createdAt: "2026-07-01T00:00:00.000Z",
+                    updatedAt: "2026-07-01T00:00:00.000Z",
+                  },
+                ]
+              : [],
+          ) as never,
+      },
+      controller: {
+        listRuns: () =>
+          Promise.resolve([
+            runRecord({
+              id: "plan_pending",
+              type: "plan",
+              status: "waiting_approval",
+              capsuleId: "inst_has_plan",
+              installationId: "inst_has_plan",
+            }),
+          ]),
+      },
+      createCapsulePlan: (capsuleId) => {
+        planned.push(capsuleId);
+        return Promise.resolve({});
+      },
+    },
+    { workspaceLimit: 10, runLookback: 50 },
+  );
+
+  expect(planned).toEqual(["inst_needs_plan"]);
+  expect(result).toEqual({
+    workspacesScanned: 1,
+    staleCapsulesScanned: 2,
+    plansCreated: 1,
+  });
 });
 
 test("scheduled run repair reschedules only stale dispatchable OpenTofu runs", async () => {

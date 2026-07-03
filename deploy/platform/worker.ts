@@ -71,6 +71,7 @@ import type {
   TakosumiAdapterCapabilities,
   TakosumiResourceCapabilities,
 } from "takosumi-contract/capabilities";
+import type { Capsule } from "takosumi-contract/capsules";
 import type { Run, RunStatus, RunType } from "takosumi-contract/runs";
 export {
   isPlatformCloudExtensionCatalogPath,
@@ -232,6 +233,11 @@ export default {
   async scheduled(_event: unknown, env: CloudflareWorkerEnv): Promise<void> {
     await runScheduledSourcePoll(env as unknown as DeployControlEnv);
     await runScheduledOpenTofuRunRepair(env as unknown as DeployControlEnv);
+    if (autoPlanStaleCapsulesEnabled(env)) {
+      await runScheduledStaleCapsuleAutoPlan(
+        env as unknown as DeployControlEnv,
+      );
+    }
     if (driftCheckEnabled(env)) {
       await runScheduledDriftSweep(env as unknown as DeployControlEnv);
     }
@@ -3099,6 +3105,24 @@ export interface OpenTofuRunRepairOperations {
 
 type RepairRunAction = "plan" | "apply" | "source_sync" | "restore";
 
+export interface StaleCapsuleAutoPlanOperations {
+  readonly spaces: {
+    listWorkspaces(): Promise<
+      readonly { readonly id: string; readonly archivedAt?: string }[]
+    >;
+  };
+  readonly installations: {
+    listCapsules(workspaceId: string): Promise<readonly Capsule[]>;
+  };
+  readonly controller: {
+    listRuns(
+      workspaceId: string,
+      options?: { readonly limit?: number },
+    ): Promise<readonly Run[]>;
+  };
+  createCapsulePlan(capsuleId: string): Promise<unknown>;
+}
+
 export interface OpenTofuRunRepairScheduler {
   schedule(dispatch: {
     readonly action: RepairRunAction;
@@ -3190,6 +3214,120 @@ export async function pollAutoSyncSources(
       // Best-effort: one bad source must not abort the whole poll.
     }
   }
+}
+
+const SCHEDULED_STALE_AUTO_PLAN_WORKSPACE_LIMIT = 25;
+const SCHEDULED_STALE_AUTO_PLAN_RUN_LOOKBACK = 100;
+
+/**
+ * Operator/Cloud opt-in: turn stale Capsules into reviewable update plans.
+ *
+ * Core source sync only marks Capsules `stale`; it never silently applies. This
+ * scheduled sweep is an operator policy layer that creates at most one pending
+ * plan per stale Capsule, then leaves normal Run approval/apply semantics in
+ * charge.
+ */
+export function autoPlanStaleCapsulesEnabled(
+  env: CloudflareWorkerEnv,
+): boolean {
+  const flag = env.TAKOSUMI_AUTO_PLAN_STALE_CAPSULES;
+  return typeof flag === "string" && flag === "1";
+}
+
+async function runScheduledStaleCapsuleAutoPlan(
+  env: DeployControlEnv,
+): Promise<void> {
+  const operations = await deployControlSeam(env).operations();
+  await planStaleCapsuleUpdates(operations, {
+    workspaceLimit: SCHEDULED_STALE_AUTO_PLAN_WORKSPACE_LIMIT,
+    runLookback: SCHEDULED_STALE_AUTO_PLAN_RUN_LOOKBACK,
+  });
+}
+
+export interface StaleCapsuleAutoPlanResult {
+  readonly workspacesScanned: number;
+  readonly staleCapsulesScanned: number;
+  readonly plansCreated: number;
+}
+
+export async function planStaleCapsuleUpdates(
+  operations: StaleCapsuleAutoPlanOperations,
+  options: {
+    readonly workspaceLimit?: number;
+    readonly runLookback?: number;
+  } = {},
+): Promise<StaleCapsuleAutoPlanResult> {
+  const workspaceLimit = positiveInteger(
+    options.workspaceLimit,
+    SCHEDULED_STALE_AUTO_PLAN_WORKSPACE_LIMIT,
+  );
+  const runLookback = positiveInteger(
+    options.runLookback,
+    SCHEDULED_STALE_AUTO_PLAN_RUN_LOOKBACK,
+  );
+  const workspaces = (await operations.spaces.listWorkspaces())
+    .filter((workspace) => !workspace.archivedAt)
+    .slice(0, workspaceLimit);
+  let staleCapsulesScanned = 0;
+  let plansCreated = 0;
+  for (const workspace of workspaces) {
+    let staleCapsules: readonly Capsule[];
+    try {
+      staleCapsules = (await operations.installations.listCapsules(workspace.id))
+        .filter((capsule) => capsule.status === "stale");
+    } catch {
+      continue;
+    }
+    if (staleCapsules.length === 0) continue;
+    staleCapsulesScanned += staleCapsules.length;
+    let pendingRuns: readonly Run[];
+    try {
+      pendingRuns = await operations.controller.listRuns(workspace.id, {
+        limit: runLookback,
+      });
+    } catch {
+      continue;
+    }
+    const pendingPlanCapsuleIds = new Set(
+      pendingRuns
+        .filter(isPendingCapsulePlan)
+        .map((run) => run.capsuleId ?? run.installationId)
+        .filter((id): id is string => typeof id === "string" && id.length > 0),
+    );
+    for (const capsule of staleCapsules) {
+      if (pendingPlanCapsuleIds.has(capsule.id)) continue;
+      try {
+        await operations.createCapsulePlan(capsule.id);
+        pendingPlanCapsuleIds.add(capsule.id);
+        plansCreated += 1;
+      } catch {
+        // Best-effort: one bad Capsule must not abort other update plans.
+      }
+    }
+  }
+  return {
+    workspacesScanned: workspaces.length,
+    staleCapsulesScanned,
+    plansCreated,
+  };
+}
+
+function isPendingCapsulePlan(run: Run): boolean {
+  return (
+    run.type === "plan" &&
+    (run.status === "queued" ||
+      run.status === "running" ||
+      run.status === "waiting_approval") &&
+    (typeof run.capsuleId === "string" ||
+      typeof run.installationId === "string")
+  );
+}
+
+function positiveInteger(value: number | undefined, fallback: number): number {
+  if (!Number.isFinite(value) || value === undefined || value <= 0) {
+    return fallback;
+  }
+  return Math.floor(value);
 }
 
 const SCHEDULED_RUN_REPAIR_WORKSPACE_LIMIT = 100;

@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 
 import {
   OpenTofuDeploymentController,
+  type Deployment,
   type OpenTofuApplyJob,
   type OpenTofuPlanJob,
   type OpenTofuSourceSyncJob,
@@ -11,7 +12,9 @@ import { InMemoryOpenTofuDeploymentStore } from "../../../../core/domains/deploy
 import { SourcesService } from "../../../../core/domains/sources/mod.ts";
 import { StaticSecretConnectionVault } from "../../../../core/adapters/vault/mod.ts";
 import { MultiCloudSecretBoundaryCrypto } from "../../../../core/adapters/secret-store/memory.ts";
-import type { SourceSyncRun } from "takosumi-contract/sources";
+import type { SourceSnapshot, SourceSyncRun } from "takosumi-contract/sources";
+
+const TEST_TIME = "2026-06-06T00:00:00.000Z";
 
 class StubRunner {
   readonly calls: OpenTofuSourceSyncJob[] = [];
@@ -54,12 +57,12 @@ function build(
     crypto: new MultiCloudSecretBoundaryCrypto({
       globalPassphrase: "test-passphrase-0123456789-abcdef-0123456789",
     }),
-    now: () => new Date("2026-06-06T00:00:00.000Z"),
+    now: () => new Date(TEST_TIME),
     newId: () => newId("conn"),
   });
   const sourcesService = new SourcesService({
     store,
-    now: () => new Date("2026-06-06T00:00:00.000Z"),
+    now: () => new Date(TEST_TIME),
     newId,
     newHookSecret: () => "whk_secret",
   });
@@ -75,6 +78,74 @@ function build(
       : {}),
   });
   return { store, vault, sourcesService, runner, controller };
+}
+
+function sourceSnapshot(
+  over: Partial<SourceSnapshot> = {},
+): SourceSnapshot {
+  return {
+    id: "snap_prev",
+    origin: "git",
+    workspaceId: "space_1",
+    spaceId: "space_1",
+    sourceId: "src_test00000001",
+    url: "https://github.com/acme/repo.git",
+    ref: "main",
+    resolvedCommit: "old123",
+    path: ".",
+    archiveObjectKey:
+      "spaces/space_1/sources/src_test00000001/snapshots/snap_prev/source.tar.zst",
+    archiveDigest: "sha256:" + "b".repeat(64),
+    archiveSizeBytes: 1024,
+    fetchedByRunId: "ssr_prev",
+    fetchedAt: TEST_TIME,
+    ...over,
+  };
+}
+
+function deployment(over: Partial<Deployment> = {}): Deployment {
+  return {
+    id: "dep_prev",
+    spaceId: "space_1",
+    installationId: "inst_active",
+    environment: "production",
+    applyRunId: "apply_prev",
+    sourceSnapshotId: "snap_prev",
+    stateGeneration: 1,
+    outputSnapshotId: "out_prev",
+    outputsPublic: {},
+    status: "active",
+    createdAt: TEST_TIME,
+    ...over,
+  };
+}
+
+async function seedActiveCapsuleOnSnapshot(input: {
+  readonly store: InMemoryOpenTofuDeploymentStore;
+  readonly sourceId: string;
+  readonly snapshot: SourceSnapshot;
+}): Promise<void> {
+  await input.store.putSourceSnapshot(input.snapshot);
+  await input.store.putDeployment(
+    deployment({ sourceSnapshotId: input.snapshot.id }),
+  );
+  await input.store.putInstallation({
+    id: "inst_active",
+    workspaceId: "space_1",
+    spaceId: "space_1",
+    name: "repo-app",
+    slug: "repo-app",
+    sourceId: input.sourceId,
+    installType: "opentofu_module",
+    installConfigId: "cfg_generic",
+    environment: "production",
+    currentStateGeneration: 1,
+    currentDeploymentId: "dep_prev",
+    currentOutputSnapshotId: "out_prev",
+    status: "active",
+    createdAt: TEST_TIME,
+    updatedAt: TEST_TIME,
+  });
 }
 
 test("source_sync consumer (public repo) records a snapshot and lastSeenCommit", async () => {
@@ -110,6 +181,70 @@ test("source_sync consumer (public repo) records a snapshot and lastSeenCommit",
   const stored = await store.getSource(source.id);
   expect(stored?.lastSeenCommit).toBe("abc123def456");
   expect(await store.listCredentialMintEventsForRun(run.id)).toEqual([]);
+});
+
+test("source_sync consumer marks active source Capsules stale when the resolved commit changes", async () => {
+  const { store, sourcesService, runner, controller } = build();
+  const { source } = await sourcesService.createSource({
+    spaceId: "space_1",
+    name: "repo",
+    url: "https://github.com/acme/repo.git",
+  });
+  await seedActiveCapsuleOnSnapshot({
+    store,
+    sourceId: source.id,
+    snapshot: sourceSnapshot({ sourceId: source.id }),
+  });
+  runner.result = {
+    resolvedCommit: "new123",
+    archiveDigest: "sha256:" + "c".repeat(64),
+    archiveSizeBytes: 2048,
+  };
+
+  const { run } = await controller.createSourceSync(source.id);
+  await controller.runQueuedSourceSync(run.id);
+
+  const capsule = await store.getInstallation("inst_active");
+  expect(capsule?.status).toBe("stale");
+  const activity = await store.listActivityEvents("space_1", { limit: 10 });
+  expect(activity).toContainEqual(
+    expect.objectContaining({
+      action: "installation.stale",
+      targetId: "inst_active",
+      metadata: expect.objectContaining({
+        reason: "source_ref_changed",
+        sourceId: source.id,
+        previousResolvedCommit: "old123",
+        resolvedCommit: "new123",
+      }),
+    }),
+  );
+});
+
+test("source_sync consumer does not mark Capsules stale when only the snapshot id changes for the same commit", async () => {
+  const { store, sourcesService, runner, controller } = build();
+  const { source } = await sourcesService.createSource({
+    spaceId: "space_1",
+    name: "repo",
+    url: "https://github.com/acme/repo.git",
+  });
+  await seedActiveCapsuleOnSnapshot({
+    store,
+    sourceId: source.id,
+    snapshot: sourceSnapshot({
+      sourceId: source.id,
+      resolvedCommit: runner.result.resolvedCommit,
+      archiveDigest: runner.result.archiveDigest,
+      archiveSizeBytes: runner.result.archiveSizeBytes,
+    }),
+  });
+
+  const { run } = await controller.createSourceSync(source.id);
+  await controller.runQueuedSourceSync(run.id);
+
+  const capsule = await store.getInstallation("inst_active");
+  expect(capsule?.status).toBe("active");
+  expect(await store.listActivityEvents("space_1", { limit: 10 })).toEqual([]);
 });
 
 test("source_sync consumer reuses an unchanged SourceSnapshot archive", async () => {
