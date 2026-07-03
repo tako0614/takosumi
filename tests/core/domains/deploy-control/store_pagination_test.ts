@@ -1,6 +1,6 @@
 /**
  * Keyset-pagination symmetry for the deferred §30 list reads that were bounded
- * after the stage-3 cohort: usage events (ascending), control backups
+ * after the stage-3 cohort: usage events (newest-first / descending), control backups
  * (newest-first / descending), and the OutputShare from+to union. Each asserts
  * the default cap (≤100), a complete gap-free / dup-free cursor traversal across
  * the keyset boundary, and an explicit `?limit=`. The in-memory twin and the
@@ -63,7 +63,7 @@ function outputShare(i: number, over: Partial<OutputShare> = {}): OutputShare {
 }
 
 for (const [name, make] of STORES) {
-  test(`${name}: usage events page caps at 100 and round-trips the cursor (asc)`, async () => {
+  test(`${name}: usage events page caps at 100 and round-trips newest-first (desc)`, async () => {
     const store = make();
     const total = 250;
     for (let i = 0; i < total; i += 1) await store.putUsageEvent(usageEvent(i));
@@ -94,7 +94,8 @@ for (const [name, make] of STORES) {
     expect(new Set(seen).size).toBe(total);
     const expected = Array.from(
       { length: total },
-      (_, i) => `usage_${"0".repeat(11)}${String(i).padStart(4, "0")}`,
+      (_, i) =>
+        `usage_${"0".repeat(11)}${String(total - 1 - i).padStart(4, "0")}`,
     );
     expect(seen).toEqual(expected);
 

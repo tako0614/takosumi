@@ -2847,14 +2847,14 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
       .select()
       .from(schema.usageEvents)
       .where(
-        d1KeysetWhere(
+        d1KeysetWhereDesc(
           eq(schema.usageEvents.spaceId, spaceId),
           schema.usageEvents.createdAt,
           schema.usageEvents.id,
           decodeCursor(params.cursor),
         ),
       )
-      .orderBy(asc(schema.usageEvents.createdAt), asc(schema.usageEvents.id))
+      .orderBy(desc(schema.usageEvents.createdAt), desc(schema.usageEvents.id))
       .limit(limit + 1);
     return pageFromProbe(rows.map(usageEventFromRow), limit);
   }

@@ -2399,7 +2399,11 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     spaceId: string,
     params: PageParams,
   ): Promise<Page<UsageEvent>> {
-    return pageSorted(await this.listUsageEvents(spaceId), params);
+    const newestFirst = [...(await this.listUsageEvents(spaceId))].sort(
+      (a, b) =>
+        b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id),
+    );
+    return pageSortedDesc(newestFirst, params);
   }
 
   putBackupRecord(record: BackupRecord): Promise<BackupRecord> {
