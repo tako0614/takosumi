@@ -44,6 +44,8 @@ const CLOUDFLARE_MIRROR_EVIDENCE = {
   mirrorPath:
     "/opt/opentofu/provider-mirror/registry.opentofu.org/cloudflare/cloudflare",
 } as const;
+const RUNNER_CONTAINER_CAPACITY_EXCEEDED =
+  "OpenTofu runner rejected destroy-plan run plan_live: 500 (Maximum number of running container instances exceeded. Try again later, or try configuring a higher value for max_instances)";
 
 /**
  * Seeds the Space-direct Installation model (spec §5) and returns an UPDATE
@@ -344,7 +346,7 @@ test("a retryable runner infrastructure reset requeues plan without dropping inp
   expect(planCalls).toEqual(2);
 });
 
-test("a retryable runner infrastructure reset requeues destroy plan without failing terminally", async () => {
+test("runner container capacity exhaustion requeues destroy plan without failing terminally", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   let planCalls = 0;
   const retryDispatches: Parameters<EnqueueRun>[0][] = [];
@@ -360,9 +362,7 @@ test("a retryable runner infrastructure reset requeues destroy plan without fail
       plan: () => {
         planCalls++;
         if (planCalls === 1) {
-          return Promise.reject(
-            new Error("Durable Object reset because its code was updated."),
-          );
+          return Promise.reject(new Error(RUNNER_CONTAINER_CAPACITY_EXCEEDED));
         }
         return Promise.resolve({
           planDigest: PLAN_DIGEST,

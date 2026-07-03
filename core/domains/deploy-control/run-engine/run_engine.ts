@@ -206,8 +206,10 @@ function releaseCommandRunId(applyRunId: string): string {
 }
 
 function isRetryableRunnerInfrastructureError(error: unknown): boolean {
-  return /Durable Object reset because its code was updated/i.test(
-    errorMessage(error),
+  const message = errorMessage(error);
+  return (
+    /Durable Object reset because its code was updated/i.test(message) ||
+    /Maximum number of running container instances exceeded/i.test(message)
   );
 }
 
@@ -4015,7 +4017,7 @@ export class RunEngine {
         if (queued) {
           throw new OpenTofuControllerError(
             "failed_precondition",
-            `retryable_runner_infrastructure_error: plan run ${queued.id} requeued after runner reset`,
+            `retryable_runner_infrastructure_error: plan run ${queued.id} requeued after runner infrastructure failure`,
           );
         }
       }
@@ -4708,7 +4710,7 @@ export class RunEngine {
         if (queued) {
           const retryError = new OpenTofuControllerError(
             "failed_precondition",
-            `retryable_runner_infrastructure_error: apply run ${queued.id} requeued after runner reset`,
+            `retryable_runner_infrastructure_error: apply run ${queued.id} requeued after runner infrastructure failure`,
           );
           if (queued.updatedAt !== undefined) {
             await this.#recordRunnerMinuteUsage({
@@ -5770,7 +5772,7 @@ export class RunEngine {
         if (queued) {
           const retryError = new OpenTofuControllerError(
             "failed_precondition",
-            `retryable_runner_infrastructure_error: destroy apply run ${queued.id} requeued after runner reset`,
+            `retryable_runner_infrastructure_error: destroy apply run ${queued.id} requeued after runner infrastructure failure`,
           );
           if (queued.updatedAt !== undefined) {
             await this.#recordRunnerMinuteUsage({
