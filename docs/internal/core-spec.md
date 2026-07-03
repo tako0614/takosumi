@@ -526,6 +526,12 @@ actor and verified Workspace. Cloud-only payment enforcement may precharge those
 billable writes before forwarding; OSS core remains limited to disabled/showback
 usage recording unless an operator injects an enforcement port.
 
+Usage amounts are USD-denominated. New code writes `usdMicros`; legacy
+`credits` are derived only for older storage and clients. Runner duration is
+recorded as `runner_minute` with a fine-grained USD micros amount computed from
+actual elapsed minutes and the core runner-minute showback price, so a short
+OpenTofu run is not rounded to a whole-dollar compatibility credit.
+
 ## Security
 
 OSS and Cloud share these invariants:

@@ -12,6 +12,15 @@ import type { PlanResourceChange } from "./internal-deploy-control-api.ts";
 export const USD_MICROS_PER_DOLLAR = 1_000_000;
 export const USD_MICROS_PER_CENT = 10_000;
 
+/**
+ * Default showback price for OpenTofu runner execution.
+ *
+ * Takosumi Cloud can override final commercial pricing through its billing
+ * enforcement/metering layer, but the core ledger must still emit fine-grained
+ * USD usage instead of rounding short runs to a whole legacy credit.
+ */
+export const RUNNER_MINUTE_USD_MICROS = USD_MICROS_PER_CENT;
+
 export function usdMicrosFromUsd(value: number): number {
   if (!Number.isFinite(value)) {
     throw new TypeError("USD amount must be finite");
@@ -36,6 +45,14 @@ export function legacyCreditsToUsdMicros(value: number): number {
 
 export function usdMicrosToLegacyCredits(value: number): number {
   return usdFromMicros(value);
+}
+
+export function runnerMinuteUsdMicros(quantity: number): number {
+  if (!Number.isFinite(quantity) || quantity < 0) {
+    throw new TypeError("runner minute quantity must be non-negative");
+  }
+  if (quantity === 0) return 0;
+  return Math.max(1, Math.ceil(quantity * RUNNER_MINUTE_USD_MICROS));
 }
 
 export function positiveUsdMicros(value: unknown, label: string): number {

@@ -131,6 +131,10 @@ import {
 } from "../validation.ts";
 import type { RunQueryService } from "../run_query.ts";
 import type { BillingService } from "../billing_service.ts";
+import {
+  runnerMinuteUsdMicros,
+  usdMicrosToLegacyCredits,
+} from "takosumi-contract/billing";
 import type { DriftService } from "../drift_service.ts";
 import type { RunEnvResolver } from "../run_env_resolver.ts";
 import type { ResolvedDependencies } from "../dependency_resolution.ts";
@@ -4412,6 +4416,7 @@ export class RunEngine {
     if (input.startedAt === undefined) return;
     const durationMs = Math.max(0, input.finishedAt - input.startedAt);
     const quantity = durationMs / 60_000;
+    const usdMicros = runnerMinuteUsdMicros(quantity);
     await this.#store.putUsageEvent({
       id: this.#newId("usage"),
       workspaceId: input.spaceId,
@@ -4420,7 +4425,8 @@ export class RunEngine {
       runId: input.runId,
       kind: "runner_minute",
       quantity,
-      credits: Math.max(1, Math.ceil(quantity)),
+      usdMicros,
+      credits: usdMicrosToLegacyCredits(usdMicros),
       source: "runner",
       idempotencyKey: `${input.runId}:runner_minute`,
       createdAt: new Date(input.finishedAt).toISOString(),

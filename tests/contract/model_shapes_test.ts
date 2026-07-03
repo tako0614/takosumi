@@ -31,6 +31,10 @@ import type {
   InvoiceUsageReconciliation,
   UsageEvent,
 } from "../../contract/billing.ts";
+import {
+  RUNNER_MINUTE_USD_MICROS,
+  runnerMinuteUsdMicros,
+} from "../../contract/billing.ts";
 import type { CapsuleCompatibilityReport } from "../../contract/capsules.ts";
 import type {
   Dependency,
@@ -670,4 +674,15 @@ test("Billing and security ledger shapes", () => {
   expect(invoiceReconciliation.adjustmentCredits).toBe(1);
   expect(mint.capabilities).toEqual(["cloudflare"]);
   expect(finding.severity).toBe("warning");
+});
+
+test("runner minute billing uses fine grained USD micros", () => {
+  expect(RUNNER_MINUTE_USD_MICROS).toBe(10_000);
+  expect(runnerMinuteUsdMicros(0)).toBe(0);
+  expect(runnerMinuteUsdMicros(0.00001)).toBe(1);
+  expect(runnerMinuteUsdMicros(0.5)).toBe(5_000);
+  expect(runnerMinuteUsdMicros(1)).toBe(10_000);
+  expect(() => runnerMinuteUsdMicros(-1)).toThrow(
+    "runner minute quantity must be non-negative",
+  );
 });

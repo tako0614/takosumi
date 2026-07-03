@@ -57,6 +57,10 @@ import type {
   BillingReservationContext,
 } from "takosumi-contract/billing";
 import {
+  runnerMinuteUsdMicros,
+  usdMicrosToLegacyCredits,
+} from "takosumi-contract/billing";
+import {
   FIXTURE_ARCHIVE_DIGEST,
   seedInstallationModel,
   seedProviderConnections,
@@ -3150,18 +3154,6 @@ test("showback billing records reservation and usage without blocking apply", as
   expect(usageEvents).toEqual(
     expect.arrayContaining([
       expect.objectContaining({
-        runId: planRun.id,
-        kind: "runner_minute",
-        credits: 1,
-        source: "runner",
-      }),
-      expect.objectContaining({
-        runId: applyRun.id,
-        kind: "runner_minute",
-        credits: 1,
-        source: "runner",
-      }),
-      expect.objectContaining({
         runId: applyRun.id,
         kind: "operation",
         credits: 1,
@@ -3169,18 +3161,27 @@ test("showback billing records reservation and usage without blocking apply", as
       }),
     ]),
   );
-  expect(usageEvents.filter((event) => event.kind === "runner_minute")).toEqual(
-    [
-      expect.objectContaining({
-        runId: planRun.id,
-        quantity: expect.any(Number),
-      }),
-      expect.objectContaining({
-        runId: applyRun.id,
-        quantity: expect.any(Number),
-      }),
-    ],
+  const runnerUsageEvents = usageEvents.filter(
+    (event) => event.kind === "runner_minute",
   );
+  expect(runnerUsageEvents).toEqual([
+    expect.objectContaining({
+      runId: planRun.id,
+      quantity: expect.any(Number),
+      source: "runner",
+    }),
+    expect.objectContaining({
+      runId: applyRun.id,
+      quantity: expect.any(Number),
+      source: "runner",
+    }),
+  ]);
+  for (const event of runnerUsageEvents) {
+    const usdMicros = runnerMinuteUsdMicros(event.quantity);
+    expect(event.usdMicros).toBe(usdMicros);
+    expect(event.credits).toBe(usdMicrosToLegacyCredits(usdMicros));
+    expect(event.usdMicros).toBeLessThan(10_000);
+  }
 });
 
 async function showbackEstimatedCreditsFor(
