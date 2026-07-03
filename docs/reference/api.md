@@ -69,13 +69,15 @@ Resource Shape API の object は Kubernetes-style の形に寄せます。
   "metadata": {
     "name": "api",
     "space": "prod",
+    "managedBy": "opentofu",
     "labels": {
       "app": "example"
     }
   },
   "spec": {
-    "artifact": {
-      "path": "dist/worker.js"
+    "name": "api",
+    "source": {
+      "artifactPath": "dist/worker.js"
     },
     "profiles": ["workers_bindings"]
   },
