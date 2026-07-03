@@ -12,6 +12,12 @@ export default function Footer() {
           <a href="/docs/" rel="external">
             ドキュメント
           </a>
+          <a href="/#pricing">料金</a>
+          <a href="/docs/support">サポート</a>
+          <a href="/docs/legal/terms-of-service">利用規約</a>
+          <a href="/docs/legal/privacy-policy">プライバシー</a>
+          <a href="/docs/legal/refund-policy">返金</a>
+          <a href="/docs/legal/cancellation-policy">キャンセル</a>
           <a href="https://github.com/tako0614/takosumi" rel="noopener">
             GitHub
           </a>

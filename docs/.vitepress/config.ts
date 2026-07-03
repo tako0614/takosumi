@@ -40,8 +40,11 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
         },
         { text: "Operator", link: "/reference/operator" },
         { text: "CLI", link: "/reference/cli" },
+        { text: "Support", link: "/support" },
         { text: "Terms", link: "/legal/terms-of-service" },
         { text: "Privacy", link: "/legal/privacy-policy" },
+        { text: "Refund", link: "/legal/refund-policy" },
+        { text: "Cancellation", link: "/legal/cancellation-policy" },
         { text: "DPA", link: "/legal/data-processing-agreement" },
       ],
     },
@@ -87,10 +90,7 @@ export default defineConfig({
     "Git-based OpenTofu control plane, Resource Shape API, and adapter framework",
   lang: "ja",
   base: process.env.VITEPRESS_BASE ?? "/docs/",
-  srcExclude: [
-    "internal/**/*.md",
-    "operations/**/*.md",
-  ],
+  srcExclude: ["internal/**/*.md", "operations/**/*.md"],
   cleanUrls: true,
   lastUpdated: true,
   vite: {
