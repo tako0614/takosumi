@@ -546,6 +546,8 @@ func (r *serviceShapeResource) Delete(ctx context.Context, req resource.DeleteRe
 		return
 	}
 	deleteSpace := effectiveSpace(state.Space, r.data.defaultSpace)
+	r.data.resourceShapeMutate.Lock()
+	defer r.data.resourceShapeMutate.Unlock()
 	if err := r.data.client.DeleteResource(ctx, r.cfg.kind, state.Name.ValueString(), deleteSpace); err != nil {
 		resp.Diagnostics.AddError("Failed to delete "+r.cfg.kind, err.Error())
 	}
@@ -575,6 +577,8 @@ func (r *serviceShapeResource) ModifyPlan(ctx context.Context, req resource.Modi
 	if d.HasError() {
 		return
 	}
+	r.data.resourceShapeMutate.Lock()
+	defer r.data.resourceShapeMutate.Unlock()
 	_, _ = r.data.client.PreviewResource(ctx, body)
 }
 
@@ -679,6 +683,8 @@ func (r *serviceShapeResource) put(ctx context.Context, plan *serviceShapeModel,
 	if diags.HasError() {
 		return
 	}
+	r.data.resourceShapeMutate.Lock()
+	defer r.data.resourceShapeMutate.Unlock()
 	res, err := r.data.client.PutResource(ctx, r.cfg.kind, plan.Name.ValueString(), body)
 	if err != nil {
 		diags.AddError("Failed to apply "+r.cfg.kind, err.Error())

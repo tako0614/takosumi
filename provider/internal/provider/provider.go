@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
@@ -46,9 +47,10 @@ type takosumiProvider struct {
 
 // providerData is shared with every resource via Configure.
 type providerData struct {
-	client       *client.Client
-	defaultSpace string
-	capabilities client.ProductCapabilities
+	client              *client.Client
+	defaultSpace        string
+	capabilities        client.ProductCapabilities
+	resourceShapeMutate sync.Mutex
 }
 
 // takosumiProviderModel maps the provider configuration schema.
