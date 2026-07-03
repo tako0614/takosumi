@@ -120,6 +120,13 @@ GET    /v1/workspaces/{workspaceId}
 POST   /v1/projects
 GET    /v1/projects/{projectId}
 
+POST   /v1/sources
+GET    /v1/sources
+GET    /v1/sources/{sourceId}
+PATCH  /v1/sources/{sourceId}
+POST   /v1/sources/{sourceId}/sync
+GET    /v1/sources/{sourceId}/snapshots
+
 POST   /v1/capsules
 GET    /v1/capsules/{capsuleId}
 PATCH  /v1/capsules/{capsuleId}
@@ -158,6 +165,14 @@ logs
 actor
 audit evidence
 ```
+
+`Source.defaultRef` は branch / tag / commit を受け取ります。`Source.autoSync`
+を有効にすると、scheduler または source webhook が Git ref を同期し、解決された
+commit を `SourceSnapshot` として保存します。active Capsule がその Source を追跡し、
+現在 apply 済みの SourceSnapshot と新しい commit が異なる場合、Capsule は `stale`
+になります。そこからは既存の Workspace update / RunGroup が reviewable plan を作り、
+apply は通常の Run approval に従います。Takosumi が OpenTofu の外で app artifact
+を決めたり取得したりはしません。
 
 ## Resource Shape API
 

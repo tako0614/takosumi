@@ -280,13 +280,26 @@ interface RecordedPlanCall {
 class FakeDeployControlDriver implements DeployControlRunDriver {
   readonly planCalls: RecordedPlanCall[] = [];
   readonly applyCalls: CreateApplyRunRequest[] = [];
+  readonly runQueuedPlanCalls: string[] = [];
+  readonly runQueuedApplyCalls: string[] = [];
   readonly approveCalls: {
     readonly id: string;
     readonly input?: { readonly approvedBy?: string; readonly reason?: string };
   }[] = [];
   readonly #plans = new Map<string, PublicPlanRun>();
   readonly #applies = new Map<string, ApplyRunResponse["applyRun"]>();
+  readonly #options: {
+    readonly completePlanOnGet?: boolean;
+    readonly completeApplyOnGet?: boolean;
+  };
   #seq = 0;
+
+  constructor(options: {
+    readonly completePlanOnGet?: boolean;
+    readonly completeApplyOnGet?: boolean;
+  } = {}) {
+    this.#options = options;
+  }
 
   createPlanRun(
     request: CreatePlanRunRequest,
@@ -318,37 +331,23 @@ class FakeDeployControlDriver implements DeployControlRunDriver {
   }
 
   runQueuedPlan(runId: string): Promise<unknown> {
+    this.runQueuedPlanCalls.push(runId);
     const planRun = this.#plans.get(runId)!;
-    const completedStatus =
-      planRun.operation === "destroy" ? "waiting_approval" : "succeeded";
-    const completed = {
-      ...planRun,
-      status: completedStatus,
-      planDigest: "sha256:plan",
-      planArtifact: {
-        kind: "object-storage",
-        ref: "r2://plan",
-        digest: "sha256:art",
-      },
-      planResourceChanges: [
-        {
-          address: "module.app.cloudflare_workers_script.this",
-          type: "cloudflare_workers_script",
-          actions: ["create"],
-        },
-        {
-          address: "module.app.data.cloudflare_account.acc",
-          type: "cloudflare_account",
-          actions: ["no-op"],
-        },
-      ],
-    } as unknown as PublicPlanRun;
+    const completed = this.#completedPlan(planRun);
     this.#plans.set(runId, completed);
     return Promise.resolve(completed);
   }
 
   getPlanRun(id: string): Promise<PlanRunResponse> {
-    return Promise.resolve({ planRun: this.#plans.get(id)! });
+    let planRun = this.#plans.get(id)!;
+    if (
+      this.#options.completePlanOnGet &&
+      (planRun.status === "queued" || planRun.status === "running")
+    ) {
+      planRun = this.#completedPlan(planRun);
+      this.#plans.set(id, planRun);
+    }
+    return Promise.resolve({ planRun });
   }
 
   approveRun(
@@ -393,14 +392,57 @@ class FakeDeployControlDriver implements DeployControlRunDriver {
   }
 
   runQueuedApply(runId: string): Promise<ApplyRunResponse> {
-    const applyRun = {
-      id: runId,
-      planRunId: "plan_x",
-      workspaceId: "",
-      operation: "create",
-      runnerProfileId: "cloudflare-default",
+    this.runQueuedApplyCalls.push(runId);
+    const applyRun = this.#completedApply(this.#applies.get(runId)!);
+    this.#applies.set(runId, applyRun);
+    return Promise.resolve({ applyRun });
+  }
+
+  getApplyRun(id: string): Promise<ApplyRunResponse> {
+    let applyRun = this.#applies.get(id)!;
+    if (
+      this.#options.completeApplyOnGet &&
+      (applyRun.status === "queued" || applyRun.status === "running")
+    ) {
+      applyRun = this.#completedApply(applyRun);
+      this.#applies.set(id, applyRun);
+    }
+    return Promise.resolve({ applyRun });
+  }
+
+  #completedPlan(planRun: PublicPlanRun): PublicPlanRun {
+    const completedStatus =
+      planRun.operation === "destroy" ? "waiting_approval" : "succeeded";
+    return {
+      ...planRun,
+      status: completedStatus,
+      planDigest: "sha256:plan",
+      planArtifact: {
+        kind: "object-storage",
+        ref: "r2://plan",
+        digest: "sha256:art",
+      },
+      planResourceChanges: [
+        {
+          address: "module.app.cloudflare_workers_script.this",
+          type: "cloudflare_workers_script",
+          actions: ["create"],
+        },
+        {
+          address: "module.app.data.cloudflare_account.acc",
+          type: "cloudflare_account",
+          actions: ["no-op"],
+        },
+      ],
+    } as unknown as PublicPlanRun;
+  }
+
+  #completedApply(
+    applyRun: ApplyRunResponse["applyRun"],
+  ): ApplyRunResponse["applyRun"] {
+    return {
+      ...applyRun,
       status: "succeeded",
-      stateBackend: { kind: "operator-managed" },
       stateLock: { status: "recorded", backendRef: "ref" },
       outputs: [
         {
@@ -410,16 +452,7 @@ class FakeDeployControlDriver implements DeployControlRunDriver {
           sensitive: false,
         },
       ],
-      auditEvents: [],
-      createdAt: 0,
-      updatedAt: 0,
     } as unknown as ApplyRunResponse["applyRun"];
-    this.#applies.set(runId, applyRun);
-    return Promise.resolve({ applyRun });
-  }
-
-  getApplyRun(id: string): Promise<ApplyRunResponse> {
-    return Promise.resolve({ applyRun: this.#applies.get(id)! });
   }
 }
 
@@ -495,6 +528,36 @@ test("ControllerOpentofuRunPort.apply drives plan->apply and maps outputs+native
     },
   ]);
   expect(result.runId).toBeDefined();
+});
+
+test("ControllerOpentofuRunPort can wait for an external queue owner instead of inline-driving runs", async () => {
+  const driver = new FakeDeployControlDriver({
+    completePlanOnGet: true,
+    completeApplyOnGet: true,
+  });
+  const port = new ControllerOpentofuRunPort({
+    driver,
+    resolveCapsuleBinding: () => capsuleBinding,
+    driveRunsSynchronously: false,
+    pollIntervalMs: 1,
+    waitTimeoutMs: 1_000,
+  });
+  const adapter = new OpentofuResourceShapeAdapter(port);
+  const plan = edgeWorkerPlan();
+
+  const result = await adapter.apply(applyInput(plan, cloudflareTarget));
+
+  expect(driver.runQueuedPlanCalls).toEqual([]);
+  expect(driver.runQueuedApplyCalls).toEqual([]);
+  expect(driver.planCalls.length).toBe(1);
+  expect(driver.applyCalls.length).toBe(1);
+  expect(result.outputs).toEqual({ worker_name: "api" });
+  expect(result.nativeResources).toEqual([
+    {
+      type: "cloudflare_workers_script",
+      id: "module.app.cloudflare_workers_script.this",
+    },
+  ]);
 });
 
 test("ControllerOpentofuRunPort.destroy replays generated root before apply", async () => {

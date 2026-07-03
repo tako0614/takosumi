@@ -303,6 +303,11 @@ export class ResourceShapeService {
         }),
       };
     } catch (error) {
+      if (existingLock) {
+        await this.#stores.locks.put(existingLock);
+      } else {
+        await this.#stores.locks.delete(id);
+      }
       const failedRecord: ResourceShapeRecord = {
         ...applyingRecord,
         phase: "Failed",

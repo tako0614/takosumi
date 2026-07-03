@@ -121,6 +121,13 @@ GET    /v1/workspaces/{workspaceId}
 POST   /v1/projects
 GET    /v1/projects/{projectId}
 
+POST   /v1/sources
+GET    /v1/sources
+GET    /v1/sources/{sourceId}
+PATCH  /v1/sources/{sourceId}
+POST   /v1/sources/{sourceId}/sync
+GET    /v1/sources/{sourceId}/snapshots
+
 POST   /v1/capsules
 GET    /v1/capsules/{capsuleId}
 PATCH  /v1/capsules/{capsuleId}
@@ -159,6 +166,15 @@ logs
 actor
 audit evidence
 ```
+
+`Source.defaultRef` accepts a branch, tag, or commit. When `Source.autoSync` is
+enabled, the scheduler or source webhook syncs the Git ref and stores the
+resolved commit as a `SourceSnapshot`. If an active Capsule tracks that Source
+and its currently applied SourceSnapshot differs from the newly resolved commit,
+the Capsule becomes `stale`. From there, the existing Workspace update /
+RunGroup flow creates a reviewable plan, and apply follows the normal Run
+approval path. Takosumi does not choose or fetch application artifacts outside
+the OpenTofu module.
 
 ## Resource Shape API
 

@@ -146,6 +146,8 @@ export async function createWorkerServiceApp(
           resolveCapsuleBinding: createResourceShapeBackingCapsuleResolver({
             installations: capsules,
           }),
+          driveRunsSynchronously: enqueueRun ? false : true,
+          waitTimeoutMs: 300_000,
         }),
       ),
     enabledResourceShapeKinds: resourceShapeCapabilities.enabledKinds,

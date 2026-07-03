@@ -49,8 +49,12 @@ Upload/prepared-source snapshots are internal/operator compatibility only. They
 are not a public Source kind and do not create new public Capsules.
 
 `Source.autoSync` enables scheduled Git-ref polling. It prepares newer immutable
-SourceSnapshots when the ref moves, but it does not automatically apply changes.
-Every infrastructure update still goes through Plan / Apply as a Run.
+SourceSnapshots when the ref moves. If the resolved commit differs from the
+SourceSnapshot currently applied by an active Capsule, Takosumi marks that
+Capsule `stale` so the normal Workspace update / RunGroup path can create a
+reviewable update plan. It still does not silently apply changes: every
+infrastructure update goes through Plan / Apply as a Run unless an explicit
+operator policy adds a separate auto-apply gate.
 
 Provider resolution has two OSS outcomes plus policy blocking:
 
@@ -120,6 +124,13 @@ runner capacity controls, and clear progress phases. It must not decide what a
 deployable app artifact is. Worker bundles, container images, release URLs,
 object keys, digests, and build pipelines belong to the app repo, CI/release
 pipeline, registry, provider, or ordinary OpenTofu/Terraform module variables.
+
+Release/update automation is Git-native: a Source tracks a branch, tag, or
+commit ref; source sync resolves that ref to an immutable commit and archive; a
+Capsule that is active on an older commit becomes `stale`; Workspace update
+plans the change. Takosumi does not fetch arbitrary app artifacts outside the
+OpenTofu module. If the module consumes a prebuilt container/image/bundle, it
+does so through ordinary OpenTofu variables, providers, or data sources.
 
 The reference runner keeps successful plan containers warm for
 `TAKOSUMI_RUNNER_KEEPALIVE_SECONDS` seconds (default `0`; official Cloud uses

@@ -293,7 +293,67 @@ export class SourceLifecycleService {
         updatedAt: finishedAtIso,
       });
     }
+    await this.#markSourceCapsulesStaleForNewSnapshot({
+      running,
+      snapshot,
+      finishedAtIso,
+    });
     return succeeded;
+  }
+
+  async #markSourceCapsulesStaleForNewSnapshot(input: {
+    readonly running: SourceSyncRun;
+    readonly snapshot: SourceSnapshot;
+    readonly finishedAtIso: string;
+  }): Promise<void> {
+    const capsules = await this.#store.listInstallations(
+      input.running.workspaceId,
+    );
+    for (const capsule of capsules) {
+      if (
+        capsule.sourceId !== input.running.sourceId ||
+        capsule.status !== "active"
+      ) {
+        continue;
+      }
+      const currentDeploymentId = capsule.currentDeploymentId;
+      if (!currentDeploymentId) continue;
+      const deployment = await this.#store.getDeployment(currentDeploymentId);
+      if (!deployment) continue;
+      if (deployment.sourceSnapshotId === input.snapshot.id) continue;
+      const deployedSnapshot = await this.#store.getSourceSnapshot(
+        deployment.sourceSnapshotId,
+      );
+      if (
+        deployedSnapshot &&
+        sourceSnapshotsRepresentSameGitCommit(deployedSnapshot, input.snapshot)
+      ) {
+        continue;
+      }
+      await this.#store.patchInstallation(capsule.id, {
+        status: "stale",
+        updatedAt: input.finishedAtIso,
+      });
+      await this.#store.putActivityEvent({
+        id: this.#newId("act"),
+        workspaceId: capsule.workspaceId ?? capsule.spaceId,
+        spaceId: capsule.workspaceId ?? capsule.spaceId,
+        action: "installation.stale",
+        targetType: "installation",
+        targetId: capsule.id,
+        metadata: {
+          reason: "source_ref_changed",
+          sourceId: input.running.sourceId,
+          sourceSnapshotId: input.snapshot.id,
+          previousSourceSnapshotId: deployment.sourceSnapshotId,
+          resolvedCommit: input.snapshot.resolvedCommit,
+          previousResolvedCommit: deployedSnapshot?.resolvedCommit ?? null,
+          ref: input.running.ref,
+          path: input.running.path,
+        },
+        createdAt: input.finishedAtIso,
+      });
+    }
   }
 
   #verifiedSourceArchiveObjectKey(
@@ -458,6 +518,21 @@ function sourceSnapshotMatchesRun(
     snapshot.url === running.url &&
     snapshot.ref === running.ref &&
     snapshot.path === running.path
+  );
+}
+
+function sourceSnapshotsRepresentSameGitCommit(
+  a: SourceSnapshot,
+  b: SourceSnapshot,
+): boolean {
+  return (
+    a.origin === "git" &&
+    b.origin === "git" &&
+    a.sourceId === b.sourceId &&
+    a.url === b.url &&
+    a.ref === b.ref &&
+    a.path === b.path &&
+    a.resolvedCommit === b.resolvedCommit
   );
 }
 
