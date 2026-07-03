@@ -21,10 +21,7 @@ const miniflareDockerfilePath = resolve(
   import.meta.dir,
   "../../deploy/local-substrate/wrappers/Dockerfile.miniflare",
 );
-const miniflareDockerfile = readFileSync(
-  miniflareDockerfilePath,
-  "utf8",
-);
+const miniflareDockerfile = readFileSync(miniflareDockerfilePath, "utf8");
 const cliSmokePath = resolve(
   import.meta.dir,
   "../../deploy/local-substrate/scripts/cli-smoke.sh",
@@ -109,9 +106,7 @@ test("local-substrate cloud migration prepares core and accounts tables", () => 
   expect(migrateBlock).toContain(
     "bun core/scripts/db-migrate.ts --env=production",
   );
-  expect(migrateBlock).toContain(
-    "bun cli/src/main.ts accounts migrate",
-  );
+  expect(migrateBlock).toContain("bun cli/src/main.ts accounts migrate");
   expect(migrateBlock).toContain(
     "bun deploy/local-substrate/scripts/seed-dev-session.ts",
   );
@@ -178,8 +173,10 @@ test("local-substrate AppArmor override removes docker-healthcheck dependency", 
 });
 
 test("local-substrate up rebuilds runtime images before starting", () => {
+  expect(upScript).toContain("substrate_up_args=(up -d --build)");
+  expect(upScript).toContain("substrate_up_args+=(--force-recreate)");
   expect(upScript).toContain(
-    'compose_substrate --profile "$PROFILE" up -d --build',
+    'compose_substrate --profile "$PROFILE" "${substrate_up_args[@]}"',
   );
 });
 
@@ -226,10 +223,20 @@ test("local-substrate cloud service uses the OpenTofu-capable service image", ()
   expect(cloudBlock).not.toContain("/var/run/docker.sock:/var/run/docker.sock");
 });
 
-test("local-substrate cli smoke exercises upload deploy and apply", () => {
-  expect(cliSmoke).toContain("/internal/v1/workspaces/$SPACE_ID/uploads?path=.");
-  expect(cliSmoke).toContain('post_json "/internal/v1/deploy"');
+test("local-substrate cli smoke exercises Git Source Capsule plan/apply", () => {
+  expect(cliSmoke).toContain('post_json "/internal/v1/sources"');
+  expect(cliSmoke).toContain(
+    'post_json "/internal/v1/sources/$SOURCE_ID/sync"',
+  );
+  expect(cliSmoke).toContain(
+    'post_json "/internal/v1/workspaces/$SPACE_ID/capsules"',
+  );
+  expect(cliSmoke).toContain(
+    'post_json "/internal/v1/capsules/$INSTALLATION_ID/plan"',
+  );
   expect(cliSmoke).toContain('post_json "/internal/v1/apply-runs"');
+  expect(cliSmoke).not.toContain("/internal/v1/workspaces/$SPACE_ID/uploads");
+  expect(cliSmoke).not.toContain('post_json "/internal/v1/deploy"');
   expect(cliSmoke).not.toContain("/internal/v1/plan-runs");
 });
 

@@ -28,6 +28,15 @@ import {
 } from "../../../core/bootstrap.ts";
 import { selectSecretBoundaryCrypto } from "../../../core/adapters/secret-store/memory.ts";
 import { TAKOSUMI_ACCOUNTS_CAPSULE_PROJECTIONS_PATH } from "@takosjp/takosumi-accounts-contract";
+import {
+  TAKOSUMI_PRODUCT_CAPABILITIES_PATH,
+  TAKOSUMI_WELL_KNOWN_PATH,
+} from "takosumi-contract/api-surface";
+import {
+  createTakosumiProductCapabilities,
+  createTakosumiWellKnownDocument,
+  type CreateTakosumiDiscoveryOptions,
+} from "takosumi-contract/capabilities";
 import { Hono } from "hono";
 import type { PostgresAccountsStore } from "@takosjp/takosumi-accounts-service";
 import type { NodeAccountsServerConfig } from "./handler.ts";
@@ -87,6 +96,12 @@ export interface ComposedAppInput {
    * a `Response` to short-circuit, or `undefined` to fall through.
    */
   readonly preHandle?: (req: Request) => Promise<Response | undefined>;
+  /**
+   * Optional product discovery capability overrides for the composed endpoint.
+   * The origin is always derived from the incoming request so local, staging,
+   * and hosted deployments produce self-referential discovery documents.
+   */
+  readonly productDiscovery?: Partial<CreateTakosumiDiscoveryOptions>;
   /**
    * Filesystem directory of the built dashboard SPA
    * (`dashboard/dist`). When set, non-API GET/HEAD requests are served from
@@ -173,6 +188,23 @@ export async function buildComposedApp(
       await next();
     });
   }
+  // Product discovery is used by the takosumi OpenTofu provider, CLIs, and
+  // mobile clients. Keep it on the outer composed app so the account-plane OIDC
+  // `/.well-known/*` fallback and `/v1/*` identity surface cannot shadow it.
+  app.get(TAKOSUMI_WELL_KNOWN_PATH, (c) =>
+    c.json(
+      createTakosumiWellKnownDocument(
+        productDiscoveryOptions(c.req.raw, input.productDiscovery),
+      ),
+    ),
+  );
+  app.get(TAKOSUMI_PRODUCT_CAPABILITIES_PATH, (c) =>
+    c.json(
+      createTakosumiProductCapabilities(
+        productDiscoveryOptions(c.req.raw, input.productDiscovery),
+      ),
+    ),
+  );
   // Serve the dashboard SPA for non-API navigations (after preHandle's
   // /healthz + export downloads, before the API routes). API namespaces are
   // skipped inside the responder so the service / accounts handlers keep
@@ -207,6 +239,34 @@ function inProcessDeployControlFacade(
   // (no Bearer handshake, no JSON round-trip). This is the only transport —
   // the account-plane deploy-control seam is in-process only (per AGENTS.md).
   return { operations };
+}
+
+function productDiscoveryOptions(
+  req: Request,
+  overrides: Partial<CreateTakosumiDiscoveryOptions> | undefined,
+): CreateTakosumiDiscoveryOptions {
+  return {
+    ...(overrides ?? {}),
+    origin: publicOriginFromRequest(req),
+  };
+}
+
+function publicOriginFromRequest(req: Request): string {
+  const url = new URL(req.url);
+  const forwardedProto = firstForwardedHeader(
+    req.headers.get("x-forwarded-proto"),
+  );
+  const forwardedHost = firstForwardedHeader(
+    req.headers.get("x-forwarded-host"),
+  );
+  const proto = forwardedProto ?? url.protocol.replace(/:$/, "");
+  const host = forwardedHost ?? req.headers.get("host") ?? url.host;
+  return `${proto}://${host}`;
+}
+
+function firstForwardedHeader(value: string | null): string | undefined {
+  const first = value?.split(",")[0]?.trim();
+  return first && first.length > 0 ? first : undefined;
 }
 
 function embeddedServiceRuntimeEnv(

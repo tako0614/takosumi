@@ -43,14 +43,22 @@ try:
     d = json.loads(sys.stdin.read())
 except Exception:
     raise SystemExit(1)
-raise SystemExit(0 if d.get('provider') == 'cloudflare-worker' else 1)
+if d.get('provider') == 'cloudflare-worker':
+    raise SystemExit(0)
+if (
+    d.get('provider') == 'cloudflare'
+    and d.get('service') == 'takosumi-accounts'
+    and d.get('persistence') == 'd1+r2'
+):
+    raise SystemExit(0)
+raise SystemExit(1)
 " >/dev/null 2>&1; then
 			printf '%s\n' "$host"
 			return 0
 		fi
 	done
 
-	echo "FAIL: no Takosumi service Worker host answered /healthz as provider=cloudflare-worker" >&2
+	echo "FAIL: no Takosumi service Worker host answered /healthz with a workerd-local health payload" >&2
 	return 1
 }
 
@@ -60,7 +68,7 @@ SERVICE_HOST="$(resolve_service_worker_host)"
 #    composed Bun+Postgres app; in the workers profile it is the Accounts
 #    Worker. Accept both explicitly so this smoke verifies the active profile
 #    instead of failing on a stale primary-host assumption.
-HEALTH=$(curl -sk --cacert "$CA" https://app.takosumi.test/healthz)
+HEALTH=$(curl -sk --cacert "$CA" --resolve "app.takosumi.test:443:127.0.0.1" https://app.takosumi.test/healthz)
 APP_HEALTH_KIND=$(echo "$HEALTH" | python3 -c "
 import json, sys
 d = json.loads(sys.stdin.read())
@@ -82,16 +90,24 @@ SERVICE_HEALTH=$(curl -sk --cacert "$CA" --resolve "${SERVICE_HOST}:443:127.0.0.
 echo "$SERVICE_HEALTH" | python3 -c "
 import json, sys
 d = json.loads(sys.stdin.read())
-assert d.get('provider') == 'cloudflare-worker', f'expected provider=cloudflare-worker, got {d!r}'
+if d.get('provider') == 'cloudflare-worker':
+    raise SystemExit(0)
+if (
+    d.get('provider') == 'cloudflare'
+    and d.get('service') == 'takosumi-accounts'
+    and d.get('persistence') == 'd1+r2'
+):
+    raise SystemExit(0)
+raise AssertionError(f'expected a workerd-local health payload, got {d!r}')
 " || { echo "FAIL: $SERVICE_HOST /healthz did not look workerd-local: $SERVICE_HEALTH" >&2; exit 1; }
 
 DEPLOY_CONTROL_TOKEN="${TAKOSUMI_DEPLOY_CONTROL_TOKEN:-local-substrate-deploy-control-token}"
 
 SERVICE_API_STATUS=$(curl -sk --cacert "$CA" --resolve "${SERVICE_HOST}:443:127.0.0.1" \
 	-H "Authorization: Bearer $DEPLOY_CONTROL_TOKEN" \
-	-o /dev/null -w "%{http_code}" "https://${SERVICE_HOST}/capabilities")
+	-o /dev/null -w "%{http_code}" "https://${SERVICE_HOST}/v1/capabilities")
 [[ "$SERVICE_API_STATUS" == "200" ]] || {
-	echo "FAIL: $SERVICE_HOST /capabilities returned $SERVICE_API_STATUS with operator inventory bearer (expected 200)" >&2
+	echo "FAIL: $SERVICE_HOST /v1/capabilities returned $SERVICE_API_STATUS (expected 200)" >&2
 	exit 1
 }
 
@@ -99,6 +115,7 @@ SERVICE_API_STATUS=$(curl -sk --cacert "$CA" --resolve "${SERVICE_HOST}:443:127.
 #    probe intentionally does not expose `/internal/v1`; in the postgres
 #    profile that seam is mounted only on the composed app host.
 RUNNER_PROFILES=$(curl -sk --cacert "$CA" \
+	--resolve "app.takosumi.test:443:127.0.0.1" \
 	-H "Authorization: Bearer $DEPLOY_CONTROL_TOKEN" \
 	-H "Content-Type: application/json" \
 	"https://app.takosumi.test/internal/v1/runner-profiles")
@@ -106,7 +123,7 @@ PROFILE_COUNT=$(echo "$RUNNER_PROFILES" | python3 -c "import json,sys;print(len(
 [[ "$PROFILE_COUNT" -gt 0 ]] || { echo "FAIL: /internal/v1/runner-profiles returned no profiles: $RUNNER_PROFILES" >&2; exit 1; }
 
 # 4. OIDC discovery shape
-DISC=$(curl -sk --cacert "$CA" https://app.takosumi.test/.well-known/openid-configuration)
+DISC=$(curl -sk --cacert "$CA" --resolve "app.takosumi.test:443:127.0.0.1" https://app.takosumi.test/.well-known/openid-configuration)
 ISSUER=$(echo "$DISC" | python3 -c "import json,sys;print(json.loads(sys.stdin.read()).get('issuer',''))")
 [[ -n "$ISSUER" ]] || { echo "FAIL: /.well-known/openid-configuration missing issuer" >&2; exit 1; }
 
@@ -119,6 +136,7 @@ if [[ "$APP_HEALTH_KIND" == "worker" ]]; then
 	EXPORT_ROUTE_BODY="/tmp/accounts-export-route-smoke.json"
 	probe_export_route() {
 		EXPORT_ROUTE_STATUS=$(curl -sk --cacert "$CA" -o "$EXPORT_ROUTE_BODY" -w "%{http_code}" \
+			--resolve "app.takosumi.test:443:127.0.0.1" \
 			"https://app.takosumi.test/__takosumi/exports/missing-object.json?expires=4102444800000&sig=bad")
 		[[ "$EXPORT_ROUTE_STATUS" == "403" ]] || return 1
 		python3 - "$EXPORT_ROUTE_BODY" <<'PY'

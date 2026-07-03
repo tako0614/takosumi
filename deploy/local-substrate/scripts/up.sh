@@ -183,7 +183,14 @@ compose_ingress up -d caddy
 if [[ -n "$PROFILE" ]]; then
 	echo "==> Starting substrate stack (profile: $PROFILE)"
 	prepare_app_armor_substrate_prereqs
-	compose_substrate --profile "$PROFILE" up -d --build
+	substrate_up_args=(up -d --build)
+	if local_substrate_disable_apparmor; then
+		# Recreate stale containers that were originally created with Docker's
+		# default AppArmor profile; starting them can fail before compose can
+		# apply the unconfined override.
+		substrate_up_args+=(--force-recreate)
+	fi
+	compose_substrate --profile "$PROFILE" "${substrate_up_args[@]}"
 
 	echo "==> Waiting for static build outputs"
 	wait_for_completed_service takosumi-website-build

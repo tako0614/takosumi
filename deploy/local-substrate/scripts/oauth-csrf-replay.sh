@@ -16,10 +16,13 @@
 set -euo pipefail
 
 PROVIDER="${PROVIDER:-google}"
-BASE="https://app.takosumi.test"
+APP_HOST="${TAKOSUMI_LOCAL_APP_HOST:-app.takosumi.test}"
+OAUTH_HOST="${TAKOSUMI_LOCAL_OAUTH_MOCK_HOST:-oauth-mock.test}"
+BASE="https://${APP_HOST}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUBSTRATE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 CA="$SUBSTRATE_DIR/caddy/runtime/pebble-issuance-root.pem"
+CURL_TLS=(--cacert "$CA" --resolve "${APP_HOST}:443:127.0.0.1" --resolve "${OAUTH_HOST}:443:127.0.0.1")
 
 WORK=$(mktemp -d)
 trap 'rm -rf "${WORK}"' EXIT
@@ -38,11 +41,11 @@ new_code() {
 	local jar="${WORK}/jar.$RANDOM"
 	: >"${jar}"
 	local loc1
-	loc1=$(curl -sS --cacert "$CA" -c "${jar}" -b "${jar}" -o /dev/null -w "%{redirect_url}" \
+	loc1=$(curl -sS "${CURL_TLS[@]}" -c "${jar}" -b "${jar}" -o /dev/null -w "%{redirect_url}" \
 		"${BASE}/v1/auth/upstream/authorize?provider=${PROVIDER}&state=${state}")
 	[[ -n "${loc1}" ]] || { echo "FAIL: authorize did not return a redirect" >&2; exit 1; }
 	local loc2
-	loc2=$(curl -sS --cacert "$CA" -c "${jar}" -b "${jar}" -o /dev/null -w "%{redirect_url}" "${loc1}")
+	loc2=$(curl -sS "${CURL_TLS[@]}" -c "${jar}" -b "${jar}" -o /dev/null -w "%{redirect_url}" "${loc1}")
 	[[ -n "${loc2}" ]] || { echo "FAIL: provider authorize did not return a callback redirect" >&2; exit 1; }
 	local code
 	code=$(echo "${loc2}" | sed -nE 's/.*[?&]code=([^&]*).*/\1/p')
@@ -64,13 +67,13 @@ assert_non_2xx() {
 
 # 1. Replay of a redeemed code under its OWN jar (so state cookie matches).
 read -r STATE1 CODE1 JAR1 <<<"$(new_code)"
-FIRST=$(curl -sS --cacert "$CA" -c "${JAR1}" -b "${JAR1}" -o /dev/null -w "%{http_code}" \
+FIRST=$(curl -sS "${CURL_TLS[@]}" -c "${JAR1}" -b "${JAR1}" -o /dev/null -w "%{http_code}" \
 	"${BASE}/v1/auth/upstream/callback?provider=${PROVIDER}&code=${CODE1}&state=${STATE1}")
 if [[ "${FIRST}" != "200" ]]; then
 	echo "FAIL: initial callback exchange returned ${FIRST}, expected 200 (test prereq)" >&2
 	exit 1
 fi
-REPLAY=$(curl -sS --cacert "$CA" -c "${JAR1}" -b "${JAR1}" -o /dev/null -w "%{http_code}" \
+REPLAY=$(curl -sS "${CURL_TLS[@]}" -c "${JAR1}" -b "${JAR1}" -o /dev/null -w "%{http_code}" \
 	"${BASE}/v1/auth/upstream/callback?provider=${PROVIDER}&code=${CODE1}&state=${STATE1}")
 assert_non_2xx "code replay (same state, same jar)" "${REPLAY}"
 
@@ -79,7 +82,7 @@ assert_non_2xx "code replay (same state, same jar)" "${REPLAY}"
 #    the query parameter).
 read -r _ CODE2 JAR2 <<<"$(new_code)"
 WRONG_STATE="csrf_attacker_$(date +%s%N)_$RANDOM"
-MISMATCH=$(curl -sS --cacert "$CA" -c "${JAR2}" -b "${JAR2}" -o /dev/null -w "%{http_code}" \
+MISMATCH=$(curl -sS "${CURL_TLS[@]}" -c "${JAR2}" -b "${JAR2}" -o /dev/null -w "%{http_code}" \
 	"${BASE}/v1/auth/upstream/callback?provider=${PROVIDER}&code=${CODE2}&state=${WRONG_STATE}")
 assert_non_2xx "state mismatch (state cookie vs query)" "${MISMATCH}"
 
@@ -87,7 +90,7 @@ assert_non_2xx "state mismatch (state cookie vs query)" "${MISMATCH}"
 #    provider-code validation path, not merely fail the state-cookie guard.
 read -r UNKNOWN_STATE _ UNKNOWN_JAR <<<"$(new_code)"
 UNKNOWN_CODE="not_a_real_code_$(date +%s%N)"
-UNKNOWN=$(curl -sS --cacert "$CA" -c "${UNKNOWN_JAR}" -b "${UNKNOWN_JAR}" -o /dev/null -w "%{http_code}" \
+UNKNOWN=$(curl -sS "${CURL_TLS[@]}" -c "${UNKNOWN_JAR}" -b "${UNKNOWN_JAR}" -o /dev/null -w "%{http_code}" \
 	"${BASE}/v1/auth/upstream/callback?provider=${PROVIDER}&code=${UNKNOWN_CODE}&state=${UNKNOWN_STATE}")
 assert_non_2xx "unknown code (valid state cookie)" "${UNKNOWN}"
 

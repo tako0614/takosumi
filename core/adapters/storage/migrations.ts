@@ -1677,7 +1677,7 @@ drop table if exists takosumi_connections;`,
       version: 32,
       domain: "deploy",
       description:
-        "Create the Source / SourceSnapshot / SourceSyncRun ledger (Core Specification §6). source_json carries the public Source plus private hook-secret hash / lastSeenCommit; the hook-secret plaintext and any git credential value never land in the database.",
+        "Create the Source / SourceSnapshot / SourceSyncRun ledger (Core Specification §6). source_json carries the public Source plus internal hook-secret hash / lastSeenCommit / autoSync; the hook-secret plaintext and any git credential value never land in the database.",
       sql: `create table if not exists takosumi_sources (
   id          text   primary key,
   space_id    text   not null,
@@ -1727,7 +1727,7 @@ drop table if exists takosumi_sources;`,
       version: 33,
       domain: "deploy",
       description:
-        "Create the historical lane ledger. App / Environment / InstallProfile columns are compatibility table names; the current public model is Workspace / Project / Source / Capsule / Run / StateVersion / Output plus ProviderConnection / ProviderBinding, with no secret values in connection rows.",
+        "Create the historical lane ledger. App / Environment / InstallProfile columns are compatibility table names; the current public model is Space / Source / Installation / InstallConfig plus Installation provider env bindings, with no secret values in connection rows.",
       sql: `create table if not exists takosumi_apps (
   id                 text   primary key,
   space_id           text   not null,
@@ -2133,7 +2133,6 @@ create table if not exists takosumi_plans (
   id                 text    primary key,
   name               text    not null,
   monthly_base_price integer not null,
-  included_usd_micros bigint,
   included_credits   integer not null,
   limits_json        jsonb   not null,
   plan_json          jsonb   not null,
@@ -2156,55 +2155,19 @@ create index if not exists takosumi_space_subscriptions_billing_account_idx
   on takosumi_space_subscriptions (billing_account_id);
 create table if not exists takosumi_credit_balances (
   space_id                 text    primary key,
-  available_usd_micros     bigint,
-  reserved_usd_micros      bigint,
-  monthly_included_usd_micros bigint,
-  purchased_usd_micros     bigint,
   available_credits        integer not null,
   reserved_credits         integer not null,
   monthly_included_credits integer not null,
   purchased_credits        integer not null,
   updated_at               text    not null
 );
-create table if not exists takosumi_billing_auto_recharge_attempts (
-  id                       text   primary key,
-  space_id                 text   not null,
-  run_id                   text   not null,
-  billing_account_id       text   not null,
-  idempotency_key          text   not null,
-  period_start             text   not null,
-  period_end               text,
-  requested_usd_micros     bigint not null,
-  monthly_limit_usd_micros bigint,
-  charged_usd_micros       bigint,
-  status                   text   not null
-    check (status in ('pending','pending_unknown','succeeded','failed')),
-  stripe_payment_intent_id text,
-  provider_status          text,
-  failure_reason           text,
-  attempt_json             jsonb  not null,
-  created_at               text   not null,
-  updated_at               text   not null
-);
-create unique index if not exists takosumi_billing_auto_recharge_attempts_idempotency_unique
-  on takosumi_billing_auto_recharge_attempts (idempotency_key);
-create index if not exists takosumi_billing_auto_recharge_attempts_space_period_status_idx
-  on takosumi_billing_auto_recharge_attempts (space_id, period_start, status);
-create index if not exists takosumi_billing_auto_recharge_attempts_run_idx
-  on takosumi_billing_auto_recharge_attempts (run_id);
 create table if not exists takosumi_usage_events (
   id              text             primary key,
   space_id        text             not null,
   installation_id text,
   run_id          text,
-  meter_id        text,
-  resource_family text,
-  resource_id     text,
-  operation       text,
-  resource_metadata_json jsonb,
   kind            text             not null,
   quantity        double precision not null,
-  usd_micros      bigint,
   credits         integer          not null,
   source          text             not null,
   idempotency_key text             not null unique,
@@ -2218,7 +2181,6 @@ create table if not exists takosumi_credit_reservations (
   id                text    primary key,
   space_id          text    not null,
   run_id            text    not null,
-  estimated_usd_micros bigint,
   estimated_credits integer not null,
   status            text    not null
     check (status in ('reserved','captured','released','expired')),
@@ -2281,9 +2243,6 @@ drop table if exists takosumi_credit_reservations;
 drop index if exists takosumi_usage_events_run_idx;
 drop index if exists takosumi_usage_events_space_idx;
 drop table if exists takosumi_usage_events;
-drop index if exists takosumi_billing_auto_recharge_attempts_run_idx;
-drop index if exists takosumi_billing_auto_recharge_attempts_space_period_status_idx;
-drop table if exists takosumi_billing_auto_recharge_attempts;
 drop table if exists takosumi_credit_balances;
 drop index if exists takosumi_space_subscriptions_billing_account_idx;
 drop index if exists takosumi_space_subscriptions_space_idx;
@@ -2462,7 +2421,7 @@ drop table if exists takosumi_provider_templates_entries;`,
       version: 46,
       domain: "deploy",
       description:
-        "Promote the single Run ledger's status / lease coordination fields to indexed columns: add status (mirroring the D1 ledger, backfilled from run_json), plus the lease_token / heartbeat_at columns and the (kind, status) index used by run-lease claim/heartbeat sweeps. Also create the takosumi_artifacts and takosumi_provider_templates ledgers that the deploy-control store has written but which no prior Postgres migration ever materialized (the D1 store and Drizzle schema already define them), and relax the source_id columns on takosumi_source_snapshots / takosumi_opentofu_installations to nullable so legacy upload-origin snapshots and installations — which have no Source — match the Drizzle schema. Additive and idempotent: each column add uses `if not exists`, the backfill reads run_json before status is enforced NOT NULL, the table / index creates are `if not exists`, and `drop not null` is a no-op when already nullable.",
+        "Promote the single Run ledger's status / lease coordination fields to indexed columns: add status (mirroring the D1 ledger, backfilled from run_json), plus the lease_token / heartbeat_at columns and the (kind, status) index used by run-lease claim/heartbeat sweeps. Also create the takosumi_artifacts and takosumi_provider_templates ledgers that the deploy-control store has written but which no prior Postgres migration ever materialized (the D1 store and Drizzle schema already define them), and relax the source_id columns on takosumi_source_snapshots / takosumi_opentofu_installations to nullable so upload-origin (takosumi deploy) snapshots and installations — which have no Source — match the Drizzle schema. Additive and idempotent: each column add uses `if not exists`, the backfill reads run_json before status is enforced NOT NULL, the table / index creates are `if not exists`, and `drop not null` is a no-op when already nullable.",
       sql: `alter table takosumi_runs add column if not exists status text;
 alter table takosumi_runs add column if not exists lease_token text;
 alter table takosumi_runs add column if not exists heartbeat_at bigint;

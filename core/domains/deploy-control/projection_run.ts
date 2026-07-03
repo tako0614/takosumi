@@ -184,7 +184,7 @@ export function projectPlanRun(
     id: planRun.id,
     ...(planRun.runGroupId ? { runGroupId: planRun.runGroupId } : {}),
     workspaceId: planRun.workspaceId,
-    spaceId: (planRun.workspaceId ?? planRun.spaceId),
+    spaceId: planRun.workspaceId ?? planRun.spaceId,
     ...(options.installationId
       ? {
           capsuleId: options.installationId,
@@ -237,17 +237,17 @@ export function projectPlanRun(
 
 function projectApplyExpectedGuard(planRun: PlanRun): Run["applyExpected"] {
   if (!planRun.planDigest || !planRun.planArtifact) return undefined;
+  const capsuleId = planRun.capsuleId ?? planRun.installationId;
   return {
-    reviewedPlanId: planRun.id,
+    planRunId: planRun.id,
+    ...(capsuleId ? { capsuleId } : {}),
     ...(planRun.installationId
       ? { installationId: planRun.installationId }
       : {}),
-    ...(planRun.installationId
-      ? {
-          currentApplyLedgerId: planRun.installationCurrentDeploymentId ?? null,
-        }
+    ...(capsuleId
+      ? { currentStateVersionId: planRun.capsuleCurrentStateVersionId ?? null }
       : {}),
-    runnerId: planRun.runnerProfileId,
+    runnerProfileId: planRun.runnerProfileId,
     sourceDigest: planRun.sourceDigest,
     variablesDigest: planRun.variablesDigest,
     policyDecisionDigest: planRun.policyDecisionDigest,
@@ -288,7 +288,7 @@ export function projectApplyRun(
     id: applyRun.id,
     ...(options.runGroupId ? { runGroupId: options.runGroupId } : {}),
     workspaceId: applyRun.workspaceId,
-    spaceId: (applyRun.workspaceId ?? applyRun.spaceId),
+    spaceId: applyRun.workspaceId ?? applyRun.spaceId,
     ...(options.installationId
       ? {
           capsuleId: options.installationId,
@@ -404,7 +404,9 @@ export function projectPlanRunCost(planRun: PlanRun): RunCostInfo {
   // value is surfaced as `showback` here; the actual gating (if any) is reported
   // via `blocked` / `reasons` recorded by the injected enforcement port.
   const billingMode: RunCostInfo["billingMode"] =
-    modeValue === "showback" || modeValue === "enforce" ? "showback" : "disabled";
+    modeValue === "showback" || modeValue === "enforce"
+      ? "showback"
+      : "disabled";
   const legacyEstimatedCredits = numberOrUndefined(billing?.estimatedCredits);
   const legacyAvailableCredits = numberOrUndefined(billing?.availableCredits);
   const estimatedUsdMicros =

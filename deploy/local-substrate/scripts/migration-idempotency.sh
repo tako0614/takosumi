@@ -19,6 +19,16 @@ SUBSTRATE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$SUBSTRATE_DIR"
 source "$SCRIPT_DIR/compose-helpers.sh"
 
+materialize_d1() {
+	local host
+	for host in service-worker.takosumi.test service.takosumi.test; do
+		curl -sk --max-time 5 --cacert "$SUBSTRATE_DIR/caddy/runtime/pebble-issuance-root.pem" \
+			--resolve "${host}:443:127.0.0.1" \
+			-o /dev/null \
+			"https://${host}/v1/capabilities" || true
+	done
+}
+
 # 1. Snapshot the service worker's D1 sqlite via an AppArmor-compatible helper
 #    container. `docker exec` is not available on some locked-down hosts, and
 #    reading the named volume from a one-shot Python container is enough for a
@@ -31,21 +41,27 @@ snapshot() {
 		python3 - <<'PY' > "$out"
 import os
 import sqlite3
-sqlite_path = ""
+best_sql = ""
+best_path = ""
 for root, _dirs, files in os.walk("/data/d1"):
     for name in files:
         if name.endswith(".sqlite"):
             sqlite_path = os.path.join(root, name)
-            break
-    if sqlite_path:
-        break
-if not sqlite_path:
+            con = sqlite3.connect(f"file:{sqlite_path}?mode=ro&immutable=1", uri=True)
+            rows = con.execute("SELECT sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY name").fetchall()
+            sql = "\n".join(r[0] for r in rows)
+            con.close()
+            if len(sql) > len(best_sql):
+                best_sql = sql
+                best_path = sqlite_path
+if not best_path:
     raise SystemExit("no .sqlite under /data/d1 in the worker volume")
-con = sqlite3.connect(f"file:{sqlite_path}?mode=ro&immutable=1", uri=True)
-rows = con.execute("SELECT sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY name").fetchall()
-print("\n".join(r[0] for r in rows))
+if len(best_sql) < 100:
+    raise SystemExit(f"no materialized D1 schema found under /data/d1 (best={best_path}, bytes={len(best_sql)})")
+print(best_sql)
 PY
 }
+materialize_d1
 snapshot /tmp/schema-before.txt
 
 SIZE_BEFORE=$(wc -c < /tmp/schema-before.txt)

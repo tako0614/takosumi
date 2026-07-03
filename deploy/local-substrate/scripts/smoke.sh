@@ -66,7 +66,7 @@ bundle_freshness_gate() {
 				exit 1
 			}
 			compose_substrate --profile postgres \
-				up -d --force-recreate takosumi-service-worker >/dev/null 2>&1
+				up -d --force-recreate --no-deps takosumi-service-worker >/dev/null 2>&1
 			sleep 3
 			echo "==> [bundle-gate] platform worker rebuilt + restarted"
 		fi
@@ -328,7 +328,7 @@ fi
 echo
 echo "==> k6 load baseline via Caddy + TLS (20 RPS x 20s — regression watch only, NOT SLO)"
 if run_script "k6.baseline" "bash $SCRIPT_DIR/k6-baseline.sh"; then
-	echo "    PASS [k6.baseline] deploy control plan + oidc both within p95 + error-rate thresholds"
+	echo "    PASS [k6.baseline] deploy control read + oidc both within p95 + error-rate thresholds"
 	PASS=$((PASS + 1))
 else
 	echo "    FAIL [k6.baseline] see scripts/k6-baseline.sh --verbose"

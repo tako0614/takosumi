@@ -4,18 +4,21 @@
 # Walks:
 #   1. Mint subject A through the Google oauth-mock dance.
 #   2. Use the local-substrate dev fixture session as subject B.
-#   3. POST an installation as A with A's HttpOnly cookie.
-#   4. GET that installation with B's bearer -> MUST be non-200.
-#   5. GET with A's cookie -> 200 (sanity).
+#   3. Create a Workspace, Git Source, and Capsule as A with A's HttpOnly cookie.
+#   4. Read that Capsule as B with the local fixture bearer -> MUST be non-200.
+#   5. Read/list with A's cookie -> 200 (sanity).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUBSTRATE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 CA="$SUBSTRATE_DIR/caddy/runtime/pebble-issuance-root.pem"
-BASE="https://app.takosumi.test"
+APP_HOST="${TAKOSUMI_LOCAL_APP_HOST:-app.takosumi.test}"
+OAUTH_HOST="${TAKOSUMI_LOCAL_OAUTH_MOCK_HOST:-oauth-mock.test}"
+BASE="https://${APP_HOST}"
 LOCAL_DEV_SESSION_ID="${TAKOSUMI_ACCOUNTS_LOCAL_DEV_SESSION_ID:-sess_local_substrate}"
 LOCAL_DEV_SUBJECT="${TAKOSUMI_ACCOUNTS_LOCAL_DEV_SUBJECT:-tsub_takosumi_accounts_local}"
 COOKIE_JARS=()
+CURL_TLS=(--cacert "$CA" --resolve "${APP_HOST}:443:127.0.0.1" --resolve "${OAUTH_HOST}:443:127.0.0.1")
 
 cleanup_jars() {
 	for jar in "${COOKIE_JARS[@]}"; do
@@ -30,11 +33,11 @@ mint_google_cookie_session() {
 	jar="$(mktemp)"
 	COOKIE_JARS+=("$jar")
 	local loc1
-	loc1=$(curl -sk --cacert "$CA" -o /dev/null -w "%{redirect_url}" \
+	loc1=$(curl -sk "${CURL_TLS[@]}" -o /dev/null -w "%{redirect_url}" \
 		-c "$jar" -b "$jar" \
 		"$BASE/v1/auth/upstream/authorize?provider=google&state=$state")
 	local loc2
-	loc2=$(curl -sk --cacert "$CA" -o /dev/null -w "%{redirect_url}" \
+	loc2=$(curl -sk "${CURL_TLS[@]}" -o /dev/null -w "%{redirect_url}" \
 		-c "$jar" -b "$jar" "$loc1")
 	local code
 	code=$(echo "$loc2" | sed -nE 's/.*[?&]code=([^&]*).*/\1/p')
@@ -49,7 +52,7 @@ mint_google_cookie_session() {
 		exit 1
 	}
 	local resp
-	resp=$(curl -sk --cacert "$CA" \
+	resp=$(curl -sk "${CURL_TLS[@]}" \
 		-c "$jar" -b "$jar" \
 		"$BASE/v1/auth/upstream/callback?provider=google&code=$code&state=$callback_state")
 	local subject
@@ -63,7 +66,7 @@ print(d.get('subject', ''))
 		exit 1
 	fi
 	local me
-	me=$(curl -sk --cacert "$CA" -b "$jar" "$BASE/v1/account/session/me")
+	me=$(curl -sk "${CURL_TLS[@]}" -b "$jar" "$BASE/v1/account/session/me")
 	local me_subject
 	me_subject=$(echo "$me" | python3 -c "
 import json, sys
@@ -83,7 +86,7 @@ read -r SUB_A JAR_A <<<"$(mint_google_cookie_session)"
 	exit 1
 }
 
-DEV_ME=$(curl -sk --cacert "$CA" \
+DEV_ME=$(curl -sk "${CURL_TLS[@]}" \
 	-H "Authorization: Bearer $LOCAL_DEV_SESSION_ID" \
 	"$BASE/v1/account/session/me")
 SUB_B=$(echo "$DEV_ME" | python3 -c "
@@ -101,66 +104,149 @@ if [[ "$SUB_A" == "$SUB_B" ]]; then
 	exit 1
 fi
 
-APP_ID="takos-docs"
-COMMIT="0000000000000000000000000000000000000000"
-DIGEST="sha256:0000000000000000000000000000000000000000000000000000000000000000"
-RUN_SUFFIX="$(date +%s%N)_$RANDOM"
+RUN_SUFFIX="$(date +%s%N)-$RANDOM"
+SOURCE_URL="https://github.com/tako0614/takosumi.git"
+SOURCE_REF="main"
+SOURCE_PATH="opentofu-modules/core/module"
+INSTALL_CONFIG_ID="${TAKOSUMI_DEPLOY_CONTROL_INSTALL_CONFIG_ID:-cfg-default-opentofu-capsule}"
+WORKSPACE_HANDLE="tenant-iso-${RUN_SUFFIX}"
+CAPSULE_NAME="tenant-capsule-${RUN_SUFFIX}"
 
-INSTALL_PAYLOAD=$(cat <<JSON
-{
-  "accountId": "acct_iso_${RUN_SUFFIX}",
-  "spaceId": "space_iso_${RUN_SUFFIX}",
-  "appId": "$APP_ID",
-  "source": {
-    "gitUrl": "https://github.com/tako0614/takos-docs.git",
-    "ref": "main",
-    "commit": "$COMMIT",
-    "planDigest": "$DIGEST"
-  },
-  "mode": "shared-cell",
-  "createdBySubject": "$SUB_A"
-}
-JSON
-)
-CREATE_RESP=$(curl -sk --cacert "$CA" -X POST \
+WORKSPACE_RESP=$(curl -sk "${CURL_TLS[@]}" -X POST \
 	-b "$JAR_A" \
 	-H "Content-Type: application/json" \
-	-d "$INSTALL_PAYLOAD" \
-	"$BASE/v1/capsule-projections")
-INST_ID=$(echo "$CREATE_RESP" | python3 -c "
+	-d "$(cat <<JSON
+{
+  "handle": "$WORKSPACE_HANDLE",
+  "displayName": "Tenant isolation smoke $RUN_SUFFIX",
+  "type": "personal"
+}
+JSON
+)" \
+	-w "\n%{http_code}" \
+	"$BASE/api/v1/workspaces")
+WORKSPACE_STATUS=$(echo "$WORKSPACE_RESP" | tail -n1)
+WORKSPACE_BODY=$(echo "$WORKSPACE_RESP" | head -n -1)
+if [[ "$WORKSPACE_STATUS" != "201" ]]; then
+	echo "FAIL: subject A could not create Workspace: status=$WORKSPACE_STATUS body=$WORKSPACE_BODY" >&2
+	exit 1
+fi
+WORKSPACE_ID=$(echo "$WORKSPACE_BODY" | python3 -c "
 import json, sys
 d = json.loads(sys.stdin.read())
-print((d.get('installation') or {}).get('id', ''))
+print((d.get('space') or {}).get('id', ''))
 ")
-if [[ -z "$INST_ID" ]]; then
-	echo "FAIL: subject A could not create installation: $CREATE_RESP" >&2
+if [[ -z "$WORKSPACE_ID" ]]; then
+	echo "FAIL: Workspace create response did not include space.id: $WORKSPACE_BODY" >&2
+	exit 1
+fi
+
+SOURCE_RESP=$(curl -sk "${CURL_TLS[@]}" -X POST \
+	-b "$JAR_A" \
+	-H "Content-Type: application/json" \
+	-d "$(cat <<JSON
+{
+  "workspaceId": "$WORKSPACE_ID",
+  "name": "tenant-source-$RUN_SUFFIX",
+  "url": "$SOURCE_URL",
+  "defaultRef": "$SOURCE_REF",
+  "defaultPath": "$SOURCE_PATH",
+  "autoSync": false
+}
+JSON
+)" \
+	-w "\n%{http_code}" \
+	"$BASE/api/v1/sources")
+SOURCE_STATUS=$(echo "$SOURCE_RESP" | tail -n1)
+SOURCE_BODY=$(echo "$SOURCE_RESP" | head -n -1)
+if [[ "$SOURCE_STATUS" != "201" ]]; then
+	echo "FAIL: subject A could not create Source: status=$SOURCE_STATUS body=$SOURCE_BODY" >&2
+	exit 1
+fi
+SOURCE_ID=$(echo "$SOURCE_BODY" | python3 -c "
+import json, sys
+d = json.loads(sys.stdin.read())
+print((d.get('source') or {}).get('id', ''))
+")
+if [[ -z "$SOURCE_ID" ]]; then
+	echo "FAIL: Source create response did not include source.id: $SOURCE_BODY" >&2
+	exit 1
+fi
+
+CAPSULE_RESP=$(curl -sk "${CURL_TLS[@]}" -X POST \
+	-b "$JAR_A" \
+	-H "Content-Type: application/json" \
+	-d "$(cat <<JSON
+{
+  "name": "$CAPSULE_NAME",
+  "environment": "test",
+  "sourceId": "$SOURCE_ID",
+  "installConfigId": "$INSTALL_CONFIG_ID",
+  "modulePath": "$SOURCE_PATH",
+  "runnerProfileId": "generic-opentofu-provider"
+}
+JSON
+)" \
+	-w "\n%{http_code}" \
+	"$BASE/api/v1/workspaces/$WORKSPACE_ID/capsules")
+CAPSULE_STATUS=$(echo "$CAPSULE_RESP" | tail -n1)
+CAPSULE_BODY=$(echo "$CAPSULE_RESP" | head -n -1)
+if [[ "$CAPSULE_STATUS" != "201" ]]; then
+	echo "FAIL: subject A could not create Capsule: status=$CAPSULE_STATUS body=$CAPSULE_BODY" >&2
+	exit 1
+fi
+CAPSULE_ID=$(echo "$CAPSULE_BODY" | python3 -c "
+import json, sys
+d = json.loads(sys.stdin.read())
+print((d.get('capsule') or {}).get('id', ''))
+")
+if [[ -z "$CAPSULE_ID" ]]; then
+	echo "FAIL: Capsule create response did not include capsule.id: $CAPSULE_BODY" >&2
 	exit 1
 fi
 
 cleanup() {
-	curl -sk --cacert "$CA" -X DELETE \
+	curl -sk "${CURL_TLS[@]}" -X DELETE \
 		-b "$JAR_A" \
-		"$BASE/v1/capsule-projections/$INST_ID" >/dev/null 2>&1 || true
+		"$BASE/api/v1/capsules/$CAPSULE_ID" >/dev/null 2>&1 || true
 	cleanup_jars
 }
 trap cleanup EXIT
 
-STATUS_A=$(curl -sk --cacert "$CA" -o /dev/null -w "%{http_code}" \
+STATUS_A=$(curl -sk "${CURL_TLS[@]}" -o /dev/null -w "%{http_code}" \
 	-b "$JAR_A" \
-	"$BASE/v1/capsule-projections/$INST_ID")
+	"$BASE/api/v1/capsules/$CAPSULE_ID")
 if [[ "$STATUS_A" != "200" ]]; then
-	echo "FAIL: subject A can't read own installation: $STATUS_A" >&2
+	echo "FAIL: subject A can't read own Capsule: $STATUS_A" >&2
 	exit 1
 fi
 
-STATUS_B=$(curl -sk --cacert "$CA" -o /dev/null -w "%{http_code}" \
+LIST_A=$(curl -sk "${CURL_TLS[@]}" -o /dev/null -w "%{http_code}" \
+	-b "$JAR_A" \
+	"$BASE/api/v1/workspaces/$WORKSPACE_ID/capsules")
+if [[ "$LIST_A" != "200" ]]; then
+	echo "FAIL: subject A can't list own Workspace Capsules: $LIST_A" >&2
+	exit 1
+fi
+
+STATUS_B=$(curl -sk "${CURL_TLS[@]}" -o /dev/null -w "%{http_code}" \
 	-H "Authorization: Bearer $LOCAL_DEV_SESSION_ID" \
-	"$BASE/v1/capsule-projections/$INST_ID")
+	"$BASE/api/v1/capsules/$CAPSULE_ID")
 
 if [[ "$STATUS_B" == "200" ]]; then
-	echo "FAIL: TENANT ISOLATION VIOLATION - subject B read subject A's installation" >&2
-	echo "      A=$SUB_A  B=$SUB_B  installation=$INST_ID" >&2
+	echo "FAIL: TENANT ISOLATION VIOLATION - subject B read subject A's Capsule" >&2
+	echo "      A=$SUB_A  B=$SUB_B  workspace=$WORKSPACE_ID capsule=$CAPSULE_ID" >&2
 	exit 1
 fi
 
-echo "OK tenant isolation enforced - A=$SUB_A own=200 B=$SUB_B cross-read=$STATUS_B"
+LIST_B=$(curl -sk "${CURL_TLS[@]}" -o /dev/null -w "%{http_code}" \
+	-H "Authorization: Bearer $LOCAL_DEV_SESSION_ID" \
+	"$BASE/api/v1/workspaces/$WORKSPACE_ID/capsules")
+
+if [[ "$LIST_B" == "200" ]]; then
+	echo "FAIL: TENANT ISOLATION VIOLATION - subject B listed subject A's Workspace Capsules" >&2
+	echo "      A=$SUB_A  B=$SUB_B  workspace=$WORKSPACE_ID" >&2
+	exit 1
+fi
+
+echo "OK tenant isolation enforced - A=$SUB_A own=200/list=200 B=$SUB_B cross-read=$STATUS_B cross-list=$LIST_B"

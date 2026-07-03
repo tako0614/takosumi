@@ -211,6 +211,52 @@ test("composed app still serves an embedded service process route", async () => 
   assert.equal(spy.calls.length, 0);
 });
 
+test("composed app owns Takosumi product discovery before account fallback", async () => {
+  const { app, spy } = await buildTestApp();
+  const wellKnown = await app.fetch(
+    new Request("https://app.takosumi.test/.well-known/takosumi"),
+  );
+  assert.equal(wellKnown.status, 200);
+  assert.equal(wellKnown.headers.get("x-handled-by"), null);
+  const wellKnownBody = await wellKnown.json();
+  assert.equal(
+    wellKnownBody.endpoints.capabilities,
+    "https://app.takosumi.test/v1/capabilities",
+  );
+
+  const capabilities = await app.fetch(
+    new Request("https://app.takosumi.test/v1/capabilities"),
+  );
+  assert.equal(capabilities.status, 200);
+  assert.equal(capabilities.headers.get("x-handled-by"), null);
+  const capabilitiesBody = await capabilities.json();
+  assert.equal(capabilitiesBody.resources.Stack, true);
+  assert.equal(capabilitiesBody.adapters.opentofu, true);
+
+  assert.equal(spy.calls.length, 0);
+});
+
+test("composed app product discovery uses forwarded public origin", async () => {
+  const { app, spy } = await buildTestApp();
+  const res = await app.fetch(
+    new Request("http://cloud:8787/.well-known/takosumi", {
+      headers: {
+        "x-forwarded-proto": "https",
+        "x-forwarded-host": "app.takosumi.test",
+      },
+    }),
+  );
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.equal(body.endpoints.api, "https://app.takosumi.test/api");
+  assert.equal(
+    body.endpoints.capabilities,
+    "https://app.takosumi.test/v1/capabilities",
+  );
+  assert.equal(body.endpoints.oidc_issuer, "https://app.takosumi.test");
+  assert.equal(spy.calls.length, 0);
+});
+
 test("composed app delegates non-installation paths to the account-plane fallback", async () => {
   const { app, spy } = await buildTestApp();
   // `/dashboard` is an account-plane surface the service never registers; it
