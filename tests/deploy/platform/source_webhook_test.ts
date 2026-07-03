@@ -38,6 +38,7 @@ import {
   pollAutoSyncSources,
   planStaleCapsuleUpdates,
   repairStaleOpenTofuRuns,
+  scheduledSourcePollBatch,
   summarizePrometheusMetrics,
   verifyPlatformCloudExtensionPersonalAccessToken,
   verifyPlatformCloudExtensionServiceAccessToken,
@@ -280,6 +281,25 @@ test("scheduled poll enqueues a deduped sync per autoSync source, capped", async
   };
   await pollAutoSyncSources(ops, 50);
   expect(syncCalls).toEqual(["src_a", "src_b"]);
+});
+
+test("scheduled source poll batch is operator configurable with a small default", () => {
+  expect(scheduledSourcePollBatch({} as never)).toBe(5);
+  expect(
+    scheduledSourcePollBatch({
+      TAKOSUMI_SCHEDULED_SOURCE_POLL_BATCH: "2",
+    } as never),
+  ).toBe(2);
+  expect(
+    scheduledSourcePollBatch({
+      TAKOSUMI_SCHEDULED_SOURCE_POLL_BATCH: "0",
+    } as never),
+  ).toBe(5);
+  expect(
+    scheduledSourcePollBatch({
+      TAKOSUMI_SCHEDULED_SOURCE_POLL_BATCH: "not-a-number",
+    } as never),
+  ).toBe(5);
 });
 
 test("stale Capsule auto-plan is opt-in", () => {

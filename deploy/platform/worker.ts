@@ -3188,11 +3188,18 @@ function bearerFromAuthorization(header: string): string | undefined {
 }
 
 // Capped batch so a single cron tick never enqueues an unbounded number of runs.
-const SCHEDULED_SOURCE_POLL_BATCH = 50;
+const DEFAULT_SCHEDULED_SOURCE_POLL_BATCH = 5;
+
+export function scheduledSourcePollBatch(env: DeployControlEnv): number {
+  return positiveInteger(
+    Number(env.TAKOSUMI_SCHEDULED_SOURCE_POLL_BATCH),
+    DEFAULT_SCHEDULED_SOURCE_POLL_BATCH,
+  );
+}
 
 async function runScheduledSourcePoll(env: DeployControlEnv): Promise<void> {
   const operations = await deployControlSeam(env).operations();
-  await pollAutoSyncSources(operations, SCHEDULED_SOURCE_POLL_BATCH);
+  await pollAutoSyncSources(operations, scheduledSourcePollBatch(env));
 }
 
 /**

@@ -50,6 +50,33 @@ class FailingApplyAdapter extends PluginSpyAdapter {
   }
 }
 
+class SlowDeleteAdapter extends PluginSpyAdapter {
+  readonly started: Promise<void>;
+  #startDelete!: () => void;
+  #finishDelete!: () => void;
+  #finishDeletePromise: Promise<void>;
+
+  constructor() {
+    super();
+    this.started = new Promise((resolve) => {
+      this.#startDelete = resolve;
+    });
+    this.#finishDeletePromise = new Promise((resolve) => {
+      this.#finishDelete = resolve;
+    });
+  }
+
+  finishDelete(): void {
+    this.#finishDelete();
+  }
+
+  override async delete(input: AdapterDeleteInput): Promise<void> {
+    this.deleteInputs.push(input);
+    this.#startDelete();
+    await this.#finishDeletePromise;
+  }
+}
+
 const POOL: TargetPoolSpec = {
   targets: [
     {
@@ -397,6 +424,55 @@ test("delete resolves native target from the non-default TargetPool that created
   expect(adapter.deleteInputs[0]?.nativeResources).toEqual([
     { type: "takosumi.object_bucket", id: "assets" },
   ]);
+});
+
+test("delete is idempotent while adapter-backed destroy is in progress", async () => {
+  const stores = createInMemoryResourceShapeStores();
+  const adapter = new SlowDeleteAdapter();
+  const service = new ResourceShapeService({
+    stores,
+    adapter,
+    now: () => NOW,
+  });
+  await seed(service);
+
+  const created = await service.apply(APPLY);
+  expect(created.ok).toBe(true);
+
+  const firstDelete = service.delete(
+    "space_1",
+    "ObjectBucket",
+    "assets",
+    ACTOR,
+  );
+  await adapter.started;
+
+  const deleting = await service.get("space_1", "ObjectBucket", "assets");
+  expect(deleting.ok).toBe(true);
+  if (deleting.ok) expect(deleting.value.status?.phase).toBe("Deleting");
+
+  const secondDelete = await service.delete(
+    "space_1",
+    "ObjectBucket",
+    "assets",
+    ACTOR,
+  );
+  expect(secondDelete.ok).toBe(true);
+  expect(adapter.deleteInputs).toHaveLength(1);
+
+  const updateWhileDeleting = await service.apply(APPLY);
+  expect(updateWhileDeleting.ok).toBe(false);
+  if (!updateWhileDeleting.ok) {
+    expect(updateWhileDeleting.error.code).toBe("delete_blocked");
+  }
+
+  adapter.finishDelete();
+  const completed = await firstDelete;
+  expect(completed.ok).toBe(true);
+  expect(adapter.deleteInputs).toHaveLength(1);
+
+  const remaining = await service.get("space_1", "ObjectBucket", "assets");
+  expect(remaining.ok).toBe(false);
 });
 
 test("new resource apply failure rolls back the provisional lock so delete only clears the ledger", async () => {
