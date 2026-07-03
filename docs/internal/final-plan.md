@@ -435,6 +435,16 @@ resource "takosumi_edge_worker" "api" {
 }
 ```
 
+`profiles` are examples of endpoint-defined capability/profile tokens. The
+OpenTofu provider must not freeze this list in the provider binary; support is
+advertised and enforced by the Takosumi endpoint through capabilities,
+TargetPool policy, adapter evidence, and the Resolver.
+
+The same rule applies to shape `interfaces` such as ObjectBucket interfaces.
+Takosumi owns the typed service form (`ObjectBucket`, `EdgeWorker`, `Queue`,
+etc.); the concrete interface/profile tokens are capability evidence that an
+endpoint or operator can extend.
+
 Important rules:
 
 ```text

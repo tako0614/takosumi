@@ -274,6 +274,12 @@ Shape-specific fields:
 module through `hashicorp/http`; it requires `artifact_sha256` so the runner
 fails closed if the bytes change.
 
+`profiles`, `compatibility_flags`, and shape `interfaces` such as
+`takosumi_object_bucket.interfaces` are endpoint-defined tokens. The provider
+only rejects blank/whitespace values; the configured Takosumi endpoint's
+capabilities, TargetPool policy, adapter evidence, and Resolver decide whether
+the token is supported.
+
 Operator/admin fields:
 
 | Resource               | Required fields              | Optional fields                                                               |

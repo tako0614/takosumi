@@ -19,8 +19,6 @@ import (
 	"github.com/takosjp/terraform-provider-takosumi/internal/client"
 )
 
-var edgeWorkerProfiles = []string{"workers_bindings", "node_compat", "service_bindings", "static_assets"}
-
 var (
 	_ resource.Resource                = (*edgeWorkerResource)(nil)
 	_ resource.ResourceWithConfigure   = (*edgeWorkerResource)(nil)
@@ -96,9 +94,9 @@ func (r *edgeWorkerResource) Schema(_ context.Context, _ resource.SchemaRequest,
 			"profiles": schema.SetAttribute{
 				Optional:    true,
 				ElementType: types.StringType,
-				Description: "Optional Worker profile tokens. Allowed values: " + strings.Join(edgeWorkerProfiles, ", ") + ".",
+				Description: "Optional Worker profile tokens. Values are endpoint-defined and validated by Takosumi capabilities, TargetPool policy, and the Resolver.",
 				Validators: []validator.Set{
-					SetStringsOneOf(0, edgeWorkerProfiles...),
+					SetStringsNonEmpty(0),
 				},
 			},
 			"space": schema.StringAttribute{

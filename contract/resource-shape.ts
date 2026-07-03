@@ -125,8 +125,13 @@ export interface ResourceConnectionSpec {
 
 // --- EdgeWorker shape (`docs/internal/final-plan.md` §5 / §10.1) ---------------------
 
-export type EdgeWorkerProfile =
-  "workers_bindings" | "node_compat" | "service_bindings" | "static_assets";
+/**
+ * Endpoint-defined Worker capability/profile token. Standard examples include
+ * `workers_bindings`, `node_compat`, `service_bindings`, and `static_assets`,
+ * but operators/adapters can advertise additional tokens through TargetPool
+ * capability evidence and the Resolver.
+ */
+export type EdgeWorkerProfile = string;
 
 export interface EdgeWorkerSource {
   /**
@@ -157,7 +162,11 @@ export type EdgeWorkerResource = ResourceObject<"EdgeWorker", EdgeWorkerSpec>;
 
 // --- Data / runtime shapes ---------------------------------------------------
 
-export type ObjectBucketInterface = "s3_api" | "signed_url" | "object_events";
+/**
+ * Endpoint-defined ObjectBucket interface token. Standard examples include
+ * `s3_api`, `signed_url`, and `object_events`.
+ */
+export type ObjectBucketInterface = string;
 
 export interface ObjectBucketSpec {
   readonly name: string;
