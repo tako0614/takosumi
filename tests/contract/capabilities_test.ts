@@ -44,6 +44,17 @@ test("Takosumi product capabilities separate framework from enabled profiles", (
   assert.equal(capabilities.commercial.payment_enforcement, false);
 });
 
+test("Takosumi adapter capabilities can carry operator-defined extension tokens", () => {
+  const capabilities = createTakosumiProductCapabilities({
+    adapters: {
+      "operator.edge-runtime": true,
+    },
+  });
+
+  assert.equal(capabilities.adapters.opentofu, true);
+  assert.equal(capabilities.adapters["operator.edge-runtime"], true);
+});
+
 test("Takosumi discovery can publish a scoped S3-compatible endpoint", () => {
   const document = createTakosumiWellKnownDocument({
     origin: "https://takosumi.example.com/",

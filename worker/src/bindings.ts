@@ -102,6 +102,14 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
    * `/v1/capabilities`. CSV/whitespace list or `all`.
    */
   readonly TAKOSUMI_RESOURCE_ADAPTERS?: string;
+  /**
+   * Operator-defined Resource Shape adapter capability tokens advertised through
+   * `/v1/capabilities`. CSV/whitespace list or JSON string array. These are not
+   * parsed as known built-in adapter families; they are accepted as extension
+   * tokens and must still be backed by TargetPool capability evidence and a
+   * plugin-aware adapter at runtime.
+   */
+  readonly TAKOSUMI_RESOURCE_ADAPTER_EXTENSIONS?: string;
 }
 
 export type OpenTofuRunAction =

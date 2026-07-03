@@ -71,10 +71,11 @@ import {
   platformCloudExtensionRoutes,
   type PlatformCloudExtensionRoute,
 } from "./cloud_extensions.ts";
-import type {
-  CreateTakosumiDiscoveryOptions,
-  TakosumiAdapterCapabilities,
-  TakosumiResourceCapabilities,
+import {
+  TAKOSUMI_ADAPTER_CAPABILITY_KEYS,
+  type CreateTakosumiDiscoveryOptions,
+  type TakosumiAdapterCapabilities,
+  type TakosumiResourceCapabilities,
 } from "takosumi-contract/capabilities";
 import type { Capsule } from "takosumi-contract/capsules";
 import type { Run, RunStatus, RunType } from "takosumi-contract/runs";
@@ -292,8 +293,7 @@ const RESOURCE_CAPABILITY_KEYS: readonly Exclude<
   "ContainerService",
 ];
 
-const ADAPTER_CAPABILITY_KEYS: readonly (keyof TakosumiAdapterCapabilities)[] =
-  ["opentofu", "aws", "cloudflare", "kubernetes", "vm", "takosumi_native"];
+const ADAPTER_CAPABILITY_KEYS = TAKOSUMI_ADAPTER_CAPABILITY_KEYS;
 
 type MutablePartial<T> = {
   -readonly [K in keyof T]?: T[K];
@@ -328,6 +328,11 @@ function platformAdapterCapabilities(
   for (const key of parseCapabilityList(
     env.TAKOSUMI_RESOURCE_ADAPTERS,
     ADAPTER_CAPABILITY_KEYS,
+  )) {
+    base[key] = true;
+  }
+  for (const key of parseExtensionCapabilityTokens(
+    env.TAKOSUMI_RESOURCE_ADAPTER_EXTENSIONS,
   )) {
     base[key] = true;
   }
@@ -377,6 +382,18 @@ function parseCapabilityTokens(raw: string): readonly string[] {
     .split(/[,\s]+/u)
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function parseExtensionCapabilityTokens(value: unknown): readonly string[] {
+  if (typeof value !== "string" || value.trim().length === 0) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const token of parseCapabilityTokens(value.trim())) {
+    if (token.trim() === "" || /\s/u.test(token) || seen.has(token)) continue;
+    seen.add(token);
+    out.push(token);
+  }
+  return out;
 }
 
 export function platformResourceShapeApiEnabled(

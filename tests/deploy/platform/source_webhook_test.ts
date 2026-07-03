@@ -1569,6 +1569,8 @@ test("platform Resource Shape API discovery is gated by deploy-control token and
     TAKOSUMI_RESOURCE_SHAPES:
       "EdgeWorker,ObjectBucket,KVStore,Queue,SQLDatabase",
     TAKOSUMI_RESOURCE_ADAPTERS: "cloudflare",
+    TAKOSUMI_RESOURCE_ADAPTER_EXTENSIONS:
+      "operator.edge-runtime operator.container-runtime operator.edge-runtime",
   } as never;
 
   expect(platformResourceShapeApiEnabled({} as never)).toBe(false);
@@ -1591,6 +1593,8 @@ test("platform Resource Shape API discovery is gated by deploy-control token and
   expect(body.resources.ContainerService).toBe(false);
   expect(body.adapters.cloudflare).toBe(true);
   expect(body.adapters.takosumi_native).toBe(false);
+  expect(body.adapters["operator.edge-runtime"]).toBe(true);
+  expect(body.adapters["operator.container-runtime"]).toBe(true);
 
   const disabledShape = await handlePlatformResourceShapeApiRequest(
     new Request("https://app.takosumi.com/v1/resources/ContainerService/api", {

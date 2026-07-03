@@ -268,6 +268,27 @@ OpenAI-compatible endpoints should stay the external surface when they fit.
 When no adequate standard exists for a repeated service form, Takosumi defines
 the shape itself.
 
+There are two extension layers:
+
+```text
+HCL shape layer:
+  new takosumi_* resource types require a schema/API/provider release.
+  This preserves OpenTofu plan diffs, validation, import, state upgrades, and
+  completion.
+
+implementation layer:
+  operators can add targets, implementation tokens, adapter plugins, and
+  capability evidence without changing the HCL shape.
+  The resolver accepts those operator-defined tokens through TargetPool,
+  Policy, Adapter, and ResolutionLock.
+```
+
+This means a provider-neutral service form such as `ContainerService` can land
+on Kubernetes, Cloudflare Containers, VM fleet, Takosumi Native, or an
+operator-defined runtime plugin while the user's HCL stays the same. It does
+not mean a live Takosumi endpoint can invent arbitrary new OpenTofu resource
+schemas at runtime.
+
 The public Resource API is Takosumi-native but should follow standard API
 conventions:
 

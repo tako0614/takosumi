@@ -58,9 +58,10 @@ import {
   decodeActorContext,
   TAKOSUMI_INTERNAL_ACTOR_HEADER,
 } from "takosumi-contract/internal/rpc";
-import type {
-  TakosumiAdapterCapabilities,
-  TakosumiResourceCapabilities,
+import {
+  TAKOSUMI_ADAPTER_CAPABILITY_KEYS,
+  type TakosumiAdapterCapabilities,
+  type TakosumiResourceCapabilities,
 } from "takosumi-contract/capabilities";
 
 export async function createWorkerServiceApp(
@@ -223,8 +224,7 @@ function officialCatalogSourceFromEnv(
 const RESOURCE_CAPABILITY_KEYS: readonly ResourceShapeKind[] =
   RESOURCE_SHAPE_KINDS;
 
-const ADAPTER_CAPABILITY_KEYS: readonly (keyof TakosumiAdapterCapabilities)[] =
-  ["opentofu", "aws", "cloudflare", "kubernetes", "vm", "takosumi_native"];
+const ADAPTER_CAPABILITY_KEYS = TAKOSUMI_ADAPTER_CAPABILITY_KEYS;
 
 type MutablePartial<T> = { -readonly [K in keyof T]?: T[K] };
 
@@ -259,6 +259,11 @@ function resourceShapeCapabilitiesFromEnv(env: CloudflareWorkerEnv): {
     for (const key of parseCapabilityList(
       env.TAKOSUMI_RESOURCE_ADAPTERS,
       ADAPTER_CAPABILITY_KEYS,
+    )) {
+      adapters[key] = true;
+    }
+    for (const key of parseExtensionCapabilityTokens(
+      env.TAKOSUMI_RESOURCE_ADAPTER_EXTENSIONS,
     )) {
       adapters[key] = true;
     }
@@ -303,6 +308,18 @@ function parseCapabilityTokens(raw: string): readonly string[] {
     .split(/[,\s]+/u)
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function parseExtensionCapabilityTokens(value: unknown): readonly string[] {
+  if (typeof value !== "string" || value.trim().length === 0) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const token of parseCapabilityTokens(value.trim())) {
+    if (token.trim() === "" || /\s/u.test(token) || seen.has(token)) continue;
+    seen.add(token);
+    out.push(token);
+  }
+  return out;
 }
 
 /**

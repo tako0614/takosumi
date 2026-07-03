@@ -214,6 +214,12 @@ endpoint through env/secret projection.
 
 Backends are resolved through TargetPool, Policy, capability evidence, and
 ResolutionLock. Normal `takosumi_*` HCL does not hard-code backend placement.
+`/v1/capabilities.adapters` may return operator-defined adapter tokens as
+additional boolean keys alongside the known keys (`opentofu`, `aws`,
+`cloudflare`, `kubernetes`, `vm`, and `takosumi_native`). Those extension keys
+add implementations for existing typed shapes; they do not create new
+`takosumi_*` HCL resource types at runtime. New shapes still require a
+schema/API/provider release.
 
 ```http
 POST /v1/targets
