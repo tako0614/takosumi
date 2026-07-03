@@ -45,6 +45,11 @@ import {
   TAKOSUMI_PRODUCT_CAPABILITIES_PATH,
   TAKOSUMI_WELL_KNOWN_PATH,
 } from "takosumi-contract/api-surface";
+import type { ActorContext } from "takosumi-contract";
+import {
+  encodeActorContext,
+  TAKOSUMI_INTERNAL_ACTOR_HEADER,
+} from "takosumi-contract/internal/rpc";
 import type { RuntimeAgentRegistry } from "../../core/agents/types.ts";
 import {
   creditBalanceAvailableUsdMicros,
@@ -263,7 +268,8 @@ function platformDiscoveryOptions(
     adapters,
     compat: {
       s3: extensionCapabilities.s3Compat,
-      provider_cloudflare_workers: extensionCapabilities.providerCompatCloudflareWorkers,
+      provider_cloudflare_workers:
+        extensionCapabilities.providerCompatCloudflareWorkers,
     },
     endpoints: {
       ...(extensionCapabilities.s3Endpoint
@@ -393,14 +399,354 @@ export function isPlatformResourceShapeApiPath(pathname: string): boolean {
 export async function handlePlatformResourceShapeApiRequest(
   request: Request,
   env: CloudflareWorkerEnv,
+  sessionVerifier: PlatformCloudExtensionSessionVerifier = verifyPlatformCloudExtensionSession,
+  usageRecorder: PlatformCloudExtensionUsageRecorder = async (
+    spaceId,
+    input,
+  ) => {
+    await (await takosumiOperationsFor(env)).recordMeteredUsage(spaceId, input);
+  },
+  usageAuthorizer: PlatformCloudExtensionUsageAuthorizer = async (
+    spaceId,
+    input,
+  ) => {
+    const operations = await takosumiOperationsFor(env);
+    const { billing } = await operations.getWorkspaceBilling(spaceId);
+    const availableUsdMicros = creditBalanceAvailableUsdMicros(billing.balance);
+    const requiredUsdMicros = input.usdMicros ?? 0;
+    if (requiredUsdMicros > availableUsdMicros) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "metered usage spend failed: insufficient USD balance",
+        {
+          reason: "insufficient_credits",
+          workspaceId: spaceId,
+          usdMicros: requiredUsdMicros,
+        },
+      );
+    }
+  },
 ): Promise<Response> {
   if (!platformResourceShapeApiEnabled(env)) {
     return Response.json({ error: "not found" }, { status: 404 });
+  }
+  if (!platformResourceShapeHasDeployControlBearer(request, env)) {
+    const authorized = await platformResourceShapeExternalRequest(
+      request,
+      env,
+      sessionVerifier,
+      usageRecorder,
+      usageAuthorizer,
+    );
+    if (!authorized.ok) return authorized.response;
+    request = authorized.request;
   }
   const service = await cachedDeployControlService(
     env as unknown as DeployControlEnv,
   );
   return await service.app.fetch(request);
+}
+
+function platformResourceShapeHasDeployControlBearer(
+  request: Request,
+  env: CloudflareWorkerEnv,
+): boolean {
+  const token =
+    typeof env.TAKOSUMI_DEPLOY_CONTROL_TOKEN === "string"
+      ? env.TAKOSUMI_DEPLOY_CONTROL_TOKEN
+      : undefined;
+  const bearer = bearerFromAuthorization(
+    request.headers.get("authorization") ?? "",
+  );
+  return Boolean(token && bearer && constantTimeEqualsString(bearer, token));
+}
+
+async function platformResourceShapeExternalRequest(
+  request: Request,
+  env: CloudflareWorkerEnv,
+  sessionVerifier: PlatformCloudExtensionSessionVerifier,
+  usageRecorder: PlatformCloudExtensionUsageRecorder,
+  usageAuthorizer: PlatformCloudExtensionUsageAuthorizer,
+): Promise<
+  | { readonly ok: true; readonly request: Request }
+  | { readonly ok: false; readonly response: Response }
+> {
+  const session = await sessionVerifier(request, env);
+  if (!session.authenticated) {
+    return {
+      ok: false,
+      response: Response.json({ error: "unauthenticated" }, { status: 401 }),
+    };
+  }
+
+  const materialized = await materializeRequestBody(request);
+  if (!materialized.ok) return materialized;
+  const url = new URL(request.url);
+  const body = materialized.bodyText
+    ? objectRecord(JSON.parse(materialized.bodyText))
+    : {};
+  const requested = platformCloudExtensionRequestedBillingContext(request);
+  const requestSpaceId = platformResourceShapeRequestSpaceId(
+    request,
+    url,
+    body,
+  );
+  if (
+    requested.spaceId &&
+    requestSpaceId &&
+    requested.spaceId !== requestSpaceId
+  ) {
+    return platformCloudExtensionUsageFailure("usage_workspace_id_mismatch");
+  }
+  const billingSpaceId =
+    requested.spaceId ??
+    requestSpaceId ??
+    safePlatformCloudExtensionContextId(session.spaceId);
+  const meter = platformResourceShapeUsageMeter(request);
+  if (!billingSpaceId) {
+    return meter
+      ? platformCloudExtensionUsageFailure("usage_workspace_id_missing")
+      : {
+          ok: false,
+          response: Response.json(
+            {
+              error: "invalid_request",
+              error_description: "space is required",
+            },
+            { status: 400 },
+          ),
+        };
+  }
+
+  const billingContextRequest = cloneRequestWithBody(
+    materialized,
+    (headers) => {
+      headers.set(
+        PLATFORM_CLOUD_EXTENSION_BILLING_WORKSPACE_ID_HEADER,
+        billingSpaceId,
+      );
+    },
+  );
+  const verified = await platformCloudExtensionVerifiedBillingSession(
+    billingContextRequest,
+    env,
+    session,
+  );
+  if (!verified.ok) return verified;
+
+  if (meter) {
+    const charged = await prechargePlatformResourceShapeUsage(
+      billingSpaceId,
+      meter,
+      env,
+      usageRecorder,
+      usageAuthorizer,
+    );
+    if (!charged.ok) return charged;
+  }
+
+  return {
+    ok: true,
+    request: cloneRequestWithBody(materialized, (headers) => {
+      headers.set(
+        "authorization",
+        `Bearer ${String(env.TAKOSUMI_DEPLOY_CONTROL_TOKEN)}`,
+      );
+      headers.set(
+        TAKOSUMI_INTERNAL_ACTOR_HEADER,
+        encodeActorContext(
+          platformResourceShapeActorContext(verified.session, billingSpaceId),
+        ),
+      );
+      for (const header of PLATFORM_CLOUD_EXTENSION_RAW_CREDENTIAL_HEADERS) {
+        if (header !== "authorization") headers.delete(header);
+      }
+    }),
+  };
+}
+
+async function materializeRequestBody(request: Request): Promise<
+  | {
+      readonly ok: true;
+      readonly request: Request;
+      readonly bodyText?: string;
+    }
+  | { readonly ok: false; readonly response: Response }
+> {
+  if (request.method === "GET" || request.method === "HEAD") {
+    return { ok: true, request };
+  }
+  const bodyText = await request.text();
+  if (bodyText.trim()) {
+    try {
+      JSON.parse(bodyText);
+    } catch {
+      return {
+        ok: false,
+        response: Response.json(
+          {
+            error: "invalid_request",
+            error_description: "body must be JSON",
+          },
+          { status: 400 },
+        ),
+      };
+    }
+  }
+  return { ok: true, request, bodyText };
+}
+
+function cloneRequestWithBody(
+  materialized: { readonly request: Request; readonly bodyText?: string },
+  updateHeaders: (headers: Headers) => void,
+): Request {
+  const headers = new Headers(materialized.request.headers);
+  headers.delete(TAKOSUMI_INTERNAL_ACTOR_HEADER);
+  updateHeaders(headers);
+  return new Request(materialized.request.url, {
+    method: materialized.request.method,
+    headers,
+    body:
+      materialized.request.method === "GET" ||
+      materialized.request.method === "HEAD"
+        ? undefined
+        : (materialized.bodyText ?? ""),
+    redirect: materialized.request.redirect,
+  });
+}
+
+function platformResourceShapeRequestSpaceId(
+  request: Request,
+  url: URL,
+  body: Record<string, unknown>,
+): string | undefined {
+  return (
+    safePlatformCloudExtensionContextId(url.searchParams.get("space")) ??
+    safePlatformCloudExtensionContextId(
+      request.headers.get(PLATFORM_CLOUD_EXTENSION_BILLING_WORKSPACE_ID_HEADER),
+    ) ??
+    safePlatformCloudExtensionContextId(valueString(body.space)) ??
+    safePlatformCloudExtensionContextId(
+      valueString(objectRecord(body.metadata).space),
+    )
+  );
+}
+
+function platformResourceShapeUsageMeter(
+  request: Request,
+): PlatformCloudUsageMeter | undefined {
+  if (request.method.toUpperCase() !== "PUT") return undefined;
+  const url = new URL(request.url);
+  const segments = pathSegmentsForUsageMatch(url.pathname);
+  if (
+    segments.length === 4 &&
+    segments[0] === "v1" &&
+    segments[1] === "resources"
+  ) {
+    return {
+      meterId: "takosumi:resource_shape:apply",
+      resourceFamily: "takosumi.resource_shape",
+      resourceId: `${segments[2]}:${segments[3]}`,
+      operation: "apply",
+      kind: "operation",
+      quantity: 1,
+    };
+  }
+  if (
+    segments.length === 3 &&
+    segments[0] === "v1" &&
+    segments[1] === "target-pools"
+  ) {
+    return {
+      meterId: "takosumi:resource_shape:target_pool_put",
+      resourceFamily: "takosumi.target_pool",
+      resourceId: `target-pool:${segments[2]}`,
+      operation: "target_pool_put",
+      kind: "operation",
+      quantity: 1,
+    };
+  }
+  if (
+    segments.length === 3 &&
+    segments[0] === "v1" &&
+    segments[1] === "space-policies"
+  ) {
+    return {
+      meterId: "takosumi:resource_shape:space_policy_put",
+      resourceFamily: "takosumi.space_policy",
+      resourceId: `space-policy:${segments[2]}`,
+      operation: "space_policy_put",
+      kind: "operation",
+      quantity: 1,
+    };
+  }
+  return undefined;
+}
+
+async function prechargePlatformResourceShapeUsage(
+  spaceId: string,
+  meter: PlatformCloudUsageMeter,
+  env: CloudflareWorkerEnv,
+  usageRecorder: PlatformCloudExtensionUsageRecorder,
+  usageAuthorizer: PlatformCloudExtensionUsageAuthorizer,
+): Promise<
+  { readonly ok: true } | { readonly ok: false; readonly response: Response }
+> {
+  const priceBook = parsePlatformCloudUsagePriceBook(
+    env.TAKOSUMI_CLOUD_USAGE_PRICE_BOOK,
+  );
+  if (!priceBook.ok) return platformCloudExtensionUsageFailure(priceBook.error);
+  const usdMicros = pricePlatformCloudUsageMeter(meter, priceBook.value);
+  if (!usdMicros.ok) return platformCloudExtensionUsageFailure(usdMicros.error);
+  const now = new Date().toISOString();
+  const input: RecordMeteredUsageInput = {
+    meterId: meter.meterId,
+    ...(meter.resourceFamily ? { resourceFamily: meter.resourceFamily } : {}),
+    ...(meter.resourceId ? { resourceId: meter.resourceId } : {}),
+    ...(meter.operation ? { operation: meter.operation } : {}),
+    kind: platformCloudUsageEventKind(meter.kind) ?? "operation",
+    quantity: meter.quantity,
+    usdMicros: usdMicros.value,
+    source: "resource_meter",
+    spendRequired: true,
+    idempotencyKey: [
+      "resource-shape",
+      spaceId,
+      meter.meterId,
+      meter.resourceId ?? "none",
+      now,
+    ].join(":"),
+    createdAt: now,
+  };
+  try {
+    await usageAuthorizer(spaceId, input);
+    await usageRecorder(spaceId, input);
+    return { ok: true };
+  } catch (error) {
+    return platformCloudExtensionUsageFailure(
+      platformCloudExtensionUsageRecordFailureReason(error),
+    );
+  }
+}
+
+function platformResourceShapeActorContext(
+  session: PlatformCloudExtensionSessionContext,
+  spaceId: string,
+): ActorContext {
+  return {
+    actorAccountId:
+      safePlatformCloudExtensionContextId(session.subject) ??
+      `${session.authKind ?? "session"}:resource-shape`,
+    roles: session.scopes?.includes("admin") ? ["owner"] : ["operator"],
+    requestId: crypto.randomUUID(),
+    spaceId,
+    ...(session.authKind === "service-token"
+      ? { principalKind: "service", serviceId: session.subject }
+      : { principalKind: "account" }),
+    ...(session.scopes && session.scopes.length > 0
+      ? { scopes: [...session.scopes] }
+      : {}),
+  };
 }
 
 function platformCloudExtensionCapabilities(env: CloudflareWorkerEnv): {
@@ -1680,10 +2026,17 @@ async function platformCloudExtensionAuthContext(
   };
 }
 
-async function platformCloudExtensionVerifiedBillingSession(
+type PlatformCloudExtensionWorkspaceAccess = (
+  request: Request,
+  env: CloudflareWorkerEnv,
+  workspaceId: string,
+) => Promise<boolean>;
+
+export async function platformCloudExtensionVerifiedBillingSession(
   request: Request,
   env: CloudflareWorkerEnv,
   session: PlatformCloudExtensionSessionContext,
+  workspaceAccess: PlatformCloudExtensionWorkspaceAccess = platformCloudExtensionSessionCanAccessWorkspace,
 ): Promise<
   | {
       readonly ok: true;
@@ -1702,13 +2055,12 @@ async function platformCloudExtensionVerifiedBillingSession(
       return platformCloudExtensionUsageFailure("usage_workspace_id_mismatch");
     }
     if (!verifiedSpaceId) {
+      const canRequestWorkspace =
+        session.authKind === "session" ||
+        session.authKind === "personal-access-token";
       if (
-        session.authKind !== "session" ||
-        !(await platformCloudExtensionSessionCanAccessWorkspace(
-          request,
-          env,
-          requested.spaceId,
-        ))
+        !canRequestWorkspace ||
+        !(await workspaceAccess(request, env, requested.spaceId))
       ) {
         return platformCloudExtensionUsageFailure(
           "usage_workspace_id_mismatch",
@@ -3280,8 +3632,9 @@ export async function planStaleCapsuleUpdates(
   for (const workspace of workspaces) {
     let staleCapsules: readonly Capsule[];
     try {
-      staleCapsules = (await operations.installations.listCapsules(workspace.id))
-        .filter((capsule) => capsule.status === "stale");
+      staleCapsules = (
+        await operations.installations.listCapsules(workspace.id)
+      ).filter((capsule) => capsule.status === "stale");
     } catch {
       continue;
     }

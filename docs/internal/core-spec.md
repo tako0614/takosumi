@@ -501,6 +501,14 @@ Egress
 Operator/Cloud turns usage into meters, rating, invoices, payment, commercial
 quota, and support tooling.
 
+Hosted Resource Shape API and compatibility API calls are attributed to a
+Workspace, not to a required app-installation record. A request may carry a
+Capsule / installation id when it exists, but direct `takosumi` provider and
+Cloudflare-compatible import calls can be metered with only an authenticated
+actor and verified Workspace. Cloud-only payment enforcement may precharge those
+billable writes before forwarding; OSS core remains limited to disabled/showback
+usage recording unless an operator injects an enforcement port.
+
 ## Security
 
 OSS and Cloud share these invariants:

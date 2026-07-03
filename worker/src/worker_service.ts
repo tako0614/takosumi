@@ -51,8 +51,13 @@ import {
 } from "../../core/domains/resource-shape/opentofu_adapter.ts";
 import {
   RESOURCE_SHAPE_KINDS,
+  type ActorContext,
   type ResourceShapeKind,
 } from "takosumi-contract";
+import {
+  decodeActorContext,
+  TAKOSUMI_INTERNAL_ACTOR_HEADER,
+} from "takosumi-contract/internal/rpc";
 import type {
   TakosumiAdapterCapabilities,
   TakosumiResourceCapabilities,
@@ -153,6 +158,7 @@ export async function createWorkerServiceApp(
     enabledResourceShapeKinds: resourceShapeCapabilities.enabledKinds,
     resourceCapabilities: resourceShapeCapabilities.resources,
     adapterCapabilities: resourceShapeCapabilities.adapters,
+    resolveResourceShapeActor: resourceShapeActorFromRequest,
     ...(officialCatalogSource ? { officialCatalogSource } : {}),
     opentofuRunner,
     providerEnvRunner: opentofuRunner,
@@ -188,6 +194,16 @@ export async function createWorkerServiceApp(
     ...(dependencyValueSealer ? { dependencyValueSealer } : {}),
     ...(releaseActivator ? { releaseActivator } : {}),
   });
+}
+
+function resourceShapeActorFromRequest(request: Request): ActorContext {
+  const actorHeader = request.headers.get(TAKOSUMI_INTERNAL_ACTOR_HEADER);
+  if (actorHeader) return decodeActorContext(actorHeader);
+  return {
+    actorAccountId: "platform-resource-shape",
+    roles: ["owner"],
+    requestId: crypto.randomUUID(),
+  };
 }
 
 function officialCatalogSourceFromEnv(
