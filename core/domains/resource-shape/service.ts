@@ -71,7 +71,8 @@ export type ResourceServiceErrorCode =
   | "selected_target_missing"
   | "not_found"
   | "delete_blocked"
-  | "apply_failed";
+  | "apply_failed"
+  | "delete_failed";
 
 export interface ResourceServiceError {
   readonly code: ResourceServiceErrorCode;
@@ -222,6 +223,15 @@ export class ResourceShapeService {
   ): Promise<ServiceResult<ResourceObject>> {
     const id = formatResourceShapeId(req.space, req.kind, req.name);
     const existing = await this.#stores.resources.get(id);
+    if (existing?.phase === "Deleting") {
+      return {
+        ok: false,
+        error: {
+          code: "delete_blocked",
+          message: `resource ${id} is currently deleting`,
+        },
+      };
+    }
     const existingLock = await this.#stores.locks.get(id);
 
     const prepared = await this.#resolveAndPlan(req, existingLock);
@@ -363,6 +373,9 @@ export class ResourceShapeService {
         error: { code: "not_found", message: `resource ${id} not found` },
       };
     }
+    if (record.phase === "Deleting") {
+      return { ok: true, value: undefined };
+    }
     const lock = await this.#stores.locks.get(id);
     const entry = lock
       ? await this.#findTargetPoolEntryForDelete(space, lock.target)
@@ -390,19 +403,62 @@ export class ResourceShapeService {
           },
         };
       }
-      await this.#adapter.delete({
-        resourceId: id,
-        plan: planResourceShape(
-          lock.selectedImplementation,
-          specResult.parsed,
-          entry,
-        ),
-        nativeResources: lock.nativeResources ?? [],
-        target: entry,
-        credentialRef: entry.credentialRef,
-        deletePolicy,
-        actor,
-      });
+      const deleteClaim = await this.#stores.resources.claimDelete(
+        {
+          ...record,
+          phase: "Deleting",
+          conditions: [deletingCondition(record.generation, this.#now())],
+          updatedAt: this.#now(),
+        },
+        record.generation,
+      );
+      if (deleteClaim.status === "already_deleting") {
+        return { ok: true, value: undefined };
+      }
+      if (deleteClaim.status === "not_found") {
+        return {
+          ok: false,
+          error: { code: "not_found", message: `resource ${id} not found` },
+        };
+      }
+      if (deleteClaim.status === "conflict") {
+        return {
+          ok: false,
+          error: {
+            code: "delete_blocked",
+            message: `resource ${id} changed while delete was being claimed`,
+          },
+        };
+      }
+      const claimedRecord = deleteClaim.record;
+      try {
+        await this.#adapter.delete({
+          resourceId: id,
+          plan: planResourceShape(
+            lock.selectedImplementation,
+            specResult.parsed,
+            entry,
+          ),
+          nativeResources: lock.nativeResources ?? [],
+          target: entry,
+          credentialRef: entry.credentialRef,
+          deletePolicy,
+          actor,
+        });
+      } catch (error) {
+        await this.#stores.resources.upsert({
+          ...claimedRecord,
+          phase: "Failed",
+          conditions: [
+            deleteFailedCondition(record.generation, this.#now(), error),
+          ],
+          updatedAt: this.#now(),
+        });
+        return {
+          ok: false,
+          error: { code: "delete_failed", message: errorMessage(error) },
+        };
+      }
     }
     await this.#stores.locks.delete(id);
     await this.#stores.resources.delete(id);
@@ -843,6 +899,16 @@ function readyCondition(generation: number, at: IsoTimestamp): Condition {
   };
 }
 
+function deletingCondition(generation: number, at: IsoTimestamp): Condition {
+  return {
+    type: "Ready",
+    status: "false",
+    reason: "Deleting",
+    observedGeneration: generation,
+    lastTransitionAt: at,
+  };
+}
+
 function failedCondition(
   generation: number,
   at: IsoTimestamp,
@@ -852,6 +918,21 @@ function failedCondition(
     type: "Ready",
     status: "false",
     reason: "ApplyFailed",
+    message: errorMessage(error),
+    observedGeneration: generation,
+    lastTransitionAt: at,
+  };
+}
+
+function deleteFailedCondition(
+  generation: number,
+  at: IsoTimestamp,
+  error: unknown,
+): Condition {
+  return {
+    type: "Ready",
+    status: "false",
+    reason: "DeleteFailed",
     message: errorMessage(error),
     observedGeneration: generation,
     lastTransitionAt: at,

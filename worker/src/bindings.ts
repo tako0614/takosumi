@@ -41,6 +41,11 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
   readonly TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR?: string;
   readonly TAKOSUMI_SOURCE_ARCHIVE_ZSTD_LEVEL?: string;
   /**
+   * Maximum auto-sync Sources a scheduled cron tick may enqueue. This is an
+   * operator load-shedding knob for runner-backed source_sync runs.
+   */
+  readonly TAKOSUMI_SCHEDULED_SOURCE_POLL_BATCH?: string;
+  /**
    * Local/private probe ingress opt-in for the `/internal/v1/*` HTTP seam.
    * Production edge deployments omit this so generic internal APIs stay 404.
    */

@@ -470,6 +470,7 @@ function httpStatusForServiceError(
     case "delete_blocked":
       return 409;
     case "apply_failed":
+    case "delete_failed":
       return 502;
   }
 }

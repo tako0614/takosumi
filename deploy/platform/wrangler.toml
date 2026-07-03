@@ -187,6 +187,9 @@ TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR = "/tmp/takosumi-provider-cache"
 # Lower zstd levels trade a slightly larger SourceSnapshot archive for faster
 # first install/source_sync. The runner validates the accepted range.
 TAKOSUMI_SOURCE_ARCHIVE_ZSTD_LEVEL = "1"
+# Keep scheduled source_sync from competing with user-facing plan/apply/destroy
+# runs for runner container capacity.
+TAKOSUMI_SCHEDULED_SOURCE_POLL_BATCH = "5"
 # Production hardening evidence gate. In observe mode the internal gate reports
 # missing/drifted evidence but does not return 503. Platform readiness access must
 # stay closed in observe mode: TAKOSUMI_ACCOUNTS_PLATFORM_ACCESS="open"

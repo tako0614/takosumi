@@ -78,6 +78,12 @@ export interface CloudflareWorkerEnv {
   readonly TAKOSUMI_ACCOUNTS_UPSTREAM_SESSION_TTL_MS?: string;
   readonly TAKOSUMI_ACCOUNTS_LOGIN_EMAIL_ALLOWLIST?: string;
   readonly TAKOSUMI_ACCOUNTS_LOGIN_EMAIL_ALLOWLIST_REQUIRE_VERIFIED?: string;
+  /**
+   * Shared platform-worker load-shedding knob used by the scheduled deploy-control
+   * source poller. Optional and intentionally not part of the required accounts
+   * binding set.
+   */
+  readonly TAKOSUMI_SCHEDULED_SOURCE_POLL_BATCH?: string;
   readonly TAKOSUMI_ACCOUNTS_UPSTREAM_GOOGLE_CLIENT_ID?: string;
   readonly TAKOSUMI_ACCOUNTS_UPSTREAM_GOOGLE_CLIENT_SECRET?: string;
   readonly TAKOSUMI_ACCOUNTS_UPSTREAM_GOOGLE_REDIRECT_URI?: string;

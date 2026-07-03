@@ -33,6 +33,7 @@ import type {
   TargetPoolRecordId,
 } from "./records.ts";
 import type {
+  ResourceDeleteClaimResult,
   ResolutionLockStore,
   ResourceShapeStore,
   ResourceShapeStores,
@@ -267,6 +268,31 @@ class SqlResourceShapeStore implements ResourceShapeStore {
       [spaceId],
     );
     return result.rows.map(resourceShapeFromRow);
+  }
+
+  async claimDelete(
+    record: ResourceShapeRecord,
+    expectedGeneration: number,
+  ): Promise<ResourceDeleteClaimResult> {
+    const result = await this.#client.query(
+      `update ${this.#table}
+       set phase = $1, conditions_json = $2::jsonb, updated_at = $3
+       where id = $4 and generation = $5 and phase != 'Deleting'`,
+      [
+        record.phase,
+        jsonOrNull(record.conditions),
+        record.updatedAt,
+        record.id,
+        expectedGeneration,
+      ],
+    );
+    if (result.rowCount > 0) return { status: "claimed", record };
+    const current = await this.get(record.id);
+    if (!current) return { status: "not_found" };
+    if (current.phase === "Deleting") {
+      return { status: "already_deleting", record: current };
+    }
+    return { status: "conflict", record: current };
   }
 
   async delete(id: ResourceShapeRecordId): Promise<void> {

@@ -29,6 +29,7 @@ const SPACE_A = "sp_alpha" as SpaceId;
 const SPACE_B = "sp_beta" as SpaceId;
 const T0 = "2026-06-29T00:00:00.000Z" as IsoTimestamp;
 const T1 = "2026-06-29T01:00:00.000Z" as IsoTimestamp;
+const T2 = "2026-06-29T02:00:00.000Z" as IsoTimestamp;
 
 function fullShape(): ResourceShapeRecord {
   return {
@@ -222,6 +223,72 @@ for (const backend of backends) {
         (r) => r.id === record.id,
       );
       expect(listed).toHaveLength(1);
+    });
+
+    test("resource shape: claimDelete atomically marks one active deleter", async () => {
+      const record: ResourceShapeRecord = {
+        ...fullShape(),
+        id: formatResourceShapeId(SPACE_A, "ObjectBucket", "assets-claim"),
+        name: "assets-claim",
+      };
+      await stores.resources.upsert(record);
+      const deleting: ResourceShapeRecord = {
+        ...record,
+        phase: "Deleting",
+        conditions: [
+          {
+            type: "Ready",
+            status: "false",
+            reason: "Deleting",
+            observedGeneration: record.generation,
+          },
+        ],
+        updatedAt: T2,
+      };
+
+      const claimed = await stores.resources.claimDelete(
+        deleting,
+        record.generation,
+      );
+      expect(claimed).toEqual({ status: "claimed", record: deleting });
+      expect(await stores.resources.get(record.id)).toEqual(deleting);
+
+      const duplicate = await stores.resources.claimDelete(
+        deleting,
+        record.generation,
+      );
+      expect(duplicate).toEqual({
+        status: "already_deleting",
+        record: deleting,
+      });
+
+      const missing = await stores.resources.claimDelete(
+        {
+          ...deleting,
+          id: formatResourceShapeId(SPACE_A, "ObjectBucket", "missing"),
+        },
+        record.generation,
+      );
+      expect(missing).toEqual({ status: "not_found" });
+      await stores.resources.delete(record.id);
+    });
+
+    test("resource shape: claimDelete detects generation conflicts", async () => {
+      const record: ResourceShapeRecord = {
+        ...fullShape(),
+        id: formatResourceShapeId(SPACE_A, "ObjectBucket", "assets-conflict"),
+        name: "assets-conflict",
+      };
+      await stores.resources.upsert(record);
+      const deleting: ResourceShapeRecord = {
+        ...record,
+        phase: "Deleting",
+        updatedAt: T2,
+      };
+      const conflict = await stores.resources.claimDelete(deleting, 999);
+      expect(conflict).toEqual({ status: "conflict", record });
+      expect(await stores.resources.get(record.id)).toEqual(record);
+      await stores.resources.delete(record.id);
     });
 
     test("resource shape: listBySpace is space-scoped + delete removes", async () => {

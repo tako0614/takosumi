@@ -17,6 +17,18 @@ import type {
   TargetPoolRecordId,
 } from "./records.ts";
 
+export type ResourceDeleteClaimResult =
+  | { readonly status: "claimed"; readonly record: ResourceShapeRecord }
+  | {
+      readonly status: "already_deleting";
+      readonly record: ResourceShapeRecord;
+    }
+  | { readonly status: "not_found" }
+  | {
+      readonly status: "conflict";
+      readonly record: ResourceShapeRecord;
+    };
+
 export interface ResourceShapeStore {
   upsert(record: ResourceShapeRecord): Promise<ResourceShapeRecord>;
   get(id: ResourceShapeRecordId): Promise<ResourceShapeRecord | undefined>;
@@ -26,6 +38,10 @@ export interface ResourceShapeStore {
     name: string,
   ): Promise<ResourceShapeRecord | undefined>;
   listBySpace(spaceId: SpaceId): Promise<readonly ResourceShapeRecord[]>;
+  claimDelete(
+    record: ResourceShapeRecord,
+    expectedGeneration: number,
+  ): Promise<ResourceDeleteClaimResult>;
   delete(id: ResourceShapeRecordId): Promise<void>;
 }
 
@@ -101,6 +117,22 @@ export class InMemoryResourceShapeStore implements ResourceShapeStore {
     return Promise.resolve(
       [...this.#byId.values()].filter((record) => record.spaceId === spaceId),
     );
+  }
+
+  claimDelete(
+    record: ResourceShapeRecord,
+    expectedGeneration: number,
+  ): Promise<ResourceDeleteClaimResult> {
+    const current = this.#byId.get(record.id);
+    if (!current) return Promise.resolve({ status: "not_found" });
+    if (current.phase === "Deleting") {
+      return Promise.resolve({ status: "already_deleting", record: current });
+    }
+    if (current.generation !== expectedGeneration) {
+      return Promise.resolve({ status: "conflict", record: current });
+    }
+    this.#byId.set(record.id, record);
+    return Promise.resolve({ status: "claimed", record });
   }
 
   delete(id: ResourceShapeRecordId): Promise<void> {

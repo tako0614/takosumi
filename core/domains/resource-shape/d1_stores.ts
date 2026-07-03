@@ -31,6 +31,7 @@ import type {
   TargetPoolRecordId,
 } from "./records.ts";
 import type {
+  ResourceDeleteClaimResult,
   ResolutionLockStore,
   ResourceShapeStore,
   ResourceShapeStores,
@@ -50,7 +51,9 @@ interface D1LikePreparedStatement {
   bind(...values: readonly unknown[]): D1LikePreparedStatement;
   first<T = unknown>(): Promise<T | null>;
   all<T = unknown>(): Promise<{ readonly results?: readonly T[] }>;
-  run<T = unknown>(): Promise<unknown>;
+  run<T = unknown>(): Promise<{
+    readonly meta?: { readonly changes?: number };
+  }>;
 }
 
 // --- JSON (de)serialization helpers -----------------------------------------
@@ -277,6 +280,35 @@ class D1ResourceShapeStore implements ResourceShapeStore {
       .bind(spaceId)
       .all<ResourceShapeRow>();
     return (result.results ?? []).map(resourceShapeFromRow);
+  }
+
+  async claimDelete(
+    record: ResourceShapeRecord,
+    expectedGeneration: number,
+  ): Promise<ResourceDeleteClaimResult> {
+    const result = await this.#db
+      .prepare(
+        `update ${this.#table}
+         set phase = ?, conditions_json = ?, updated_at = ?
+         where id = ? and generation = ? and phase != 'Deleting'`,
+      )
+      .bind(
+        record.phase,
+        jsonOrNull(record.conditions),
+        record.updatedAt,
+        record.id,
+        expectedGeneration,
+      )
+      .run();
+    if ((result.meta?.changes ?? 0) > 0) {
+      return { status: "claimed", record };
+    }
+    const current = await this.get(record.id);
+    if (!current) return { status: "not_found" };
+    if (current.phase === "Deleting") {
+      return { status: "already_deleting", record: current };
+    }
+    return { status: "conflict", record: current };
   }
 
   async delete(id: ResourceShapeRecordId): Promise<void> {
