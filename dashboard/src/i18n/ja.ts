@@ -867,8 +867,7 @@ export const ja = {
   "notif.event.driftDetail": "再デプロイが必要かもしれません",
   "notif.event.stale": "依存先の更新で再デプロイが必要になりました",
   "notif.event.staleDetail": "更新元: {producer}",
-  "notif.event.connCreated":
-    "接続済みアカウント「{provider}」を追加しました",
+  "notif.event.connCreated": "接続済みアカウント「{provider}」を追加しました",
   "notif.event.connCreatedGeneric": "接続済みアカウントを追加しました",
   "notif.event.connRevoked":
     "接続済みアカウント「{provider}」が無効になりました",
@@ -941,8 +940,7 @@ export const ja = {
 
   // --- cloud resources -------------------------------------------------------------
   "cloudResources.title": "Takosumi Cloud",
-  "cloudResources.subtitle":
-    "外部キーと利用中のリソースを確認します。",
+  "cloudResources.subtitle": "外部キーと利用中のリソースを確認します。",
   "cloudResources.unavailable.title": "Takosumi Cloud 専用です",
   "cloudResources.unavailable.body":
     "この実行環境では Cloud 専用エンドポイントは提供されていません。",
@@ -1054,8 +1052,8 @@ export const ja = {
     "購入が完了しました。残高への反映まで少しかかる場合があります。",
   "billing.checkout.cancelled": "購入をキャンセルしました。",
   "billing.usage.title": "使用量",
-  "billing.usage.thisMonth": "今月の使用量",
-  "billing.usage.gateway": "Cloud リソース使用量",
+  "billing.usage.openHint": "使用履歴を開くと最近の明細を読み込みます。",
+  "billing.usage.moreAvailable": "さらに明細があります。",
   "billing.usage.loading": "使用量を読み込み中です...",
   "billing.usage.error": "使用量を読み込めませんでした: {message}",
   "billing.usage.empty": "使用量はまだありません。",
