@@ -751,6 +751,8 @@ export async function resolveOptions(
     args.appName ??
     stringRecordValue(vars, "appName") ??
     stringRecordValue(vars, "name") ??
+    stringRecordValue(vars, "project_name") ??
+    stringRecordValue(vars, "worker_name") ??
     resolvedAppName;
   const explicitRunnerProfileId =
     args.runnerProfileId ?? env.TAKOSUMI_SMOKE_RUNNER_PROFILE_ID;
