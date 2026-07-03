@@ -79,6 +79,65 @@ test("platform control-plane smoke dry-run is redacted and complete", async () =
   expect(json).not.toContain("CLOUDFLARE_API_TOKEN");
 });
 
+test("platform control-plane smoke derives app name from OpenTofu project variables", async () => {
+  const projectOptions = await resolveOptions(
+    {
+      dryRun: true,
+      url: "https://app-staging.takosumi.com",
+      space: "space_test",
+      cloudflareAccountId: "account",
+      cloudflareWorkersSubdomain: "takosumi-smoke",
+      varsJson: JSON.stringify({
+        project_name: "takos-from-project",
+        cloudflare: { account_id: "account" },
+      }),
+    },
+    {
+      TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token",
+      CLOUDFLARE_API_TOKEN: "cloudflare-token",
+    },
+  );
+  expect(projectOptions.appName).toBe("takos-from-project");
+
+  const workerOptions = await resolveOptions(
+    {
+      dryRun: true,
+      url: "https://app-staging.takosumi.com",
+      space: "space_test",
+      cloudflareAccountId: "account",
+      cloudflareWorkersSubdomain: "takosumi-smoke",
+      varsJson: JSON.stringify({
+        worker_name: "worker-from-vars",
+      }),
+    },
+    {
+      TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token",
+      CLOUDFLARE_API_TOKEN: "cloudflare-token",
+    },
+  );
+  expect(workerOptions.appName).toBe("worker-from-vars");
+
+  const explicitOptions = await resolveOptions(
+    {
+      dryRun: true,
+      url: "https://app-staging.takosumi.com",
+      space: "space_test",
+      appName: "explicit-name",
+      cloudflareAccountId: "account",
+      cloudflareWorkersSubdomain: "takosumi-smoke",
+      varsJson: JSON.stringify({
+        project_name: "takos-from-project",
+        worker_name: "worker-from-vars",
+      }),
+    },
+    {
+      TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token",
+      CLOUDFLARE_API_TOKEN: "cloudflare-token",
+    },
+  );
+  expect(explicitOptions.appName).toBe("explicit-name");
+});
+
 test("platform control-plane smoke reads current Capsule create responses", () => {
   expect(
     createdCapsuleFromCreateResponse({
