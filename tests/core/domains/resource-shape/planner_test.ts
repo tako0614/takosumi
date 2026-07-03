@@ -86,11 +86,22 @@ test("parseEdgeWorkerSpec rejects ambiguous or unverifiable artifacts", () => {
   if (!insecure.ok) expect(insecure.error.message).toContain("https");
 });
 
-test("parseEdgeWorkerSpec rejects an unknown profile", () => {
+test("parseEdgeWorkerSpec accepts endpoint-defined profiles", () => {
   const r = parseEdgeWorkerSpec({
     name: "api",
     source: { artifactPath: "/work/dist/worker.js" },
-    profiles: ["lambda_handler"],
+    profiles: ["runtime.workers.next", "bindings.custom"],
+  });
+  expect(r.ok).toBe(true);
+  if (!r.ok) return;
+  expect(r.spec.profiles).toEqual(["runtime.workers.next", "bindings.custom"]);
+});
+
+test("parseEdgeWorkerSpec rejects malformed profile tokens", () => {
+  const r = parseEdgeWorkerSpec({
+    name: "api",
+    source: { artifactPath: "/work/dist/worker.js" },
+    profiles: ["bad profile"],
   });
   expect(r.ok).toBe(false);
   if (!r.ok) expect(r.error.code).toBe("invalid_profile");
@@ -193,12 +204,16 @@ test("planEdgeWorker maps release artifact URL and digest to module inputs", () 
 test("parseObjectBucketSpec accepts S3-compatible object storage interfaces", () => {
   const r = parseObjectBucketSpec({
     name: "assets",
-    interfaces: ["s3_api", "signed_url"],
+    interfaces: ["s3_api", "signed_url", "custom.replication"],
     lifecyclePolicy: { delete: "retain" },
   });
   expect(r.ok).toBe(true);
   if (!r.ok) return;
-  expect(r.spec.interfaces).toEqual(["s3_api", "signed_url"]);
+  expect(r.spec.interfaces).toEqual([
+    "s3_api",
+    "signed_url",
+    "custom.replication",
+  ]);
   expect(r.spec.lifecyclePolicy?.delete).toBe("retain");
 });
 

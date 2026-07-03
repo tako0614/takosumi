@@ -10,10 +10,8 @@
 
 import type {
   ContainerServiceSpec,
-  EdgeWorkerProfile,
   EdgeWorkerSpec,
   KVStoreSpec,
-  ObjectBucketInterface,
   ObjectBucketSpec,
   QueueSpec,
   ResourceDeletePolicy,
@@ -120,13 +118,6 @@ export type ParseContainerServiceSpecResult =
       readonly ok: false;
       readonly error: { readonly code: string; readonly message: string };
     };
-
-const EDGE_WORKER_PROFILES: readonly EdgeWorkerProfile[] = [
-  "workers_bindings",
-  "node_compat",
-  "service_bindings",
-  "static_assets",
-];
 
 const RESOURCE_DELETE_POLICIES: readonly ResourceDeletePolicy[] = [
   "delete",
@@ -304,9 +295,7 @@ export function parseObjectBucketSpec(
     ok: true,
     spec: {
       name: name.value,
-      ...(interfaces?.value
-        ? { interfaces: interfaces.value as readonly ObjectBucketInterface[] }
-        : {}),
+      ...(interfaces?.value ? { interfaces: interfaces.value } : {}),
       ...(lifecyclePolicy.value
         ? { lifecyclePolicy: lifecyclePolicy.value }
         : {}),
@@ -482,12 +471,7 @@ export function parseEdgeWorkerSpec(spec: unknown): ParseEdgeWorkerSpecResult {
   const profiles =
     candidate.profiles === undefined
       ? undefined
-      : parseStringList(
-          candidate.profiles,
-          "profiles",
-          EDGE_WORKER_PROFILES,
-          false,
-        );
+      : parseExtensibleTokenList(candidate.profiles, "profiles", false);
   if (profiles && !profiles.ok) return profiles;
 
   const compatibilityFlags =
@@ -539,9 +523,7 @@ export function parseEdgeWorkerSpec(spec: unknown): ParseEdgeWorkerSpecResult {
       ...(compatibilityFlags?.value
         ? { compatibilityFlags: compatibilityFlags.value }
         : {}),
-      ...(profiles?.value
-        ? { profiles: profiles.value as readonly EdgeWorkerProfile[] }
-        : {}),
+      ...(profiles?.value ? { profiles: profiles.value } : {}),
       ...(lifecyclePolicy.value
         ? { lifecyclePolicy: lifecyclePolicy.value }
         : {}),
@@ -826,51 +808,6 @@ function parseName(candidate: Record<string, unknown>):
     };
   }
   return { ok: true, value: name };
-}
-
-function parseStringList<T extends string>(
-  value: unknown,
-  field: string,
-  allowed: readonly T[],
-  requireNonEmpty: boolean,
-):
-  | { readonly ok: true; readonly value: readonly T[] }
-  | {
-      readonly ok: false;
-      readonly error: { readonly code: string; readonly message: string };
-    } {
-  if (!Array.isArray(value) || (requireNonEmpty && value.length === 0)) {
-    return {
-      ok: false,
-      error: {
-        code: invalidListCode(field, true),
-        message: `spec.${field} must be ${requireNonEmpty ? "a non-empty" : "an"} array`,
-      },
-    };
-  }
-  for (const item of value) {
-    if (typeof item !== "string" || !allowed.includes(item as T)) {
-      return {
-        ok: false,
-        error: {
-          code: invalidListCode(field, false),
-          message: `unknown ${field} value: ${String(item)}`,
-        },
-      };
-    }
-  }
-  return { ok: true, value: value as readonly T[] };
-}
-
-function invalidListCode(field: string, plural: boolean): string {
-  switch (field) {
-    case "interfaces":
-      return plural ? "invalid_interfaces" : "invalid_interface";
-    case "protocols":
-      return plural ? "invalid_protocols" : "invalid_protocol";
-    default:
-      return "invalid_profile";
-  }
 }
 
 function parseExtensibleTokenList(

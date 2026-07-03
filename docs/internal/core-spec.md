@@ -294,6 +294,11 @@ imply full vendor API compatibility.
 
 Resource objects use `apiVersion: takosumi.dev/v1alpha1`.
 
+Interface and Profile values are capability tokens. The examples in this spec
+are the built-in tokens Takosumi ships with; they are not closed enums in the
+provider binary. Operators can advertise additional tokens through TargetPool
+capability evidence and adapters.
+
 ```json
 {
   "apiVersion": "takosumi.dev/v1alpha1",
@@ -326,6 +331,10 @@ Resource objects use `apiVersion: takosumi.dev/v1alpha1`.
   }
 }
 ```
+
+`profiles` are endpoint-defined tokens. `workers_bindings` is an example, not
+a closed provider-side enum. Validation of support belongs to capability
+discovery, TargetPool policy, adapter evidence, and the Resolver.
 
 ## Resolver
 

@@ -2,9 +2,14 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
+	frameworkresource "github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/takosjp/terraform-provider-takosumi/internal/client"
@@ -71,6 +76,103 @@ func TestEdgeWorkerToResourceCarriesTargetPoolName(t *testing.T) {
 	}
 	if resource.TargetPoolName != "containers" {
 		t.Fatalf("expected targetPoolName to be carried, got %#v", resource)
+	}
+}
+
+func TestEdgeWorkerCreateAcceptsEndpointDefinedProfileTokens(t *testing.T) {
+	ctx := context.Background()
+	var gotProfiles []any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut || r.URL.Path != "/v1/resources/EdgeWorker/api" {
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
+		var req client.Resource
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Errorf("decode request: %v", err)
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		rawProfiles, ok := req.Spec["profiles"].([]any)
+		if !ok {
+			t.Errorf("expected profiles list in request, got %#v", req.Spec["profiles"])
+		}
+		gotProfiles = rawProfiles
+		req.Status = &client.Status{
+			Phase: "Ready",
+			Resolution: client.Resolution{
+				SelectedImplementation: "custom_worker_runtime",
+				Target:                 "operator-runtime",
+				Locked:                 true,
+				Portability:            "portable",
+			},
+			Outputs: map[string]any{"url": "https://api.example.com"},
+		}
+		raw, _ := json.Marshal(req)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(raw)
+	}))
+	defer srv.Close()
+
+	r := &edgeWorkerResource{
+		data: &providerData{
+			client:       client.New(srv.URL, "", srv.Client()),
+			defaultSpace: "prod",
+			capabilities: client.ProductCapabilities{
+				Resources: map[string]bool{client.KindEdgeWorker: true},
+			},
+		},
+	}
+	var schemaResp frameworkresource.SchemaResponse
+	r.Schema(ctx, frameworkresource.SchemaRequest{}, &schemaResp)
+	if schemaResp.Diagnostics.HasError() {
+		t.Fatalf("schema diagnostics: %v", schemaResp.Diagnostics)
+	}
+	plan := tfsdk.Plan{Schema: schemaResp.Schema}
+	diags := plan.Set(ctx, edgeWorkerModel{
+		ID:                 types.StringUnknown(),
+		Name:               types.StringValue("api"),
+		ArtifactPath:       types.StringValue("/work/dist/worker.js"),
+		CompatibilityFlags: types.SetNull(types.StringType),
+		Profiles: types.SetValueMust(types.StringType, []attr.Value{
+			types.StringValue("runtime.workers.next"),
+			types.StringValue("bindings.custom"),
+		}),
+		Space:                  types.StringNull(),
+		TargetPool:             types.StringNull(),
+		SelectedImplementation: types.StringUnknown(),
+		Target:                 types.StringUnknown(),
+		Locked:                 types.BoolUnknown(),
+		Portability:            types.StringUnknown(),
+		Outputs:                types.MapUnknown(types.StringType),
+	})
+	if diags.HasError() {
+		t.Fatalf("plan diagnostics: %v", diags)
+	}
+	resp := frameworkresource.CreateResponse{
+		State: tfsdk.State{Schema: schemaResp.Schema},
+	}
+	r.Create(ctx, frameworkresource.CreateRequest{Plan: plan}, &resp)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("create diagnostics: %v", resp.Diagnostics)
+	}
+	if len(gotProfiles) != 2 {
+		t.Fatalf("expected two profile tokens, got %#v", gotProfiles)
+	}
+	want := map[string]bool{
+		"runtime.workers.next": true,
+		"bindings.custom":      true,
+	}
+	for _, got := range gotProfiles {
+		value, ok := got.(string)
+		if !ok || !want[value] {
+			t.Fatalf("unexpected profile token %#v in %#v", got, gotProfiles)
+		}
+		delete(want, value)
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing profile tokens: %#v", want)
 	}
 }
 
