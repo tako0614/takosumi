@@ -29,7 +29,10 @@ interface PageCopy {
   readonly sections: readonly Section[];
 }
 
-const SUPPORT_EMAIL = "support@takosumi.com";
+const MERCHANT_NAME = "冨山翔太";
+const MERCHANT_ADDRESS = "大阪府大阪市生野区巽東3-11-26";
+const SUPPORT_EMAIL = "shoutatomiyama0614@gmail.com";
+const SUPPORT_PHONE = "080-9545-2283";
 const STATEMENT_DESCRIPTOR = "TAKOSUMI";
 
 const ORDER: readonly PageKey[] = [
@@ -87,6 +90,16 @@ const COPY: Record<Locale, Record<PageKey, PageCopy>> = {
             "残高が不足している場合、有料の managed resource 実行、Compatibility API、AI Gateway、追加デプロイは実行前に停止されることがあります。",
             "不正利用、過剰な負荷、規約違反、支払い失敗、セキュリティリスクがある場合、アクセスや実行を制限することがあります。",
             "破壊的な削除や外部 provider の状態変更は、ユーザーが内容を確認してから実行する必要があります。",
+          ],
+        },
+        {
+          title: "事業者情報",
+          body: [
+            `運営者: ${MERCHANT_NAME}`,
+            `所在地: ${MERCHANT_ADDRESS}`,
+            `サポートメール: ${SUPPORT_EMAIL}`,
+            `サポート電話番号: ${SUPPORT_PHONE}`,
+            `カード明細には原則として ${STATEMENT_DESCRIPTOR} と表示されます。`,
           ],
         },
         {
@@ -202,6 +215,15 @@ const COPY: Record<Locale, Record<PageKey, PageCopy>> = {
       updated: "連絡先",
       sections: [
         {
+          title: "事業者情報",
+          body: [
+            `運営者: ${MERCHANT_NAME}`,
+            `所在地: ${MERCHANT_ADDRESS}`,
+            `サポートメール: ${SUPPORT_EMAIL}`,
+            `サポート電話番号: ${SUPPORT_PHONE}`,
+          ],
+        },
+        {
           title: SUPPORT_EMAIL,
           body: [
             "問い合わせには、登録メールアドレス、workspace、project、capsule、run、resource、請求や receipt の ID、発生時刻、期待した動作を含めてください。",
@@ -241,6 +263,16 @@ const COPY: Record<Locale, Record<PageKey, PageCopy>> = {
             "When balance is insufficient, paid managed resource execution, Compatibility APIs, AI Gateway calls, and additional deploys may stop before they run.",
             "Access or execution may be limited for abuse, excessive load, policy violations, failed payment, or security risk.",
             "Destructive deletion and external provider changes require the user to review what will run.",
+          ],
+        },
+        {
+          title: "Merchant information",
+          body: [
+            `Operator: ${MERCHANT_NAME}`,
+            `Address: ${MERCHANT_ADDRESS}`,
+            `Support email: ${SUPPORT_EMAIL}`,
+            `Support phone: ${SUPPORT_PHONE}`,
+            `Card statements generally show ${STATEMENT_DESCRIPTOR}.`,
           ],
         },
         {
@@ -355,6 +387,15 @@ const COPY: Record<Locale, Record<PageKey, PageCopy>> = {
       lead: "Support covers accounts, login, billing, deploys, Cloud resources, and usage questions.",
       updated: "Contact",
       sections: [
+        {
+          title: "Merchant information",
+          body: [
+            `Operator: ${MERCHANT_NAME}`,
+            `Address: ${MERCHANT_ADDRESS}`,
+            `Support email: ${SUPPORT_EMAIL}`,
+            `Support phone: ${SUPPORT_PHONE}`,
+          ],
+        },
         {
           title: SUPPORT_EMAIL,
           body: [
