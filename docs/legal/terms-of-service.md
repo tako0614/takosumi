@@ -24,31 +24,6 @@ billing/payment, official usage metering sold as a service, and official
 support/abuse workflows are Takosumi for Operator / Takosumi Cloud operation
 features and are governed by the relevant hosted operator terms when used.
 
-## Takosumi Cloud commercial terms
-
-Takosumi Cloud is a hosted digital service. It does not ship physical goods.
-When a customer purchases a hosted plan or a credit pack, the account receives
-plan access, managed resource access, or USD-denominated Takosumi Cloud usage
-credit.
-
-Takosumi Cloud usage credit is not a cash account, stored-value account, or
-withdrawable balance. It may be used only for eligible Takosumi Cloud managed
-resource usage. Free, trial, or promotional credit has no cash value.
-
-Published pricing is available on the Takosumi website pricing section. Unless
-the checkout screen states otherwise, the card statement descriptor is
-`TAKOSUMI`. Customers can review the amount, currency, and plan before
-checkout completes.
-
-Monthly hosted plans renew until cancelled. Cancellation stops future renewals;
-already-started billing periods and consumed usage credit are handled under the
-[Cancellation Policy](./cancellation-policy.md) and
-[Refund Policy](./refund-policy.md).
-
-Support, billing, cancellation, and refund requests should be sent to
-`support@takosumi.com`. Do not send provider tokens, private keys, API keys, or
-other secret values by email.
-
 Self-hosted operators may replace this page with their own terms. If a hosted
 operator publishes separate signed terms, those operator terms take precedence
 for that hosted deployment.

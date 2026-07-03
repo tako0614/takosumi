@@ -49,29 +49,8 @@ export default function Pricing() {
 
       <p class="plan-footnote">
         表示価格は Takosumi Cloud Starter の plan spec
-        に基づきます。実際の課金開始前に checkout
-        と利用量を確認できます。カード明細には原則として
-        <strong>TAKOSUMI</strong> と表示されます。
+        に基づきます。実際の課金開始前に checkout と利用量を確認できます。
       </p>
-
-      <div class="billing-policy-note" aria-label="Billing policies">
-        <div>
-          <h3>課金の扱い</h3>
-          <p>
-            Takosumi Cloud はデジタルサービスです。購入後、アカウントに plan と
-            USD-denominated credit が反映され、Cloud resource usage に応じて
-            credit が差し引かれます。残高が不足すると、追加の有料リソース実行は
-            事前に止まります。
-          </p>
-        </div>
-        <nav aria-label="Billing policy links">
-          <a href="/docs/legal/refund-policy">返金ポリシー</a>
-          <a href="/docs/legal/cancellation-policy">キャンセル</a>
-          <a href="/docs/legal/terms-of-service">利用規約</a>
-          <a href="/docs/legal/privacy-policy">プライバシー</a>
-          <a href="/docs/support">サポート</a>
-        </nav>
-      </div>
     </Section>
   );
 }

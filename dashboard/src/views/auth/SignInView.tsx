@@ -228,21 +228,11 @@ export function SignInPanel() {
       <Show when={isTakosumiCloudRuntime()}>
         <p class="sign-in-terms">
           {t("auth.termsPrefix")}{" "}
-          <a
-            href="https://takosumi.com/docs/legal/terms-of-service"
-            class="link"
-            target="_blank"
-            rel="noopener"
-          >
+          <a href="/legal/terms-of-service" class="link">
             {t("auth.termsOfService")}
           </a>
           {t("auth.and")}
-          <a
-            href="https://takosumi.com/docs/legal/privacy-policy"
-            class="link"
-            target="_blank"
-            rel="noopener"
-          >
+          <a href="/legal/privacy-policy" class="link">
             {t("auth.privacyPolicy")}
           </a>
           {t("auth.termsSuffix")}
