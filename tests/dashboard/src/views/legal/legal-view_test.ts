@@ -20,7 +20,10 @@ test("legal and support pages live on app routes instead of OSS docs", () => {
   expect(signIn).not.toContain("takosumi.com/docs/legal");
 
   expect(legal).toContain("Takosumi Cloud");
-  expect(legal).toContain("support@takosumi.com");
+  expect(legal).toContain("冨山翔太");
+  expect(legal).toContain("大阪府大阪市生野区巽東3-11-26");
+  expect(legal).toContain("080-9545-2283");
+  expect(legal).toContain("shoutatomiyama0614@gmail.com");
   expect(legal).toContain("TAKOSUMI");
   expect(legal).toContain("Stripe");
   expect(legal).toContain("digital service");
