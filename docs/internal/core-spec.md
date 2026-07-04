@@ -455,10 +455,10 @@ enabled or disabled by `/v1/capabilities`.
 
 Operator/Cloud implementations that expose managed capacity should normalize
 compatibility API calls, Resource Shape adapter calls, dashboard actions, and
-data-plane facades into the same managed-operation descriptor before calling a
-backend manager. The public API surface decides how the user enters Takosumi;
-the selected manager decides whether the backend is Workers for Platforms,
-R2, D1, KV, Queues, Workflows, Containers, or another operator-provided
+data-plane facades into the same managed-operation request shape before calling
+a backend manager. The public API surface decides how the user enters Takosumi;
+the selected manager decides whether the backend is Workers for Platforms, R2,
+D1, KV, Queues, Workflows, Containers, or another operator-provided
 implementation.
 
 Cloud/operator descriptors should fail closed when a service form is recognized
