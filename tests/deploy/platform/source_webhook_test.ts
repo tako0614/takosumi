@@ -3333,6 +3333,7 @@ test("cloud extension authenticates personal access tokens through accounts intr
         active: true,
         scope: "ai.chat ai.models.read",
         sub: "tsub_pat_user",
+        takosumi: { space_id: "space_pat_default" },
       });
     },
   );
@@ -3340,6 +3341,7 @@ test("cloud extension authenticates personal access tokens through accounts intr
     authenticated: true,
     authKind: "personal-access-token",
     subject: "tsub_pat_user",
+    spaceId: "space_pat_default",
     scopes: ["ai.chat", "ai.models.read"],
   });
   expect(introspectionRequests[0]?.url).toBe(

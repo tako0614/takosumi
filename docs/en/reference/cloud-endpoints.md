@@ -155,8 +155,12 @@ token, and the billing Workspace must be verified.
 Sessions and personal access tokens may select the billing Workspace with
 `x-takosumi-cloud-billing-workspace-id`. The platform verifies that the token
 can read that Workspace in the accounts plane before forwarding to the Cloud
-handler or Resource Shape API. Service tokens may only use the Workspace encoded
-in token metadata.
+handler or Resource Shape API. For OpenTofu providers such as the Cloudflare
+provider that do not conveniently attach arbitrary headers, create the personal
+access token with `workspace_id`. The platform then uses the token
+introspection `takosumi.space_id` as the default billing Workspace, so provider
+configuration only needs `api_token` and `base_url`. Service tokens may only
+use the Workspace encoded in token metadata.
 
 Billable writes are precharged against Workspace credits before forwarding. If
 the Workspace context is missing, the token does not match the Workspace, or the
@@ -215,7 +219,8 @@ Normal Cloud endpoint keys should use:
 
 ```json
 {
-  "scopes": ["read", "write"]
+  "scopes": ["read", "write"],
+  "workspace_id": "space_xxx"
 }
 ```
 

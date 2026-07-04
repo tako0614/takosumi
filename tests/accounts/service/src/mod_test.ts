@@ -2848,6 +2848,21 @@ test("accounts handler issues and revokes personal access tokens", async () => {
     createdAt: now,
     expiresAt: now + 60_000,
   });
+  store.saveLedgerAccount({
+    accountId: "acct_pat_owner",
+    legalOwnerSubject: "tsub_pat_owner",
+    billingAccountId: "bill_pat_owner",
+    createdAt: now,
+    updatedAt: now,
+  });
+  store.saveWorkspace({
+    workspaceId: "space_pat_owner",
+    accountId: "acct_pat_owner",
+    kind: "personal",
+    displayName: "PAT owner workspace",
+    createdAt: now,
+    updatedAt: now,
+  });
   // Round 2: register a static OIDC client so /oauth/introspect can
   // authenticate the introspection request per RFC 7662 §2.1. The
   // degraded mode (no clients wired) is no longer available now
@@ -2875,6 +2890,7 @@ test("accounts handler issues and revokes personal access tokens", async () => {
       body: JSON.stringify({
         name: "CLI",
         scopes: ["read", "write"],
+        workspace_id: "space_pat_owner",
       }),
     }),
   );
@@ -2883,6 +2899,7 @@ test("accounts handler issues and revokes personal access tokens", async () => {
   expect(String(createBody.token).startsWith("takpat_")).toEqual(true);
   expect(createBody.token_record.subject).toEqual("tsub_pat_owner");
   expect(createBody.token_record.scopes).toEqual(["read", "write"]);
+  expect(createBody.token_record.workspace_id).toEqual("space_pat_owner");
 
   const listResponse = await handler(
     new Request("https://accounts.example.test/v1/account/tokens", {
@@ -2897,6 +2914,7 @@ test("accounts handler issues and revokes personal access tokens", async () => {
   expect(listBody.next_cursor).toEqual(null);
   expect(listBody.tokens[0].token).toEqual(undefined);
   expect(listBody.tokens[0].name).toEqual("CLI");
+  expect(listBody.tokens[0].workspace_id).toEqual("space_pat_owner");
 
   const introspectResponse = await handler(
     new Request("https://accounts.example.test/oauth/introspect", {
@@ -2914,6 +2932,7 @@ test("accounts handler issues and revokes personal access tokens", async () => {
   expect(introspectBody.iss).toEqual("https://accounts.example.test");
   expect(introspectBody.sub).toEqual("tsub_pat_owner");
   expect(introspectBody.scope).toEqual("read write");
+  expect(introspectBody.takosumi).toEqual({ space_id: "space_pat_owner" });
 
   const tokenId = createBody.token_record.id;
   const revokeResponse = await handler(

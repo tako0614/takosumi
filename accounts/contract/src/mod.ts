@@ -114,6 +114,7 @@ export interface TakosumiAccountsPatMetadata {
   name: string;
   prefix: string;
   scopes: readonly TakosumiAccountsPatScope[];
+  workspace_id?: string;
   created_at: string;
   expires_at?: string;
   revoked_at?: string;
@@ -123,6 +124,8 @@ export interface TakosumiAccountsPatMetadata {
 export interface TakosumiAccountsCreatePatRequest {
   name: string;
   scopes: readonly TakosumiAccountsPatScope[];
+  workspace_id?: string;
+  workspaceId?: string;
   expires_at?: string;
   expiresAt?: string;
 }
