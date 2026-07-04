@@ -146,8 +146,7 @@ non-secret speed settings. This is not a cross-run source-sync cache.
 
 The Resource Shape flow starts from typed Resource objects and resolves them to
 Targets. Those objects can be submitted through the Resource API,
-`takosumi_*` provider resources, CLI, dashboard, Kubernetes CRDs, or scoped
-compatibility facades when an operator enables them:
+`takosumi_*` provider resources, CLI, dashboard, or Kubernetes CRDs:
 
 ```text
 Resource Shape
@@ -165,10 +164,12 @@ not move without an explicit migration.
 Resource Shapes are not a replacement for every existing provider or standard
 surface. If an industry-standard protocol/API or adequate OpenTofu provider
 already expresses the service cleanly, use that surface through the OpenTofu
-Stack flow or a scoped compatibility profile. S3-compatible object storage,
-OCI registry, Kubernetes CRDs, CloudEvents, OpenAI-compatible APIs, and scoped
-Cloudflare Workers-compatible import/deploy paths are examples of surfaces that
-should remain standard-facing.
+Stack flow or a scoped compatibility profile. Compatibility profiles are peer
+entrypoints for standard tools/protocols, not fallback routes into
+`takosumi/takosumi`. S3-compatible object storage, OCI registry, Kubernetes
+CRDs, CloudEvents, OpenAI-compatible APIs, and scoped Cloudflare
+Workers-compatible import/deploy paths are examples of surfaces that should
+remain standard-facing.
 
 Add a Takosumi shape when the service form is durable, no adequate standard
 surface exists, and Takosumi needs to own binding projection, resolution lock,

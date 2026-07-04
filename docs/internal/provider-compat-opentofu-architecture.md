@@ -91,8 +91,9 @@ The current Cloud extension contract stops here: `compat.cloudflare.workers.v1`
 and Takosumi AI Gateway. Other Cloud extension routes require a new
 Operator/Cloud product spec and implementation. OSS compatibility profiles such
 as S3, OCI, CloudEvents, Kubernetes CRD, or scoped Cloudflare Workers
-compatibility remain capability-versioned Resource Shape entrypoints, not
-complete provider API compatibility.
+compatibility remain capability-versioned compatibility entrypoints for
+Takosumi-managed capabilities, not complete provider API compatibility and not
+subordinate routes into `takosumi/takosumi`.
 
 If Takosumi Cloud later wants another hosted extension endpoint, it requires a
 new Operator/Cloud product spec and implementation. It must not be inferred from

@@ -178,8 +178,15 @@ the OpenTofu module.
 
 ## Resource Shape API
 
-The Resource Shape API is the canonical API used by `takosumi_*` provider
-resources, CLI, dashboard, and compatibility facades.
+The Resource Shape API is the typed Resource object API used by `takosumi_*`
+provider resources, CLI, dashboard, Kubernetes CRDs, and similar Takosumi-native
+clients.
+
+Compatibility APIs are separate first-class surfaces. When a standard protocol
+or existing tool is the best fit, the compatibility API remains the public
+surface. A handler may normalize Resource, NativeResource, usage, or audit
+evidence internally, but that is bookkeeping; it does not make the compatibility
+API subordinate to the `takosumi` provider or the Resource Shape API.
 
 ```http
 POST   /v1/resources/preview
