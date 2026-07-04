@@ -41,7 +41,7 @@ Edge JS app は `EdgeWorker` resource として動きます。Takosumi Cloud で
 Cloudflare Workers for Platforms を基盤にした runtime で実装できます。これは
 Cloud が提供する resource の一つであり、ContainerService、Object Storage、KV、
 Database、Queue、AI とは別の service form です。Cloudflare Workers provider
-compatibility profile の entrypoints は same platform worker に合流し、not deployed as separate Workers です。
+compatibility profile の entrypoints は同じ platform worker に合流し、別 Worker としては deploy しません。
 
 Cloud managed resource は、compatibility endpoint、`takosumi/takosumi` provider、
 Dashboard のどこから入っても、backend API を叩く前に同じ managed operation
@@ -51,6 +51,9 @@ usage / credit guard、manager dispatch を共通化し、最後に選ばれた 
 Workers for Platforms、R2、D1、KV、Queue、Containers、または別の operator backend
 を使います。認識済み service form でも manager が未設定なら usage charge や
 backend API call の前に fail closed し、別の compatibility path へ fallback しません。
+入口は user-facing protocol を決めるだけです。Cloudflare-compatible path、
+Resource Shape API、Dashboard action、S3-compatible data-plane、AI Gateway request は
+すべて dispatch plan まで同じ形に正規化され、backend choice は manager 側が決めます。
 
 Durable workflow は、利用可能な場合に Dynamic Workers と
 `@cloudflare/dynamic-workflows` を使います。operator/internal jobs は normal

@@ -73,7 +73,8 @@ Operator/internal jobs:
 provider、Compatibility API、または Dashboard のどれであっても、認証、Workspace
 billing context、Resource / NativeResource への正規化、共通 managed operation
 descriptor、selected manager の利用可否確認、usage / credit guard を通り、その後に
-manager が backend を選びます。`takosumi_*` Resource Shape として入る場合は、
+manager が backend を選びます。API entrypoint は user-facing protocol を決めるだけで、
+backend choice は manager descriptor / dispatch plan の責務です。`takosumi_*` Resource Shape として入る場合は、
 その前段で TargetPool / Policy / ResolutionLock も通ります。
 
 ```text
@@ -109,6 +110,8 @@ Cloudflare-compatible path はこの pipeline への import path です。EdgeWo
 公式 manager は Workers for Platforms dispatch namespace を使いますが、API contract
 は `EdgeWorker` / `ObjectBucket` / `KVStore` / `SQLDatabase` / `Queue` などの service
 form で固定し、WfP や Cloudflare primitive を public resource identity にはしません。
+将来 manager を差し替える場合も、entrypoint URL や provider schema ではなく、
+manager descriptor / TargetPool / adapter evidence を変える形にします。
 
 参考:
 
