@@ -107,6 +107,13 @@ export interface OpentofuProviderBinding {
   readonly providerSource: string;
   readonly alias?: string;
   /**
+   * Optional provider API base URL selected by the Target implementation.
+   * Managed compatibility profiles use this to route an existing provider
+   * through an operator-owned endpoint. It is capability/TargetPool data, not
+   * a Cloud edition branch in the provider binary.
+   */
+  readonly baseUrl?: string;
+  /**
    * ProviderConnection id whose credentials the runner mints for this provider.
    * Undefined when no Takosumi-managed credential is bound (the generated root
    * stays credential-free and relies on ambient runner env, if any).
@@ -327,6 +334,7 @@ export class OpentofuResourceShapeAdapter implements ResourceAdapter {
       providerBinding: {
         provider,
         providerSource: providerSourceForLocalName(provider),
+        ...providerBindingOptionsFor(input.implementationOptions),
         ...(input.credentialRef ? { connectionId: input.credentialRef } : {}),
       },
       nativeResources: input.nativeResources,
@@ -346,6 +354,7 @@ export class OpentofuResourceShapeAdapter implements ResourceAdapter {
       providerBinding: {
         provider,
         providerSource: providerSourceForLocalName(provider),
+        ...providerBindingOptionsFor(input.implementationOptions),
         // The opentofu-adapter injects the bound ProviderConnection (the Target's
         // credentialRef) into the runner per-run; absent means no managed cred.
         ...(input.credentialRef ? { connectionId: input.credentialRef } : {}),
@@ -670,7 +679,14 @@ export class ControllerOpentofuRunPort implements OpentofuRunPort {
         text: file.text,
       })),
     };
-    return { generatedRoot: dispatch, outputAllowlist };
+    const providerCredentialDelivery = providerCredentialDeliveryFor(
+      request.providerBinding,
+    );
+    return {
+      generatedRoot: dispatch,
+      outputAllowlist,
+      ...(providerCredentialDelivery ? { providerCredentialDelivery } : {}),
+    };
   }
 
   async #waitForPlanCompletion(planRun: PublicPlanRun): Promise<PublicPlanRun> {
@@ -714,18 +730,35 @@ export class ControllerOpentofuRunPort implements OpentofuRunPort {
   }
 }
 
-/** One `generated_root_variable` provider binding per bound ProviderConnection. */
+/** One provider binding per managed credential or provider base URL override. */
 function providerEnvBindingsFor(
   binding: OpentofuProviderBinding,
 ): readonly RootInstallationProviderEnvBinding[] {
-  if (!binding.connectionId) return [];
+  if (!binding.connectionId && !binding.baseUrl) return [];
+  const credentialDelivery = providerCredentialDeliveryFor(binding);
   return [
     {
       provider: binding.providerSource,
       ...(binding.alias ? { alias: binding.alias } : {}),
-      credentialDelivery: "generated_root_variable",
+      ...(credentialDelivery ? { credentialDelivery } : {}),
+      ...(binding.baseUrl ? { baseUrl: binding.baseUrl } : {}),
     },
   ];
+}
+
+function providerCredentialDeliveryFor(
+  binding: OpentofuProviderBinding,
+): RootInstallationProviderEnvBinding["credentialDelivery"] | undefined {
+  if (!binding.connectionId && !binding.baseUrl) return undefined;
+  return binding.baseUrl ? "provider_env" : "generated_root_variable";
+}
+
+function providerBindingOptionsFor(
+  implementationOptions: JsonObject | undefined,
+): Pick<OpentofuProviderBinding, "baseUrl"> {
+  const baseUrl = implementationOptions?.providerBaseUrl;
+  if (typeof baseUrl !== "string" || baseUrl.trim() === "") return {};
+  return { baseUrl: baseUrl.trim() };
 }
 
 /** Project each public output name as an allowlist passthrough of the same name. */
@@ -786,6 +819,9 @@ export function applyGuardFromPlanRun(
           resolvedProviderEnvBindingsDigest:
             planRun.resolvedProviderEnvBindingsDigest,
         }
+      : {}),
+    ...(planRun.providerCredentialDelivery
+      ? { providerCredentialDelivery: planRun.providerCredentialDelivery }
       : {}),
   };
 }

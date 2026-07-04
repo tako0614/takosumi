@@ -109,7 +109,7 @@ export class RunCredentialBroker {
       planRun,
       phase,
       auditRunId,
-      "generated_root_variable",
+      planRun.providerCredentialDelivery ?? "generated_root_variable",
     );
   }
 
@@ -181,6 +181,9 @@ export class RunCredentialBroker {
       // This is the only provider credential delivery path for Installation
       // runs.
       const providerEntries = providerMintEntriesFromResolved(resolved);
+      const credentialEvidenceProviders = providerEntries.map(
+        (entry) => entry.provider,
+      );
       const missingRootOnly = missingRootOnlyCredentialProviders(
         planRun.requiredProviders,
         resolved,
@@ -215,6 +218,7 @@ export class RunCredentialBroker {
           planRun,
           bundle.providerCredentialEvidence,
           providerEntries.length,
+          credentialEvidenceProviders,
         );
         return { ...bundle.env };
       }
@@ -238,6 +242,7 @@ export class RunCredentialBroker {
         planRun,
         evidence,
         providerEntries.length,
+        credentialEvidenceProviders,
       );
       const perAliasResponse = perAlias.toMintResponse();
       const env = { ...bundle.env, ...perAliasResponse.env };
@@ -265,12 +270,13 @@ export class RunCredentialBroker {
     planRun: PlanRun,
     evidence: readonly ProviderCredentialMintEvidence[],
     expectedCredentialEvidenceCount = 0,
+    credentialEvidenceProviders: readonly string[] = [],
   ): Promise<void> {
     const policy = await this.#policyForPlanRun(planRun);
     const result = evaluateProviderCredentialMintPolicy(
       evidence,
       policy,
-      planRun.requiredProviders,
+      credentialEvidenceProviders,
       expectedCredentialEvidenceCount,
     );
     if (result.reasons.length === 0) return;

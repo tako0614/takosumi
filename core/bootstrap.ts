@@ -369,6 +369,12 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
   readonly resourceShapeAdapterFactory?: (
     deps: ResourceShapeAdapterFactoryDeps,
   ) => ResourceAdapter | Promise<ResourceAdapter>;
+  /**
+   * Upper bound for a synchronous Resource Shape delete request. OpenTofu-backed
+   * deletes may perform a destroy plan and a destroy apply, so hosts that wire a
+   * real runner should set this longer than one runner wait window.
+   */
+  readonly resourceShapeDeleteTimeoutMs?: number;
   /** Enables the Resource Shape API with the dev/test stub when no adapter is supplied. */
   readonly enableResourceShapeApi?: boolean;
   /**
@@ -1075,6 +1081,9 @@ export async function createTakosumiService(
             : createInMemoryResourceShapeStores()),
         adapter: resourceShapeAdapter,
         now: () => new Date().toISOString(),
+        ...(options.resourceShapeDeleteTimeoutMs !== undefined
+          ? { deleteTimeoutMs: options.resourceShapeDeleteTimeoutMs }
+          : {}),
       })
     : undefined;
   assertResourceShapeApiAuthOrWarn({

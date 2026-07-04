@@ -108,22 +108,35 @@ export interface PreviewResourceResult {
 }
 
 const DEFAULT_POOL_NAME = "default";
+const DEFAULT_DELETE_TIMEOUT_MS = 120_000;
 
 export interface ResourceShapeServiceDeps {
   readonly stores: ResourceShapeStores;
   readonly adapter: ResourceAdapter;
   readonly now: () => IsoTimestamp;
+  readonly deleteTimeoutMs?: number;
+}
+
+export interface DeleteResourceOptions {
+  /**
+   * Break-glass ledger tombstone. Normal deletes try adapter/native cleanup
+   * first; force deletes are for operator cleanup of failed resources whose
+   * native cleanup credentials or target no longer exist.
+   */
+  readonly force?: boolean;
 }
 
 export class ResourceShapeService {
   readonly #stores: ResourceShapeStores;
   readonly #adapter: ResourceAdapter;
   readonly #now: () => IsoTimestamp;
+  readonly #deleteTimeoutMs: number;
 
   constructor(deps: ResourceShapeServiceDeps) {
     this.#stores = deps.stores;
     this.#adapter = deps.adapter;
     this.#now = deps.now;
+    this.#deleteTimeoutMs = deps.deleteTimeoutMs ?? DEFAULT_DELETE_TIMEOUT_MS;
   }
 
   // --- Configuration: TargetPool / SpacePolicy --------------------------------
@@ -364,6 +377,7 @@ export class ResourceShapeService {
     kind: ResourceShapeKind,
     name: string,
     actor: ActorContext,
+    options: DeleteResourceOptions = {},
   ): Promise<ServiceResult<void>> {
     const id = formatResourceShapeId(space, kind, name);
     const record = await this.#stores.resources.get(id);
@@ -372,6 +386,11 @@ export class ResourceShapeService {
         ok: false,
         error: { code: "not_found", message: `resource ${id} not found` },
       };
+    }
+    if (options.force) {
+      await this.#stores.locks.delete(id);
+      await this.#stores.resources.delete(id);
+      return { ok: true, value: undefined };
     }
     if (record.phase === "Deleting") {
       return { ok: true, value: undefined };
@@ -432,19 +451,28 @@ export class ResourceShapeService {
       }
       const claimedRecord = deleteClaim.record;
       try {
-        await this.#adapter.delete({
-          resourceId: id,
-          plan: planResourceShape(
-            lock.selectedImplementation,
-            specResult.parsed,
-            entry,
-          ),
-          nativeResources: lock.nativeResources ?? [],
-          target: entry,
-          credentialRef: entry.credentialRef,
-          deletePolicy,
-          actor,
-        });
+        await withTimeout(
+          this.#adapter.delete({
+            resourceId: id,
+            plan: planResourceShape(
+              lock.selectedImplementation,
+              specResult.parsed,
+              entry,
+            ),
+            nativeResources: lock.nativeResources ?? [],
+            target: entry,
+            credentialRef: entry.credentialRef,
+            ...implementationDispatchOptionsFor(
+              entry,
+              record.kind,
+              lock.selectedImplementation,
+            ),
+            deletePolicy,
+            actor,
+          }),
+          this.#deleteTimeoutMs,
+          `delete ${id}`,
+        );
       } catch (error) {
         await this.#stores.resources.upsert({
           ...claimedRecord,
@@ -825,6 +853,11 @@ function validateTargetPoolSpec(
             `TargetPool target[${index}].implementations[${implIndex}].options must be an object`,
           );
         }
+        const optionError = validateImplementationOptions(
+          impl.options,
+          `TargetPool target[${index}].implementations[${implIndex}].options`,
+        );
+        if (optionError) return optionError;
         const secret = findSecretLikeJson(
           impl.options,
           `TargetPool target[${index}].implementations[${implIndex}].options`,
@@ -836,8 +869,50 @@ function validateTargetPoolSpec(
   return undefined;
 }
 
+function implementationDispatchOptionsFor(
+  entry: TargetPoolEntry,
+  shape: ResourceShapeKind,
+  implementation: string,
+):
+  | {
+      readonly implementationPlugin?: string;
+      readonly implementationOptions?: JsonObject;
+    }
+  | undefined {
+  const matched = entry.implementations?.find(
+    (impl) => impl.shape === shape && impl.implementation === implementation,
+  );
+  if (!matched) return undefined;
+  return {
+    ...(matched.plugin ? { implementationPlugin: matched.plugin } : {}),
+    ...(matched.options ? { implementationOptions: matched.options } : {}),
+  };
+}
+
 function invalidTargetPool(message: string): ResourceServiceError {
   return { code: "invalid_target_pool", message };
+}
+
+function validateImplementationOptions(
+  options: Readonly<Record<string, unknown>>,
+  field: string,
+): ResourceServiceError | undefined {
+  const providerBaseUrl = options.providerBaseUrl;
+  if (providerBaseUrl === undefined) return undefined;
+  if (typeof providerBaseUrl !== "string" || providerBaseUrl.trim() === "") {
+    return invalidTargetPool(`${field}.providerBaseUrl must be a non-empty string`);
+  }
+  try {
+    const url = new URL(providerBaseUrl);
+    if (url.protocol !== "https:" && url.protocol !== "http:") {
+      return invalidTargetPool(
+        `${field}.providerBaseUrl must use http or https`,
+      );
+    }
+  } catch {
+    return invalidTargetPool(`${field}.providerBaseUrl must be an absolute URL`);
+  }
+  return undefined;
 }
 
 function tokenError(
@@ -941,4 +1016,22 @@ function deleteFailedCondition(
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  label: string,
+): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => {
+      reject(new Error(`${label} did not complete within ${timeoutMs}ms`));
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
 }

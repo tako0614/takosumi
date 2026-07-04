@@ -33,7 +33,7 @@ const (
 	envSpace    = "TAKOSUMI_SPACE"
 	envToken    = "TAKOSUMI_TOKEN"
 
-	defaultResourceAPITimeout = 6 * time.Minute
+	defaultResourceAPITimeout = 12 * time.Minute
 )
 
 // Ensure takosumiProvider satisfies the provider.Provider interface.

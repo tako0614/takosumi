@@ -51,6 +51,9 @@ const awsTarget: TargetPoolEntry = {
   priority: 5,
 };
 
+const providerCompatBaseUrl =
+  "https://app.takosumi.com/compat/cloudflare/client/v4";
+
 function edgeWorkerPlan(): ResourceShapePlan {
   return planEdgeWorker(
     "cloudflare_workers",
@@ -134,6 +137,7 @@ test("apply maps cloudflare target to provider+inputs and threads moduleFiles/te
     "registry.opentofu.org/cloudflare/cloudflare",
   );
   expect(req.providerBinding.connectionId).toBe("conn_cf_1");
+  expect(req.providerBinding.baseUrl).toBeUndefined();
   expect(req.inputs.appName).toBe("api");
   expect(req.inputs.accountId).toBe("cf-account-123");
   expect(req.inputs.artifactPath).toBe("/work/dist/worker.js");
@@ -149,6 +153,22 @@ test("apply maps cloudflare target to provider+inputs and threads moduleFiles/te
     url: "fake://tkrn:demo:EdgeWorker:api/url",
   });
   expect(result.runId).toBeDefined();
+});
+
+test("apply threads managed provider base_url from implementation options", async () => {
+  const port = new FakeOpentofuRunPort();
+  const adapter = new OpentofuResourceShapeAdapter(port);
+  const plan = edgeWorkerPlan();
+
+  await adapter.apply(
+    applyInput(plan, cloudflareTarget, {
+      implementationOptions: { providerBaseUrl: providerCompatBaseUrl },
+    }),
+  );
+
+  expect(port.applyRequests[0]?.providerBinding.baseUrl).toBe(
+    providerCompatBaseUrl,
+  );
 });
 
 test("preview returns summary + nativeResources + runId from a simulated plan", async () => {
@@ -245,6 +265,23 @@ test("delete with the delete policy drives destroy on the port", async () => {
   expect(req.deletePolicy).toBe("delete");
 });
 
+test("delete threads managed provider base_url from implementation options", async () => {
+  const port = new FakeOpentofuRunPort();
+  const adapter = new OpentofuResourceShapeAdapter(port);
+  const plan = edgeWorkerPlan();
+
+  await adapter.delete(
+    deleteInput({
+      plan,
+      implementationOptions: { providerBaseUrl: providerCompatBaseUrl },
+    }),
+  );
+
+  expect(port.destroyRequests[0]?.providerBinding.baseUrl).toBe(
+    providerCompatBaseUrl,
+  );
+});
+
 test("delete with a retain or block policy never destroys", async () => {
   const port = new FakeOpentofuRunPort();
   const adapter = new OpentofuResourceShapeAdapter(port);
@@ -311,6 +348,9 @@ class FakeDeployControlDriver implements DeployControlRunDriver {
   ): Promise<PlanRunResponse> {
     this.planCalls.push({ request, ...(internal ? { internal } : {}) });
     const id = `plan_${++this.#seq}`;
+    const providerCredentialDelivery =
+      internal?.providerCredentialDelivery ??
+      internal?.genericRootDispatch?.providerCredentialDelivery;
     const planRun = {
       id,
       workspaceId: request.workspaceId ?? "",
@@ -325,6 +365,7 @@ class FakeDeployControlDriver implements DeployControlRunDriver {
       status: "queued",
       policy: { status: "passed", reasons: [], checkedAt: 0 },
       policyDecisionDigest: "sha256:policy",
+      ...(providerCredentialDelivery ? { providerCredentialDelivery } : {}),
       auditEvents: [],
       createdAt: 0,
       updatedAt: 0,
@@ -494,6 +535,9 @@ test("ControllerOpentofuRunPort.plan builds a real generated-root dispatch and m
 
   const dispatch = internal?.genericRootDispatch?.generatedRoot;
   expect(dispatch).toBeDefined();
+  expect(internal?.genericRootDispatch?.providerCredentialDelivery).toBe(
+    "generated_root_variable",
+  );
   expect(dispatch!.moduleFiles?.map((f) => f.path)).toEqual(
     plan.moduleFiles.map((f) => f.path),
   );
@@ -510,6 +554,37 @@ test("ControllerOpentofuRunPort.plan builds a real generated-root dispatch and m
     },
   ]);
   expect(preview.runId).toBe("plan_1");
+});
+
+test("ControllerOpentofuRunPort renders provider base_url for managed compatibility targets", async () => {
+  const driver = new FakeDeployControlDriver();
+  const port = new ControllerOpentofuRunPort({
+    driver,
+    resolveCapsuleBinding: () => capsuleBinding,
+  });
+  const adapter = new OpentofuResourceShapeAdapter(port);
+  const plan = edgeWorkerPlan();
+
+  await adapter.preview(
+    applyInput(plan, cloudflareTarget, {
+      implementationOptions: { providerBaseUrl: providerCompatBaseUrl },
+    }),
+  );
+
+  const mainTf =
+    driver.planCalls[0]?.internal?.genericRootDispatch?.generatedRoot.files[
+      "main.tf"
+    ];
+  expect(mainTf).toBeDefined();
+  if (!mainTf) return;
+  expect(
+    driver.planCalls[0]?.internal?.genericRootDispatch
+      ?.providerCredentialDelivery,
+  ).toBe("provider_env");
+  expect(mainTf).toContain('provider "cloudflare"');
+  expect(mainTf).toContain(`base_url = "${providerCompatBaseUrl}"`);
+  expect(mainTf).not.toContain("api_token = var.");
+  expect(mainTf).not.toContain('variable "cloudflare_api_token"');
 });
 
 test("ControllerOpentofuRunPort.apply drives plan->apply and maps outputs+nativeResources", async () => {
@@ -541,6 +616,26 @@ test("ControllerOpentofuRunPort.apply drives plan->apply and maps outputs+native
     },
   ]);
   expect(result.runId).toBeDefined();
+});
+
+test("ControllerOpentofuRunPort apply guard preserves managed provider env delivery", async () => {
+  const driver = new FakeDeployControlDriver();
+  const port = new ControllerOpentofuRunPort({
+    driver,
+    resolveCapsuleBinding: () => capsuleBinding,
+  });
+  const adapter = new OpentofuResourceShapeAdapter(port);
+  const plan = edgeWorkerPlan();
+
+  await adapter.apply(
+    applyInput(plan, cloudflareTarget, {
+      implementationOptions: { providerBaseUrl: providerCompatBaseUrl },
+    }),
+  );
+
+  expect(driver.applyCalls[0]?.expected.providerCredentialDelivery).toBe(
+    "provider_env",
+  );
 });
 
 test("ControllerOpentofuRunPort can wait for an external queue owner instead of inline-driving runs", async () => {

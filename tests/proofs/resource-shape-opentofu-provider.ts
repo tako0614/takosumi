@@ -110,6 +110,7 @@ export interface ResourceShapeOpenTofuProviderLiveProof {
     readonly plannedResourceCount: number;
     readonly stateResourceCount: number;
     readonly appliedResourceKinds: readonly ShapeKind[];
+    readonly providerBaseUrlConfigured: boolean;
     readonly outputKeys: readonly string[];
     readonly applyOutputDigest: string;
     readonly destroyCompleted: boolean;
@@ -125,6 +126,8 @@ interface LiveProofOptions {
   readonly targetType: string;
   readonly targetRef: string;
   readonly credentialRef: string;
+  readonly targetProviderBaseUrl?: string;
+  readonly targetPlugin?: string;
   readonly edgeWorkerArtifactUrl?: string;
   readonly edgeWorkerArtifactSha256?: string;
   readonly outputPath?: string;
@@ -303,6 +306,8 @@ export async function runResourceShapeOpenTofuProviderLiveProof(
       TF_VAR_target_type: options.targetType,
       TF_VAR_target_ref: options.targetRef,
       TF_VAR_credential_ref: options.credentialRef,
+      TF_VAR_target_provider_base_url: options.targetProviderBaseUrl,
+      TF_VAR_target_plugin: options.targetPlugin,
       TF_VAR_edge_worker_artifact_url: options.edgeWorkerArtifactUrl,
       TF_VAR_edge_worker_artifact_sha256: options.edgeWorkerArtifactSha256,
       TAKOSUMI_ENDPOINT: options.endpoint,
@@ -311,10 +316,11 @@ export async function runResourceShapeOpenTofuProviderLiveProof(
     };
 
     let destroyCompleted = false;
-    let applied = false;
+    let applyStarted = false;
     let outputsJson = "{}";
     let stateList = "";
     let plannedResourceCount = 0;
+    let applyError: unknown;
 
     try {
       await runCommand(
@@ -335,6 +341,7 @@ export async function runResourceShapeOpenTofuProviderLiveProof(
         env,
       );
       plannedResourceCount = countManagedResourceChanges(planJson);
+      applyStarted = true;
       await runCommand(
         [
           "tofu",
@@ -347,28 +354,34 @@ export async function runResourceShapeOpenTofuProviderLiveProof(
         moduleDir,
         env,
       );
-      applied = true;
       outputsJson = await runCommand(
         ["tofu", "output", "-json"],
         moduleDir,
         env,
       );
       stateList = await runCommand(["tofu", "state", "list"], moduleDir, env);
+    } catch (error) {
+      applyError = error;
+      throw error;
     } finally {
-      if (applied) {
-        await runCommand(
-          [
-            "tofu",
-            "destroy",
-            "-auto-approve",
-            "-input=false",
-            "-no-color",
-            "-parallelism=1",
-          ],
-          moduleDir,
-          env,
-        );
-        destroyCompleted = true;
+      if (applyStarted) {
+        try {
+          await runCommand(
+            [
+              "tofu",
+              "destroy",
+              "-auto-approve",
+              "-input=false",
+              "-no-color",
+              "-parallelism=1",
+            ],
+            moduleDir,
+            env,
+          );
+          destroyCompleted = true;
+        } catch (destroyError) {
+          if (!applyError) throw destroyError;
+        }
       }
     }
 
@@ -402,6 +415,9 @@ export async function runResourceShapeOpenTofuProviderLiveProof(
           .map((line) => line.trim())
           .filter(Boolean).length,
         appliedResourceKinds: livePlan.shapes,
+        providerBaseUrlConfigured:
+          typeof options.targetProviderBaseUrl === "string" &&
+          options.targetProviderBaseUrl.trim().length > 0,
         outputKeys,
         applyOutputDigest: digestBytes(Buffer.from(outputsJson)),
         destroyCompleted,
@@ -853,6 +869,8 @@ function liveMaterializableShapes(
 function liveModuleHcl({
   resourcePrefix,
   shapes,
+  targetProviderBaseUrl,
+  targetPlugin,
 }: LiveProofOptions & {
   readonly resourcePrefix: string;
   readonly shapes: readonly ShapeKind[];
@@ -946,6 +964,16 @@ variable "credential_ref" {
   type = string
 }
 
+variable "target_provider_base_url" {
+  type    = string
+  default = ""
+}
+
+variable "target_plugin" {
+  type    = string
+  default = ""
+}
+
 variable "edge_worker_artifact_url" {
   type    = string
   default = ""
@@ -971,6 +999,7 @@ resource "takosumi_target_pool" "live" {
     ref            = var.target_ref
     credential_ref = var.credential_ref
     priority       = 100
+${managedCompatImplementationHcl({ targetProviderBaseUrl, targetPlugin })}
   }]
 }
 
@@ -988,6 +1017,86 @@ output "shape_outputs" {
   }
 }
 `;
+}
+
+function managedCompatImplementationHcl({
+  targetProviderBaseUrl,
+  targetPlugin,
+}: {
+  readonly targetProviderBaseUrl: string | undefined;
+  readonly targetPlugin: string | undefined;
+}): string {
+  if (!targetProviderBaseUrl && !targetPlugin) return "";
+  const plugin = targetPlugin
+    ? `
+        plugin         = var.target_plugin`
+    : "";
+  const options = targetProviderBaseUrl
+    ? `options_json = jsonencode({
+          providerBaseUrl = var.target_provider_base_url
+        })`
+    : "";
+  return `
+    implementation = [
+      {
+        shape          = "EdgeWorker"
+        implementation = "cloudflare_workers"
+        ${plugin}
+        interfaces = {
+          worker_fetch     = "native"
+          workers_bindings = "native"
+          node_compat      = "shim"
+          service_bindings = "native"
+          static_assets    = "native"
+        }
+        ${options}
+      },
+      {
+        shape          = "ObjectBucket"
+        implementation = "cloudflare_r2_bucket"
+        ${plugin}
+        interfaces = {
+          object_store  = "native"
+          s3_api        = "native"
+          signed_url    = "native"
+          object_events = "shim"
+        }
+        ${options}
+      },
+      {
+        shape          = "KVStore"
+        implementation = "cloudflare_kv_namespace"
+        ${plugin}
+        interfaces = {
+          kv_store        = "native"
+          runtime_binding = "native"
+        }
+        ${options}
+      },
+      {
+        shape          = "Queue"
+        implementation = "cloudflare_queue"
+        ${plugin}
+        interfaces = {
+          queue       = "native"
+          publish     = "native"
+          consume     = "native"
+          cloudevents = "shim"
+        }
+        ${options}
+      },
+      {
+        shape          = "SQLDatabase"
+        implementation = "cloudflare_d1_database"
+        ${plugin}
+        interfaces = {
+          sql        = "native"
+          sqlite     = "native"
+          migrations = "shim"
+        }
+        ${options}
+      }
+    ]`;
 }
 
 async function fetchLiveCapabilities(options: {
@@ -1147,6 +1256,12 @@ if (import.meta.main) {
           "--credential-ref",
           "TAKOSUMI_LIVE_CREDENTIAL_REF",
         ),
+        targetProviderBaseUrl:
+          argValue("--target-provider-base-url") ??
+          process.env.TAKOSUMI_LIVE_TARGET_PROVIDER_BASE_URL,
+        targetPlugin:
+          argValue("--target-plugin") ??
+          process.env.TAKOSUMI_LIVE_TARGET_PLUGIN,
         edgeWorkerArtifactUrl:
           argValue("--edge-worker-artifact-url") ??
           process.env.TAKOSUMI_LIVE_EDGE_WORKER_ARTIFACT_URL,

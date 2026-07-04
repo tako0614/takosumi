@@ -906,7 +906,11 @@ export function createAccountsHandler(
       if (request.method === "POST") {
         const limited = accountTokensLimiter.consume(request);
         if (limited) return limited;
-        return await handleCreatePersonalAccessToken({ request, store });
+        return await handleCreatePersonalAccessToken({
+          request,
+          store,
+          operations: options.controlPlaneOperations,
+        });
       }
       return methodNotAllowed("GET, POST");
     }

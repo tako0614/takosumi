@@ -50,6 +50,13 @@ class FailingApplyAdapter extends PluginSpyAdapter {
   }
 }
 
+class FailingDeleteAdapter extends PluginSpyAdapter {
+  override async delete(input: AdapterDeleteInput): Promise<void> {
+    this.deleteInputs.push(input);
+    throw new Error("simulated delete failure");
+  }
+}
+
 class SlowDeleteAdapter extends PluginSpyAdapter {
   readonly started: Promise<void>;
   #startDelete!: () => void;
@@ -97,6 +104,9 @@ const POOL: TargetPoolSpec = {
 const POLICY: SpacePolicySpec = {
   resolution: { lockAfterCreate: true, allowAutoMigration: false },
 };
+
+const PROVIDER_COMPAT_BASE_URL =
+  "https://app.takosumi.com/compat/cloudflare/client/v4";
 
 async function seed(service: ResourceShapeService, policy = POLICY) {
   await service.putTargetPool("space_1", "default", POOL);
@@ -285,6 +295,64 @@ test("apply passes selected implementation plugin metadata to the adapter", asyn
   });
 });
 
+test("delete reuses selected implementation options from the TargetPool", async () => {
+  const stores = createInMemoryResourceShapeStores();
+  const adapter = new PluginSpyAdapter();
+  const service = new ResourceShapeService({
+    stores,
+    adapter,
+    now: () => NOW,
+  });
+  await service.putTargetPool("space_1", "default", {
+    targets: [
+      {
+        name: "cloud-managed-edge",
+        type: "cloudflare",
+        ref: "ts_virtual_account",
+        credentialRef: "conn_takosumi_cloud_edge",
+        priority: 90,
+        implementations: [
+          {
+            shape: "EdgeWorker",
+            implementation: "cloudflare_workers",
+            options: { providerBaseUrl: PROVIDER_COMPAT_BASE_URL },
+            interfaces: {
+              worker_fetch: "native",
+              workers_bindings: "native",
+            },
+          },
+        ],
+      },
+    ],
+  });
+  await service.putSpacePolicy("space_1", "default", POLICY);
+
+  const created = await service.apply({
+    actor: ACTOR,
+    space: "space_1",
+    kind: "EdgeWorker",
+    name: "api",
+    spec: {
+      name: "api",
+      source: { artifactPath: "/work/dist/worker.js" },
+      profiles: ["workers_bindings"],
+    },
+  });
+  expect(created.ok).toBe(true);
+  expect(adapter.applyInputs[0]?.implementationOptions).toEqual({
+    providerBaseUrl: PROVIDER_COMPAT_BASE_URL,
+  });
+
+  const deleted = await service.delete("space_1", "EdgeWorker", "api", ACTOR);
+  expect(deleted.ok).toBe(true);
+  expect(adapter.deleteInputs[0]?.implementationOptions).toEqual({
+    providerBaseUrl: PROVIDER_COMPAT_BASE_URL,
+  });
+  expect(adapter.deleteInputs[0]?.credentialRef).toBe(
+    "conn_takosumi_cloud_edge",
+  );
+});
+
 test("apply passes TargetPool credentialRef separately from target ref", async () => {
   const stores = createInMemoryResourceShapeStores();
   const adapter = new PluginSpyAdapter();
@@ -371,6 +439,34 @@ test("putTargetPool rejects malformed capability evidence and secret-like option
   expect(secretOptions.ok).toBe(false);
   if (!secretOptions.ok)
     expect(secretOptions.error.message).toContain("secret-looking");
+
+  const invalidProviderBaseUrl = await service.putTargetPool(
+    "space_1",
+    "bad-provider-base-url",
+    {
+      targets: [
+        {
+          name: "plugin-main",
+          type: "cloudflare",
+          priority: 90,
+          implementations: [
+            {
+              shape: "EdgeWorker",
+              implementation: "cloudflare_workers",
+              interfaces: { worker_fetch: "native" },
+              options: { providerBaseUrl: "not-a-url" },
+            },
+          ],
+        },
+      ],
+    },
+  );
+  expect(invalidProviderBaseUrl.ok).toBe(false);
+  if (!invalidProviderBaseUrl.ok) {
+    expect(invalidProviderBaseUrl.error.message).toContain(
+      "providerBaseUrl must be an absolute URL",
+    );
+  }
 });
 
 test("delete resolves native target from the non-default TargetPool that created the lock", async () => {
@@ -470,6 +566,91 @@ test("delete is idempotent while adapter-backed destroy is in progress", async (
   const completed = await firstDelete;
   expect(completed.ok).toBe(true);
   expect(adapter.deleteInputs).toHaveLength(1);
+
+  const remaining = await service.get("space_1", "ObjectBucket", "assets");
+  expect(remaining.ok).toBe(false);
+});
+
+test("delete timeout marks the resource failed instead of leaving it deleting forever", async () => {
+  const stores = createInMemoryResourceShapeStores();
+  const adapter = new SlowDeleteAdapter();
+  const service = new ResourceShapeService({
+    stores,
+    adapter,
+    now: () => NOW,
+    deleteTimeoutMs: 5,
+  });
+  await seed(service);
+
+  const created = await service.apply(APPLY);
+  expect(created.ok).toBe(true);
+
+  const deleted = await service.delete(
+    "space_1",
+    "ObjectBucket",
+    "assets",
+    ACTOR,
+  );
+  expect(deleted.ok).toBe(false);
+  if (!deleted.ok) {
+    expect(deleted.error.code).toBe("delete_failed");
+    expect(deleted.error.message).toContain("did not complete within 5ms");
+  }
+
+  const failed = await service.get("space_1", "ObjectBucket", "assets");
+  expect(failed.ok).toBe(true);
+  if (failed.ok) {
+    expect(failed.value.status?.phase).toBe("Failed");
+    expect(failed.value.status?.conditions[0]?.type).toBe("Ready");
+    expect(failed.value.status?.conditions[0]?.reason).toBe("DeleteFailed");
+  }
+  expect(adapter.deleteInputs).toHaveLength(1);
+
+  adapter.finishDelete();
+});
+
+test("force delete tombstones a failed resource without re-entering the adapter", async () => {
+  const stores = createInMemoryResourceShapeStores();
+  const adapter = new FailingDeleteAdapter();
+  const service = new ResourceShapeService({
+    stores,
+    adapter,
+    now: () => NOW,
+  });
+  await seed(service);
+
+  const created = await service.apply(APPLY);
+  expect(created.ok).toBe(true);
+
+  const firstDelete = await service.delete(
+    "space_1",
+    "ObjectBucket",
+    "assets",
+    ACTOR,
+  );
+  expect(firstDelete.ok).toBe(false);
+  if (!firstDelete.ok) {
+    expect(firstDelete.error.code).toBe("delete_failed");
+    expect(firstDelete.error.message).toContain("simulated delete failure");
+  }
+  expect(adapter.deleteInputs).toHaveLength(1);
+
+  const failed = await service.get("space_1", "ObjectBucket", "assets");
+  expect(failed.ok).toBe(true);
+  if (failed.ok) expect(failed.value.status?.phase).toBe("Failed");
+
+  const forced = await service.delete(
+    "space_1",
+    "ObjectBucket",
+    "assets",
+    ACTOR,
+    { force: true },
+  );
+  expect(forced.ok).toBe(true);
+  expect(adapter.deleteInputs).toHaveLength(1);
+  expect(await stores.locks.get("tkrn:space_1:ObjectBucket:assets")).toBe(
+    undefined,
+  );
 
   const remaining = await service.get("space_1", "ObjectBucket", "assets");
   expect(remaining.ok).toBe(false);

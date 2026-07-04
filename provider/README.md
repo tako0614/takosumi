@@ -304,9 +304,48 @@ Operator/admin fields:
 `TargetPool` may declare operator-specific `implementation` capability
 evidence. The built-in OpenTofu-backed adapter can execute first-party
 implementation tokens such as `cloudflare_workers` and `kubernetes_deployment`.
-The optional `plugin` field is reserved for hosts that inject a plugin-aware
-Resource Shape adapter; the stock adapter rejects plugin-backed implementations
-instead of silently ignoring them.
+The optional `plugin` field selects a host-injected Resource Shape adapter
+binding. The OSS platform worker dispatches that plugin through a generic
+fetch-compatible seam; hosts decide which plugin ids are installed. If no plugin
+binding is installed, the stock OpenTofu adapter rejects plugin-backed
+implementations instead of silently ignoring them.
+
+Managed compatibility endpoints are also selected through TargetPool
+implementation options, not through provider-binary branches. For example, an
+operator-managed Cloudflare-backed target can set `providerBaseUrl` on every
+implementation that should execute through the same compatibility endpoint
+(`cloudflare_workers`, `cloudflare_r2_bucket`, `cloudflare_kv_namespace`,
+`cloudflare_queue`, `cloudflare_d1_database`, and similar managed bindings):
+
+```hcl
+implementation {
+  shape          = "EdgeWorker"
+  implementation = "cloudflare_workers"
+
+  interfaces = {
+    worker_fetch     = "native"
+    workers_bindings = "native"
+  }
+
+  options_json = jsonencode({
+    providerBaseUrl = "https://app.takosumi.com/compat/cloudflare/client/v4"
+  })
+}
+```
+
+Official Takosumi Cloud managed targets may instead set `plugin` to the Cloud
+managed-resource adapter. That keeps the `takosumi_*` HCL and Resource Shape API
+stable while the Cloud deployment chooses Workers for Platforms, R2, D1, KV,
+Queues, or another managed backend behind the adapter.
+
+The generated OpenTofu root renders that as `base_url` on the selected
+provider block for the selected shape. Managed compatibility credentials are delivered through the
+selected ProviderConnection as provider-native runner env, so a Cloudflare
+compat target can use a Workspace-bound Takosumi token in
+`CLOUDFLARE_API_TOKEN` while the provider block contains only `base_url`. The
+provider resource remains `takosumi_edge_worker`; the managed Target decides
+whether the backend is Workers for Platforms, Takosumi native runtime, or
+another adapter.
 
 Extension happens at the implementation layer, not by inventing live provider
 schemas. A new HCL resource such as `takosumi_workflow` requires a provider/API

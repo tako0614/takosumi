@@ -103,7 +103,7 @@ func TestProviderDoesNotExposePushNotificationResources(t *testing.T) {
 
 func TestResourceAPIHTTPClientWaitsForServerSideOpenTofuRuns(t *testing.T) {
 	client := newResourceAPIHTTPClient()
-	if client.Timeout < 5*time.Minute {
+	if client.Timeout < 11*time.Minute {
 		t.Fatalf(
 			"Resource API timeout must cover server-side OpenTofu apply waits, got %s",
 			client.Timeout,

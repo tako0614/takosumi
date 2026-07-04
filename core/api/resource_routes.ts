@@ -140,6 +140,7 @@ export function registerResourceShapeRoutes(
       kind.value,
       c.req.param("name"),
       auth.actor,
+      { force: isTruthyQuery(c.req.query("force")) },
     );
     if (!result.ok) return errorResponse(c, result.error);
     return c.body(null, 204);
@@ -414,6 +415,11 @@ function stringField(
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function isTruthyQuery(value: string | undefined): boolean {
+  if (!value) return false;
+  return ["1", "true", "yes", "on"].includes(value.toLowerCase());
 }
 
 function badRequest(c: Context, message: string): Response {

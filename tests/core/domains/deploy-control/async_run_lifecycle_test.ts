@@ -424,6 +424,64 @@ test("runner container capacity exhaustion requeues destroy plan without failing
   expect(planCalls).toEqual(2);
 });
 
+test("runner infrastructure errors fail a plan after the retry budget is exhausted", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  let planCalls = 0;
+  const retryDispatches: Parameters<EnqueueRun>[0][] = [];
+  const enqueueRun: EnqueueRun = (dispatch) => {
+    retryDispatches.push(dispatch);
+    return Promise.resolve();
+  };
+  const controller = new OpenTofuDeploymentController({
+    store,
+    now: monotonicNow(5450),
+    newId: deterministicIds(),
+    runner: {
+      plan: () => {
+        planCalls++;
+        return Promise.reject(new Error(RUNNER_CONTAINER_CAPACITY_EXCEEDED));
+      },
+      apply: () => Promise.resolve({}),
+    },
+    vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
+    enqueueRun,
+  });
+  const request = await seedUpdatable(store, {
+    installationId: "inst_plan_retry_exhausted",
+  });
+  const { planRun: queuedPlan } = await controller.createPlanRun(request);
+  retryDispatches.length = 0;
+
+  await expect(
+    controller.dispatchQueuedRun({
+      action: "plan",
+      runId: queuedPlan.id,
+      spaceId: queuedPlan.spaceId,
+    }),
+  ).rejects.toThrow(/retryable_runner_infrastructure_error/);
+
+  await controller.dispatchQueuedRun({
+    action: "plan",
+    runId: queuedPlan.id,
+    spaceId: queuedPlan.spaceId,
+  });
+
+  const failed = (await store.getPlanRun(queuedPlan.id))!;
+  expect(failed.status).toEqual("failed");
+  expect(failed.diagnostics?.[0]?.message).toContain(
+    "runner_infrastructure_retry_exhausted",
+  );
+  expect(planCalls).toEqual(2);
+  expect(retryDispatches).toEqual([
+    {
+      action: "plan",
+      runId: queuedPlan.id,
+      spaceId: queuedPlan.spaceId,
+      cause: "controller_retry",
+    },
+  ]);
+});
+
 test("a retryable runner infrastructure reset requeues apply without failing terminally", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   let applyCalls = 0;
@@ -522,6 +580,81 @@ test("a retryable runner infrastructure reset requeues apply without failing ter
     (await store.getInstallation(request.installationId!))
       ?.currentStateGeneration,
   ).toEqual(1);
+});
+
+test("runner infrastructure errors fail apply after the retry budget is exhausted", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  let applyCalls = 0;
+  const retryDispatches: Parameters<EnqueueRun>[0][] = [];
+  const enqueueRun: EnqueueRun = (dispatch) => {
+    retryDispatches.push(dispatch);
+    return Promise.resolve();
+  };
+  const controller = new OpenTofuDeploymentController({
+    store,
+    now: monotonicNow(5650),
+    newId: deterministicIds(),
+    runner: {
+      plan: () =>
+        Promise.resolve({
+          planDigest: PLAN_DIGEST,
+          planArtifact: planArtifact(),
+          providerLockDigest: LOCK_DIGEST,
+          requiredProviders: [CLOUDFLARE],
+          providerInstallation: [CLOUDFLARE_MIRROR_EVIDENCE],
+        }),
+      apply: () => {
+        applyCalls++;
+        return Promise.reject(new Error(RUNNER_CONTAINER_CAPACITY_EXCEEDED));
+      },
+    },
+    vault: fakeVault({ [CLOUDFLARE]: { CLOUDFLARE_API_TOKEN: SECRET_TOKEN } }),
+    enqueueRun,
+  });
+  const request = await seedUpdatable(store, {
+    installationId: "inst_apply_retry_exhausted",
+  });
+  const { planRun: queuedPlan } = await controller.createPlanRun(request);
+  await controller.dispatchQueuedRun({
+    action: "plan",
+    runId: queuedPlan.id,
+    spaceId: queuedPlan.spaceId,
+  });
+  const planRun = (await store.getPlanRun(queuedPlan.id))!;
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+  retryDispatches.length = 0;
+
+  await expect(
+    controller.dispatchQueuedRun({
+      action: "apply",
+      runId: applyRun.id,
+      spaceId: applyRun.spaceId,
+    }),
+  ).rejects.toThrow(/retryable_runner_infrastructure_error/);
+
+  await controller.dispatchQueuedRun({
+    action: "apply",
+    runId: applyRun.id,
+    spaceId: applyRun.spaceId,
+  });
+
+  const failed = (await store.getApplyRun(applyRun.id))!;
+  expect(failed.status).toEqual("failed");
+  expect(failed.diagnostics?.[0]?.message).toContain(
+    "runner_infrastructure_retry_exhausted",
+  );
+  expect(applyCalls).toEqual(2);
+  expect(retryDispatches).toEqual([
+    {
+      action: "apply",
+      runId: applyRun.id,
+      spaceId: applyRun.spaceId,
+      cause: "controller_retry",
+    },
+  ]);
 });
 
 test("a retryable runner infrastructure reset requeues destroy apply without failing terminally", async () => {

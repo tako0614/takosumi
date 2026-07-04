@@ -50,6 +50,12 @@ import {
   OpentofuResourceShapeAdapter,
 } from "../../core/domains/resource-shape/opentofu_adapter.ts";
 import {
+  PluginResourceShapeAdapter,
+  type ResourceAdapter,
+  type ResourceShapePluginBinding,
+  type ResourceShapePluginBindings,
+} from "../../core/domains/resource-shape/mod.ts";
+import {
   RESOURCE_SHAPE_KINDS,
   type ActorContext,
   type ResourceShapeKind,
@@ -63,6 +69,12 @@ import {
   type TakosumiAdapterCapabilities,
   type TakosumiResourceCapabilities,
 } from "takosumi-contract/capabilities";
+
+const RESOURCE_SHAPE_RUN_WAIT_TIMEOUT_MS = 300_000;
+const RESOURCE_SHAPE_DELETE_TIMEOUT_MS =
+  RESOURCE_SHAPE_RUN_WAIT_TIMEOUT_MS * 2 + 60_000;
+const RESOURCE_SHAPE_ADAPTER_PLUGIN_HANDLERS_ENV =
+  "TAKOSUMI_RESOURCE_ADAPTER_PLUGIN_HANDLERS";
 
 export async function createWorkerServiceApp(
   env: CloudflareWorkerEnv,
@@ -145,17 +157,20 @@ export async function createWorkerServiceApp(
     takosumiRevokeDebtStore: deployStores.revokeDebtStore,
     opentofuDeploymentStore,
     resourceShapeStores: createD1ResourceShapeStores(env.TAKOSUMI_CONTROL_DB),
-    resourceShapeAdapterFactory: ({ controller, capsules }) =>
-      new OpentofuResourceShapeAdapter(
+    resourceShapeAdapterFactory: ({ controller, capsules }) => {
+      const adapter = new OpentofuResourceShapeAdapter(
         new ControllerOpentofuRunPort({
           driver: controller,
           resolveCapsuleBinding: createResourceShapeBackingCapsuleResolver({
             installations: capsules,
           }),
           driveRunsSynchronously: enqueueRun ? false : true,
-          waitTimeoutMs: 300_000,
+          waitTimeoutMs: RESOURCE_SHAPE_RUN_WAIT_TIMEOUT_MS,
         }),
-      ),
+      );
+      return resourceShapeAdapterFromEnv(env, adapter);
+    },
+    resourceShapeDeleteTimeoutMs: RESOURCE_SHAPE_DELETE_TIMEOUT_MS,
     enabledResourceShapeKinds: resourceShapeCapabilities.enabledKinds,
     resourceCapabilities: resourceShapeCapabilities.resources,
     adapterCapabilities: resourceShapeCapabilities.adapters,
@@ -227,6 +242,70 @@ const RESOURCE_CAPABILITY_KEYS: readonly ResourceShapeKind[] =
 const ADAPTER_CAPABILITY_KEYS = TAKOSUMI_ADAPTER_CAPABILITY_KEYS;
 
 type MutablePartial<T> = { -readonly [K in keyof T]?: T[K] };
+
+function resourceShapeAdapterFromEnv(
+  env: CloudflareWorkerEnv,
+  fallback: ResourceAdapter,
+): ResourceAdapter {
+  const plugins = resourceShapePluginBindingsFromEnv(env);
+  return Object.keys(plugins).length > 0
+    ? new PluginResourceShapeAdapter(fallback, plugins)
+    : fallback;
+}
+
+function resourceShapePluginBindingsFromEnv(
+  env: CloudflareWorkerEnv,
+): ResourceShapePluginBindings {
+  const raw = env.TAKOSUMI_RESOURCE_ADAPTER_PLUGIN_HANDLERS;
+  if (typeof raw !== "string" || raw.trim() === "") return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new TypeError(
+      `${RESOURCE_SHAPE_ADAPTER_PLUGIN_HANDLERS_ENV} must be valid JSON`,
+      { cause: error },
+    );
+  }
+  if (!Array.isArray(parsed)) {
+    throw new TypeError(
+      `${RESOURCE_SHAPE_ADAPTER_PLUGIN_HANDLERS_ENV} must be a JSON array`,
+    );
+  }
+  const out: Record<string, ResourceShapePluginBinding> = {};
+  for (const [index, entry] of parsed.entries()) {
+    const label = `${RESOURCE_SHAPE_ADAPTER_PLUGIN_HANDLERS_ENV}[${index}]`;
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new TypeError(`${label} must be an object`);
+    }
+    const record = entry as Record<string, unknown>;
+    const plugin = record.plugin;
+    const handlerKey = record.handlerKey;
+    if (typeof plugin !== "string" || plugin.trim() === "") {
+      throw new TypeError(`${label}.plugin must be a non-empty string`);
+    }
+    if (typeof handlerKey !== "string" || handlerKey.trim() === "") {
+      throw new TypeError(`${label}.handlerKey must be a non-empty string`);
+    }
+    const binding = env[handlerKey.trim()];
+    if (!isFetchBinding(binding)) {
+      throw new TypeError(
+        `${label}.handlerKey "${handlerKey}" did not resolve to a fetch binding`,
+      );
+    }
+    out[plugin.trim()] = binding;
+  }
+  return out;
+}
+
+function isFetchBinding(value: unknown): value is ResourceShapePluginBinding {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    "fetch" in value &&
+    typeof (value as { readonly fetch?: unknown }).fetch === "function"
+  );
+}
 
 function resourceShapeCapabilitiesFromEnv(env: CloudflareWorkerEnv): {
   readonly enabledKinds: readonly ResourceShapeKind[];

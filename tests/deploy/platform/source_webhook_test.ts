@@ -150,7 +150,7 @@ const TEST_CLOUD_USAGE_PRICE_BOOK = JSON.stringify({
     },
     {
       meterIdPrefix: "takosumi:resource_shape:",
-      kind: "operation",
+      kind: "gateway_compute",
       unit: "operation",
       chargeUsdMicrosPerUnit: 2_000,
       estimatedCostUsdMicrosPerUnit: 100,
@@ -1788,7 +1788,7 @@ test("platform Resource Shape API accepts user tokens without installation regis
         resourceFamily: "takosumi.target_pool",
         resourceId: "target-pool:default",
         operation: "target_pool_put",
-        kind: "operation",
+        kind: "gateway_compute",
         quantity: 1,
         usdMicros: 2_000,
         source: "resource_meter",
