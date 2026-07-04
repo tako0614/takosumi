@@ -2860,8 +2860,8 @@ function runSchemas(): Record<string, Record<string, unknown>> {
         backupId: { type: "string" },
         restoreStateGeneration: { type: "integer" },
         restoreServiceData: { type: "boolean" },
-        restoredStateSnapshotId: { type: "string" },
-        restoredFromStateSnapshotId: { type: "string" },
+        restoredStateVersionId: { type: "string" },
+        restoredFromStateVersionId: { type: "string" },
         restoredServiceData: ref("RunServiceDataRestoreResult"),
         errorCode: { type: "string" },
         createdBy: { type: "string" },
@@ -2886,8 +2886,8 @@ function runSchemas(): Record<string, Record<string, unknown>> {
     RunApplyExpectedGuard: {
       type: "object",
       required: [
-        "planRunId",
-        "runnerProfileId",
+        "planId",
+        "runnerId",
         "sourceDigest",
         "variablesDigest",
         "policyDecisionDigest",
@@ -2895,13 +2895,13 @@ function runSchemas(): Record<string, Record<string, unknown>> {
         "planArtifactDigest",
       ],
       properties: {
-        planRunId: { type: "string" },
+        planId: { type: "string" },
         capsuleId: { type: "string" },
         installationId: { type: "string" },
         currentStateVersionId: {
           oneOf: [{ type: "string" }, { type: "null" }],
         },
-        runnerProfileId: { type: "string" },
+        runnerId: { type: "string" },
         sourceDigest: { type: "string" },
         variablesDigest: { type: "string" },
         policyDecisionDigest: { type: "string" },

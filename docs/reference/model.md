@@ -4,7 +4,8 @@ Last updated: 2026-06-29
 
 Takosumi OSS has two public flows: run plain OpenTofu from Git, and resolve
 Takosumi Resource Shapes through TargetPools, policy, and Adapters. Compatibility
-APIs are capability entrypoints into those models, not the internal model itself.
+APIs are additional capability-scoped surfaces alongside those flows. They are
+not fallbacks into the `takosumi` provider or subordinate Resource Shape APIs.
 
 ## OpenTofu Stack Concepts
 
@@ -219,6 +220,16 @@ import path, or managed-target control. They are not a claim of full AWS
 compatibility, full Cloudflare API compatibility, an internal provider-specific
 model, or a reason to recreate standards that already work through existing
 providers.
+
+Takosumi exposes multiple first-class surfaces with no hierarchy between
+provider, standard protocol, and compatibility profile.
+`takosumi_*` Resource Shapes, S3-compatible APIs, CloudEvents-compatible APIs,
+Kubernetes CRDs, OpenAI-compatible APIs, and scoped Cloudflare-compatible APIs
+can all be valid Takosumi-managed features. A compatibility profile remains a
+feature in its own right when it is the best fit for existing tools. Unsupported
+operations should fail closed instead of pretending full vendor compatibility;
+operators can then add another compatibility profile, a standard-provider path,
+or a typed Takosumi shape when the service form warrants it.
 
 The public API boundary is documented in [Takosumi API](./api.md). Internal
 planning and conformance notes live outside the published docs surface.

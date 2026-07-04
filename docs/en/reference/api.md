@@ -263,8 +263,9 @@ the workload identity contract belongs to standard Takosumi.
 
 ## Compatibility API
 
-Compatibility APIs preserve standard protocol/API facades. The internal
-canonical model remains the Resource API.
+Compatibility APIs preserve standard protocol/API facades and are independent
+Takosumi-managed feature surfaces. They are not fallbacks into the `takosumi`
+provider or subordinate routes into Resource Shapes.
 
 ```text
 compat.s3.v1
@@ -285,6 +286,16 @@ compat.cloudflare.workers.v1
 
 These are not full AWS API compatibility or full Cloudflare API compatibility claims. Scope is
 published through capabilities and a compatibility matrix.
+
+Compatibility APIs, typed `takosumi_*` Resource Shapes, S3-compatible APIs,
+OpenAI-compatible APIs, Kubernetes CRDs, and CloudEvents-compatible APIs are
+parallel surfaces. Selection depends on capability, fit with existing tools,
+and which service forms the operator enables; no surface is the universal
+source of truth for the others.
+The `takosumi` provider exists to define service forms that lack an adequate
+vendor-independent provider or protocol. Operations outside a scoped
+compatibility profile fail closed and are documented in the compatibility
+matrix instead of pretending full vendor compatibility.
 
 Takosumi Cloud-specific endpoint examples live in
 [Cloud endpoints](./cloud-endpoints.md).

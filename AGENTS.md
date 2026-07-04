@@ -109,7 +109,8 @@ Three principles are load-bearing for new work:
 - **Resource Shape API**: resource-shape authoring is a Takosumi API surface, not a repo metadata requirement. Plain
   OpenTofu repos remain valid; `takosumi_*` resources use the thin `takosumi_provider` and Takosumi API.
 - **Compatibility profiles by capability**: S3 / OCI / CloudEvents / Kubernetes CRD / Cloudflare subset surfaces are
-  capability-versioned entrypoints into the Resource API. Do not claim complete AWS or Cloudflare API compatibility.
+  capability-versioned feature surfaces for Takosumi-managed capabilities. They are not fallback routes into the
+  `takosumi` provider or subordinate to typed Resource Shapes. Do not claim complete AWS or Cloudflare API compatibility.
 
 ## Provider Connection / Policy Boundary
 

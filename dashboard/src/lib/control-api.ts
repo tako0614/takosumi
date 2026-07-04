@@ -552,12 +552,12 @@ export interface RunPlanResource {
 }
 
 export interface RunApplyExpectedGuard {
-  readonly planRunId: string;
+  readonly planId: string;
   readonly capsuleId?: string;
   /** @deprecated Use capsuleId. */
   readonly installationId?: string;
   readonly currentStateVersionId?: string | null;
-  readonly runnerProfileId: string;
+  readonly runnerId: string;
   readonly sourceDigest: string;
   readonly variablesDigest: string;
   readonly policyDecisionDigest: string;
