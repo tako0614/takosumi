@@ -14,7 +14,7 @@ ecosystem root. The root `docs/` directory is for cross-product indexes,
 quality gates, and ecosystem reference material, not Takosumi's product-local
 planning backlog.
 
-Public docs and internal docs have different jobs:
+Public docs, internal notes, and operator runbooks have different jobs:
 
 ```text
 docs/
@@ -32,6 +32,12 @@ The public docs build excludes `internal/**/*.md` and `operations/**/*.md`.
 When an internal design becomes a stable user/operator contract, rewrite the
 contract into `docs/reference/` or `docs/cloud/` instead of linking readers to
 the internal note.
+
+Do not copy operator-private paths, secret file paths, private evidence refs,
+Stripe sync routes, price-book env, or closed handler wiring into public docs.
+Public docs may describe the external contract and fail-closed behavior; the
+implementation procedure belongs in `docs/operations/` or private operator
+evidence.
 
 Use public docs for external product and API contracts:
 
