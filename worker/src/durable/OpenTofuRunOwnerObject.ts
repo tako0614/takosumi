@@ -54,6 +54,7 @@ interface DurableObjectStorage {
   get<T = unknown>(key: string): Promise<T | undefined>;
   put<T>(key: string, value: T): Promise<void>;
   delete(key: string): Promise<boolean>;
+  getAlarm?(): Promise<number | null>;
   setAlarm?(scheduledTime: number): Promise<void>;
   deleteAlarm?(): Promise<void>;
 }
@@ -120,6 +121,13 @@ export class OpenTofuRunOwnerObject {
     const url = new URL(request.url);
     if (url.pathname === "/healthz") {
       return Response.json({ ok: true, role: "opentofu-run-owner" });
+    }
+    if (url.pathname === "/debug" && request.method === "GET") {
+      return Response.json(await this.#debugState());
+    }
+    if (url.pathname === "/drain" && request.method === "POST") {
+      await this.#dispatchDueRun({ drainControllerRetry: true });
+      return Response.json(await this.#debugState());
     }
     if (request.method !== "POST") {
       return Response.json({ error: "method not allowed" }, { status: 405 });
@@ -423,6 +431,21 @@ export class OpenTofuRunOwnerObject {
 
   async #readRecord(): Promise<RunOwnerRecord | undefined> {
     return await this.state.storage.get<RunOwnerRecord>(RUN_OWNER_RECORD_KEY);
+  }
+
+  async #debugState(): Promise<{
+    readonly record?: RunOwnerRecord;
+    readonly alarmAt?: number;
+    readonly alarmAtIso?: string;
+  }> {
+    const record = await this.#readRecord();
+    const alarmAt = await this.state.storage.getAlarm?.().catch(() => null);
+    return {
+      ...(record ? { record } : {}),
+      ...(typeof alarmAt === "number"
+        ? { alarmAt, alarmAtIso: new Date(alarmAt).toISOString() }
+        : {}),
+    };
   }
 
   async #writeRecord(record: RunOwnerRecord): Promise<void> {

@@ -162,6 +162,9 @@ export default {
     if (url.pathname === "/internal/platform/hardening-gates") {
       return handleHardeningGatesRequest(request, env);
     }
+    if (url.pathname === INTERNAL_PLATFORM_RUN_OWNER_PATH) {
+      return handlePlatformRunOwnerRequest(request, url, env);
+    }
     if (isPlatformRuntimeCellDrillPath(url.pathname)) {
       const response = await handlePlatformRuntimeCellDrillRequest(
         request,
@@ -3410,6 +3413,56 @@ function handleHardeningGatesRequest(
   const status = result.enforced && !result.ok ? 503 : 200;
   if (request.method === "HEAD") return new Response(null, { status });
   return Response.json(result, { status });
+}
+
+const INTERNAL_PLATFORM_RUN_OWNER_PATH = "/internal/platform/run-owner";
+const RUN_OWNER_RUN_ID_PATTERN = /^[a-z][a-z0-9_]{1,31}_[0-9a-zA-Z]{8,96}$/;
+
+export async function handlePlatformRunOwnerRequest(
+  request: Request,
+  url: URL,
+  env: CloudflareWorkerEnv,
+): Promise<Response> {
+  if (request.method !== "GET" && request.method !== "POST") {
+    return Response.json({ error: "method not allowed" }, { status: 405 });
+  }
+  const auth = requireDeployControlBearer(request, env);
+  if (auth) return auth;
+  const namespace = (env as unknown as DeployControlEnv).RUN_OWNER;
+  if (!namespace) {
+    return Response.json(
+      { error: "RUN_OWNER binding is not configured" },
+      { status: 503 },
+    );
+  }
+  const runId = url.searchParams.get("runId")?.trim() ?? "";
+  if (!RUN_OWNER_RUN_ID_PATTERN.test(runId)) {
+    return Response.json({ error: "invalid runId" }, { status: 400 });
+  }
+  const ownerPath = request.method === "POST" ? "drain" : "debug";
+  const ownerResponse = await namespace
+    .get(namespace.idFromName(runId))
+    .fetch(
+      new Request(`https://opentofu-run-owner/${ownerPath}`, {
+        method: request.method,
+        headers: { accept: "application/json" },
+      }),
+    );
+  const text = await ownerResponse.text();
+  let owner: unknown = null;
+  try {
+    owner = text ? JSON.parse(text) : null;
+  } catch {
+    owner = { textClass: text ? "non-json" : "empty" };
+  }
+  return Response.json(
+    {
+      runId,
+      operation: ownerPath,
+      owner,
+    },
+    { status: ownerResponse.ok ? 200 : 502 },
+  );
 }
 
 function evidenceCheck(

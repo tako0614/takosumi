@@ -19,6 +19,7 @@ import {
   handlePlatformMetricsDashboardRequest,
   handlePlatformMetricsRequest,
   handlePlatformResourceShapeApiRequest,
+  handlePlatformRunOwnerRequest,
   handlePlatformRuntimeCellDrillRequest,
   handleSourceWebhookRequest,
   isOperatorBillingPath,
@@ -662,6 +663,76 @@ test("hardening gates route is operator bearer gated and returns 503 when enforc
   );
   expect(response.status).toBe(503);
   expect((await response.json()).ok).toBe(false);
+});
+
+test("platform run owner route is operator bearer gated and forwards debug/drain", async () => {
+  const ownerRequests: { id: unknown; url: string; method: string }[] = [];
+  const env = {
+    TAKOSUMI_DEPLOY_CONTROL_TOKEN: "operator-secret",
+    RUN_OWNER: {
+      idFromName: (name: string) => `id:${name}`,
+      get: (id: unknown) => ({
+        fetch: async (request: Request) => {
+          ownerRequests.push({ id, url: request.url, method: request.method });
+          return Response.json({
+            record: {
+              runId: "ssr_12345678",
+              status: request.method === "POST" ? "succeeded" : "scheduled",
+            },
+          });
+        },
+      }),
+    },
+  } as never;
+  const url = new URL(
+    "https://app.takosumi.com/internal/platform/run-owner?runId=ssr_12345678",
+  );
+
+  const unauthenticated = await handlePlatformRunOwnerRequest(
+    new Request(url),
+    url,
+    env,
+  );
+  expect(unauthenticated.status).toBe(401);
+
+  const debug = await handlePlatformRunOwnerRequest(
+    new Request(url, { headers: { authorization: "Bearer operator-secret" } }),
+    url,
+    env,
+  );
+  expect(debug.status).toBe(200);
+  expect(await debug.json()).toEqual({
+    runId: "ssr_12345678",
+    operation: "debug",
+    owner: { record: { runId: "ssr_12345678", status: "scheduled" } },
+  });
+
+  const drain = await handlePlatformRunOwnerRequest(
+    new Request(url, {
+      method: "POST",
+      headers: { authorization: "Bearer operator-secret" },
+    }),
+    url,
+    env,
+  );
+  expect(drain.status).toBe(200);
+  expect(await drain.json()).toEqual({
+    runId: "ssr_12345678",
+    operation: "drain",
+    owner: { record: { runId: "ssr_12345678", status: "succeeded" } },
+  });
+  expect(ownerRequests).toEqual([
+    {
+      id: "id:ssr_12345678",
+      url: "https://opentofu-run-owner/debug",
+      method: "GET",
+    },
+    {
+      id: "id:ssr_12345678",
+      url: "https://opentofu-run-owner/drain",
+      method: "POST",
+    },
+  ]);
 });
 
 test("platform metrics route is forwarded to the deploy-control seam", async () => {
