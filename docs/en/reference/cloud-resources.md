@@ -104,6 +104,12 @@ official manager for EdgeWorker uses a Workers for Platforms dispatch namespace,
 but the API contract is the service form: `EdgeWorker`, `ObjectBucket`,
 `KVStore`, `SQLDatabase`, `Queue`, and peers. WfP and Cloudflare primitives are
 not the public resource identity.
+The shared manager descriptor keeps three names separate: the stable Takosumi
+Cloud service family such as `takosumi.edge_worker`, the public usage family
+used by billing and compatibility meters such as `cloudflare.workers_script`,
+and the replaceable backend manager such as a Workers for Platforms dispatch
+namespace. Changing the manager must not change the user-facing Resource Shape
+API or compatibility entrypoint.
 For the same reason, Cloud's normalized resource kind is service-form-oriented,
 such as `object_bucket`, `sql_database`, and `durable_workflow`. Tokens such as
 `r2` and `d1` stay compatibility URL tokens or current backend prefixes; they

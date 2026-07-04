@@ -408,6 +408,11 @@ are shared. Resource Shape entrypoints also apply TargetPool / Policy /
 ResolutionLock. The Cloudflare-compatible
 endpoint is an import / deploy path into this shared Cloud managed operation
 boundary, not a separate product stack.
+The canonical Cloud resource name is the service form such as `EdgeWorker` or
+`ObjectBucket` plus a Takosumi Cloud service family such as
+`takosumi.edge_worker`. Families such as `cloudflare.workers_script` and
+`cloudflare.r2` are public billing / compatibility meter families, while
+Workers for Platforms or R2 are selected managers / backend implementations.
 
 Response envelope:
 
