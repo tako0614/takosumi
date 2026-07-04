@@ -45,10 +45,12 @@ compatibility profile の entrypoints は same platform worker に合流し、no
 
 Cloud managed resource は、compatibility endpoint、`takosumi/takosumi` provider、
 Dashboard のどこから入っても、backend API を叩く前に同じ managed operation
-pipeline を通ります。認証、Workspace billing context、usage / credit guard、
-Resource / NativeResource 正規化、manager dispatch を共通化し、最後に選ばれた
-manager が Workers for Platforms、R2、D1、KV、Queue、Containers、または別の
-operator backend を使います。
+pipeline を通ります。認証、Workspace billing context、Resource / NativeResource
+正規化、managed-operation dispatch plan、selected-manager availability check、
+usage / credit guard、manager dispatch を共通化し、最後に選ばれた manager が
+Workers for Platforms、R2、D1、KV、Queue、Containers、または別の operator backend
+を使います。認識済み service form でも manager が未設定なら usage charge や
+backend API call の前に fail closed し、別の compatibility path へ fallback しません。
 
 Durable workflow は、利用可能な場合に Dynamic Workers と
 `@cloudflare/dynamic-workflows` を使います。operator/internal jobs は normal

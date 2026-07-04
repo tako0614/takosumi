@@ -61,6 +61,14 @@ S3-compatible Object Storage endpoint, Cloud usage, and Cloud Edge Runtime are
 served by Takosumi Cloud managed backends. Managed-backend internals, secrets,
 and operator-only records are not public contracts; they belong in operator
 runbooks.
+All managed endpoint families normalize into the same Cloud managed-operation
+boundary before a backend API is called. Cloudflare-compatible paths,
+`takosumi_*` Resource Shape calls, S3-compatible data-plane requests, AI Gateway
+requests, runtime dispatch, and Dashboard actions are peer entrypoints. They
+are not fallback layers for each other. The platform resolves the public service
+form, selected manager, and usage meter first; unsupported paths return 501, and
+recognized paths whose manager is unavailable return 501 before usage is
+charged or any provider backend is touched.
 
 ## Catalog
 

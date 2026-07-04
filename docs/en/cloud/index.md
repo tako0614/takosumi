@@ -45,10 +45,13 @@ Database, Queue, and AI.
 Every Cloud managed resource entrypoint uses the same managed operation
 pipeline before a backend API is called. Whether the request comes from a
 compatibility endpoint, the `takosumi/takosumi` provider, or the Dashboard, it
-passes through authentication, Workspace billing context, usage / credit guard,
-Resource / NativeResource normalization, and manager dispatch. The selected
-manager then chooses Workers for Platforms, R2, D1, KV, Queues, Containers, or
-another operator backend.
+passes through authentication, Workspace billing context, Resource /
+NativeResource normalization, managed-operation dispatch planning,
+selected-manager availability checks, usage / credit guard, and then manager
+dispatch. The selected manager chooses Workers for Platforms, R2, D1, KV,
+Queues, Containers, or another operator backend. A recognized service form whose
+manager is not configured fails before usage is charged and before any backend
+API call; it does not fall back to another compatibility path.
 
 Durable workflows use Dynamic Workers with `@cloudflare/dynamic-workflows` when
 available. Operator/internal jobs use normal Cloudflare Workflows.
