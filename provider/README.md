@@ -19,11 +19,12 @@ surfaces; they are not reasons to add duplicate `takosumi_*` resources. The
 Takosumi endpoint owns resolver decisions, credentials, state, drift, and
 adapter execution.
 
-Using Takosumi does not require this provider. Plain OpenTofu stacks can use
-existing providers, standard endpoints, compatibility APIs, or generic-env
-ProviderConnections. Use `takosumi/takosumi` only when the desired service form
-lacks an adequate vendor-neutral provider/protocol and Takosumi must expose it
-as a typed Resource Shape or operator/admin object.
+Using Takosumi does not require this provider, and this provider is not the
+preferred route when a universal surface already exists. Plain OpenTofu stacks
+can use existing providers, standard endpoints, compatibility APIs, or
+generic-env ProviderConnections. Use `takosumi/takosumi` only when the desired
+service form lacks an adequate vendor-neutral provider/protocol and Takosumi
+must expose it as a typed Resource Shape or operator/admin object.
 
 Current v1alpha1 Resource Shape resources:
 

@@ -43,7 +43,8 @@ separate product core.
 ## 1. The Key Rule
 
 Use industry-standard surfaces when they exist. Define Takosumi-owned typed
-shapes when the service form is real but no adequate standard surface exists.
+shapes only when the service form is real and no adequate universal provider,
+standard protocol, or scoped compatibility surface exists.
 
 ```text
 If an adequate industry-standard protocol, API, or OpenTofu provider exists:
@@ -78,6 +79,13 @@ provider does not correspond to a Takosumi-owned service form or a standard
 compatibility surface:
   do not add it. It has no reason to exist in the Takosumi provider.
 ```
+
+The `takosumi/takosumi` provider is therefore not the preferred or required
+path just because Takosumi is involved. It is a typed HCL facade for
+Takosumi-owned service forms that lack an adequate universal surface. When a
+non-vendor-specific provider or protocol already gives users a clean OpenTofu
+experience, Takosumi should run, secure, meter, and audit that existing surface
+instead of defining a duplicate `takosumi_*` resource.
 
 Before adding any `takosumi_*` resource, the design must pass a prior-art gate:
 
