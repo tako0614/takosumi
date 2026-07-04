@@ -138,6 +138,11 @@ Takosumi Cloud は USD credit で動きます。billable operation は price boo
 決め、残高が足りない場合は実行前に止めます。cleanup / destroy は残高切れでも
 できるようにし、作った resource が消せなくなる状態を避けます。
 
+公開価格、無料枠、usage 単価、credit exhaustion の契約は
+[Takosumi Cloud pricing](./pricing.md) にまとめています。runtime price book、
+payment-provider 同期、margin guard、reconciliation は公開 contract ではなく
+operator operations の範囲です。
+
 Dashboard では次を確認できます。
 
 - available balance
@@ -189,3 +194,4 @@ provider "cloudflare" {
 
 - [Takosumi Cloud resources](../reference/cloud-resources.md)
 - [Takosumi Cloud endpoints](../reference/cloud-endpoints.md)
+- [Takosumi Cloud pricing](./pricing.md)

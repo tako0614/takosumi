@@ -254,8 +254,9 @@ closed します。
 
 価格は Cloud endpoint request body ではなく Takosumi Cloud 側で決めます。request
 body や client header に `usdMicros` / `credits` を書かせません。公開価格と無料枠は
-Cloud docs と Dashboard の billing 表示に出します。実際の price book、同期手順、
-payment provider 連携の運用 detail は公開 reference ではなく運用メモ側で管理します。
+[Takosumi Cloud pricing](../cloud/pricing.md) と Dashboard の billing 表示に出します。
+実際の price book、同期手順、payment provider 連携の運用 detail は公開 reference
+ではなく運用メモ側で管理します。
 
 cleanup は拡張と分けます。作成、deploy、runtime、data-plane write/query/message
 / instance operation は billable で、credit が足りない場合は fail closed します。
@@ -271,8 +272,7 @@ Cloudflare upstream へ素通しして無料利用できる状態にはしませ
 Takosumi 側で請求できていると言える条件は、Workspace usage ledger に usage event
 が記録され、billing projection へ反映されることです。上流 provider の請求だけでは
 Takosumi ユーザーへの請求完了を意味しません。payment provider への export、
-reconciliation、operator token、price book の実値は customer API ではなく
-operator runbook の範囲です。
+reconciliation、price book の実値は customer API ではなく operator runbook の範囲です。
 
 ## AI Gateway
 

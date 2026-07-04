@@ -22,6 +22,7 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
       items: [
         { text: "概要", link: "/" },
         { text: "Takosumi Cloud", link: "/cloud/" },
+        { text: "Cloud pricing", link: "/cloud/pricing" },
         { text: "Quickstart", link: "/getting-started/quickstart" },
       ],
     },
@@ -55,6 +56,7 @@ const enSidebar: DefaultTheme.SidebarMulti = {
       items: [
         { text: "Overview", link: "/en/" },
         { text: "Takosumi Cloud", link: "/en/cloud/" },
+        { text: "Cloud pricing", link: "/en/cloud/pricing" },
         { text: "Quickstart", link: "/en/getting-started/quickstart" },
       ],
     },

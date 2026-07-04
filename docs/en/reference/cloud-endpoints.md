@@ -271,9 +271,10 @@ runtime dispatch.
 
 Pricing is owned by Takosumi Cloud, not by endpoint request bodies. Requests and
 client headers must not submit `usdMicros` or `credits`. Public prices and
-free-tier terms are shown in Cloud docs and Dashboard billing views. The real
-price book, sync procedure, and payment-provider operation details belong in
-operator notes, not in the public reference.
+free-tier terms are shown in [Takosumi Cloud pricing](../cloud/pricing.md) and
+Dashboard billing views. The real price book, sync procedure, and
+payment-provider operation details belong in operator notes, not in the public
+reference.
 
 Cleanup is intentionally different from expansion. Create, deploy, runtime, and
 data-plane write/query/message/instance operations are billable and fail closed
@@ -290,8 +291,8 @@ proxying to Cloudflare for free.
 Takosumi can claim a customer has been billed only when the Workspace usage
 ledger records a usage event and the billing projection reflects it. Upstream
 provider charges alone do not mean Takosumi customer billing is complete.
-Payment-provider export, reconciliation, operator tokens, and concrete price
-book values are operator-runbook concerns, not customer APIs.
+Payment-provider export, reconciliation, and concrete price book values are
+operator-runbook concerns, not customer APIs.
 
 ## AI Gateway
 
