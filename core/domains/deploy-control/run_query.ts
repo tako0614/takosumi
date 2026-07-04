@@ -143,10 +143,10 @@ export class RunQueryService {
   /**
    * Reads the run-level diagnostics + audit trail for a Run (spec §30 `GET
    * /internal/v1/runs/:runId/logs`). Diagnostics + audit events are recorded on the
-   * underlying PlanRun / ApplyRun ledger record; a `source_sync` run carries no
-   * structured diagnostics, so its single `error`, when present, is surfaced as
-   * one error diagnostic. Returns the unified `{ diagnostics, auditEvents }`
-   * shape. A missing run is a typed 404.
+   * underlying PlanRun / ApplyRun ledger record; a `source_sync` run projects
+   * public-safe phase timings plus its single `error`, when present. Returns
+   * the unified `{ diagnostics, auditEvents }` shape. A missing run is a typed
+   * 404.
    */
   async getRunLogs(id: string): Promise<RunLogsResponse> {
     requireNonEmptyString(id, "runId");
@@ -194,10 +194,10 @@ export class RunQueryService {
 
   /**
    * Resolves a Run id to its underlying ledger record's `{ diagnostics,
-   * auditEvents }`. PlanRun / ApplyRun carry both; a SourceSyncRun has neither,
-   * so its `error` is projected to a single error diagnostic and its audit trail
-   * is empty. A missing run is a typed 404. Used by the run logs/events routes;
-   * no credential material or sensitive output value enters these projections.
+   * auditEvents }`. PlanRun / ApplyRun carry both; a SourceSyncRun projects
+   * public-safe phase timings and its `error`; its audit trail is empty. A
+   * missing run is a typed 404. Used by the run logs/events routes; no
+   * credential material or sensitive output value enters these projections.
    */
   async #requireRunRecordWithLogs(id: string): Promise<{
     readonly diagnostics: readonly RunDiagnostic[];
@@ -220,9 +220,7 @@ export class RunQueryService {
     const sync = await this.#store.getSourceSyncRun(id);
     if (sync) {
       return {
-        diagnostics: sync.error
-          ? [{ severity: "error", message: sync.error }]
-          : [],
+        diagnostics: sourceSyncDiagnostics(sync),
         auditEvents: [],
       };
     }
@@ -325,4 +323,36 @@ function isStoredSourceSyncRun(row: StoredRunRecord): row is SourceSyncRun {
 
 function isPublicRunRecord(row: StoredRunRecord): row is Run {
   return typeof (row as Partial<Run>).type === "string";
+}
+
+function sourceSyncDiagnostics(sync: SourceSyncRun): readonly RunDiagnostic[] {
+  const diagnostics: RunDiagnostic[] = [];
+  const timingDetail = sourceSyncTimingDetail(sync);
+  if (timingDetail) {
+    diagnostics.push({
+      severity: "info",
+      message: "source sync phase timings recorded",
+      detail: timingDetail,
+    });
+  }
+  if (sync.error) {
+    diagnostics.push({ severity: "error", message: sync.error });
+  }
+  return diagnostics;
+}
+
+function sourceSyncTimingDetail(sync: SourceSyncRun): string | undefined {
+  const details =
+    sync.phaseTimings?.flatMap((timing) => {
+      if (!/^[a-z][a-z0-9_]{0,63}$/u.test(timing.phase)) return [];
+      if (
+        typeof timing.durationMs !== "number" ||
+        !Number.isFinite(timing.durationMs) ||
+        timing.durationMs < 0
+      ) {
+        return [];
+      }
+      return [`${timing.phase}=${Math.round(timing.durationMs)}ms`];
+    }) ?? [];
+  return details.length > 0 ? details.join(", ") : undefined;
 }

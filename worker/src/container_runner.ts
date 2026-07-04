@@ -268,11 +268,13 @@ export class CloudflareContainerOpenTofuRunner
         `OpenTofu runner source_sync ${job.runId} returned an incomplete result`,
       );
     }
+    const phaseTimings = phaseTimingsFromContainerResult(result);
     return {
       resolvedCommit,
       archiveDigest,
       archiveSizeBytes,
       ...(archiveObjectKey ? { archiveObjectKey } : {}),
+      ...(phaseTimings ? { phaseTimings } : {}),
     };
   }
 
@@ -662,13 +664,26 @@ function diagnosticsFromContainerResult(
 function phaseTimingDetailFromContainerResult(
   result: Record<string, unknown>,
 ): string | undefined {
+  const timings = phaseTimingsFromContainerResult(result)?.map(
+    (entry) => `${entry.phase}=${Math.round(entry.durationMs)}ms`,
+  ) ?? [];
+  return timings.length > 0 ? timings.join(", ") : undefined;
+}
+
+function phaseTimingsFromContainerResult(
+  result: Record<string, unknown>,
+): NonNullable<OpenTofuSourceSyncResult["phaseTimings"]> | undefined {
   const value = result.phaseTimings;
   if (!Array.isArray(value)) return undefined;
   const timings = value.flatMap((entry) => {
     if (!isRecord(entry)) return [];
     const phase = stringFromRecord(entry, "phase");
+    const startedAt = stringFromRecord(entry, "startedAt");
+    const finishedAt = stringFromRecord(entry, "finishedAt");
     const durationMs = entry.durationMs;
     if (!phase || !/^[a-z][a-z0-9_]{0,63}$/u.test(phase)) return [];
+    if (!startedAt || !isIsoLikeDate(startedAt)) return [];
+    if (!finishedAt || !isIsoLikeDate(finishedAt)) return [];
     if (
       typeof durationMs !== "number" ||
       !Number.isFinite(durationMs) ||
@@ -676,9 +691,13 @@ function phaseTimingDetailFromContainerResult(
     ) {
       return [];
     }
-    return [`${phase}=${Math.round(durationMs)}ms`];
+    return [{ phase, startedAt, finishedAt, durationMs }];
   });
-  return timings.length > 0 ? timings.join(", ") : undefined;
+  return timings.length > 0 ? timings : undefined;
+}
+
+function isIsoLikeDate(value: string): boolean {
+  return Number.isFinite(Date.parse(value));
 }
 
 function planResourceChangesFromContainerResult(

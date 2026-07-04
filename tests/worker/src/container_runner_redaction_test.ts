@@ -121,6 +121,54 @@ test("container runner threads phase timings into non-secret diagnostics", async
   );
 });
 
+test("container runner returns sanitized source sync phase timings", async () => {
+  const runner = new CloudflareContainerOpenTofuRunner(
+    envReturning({
+      resolvedCommit: "abc123def456",
+      sourceArchive: {
+        digest: `sha256:${"b".repeat(64)}`,
+        sizeBytes: 2048,
+      },
+      phaseTimings: [
+        {
+          phase: "source_ref_resolve",
+          startedAt: "2026-06-28T00:00:00.000Z",
+          finishedAt: "2026-06-28T00:00:00.040Z",
+          durationMs: 40,
+        },
+        {
+          phase: "bad phase with spaces",
+          startedAt: "2026-06-28T00:00:00.040Z",
+          finishedAt: "2026-06-28T00:00:00.050Z",
+          durationMs: 10,
+        },
+      ],
+    }),
+  );
+
+  const result = await runner.sourceSync({
+    runId: "ssr_timing",
+    spaceId: "space_1",
+    sourceId: "src_1",
+    source: {
+      url: "https://github.com/acme/repo.git",
+      ref: "main",
+      path: ".",
+    },
+    archiveObjectKey:
+      "spaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
+  });
+
+  expect(result.phaseTimings).toEqual([
+    {
+      phase: "source_ref_resolve",
+      startedAt: "2026-06-28T00:00:00.000Z",
+      finishedAt: "2026-06-28T00:00:00.040Z",
+      durationMs: 40,
+    },
+  ]);
+});
+
 test("container runner records active run and startup metrics", async () => {
   const observability = new InMemoryObservabilitySink();
   const runner = new CloudflareContainerOpenTofuRunner(

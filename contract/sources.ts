@@ -153,10 +153,22 @@ export interface SourceSyncRun {
   readonly archiveDigest?: string;
   readonly archiveSizeBytes?: number;
   readonly snapshotId?: string;
+  /**
+   * Public-safe runner phase timings. These are operational metadata only:
+   * phase names and durations, never source contents or credential values.
+   */
+  readonly phaseTimings?: readonly SourceSyncPhaseTiming[];
   readonly error?: string;
 }
 
 export type SourceSyncRunStatus = "queued" | "running" | "succeeded" | "failed";
+
+export interface SourceSyncPhaseTiming {
+  readonly phase: string;
+  readonly startedAt: string;
+  readonly finishedAt: string;
+  readonly durationMs: number;
+}
 
 // ---------------------------------------------------------------------------
 // Source connection kinds for Git credentials.

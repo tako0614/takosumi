@@ -92,6 +92,7 @@ import type {
   Source,
   SourceResponse,
   SourceSnapshot,
+  SourceSyncPhaseTiming,
   SourceSyncRun,
 } from "takosumi-contract/sources";
 import type { PageParams } from "takosumi-contract/pagination";
@@ -626,6 +627,7 @@ export interface OpenTofuSourceSyncResult {
   readonly archiveSizeBytes: number;
   /** Existing archive object key when an unchanged ref reused a SourceSnapshot. */
   readonly archiveObjectKey?: string;
+  readonly phaseTimings?: readonly SourceSyncPhaseTiming[];
 }
 
 /**
