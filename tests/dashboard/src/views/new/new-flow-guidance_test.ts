@@ -236,6 +236,23 @@ describe("/new flow guidance", () => {
     );
   });
 
+  test("generated project_name hints follow the visible service name", () => {
+    expect(newAppViewSource).toContain("function projectNameHintIsGenerated");
+    expect(newAppViewSource).toContain(
+      'value === "service-name" || value === "service-name-with-space"',
+    );
+    expect(newAppViewSource).toContain(
+      "const initialResourcePrefix = projectNameHintIsGenerated(initialProjectName)",
+    );
+    expect(newAppViewSource).toContain(
+      "slugInputValue(resourcePrefix() || defaultProjectName())",
+    );
+    expect(newAppViewSource).toContain("const isGeneratedProjectName =");
+    expect(newAppViewSource).toContain(
+      "projectNameHintIsGenerated(nextProjectName)",
+    );
+  });
+
   test("does not allow install-link submit before add configuration loads", () => {
     expect(newAppViewSource).toContain("const installConfigLoading = () =>");
     expect(newAppViewSource).toContain(
