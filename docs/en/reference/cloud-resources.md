@@ -71,6 +71,32 @@ Operator/internal jobs:
   Cloudflare Workflows
 ```
 
+Every Cloud managed resource passes through the shared Cloud extension layer
+before a backend API is called. Whether the entrypoint is the
+`takosumi/takosumi` provider, a Compatibility API, or a Dashboard action, the
+request passes through auth, Workspace billing context, usage / credit guard,
+Resource / NativeResource normalization, capability / manager dispatch, and
+then the selected manager chooses the backend. When the entrypoint is a
+`takosumi_*` Resource Shape, TargetPool / Policy / ResolutionLock are also part
+of the path before manager dispatch.
+
+```text
+Resource Shape API / Compatibility API / Dashboard action
+  -> auth + billing Workspace
+  -> usage / credit guard
+  -> Resource / NativeResource normalization
+  -> TargetPool / Policy / ResolutionLock (Resource Shape entrypoints)
+  -> capability / manager dispatch
+  -> selected manager
+  -> backend API
+```
+
+The Cloudflare-compatible path is an import path into this pipeline. The current
+official manager for EdgeWorker uses a Workers for Platforms dispatch namespace,
+but the API contract is the service form: `EdgeWorker`, `ObjectBucket`,
+`KVStore`, `SQLDatabase`, `Queue`, and peers. WfP and Cloudflare primitives are
+not the public resource identity.
+
 References:
 
 - [How Workers for Platforms works](https://developers.cloudflare.com/cloudflare-for-platforms/workers-for-platforms/how-workers-for-platforms-works/)
@@ -105,21 +131,21 @@ The Cloudflare import capability is `compat.cloudflare.workers.v1`. It exposes
 only the subset needed to import Workers-oriented resources into Takosumi Cloud
 resources. Unsupported Cloudflare products stay explicit.
 
-| Status      | Scope                                                                  |
-| ----------- | ---------------------------------------------------------------------- |
-| Stable      | Worker script deploy to `EdgeWorker`                                   |
-| Stable      | Worker routes to Takosumi routes / default hostnames                   |
-| Stable      | Worker secrets / vars                                                  |
-| Stable      | KV namespace                                                           |
-| Stable      | R2 bucket / Object Storage                                             |
-| Stable      | D1 database / App Database                                             |
-| Preview     | Queue                                                                  |
-| Preview     | Durable Workflow                                                       |
-| Preview     | Dynamic Worker workflow support                                        |
-| Planned     | Containers                                                             |
-| Planned     | Durable Objects style stateful apps                                    |
-| Unsupported | DNS, WAF, Zero Trust, Registrar, Cloudflare account IAM, Load Balancer |
-| Unsupported | Email Routing                                                          |
+| Status             | Scope                                                                  |
+| ------------------ | ---------------------------------------------------------------------- |
+| Production Preview | Worker script deploy to `EdgeWorker`                                   |
+| Production Preview | Worker routes to Takosumi routes / default hostnames                   |
+| Production Preview | Worker secrets / vars                                                  |
+| Production Preview | KV namespace                                                           |
+| Production Preview | R2 bucket / Object Storage                                             |
+| Production Preview | D1 database / App Database                                             |
+| Preview            | Queue                                                                  |
+| Preview            | Durable Workflow                                                       |
+| Preview            | Dynamic Worker workflow support                                        |
+| Planned            | Containers                                                             |
+| Planned            | Durable Objects style stateful apps                                    |
+| Unsupported        | DNS, WAF, Zero Trust, Registrar, Cloudflare account IAM, Load Balancer |
+| Unsupported        | Email Routing                                                          |
 
 AI Gateway is not part of Workers compatibility. It is a separate
 OpenAI-compatible endpoint profile. See

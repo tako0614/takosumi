@@ -42,6 +42,14 @@ with Cloudflare Workers for Platforms and a Takosumi-managed dispatch layer.
 This is one Cloud resource, separate from ContainerService, Object Storage, KV,
 Database, Queue, and AI.
 
+Every Cloud managed resource entrypoint uses the same managed operation
+pipeline before a backend API is called. Whether the request comes from a
+compatibility endpoint, the `takosumi/takosumi` provider, or the Dashboard, it
+passes through authentication, Workspace billing context, usage / credit guard,
+Resource / NativeResource normalization, and manager dispatch. The selected
+manager then chooses Workers for Platforms, R2, D1, KV, Queues, Containers, or
+another operator backend.
+
 Durable workflows use Dynamic Workers with `@cloudflare/dynamic-workflows` when
 available. Operator/internal jobs use normal Cloudflare Workflows.
 
@@ -110,27 +118,28 @@ Takosumi Cloud services are not all GA at once. We publish services gradually
 and promote them to Stable only when Dashboard, docs, billing, destroy proof,
 usage ledger, and runtime guard evidence are in place.
 
-| Stage   | Meaning                                                    |
-| ------- | ---------------------------------------------------------- |
-| Stable  | billing, deletion, usage ledger, docs, and smoke are ready |
-| Preview | usable, but limits and expected changes are documented     |
-| Planned | public product direction, not yet available                |
+| Stage              | Meaning                                                                          |
+| ------------------ | -------------------------------------------------------------------------------- |
+| Stable             | publicly GA, with billing, deletion, usage ledger, docs, and smoke ready         |
+| Production Preview | available on the production runtime before GA readiness / live billing promotion |
+| Preview            | usable, but limits and expected changes are documented                           |
+| Planned            | public product direction, not yet available                                      |
 
 Initial rollout:
 
-| Service          | Stage   |
-| ---------------- | ------- |
-| Edge Worker      | Stable  |
-| Routes           | Stable  |
-| Secrets / Vars   | Stable  |
-| KV               | Stable  |
-| Object Storage   | Stable  |
-| Database         | Stable  |
-| AI Gateway       | Stable  |
-| Queue            | Preview |
-| Durable Workflow | Preview |
-| Containers       | Planned |
-| Stateful apps    | Planned |
+| Service          | Stage              |
+| ---------------- | ------------------ |
+| Edge Worker      | Production Preview |
+| Routes           | Production Preview |
+| Secrets / Vars   | Production Preview |
+| KV               | Production Preview |
+| Object Storage   | Production Preview |
+| Database         | Production Preview |
+| AI Gateway       | Production Preview |
+| Queue            | Preview            |
+| Durable Workflow | Preview            |
+| Containers       | Planned            |
+| Stateful apps    | Planned            |
 
 ## Credits
 
@@ -161,22 +170,22 @@ compatibility. AI Gateway is a separate OpenAI-compatible profile.
 
 ### `compat.cloudflare.workers.v1`
 
-| Status      | Scope                                                                  |
-| ----------- | ---------------------------------------------------------------------- |
-| Stable      | Worker script deploy, routes, secrets, vars                            |
-| Stable      | KV namespace, R2 bucket / Object Storage, D1 database / App Database   |
-| Preview     | Queue, Durable Workflow, Dynamic Worker workflow support               |
-| Planned     | Containers, Durable Objects style stateful apps                        |
-| Unsupported | DNS, WAF, Zero Trust, Registrar, Cloudflare account IAM, Load Balancer |
-| Unsupported | Email Routing                                                          |
+| Status             | Scope                                                                  |
+| ------------------ | ---------------------------------------------------------------------- |
+| Production Preview | Worker script deploy, routes, secrets, vars                            |
+| Production Preview | KV namespace, R2 bucket / Object Storage, D1 database / App Database   |
+| Preview            | Queue, Durable Workflow, Dynamic Worker workflow support               |
+| Planned            | Containers, Durable Objects style stateful apps                        |
+| Unsupported        | DNS, WAF, Zero Trust, Registrar, Cloudflare account IAM, Load Balancer |
+| Unsupported        | Email Routing                                                          |
 
 ### AI Gateway OpenAI-compatible profile
 
-| Status | Scope                             |
-| ------ | --------------------------------- |
-| Stable | `/gateway/ai/v1/models`           |
-| Stable | `/gateway/ai/v1/chat/completions` |
-| Stable | `/gateway/ai/v1/embeddings`       |
+| Status             | Scope                             |
+| ------------------ | --------------------------------- |
+| Production Preview | `/gateway/ai/v1/models`           |
+| Production Preview | `/gateway/ai/v1/chat/completions` |
+| Production Preview | `/gateway/ai/v1/embeddings`       |
 
 The Cloudflare-compatible API is an import and deploy path. Use it when you
 want an existing Cloudflare Workers manifest to target Takosumi Cloud
