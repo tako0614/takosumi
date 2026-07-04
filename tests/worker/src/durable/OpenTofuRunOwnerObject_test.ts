@@ -69,6 +69,50 @@ test("OpenTofu run owner alarm dispatches once and records success", async () =>
   assert.equal(storage.alarmAt, undefined);
 });
 
+test("OpenTofu run owner debug and drain expose operator-safe state", async () => {
+  const storage = new FakeDoStorage();
+  const now = Date.parse("2026-06-22T08:00:00.000Z");
+  const calls: unknown[] = [];
+  const owner = new OpenTofuRunOwnerObject(
+    { storage },
+    {} as CloudflareWorkerEnv,
+    {
+      now: () => now,
+      dispatch: (dispatch) => {
+        calls.push(dispatch);
+        return Promise.resolve();
+      },
+      readRunStatus: () => Promise.resolve("succeeded"),
+    },
+  );
+
+  await start(owner, "source_sync");
+
+  const debug = await owner.fetch(new Request("https://run-owner/debug"));
+  assert.equal(debug.status, 200);
+  const debugBody = (await debug.json()) as {
+    record?: { status?: string; runId?: string; action?: string };
+    alarmAt?: number;
+  };
+  assert.equal(debugBody.record?.status, "scheduled");
+  assert.equal(debugBody.record?.runId, "run_1");
+  assert.equal(debugBody.record?.action, "source_sync");
+  assert.equal(debugBody.alarmAt, now);
+
+  const drain = await owner.fetch(
+    new Request("https://run-owner/drain", { method: "POST" }),
+  );
+  assert.equal(drain.status, 200);
+  const drainBody = (await drain.json()) as {
+    record?: { status?: string; attempts?: number };
+  };
+  assert.deepEqual(calls, [
+    { action: "source_sync", runId: "run_1", spaceId: "space_1" },
+  ]);
+  assert.equal(drainBody.record?.status, "succeeded");
+  assert.equal(drainBody.record?.attempts, 1);
+});
+
 test("OpenTofu run owner maps destroy queue work to apply dispatch", async () => {
   const storage = new FakeDoStorage();
   const calls: unknown[] = [];
@@ -510,6 +554,10 @@ class FakeDoStorage {
 
   delete(key: string): Promise<boolean> {
     return Promise.resolve(this.#values.delete(key));
+  }
+
+  getAlarm(): Promise<number | null> {
+    return Promise.resolve(this.alarmAt ?? null);
   }
 
   setAlarm(scheduledTime: number): Promise<void> {
