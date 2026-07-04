@@ -87,6 +87,7 @@ export default defineConfig({
     "Git-based OpenTofu control plane, Resource Shape API, and adapter framework",
   lang: "ja",
   base: process.env.VITEPRESS_BASE ?? "/docs/",
+  // Public docs must not publish product-local design notes or operator runbooks.
   srcExclude: ["internal/**/*.md", "operations/**/*.md"],
   cleanUrls: true,
   lastUpdated: true,

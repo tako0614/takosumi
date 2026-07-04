@@ -47,24 +47,18 @@ Takosumi for Operator / Cloud の運用層だけが次を持ちます。
 - official managed target / native resource backend
 - official usage / quota / billing / support controls
 
-公式 `app.takosumi.com` は closed `takosumi-cloud/platform/worker.ts` wrapper を
-Worker entry にし、OSS platform worker の `cloud_extensions` seam に Cloud-only
-fetch handler を in-process で mount します。AI Gateway、Cloudflare-compatible
-import endpoint、S3-compatible Object Storage endpoint、Cloud usage、Cloud Edge
-Runtime の実装は closed handler 側にあり、OSS code に入れてよいのは catalog
-metadata、auth forwarding、dashboard client、smoke test までです。`handlerKey`
-は OSS seam が参照する論理 handler key であり、公式 Cloud wrapper が in-process
-で解決します。これは単一の `takosumi-cloud/platform/worker.ts` deployment unit
-であり、AI Gateway / Cloudflare-compatible import endpoint /
-S3-compatible Object Storage endpoint / Cloud usage / Cloud Edge Runtime を別
-Worker として deploy しません。managed resource backend は Takosumi Cloud 側の
-closed module です。
+公式 `app.takosumi.com` は Cloud 専用 handler を同じ hosted platform origin に
+mount します。AI Gateway、Cloudflare-compatible import endpoint、
+S3-compatible Object Storage endpoint、Cloud usage、Cloud Edge Runtime は
+Takosumi Cloud の managed backend で処理されます。managed backend の実装詳細、
+secret、private config、operator evidence は公開 contract ではなく、operator
+runbook 側で管理します。
 
 ## Catalog
 
-Cloud extension の有効状態はこの route で確認できます。
-Dashboard からは account session cookie で読みます。operator drill /
-automation では deploy-control bearer でも読めます。
+Cloud endpoint の有効状態はこの route で確認できます。
+Dashboard からは account session cookie で読みます。automation では適切な
+read scope を持つ service token で読めます。
 
 ```http
 GET /__takosumi/cloud/extensions
@@ -126,14 +120,13 @@ GET /__takosumi/cloud/extensions
 ```
 
 `configured: false` の extension は画面に出ても、実行時は fail closed します。
-この catalog は path-based の `cloud_extensions` route だけを列挙します。
+この catalog は公開 endpoint と capability だけを列挙します。
 `authMode: "handler"` は、S3 SigV4 のような標準プロトコル署名を Cloud handler
 が直接検証する route だけに使います。この場合 platform は customer session /
 PAT を検証せず、spoof 可能な Takosumi context header と cookie は削除し、
 `Authorization` header を handler に渡します。
 `*.app.takos.jp` / `*.app-staging.takos.jp` の Takosumi Cloud public HTTP traffic は
-同じ `takosumi-cloud/platform/worker.ts` 内の hostname dispatch registry で
-Cloud runtime に送られます。別 Worker ではありません。
+同じ hosted origin の hostname dispatch registry で Cloud runtime に送られます。
 
 ## API key / Workspace billing context
 
@@ -256,195 +249,32 @@ usage event は quantity、usdMicros、source、timestamp を持ちます。prov
 credential、API key、bearer token、database URL、DSN、password などの secret
 値を持ってはいけません。
 
-Cloud extension は、実行結果に内部 usage report header を付けることで
-platform worker に使用量を報告できます。platform worker はこの header を
-client response から削除し、`recordGatewayResourceUsage` で Workspace usage
-ledger に記録します。usage report があるのに ledger へ記録できない場合は、
-未課金の成功を返さないため fail closed します。
+Cloud managed endpoints は使用量を Workspace usage ledger に記録します。ledger
+に記録できない成功は返しません。残高不足、Workspace context 不足、未価格付け、
+scope 不一致では、下流 provider、AI upstream、runtime dispatch へ進まず fail
+closed します。
 
-state-changing Cloud extension route が `TAKOSUMI_CLOUD_EXTENSIONS` の
-`fallbackUsage` に一致する場合、platform worker は mounted Cloud extension handler を呼ぶ前に
-price book で `usdMicros` を確定し、Workspace balance から atomic に spend します。
-残高不足・未価格付け・billing Workspace context 不足では upstream Cloudflare API /
-AI upstream / dispatch は呼びません。extension response が同じ request meter を
-返した場合は二重記録せず、AI の input/output token など response 後にしか分からない
-追加 meter だけを後段で記録します。
+価格は Cloud endpoint request body ではなく Takosumi Cloud 側で決めます。request
+body や client header に `usdMicros` / `credits` を書かせません。公開価格と無料枠は
+Cloud docs と Dashboard の billing 表示に出します。実際の price book、同期手順、
+payment provider 連携の運用 detail は公開 reference ではなく運用メモ側で管理します。
 
-public traffic を受ける Cloud Edge Runtime は使用量報告だけが例外で、client
-response に usage header を出しません。ただし Edge Runtime handler も同じ公式
-platform Worker に mount されます。route ledger に `spaceId` があることを前提に、
-dispatch 前に platform worker の内部 route `POST /internal/platform/cloud/usage` へ
-`cloudflare:workers_script:request` meter を送り、price book による課金が成功した
-場合だけ Workers Script を dispatch します。残高不足・価格未設定・内部 usage token
-未設定では Workers Script は実行されません。
-
-価格は Cloud extension ではなく Takosumi Cloud platform worker が決めます。
-Cloud extension の usage report は `meterId`、`kind`、`quantity`、resource metadata
-だけを出します。価格は operator config の `TAKOSUMI_CLOUD_USAGE_PRICE_BOOK` が
-単価・原価見積もり・最低粗利を検証して確定します。extension request body や header
-には `usdMicros` / `credits` を書かせません。price book に meter がない、または
-最低粗利を満たさない meter は fail closed し、WfP / AI の未課金成功を返しません。
-公開価格と無料枠は Cloud docs と Dashboard の billing 表示に出します。operator
-price book の実値と変更手順は公開 reference ではなく運用メモ側で管理します。
-
-内部 header:
-
-```http
-x-takosumi-cloud-usage-space-id: space_xxx
-x-takosumi-cloud-usage-period-start: 2026-06-26T13:00:00.000Z
-x-takosumi-cloud-usage-period-end: 2026-06-26T13:01:00.000Z
-x-takosumi-cloud-usage-meters: [{"meterId":"ai:default:request","kind":"ai_request","quantity":1}]
-```
+cleanup は拡張と分けます。作成、deploy、runtime、data-plane write/query/message
+/ instance operation は billable で、credit が足りない場合は fail closed します。
+一方で DELETE cleanup は、残高切れで user data や managed resource が取り残されない
+よう、原則として fallback usage を持たせません。
 
 Takosumi Cloud の managed resource backend は、ユーザー向けには Cloudflare
 provider の `cloudflare_workers_script` / route / KV / R2 / D1 / Queues /
 Workflows として見せます。内部 backend 名は請求・画面・usage ledger の
-user-facing family には出しません。
-Worker script の使用量は `resourceFamily: "cloudflare.workers_script"` として
-`gateway_compute` または `gateway_storage_gb_hour` を報告します。Queues は
-`cloudflare.queues`、Workflows は `cloudflare.workflows` として報告します。
-KV value、R2 object、D1 query、Queue message、Queue consumer、Workflow
-instance の subpath は、対応する public meter と platform `fallbackUsage`
-precharge がある場合だけ開きます。R2 は bucket lifecycle、object read/write、
-storage inventory を課金対象にします。R2 object DELETE は cleanup として扱い、
-残高切れで user data が取り残されないよう fallback usage meter を出しません。
-未対応 managed subpath は 501 で閉じ、Cloudflare upstream へ素通しして無料利用
-できる状態にはしません。
-Containers / Durable Objects などの追加 family は、closed backend が発生させた
-usage を `/cloud/usage/resource-meters` で課金 ledger に流せます。ただし、
-customer-facing managed resource として catalog / 画面に出すには、別途 lifecycle
-endpoint、destroy / deprovision proof、runtime guard の smoke が必要です。内部
-backend alias は `meterId`、`resourceFamily`、Stripe meter、public usage metadata
-では拒否します。例:
+user-facing family には出しません。Unsupported managed subpath は 501 で閉じ、
+Cloudflare upstream へ素通しして無料利用できる状態にはしません。
 
-```http
-x-takosumi-cloud-usage-meters: [{"meterId":"cloudflare:workers_script:request","resourceFamily":"cloudflare.workers_script","resourceId":"EdgeWorker/api","operation":"request","kind":"gateway_compute","quantity":1}]
-```
-
-storage-backed resource の在庫計測では、closed `takosumi-cloud` の
-`storageInventoryUsageReports()` helper が provider inventory collector の
-平均 bytes と実 period から GB-hour を計算し、同じ header 形式で報告します。
-
-collector は customer API ではなく Cloud-only extension endpoint を呼びます。
-公式 Cloud wrapper は `/cloud/usage` を closed Cloud usage handler に in-process
-mount し、platform 側の `TAKOSUMI_CLOUD_EXTENSIONS` はその handler key を参照します。
-公式 `app.takosumi.com` では platform wrapper が Cloud usage handler を同じ
-Worker 内で mount します。service token には usage 書き込み用 scope を付けます。request は
-1 Workspace ずつ batch し、複数 Workspace を混ぜると endpoint は 400 を返します。
-verified billing Workspace context と sample の `workspaceId` が一致しない場合も
-403 で fail closed します。
-
-```http
-POST /cloud/usage/storage-inventory
-```
-
-```json
-{
-  "periodStart": "2026-06-26T13:00:00.000Z",
-  "periodEnd": "2026-06-26T14:00:00.000Z",
-  "samples": [
-    {
-      "workspaceId": "space_xxx",
-      "resourceFamily": "cloudflare.r2",
-      "resourceId": "ObjectStorage/assets",
-      "averageBytes": 536870912
-    }
-  ]
-}
-```
-
-```http
-x-takosumi-cloud-usage-period-start: 2026-06-26T13:00:00.000Z
-x-takosumi-cloud-usage-period-end: 2026-06-26T14:00:00.000Z
-x-takosumi-cloud-usage-meters: [{"meterId":"cloudflare:r2:storage_gb_hour","resourceFamily":"cloudflare.r2","resourceId":"ObjectStorage/assets","operation":"storage.inventory","kind":"gateway_storage_gb_hour","quantity":0.5}]
-```
-
-managed resource backend が compute / operation 系の使用量を実測できる場合は、
-同じ `/cloud/usage` extension の `resource-meters` endpoint に public meter を送ります。
-現在受け付ける family は `cloudflare.containers` と
-`cloudflare.durable_objects` だけです。endpoint は verified billing Workspace
-context を必須にし、body の `workspaceId` と一致しない usage を拒否します。
-`usdMicros` / `credits` は request body に書かせず、platform worker の
-`TAKOSUMI_CLOUD_USAGE_PRICE_BOOK` が価格を決めます。
-
-```http
-POST /cloud/usage/resource-meters
-```
-
-```json
-{
-  "workspaceId": "space_xxx",
-  "periodStart": "2026-06-26T13:00:00.000Z",
-  "periodEnd": "2026-06-26T13:01:00.000Z",
-  "meters": [
-    {
-      "meterId": "cloudflare:containers:vcpu_second",
-      "resourceFamily": "cloudflare.containers",
-      "resourceId": "container:api",
-      "operation": "vcpu_second",
-      "kind": "gateway_compute",
-      "quantity": 12.5
-    },
-    {
-      "meterId": "cloudflare:durable_objects:operation",
-      "resourceFamily": "cloudflare.durable_objects",
-      "resourceId": "durable_object:session",
-      "operation": "operation",
-      "kind": "gateway_compute",
-      "quantity": 3
-    }
-  ]
-}
-```
-
-```http
-x-takosumi-cloud-usage-period-start: 2026-06-26T13:00:00.000Z
-x-takosumi-cloud-usage-period-end: 2026-06-26T13:01:00.000Z
-x-takosumi-cloud-usage-meters: [{"meterId":"cloudflare:containers:vcpu_second","resourceFamily":"cloudflare.containers","resourceId":"container:api","operation":"vcpu_second","kind":"gateway_compute","quantity":12.5}]
-```
-
-この ledger に入った使用量を、billing reconciliation / Stripe invoice 側の
-正本入力にします。Cloudflare AI Gateway / Workers AI の上流請求は operator の
-Cloudflare account に来ますが、それだけでは Takosumi ユーザーへの請求完了を
-意味しません。Takosumi 側で請求できていると言える条件は、Cloud extension が
-usage report を出し、Workspace usage ledger に記録され、billing/Stripe 側で
-集計・請求されることです。
-
-Cloud extension が正確な usage header を返すのが正本です。ただし header 未配線の
-成功リクエストを無料成功にしないため、platform worker は検証済みの billing
-Workspace context がある場合に限って最低限の operation usage を fallback 記録します。
-この fallback は精密な token / storage 使用量ではなく、課金漏れ防止用の
-operation metering です。Cloudflare Workers provider compatibility の fallback も
-`cloudflare.workers_script` として記録し、内部 backend 名は usage event へ
-残しません。
-
-Stripe 連携では、billing account ごとの未 export usage report を meter / unit
-単位で rollup し、Stripe invoice item として作成します。成功した usage report
-には `billingExportProvider: "stripe"`、export id、Stripe invoice item id、
-exported timestamp を保存し、同じ report を次回同期で再請求しません。例えば
-Cloudflare Workers provider compatibility の請求名は `cloudflare.workers_script` のままで、
-内部 backend alias を請求名にしてはいけません。`resourceMetadata.backend` の
-ような内部実装 hint も public usage / billing payload には入れません。
-
-operator が Stripe usage invoice item 同期を起動する route は account plane の
-`POST /v1/billing/stripe/usage-invoice-items` です。これは customer API ではなく
-operator-only route で、`x-takosumi-billing-usage-sync-token` が必要です。
-body に `usageEvents` を渡すと、route は verified `workspaceId` の BillingAccount を
-使って `BillingUsageRecord` に import してから Stripe invoice item を作ります。
-これにより、Cloud extension usage ledger から Stripe 請求までの経路が途切れません。
-`TAKOSUMI_STRIPE_USAGE_INVOICE_ITEM_PRICES` には meter / unit / unitAmount /
-currency の JSON 配列を設定します。例:
-
-```json
-[
-  {
-    "meter": "cloudflare.workers_script",
-    "unit": "requests",
-    "unitAmount": 4,
-    "currency": "usd"
-  }
-]
-```
+Takosumi 側で請求できていると言える条件は、Workspace usage ledger に usage event
+が記録され、billing projection へ反映されることです。上流 provider の請求だけでは
+Takosumi ユーザーへの請求完了を意味しません。payment provider への export、
+reconciliation、operator token、price book の実値は customer API ではなく
+operator runbook の範囲です。
 
 ## AI Gateway
 
@@ -617,19 +447,9 @@ Cloud endpoint の contract では次を守ります。
 - unsupported route は互換っぽく成功させず fail closed する
 - OSS Takosumi に Cloud-only backend を持ち込まない
 
-## 実装状態
+## Availability
 
-OSS repo にあるもの:
-
-- platform route catalog
-- same-origin session / PAT / service-token auth forwarding
-- AI Gateway OpenAI-compatible handler seam
-- dashboard Cloud endpoint client
-- smoke tests and provider E2E expectations
-
-Cloudflare Workers provider compatibility profile backend と managed resource
-materialization は closed Takosumi Cloud handler で、公式 platform worker が
-in-process で mount します。
-AI Gateway / provider compatibility profile handler が未設定の場合、
-`/gateway/ai/v1/*` と `/compat/cloudflare/client/v4/*` は platform worker から
-意図的に not found を返します。
+Cloud endpoint availability is advertised through the catalog and capability
+matrix. If an endpoint family is not configured, the route must fail closed
+instead of silently falling back to an unmanaged upstream or returning a fake
+success.

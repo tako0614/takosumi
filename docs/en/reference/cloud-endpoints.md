@@ -52,24 +52,18 @@ Only the Takosumi for Operator / Cloud operation layer has:
 - official managed target / native resource backends
 - official usage, quota, billing, and support controls
 
-Official `app.takosumi.com` uses the closed
-`takosumi-cloud/platform/worker.ts` wrapper as the Worker entry. The wrapper
-mounts Cloud-only fetch handlers in-process into the OSS platform worker's
-`cloud_extensions` seam. AI Gateway, the Cloudflare-compatible import endpoint,
-the S3-compatible Object Storage endpoint, Cloud usage, and Cloud Edge Runtime
-live in closed handlers; OSS code may contain catalog metadata, auth forwarding,
-dashboard clients, and smoke tests. `handlerKey` is the logical handler key
-consumed by the OSS seam and resolved in-process by the official Cloud wrapper.
-This is one `takosumi-cloud/platform/worker.ts` deployment unit; AI Gateway, the
-Cloudflare-compatible import endpoint, the S3-compatible Object Storage
-endpoint, Cloud usage, and Cloud Edge Runtime are not deployed as separate
-Workers. Managed resource backends are Takosumi Cloud closed modules.
+Official `app.takosumi.com` mounts Cloud-only handlers on the same hosted
+platform origin. AI Gateway, the Cloudflare-compatible import endpoint, the
+S3-compatible Object Storage endpoint, Cloud usage, and Cloud Edge Runtime are
+served by Takosumi Cloud managed backends. Managed-backend implementation
+details, secrets, private config, and operator evidence are not public
+contracts; they belong in operator runbooks.
 
 ## Catalog
 
-Use this route to inspect enabled Cloud extensions:
-The dashboard reads it with the account session cookie. Operator drills and
-automation can also read it with the deploy-control bearer.
+Use this route to inspect enabled Cloud endpoints. The dashboard reads it with
+the account session cookie. Automation can read it with a service token that has
+the appropriate read scope.
 
 ```http
 GET /__takosumi/cloud/extensions
@@ -132,7 +126,7 @@ Example:
 
 An extension with `configured: false` may appear in the UI, but runtime calls
 must fail closed.
-This catalog lists only path-based `cloud_extensions` routes.
+This catalog lists only public endpoints and capabilities.
 `authMode: "handler"` is reserved for standard signed protocols such as S3
 SigV4, where the Cloud handler must verify the protocol Authorization header
 itself. In that mode, the platform does not verify a customer session/PAT; it
@@ -140,8 +134,7 @@ strips spoofable Takosumi context headers and cookies, then forwards the
 `Authorization` header to the handler.
 Takosumi Cloud public HTTP traffic for `*.app.takos.jp` and
 `*.app-staging.takos.jp` is dispatched to the Cloud Edge Runtime by the same
-`takosumi-cloud/platform/worker.ts` hostname dispatch registry. It is not a
-separate Worker.
+hosted-origin hostname dispatch registry.
 
 ## API key / Workspace billing context
 
@@ -271,204 +264,35 @@ Usage events carry quantity, usdMicros, source, and timestamp. They must not
 carry provider credentials, API keys, bearer tokens, database URLs, DSNs,
 passwords, or other secret values.
 
-Cloud extensions report billable runtime usage to the platform worker by adding
-internal usage report headers to their response. The platform worker strips
-those headers from the client response and records them through
-`recordGatewayResourceUsage` in the Workspace usage ledger. If an extension
-reports usage but the ledger write cannot be completed, the platform fails
-closed instead of returning an unmetered success.
+Cloud managed endpoints record usage into the Workspace usage ledger. A success
+that cannot be recorded must not be returned. If Workspace context is missing,
+credits are insufficient, pricing is unavailable, or scopes do not match, the
+request fails closed before it reaches the downstream provider, AI upstream, or
+runtime dispatch.
 
-The public Cloud Edge Runtime is the exception only for usage reporting: it does
-not expose usage headers to client responses. The Edge Runtime handler is still
-mounted into the same official platform Worker. For a matched route with a
-`spaceId`, it sends a `cloudflare:workers_script:request` meter to the platform
-worker's internal `POST /internal/platform/cloud/usage` route before
-dispatching the Workers Script. If the Workspace has insufficient credits,
-pricing is missing, or the internal usage token is not configured, the Workers
-Script is not dispatched.
-
-Pricing is owned by the Takosumi Cloud platform worker, not by the Cloud
-extension. The canonical extension report carries `meterId`, `kind`, `quantity`,
-and resource metadata. Extension requests must not provide `usdMicros` or
-`credits`; production pricing comes from the operator config
-`TAKOSUMI_CLOUD_USAGE_PRICE_BOOK`. The price book validates unit charge,
-estimated unit cost, and minimum gross margin before it writes `usdMicros` to
-the ledger. Unknown meters or prices below the required margin fail closed, so
-WfP and AI requests cannot succeed without billable credit.
-Public prices and free-tier terms are surfaced in the Cloud docs and Dashboard
-billing views. The operator price-book values and change procedure stay in
+Pricing is owned by Takosumi Cloud, not by endpoint request bodies. Requests and
+client headers must not submit `usdMicros` or `credits`. Public prices and
+free-tier terms are shown in Cloud docs and Dashboard billing views. The real
+price book, sync procedure, and payment-provider operation details belong in
 operator notes, not in the public reference.
 
 Cleanup is intentionally different from expansion. Create, deploy, runtime, and
 data-plane write/query/message/instance operations are billable and fail closed
-when credit is insufficient. DELETE cleanup does not emit fallback usage and must
-remain available so OpenTofu destroy and app removal can recover from a depleted
-balance without leaving resources stuck.
-
-Internal headers:
-
-```http
-x-takosumi-cloud-usage-space-id: space_xxx
-x-takosumi-cloud-usage-period-start: 2026-06-26T13:00:00.000Z
-x-takosumi-cloud-usage-period-end: 2026-06-26T13:01:00.000Z
-x-takosumi-cloud-usage-meters: [{"meterId":"ai:default:request","kind":"ai_request","quantity":1}]
-```
+when credit is insufficient. DELETE cleanup should remain available so OpenTofu
+destroy and app removal can recover from a depleted balance without leaving
+resources stuck.
 
 The Takosumi Cloud managed resource backend presents resources to users as
 Cloudflare provider `cloudflare_workers_script`, routes, KV, R2, D1, Queues,
 and Workflows. Internal backend names must not become the user-facing billing
-or usage-ledger family. Worker script usage is reported with
-`resourceFamily: "cloudflare.workers_script"` as `gateway_compute` or
-`gateway_storage_gb_hour`. Queues are reported as `cloudflare.queues`, and
-Workflows are reported as `cloudflare.workflows`. Subpaths for KV values, R2
-objects, D1 query, Queue messages, Queue consumers, and Workflow instances are
-opened only when the corresponding public meter and platform `fallbackUsage`
-precharge coverage exist. R2 bucket lifecycle, object read/write operations,
-and storage inventory are metered. R2 object DELETE is treated as cleanup and
-intentionally emits no fallback usage meter so depleted credits do not strand
-user data. Unsupported managed subpaths still return 501 instead of proxying to
-Cloudflare for free.
-Additional families such as Containers and Durable Objects can report
-backend-measured usage through `/cloud/usage/resource-meters`. That billing
-path does not by itself make the managed resource generally available: catalog
-and UI exposure still require lifecycle endpoints, destroy / deprovision proof,
-and runtime guard smoke evidence. Internal backend aliases are rejected in
-`meterId`, `resourceFamily`, Stripe meters, and public usage metadata. Example:
+or usage-ledger family. Unsupported managed subpaths return 501 instead of
+proxying to Cloudflare for free.
 
-```http
-x-takosumi-cloud-usage-meters: [{"meterId":"cloudflare:workers_script:request","resourceFamily":"cloudflare.workers_script","resourceId":"EdgeWorker/api","operation":"request","kind":"gateway_compute","quantity":1}]
-```
-
-For storage-backed resource inventory, the closed `takosumi-cloud`
-`storageInventoryUsageReports()` helper converts provider inventory collector
-average bytes plus a real period into GB-hour usage and reports it with the same
-header shape.
-
-The collector calls a Cloud-only extension endpoint, not a customer API. The
-official Cloud wrapper mounts `/cloud/usage` to the closed Cloud usage handler
-in-process, and the platform `TAKOSUMI_CLOUD_EXTENSIONS` config points to that
-handler key. Official `app.takosumi.com` mounts the Cloud usage handler in the
-same platform Worker.
-The service token should carry a
-usage-write scope. Requests are batched per Workspace; mixing multiple
-Workspaces returns 400. If the verified billing Workspace context and the
-sample `workspaceId` differ, the endpoint returns 403 and no usage is recorded.
-
-```http
-POST /cloud/usage/storage-inventory
-```
-
-```json
-{
-  "periodStart": "2026-06-26T13:00:00.000Z",
-  "periodEnd": "2026-06-26T14:00:00.000Z",
-  "samples": [
-    {
-      "workspaceId": "space_xxx",
-      "resourceFamily": "cloudflare.r2",
-      "resourceId": "ObjectStorage/assets",
-      "averageBytes": 536870912
-    }
-  ]
-}
-```
-
-```http
-x-takosumi-cloud-usage-period-start: 2026-06-26T13:00:00.000Z
-x-takosumi-cloud-usage-period-end: 2026-06-26T14:00:00.000Z
-x-takosumi-cloud-usage-meters: [{"meterId":"cloudflare:r2:storage_gb_hour","resourceFamily":"cloudflare.r2","resourceId":"ObjectStorage/assets","operation":"storage.inventory","kind":"gateway_storage_gb_hour","quantity":0.5}]
-```
-
-When a managed resource backend measures compute or operation usage, it submits
-public meters to the `resource-meters` endpoint under the same `/cloud/usage`
-extension. The endpoint currently accepts only `cloudflare.containers` and
-`cloudflare.durable_objects`. A verified billing Workspace context is required;
-request `workspaceId` values that do not match the verified context are
-rejected. Callers must not send `usdMicros` or `credits`; the
-platform worker prices each meter through `TAKOSUMI_CLOUD_USAGE_PRICE_BOOK`.
-
-```http
-POST /cloud/usage/resource-meters
-```
-
-```json
-{
-  "workspaceId": "space_xxx",
-  "periodStart": "2026-06-26T13:00:00.000Z",
-  "periodEnd": "2026-06-26T13:01:00.000Z",
-  "meters": [
-    {
-      "meterId": "cloudflare:containers:vcpu_second",
-      "resourceFamily": "cloudflare.containers",
-      "resourceId": "container:api",
-      "operation": "vcpu_second",
-      "kind": "gateway_compute",
-      "quantity": 12.5
-    },
-    {
-      "meterId": "cloudflare:durable_objects:operation",
-      "resourceFamily": "cloudflare.durable_objects",
-      "resourceId": "durable_object:session",
-      "operation": "operation",
-      "kind": "gateway_compute",
-      "quantity": 3
-    }
-  ]
-}
-```
-
-```http
-x-takosumi-cloud-usage-period-start: 2026-06-26T13:00:00.000Z
-x-takosumi-cloud-usage-period-end: 2026-06-26T13:01:00.000Z
-x-takosumi-cloud-usage-meters: [{"meterId":"cloudflare:containers:vcpu_second","resourceFamily":"cloudflare.containers","resourceId":"container:api","operation":"vcpu_second","kind":"gateway_compute","quantity":12.5}]
-```
-
-This ledger is the source input for billing reconciliation and Stripe invoices.
-Upstream Cloudflare AI Gateway / Workers AI charges still land on the
-operator's Cloudflare account; that alone does not mean the Takosumi customer
-has been billed. Takosumi billing is closed only when the Cloud extension emits
-usage reports, the Workspace usage ledger records them, and billing/Stripe
-aggregates them into an invoice or entitlement decision.
-
-Precise usage headers from the Cloud extension are the authoritative path. As a
-leak-prevention fallback, when a successful request has a verified billing
-Workspace context but no usage headers, the platform worker records minimal
-operation usage instead of letting the request succeed for free. This fallback
-is operation metering, not precise token or storage accounting. Cloudflare
-Workers compatibility fallback usage is still recorded as
-`cloudflare.workers_script`; internal backend names are not copied into usage
-events.
-
-The Stripe integration rolls up unexported usage reports by billing account,
-meter, and unit, then creates Stripe invoice items for those rollups. After a
-successful invoice item creation, the source usage reports are marked with
-`billingExportProvider: "stripe"`, the export id, the Stripe invoice item id,
-and the exported timestamp so the next sync does not charge the same reports
-again. For Cloudflare Workers provider compatibility, the billing name remains
-`cloudflare.workers_script`; internal backend aliases must not be used as the
-billing name. Internal implementation hints such as `resourceMetadata.backend`
-must not appear in public usage or billing payloads.
-
-Operators trigger Stripe usage invoice item sync through the account-plane
-`POST /v1/billing/stripe/usage-invoice-items` route. This is an operator-only
-route, not a customer API, and requires the
-`x-takosumi-billing-usage-sync-token` header. When the body includes
-`usageEvents`, the route imports them as `BillingUsageRecord` rows through the
-verified `workspaceId` BillingAccount before creating Stripe invoice items, so
-the Cloud extension usage ledger stays connected to customer billing. Configure
-`TAKOSUMI_STRIPE_USAGE_INVOICE_ITEM_PRICES` as a JSON array of meter / unit /
-unitAmount / currency mappings, for example:
-
-```json
-[
-  {
-    "meter": "cloudflare.workers_script",
-    "unit": "requests",
-    "unitAmount": 4,
-    "currency": "usd"
-  }
-]
-```
+Takosumi can claim a customer has been billed only when the Workspace usage
+ledger records a usage event and the billing projection reflects it. Upstream
+provider charges alone do not mean Takosumi customer billing is complete.
+Payment-provider export, reconciliation, operator tokens, and concrete price
+book values are operator-runbook concerns, not customer APIs.
 
 ## AI Gateway
 
@@ -642,19 +466,9 @@ Cloud endpoints must:
 - fail closed for unsupported routes instead of pretending success
 - keep Cloud-only backends out of OSS Takosumi
 
-## Implementation status
+## Availability
 
-The OSS repository contains:
-
-- platform route catalog
-- same-origin session / PAT / service-token auth forwarding
-- AI Gateway OpenAI-compatible handler seam
-- dashboard Cloud endpoint client
-- smoke tests and provider E2E expectations
-
-The Cloudflare Workers provider compatibility profile backend and managed
-resource materialization are closed Takosumi Cloud handlers mounted in-process by
-the official platform worker.
-If AI Gateway / provider compatibility profile handlers are not configured,
-`/gateway/ai/v1/*` and `/compat/cloudflare/client/v4/*` intentionally return
-not found from the platform worker.
+Cloud endpoint availability is advertised through the catalog and compatibility
+matrix. If an endpoint family is not configured, the route must fail closed
+instead of silently falling back to an unmanaged upstream or returning a fake
+success.
