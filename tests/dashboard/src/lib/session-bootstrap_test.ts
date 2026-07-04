@@ -99,4 +99,36 @@ describe("dashboard session bootstrap", () => {
       "/api/v1/dashboard/bootstrap?includeWorkspaces=true",
     ]);
   });
+
+  test("lets the workspace list start the shared bootstrap before session refresh", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const path = typeof input === "string" ? input : String(input);
+      calls.push(path);
+      if (path === "/api/v1/dashboard/bootstrap?includeWorkspaces=true") {
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        return new Response(
+          JSON.stringify({
+            session: { subject: "tsub_1" },
+            workspaces: [{ id: "space_1", handle: "main" }],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      throw new Error(`unexpected fetch: ${path}`);
+    }) as typeof fetch;
+
+    const workspacePromise = listWorkspacesCached();
+    const sessionPromise = refreshSession();
+    const [workspaces, session] = await Promise.all([
+      workspacePromise,
+      sessionPromise,
+    ]);
+
+    expect(workspaces[0]?.id).toBe("space_1");
+    expect(session?.subject).toBe("tsub_1");
+    expect(calls).toEqual([
+      "/api/v1/dashboard/bootstrap?includeWorkspaces=true",
+    ]);
+  });
 });

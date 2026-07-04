@@ -20,11 +20,11 @@
  * server-side revocation within a reasonable window.
  */
 import { setCurrentWorkspaceId } from "../../../lib/workspace-state.ts";
+import { primeWorkspaceListCache } from "../../../lib/workspace-list.ts";
 import {
-  primeWorkspaceListCache,
-  primeWorkspaceListCacheFromPromise,
-} from "../../../lib/workspace-list.ts";
-import type { Workspace } from "../../../lib/control-api.ts";
+  fetchDashboardBootstrap,
+  type DashboardBootstrapResponse,
+} from "../../../lib/dashboard-bootstrap.ts";
 
 export interface SessionRecord {
   readonly subject: string;
@@ -41,9 +41,6 @@ export interface SessionRecord {
 }
 
 const SESSION_ME_PATH = "/v1/account/session/me";
-const DASHBOARD_BOOTSTRAP_PATH = "/api/v1/dashboard/bootstrap";
-const DASHBOARD_SESSION_BOOTSTRAP_PATH =
-  `${DASHBOARD_BOOTSTRAP_PATH}?includeWorkspaces=true`;
 const CACHE_TTL_MS = 30_000;
 
 const listeners = new Set<(s: SessionRecord | null) => void>();
@@ -57,7 +54,7 @@ function notify(s: SessionRecord | null): void {
 }
 
 interface SessionMeResponse {
-  readonly subject: string;
+  readonly subject?: string;
   readonly expiresAt?: number;
   readonly primaryAccountId?: string;
   readonly provider?: string;
@@ -74,10 +71,6 @@ interface SessionMeResponse {
     readonly displayName?: string;
     readonly email?: string;
   } | null;
-}
-
-interface DashboardBootstrapResponse extends SessionMeResponse {
-  readonly workspaces?: readonly Workspace[];
 }
 
 function pickResponseRecord(data: SessionMeResponse): SessionRecord | null {
@@ -113,21 +106,7 @@ function pickResponseRecord(data: SessionMeResponse): SessionRecord | null {
 async function fetchSessionMe(): Promise<SessionRecord | null> {
   if (typeof fetch === "undefined") return null;
   try {
-    const bootstrap = fetch(DASHBOARD_SESSION_BOOTSTRAP_PATH, {
-      method: "GET",
-      headers: { accept: "application/json" },
-      credentials: "include",
-    }).then(async (res): Promise<DashboardBootstrapResponse | undefined> => {
-      if (res.status === 401 || res.status === 404) return undefined;
-      if (!res.ok) return undefined;
-      return (await res.json()) as DashboardBootstrapResponse;
-    });
-    primeWorkspaceListCacheFromPromise(
-      bootstrap.then((data) =>
-        Array.isArray(data?.workspaces) ? data.workspaces : undefined,
-      ),
-    );
-    const data = await bootstrap;
+    const data = await fetchDashboardBootstrap();
     if (!data) throw new Error("dashboard bootstrap unavailable");
     if (Array.isArray(data.workspaces)) {
       primeWorkspaceListCache(data.workspaces);
