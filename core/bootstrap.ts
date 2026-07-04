@@ -375,6 +375,11 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
    * real runner should set this longer than one runner wait window.
    */
   readonly resourceShapeDeleteTimeoutMs?: number;
+  /**
+   * Operator-managed compat/provider base URLs accepted in TargetPool
+   * implementation options. Empty rejects provider base URL overrides.
+   */
+  readonly resourceShapeAllowedProviderBaseUrls?: readonly string[];
   /** Enables the Resource Shape API with the dev/test stub when no adapter is supplied. */
   readonly enableResourceShapeApi?: boolean;
   /**
@@ -388,6 +393,13 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
   readonly resolveResourceShapeActor?: (
     request: Request,
   ) => ActorContext | Promise<ActorContext>;
+  readonly authorizeResourceShapeForceDelete?: (input: {
+    readonly actor: ActorContext;
+    readonly request: Request;
+    readonly space: string;
+    readonly kind: ResourceShapeKind;
+    readonly name: string;
+  }) => boolean | Promise<boolean>;
   /**
    * Operator-selected public Git source for first-party catalog cards. The
    * default tracks the public development mirror, while hosted deployments can
@@ -1084,6 +1096,12 @@ export async function createTakosumiService(
         ...(options.resourceShapeDeleteTimeoutMs !== undefined
           ? { deleteTimeoutMs: options.resourceShapeDeleteTimeoutMs }
           : {}),
+        ...(options.resourceShapeAllowedProviderBaseUrls
+          ? {
+              allowedProviderBaseUrls:
+                options.resourceShapeAllowedProviderBaseUrls,
+            }
+          : {}),
       })
     : undefined;
   assertResourceShapeApiAuthOrWarn({
@@ -1129,6 +1147,12 @@ export async function createTakosumiService(
             ? {
                 resolveActor: (c) =>
                   options.resolveResourceShapeActor!(c.req.raw),
+              }
+            : {}),
+          ...(options.authorizeResourceShapeForceDelete
+            ? {
+                authorizeResourceShapeForceDelete:
+                  options.authorizeResourceShapeForceDelete,
               }
             : {}),
         }

@@ -250,9 +250,12 @@ test("bootstrap passes Resource Shape delete timeout to the service", async () =
   });
   expect(applied.status).toBe(200);
 
-  const deleted = await app.request("/v1/resources/EdgeWorker/api?space=space_1", {
-    method: "DELETE",
-  });
+  const deleted = await app.request(
+    "/v1/resources/EdgeWorker/api?space=space_1",
+    {
+      method: "DELETE",
+    },
+  );
   expect(deleted.status).toBe(204);
 });
 
@@ -475,6 +478,61 @@ test("GET /v1/resources/EdgeWorker/:name returns the applied resource", async ()
   const body = await res.json();
   expect(body.metadata.name).toBe("api");
   expect(body.status.resolution.target).toBe("cloudflare-main");
+});
+
+test("DELETE /v1/resources/:kind/:name rejects force delete without break-glass hook", async () => {
+  const { app } = await buildApp();
+  await app.request("/v1/resources/EdgeWorker/api", {
+    method: "PUT",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({
+      metadata: { space: "space_1" },
+      spec: {
+        name: "api",
+        source: { artifactPath: "/work/dist/worker.js" },
+      },
+    }),
+  });
+
+  const rejected = await app.request(
+    "/v1/resources/EdgeWorker/api?space=space_1&force=true",
+    { method: "DELETE" },
+  );
+  expect(rejected.status).toBe(403);
+  expect((await rejected.json()).error.message).toContain(
+    "force delete requires operator break-glass authorization",
+  );
+});
+
+test("DELETE /v1/resources/:kind/:name allows force delete through explicit break-glass hook", async () => {
+  const { app } = await buildApp({
+    authorizeResourceShapeForceDelete: ({ actor, kind, name, space }) =>
+      actor.actorAccountId === "self-host" &&
+      space === "space_1" &&
+      kind === "EdgeWorker" &&
+      name === "api",
+  });
+  await app.request("/v1/resources/EdgeWorker/api", {
+    method: "PUT",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({
+      metadata: { space: "space_1" },
+      spec: {
+        name: "api",
+        source: { artifactPath: "/work/dist/worker.js" },
+      },
+    }),
+  });
+
+  const accepted = await app.request(
+    "/v1/resources/EdgeWorker/api?space=space_1&force=true",
+    { method: "DELETE" },
+  );
+  expect(accepted.status).toBe(204);
+  const missing = await app.request(
+    "/v1/resources/EdgeWorker/api?space=space_1",
+  );
+  expect(missing.status).toBe(404);
 });
 
 test("POST /v1/resources/preview resolves without persisting", async () => {

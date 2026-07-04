@@ -157,6 +157,9 @@ export async function createWorkerServiceApp(
     takosumiRevokeDebtStore: deployStores.revokeDebtStore,
     opentofuDeploymentStore,
     resourceShapeStores: createD1ResourceShapeStores(env.TAKOSUMI_CONTROL_DB),
+    resourceShapeAllowedProviderBaseUrls: parseProviderBaseUrlAllowlist(
+      env.TAKOSUMI_RESOURCE_PROVIDER_BASE_URL_ALLOWLIST,
+    ),
     resourceShapeAdapterFactory: ({ controller, capsules }) => {
       const adapter = new OpentofuResourceShapeAdapter(
         new ControllerOpentofuRunPort({
@@ -397,6 +400,27 @@ function parseExtensionCapabilityTokens(value: unknown): readonly string[] {
     if (token.trim() === "" || /\s/u.test(token) || seen.has(token)) continue;
     seen.add(token);
     out.push(token);
+  }
+  return out;
+}
+
+function parseProviderBaseUrlAllowlist(value: unknown): readonly string[] {
+  if (typeof value !== "string" || value.trim().length === 0) return [];
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const token of parseCapabilityTokens(value.trim())) {
+    try {
+      const url = new URL(token);
+      if (url.protocol !== "http:" && url.protocol !== "https:") continue;
+      url.hash = "";
+      url.search = "";
+      const normalized = url.href.replace(/\/+$/u, "");
+      if (seen.has(normalized)) continue;
+      seen.add(normalized);
+      out.push(normalized);
+    } catch {
+      continue;
+    }
   }
   return out;
 }

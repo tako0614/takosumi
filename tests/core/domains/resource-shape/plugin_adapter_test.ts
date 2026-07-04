@@ -117,3 +117,39 @@ test("plugin adapter fails closed when a selected plugin is not installed", asyn
     adapter.apply(applyInput({ implementationPlugin: "missing" })),
   ).rejects.toThrow('Resource Shape adapter plugin "missing" is not installed');
 });
+
+test("plugin adapter rejects malformed preview responses", async () => {
+  const adapter = new PluginResourceShapeAdapter(
+    new StubResourceShapeAdapter(),
+    {
+      "cloud-managed": {
+        fetch() {
+          return Response.json({ summary: "missing native resources" });
+        },
+      },
+    },
+  );
+
+  await expect(
+    adapter.preview(applyInput({ implementationPlugin: "cloud-managed" })),
+  ).rejects.toThrow("preview response must include nativeResources");
+});
+
+test("plugin adapter rejects malformed apply responses", async () => {
+  const adapter = new PluginResourceShapeAdapter(
+    new StubResourceShapeAdapter(),
+    {
+      "cloud-managed": {
+        fetch() {
+          return Response.json({
+            nativeResources: [{ type: "cloudflare_r2_bucket", id: "assets" }],
+          });
+        },
+      },
+    },
+  );
+
+  await expect(
+    adapter.apply(applyInput({ implementationPlugin: "cloud-managed" })),
+  ).rejects.toThrow("apply response must include outputs");
+});

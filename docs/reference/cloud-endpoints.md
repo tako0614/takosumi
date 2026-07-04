@@ -147,10 +147,11 @@ provider config は `api_token` と `base_url` だけで動きます。service t
 
 Takosumi Cloud が提供する managed compatibility target を OpenTofu から使う場合は、
 その Workspace-bound token を generic-env ProviderConnection に保存し、runner env として
-`CLOUDFLARE_API_TOKEN` へ注入します。TargetPool 側は、Cloudflare provider で実行する
-managed implementation (`cloudflare_workers` / `cloudflare_r2_bucket` /
-`cloudflare_kv_namespace` / `cloudflare_queue` / `cloudflare_d1_database` など)
-それぞれに `providerBaseUrl` を指定します。
+`CLOUDFLARE_API_TOKEN` へ注入します。plain OpenTofu stack で既存 Cloudflare provider
+manifest を import / deploy path として使う場合は、provider config の `base_url` に
+Takosumi Cloud の compat endpoint を指定します。Resource Shape の TargetPool で
+`providerBaseUrl` を持てるのは、operator が allowlist した URL かつ
+operator-installed `plugin` implementation に限ります。
 生成される provider block は `base_url` だけを持ち、secret は HCL / plan / state に残りません。
 本物の Cloudflare account へ出す target では、通常どおりユーザーの Cloudflare ProviderConnection
 を使います。
@@ -332,20 +333,21 @@ Workers-oriented resource を Takosumi Cloud `EdgeWorker` / managed bindings に
 向けられるようにすることです。これは既存 manifest を取り込むための import /
 deploy path であり、Cloudflare API 全体の互換ではありません。
 
-Takosumi Cloud の公式 managed target では、この endpoint は TargetPool の
-Cloudflare-backed implementation option として選ばれます。`EdgeWorker` だけでなく、
-R2/KV/D1/Queue 相当の managed bindings も同じ compat endpoint を使う場合は、各
-implementation に同じ `providerBaseUrl` を設定します。例:
+Takosumi Cloud の公式 managed target では、この endpoint は operator allowlist 済みの
+compat URL として扱います。`EdgeWorker` だけでなく、R2/KV/D1/Queue 相当の
+managed bindings も同じ compat endpoint を使う場合は、各 implementation に同じ
+`providerBaseUrl` と operator-installed `plugin` を設定します。例:
 
 ```json
 {
+  "plugin": "takosumi-cloud-managed",
   "providerBaseUrl": "https://app.takosumi.com/compat/cloudflare/client/v4"
 }
 ```
 
-公式 managed target では、typed `takosumi_*` Resource Shape は同じ TargetPool
-implementation に `plugin` を設定して、Takosumi Cloud の managed-resource adapter
-へ直接 dispatch できます。この場合も入口は Resource Shape API のままで、
+公式 managed target では、typed `takosumi_*` Resource Shape がこの TargetPool
+implementation を選ぶと、Takosumi Cloud の managed-resource adapter へ直接
+dispatch されます。この場合も入口は Resource Shape API のままで、
 TargetPool / Policy / ResolutionLock を通り、Cloud extension 共通層の usage /
 credit guard を通ります。Cloudflare 実装は
 内部でこの compat handler を再利用するため、EdgeWorker は Workers for Platforms
