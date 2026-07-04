@@ -1,5 +1,6 @@
 import type { CloudflareWorkerEnv, OpenTofuRunAction } from "../bindings.ts";
 import { cachedRunOwnerDeployControlService } from "../deploy_control_seam.ts";
+import { OpenTofuControllerError } from "../../../core/domains/deploy-control/errors.ts";
 import { InstallationLeaseBusyError } from "../../../core/domains/deploy-control/installation_lease.ts";
 import type { RunStatus } from "takosumi-contract/runs";
 
@@ -409,7 +410,7 @@ export class OpenTofuRunOwnerObject {
         attempts,
         finishedAt,
         updatedAt: finishedAt,
-        lastError: "opentofu run dispatch failed",
+        lastError: runDispatchFailureMessage(error),
       });
       await this.state.storage.deleteAlarm?.();
       return false;
@@ -423,7 +424,7 @@ export class OpenTofuRunOwnerObject {
       attempts,
       updatedAt: new Date(this.#now()).toISOString(),
       nextAttemptAt,
-      lastError: "opentofu run dispatch failed",
+      lastError: runDispatchFailureMessage(error),
     });
     await this.#scheduleAlarm(Date.parse(nextAttemptAt));
     return false;
@@ -579,6 +580,24 @@ function isControllerManagedRetryError(error: unknown): boolean {
     error instanceof Error &&
     /retryable_runner_infrastructure_error/i.test(error.message)
   );
+}
+
+function runDispatchFailureMessage(error: unknown): string {
+  const prefix = "opentofu run dispatch failed";
+  if (error instanceof OpenTofuControllerError) {
+    return `${prefix}: ${error.code}: ${redactErrorMessage(error.message)}`;
+  }
+  if (error instanceof Error) {
+    return `${prefix}: ${error.name}: ${redactErrorMessage(error.message)}`;
+  }
+  return `${prefix}: ${typeof error}`;
+}
+
+function redactErrorMessage(message: string): string {
+  return message
+    .replace(/(?:secret|token|key|password)[^\\s"'`]+/gi, "[redacted]")
+    .replace(/\s+/g, " ")
+    .slice(0, 240);
 }
 
 function isRunStillDispatchable(status: RunStatus | undefined): boolean {
