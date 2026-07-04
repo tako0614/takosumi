@@ -188,7 +188,10 @@ import {
   resolvedProviderEnvBindingsDigest,
   type ResolvedInstallationProviderEnvBinding,
 } from "../connections/mod.ts";
-import { providerEnvRule } from "takosumi-contract/provider-env-rules";
+import {
+  isCredentialFreeUtilityProvider,
+  providerEnvRule,
+} from "takosumi-contract/provider-env-rules";
 import { SourceManagement } from "./source_management.ts";
 import { SourceLifecycleService } from "./source_lifecycle.ts";
 import { ConnectionManagement } from "./connection_management.ts";
@@ -316,8 +319,8 @@ export function runEnvironmentFailedRun<R extends PlanRun | ApplyRun>(
 
 /**
  * Generated-root dispatch fields threaded onto a run job. `generatedRoot` is
- * the canonical path for both built-in first-party modules and generic
- * Capsules; bundled modules are carried as `generatedRoot.moduleFiles`.
+ * the canonical path for both built-in template modules and generic
+ * Capsules; embedded template modules are carried as `generatedRoot.moduleFiles`.
  * Takosumi does not dispatch app build or artifact handling; app release inputs
  * are ordinary OpenTofu variables owned by the module/app release flow.
  */
@@ -684,7 +687,11 @@ export function providersRequiringProviderEnvBindings(
     return [];
   }
   return normalizeProviders(
-    providers.filter((provider) => providerEnvRule(provider) !== undefined),
+    providers.filter(
+      (provider) =>
+        providerEnvRule(provider) !== undefined &&
+        !isCredentialFreeUtilityProvider(provider),
+    ),
   );
 }
 

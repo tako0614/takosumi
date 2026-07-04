@@ -757,6 +757,8 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
         "resources_json",
         "data_sources_json",
         "provisioners_json",
+        "root_module_variables_json",
+        "root_module_outputs_json",
         "normalized_object_key",
         "normalized_digest",
         "created_at",
@@ -2101,6 +2103,8 @@ drop table if exists takosumi_backups;`,
   resources_json     jsonb  not null,
   data_sources_json  jsonb  not null,
   provisioners_json  jsonb  not null,
+  root_module_variables_json jsonb not null default '[]'::jsonb,
+  root_module_outputs_json   jsonb not null default '[]'::jsonb,
   normalized_object_key text,
   normalized_digest  text,
   created_at         text   not null
@@ -3345,5 +3349,20 @@ create index if not exists takosumi_space_policies_space_idx
 drop table if exists takosumi_target_pools;
 drop table if exists takosumi_resolution_locks;
 drop table if exists takosumi_resource_shapes;`,
+    },
+    {
+      id: "deploy.capsule_compatibility_root_interface.add",
+      version: 62,
+      domain: "deploy",
+      description:
+        "Persist non-secret root module variable/output names on CapsuleCompatibilityReport so a preflight report can be reused for plan creation without expanding the source archive again. This preserves ProviderConnection-derived variable injection for Git/OpenTofu installs in SQL-backed ledgers.",
+      sql: `alter table takosumi_capsule_compatibility_reports
+  add column if not exists root_module_variables_json jsonb not null default '[]'::jsonb;
+alter table takosumi_capsule_compatibility_reports
+  add column if not exists root_module_outputs_json jsonb not null default '[]'::jsonb;`,
+      down: `alter table takosumi_capsule_compatibility_reports
+  drop column if exists root_module_outputs_json;
+alter table takosumi_capsule_compatibility_reports
+  drop column if exists root_module_variables_json;`,
     },
   ]);

@@ -194,6 +194,12 @@ export const capsuleCompatibilityReports = sqliteTable(
     resourcesJson: jsonText("resources_json").notNull(),
     dataSourcesJson: jsonText("data_sources_json").notNull(),
     provisionersJson: jsonText("provisioners_json").notNull(),
+    rootModuleVariablesJson: jsonText("root_module_variables_json")
+      .notNull()
+      .default([]),
+    rootModuleOutputsJson: jsonText("root_module_outputs_json")
+      .notNull()
+      .default([]),
     normalizedObjectKey: text("normalized_object_key"),
     normalizedDigest: text("normalized_digest"),
     createdAt: text("created_at").notNull(),

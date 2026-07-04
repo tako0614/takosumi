@@ -338,6 +338,31 @@ export function providerMatches(provider: string, rule: string): boolean {
   return provider === rule || provider.endsWith(`/${rule}`);
 }
 
+export const CREDENTIAL_FREE_UTILITY_PROVIDER_ADDRESSES = [
+  "registry.opentofu.org/hashicorp/http",
+  "registry.opentofu.org/hashicorp/random",
+  "registry.opentofu.org/hashicorp/tls",
+] as const;
+
+/**
+ * Providers that are useful in normal OpenTofu graphs but do not represent a
+ * credential boundary for Takosumi. They may still need provider binaries and
+ * lockfile review, but they must not force a Provider Connection or env/file
+ * injection.
+ */
+export function isCredentialFreeUtilityProvider(provider: string): boolean {
+  const identity = defaultRegistryProviderIdentity(provider);
+  const normalized =
+    identity !== undefined && provider.trim().startsWith(DEFAULT_OPENTOFU_REGISTRY)
+      ? provider.trim()
+      : identity !== undefined
+        ? `${DEFAULT_OPENTOFU_REGISTRY}${identity}`
+        : provider.trim();
+  return (
+    CREDENTIAL_FREE_UTILITY_PROVIDER_ADDRESSES as readonly string[]
+  ).includes(normalized);
+}
+
 /**
  * Bidirectional "same OpenTofu provider family" test: true when two provider
  * identifiers name the same provider, matching a short name (`cloudflare`)

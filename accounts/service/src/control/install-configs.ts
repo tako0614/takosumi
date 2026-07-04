@@ -74,10 +74,7 @@ import type {
   ProviderResolution,
   PublicProviderResolution,
 } from "takosumi-contract/provider-resolution";
-import type {
-  OutputShare,
-  OutputShareEntry,
-} from "takosumi-contract/outputs";
+import type { OutputShare, OutputShareEntry } from "takosumi-contract/outputs";
 import type { PublicDeployment } from "takosumi-contract/deployments";
 import type {
   BackupRecord,
@@ -243,7 +240,7 @@ function publicInstallConfigSourceKind(
   return "generic_capsule";
 }
 
-type InstallConfigListView = "all" | "starter-catalog";
+type InstallConfigListView = "all" | "template-catalog";
 
 function parseInstallConfigListView(
   url: URL,
@@ -255,20 +252,20 @@ function parseInstallConfigListView(
   if (raw === null || raw === "" || raw === "all") {
     return { ok: true, view: "all" };
   }
-  if (raw === "starter-catalog") {
-    return { ok: true, view: "starter-catalog" };
+  if (raw === "template-catalog" || raw === "starter-catalog") {
+    return { ok: true, view: "template-catalog" };
   }
   return {
     ok: false,
     response: errorJson(
       "invalid_request",
-      "view must be all or starter-catalog",
+      "view must be all or template-catalog",
       400,
     ),
   };
 }
 
-function isStarterCatalogInstallConfig(config: InstallConfig): boolean {
+function isTemplateCatalogInstallConfig(config: InstallConfig): boolean {
   if (config.workspaceId !== undefined) return false;
   if (config.id === DEFAULT_CAPSULE_INSTALL_CONFIG_ID) return true;
   return (
@@ -318,8 +315,8 @@ async function listInstallConfigs(
           isSelectableInstallConfig,
         );
   const merged = (
-    view.view === "starter-catalog"
-      ? official.filter(isStarterCatalogInstallConfig)
+    view.view === "template-catalog"
+      ? official.filter(isTemplateCatalogInstallConfig)
       : [...official, ...scoped]
   ).sort(
     (a, b) =>

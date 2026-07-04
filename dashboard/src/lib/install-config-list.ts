@@ -1,4 +1,11 @@
-import { listInstallConfigs, type InstallConfig } from "./control-api.ts";
+import {
+  listInstallConfigs,
+  TEMPLATE_CATALOG_VIEW,
+  type InstallConfig,
+  type InstallConfigView,
+} from "./control-api.ts";
+
+export { TEMPLATE_CATALOG_VIEW };
 
 const CACHE_TTL_MS = 10_000;
 
@@ -12,7 +19,7 @@ const inflight = new Map<string, Promise<readonly InstallConfig[]>>();
 
 function cacheKey(
   workspaceId: string | undefined,
-  options: { readonly view?: "starter-catalog" },
+  options: { readonly view?: InstallConfigView },
 ): string {
   return `${workspaceId ?? ""}:${options.view ?? "all"}`;
 }
@@ -41,7 +48,7 @@ export function clearInstallConfigListCache(workspaceId?: string): void {
 export function primeInstallConfigListCache(
   workspaceId: string | undefined,
   installConfigs: readonly InstallConfig[],
-  options: { readonly view?: "starter-catalog" } = {},
+  options: { readonly view?: InstallConfigView } = {},
 ): void {
   cache.set(cacheKey(workspaceId, options), {
     installConfigs,
@@ -52,7 +59,7 @@ export function primeInstallConfigListCache(
 export async function listInstallConfigsCached(
   workspaceId?: string,
   options: {
-    readonly view?: "starter-catalog";
+    readonly view?: InstallConfigView;
     readonly force?: boolean;
   } = {},
 ): Promise<readonly InstallConfig[]> {

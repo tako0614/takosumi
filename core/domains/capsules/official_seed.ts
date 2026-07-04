@@ -1,5 +1,5 @@
 /**
- * Seeds built-in shared InstallConfigs from the first-party module registry
+ * Seeds built-in shared InstallConfigs from the template module registry
  * (Core Specification §10 / §11). TemplateDefinitions stay the seed source of
  * truth; this derives a `trustLevel: "official"` InstallConfig per built-in
  * module so an Installation can reference a service-side config by id while the
@@ -11,12 +11,12 @@
  *     standard Git URL installs. It has no `templateBinding`.
  *   - The named official InstallConfig alias (`core`) for the Space base
  *     Capsule.
- *   - The per-template configs for every other built-in starter module
+ *   - The per-template configs for every other built-in template module
  *     (`cfg-official-<templateId>`, installType opentofu_module).
  *
  * The config id is stable so the upsert is idempotent across restarts.
  * `templateBinding` is an internal service-side seam; plan creation normalizes
- * the bundled module into generatedRoot.moduleFiles before runner dispatch.
+ * the embedded template module into generatedRoot.moduleFiles before runner dispatch.
  */
 
 import type { TemplateDefinition } from "@takosumi/internal/deploy-control-api";
@@ -273,7 +273,7 @@ export function installConfigFromTemplate(
 /**
  * Derives the full built-in shared InstallConfig set: the generic Capsule
  * default, the named official alias (`core`), plus a per-template config for
- * every OTHER first-party starter module. A template already bound by a named
+ * every OTHER built-in template module. A template already bound by a named
  * alias does NOT also get a generic `cfg-official-<templateId>` config (avoids
  * two configs over the same module surface).
  */

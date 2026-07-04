@@ -1562,6 +1562,8 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       resourcesJson: report.resources,
       dataSourcesJson: report.dataSources,
       provisionersJson: report.provisioners,
+      rootModuleVariablesJson: report.rootModuleVariables ?? [],
+      rootModuleOutputsJson: report.rootModuleOutputs ?? [],
       normalizedObjectKey: report.normalizedObjectKey ?? null,
       normalizedDigest: report.normalizedDigest ?? null,
       createdAt: report.createdAt,
@@ -1600,6 +1602,12 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       provisioners: parseJson(
         row.provisionersJson,
       ) as CapsuleCompatibilityReport["provisioners"],
+      rootModuleVariables: parseJson(
+        row.rootModuleVariablesJson,
+      ) as CapsuleCompatibilityReport["rootModuleVariables"],
+      rootModuleOutputs: parseJson(
+        row.rootModuleOutputsJson,
+      ) as CapsuleCompatibilityReport["rootModuleOutputs"],
       ...(row.normalizedObjectKey
         ? { normalizedObjectKey: row.normalizedObjectKey }
         : {}),
@@ -1674,6 +1682,12 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       provisioners: parseJson(
         row.provisionersJson,
       ) as CapsuleCompatibilityReport["provisioners"],
+      rootModuleVariables: parseJson(
+        row.rootModuleVariablesJson,
+      ) as CapsuleCompatibilityReport["rootModuleVariables"],
+      rootModuleOutputs: parseJson(
+        row.rootModuleOutputsJson,
+      ) as CapsuleCompatibilityReport["rootModuleOutputs"],
       ...(row.normalizedObjectKey
         ? { normalizedObjectKey: row.normalizedObjectKey }
         : {}),

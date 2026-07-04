@@ -1,11 +1,11 @@
 /**
- * Add a service (`/new`) — starter catalog first for normal users, explicit
+ * Add a service (`/new`) — app discovery first for normal users, explicit
  * install links / Git sources second, one underlying flow.
  *
  * Three entry shapes, identical install path:
  *   - Link/source import: the primary path for app install links or raw Git
- *     URLs, including services that are not in the starter catalog.
- *   - Examples: curated first-party / known service coordinates returned by
+ *     URLs, including services that are not in the catalog.
+ *   - Examples: curated installable app / known service coordinates returned by
  *     the InstallConfig API. Picking one pre-fills the same Git-backed flow.
  *   - External install link: another site links `/install?git=…` (or the
  *     packed `?source=git::…` form); the router forwards the query here and
@@ -95,14 +95,17 @@ import {
 } from "../../lib/control-api.ts";
 import { locale, t } from "../../i18n/index.ts";
 import { StoreBrowser } from "../store/StoreBrowser.tsx";
-import { firstPartyStoreListings } from "../store/first-party-listings.ts";
+import { installableAppStoreListings } from "../store/installable-app-listings.ts";
 import { buildNewQuery } from "../store/store-link.ts";
 import type { TcsListing } from "../../lib/tcs-client.ts";
 import {
   clearCapsuleListCache,
   listCapsulesCached,
 } from "../../lib/capsule-list.ts";
-import { listInstallConfigsCached } from "../../lib/install-config-list.ts";
+import {
+  listInstallConfigsCached,
+  TEMPLATE_CATALOG_VIEW,
+} from "../../lib/install-config-list.ts";
 import {
   Badge,
   Button,
@@ -133,6 +136,13 @@ interface InputVariableRow {
   readonly value: string;
   readonly jsonValue?: JsonValue;
 }
+
+const HIDDEN_INSTALL_VARIABLE_NAMES = new Set([
+  "enable_cloudflare_resources",
+  "enable_cloudflare_worker_script",
+  "worker_bundle_url",
+  "worker_bundle_sha256",
+]);
 
 function CatalogIcon(props: { readonly entry: CatalogEntry }) {
   switch (props.entry.kind) {
@@ -484,7 +494,10 @@ function inputVariableRowsFromPrefill(
   vars: Readonly<Record<string, JsonValue>> | undefined,
 ): readonly InputVariableRow[] {
   return Object.entries(vars ?? {})
-    .filter(([name]) => name !== "project_name")
+    .filter(
+      ([name]) =>
+        name !== "project_name" && !HIDDEN_INSTALL_VARIABLE_NAMES.has(name),
+    )
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([name, value]) => ({
       name,
@@ -664,7 +677,7 @@ function Inner() {
 
   const workspaceId = () =>
     currentWorkspaceId() ? currentWorkspaceId() : null;
-  const shouldLoadStarterConfigs = () => {
+  const shouldLoadTemplateConfigs = () => {
     const id = workspaceId();
     return id && initialInstallConfigId ? id : null;
   };
@@ -677,9 +690,8 @@ function Inner() {
     }
     return null;
   };
-  const [starterConfigs] = createResource(
-    shouldLoadStarterConfigs,
-    (id) => listInstallConfigsCached(id, { view: "starter-catalog" }),
+  const [templateConfigs] = createResource(shouldLoadTemplateConfigs, (id) =>
+    listInstallConfigsCached(id, { view: TEMPLATE_CATALOG_VIEW }),
   );
   const [installConfigs] = createResource(shouldLoadInstallConfigs, (id) =>
     listInstallConfigsCached(id),
@@ -769,15 +781,15 @@ function Inner() {
     window.dispatchEvent(new Event("takosumi:workspaces-changed"));
     return workspace;
   });
-  const starterConfigList = createMemo<readonly InstallConfig[]>(
-    () => starterConfigs() ?? [],
+  const templateConfigList = createMemo<readonly InstallConfig[]>(
+    () => templateConfigs() ?? [],
   );
   const installConfigList = createMemo<readonly InstallConfig[]>(
     () => installConfigs() ?? [],
   );
   const allCatalogEntries = createMemo<readonly CatalogEntry[]>(() =>
     dedupeCatalogConfigs(
-      starterConfigList().filter((config): config is CatalogInstallConfig =>
+      templateConfigList().filter((config): config is CatalogInstallConfig =>
         Boolean(config.catalog?.source),
       ),
     )
@@ -796,7 +808,7 @@ function Inner() {
       ),
   );
   const localStoreListings = createMemo<readonly TcsListing[]>(
-    () => firstPartyStoreListings,
+    () => installableAppStoreListings,
   );
   const defaultGitInstallConfig = () =>
     installConfigList().find(
@@ -807,7 +819,9 @@ function Inner() {
         config.sourceKind === "generic_capsule" &&
         config.workspaceId === undefined,
     ) ??
-    installConfigList().find((config) => config.sourceKind === "generic_capsule");
+    installConfigList().find(
+      (config) => config.sourceKind === "generic_capsule",
+    );
   const ensureConfigSelected = () => {
     const list = installConfigList();
     if (list.length === 0) return list;
@@ -1101,7 +1115,9 @@ function Inner() {
   };
   const shouldOpenServiceAdvanced = () => inputVariables().length > 0;
   const installReturnVariables = (): Readonly<Record<string, JsonValue>> => {
-    const variables: Record<string, JsonValue> = {};
+    const variables: Record<string, JsonValue> = {
+      ...(currentInstallPrefill()?.vars ?? {}),
+    };
     if (supportsProjectNameInput()) {
       variables.project_name = projectNameVariable();
     }
@@ -2548,8 +2564,8 @@ function Inner() {
 
                 <Show
                   when={
-                    !starterConfigs.loading &&
-                    starterConfigList().length === 0 &&
+                    !templateConfigs.loading &&
+                    templateConfigList().length === 0 &&
                     !hasChosenSource()
                   }
                 >

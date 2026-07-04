@@ -88,8 +88,9 @@ interface InstallationPlanRouteRequest {
   readonly runnerId?: string;
 }
 
-const API_PATCHABLE_INSTALLATION_STATUSES: ReadonlySet<CapsuleStatus> =
-  new Set(["active", "stale", "error"]);
+const API_PATCHABLE_INSTALLATION_STATUSES: ReadonlySet<CapsuleStatus> = new Set(
+  ["active", "stale", "error"],
+);
 
 function publicInstallation(installation: Capsule): PublicCapsule {
   const {
@@ -100,7 +101,9 @@ function publicInstallation(installation: Capsule): PublicCapsule {
   return publicRecord;
 }
 
-function capsuleResponse(capsule: Capsule): { readonly capsule: PublicCapsule } {
+function capsuleResponse(capsule: Capsule): {
+  readonly capsule: PublicCapsule;
+} {
   return { capsule: publicInstallation(capsule) };
 }
 
@@ -161,7 +164,7 @@ function compatibilityReportIdFromBody(body: {
   return body.compatibilityReportId.trim();
 }
 
-type InstallConfigListView = "all" | "starter-catalog";
+type InstallConfigListView = "all" | "template-catalog";
 
 function parseInstallConfigListView(
   raw: string | undefined,
@@ -171,8 +174,8 @@ function parseInstallConfigListView(
   if (raw === undefined || raw === "" || raw === "all") {
     return { kind: "ok", view: "all" };
   }
-  if (raw === "starter-catalog") {
-    return { kind: "ok", view: "starter-catalog" };
+  if (raw === "template-catalog" || raw === "starter-catalog") {
+    return { kind: "ok", view: "template-catalog" };
   }
   return {
     kind: "invalid",
@@ -180,7 +183,7 @@ function parseInstallConfigListView(
       JSON.stringify({
         error: {
           code: "invalid_argument",
-          message: "view must be all or starter-catalog",
+          message: "view must be all or template-catalog",
         },
       }),
       {
@@ -191,7 +194,7 @@ function parseInstallConfigListView(
   };
 }
 
-function isStarterCatalogInstallConfig(config: InstallConfig): boolean {
+function isTemplateCatalogInstallConfig(config: InstallConfig): boolean {
   if (config.spaceId !== undefined) return false;
   if (config.id === DEFAULT_CAPSULE_INSTALL_CONFIG_ID) return true;
   return (
@@ -299,8 +302,7 @@ export const DEPLOY_CONTROL_INSTALLATION_ENDPOINTS: readonly DeployControlEndpoi
     {
       method: "GET",
       path: TAKOSUMI_API_CAPSULE_STATE_VERSIONS_ROUTE,
-      summary:
-        "Lists StateVersion records for a Capsule.",
+      summary: "Lists StateVersion records for a Capsule.",
       auth: "deploy-control-token",
       operationId: "listCapsuleStateVersions",
       openapi: {
@@ -315,7 +317,10 @@ export const DEPLOY_CONTROL_INSTALLATION_ENDPOINTS: readonly DeployControlEndpoi
       summary: "Reads a StateVersion ledger record.",
       auth: "deploy-control-token",
       operationId: "getStateVersion",
-      openapi: { pathParams: ["stateVersionId"], okSchema: "DeploymentResponse" },
+      openapi: {
+        pathParams: ["stateVersionId"],
+        okSchema: "DeploymentResponse",
+      },
       notImplementedMessage: "deployment ledger not wired",
     },
     {
@@ -339,7 +344,10 @@ export const DEPLOY_CONTROL_INSTALLATION_ENDPOINTS: readonly DeployControlEndpoi
         "Lists built-in shared InstallConfigs plus the Workspace's own configs when workspaceId is given.",
       auth: "deploy-control-token",
       operationId: "listInstallConfigs",
-      openapi: { query: ["workspaceId"], okSchema: "ListInstallConfigsResponse" },
+      openapi: {
+        query: ["workspaceId"],
+        okSchema: "ListInstallConfigsResponse",
+      },
       notImplementedMessage: "installations not wired",
     },
     {
@@ -524,13 +532,10 @@ export function mountDeployControlInstallationRoutes(
         if (includeDestroyed.kind === "invalid") {
           return includeDestroyed.response;
         }
-        const result = await installations!.listCapsulesPage(
-          id,
-          {
-            ...page.value,
-            includeDestroyed: includeDestroyed.includeDestroyed,
-          },
-        );
+        const result = await installations!.listCapsulesPage(id, {
+          ...page.value,
+          includeDestroyed: includeDestroyed.includeDestroyed,
+        });
         return c.json(
           {
             capsules: result.items.map(publicInstallation),
@@ -711,8 +716,8 @@ export function mountDeployControlInstallationRoutes(
                 isSelectableInstallConfig,
               );
         const merged = (
-          view.view === "starter-catalog"
-            ? official.filter(isStarterCatalogInstallConfig)
+          view.view === "template-catalog"
+            ? official.filter(isTemplateCatalogInstallConfig)
             : [...official, ...scoped]
         ).sort(
           (a, b) =>

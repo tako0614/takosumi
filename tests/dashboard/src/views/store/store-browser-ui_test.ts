@@ -47,10 +47,10 @@ describe("StoreBrowser install UI", () => {
     expect(storeBrowserCss).toContain("width: 100%");
   });
 
-  test("passes official first-party listings into the standalone Store tab", () => {
-    expect(storeViewSource).toContain("firstPartyStoreListings");
+  test("passes local installable app listings into the standalone Store tab", () => {
+    expect(storeViewSource).toContain("installableAppStoreListings");
     expect(storeViewSource).toContain(
-      "localListings={firstPartyStoreListings}",
+      "localListings={installableAppStoreListings}",
     );
   });
 });

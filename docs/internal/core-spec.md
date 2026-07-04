@@ -220,6 +220,11 @@ CRDs, CloudEvents, OpenAI-compatible APIs, and scoped Cloudflare
 Workers-compatible import/deploy paths are examples of standard-conscious
 surfaces.
 
+If a mature vendor-neutral provider exists outside Takosumi, prefer that
+provider. Takosumi can still manage ProviderConnections, env/file injection,
+runs, state, outputs, policy, usage, and compatibility gates around it without
+forcing the user onto `takosumi/takosumi`.
+
 If a durable service form has no adequate standard surface, Takosumi should
 define it as a typed Resource Shape. One-off gaps still stay in generic-env
 ProviderConnections and ordinary OpenTofu modules. Add a Takosumi provider

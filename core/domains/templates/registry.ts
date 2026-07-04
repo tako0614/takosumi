@@ -118,7 +118,7 @@ export class TemplateRegistry {
     if (!moduleFiles || moduleFiles.length === 0) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        `template ${registryKey(id, version)} has no bundled module files`,
+        `template ${registryKey(id, version)} has no embedded module files`,
       );
     }
     return moduleFiles.map((file) => ({ ...file }));

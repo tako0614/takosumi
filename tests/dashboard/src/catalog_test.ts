@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { firstPartyStoreListings } from "../../../dashboard/src/views/store/first-party-listings.ts";
+import { installableAppStoreListings } from "../../../dashboard/src/views/store/installable-app-listings.ts";
 import { buildNewQuery } from "../../../dashboard/src/views/store/store-link.ts";
 import { officialInstallConfigs } from "../../../core/domains/capsules/official_seed.ts";
 import { defaultTemplateRegistry } from "../../../core/domains/templates/mod.ts";
@@ -20,7 +20,7 @@ describe("dashboard catalog", () => {
     }
   });
 
-  test("product distributions are not generic Takosumi starter cards", () => {
+  test("product distributions are not generic Takosumi template cards", () => {
     expect(catalogEntries().map((entry) => entry.templateId)).not.toContain(
       "takos",
     );
@@ -46,7 +46,7 @@ describe("dashboard catalog", () => {
     expect(template.outputs.public.url?.from).toBe("url");
   });
 
-  test("internal starter catalog stays narrow and template-backed", () => {
+  test("internal template catalog stays narrow and template-backed", () => {
     const entries = catalogEntries();
     const services = entries.filter((entry) => entry.surface === "service");
     const buildingBlocks = entries.filter(
@@ -70,12 +70,12 @@ describe("dashboard catalog", () => {
       "cloudflare_r2_bucket",
       "cloudflare_d1_database",
     ]);
-    const seededConfigs = officialInstallConfigs();
+    const builtInConfigs = officialInstallConfigs();
     for (const entry of catalogEntries().filter(
       (catalogEntry) => catalogEntry.surface === "service",
     )) {
-      const config = seededConfigs.find(
-        (seeded) => seeded.id === entry.installConfigId,
+      const config = builtInConfigs.find(
+        (builtIn) => builtIn.id === entry.installConfigId,
       );
       const template = defaultTemplateRegistry.require(
         config!.templateBinding!.templateId,
@@ -90,11 +90,11 @@ describe("dashboard catalog", () => {
     }
   });
 
-  test("starter catalog entries resolve to seeded official template configs", () => {
-    const seededConfigs = officialInstallConfigs();
+  test("template catalog entries resolve to built-in template configs", () => {
+    const builtInConfigs = officialInstallConfigs();
     for (const entry of catalogEntries()) {
-      const config = seededConfigs.find(
-        (seeded) => seeded.id === entry.installConfigId,
+      const config = builtInConfigs.find(
+        (builtIn) => builtIn.id === entry.installConfigId,
       );
       expect(config, entry.templateId).toBeDefined();
       expect(config?.sourceKind).toBe("first_party_capsule");
@@ -121,12 +121,12 @@ describe("dashboard catalog", () => {
     }
   });
 
-  test("/new first-party listings show actual apps instead of generic templates", () => {
-    expect(firstPartyStoreListings.map((listing) => listing.id).sort()).toEqual(
-      ["takos", "yurucommu"],
-    );
+  test("/new installable app listings show actual apps instead of generic templates", () => {
     expect(
-      firstPartyStoreListings.map((listing) => [
+      installableAppStoreListings.map((listing) => listing.id).sort(),
+    ).toEqual(["takos", "yurucommu"]);
+    expect(
+      installableAppStoreListings.map((listing) => [
         listing.id,
         listing.kind,
         listing.source.git,
@@ -138,7 +138,7 @@ describe("dashboard catalog", () => {
         "yurucommu",
         "app",
         "https://github.com/tako0614/yurucommu.git",
-        "master",
+        "main",
         ".",
       ],
       [
@@ -149,7 +149,10 @@ describe("dashboard catalog", () => {
         "deploy/opentofu",
       ],
     ]);
-    for (const listing of firstPartyStoreListings) {
+    for (const listing of installableAppStoreListings) {
+      expect(listing.provider).toBe("cloudflare");
+      expect(listing.badge.ja).toBe("追加候補");
+      expect(listing.badge.en).toBe("Installable");
       expect(
         listing.source.resolvedCommit,
         `${listing.id} resolved commit`,
@@ -160,12 +163,12 @@ describe("dashboard catalog", () => {
       ).toBe(listing.source.resolvedCommit);
     }
     expect(
-      firstPartyStoreListings.some((listing) =>
+      installableAppStoreListings.some((listing) =>
         listing.name.ja.includes("Webアプリを公開"),
       ),
     ).toBe(false);
     expect(
-      firstPartyStoreListings.some(
+      installableAppStoreListings.some(
         (listing) => listing.id === "cloudflare-hello-worker",
       ),
     ).toBe(false);

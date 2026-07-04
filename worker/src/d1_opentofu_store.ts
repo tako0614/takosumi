@@ -1469,6 +1469,8 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
       resourcesJson: report.resources,
       dataSourcesJson: report.dataSources,
       provisionersJson: report.provisioners,
+      rootModuleVariablesJson: report.rootModuleVariables ?? [],
+      rootModuleOutputsJson: report.rootModuleOutputs ?? [],
       normalizedObjectKey: report.normalizedObjectKey ?? null,
       normalizedDigest: report.normalizedDigest ?? null,
       createdAt: report.createdAt,
@@ -1500,6 +1502,10 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
         row.dataSourcesJson as CapsuleCompatibilityReport["dataSources"],
       provisioners:
         row.provisionersJson as CapsuleCompatibilityReport["provisioners"],
+      rootModuleVariables:
+        row.rootModuleVariablesJson as CapsuleCompatibilityReport["rootModuleVariables"],
+      rootModuleOutputs:
+        row.rootModuleOutputsJson as CapsuleCompatibilityReport["rootModuleOutputs"],
       ...(row.normalizedObjectKey
         ? { normalizedObjectKey: row.normalizedObjectKey }
         : {}),
@@ -1564,6 +1570,10 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
         row.dataSourcesJson as CapsuleCompatibilityReport["dataSources"],
       provisioners:
         row.provisionersJson as CapsuleCompatibilityReport["provisioners"],
+      rootModuleVariables:
+        row.rootModuleVariablesJson as CapsuleCompatibilityReport["rootModuleVariables"],
+      rootModuleOutputs:
+        row.rootModuleOutputsJson as CapsuleCompatibilityReport["rootModuleOutputs"],
       ...(row.normalizedObjectKey
         ? { normalizedObjectKey: row.normalizedObjectKey }
         : {}),
@@ -3597,6 +3607,8 @@ export async function ensureD1OpenTofuLedgerSchema(
       resources_json text not null,
       data_sources_json text not null,
       provisioners_json text not null,
+      root_module_variables_json text not null default '[]',
+      root_module_outputs_json text not null default '[]',
       normalized_object_key text,
       normalized_digest text,
       created_at text not null
@@ -4696,6 +4708,28 @@ stale pre-rename named indexes dropped (the canonical new-name indexes are (re)c
       ]) {
         await db.prepare(`drop index if exists ${indexName}`).run();
       }
+    },
+  },
+  {
+    version: 18,
+    name: "d1_opentofu_compatibility_report_root_interface",
+    checksumSource: `
+capsule_compatibility_reports.root_module_variables_json text not null default []
+capsule_compatibility_reports.root_module_outputs_json text not null default []
+`,
+    async apply(db) {
+      await ensureD1Column(
+        db,
+        "capsule_compatibility_reports",
+        "root_module_variables_json",
+        "text not null default '[]'",
+      );
+      await ensureD1Column(
+        db,
+        "capsule_compatibility_reports",
+        "root_module_outputs_json",
+        "text not null default '[]'",
+      );
     },
   },
 ] as const satisfies readonly D1OpenTofuSchemaMigration[];

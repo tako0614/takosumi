@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import {
   clearInstallConfigListCache,
   listInstallConfigsCached,
+  TEMPLATE_CATALOG_VIEW,
 } from "../../../../dashboard/src/lib/install-config-list.ts";
 
 const realFetch = globalThis.fetch;
@@ -39,26 +40,26 @@ describe("listInstallConfigsCached", () => {
     const calls = stubInstallConfigFetch();
 
     const [a, b] = await Promise.all([
-      listInstallConfigsCached("space_1", { view: "starter-catalog" }),
-      listInstallConfigsCached("space_1", { view: "starter-catalog" }),
+      listInstallConfigsCached("space_1", { view: TEMPLATE_CATALOG_VIEW }),
+      listInstallConfigsCached("space_1", { view: TEMPLATE_CATALOG_VIEW }),
     ]);
 
     expect(calls()).toEqual([
-      "/api/v1/capsule-configs?workspaceId=space_1&view=starter-catalog",
+      `/api/v1/capsule-configs?workspaceId=space_1&view=${TEMPLATE_CATALOG_VIEW}`,
     ]);
     expect(a).toEqual(b);
     expect(a[0]?.id).toBe("cfg_1");
   });
 
-  test("separates all-config and starter-catalog cache entries", async () => {
+  test("separates all-config and template catalog cache entries", async () => {
     const calls = stubInstallConfigFetch();
 
     await listInstallConfigsCached("space_1");
-    await listInstallConfigsCached("space_1", { view: "starter-catalog" });
+    await listInstallConfigsCached("space_1", { view: TEMPLATE_CATALOG_VIEW });
 
     expect(calls()).toEqual([
       "/api/v1/capsule-configs?workspaceId=space_1",
-      "/api/v1/capsule-configs?workspaceId=space_1&view=starter-catalog",
+      `/api/v1/capsule-configs?workspaceId=space_1&view=${TEMPLATE_CATALOG_VIEW}`,
     ]);
   });
 });

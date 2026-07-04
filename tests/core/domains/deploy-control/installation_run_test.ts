@@ -704,6 +704,11 @@ test("requested scalar Cloudflare Capsule inputs can be filled from provider sco
       variableMapping: {
         cloudflare_account_id: null,
         account_id: null,
+        cloudflare_workers_subdomain: null,
+        workersSubdomain: null,
+        cloudflare: {
+          workers_subdomain: null,
+        },
         untouched: null,
       },
     },
@@ -713,7 +718,10 @@ test("requested scalar Cloudflare Capsule inputs can be filled from provider sco
       "conn_cloudflare_scope",
       seeded.installation.spaceId,
     ),
-    scopeHints: { accountId: "acct_scope_123" },
+    scopeHints: {
+      accountId: "acct_scope_123",
+      workersSubdomain: "team-workers",
+    },
   });
   await store.putInstallationProviderEnvBindingSet({
     id: "profile_cloudflare_scope",
@@ -744,6 +752,11 @@ test("requested scalar Cloudflare Capsule inputs can be filled from provider sco
   const mainTf = runner.planJobs[0]!.generatedRoot!.files["main.tf"]!;
   expect(mainTf).toContain('cloudflare_account_id = "acct_scope_123"');
   expect(mainTf).toContain('account_id = "acct_scope_123"');
+  expect(mainTf).toContain('cloudflare_workers_subdomain = "team-workers"');
+  expect(mainTf).toContain('workersSubdomain = "team-workers"');
+  expect(mainTf).toContain(
+    'cloudflare = jsondecode("{\\"account_id\\":\\"acct_scope_123\\",\\"workers_subdomain\\":\\"team-workers\\"}")',
+  );
   expect(mainTf).toContain("untouched = null");
   expect(mainTf).not.toContain("fixture-provider-token");
 });
@@ -1310,6 +1323,37 @@ test("installation plan reuses a preflight CompatibilityReport hint without rech
   const runner = recordingRunner();
   const seeded = await seedRunnableInstallationModel(store, {
     environment: "preview",
+    installConfig: {
+      variableMapping: {
+        project_name: "yuru-e2e",
+        enable_cloudflare_resources: true,
+      },
+    },
+  });
+  await putConnectionWithProviderEnv(store, {
+    ...cloudflareConnection(
+      "conn_cloudflare_scope",
+      seeded.installation.spaceId,
+    ),
+    scopeHints: {
+      accountId: "acct_scope_123",
+      workersSubdomain: "team-workers",
+    },
+  });
+  await store.putInstallationProviderEnvBindingSet({
+    id: "profile_cloudflare_scope",
+    spaceId: seeded.installation.spaceId,
+    installationId: seeded.installation.id,
+    environment: seeded.installation.environment,
+    bindings: [
+      {
+        provider: "cloudflare",
+        alias: "main",
+        connectionId: "conn_cloudflare_scope",
+      },
+    ],
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
   });
   await store.putCapsuleCompatibilityReport({
     id: "caprep_preflight",
@@ -1333,6 +1377,13 @@ test("installation plan reuses a preflight CompatibilityReport hint without rech
     ],
     dataSources: [],
     provisioners: [],
+    rootModuleVariables: [
+      "cloudflare_account_id",
+      "cloudflare_workers_subdomain",
+      "enable_cloudflare_resources",
+      "project_name",
+    ],
+    rootModuleOutputs: ["takosumi_release", "worker_name", "url"],
     createdAt: "2026-06-07T00:00:00.000Z",
   });
   let sourceFileReadCount = 0;
@@ -1368,6 +1419,12 @@ test("installation plan reuses a preflight CompatibilityReport hint without rech
   expect(sourceFileReadCount).toBe(0);
   expect(runner.planJobs).toHaveLength(1);
   expect(runner.planJobs[0]?.generatedRoot?.moduleFiles).toBeUndefined();
+  const mainTf = runner.planJobs[0]!.generatedRoot!.files["main.tf"]!;
+  expect(mainTf).toContain('project_name = "yuru-e2e"');
+  expect(mainTf).toContain("enable_cloudflare_resources = true");
+  expect(mainTf).toContain('cloudflare_account_id = "acct_scope_123"');
+  expect(mainTf).toContain('cloudflare_workers_subdomain = "team-workers"');
+  expect(mainTf).not.toContain("fixture-provider-token");
 });
 
 test("installation plan reuses the latest matching preflight CompatibilityReport when the client omits the hint", async () => {

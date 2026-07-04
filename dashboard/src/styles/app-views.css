@@ -458,7 +458,7 @@
   }
 }
 
-/* ===== Workspace starter (home) ===== */
+/* ===== Workspace empty state (home) ===== */
 .av-start {
   display: flex;
   flex-direction: column;

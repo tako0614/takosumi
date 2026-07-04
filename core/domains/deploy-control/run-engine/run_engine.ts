@@ -248,9 +248,12 @@ function requestedGenericCapsuleVariables(
   explicit: Readonly<Record<string, unknown>>,
   providerInputDefaults: Readonly<Record<string, JsonValue>>,
   moduleFiles: readonly OpenTofuCapsuleSourceFile[] | undefined,
+  rootModuleVariables: readonly string[] | undefined,
 ): Readonly<Record<string, unknown>> {
-  if (!moduleFiles || moduleFiles.length === 0) return explicit;
-  const declaredInputs = new Set(collectRootModuleVariableNames(moduleFiles));
+  const declaredInputs = new Set(
+    rootModuleVariables ??
+      (moduleFiles ? collectRootModuleVariableNames(moduleFiles) : []),
+  );
   if (declaredInputs.size === 0) return explicit;
   const requested: Record<string, unknown> = { ...explicit };
   for (const key of Object.keys(providerInputDefaults)) {
@@ -264,10 +267,14 @@ function requestedGenericCapsuleVariables(
 function genericCapsuleOutputAllowlist(
   configured: InstallConfig["outputAllowlist"],
   moduleFiles: readonly OpenTofuCapsuleSourceFile[] | undefined,
+  rootModuleOutputs: readonly string[] | undefined,
 ): InstallConfig["outputAllowlist"] {
-  if (!moduleFiles || moduleFiles.length === 0) return configured;
+  const outputNames =
+    rootModuleOutputs ??
+    (moduleFiles ? collectRootModuleOutputNames(moduleFiles) : []);
+  if (outputNames.length === 0) return configured;
   const allowlist: Record<string, OutputAllowlistEntry> = { ...configured };
-  for (const name of collectRootModuleOutputNames(moduleFiles)) {
+  for (const name of outputNames) {
     if (name === "takosumi_release") continue;
     if (Object.prototype.hasOwnProperty.call(allowlist, name)) continue;
     allowlist[name] = { from: name, type: "json" };
@@ -1555,12 +1562,14 @@ export class RunEngine {
           explicitVariables,
           installTypePlan.providerInputDefaults,
           moduleFiles,
+          input.compatibilityReport?.rootModuleVariables,
         ),
       ),
     );
     const outputAllowlist = genericCapsuleOutputAllowlist(
       input.installConfig.outputAllowlist,
       moduleFiles,
+      input.compatibilityReport?.rootModuleOutputs,
     );
     return {
       request: {

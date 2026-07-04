@@ -18,10 +18,10 @@ const controlApiSource = readFileSync(
   resolve(here, "../../../../../dashboard/src/lib/control-api.ts"),
   "utf8",
 );
-const firstPartyListingsSource = readFileSync(
+const installableAppListingsSource = readFileSync(
   resolve(
     here,
-    "../../../../../dashboard/src/views/store/first-party-listings.ts",
+    "../../../../../dashboard/src/views/store/installable-app-listings.ts",
   ),
   "utf8",
 );
@@ -65,7 +65,7 @@ describe("/new flow guidance", () => {
   test("integrates service browsing and link install into /new", () => {
     expect(newAppViewSource).toContain("StoreBrowser");
     expect(newAppViewSource).toContain("localStoreListings");
-    expect(newAppViewSource).toContain("firstPartyStoreListings");
+    expect(newAppViewSource).toContain("installableAppStoreListings");
     expect(newAppViewSource).not.toContain("catalogEntryToListing");
     expect(newAppViewSource).toContain("pickStoreListing");
     expect(newAppViewSource).toContain("startLinkImport");
@@ -200,6 +200,8 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain(
       "setInputVariables(inputVariableRowsFromPrefill(next.vars))",
     );
+    expect(newAppViewSource).toContain("HIDDEN_INSTALL_VARIABLE_NAMES");
+    expect(newAppViewSource).toContain("currentInstallPrefill()?.vars ?? {}");
     expect(newAppViewSource).toContain("activeInstallPrefill()");
     expect(newAppViewSource).toContain("? prefilledLinkReview()");
     expect(newAppViewSource).toContain(": gitFields()");
@@ -239,24 +241,33 @@ describe("/new flow guidance", () => {
     expect(ja["new.error.configLoading"]).toContain("追加設定を読み込み中");
   });
 
-  test("/new displays real first-party app listings, not internal template starters", () => {
-    expect(firstPartyListingsSource).toContain('id: "yurucommu"');
-    expect(firstPartyListingsSource).toContain(
+  test("/new displays real installable app listings, not internal templates", () => {
+    expect(installableAppListingsSource).toContain('id: "yurucommu"');
+    expect(installableAppListingsSource).toContain(
       'git: "https://github.com/tako0614/yurucommu.git"',
     );
-    expect(firstPartyListingsSource).toContain('ref: "main"');
-    expect(firstPartyListingsSource).toContain("resolvedCommit:");
-    expect(firstPartyListingsSource).toContain('id: "takos"');
-    expect(firstPartyListingsSource).toContain(
+    expect(installableAppListingsSource).toContain('ref: "main"');
+    expect(installableAppListingsSource).toContain("resolvedCommit:");
+    expect(installableAppListingsSource).toContain("worker_bundle_url");
+    expect(installableAppListingsSource).toContain("worker_bundle_sha256");
+    expect(installableAppListingsSource).toContain(
+      "https://github.com/tako0614/yurucommu/releases/download/v2.0.0/takos-worker.js",
+    );
+    expect(installableAppListingsSource).toContain('id: "takos"');
+    expect(installableAppListingsSource).toContain(
       'git: "https://github.com/tako0614/takos.git"',
     );
-    expect(firstPartyListingsSource).toContain('path: "deploy/opentofu"');
-    expect(firstPartyListingsSource).not.toContain("cloudflare-hello-worker");
-    expect(firstPartyListingsSource).not.toContain("Webアプリを公開");
+    expect(installableAppListingsSource).toContain('path: "deploy/opentofu"');
+    expect(installableAppListingsSource).not.toContain(
+      "cloudflare-hello-worker",
+    );
+    expect(installableAppListingsSource).not.toContain("Webアプリを公開");
+    expect(installableAppListingsSource).toContain("追加候補");
+    expect(installableAppListingsSource).toContain("Installable");
     expect(newAppViewSource).toContain(
       "localStoreListings = createMemo<readonly TcsListing[]>",
     );
-    expect(newAppViewSource).toContain("() => firstPartyStoreListings");
+    expect(newAppViewSource).toContain("() => installableAppStoreListings");
   });
 
   test("/new uses active Capsule list reads instead of loading destroyed history", () => {
@@ -268,7 +279,7 @@ describe("/new flow guidance", () => {
   });
 
   test("/new defers config API reads until a source or installConfig link is selected", () => {
-    expect(newAppViewSource).toContain("const shouldLoadStarterConfigs = ()");
+    expect(newAppViewSource).toContain("const shouldLoadTemplateConfigs = ()");
     expect(newAppViewSource).toContain(
       "return id && initialInstallConfigId ? id : null",
     );
@@ -278,13 +289,13 @@ describe("/new flow guidance", () => {
       "gitUrl().trim() || activeInstallPrefill() || selectedCatalogId()",
     );
     expect(newAppViewSource).toMatch(
-      /createResource\(\s*shouldLoadStarterConfigs/u,
+      /createResource\(\s*shouldLoadTemplateConfigs/u,
     );
     expect(newAppViewSource).toMatch(
       /createResource\(\s*shouldLoadInstallConfigs/u,
     );
     expect(newAppViewSource).not.toContain(
-      "createResource(workspaceId, listStarterCatalogInstallConfigs",
+      "createResource(workspaceId, listTemplateCatalogInstallConfigs",
     );
     expect(newAppViewSource).not.toContain(
       "createResource(workspaceId, (id) =>\n    listInstallConfigs(id)",
@@ -292,7 +303,7 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain("listInstallConfigsCached");
   });
 
-  test("keeps internal starter configs separate from /new app discovery", () => {
+  test("keeps internal template configs separate from /new app discovery", () => {
     const officialSeedSource = readFileSync(
       resolve(here, "../../../../../core/domains/capsules/official_seed.ts"),
       "utf8",
@@ -306,8 +317,8 @@ describe("/new flow guidance", () => {
     expect(officialSeedSource).toContain(
       'defaultValue: "service-name-with-space"',
     );
-    expect(controlApiSource).toContain("listStarterCatalogInstallConfigs");
-    expect(newAppViewSource).toContain('view: "starter-catalog"');
+    expect(controlApiSource).toContain("listTemplateCatalogInstallConfigs");
+    expect(newAppViewSource).toContain("TEMPLATE_CATALOG_VIEW");
     expect(newAppViewSource).toContain("const allCatalogEntries = createMemo");
     expect(newAppViewSource).toContain("selectedCatalogEntry");
     expect(newAppViewSource).not.toContain("catalogEntryToListing");
@@ -316,15 +327,15 @@ describe("/new flow guidance", () => {
     );
   });
 
-  test("install links keep starter catalog loading separate from generic Capsule config", () => {
-    expect(newAppViewSource).toContain('view: "starter-catalog"');
-    expect(newAppViewSource).toContain("const [starterConfigs]");
+  test("install links keep template catalog loading separate from generic Capsule config", () => {
+    expect(newAppViewSource).toContain("TEMPLATE_CATALOG_VIEW");
+    expect(newAppViewSource).toContain("const [templateConfigs]");
     expect(newAppViewSource).toContain("const [installConfigs]");
     expect(newAppViewSource).toContain("listInstallConfigsCached(id)");
     expect(newAppViewSource).toContain("const installConfigList");
     expect(newAppViewSource).toContain("installConfigList().find");
-    expect(newAppViewSource).toContain("sourceKind === \"generic_capsule\"");
-    expect(newAppViewSource).toContain("starterConfigList().length === 0");
+    expect(newAppViewSource).toContain('sourceKind === "generic_capsule"');
+    expect(newAppViewSource).toContain("templateConfigList().length === 0");
     expect(newAppViewSource).toContain("!hasChosenSource()");
   });
 

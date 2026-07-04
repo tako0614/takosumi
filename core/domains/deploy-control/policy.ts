@@ -15,7 +15,7 @@ import type {
   RunnerProfile,
 } from "@takosumi/internal/deploy-control-api";
 import { evaluateProviderAllowlist, providerMatches } from "takosumi-policy";
-import { isCredentialFreeUtilityProvider } from "./runner_profiles.ts";
+import { isCredentialFreeUtilityProvider } from "takosumi-contract/provider-env-rules";
 
 export function evaluatePolicy(input: {
   readonly profile: RunnerProfile;
