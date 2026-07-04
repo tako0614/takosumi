@@ -551,11 +551,15 @@ OpenTofu provider / Compatibility API / Resource Shape API / Dashboard action
 
 `/compat/cloudflare/client/v4` is therefore not a separate product stack. It is
 one import/deploy entrypoint into the same Cloud managed-resource operation
-boundary. Typed Resource Shapes additionally use TargetPool / Policy /
-ResolutionLock / Adapter dispatch before manager selection. The backend may be
-Workers for Platforms today, and a different managed EdgeWorker adapter later,
-without changing the public Resource Shape schema or the provider-facing
-compatibility endpoint.
+boundary. Compat handlers, Resource Shape adapters, dashboard actions, and
+standard data-plane facades should normalize the request into the same
+managed-operation descriptor before the selected manager is allowed to call a
+backend API. Typed Resource Shapes additionally use TargetPool / Policy /
+ResolutionLock / Adapter dispatch before manager selection. The official
+Takosumi Cloud EdgeWorker manager is Cloudflare Workers for Platforms dispatch
+namespace today, and a different managed EdgeWorker adapter later, without
+changing the public Resource Shape schema or the provider-facing compatibility
+endpoint.
 
 ### 4.2 ObjectBucket And S3-Compatible Object Storage
 

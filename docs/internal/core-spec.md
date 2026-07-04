@@ -453,6 +453,14 @@ projection, policy, or metering surface is actually needed.
 Do not claim complete AWS API or Cloudflare API compatibility. Specific surfaces are
 enabled or disabled by `/v1/capabilities`.
 
+Operator/Cloud implementations that expose managed capacity should normalize
+compatibility API calls, Resource Shape adapter calls, dashboard actions, and
+data-plane facades into the same managed-operation descriptor before calling a
+backend manager. The public API surface decides how the user enters Takosumi;
+the selected manager decides whether the backend is Workers for Platforms,
+R2, D1, KV, Queues, Workflows, Containers, or another operator-provided
+implementation.
+
 For example, ordinary S3/R2/GCS object storage can use existing providers while
 `compat.s3.v1` remains disabled. An object-storage Resource Shape or S3
 compatibility facade is justified only when an operator needs Takosumi-owned
