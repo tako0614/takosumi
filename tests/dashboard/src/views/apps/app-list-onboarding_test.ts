@@ -77,7 +77,7 @@ describe("AppListView app launcher", () => {
     expect(appListSource).toContain('t("apps.empty.viewServices")');
   });
 
-  test("keeps starter copy action-oriented and non-procedural in both locales", () => {
+  test("keeps empty app copy action-oriented and non-procedural in both locales", () => {
     expect(en).not.toHaveProperty("apps.start.add");
     expect(ja).not.toHaveProperty("apps.start.add");
     expect(en).not.toHaveProperty("apps.staleReason");

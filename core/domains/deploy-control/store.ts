@@ -108,8 +108,8 @@ export interface PlanRunInputs {
   readonly variables: Readonly<Record<string, JsonValue>>;
   /**
    * Generated-root dispatch data. New Capsule sidecars carry `generatedRoot`
-   * for both built-in first-party modules and generic Capsules; bundled modules
-   * are embedded as `generatedRoot.moduleFiles`. The queue consumer re-reads
+   * for both built-in template modules and generic Capsules; embedded template
+   * modules are carried as `generatedRoot.moduleFiles`. The queue consumer re-reads
    * this sidecar and threads it onto the runner dispatch payload. Never
    * projected into the public ledger.
    */

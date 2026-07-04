@@ -232,6 +232,7 @@ describe("/new Provider Connections return context", () => {
   test("Cloudflare connection form requires and forwards account id as a scope hint", () => {
     expect(connectionsTabSource).toContain("scopeHintsFromConnectionValues");
     expect(connectionsTabSource).toContain("helperCloudflareAccountId");
+    expect(connectionsTabSource).toContain("helperCloudflareWorkersSubdomain");
     expect(connectionsTabSource).toContain("CLOUDFLARE_ACCOUNT_ID");
     expect(connectionsTabSource).toContain(
       "submitValues.CLOUDFLARE_ACCOUNT_ID = cloudflareAccountId",

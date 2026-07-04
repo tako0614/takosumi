@@ -864,6 +864,13 @@ output "worker_bundle_sha256" {
       (finding) => finding.code === "data_source_not_allowed",
     ),
   ).toBe(false);
+  expect(
+    result.findings.some(
+      (finding) =>
+        finding.code === "generic_provider_connection_required" &&
+        finding.message.includes("hashicorp/http"),
+    ),
+  ).toBe(false);
 });
 
 test("marks one-touch unsafe constructs as unsupported", () => {

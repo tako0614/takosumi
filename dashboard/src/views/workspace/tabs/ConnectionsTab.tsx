@@ -131,6 +131,10 @@ export default function ConnectionsTab(props: { readonly workspaceId: string }) 
   const [helperToken, setHelperToken] = createSignal("");
   const [helperCloudflareAccountId, setHelperCloudflareAccountId] =
     createSignal("");
+  const [
+    helperCloudflareWorkersSubdomain,
+    setHelperCloudflareWorkersSubdomain,
+  ] = createSignal("");
   const [genericEnvProvider, setGenericEnvProvider] = createSignal("");
   const [envPairs, setEnvPairs] = createSignal<readonly EnvPair[]>([
     { name: "", value: "" },
@@ -153,6 +157,7 @@ export default function ConnectionsTab(props: { readonly workspaceId: string }) 
   ):
     | {
         readonly accountId?: string;
+        readonly workersSubdomain?: string;
         readonly awsRegion?: string;
         readonly gcpProjectId?: string;
       }
@@ -190,6 +195,7 @@ export default function ConnectionsTab(props: { readonly workspaceId: string }) 
     setValues({});
     setHelperToken("");
     setHelperCloudflareAccountId("");
+    setHelperCloudflareWorkersSubdomain("");
     setDisplayName("");
     setGenericEnvProvider("");
     setEnvPairs([{ name: "", value: "" }]);
@@ -252,15 +258,20 @@ export default function ConnectionsTab(props: { readonly workspaceId: string }) 
     if (cloudflareAccountId) {
       submitValues.CLOUDFLARE_ACCOUNT_ID = cloudflareAccountId;
     }
+    const workersSubdomain = helperCloudflareWorkersSubdomain().trim();
+    const scopeHints = scopeHintsFromConnectionValues(
+      d.providerSource ?? d.provider,
+      submitValues,
+    );
     const connection = await createConnection({
       workspaceId: workspaceId(),
       provider: d.providerSource ?? d.provider,
       displayName:
         displayName().trim() || (d.providerSource ? d.label : undefined),
-      scopeHints: scopeHintsFromConnectionValues(
-        d.providerSource ?? d.provider,
-        submitValues,
-      ),
+      scopeHints:
+        workersSubdomain && d.provider === "cloudflare"
+          ? { ...(scopeHints ?? {}), workersSubdomain }
+          : scopeHints,
       values: submitValues,
     });
     await afterConnectionCreated(connection);
@@ -854,6 +865,28 @@ export default function ConnectionsTab(props: { readonly workspaceId: string }) 
                                   }
                                   placeholder={t(
                                     "conn.provider.cloudflare.accountId.placeholder",
+                                  )}
+                                  autocomplete="off"
+                                  spellcheck={false}
+                                />
+                              </FormField>
+                              <FormField
+                                label={t(
+                                  "conn.provider.cloudflare.workersSubdomain.label",
+                                )}
+                              >
+                                <Input
+                                  id="connection-helper-cloudflare-workers-subdomain"
+                                  name="helperCloudflareWorkersSubdomain"
+                                  type="text"
+                                  value={helperCloudflareWorkersSubdomain()}
+                                  onInput={(e) =>
+                                    setHelperCloudflareWorkersSubdomain(
+                                      e.currentTarget.value,
+                                    )
+                                  }
+                                  placeholder={t(
+                                    "conn.provider.cloudflare.workersSubdomain.placeholder",
                                   )}
                                   autocomplete="off"
                                   spellcheck={false}

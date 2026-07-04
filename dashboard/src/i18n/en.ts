@@ -696,6 +696,9 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.provider.cloudflare.apiToken.placeholder": "Paste the access token",
   "conn.provider.cloudflare.accountId.label": "Account ID",
   "conn.provider.cloudflare.accountId.placeholder": "0123abcd...",
+  "conn.provider.cloudflare.workersSubdomain.label":
+    "workers.dev subdomain (optional)",
+  "conn.provider.cloudflare.workersSubdomain.placeholder": "your-team",
   "conn.provider.aws.label": "AWS",
   "conn.provider.aws.accessKeyId.label": "Access key ID",
   "conn.provider.aws.secretAccessKey.label": "Secret access key",

@@ -83,7 +83,7 @@ describe("tcs aggregate", () => {
     expect(s.done).toBe(true);
   });
 
-  test("keeps the installConfigId-backed official listing as primary", () => {
+  test("keeps the installConfigId-backed local listing as primary", () => {
     const sharedSource = {
       git: "https://github.com/o/shared.git",
       ref: "main",
@@ -97,7 +97,7 @@ describe("tcs aggregate", () => {
           isDefault: true,
           items: [
             {
-              ...L("official", sharedSource, "2026-01-01T00:00:00.000Z"),
+              ...L("local", sharedSource, "2026-01-01T00:00:00.000Z"),
               installConfigId: "cfg-official-worker",
             },
           ],

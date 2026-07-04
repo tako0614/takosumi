@@ -9,6 +9,7 @@ import type {
 import type { PolicyConfig } from "takosumi-contract/install-configs";
 import type { SourceSnapshot } from "takosumi-contract/sources";
 import { providerById } from "@takosumi/providers";
+import { isCredentialFreeUtilityProvider } from "takosumi-contract/provider-env-rules";
 
 export interface CapsuleSourceFile {
   readonly path: string;
@@ -30,6 +31,8 @@ export interface CapsuleCompatibilityAnalysis {
   readonly resources: readonly CapsuleResourceSummary[];
   readonly dataSources: readonly CapsuleDataSourceSummary[];
   readonly provisioners: readonly CapsuleProvisionerSummary[];
+  readonly rootModuleVariables: readonly string[];
+  readonly rootModuleOutputs: readonly string[];
   readonly normalizedObjectKey?: string;
   readonly normalizedDigest?: string;
   readonly normalizedFiles?: readonly CapsuleSourceFile[];
@@ -152,6 +155,8 @@ export function analyzeOpenTofuCapsuleFiles(
       resources: [],
       dataSources: [],
       provisioners: [],
+      rootModuleVariables: [],
+      rootModuleOutputs: [],
       normalizedObjectKey: input.sourceSnapshot.archiveObjectKey,
       normalizedDigest: input.sourceSnapshot.archiveDigest,
     };
@@ -224,6 +229,7 @@ export function analyzeOpenTofuCapsuleFiles(
       });
     } else if (
       !isGuidedProviderSource(provider.source) &&
+      !isCredentialFreeUtilityProvider(provider.source) &&
       !providerInSet(provider.source, explicitProviderAllowlist)
     ) {
       findings.push({
@@ -275,6 +281,7 @@ export function analyzeOpenTofuCapsuleFiles(
     level === "auto_capsulized"
       ? normalizeAutoCapsulizedFiles(input.files, hclFiles)
       : undefined;
+  const executionRootFiles = normalizedFiles ?? hclFiles;
   return {
     level,
     findings,
@@ -282,6 +289,8 @@ export function analyzeOpenTofuCapsuleFiles(
     resources,
     dataSources,
     provisioners,
+    rootModuleVariables: collectRootModuleVariableNames(executionRootFiles),
+    rootModuleOutputs: collectRootModuleOutputNames(executionRootFiles),
     normalizedObjectKey: normalizedFiles
       ? normalizedModuleObjectKey(input.sourceSnapshot)
       : input.sourceSnapshot.archiveObjectKey,

@@ -1261,6 +1261,14 @@ function capsuleSchemas(): Record<string, Record<string, unknown>> {
           type: "array",
           items: ref("CapsuleProvisionerRequirement"),
         },
+        rootModuleVariables: {
+          type: "array",
+          items: { type: "string" },
+        },
+        rootModuleOutputs: {
+          type: "array",
+          items: { type: "string" },
+        },
         providerRequirements: {
           type: "array",
           items: ref("ProviderRequirement"),

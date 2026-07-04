@@ -141,6 +141,7 @@ export function publicProviderConnectionStatus(
 export interface ConnectionScopeHints {
   readonly accountId?: string;
   readonly zoneId?: string;
+  readonly workersSubdomain?: string;
   readonly cloudflareTokenVending?: CloudflareTokenVendingConfig;
   readonly repoUrl?: string;
   readonly username?: string;

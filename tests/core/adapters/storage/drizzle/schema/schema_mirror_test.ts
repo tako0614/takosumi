@@ -299,6 +299,8 @@ test("D1 Drizzle schema mirrors critical live D1 tables", () => {
     nn("resources_json"),
     nn("data_sources_json"),
     nn("provisioners_json"),
+    defaulted("root_module_variables_json"),
+    defaulted("root_module_outputs_json"),
     nullable("normalized_object_key"),
     nullable("normalized_digest"),
     nn("created_at"),
@@ -550,7 +552,7 @@ test("Worker D1 bootstrap records canonical schema migration ledger", async () =
     .all<D1SchemaMigrationRow>();
   const rows = migrationRows.results ?? [];
   expect(rows.map((row) => row.version)).toEqual([
-    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
+    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
   ]);
   expect(rows.map((row) => row.name)).toEqual([
     "d1_opentofu_connections_and_secret_blobs_shape",
@@ -570,6 +572,7 @@ test("Worker D1 bootstrap records canonical schema migration ledger", async () =
     "d1_opentofu_billing_auto_recharge_attempts",
     "d1_opentofu_provider_credential_collapse",
     "d1_opentofu_workspace_capsule_rename",
+    "d1_opentofu_compatibility_report_root_interface",
   ]);
   for (const row of rows) {
     expect(row.checksum).toMatch(/^sha256:[0-9a-f]{64}$/);
@@ -1073,6 +1076,8 @@ test("Postgres Drizzle schema mirrors critical migration catalog tables", () => 
     nn("resources_json"),
     nn("data_sources_json"),
     nn("provisioners_json"),
+    defaulted("root_module_variables_json"),
+    defaulted("root_module_outputs_json"),
     nullable("normalized_object_key"),
     nullable("normalized_digest"),
     nn("created_at"),

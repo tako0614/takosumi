@@ -191,6 +191,12 @@ export const capsuleCompatibilityReports = pgTable(
     resourcesJson: json("resources_json").notNull(),
     dataSourcesJson: json("data_sources_json").notNull(),
     provisionersJson: json("provisioners_json").notNull(),
+    rootModuleVariablesJson: json("root_module_variables_json")
+      .notNull()
+      .default([]),
+    rootModuleOutputsJson: json("root_module_outputs_json")
+      .notNull()
+      .default([]),
     normalizedObjectKey: text("normalized_object_key"),
     normalizedDigest: text("normalized_digest"),
     createdAt: text("created_at").notNull(),

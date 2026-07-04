@@ -7,7 +7,7 @@ const CATEGORY_LABELS: Record<string, { ja: string; en: string }> = {
   personal: { ja: "パーソナル", en: "Personal" },
   productivity: { ja: "仕事・文書", en: "Productivity" },
   social: { ja: "コミュニティ", en: "Community" },
-  starter: { ja: "スターター", en: "Starters" },
+  starter: { ja: "テンプレート", en: "Templates" },
   storage: { ja: "ストレージ", en: "Storage" },
   tools: { ja: "ツール", en: "Tools" },
   workspace: { ja: "ワークスペース", en: "Workspace" },

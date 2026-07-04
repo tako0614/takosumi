@@ -999,6 +999,11 @@ test("CapsuleCompatibilityReport store preserves owner fields", async () => {
       resources: [],
       dataSources: [],
       provisioners: [],
+      rootModuleVariables: [
+        "cloudflare_account_id",
+        "cloudflare_workers_subdomain",
+      ],
+      rootModuleOutputs: ["url", "worker_name"],
       normalizedObjectKey:
         "spaces/space_1/installations/inst_1/runs/run_1/normalized-module.tar.zst",
       normalizedDigest:
@@ -1014,6 +1019,8 @@ test("CapsuleCompatibilityReport store preserves owner fields", async () => {
       sourceId: report.sourceId,
       installationId: report.installationId,
       sourceSnapshotId: report.sourceSnapshotId,
+      rootModuleVariables: report.rootModuleVariables,
+      rootModuleOutputs: report.rootModuleOutputs,
     });
   }
 });

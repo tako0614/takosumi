@@ -95,6 +95,10 @@ only for repeated service forms with no adequate standard surface and a clear
 schema, planner, adapter, state/import/drift behavior, and capability evidence.
 S3-compatible APIs, OCI registries, Kubernetes CRDs, CloudEvents, and
 OpenAI-compatible endpoints remain external standard surfaces.
+Using Takosumi does not require the `takosumi/takosumi` provider. If an
+existing vendor-neutral provider is enough, run it through the Stack flow. Use
+the Takosumi provider only for Takosumi-owned typed Resource Shapes or
+operator/admin objects.
 
 The public API boundary is documented in [Takosumi API](./reference/api.md).
 
@@ -110,7 +114,7 @@ TargetPool
 Credential / OIDC / Secret / Policy
 Compatibility API framework
 Adapter framework
-takosumi_provider-compatible API
+typed Resource API for provider / CLI / dashboard / CRD / compat facades
 ```
 
 Compatibility APIs are capability surfaces. Examples include `compat.oci.v1`,

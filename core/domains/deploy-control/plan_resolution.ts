@@ -313,6 +313,16 @@ function providerInputDefaultsFromResolved(
         inputs.account_id = accountId;
         mergeObjectInput(inputs, "cloudflare", { account_id: accountId });
       }
+      const workersSubdomain = nonEmptyString(
+        connection.scopeHints?.workersSubdomain,
+      );
+      if (workersSubdomain) {
+        inputs.cloudflare_workers_subdomain = workersSubdomain;
+        inputs.workersSubdomain = workersSubdomain;
+        mergeObjectInput(inputs, "cloudflare", {
+          workers_subdomain: workersSubdomain,
+        });
+      }
     }
   }
   return inputs;

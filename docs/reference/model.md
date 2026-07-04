@@ -143,8 +143,10 @@ non-secret speed settings. This is not a cross-run source-sync cache.
 
 ## Resource Shape Resolution
 
-The Resource Shape flow starts from `takosumi_*` resources and resolves them to
-Targets:
+The Resource Shape flow starts from typed Resource objects and resolves them to
+Targets. Those objects can be submitted through the Resource API,
+`takosumi_*` provider resources, CLI, dashboard, Kubernetes CRDs, or scoped
+compatibility facades when an operator enables them:
 
 ```text
 Resource Shape

@@ -58,6 +58,10 @@ If the service form is durable but no adequate standard surface exists:
 This is not "Takosumi should create every missing provider." It is:
 
 ```text
+vendor-neutral provider or standard API already exists:
+  prefer it. Takosumi can manage credentials, runs, state, outputs, policy, and
+  usage around that surface without adding a takosumi_* resource.
+
 standard surface exists:
   do not recreate it in takosumi_provider.
   Examples: S3-compatible object storage, OCI registry, Kubernetes CRD,
@@ -90,6 +94,9 @@ Before adding any `takosumi_*` resource, the design must pass a prior-art gate:
 
 If answers 1-3 are yes and answer 4 is no, do not add a Takosumi resource.
 If no standard surface exists and answer 4 is yes, define the Takosumi shape.
+`takosumi/takosumi` is therefore optional for users: it is the typed Resource
+Shape provider for Takosumi-owned service forms, not the only valid way to use
+Takosumi.
 
 Examples:
 

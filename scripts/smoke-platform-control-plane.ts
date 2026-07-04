@@ -1597,7 +1597,10 @@ async function createSpaceCloudflareConnection(
             kind: "generic_env_provider",
             credentialDriver: "generic_env",
             displayName,
-            scopeHints: { accountId: options.cloudflareAccountId },
+            scopeHints: {
+              accountId: options.cloudflareAccountId,
+              workersSubdomain: options.cloudflareWorkersSubdomain,
+            },
             values: {
               CLOUDFLARE_API_TOKEN: options.cloudflareApiToken,
               CLOUDFLARE_ACCOUNT_ID: options.cloudflareAccountId,
@@ -1607,7 +1610,10 @@ async function createSpaceCloudflareConnection(
             workspaceId: spaceId,
             provider: "cloudflare",
             displayName,
-            scopeHints: { accountId: options.cloudflareAccountId },
+            scopeHints: {
+              accountId: options.cloudflareAccountId,
+              workersSubdomain: options.cloudflareWorkersSubdomain,
+            },
             values: { CLOUDFLARE_API_TOKEN: options.cloudflareApiToken },
           },
   });

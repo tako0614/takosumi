@@ -4,7 +4,9 @@ const now = "2026-07-01T00:00:00.000Z";
 
 const text = (ja: string, en: string) => ({ ja, en });
 
-export const firstPartyStoreListings: readonly TcsListing[] = [
+// Dashboard-local installable app links into Git-hosted OpenTofu Capsules. These are not
+// Takosumi-owned platform services or privileged platform surfaces.
+export const installableAppStoreListings: readonly TcsListing[] = [
   {
     id: "yurucommu",
     source: {
@@ -15,7 +17,7 @@ export const firstPartyStoreListings: readonly TcsListing[] = [
     },
     kind: "app",
     surface: "service",
-    provider: "takosumi",
+    provider: "cloudflare",
     category: "social",
     suggestedName: "yurucommu",
     name: text("yurucommu", "yurucommu"),
@@ -23,13 +25,39 @@ export const firstPartyStoreListings: readonly TcsListing[] = [
       "自分用のコミュニティ / ActivityPub アプリをホストします。",
       "Host a personal community / ActivityPub app.",
     ),
-    badge: text("公式アプリ", "Official app"),
+    badge: text("追加候補", "Installable"),
     inputs: [
       {
         name: "project_name",
         type: "string",
         defaultValue: "service-name-with-space",
         label: text("サービス名", "Service name"),
+      },
+      {
+        name: "enable_cloudflare_resources",
+        type: "boolean",
+        defaultValue: "true",
+        label: text("Cloudflare リソースを作成", "Create Cloudflare resources"),
+      },
+      {
+        name: "enable_cloudflare_worker_script",
+        type: "boolean",
+        defaultValue: "true",
+        label: text("Worker を公開", "Publish Worker"),
+      },
+      {
+        name: "worker_bundle_url",
+        type: "string",
+        defaultValue:
+          "https://github.com/tako0614/yurucommu/releases/download/v2.0.0/takos-worker.js",
+        label: text("Worker artifact URL", "Worker artifact URL"),
+      },
+      {
+        name: "worker_bundle_sha256",
+        type: "string",
+        defaultValue:
+          "5a5713b2cc548414951c51a469b32bdba756d2101933575d0ab230131eaa8c95",
+        label: text("Worker artifact SHA-256", "Worker artifact SHA-256"),
       },
     ],
     outputAllowlist: [
@@ -50,11 +78,11 @@ export const firstPartyStoreListings: readonly TcsListing[] = [
       git: "https://github.com/tako0614/takos.git",
       ref: "main",
       path: "deploy/opentofu",
-      resolvedCommit: "3e8b7eeb04c85b6e73b7187b5c7baa269338394e",
+      resolvedCommit: "cc9e81fc2743ff1d07ddcec843cd36a7ce2ed1c0",
     },
     kind: "app",
     surface: "service",
-    provider: "takosumi",
+    provider: "cloudflare",
     category: "workspace",
     suggestedName: "takos",
     name: text("Takos", "Takos"),
@@ -62,7 +90,7 @@ export const firstPartyStoreListings: readonly TcsListing[] = [
       "AI ワークスペースを自分の環境にホストします。",
       "Host the Takos AI workspace in your own environment.",
     ),
-    badge: text("公式アプリ", "Official app"),
+    badge: text("追加候補", "Installable"),
     inputs: [
       {
         name: "project_name",

@@ -162,6 +162,14 @@ export interface CapsuleCompatibilityReport {
   readonly resources: readonly CapsuleResourceSummary[];
   readonly dataSources: readonly CapsuleDataSourceSummary[];
   readonly provisioners: readonly CapsuleProvisionerSummary[];
+  /**
+   * Non-secret root module interface discovered during compatibility analysis.
+   * Plan creation can reuse this metadata when a preflight report is supplied,
+   * avoiding another source archive expansion just to decide which ordinary
+   * OpenTofu variables/outputs the generated root may project.
+   */
+  readonly rootModuleVariables?: readonly string[];
+  readonly rootModuleOutputs?: readonly string[];
   readonly providerRequirements?: readonly ProviderRequirement[];
   readonly providerResolutions?: readonly ProviderResolution[];
   readonly normalizedObjectKey?: string;

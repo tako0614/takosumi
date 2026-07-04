@@ -1,14 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import { buildNewQuery } from "../../../../../dashboard/src/views/store/store-link.ts";
+import { installableAppStoreListings } from "../../../../../dashboard/src/views/store/installable-app-listings.ts";
 import type { TcsListing } from "../../../../../dashboard/src/lib/tcs-client.ts";
 
 const text = (value: string) => ({ ja: value, en: value });
 
 function listing(extra: Partial<TcsListing> = {}): TcsListing {
   return {
-    id: "official-worker",
+    id: "installable-worker",
     source: {
-      git: "https://github.com/tako0614/takosumi-starter.git",
+      git: "https://github.com/tako0614/takosumi-template.git",
       ref: "0123456789abcdef0123456789abcdef01234567",
       path: "modules/worker",
     },
@@ -35,7 +36,7 @@ function listing(extra: Partial<TcsListing> = {}): TcsListing {
 }
 
 describe("store link handoff", () => {
-  test("official starter listings hand off by InstallConfig id", () => {
+  test("installConfigId-backed installable listings hand off by InstallConfig id", () => {
     const query = buildNewQuery(
       listing({ installConfigId: "install_cloudflare_worker" }),
     );
@@ -49,10 +50,56 @@ describe("store link handoff", () => {
     const query = buildNewQuery(listing());
     const params = new URLSearchParams(query);
     expect(params.get("git")).toBe(
-      "https://github.com/tako0614/takosumi-starter.git",
+      "https://github.com/tako0614/takosumi-template.git",
     );
     expect(params.get("ref")).toBe("0123456789abcdef0123456789abcdef01234567");
     expect(params.get("path")).toBe("modules/worker");
     expect(params.get("var.project_name")).toBe("service-name-with-space");
+  });
+
+  test("typed listing defaults are handed off as JSON variables", () => {
+    const query = buildNewQuery(
+      listing({
+        inputs: [
+          {
+            name: "enable_cloudflare_resources",
+            type: "boolean",
+            label: text("Enabled"),
+            defaultValue: "true",
+          },
+          {
+            name: "replicas",
+            type: "number",
+            label: text("Replicas"),
+            defaultValue: "2",
+          },
+        ],
+      }),
+    );
+    const params = new URLSearchParams(query);
+    expect(params.get("varjson.enable_cloudflare_resources")).toBe("true");
+    expect(params.get("varjson.replicas")).toBe("2");
+    expect(params.has("var.enable_cloudflare_resources")).toBe(false);
+  });
+
+  test("yurucommu handoff carries the Worker artifact inputs for OpenTofu", () => {
+    const yurucommu = installableAppStoreListings.find(
+      (entry) => entry.id === "yurucommu",
+    );
+    expect(yurucommu).toBeDefined();
+    const params = new URLSearchParams(buildNewQuery(yurucommu!));
+
+    expect(params.get("git")).toBe("https://github.com/tako0614/yurucommu.git");
+    expect(params.get("ref")).toBe(
+      "5bace37eac259d1aa1b313b3ded31c03c518c1b8",
+    );
+    expect(params.get("varjson.enable_cloudflare_resources")).toBe("true");
+    expect(params.get("varjson.enable_cloudflare_worker_script")).toBe("true");
+    expect(params.get("var.worker_bundle_url")).toBe(
+      "https://github.com/tako0614/yurucommu/releases/download/v2.0.0/takos-worker.js",
+    );
+    expect(params.get("var.worker_bundle_sha256")).toBe(
+      "5a5713b2cc548414951c51a469b32bdba756d2101933575d0ab230131eaa8c95",
+    );
   });
 });

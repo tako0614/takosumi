@@ -8,7 +8,16 @@
 
 import type { RunnerProfile } from "@takosumi/internal/deploy-control-api";
 import { providerById } from "@takosumi/providers";
+import {
+  CREDENTIAL_FREE_UTILITY_PROVIDER_ADDRESSES,
+  isCredentialFreeUtilityProvider,
+} from "takosumi-contract/provider-env-rules";
 import { log } from "../../shared/log.ts";
+
+export {
+  CREDENTIAL_FREE_UTILITY_PROVIDER_ADDRESSES,
+  isCredentialFreeUtilityProvider,
+} from "takosumi-contract/provider-env-rules";
 
 // Per-provider egress policy is owned by the provider runtime registry (single
 // source of truth); a runner profile owns only its presentation + runtime. `id`
@@ -23,18 +32,6 @@ function networkFor(id: string): NonNullable<RunnerProfile["networkPolicy"]> {
 // kubernetes provider already carries both its kubernetes + helm addresses).
 function providerAddressesFor(id: string): readonly string[] {
   return requireProvider(id).providerAddresses;
-}
-
-export const CREDENTIAL_FREE_UTILITY_PROVIDER_ADDRESSES = [
-  "registry.opentofu.org/hashicorp/http",
-  "registry.opentofu.org/hashicorp/random",
-  "registry.opentofu.org/hashicorp/tls",
-] as const;
-
-export function isCredentialFreeUtilityProvider(provider: string): boolean {
-  return (
-    CREDENTIAL_FREE_UTILITY_PROVIDER_ADDRESSES as readonly string[]
-  ).includes(provider);
 }
 
 function providerAddressesWithUtilities(id: string): readonly string[] {

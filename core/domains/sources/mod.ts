@@ -480,6 +480,8 @@ export class SourcesService {
       resources: analysis.resources,
       dataSources: analysis.dataSources,
       provisioners: analysis.provisioners,
+      rootModuleVariables: analysis.rootModuleVariables,
+      rootModuleOutputs: analysis.rootModuleOutputs,
       ...(normalizedObjectKey ? { normalizedObjectKey } : {}),
       ...(normalizedDigest ? { normalizedDigest } : {}),
       createdAt: this.#now().toISOString(),
@@ -1008,6 +1010,8 @@ function compatibilityCheckFailureAnalysis(
     resources: [],
     dataSources: [],
     provisioners: [],
+    rootModuleVariables: [],
+    rootModuleOutputs: [],
     normalizedObjectKey: snapshot.archiveObjectKey,
     normalizedDigest: snapshot.archiveDigest,
   };

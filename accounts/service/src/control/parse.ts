@@ -346,6 +346,7 @@ export function connectionScopeHints(
   for (const key of [
     "accountId",
     "zoneId",
+    "workersSubdomain",
     "repoUrl",
     "username",
     "knownHostsEntry",

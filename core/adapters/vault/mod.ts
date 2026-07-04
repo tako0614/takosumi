@@ -1369,6 +1369,7 @@ function normalizeScope(
   const out: {
     accountId?: string;
     zoneId?: string;
+    workersSubdomain?: string;
     cloudflareTokenVending?: ConnectionScopeHints["cloudflareTokenVending"];
     username?: string;
     knownHostsEntry?: string;
@@ -1384,6 +1385,12 @@ function normalizeScope(
   }
   if (typeof scope.zoneId === "string" && scope.zoneId.length > 0) {
     out.zoneId = scope.zoneId;
+  }
+  if (
+    typeof scope.workersSubdomain === "string" &&
+    scope.workersSubdomain.length > 0
+  ) {
+    out.workersSubdomain = scope.workersSubdomain;
   }
   const cloudflareTokenVending = normalizeCloudflareTokenVending(
     scope.cloudflareTokenVending,

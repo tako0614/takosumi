@@ -795,6 +795,7 @@ export type ConnectionScopeKind = "operator" | "space";
 export interface ConnectionScopeHints {
   readonly accountId?: string;
   readonly zoneId?: string;
+  readonly workersSubdomain?: string;
   readonly awsRegion?: string;
   readonly gcpProjectId?: string;
   readonly gcpServiceAccountEmail?: string;
@@ -1268,9 +1269,13 @@ export async function putCapsuleProviderConnectionSet(
 
 // --- Capsule configs -------------------------------------------------------
 
+export const TEMPLATE_CATALOG_VIEW = "template-catalog" as const;
+
+export type InstallConfigView = typeof TEMPLATE_CATALOG_VIEW;
+
 export async function listInstallConfigs(
   workspaceId?: string,
-  options: { readonly view?: "starter-catalog" } = {},
+  options: { readonly view?: InstallConfigView } = {},
 ): Promise<readonly InstallConfig[]> {
   return await fetchAllPages<InstallConfig>(
     `${BASE}/capsule-configs${query({
@@ -1281,10 +1286,10 @@ export async function listInstallConfigs(
   );
 }
 
-export async function listStarterCatalogInstallConfigs(
+export async function listTemplateCatalogInstallConfigs(
   workspaceId?: string,
 ): Promise<readonly InstallConfig[]> {
-  return await listInstallConfigs(workspaceId, { view: "starter-catalog" });
+  return await listInstallConfigs(workspaceId, { view: TEMPLATE_CATALOG_VIEW });
 }
 
 // --- OpenTofu Capsule compatibility ---------------------------------------

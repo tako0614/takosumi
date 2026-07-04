@@ -4294,7 +4294,7 @@ test("GET /api/v1/capsule-configs merges official + scoped", async () => {
   expect(legacyResp?.status).toEqual(200);
 });
 
-test("GET /api/v1/capsule-configs starter catalog hides scoped configs", async () => {
+test("GET /api/v1/capsule-configs template catalog hides scoped configs", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
@@ -4387,7 +4387,7 @@ test("GET /api/v1/capsule-configs starter catalog hides scoped configs", async (
 
   const { request: req, url } = request(
     "GET",
-    "/api/v1/capsule-configs?workspaceId=space_a&view=starter-catalog",
+    "/api/v1/capsule-configs?workspaceId=space_a&view=template-catalog",
     { cookie },
   );
   const response = await handleControlRoute({

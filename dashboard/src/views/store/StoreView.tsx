@@ -2,7 +2,7 @@
  * Control-plane Store tab. Wraps the shared StoreBrowser with the decentralized
  * Takosumi store(s); every add action is handed to the full /new flow where
  * compatibility, provider connections, and variables are reviewed. There is no
- * built-in starter catalog here — discovery lives in the store.
+ * built-in template catalog here — discovery lives in the store.
  */
 import { onMount } from "solid-js";
 import { useNavigate } from "@solidjs/router";
@@ -17,7 +17,7 @@ import {
 import { listWorkspacesCached } from "../../lib/workspace-list.ts";
 import { StoreBrowser } from "./StoreBrowser.tsx";
 import { buildNewQuery } from "./store-link.ts";
-import { firstPartyStoreListings } from "./first-party-listings.ts";
+import { installableAppStoreListings } from "./installable-app-listings.ts";
 import type { TcsListing } from "../../lib/tcs-client.ts";
 
 function Inner() {
@@ -27,7 +27,10 @@ function Inner() {
     if (currentWorkspaceId()) return;
     try {
       const workspaces = await listWorkspacesCached();
-      const chosen = selectAvailableWorkspaceId(currentWorkspaceId(), workspaces);
+      const chosen = selectAvailableWorkspaceId(
+        currentWorkspaceId(),
+        workspaces,
+      );
       if (chosen) setCurrentWorkspaceId(chosen);
     } catch {
       /* a workspace picker in the chrome handles the empty case */
@@ -55,7 +58,7 @@ function Inner() {
         </header>
         <StoreBrowser
           locale={locale()}
-          localListings={firstPartyStoreListings}
+          localListings={installableAppStoreListings}
           onInstall={onConfigure}
           onConfigure={onConfigure}
         />

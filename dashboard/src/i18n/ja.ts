@@ -700,6 +700,9 @@ export const ja = {
   "conn.provider.cloudflare.apiToken.placeholder": "アクセストークンを貼り付け",
   "conn.provider.cloudflare.accountId.label": "アカウント ID",
   "conn.provider.cloudflare.accountId.placeholder": "0123abcd...",
+  "conn.provider.cloudflare.workersSubdomain.label":
+    "workers.dev サブドメイン（任意）",
+  "conn.provider.cloudflare.workersSubdomain.placeholder": "your-team",
   "conn.provider.aws.label": "AWS",
   "conn.provider.aws.accessKeyId.label": "アクセスキー ID",
   "conn.provider.aws.secretAccessKey.label": "シークレットアクセスキー",

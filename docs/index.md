@@ -95,6 +95,8 @@ ProviderConnection で足りるかを先に確認します。Takosumi の shape 
 service form として schema / planner / adapter / state / import / drift の意味が固まるものだけに追加します。
 S3-compatible API、OCI registry、Kubernetes CRD、CloudEvents、OpenAI-compatible endpoint などの標準面は
 そのまま外部 surface として使います。
+Takosumi を使うために `takosumi/takosumi` provider が必須なわけではありません。既存の汎用 provider が
+十分なら Stack flow でそのまま使い、Takosumi provider は Takosumi が所有する typed Resource Shape が必要な場合だけ使います。
 
 公開 API の詳しい境界は [Takosumi API](./reference/api.md) にまとめています。
 
@@ -112,7 +114,7 @@ TargetPool
 Credential / OIDC / Secret / Policy
 Compatibility API framework
 Adapter framework
-takosumi_provider-compatible API
+typed Resource API for provider / CLI / dashboard / CRD / compat facades
 ```
 
 互換 API は capability として公開範囲を宣言します。例: `compat.oci.v1`、`compat.cloudevents.v1`、
