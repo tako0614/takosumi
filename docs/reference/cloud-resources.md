@@ -68,6 +68,30 @@ Operator/internal jobs:
   Cloudflare Workflows
 ```
 
+すべての Cloud managed resource は、実 backend API を叩く前に Cloud extension
+共通層を通します。入口が `takosumi/takosumi` provider、Compatibility API、または
+Dashboard のどれであっても、認証、Workspace billing context、usage / credit guard、
+Resource / NativeResource への正規化、capability / manager dispatch を通り、
+その後に manager が backend を選びます。
+`takosumi_*` Resource Shape として入る場合は、その前段で TargetPool / Policy /
+ResolutionLock も通ります。
+
+```text
+Resource Shape API / Compatibility API / Dashboard action
+  -> auth + billing Workspace
+  -> usage / credit guard
+  -> Resource / NativeResource normalization
+  -> TargetPool / Policy / ResolutionLock (Resource Shape entrypoints)
+  -> capability / manager dispatch
+  -> selected manager
+  -> backend API
+```
+
+Cloudflare-compatible path はこの pipeline への import path です。EdgeWorker の現在の
+公式 manager は Workers for Platforms dispatch namespace を使いますが、API contract
+は `EdgeWorker` / `ObjectBucket` / `KVStore` / `SQLDatabase` / `Queue` などの service
+form で固定し、WfP や Cloudflare primitive を public resource identity にはしません。
+
 参考:
 
 - [How Workers for Platforms works](https://developers.cloudflare.com/cloudflare-for-platforms/workers-for-platforms/how-workers-for-platforms-works/)
@@ -102,21 +126,21 @@ Cloudflare import capability は `compat.cloudflare.workers.v1` です。
 Workers-oriented resource を Takosumi Cloud resources に取り込むために必要な
 subset だけを公開します。対応しない Cloudflare product は明示します。
 
-| Status      | Scope                                                                  |
-| ----------- | ---------------------------------------------------------------------- |
-| Stable      | Worker script deploy to `EdgeWorker`                                   |
-| Stable      | Worker routes to Takosumi routes / default hostnames                   |
-| Stable      | Worker secrets / vars                                                  |
-| Stable      | KV namespace                                                           |
-| Stable      | R2 bucket / Object Storage                                             |
-| Stable      | D1 database / App Database                                             |
-| Preview     | Queue                                                                  |
-| Preview     | Durable Workflow                                                       |
-| Preview     | Dynamic Worker workflow support                                        |
-| Planned     | Containers                                                             |
-| Planned     | Durable Objects style stateful apps                                    |
-| Unsupported | DNS, WAF, Zero Trust, Registrar, Cloudflare account IAM, Load Balancer |
-| Unsupported | Email Routing                                                          |
+| Status             | Scope                                                                  |
+| ------------------ | ---------------------------------------------------------------------- |
+| Production Preview | Worker script deploy to `EdgeWorker`                                   |
+| Production Preview | Worker routes to Takosumi routes / default hostnames                   |
+| Production Preview | Worker secrets / vars                                                  |
+| Production Preview | KV namespace                                                           |
+| Production Preview | R2 bucket / Object Storage                                             |
+| Production Preview | D1 database / App Database                                             |
+| Preview            | Queue                                                                  |
+| Preview            | Durable Workflow                                                       |
+| Preview            | Dynamic Worker workflow support                                        |
+| Planned            | Containers                                                             |
+| Planned            | Durable Objects style stateful apps                                    |
+| Unsupported        | DNS, WAF, Zero Trust, Registrar, Cloudflare account IAM, Load Balancer |
+| Unsupported        | Email Routing                                                          |
 
 AI Gateway は Workers compatibility ではありません。別の OpenAI-compatible
 endpoint profile です。詳細は [Cloud endpoints](./cloud-endpoints.md#ai-gateway)

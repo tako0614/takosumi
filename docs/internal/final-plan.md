@@ -498,6 +498,65 @@ and a Takosumi-managed dispatch layer. That is an implementation detail for one
 shape. Object storage, KV, database, queue, container, workflow, and AI surfaces
 are peer resources in Takosumi Cloud.
 
+Managed provider-compatible paths use the same TargetPool / Adapter decision as
+Resource Shapes. A Cloud-managed Target can either attach non-secret
+implementation options such as `providerBaseUrl` to Cloudflare-provider-backed
+managed implementations, or select an operator-installed adapter plugin for
+direct managed materialization. `providerBaseUrl` applies to every
+Cloudflare-provider-backed managed implementation that should use the same
+compatibility endpoint, not only to `EdgeWorker`:
+
+```json
+{
+  "providerBaseUrl": "https://app.takosumi.com/compat/cloudflare/client/v4"
+}
+```
+
+The OpenTofu adapter renders that value into the generated provider block as
+`base_url` for the selected shape. For managed compatibility targets,
+credentials are delivered as provider-native runner env rather than
+generated-root secret variables. In Takosumi Cloud this means the Cloudflare
+provider can receive a Workspace-bound Takosumi personal access token or service
+token through the normal `CLOUDFLARE_API_TOKEN` env name while the provider block
+only contains the managed `base_url`.
+
+From the user's perspective the entrypoint is still the normal OpenTofu
+provider or `takosumi_edge_worker`; behind that entrypoint the selected
+Target/Adapter decides whether the implementation is Cloudflare Workers for
+Platforms, Takosumi native runtime, or an operator-provided plugin. Do not
+hard-code WfP into the provider binary or the Resource Shape schema.
+
+For Takosumi Cloud official managed targets, typed `takosumi_*` Resource Shapes
+should use an installed managed-resource adapter plugin instead of nesting an
+OpenTofu destroy/apply per resource. The plugin still enters through the same
+Resource Shape API, TargetPool, Policy, ResolutionLock, usage, and credit
+pipeline. Its current Cloudflare implementation reuses the Cloudflare
+Workers-compatible handler internally so EdgeWorker deploys are backed by
+Workers for Platforms dispatch namespace, while ObjectBucket / KVStore /
+SQLDatabase / Queue map to the selected managed backend primitives.
+
+All Cloud-managed resource entrypoints share the Cloud extension boundary before
+any backend API call:
+
+```text
+OpenTofu provider / Compatibility API / Resource Shape API / Dashboard action
+  -> auth + billing Workspace
+  -> usage / credit guard
+  -> Resource / NativeResource normalization
+  -> TargetPool / Policy / ResolutionLock (Resource Shape entrypoints)
+  -> capability / manager dispatch
+  -> selected manager
+  -> backend API
+```
+
+`/compat/cloudflare/client/v4` is therefore not a separate product stack. It is
+one import/deploy entrypoint into the same Cloud managed-resource operation
+boundary. Typed Resource Shapes additionally use TargetPool / Policy /
+ResolutionLock / Adapter dispatch before manager selection. The backend may be
+Workers for Platforms today, and a different managed EdgeWorker adapter later,
+without changing the public Resource Shape schema or the provider-facing
+compatibility endpoint.
+
 ### 4.2 ObjectBucket And S3-Compatible Object Storage
 
 `ObjectBucket` is the provider-neutral service form for object storage when
@@ -725,7 +784,9 @@ export default {
 ```
 
 Takosumi core defines the contract. Operators decide which plugins are
-installed and trusted.
+installed and trusted. The standard platform worker supports a generic
+fetch-compatible plugin binding seam; Cloud/Operator deployments map plugin ids
+to handler bindings, and OSS core never imports the closed implementation.
 
 ## 7. ProviderConnection And CredentialRecipe
 

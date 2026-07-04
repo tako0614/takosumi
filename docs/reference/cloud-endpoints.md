@@ -144,6 +144,16 @@ token introspection の `takosumi.space_id` を default billing Workspace とし
 provider config は `api_token` と `base_url` だけで動きます。service token は token metadata
 に紐づく Workspace だけを使えます。
 
+Takosumi Cloud が提供する managed compatibility target を OpenTofu から使う場合は、
+その Workspace-bound token を generic-env ProviderConnection に保存し、runner env として
+`CLOUDFLARE_API_TOKEN` へ注入します。TargetPool 側は、Cloudflare provider で実行する
+managed implementation (`cloudflare_workers` / `cloudflare_r2_bucket` /
+`cloudflare_kv_namespace` / `cloudflare_queue` / `cloudflare_d1_database` など)
+それぞれに `providerBaseUrl` を指定します。
+生成される provider block は `base_url` だけを持ち、secret は HCL / plan / state に残りません。
+本物の Cloudflare account へ出す target では、通常どおりユーザーの Cloudflare ProviderConnection
+を使います。
+
 billable な write は転送前に Workspace credits から precharge されます。Workspace context
 がない、token と Workspace が一致しない、または credits が足りない場合は fail closed
 し、Cloud endpoint / apply path へは進みません。Capsule / installation id は任意です。未指定の
@@ -318,6 +328,49 @@ https://app.takosumi.com/compat/cloudflare/client/v4
 Workers-oriented resource を Takosumi Cloud `EdgeWorker` / managed bindings に
 向けられるようにすることです。これは既存 manifest を取り込むための import /
 deploy path であり、Cloudflare API 全体の互換ではありません。
+
+Takosumi Cloud の公式 managed target では、この endpoint は TargetPool の
+Cloudflare-backed implementation option として選ばれます。`EdgeWorker` だけでなく、
+R2/KV/D1/Queue 相当の managed bindings も同じ compat endpoint を使う場合は、各
+implementation に同じ `providerBaseUrl` を設定します。例:
+
+```json
+{
+  "providerBaseUrl": "https://app.takosumi.com/compat/cloudflare/client/v4"
+}
+```
+
+公式 managed target では、typed `takosumi_*` Resource Shape は同じ TargetPool
+implementation に `plugin` を設定して、Takosumi Cloud の managed-resource adapter
+へ直接 dispatch できます。この場合も入口は Resource Shape API のままで、
+TargetPool / Policy / ResolutionLock を通り、Cloud extension 共通層の usage /
+credit guard を通ります。Cloudflare 実装は
+内部でこの compat handler を再利用するため、EdgeWorker は Workers for Platforms
+dispatch namespace に、ObjectBucket / KVStore / SQLDatabase / Queue は選択された
+managed backend primitive に落ちます。
+
+`takosumi_edge_worker` と Cloudflare provider compatibility path は同じ Cloud
+managed-resource operation boundary を通ります。Resource Shape entrypoint は
+TargetPool / Policy / ResolutionLock / Adapter dispatch を使い、compatibility
+entrypoint は Cloud extension catalog / auth / usage guard と compat manager の
+virtual resource ledger を使います。どちらも backend API を叩く前に Workspace
+context と credit を検証し、裏側の実装は manager が決めます。managed
+compatibility target の credential は provider-native env delivery で渡されるため、
+Cloudflare provider は
+`CLOUDFLARE_API_TOKEN=<Workspace-bound Takosumi token>` と `base_url` だけで
+Takosumi Cloud の compat endpoint を叩きます。Takosumi Cloud の初期 Worker
+implementation は Workers for Platforms の dispatch namespace を使いますが、
+それは `EdgeWorker` 実装の一候補であり、public API や provider schema には固定
+しません。
+
+Cloud managed resource の入口は、Compatibility API、既存 OpenTofu provider、
+`takosumi/takosumi` provider の Resource Shape API のどれでも同じ扱いです。
+入口ごとの差は request shape と ownership ledger です。auth、capability、
+Workspace usage / credit guard、Resource / NativeResource 正規化、manager dispatch
+は共通に通します。Resource Shape entrypoint では TargetPool / Policy /
+ResolutionLock が追加で適用されます。
+Cloudflare-compatible endpoint は独立した別 stack ではなく、この共通 Cloud managed
+operation boundary への import / deploy path です。
 
 response envelope:
 
