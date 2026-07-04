@@ -461,6 +461,12 @@ the selected manager decides whether the backend is Workers for Platforms,
 R2, D1, KV, Queues, Workflows, Containers, or another operator-provided
 implementation.
 
+Cloud/operator descriptors should fail closed when a service form is recognized
+but its selected manager is not configured. That failure happens before usage
+precharge and before the backend API call, so an unsupported `ContainerService`
+manager cannot be accidentally translated through the Cloudflare Workers
+compatibility path or any other unrelated route.
+
 For example, ordinary S3/R2/GCS object storage can use existing providers while
 `compat.s3.v1` remains disabled. An object-storage Resource Shape or S3
 compatibility facade is justified only when an operator needs Takosumi-owned

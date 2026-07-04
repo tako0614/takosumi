@@ -549,6 +549,14 @@ OpenTofu provider / Compatibility API / Resource Shape API / Dashboard action
   -> backend API
 ```
 
+The Cloud-managed descriptor table is the Cloud-local source of truth for this
+last step. Each descriptor records the service form, public usage family,
+NativeResource evidence type, current manager, backend substrate, and whether
+that manager is configured. If the service form is known but the manager is not
+configured, the request fails before usage precharge and before any backend API
+call. The request must not be silently routed through a different compatibility
+path.
+
 `/compat/cloudflare/client/v4` is therefore not a separate product stack. It is
 one import/deploy entrypoint into the same Cloud managed-resource operation
 boundary. Compat handlers, Resource Shape adapters, dashboard actions, and
