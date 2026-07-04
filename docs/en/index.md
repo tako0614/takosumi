@@ -164,6 +164,11 @@ official managed resources. Its Cloudflare Workers-compatible profile is an
 import and deploy path for existing Workers-oriented apps, not full Cloudflare
 API compatibility.
 
+Cloudflare-compatible imports, existing OpenTofu providers, Dashboard actions,
+and `takosumi/takosumi` Resource Shapes normalize into the Cloud managed
+operation boundary before backend API calls. WfP and similar substrates are
+Target / Adapter / manager implementation details.
+
 ## Next Documents
 
 - [Quickstart](./getting-started/quickstart.md)

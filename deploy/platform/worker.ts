@@ -664,7 +664,7 @@ function platformResourceShapeUsageMeter(
       resourceFamily: "takosumi.resource_shape",
       resourceId: `${segments[2]}:${segments[3]}`,
       operation: "apply",
-      kind: "operation",
+      kind: "gateway_compute",
       quantity: 1,
     };
   }
@@ -678,7 +678,7 @@ function platformResourceShapeUsageMeter(
       resourceFamily: "takosumi.target_pool",
       resourceId: `target-pool:${segments[2]}`,
       operation: "target_pool_put",
-      kind: "operation",
+      kind: "gateway_compute",
       quantity: 1,
     };
   }
@@ -692,7 +692,7 @@ function platformResourceShapeUsageMeter(
       resourceFamily: "takosumi.space_policy",
       resourceId: `space-policy:${segments[2]}`,
       operation: "space_policy_put",
-      kind: "operation",
+      kind: "gateway_compute",
       quantity: 1,
     };
   }
@@ -1844,9 +1844,13 @@ export async function handlePlatformCloudExtensionRouteRequest(
     usageAuthorizer,
   );
   if (!usagePrecharge.ok) return usagePrecharge.response;
-  const upstreamResponse = await handler.fetch(authContext.request);
-  return await responseForPlatformCloudExtensionClient(
+  const handlerRequest = platformCloudExtensionRequestWithPrechargedUsage(
     authContext.request,
+    usagePrecharge.charged,
+  );
+  const upstreamResponse = await handler.fetch(handlerRequest);
+  return await responseForPlatformCloudExtensionClient(
+    handlerRequest,
     upstreamResponse,
     env,
     route,
@@ -1937,6 +1941,8 @@ const PLATFORM_CLOUD_EXTENSION_BILLING_CONTEXT_HEADERS = [
   PLATFORM_CLOUD_EXTENSION_BILLING_WORKSPACE_ID_HEADER,
   PLATFORM_CLOUD_EXTENSION_BILLING_INSTALLATION_ID_HEADER,
 ] as const;
+const PLATFORM_CLOUD_EXTENSION_USAGE_PRECHARGED_HEADER =
+  "x-takosumi-cloud-managed-operation-precharged";
 
 async function platformCloudExtensionAuthContext(
   request: Request,
@@ -2241,6 +2247,16 @@ function clonePlatformCloudExtensionRequest(
         : request.body,
     redirect: request.redirect,
   });
+}
+
+function platformCloudExtensionRequestWithPrechargedUsage(
+  request: Request,
+  charged: readonly PlatformCloudExtensionChargedUsage[],
+): Request {
+  if (charged.length === 0) return request;
+  const headers = new Headers(request.headers);
+  headers.set(PLATFORM_CLOUD_EXTENSION_USAGE_PRECHARGED_HEADER, "1");
+  return clonePlatformCloudExtensionRequest(request, headers);
 }
 
 export type PlatformCloudExtensionUsageRecorder = (

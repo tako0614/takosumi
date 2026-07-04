@@ -30,13 +30,16 @@ screen:
 - this month's usage, Cloud resource usage, and available balance
 - usage history (the usage event ledger)
 
-Deleting a resource calls the compatible import endpoint's DELETE. It requires a
-`write`-scoped session and only takes effect when the Cloud managed resource has
-been created. Unsupported endpoint families answer 501 fail-closed. DELETE cleanup is
-not a billable fallback operation, so a Workspace that has run out of credit can
-still destroy or remove already-created managed resources. The app does not carry
-the full specification — provider compatibility scope, OpenTofu provider
-examples, usage event contracts, and secret-handling rules belong in docs.
+Deleting a resource submits a delete action through the shared Cloud
+managed-resource operation boundary. Resources created through a
+Cloudflare-shaped import path can also be deleted through that compatible
+endpoint's DELETE. It requires a `write`-scoped session and only takes effect
+when the Cloud managed resource has been created. Unsupported endpoint families
+answer 501 fail-closed. DELETE cleanup is not a billable fallback operation, so
+a Workspace that has run out of credit can still destroy or remove
+already-created managed resources. The app does not carry the full
+specification — provider compatibility scope, OpenTofu provider examples, usage
+event contracts, and secret-handling rules belong in docs.
 
 ## Boundary
 
@@ -293,11 +296,14 @@ when credit is insufficient. DELETE cleanup should remain available so OpenTofu
 destroy and app removal can recover from a depleted balance without leaving
 resources stuck.
 
-The Takosumi Cloud managed resource backend presents resources to users as
-Cloudflare provider `cloudflare_workers_script`, routes, KV, R2, D1, Queues,
-and Workflows. Internal backend names must not become the user-facing billing
-or usage-ledger family. Unsupported managed subpaths return 501 instead of
-proxying to Cloudflare for free.
+The Takosumi Cloud managed resource backend can present a Cloudflare-shaped
+compatibility view to Cloudflare-oriented OpenTofu manifests:
+`cloudflare_workers_script`, routes, KV, R2, D1, Queues, and Workflows. UI,
+billing, usage ledgers, and public resource identity use service forms such as
+`EdgeWorker`, `ObjectBucket`, `KVStore`, `SQLDatabase`, and `Queue`. Internal
+backend names must not become the user-facing billing or usage-ledger family.
+Unsupported managed subpaths return 501 instead of proxying to Cloudflare for
+free.
 
 Takosumi can claim a customer has been billed only when the Workspace usage
 ledger records a usage event and the billing projection reflects it. Upstream
@@ -502,12 +508,12 @@ Compatibility API. It should show at least:
 - Database
 - Workers
 
-Inventory is for operational inspection. The authoritative lifecycle contract
-is the Compatibility API plus the Cloudflare-compatible OpenTofu provider
-plan/apply result. The `takosumi/takosumi` provider Resource Shape API
-(`/v1/resources/*`) is a separate surface and is advertised through the
-`resource_shapes` capability only when the production host mounts a real
-ResourceShape adapter and routes it.
+Inventory is for operational inspection. Lifecycle entrypoints can be the
+Compatibility API, a Cloudflare-compatible OpenTofu provider, the
+`takosumi/takosumi` Resource Shape API, or a Dashboard action. They normalize
+into the same Cloud managed-resource operation boundary. The `resource_shapes`
+capability means typed Resource Shape APIs are available; it does not mean a
+separate managed-resource lifecycle.
 
 ## Security contract
 
