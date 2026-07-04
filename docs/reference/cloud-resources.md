@@ -71,10 +71,10 @@ Operator/internal jobs:
 すべての Cloud managed resource は、実 backend API を叩く前に Cloud extension
 共通層を通します。入口が Cloudflare-compatible OpenTofu provider、`takosumi/takosumi`
 provider、Compatibility API、または Dashboard のどれであっても、認証、Workspace
-billing context、usage / credit guard、Resource / NativeResource への正規化、
-capability / manager dispatch を通り、その後に manager が backend を選びます。
-`takosumi_*` Resource Shape として入る場合は、その前段で TargetPool / Policy /
-ResolutionLock も通ります。
+billing context、Resource / NativeResource への正規化、共通 managed operation
+descriptor、selected manager の利用可否確認、usage / credit guard を通り、その後に
+manager が backend を選びます。`takosumi_*` Resource Shape として入る場合は、
+その前段で TargetPool / Policy / ResolutionLock も通ります。
 
 ```text
 OpenTofu provider via compat / takosumi provider via Resource Shape API / Compatibility API / Dashboard action
@@ -100,6 +100,10 @@ manager 実装を結びます。例えば `EdgeWorker` の現在 manager は Clo
 Workers for Platforms dispatch namespace ですが、public resource identity と
 課金 meter は `EdgeWorker` / `cloudflare.workers_script` です。WfP は implementation
 token であり、ユーザー向けの resource 名や課金単位にはしません。
+同じ理由で、Cloud 内部の normalized resource kind は `object_bucket` /
+`sql_database` / `durable_workflow` のような service form 寄りの名前にします。
+`r2` や `d1` は Cloudflare-compatible URL token や現在の backend prefix に限定し、
+共通 operation kind にはしません。
 
 Cloudflare-compatible path はこの pipeline への import path です。EdgeWorker の現在の
 公式 manager は Workers for Platforms dispatch namespace を使いますが、API contract

@@ -461,6 +461,9 @@ request shape before calling a backend manager. The public API surface decides
 how the user enters Takosumi; the selected manager decides whether the backend is
 Workers for Platforms, R2, D1, KV, Queues, Workflows, Containers, AI Gateway
 upstream routing, or another operator-provided implementation.
+The shared boundary produces a managed-operation descriptor and dispatch plan
+before usage authorization, so manager availability is checked before a request
+can spend credits or call a backend API.
 
 Cloud/operator descriptors should fail closed when a service form is recognized
 but its selected manager is not configured. That failure happens before usage
