@@ -263,8 +263,8 @@ workload identity の core contract は標準 Takosumi 側にあります。
 ## Compatibility API
 
 Compatibility API は標準 protocol / API の facade であり、独立した
-Takosumi-managed feature surface です。`takosumi` provider や Resource Shape
-API への fallback ではありません。
+Takosumi-managed feature surface です。plain Stack flow や typed Resource Shape
+と横並びの入口であり、`takosumi` provider への従属 route ではありません。
 
 ```text
 compat.s3.v1

@@ -20,9 +20,10 @@ Takosumi endpoint owns resolver decisions, credentials, state, drift, and
 adapter execution.
 
 Using Takosumi does not require this provider. Plain OpenTofu stacks can use
-existing providers, standard endpoints, or generic-env ProviderConnections. Use
-`takosumi/takosumi` only when the desired service form is a Takosumi-owned
-Resource Shape or operator/admin object.
+existing providers, standard endpoints, compatibility APIs, or generic-env
+ProviderConnections. Use `takosumi/takosumi` only when the desired service form
+lacks an adequate vendor-neutral provider/protocol and Takosumi must expose it
+as a typed Resource Shape or operator/admin object.
 
 Current v1alpha1 Resource Shape resources:
 
@@ -91,12 +92,14 @@ conventions: `apiVersion`, `kind`, `metadata`, `spec`, `status`,
 apply, explicit delete, observe/refresh for drift, import for adoption,
 capability discovery, cursor pagination, and structured error codes.
 
-Compatibility APIs are separate. They preserve standard surfaces when Takosumi
-provides the backend or import path. When Takosumi exposes S3-compatible
-storage, OCI registry, CloudEvents, Kubernetes CRDs, OpenAI-compatible AI
-Gateway, or a Cloudflare Workers-compatible subset, those facades enter
-Takosumi-managed capabilities. They are not this provider's internal model and
-not promises of full vendor API compatibility.
+Compatibility APIs are separate first-class surfaces. They preserve standard
+protocol/API facades when Takosumi provides the backend or import path. When
+Takosumi exposes S3-compatible storage, OCI registry, CloudEvents, Kubernetes
+CRDs, OpenAI-compatible AI Gateway, or a Cloudflare Workers-compatible subset,
+those facades enter Takosumi-managed capabilities. They are not this provider's
+internal model, and the provider is not the canonical route for them. Internal
+normalization into Resource API state, usage, or audit records is bookkeeping,
+not a public hierarchy or a promise of full vendor API compatibility.
 
 ## Build And Test
 

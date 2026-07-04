@@ -5,7 +5,8 @@ Last updated: 2026-06-29
 Takosumi OSS has two public flows: run plain OpenTofu from Git, and resolve
 Takosumi Resource Shapes through TargetPools, policy, and Adapters. Compatibility
 APIs are additional capability-scoped surfaces alongside those flows. They are
-not fallbacks into the `takosumi` provider or subordinate Resource Shape APIs.
+peer entrypoints, not provider-internal routes inside `takosumi/takosumi` or
+subordinate Resource Shape APIs.
 
 ## OpenTofu Stack Concepts
 

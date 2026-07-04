@@ -264,8 +264,9 @@ the workload identity contract belongs to standard Takosumi.
 ## Compatibility API
 
 Compatibility APIs preserve standard protocol/API facades and are independent
-Takosumi-managed feature surfaces. They are not fallbacks into the `takosumi`
-provider or subordinate routes into Resource Shapes.
+Takosumi-managed feature surfaces. They are peer entrypoints alongside the
+plain Stack flow and typed Resource Shapes, not subordinate routes into the
+`takosumi` provider.
 
 ```text
 compat.s3.v1
