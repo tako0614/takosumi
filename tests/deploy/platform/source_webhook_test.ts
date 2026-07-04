@@ -665,25 +665,50 @@ test("hardening gates route is operator bearer gated and returns 503 when enforc
   expect((await response.json()).ok).toBe(false);
 });
 
-test("platform run owner route is operator bearer gated and forwards debug/drain", async () => {
-  const ownerRequests: { id: unknown; url: string; method: string }[] = [];
+test("platform run owner route is operator bearer gated and reschedules from the run ledger", async () => {
+  const ownerRequests: {
+    id: unknown;
+    url: string;
+    method: string;
+    body?: unknown;
+  }[] = [];
   const env = {
     TAKOSUMI_DEPLOY_CONTROL_TOKEN: "operator-secret",
     RUN_OWNER: {
       idFromName: (name: string) => `id:${name}`,
       get: (id: unknown) => ({
         fetch: async (request: Request) => {
-          ownerRequests.push({ id, url: request.url, method: request.method });
+          const bodyText = await request.text();
+          ownerRequests.push({
+            id,
+            url: request.url,
+            method: request.method,
+            body: bodyText ? JSON.parse(bodyText) : undefined,
+          });
           return Response.json({
             record: {
               runId: "ssr_12345678",
-              status: request.method === "POST" ? "succeeded" : "scheduled",
+              status: request.url.endsWith("/debug")
+                ? "scheduled"
+                : "succeeded",
             },
           });
         },
       }),
     },
   } as never;
+  const operations = {
+    getRun: async (id: string) => ({
+      id,
+      workspaceId: "space_123",
+      spaceId: "space_123",
+      sourceId: "src_123",
+      type: "source_sync",
+      status: "queued",
+      createdBy: "system",
+      createdAt: "2026-07-04T00:00:00.000Z",
+    }),
+  };
   const url = new URL(
     "https://app.takosumi.com/internal/platform/run-owner?runId=ssr_12345678",
   );
@@ -714,23 +739,46 @@ test("platform run owner route is operator bearer gated and forwards debug/drain
     }),
     url,
     env,
+    { operations, now: () => 123_456_789 },
   );
   expect(drain.status).toBe(200);
   expect(await drain.json()).toEqual({
     runId: "ssr_12345678",
-    operation: "drain",
-    owner: { record: { runId: "ssr_12345678", status: "succeeded" } },
+    operation: "reschedule_drain",
+    run: {
+      type: "source_sync",
+      status: "queued",
+      workspaceId: "space_123",
+    },
+    start: { record: { runId: "ssr_12345678", status: "succeeded" } },
+    drain: { record: { runId: "ssr_12345678", status: "succeeded" } },
   });
   expect(ownerRequests).toEqual([
     {
       id: "id:ssr_12345678",
       url: "https://opentofu-run-owner/debug",
       method: "GET",
+      body: undefined,
+    },
+    {
+      id: "id:ssr_12345678",
+      url: "https://opentofu-run-owner/start",
+      method: "POST",
+      body: {
+        kind: "takosumi.opentofu-run-owner.start@v1",
+        action: "source_sync",
+        runId: "ssr_12345678",
+        spaceId: "space_123",
+        cause: "controller_retry",
+        queueAttempt: 1,
+        messageId: "operator-repair:ssr_12345678:21i3v9",
+      },
     },
     {
       id: "id:ssr_12345678",
       url: "https://opentofu-run-owner/drain",
       method: "POST",
+      body: undefined,
     },
   ]);
 });

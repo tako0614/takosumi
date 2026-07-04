@@ -37,6 +37,7 @@ import {
 } from "../../worker/src/scheduled/drift.ts";
 import { constantTimeEqualsString } from "../../core/shared/constant_time.ts";
 import { TAKOSUMI_METRICS_PATH } from "../../core/api/metrics_routes.ts";
+import { DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE } from "@takosumi/internal/deploy-control-api";
 import {
   createTakosumiProductCapabilities,
   createTakosumiWellKnownDocument,
@@ -3422,6 +3423,10 @@ export async function handlePlatformRunOwnerRequest(
   request: Request,
   url: URL,
   env: CloudflareWorkerEnv,
+  deps: {
+    readonly operations?: Pick<ControlPlaneOperations, "getRun">;
+    readonly now?: () => number;
+  } = {},
 ): Promise<Response> {
   if (request.method !== "GET" && request.method !== "POST") {
     return Response.json({ error: "method not allowed" }, { status: 405 });
@@ -3439,30 +3444,126 @@ export async function handlePlatformRunOwnerRequest(
   if (!RUN_OWNER_RUN_ID_PATTERN.test(runId)) {
     return Response.json({ error: "invalid runId" }, { status: 400 });
   }
-  const ownerPath = request.method === "POST" ? "drain" : "debug";
-  const ownerResponse = await namespace
-    .get(namespace.idFromName(runId))
-    .fetch(
-      new Request(`https://opentofu-run-owner/${ownerPath}`, {
-        method: request.method,
-        headers: { accept: "application/json" },
-      }),
+  if (request.method === "GET") {
+    const owner = await fetchPlatformRunOwnerJson(namespace, runId, "debug", {
+      method: "GET",
+    });
+    return Response.json(
+      {
+        runId,
+        operation: "debug",
+        owner: owner.body,
+      },
+      { status: owner.response.ok ? 200 : 502 },
     );
-  const text = await ownerResponse.text();
-  let owner: unknown = null;
-  try {
-    owner = text ? JSON.parse(text) : null;
-  } catch {
-    owner = { textClass: text ? "non-json" : "empty" };
   }
+  let run: Run;
+  try {
+    const operations =
+      deps.operations ?? (await controlPlaneOperationsFor(env));
+    run = await operations.getRun(runId);
+  } catch (error) {
+    if (error instanceof OpenTofuControllerError) {
+      return Response.json(
+        { error: error.code, message: error.message },
+        { status: DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE[error.code] },
+      );
+    }
+    throw error;
+  }
+  const action = repairActionForRunType(run.type);
+  if (!action) {
+    return Response.json(
+      {
+        error: "unsupported run type",
+        runId,
+        runType: run.type,
+      },
+      { status: 409 },
+    );
+  }
+  const spaceId = run.workspaceId || run.spaceId;
+  if (!spaceId) {
+    return Response.json(
+      {
+        error: "run is missing workspace",
+        runId,
+      },
+      { status: 409 },
+    );
+  }
+  const now = deps.now?.() ?? Date.now();
+  const start = await fetchPlatformRunOwnerJson(namespace, runId, "start", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      kind: "takosumi.opentofu-run-owner.start@v1",
+      action,
+      runId,
+      spaceId,
+      cause: "controller_retry",
+      queueAttempt: 1,
+      messageId: `operator-repair:${runId}:${now.toString(36)}`,
+    }),
+  });
+  if (!start.response.ok) {
+    return Response.json(
+      {
+        runId,
+        operation: "reschedule",
+        run: {
+          type: run.type,
+          status: run.status,
+          workspaceId: spaceId,
+        },
+        owner: start.body,
+      },
+      { status: 502 },
+    );
+  }
+  const drain = await fetchPlatformRunOwnerJson(namespace, runId, "drain", {
+    method: "POST",
+  });
   return Response.json(
     {
       runId,
-      operation: ownerPath,
-      owner,
+      operation: "reschedule_drain",
+      run: {
+        type: run.type,
+        status: run.status,
+        workspaceId: spaceId,
+      },
+      start: start.body,
+      drain: drain.body,
     },
-    { status: ownerResponse.ok ? 200 : 502 },
+    { status: drain.response.ok ? 200 : 502 },
   );
+}
+
+async function fetchPlatformRunOwnerJson(
+  namespace: NonNullable<DeployControlEnv["RUN_OWNER"]>,
+  runId: string,
+  path: "debug" | "drain" | "start",
+  init: RequestInit,
+): Promise<{ readonly response: Response; readonly body: unknown }> {
+  const response = await namespace.get(namespace.idFromName(runId)).fetch(
+    new Request(`https://opentofu-run-owner/${path}`, {
+      ...init,
+      headers: {
+        accept: "application/json",
+        ...Object.fromEntries(new Headers(init.headers).entries()),
+      },
+    }),
+  );
+  const text = await response.text();
+  try {
+    return { response, body: text ? JSON.parse(text) : null };
+  } catch {
+    return {
+      response,
+      body: { textClass: text ? "non-json" : "empty" },
+    };
+  }
 }
 
 function evidenceCheck(
