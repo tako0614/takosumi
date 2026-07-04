@@ -24,6 +24,14 @@ describe("StoreBrowser install UI", () => {
     expect(storeBrowserSource).toContain('class="tcs-card-top"');
     expect(storeBrowserSource).toContain('class="tcs-card-main"');
     expect(storeBrowserSource).toContain('class="tcs-detail-title"');
+    expect(storeBrowserSource).toContain(
+      "<h3>{pick(listing.name, props.locale)}</h3>",
+    );
+    expect(storeBrowserSource).not.toContain(
+      "<h4>{pick(listing.name, props.locale)}</h4>",
+    );
+    expect(storeBrowserCss).toContain(".tcs-card-open h3");
+    expect(storeBrowserCss).not.toContain(".tcs-card-open h4");
     expect(storeBrowserSource).toContain("AppWindow");
     expect(storeBrowserSource).toContain("Globe2");
     expect(storeBrowserSource).toContain("HardDrive");
