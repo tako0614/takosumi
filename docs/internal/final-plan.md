@@ -562,6 +562,7 @@ path.
 `/compat/cloudflare/client/v4` is therefore not a separate product stack. It is
 one import/deploy entrypoint into the same Cloud managed-operation boundary.
 Compat handlers, Worker route writes, Resource Shape adapters, dashboard
+Compat handlers, Worker route writes/deletes, Resource Shape adapters, dashboard
 actions, standard data-plane facades, and billable AI Gateway requests should
 normalize the request into the same `CloudManagedOperation` request shape before
 the selected manager is allowed to call a backend API. Typed Resource Shapes
