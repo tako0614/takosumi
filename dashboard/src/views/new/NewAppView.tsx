@@ -425,6 +425,10 @@ function catalogDefaultInputValue(
   }
 }
 
+function projectNameHintIsGenerated(value: string | undefined): boolean {
+  return value === "service-name" || value === "service-name-with-space";
+}
+
 function catalogVariablePath(name: string): readonly string[] | undefined {
   const path = name.split(".").map((part) => part.trim());
   if (path.length === 0) return undefined;
@@ -659,10 +663,15 @@ function Inner() {
     typeof initialInstallPrefill?.vars?.project_name === "string"
       ? initialInstallPrefill.vars.project_name
       : "";
+  const initialResourcePrefix = projectNameHintIsGenerated(initialProjectName)
+    ? ""
+    : initialProjectName;
   const [name, setName] = createSignal(initialName);
-  const [resourcePrefix, setResourcePrefix] = createSignal(initialProjectName);
+  const [resourcePrefix, setResourcePrefix] = createSignal(
+    initialResourcePrefix,
+  );
   const [resourcePrefixTouched, setResourcePrefixTouched] = createSignal(
-    initialProjectName !== "",
+    initialResourcePrefix !== "",
   );
   const [inputVariables, setInputVariables] = createSignal<
     readonly InputVariableRow[]
@@ -1050,9 +1059,7 @@ function Inner() {
     return slugInputValue(name() || capsuleNameFromUrl(sourceGitUrl()));
   };
   const projectNameVariable = () =>
-    slugInputValue(
-      resourcePrefix() || prefilledProjectName() || defaultProjectName(),
-    );
+    slugInputValue(resourcePrefix() || defaultProjectName());
   const updateInputVariable = (
     index: number,
     patch: Partial<InputVariableRow>,
@@ -1477,8 +1484,10 @@ function Inner() {
         ? next.vars.project_name
         : undefined;
     if (nextProjectName) {
-      setResourcePrefix(nextProjectName);
-      setResourcePrefixTouched(true);
+      const isGeneratedProjectName =
+        projectNameHintIsGenerated(nextProjectName);
+      setResourcePrefix(isGeneratedProjectName ? "" : nextProjectName);
+      setResourcePrefixTouched(!isGeneratedProjectName);
     } else {
       setResourcePrefix("");
       setResourcePrefixTouched(false);
