@@ -107,7 +107,11 @@ Three principles are load-bearing for new work:
 - **No in-repo manifest**: user repos stay plain git repos with no required Takosumi metadata file. All Capsule
   configuration is service-side DB config; repo metadata is read from Git and well-known OpenTofu outputs.
 - **Resource Shape API**: resource-shape authoring is a Takosumi API surface, not a repo metadata requirement. Plain
-  OpenTofu repos remain valid; `takosumi_*` resources use the thin `takosumi_provider` and Takosumi API.
+  OpenTofu repos remain valid; `takosumi_*` resources use the thin `takosumi_provider` and Takosumi API. The
+  `takosumi/takosumi` provider is optional for users: it exists to provide typed schemas for Takosumi-owned service
+  forms only when no adequate universal provider, standard protocol, scoped compatibility surface, or generic-env
+  OpenTofu module path fits. Existing vendor-neutral providers and industry-standard APIs remain equally valid Takosumi
+  entrypoints through the Stack flow or compatibility profiles.
 - **Compatibility profiles by capability**: S3 / OCI / CloudEvents / Kubernetes CRD / Cloudflare subset surfaces are
   capability-versioned feature surfaces for Takosumi-managed capabilities. They are peer entrypoints alongside the
   Stack flow and typed Resource Shapes, not subordinate routes into the `takosumi` provider. Do not claim complete AWS
