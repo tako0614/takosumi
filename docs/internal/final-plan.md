@@ -496,7 +496,9 @@ operator-provided EdgeWorker adapter plugin
 Takosumi Cloud may implement `EdgeWorker` with Cloudflare Workers for Platforms
 and a Takosumi-managed dispatch layer. That is an implementation detail for one
 shape. Object storage, KV, database, queue, container, workflow, and AI surfaces
-are peer resources in Takosumi Cloud.
+are peer Cloud-provided services in Takosumi Cloud. AI Gateway remains a service
+endpoint rather than a Resource Shape, but billable AI requests still enter the
+same Cloud managed-operation boundary before upstream model execution.
 
 Managed provider-compatible paths use the same TargetPool / Adapter decision as
 Resource Shapes. A Cloud-managed Target can either attach non-secret
@@ -535,11 +537,11 @@ Workers-compatible handler internally so EdgeWorker deploys are backed by
 Workers for Platforms dispatch namespace, while ObjectBucket / KVStore /
 SQLDatabase / Queue map to the selected managed backend primitives.
 
-All Cloud-managed resource entrypoints share the Cloud extension boundary before
+All Cloud-managed service entrypoints share the Cloud extension boundary before
 any backend API call:
 
 ```text
-OpenTofu provider / Compatibility API / Resource Shape API / Dashboard action
+OpenTofu provider / Compatibility API / Resource Shape API / Dashboard action / AI Gateway
   -> auth + billing Workspace
   -> usage / credit guard
   -> Resource / NativeResource normalization
@@ -558,16 +560,18 @@ call. The request must not be silently routed through a different compatibility
 path.
 
 `/compat/cloudflare/client/v4` is therefore not a separate product stack. It is
-one import/deploy entrypoint into the same Cloud managed-resource operation
-boundary. Compat handlers, Resource Shape adapters, dashboard actions, and
-standard data-plane facades should normalize the request into the same
-`CloudManagedOperation` request shape before the selected manager is allowed to
-call a backend API. Typed Resource Shapes additionally use TargetPool / Policy /
-ResolutionLock / Adapter dispatch before manager selection. The official
-Takosumi Cloud EdgeWorker manager is Cloudflare Workers for Platforms dispatch
-namespace today, and a different managed EdgeWorker adapter can replace it
-later without changing the public Resource Shape schema or the provider-facing
-compatibility endpoint.
+one import/deploy entrypoint into the same Cloud managed-operation boundary.
+Compat handlers, Resource Shape adapters, dashboard actions, standard data-plane
+facades, and billable AI Gateway requests should normalize the request into the
+same `CloudManagedOperation` request shape before the selected manager is
+allowed to call a backend API. Typed Resource Shapes additionally use
+TargetPool / Policy / ResolutionLock / Adapter dispatch before manager
+selection. AI Gateway does not become a Resource Shape; it uses the same
+auth/billing/manager boundary with AI-specific request/token meters. The
+official Takosumi Cloud EdgeWorker manager is Cloudflare Workers for Platforms
+dispatch namespace today, and a different managed EdgeWorker adapter can
+replace it later without changing the public Resource Shape schema or the
+provider-facing compatibility endpoint.
 
 ### 4.2 ObjectBucket And S3-Compatible Object Storage
 
@@ -656,6 +660,18 @@ Policy, capability evidence, and ResolutionLock.
 
 AI Gateway remains a Takosumi Cloud / operator service endpoint, not a default
 `takosumi_*` resource.
+
+In Takosumi Cloud, billable AI Gateway requests still pass through the common
+Cloud managed-operation boundary:
+
+```text
+/gateway/ai/v1
+  -> auth + billing Workspace
+  -> CloudManagedOperation(entrypoint = ai_gateway)
+  -> usage / credit guard
+  -> AI gateway profile router
+  -> upstream model provider
+```
 
 Apps should receive AI configuration like any other external service:
 

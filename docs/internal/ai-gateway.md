@@ -96,10 +96,21 @@ charged to the Takosumi Cloud operator's Cloudflare account. That is only the
 upstream cost path. It is not sufficient evidence that the Takosumi customer has
 been billed.
 
-The closed AI Gateway handler must report billable usage back to the platform
-worker with the Cloud extension usage report headers. The platform worker strips
-those headers before returning the response and records them in the Workspace
-usage ledger. Supported AI meter kinds are:
+The closed AI Gateway handler must authorize billable requests through the
+common Cloud managed-operation boundary before the upstream model call:
+
+```text
+/gateway/ai/v1
+  -> CloudManagedOperation(entrypoint = ai_gateway)
+  -> usage / credit guard
+  -> AI gateway profile router
+  -> upstream model provider
+```
+
+Successful responses can also emit Cloud extension usage report headers for
+post-response token meters. The platform worker strips those headers before
+returning the response and records them in the Workspace usage ledger.
+Supported AI meter kinds are:
 
 - `ai_request`
 - `ai_input_token`
