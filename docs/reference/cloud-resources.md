@@ -79,13 +79,20 @@ ResolutionLock も通ります。
 ```text
 OpenTofu provider via compat / takosumi provider via Resource Shape API / Compatibility API / Dashboard action
   -> auth + billing Workspace
-  -> usage / credit guard
   -> Resource / NativeResource normalization
   -> TargetPool / Policy / ResolutionLock (Resource Shape entrypoints)
+  -> CloudManagedOperation
+  -> CloudManagedDispatchPlan
+  -> selected manager configured check
+  -> usage / credit guard
   -> capability / manager dispatch
   -> selected manager
   -> backend API
 ```
+
+manager が未設定の service form は、usage precharge より前に fail closed します。
+つまり ContainerService などの backend がまだ official Cloud に入っていない場合、
+credit だけ引かれたり、別の compatibility path に暗黙 fallback したりしません。
 
 この共通層では、Cloud-managed service form ごとに manager descriptor を持ちます。
 descriptor は公開 service form、usage meter family、NativeResource type、現在の
