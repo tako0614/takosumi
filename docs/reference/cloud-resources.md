@@ -94,6 +94,9 @@ OpenTofu provider via compat / takosumi provider via Resource Shape API / Compat
 manager が未設定の service form は、usage precharge より前に fail closed します。
 つまり ContainerService などの backend がまだ official Cloud に入っていない場合、
 credit だけ引かれたり、別の compatibility path に暗黙 fallback したりしません。
+Worker route の作成・削除、default hostname、custom domain も EdgeWorker の
+operation として同じ resolver / dispatch plan に乗ります。route だけが compat
+handler の内部都合で backend API を直接叩くことはありません。
 
 この共通層では、Cloud-managed service form ごとに manager descriptor を持ちます。
 descriptor は公開 service form、usage meter family、NativeResource type、現在の
