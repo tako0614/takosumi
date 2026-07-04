@@ -23,7 +23,7 @@ product definition、API、Resource Shape、Compatibility API、Cloud の公開 
 を書きます。
 
 開発中の最終計画、core conformance、運用手順、secret rotation、private evidence、
-pricing の実値、Stripe 同期手順、closed handler wiring は公開 docs ではなく
+pricing の実値、Stripe 同期手順、implementation-only wiring は公開 docs ではなく
 `internal/` または `operations/` 側で管理します。公開 build では
 `internal/**/*.md` と `operations/**/*.md` を除外します。
 

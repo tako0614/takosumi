@@ -151,4 +151,4 @@ Binding / Provider Connection. Do not put raw secrets in the manifest.
 On Takosumi Cloud, this import path can be used without creating an app
 installation first. It still requires an authenticated token and a billing
 Workspace. Billable writes spend Workspace credits and are not forwarded to the
-compatibility handler when the Workspace has insufficient balance.
+compatibility endpoint when the Workspace has insufficient balance.

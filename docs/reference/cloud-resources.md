@@ -148,4 +148,4 @@ ProviderConnection / ProviderBinding で切り替えます。manifest に raw se
 
 Takosumi Cloud では、この import path は app installation 登録なしでも使えます。
 ただし認証済み token と課金対象 Workspace は必須です。billable な write は
-Workspace credits から引かれ、残高不足なら下流の compatibility handler へ転送されません。
+Workspace credits から引かれ、残高不足なら compatibility endpoint の実行前に止まります。
