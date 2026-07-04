@@ -51,8 +51,8 @@ export default createHandler(() => (
             content="https://takosumi.com/brand/og-cover.svg"
           />
           <meta name="theme-color" content="#0a0a0a" />
-          <link rel="icon" href="/brand/favicon.svg" />
-          <link rel="apple-touch-icon" href="/brand/favicon.svg" />
+          <link rel="icon" href="/tako.png" />
+          <link rel="apple-touch-icon" href="/tako.png" />
           <script type="application/ld+json" innerHTML={JSON_LD} />
           {assets}
         </head>
