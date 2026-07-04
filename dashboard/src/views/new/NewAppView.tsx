@@ -129,6 +129,7 @@ interface ProviderConnectionRow {
   readonly alias: string;
   readonly connectionId: string;
   readonly resourceTypes: readonly string[];
+  readonly rootModuleVariables: readonly string[];
 }
 
 interface InputVariableRow {
@@ -1339,12 +1340,17 @@ function Inner() {
   ): number => {
     let score = 0;
     const provider = providerTail(row.provider);
+    const wantsWorkersSubdomain =
+      row.resourceTypes.includes("cloudflare_workers_script_subdomain") ||
+      row.rootModuleVariables.includes("cloudflare") ||
+      row.rootModuleVariables.includes("cloudflare_workers_subdomain") ||
+      row.rootModuleVariables.includes("workersSubdomain");
     if (provider === "cloudflare" && connection.scopeHints?.accountId) {
       score += 10;
     }
     if (
       provider === "cloudflare" &&
-      row.resourceTypes.includes("cloudflare_workers_script_subdomain") &&
+      wantsWorkersSubdomain &&
       connection.scopeHints?.workersSubdomain
     ) {
       score += 100;
@@ -1446,6 +1452,7 @@ function Inner() {
           alias,
           connectionId: "",
           resourceTypes,
+          rootModuleVariables: result.rootModuleVariables,
         }));
       });
 

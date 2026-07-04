@@ -880,6 +880,7 @@ export interface CapsuleCompatibilityResult {
   readonly diagnostics: readonly CapsuleCompatibilityDiagnostic[];
   readonly providers: readonly CapsuleCompatibilityProvider[];
   readonly resources: readonly CapsuleCompatibilityResource[];
+  readonly rootModuleVariables: readonly string[];
   readonly installConfigId?: string;
   readonly sourceId?: string;
   readonly source?: "api";
@@ -1353,6 +1354,7 @@ export async function checkCapsuleCompatibility(input: {
         readonly count?: number;
         readonly allowed?: boolean;
       }[];
+      readonly rootModuleVariables?: readonly string[];
     };
   }>(`${BASE}/sources/${encodeURIComponent(sourceId)}/compatibility-check`, {
     method: "POST",
@@ -1401,6 +1403,7 @@ export async function checkCapsuleCompatibility(input: {
     diagnostics,
     providers,
     resources,
+    rootModuleVariables: body.report.rootModuleVariables ?? [],
     ...(input.installConfigId
       ? { installConfigId: input.installConfigId }
       : {}),

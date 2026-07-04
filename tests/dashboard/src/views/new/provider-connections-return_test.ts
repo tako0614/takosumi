@@ -215,8 +215,18 @@ describe("/new Provider Connections return context", () => {
 
   test("/new prefers Cloudflare connections that can derive workers.dev launch URLs", () => {
     expect(newAppViewSource).toContain("const providerConnectionScore =");
+    expect(newAppViewSource).toContain("const wantsWorkersSubdomain =");
     expect(newAppViewSource).toContain(
       'row.resourceTypes.includes("cloudflare_workers_script_subdomain")',
+    );
+    expect(newAppViewSource).toContain(
+      'row.rootModuleVariables.includes("cloudflare")',
+    );
+    expect(newAppViewSource).toContain(
+      'row.rootModuleVariables.includes("cloudflare_workers_subdomain")',
+    );
+    expect(newAppViewSource).toContain(
+      'row.rootModuleVariables.includes("workersSubdomain")',
     );
     expect(newAppViewSource).toContain(
       "connection.scopeHints?.workersSubdomain",
@@ -230,6 +240,15 @@ describe("/new Provider Connections return context", () => {
     );
     expect(newAppViewSource).toContain(
       "const options = () => providerConnectionsForRow(row)",
+    );
+    expect(newAppViewSource).toContain(
+      "rootModuleVariables: result.rootModuleVariables",
+    );
+    expect(controlApiSource).toContain(
+      "readonly rootModuleVariables: readonly string[]",
+    );
+    expect(controlApiSource).toContain(
+      "rootModuleVariables: body.report.rootModuleVariables ?? []",
     );
   });
 
