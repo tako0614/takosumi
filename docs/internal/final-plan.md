@@ -543,9 +543,12 @@ any backend API call:
 ```text
 OpenTofu provider / Compatibility API / Resource Shape API / Dashboard action / AI Gateway
   -> auth + billing Workspace
-  -> usage / credit guard
   -> Resource / NativeResource normalization
   -> TargetPool / Policy / ResolutionLock (Resource Shape entrypoints)
+  -> CloudManagedOperation
+  -> CloudManagedDispatchPlan
+  -> selected manager configured check
+  -> usage / credit guard
   -> capability / manager dispatch
   -> selected manager
   -> backend API
@@ -668,6 +671,8 @@ Cloud managed-operation boundary:
 /gateway/ai/v1
   -> auth + billing Workspace
   -> CloudManagedOperation(entrypoint = ai_gateway)
+  -> CloudManagedDispatchPlan
+  -> selected manager configured check
   -> usage / credit guard
   -> AI gateway profile router
   -> upstream model provider

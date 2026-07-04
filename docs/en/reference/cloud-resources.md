@@ -75,28 +75,39 @@ Every Cloud managed resource passes through the shared Cloud extension layer
 before a backend API is called. Whether the entrypoint is a
 Cloudflare-compatible OpenTofu provider, the `takosumi/takosumi` provider, a
 Compatibility API, or a Dashboard action, the request passes through auth,
-Workspace billing context, usage / credit guard, Resource / NativeResource
-normalization, capability / manager dispatch, and then the selected manager
-chooses the backend. When the entrypoint is a `takosumi_*` Resource Shape,
-TargetPool / Policy / ResolutionLock are also part of the path before manager
-dispatch.
+Workspace billing context, Resource / NativeResource normalization, a common
+managed operation descriptor, selected-manager availability checks, usage /
+credit guard, and then the selected manager chooses the backend. When the
+entrypoint is a `takosumi_*` Resource Shape, TargetPool / Policy /
+ResolutionLock are also part of the path before manager dispatch.
 
 ```text
 OpenTofu provider via compat / takosumi provider via Resource Shape API / Compatibility API / Dashboard action
   -> auth + billing Workspace
-  -> usage / credit guard
   -> Resource / NativeResource normalization
   -> TargetPool / Policy / ResolutionLock (Resource Shape entrypoints)
+  -> CloudManagedOperation
+  -> CloudManagedDispatchPlan
+  -> selected manager configured check
+  -> usage / credit guard
   -> capability / manager dispatch
   -> selected manager
   -> backend API
 ```
+
+If a service form is known but its selected manager is not configured, the
+request fails before usage precharge and before any backend API call. It does
+not fall back to another compatibility path.
 
 The Cloudflare-compatible path is an import path into this pipeline. The current
 official manager for EdgeWorker uses a Workers for Platforms dispatch namespace,
 but the API contract is the service form: `EdgeWorker`, `ObjectBucket`,
 `KVStore`, `SQLDatabase`, `Queue`, and peers. WfP and Cloudflare primitives are
 not the public resource identity.
+For the same reason, Cloud's normalized resource kind is service-form-oriented,
+such as `object_bucket`, `sql_database`, and `durable_workflow`. Tokens such as
+`r2` and `d1` stay compatibility URL tokens or current backend prefixes; they
+are not the shared operation kind.
 
 References:
 
