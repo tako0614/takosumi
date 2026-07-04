@@ -1333,6 +1333,33 @@ function Inner() {
     readyProviderConnections().filter((connection) =>
       sameProviderFamily(provider, connection.providerSource),
     );
+  const providerConnectionScore = (
+    row: ProviderConnectionRow,
+    connection: ProviderConnection,
+  ): number => {
+    let score = 0;
+    const provider = providerTail(row.provider);
+    if (provider === "cloudflare" && connection.scopeHints?.accountId) {
+      score += 10;
+    }
+    if (
+      provider === "cloudflare" &&
+      row.resourceTypes.includes("cloudflare_workers_script_subdomain") &&
+      connection.scopeHints?.workersSubdomain
+    ) {
+      score += 100;
+    }
+    return score;
+  };
+  const providerConnectionsForRow = (row: ProviderConnectionRow) =>
+    providerConnectionsForProvider(row.provider)
+      .map((connection, index) => ({
+        connection,
+        index,
+        score: providerConnectionScore(row, connection),
+      }))
+      .sort((a, b) => b.score - a.score || a.index - b.index)
+      .map((entry) => entry.connection);
   const providerNeedsConnection = (row: ProviderConnectionRow) =>
     providerRequiresConnection(row.provider) &&
     providerConnectionsForProvider(row.provider).length === 0;
@@ -1342,15 +1369,15 @@ function Inner() {
     providerRows().filter(providerNeedsConnection);
   const providerRowNeedsVisibleChoice = (row: ProviderConnectionRow) => {
     if (!providerRequiresConnection(row.provider)) return false;
-    const candidates = providerConnectionsForProvider(row.provider);
+    const candidates = providerConnectionsForRow(row);
     if (candidates.length !== 1) return true;
     return row.connectionId !== candidates[0]?.id;
   };
   const providerRowsRequiringChoice = () =>
     providerRows().filter(providerRowNeedsVisibleChoice);
 
-  const defaultConnectionForProvider = (provider: string): string => {
-    const candidates = providerConnectionsForProvider(provider);
+  const defaultConnectionForRow = (row: ProviderConnectionRow): string => {
+    const candidates = providerConnectionsForRow(row);
     return candidates[0]?.id ?? "";
   };
 
@@ -1366,7 +1393,7 @@ function Inner() {
       ) {
         return row;
       }
-      const connectionId = defaultConnectionForProvider(row.provider);
+      const connectionId = defaultConnectionForRow(row);
       if (!connectionId || connectionId === row.connectionId) {
         return row;
       }
@@ -1417,7 +1444,7 @@ function Inner() {
         return aliases.map((alias) => ({
           provider: provider.source,
           alias,
-          connectionId: defaultConnectionForProvider(provider.source),
+          connectionId: "",
           resourceTypes,
         }));
       });
@@ -2694,8 +2721,7 @@ function Inner() {
                     <div class="wb-provider-grid">
                       <For each={providerRowsRequiringChoice()}>
                         {(row, index) => {
-                          const options = () =>
-                            providerConnectionsForProvider(row.provider);
+                          const options = () => providerConnectionsForRow(row);
                           return (
                             <div class="wb-provider-row">
                               <div class="wb-provider-meta">

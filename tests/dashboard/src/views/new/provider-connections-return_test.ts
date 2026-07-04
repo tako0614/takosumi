@@ -213,6 +213,26 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).toContain("setProviderRows(defaultedRows)");
   });
 
+  test("/new prefers Cloudflare connections that can derive workers.dev launch URLs", () => {
+    expect(newAppViewSource).toContain("const providerConnectionScore =");
+    expect(newAppViewSource).toContain(
+      'row.resourceTypes.includes("cloudflare_workers_script_subdomain")',
+    );
+    expect(newAppViewSource).toContain(
+      "connection.scopeHints?.workersSubdomain",
+    );
+    expect(newAppViewSource).toContain("const providerConnectionsForRow =");
+    expect(newAppViewSource).toContain(
+      "providerConnectionScore(row, connection)",
+    );
+    expect(newAppViewSource).toContain(
+      "const connectionId = defaultConnectionForRow(row)",
+    );
+    expect(newAppViewSource).toContain(
+      "const options = () => providerConnectionsForRow(row)",
+    );
+  });
+
   test("/new only asks for Provider Connections when the provider has credential env rules", () => {
     expect(newAppViewSource).toContain(
       'from "takosumi-contract/provider-env-rules"',
