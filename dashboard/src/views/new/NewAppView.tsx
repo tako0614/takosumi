@@ -141,6 +141,7 @@ interface InputVariableRow {
 const HIDDEN_INSTALL_VARIABLE_NAMES = new Set([
   "enable_cloudflare_resources",
   "enable_cloudflare_worker_script",
+  "release_container_images",
   "worker_bundle_url",
   "worker_bundle_sha256",
 ]);
@@ -422,7 +423,7 @@ function catalogDefaultInputValue(
     case "us-east-1":
       return "us-east-1";
     default:
-      return "";
+      return field.defaultValue ?? "";
   }
 }
 
@@ -460,7 +461,48 @@ function catalogInputJsonValue(
     const numberValue = Number(value);
     if (Number.isFinite(numberValue)) return numberValue;
   }
+  if (field.type === "json") {
+    const parsed = parseCatalogJsonValue(value);
+    if (parsed !== undefined) return parsed;
+  }
   return value;
+}
+
+function parseCatalogJsonValue(value: string): JsonValue | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return undefined;
+  }
+  return isSafeCatalogJsonValue(parsed) ? parsed : undefined;
+}
+
+function isSafeCatalogJsonValue(value: unknown, depth = 0): value is JsonValue {
+  if (depth > 8) return false;
+  if (value === null) return true;
+  switch (typeof value) {
+    case "string":
+      return isSafeInstallVariableValue(value);
+    case "number":
+      return Number.isFinite(value);
+    case "boolean":
+      return true;
+    case "object":
+      if (Array.isArray(value)) {
+        return (
+          value.length <= 64 &&
+          value.every((item) => isSafeCatalogJsonValue(item, depth + 1))
+        );
+      }
+      return Object.entries(value as Record<string, unknown>).every(
+        ([key, nested]) =>
+          isSafeCatalogVariablePathSegment(key) &&
+          isSafeCatalogJsonValue(nested, depth + 1),
+      );
+    default:
+      return false;
+  }
 }
 
 function setCatalogJsonVariable(
@@ -1198,12 +1240,14 @@ function Inner() {
     entry.inputs.filter(
       (field) =>
         !isConnectionScopedCatalogInput(entry, field) &&
+        !HIDDEN_INSTALL_VARIABLE_NAMES.has(field.name) &&
         !catalogInputHasImplicitValue(entry, field),
     );
   const advancedCatalogInputs = (entry: CatalogEntry) =>
     entry.inputs.filter(
       (field) =>
         !isConnectionScopedCatalogInput(entry, field) &&
+        !HIDDEN_INSTALL_VARIABLE_NAMES.has(field.name) &&
         catalogInputHasImplicitValue(entry, field),
     );
   const hasMissingAdvancedCatalogInputs = () => {

@@ -24,7 +24,11 @@ export function buildNewQuery(listing: TcsListing): string {
     if (!input.defaultValue) continue;
     if (!isSafeInstallVariableName(input.name)) continue;
     if (!isSafeInstallVariableValue(input.defaultValue)) continue;
-    if (input.type === "boolean" || input.type === "number") {
+    if (
+      input.type === "boolean" ||
+      input.type === "number" ||
+      input.type === "json"
+    ) {
       params.set(`varjson.${input.name}`, input.defaultValue);
     } else {
       params.set(`var.${input.name}`, input.defaultValue);

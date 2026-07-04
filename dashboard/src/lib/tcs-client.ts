@@ -23,7 +23,7 @@ export interface TcsListingSource {
 
 export interface TcsListingInput {
   readonly name: string;
-  readonly type?: "string" | "number" | "boolean";
+  readonly type?: "string" | "number" | "boolean" | "json";
   readonly required?: boolean;
   readonly defaultValue?: string;
   readonly label: TcsLocalizedText;
