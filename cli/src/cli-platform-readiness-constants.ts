@@ -413,7 +413,12 @@ export const platformReadinessStructuredEvidenceRequirements: Record<
   "email-assurance": {
     fields: ["accountId", "assuranceMethod", "verifiedAt"],
     allowedValues: {
-      assuranceMethod: ["email-verified", "operator-invited", "enterprise-idp"],
+      assuranceMethod: [
+        "email-verified",
+        "google-oauth-session",
+        "operator-invited",
+        "enterprise-idp",
+      ],
     },
   },
   "team-membership": {
@@ -619,34 +624,50 @@ export const platformReadinessStructuredEvidenceRequirements: Record<
     fields: ["wordingRef", "reviewedBy"],
   },
   "signup-event": {
-    fields: ["eventId", "accountId", "workspaceId"],
+    fields: ["eventId", "workspaceId"],
+    anyOf: [["accountId", "sessionSubject", "sessionSubjectDigest"]],
   },
   "terms-acceptance": {
-    fields: ["eventId", "accountId", "termsVersion"],
+    fields: ["eventId", "accountId"],
+    anyOf: [["termsVersion", "termsVisibleAt", "termsPageDigest"]],
   },
   "entitlement-event": {
-    fields: ["eventId", "accountId", "entitlementId"],
+    fields: ["eventId", "accountId"],
+    anyOf: [["entitlementId", "entitlementStatus"]],
   },
   "launch-token-consume": {
-    fields: ["capsuleId", "launchTokenJti", "sessionId"],
+    fields: ["capsuleId"],
+    anyOf: [
+      ["launchTokenJti", "launchUrlDigest"],
+      ["sessionId", "sessionSubject", "sessionSubjectDigest"],
+    ],
   },
   "capsule-created": {
     fields: ["capsuleId", "workspaceId", "sourceUrl", "commitSha"],
   },
   "capsule-session": {
-    fields: ["capsuleId", "subject", "sessionId"],
+    fields: ["capsuleId"],
+    anyOf: [
+      ["subject", "sessionSubject", "sessionSubjectDigest"],
+      ["sessionId", "sessionSubject", "sessionSubjectDigest"],
+    ],
   },
   "capsule-plan-run": {
     fields: ["capsuleId", "planRunId", "sourceUrl", "commitSha", "planDigest"],
   },
   "cost-review": {
-    fields: ["planDigest", "costEstimateId", "approvedBy"],
+    fields: ["planDigest", "approvedBy"],
+    anyOf: [["costEstimateId", "costReviewEventId", "billingMode"]],
   },
   "capsule-apply": {
     fields: ["capsuleId", "applyRunId", "stateVersionId", "planDigest"],
   },
   "oidc-login": {
-    fields: ["capsuleId", "oidcClientId", "sessionId"],
+    fields: ["capsuleId"],
+    anyOf: [
+      ["oidcClientId", "issuer"],
+      ["sessionId", "sessionSubject", "sessionSubjectDigest"],
+    ],
   },
   "event-hash-chain": {
     fields: ["capsuleId", "firstEventHash", "lastEventHash"],
