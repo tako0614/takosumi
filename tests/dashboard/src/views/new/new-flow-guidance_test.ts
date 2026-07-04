@@ -52,6 +52,13 @@ describe("/new flow guidance", () => {
     expect(ja).not.toHaveProperty("new.flow.nextReview");
   });
 
+  test("keeps a real page heading for accessibility without adding visual chrome", () => {
+    expect(newAppViewSource).toContain(
+      '<h1 class="sr-only">{t("new.title")}</h1>',
+    );
+    expect(newAppViewSource).not.toContain("<PageHeader");
+  });
+
   test("keeps the /new layout compact on mobile", () => {
     expect(appViewsCssSource).not.toContain(".av-new-guide");
     expect(appViewsCssSource).not.toContain(".av-new-source");

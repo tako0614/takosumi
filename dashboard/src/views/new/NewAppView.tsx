@@ -2215,6 +2215,8 @@ function Inner() {
           />
         }
       >
+        <h1 class="sr-only">{t("new.title")}</h1>
+
         <Show when={installPrefillRejected}>
           <div class="wb-action-callout" role="alert">
             <strong>{t("new.deeplink.invalidTitle")}</strong>
