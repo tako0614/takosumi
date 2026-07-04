@@ -2963,6 +2963,39 @@ test("accounts handler issues and revokes personal access tokens", async () => {
   expect((await revokedIntrospectResponse.json()).active).toEqual(false);
 });
 
+test("accounts handler can bind PATs to control-plane owned Workspaces when the accounts index is stale", async () => {
+  const store = new InMemoryAccountsStore();
+  const sessionId = seedAccountSession(store, "tsub_pat_owner");
+  const handler = createAccountsHandler({
+    issuer: "https://accounts.example.test",
+    store,
+    controlPlaneOperations: billingCheckoutOperations("tsub_pat_owner"),
+  });
+
+  const createResponse = await handler(
+    new Request("https://accounts.example.test/v1/account/tokens", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${sessionId}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        name: "Managed compat proof",
+        scopes: ["read", "write"],
+        workspace_id: "space_control_plane_owned",
+      }),
+    }),
+  );
+
+  expect(createResponse.status).toEqual(201);
+  const createBody = await createResponse.json();
+  expect(String(createBody.token).startsWith("takpat_")).toEqual(true);
+  expect(createBody.token_record.subject).toEqual("tsub_pat_owner");
+  expect(createBody.token_record.workspace_id).toEqual(
+    "space_control_plane_owned",
+  );
+});
+
 test("accounts handler paginates personal access token metadata", async () => {
   const store = new InMemoryAccountsStore();
   const now = Date.now();

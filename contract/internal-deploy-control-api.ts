@@ -15,6 +15,7 @@ import type { Deployment } from "./deployments.ts";
 import type { ProviderResolution } from "./provider-resolution.ts";
 import type { DeployRequest } from "./deploy.ts";
 import type { CapsuleProviderEnvBindings } from "./connections.ts";
+import type { ProviderCredentialMintEvidence } from "./security.ts";
 import { INTERNAL_V1_PREFIX } from "./api-surface.ts";
 export type {
   ListProvidersResponse,
@@ -320,6 +321,17 @@ export interface PlanRun {
    */
   readonly resolvedProviderEnvBindingsDigest?: string;
   /**
+   * Internal generated-root credential delivery selected at plan creation.
+   *
+   * Normal OpenTofu Stack flow uses `generated_root_variable`, keeping provider
+   * credentials as root-only sensitive variables. Resource Shape managed
+   * compatibility targets may use `provider_env` when the generated root renders
+   * only a provider `base_url` and the selected ProviderConnection should expose
+   * the provider's normal env names to the runner. This is non-secret metadata;
+   * secret values still come only from the vault.
+   */
+  readonly providerCredentialDelivery?: ProviderCredentialMintEvidence["delivery"];
+  /**
    * Resolved SourceSnapshot this plan was created against. Set for runs created
    * through the Capsule plan/destroy-plan path. The apply consumer
    * revalidates the ApplyRun's plan still references this snapshot and threads
@@ -505,6 +517,7 @@ export interface ApplyExpectedGuard {
    * an Env binding swap. Absent for runs with no installation context.
    */
   readonly resolvedProviderEnvBindingsDigest?: string;
+  readonly providerCredentialDelivery?: ProviderCredentialMintEvidence["delivery"];
 }
 
 // Capsule / InstallConfig live in ./install-configs.ts and

@@ -8,6 +8,7 @@ import {
   ResourceShapeService,
   StubResourceShapeAdapter,
 } from "../../../core/domains/resource-shape/mod.ts";
+import type { AdapterDeleteInput } from "../../../core/domains/resource-shape/mod.ts";
 import type { SpacePolicySpec, TargetPoolSpec } from "takosumi-contract";
 
 const POOL: TargetPoolSpec = {
@@ -57,6 +58,12 @@ const AUTH_HEADERS = {
   ...JSON_HEADERS,
   authorization: "Bearer resource-token",
 };
+
+class SlowDeleteAdapter extends StubResourceShapeAdapter {
+  override async delete(_input: AdapterDeleteInput): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
 
 test("PUT /v1/resources/EdgeWorker/:name applies a first-class Worker shape", async () => {
   const { app } = await buildApp();
@@ -206,6 +213,47 @@ test("bootstrap wires Resource Shape API bearer from deploy-control token", asyn
   const accepted = await app.request("/v1/capabilities");
   expect(accepted.status).toBe(200);
   expect((await accepted.json()).resources.EdgeWorker).toBe(true);
+});
+
+test("bootstrap passes Resource Shape delete timeout to the service", async () => {
+  const { app } = await createTakosumiService({
+    role: "takosumi-api",
+    runtimeEnv: { TAKOSUMI_ENVIRONMENT: "test", TAKOSUMI_DEV_MODE: "1" },
+    resourceShapeAdapter: new SlowDeleteAdapter(),
+    resourceShapeDeleteTimeoutMs: 100,
+    startWorkerDaemon: false,
+  });
+
+  const pool = await app.request("/v1/target-pools/default", {
+    method: "PUT",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ space: "space_1", spec: POOL }),
+  });
+  expect(pool.status).toBe(200);
+  const policy = await app.request("/v1/space-policies/default", {
+    method: "PUT",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ space: "space_1", spec: POLICY }),
+  });
+  expect(policy.status).toBe(200);
+
+  const applied = await app.request("/v1/resources/EdgeWorker/api", {
+    method: "PUT",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({
+      metadata: { space: "space_1" },
+      spec: {
+        name: "api",
+        source: { artifactPath: "/work/dist/worker.js" },
+      },
+    }),
+  });
+  expect(applied.status).toBe(200);
+
+  const deleted = await app.request("/v1/resources/EdgeWorker/api?space=space_1", {
+    method: "DELETE",
+  });
+  expect(deleted.status).toBe(204);
 });
 
 test("PUT /v1/resources/ObjectBucket/:name applies a provider-neutral bucket shape", async () => {

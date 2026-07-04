@@ -224,6 +224,23 @@ function isRetryableRunnerRequeueError(error: unknown): boolean {
   );
 }
 
+const RUNNER_INFRASTRUCTURE_RETRY_LIMIT = 1;
+
+function runnerInfrastructureRetryCount(
+  run: PlanRun | ApplyRun,
+  retryEventTypes: readonly string[],
+): number {
+  return run.auditEvents.filter((event) =>
+    retryEventTypes.includes(event.type),
+  ).length;
+}
+
+function runnerInfrastructureRetryExhaustedError(phase: string): Error {
+  return new Error(
+    `runner_infrastructure_retry_exhausted: ${phase} runner infrastructure retry limit exhausted`,
+  );
+}
+
 /**
  * The single-owner run-serialization port. The controller owns the only
  * `#mutationChains` map + `#runSerialized` implementation and passes this
@@ -564,6 +581,9 @@ export class RunEngine {
         : await this.#resolvePlanSourceSnapshotId(installation));
     const baseStateGeneration =
       internal.baseStateGeneration ?? installation.currentStateGeneration;
+    const providerCredentialDelivery =
+      internal.providerCredentialDelivery ??
+      internal.genericRootDispatch?.providerCredentialDelivery;
     let planRun: PlanRun = {
       id: planRunId,
       workspaceId,
@@ -587,6 +607,7 @@ export class RunEngine {
       installationContext,
       ...(internal.runGroupId ? { runGroupId: internal.runGroupId } : {}),
       ...(internal.driftCheck ? { driftCheck: true as const } : {}),
+      ...(providerCredentialDelivery ? { providerCredentialDelivery } : {}),
       ...(templatePlan
         ? {
             templateBinding: {
@@ -4022,6 +4043,22 @@ export class RunEngine {
       return updated;
     } catch (error) {
       if (isRetryableRunnerInfrastructureError(error)) {
+        const retryEvent =
+          running.operation === "destroy"
+            ? "destroy_plan.retry_scheduled"
+            : "plan.retry_scheduled";
+        if (
+          runnerInfrastructureRetryCount(running, [retryEvent]) >=
+          RUNNER_INFRASTRUCTURE_RETRY_LIMIT
+        ) {
+          return await this.#failPlanRun(
+            running,
+            leaseToken,
+            runnerInfrastructureRetryExhaustedError(
+              running.operation === "destroy" ? "destroy_plan" : "plan",
+            ),
+          );
+        }
         const queued = await this.#requeuePlanRunAfterRunnerInfrastructureError(
           running,
           leaseToken,
@@ -4714,9 +4751,38 @@ export class RunEngine {
       });
     } catch (error) {
       if (runnerDispatched && isRetryableRunnerInfrastructureError(error)) {
+        const runningWithEnvironmentFailure = runEnvironmentFailedRun(
+          runningForFailure,
+          error,
+        );
+        if (
+          runnerInfrastructureRetryCount(runningWithEnvironmentFailure, [
+            "apply.retry_scheduled",
+          ]) >= RUNNER_INFRASTRUCTURE_RETRY_LIMIT
+        ) {
+          await this.#billing.releaseApplyBillingReservation(planRun);
+          const failed = await this.#failApplyRun(
+            runningWithEnvironmentFailure,
+            leaseToken,
+            profile,
+            startedAt,
+            "apply.failed",
+            runnerInfrastructureRetryExhaustedError("apply"),
+          );
+          if (failed.finishedAt !== undefined) {
+            await this.#recordRunnerMinuteUsage({
+              spaceId: failed.workspaceId,
+              runId: failed.id,
+              installationId: failed.installationId,
+              startedAt,
+              finishedAt: failed.finishedAt,
+            });
+          }
+          return { applyRun: failed };
+        }
         const queued =
           await this.#requeueApplyRunAfterRunnerInfrastructureError(
-            runEnvironmentFailedRun(runningForFailure, error),
+            runningWithEnvironmentFailure,
             leaseToken,
             profile,
             startedAt,
@@ -5775,9 +5841,32 @@ export class RunEngine {
         throw new OpenTofuControllerError("failed_precondition", error.message);
       }
       if (runnerDispatched && isRetryableRunnerInfrastructureError(error)) {
+        const runningWithEnvironmentFailure = runEnvironmentFailedRun(
+          running,
+          error,
+        );
+        if (
+          runnerInfrastructureRetryCount(runningWithEnvironmentFailure, [
+            "destroy.retry_scheduled",
+          ]) >= RUNNER_INFRASTRUCTURE_RETRY_LIMIT
+        ) {
+          await this.#billing.releaseApplyBillingReservation(planRun);
+          return {
+            applyRun: await this.#failApplyRun(
+              runningWithEnvironmentFailure,
+              leaseToken,
+              profile,
+              startedAt,
+              "destroy.failed",
+              runnerInfrastructureRetryExhaustedError("destroy_apply"),
+            ),
+            capsule: publicInstallation(installation),
+            installation: publicInstallation(installation),
+          };
+        }
         const queued =
           await this.#requeueApplyRunAfterRunnerInfrastructureError(
-            runEnvironmentFailedRun(running, error),
+            runningWithEnvironmentFailure,
             leaseToken,
             profile,
             startedAt,

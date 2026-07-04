@@ -219,9 +219,10 @@ export interface InstallationProviderEnvBindingMintOptions {
   /**
    * `generated_root_variable` is the normal OpenTofu plan/apply path: provider
    * credentials become TF_VAR_<provider>_<alias>_<arg> so only the generated
-   * root provider block sees them. `provider_env` is for runner-executed release
-   * commands such as wrangler, which need the provider's native process env
-   * names after the app explicitly declared a release command.
+   * root provider block sees them. `provider_env` is for flows whose generated
+   * root intentionally leaves provider credentials in native env names, such as
+   * runner-executed release commands or managed compatibility targets that only
+   * render a provider `base_url`.
    */
   readonly delivery?: InstallationProviderEnvBindingDelivery;
 }

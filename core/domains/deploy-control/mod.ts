@@ -58,6 +58,7 @@ import type {
   TestConnectionResponse,
 } from "@takosumi/internal/deploy-control-api";
 import type { Capsule, PublicCapsule } from "takosumi-contract/capsules";
+import type { ProviderCredentialMintEvidence } from "takosumi-contract/security";
 import type {
   ListProvidersResponse,
   ProviderListingResponse,
@@ -838,6 +839,11 @@ export interface GenericRootPlanContext {
 export interface GenericRootDispatchContext {
   readonly generatedRoot: DispatchGeneratedRoot;
   readonly outputAllowlist: InstallConfig["outputAllowlist"];
+  /**
+   * Credential delivery expected by this generated root. Omitted means the
+   * normal root-variable OpenTofu path.
+   */
+  readonly providerCredentialDelivery?: ProviderCredentialMintEvidence["delivery"];
 }
 
 /**
@@ -856,6 +862,12 @@ export interface PlanRunInternalContext {
   readonly installTypePlan?: InstallTypePlanContext;
   /** Generated-root dispatch for a non-template OpenTofu Capsule (§7). */
   readonly genericRootDispatch?: GenericRootDispatchContext;
+  /**
+   * Internal credential delivery override for generated-root dispatches. Kept
+   * beside `genericRootDispatch` so plan creation can persist the value on
+   * PlanRun before queue execution and apply.
+   */
+  readonly providerCredentialDelivery?: ProviderCredentialMintEvidence["delivery"];
   /**
    * RunGroup this plan belongs to (spec §19 / §24). Stamped onto the PlanRun by
    * the RunGroup space-update path so the §19 Run projects `runGroupId` and the
@@ -1772,6 +1784,7 @@ const APPLY_EXPECTED_GUARD_KEYS = [
   "sourceCommit",
   "providerLockDigest",
   "resolvedProviderEnvBindingsDigest",
+  "providerCredentialDelivery",
 ] as const satisfies readonly (keyof ApplyExpectedGuard)[];
 
 function projectApplyExpectedGuard(
@@ -1830,6 +1843,9 @@ export function applyExpectedGuardFromPlanRun(
           resolvedProviderEnvBindingsDigest:
             planRun.resolvedProviderEnvBindingsDigest,
         }
+      : {}),
+    ...(planRun.providerCredentialDelivery
+      ? { providerCredentialDelivery: planRun.providerCredentialDelivery }
       : {}),
   };
 }

@@ -2,6 +2,7 @@ import {
   TAKOSUMI_ACCOUNTS_PAT_SCOPES,
   type TakosumiAccountsPatMetadata,
   type TakosumiAccountsPatScope,
+  type TakosumiSubject,
 } from "@takosjp/takosumi-accounts-contract";
 import type { AccountsStore, PersonalAccessTokenRecord } from "./store.ts";
 import { base64UrlEncodeBytes } from "./encoding.ts";
@@ -17,6 +18,7 @@ import {
   paginateById,
   parsePageLimit,
 } from "./installation-routes.ts";
+import type { ControlPlaneOperations } from "./control-operations.ts";
 
 /**
  * List the caller's personal access tokens.
@@ -64,6 +66,7 @@ export async function handleListPersonalAccessTokens(input: {
 export async function handleCreatePersonalAccessToken(input: {
   request: Request;
   store: AccountsStore;
+  operations?: ControlPlaneOperations;
 }): Promise<Response> {
   const session = await requireAccountSession(input);
   if (!session.ok) return session.response;
@@ -88,12 +91,13 @@ export async function handleCreatePersonalAccessToken(input: {
     );
   }
   if (workspaceId) {
-    const ownedWorkspaces = await input.store.listWorkspacesForOwner(
-      session.subject,
-    );
-    if (
-      !ownedWorkspaces.some((workspace) => workspace.workspaceId === workspaceId)
-    ) {
+    const ownsWorkspace = await subjectOwnsWorkspace({
+      store: input.store,
+      operations: input.operations,
+      subject: session.subject,
+      workspaceId,
+    });
+    if (!ownsWorkspace) {
       return errorJson(
         "workspace_not_found",
         "workspace_id must reference a Workspace owned by the token subject",
@@ -121,6 +125,34 @@ export async function handleCreatePersonalAccessToken(input: {
     },
     201,
   );
+}
+
+async function subjectOwnsWorkspace(input: {
+  readonly store: AccountsStore;
+  readonly operations?: ControlPlaneOperations;
+  readonly subject: TakosumiSubject;
+  readonly workspaceId: string;
+}): Promise<boolean> {
+  const ownedWorkspaces = await input.store.listWorkspacesForOwner(
+    input.subject,
+  );
+  if (
+    ownedWorkspaces.some(
+      (workspace) => workspace.workspaceId === input.workspaceId,
+    )
+  ) {
+    return true;
+  }
+
+  const operations = input.operations;
+  if (!operations) return false;
+  try {
+    const workspace = await operations.spaces.getWorkspace(input.workspaceId);
+    if (workspace.ownerUserId === input.subject) return true;
+  } catch {
+    return false;
+  }
+  return false;
 }
 
 export async function handleRevokePersonalAccessToken(input: {

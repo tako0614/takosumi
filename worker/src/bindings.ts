@@ -110,6 +110,13 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
    * plugin-aware adapter at runtime.
    */
   readonly TAKOSUMI_RESOURCE_ADAPTER_EXTENSIONS?: string;
+  /**
+   * Operator-installed Resource Shape adapter plugins. JSON array of
+   * `{ "plugin": "...", "handlerKey": "..." }`. The handler key must resolve
+   * to a fetch-compatible binding on the host Worker env. OSS treats this as a
+   * generic adapter seam; the concrete handler belongs to the operator/Cloud.
+   */
+  readonly TAKOSUMI_RESOURCE_ADAPTER_PLUGIN_HANDLERS?: string;
 }
 
 export type OpenTofuRunAction =
