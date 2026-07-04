@@ -18,6 +18,23 @@ Published docs include:
 
 Required public contract information must not depend on unpublished notes.
 
+## Published Pages Must Be Self-Contained
+
+Published pages must include enough information for readers to make decisions
+without reading internal notes or operator runbooks.
+
+| Topic                       | Published docs must include                                              | Keep internal                                         |
+| --------------------------- | ------------------------------------------------------------------------ | ----------------------------------------------------- |
+| product / edition boundary  | external Takosumi, Takosumi for Operator, and Takosumi Cloud definitions | design alternatives and unsettled roadmap notes       |
+| API / compatibility surface | endpoint, capability, auth, errors, supported/preview/unsupported        | handler wiring, closed repo paths, and private routes |
+| Resource Shape              | schema, lifecycle, state/import/drift behavior                           | adapter internals and private target inventory        |
+| Cloud pricing / credits     | customer prices, free tier, credit exhaustion, auto charge behavior      | price IDs, cost tables, margin guards, reconciliation |
+| security / secret handling  | no secret redisplay, log redaction, run-scoped injection                 | secret file paths, vault paths, and operator tokens   |
+
+Published pages must not link to `docs/internal/` or `docs/operations/` as a
+substitute for explaining the contract. If an internal note becomes public, the
+stable public-safe contract is rewritten into this docs tree.
+
 ## What Published Docs Exclude
 
 Published docs do not include:

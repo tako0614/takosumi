@@ -18,6 +18,23 @@
 
 公開 contract として必要な情報を、非公開メモを読まないと分からない状態にはしません。
 
+## 公開ページは self-contained にする
+
+公開ページは、読者が内部メモや operator runbook を読まなくても判断できる
+粒度で書きます。
+
+| Topic                       | 公開 docs に必ず書くこと                                         | 内部に残すこと                                      |
+| --------------------------- | ---------------------------------------------------------------- | --------------------------------------------------- |
+| product / edition boundary  | Takosumi、Takosumi for Operator、Takosumi Cloud の外部定義       | 設計候補、迷った案、未確定ロードマップ              |
+| API / compatibility surface | endpoint、capability、認証、error、supported/preview/unsupported | handler wiring、closed repo path、private route     |
+| Resource Shape              | schema、lifecycle、state/import/drift の外部挙動                 | adapter 実装詳細、private target inventory          |
+| Cloud pricing / credits     | customer price、無料枠、credit exhaustion、auto charge 挙動      | price id、原価表、margin guard、reconciliation 手順 |
+| security / secret handling  | secret 非再表示、log redaction、run-scoped injection             | secret file path、vault path、operator token        |
+
+公開 docs から `docs/internal/` や `docs/operations/` へ直接リンクして、仕様説明を
+肩代わりさせません。内部メモの内容を公開する必要がある場合は、public-safe な
+contract としてこの docs 配下に書き直します。
+
 ## 公開 docs に含めない情報
 
 公開 docs には次の情報を載せません。
