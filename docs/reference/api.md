@@ -297,6 +297,9 @@ OpenAI-compatible API、Kubernetes CRD、CloudEvents などは、どれか一つ
 正本にするのではなく、capability・既存 tool との相性・operator が有効化した
 service form に応じて並列に使います。`takosumi` provider は、既存の普遍的な
 provider / protocol が足りない service form を schema 付きで定義する入口です。
+後から十分な普遍 provider / protocol / standard surface が成立した場合は、新規
+利用ではそちらを優先します。Takosumi shape は import continuity、migration、
+managed-target placement、policy、metering の価値が残る場合だけ使います。
 表現できない operation は互換っぽく成功させず、compatibility matrix で範囲を
 明示して fail closed します。
 

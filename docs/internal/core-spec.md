@@ -228,6 +228,13 @@ where a durable service form lacks an adequate vendor-neutral provider/protocol
 and needs Takosumi-owned schema, planner, adapter, state, import, drift, policy,
 metering, or managed-target placement.
 
+This remains true over time. A `takosumi_*` resource is not a lock-in claim. If
+Takosumi filled a missing universal surface and the ecosystem later gets an
+adequate vendor-neutral provider, protocol, or compatibility surface, new
+designs should prefer that universal path. The Takosumi shape may stay for
+state continuity, import, migration, or managed-target semantics, but it should
+not be treated as mandatory.
+
 If a durable service form has no adequate standard surface, Takosumi should
 define it as a typed Resource Shape. One-off gaps still stay in generic-env
 ProviderConnections and ordinary OpenTofu modules. Add a Takosumi provider

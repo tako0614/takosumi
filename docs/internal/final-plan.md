@@ -106,6 +106,13 @@ If no standard surface exists and answer 4 is yes, define the Takosumi shape.
 Shape provider for Takosumi-owned service forms, not the only valid way to use
 Takosumi and not the canonical path for every managed capability.
 
+The rule is intentionally reversible. If Takosumi defines a typed shape because
+no adequate universal provider or standard surface exists, and a credible
+vendor-neutral surface later appears, Takosumi should prefer that surface for
+new use cases. The existing Takosumi shape can remain as an import/compatibility
+or migration surface when needed, but Takosumi must not insist that users keep
+using `takosumi/takosumi` once a better universal path exists.
+
 Examples:
 
 ```text
