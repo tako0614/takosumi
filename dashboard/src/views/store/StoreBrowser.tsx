@@ -495,7 +495,7 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
                       class="tcs-card-open"
                       onClick={() => setSelected(listing)}
                     >
-                      <h4>{pick(listing.name, props.locale)}</h4>
+                      <h3>{pick(listing.name, props.locale)}</h3>
                       <p>{pick(listing.description, props.locale)}</p>
                     </button>
                   </div>

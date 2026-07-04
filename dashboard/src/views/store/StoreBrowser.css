@@ -205,7 +205,7 @@
   cursor: pointer;
   min-width: 0;
 }
-.tcs-card-open h4 {
+.tcs-card-open h3 {
   margin: 0 0 4px;
   font-size: 1.02rem;
   overflow-wrap: anywhere;
