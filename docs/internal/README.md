@@ -4,6 +4,10 @@ This directory contains Takosumi development authority documents, architecture
 notes, and conformance notes. They are intentionally excluded from the
 published VitePress docs.
 
+Status: internal memo. These files guide implementation and design review, but
+they are not customer-facing product docs and do not replace the published API,
+Cloud, pricing, legal, or model references.
+
 Decision: keep Takosumi-specific development notes in this product-local
 `docs/internal/` directory, not in the ecosystem root. The root repository
 should only carry cross-product governance, quality gates, and integration
@@ -32,6 +36,17 @@ The public docs build excludes `internal/**/*.md` and `operations/**/*.md`.
 When an internal design becomes a stable user/operator contract, rewrite the
 contract into `docs/reference/` or `docs/cloud/` instead of linking readers to
 the internal note.
+
+Promotion checklist:
+
+```text
+1. Keep only the stable external contract.
+2. Remove private paths, secret names, raw evidence refs, and handler wiring.
+3. Put API/model behavior in docs/reference/.
+4. Put customer-facing Cloud behavior and pricing in docs/cloud/.
+5. Update the English counterpart when the public page has one.
+6. Run the docs boundary and docs build checks.
+```
 
 Do not copy operator-private paths, secret file paths, private evidence refs,
 Stripe sync routes, price-book env, or closed handler wiring into public docs.

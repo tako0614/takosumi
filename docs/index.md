@@ -22,13 +22,13 @@ Takosumi Cloud は、その Takosumi を私たちが公式に運用する hosted
 product definition、API、Resource Shape、Compatibility API、Cloud の公開 contract
 を書きます。
 
-開発中の最終計画、core conformance、運用手順、secret rotation、private evidence、
-pricing の実値、Stripe 同期手順、implementation-only wiring は公開 docs ではなく
-`internal/` または `operations/` 側で管理します。公開 build では
-`internal/**/*.md` と `operations/**/*.md` を除外します。
+開発中の設計メモ、conformance note、deploy 手順、secret rotation、raw readiness
+record、pricing 同期手順、implementation-only wiring は公開 product contract では
+ありません。
 
 内部メモの内容が安定した public contract になった場合は、内部ページへリンクせず、
-必要な情報だけを `reference/`、`cloud/`、`getting-started/` に書き直します。
+必要な情報だけを公開 docs に書き直します。詳しい分類は
+[Published docs contract](./reference/docs-contract.md) に固定しています。
 
 ## Cloud と OSS
 
