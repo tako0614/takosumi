@@ -230,10 +230,12 @@ provider, standard protocol, and compatibility profile.
 `takosumi_*` Resource Shapes, S3-compatible APIs, CloudEvents-compatible APIs,
 Kubernetes CRDs, OpenAI-compatible APIs, and scoped Cloudflare-compatible APIs
 can all be valid Takosumi-managed features. A compatibility profile remains a
-feature in its own right when it is the best fit for existing tools. Unsupported
-operations should fail closed instead of pretending full vendor compatibility;
-operators can then add another compatibility profile, a standard-provider path,
-or a typed Takosumi shape when the service form warrants it.
+feature in its own right when it is the best fit for existing tools. The
+`takosumi` provider exists for durable service forms that lack an adequate
+vendor-independent provider or protocol. Unsupported operations should fail
+closed instead of pretending full vendor compatibility; operators can then add
+another compatibility profile, a standard-provider path, or a typed Takosumi
+shape when the service form warrants it.
 
 The public API boundary is documented in [Takosumi API](./api.md). Internal
 planning and conformance notes live outside the published docs surface.

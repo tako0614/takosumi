@@ -23,11 +23,10 @@ Cloudflare token or account id.
 
 Resource-creating Layer 2 smokes must also run the platform smoke with
 `--cloudflare-resource-preflight account-resources`. That checks the operator
-Cloudflare token can list D1, Workers KV, R2, and Queues for the configured
 Cloudflare token can list D1, Workers KV, R2, Queues, and Workflows for the
-configured account before OpenTofu starts an apply. This is a fail-closed guard against
-partial resource creation when the token is active but missing one resource
-permission.
+configured account before OpenTofu starts an apply. This is a fail-closed guard
+against partial resource creation when the token is active but missing one
+resource permission.
 
 ## Layer 1 — provider/module integration (runnable now, no worker)
 
