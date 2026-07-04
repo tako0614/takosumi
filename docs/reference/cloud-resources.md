@@ -87,6 +87,13 @@ OpenTofu provider via compat / takosumi provider via Resource Shape API / Compat
   -> backend API
 ```
 
+この共通層では、Cloud-managed service form ごとに manager descriptor を持ちます。
+descriptor は公開 service form、usage meter family、NativeResource type、現在の
+manager 実装を結びます。例えば `EdgeWorker` の現在 manager は Cloudflare
+Workers for Platforms dispatch namespace ですが、public resource identity と
+課金 meter は `EdgeWorker` / `cloudflare.workers_script` です。WfP は implementation
+token であり、ユーザー向けの resource 名や課金単位にはしません。
+
 Cloudflare-compatible path はこの pipeline への import path です。EdgeWorker の現在の
 公式 manager は Workers for Platforms dispatch namespace を使いますが、API contract
 は `EdgeWorker` / `ObjectBucket` / `KVStore` / `SQLDatabase` / `Queue` などの service
