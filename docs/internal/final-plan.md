@@ -561,16 +561,16 @@ path.
 
 `/compat/cloudflare/client/v4` is therefore not a separate product stack. It is
 one import/deploy entrypoint into the same Cloud managed-operation boundary.
-Compat handlers, Resource Shape adapters, dashboard actions, standard data-plane
-facades, and billable AI Gateway requests should normalize the request into the
-same `CloudManagedOperation` request shape before the selected manager is
-allowed to call a backend API. Typed Resource Shapes additionally use
-TargetPool / Policy / ResolutionLock / Adapter dispatch before manager
-selection. AI Gateway does not become a Resource Shape; it uses the same
+Compat handlers, Worker route writes, Resource Shape adapters, dashboard
+actions, standard data-plane facades, and billable AI Gateway requests should
+normalize the request into the same `CloudManagedOperation` request shape before
+the selected manager is allowed to call a backend API. Typed Resource Shapes
+additionally use TargetPool / Policy / ResolutionLock / Adapter dispatch before
+manager selection. AI Gateway does not become a Resource Shape; it uses the same
 auth/billing/manager boundary with AI-specific request/token meters. The
 official Takosumi Cloud EdgeWorker manager is Cloudflare Workers for Platforms
-dispatch namespace today, and a different managed EdgeWorker adapter can
-replace it later without changing the public Resource Shape schema or the
+dispatch namespace today, and a different managed EdgeWorker adapter can replace
+it later without changing the public Resource Shape schema or the
 provider-facing compatibility endpoint.
 
 ### 4.2 ObjectBucket And S3-Compatible Object Storage

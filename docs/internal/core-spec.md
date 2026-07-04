@@ -455,12 +455,12 @@ enabled or disabled by `/v1/capabilities`.
 
 Operator/Cloud implementations that expose managed capacity should normalize
 compatibility API calls, Resource Shape adapter calls, dashboard actions,
-data-plane facades, and billable service endpoints such as AI Gateway into the
-same managed-operation request shape before calling a backend manager. The
-public API surface decides how the user enters Takosumi; the selected manager
-decides whether the backend is Workers for Platforms, R2, D1, KV, Queues,
-Workflows, Containers, AI Gateway upstream routing, or another
-operator-provided implementation.
+data-plane facades, Cloudflare-compatible Worker route writes, and billable
+service endpoints such as AI Gateway into the same managed-operation request
+shape before calling a backend manager. The public API surface decides how the
+user enters Takosumi; the selected manager decides whether the backend is
+Workers for Platforms, R2, D1, KV, Queues, Workflows, Containers, AI Gateway
+upstream routing, or another operator-provided implementation.
 
 Cloud/operator descriptors should fail closed when a service form is recognized
 but its selected manager is not configured. That failure happens before usage
