@@ -40,7 +40,7 @@ export interface SessionRecord {
 const SESSION_ME_PATH = "/v1/account/session/me";
 const DASHBOARD_BOOTSTRAP_PATH = "/api/v1/dashboard/bootstrap";
 const DASHBOARD_SESSION_BOOTSTRAP_PATH =
-  `${DASHBOARD_BOOTSTRAP_PATH}?includeWorkspaces=false`;
+  `${DASHBOARD_BOOTSTRAP_PATH}?includeWorkspaces=true`;
 const CACHE_TTL_MS = 30_000;
 
 const listeners = new Set<(s: SessionRecord | null) => void>();
