@@ -3,7 +3,10 @@ import {
   clearSession,
   refreshSession,
 } from "../../../../dashboard/src/views/account/lib/session.ts";
-import { clearWorkspaceListCache } from "../../../../dashboard/src/lib/workspace-list.ts";
+import {
+  clearWorkspaceListCache,
+  listWorkspacesCached,
+} from "../../../../dashboard/src/lib/workspace-list.ts";
 
 const realFetch = globalThis.fetch;
 
@@ -14,15 +17,16 @@ afterEach(() => {
 });
 
 describe("dashboard session bootstrap", () => {
-  test("refreshSession uses the lightweight dashboard session bootstrap", async () => {
+  test("refreshSession uses the dashboard session bootstrap and primes workspaces", async () => {
     const calls: string[] = [];
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       const path = typeof input === "string" ? input : String(input);
       calls.push(path);
-      if (path === "/api/v1/dashboard/bootstrap?includeWorkspaces=false") {
+      if (path === "/api/v1/dashboard/bootstrap?includeWorkspaces=true") {
         return new Response(
           JSON.stringify({
             session: { subject: "tsub_1" },
+            workspaces: [{ id: "space_1", handle: "main" }],
           }),
           { status: 200, headers: { "content-type": "application/json" } },
         );
@@ -32,9 +36,10 @@ describe("dashboard session bootstrap", () => {
 
     const session = await refreshSession();
     expect(session?.subject).toBe("tsub_1");
+    expect((await listWorkspacesCached())[0]?.id).toBe("space_1");
 
     expect(calls).toEqual([
-      "/api/v1/dashboard/bootstrap?includeWorkspaces=false",
+      "/api/v1/dashboard/bootstrap?includeWorkspaces=true",
     ]);
   });
 
@@ -43,11 +48,12 @@ describe("dashboard session bootstrap", () => {
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       const path = typeof input === "string" ? input : String(input);
       calls.push(path);
-      if (path === "/api/v1/dashboard/bootstrap?includeWorkspaces=false") {
+      if (path === "/api/v1/dashboard/bootstrap?includeWorkspaces=true") {
         await new Promise((resolve) => setTimeout(resolve, 1));
         return new Response(
           JSON.stringify({
             session: { subject: "tsub_1" },
+            workspaces: [{ id: "space_1", handle: "main" }],
           }),
           { status: 200, headers: { "content-type": "application/json" } },
         );
@@ -60,7 +66,7 @@ describe("dashboard session bootstrap", () => {
     expect(a).toEqual(b);
     expect(a?.subject).toBe("tsub_1");
     expect(calls).toEqual([
-      "/api/v1/dashboard/bootstrap?includeWorkspaces=false",
+      "/api/v1/dashboard/bootstrap?includeWorkspaces=true",
     ]);
   });
 });
