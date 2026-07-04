@@ -69,4 +69,34 @@ describe("dashboard session bootstrap", () => {
       "/api/v1/dashboard/bootstrap?includeWorkspaces=true",
     ]);
   });
+
+  test("shares session bootstrap workspaces with the shell workspace list", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const path = typeof input === "string" ? input : String(input);
+      calls.push(path);
+      if (path === "/api/v1/dashboard/bootstrap?includeWorkspaces=true") {
+        await new Promise((resolve) => setTimeout(resolve, 1));
+        return new Response(
+          JSON.stringify({
+            session: { subject: "tsub_1" },
+            workspaces: [{ id: "space_1", handle: "main" }],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      throw new Error(`unexpected fetch: ${path}`);
+    }) as typeof fetch;
+
+    const [session, workspaces] = await Promise.all([
+      refreshSession(),
+      listWorkspacesCached(),
+    ]);
+
+    expect(session?.subject).toBe("tsub_1");
+    expect(workspaces[0]?.id).toBe("space_1");
+    expect(calls).toEqual([
+      "/api/v1/dashboard/bootstrap?includeWorkspaces=true",
+    ]);
+  });
 });
