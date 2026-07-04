@@ -69,15 +69,15 @@ Operator/internal jobs:
 ```
 
 すべての Cloud managed resource は、実 backend API を叩く前に Cloud extension
-共通層を通します。入口が `takosumi/takosumi` provider、Compatibility API、または
-Dashboard のどれであっても、認証、Workspace billing context、usage / credit guard、
-Resource / NativeResource への正規化、capability / manager dispatch を通り、
-その後に manager が backend を選びます。
+共通層を通します。入口が Cloudflare-compatible OpenTofu provider、`takosumi/takosumi`
+provider、Compatibility API、または Dashboard のどれであっても、認証、Workspace
+billing context、usage / credit guard、Resource / NativeResource への正規化、
+capability / manager dispatch を通り、その後に manager が backend を選びます。
 `takosumi_*` Resource Shape として入る場合は、その前段で TargetPool / Policy /
 ResolutionLock も通ります。
 
 ```text
-Resource Shape API / Compatibility API / Dashboard action
+OpenTofu provider via compat / takosumi provider via Resource Shape API / Compatibility API / Dashboard action
   -> auth + billing Workspace
   -> usage / credit guard
   -> Resource / NativeResource normalization

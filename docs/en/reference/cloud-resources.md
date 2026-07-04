@@ -72,16 +72,17 @@ Operator/internal jobs:
 ```
 
 Every Cloud managed resource passes through the shared Cloud extension layer
-before a backend API is called. Whether the entrypoint is the
-`takosumi/takosumi` provider, a Compatibility API, or a Dashboard action, the
-request passes through auth, Workspace billing context, usage / credit guard,
-Resource / NativeResource normalization, capability / manager dispatch, and
-then the selected manager chooses the backend. When the entrypoint is a
-`takosumi_*` Resource Shape, TargetPool / Policy / ResolutionLock are also part
-of the path before manager dispatch.
+before a backend API is called. Whether the entrypoint is a
+Cloudflare-compatible OpenTofu provider, the `takosumi/takosumi` provider, a
+Compatibility API, or a Dashboard action, the request passes through auth,
+Workspace billing context, usage / credit guard, Resource / NativeResource
+normalization, capability / manager dispatch, and then the selected manager
+chooses the backend. When the entrypoint is a `takosumi_*` Resource Shape,
+TargetPool / Policy / ResolutionLock are also part of the path before manager
+dispatch.
 
 ```text
-Resource Shape API / Compatibility API / Dashboard action
+OpenTofu provider via compat / takosumi provider via Resource Shape API / Compatibility API / Dashboard action
   -> auth + billing Workspace
   -> usage / credit guard
   -> Resource / NativeResource normalization
