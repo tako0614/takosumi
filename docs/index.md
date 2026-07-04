@@ -114,7 +114,8 @@ TargetPool
 Credential / OIDC / Secret / Policy
 Compatibility API framework
 Adapter framework
-typed Resource API for provider / CLI / dashboard / CRD / compat facades
+typed Resource API for provider / CLI / dashboard / CRD
+scoped compatibility API surfaces
 ```
 
 互換 API は capability として公開範囲を宣言します。例: `compat.oci.v1`、`compat.cloudevents.v1`、

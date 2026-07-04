@@ -114,7 +114,8 @@ TargetPool
 Credential / OIDC / Secret / Policy
 Compatibility API framework
 Adapter framework
-typed Resource API for provider / CLI / dashboard / CRD / compat facades
+typed Resource API for provider / CLI / dashboard / CRD
+scoped compatibility API surfaces
 ```
 
 Compatibility APIs are capability surfaces. Examples include `compat.oci.v1`,

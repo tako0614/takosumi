@@ -358,7 +358,8 @@ Secret / Policy / RBAC basics
 Adapter framework
 Compatibility API framework
 usage event emission
-takosumi provider API compatibility
+Takosumi Resource API clients such as provider / CLI / dashboard
+scoped compatibility API surfaces
 ```
 
 Takosumi OSS does not include:
