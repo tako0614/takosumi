@@ -163,11 +163,12 @@ OpenAI-compatible `usage` object, `ai_input_token` / `ai_output_token`.
 Production pricing is finalized by the platform worker's
 `TAKOSUMI_CLOUD_USAGE_PRICE_BOOK`; model-level `billingUsdMicros*` values are
 accepted for closed AI Gateway fallback/compatibility and local tests, but the
-operator price book is the Cloud pricing source of truth. The platform worker
-records the priced report in the Workspace usage ledger and strips the internal
-headers before returning the client response. If the auth context has no
-`spaceId`, the AI Gateway does not emit a usage report because the request
-cannot be billed to a Workspace.
+public Cloud pricing page is the customer-facing pricing source of truth and
+the operator price book is its runtime projection. The platform worker records
+the priced report in the Workspace usage ledger and strips the internal headers
+before returning the client response. If the auth context has no `spaceId`, the
+AI Gateway does not emit a usage report because the request cannot be billed to
+a Workspace.
 
 `workers_ai_binding` profiles may set `gateway.id` to route `env.AI.run()`
 through Cloudflare AI Gateway from inside the Worker. Use `default` unless the

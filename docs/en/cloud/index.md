@@ -139,6 +139,11 @@ price book and stop before execution when the Workspace balance is insufficient.
 Cleanup and destroy operations remain available after credit depletion so users
 can remove resources instead of leaving them stranded.
 
+Public prices, free-tier terms, usage rates, and credit-exhaustion behavior are
+documented in [Takosumi Cloud pricing](./pricing.md). Runtime price books,
+payment-provider synchronization, margin guards, and reconciliation are
+operator operation details, not public contracts.
+
 The Dashboard shows:
 
 - available balance
@@ -189,3 +194,4 @@ Details:
 
 - [Takosumi Cloud resources](../reference/cloud-resources.md)
 - [Takosumi Cloud endpoints](../reference/cloud-endpoints.md)
+- [Takosumi Cloud pricing](./pricing.md)
