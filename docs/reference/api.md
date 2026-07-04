@@ -262,8 +262,9 @@ workload identity の core contract は標準 Takosumi 側にあります。
 
 ## Compatibility API
 
-Compatibility API は標準 protocol / API の facade です。内部 canonical model は
-Resource API に正規化します。
+Compatibility API は標準 protocol / API の facade であり、独立した
+Takosumi-managed feature surface です。`takosumi` provider や Resource Shape
+API への fallback ではありません。
 
 ```text
 compat.s3.v1
@@ -284,6 +285,14 @@ compat.cloudflare.workers.v1
 
 これは full AWS API や full Cloudflare API 互換を意味しません。範囲は capability と
 compatibility matrix で明示します。
+
+compat API、typed `takosumi_*` Resource Shape、S3-compatible API、
+OpenAI-compatible API、Kubernetes CRD、CloudEvents などは、どれか一つを
+正本にするのではなく、capability・既存 tool との相性・operator が有効化した
+service form に応じて並列に使います。`takosumi` provider は、既存の普遍的な
+provider / protocol が足りない service form を schema 付きで定義する入口です。
+表現できない operation は互換っぽく成功させず、compatibility matrix で範囲を
+明示して fail closed します。
 
 Takosumi Cloud 固有の endpoint 例は [Cloud endpoints](./cloud-endpoints.md) を見てください。
 

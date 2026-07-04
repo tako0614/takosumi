@@ -147,8 +147,8 @@ test("projectPlanRun carries snapshot id, generation, plan digest, policy pass",
   expect(run.planDigest).toBe("sha256:plan");
   expect(run.planArtifactKey).toBe("key/plan.bin");
   expect(run.applyExpected).toEqual({
-    planRunId: "plan_1",
-    runnerProfileId: "cloudflare-default",
+    planId: "plan_1",
+    runnerId: "cloudflare-default",
     sourceDigest: "sha256:src",
     variablesDigest: "sha256:vars",
     policyDecisionDigest: "sha256:policy",

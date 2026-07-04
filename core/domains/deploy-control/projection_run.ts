@@ -239,7 +239,7 @@ function projectApplyExpectedGuard(planRun: PlanRun): Run["applyExpected"] {
   if (!planRun.planDigest || !planRun.planArtifact) return undefined;
   const capsuleId = planRun.capsuleId ?? planRun.installationId;
   return {
-    planRunId: planRun.id,
+    planId: planRun.id,
     ...(capsuleId ? { capsuleId } : {}),
     ...(planRun.installationId
       ? { installationId: planRun.installationId }
@@ -247,7 +247,7 @@ function projectApplyExpectedGuard(planRun: PlanRun): Run["applyExpected"] {
     ...(capsuleId
       ? { currentStateVersionId: planRun.capsuleCurrentStateVersionId ?? null }
       : {}),
-    runnerProfileId: planRun.runnerProfileId,
+    runnerId: planRun.runnerProfileId,
     sourceDigest: planRun.sourceDigest,
     variablesDigest: planRun.variablesDigest,
     policyDecisionDigest: planRun.policyDecisionDigest,

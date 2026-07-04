@@ -317,9 +317,12 @@ exposed: S3-compatible APIs for object storage data-plane, OCI registry APIs
 for artifacts/images, CloudEvents for event ingress, Kubernetes CRDs for
 Kubernetes northbound integration, OpenAI-compatible endpoints for AI gateway
 access, and a scoped Cloudflare Workers-compatible subset for Worker import /
-deploy paths. These compatibility APIs are standard-conscious facades into
-Takosumi-managed capabilities; they are not the internal canonical model and
-not promises of full vendor API compatibility.
+deploy paths. These compatibility APIs are standard-conscious
+Takosumi-managed feature surfaces. They are not fallback routes into the
+`takosumi` provider and not promises of full vendor API compatibility. An
+implementation may normalize state, usage, or audit evidence into Takosumi
+resource records, but that is internal bookkeeping rather than a hierarchy of
+public surfaces.
 
 Future shapes are added only when they have a real schema, planner, adapter
 path, and user value. Do not expose `takosumi_resource { type, spec }` as the
