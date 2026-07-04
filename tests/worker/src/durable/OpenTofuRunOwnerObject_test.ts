@@ -311,7 +311,11 @@ test("OpenTofu run owner marks retries exhausted after owner retry budget", asyn
   assert.equal(marks, 1);
   assert.equal(record?.status, "failed");
   assert.equal(record?.attempts, 3);
-  assert.equal(record?.lastError, "opentofu run dispatch failed");
+  assert.equal(
+    typeof record?.lastError === "string" &&
+      record.lastError.startsWith("opentofu run dispatch failed: Error:"),
+    true,
+  );
   assert.equal(JSON.stringify(record).includes("secret-token-in-error"), false);
   assert.equal(storage.alarmAt, undefined);
 });
