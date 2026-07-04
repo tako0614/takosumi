@@ -96,7 +96,7 @@ If answers 1-3 are yes and answer 4 is no, do not add a Takosumi resource.
 If no standard surface exists and answer 4 is yes, define the Takosumi shape.
 `takosumi/takosumi` is therefore optional for users: it is the typed Resource
 Shape provider for Takosumi-owned service forms, not the only valid way to use
-Takosumi.
+Takosumi and not the canonical path for every managed capability.
 
 Examples:
 
@@ -325,8 +325,9 @@ for artifacts/images, CloudEvents for event ingress, Kubernetes CRDs for
 Kubernetes northbound integration, OpenAI-compatible endpoints for AI gateway
 access, and a scoped Cloudflare Workers-compatible subset for Worker import /
 deploy paths. These compatibility APIs are standard-conscious
-Takosumi-managed feature surfaces. They are not fallback routes into the
-`takosumi` provider and not promises of full vendor API compatibility. An
+Takosumi-managed feature surfaces. They are peer entrypoints alongside the
+plain Stack flow and typed Resource Shapes, not provider-internal routes inside
+`takosumi/takosumi` and not promises of full vendor API compatibility. An
 implementation may normalize state, usage, or audit evidence into Takosumi
 resource records, but that is internal bookkeeping rather than a hierarchy of
 public surfaces.

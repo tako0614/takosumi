@@ -223,7 +223,10 @@ surfaces.
 If a mature vendor-neutral provider exists outside Takosumi, prefer that
 provider. Takosumi can still manage ProviderConnections, env/file injection,
 runs, state, outputs, policy, usage, and compatibility gates around it without
-forcing the user onto `takosumi/takosumi`.
+forcing the user onto `takosumi/takosumi`. The Takosumi provider exists only
+where a durable service form lacks an adequate vendor-neutral provider/protocol
+and needs Takosumi-owned schema, planner, adapter, state, import, drift, policy,
+metering, or managed-target placement.
 
 If a durable service form has no adequate standard surface, Takosumi should
 define it as a typed Resource Shape. One-off gaps still stay in generic-env
