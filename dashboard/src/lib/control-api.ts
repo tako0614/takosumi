@@ -1864,11 +1864,17 @@ export async function approveRunGroup(id: string): Promise<RunGroupWithRuns> {
 
 // --- Connections -----------------------------------------------------------
 
+function normalizedWorkspaceId(value: string): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
 export async function listConnections(
   workspaceId: string,
 ): Promise<readonly Connection[]> {
+  const normalized = normalizedWorkspaceId(workspaceId);
+  if (!normalized) return [];
   return await fetchAllPages<Connection>(
-    `${BASE}/connections${query({ workspaceId: workspaceId })}`,
+    `${BASE}/connections${query({ workspaceId: normalized })}`,
     (body) => (body.connections as readonly Connection[]) ?? [],
   );
 }
@@ -1876,9 +1882,11 @@ export async function listConnections(
 export async function listProviderConnections(
   workspaceId: string,
 ): Promise<readonly ProviderConnection[]> {
+  const normalized = normalizedWorkspaceId(workspaceId);
+  if (!normalized) return [];
   const body = await controlFetch<{
     providerConnections?: readonly ProviderConnection[];
-  }>(`${BASE}/provider-connections${query({ workspaceId: workspaceId })}`);
+  }>(`${BASE}/provider-connections${query({ workspaceId: normalized })}`);
   return body.providerConnections ?? [];
 }
 
