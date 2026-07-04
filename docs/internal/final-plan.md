@@ -561,6 +561,14 @@ that manager is configured. If the service form is known but the manager is not
 configured, the request fails before usage precharge and before any backend API
 call. The request must not be silently routed through a different compatibility
 path.
+In Takosumi Cloud's official deployment, `EdgeWorker` selects the Cloudflare
+Workers for Platforms dispatch-namespace manager. Other Cloud-provided service
+forms use the same operation and credit boundary, but they do not become WfP
+Workers: ObjectBucket selects the object-storage manager, SQLDatabase selects
+the database manager, KVStore selects the KV manager, Queue selects the queue
+manager, DurableWorkflow selects the workflow manager, AI Gateway selects the
+AI gateway profile router, and future/native service forms select the
+operator-installed manager for that service form.
 
 `/compat/cloudflare/client/v4` is therefore not a separate product stack. It is
 one import/deploy entrypoint into the same Cloud managed-operation boundary.
