@@ -1,8 +1,8 @@
 # Takosumi Cloud endpoints
 
-Takosumi Cloud endpoints are Cloud-only routes/handlers plus managed-resource
-backends. They are not part of the Takosumi OSS or Takosumi for Operator
-public contract.
+This page documents the endpoint families exposed by `app.takosumi.com` for
+Takosumi Cloud. Treat them separately from the portable Takosumi OSS /
+Takosumi for Operator API.
 
 Use [Takosumi Cloud](../cloud/index.md) and
 [Takosumi Cloud resources](./cloud-resources.md) as the public product docs. This
@@ -31,8 +31,8 @@ screen:
 - usage history (the usage event ledger)
 
 Deleting a resource calls the compatible import endpoint's DELETE. It requires a
-`write`-scoped session and only takes effect when the Cloud backend has
-materialized it; otherwise the endpoint answers 501 fail-closed. DELETE cleanup is
+`write`-scoped session and only takes effect when the Cloud managed resource has
+been created. Unsupported endpoint families answer 501 fail-closed. DELETE cleanup is
 not a billable fallback operation, so a Workspace that has run out of credit can
 still destroy or remove already-created managed resources. The app does not carry
 the full specification — provider compatibility scope, OpenTofu provider
@@ -52,12 +52,12 @@ Only the Takosumi for Operator / Cloud operation layer has:
 - official managed target / native resource backends
 - official usage, quota, billing, and support controls
 
-Official `app.takosumi.com` mounts Cloud-only handlers on the same hosted
+Official `app.takosumi.com` serves Cloud endpoint families on the same hosted
 platform origin. AI Gateway, the Cloudflare-compatible import endpoint, the
 S3-compatible Object Storage endpoint, Cloud usage, and Cloud Edge Runtime are
-served by Takosumi Cloud managed backends. Managed-backend implementation
-details, secrets, private config, and operator evidence are not public
-contracts; they belong in operator runbooks.
+served by Takosumi Cloud managed backends. Managed-backend internals, secrets,
+and operator-only records are not public contracts; they belong in operator
+runbooks.
 
 ## Catalog
 
@@ -127,11 +127,10 @@ Example:
 An extension with `configured: false` may appear in the UI, but runtime calls
 must fail closed.
 This catalog lists only public endpoints and capabilities.
-`authMode: "handler"` is reserved for standard signed protocols such as S3
-SigV4, where the Cloud handler must verify the protocol Authorization header
-itself. In that mode, the platform does not verify a customer session/PAT; it
-strips spoofable Takosumi context headers and cookies, then forwards the
-`Authorization` header to the handler.
+`authMode: "handler"` is the catalog value for endpoint families that verify a
+standard protocol signature, such as S3 SigV4. In that mode, the request is
+authorized by the protocol signature rather than a platform session/PAT, and
+spoofable Takosumi context headers and cookies are stripped.
 Takosumi Cloud public HTTP traffic for `*.app.takos.jp` and
 `*.app-staging.takos.jp` is dispatched to the Cloud Edge Runtime by the same
 hosted-origin hostname dispatch registry.
@@ -147,8 +146,8 @@ token, and the billing Workspace must be verified.
 
 Sessions and personal access tokens may select the billing Workspace with
 `x-takosumi-cloud-billing-workspace-id`. The platform verifies that the token
-can read that Workspace in the accounts plane before forwarding to the Cloud
-handler or Resource Shape API. For OpenTofu providers such as the Cloudflare
+can read that Workspace in the accounts plane before forwarding to the target
+Cloud endpoint family or Resource Shape API. For OpenTofu providers such as the Cloudflare
 provider that do not conveniently attach arbitrary headers, create the personal
 access token with `workspace_id`. The platform then uses the token
 introspection `takosumi.space_id` as the default billing Workspace, so provider
@@ -158,7 +157,7 @@ use the Workspace encoded in token metadata.
 Billable writes are precharged against Workspace credits before forwarding. If
 the Workspace context is missing, the token does not match the Workspace, or the
 Workspace has insufficient credits, the request fails closed and is not
-forwarded to the downstream handler / apply path. Capsule / installation ids are
+forwarded to the Cloud endpoint / apply path. Capsule / installation ids are
 optional. When omitted, provider / compatibility API usage is recorded as a
 Workspace usage event without `installationId`.
 
@@ -184,8 +183,8 @@ DELETE /compat/s3/v1/{bucket}/{key}
 Normal Cloud API keys (Takosumi Accounts personal access tokens) are not S3 SDK
 credentials. The S3-compatible endpoint verifies AWS SigV4 access key / secret
 access key credentials. Each access key is scoped to a Workspace and optional
-bucket allowlist, while bucket descriptors come from the Cloud realized config
-or managed-resource backend.
+bucket allowlist, while bucket descriptors come from the Takosumi Cloud
+managed-resource inventory.
 
 `GET /compat/s3/v1/__takosumi/status` is readable without SigV4 and reports
 operational configuration health. The dashboard uses it to show configured
@@ -462,7 +461,7 @@ Cloud endpoints must:
 - never redisplay secret values after creation
 - keep secret-shaped values out of usage, catalog, status, and model metadata
 - have the platform worker verify API key / session validity and read/write scope
-- have the closed handler verify Workspace / account / virtual-account resource scope
+- have the Cloud endpoint verify Workspace / account / virtual-account resource scope
 - fail closed for unsupported routes instead of pretending success
 - keep Cloud-only backends out of OSS Takosumi
 

@@ -97,22 +97,32 @@ audit evidence
 
 Secrets are redacted before logs or diagnostics are persisted.
 
-## Cloud-Only Exclusions
+## Out Of Scope For Deploy-Control
 
-The OSS API must not expose:
+Deploy-Control is the Run/state/output API for OpenTofu execution. It does not
+own endpoint families for compatibility profiles, managed Cloud resources, or
+official billing. Those surfaces are documented separately and advertised by
+capabilities.
+
+The OSS Deploy-Control API must not expose the official hosted Cloud endpoint
+families:
 
 ```text
 /compat/cloudflare/client/v4
 /gateway/ai/v1
-provider-compatible Gateway endpoint routes
+provider-compatible endpoint families
 official managed resource backend controls
 managed edge/storage/container resource APIs
 official billing/quota/usage endpoints
 ```
 
-Those belong to closed Takosumi Cloud.
+The Compatibility API framework itself remains part of Takosumi. Specific
+profiles such as `compat.cloudflare.workers.v1`, `compat.s3.v1`, or an
+OpenAI-compatible AI endpoint are scoped, versioned capabilities, not hidden
+Deploy-Control routes.
 
-The current Cloud extension route scope is `compat.cloudflare.workers.v1` and
-the OpenAI-compatible AI Gateway only. Other Cloud extension routes must be
-separately specified; OSS compatibility profiles remain scoped, versioned
-capabilities outside this deploy-control API.
+For the official hosted service, the currently documented Cloud endpoint
+families are `compat.cloudflare.workers.v1`, `compat.s3.v1`, and the
+OpenAI-compatible AI Gateway. Additional endpoint families must be specified
+with their own compatibility matrix, auth model, usage contract, and
+fail-closed behavior.

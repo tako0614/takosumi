@@ -17,6 +17,21 @@ of Takosumi.
 
 Start with the [Quickstart](./getting-started/quickstart.md).
 
+## Docs Boundary
+
+These docs are public product docs. They contain product definitions, API
+contracts, Resource Shapes, Compatibility APIs, and the public Takosumi Cloud
+contract that users and operators can rely on.
+
+Development plans, core conformance notes, deploy procedures, secret rotation,
+private evidence, concrete pricing sync procedures, and implementation-only
+wiring belong in internal notes or operator runbooks. The public build excludes
+`internal/**/*.md` and `operations/**/*.md`.
+
+When an internal note becomes a stable public contract, rewrite only the
+contract into `reference/`, `cloud/`, or `getting-started/` instead of linking
+public readers to the internal note.
+
 ## Cloud and OSS
 
 ```text

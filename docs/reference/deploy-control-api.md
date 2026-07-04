@@ -167,22 +167,30 @@ declared opaque argv commands. It does not inspect whether those commands migrat
 a database, publish an artifact, update an index, or perform another app-owned
 activation task.
 
-## Cloud-Only Exclusions
+## Out-of-Scope For Deploy-Control
 
-The OSS API must not expose:
+Deploy-Control は OpenTofu execution の Run / state / output API です。
+compatibility profile、managed Cloud resource、official billing の endpoint
+family は Deploy-Control の責務ではありません。これらは別の capability として
+document され、discovery で広告されます。
+
+OSS Deploy-Control API は、公式 hosted Cloud endpoint family を直接公開しません。
 
 ```text
 /compat/cloudflare/client/v4
 /gateway/ai/v1
-provider-compatible Gateway endpoint routes
+provider-compatible endpoint families
 official managed resource backend controls
 managed edge/storage/container resource APIs
 official billing/quota/usage endpoints
 ```
 
-Those belong to closed Takosumi Cloud.
+Compatibility API framework 自体は Takosumi の一部です。
+`compat.cloudflare.workers.v1`、`compat.s3.v1`、OpenAI-compatible AI endpoint
+などの profile は scoped / versioned capability であり、Deploy-Control の hidden
+route ではありません。
 
-The current Cloud extension route scope is `compat.cloudflare.workers.v1` and
-the OpenAI-compatible AI Gateway only. Other Cloud extension routes must be
-separately specified; OSS compatibility profiles remain scoped, versioned
-capabilities outside this deploy-control API.
+公式 hosted service で現在 document している Cloud endpoint family は
+`compat.cloudflare.workers.v1`、`compat.s3.v1`、OpenAI-compatible AI Gateway です。
+追加 endpoint family は、それぞれ compatibility matrix、auth model、usage
+contract、fail-closed behavior を持つ別仕様として定義します。
