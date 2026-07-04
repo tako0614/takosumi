@@ -376,6 +376,10 @@ Workspace usage / credit guard、Resource / NativeResource 正規化、manager d
 ResolutionLock が追加で適用されます。
 Cloudflare-compatible endpoint は独立した別 stack ではなく、この共通 Cloud managed
 operation boundary への import / deploy path です。
+Cloud resource の正本名は `EdgeWorker` / `ObjectBucket` などの service form と
+`takosumi.edge_worker` などの service family です。`cloudflare.workers_script` や
+`cloudflare.r2` は billing / compat meter の公開分類、Workers for Platforms や R2
+は selected manager / backend 実装です。
 
 response envelope:
 
