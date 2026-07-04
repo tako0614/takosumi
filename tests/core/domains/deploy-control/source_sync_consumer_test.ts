@@ -150,6 +150,23 @@ async function seedActiveCapsuleOnSnapshot(input: {
 
 test("source_sync consumer (public repo) records a snapshot and lastSeenCommit", async () => {
   const { store, sourcesService, runner, controller } = build();
+  runner.result = {
+    ...runner.result,
+    phaseTimings: [
+      {
+        phase: "source_ref_resolve",
+        startedAt: "2026-06-06T00:00:01.000Z",
+        finishedAt: "2026-06-06T00:00:01.042Z",
+        durationMs: 42,
+      },
+      {
+        phase: "source_archive_upload",
+        startedAt: "2026-06-06T00:00:02.000Z",
+        finishedAt: "2026-06-06T00:00:02.125Z",
+        durationMs: 125,
+      },
+    ],
+  };
   const { source } = await sourcesService.createSource({
     spaceId: "space_1",
     name: "repo",
@@ -172,6 +189,15 @@ test("source_sync consumer (public repo) records a snapshot and lastSeenCommit",
   expect(finished?.status).toBe("succeeded");
   expect(finished?.resolvedCommit).toBe("abc123def456");
   expect(finished?.archiveDigest).toBe(runner.result.archiveDigest);
+  expect(finished?.phaseTimings?.map((timing) => timing.phase)).toEqual([
+    "source_ref_resolve",
+    "source_archive_upload",
+  ]);
+  expect((await controller.getRunLogs(run.id)).diagnostics).toContainEqual({
+    severity: "info",
+    message: "source sync phase timings recorded",
+    detail: "source_ref_resolve=42ms, source_archive_upload=125ms",
+  });
 
   const snapshots = await store.listSourceSnapshots(source.id);
   expect(snapshots).toHaveLength(1);

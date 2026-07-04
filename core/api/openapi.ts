@@ -1940,6 +1940,20 @@ function sourceSchemas(): Record<string, Record<string, unknown>> {
         archiveDigest: { type: "string" },
         archiveSizeBytes: { type: "number" },
         snapshotId: { type: "string" },
+        phaseTimings: {
+          type: "array",
+          items: {
+            type: "object",
+            required: ["phase", "startedAt", "finishedAt", "durationMs"],
+            properties: {
+              phase: { type: "string" },
+              startedAt: { type: "string", format: "date-time" },
+              finishedAt: { type: "string", format: "date-time" },
+              durationMs: { type: "number" },
+            },
+            additionalProperties: false,
+          },
+        },
         error: { type: "string" },
       },
       additionalProperties: false,

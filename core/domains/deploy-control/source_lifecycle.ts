@@ -274,6 +274,9 @@ export class SourceLifecycleService {
       archiveDigest: result.archiveDigest,
       archiveSizeBytes: result.archiveSizeBytes,
       snapshotId,
+      ...(result.phaseTimings?.length
+        ? { phaseTimings: result.phaseTimings }
+        : {}),
     };
     const terminal = await this.#persistTerminalSourceSyncRun(
       succeeded,
