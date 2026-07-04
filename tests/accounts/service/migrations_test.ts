@@ -116,6 +116,17 @@ test("personal access token migration stores Accounts PATs without raw secrets",
   expect(migration).toContain("personal_access_tokens_subject_idx");
 });
 
+test("personal access token workspace migration stores default billing workspace", async () => {
+  const migration = await readMigration(
+    "029_personal_access_tokens_workspace.sql",
+  );
+
+  expect(migration).toContain("ALTER TABLE accounts_v1.personal_access_tokens");
+  expect(migration).toContain("ADD COLUMN IF NOT EXISTS space_id text");
+  expect(migration).toContain("REFERENCES accounts_v1.spaces");
+  expect(migration).toContain("personal_access_tokens_space_idx");
+});
+
 test("authorization code nonce migration preserves OIDC nonce checks", async () => {
   const migration = await readMigration("013_authorization_code_nonce.sql");
 

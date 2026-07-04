@@ -51,6 +51,7 @@ export interface PersonalAccessTokenRecord {
   subject: TakosumiSubject;
   name: string;
   scopes: readonly TakosumiAccountsPatScope[];
+  workspaceId?: string;
   createdAt: number;
   expiresAt?: number;
   revokedAt?: number;

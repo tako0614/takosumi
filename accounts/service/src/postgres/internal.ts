@@ -240,6 +240,7 @@ export interface PersonalAccessTokenRow {
   subject: TakosumiSubject;
   name: string;
   scopes: PersonalAccessTokenRecord["scopes"];
+  space_id: string | null;
   created_at: TimeValue;
   expires_at: TimeValue | null;
   revoked_at: TimeValue | null;
@@ -549,6 +550,7 @@ export function personalAccessTokenFromRow(
     subject: row.subject,
     name: row.name,
     scopes: row.scopes,
+    workspaceId: row.space_id ?? undefined,
     createdAt: millis(row.created_at),
     expiresAt: row.expires_at === null ? undefined : millis(row.expires_at),
     revokedAt: row.revoked_at === null ? undefined : millis(row.revoked_at),

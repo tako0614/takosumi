@@ -74,6 +74,7 @@ export async function handleCreatePersonalAccessToken(input: {
   }
   const name = stringValue(body.name)?.trim();
   const scopes = personalAccessTokenScopesValue(body.scopes);
+  const workspaceId = stringValue(body.workspace_id ?? body.workspaceId)?.trim();
   const now = Date.now();
   const expiresAtResult = personalAccessTokenExpiresAtValue(
     body.expires_at ?? body.expiresAt,
@@ -86,6 +87,20 @@ export async function handleCreatePersonalAccessToken(input: {
       400,
     );
   }
+  if (workspaceId) {
+    const ownedWorkspaces = await input.store.listWorkspacesForOwner(
+      session.subject,
+    );
+    if (
+      !ownedWorkspaces.some((workspace) => workspace.workspaceId === workspaceId)
+    ) {
+      return errorJson(
+        "workspace_not_found",
+        "workspace_id must reference a Workspace owned by the token subject",
+        404,
+      );
+    }
+  }
 
   const token = generatePersonalAccessToken();
   const record: PersonalAccessTokenRecord = {
@@ -94,6 +109,7 @@ export async function handleCreatePersonalAccessToken(input: {
     subject: session.subject,
     name,
     scopes,
+    ...(workspaceId ? { workspaceId } : {}),
     createdAt: now,
     expiresAt: expiresAtResult,
   };
@@ -186,6 +202,9 @@ export function personalAccessTokenIntrospectionBody(
     client_id: "takosumi-accounts-pat",
     token_type: "Bearer",
     scope: record.scopes.join(" "),
+    ...(record.workspaceId
+      ? { takosumi: { space_id: record.workspaceId } }
+      : {}),
     ...(record.expiresAt === undefined
       ? {}
       : { exp: Math.floor(record.expiresAt / 1000) }),
@@ -201,6 +220,7 @@ function personalAccessTokenMetadata(
     name: record.name,
     prefix: record.tokenPrefix,
     scopes: record.scopes,
+    ...(record.workspaceId ? { workspace_id: record.workspaceId } : {}),
     created_at: new Date(record.createdAt).toISOString(),
     ...(record.expiresAt === undefined
       ? {}
