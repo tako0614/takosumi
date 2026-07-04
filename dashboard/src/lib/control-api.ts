@@ -441,10 +441,9 @@ export interface InstallConfig {
     readonly description: { readonly ja: string; readonly en: string };
     readonly inputs: readonly {
       readonly name: string;
-      readonly type?: "string" | "number" | "boolean";
+      readonly type?: "string" | "number" | "boolean" | "json";
       readonly required?: boolean;
-      readonly defaultValue?:
-        "service-name" | "service-name-with-space" | "main" | "us-east-1";
+      readonly defaultValue?: string;
       readonly label: { readonly ja: string; readonly en: string };
       readonly helper?: { readonly ja: string; readonly en: string };
       readonly placeholder?: string;

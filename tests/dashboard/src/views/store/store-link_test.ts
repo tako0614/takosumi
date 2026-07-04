@@ -73,12 +73,22 @@ describe("store link handoff", () => {
             label: text("Replicas"),
             defaultValue: "2",
           },
+          {
+            name: "release_container_images",
+            type: "json",
+            label: text("Release images"),
+            defaultValue:
+              '{"runtime":"registry.cloudflare.com/acc/takos-worker-runtime:0.10.0-abcdef","executor":"registry.cloudflare.com/acc/takos-agent-executor:0.10.0-abcdef"}',
+          },
         ],
       }),
     );
     const params = new URLSearchParams(query);
     expect(params.get("varjson.enable_cloudflare_resources")).toBe("true");
     expect(params.get("varjson.replicas")).toBe("2");
+    expect(params.get("varjson.release_container_images")).toBe(
+      '{"runtime":"registry.cloudflare.com/acc/takos-worker-runtime:0.10.0-abcdef","executor":"registry.cloudflare.com/acc/takos-agent-executor:0.10.0-abcdef"}',
+    );
     expect(params.has("var.enable_cloudflare_resources")).toBe(false);
   });
 
@@ -90,9 +100,7 @@ describe("store link handoff", () => {
     const params = new URLSearchParams(buildNewQuery(yurucommu!));
 
     expect(params.get("git")).toBe("https://github.com/tako0614/yurucommu.git");
-    expect(params.get("ref")).toBe(
-      "5bace37eac259d1aa1b313b3ded31c03c518c1b8",
-    );
+    expect(params.get("ref")).toBe("5bace37eac259d1aa1b313b3ded31c03c518c1b8");
     expect(params.get("varjson.enable_cloudflare_resources")).toBe("true");
     expect(params.get("varjson.enable_cloudflare_worker_script")).toBe("true");
     expect(params.get("var.worker_bundle_url")).toBe(
@@ -101,5 +109,25 @@ describe("store link handoff", () => {
     expect(params.get("var.worker_bundle_sha256")).toBe(
       "5a5713b2cc548414951c51a469b32bdba756d2101933575d0ab230131eaa8c95",
     );
+  });
+
+  test("takos handoff carries release container images for operator activation", () => {
+    const takos = installableAppStoreListings.find(
+      (entry) => entry.id === "takos",
+    );
+    expect(takos).toBeDefined();
+    const params = new URLSearchParams(buildNewQuery(takos!));
+
+    expect(params.get("git")).toBe("https://github.com/tako0614/takos.git");
+    expect(params.get("ref")).toBe("bfdd9f8bb79c2f28f86a1187ab4e9eb47e40c5bb");
+    const rawImages = params.get("varjson.release_container_images");
+    expect(rawImages).toBeTruthy();
+    const images = JSON.parse(rawImages!);
+    expect(images).toEqual({
+      runtime:
+        "registry.cloudflare.com/a10162d23653f1ad1193dabf520a5dd0/takos-worker-runtime:0.10.0-bfdd9f8bb79c",
+      executor:
+        "registry.cloudflare.com/a10162d23653f1ad1193dabf520a5dd0/takos-agent-executor:0.10.0-bfdd9f8bb79c",
+    });
   });
 });
