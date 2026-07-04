@@ -303,7 +303,10 @@ source of truth for the others.
 The `takosumi` provider exists to define service forms that lack an adequate
 vendor-independent provider or protocol. Operations outside a scoped
 compatibility profile fail closed and are documented in the compatibility
-matrix instead of pretending full vendor compatibility.
+matrix instead of pretending full vendor compatibility. If a sufficient
+universal provider, protocol, or standard surface appears later, prefer that
+surface for new work. Keep the Takosumi shape only where it still adds import
+continuity, migration, managed-target placement, policy, or metering value.
 
 Takosumi Cloud-specific endpoint examples live in
 [Cloud endpoints](./cloud-endpoints.md).

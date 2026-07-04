@@ -183,6 +183,12 @@ form that needs a typed schema, planner, adapter, import/drift/state behavior,
 and capability evidence. A provider resource that does not map to either a
 Takosumi-owned service form or an operator/admin object has no reason to exist.
 
+This is not Takosumi-provider lock-in. If Takosumi defines a shape because no
+adequate universal provider or standard protocol exists, and that surface later
+appears, new designs should prefer the universal surface. The Takosumi shape can
+remain for import continuity, migration, managed-target placement, policy, or
+metering, but it is not mandatory.
+
 Adapters report capabilities and perform preview/apply/observe/delete work.
 Initial adapter families can include OpenTofu, Cloudflare, AWS, Kubernetes, VM,
 and Takosumi-native adapters.

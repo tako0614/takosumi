@@ -26,6 +26,12 @@ generic-env ProviderConnections. Use `takosumi/takosumi` only when the desired
 service form lacks an adequate vendor-neutral provider/protocol and Takosumi
 must expose it as a typed Resource Shape or operator/admin object.
 
+That rule is reversible. If a `takosumi_*` resource was created because no
+adequate universal surface existed, and a credible vendor-neutral provider or
+standard protocol later becomes available, prefer the universal surface for new
+work. Keep the Takosumi resource only where it still adds import continuity,
+managed-target placement, policy, metering, or migration value.
+
 Current v1alpha1 Resource Shape resources:
 
 | Resource                     | Shape              | Purpose                                             |
