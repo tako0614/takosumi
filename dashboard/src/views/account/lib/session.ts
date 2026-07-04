@@ -20,7 +20,10 @@
  * server-side revocation within a reasonable window.
  */
 import { setCurrentWorkspaceId } from "../../../lib/workspace-state.ts";
-import { primeWorkspaceListCache } from "../../../lib/workspace-list.ts";
+import {
+  primeWorkspaceListCache,
+  primeWorkspaceListCacheFromPromise,
+} from "../../../lib/workspace-list.ts";
 import type { Workspace } from "../../../lib/control-api.ts";
 
 export interface SessionRecord {
@@ -110,19 +113,26 @@ function pickResponseRecord(data: SessionMeResponse): SessionRecord | null {
 async function fetchSessionMe(): Promise<SessionRecord | null> {
   if (typeof fetch === "undefined") return null;
   try {
-    const res = await fetch(DASHBOARD_SESSION_BOOTSTRAP_PATH, {
+    const bootstrap = fetch(DASHBOARD_SESSION_BOOTSTRAP_PATH, {
       method: "GET",
       headers: { accept: "application/json" },
       credentials: "include",
+    }).then(async (res): Promise<DashboardBootstrapResponse | undefined> => {
+      if (res.status === 401 || res.status === 404) return undefined;
+      if (!res.ok) return undefined;
+      return (await res.json()) as DashboardBootstrapResponse;
     });
-    if (res.status === 401 || res.status === 404) return null;
-    if (res.ok) {
-      const data = (await res.json()) as DashboardBootstrapResponse;
-      if (Array.isArray(data.workspaces)) {
-        primeWorkspaceListCache(data.workspaces);
-      }
-      return pickResponseRecord(data);
+    primeWorkspaceListCacheFromPromise(
+      bootstrap.then((data) =>
+        Array.isArray(data?.workspaces) ? data.workspaces : undefined,
+      ),
+    );
+    const data = await bootstrap;
+    if (!data) throw new Error("dashboard bootstrap unavailable");
+    if (Array.isArray(data.workspaces)) {
+      primeWorkspaceListCache(data.workspaces);
     }
+    return pickResponseRecord(data);
   } catch {
     // Fall back to the account-plane session mirror below. The bootstrap route
     // is an optimization, not the canonical cookie proof.
