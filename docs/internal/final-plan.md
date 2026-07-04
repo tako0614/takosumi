@@ -561,7 +561,6 @@ path.
 
 `/compat/cloudflare/client/v4` is therefore not a separate product stack. It is
 one import/deploy entrypoint into the same Cloud managed-operation boundary.
-Compat handlers, Worker route writes, Resource Shape adapters, dashboard
 Compat handlers, Worker route writes/deletes, Resource Shape adapters, dashboard
 actions, standard data-plane facades, and billable AI Gateway requests should
 normalize the request into the same `CloudManagedOperation` request shape before
@@ -854,7 +853,6 @@ Compatibility APIs are framework capabilities in standard Takosumi.
 Compatibility APIs are scoped, versioned entrypoints into Takosumi. They are
 not a promise of complete cloud API compatibility. Whether a specific
 compatibility profile is enabled is reported through capabilities.
-In short: specific compatibility profile is enabled is reported through capabilities.
 
 Examples:
 
