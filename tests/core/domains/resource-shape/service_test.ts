@@ -252,6 +252,7 @@ test("apply passes selected implementation plugin metadata to the adapter", asyn
     stores,
     adapter,
     now: () => NOW,
+    allowedProviderBaseUrls: [PROVIDER_COMPAT_BASE_URL],
   });
   await service.putTargetPool("space_1", "default", {
     targets: [
@@ -302,6 +303,7 @@ test("delete reuses selected implementation options from the TargetPool", async 
     stores,
     adapter,
     now: () => NOW,
+    allowedProviderBaseUrls: [PROVIDER_COMPAT_BASE_URL],
   });
   await service.putTargetPool("space_1", "default", {
     targets: [
@@ -315,6 +317,7 @@ test("delete reuses selected implementation options from the TargetPool", async 
           {
             shape: "EdgeWorker",
             implementation: "cloudflare_workers",
+            plugin: "cloud-managed",
             options: { providerBaseUrl: PROVIDER_COMPAT_BASE_URL },
             interfaces: {
               worker_fetch: "native",
@@ -342,12 +345,14 @@ test("delete reuses selected implementation options from the TargetPool", async 
   expect(adapter.applyInputs[0]?.implementationOptions).toEqual({
     providerBaseUrl: PROVIDER_COMPAT_BASE_URL,
   });
+  expect(adapter.applyInputs[0]?.implementationPlugin).toBe("cloud-managed");
 
   const deleted = await service.delete("space_1", "EdgeWorker", "api", ACTOR);
   expect(deleted.ok).toBe(true);
   expect(adapter.deleteInputs[0]?.implementationOptions).toEqual({
     providerBaseUrl: PROVIDER_COMPAT_BASE_URL,
   });
+  expect(adapter.deleteInputs[0]?.implementationPlugin).toBe("cloud-managed");
   expect(adapter.deleteInputs[0]?.credentialRef).toBe(
     "conn_takosumi_cloud_edge",
   );
@@ -453,6 +458,7 @@ test("putTargetPool rejects malformed capability evidence and secret-like option
             {
               shape: "EdgeWorker",
               implementation: "cloudflare_workers",
+              plugin: "cloud-managed",
               interfaces: { worker_fetch: "native" },
               options: { providerBaseUrl: "not-a-url" },
             },
@@ -465,6 +471,69 @@ test("putTargetPool rejects malformed capability evidence and secret-like option
   if (!invalidProviderBaseUrl.ok) {
     expect(invalidProviderBaseUrl.error.message).toContain(
       "providerBaseUrl must be an absolute URL",
+    );
+  }
+
+  const unallowedProviderBaseUrl = await service.putTargetPool(
+    "space_1",
+    "unallowed-provider-base-url",
+    {
+      targets: [
+        {
+          name: "plugin-main",
+          type: "cloudflare",
+          priority: 90,
+          implementations: [
+            {
+              shape: "EdgeWorker",
+              implementation: "cloudflare_workers",
+              plugin: "cloud-managed",
+              interfaces: { worker_fetch: "native" },
+              options: { providerBaseUrl: PROVIDER_COMPAT_BASE_URL },
+            },
+          ],
+        },
+      ],
+    },
+  );
+  expect(unallowedProviderBaseUrl.ok).toBe(false);
+  if (!unallowedProviderBaseUrl.ok) {
+    expect(unallowedProviderBaseUrl.error.message).toContain(
+      "providerBaseUrl is not in the operator allowlist",
+    );
+  }
+
+  const serviceWithAllowlist = new ResourceShapeService({
+    stores: createInMemoryResourceShapeStores(),
+    adapter: new StubResourceShapeAdapter(),
+    now: () => NOW,
+    allowedProviderBaseUrls: [PROVIDER_COMPAT_BASE_URL],
+  });
+  const missingPlugin = await serviceWithAllowlist.putTargetPool(
+    "space_1",
+    "missing-provider-base-url-plugin",
+    {
+      targets: [
+        {
+          name: "plugin-main",
+          type: "cloudflare",
+          priority: 90,
+          implementations: [
+            {
+              shape: "EdgeWorker",
+              implementation: "cloudflare_workers",
+              interfaces: { worker_fetch: "native" },
+              options: { providerBaseUrl: PROVIDER_COMPAT_BASE_URL },
+            },
+          ],
+        },
+      ],
+    },
+  );
+  expect(missingPlugin.ok).toBe(false);
+  if (!missingPlugin.ok) {
+    expect(missingPlugin.error.message).toContain(
+      "providerBaseUrl requires an operator-installed implementation plugin",
     );
   }
 });

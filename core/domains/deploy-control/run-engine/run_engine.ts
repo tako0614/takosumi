@@ -230,9 +230,8 @@ function runnerInfrastructureRetryCount(
   run: PlanRun | ApplyRun,
   retryEventTypes: readonly string[],
 ): number {
-  return run.auditEvents.filter((event) =>
-    retryEventTypes.includes(event.type),
-  ).length;
+  return run.auditEvents.filter((event) => retryEventTypes.includes(event.type))
+    .length;
 }
 
 function runnerInfrastructureRetryExhaustedError(phase: string): Error {
@@ -5851,15 +5850,25 @@ export class RunEngine {
           ]) >= RUNNER_INFRASTRUCTURE_RETRY_LIMIT
         ) {
           await this.#billing.releaseApplyBillingReservation(planRun);
-          return {
-            applyRun: await this.#failApplyRun(
-              runningWithEnvironmentFailure,
-              leaseToken,
-              profile,
+          const failed = await this.#failApplyRun(
+            runningWithEnvironmentFailure,
+            leaseToken,
+            profile,
+            startedAt,
+            "destroy.failed",
+            runnerInfrastructureRetryExhaustedError("destroy_apply"),
+          );
+          if (failed.finishedAt !== undefined) {
+            await this.#recordRunnerMinuteUsage({
+              spaceId: failed.workspaceId,
+              runId: failed.id,
+              installationId: failed.installationId,
               startedAt,
-              "destroy.failed",
-              runnerInfrastructureRetryExhaustedError("destroy_apply"),
-            ),
+              finishedAt: failed.finishedAt,
+            });
+          }
+          return {
+            applyRun: failed,
             capsule: publicInstallation(installation),
             installation: publicInstallation(installation),
           };

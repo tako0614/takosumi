@@ -52,6 +52,17 @@ export interface RegisterResourceShapeRoutesOptions {
     readonly token: string;
     readonly request: Request;
   }) => ActorContext | undefined | Promise<ActorContext | undefined>;
+  /**
+   * Break-glass Resource tombstone authorization. Omitted means force deletes
+   * are not exposed over HTTP; operator compositions must explicitly opt in.
+   */
+  readonly authorizeResourceShapeForceDelete?: (input: {
+    readonly actor: ActorContext;
+    readonly request: Request;
+    readonly space: string;
+    readonly kind: ResourceShapeKind;
+    readonly name: string;
+  }) => boolean | Promise<boolean>;
 }
 
 /** Route inventory for the resource-shape family (not yet OpenAPI-published). */
@@ -135,12 +146,33 @@ export function registerResourceShapeRoutes(
     if ("response" in kind) return kind.response;
     const space = requireQuery(c, "space");
     if ("response" in space) return space.response;
+    const force = isTruthyQuery(c.req.query("force"));
+    if (force) {
+      const allowed = await options.authorizeResourceShapeForceDelete?.({
+        actor: auth.actor,
+        request: c.req.raw,
+        space: space.value,
+        kind: kind.value,
+        name: c.req.param("name"),
+      });
+      if (allowed !== true) {
+        return c.json(
+          apiError(
+            "forbidden",
+            "resource force delete requires operator break-glass authorization",
+            undefined,
+            requestIdFromContext(c),
+          ),
+          403,
+        );
+      }
+    }
     const result = await service.delete(
       space.value,
       kind.value,
       c.req.param("name"),
       auth.actor,
-      { force: isTruthyQuery(c.req.query("force")) },
+      { force },
     );
     if (!result.ok) return errorResponse(c, result.error);
     return c.body(null, 204);

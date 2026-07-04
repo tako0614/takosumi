@@ -115,6 +115,12 @@ export interface ResourceShapeServiceDeps {
   readonly adapter: ResourceAdapter;
   readonly now: () => IsoTimestamp;
   readonly deleteTimeoutMs?: number;
+  /**
+   * Operator-managed provider/compat base URLs that Resource Shape TargetPool
+   * implementation options may reference. Empty by default so customer-written
+   * TargetPools cannot redirect provider credentials to arbitrary origins.
+   */
+  readonly allowedProviderBaseUrls?: readonly string[];
 }
 
 export interface DeleteResourceOptions {
@@ -131,12 +137,16 @@ export class ResourceShapeService {
   readonly #adapter: ResourceAdapter;
   readonly #now: () => IsoTimestamp;
   readonly #deleteTimeoutMs: number;
+  readonly #allowedProviderBaseUrls: ReadonlySet<string>;
 
   constructor(deps: ResourceShapeServiceDeps) {
     this.#stores = deps.stores;
     this.#adapter = deps.adapter;
     this.#now = deps.now;
     this.#deleteTimeoutMs = deps.deleteTimeoutMs ?? DEFAULT_DELETE_TIMEOUT_MS;
+    this.#allowedProviderBaseUrls = new Set(
+      (deps.allowedProviderBaseUrls ?? []).map(normalizeBaseUrl),
+    );
   }
 
   // --- Configuration: TargetPool / SpacePolicy --------------------------------
@@ -146,7 +156,11 @@ export class ResourceShapeService {
     name: string,
     spec: TargetPoolSpec,
   ): Promise<ServiceResult<TargetPoolRecord>> {
-    const validation = validateTargetPoolSpec(name, spec);
+    const validation = validateTargetPoolSpec(
+      name,
+      spec,
+      this.#allowedProviderBaseUrls,
+    );
     if (validation) return { ok: false, error: validation };
     const now = this.#now();
     const existing = await this.#stores.targetPools.getByName(space, name);
@@ -704,6 +718,7 @@ const SECRET_VALUE_PATTERN =
 function validateTargetPoolSpec(
   name: string,
   spec: unknown,
+  allowedProviderBaseUrls: ReadonlySet<string>,
 ): ResourceServiceError | undefined {
   const nameError = tokenError(name, "TargetPool name");
   if (nameError) return nameError;
@@ -856,6 +871,10 @@ function validateTargetPoolSpec(
         const optionError = validateImplementationOptions(
           impl.options,
           `TargetPool target[${index}].implementations[${implIndex}].options`,
+          {
+            allowedProviderBaseUrls,
+            plugin: typeof impl.plugin === "string" ? impl.plugin : undefined,
+          },
         );
         if (optionError) return optionError;
         const secret = findSecretLikeJson(
@@ -896,12 +915,24 @@ function invalidTargetPool(message: string): ResourceServiceError {
 function validateImplementationOptions(
   options: Readonly<Record<string, unknown>>,
   field: string,
+  context: {
+    readonly allowedProviderBaseUrls: ReadonlySet<string>;
+    readonly plugin: string | undefined;
+  },
 ): ResourceServiceError | undefined {
   const providerBaseUrl = options.providerBaseUrl;
   if (providerBaseUrl === undefined) return undefined;
   if (typeof providerBaseUrl !== "string" || providerBaseUrl.trim() === "") {
-    return invalidTargetPool(`${field}.providerBaseUrl must be a non-empty string`);
+    return invalidTargetPool(
+      `${field}.providerBaseUrl must be a non-empty string`,
+    );
   }
+  if (!context.plugin) {
+    return invalidTargetPool(
+      `${field}.providerBaseUrl requires an operator-installed implementation plugin`,
+    );
+  }
+  let normalized: string;
   try {
     const url = new URL(providerBaseUrl);
     if (url.protocol !== "https:" && url.protocol !== "http:") {
@@ -909,10 +940,25 @@ function validateImplementationOptions(
         `${field}.providerBaseUrl must use http or https`,
       );
     }
+    normalized = normalizeBaseUrl(url.href);
   } catch {
-    return invalidTargetPool(`${field}.providerBaseUrl must be an absolute URL`);
+    return invalidTargetPool(
+      `${field}.providerBaseUrl must be an absolute URL`,
+    );
+  }
+  if (!context.allowedProviderBaseUrls.has(normalized)) {
+    return invalidTargetPool(
+      `${field}.providerBaseUrl is not in the operator allowlist`,
+    );
   }
   return undefined;
+}
+
+function normalizeBaseUrl(value: string): string {
+  const url = new URL(value.trim());
+  url.hash = "";
+  url.search = "";
+  return url.href.replace(/\/+$/u, "");
 }
 
 function tokenError(

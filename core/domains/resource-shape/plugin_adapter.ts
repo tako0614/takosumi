@@ -5,6 +5,7 @@ import type {
   AdapterPreviewResult,
   ResourceAdapter,
 } from "./adapter.ts";
+import type { JsonObject, NativeResourceRef } from "takosumi-contract";
 
 export interface ResourceShapePluginBinding {
   fetch(request: Request): Promise<Response> | Response;
@@ -37,29 +38,35 @@ export class PluginResourceShapeAdapter implements ResourceAdapter {
   async preview(input: AdapterApplyInput): Promise<AdapterPreviewResult> {
     const plugin = this.#pluginFor(input.implementationPlugin);
     if (!plugin) return await this.#fallback.preview(input);
-    return await this.#callPlugin<AdapterPreviewResult>(
-      plugin,
+    return validatePreviewResult(
+      await this.#callPlugin(
+        plugin,
+        input.implementationPlugin!,
+        "preview",
+        input,
+      ),
       input.implementationPlugin!,
-      "preview",
-      input,
     );
   }
 
   async apply(input: AdapterApplyInput): Promise<AdapterApplyResult> {
     const plugin = this.#pluginFor(input.implementationPlugin);
     if (!plugin) return await this.#fallback.apply(input);
-    return await this.#callPlugin<AdapterApplyResult>(
-      plugin,
+    return validateApplyResult(
+      await this.#callPlugin(
+        plugin,
+        input.implementationPlugin!,
+        "apply",
+        input,
+      ),
       input.implementationPlugin!,
-      "apply",
-      input,
     );
   }
 
   async delete(input: AdapterDeleteInput): Promise<void> {
     const plugin = this.#pluginFor(input.implementationPlugin);
     if (!plugin) return await this.#fallback.delete(input);
-    await this.#callPlugin<unknown>(
+    await this.#callPlugin(
       plugin,
       input.implementationPlugin!,
       "delete",
@@ -80,12 +87,12 @@ export class PluginResourceShapeAdapter implements ResourceAdapter {
     return plugin;
   }
 
-  async #callPlugin<T>(
+  async #callPlugin(
     plugin: ResourceShapePluginBinding,
     pluginId: string,
     action: PluginAction,
     input: AdapterApplyInput | AdapterDeleteInput,
-  ): Promise<T> {
+  ): Promise<Record<string, unknown> | undefined> {
     const response = await plugin.fetch(
       new Request(
         `https://takosumi-resource-shape-plugin.local/${encodeURIComponent(
@@ -103,15 +110,92 @@ export class PluginResourceShapeAdapter implements ResourceAdapter {
         `Resource Shape adapter plugin "${pluginId}" ${action} failed with ${response.status}: ${await response.text()}`,
       );
     }
-    if (action === "delete" || response.status === 204) return undefined as T;
+    if (action === "delete" || response.status === 204) return undefined;
     const body = (await response.json()) as unknown;
     if (!isRecord(body)) {
       throw new Error(
         `Resource Shape adapter plugin "${pluginId}" ${action} returned a non-object response`,
       );
     }
-    return body as T;
+    return body;
   }
+}
+
+function validatePreviewResult(
+  body: Record<string, unknown> | undefined,
+  pluginId: string,
+): AdapterPreviewResult {
+  if (!body) {
+    throw new Error(
+      `Resource Shape adapter plugin "${pluginId}" preview returned an empty response`,
+    );
+  }
+  const summary = body.summary;
+  if (typeof summary !== "string" || summary.trim() === "") {
+    throw new Error(
+      `Resource Shape adapter plugin "${pluginId}" preview response must include summary`,
+    );
+  }
+  return {
+    summary,
+    nativeResources: nativeResourcesFromPluginResponse(
+      body.nativeResources,
+      pluginId,
+      "preview",
+    ),
+    ...(typeof body.runId === "string" ? { runId: body.runId } : {}),
+  };
+}
+
+function validateApplyResult(
+  body: Record<string, unknown> | undefined,
+  pluginId: string,
+): AdapterApplyResult {
+  if (!body) {
+    throw new Error(
+      `Resource Shape adapter plugin "${pluginId}" apply returned an empty response`,
+    );
+  }
+  if (!isRecord(body.outputs)) {
+    throw new Error(
+      `Resource Shape adapter plugin "${pluginId}" apply response must include outputs`,
+    );
+  }
+  return {
+    nativeResources: nativeResourcesFromPluginResponse(
+      body.nativeResources,
+      pluginId,
+      "apply",
+    ),
+    outputs: body.outputs as JsonObject,
+    ...(typeof body.runId === "string" ? { runId: body.runId } : {}),
+  };
+}
+
+function nativeResourcesFromPluginResponse(
+  value: unknown,
+  pluginId: string,
+  action: PluginAction,
+): readonly NativeResourceRef[] {
+  if (!Array.isArray(value)) {
+    throw new Error(
+      `Resource Shape adapter plugin "${pluginId}" ${action} response must include nativeResources`,
+    );
+  }
+  return value.map((item, index) => {
+    if (
+      !isRecord(item) ||
+      typeof item.type !== "string" ||
+      item.type.trim() === "" ||
+      typeof item.id !== "string" ||
+      item.id.trim() === ""
+    ) {
+      throw new Error(
+        `Resource Shape adapter plugin "${pluginId}" ${action} response nativeResources[${index}] must include type and id`,
+      );
+    }
+    return { type: item.type, id: item.id };
+  });
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
