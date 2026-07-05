@@ -1167,9 +1167,9 @@ export class OpenTofuDeploymentController {
           requiredProviders,
         ),
     });
-    this.#seededProfiles = this.#seedRunnerProfiles(
-      dependencies.runnerProfiles ?? createDefaultRunnerProfiles(this.#now()),
-    );
+    const runnerProfiles =
+      dependencies.runnerProfiles ?? createDefaultRunnerProfiles(this.#now());
+    this.#seededProfiles = this.#seedRunnerProfiles(runnerProfiles);
     this.#runEngine = new RunEngine({
       store: this.#store,
       runner: this.#runner,
@@ -1188,6 +1188,7 @@ export class OpenTofuDeploymentController {
       observability: this.#observability,
       metricTags: this.#metricTags,
       allowOperatorBackedProviderEnvs: this.#allowOperatorBackedProviderEnvs,
+      runnerProfiles,
       seededProfiles: this.#seededProfiles,
       runQuery: this.#runQuery,
       billing: this.#billing,
