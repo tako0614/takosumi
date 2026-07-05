@@ -127,7 +127,13 @@ bun run operator:release-activator -- serve \
 ```
 
 It fetches the SourceSnapshot archive from R2, verifies the recorded digest,
-extracts it into a temporary directory, and runs the opaque `post_apply` argv.
+extracts it into an operator work directory, and runs the opaque `post_apply` argv.
+The default work root is `/var/tmp/takosumi-release-activator`; set
+`TAKOSUMI_RELEASE_WORK_ROOT` or `--work-root` when the operator host uses a
+different large disk. Each activation injects job-local `TMPDIR`,
+`BUN_INSTALL_CACHE_DIR`, `BUN_TMPDIR`, `XDG_CACHE_HOME`, and
+`NODE_COMPILE_CACHE`, so `bun install`, `bunx wrangler`, and build steps do not
+depend on a shared tmpfs `/tmp`.
 Takosumi does not add database-specific migration resources, product-specific
 publication code, or resource-aware activation plugins. Any work after apply is
 just a command owned by the Capsule/operator; Takosumi only runs it, records

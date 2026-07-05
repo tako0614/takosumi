@@ -1143,7 +1143,7 @@ export async function runPlatformControlPlaneSmoke(
     }
     if (shouldVerifyCloudflareDeployment(options)) {
       beginStep("deploymentVerified");
-      await assertCloudflareWorkerExists(options);
+      await assertCloudflareWorkerExists(options, deploymentLedger.outputsPublic);
       completeStep("deploymentVerified");
     }
     if (options.verificationMode === "cloudflare-worker") {
@@ -1154,7 +1154,7 @@ export async function runPlatformControlPlaneSmoke(
           deploymentLedger.outputsPublic,
         );
       } else {
-        await assertPublicWorkerUrl(options);
+        await assertPublicWorkerUrl(options, deploymentLedger.outputsPublic);
       }
       completeStep("publicUrlVerified");
     }
@@ -2418,22 +2418,42 @@ async function latestDeploymentForInstallation(
 
 async function assertCloudflareWorkerExists(
   options: PlatformControlPlaneSmokeOptions,
+  outputsPublic?: Readonly<Record<string, unknown>>,
 ): Promise<void> {
+  const workerName = cloudflareWorkerName(options, outputsPublic);
   const deadline = Date.now() + 60_000;
   let lastStatus = 0;
   while (Date.now() <= deadline) {
-    const response = await cloudflareScriptRequest(options, "GET");
+    const response = await cloudflareScriptRequest(options, "GET", workerName);
     lastStatus = response.status;
     if (response.status === 200) return;
     await sleep(2_000);
   }
   throw new Error(
-    `Cloudflare Worker ${options.appName} was not readable after apply (last HTTP ${lastStatus})`,
+    `Cloudflare Worker ${workerName} was not readable after apply (last HTTP ${lastStatus})`,
   );
 }
 
 function publicWorkerUrl(options: PlatformControlPlaneSmokeOptions): string {
-  return `https://${options.appName}.${options.cloudflareWorkersSubdomain}.workers.dev`;
+  return publicWorkerUrlForName(options, options.appName);
+}
+
+function publicWorkerUrlForName(
+  options: PlatformControlPlaneSmokeOptions,
+  workerName: string,
+): string {
+  return `https://${workerName}.${options.cloudflareWorkersSubdomain}.workers.dev`;
+}
+
+function cloudflareWorkerName(
+  options: PlatformControlPlaneSmokeOptions,
+  outputsPublic?: Readonly<Record<string, unknown>>,
+): string {
+  const outputWorkerName = outputsPublic?.worker_name;
+  if (typeof outputWorkerName === "string" && outputWorkerName.trim()) {
+    return outputWorkerName;
+  }
+  return options.appName;
 }
 
 function isCurrentTakosumiHelloPage(body: string): boolean {
@@ -2447,8 +2467,16 @@ function isCurrentTakosumiHelloPage(body: string): boolean {
 
 async function assertPublicWorkerUrl(
   options: PlatformControlPlaneSmokeOptions,
+  outputsPublic?: Readonly<Record<string, unknown>>,
 ): Promise<void> {
-  const url = publicWorkerUrl(options);
+  const outputUrl = outputsPublic?.url;
+  const url =
+    typeof outputUrl === "string" && outputUrl.trim()
+      ? outputUrl
+      : publicWorkerUrlForName(
+          options,
+          cloudflareWorkerName(options, outputsPublic),
+        );
   const deadline = Date.now() + 60_000;
   let lastStatus = 0;
   let lastBody = "";
@@ -2672,12 +2700,14 @@ async function assertDeploymentLedger(
   if (!isRecord(outputsPublic)) {
     throw new Error("state-version ledger did not expose outputsPublic");
   }
-  if (outputsPublic.worker_name !== options.appName) {
+  const workerName = outputsPublic.worker_name;
+  if (typeof workerName !== "string" || !workerName.trim()) {
     throw new Error(
-      "deployment outputsPublic.worker_name did not match appName",
+      "deployment outputsPublic.worker_name was not a non-empty string",
     );
   }
-  if (outputsPublic.url !== publicWorkerUrl(options)) {
+  const expectedWorkerUrl = publicWorkerUrlForName(options, workerName);
+  if (outputsPublic.url !== expectedWorkerUrl) {
     throw new Error(
       "deployment outputsPublic.url did not match public Worker URL",
     );
@@ -2971,11 +3001,12 @@ async function assertPublicWorkerUrlGone(
 async function cloudflareScriptRequest(
   options: PlatformControlPlaneSmokeOptions,
   method: "GET" | "DELETE",
+  workerName = options.appName,
 ): Promise<Response> {
   return await fetch(
     `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(
       options.cloudflareAccountId,
-    )}/workers/scripts/${encodeURIComponent(options.appName)}`,
+    )}/workers/scripts/${encodeURIComponent(workerName)}`,
     {
       method,
       headers: {

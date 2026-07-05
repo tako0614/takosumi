@@ -655,6 +655,13 @@ bun run release-activation:evidence -- --update-digests \
   "$TAKOSUMI_PRIVATE/evidence/release-activation.json"
 ```
 
+release activator は source archive、展開済み source、Bun/Wrangler の一時 cache を
+job-local workdir に置く。既定は `/var/tmp/takosumi-release-activator` で、tmpfs の
+`/tmp` を使い切らないようにする。operator host の disk layout に合わせて
+`TAKOSUMI_RELEASE_WORK_ROOT` または `--work-root` で十分な容量の永続ディスクを指定する。
+release command には job-local `TMPDIR` / `BUN_INSTALL_CACHE_DIR` / `BUN_TMPDIR` /
+`XDG_CACHE_HOME` / `NODE_COMPILE_CACHE` が注入され、親プロセスの `/tmp` や Bun cache には依存しない。
+
 `release-activation:evidence` の出力 `env` に含まれる4組の
 `TAKOSUMI_RELEASE_ACTIVATION_*_EVIDENCE_REF` / `_DIGEST` を realized config
 へ反映する。`TAKOSUMI_RELEASE_ACTIVATOR_URL` が設定されている場合、

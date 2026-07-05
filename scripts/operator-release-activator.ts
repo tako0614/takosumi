@@ -2,7 +2,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -12,7 +12,7 @@ import {
 } from "../contract/provider-env-rules.ts";
 
 const RELEASE_ACTIVATION_KIND = "takosumi.operator.release-activation@v1";
-const DEFAULT_WORK_ROOT = join(tmpdir(), "takosumi-release-activator");
+const DEFAULT_WORK_ROOT = defaultReleaseWorkRoot();
 const DEFAULT_HOST = "127.0.0.1";
 const DEFAULT_PORT = 8797;
 const USAGE = "usage: operator-release-activator.ts <serve|run> ...";
@@ -128,6 +128,8 @@ const SECRET_ENV_NAME_RE =
   /(?:^|[_-])(?:token|secret|password|passwd|credential|auth|bearer|session|cookie|key)(?:$|[_-])|(?:^|[_-])(?:database|db|postgres|postgresql|mysql|mariadb|redis|mongo|mongodb|libsql|sqlite)[_-]?(?:url|uri|dsn)(?:$|[_-])|(?:^|[_-])(?:dsn|connection[_-]?string)(?:$|[_-])/i;
 const SECRET_ENV_VALUE_RE =
   /(?:token|secret|password|passwd|credential|auth|bearer|session|cookie|key|database[_-]?url|connection[_-]?string|\bdsn\b|(?:postgres(?:ql)?|mysql|mariadb|redis|mongo|mongodb|libsql|sqlite):\/\/|:\/\/[^/\s:@]+:[^@\s]+@)/i;
+const activeServers: Array<ReturnType<typeof Bun.serve>> = [];
+const keepAliveTimers: Array<ReturnType<typeof setInterval>> = [];
 
 export function buildWranglerR2GetArgs(input: WranglerR2GetInput): string[] {
   const args = [
@@ -156,6 +158,8 @@ export async function runReleaseActivation(
   const workdir = await mkdtemp(join(workRoot, "release-"));
   const archivePath = join(workdir, "source.tar.zst");
   const sourceRoot = join(workdir, "source");
+  const runtimeRoot = join(workdir, "runtime");
+  await prepareRuntimeRoot(runtimeRoot);
   try {
     if (options.downloadArchive) {
       await options.downloadArchive(payload, archivePath);
@@ -173,6 +177,7 @@ export async function runReleaseActivation(
         payload,
         command,
         sourceRoot,
+        runtimeRoot,
         options.commandEnv,
         options.commandEnvAllowlist,
       );
@@ -337,6 +342,8 @@ async function downloadArchiveWithWrangler(
     );
   }
   await mkdir(dirname(archivePath), { recursive: true });
+  const runtimeRoot = join(dirname(archivePath), "tool-runtime");
+  await prepareRuntimeRoot(runtimeRoot);
   const args = buildWranglerR2GetArgs({
     bucket,
     key: payload.sourceSnapshot.archiveObjectKey,
@@ -347,7 +354,7 @@ async function downloadArchiveWithWrangler(
   });
   const result = spawnSync("bunx", args, {
     encoding: "utf8",
-    env: materializerToolEnv(options.operatorEnv),
+    env: materializerToolEnv(options.operatorEnv, runtimeRoot),
   });
   if (result.status !== 0) {
     throw new Error(
@@ -401,6 +408,7 @@ function runReleaseCommand(
   payload: ReleaseActivationPayload,
   command: ReleaseActivationCommand,
   sourceRoot: string,
+  runtimeRoot: string,
   parentEnv: Readonly<Record<string, string | undefined>> | undefined,
   commandEnvAllowlist: readonly string[] | undefined,
 ): void {
@@ -437,6 +445,7 @@ function runReleaseCommand(
       outputs,
     }),
     ...(command.env ?? {}),
+    ...materializerRuntimeEnv(runtimeRoot),
   };
   assertNoUnexpectedCredentialEnv(
     env,
@@ -483,6 +492,43 @@ function materializerBaseEnv(
   return next;
 }
 
+function defaultReleaseWorkRoot(): string {
+  const configured = process.env.TAKOSUMI_RELEASE_WORK_ROOT?.trim();
+  if (configured) return configured;
+  if (process.platform === "win32") {
+    return join(
+      process.env.XDG_CACHE_HOME ?? join(homedir(), ".cache"),
+      "takosumi-release-activator",
+    );
+  }
+  return join("/var/tmp", "takosumi-release-activator");
+}
+
+async function prepareRuntimeRoot(runtimeRoot: string): Promise<void> {
+  await Promise.all(
+    [
+      "tmp",
+      "bun-install-cache",
+      "bun-tmp",
+      "xdg-cache",
+      "node-compile-cache",
+    ].map((name) => mkdir(join(runtimeRoot, name), { recursive: true })),
+  );
+}
+
+function materializerRuntimeEnv(runtimeRoot: string): Record<string, string> {
+  const tmpPath = join(runtimeRoot, "tmp");
+  return {
+    TMPDIR: tmpPath,
+    TEMP: tmpPath,
+    TMP: tmpPath,
+    BUN_INSTALL_CACHE_DIR: join(runtimeRoot, "bun-install-cache"),
+    BUN_TMPDIR: join(runtimeRoot, "bun-tmp"),
+    XDG_CACHE_HOME: join(runtimeRoot, "xdg-cache"),
+    NODE_COMPILE_CACHE: join(runtimeRoot, "node-compile-cache"),
+  };
+}
+
 function materializerAllowedCommandEnv(
   env: Readonly<Record<string, string | undefined>> | undefined = process.env,
   allowlist: readonly string[] | undefined,
@@ -518,12 +564,14 @@ function normalizeCommandEnvAllowlist(
 
 function materializerToolEnv(
   env: Readonly<Record<string, string | undefined>> = process.env,
+  runtimeRoot?: string,
 ): Record<string, string> {
   const next = materializerBaseEnv(env);
   for (const name of WRANGLER_AUTH_ENV_NAMES) {
     const value = env[name];
     if (typeof value === "string") next[name] = value;
   }
+  if (runtimeRoot) Object.assign(next, materializerRuntimeEnv(runtimeRoot));
   return next;
 }
 
@@ -707,6 +755,12 @@ export function serveReleaseActivator(options: ServeOptions): void {
     port: options.port,
     fetch,
   });
+  activeServers.push(server);
+  keepAliveTimers.push(
+    setInterval(() => {
+      // A pending Promise alone does not keep Bun's event loop alive.
+    }, 60_000),
+  );
   console.log(
     `Takosumi operator release activator listening on http://${server.hostname}:${server.port}`,
   );
@@ -824,43 +878,49 @@ async function runReleaseActivationChild(
   child.stderr?.on("data", (chunk) => {
     stderr = tailText(stderr + String(chunk), 256 * 1024);
   });
-  return await new Promise((resolve) => {
-    child.on("error", (error) => {
-      resolve({
-        status: "failed",
-        kind: "takosumi.operator.release-commands@v1",
-        message: `release activation child failed: ${error.message}`,
+  try {
+    return await new Promise((resolve) => {
+      child.on("error", (error) => {
+        resolve({
+          status: "failed",
+          kind: "takosumi.operator.release-commands@v1",
+          message: `release activation child failed: ${error.message}`,
+        });
       });
-    });
-    child.on("close", (code) => {
-      if (code === 0) {
-        try {
-          resolve(JSON.parse(stdout) as ReleaseActivationResponse);
-          return;
-        } catch {
-          resolve({
-            status: "failed",
-            kind: "takosumi.operator.release-commands@v1",
-            message: `release activation child returned invalid JSON: ${tailText(
-              stdout,
-            )}`,
-          });
-          return;
+      child.on("close", (code) => {
+        if (code === 0) {
+          try {
+            resolve(JSON.parse(stdout) as ReleaseActivationResponse);
+            return;
+          } catch {
+            resolve({
+              status: "failed",
+              kind: "takosumi.operator.release-commands@v1",
+              message: `release activation child returned invalid JSON: ${tailText(
+                stdout,
+              )}`,
+            });
+            return;
+          }
         }
-      }
-      resolve({
-        status: "failed",
-        kind: "takosumi.operator.release-commands@v1",
-        message: [
-          `release activation child exited ${code ?? "unknown"}`,
-          stdout ? `stdout tail:\n${tailText(stdout)}` : undefined,
-          stderr ? `stderr tail:\n${tailText(stderr)}` : undefined,
-        ]
-          .filter(Boolean)
-          .join("\n"),
+        resolve({
+          status: "failed",
+          kind: "takosumi.operator.release-commands@v1",
+          message: [
+            `release activation child exited ${code ?? "unknown"}`,
+            stdout ? `stdout tail:\n${tailText(stdout)}` : undefined,
+            stderr ? `stderr tail:\n${tailText(stderr)}` : undefined,
+          ]
+            .filter(Boolean)
+            .join("\n"),
+        });
       });
     });
-  });
+  } finally {
+    if (options.keepWorkdir !== true) {
+      await rm(jobDir, { recursive: true, force: true });
+    }
+  }
 }
 
 function runModeArgs(options: RunReleaseOptions): string[] {

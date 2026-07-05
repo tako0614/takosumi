@@ -225,6 +225,30 @@ function isRetryableRunnerRequeueError(error: unknown): boolean {
 }
 
 const RUNNER_INFRASTRUCTURE_RETRY_LIMIT = 1;
+const PLAN_CREATION_STAGE_TIMEOUT_MS = 25_000;
+
+async function planCreationStage<T>(
+  stage: string,
+  promise: Promise<T>,
+): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => {
+      reject(
+        new OpenTofuControllerError(
+          "failed_precondition",
+          `capsule_plan_creation_timeout: stage ${stage} did not return within ${PLAN_CREATION_STAGE_TIMEOUT_MS}ms`,
+          { stage, timeoutMs: PLAN_CREATION_STAGE_TIMEOUT_MS },
+        ),
+      );
+    }, PLAN_CREATION_STAGE_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
 
 function runnerInfrastructureRetryCount(
   run: PlanRun | ApplyRun,
@@ -905,32 +929,41 @@ export class RunEngine {
     const compatibilityReport = internal.deferCompatibilityReport
       ? undefined
       : internal.compatibilityReportId
-        ? await this.#useInstallationCompatibilityReportHint(
-            installation,
-            source,
-            snapshot,
-            internal.compatibilityReportId,
+        ? await planCreationStage(
+            "compatibility_report_hint",
+            this.#useInstallationCompatibilityReportHint(
+              installation,
+              source,
+              snapshot,
+              internal.compatibilityReportId,
+            ),
           )
-        : await this.#ensureInstallationCompatibilityReport(
-            installation,
-            source,
-            snapshot,
-            installConfig.modulePath,
+        : await planCreationStage(
+            "compatibility_report_ensure",
+            this.#ensureInstallationCompatibilityReport(
+              installation,
+              source,
+              snapshot,
+              installConfig.modulePath,
+            ),
           );
     const {
       request: planRequest,
       installTypePlan,
       genericRootPlan,
-    } = await this.#installationPlanRequest({
-      installation,
-      installConfig,
-      source,
-      snapshot,
-      operation,
-      ...(runnerProfileId ? { runnerProfileId } : {}),
-      ...(compatibilityReport ? { compatibilityReport } : {}),
-      skipReadySourceFileDiscovery: compatibilityReportFromHint,
-    });
+    } = await planCreationStage(
+      "installation_plan_request",
+      this.#installationPlanRequest({
+        installation,
+        installConfig,
+        source,
+        snapshot,
+        operation,
+        ...(runnerProfileId ? { runnerProfileId } : {}),
+        ...(compatibilityReport ? { compatibilityReport } : {}),
+        skipReadySourceFileDiscovery: compatibilityReportFromHint,
+      }),
+    );
     const installationContext: PlanRunInstallationContext = {
       workspaceId: installation.workspaceId,
       spaceId: installation.spaceId,
@@ -951,7 +984,10 @@ export class RunEngine {
       : planRequest;
     const resolvedDeps = destroy
       ? undefined
-      : await this.#dependencies.resolveConsumerDependencies(installation);
+      : await planCreationStage(
+          "dependency_resolution",
+          this.#dependencies.resolveConsumerDependencies(installation),
+        );
     const injectedRequest = resolvedDeps
       ? this.#injectDependencyValues(
           selectedPlanRequest,
@@ -959,30 +995,36 @@ export class RunEngine {
         )
       : selectedPlanRequest;
     const finalizedGenericRoot = genericRootPlan
-      ? await this.#genericRootDispatchForRequest(
-          injectedRequest,
-          genericRootPlan,
-          compatibilityReport,
-          snapshot,
+      ? await planCreationStage(
+          "generic_root_dispatch",
+          this.#genericRootDispatchForRequest(
+            injectedRequest,
+            genericRootPlan,
+            compatibilityReport,
+            snapshot,
+          ),
         )
       : undefined;
-    const response = await this.createPlanRun(injectedRequest, context, {
-      installationContext,
-      sourceSnapshotId: snapshot.id,
-      baseStateGeneration,
-      ...(compatibilityReport
-        ? { compatibilityReportId: compatibilityReport.id }
-        : {}),
-      ...(installTypePlan ? { installTypePlan } : {}),
-      ...(finalizedGenericRoot
-        ? { genericRootDispatch: finalizedGenericRoot }
-        : {}),
-      ...(resolvedDeps && resolvedDeps.entries.length > 0
-        ? { resolvedDependencies: resolvedDeps }
-        : {}),
-      ...(internal.runGroupId ? { runGroupId: internal.runGroupId } : {}),
-      ...(internal.driftCheck ? { driftCheck: true as const } : {}),
-    });
+    const response = await planCreationStage(
+      "plan_run_create",
+      this.createPlanRun(injectedRequest, context, {
+        installationContext,
+        sourceSnapshotId: snapshot.id,
+        baseStateGeneration,
+        ...(compatibilityReport
+          ? { compatibilityReportId: compatibilityReport.id }
+          : {}),
+        ...(installTypePlan ? { installTypePlan } : {}),
+        ...(finalizedGenericRoot
+          ? { genericRootDispatch: finalizedGenericRoot }
+          : {}),
+        ...(resolvedDeps && resolvedDeps.entries.length > 0
+          ? { resolvedDependencies: resolvedDeps }
+          : {}),
+        ...(internal.runGroupId ? { runGroupId: internal.runGroupId } : {}),
+        ...(internal.driftCheck ? { driftCheck: true as const } : {}),
+      }),
+    );
     return response;
   }
 

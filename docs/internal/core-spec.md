@@ -351,6 +351,31 @@ capability evidence and adapters.
 a closed provider-side enum. Validation of support belongs to capability
 discovery, TargetPool policy, adapter evidence, and the Resolver.
 
+## Composite Products
+
+Composite products are represented by composing typed generic shapes. They do
+not get product-specific catch-all Resource Shapes.
+
+Takos is the reference example. Takosumi should be able to describe a Takos
+distribution as ordinary Resource Shape objects:
+
+```text
+Takos distribution:
+  EdgeWorker        -> takos-worker
+  SQLDatabase       -> workspace/control database
+  KVStore           -> session/cache/state binding
+  ObjectBucket      -> files and workspace objects
+  Queue             -> agent jobs and product events
+  ContainerService  -> takos-git and takos-agent containers
+```
+
+This means there is no `takosumi_takos` resource and no generic
+`takosumi_resource { type, spec }` fallback for Takos. If Takos needs a service
+form that the default shapes cannot express, add that missing typed service form
+only after the prior-art gate passes. The implementation/backend still remains
+an operator decision through TargetPool, Policy, adapter capability evidence,
+and ResolutionLock.
+
 ## Resolver
 
 Resolver input:
