@@ -119,7 +119,7 @@ describe("store link handoff", () => {
     const params = new URLSearchParams(buildNewQuery(takos!));
 
     expect(params.get("git")).toBe("https://github.com/tako0614/takos.git");
-    expect(params.get("ref")).toBe("bfdd9f8bb79c2f28f86a1187ab4e9eb47e40c5bb");
+    expect(params.get("ref")).toBe("a4d0375aee7cb7466db6f5d4512ef65eda16e8b9");
     const rawImages = params.get("varjson.release_container_images");
     expect(rawImages).toBeTruthy();
     const images = JSON.parse(rawImages!);
