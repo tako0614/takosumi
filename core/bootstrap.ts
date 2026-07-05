@@ -137,6 +137,7 @@ import type {
 import type { PageParams } from "takosumi-contract/pagination";
 import type {
   TakosumiAdapterCapabilities,
+  TakosumiOperatorCapabilities,
   TakosumiResourceCapabilities,
 } from "takosumi-contract/capabilities";
 import {
@@ -390,6 +391,7 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
   readonly enabledResourceShapeKinds?: readonly ResourceShapeKind[];
   readonly resourceCapabilities?: Partial<TakosumiResourceCapabilities>;
   readonly adapterCapabilities?: Partial<TakosumiAdapterCapabilities>;
+  readonly operatorCapabilities?: Partial<TakosumiOperatorCapabilities>;
   readonly resolveResourceShapeActor?: (
     request: Request,
   ) => ActorContext | Promise<ActorContext>;
@@ -1133,6 +1135,9 @@ export async function createTakosumiService(
       : {}),
     ...(options.adapterCapabilities
       ? { adapterCapabilities: options.adapterCapabilities }
+      : {}),
+    ...(options.operatorCapabilities
+      ? { operatorCapabilities: options.operatorCapabilities }
       : {}),
     resourceShapeRouteOptions: resourceShapeService
       ? {

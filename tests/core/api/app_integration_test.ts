@@ -106,6 +106,31 @@ test("createApiApp exposes product capabilities without inventory auth", async (
   assert.equal(body.apiVersion, TAKOSUMI_API_VERSION);
   assert.equal(body.resources.Stack, true);
   assert.equal(body.compat.framework, true);
+  assert.equal(body.operator.runner_pools, false);
+  assert.equal(body.operator.cli_api_operations, false);
+});
+
+test("createApiApp can advertise Operator operations without an admin UI capability", async () => {
+  const app = await createApiApp({
+    operatorCapabilities: {
+      runner_pools: true,
+      operator_connections: true,
+      db_backed_configuration: true,
+      cli_api_operations: true,
+      audit_evidence: true,
+    },
+  });
+
+  const response = await app.request(TAKOSUMI_PRODUCT_CAPABILITIES_PATH);
+
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.operator.runner_pools, true);
+  assert.equal(body.operator.operator_connections, true);
+  assert.equal(body.operator.db_backed_configuration, true);
+  assert.equal(body.operator.cli_api_operations, true);
+  assert.equal(body.operator.audit_evidence, true);
+  assert.equal(Object.hasOwn(body.operator, "operator_console"), false);
 });
 
 test("createApiApp does not mount retired public deployment routes", async () => {
@@ -146,9 +171,7 @@ test("createApiApp does not mount retired public deployment routes", async () =>
   assert.equal(endpointPaths.includes("/internal/v1/apply-runs"), false);
   assert.equal(endpointPaths.includes("/internal/v1/runner-profiles"), false);
   assert.equal(
-    endpointPaths.includes(
-      "/internal/v1/capsules/:installationId/outputs",
-    ),
+    endpointPaths.includes("/internal/v1/capsules/:installationId/outputs"),
     false,
   );
   assert.equal(
@@ -166,9 +189,7 @@ test("createApiApp does not mount retired public deployment routes", async () =>
   assert.equal(openapi.paths["/internal/v1/apply-runs"], undefined);
   assert.equal(openapi.paths["/internal/v1/runner-profiles"], undefined);
   assert.equal(
-    openapi.paths[
-      "/internal/v1/capsules/{installationId}/outputs"
-    ],
+    openapi.paths["/internal/v1/capsules/{installationId}/outputs"],
     undefined,
   );
   assert.equal(openapi.paths["/api/public/v1/deployments"], undefined);
@@ -234,9 +255,7 @@ test("createApiApp does not mount retired public deployment routes", async () =>
   assert.equal(openapi.components.schemas.PutProviderEnvRequest, undefined);
   assert.equal(openapi.components.schemas.ServiceGrant, undefined);
   assert.equal(openapi.components.schemas.CreateServiceGrantRequest, undefined);
-  for (const schemaName of [
-    "CapabilitiesResponse",
-  ] as const) {
+  for (const schemaName of ["CapabilitiesResponse"] as const) {
     assert.notEqual(
       openapi.components.schemas[schemaName].additionalProperties,
       true,

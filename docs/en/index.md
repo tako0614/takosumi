@@ -47,7 +47,8 @@ Takosumi for Operator:
   Takosumi
   + customer management
   + billing / metering / quota
-  + operator console
+  + DB-backed operator configuration
+  + CLI / API / runbook operations
   + managed target catalog
   + commercial operation.
 
@@ -151,7 +152,8 @@ Commercial operation and official managed capacity belong to Operator / Cloud.
 ```text
 customer management
 billing / metering / quota / plan
-operator console
+DB-backed operator configuration
+CLI / API / runbook operations
 managed target catalog
 official managed target pools
 official native runtime / object store / queue / DB / edge gateway

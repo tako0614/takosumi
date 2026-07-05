@@ -66,7 +66,9 @@ import {
 } from "takosumi-contract/internal/rpc";
 import {
   TAKOSUMI_ADAPTER_CAPABILITY_KEYS,
+  TAKOSUMI_OPERATOR_CAPABILITY_KEYS,
   type TakosumiAdapterCapabilities,
+  type TakosumiOperatorCapabilities,
   type TakosumiResourceCapabilities,
 } from "takosumi-contract/capabilities";
 
@@ -148,6 +150,7 @@ export async function createWorkerServiceApp(
     });
   const officialCatalogSource = officialCatalogSourceFromEnv(env);
   const resourceShapeCapabilities = resourceShapeCapabilitiesFromEnv(env);
+  const operatorCapabilities = operatorCapabilitiesFromEnv(env);
   return await createTakosumiService({
     role,
     runtimeEnv,
@@ -177,6 +180,7 @@ export async function createWorkerServiceApp(
     enabledResourceShapeKinds: resourceShapeCapabilities.enabledKinds,
     resourceCapabilities: resourceShapeCapabilities.resources,
     adapterCapabilities: resourceShapeCapabilities.adapters,
+    operatorCapabilities,
     resolveResourceShapeActor: resourceShapeActorFromRequest,
     ...(officialCatalogSource ? { officialCatalogSource } : {}),
     opentofuRunner,
@@ -351,6 +355,19 @@ function resourceShapeCapabilitiesFromEnv(env: CloudflareWorkerEnv): {
     }
   }
   return { enabledKinds, resources, adapters };
+}
+
+function operatorCapabilitiesFromEnv(
+  env: CloudflareWorkerEnv,
+): Partial<TakosumiOperatorCapabilities> {
+  const capabilities: MutablePartial<TakosumiOperatorCapabilities> = {};
+  for (const key of parseCapabilityList(
+    env.TAKOSUMI_OPERATOR_CAPABILITIES,
+    TAKOSUMI_OPERATOR_CAPABILITY_KEYS,
+  )) {
+    capabilities[key] = true;
+  }
+  return capabilities;
 }
 
 function parseCapabilityList<T extends string>(

@@ -76,6 +76,7 @@ import {
   TAKOSUMI_ADAPTER_CAPABILITY_KEYS,
   type CreateTakosumiDiscoveryOptions,
   type TakosumiAdapterCapabilities,
+  type TakosumiOperatorCapabilities,
   type TakosumiResourceCapabilities,
 } from "takosumi-contract/capabilities";
 import type { Capsule } from "takosumi-contract/capsules";
@@ -270,6 +271,7 @@ function platformDiscoveryOptions(
     paymentEnforcement: true,
     resources,
     adapters,
+    operator: platformOperatorCapabilities(),
     compat: {
       s3: extensionCapabilities.s3Compat,
       provider_cloudflare_workers:
@@ -766,6 +768,20 @@ function platformResourceShapeActorContext(
     ...(session.scopes && session.scopes.length > 0
       ? { scopes: [...session.scopes] }
       : {}),
+  };
+}
+
+function platformOperatorCapabilities(): TakosumiOperatorCapabilities {
+  return {
+    multi_tenant_workspaces: true,
+    workspace_members: true,
+    runner_pools: true,
+    operator_connections: true,
+    managed_target_catalog: true,
+    db_backed_configuration: true,
+    cli_api_operations: true,
+    usage_showback: true,
+    audit_evidence: true,
   };
 }
 
