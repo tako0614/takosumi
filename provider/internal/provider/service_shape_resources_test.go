@@ -125,6 +125,7 @@ func TestServiceShapeCreatePutsEachResourceOnce(t *testing.T) {
 				Ports:                  types.SetNull(types.Int64Type),
 				PublicHTTP:             types.BoolNull(),
 				Environment:            types.MapNull(types.StringType),
+				Connections:            types.ListNull(types.ObjectType{AttrTypes: resourceConnectionAttrTypes}),
 				Space:                  types.StringNull(),
 				TargetPool:             types.StringNull(),
 				SelectedImplementation: types.StringUnknown(),
@@ -221,5 +222,39 @@ func TestServiceShapeCreatePutsEachResourceOnce(t *testing.T) {
 				t.Fatalf("expected exactly one PUT during create, got %d", putCount)
 			}
 		})
+	}
+}
+
+func TestContainerServiceToResourceCarriesConnections(t *testing.T) {
+	model := containerServiceModel{
+		Name:        types.StringValue("agent"),
+		Image:       types.StringValue("ghcr.io/example/agent:1.0.0"),
+		PublicHTTP:  types.BoolValue(false),
+		Environment: types.MapNull(types.StringType),
+		Connections: testConnectionList(
+			t,
+			"JOBS",
+			"Queue/jobs",
+			[]string{"consume", "publish"},
+			"env",
+		),
+	}
+
+	resource, _, diags := model.toServiceShapeModel().toResource(
+		context.Background(),
+		"prod",
+		client.KindContainerService,
+		specContainerService,
+	)
+	if diags.HasError() {
+		t.Fatalf("toResource diagnostics: %v", diags)
+	}
+	connections, ok := resource.Spec["connections"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected connections to be carried, got %#v", resource.Spec["connections"])
+	}
+	jobs, ok := connections["JOBS"].(map[string]any)
+	if !ok || jobs["resource"] != "Queue/jobs" || jobs["projection"] != "env" {
+		t.Fatalf("expected JOBS connection to be carried, got %#v", connections)
 	}
 }

@@ -207,6 +207,13 @@ Do not add `takosumi_takos` or an equivalent one-resource wrapper. If Takos
 later needs a service form that these generic shapes cannot express, add the
 missing service form only after the same prior-art gate passes.
 
+Consumer shapes such as `EdgeWorker` and `ContainerService` can declare
+non-secret `connections` to the shapes they use. A connection carries only the
+resource reference, requested permissions, and projection kind. Credential
+material and concrete runtime binding generation remain in Credential /
+ProviderConnection and adapter execution. The HCL surface is `connections =
+[...]`; `connection` is reserved by OpenTofu/Terraform.
+
 Adapters report capabilities and perform preview/apply/observe/delete work.
 Initial adapter families can include OpenTofu, Cloudflare, AWS, Kubernetes, VM,
 and Takosumi-native adapters.

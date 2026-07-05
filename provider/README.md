@@ -65,9 +65,12 @@ Takos itself is not a reason to add a product-specific provider resource. The
 Takos distribution should be expressed as a composition of generic service
 forms such as `takosumi_edge_worker`, `takosumi_sql_database`,
 `takosumi_kv_store`, `takosumi_object_bucket`, `takosumi_queue`, and
-`takosumi_container_service`. The provider proof
-`bun run opentofu:takos-shape-provider-proof` exercises that composition and
-intentionally avoids a `takosumi_takos` catch-all resource.
+`takosumi_container_service`. Consumer shapes use the typed `connections`
+attribute to declare non-secret resource references, requested permissions, and
+projection kind; the selected adapter owns concrete grant/binding
+materialization. The provider proof `bun run opentofu:takos-shape-provider-proof`
+exercises that composition and intentionally avoids a `takosumi_takos`
+catch-all resource.
 
 ## Provider / API Boundary
 

@@ -86,6 +86,8 @@ export interface ResourceShapeOpenTofuProviderProof {
     readonly targetPoolDeleteCount: number;
     readonly outputKeys: readonly string[];
     readonly applyOutputDigest: string;
+    readonly connectionRequestCount: number;
+    readonly connectionResourceRefs: readonly string[];
     readonly composition?: {
       readonly app: "takos";
       readonly note: string;
@@ -260,11 +262,13 @@ export async function runResourceShapeOpenTofuProviderProof(
         targetPoolDeleteCount: serverState.targetPoolDeleteCount,
         outputKeys,
         applyOutputDigest: digestBytes(Buffer.from(outputsJson)),
+        connectionRequestCount: serverState.connectionRequestCount(),
+        connectionResourceRefs: serverState.connectionResourceRefs(),
         ...(profile === "takos-distribution"
           ? {
               composition: {
                 app: "takos",
-                note: "Takos is expressed as generic Resource Shapes: one EdgeWorker, durable data/binding shapes, queues, and separate container services. This proof deliberately avoids a takosumi_takos catch-all resource.",
+                note: "Takos is expressed as generic Resource Shapes with explicit non-secret connections: one EdgeWorker, durable data/binding shapes, queues, and separate container services. This proof deliberately avoids a takosumi_takos catch-all resource.",
                 worker: "EdgeWorker",
                 durableResources: [
                   "SQLDatabase",
@@ -508,6 +512,7 @@ class ResourceShapeProofServer {
   readonly resources = new Map<string, ProofResource>();
   readonly appliedResources: ProofResource[] = [];
   readonly deletedResources: ProofResource[] = [];
+  readonly connectedResources: ProofResource[] = [];
   readonly targetPools = new Map<string, ProofTargetPoolRecord>();
   previewCount = 0;
   targetPoolPutCount = 0;
@@ -570,6 +575,13 @@ class ResourceShapeProofServer {
           return badRequest(`spec.name must be ${name}`);
         }
         const record = this.readyResource(body);
+        if (
+          record.spec?.connections &&
+          typeof record.spec.connections === "object" &&
+          !Array.isArray(record.spec.connections)
+        ) {
+          this.connectedResources.push(record);
+        }
         this.appliedResources.push(record);
         this.resources.set(
           resourceKey(kind, name, record.metadata.space),
@@ -682,6 +694,51 @@ class ResourceShapeProofServer {
 
   deleteCountsByKind(): Record<ShapeKind, number> {
     return countResourcesByKind(this.deletedResources);
+  }
+
+  connectionRequestCount(): number {
+    let count = 0;
+    for (const record of this.connectedResources) {
+      const connections = record.spec?.connections;
+      if (
+        connections &&
+        typeof connections === "object" &&
+        !Array.isArray(connections)
+      ) {
+        count += Object.keys(connections).length;
+      }
+    }
+    return count;
+  }
+
+  connectionResourceRefs(): readonly string[] {
+    const refs = new Set<string>();
+    for (const record of this.connectedResources) {
+      const connections = record.spec?.connections;
+      if (
+        !connections ||
+        typeof connections !== "object" ||
+        Array.isArray(connections)
+      ) {
+        continue;
+      }
+      for (const connection of Object.values(
+        connections as Record<string, unknown>,
+      )) {
+        if (
+          connection &&
+          typeof connection === "object" &&
+          !Array.isArray(connection)
+        ) {
+          const resource = (connection as { readonly resource?: unknown })
+            .resource;
+          if (typeof resource === "string" && resource.length > 0) {
+            refs.add(resource);
+          }
+        }
+      }
+    }
+    return [...refs].sort();
   }
 
   assertComplete(expectedCounts: Record<ShapeKind, number>): void {
@@ -928,6 +985,39 @@ resource "takosumi_edge_worker" "takos_worker" {
   compatibility_date = "2026-06-29"
   profiles           = ["workers_bindings", "node_compat"]
   target_pool        = takosumi_target_pool.default.name
+
+  connections = [
+    {
+      name        = "DATABASE"
+      resource    = takosumi_sql_database.workspace.id
+      permissions = ["connect"]
+      projection  = "database_url"
+    },
+    {
+      name        = "SESSION"
+      resource    = takosumi_kv_store.session.id
+      permissions = ["read", "write"]
+      projection  = "runtime_binding"
+    },
+    {
+      name        = "FILES"
+      resource    = takosumi_object_bucket.files.id
+      permissions = ["read", "write"]
+      projection  = "runtime_binding"
+    },
+    {
+      name        = "AGENT_JOBS"
+      resource    = takosumi_queue.agent_jobs.id
+      permissions = ["publish"]
+      projection  = "runtime_binding"
+    },
+    {
+      name        = "EVENTS"
+      resource    = takosumi_queue.events.id
+      permissions = ["publish"]
+      projection  = "runtime_binding"
+    }
+  ]
 }
 
 resource "takosumi_sql_database" "workspace" {
@@ -985,6 +1075,27 @@ resource "takosumi_container_service" "agent" {
   environment = {
     TAKOS_SERVICE = "agent"
   }
+
+  connections = [
+    {
+      name        = "AGENT_JOBS"
+      resource    = takosumi_queue.agent_jobs.id
+      permissions = ["consume", "publish"]
+      projection  = "env"
+    },
+    {
+      name        = "FILES"
+      resource    = takosumi_object_bucket.files.id
+      permissions = ["read", "write"]
+      projection  = "env"
+    },
+    {
+      name        = "EVENTS"
+      resource    = takosumi_queue.events.id
+      permissions = ["publish"]
+      projection  = "env"
+    }
+  ]
 }
 
 output "takos_shape_ids" {

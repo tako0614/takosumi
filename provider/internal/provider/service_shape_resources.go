@@ -61,6 +61,7 @@ type serviceShapeModel struct {
 	Ports                  types.Set    `tfsdk:"ports"`
 	PublicHTTP             types.Bool   `tfsdk:"public_http"`
 	Environment            types.Map    `tfsdk:"environment"`
+	Connections            types.List   `tfsdk:"connections"`
 	Space                  types.String `tfsdk:"space"`
 	TargetPool             types.String `tfsdk:"target_pool"`
 	SelectedImplementation types.String `tfsdk:"selected_implementation"`
@@ -131,6 +132,7 @@ type containerServiceModel struct {
 	Ports                  types.Set    `tfsdk:"ports"`
 	PublicHTTP             types.Bool   `tfsdk:"public_http"`
 	Environment            types.Map    `tfsdk:"environment"`
+	Connections            types.List   `tfsdk:"connections"`
 	Space                  types.String `tfsdk:"space"`
 	TargetPool             types.String `tfsdk:"target_pool"`
 	SelectedImplementation types.String `tfsdk:"selected_implementation"`
@@ -249,6 +251,7 @@ func (m containerServiceModel) toServiceShapeModel() serviceShapeModel {
 	base.Ports = m.Ports
 	base.PublicHTTP = m.PublicHTTP
 	base.Environment = m.Environment
+	base.Connections = m.Connections
 	return base
 }
 
@@ -260,6 +263,7 @@ func containerServiceModelFromServiceShape(m serviceShapeModel) containerService
 		Ports:                  m.Ports,
 		PublicHTTP:             m.PublicHTTP,
 		Environment:            m.Environment,
+		Connections:            m.Connections,
 		Space:                  m.Space,
 		TargetPool:             m.TargetPool,
 		SelectedImplementation: m.SelectedImplementation,
@@ -397,6 +401,7 @@ func (r *serviceShapeResource) Schema(_ context.Context, _ resource.SchemaReques
 			ElementType: types.StringType,
 			Description: "Non-secret environment variables. Secrets and AI keys must come from ProviderConnection/Secret projection, not this map.",
 		}
+		attrs["connections"] = resourceConnectionAttribute()
 	}
 	resp.Schema = schema.Schema{
 		Description: r.cfg.description,
@@ -770,6 +775,9 @@ func (m serviceShapeModel) toResource(ctx context.Context, defaultSpace, kind st
 				spec["environment"] = env
 			}
 		}
+		if connections := resourceConnectionsToSpec(ctx, m.Connections, &diags); len(connections) > 0 {
+			spec["connections"] = connections
+		}
 	}
 	targetPool := ""
 	if !m.TargetPool.IsNull() && !m.TargetPool.IsUnknown() {
@@ -882,6 +890,13 @@ func refreshServiceShapeSpec(ctx context.Context, res *client.Resource, specKind
 			m.Environment = value
 		} else {
 			m.Environment = types.MapNull(types.StringType)
+		}
+		if raw, ok := res.Spec["connections"]; ok {
+			connections, d := resourceConnectionsFromSpec(ctx, raw)
+			diags.Append(d...)
+			m.Connections = connections
+		} else {
+			m.Connections = types.ListNull(types.ObjectType{AttrTypes: resourceConnectionAttrTypes})
 		}
 	}
 	return diags

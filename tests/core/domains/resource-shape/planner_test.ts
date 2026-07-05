@@ -124,20 +124,41 @@ test("parseEdgeWorkerSpec rejects source modes the planner cannot materialize", 
   if (!r.ok) expect(r.error.code).toBe("invalid_source");
 });
 
-test("parseEdgeWorkerSpec rejects connections until grant/projection planning lands", () => {
+test("parseEdgeWorkerSpec accepts non-secret resource connections", () => {
   const r = parseEdgeWorkerSpec({
     name: "api",
     source: { artifactPath: "/work/dist/worker.js" },
     connections: {
-      AI: {
+      ASSETS: {
         resource: "ObjectBucket/assets",
-        permissions: ["connect"],
-        projection: "env",
+        permissions: ["read", "write"],
+        projection: "runtime_binding",
+      },
+    },
+  });
+  expect(r.ok).toBe(true);
+  if (!r.ok) return;
+  expect(r.spec.connections?.ASSETS).toEqual({
+    resource: "ObjectBucket/assets",
+    permissions: ["read", "write"],
+    projection: "runtime_binding",
+  });
+});
+
+test("parseEdgeWorkerSpec rejects malformed resource connections", () => {
+  const r = parseEdgeWorkerSpec({
+    name: "api",
+    source: { artifactPath: "/work/dist/worker.js" },
+    connections: {
+      "bad name": {
+        resource: "ObjectBucket/assets",
+        permissions: ["read"],
+        projection: "runtime_binding",
       },
     },
   });
   expect(r.ok).toBe(false);
-  if (!r.ok) expect(r.error.code).toBe("invalid_connections");
+  if (!r.ok) expect(r.error.code).toBe("invalid_connection");
 });
 
 test("planEdgeWorker maps cloudflare_workers to cloudflare-worker-service", () => {
@@ -166,7 +187,7 @@ test("planEdgeWorker maps cloudflare_workers to cloudflare-worker-service", () =
     accountId: "cf-account-123",
     artifactPath: "/work/dist/worker.js",
   });
-  expect(plan.publicOutputs).toEqual(["worker_name", "url"]);
+  expect(plan.publicOutputs).toEqual(["worker_name", "url", "connections"]);
   expect(plan.moduleFiles).toBe(
     firstPartyModuleFilesByTemplateId["cloudflare-worker-service"],
   );
@@ -198,6 +219,38 @@ test("planEdgeWorker maps release artifact URL and digest to module inputs", () 
     artifactUrl: "https://example.com/releases/api-worker.js",
     artifactSha256:
       "1111111111111111111111111111111111111111111111111111111111111111",
+  });
+});
+
+test("planEdgeWorker carries Resource Shape connection metadata", () => {
+  const target: TargetPoolEntry = {
+    name: "cf-main",
+    type: "cloudflare",
+    ref: "cf-account-123",
+    priority: 10,
+  };
+  const plan = planEdgeWorker(
+    "cloudflare_workers",
+    {
+      name: "api",
+      source: { artifactPath: "/work/dist/worker.js" },
+      connections: {
+        ASSETS: {
+          resource: "ObjectBucket/assets",
+          permissions: ["write", "read"],
+          projection: "runtime_binding",
+        },
+      },
+    },
+    target,
+  );
+
+  expect(plan.inputs.connections).toEqual({
+    ASSETS: {
+      resource: "ObjectBucket/assets",
+      permissions: ["read", "write"],
+      projection: "runtime_binding",
+    },
   });
 });
 
@@ -260,11 +313,19 @@ test("parseContainerServiceSpec accepts an OCI image with ports and env", () => 
     ports: [8080],
     publicHttp: true,
     environment: { NODE_ENV: "production" },
+    connections: {
+      JOBS: {
+        resource: "Queue/jobs",
+        permissions: ["consume"],
+        projection: "env",
+      },
+    },
   });
   expect(r.ok).toBe(true);
   if (!r.ok) return;
   expect(r.spec.image).toBe("ghcr.io/example/agent:1.0.0");
   expect(r.spec.ports).toEqual([8080]);
+  expect(r.spec.connections?.JOBS?.resource).toBe("Queue/jobs");
 });
 
 test("parseContainerServiceSpec rejects secret-looking environment entries", () => {
@@ -324,6 +385,13 @@ test("planContainerService uses the generic container module for operator implem
       ports: [8080],
       publicHttp: true,
       environment: { NODE_ENV: "production" },
+      connections: {
+        JOBS: {
+          resource: "Queue/jobs",
+          permissions: ["consume"],
+          projection: "env",
+        },
+      },
     },
     target,
   );
@@ -338,6 +406,13 @@ test("planContainerService uses the generic container module for operator implem
     ports: [8080],
     publicHttp: true,
     environment: { NODE_ENV: "production" },
+    connections: {
+      JOBS: {
+        resource: "Queue/jobs",
+        permissions: ["consume"],
+        projection: "env",
+      },
+    },
   });
-  expect(plan.publicOutputs).toEqual(["service_name", "url"]);
+  expect(plan.publicOutputs).toEqual(["service_name", "url", "connections"]);
 });

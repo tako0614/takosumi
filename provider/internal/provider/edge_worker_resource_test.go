@@ -28,6 +28,7 @@ func TestRefreshEdgeWorkerSpecClearsAbsentOptionalFields(t *testing.T) {
 		Profiles: types.SetValueMust(types.StringType, []attr.Value{
 			types.StringValue("workers_bindings"),
 		}),
+		Connections: testConnectionList(t, "ASSETS", "ObjectBucket/assets", []string{"read"}, "runtime_binding"),
 	}
 	res := &client.Resource{
 		Metadata: client.Metadata{Name: "api", Space: "prod"},
@@ -58,6 +59,9 @@ func TestRefreshEdgeWorkerSpecClearsAbsentOptionalFields(t *testing.T) {
 	if !m.Profiles.IsNull() {
 		t.Fatalf("expected profiles to be cleared")
 	}
+	if !m.Connections.IsNull() {
+		t.Fatalf("expected connections to be cleared")
+	}
 }
 
 func TestEdgeWorkerToResourceCarriesTargetPoolName(t *testing.T) {
@@ -65,6 +69,7 @@ func TestEdgeWorkerToResourceCarriesTargetPoolName(t *testing.T) {
 		Name:         types.StringValue("api"),
 		ArtifactPath: types.StringValue("/work/dist/worker.js"),
 		TargetPool:   types.StringValue("containers"),
+		Connections:  testConnectionList(t, "ASSETS", "ObjectBucket/assets", []string{"read", "write"}, "runtime_binding"),
 	}
 
 	resource, space, diags := model.toResource(context.Background(), "prod")
@@ -76,6 +81,14 @@ func TestEdgeWorkerToResourceCarriesTargetPoolName(t *testing.T) {
 	}
 	if resource.TargetPoolName != "containers" {
 		t.Fatalf("expected targetPoolName to be carried, got %#v", resource)
+	}
+	connections, ok := resource.Spec["connections"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected connections to be carried, got %#v", resource.Spec["connections"])
+	}
+	assets, ok := connections["ASSETS"].(map[string]any)
+	if !ok || assets["resource"] != "ObjectBucket/assets" {
+		t.Fatalf("expected ASSETS connection to be carried, got %#v", connections)
 	}
 }
 
@@ -139,6 +152,7 @@ func TestEdgeWorkerCreateAcceptsEndpointDefinedProfileTokens(t *testing.T) {
 			types.StringValue("runtime.workers.next"),
 			types.StringValue("bindings.custom"),
 		}),
+		Connections:            types.ListNull(types.ObjectType{AttrTypes: resourceConnectionAttrTypes}),
 		Space:                  types.StringNull(),
 		TargetPool:             types.StringNull(),
 		SelectedImplementation: types.StringUnknown(),
@@ -174,6 +188,32 @@ func TestEdgeWorkerCreateAcceptsEndpointDefinedProfileTokens(t *testing.T) {
 	if len(want) != 0 {
 		t.Fatalf("missing profile tokens: %#v", want)
 	}
+}
+
+func testConnectionList(t *testing.T, name, resource string, permissions []string, projection string) types.List {
+	t.Helper()
+	permissionValues := make([]attr.Value, 0, len(permissions))
+	for _, permission := range permissions {
+		permissionValues = append(permissionValues, types.StringValue(permission))
+	}
+	permissionSet, diags := types.SetValue(types.StringType, permissionValues)
+	if diags.HasError() {
+		t.Fatalf("permission set diagnostics: %v", diags)
+	}
+	value, diags := types.ObjectValue(resourceConnectionAttrTypes, map[string]attr.Value{
+		"name":        types.StringValue(name),
+		"resource":    types.StringValue(resource),
+		"permissions": permissionSet,
+		"projection":  types.StringValue(projection),
+	})
+	if diags.HasError() {
+		t.Fatalf("connection object diagnostics: %v", diags)
+	}
+	list, diags := types.ListValue(types.ObjectType{AttrTypes: resourceConnectionAttrTypes}, []attr.Value{value})
+	if diags.HasError() {
+		t.Fatalf("connection list diagnostics: %v", diags)
+	}
+	return list
 }
 
 func TestEdgeWorkerToResourceAcceptsArtifactURLWithDigest(t *testing.T) {
