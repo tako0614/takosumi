@@ -35,6 +35,7 @@
     "opentofu:live-local-proof": "bun tests/proofs/live-opentofu-plan-apply.ts",
     "opentofu:resource-shape-provider-proof": "bun tests/proofs/resource-shape-opentofu-provider.ts",
     "opentofu:takos-shape-provider-proof": "bun tests/proofs/resource-shape-opentofu-provider.ts --profile takos-distribution",
+    "opentofu:yurucommu-shape-provider-proof": "bun tests/proofs/resource-shape-opentofu-provider.ts --profile yurucommu-worker-app",
     "smoke:cloudflare": "bun scripts/smoke-cloudflare.ts",
     "smoke:platform-control-plane": "bun scripts/smoke-platform-control-plane.ts",
     "probe:accounts-rate-limit": "bun scripts/probe-accounts-rate-limit.ts",

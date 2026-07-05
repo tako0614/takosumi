@@ -72,6 +72,12 @@ materialization. The provider proof `bun run opentofu:takos-shape-provider-proof
 exercises that composition and intentionally avoids a `takosumi_takos`
 catch-all resource.
 
+The same rule applies to yurucommu-style Worker apps. The provider proof
+`bun run opentofu:yurucommu-shape-provider-proof` expresses yurucommu as one
+`takosumi_edge_worker`, `takosumi_sql_database`, `takosumi_object_bucket`,
+`takosumi_kv_store`, and delivery/DLQ `takosumi_queue` resources. It
+intentionally avoids a `takosumi_yurucommu` catch-all resource.
+
 ## Provider / API Boundary
 
 `provider-neutral` in Takosumi docs means vendor-independent as a Takosumi
