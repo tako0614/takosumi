@@ -102,6 +102,7 @@ export interface ResourceShapeOpenTofuProviderLiveProof {
   readonly kind: typeof PROOF_KIND;
   readonly mode: "live";
   readonly status: "passed";
+  readonly profile: ProofProfile;
   readonly generatedAt: string;
   readonly endpoint: string;
   readonly space: string;
@@ -124,12 +125,16 @@ export interface ResourceShapeOpenTofuProviderLiveProof {
     readonly plannedResourceCount: number;
     readonly stateResourceCount: number;
     readonly appliedResourceKinds: readonly ShapeKind[];
+    readonly expectedResourceCountsByKind: Record<ShapeKind, number>;
+    readonly appliedResourceCountsByKind: Record<ShapeKind, number>;
+    readonly fullProfileSatisfied: boolean;
     readonly providerBaseUrlConfigured: boolean;
     readonly outputKeys: readonly string[];
     readonly applyOutputDigest: string;
     readonly destroyCompleted: boolean;
     readonly remainingMatchingResourceCount: number;
     readonly remainingMatchingTargetPoolCount: number;
+    readonly composition?: ResourceShapeOpenTofuProviderProof["evidence"]["composition"];
   };
 }
 
@@ -145,6 +150,7 @@ interface LiveProofOptions {
   readonly edgeWorkerArtifactUrl?: string;
   readonly edgeWorkerArtifactSha256?: string;
   readonly outputPath?: string;
+  readonly profile?: ProofProfile;
   readonly now?: () => string;
 }
 
@@ -319,14 +325,23 @@ export async function runResourceShapeOpenTofuProviderLiveProof(
     );
 
     const capabilities = await fetchLiveCapabilities(options);
-    const livePlan = liveMaterializableShapes(capabilities.resources, options);
+    const profile = options.profile ?? "generic";
+    const livePlan = liveMaterializableShapes(capabilities.resources, {
+      ...options,
+      profile,
+    });
     const prefix =
       options.now?.().replace(/\D/g, "").slice(0, 14) ||
       new Date().toISOString().replace(/\D/g, "").slice(0, 14);
     const resourcePrefix = `live-${prefix}`;
     await writeFile(
       join(moduleDir, "main.tf"),
-      liveModuleHcl({ ...options, resourcePrefix, shapes: livePlan.shapes }),
+      liveModuleHcl({
+        ...options,
+        profile,
+        resourcePrefix,
+        resourceCounts: livePlan.resourceCountsByKind,
+      }),
     );
 
     const env = {
@@ -426,6 +441,7 @@ export async function runResourceShapeOpenTofuProviderLiveProof(
       kind: PROOF_KIND,
       mode: "live",
       status: "passed",
+      profile,
       generatedAt: options.now?.() ?? new Date().toISOString(),
       endpoint: options.endpoint,
       space: options.space,
@@ -448,6 +464,9 @@ export async function runResourceShapeOpenTofuProviderLiveProof(
           .map((line) => line.trim())
           .filter(Boolean).length,
         appliedResourceKinds: livePlan.shapes,
+        expectedResourceCountsByKind: livePlan.expectedResourceCountsByKind,
+        appliedResourceCountsByKind: livePlan.resourceCountsByKind,
+        fullProfileSatisfied: livePlan.fullProfileSatisfied,
         providerBaseUrlConfigured:
           typeof options.targetProviderBaseUrl === "string" &&
           options.targetProviderBaseUrl.trim().length > 0,
@@ -456,17 +475,25 @@ export async function runResourceShapeOpenTofuProviderLiveProof(
         destroyCompleted,
         remainingMatchingResourceCount: remaining.resources,
         remainingMatchingTargetPoolCount: remaining.targetPools,
+        ...(compositionForProfile(profile)
+          ? { composition: compositionForProfile(profile) }
+          : {}),
       },
     };
 
-    if (proof.evidence.plannedResourceCount < livePlan.shapes.length + 1) {
+    const expectedLiveManagedResources =
+      Object.values(livePlan.resourceCountsByKind).reduce(
+        (sum, count) => sum + count,
+        0,
+      ) + 1;
+    if (proof.evidence.plannedResourceCount < expectedLiveManagedResources) {
       throw new Error(
-        `expected at least ${livePlan.shapes.length + 1} planned resources, got ${proof.evidence.plannedResourceCount}`,
+        `expected at least ${expectedLiveManagedResources} planned resources, got ${proof.evidence.plannedResourceCount}`,
       );
     }
-    if (proof.evidence.stateResourceCount < livePlan.shapes.length + 1) {
+    if (proof.evidence.stateResourceCount < expectedLiveManagedResources) {
       throw new Error(
-        `expected at least ${livePlan.shapes.length + 1} state resources, got ${proof.evidence.stateResourceCount}`,
+        `expected at least ${expectedLiveManagedResources} state resources, got ${proof.evidence.stateResourceCount}`,
       );
     }
     if (!proof.evidence.destroyCompleted) {
@@ -1341,18 +1368,29 @@ function liveMaterializableShapes(
   resources: Record<string, boolean>,
   options: Pick<
     LiveProofOptions,
-    "edgeWorkerArtifactUrl" | "edgeWorkerArtifactSha256"
+    "edgeWorkerArtifactUrl" | "edgeWorkerArtifactSha256" | "profile"
   >,
 ): {
   readonly shapes: readonly ShapeKind[];
+  readonly expectedResourceCountsByKind: Record<ShapeKind, number>;
+  readonly resourceCountsByKind: Record<ShapeKind, number>;
+  readonly fullProfileSatisfied: boolean;
   readonly skipped: readonly {
     readonly kind: ShapeKind;
     readonly reason: string;
   }[];
 } {
+  const expectedResourceCountsByKind = expectedCountsForProfile(
+    options.profile ?? "generic",
+  );
+  const resourceCountsByKind = Object.fromEntries(
+    SHAPES.map((kind) => [kind, 0]),
+  ) as Record<ShapeKind, number>;
   const shapes: ShapeKind[] = [];
   const skipped: { kind: ShapeKind; reason: string }[] = [];
   for (const kind of SHAPES) {
+    const expectedCount = expectedResourceCountsByKind[kind];
+    if (expectedCount < 1) continue;
     if (!resources[kind]) {
       skipped.push({ kind, reason: "endpoint capability is disabled" });
       continue;
@@ -1360,6 +1398,7 @@ function liveMaterializableShapes(
     if (kind === "EdgeWorker") {
       if (options.edgeWorkerArtifactUrl && options.edgeWorkerArtifactSha256) {
         shapes.push(kind);
+        resourceCountsByKind[kind] = expectedCount;
       } else {
         skipped.push({
           kind,
@@ -1378,37 +1417,52 @@ function liveMaterializableShapes(
       continue;
     }
     shapes.push(kind);
+    resourceCountsByKind[kind] = expectedCount;
   }
   if (shapes.length === 0) {
     throw new Error("no live-materializable Resource Shape capabilities found");
   }
-  return { shapes, skipped };
+  const fullProfileSatisfied = SHAPES.every(
+    (kind) => resourceCountsByKind[kind] === expectedResourceCountsByKind[kind],
+  );
+  return {
+    shapes,
+    expectedResourceCountsByKind,
+    resourceCountsByKind,
+    fullProfileSatisfied,
+    skipped,
+  };
 }
 
 function liveModuleHcl({
   resourcePrefix,
-  shapes,
+  profile,
+  resourceCounts,
   targetProviderBaseUrl,
   targetPlugin,
 }: LiveProofOptions & {
   readonly resourcePrefix: string;
-  readonly shapes: readonly ShapeKind[];
+  readonly profile: ProofProfile;
+  readonly resourceCounts: Record<ShapeKind, number>;
 }): string {
   const resources: string[] = [];
   const idOutputs: string[] = [];
   const shapeOutputs: string[] = [];
-  if (shapes.includes("EdgeWorker")) {
+  const has = (kind: ShapeKind) => resourceCounts[kind] > 0;
+  if (has("EdgeWorker")) {
+    const connections = liveEdgeWorkerConnectionsHcl(profile, resourceCounts);
     resources.push(`resource "takosumi_edge_worker" "api" {
   name            = "${resourcePrefix}-edge"
   artifact_url    = var.edge_worker_artifact_url
   artifact_sha256 = var.edge_worker_artifact_sha256
   target_pool     = takosumi_target_pool.live.name
+${connections}
 }
 `);
     idOutputs.push(`edge_worker = takosumi_edge_worker.api.id`);
     shapeOutputs.push(`edge_worker = takosumi_edge_worker.api.outputs`);
   }
-  if (shapes.includes("ObjectBucket")) {
+  if (has("ObjectBucket")) {
     resources.push(`resource "takosumi_object_bucket" "assets" {
   name        = "${resourcePrefix}-assets"
   interfaces  = ["s3_api", "signed_url"]
@@ -1418,7 +1472,7 @@ function liveModuleHcl({
     idOutputs.push(`object_bucket = takosumi_object_bucket.assets.id`);
     shapeOutputs.push(`object_bucket = takosumi_object_bucket.assets.outputs`);
   }
-  if (shapes.includes("KVStore")) {
+  if (has("KVStore")) {
     resources.push(`resource "takosumi_kv_store" "cache" {
   name        = "${resourcePrefix}-cache"
   consistency = "eventual"
@@ -1428,18 +1482,23 @@ function liveModuleHcl({
     idOutputs.push(`kv_store = takosumi_kv_store.cache.id`);
     shapeOutputs.push(`kv_store = takosumi_kv_store.cache.outputs`);
   }
-  if (shapes.includes("Queue")) {
-    resources.push(`resource "takosumi_queue" "delivery" {
-  name           = "${resourcePrefix}-queue"
+  if (resourceCounts.Queue > 0) {
+    for (let index = 0; index < resourceCounts.Queue; index++) {
+      const localName = liveQueueLocalName(profile, index);
+      const outputName = liveQueueOutputName(profile, index);
+      const suffix = liveQueueNameSuffix(profile, index);
+      resources.push(`resource "takosumi_queue" "${localName}" {
+  name           = "${resourcePrefix}-${suffix}"
   max_retries    = 3
   max_batch_size = 10
   target_pool    = takosumi_target_pool.live.name
 }
 `);
-    idOutputs.push(`queue = takosumi_queue.delivery.id`);
-    shapeOutputs.push(`queue = takosumi_queue.delivery.outputs`);
+      idOutputs.push(`${outputName} = takosumi_queue.${localName}.id`);
+      shapeOutputs.push(`${outputName} = takosumi_queue.${localName}.outputs`);
+    }
   }
-  if (shapes.includes("SQLDatabase")) {
+  if (has("SQLDatabase")) {
     resources.push(`resource "takosumi_sql_database" "main" {
   name        = "${resourcePrefix}-db"
   engine      = "sqlite"
@@ -1448,6 +1507,35 @@ function liveModuleHcl({
 `);
     idOutputs.push(`sql_database = takosumi_sql_database.main.id`);
     shapeOutputs.push(`sql_database = takosumi_sql_database.main.outputs`);
+  }
+  if (resourceCounts.ContainerService > 0) {
+    for (let index = 0; index < resourceCounts.ContainerService; index++) {
+      const localName = index === 0 ? "git" : "agent";
+      const serviceName = index === 0 ? "git" : "agent";
+      const connections =
+        localName === "agent"
+          ? liveContainerServiceConnectionsHcl(resourceCounts)
+          : "";
+      resources.push(`resource "takosumi_container_service" "${localName}" {
+  name        = "${resourcePrefix}-${serviceName}"
+  image       = "ghcr.io/takosjp/takos-${serviceName}:1.0.0"
+  ports       = [8080]
+  public_http = false
+  target_pool = takosumi_target_pool.live.name
+${connections}
+
+  environment = {
+    TAKOS_SERVICE = "${serviceName}"
+  }
+}
+`);
+      idOutputs.push(
+        `container_${localName} = takosumi_container_service.${localName}.id`,
+      );
+      shapeOutputs.push(
+        `container_${localName} = takosumi_container_service.${localName}.outputs`,
+      );
+    }
   }
   return `terraform {
   required_providers {
@@ -1538,6 +1626,119 @@ output "shape_outputs" {
 `;
 }
 
+function liveEdgeWorkerConnectionsHcl(
+  profile: ProofProfile,
+  resourceCounts: Record<ShapeKind, number>,
+): string {
+  const connections: string[] = [];
+  if (resourceCounts.SQLDatabase > 0) {
+    connections.push(`{
+      name        = "${profile === "takos-distribution" ? "DATABASE" : "DB"}"
+      resource    = takosumi_sql_database.main.id
+      permissions = ["connect"]
+      projection  = "runtime_binding"
+    }`);
+  }
+  if (resourceCounts.ObjectBucket > 0) {
+    connections.push(`{
+      name        = "${profile === "takos-distribution" ? "FILES" : "MEDIA"}"
+      resource    = takosumi_object_bucket.assets.id
+      permissions = ["read", "write"]
+      projection  = "runtime_binding"
+    }`);
+  }
+  if (resourceCounts.KVStore > 0) {
+    connections.push(`{
+      name        = "${profile === "takos-distribution" ? "SESSION" : "KV"}"
+      resource    = takosumi_kv_store.cache.id
+      permissions = ["read", "write"]
+      projection  = "runtime_binding"
+    }`);
+  }
+  if (resourceCounts.Queue > 0) {
+    connections.push(`{
+      name        = "${profile === "takos-distribution" ? "AGENT_JOBS" : "DELIVERY_QUEUE"}"
+      resource    = takosumi_queue.${liveQueueLocalName(profile, 0)}.id
+      permissions = ["publish"]
+      projection  = "runtime_binding"
+    }`);
+  }
+  if (resourceCounts.Queue > 1) {
+    connections.push(`{
+      name        = "${profile === "takos-distribution" ? "EVENTS" : "DELIVERY_DLQ"}"
+      resource    = takosumi_queue.${liveQueueLocalName(profile, 1)}.id
+      permissions = ["publish"]
+      projection  = "runtime_binding"
+    }`);
+  }
+  if (connections.length === 0) return "";
+  return `
+
+  connections = [
+    ${connections.join(",\n    ")}
+  ]`;
+}
+
+function liveContainerServiceConnectionsHcl(
+  resourceCounts: Record<ShapeKind, number>,
+): string {
+  const connections: string[] = [];
+  if (resourceCounts.Queue > 0) {
+    connections.push(`{
+      name        = "AGENT_JOBS"
+      resource    = takosumi_queue.${liveQueueLocalName("takos-distribution", 0)}.id
+      permissions = ["consume", "publish"]
+      projection  = "env"
+    }`);
+  }
+  if (resourceCounts.ObjectBucket > 0) {
+    connections.push(`{
+      name        = "FILES"
+      resource    = takosumi_object_bucket.assets.id
+      permissions = ["read", "write"]
+      projection  = "env"
+    }`);
+  }
+  if (resourceCounts.Queue > 1) {
+    connections.push(`{
+      name        = "EVENTS"
+      resource    = takosumi_queue.${liveQueueLocalName("takos-distribution", 1)}.id
+      permissions = ["publish"]
+      projection  = "env"
+    }`);
+  }
+  if (connections.length === 0) return "";
+  return `
+
+  connections = [
+    ${connections.join(",\n    ")}
+  ]`;
+}
+
+function liveQueueLocalName(profile: ProofProfile, index: number): string {
+  if (profile === "takos-distribution")
+    return index === 0 ? "agent_jobs" : "events";
+  if (profile === "yurucommu-worker-app")
+    return index === 0 ? "delivery" : "delivery_dlq";
+  return index === 0 ? "delivery" : `delivery_${index + 1}`;
+}
+
+function liveQueueOutputName(profile: ProofProfile, index: number): string {
+  if (profile === "takos-distribution")
+    return index === 0 ? "agent_jobs" : "events";
+  if (profile === "yurucommu-worker-app")
+    return index === 0 ? "delivery" : "delivery_dlq";
+  return index === 0 ? "queue" : `queue_${index + 1}`;
+}
+
+function liveQueueNameSuffix(profile: ProofProfile, index: number): string {
+  if (profile === "takos-distribution")
+    return index === 0 ? "agent-jobs" : "events";
+  if (profile === "yurucommu-worker-app")
+    return index === 0 ? "delivery" : "delivery-dlq";
+  return index === 0 ? "queue" : `queue-${index + 1}`;
+}
+
 function managedCompatImplementationHcl({
   targetProviderBaseUrl,
   targetPlugin,
@@ -1562,11 +1763,17 @@ function managedCompatImplementationHcl({
         implementation = "cloudflare_workers"
         ${plugin}
         interfaces = {
-          worker_fetch     = "native"
-          workers_bindings = "native"
-          node_compat      = "shim"
-          service_bindings = "native"
-          static_assets    = "native"
+          worker_fetch        = "native"
+          workers_bindings    = "native"
+          node_compat         = "shim"
+          service_bindings    = "native"
+          static_assets       = "native"
+          resource_connection = "native"
+          runtime_binding     = "native"
+          grant_connect       = "native"
+          grant_read          = "native"
+          grant_write         = "native"
+          grant_publish       = "native"
         }
         ${options}
       },
@@ -1787,6 +1994,7 @@ if (import.meta.main) {
         edgeWorkerArtifactSha256:
           argValue("--edge-worker-artifact-sha256") ??
           process.env.TAKOSUMI_LIVE_EDGE_WORKER_ARTIFACT_SHA256,
+        profile: profileFromArgs(),
         ...(outputPath ? { outputPath } : {}),
       })
     : await runResourceShapeOpenTofuProviderProof({
