@@ -1599,6 +1599,127 @@ test("GET /api/v1/dashboard/bootstrap returns session and Workspaces", async () 
   expect(operations.calls.listWorkspacesByOwner).toEqual([subject]);
 });
 
+test("GET /api/v1/dashboard/bootstrap omits archived Workspaces", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie, subject } = seedSession(store);
+  const operations = fakeOperations({
+    spaces: {
+      listWorkspacesByOwner: async (ownerUserId) => {
+        operations.calls.listWorkspacesByOwner = [ownerUserId];
+        return [
+          {
+            id: "space_active",
+            handle: "active",
+            displayName: "Active",
+            type: "personal" as const,
+            ownerUserId: subject,
+            createdAt: "2026-01-01T00:00:00Z",
+            updatedAt: "2026-01-01T00:00:00Z",
+          },
+          {
+            id: "space_archived",
+            handle: "archived",
+            displayName: "Archived",
+            type: "personal" as const,
+            ownerUserId: subject,
+            createdAt: "2026-01-02T00:00:00Z",
+            updatedAt: "2026-01-02T00:00:00Z",
+            archivedAt: "2026-01-03T00:00:00Z",
+          },
+        ];
+      },
+    },
+  });
+  const { request: req, url } = request("GET", "/api/v1/dashboard/bootstrap", {
+    cookie,
+  });
+
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+
+  expect(response?.status).toEqual(200);
+  const body = (await response!.json()) as {
+    workspaces: Array<Record<string, unknown>>;
+  };
+  expect(body.workspaces.map((workspace) => workspace.id)).toEqual([
+    "space_active",
+  ]);
+  expect(operations.calls.listWorkspacesByOwner).toEqual([subject]);
+});
+
+test("GET /api/v1/dashboard/bootstrap limits Workspaces while retaining the selected Workspace", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie, subject } = seedSession(store);
+  const operations = fakeOperations({
+    spaces: {
+      listWorkspacesByOwner: async (ownerUserId) => {
+        operations.calls.listWorkspacesByOwner = [ownerUserId];
+        return [
+          {
+            id: "space_old_selected",
+            handle: "old-selected",
+            displayName: "Old selected",
+            type: "personal" as const,
+            ownerUserId: subject,
+            createdAt: "2026-01-01T00:00:00Z",
+            updatedAt: "2026-01-01T00:00:00Z",
+          },
+          {
+            id: "space_newest",
+            handle: "newest",
+            displayName: "Newest",
+            type: "personal" as const,
+            ownerUserId: subject,
+            createdAt: "2026-01-03T00:00:00Z",
+            updatedAt: "2026-01-03T00:00:00Z",
+          },
+          {
+            id: "space_middle",
+            handle: "middle",
+            displayName: "Middle",
+            type: "personal" as const,
+            ownerUserId: subject,
+            createdAt: "2026-01-02T00:00:00Z",
+            updatedAt: "2026-01-02T00:00:00Z",
+          },
+        ];
+      },
+    },
+  });
+  const { request: req, url } = request(
+    "GET",
+    "/api/v1/dashboard/bootstrap?workspaceLimit=2&workspaceId=space_old_selected",
+    { cookie },
+  );
+
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+
+  expect(response?.status).toEqual(200);
+  const body = (await response!.json()) as {
+    workspaces: Array<Record<string, unknown>>;
+    workspaceList: Record<string, unknown>;
+  };
+  expect(body.workspaces.map((workspace) => workspace.id)).toEqual([
+    "space_old_selected",
+    "space_newest",
+  ]);
+  expect(body.workspaceList).toEqual({
+    total: 3,
+    returned: 2,
+    limit: 2,
+    truncated: true,
+  });
+});
+
 test("GET /api/v1/dashboard/bootstrap batches ledger Workspace lookups", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie, subject } = seedSession(store, { subject: "tsub_ledger" });
@@ -1655,8 +1776,8 @@ test("GET /api/v1/dashboard/bootstrap batches ledger Workspace lookups", async (
     workspaces: Array<Record<string, unknown>>;
   };
   expect(body.workspaces.map((workspace) => workspace.id)).toEqual([
-    "space_ledger_a",
     "space_ledger_b",
+    "space_ledger_a",
   ]);
   expect(operations.calls.listWorkspacesByOwner).toEqual([subject]);
   expect(operations.calls.listWorkspacesByIds).toEqual([

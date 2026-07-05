@@ -38,6 +38,7 @@ import {
 const DEFAULT_CAPSULE_LIMIT = 100;
 const DEFAULT_ACTIVITY_LIMIT = 50;
 const DEFAULT_INSTALL_CONFIG_LIMIT = 200;
+const DEFAULT_WORKSPACE_BOOTSTRAP_LIMIT = 50;
 
 export async function handleDashboard(
   ctx: ControlDispatchContext,
@@ -89,13 +90,39 @@ async function dashboardBootstrap(
 ): Promise<Response> {
   const includeWorkspaces =
     url.searchParams.get("includeWorkspaces") !== "false";
-  const workspaces = includeWorkspaces
-    ? await listWorkspacesForSession(operations, store, sessionSubject)
+  const workspaceLimit = parseLimitOrDefault(
+    url.searchParams.get("workspaceLimit"),
+    DEFAULT_WORKSPACE_BOOTSTRAP_LIMIT,
+  );
+  if (workspaceLimit === "invalid") {
+    return errorJson(
+      "invalid_request",
+      "workspaceLimit must be a positive integer",
+      400,
+    );
+  }
+  const workspaceList = includeWorkspaces
+    ? await listActiveWorkspaceProjectionForSession(
+        operations,
+        store,
+        sessionSubject,
+        {
+          limit: workspaceLimit,
+          ensureWorkspaceId: stringValue(
+            url.searchParams.get("workspaceId") ?? undefined,
+          ),
+        },
+      )
     : undefined;
   return json(
     {
       session: { subject: sessionSubject },
-      ...(workspaces ? { workspaces } : {}),
+      ...(workspaceList
+        ? {
+            workspaces: workspaceList.workspaces,
+            workspaceList: workspaceList.meta,
+          }
+        : {}),
     } satisfies DashboardBootstrapResponse,
     200,
     { "cache-control": "no-store" },
@@ -114,9 +141,29 @@ async function dashboardOverview(
   const includeWorkspaces =
     url.searchParams.get("includeWorkspaces") !== "false" ||
     requestedWorkspaceId === undefined;
-  const workspaces = includeWorkspaces
-    ? await listWorkspacesForSession(operations, store, sessionSubject)
-    : [];
+  const workspaceLimit = parseLimitOrDefault(
+    url.searchParams.get("workspaceLimit"),
+    DEFAULT_WORKSPACE_BOOTSTRAP_LIMIT,
+  );
+  if (workspaceLimit === "invalid") {
+    return errorJson(
+      "invalid_request",
+      "workspaceLimit must be a positive integer",
+      400,
+    );
+  }
+  const workspaceList = includeWorkspaces
+    ? await listActiveWorkspaceProjectionForSession(
+        operations,
+        store,
+        sessionSubject,
+        {
+          limit: workspaceLimit,
+          ensureWorkspaceId: requestedWorkspaceId,
+        },
+      )
+    : { workspaces: [], meta: workspaceListMeta([], 0, workspaceLimit) };
+  const workspaces = workspaceList.workspaces;
   const selectedWorkspaceId =
     requestedWorkspaceId ??
     workspaces.find((workspace) => !isArchivedWorkspace(workspace))?.id;
@@ -124,6 +171,7 @@ async function dashboardOverview(
   if (!selectedWorkspaceId) {
     return json({
       workspaces,
+      workspaceList: workspaceList.meta,
       workspace: null,
       capsules: [],
       currentStateVersions: [],
@@ -185,6 +233,7 @@ async function dashboardOverview(
 
   return json({
     workspaces,
+    workspaceList: workspaceList.meta,
     workspace: selectedWorkspace,
     capsules,
     currentStateVersions,
@@ -198,6 +247,7 @@ async function dashboardOverview(
 
 interface DashboardOverviewResponse {
   readonly workspaces: readonly Workspace[];
+  readonly workspaceList: DashboardWorkspaceListMeta;
   readonly workspace: Workspace | null;
   readonly capsules: readonly PublicCapsule[];
   readonly currentStateVersions: readonly PublicDeployment[];
@@ -209,6 +259,14 @@ interface DashboardOverviewResponse {
 interface DashboardBootstrapResponse {
   readonly session: { readonly subject: string };
   readonly workspaces?: readonly Workspace[];
+  readonly workspaceList?: DashboardWorkspaceListMeta;
+}
+
+interface DashboardWorkspaceListMeta {
+  readonly total: number;
+  readonly returned: number;
+  readonly limit: number;
+  readonly truncated: boolean;
 }
 
 async function listWorkspacesForSession(
@@ -249,6 +307,82 @@ async function listWorkspacesForSession(
     (a, b) =>
       a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
   );
+}
+
+async function listActiveWorkspacesForSession(
+  operations: ControlPlaneOperations,
+  store: AccountsStore,
+  sessionSubject: string,
+): Promise<readonly Workspace[]> {
+  return (
+    await listWorkspacesForSession(operations, store, sessionSubject)
+  ).filter((workspace) => !isArchivedWorkspace(workspace));
+}
+
+async function listActiveWorkspaceProjectionForSession(
+  operations: ControlPlaneOperations,
+  store: AccountsStore,
+  sessionSubject: string,
+  options: {
+    readonly limit: number;
+    readonly ensureWorkspaceId?: string;
+  },
+): Promise<{
+  readonly workspaces: readonly Workspace[];
+  readonly meta: DashboardWorkspaceListMeta;
+}> {
+  const all = await listActiveWorkspacesForSession(
+    operations,
+    store,
+    sessionSubject,
+  );
+  const sorted = [...all].sort(compareWorkspaceMostRecentFirst);
+  const limited = limitWorkspaces(sorted, options.limit, options.ensureWorkspaceId);
+  return {
+    workspaces: limited,
+    meta: workspaceListMeta(limited, all.length, options.limit),
+  };
+}
+
+function limitWorkspaces(
+  workspaces: readonly Workspace[],
+  limit: number,
+  ensureWorkspaceId?: string,
+): readonly Workspace[] {
+  const limited = workspaces.slice(0, limit);
+  if (
+    ensureWorkspaceId === undefined ||
+    limited.some((workspace) => workspace.id === ensureWorkspaceId)
+  ) {
+    return limited;
+  }
+  const selected = workspaces.find(
+    (workspace) => workspace.id === ensureWorkspaceId,
+  );
+  if (!selected) return limited;
+  return [selected, ...limited.filter((workspace) => workspace.id !== selected.id)].slice(
+    0,
+    limit,
+  );
+}
+
+function workspaceListMeta(
+  workspaces: readonly Workspace[],
+  total: number,
+  limit: number,
+): DashboardWorkspaceListMeta {
+  return {
+    total,
+    returned: workspaces.length,
+    limit,
+    truncated: total > workspaces.length,
+  };
+}
+
+function compareWorkspaceMostRecentFirst(a: Workspace, b: Workspace): number {
+  const aTime = a.updatedAt || a.createdAt;
+  const bTime = b.updatedAt || b.createdAt;
+  return bTime.localeCompare(aTime) || a.id.localeCompare(b.id);
 }
 
 function uniqueMissingWorkspaceIds(

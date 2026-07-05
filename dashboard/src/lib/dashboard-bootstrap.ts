@@ -2,7 +2,8 @@ import type { Workspace } from "./control-api.ts";
 
 const DASHBOARD_BOOTSTRAP_PATH = "/api/v1/dashboard/bootstrap";
 export const DASHBOARD_SESSION_BOOTSTRAP_PATH = `${DASHBOARD_BOOTSTRAP_PATH}?includeWorkspaces=false`;
-export const DASHBOARD_WORKSPACE_BOOTSTRAP_PATH = `${DASHBOARD_BOOTSTRAP_PATH}?includeWorkspaces=true`;
+const DASHBOARD_WORKSPACE_BOOTSTRAP_LIMIT = 50;
+export const DASHBOARD_WORKSPACE_BOOTSTRAP_PATH = `${DASHBOARD_BOOTSTRAP_PATH}?includeWorkspaces=true&workspaceLimit=${DASHBOARD_WORKSPACE_BOOTSTRAP_LIMIT}`;
 
 export interface DashboardBootstrapSession {
   readonly subject: string;
@@ -25,6 +26,12 @@ export interface DashboardBootstrapResponse {
   readonly email?: string;
   readonly session?: DashboardBootstrapSession | null;
   readonly workspaces?: readonly Workspace[];
+  readonly workspaceList?: {
+    readonly total: number;
+    readonly returned: number;
+    readonly limit: number;
+    readonly truncated: boolean;
+  };
 }
 
 const inflight = new Map<
@@ -41,15 +48,17 @@ export function fetchDashboardBootstrap(): Promise<
 >;
 export function fetchDashboardBootstrap(options: {
   readonly includeWorkspaces?: boolean;
+  readonly selectedWorkspaceId?: string;
 }): Promise<DashboardBootstrapResponse | undefined>;
 export function fetchDashboardBootstrap(
   options: {
     readonly includeWorkspaces?: boolean;
+    readonly selectedWorkspaceId?: string;
   } = {},
 ): Promise<DashboardBootstrapResponse | undefined> {
   const path =
     options.includeWorkspaces === true
-      ? DASHBOARD_WORKSPACE_BOOTSTRAP_PATH
+      ? dashboardWorkspaceBootstrapPath(options.selectedWorkspaceId)
       : DASHBOARD_SESSION_BOOTSTRAP_PATH;
   const current = inflight.get(path);
   if (current) return current;
@@ -72,8 +81,30 @@ export function fetchDashboardBootstrap(
   return request;
 }
 
+function dashboardWorkspaceBootstrapPath(selectedWorkspaceId?: string): string {
+  const params = new URLSearchParams({
+    includeWorkspaces: "true",
+    workspaceLimit: String(DASHBOARD_WORKSPACE_BOOTSTRAP_LIMIT),
+  });
+  if (selectedWorkspaceId && selectedWorkspaceId.length > 0) {
+    params.set("workspaceId", selectedWorkspaceId);
+  }
+  return `${DASHBOARD_BOOTSTRAP_PATH}?${params.toString()}`;
+}
+
 export function fetchDashboardWorkspaceBootstrap(): Promise<
   DashboardBootstrapResponse | undefined
-> {
-  return fetchDashboardBootstrap({ includeWorkspaces: true });
+>;
+export function fetchDashboardWorkspaceBootstrap(options: {
+  readonly selectedWorkspaceId?: string;
+}): Promise<DashboardBootstrapResponse | undefined>;
+export function fetchDashboardWorkspaceBootstrap(
+  options: {
+    readonly selectedWorkspaceId?: string;
+  } = {},
+): Promise<DashboardBootstrapResponse | undefined> {
+  return fetchDashboardBootstrap({
+    includeWorkspaces: true,
+    selectedWorkspaceId: options.selectedWorkspaceId,
+  });
 }

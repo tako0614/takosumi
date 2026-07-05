@@ -40,7 +40,7 @@ interface Props {
 
 export default function WorkspaceSwitcher(props: Props = {}) {
   const [workspaces, { refetch }] = createResource(() =>
-    listWorkspacesCached(),
+    listWorkspacesCached({ selectedWorkspaceId: currentWorkspaceId() }),
   );
   const [switcherOpen, setSwitcherOpen] = createSignal(false);
   const loadedWorkspaces = createMemo(() => workspaces() ?? []);
