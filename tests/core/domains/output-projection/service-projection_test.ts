@@ -58,10 +58,10 @@ test("projects service_exports and service_bindings outputs to transient service
   ]);
 });
 
-test("projects takos_app publish/consume outputs and resolves self producer", () => {
+test("projects app_deployment publish/consume outputs and resolves self producer", () => {
   const { serviceExports, serviceBindings } = projectServicesFromOutputs(
     outputs({
-      takos_app: {
+      app_deployment: {
         name: "yurucommu",
         version: "2.0.0",
         compute: {

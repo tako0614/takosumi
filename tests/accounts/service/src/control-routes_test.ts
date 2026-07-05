@@ -3317,7 +3317,7 @@ test("POST /api/v1/workspaces/:id/capsules stores runnerId and outputAllowlist i
         installConfigId: "cfg_x",
         runnerId: "generic-opentofu-provider",
         outputAllowlist: {
-          takos_app: { from: "takos_app", type: "json", required: true },
+          app_deployment: { from: "app_deployment", type: "json", required: true },
         },
       },
     },
@@ -3343,7 +3343,7 @@ test("POST /api/v1/workspaces/:id/capsules stores runnerId and outputAllowlist i
   expect(config.runnerId).toEqual("generic-opentofu-provider");
   expect(config.variableMapping).toEqual({});
   expect(config.outputAllowlist).toEqual({
-    takos_app: { from: "takos_app", type: "json", required: true },
+    app_deployment: { from: "app_deployment", type: "json", required: true },
   });
   const createCall = operations.calls.createCapsule?.[0] as {
     installConfigId: string;

@@ -403,14 +403,14 @@ test("apply allowlists service_exports and service_bindings outputs that project
   ]);
 });
 
-test("apply allowlists takos_app output that projects to transient exports and bindings", async () => {
+test("apply allowlists app_deployment output that projects to transient exports and bindings", async () => {
   const { store, request } = await seedUpdatableInstallation();
   const installConfig = await store.getInstallConfig("cfg_fixture");
   await store.putInstallConfig({
     ...installConfig!,
     outputAllowlist: {
       ...installConfig!.outputAllowlist,
-      takos_app: { from: "takos_app", type: "json" },
+      app_deployment: { from: "app_deployment", type: "json" },
     },
   });
   const controller = new OpenTofuDeploymentController({
@@ -423,7 +423,7 @@ test("apply allowlists takos_app output that projects to transient exports and b
         sensitive: false,
         value: "https://app.example.test",
       },
-      takos_app: {
+      app_deployment: {
         sensitive: false,
         value: {
           name: "yurucommu",

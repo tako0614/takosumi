@@ -69,9 +69,9 @@ test("output allowlist projection fails closed for required nested JSON secret m
   ).toThrow("cannot be projected");
 });
 
-test("output allowlist projection accepts takos_app service projection without resources", () => {
+test("output allowlist projection accepts app_deployment service projection with resource descriptors", () => {
   const outputs = {
-    takos_app: {
+    app_deployment: {
       sensitive: false,
       value: {
         name: "yurucommu",
@@ -92,6 +92,18 @@ test("output allowlist projection accepts takos_app service projection without r
             ],
           },
         },
+        resources: {
+          database: {
+            type: "sql",
+            bind: "DB",
+            to: ["web"],
+          },
+          media: {
+            type: "object-store",
+            bind: "MEDIA",
+            to: ["web"],
+          },
+        },
         publish: [
           {
             name: "launcher",
@@ -104,54 +116,25 @@ test("output allowlist projection accepts takos_app service projection without r
     },
   };
   const allowlist = {
-    takos_app: { from: "takos_app", type: "json", required: true },
+    app_deployment: { from: "app_deployment", type: "json", required: true },
   } as const;
 
   expect(projectOutputAllowlistSpaceOutputs(allowlist, outputs)).toEqual({
-    takos_app: outputs.takos_app.value,
+    app_deployment: outputs.app_deployment.value,
   });
   expect(projectOutputAllowlistPublicOutputs(allowlist, outputs)).toEqual([
     {
-      name: "takos_app",
+      name: "app_deployment",
       kind: "json",
-      value: outputs.takos_app.value,
+      value: outputs.app_deployment.value,
       sensitive: false,
     },
   ]);
 });
 
-test("output allowlist projection rejects takos_app resource descriptors", () => {
+test("output allowlist projection still rejects app_deployment values with concrete secret material", () => {
   const outputs = {
-    takos_app: {
-      sensitive: false,
-      value: {
-        name: "resource-app",
-        resources: {
-          database: {
-            type: "sql",
-            bindings: {
-              web: "DB",
-            },
-          },
-        },
-        publish: [],
-      },
-    },
-  };
-
-  expect(() =>
-    projectOutputAllowlistSpaceOutputs(
-      {
-        takos_app: { from: "takos_app", type: "json", required: true },
-      },
-      outputs,
-    ),
-  ).toThrow("cannot be projected");
-});
-
-test("output allowlist projection still rejects takos_app values with concrete secret material", () => {
-  const outputs = {
-    takos_app: {
+    app_deployment: {
       sensitive: false,
       value: {
         name: "bad-app",
@@ -163,7 +146,7 @@ test("output allowlist projection still rejects takos_app values with concrete s
   expect(() =>
     projectOutputAllowlistSpaceOutputs(
       {
-        takos_app: { from: "takos_app", type: "json", required: true },
+        app_deployment: { from: "app_deployment", type: "json", required: true },
       },
       outputs,
     ),
