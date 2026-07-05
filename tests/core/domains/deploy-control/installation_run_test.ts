@@ -1063,6 +1063,50 @@ test("installation plan resolves the latest SourceSnapshot for the Source ref an
   });
 });
 
+test("installation destroy-plan pins the active deployment SourceSnapshot instead of latest Git snapshot", async () => {
+  const { store, runner, controller } = await seededController();
+
+  const create = await controller.createInstallationPlan("inst_fixture");
+  const created = await controller.createApplyRun({
+    planRunId: create.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(create.planRun),
+  });
+  expect(created.installation?.currentDeploymentId).toBeDefined();
+
+  const newerArchiveKey =
+    "spaces/space_test/sources/src_fixture/snapshots/snap_newer_after_apply/source.tar.zst";
+  await store.putSourceSnapshot({
+    id: "snap_newer_after_apply",
+    origin: "git",
+    spaceId: "space_test",
+    sourceId: "src_fixture",
+    url: "https://git.example.com/example/app.git",
+    ref: "main",
+    resolvedCommit: "bbbbbb0123456789abcdef0123456789abcdef01",
+    path: ".",
+    archiveObjectKey: newerArchiveKey,
+    archiveDigest: FIXTURE_ARCHIVE_DIGEST,
+    archiveSizeBytes: 1024,
+    fetchedByRunId: "run_newer_after_apply_sync",
+    fetchedAt: "2026-06-06T00:00:10.000Z",
+  });
+
+  const destroy =
+    await controller.createInstallationDestroyPlan("inst_fixture");
+
+  expect(destroy.planRun.operation).toEqual("destroy");
+  expect(destroy.planRun.sourceSnapshotId).toEqual("snap_fixture");
+  expect(destroy.planRun.status).toEqual("waiting_approval");
+  expect(runner.planJobs).toHaveLength(2);
+  expect(runner.planJobs[1]?.sourceArchive).toEqual({
+    objectKey: ARCHIVE_KEY,
+    digest: FIXTURE_ARCHIVE_DIGEST,
+  });
+  expect(runner.planJobs[1]?.sourceArchive?.objectKey).not.toEqual(
+    newerArchiveKey,
+  );
+});
+
 test("installation plan uses InstallConfig modulePath inside a repo-root SourceSnapshot", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   const runner = recordingRunner();

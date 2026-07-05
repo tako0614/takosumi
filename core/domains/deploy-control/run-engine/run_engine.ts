@@ -860,16 +860,24 @@ export class RunEngine {
       // The rollback-plan path pins a SPECIFIC SourceSnapshot (a prior
       // Deployment's snapshot); otherwise resolve the Source's latest snapshot
       // for its default ref.
+      const destroySnapshotId = destroy
+        ? await this.#destroySourceSnapshotIdForInstallation(installation)
+        : undefined;
       const resolved = internal.sourceSnapshotId
         ? await this.#requireSourceSnapshotForSource(
             stored.id,
             internal.sourceSnapshotId,
           )
-        : await this.#resolveLatestSnapshot(
-            stored.id,
-            stored.defaultRef,
-            stored.defaultPath,
-          );
+        : destroySnapshotId
+          ? await this.#requireSourceSnapshotForSource(
+              stored.id,
+              destroySnapshotId,
+            )
+          : await this.#resolveLatestSnapshot(
+              stored.id,
+              stored.defaultRef,
+              stored.defaultPath,
+            );
       if (!resolved) {
         // Typed 409: the Installation cannot plan until a SourceSnapshot exists
         // for its source. Callers run a source_sync first.
@@ -885,9 +893,7 @@ export class RunEngine {
       const pinnedSnapshotId =
         internal.sourceSnapshotId ??
         (destroy
-          ? await this.#destroySourceSnapshotIdForUploadInstallation(
-              installation,
-            )
+          ? await this.#destroySourceSnapshotIdForInstallation(installation)
           : undefined);
       if (!pinnedSnapshotId) {
         throw new OpenTofuControllerError(
@@ -1819,7 +1825,7 @@ export class RunEngine {
     return deployment.sourceSnapshotId;
   }
 
-  async #destroySourceSnapshotIdForUploadInstallation(
+  async #destroySourceSnapshotIdForInstallation(
     installation: Installation,
   ): Promise<string | undefined> {
     return (
