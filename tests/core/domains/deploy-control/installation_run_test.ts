@@ -174,6 +174,36 @@ function controllerWith(
   });
 }
 
+class HangingRunnerProfileSeedStore extends InMemoryOpenTofuDeploymentStore {
+  override putRunnerProfile(profile: RunnerProfile): Promise<RunnerProfile> {
+    void profile;
+    return new Promise(() => {
+      // Intentionally pending: plan/apply hot paths use the controller's
+      // configured runner profile snapshot instead of waiting for seed writes.
+    });
+  }
+}
+
+async function expectWithin<T>(
+  work: Promise<T>,
+  timeoutMs: number,
+): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error(`timed out after ${timeoutMs}ms`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
+}
+
 function multiProviderRunnerProfile(
   providers: readonly string[] = [
     "registry.opentofu.org/cloudflare/cloudflare",
@@ -540,6 +570,26 @@ test("installation plan dispatch carries sourceArchive + stateScope at the curre
   expect(run.environment).toEqual("preview");
   expect(run.sourceSnapshotId).toEqual("snap_fixture");
   expect(run.baseStateGeneration).toEqual(0);
+});
+
+test("installation plan does not wait for runner profile seed persistence", async () => {
+  const store = new HangingRunnerProfileSeedStore();
+  const runner = recordingRunner();
+  await seedRunnableInstallationModel(store);
+  const profile = multiProviderRunnerProfile();
+  const controller = controllerWith(store, runner, {
+    runnerProfiles: [profile],
+    defaultRunnerProfileId: profile.id,
+  });
+
+  const { planRun } = await expectWithin(
+    controller.createInstallationPlan("inst_fixture"),
+    1_000,
+  );
+
+  expect(planRun.status).toEqual("succeeded");
+  expect(planRun.runnerProfileId).toEqual(profile.id);
+  expect(runner.planJobs).toHaveLength(1);
 });
 
 test("installation plan does not invent Cloudflare Capsule inputs from scope hints", async () => {

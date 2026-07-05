@@ -358,6 +358,7 @@ export interface RunEngineDependencies {
   readonly observability?: Pick<ObservabilitySink, "recordMetric">;
   readonly metricTags: Record<string, string>;
   readonly allowOperatorBackedProviderEnvs: boolean;
+  readonly runnerProfiles: readonly RunnerProfile[];
   readonly seededProfiles: Promise<void>;
   readonly runQuery: RunQueryService;
   readonly billing: BillingService;
@@ -389,6 +390,7 @@ export class RunEngine {
   readonly #observability?: Pick<ObservabilitySink, "recordMetric">;
   readonly #metricTags: Record<string, string>;
   readonly #allowOperatorBackedProviderEnvs: boolean;
+  readonly #runnerProfilesById: ReadonlyMap<string, RunnerProfile>;
   readonly #seededProfiles: Promise<void>;
   readonly #runQuery: RunQueryService;
   readonly #billing: BillingService;
@@ -421,6 +423,9 @@ export class RunEngine {
     this.#metricTags = deps.metricTags;
     this.#allowOperatorBackedProviderEnvs =
       deps.allowOperatorBackedProviderEnvs;
+    this.#runnerProfilesById = new Map(
+      deps.runnerProfiles.map((profile) => [profile.id, profile]),
+    );
     this.#seededProfiles = deps.seededProfiles;
     this.#runQuery = deps.runQuery;
     this.#billing = deps.billing;
@@ -501,7 +506,6 @@ export class RunEngine {
     context: DeployControlActorContext = {},
     internal: PlanRunInternalContext = {},
   ): Promise<PlanRunResponse> {
-    await this.#seededProfiles;
     const workspaceId = request.workspaceId ?? request.spaceId;
     requireNonEmptyString(workspaceId, "workspaceId");
     const requestCapsuleId = request.capsuleId ?? request.installationId;
@@ -830,7 +834,6 @@ export class RunEngine {
     context: DeployControlActorContext,
     internal: CreateInstallationPlanInternal = {},
   ): Promise<PlanRunResponse> {
-    await planCreationStage("runner_profile_seed", this.#seededProfiles);
     requireNonEmptyString(installationId, "installationId");
     const installation = await planCreationStage(
       "installation_load",
@@ -1917,7 +1920,6 @@ export class RunEngine {
     request: CreateApplyRunRequest,
     context: DeployControlActorContext = {},
   ): Promise<ApplyRunResponse> {
-    await this.#seededProfiles;
     requireNonEmptyString(request.planRunId, "planRunId");
     const planRun = await this.#requirePlanRun(request.planRunId);
     // A §19 drift_check is a read-only signal: it can NEVER be applied (Phase 8).
@@ -6002,6 +6004,8 @@ export class RunEngine {
 
   async #requireRunnerProfile(id: string): Promise<RunnerProfile> {
     requireNonEmptyString(id, "runnerProfileId");
+    const configuredProfile = this.#runnerProfilesById.get(id);
+    if (configuredProfile) return configuredProfile;
     const profile = await this.#store.getRunnerProfile(id);
     if (!profile) {
       throw new OpenTofuControllerError(
