@@ -39,17 +39,20 @@ function fetchAndCacheWorkspaces(): Promise<readonly Workspace[]> {
   });
 }
 
-async function fetchBootstrapWorkspaces(): Promise<
-  readonly Workspace[] | undefined
-> {
-  const data = await fetchDashboardWorkspaceBootstrap();
+async function fetchBootstrapWorkspaces(
+  selectedWorkspaceId?: string,
+): Promise<readonly Workspace[] | undefined> {
+  const data = await fetchDashboardWorkspaceBootstrap({ selectedWorkspaceId });
   if (!Array.isArray(data?.workspaces)) return undefined;
   primeWorkspaceListCache(data.workspaces);
   return data.workspaces;
 }
 
 export async function listWorkspacesCached(
-  options: { readonly force?: boolean } = {},
+  options: {
+    readonly force?: boolean;
+    readonly selectedWorkspaceId?: string;
+  } = {},
 ): Promise<readonly Workspace[]> {
   if (!options.force && cacheIsFresh()) {
     return cachedWorkspaces ?? [];
@@ -59,7 +62,7 @@ export async function listWorkspacesCached(
   }
 
   if (!options.force) {
-    inflight = fetchBootstrapWorkspaces()
+    inflight = fetchBootstrapWorkspaces(options.selectedWorkspaceId)
       .then((workspaces) => workspaces ?? fetchAndCacheWorkspaces())
       .catch(() => fetchAndCacheWorkspaces())
       .finally(() => {

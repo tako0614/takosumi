@@ -9,6 +9,8 @@ import {
 } from "../../../../dashboard/src/lib/workspace-list.ts";
 
 const realFetch = globalThis.fetch;
+const workspaceBootstrapPath =
+  "/api/v1/dashboard/bootstrap?includeWorkspaces=true&workspaceLimit=50";
 
 afterEach(() => {
   clearSession();
@@ -30,7 +32,7 @@ describe("dashboard session bootstrap", () => {
           { status: 200, headers: { "content-type": "application/json" } },
         );
       }
-      if (path === "/api/v1/dashboard/bootstrap?includeWorkspaces=true") {
+      if (path === workspaceBootstrapPath) {
         return new Response(
           JSON.stringify({
             session: { subject: "tsub_1" },
@@ -52,7 +54,7 @@ describe("dashboard session bootstrap", () => {
 
     expect(calls).toEqual([
       "/api/v1/dashboard/bootstrap?includeWorkspaces=false",
-      "/api/v1/dashboard/bootstrap?includeWorkspaces=true",
+      workspaceBootstrapPath,
     ]);
   });
 
@@ -95,7 +97,7 @@ describe("dashboard session bootstrap", () => {
           { status: 200, headers: { "content-type": "application/json" } },
         );
       }
-      if (path === "/api/v1/dashboard/bootstrap?includeWorkspaces=true") {
+      if (path === workspaceBootstrapPath) {
         await new Promise((resolve) => setTimeout(resolve, 1));
         return new Response(
           JSON.stringify({
@@ -117,7 +119,7 @@ describe("dashboard session bootstrap", () => {
     expect(workspaces[0]?.id).toBe("space_1");
     expect(calls).toEqual([
       "/api/v1/dashboard/bootstrap?includeWorkspaces=false",
-      "/api/v1/dashboard/bootstrap?includeWorkspaces=true",
+      workspaceBootstrapPath,
     ]);
   });
 
@@ -134,7 +136,7 @@ describe("dashboard session bootstrap", () => {
           { status: 200, headers: { "content-type": "application/json" } },
         );
       }
-      if (path === "/api/v1/dashboard/bootstrap?includeWorkspaces=true") {
+      if (path === workspaceBootstrapPath) {
         await new Promise((resolve) => setTimeout(resolve, 1));
         return new Response(
           JSON.stringify({
@@ -157,7 +159,7 @@ describe("dashboard session bootstrap", () => {
     expect(workspaces[0]?.id).toBe("space_1");
     expect(session?.subject).toBe("tsub_1");
     expect(calls).toEqual([
-      "/api/v1/dashboard/bootstrap?includeWorkspaces=true",
+      workspaceBootstrapPath,
       "/api/v1/dashboard/bootstrap?includeWorkspaces=false",
     ]);
   });
