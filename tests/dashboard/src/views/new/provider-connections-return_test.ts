@@ -377,9 +377,10 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).toContain(
       "compatibilityReportId: flowInput.compatibilityReportId",
     );
-    expect(newAppViewSource).toContain("timeoutMs: PLAN_REQUEST_TIMEOUT_MS");
+    expect(newAppViewSource).not.toContain("PLAN_REQUEST_TIMEOUT_MS");
+    expect(newAppViewSource).not.toContain("isPlanRequestTimeout");
     expect(newAppViewSource).toContain(
-      "planEnvelope = await planCapsule(capsuleId, planOptions)",
+      "const planEnvelope = await planCapsule(capsuleId, planOptions)",
     );
     expect(controlApiSource).toContain(
       "readonly compatibilityReportId?: string",

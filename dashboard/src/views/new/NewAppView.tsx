@@ -74,7 +74,6 @@ import {
   createSource,
   extractRunId,
   listCapsules,
-  listRuns,
   type CapsuleProviderConnectionBindings,
   type Capsule,
   type CapsuleCompatibilityDiagnostic,
@@ -91,7 +90,6 @@ import {
   type CapsuleCompatibilityProvider,
   type Connection,
   type ProviderConnection,
-  type Run,
   type RunStatus,
   type Workspace,
 } from "../../lib/control-api.ts";
@@ -161,7 +159,6 @@ function CatalogIcon(props: { readonly entry: CatalogEntry }) {
 
 const INSTALLATION_NAME_PATTERN = /^[a-z0-9-]+$/u;
 const INSTALLATION_DONE: StepState = "done";
-const PLAN_REQUEST_TIMEOUT_MS = 45_000;
 
 type CatalogEntry = NonNullable<InstallConfig["catalog"]> & {
   readonly id: string;
@@ -582,23 +579,6 @@ function sourceIdFromControlError(error: ControlApiError | undefined): string {
 
 function isDuplicateServiceError(error: ControlApiError | undefined): boolean {
   return error?.isDuplicateService ?? false;
-}
-
-function isPlanRequestTimeout(error: unknown): boolean {
-  return (
-    error instanceof ControlApiError &&
-    error.code === "request_timeout"
-  );
-}
-
-async function latestPlanRunForCapsule(
-  workspaceId: string,
-  capsuleId: string,
-): Promise<Run | undefined> {
-  const runs = await listRuns(workspaceId, 30);
-  return runs.find(
-    (run) => run.capsuleId === capsuleId && run.type === "plan",
-  );
 }
 
 function runStatusLabel(status: RunStatus): string {
@@ -2024,20 +2004,8 @@ function Inner() {
         ...(flowInput.compatibilityReportId
           ? { compatibilityReportId: flowInput.compatibilityReportId }
           : {}),
-        timeoutMs: PLAN_REQUEST_TIMEOUT_MS,
       };
-      let planEnvelope: unknown;
-      try {
-        planEnvelope = await planCapsule(capsuleId, planOptions);
-      } catch (err) {
-        if (!isPlanRequestTimeout(err)) throw err;
-        const recovered = await latestPlanRunForCapsule(workspace, capsuleId);
-        if (recovered) {
-          planEnvelope = { run: recovered };
-        } else {
-          planEnvelope = await planCapsule(capsuleId, planOptions);
-        }
-      }
+      const planEnvelope = await planCapsule(capsuleId, planOptions);
       throwIfStaleFlow(flow);
       setStepPlan("done");
       const runId = extractRunId(planEnvelope);
