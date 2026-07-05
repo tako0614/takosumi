@@ -143,7 +143,7 @@ test("apply maps cloudflare target to provider+inputs and threads moduleFiles/te
   expect(req.inputs.artifactPath).toBe("/work/dist/worker.js");
   expect(req.templateId).toBe("cloudflare-worker-service");
   expect(req.moduleFiles).toBe(plan.moduleFiles);
-  expect(req.publicOutputs).toEqual(["worker_name", "url"]);
+  expect(req.publicOutputs).toEqual(["worker_name", "url", "connections"]);
 
   expect(result.nativeResources).toEqual([
     { type: "cloudflare_workers_script", id: "api" },
@@ -151,6 +151,7 @@ test("apply maps cloudflare target to provider+inputs and threads moduleFiles/te
   expect(result.outputs).toEqual({
     worker_name: "fake://tkrn:demo:EdgeWorker:api/worker_name",
     url: "fake://tkrn:demo:EdgeWorker:api/url",
+    connections: "fake://tkrn:demo:EdgeWorker:api/connections",
   });
   expect(result.runId).toBeDefined();
 });

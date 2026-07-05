@@ -680,6 +680,25 @@ Takos distribution:
   ContainerService  -> takos-git and takos-agent containers
 ```
 
+Consumer shapes declare non-secret `connections` to the shapes they use. The
+connection contract carries only resource references, requested permissions,
+and projection kind; credentials and concrete binding materialization stay in
+Credential / ProviderConnection / adapter execution.
+
+```hcl
+resource "takosumi_edge_worker" "takos_worker" {
+  name          = "takos-worker"
+  artifact_path = "/work/dist/takos-worker.js"
+
+  connections = [{
+    name        = "FILES"
+    resource    = takosumi_object_bucket.files.id
+    permissions = ["read", "write"]
+    projection  = "runtime_binding"
+  }]
+}
+```
+
 This keeps Takos on the same provider-neutral shape model as third-party apps.
 If a future Takos component needs a service form that is not covered by these
 shapes, add that missing service form only after the prior-art gate passes. The

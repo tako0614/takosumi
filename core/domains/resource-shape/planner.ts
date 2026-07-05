@@ -14,7 +14,10 @@ import type {
   KVStoreSpec,
   ObjectBucketSpec,
   QueueSpec,
+  ResourceConnectionPermission,
+  ResourceConnectionSpec,
   ResourceDeletePolicy,
+  ResourceProjectionKind,
   ResourceShapeKind,
   SQLDatabaseSpec,
   TargetPoolEntry,
@@ -124,6 +127,15 @@ const RESOURCE_DELETE_POLICIES: readonly ResourceDeletePolicy[] = [
   "retain",
   "snapshot_then_delete",
   "block",
+];
+const RESOURCE_CONNECTION_PERMISSIONS: readonly ResourceConnectionPermission[] =
+  ["read", "write", "connect", "publish", "consume"];
+const RESOURCE_PROJECTION_KINDS: readonly ResourceProjectionKind[] = [
+  "env",
+  "database_url",
+  "runtime_binding",
+  "volume_mount",
+  "sdk_client",
 ];
 const SECRET_KEY_PATTERN =
   /(^|[_-])(secret|token|password|passwd|api[_-]?key|private[_-]?key|credential|client[_-]?secret)([_-]|$)/i;
@@ -430,6 +442,8 @@ export function parseContainerServiceSpec(
   if (!ports.ok) return ports;
   const environment = parseStringMap(candidate.environment, "environment");
   if (!environment.ok) return environment;
+  const connections = parseConnectionsMap(candidate.connections);
+  if (!connections.ok) return connections;
   const publicHttp = candidate.publicHttp;
   if (publicHttp !== undefined && typeof publicHttp !== "boolean") {
     return {
@@ -450,6 +464,7 @@ export function parseContainerServiceSpec(
       ...(ports.value ? { ports: ports.value } : {}),
       ...(publicHttp !== undefined ? { publicHttp } : {}),
       ...(environment.value ? { environment: environment.value } : {}),
+      ...(connections.value ? { connections: connections.value } : {}),
       ...(lifecyclePolicy.value
         ? { lifecyclePolicy: lifecyclePolicy.value }
         : {}),
@@ -498,16 +513,8 @@ export function parseEdgeWorkerSpec(spec: unknown): ParseEdgeWorkerSpecResult {
     };
   }
 
-  if (candidate.connections !== undefined) {
-    return {
-      ok: false,
-      error: {
-        code: "invalid_connections",
-        message:
-          "spec.connections is not supported for EdgeWorker until grant/projection planning is implemented",
-      },
-    };
-  }
+  const connections = parseConnectionsMap(candidate.connections);
+  if (!connections.ok) return connections;
 
   const lifecyclePolicy = parseLifecyclePolicy(candidate.lifecyclePolicy);
   if (!lifecyclePolicy.ok) return lifecyclePolicy;
@@ -524,6 +531,7 @@ export function parseEdgeWorkerSpec(spec: unknown): ParseEdgeWorkerSpecResult {
         ? { compatibilityFlags: compatibilityFlags.value }
         : {}),
       ...(profiles?.value ? { profiles: profiles.value } : {}),
+      ...(connections.value ? { connections: connections.value } : {}),
       ...(lifecyclePolicy.value
         ? { lifecyclePolicy: lifecyclePolicy.value }
         : {}),
@@ -586,12 +594,15 @@ export function planEdgeWorker(
   if (artifactPath) inputs.artifactPath = artifactPath;
   if (artifactUrl) inputs.artifactUrl = artifactUrl;
   if (artifactSha256) inputs.artifactSha256 = artifactSha256;
+  if (spec.connections && Object.keys(spec.connections).length > 0) {
+    inputs.connections = normalizedConnectionsForPlan(spec.connections);
+  }
   return {
     shape: "EdgeWorker",
     templateId,
     moduleFiles,
     inputs,
-    publicOutputs: ["worker_name", "url"],
+    publicOutputs: ["worker_name", "url", "connections"],
   };
 }
 
@@ -694,8 +705,11 @@ export function planContainerService(
       ports: spec.ports ?? [],
       publicHttp: spec.publicHttp ?? false,
       environment: spec.environment ?? {},
+      connections: spec.connections
+        ? normalizedConnectionsForPlan(spec.connections)
+        : {},
     },
-    publicOutputs: ["service_name", "url"],
+    publicOutputs: ["service_name", "url", "connections"],
   };
 }
 
@@ -725,6 +739,7 @@ function planGenericServiceShape(
 function requiredEdgeWorkerInterfaces(spec: EdgeWorkerSpec): readonly string[] {
   const interfaces: string[] = ["worker_fetch"];
   for (const profile of spec.profiles ?? []) interfaces.push(profile);
+  appendConnectionInterfaces(interfaces, spec.connections);
   return interfaces;
 }
 
@@ -752,13 +767,29 @@ function requiredSQLDatabaseInterfaces(
 function requiredContainerServiceInterfaces(
   spec: ContainerServiceSpec,
 ): readonly string[] {
-  return [
+  const interfaces = [
     "oci_container",
     ...(spec.publicHttp ? ["public_http"] : []),
     ...(spec.environment && Object.keys(spec.environment).length > 0
       ? ["env_projection"]
       : []),
   ];
+  appendConnectionInterfaces(interfaces, spec.connections);
+  return interfaces;
+}
+
+function appendConnectionInterfaces(
+  interfaces: string[],
+  connections: Readonly<Record<string, ResourceConnectionSpec>> | undefined,
+): void {
+  if (!connections || Object.keys(connections).length === 0) return;
+  interfaces.push("resource_connection");
+  for (const connection of Object.values(connections)) {
+    interfaces.push(connection.projection);
+    for (const permission of connection.permissions) {
+      interfaces.push(`grant_${permission}`);
+    }
+  }
 }
 
 function moduleFilesFor(
@@ -937,6 +968,138 @@ function parseStringMap(
     }
   }
   return { ok: true, value: value as Readonly<Record<string, string>> };
+}
+
+function parseConnectionsMap(value: unknown):
+  | {
+      readonly ok: true;
+      readonly value:
+        Readonly<Record<string, ResourceConnectionSpec>> | undefined;
+    }
+  | {
+      readonly ok: false;
+      readonly error: { readonly code: string; readonly message: string };
+    } {
+  if (value === undefined) return { ok: true, value: undefined };
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return {
+      ok: false,
+      error: {
+        code: "invalid_connections",
+        message: "spec.connections must be an object keyed by connection name",
+      },
+    };
+  }
+
+  const out: Record<string, ResourceConnectionSpec> = {};
+  for (const [name, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (!name || /\s/.test(name)) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_connection",
+          message:
+            "spec.connections keys must be non-empty capability tokens without whitespace",
+        },
+      };
+    }
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_connection",
+          message: `spec.connections.${name} must be an object`,
+        },
+      };
+    }
+    const candidate = raw as Record<string, unknown>;
+    if (
+      typeof candidate.resource !== "string" ||
+      candidate.resource.trim() === "" ||
+      /\s/.test(candidate.resource)
+    ) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_connection",
+          message: `spec.connections.${name}.resource must be a non-empty resource reference token`,
+        },
+      };
+    }
+    if (
+      !Array.isArray(candidate.permissions) ||
+      candidate.permissions.length === 0
+    ) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_connection",
+          message: `spec.connections.${name}.permissions must be a non-empty array`,
+        },
+      };
+    }
+    const permissions: ResourceConnectionPermission[] = [];
+    for (const permission of candidate.permissions) {
+      if (
+        typeof permission !== "string" ||
+        !RESOURCE_CONNECTION_PERMISSIONS.includes(
+          permission as ResourceConnectionPermission,
+        )
+      ) {
+        return {
+          ok: false,
+          error: {
+            code: "invalid_connection",
+            message:
+              `spec.connections.${name}.permissions values must be one of: ` +
+              RESOURCE_CONNECTION_PERMISSIONS.join(", "),
+          },
+        };
+      }
+      permissions.push(permission as ResourceConnectionPermission);
+    }
+    if (
+      typeof candidate.projection !== "string" ||
+      !RESOURCE_PROJECTION_KINDS.includes(
+        candidate.projection as ResourceProjectionKind,
+      )
+    ) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_connection",
+          message:
+            `spec.connections.${name}.projection must be one of: ` +
+            RESOURCE_PROJECTION_KINDS.join(", "),
+        },
+      };
+    }
+    out[name] = {
+      resource: candidate.resource,
+      permissions,
+      projection: candidate.projection as ResourceProjectionKind,
+    };
+  }
+
+  return {
+    ok: true,
+    value: Object.keys(out).length > 0 ? out : undefined,
+  };
+}
+
+function normalizedConnectionsForPlan(
+  connections: Readonly<Record<string, ResourceConnectionSpec>>,
+): Record<string, ResourceConnectionSpec> {
+  const normalized: Record<string, ResourceConnectionSpec> = {};
+  for (const name of Object.keys(connections).sort()) {
+    const connection = connections[name]!;
+    normalized[name] = {
+      resource: connection.resource,
+      permissions: [...connection.permissions].sort(),
+      projection: connection.projection,
+    };
+  }
+  return normalized;
 }
 
 function parseQueueDelivery(value: unknown):

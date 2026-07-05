@@ -43,6 +43,7 @@ type edgeWorkerModel struct {
 	CompatibilityDate      types.String `tfsdk:"compatibility_date"`
 	CompatibilityFlags     types.Set    `tfsdk:"compatibility_flags"`
 	Profiles               types.Set    `tfsdk:"profiles"`
+	Connections            types.List   `tfsdk:"connections"`
 	Space                  types.String `tfsdk:"space"`
 	TargetPool             types.String `tfsdk:"target_pool"`
 	SelectedImplementation types.String `tfsdk:"selected_implementation"`
@@ -99,6 +100,7 @@ func (r *edgeWorkerResource) Schema(_ context.Context, _ resource.SchemaRequest,
 					SetStringsNonEmpty(0),
 				},
 			},
+			"connections": resourceConnectionAttribute(),
 			"space": schema.StringAttribute{
 				Optional:    true,
 				Computed:    true,
@@ -396,6 +398,9 @@ func (m edgeWorkerModel) toResource(ctx context.Context, defaultSpace string) (*
 			spec["profiles"] = profiles
 		}
 	}
+	if connections := resourceConnectionsToSpec(ctx, m.Connections, &diags); len(connections) > 0 {
+		spec["connections"] = connections
+	}
 	targetPool := ""
 	if !m.TargetPool.IsNull() && !m.TargetPool.IsUnknown() {
 		targetPool = m.TargetPool.ValueString()
@@ -480,6 +485,13 @@ func refreshEdgeWorkerSpec(res *client.Resource, m *edgeWorkerModel) diag.Diagno
 		m.Profiles = stringSetFromAny(raw)
 	} else {
 		m.Profiles = types.SetNull(types.StringType)
+	}
+	if raw, ok := res.Spec["connections"]; ok {
+		connections, d := resourceConnectionsFromSpec(context.Background(), raw)
+		diags.Append(d...)
+		m.Connections = connections
+	} else {
+		m.Connections = types.ListNull(types.ObjectType{AttrTypes: resourceConnectionAttrTypes})
 	}
 	return diags
 }

@@ -109,6 +109,16 @@ variable "publicUrl" {
   default     = ""
 }
 
+variable "connections" {
+  type = map(object({
+    resource    = string
+    permissions = list(string)
+    projection  = string
+  }))
+  description = "Non-secret Resource Shape connection metadata. The selected adapter owns concrete grant/projection materialization."
+  default     = {}
+}
+
 locals {
   artifact_from_url        = trimspace(var.artifactUrl) != ""
   expected_artifact_sha256 = replace(trimspace(var.artifactSha256), "sha256:", "")
@@ -164,6 +174,11 @@ output "worker_name" {
 output "url" {
   description = "Public URL projected outside this module, or empty when no dispatcher/custom route projection is configured."
   value       = var.publicUrl
+}
+
+output "connections" {
+  description = "Declared non-secret Resource Shape connection metadata."
+  value       = var.connections
 }
 `;
 
@@ -486,6 +501,16 @@ variable "environment" {
   default     = {}
 }
 
+variable "connections" {
+  type = map(object({
+    resource    = string
+    permissions = list(string)
+    projection  = string
+  }))
+  description = "Non-secret Resource Shape connection metadata. The selected adapter owns concrete grant/projection materialization."
+  default     = {}
+}
+
 output "service_name" {
   description = "Logical container service name."
   value       = var.serviceName
@@ -494,6 +519,11 @@ output "service_name" {
 output "url" {
   description = "Public URL if projected by the selected adapter."
   value       = ""
+}
+
+output "connections" {
+  description = "Declared non-secret Resource Shape connection metadata."
+  value       = var.connections
 }
 `;
 

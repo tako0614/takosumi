@@ -155,6 +155,7 @@ export interface EdgeWorkerSpec {
   readonly compatibilityDate?: string;
   readonly compatibilityFlags?: readonly string[];
   readonly profiles?: readonly EdgeWorkerProfile[];
+  readonly connections?: Readonly<Record<string, ResourceConnectionSpec>>;
   readonly lifecyclePolicy?: ResourceLifecyclePolicy;
 }
 
@@ -216,6 +217,7 @@ export interface ContainerServiceSpec {
   readonly ports?: readonly number[];
   readonly publicHttp?: boolean;
   readonly environment?: Readonly<Record<string, string>>;
+  readonly connections?: Readonly<Record<string, ResourceConnectionSpec>>;
   readonly lifecyclePolicy?: ResourceLifecyclePolicy;
 }
 

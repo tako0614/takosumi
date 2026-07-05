@@ -219,6 +219,13 @@ agent job / event は `Queue`、`takos-git` / `takos-agent` は
 `ContainerService` です。足りない service form が出た場合だけ、同じ prior-art
 gate を通して新しい typed shape を追加します。
 
+`EdgeWorker` や `ContainerService` のような consumer shape は `connections`
+で他の shape への非 secret 接続を宣言できます。ここに置けるのは resource
+reference、permissions、projection kind だけです。credential や実際の binding
+materialization は Credential / ProviderConnection / adapter 側が扱います。
+HCL では `connection` は予約語なので、provider surface は `connections = [...]`
+です。
+
 `ObjectBucket` があっても、data-plane は S3-compatible API を使います。
 `AI Gateway` は provider resource ではなく OpenAI-compatible endpoint と env/secret
 projection として扱います。
