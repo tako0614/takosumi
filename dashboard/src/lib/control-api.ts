@@ -219,6 +219,14 @@ async function fetchAllPages<T>(
 }
 
 const BASE = "/api/v1";
+const BILLING_PLANS_CACHE_TTL_MS = 60_000;
+let billingPlansCache:
+  | {
+      readonly expiresAt: number;
+      readonly plans: readonly PublicBillingPlan[];
+    }
+  | undefined;
+let billingPlansRequest: Promise<readonly PublicBillingPlan[]> | undefined;
 
 // ===========================================================================
 // Wire shapes (local mirror of the deploy-control contract — see module header)
@@ -1066,10 +1074,26 @@ export interface PublicBillingPlan {
 export async function listBillingPlans(): Promise<
   readonly PublicBillingPlan[]
 > {
-  const body = await controlFetch<{
+  const now = Date.now();
+  if (billingPlansCache && billingPlansCache.expiresAt > now) {
+    return billingPlansCache.plans;
+  }
+  if (billingPlansRequest) return billingPlansRequest;
+  billingPlansRequest = controlFetch<{
     plans?: readonly PublicBillingPlan[];
-  }>(`${BASE}/billing/plans`);
-  return body.plans ?? [];
+  }>(`${BASE}/billing/plans`)
+    .then((body) => {
+      const plans = body.plans ?? [];
+      billingPlansCache = {
+        expiresAt: Date.now() + BILLING_PLANS_CACHE_TTL_MS,
+        plans,
+      };
+      return plans;
+    })
+    .finally(() => {
+      billingPlansRequest = undefined;
+    });
+  return billingPlansRequest;
 }
 
 // --- Members (Workspace membership / roles) ------------------------------------

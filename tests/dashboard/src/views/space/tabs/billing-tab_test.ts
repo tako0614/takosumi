@@ -8,6 +8,10 @@ const sourcePath = resolve(
   import.meta.dir,
   "../../../../../../dashboard/src/views/workspace/tabs/BillingTab.tsx",
 );
+const controlApiSourcePath = resolve(
+  import.meta.dir,
+  "../../../../../../dashboard/src/lib/control-api.ts",
+);
 
 test("BillingTab does not mask billing API failures as disabled or empty state", () => {
   const source = readFileSync(sourcePath, "utf8");
@@ -56,6 +60,17 @@ test("BillingTab keeps checkout plans Cloud-only and leaves usage visible", () =
   expect(source).toContain('"billing.plans.title"');
   expect(source).toContain('"billing.portal"');
   expect(source).not.toContain("createResource(listBillingPlans)");
+});
+
+test("BillingTab billing plans use the shared control-api cache", () => {
+  const source = readFileSync(sourcePath, "utf8");
+  const controlApiSource = readFileSync(controlApiSourcePath, "utf8");
+
+  expect(source).toContain("listBillingPlans");
+  expect(controlApiSource).toContain("BILLING_PLANS_CACHE_TTL_MS");
+  expect(controlApiSource).toContain("billingPlansRequest");
+  expect(controlApiSource).toContain("billingPlansCache");
+  expect(controlApiSource).toContain("if (billingPlansRequest)");
 });
 
 test("BillingTab lazy-loads usage history instead of fetching every usage page on first paint", () => {
