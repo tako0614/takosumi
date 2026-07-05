@@ -74,6 +74,7 @@ import {
   createSource,
   extractRunId,
   listCapsules,
+  listRuns,
   type CapsuleProviderConnectionBindings,
   type Capsule,
   type CapsuleCompatibilityDiagnostic,
@@ -90,6 +91,7 @@ import {
   type CapsuleCompatibilityProvider,
   type Connection,
   type ProviderConnection,
+  type Run,
   type RunStatus,
   type Workspace,
 } from "../../lib/control-api.ts";
@@ -159,6 +161,7 @@ function CatalogIcon(props: { readonly entry: CatalogEntry }) {
 
 const INSTALLATION_NAME_PATTERN = /^[a-z0-9-]+$/u;
 const INSTALLATION_DONE: StepState = "done";
+const PLAN_REQUEST_TIMEOUT_MS = 45_000;
 
 type CatalogEntry = NonNullable<InstallConfig["catalog"]> & {
   readonly id: string;
@@ -311,6 +314,21 @@ function sourceFetchErrorMessage(
   return t("new.error.sourceFetchFailed", {
     message: message || t("new.error.sourceFetchFailedUnknown"),
   });
+}
+
+function safeControlApiErrorMessage(
+  apiError: ControlApiError | undefined,
+): string | undefined {
+  const message = apiError?.message.replace(/\s+/gu, " ").trim();
+  if (!message) return undefined;
+  return message.length > 240 ? `${message.slice(0, 237)}...` : message;
+}
+
+function addFlowErrorMessage(apiError: ControlApiError | undefined): string {
+  const message = safeControlApiErrorMessage(apiError);
+  return message
+    ? t("new.error.genericWithDetails", { message })
+    : t("new.error.generic");
 }
 
 function shouldShowCompatibilityPanel(
@@ -564,6 +582,23 @@ function sourceIdFromControlError(error: ControlApiError | undefined): string {
 
 function isDuplicateServiceError(error: ControlApiError | undefined): boolean {
   return error?.isDuplicateService ?? false;
+}
+
+function isPlanRequestTimeout(error: unknown): boolean {
+  return (
+    error instanceof ControlApiError &&
+    error.code === "request_timeout"
+  );
+}
+
+async function latestPlanRunForCapsule(
+  workspaceId: string,
+  capsuleId: string,
+): Promise<Run | undefined> {
+  const runs = await listRuns(workspaceId, 30);
+  return runs.find(
+    (run) => run.capsuleId === capsuleId && run.type === "plan",
+  );
 }
 
 function runStatusLabel(status: RunStatus): string {
@@ -1836,7 +1871,7 @@ function Inner() {
           ? t("new.error.syncPending")
           : apiError?.code === "source_sync_failed"
             ? sourceFetchErrorMessage(apiError)
-            : t("new.error.generic"),
+            : addFlowErrorMessage(apiError),
       );
     } finally {
       if (isCurrentFlow(flow)) {
@@ -1985,12 +2020,24 @@ function Inner() {
 
       // Step 4 — create the first plan Run, then jump to the run screen.
       setStepPlan("running");
-      const planEnvelope = await planCapsule(
-        capsuleId,
-        flowInput.compatibilityReportId
+      const planOptions = {
+        ...(flowInput.compatibilityReportId
           ? { compatibilityReportId: flowInput.compatibilityReportId }
-          : {},
-      );
+          : {}),
+        timeoutMs: PLAN_REQUEST_TIMEOUT_MS,
+      };
+      let planEnvelope: unknown;
+      try {
+        planEnvelope = await planCapsule(capsuleId, planOptions);
+      } catch (err) {
+        if (!isPlanRequestTimeout(err)) throw err;
+        const recovered = await latestPlanRunForCapsule(workspace, capsuleId);
+        if (recovered) {
+          planEnvelope = { run: recovered };
+        } else {
+          planEnvelope = await planCapsule(capsuleId, planOptions);
+        }
+      }
       throwIfStaleFlow(flow);
       setStepPlan("done");
       const runId = extractRunId(planEnvelope);
@@ -2027,7 +2074,7 @@ function Inner() {
           setError(t("new.error.alreadyExists", { name: flowInput.name }));
         }
       } else {
-        setError(t("new.error.generic"));
+        setError(addFlowErrorMessage(apiError));
       }
       if (stepPlan() === "running") setStepPlan("error");
       else if (stepInstall() === "running") setStepInstall("error");

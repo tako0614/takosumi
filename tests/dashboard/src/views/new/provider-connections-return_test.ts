@@ -309,6 +309,10 @@ describe("/new Provider Connections return context", () => {
     expect(controlApiSource).toContain("sourceSyncFailureMessage");
     expect(controlApiSource).toContain("getRunLogsWithOptions");
     expect(newAppViewSource).toContain("sourceFetchErrorMessage");
+    expect(newAppViewSource).toContain("addFlowErrorMessage");
+    expect(newAppViewSource).toContain('"new.error.genericWithDetails"');
+    expect(en["new.error.genericWithDetails"]).toContain("{message}");
+    expect(ja["new.error.genericWithDetails"]).toContain("{message}");
     expect(newAppViewSource).toContain(
       "source ref did not resolve to a commit",
     );
@@ -363,6 +367,26 @@ describe("/new Provider Connections return context", () => {
     expect(
       newAppViewSource.match(/await putCapsuleProviderConnectionSet\(/g) ?? [],
     ).toHaveLength(1);
+  });
+
+  test("/new carries the compatibility report into the first plan request", () => {
+    expect(newAppViewSource).toContain(
+      "compatibilityReportId: compatibility()?.reportId",
+    );
+    expect(newAppViewSource).toContain("const planOptions = {");
+    expect(newAppViewSource).toContain(
+      "compatibilityReportId: flowInput.compatibilityReportId",
+    );
+    expect(newAppViewSource).toContain("timeoutMs: PLAN_REQUEST_TIMEOUT_MS");
+    expect(newAppViewSource).toContain(
+      "planEnvelope = await planCapsule(capsuleId, planOptions)",
+    );
+    expect(controlApiSource).toContain(
+      "readonly compatibilityReportId?: string",
+    );
+    expect(controlApiSource).toContain(
+      "body: options.compatibilityReportId",
+    );
   });
 
   test("/new clears add-flow busy state when a stale flow is aborted", () => {

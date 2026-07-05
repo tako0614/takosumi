@@ -590,6 +590,8 @@ export const en: Record<keyof typeof ja, string> = {
   "new.error.sourceFetchFailedUnknown": "No detailed cause was returned.",
   "new.error.generic":
     "The service could not be added. Check the details and try again.",
+  "new.error.genericWithDetails":
+    "The service could not be added. Details: {message}",
   "new.error.alreadyExists":
     "“{name}” is already added to this workspace. Open it from the service list.",
   "new.error.notRunnable":
