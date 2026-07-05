@@ -295,7 +295,7 @@ test("model e2e: create Installation with runnerId and outputAllowlist stores a 
         installConfigId,
         runnerId: "generic-opentofu-provider",
         outputAllowlist: {
-          takos_app: { from: "takos_app", type: "json", required: true },
+          app_deployment: { from: "app_deployment", type: "json", required: true },
         },
       }),
     },
@@ -316,7 +316,7 @@ test("model e2e: create Installation with runnerId and outputAllowlist stores a 
   expect(config.runnerId).toBe("generic-opentofu-provider");
   expect(config.variableMapping).toEqual({});
   expect(config.outputAllowlist).toEqual({
-    takos_app: { from: "takos_app", type: "json", required: true },
+    app_deployment: { from: "app_deployment", type: "json", required: true },
   });
 
   const listRes = await app.request(

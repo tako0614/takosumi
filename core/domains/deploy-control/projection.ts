@@ -362,8 +362,8 @@ function isPublishableDeploymentOutputValue(
 ): boolean {
   if (SECRET_OUTPUT_NAME_RE.test(name)) return false;
   if (typeof value !== "string") {
-    if (name === "takos_app" && kind === "json") {
-      return !containsUnsafeTakosAppDescriptorValue(value);
+    if (name === "app_deployment" && kind === "json") {
+      return !containsUnsafeAppDeploymentDescriptorValue(value);
     }
     return !containsSecretLikeJsonValue(value);
   }
@@ -385,34 +385,11 @@ function isPublishableDeploymentOutputValue(
   return true;
 }
 
-function containsUnsafeTakosAppDescriptorValue(value: JsonValue): boolean {
-  return (
-    containsTakosAppResourceDescriptor(value) ||
-    containsSecretLikeTakosAppDescriptorValue(value)
-  );
+function containsUnsafeAppDeploymentDescriptorValue(value: JsonValue): boolean {
+  return containsSecretLikeAppDeploymentDescriptorValue(value);
 }
 
-function containsTakosAppResourceDescriptor(value: JsonValue): boolean {
-  const stack: JsonValue[] = [value];
-  let inspected = 0;
-  while (stack.length > 0) {
-    const current = stack.pop()!;
-    inspected += 1;
-    if (inspected > 1_000) return true;
-    if (current === null || typeof current !== "object") continue;
-    if (Array.isArray(current)) {
-      for (const item of current) stack.push(item);
-      continue;
-    }
-    if (Object.hasOwn(current, "resources")) return true;
-    for (const nested of Object.values(current)) {
-      stack.push(nested);
-    }
-  }
-  return false;
-}
-
-function containsSecretLikeTakosAppDescriptorValue(value: JsonValue): boolean {
+function containsSecretLikeAppDeploymentDescriptorValue(value: JsonValue): boolean {
   const stack: JsonValue[] = [value];
   let inspected = 0;
   while (stack.length > 0) {
@@ -433,7 +410,10 @@ function containsSecretLikeTakosAppDescriptorValue(value: JsonValue): boolean {
       for (const item of current) stack.push(item);
       continue;
     }
-    for (const nested of Object.values(current)) {
+    for (const [key, nested] of Object.entries(current)) {
+      if (SECRET_QUERY_RE.test(key) || SECRET_OUTPUT_NAME_RE.test(key)) {
+        return true;
+      }
       stack.push(nested);
     }
   }

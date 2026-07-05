@@ -2,7 +2,7 @@
  * Capsule output projection (deploy decision D3).
  *
  * A pure, store-free mapping from a Capsule's well-known OpenTofu Outputs
- * (`service_exports` / `service_bindings` arrays and the `takos_app`
+ * (`service_exports` / `service_bindings` arrays and the `app_deployment`
  * publish/consume convenience output) to TRANSIENT projected objects. There are
  * no DB writes, ledger rows, capability grants, or runtime authority here: this
  * module only reads output values and shapes them so a host (e.g. the Takos
@@ -144,7 +144,7 @@ export interface ProjectServicesOptions {
   readonly allowExtensionCapabilities?: boolean;
   /**
    * When a `service_bindings[].selector.producer` is `"self"` (or a
-   * `takos_app.compute.*.consume` references the launcher), resolve the
+   * `app_deployment.compute.*.consume` references the launcher), resolve the
    * producer to this Capsule id. Optional: when omitted, a self-producer
    * selector simply carries no `producerCapsuleId`.
    */
@@ -238,7 +238,7 @@ export function projectServicesFromOutputs(
 }
 
 /**
- * Validates that a Capsule's `service_exports` / `service_bindings` / `takos_app`
+ * Validates that a Capsule's `service_exports` / `service_bindings` / `app_deployment`
  * outputs are well-formed (throws a `TypeError` on a malformed output). Used at
  * apply time to fail closed on a Capsule that emits a bad output shape.
  */
@@ -272,12 +272,12 @@ function normalizeProjectedExports(
     }
   }
 
-  const takosAppExports = normalizeTakosAppPublishExports(outputs.takos_app);
-  for (const [index, normalized] of takosAppExports.entries()) {
+  const appDeploymentExports = normalizeAppDeploymentPublishExports(outputs.app_deployment);
+  for (const [index, normalized] of appDeploymentExports.entries()) {
     assertCapabilitiesAllowed(
       normalized.capabilities,
       allowExtensionCapabilities,
-      `takos_app.publish[${index}].capabilities`,
+      `app_deployment.publish[${index}].capabilities`,
     );
     projected.push(normalized);
   }
@@ -300,7 +300,7 @@ function normalizeProjectedBindings(
     }
   }
 
-  projected.push(...normalizeTakosAppConsumeBindings(outputs.takos_app));
+  projected.push(...normalizeAppDeploymentConsumeBindings(outputs.app_deployment));
   for (const [index, normalized] of projected.entries()) {
     assertCapabilitiesAllowed(
       normalized.selector.capabilities,
@@ -526,56 +526,56 @@ function normalizeProjectedGrantRequest(
   };
 }
 
-function normalizeTakosAppPublishExports(
+function normalizeAppDeploymentPublishExports(
   value: JsonValue | undefined,
 ): readonly NormalizedProjectedExport[] {
   if (value === undefined) return [];
   if (!isJsonObject(value)) {
-    throw new TypeError("takos_app output must be an object when present");
+    throw new TypeError("app_deployment output must be an object when present");
   }
   const publish = value.publish;
   if (publish === undefined) return [];
   if (!Array.isArray(publish)) {
-    throw new TypeError("takos_app.publish must be an array when present");
+    throw new TypeError("app_deployment.publish must be an array when present");
   }
-  const appName = optionalString(value.name, "takos_app.name");
-  const appVersion = optionalString(value.version, "takos_app.version");
+  const appName = optionalString(value.name, "app_deployment.name");
+  const appVersion = optionalString(value.version, "app_deployment.version");
   return publish.map((entry, index) => {
     if (!isJsonObject(entry)) {
-      throw new TypeError(`takos_app.publish[${index}] must be an object`);
+      throw new TypeError(`app_deployment.publish[${index}] must be an object`);
     }
-    const name = requiredString(entry.name, `takos_app.publish[${index}].name`);
-    const type = requiredString(entry.type, `takos_app.publish[${index}].type`);
-    const capability = capabilityFromTakosAppPublicationType(
+    const name = requiredString(entry.name, `app_deployment.publish[${index}].name`);
+    const type = requiredString(entry.type, `app_deployment.publish[${index}].type`);
+    const capability = capabilityFromAppDeploymentPublicationType(
       type,
-      `takos_app.publish[${index}].type`,
+      `app_deployment.publish[${index}].type`,
     );
     const visibilityRaw = optionalString(
       entry.visibility,
-      `takos_app.publish[${index}].visibility`,
+      `app_deployment.publish[${index}].visibility`,
     );
     const visibility = visibilityRaw ?? "space";
     if (!isProjectedExportVisibility(visibility)) {
       throw new TypeError(
-        `takos_app.publish[${index}].visibility must be private, space, public, or shared`,
+        `app_deployment.publish[${index}].visibility must be private, space, public, or shared`,
       );
     }
     const publisher = optionalString(
       entry.publisher,
-      `takos_app.publish[${index}].publisher`,
+      `app_deployment.publish[${index}].publisher`,
     );
     return {
       name,
       capabilities: [capability],
       visibility,
-      endpoints: endpointsFromTakosAppPublishOutputs(entry.outputs),
+      endpoints: endpointsFromAppDeploymentPublishOutputs(entry.outputs),
       labels: compactStringRecord({
         app: appName,
         version: appVersion,
         publisher,
       }),
       metadata: compactJsonObject({
-        source: "takos_app.publish",
+        source: "app_deployment.publish",
         appName,
         appVersion,
         publisher,
@@ -588,59 +588,59 @@ function normalizeTakosAppPublishExports(
   });
 }
 
-function normalizeTakosAppConsumeBindings(
+function normalizeAppDeploymentConsumeBindings(
   value: JsonValue | undefined,
 ): readonly NormalizedProjectedBinding[] {
   if (value === undefined) return [];
   if (!isJsonObject(value)) {
-    throw new TypeError("takos_app output must be an object when present");
+    throw new TypeError("app_deployment output must be an object when present");
   }
   const compute = value.compute;
   if (compute === undefined) return [];
   if (!isJsonObject(compute)) {
-    throw new TypeError("takos_app.compute must be an object when present");
+    throw new TypeError("app_deployment.compute must be an object when present");
   }
-  const appName = optionalString(value.name, "takos_app.name");
+  const appName = optionalString(value.name, "app_deployment.name");
   const bindings: NormalizedProjectedBinding[] = [];
   for (const [componentName, componentValue] of Object.entries(compute)) {
     if (!isJsonObject(componentValue)) {
-      throw new TypeError(`takos_app.compute.${componentName} must be an object`);
+      throw new TypeError(`app_deployment.compute.${componentName} must be an object`);
     }
     const consume = componentValue.consume;
     if (consume === undefined) continue;
     if (!Array.isArray(consume)) {
       throw new TypeError(
-        `takos_app.compute.${componentName}.consume must be an array when present`,
+        `app_deployment.compute.${componentName}.consume must be an array when present`,
       );
     }
     for (const [index, entry] of consume.entries()) {
       if (!isJsonObject(entry)) {
         throw new TypeError(
-          `takos_app.compute.${componentName}.consume[${index}] must be an object`,
+          `app_deployment.compute.${componentName}.consume[${index}] must be an object`,
         );
       }
       const publication = requiredString(
         entry.publication,
-        `takos_app.compute.${componentName}.consume[${index}].publication`,
+        `app_deployment.compute.${componentName}.consume[${index}].publication`,
       );
-      const capability = capabilityFromTakosAppConsume(
+      const capability = capabilityFromAppDeploymentConsume(
         entry,
         publication,
-        `takos_app.compute.${componentName}.consume[${index}]`,
+        `app_deployment.compute.${componentName}.consume[${index}]`,
       );
-      const env = envNamesFromTakosAppInject(entry.inject);
+      const env = envNamesFromAppDeploymentInject(entry.inject);
       bindings.push({
         name: `${componentName}_${publication}`,
         target: {
           kind: "workload",
           name: componentName,
           metadata: compactJsonObject({
-            source: "takos_app.compute",
+            source: "app_deployment.compute",
             appName,
             componentName,
             componentKind: optionalString(
               componentValue.kind,
-              `takos_app.compute.${componentName}.kind`,
+              `app_deployment.compute.${componentName}.kind`,
             ),
           }),
         },
@@ -651,11 +651,11 @@ function normalizeTakosAppConsumeBindings(
         selectorProducerIsSelf: publication === "launcher" || undefined,
         dependencyMode: "variable_injection",
         grantRequest: {
-          scopes: scopesFromTakosAppConsume(entry, capability),
+          scopes: scopesFromAppDeploymentConsume(entry, capability),
           audience: [componentName],
           ...(env.length > 0 ? { env } : {}),
           metadata: compactJsonObject({
-            source: "takos_app.compute.consume",
+            source: "app_deployment.compute.consume",
             appName,
             componentName,
             publication,
@@ -672,7 +672,7 @@ function normalizeTakosAppConsumeBindings(
   return bindings;
 }
 
-function capabilityFromTakosAppPublicationType(
+function capabilityFromAppDeploymentPublicationType(
   value: string,
   field: string,
 ): ProjectedCapability {
@@ -687,12 +687,12 @@ function capabilityFromTakosAppPublicationType(
     default:
       if (isProjectedCapability(value)) return value;
       throw new TypeError(
-        `${field} must be a known takos_app publication type or dotted projected capability`,
+        `${field} must be a known app_deployment publication type or dotted projected capability`,
       );
   }
 }
 
-function capabilityFromTakosAppConsume(
+function capabilityFromAppDeploymentConsume(
   entry: JsonObject,
   publication: string,
   field: string,
@@ -719,7 +719,7 @@ function capabilityFromTakosAppConsume(
   }
 }
 
-function scopesFromTakosAppConsume(
+function scopesFromAppDeploymentConsume(
   entry: JsonObject,
   capability: ProjectedCapability,
 ): readonly string[] {
@@ -729,7 +729,7 @@ function scopesFromTakosAppConsume(
       !Array.isArray(raw) ||
       raw.some((scope) => typeof scope !== "string" || scope.length === 0)
     ) {
-      throw new TypeError("takos_app consume scopes must be string[]");
+      throw new TypeError("app_deployment consume scopes must be string[]");
     }
     return [...new Set(raw as string[])];
   }
@@ -737,23 +737,23 @@ function scopesFromTakosAppConsume(
   return [];
 }
 
-function envNamesFromTakosAppInject(
+function envNamesFromAppDeploymentInject(
   value: JsonValue | undefined,
 ): readonly string[] {
   if (value === undefined) return [];
   if (!isJsonObject(value)) {
-    throw new TypeError("takos_app consume inject must be an object");
+    throw new TypeError("app_deployment consume inject must be an object");
   }
   const rawEnv = value.env;
   if (rawEnv === undefined) return [];
   if (!isJsonObject(rawEnv)) {
-    throw new TypeError("takos_app consume inject.env must be an object");
+    throw new TypeError("app_deployment consume inject.env must be an object");
   }
   const names: string[] = [];
   for (const envName of Object.values(rawEnv)) {
     if (typeof envName !== "string" || envName.length === 0) {
       throw new TypeError(
-        "takos_app consume inject.env values must be env var names",
+        "app_deployment consume inject.env values must be env var names",
       );
     }
     names.push(envName);
@@ -761,7 +761,7 @@ function envNamesFromTakosAppInject(
   return [...new Set(names)];
 }
 
-function endpointsFromTakosAppPublishOutputs(
+function endpointsFromAppDeploymentPublishOutputs(
   value: JsonValue | undefined,
 ): readonly ProjectedEndpoint[] | undefined {
   if (!isJsonObject(value)) return undefined;

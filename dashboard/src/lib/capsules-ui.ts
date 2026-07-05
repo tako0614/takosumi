@@ -234,10 +234,17 @@ function urlValue(value: unknown): string | undefined {
   return isUrlString(value) ? value.trim() : undefined;
 }
 
+function recordValue(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  return value as Record<string, unknown>;
+}
+
 /** Normalize one declared-surface object; null unless it carries a name. */
 function surfaceFromObject(value: unknown): AppSurface | null {
-  if (!value || typeof value !== "object") return null;
-  const rec = value as Record<string, unknown>;
+  const rec = recordValue(value);
+  if (!rec) return null;
   const name = nonEmptyString(rec.name);
   if (!name) return null;
   return {
@@ -248,10 +255,70 @@ function surfaceFromObject(value: unknown): AppSurface | null {
   };
 }
 
+function appDeploymentPublishDeclaresLauncher(
+  entry: Record<string, unknown>,
+): boolean {
+  const type = nonEmptyString(entry.type);
+  if (
+    type === "interface.ui.surface" ||
+    type === "UiSurface" ||
+    type === "ui.surface" ||
+    type === "launcher"
+  ) {
+    return true;
+  }
+  const spec = recordValue(entry.spec);
+  return spec?.launcher === true;
+}
+
+function surfaceFromAppDeploymentPublish(
+  entry: unknown,
+  outputs: Readonly<Record<string, unknown>>,
+  fallbackName?: string,
+): AppSurface | null {
+  const rec = recordValue(entry);
+  if (!rec || !appDeploymentPublishDeclaresLauncher(rec)) return null;
+  const display = recordValue(rec.display) ?? {};
+  const name =
+    nonEmptyString(display.title) ??
+    nonEmptyString(rec.name) ??
+    fallbackName;
+  if (!name) return null;
+  const declaredOutputs = recordValue(rec.outputs);
+  const urlOutput = recordValue(declaredOutputs?.url);
+  return {
+    name,
+    icon: nonEmptyString(display.icon),
+    image: urlValue(display.image),
+    url:
+      urlValue(urlOutput?.url) ??
+      urlValue(urlOutput?.value) ??
+      launchUrlFromOutputs(outputs),
+  };
+}
+
+function surfacesFromAppDeployment(
+  outputs: Readonly<Record<string, unknown>>,
+): AppSurface[] {
+  const value = recordValue(outputs.app_deployment);
+  if (!value) return [];
+  const publish = value.publish;
+  if (!Array.isArray(publish)) return [];
+  const fallbackName = nonEmptyString(value.name);
+  const surfaces: AppSurface[] = [];
+  for (const entry of publish) {
+    const surface = surfaceFromAppDeploymentPublish(entry, outputs, fallbackName);
+    if (surface) surfaces.push(surface);
+  }
+  return surfaces;
+}
+
 /**
  * The app surfaces a Capsule declares via well-known public outputs. This is
  * the dashboard's opt-in "this is an app" signal — a service with no app
  * metadata returns []. Supported declaration forms:
+ *   - `app_deployment.publish`: the current OpenTofu app declaration shape
+ *     emitted by installable Capsules such as Takos and yurucommu.
  *   - `apps`: an array of `{ name, icon?, image?, url? }` (multi-surface)
  *   - `app`: a single object, or an array of objects
  *   - flat `app_name` / `app_icon` / `app_image` / `app_url` (single surface;
@@ -263,6 +330,8 @@ export function appSurfacesFromOutputs(
   outputs: Readonly<Record<string, unknown>>,
 ): AppSurface[] {
   const surfaces: AppSurface[] = [];
+
+  surfaces.push(...surfacesFromAppDeployment(outputs));
 
   if (Array.isArray(outputs.apps)) {
     for (const entry of outputs.apps) {

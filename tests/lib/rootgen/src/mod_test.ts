@@ -487,7 +487,7 @@ test("generateGenericCapsuleRoot wraps arbitrary capsule inputs and outputs", ()
   expect(files["outputs.tf"]).toContain(
     'output "takosumi_release" {\n  value = try(module.app.takosumi_release, null)\n}',
   );
-  expect(files["outputs.tf"]).not.toContain('output "takos_app"');
+  expect(files["outputs.tf"]).not.toContain('output "app_deployment"');
 });
 
 test("generateGenericCapsuleRoot omits empty required_providers for provider-free capsules", () => {
@@ -506,7 +506,7 @@ test("generateGenericCapsuleRoot omits empty required_providers for provider-fre
   expect(files["outputs.tf"]).toContain(
     "value = try(module.app.takosumi_release, null)",
   );
-  expect(files["outputs.tf"]).not.toContain("module.app.takos_app");
+  expect(files["outputs.tf"]).not.toContain("module.app.app_deployment");
 });
 
 test("generateGenericCapsuleRoot does not duplicate control outputs when allowlisted", () => {
@@ -522,7 +522,7 @@ test("generateGenericCapsuleRoot does not duplicate control outputs when allowli
   expect(files["outputs.tf"]!.match(/output "takosumi_release"/g)).toHaveLength(
     1,
   );
-  expect(files["outputs.tf"]).not.toContain("module.app.takos_app");
+  expect(files["outputs.tf"]).not.toContain("module.app.app_deployment");
 });
 
 test("generateGenericCapsuleRoot does not materialize generic env provider blocks", () => {

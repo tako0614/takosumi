@@ -64,6 +64,34 @@ describe("appSurfacesFromOutputs", () => {
     expect(surfaces[0]?.url).toBe("https://blog.test/");
   });
 
+  test("app_deployment publish declares launcher surfaces for installed apps", () => {
+    const surfaces = appSurfacesFromOutputs({
+      launch_url: "https://yuru.test/",
+      app_deployment: {
+        contractVersion: 1,
+        name: "yurucommu",
+        publish: [
+          {
+            name: "launcher",
+            publisher: "web",
+            type: "interface.ui.surface",
+            outputs: { url: { kind: "url", routeRef: "root" } },
+            display: {
+              title: "Yurucommu",
+              description: "Self-hosted social app",
+              category: "social",
+            },
+            spec: { launcher: true },
+          },
+        ],
+      },
+    });
+
+    expect(surfaces).toHaveLength(1);
+    expect(surfaces[0]?.name).toBe("Yurucommu");
+    expect(surfaces[0]?.url).toBe("https://yuru.test/");
+  });
+
   test("flat form: an icon alone declares an app (name filled in by the view)", () => {
     const surfaces = appSurfacesFromOutputs({ app_icon: "📝" });
     expect(surfaces).toHaveLength(1);
