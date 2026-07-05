@@ -28,7 +28,7 @@ const SHAPES = [
 ] as const;
 
 type ShapeKind = (typeof SHAPES)[number];
-type ProofProfile = "generic" | "takos-distribution";
+type ProofProfile = "generic" | "takos-distribution" | "yurucommu-worker-app";
 
 interface ProofResource {
   readonly apiVersion: typeof API_VERSION;
@@ -89,16 +89,11 @@ export interface ResourceShapeOpenTofuProviderProof {
     readonly connectionRequestCount: number;
     readonly connectionResourceRefs: readonly string[];
     readonly composition?: {
-      readonly app: "takos";
+      readonly app: "takos" | "yurucommu";
       readonly note: string;
       readonly worker: "EdgeWorker";
-      readonly durableResources: readonly [
-        "SQLDatabase",
-        "KVStore",
-        "ObjectBucket",
-        "Queue",
-      ];
-      readonly containers: readonly ["ContainerService"];
+      readonly durableResources: readonly ShapeKind[];
+      readonly containers?: readonly ["ContainerService"];
     };
   };
 }
@@ -264,20 +259,9 @@ export async function runResourceShapeOpenTofuProviderProof(
         applyOutputDigest: digestBytes(Buffer.from(outputsJson)),
         connectionRequestCount: serverState.connectionRequestCount(),
         connectionResourceRefs: serverState.connectionResourceRefs(),
-        ...(profile === "takos-distribution"
+        ...(compositionForProfile(profile)
           ? {
-              composition: {
-                app: "takos",
-                note: "Takos is expressed as generic Resource Shapes with explicit non-secret connections: one EdgeWorker, durable data/binding shapes, queues, and separate container services. This proof deliberately avoids a takosumi_takos catch-all resource.",
-                worker: "EdgeWorker",
-                durableResources: [
-                  "SQLDatabase",
-                  "KVStore",
-                  "ObjectBucket",
-                  "Queue",
-                ],
-                containers: ["ContainerService"],
-              },
+              composition: compositionForProfile(profile),
             }
           : {}),
       },
@@ -790,6 +774,16 @@ function expectedCountsForProfile(
       ContainerService: 2,
     };
   }
+  if (profile === "yurucommu-worker-app") {
+    return {
+      EdgeWorker: 1,
+      ObjectBucket: 1,
+      KVStore: 1,
+      Queue: 2,
+      SQLDatabase: 1,
+      ContainerService: 0,
+    };
+  }
   return {
     EdgeWorker: 1,
     ObjectBucket: 1,
@@ -815,7 +809,31 @@ function countResourcesByKind(
 
 function moduleHcl(profile: ProofProfile): string {
   if (profile === "takos-distribution") return takosDistributionModuleHcl();
+  if (profile === "yurucommu-worker-app") return yurucommuWorkerAppModuleHcl();
   return genericModuleHcl();
+}
+
+function compositionForProfile(
+  profile: ProofProfile,
+): ResourceShapeOpenTofuProviderProof["evidence"]["composition"] | undefined {
+  if (profile === "takos-distribution") {
+    return {
+      app: "takos",
+      note: "Takos is expressed as generic Resource Shapes with explicit non-secret connections: one EdgeWorker, durable data/binding shapes, queues, and separate container services. This proof deliberately avoids a takosumi_takos catch-all resource.",
+      worker: "EdgeWorker",
+      durableResources: ["SQLDatabase", "KVStore", "ObjectBucket", "Queue"],
+      containers: ["ContainerService"],
+    };
+  }
+  if (profile === "yurucommu-worker-app") {
+    return {
+      app: "yurucommu",
+      note: "Yurucommu is expressed as a generic Worker-compatible app shape: one EdgeWorker, SQL database, media object bucket, KV store, and delivery/DLQ queues. This proof deliberately avoids a yurucommu-specific provider resource.",
+      worker: "EdgeWorker",
+      durableResources: ["SQLDatabase", "ObjectBucket", "KVStore", "Queue"],
+    };
+  }
+  return undefined;
 }
 
 function genericModuleHcl(): string {
@@ -1122,6 +1140,110 @@ output "takos_shape_outputs" {
     events     = takosumi_queue.events.outputs
     git        = takosumi_container_service.git.outputs
     agent      = takosumi_container_service.agent.outputs
+  }
+}
+`;
+}
+
+function yurucommuWorkerAppModuleHcl(): string {
+  return `${modulePreambleHcl()}
+
+${proofTargetPoolHcl("yurucommu-proof-target")}
+
+resource "takosumi_edge_worker" "yurucommu_worker" {
+  name               = "yurucommu-worker"
+  artifact_path      = "/work/dist/yurucommu-worker.js"
+  compatibility_date = "2026-06-29"
+  profiles           = ["workers_bindings"]
+  target_pool        = takosumi_target_pool.default.name
+
+  connections = [
+    {
+      name        = "DB"
+      resource    = takosumi_sql_database.database.id
+      permissions = ["connect"]
+      projection  = "runtime_binding"
+    },
+    {
+      name        = "MEDIA"
+      resource    = takosumi_object_bucket.media.id
+      permissions = ["read", "write"]
+      projection  = "runtime_binding"
+    },
+    {
+      name        = "KV"
+      resource    = takosumi_kv_store.kv.id
+      permissions = ["read", "write"]
+      projection  = "runtime_binding"
+    },
+    {
+      name        = "DELIVERY_QUEUE"
+      resource    = takosumi_queue.delivery.id
+      permissions = ["publish"]
+      projection  = "runtime_binding"
+    },
+    {
+      name        = "DELIVERY_DLQ"
+      resource    = takosumi_queue.delivery_dlq.id
+      permissions = ["publish"]
+      projection  = "runtime_binding"
+    }
+  ]
+}
+
+resource "takosumi_sql_database" "database" {
+  name            = "yurucommu-db"
+  engine          = "sqlite"
+  migrations_path = "migrations"
+  target_pool     = takosumi_target_pool.default.name
+}
+
+resource "takosumi_object_bucket" "media" {
+  name        = "yurucommu-media"
+  interfaces  = ["s3_api", "signed_url"]
+  target_pool = takosumi_target_pool.default.name
+}
+
+resource "takosumi_kv_store" "kv" {
+  name        = "yurucommu-kv"
+  consistency = "eventual"
+  target_pool = takosumi_target_pool.default.name
+}
+
+resource "takosumi_queue" "delivery" {
+  name           = "yurucommu-delivery"
+  max_retries    = 3
+  max_batch_size = 10
+  target_pool    = takosumi_target_pool.default.name
+}
+
+resource "takosumi_queue" "delivery_dlq" {
+  name           = "yurucommu-delivery-dlq"
+  max_retries    = 1
+  max_batch_size = 10
+  target_pool    = takosumi_target_pool.default.name
+}
+
+output "yurucommu_shape_ids" {
+  value = {
+    worker      = takosumi_edge_worker.yurucommu_worker.id
+    database    = takosumi_sql_database.database.id
+    media       = takosumi_object_bucket.media.id
+    kv          = takosumi_kv_store.kv.id
+    delivery    = takosumi_queue.delivery.id
+    delivery_dlq = takosumi_queue.delivery_dlq.id
+    target_pool = takosumi_target_pool.default.id
+  }
+}
+
+output "yurucommu_shape_outputs" {
+  value = {
+    worker       = takosumi_edge_worker.yurucommu_worker.outputs
+    database     = takosumi_sql_database.database.outputs
+    media        = takosumi_object_bucket.media.outputs
+    kv           = takosumi_kv_store.kv.outputs
+    delivery     = takosumi_queue.delivery.outputs
+    delivery_dlq = takosumi_queue.delivery_dlq.outputs
   }
 }
 `;
@@ -1676,11 +1798,15 @@ if (import.meta.main) {
 
 function profileFromArgs(): ProofProfile {
   const profile = argValue("--profile") ?? "generic";
-  if (profile === "generic" || profile === "takos-distribution") {
+  if (
+    profile === "generic" ||
+    profile === "takos-distribution" ||
+    profile === "yurucommu-worker-app"
+  ) {
     return profile;
   }
   throw new Error(
-    `unsupported --profile ${profile}; expected generic or takos-distribution`,
+    `unsupported --profile ${profile}; expected generic, takos-distribution, or yurucommu-worker-app`,
   );
 }
 
