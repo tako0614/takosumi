@@ -80,8 +80,9 @@ test("BillingTab lets a new Cloud workspace start checkout before billing is act
   );
   const portalMemoIndex = source.indexOf("const canOpenPortal = createMemo");
   const nonRefundableIndex = source.indexOf(
-    '<p class="muted av-plan-policy">\n                    {t("billing.plans.nonRefundable")}',
+    '<p class="muted av-plan-policy">\n            {t("billing.plans.nonRefundable")}',
   );
+  const plansSwitchIndex = source.indexOf("<Switch>", nonRefundableIndex);
   const policyLinksIndex = source.indexOf('class="av-billing-policy-links"');
   const subscriptionListIndex = source.indexOf(
     "<Show when={subscriptions().length > 0}>",
@@ -99,6 +100,8 @@ test("BillingTab lets a new Cloud workspace start checkout before billing is act
   expect(source).toContain('href="/legal/terms-of-service"');
   expect(source).toContain('href="/legal/privacy-policy"');
   expect(source).toContain('href="/support"');
+  expect(nonRefundableIndex).toBeGreaterThan(0);
+  expect(plansSwitchIndex).toBeGreaterThan(nonRefundableIndex);
   expect(policyLinksIndex).toBeGreaterThan(nonRefundableIndex);
   expect(subscriptionListIndex).toBeGreaterThan(nonRefundableIndex);
   expect(en["billing.plans.nonRefundable"]).toContain("TAKOSUMI");
