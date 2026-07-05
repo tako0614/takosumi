@@ -295,7 +295,12 @@ function requestedGenericCapsuleVariables(
       (moduleFiles ? collectRootModuleVariableNames(moduleFiles) : []),
   );
   if (declaredInputs.size === 0) return explicit;
-  const requested: Record<string, unknown> = { ...explicit };
+  const requested: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(explicit)) {
+    if (declaredInputs.has(key)) {
+      requested[key] = value;
+    }
+  }
   for (const key of Object.keys(providerInputDefaults)) {
     if (!declaredInputs.has(key)) continue;
     if (Object.prototype.hasOwnProperty.call(requested, key)) continue;

@@ -713,17 +713,19 @@ export async function resolveOptions(
         : DEFAULT_CAPSULE_DIR),
   );
   const resolvedAppName = args.appName ?? defaultAppName();
-  const vars = await readJsonRecordInput({
+  const defaultVars = defaultSmokeVars({
+    accountId: cloudflareAccountId.value,
+    appName: resolvedAppName,
+    workersSubdomain: cloudflareWorkersSubdomain.value,
+    providerless: providerlessOpenTofuSmoke,
+  });
+  const explicitVars = await readJsonRecordInput({
     inline: args.varsJson ?? env.TAKOSUMI_SMOKE_VARS_JSON,
     file: args.varsJsonFile ?? env.TAKOSUMI_SMOKE_VARS_JSON_FILE,
     label: "vars",
-    fallback: defaultSmokeVars({
-      accountId: cloudflareAccountId.value,
-      appName: resolvedAppName,
-      workersSubdomain: cloudflareWorkersSubdomain.value,
-      providerless: providerlessOpenTofuSmoke,
-    }),
+    fallback: {},
   });
+  const vars = mergeJsonRecords(defaultVars, explicitVars);
   const outputAllowlist = parseOutputAllowlist(
     await readJsonRecordInput({
       inline:
@@ -749,6 +751,10 @@ export async function resolveOptions(
   );
   const appName =
     args.appName ??
+    stringRecordValue(explicitVars, "appName") ??
+    stringRecordValue(explicitVars, "name") ??
+    stringRecordValue(explicitVars, "project_name") ??
+    stringRecordValue(explicitVars, "worker_name") ??
     stringRecordValue(vars, "appName") ??
     stringRecordValue(vars, "name") ??
     stringRecordValue(vars, "project_name") ??
@@ -1143,7 +1149,10 @@ export async function runPlatformControlPlaneSmoke(
     }
     if (shouldVerifyCloudflareDeployment(options)) {
       beginStep("deploymentVerified");
-      await assertCloudflareWorkerExists(options, deploymentLedger.outputsPublic);
+      await assertCloudflareWorkerExists(
+        options,
+        deploymentLedger.outputsPublic,
+      );
       completeStep("deploymentVerified");
     }
     if (options.verificationMode === "cloudflare-worker") {
@@ -1798,9 +1807,7 @@ async function deployGitSourceCapsule(
     path: `${API_PREFIX}/capsules/${encodeURIComponent(installation.id)}/plan`,
     timeoutMs: options.deployTimeoutSeconds * 1000,
     body: {
-      ...(options.runnerProfileId
-        ? { runnerId: options.runnerProfileId }
-        : {}),
+      ...(options.runnerProfileId ? { runnerId: options.runnerProfileId } : {}),
       compatibilityReportId: compatibility.report.id,
     },
   });
@@ -3538,7 +3545,40 @@ function defaultSmokeVars(input: {
     accountId: input.accountId,
     appName: input.appName,
     workersSubdomain: input.workersSubdomain,
+    target: "cloudflare",
+    project_name: input.appName,
+    cloudflare: {
+      account_id: input.accountId,
+      workers_subdomain: input.workersSubdomain,
+    },
   };
+}
+
+function mergeJsonRecords(
+  base: Readonly<Record<string, JsonSmokeValue>>,
+  override: Readonly<Record<string, JsonSmokeValue>>,
+): Readonly<Record<string, JsonSmokeValue>> {
+  const merged: Record<string, JsonSmokeValue> = { ...base };
+  for (const [key, value] of Object.entries(override)) {
+    const baseValue = merged[key];
+    if (isPlainJsonObject(baseValue) && isPlainJsonObject(value)) {
+      merged[key] = mergeJsonRecords(baseValue, value);
+    } else {
+      merged[key] = value;
+    }
+  }
+  return merged;
+}
+
+function isPlainJsonObject(
+  value: JsonSmokeValue | undefined,
+): value is Readonly<Record<string, JsonSmokeValue>> {
+  return (
+    value !== undefined &&
+    value !== null &&
+    !Array.isArray(value) &&
+    typeof value === "object"
+  );
 }
 
 function defaultSmokeOutputAllowlist(): SmokeOutputAllowlist {
@@ -4194,7 +4234,9 @@ async function runSelfTest(): Promise<void> {
     '<!doctype html><meta charset="utf-8"><title>Hello from Takosumi</title>' +
     "<h1>It works</h1><p>This Worker was provisioned by a Takosumi Capsule.</p>";
   if (!isCurrentTakosumiHelloPage(currentHelloHtml)) {
-    throw new Error("self-test did not recognize the current hello Worker page");
+    throw new Error(
+      "self-test did not recognize the current hello Worker page",
+    );
   }
   if (
     isCurrentTakosumiHelloPage(
