@@ -78,7 +78,7 @@ export const installableAppStoreListings: readonly TcsListing[] = [
       git: "https://github.com/tako0614/takos.git",
       ref: "main",
       path: "deploy/opentofu",
-      resolvedCommit: "bfdd9f8bb79c2f28f86a1187ab4e9eb47e40c5bb",
+      resolvedCommit: "a4d0375aee7cb7466db6f5d4512ef65eda16e8b9",
     },
     kind: "app",
     surface: "service",
