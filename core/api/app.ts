@@ -9,6 +9,7 @@ import {
   createTakosumiWellKnownDocument,
   type CreateTakosumiDiscoveryOptions,
   type TakosumiAdapterCapabilities,
+  type TakosumiOperatorCapabilities,
   type TakosumiResourceCapabilities,
 } from "takosumi-contract/capabilities";
 import {
@@ -80,6 +81,7 @@ export interface CreateApiAppOptions {
   readonly resourceShapeRouteOptions?: RegisterResourceShapeRoutesOptions;
   readonly resourceCapabilities?: Partial<TakosumiResourceCapabilities>;
   readonly adapterCapabilities?: Partial<TakosumiAdapterCapabilities>;
+  readonly operatorCapabilities?: Partial<TakosumiOperatorCapabilities>;
   /**
    * HTTP request/correlation id propagation is mounted by default. Pass
    * `false` only for low-level route tests that need to exercise raw Hono
@@ -123,6 +125,7 @@ export async function createApiApp(
           mounted,
           resourceCapabilities: options.resourceCapabilities,
           adapterCapabilities: options.adapterCapabilities,
+          operatorCapabilities: options.operatorCapabilities,
         }),
       ),
     );
@@ -136,6 +139,7 @@ export async function createApiApp(
           mounted,
           resourceCapabilities: options.resourceCapabilities,
           adapterCapabilities: options.adapterCapabilities,
+          operatorCapabilities: options.operatorCapabilities,
         }),
       ),
     );
@@ -303,6 +307,7 @@ function createProductDiscoveryOptions(input: {
   readonly mounted: RouteFamilyMountedFlags;
   readonly resourceCapabilities?: Partial<TakosumiResourceCapabilities>;
   readonly adapterCapabilities?: Partial<TakosumiAdapterCapabilities>;
+  readonly operatorCapabilities?: Partial<TakosumiOperatorCapabilities>;
 }): CreateTakosumiDiscoveryOptions {
   const resourceShapes = input.mounted.resourceShapeRoutesMounted;
   const stacks = input.mounted.deployControlInternalRoutesMounted;
@@ -329,6 +334,9 @@ function createProductDiscoveryOptions(input: {
     origin: input.origin,
     resources,
     adapters,
+    ...(input.operatorCapabilities
+      ? { operator: input.operatorCapabilities }
+      : {}),
     resourceShapesEnabled:
       input.resourceCapabilities === undefined
         ? resourceShapes

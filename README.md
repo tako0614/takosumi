@@ -72,11 +72,11 @@ billing, support/SLA, and official resource backends belong to Takosumi for Oper
 
 ## Editions
 
-| Edition                                   | What it is                                                                                                                                                                                                                                           |
-| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Takosumi OSS**                          | This repository: Git-based OpenTofu/Terraform control plane, Resource Shape API, Compatibility API framework, Adapter system, ProviderConnections, runner pool, state/output/audit, and disabled/showback billing that never blocks apply.          |
-| **Takosumi for Operator**                 | OSS/commercial operator edition for hosting Takosumi for users or customers: multi-tenant customer management, quota/metering/plans, operator console, managed target catalog, support tooling, and commercial audit.                               |
-| **Takosumi Cloud**                        | The official hosted Takosumi for Operator at `app.takosumi.com`, with official managed targets, Takosumi-owned native resource internals, AI Gateway, Stripe-enforced billing, quota, usage, support, abuse controls, and SLA.                    |
+| Edition                   | What it is                                                                                                                                                                                                                                                        |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Takosumi OSS**          | This repository: Git-based OpenTofu/Terraform control plane, Resource Shape API, Compatibility API framework, Adapter system, ProviderConnections, runner pool, state/output/audit, and disabled/showback billing that never blocks apply.                        |
+| **Takosumi for Operator** | OSS/commercial operator edition for hosting Takosumi for users or customers: multi-tenant customer management, quota/metering/plans, DB-backed operator configuration, CLI/API/runbook operations, managed target catalog, support tooling, and commercial audit. |
+| **Takosumi Cloud**        | The official hosted Takosumi for Operator at `app.takosumi.com`, with official managed targets, Takosumi-owned native resource internals, AI Gateway, Stripe-enforced billing, quota, usage, support, abuse controls, and SLA.                                    |
 
 The dependency direction is **one-way Cloud -> OSS**: the hosted Cloud operation consumes OSS contracts and composition
 points. OSS ships and runs with nothing from the hosted Cloud operation present.

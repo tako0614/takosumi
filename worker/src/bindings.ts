@@ -111,6 +111,13 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
    */
   readonly TAKOSUMI_RESOURCE_ADAPTER_EXTENSIONS?: string;
   /**
+   * Operator-only operational capabilities advertised through
+   * `/v1/capabilities`. CSV/whitespace list, JSON string array, or `all`.
+   * This is for DB-backed config / CLI / API / runbook operations, not an
+   * operator admin UI switch.
+   */
+  readonly TAKOSUMI_OPERATOR_CAPABILITIES?: string;
+  /**
    * Operator-installed Resource Shape adapter plugins. JSON array of
    * `{ "plugin": "...", "handlerKey": "..." }`. The handler key must resolve
    * to a fetch-compatible binding on the host Worker env. OSS treats this as a

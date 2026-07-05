@@ -45,7 +45,8 @@ Takosumi for Operator:
   Takosumi
   + customer management
   + billing / metering / quota
-  + operator console
+  + DB-backed operator configuration
+  + CLI / API / runbook operations
   + managed target catalog
   + commercial operation。
 
@@ -148,7 +149,8 @@ full AWS API compatibility や full Cloudflare API compatibility を名乗らず
 ```text
 customer management
 billing / metering / quota / plan
-operator console
+DB-backed operator configuration
+CLI / API / runbook operations
 managed target catalog
 official managed target pools
 official native runtime / object store / queue / DB / edge gateway

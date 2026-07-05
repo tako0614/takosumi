@@ -401,7 +401,8 @@ customer / tenant management
 multi-tenant workspace management
 billing account / subscription / plan
 quota / metering / invoice / payment integration
-operator console
+DB-backed operator configuration
+CLI / API / runbook operations
 managed target catalog
 support and abuse tooling
 commercial audit export

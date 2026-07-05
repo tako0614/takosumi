@@ -4,9 +4,9 @@ An operator runs Takosumi for Operator for their own users.
 
 Takosumi OSS provides the Git-based OpenTofu control plane, Resource Shape API,
 Compatibility API framework, and Adapter system. Takosumi for Operator adds
-customer management, billing / metering / quota, an operator console, a managed
-target catalog, and commercial operation. Takosumi Cloud is the official hosted
-operation run by us.
+customer management, billing / metering / quota, DB-backed operator
+configuration, CLI/API/runbook operations, a managed target catalog, and
+commercial operation. Takosumi Cloud is the official hosted operation run by us.
 
 ## Responsibilities
 
@@ -21,7 +21,9 @@ operation run by us.
 - operate a release activator materializer when enabled, and record app
   publication separately from the apply ledger
 - keep provider credentials, control-plane tokens, and state backend credentials out of user workloads
-- operate dashboard, API, audit, quota, and usage showback surfaces
+- operate user-facing dashboard, API, audit, quota, and usage showback surfaces
+- handle operator-only operations through DB-backed config, CLI, API, runbooks,
+  and audit evidence
 - keep evidence for tenant isolation, workspace isolation, runner isolation, and network egress policy
 
 ## OSS Boundary
@@ -57,7 +59,8 @@ Operator / Cloud own commercial operation and managed capacity.
 ```text
 customer management
 billing / metering / quota / plan
-operator console
+DB-backed operator configuration
+CLI / API / runbook operations
 managed target catalog
 support / abuse operation
 commercial audit
