@@ -1,8 +1,8 @@
 import type { Workspace } from "./control-api.ts";
 
 const DASHBOARD_BOOTSTRAP_PATH = "/api/v1/dashboard/bootstrap";
-export const DASHBOARD_SESSION_BOOTSTRAP_PATH =
-  `${DASHBOARD_BOOTSTRAP_PATH}?includeWorkspaces=true`;
+export const DASHBOARD_SESSION_BOOTSTRAP_PATH = `${DASHBOARD_BOOTSTRAP_PATH}?includeWorkspaces=false`;
+export const DASHBOARD_WORKSPACE_BOOTSTRAP_PATH = `${DASHBOARD_BOOTSTRAP_PATH}?includeWorkspaces=true`;
 
 export interface DashboardBootstrapSession {
   readonly subject: string;
@@ -27,19 +27,35 @@ export interface DashboardBootstrapResponse {
   readonly workspaces?: readonly Workspace[];
 }
 
-let inflight: Promise<DashboardBootstrapResponse | undefined> | undefined;
+const inflight = new Map<
+  string,
+  Promise<DashboardBootstrapResponse | undefined>
+>();
 
 export function clearDashboardBootstrapCache(): void {
-  inflight = undefined;
+  inflight.clear();
 }
 
 export function fetchDashboardBootstrap(): Promise<
   DashboardBootstrapResponse | undefined
-> {
-  if (inflight) return inflight;
+>;
+export function fetchDashboardBootstrap(options: {
+  readonly includeWorkspaces?: boolean;
+}): Promise<DashboardBootstrapResponse | undefined>;
+export function fetchDashboardBootstrap(
+  options: {
+    readonly includeWorkspaces?: boolean;
+  } = {},
+): Promise<DashboardBootstrapResponse | undefined> {
+  const path =
+    options.includeWorkspaces === true
+      ? DASHBOARD_WORKSPACE_BOOTSTRAP_PATH
+      : DASHBOARD_SESSION_BOOTSTRAP_PATH;
+  const current = inflight.get(path);
+  if (current) return current;
   if (typeof fetch === "undefined") return Promise.resolve(undefined);
 
-  inflight = fetch(DASHBOARD_SESSION_BOOTSTRAP_PATH, {
+  const request = fetch(path, {
     method: "GET",
     headers: { accept: "application/json" },
     credentials: "include",
@@ -50,7 +66,14 @@ export function fetchDashboardBootstrap(): Promise<
       return (await res.json()) as DashboardBootstrapResponse;
     })
     .finally(() => {
-      inflight = undefined;
+      if (inflight.get(path) === request) inflight.delete(path);
     });
-  return inflight;
+  inflight.set(path, request);
+  return request;
+}
+
+export function fetchDashboardWorkspaceBootstrap(): Promise<
+  DashboardBootstrapResponse | undefined
+> {
+  return fetchDashboardBootstrap({ includeWorkspaces: true });
 }

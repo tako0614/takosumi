@@ -1,7 +1,7 @@
 import { listWorkspaces, type Workspace } from "./control-api.ts";
 import {
   clearDashboardBootstrapCache,
-  fetchDashboardBootstrap,
+  fetchDashboardWorkspaceBootstrap,
 } from "./dashboard-bootstrap.ts";
 
 const CACHE_TTL_MS = 10_000;
@@ -42,7 +42,7 @@ function fetchAndCacheWorkspaces(): Promise<readonly Workspace[]> {
 async function fetchBootstrapWorkspaces(): Promise<
   readonly Workspace[] | undefined
 > {
-  const data = await fetchDashboardBootstrap();
+  const data = await fetchDashboardWorkspaceBootstrap();
   if (!Array.isArray(data?.workspaces)) return undefined;
   primeWorkspaceListCache(data.workspaces);
   return data.workspaces;
