@@ -149,6 +149,8 @@ interface LiveProofOptions {
   readonly targetPlugin?: string;
   readonly edgeWorkerArtifactUrl?: string;
   readonly edgeWorkerArtifactSha256?: string;
+  readonly containerImageGit?: string;
+  readonly containerImageAgent?: string;
   readonly outputPath?: string;
   readonly profile?: ProofProfile;
   readonly now?: () => string;
@@ -358,6 +360,8 @@ export async function runResourceShapeOpenTofuProviderLiveProof(
       TF_VAR_target_plugin: options.targetPlugin,
       TF_VAR_edge_worker_artifact_url: options.edgeWorkerArtifactUrl,
       TF_VAR_edge_worker_artifact_sha256: options.edgeWorkerArtifactSha256,
+      TF_VAR_container_image_git: options.containerImageGit,
+      TF_VAR_container_image_agent: options.containerImageAgent,
       TAKOSUMI_ENDPOINT: options.endpoint,
       TAKOSUMI_SPACE: options.space,
       TAKOSUMI_TOKEN: options.token,
@@ -1368,7 +1372,11 @@ function liveMaterializableShapes(
   resources: Record<string, boolean>,
   options: Pick<
     LiveProofOptions,
-    "edgeWorkerArtifactUrl" | "edgeWorkerArtifactSha256" | "profile"
+    | "edgeWorkerArtifactUrl"
+    | "edgeWorkerArtifactSha256"
+    | "containerImageGit"
+    | "containerImageAgent"
+    | "profile"
   >,
 ): {
   readonly shapes: readonly ShapeKind[];
@@ -1409,11 +1417,18 @@ function liveMaterializableShapes(
       continue;
     }
     if (kind === "ContainerService") {
-      skipped.push({
-        kind,
-        reason:
-          "live provider proof requires an enabled concrete container target; this production target currently advertises no ContainerService capability",
-      });
+      const missingImages = containerServiceNames(expectedCount).filter(
+        (serviceName) => !containerImageForServiceName(serviceName, options),
+      );
+      if (missingImages.length > 0) {
+        skipped.push({
+          kind,
+          reason: `live provider proof requires release container image refs for ${missingImages.join(", ")}; pass --container-image-git/--container-image-agent or TAKOSUMI_PROOF_CONTAINER_IMAGE_GIT/TAKOSUMI_PROOF_CONTAINER_IMAGE_AGENT`,
+        });
+        continue;
+      }
+      shapes.push(kind);
+      resourceCountsByKind[kind] = expectedCount;
       continue;
     }
     shapes.push(kind);
@@ -1432,6 +1447,28 @@ function liveMaterializableShapes(
     fullProfileSatisfied,
     skipped,
   };
+}
+
+function containerServiceName(index: number): "git" | "agent" {
+  return index === 0 ? "git" : "agent";
+}
+
+function containerServiceNames(count: number): readonly ("git" | "agent")[] {
+  return Array.from({ length: count }, (_, index) =>
+    containerServiceName(index),
+  );
+}
+
+function containerImageForServiceName(
+  serviceName: "git" | "agent",
+  options: Pick<
+    LiveProofOptions,
+    "containerImageGit" | "containerImageAgent"
+  >,
+): string | undefined {
+  return serviceName === "git"
+    ? options.containerImageGit
+    : options.containerImageAgent;
 }
 
 function liveModuleHcl({
@@ -1510,15 +1547,15 @@ ${connections}
   }
   if (resourceCounts.ContainerService > 0) {
     for (let index = 0; index < resourceCounts.ContainerService; index++) {
-      const localName = index === 0 ? "git" : "agent";
-      const serviceName = index === 0 ? "git" : "agent";
+      const serviceName = containerServiceName(index);
+      const localName = serviceName;
       const connections =
         localName === "agent"
           ? liveContainerServiceConnectionsHcl(resourceCounts)
           : "";
       resources.push(`resource "takosumi_container_service" "${localName}" {
   name        = "${resourcePrefix}-${serviceName}"
-  image       = "ghcr.io/takosjp/takos-${serviceName}:1.0.0"
+  image       = var.container_image_${localName}
   ports       = [8080]
   public_http = false
   target_pool = takosumi_target_pool.live.name
@@ -1587,6 +1624,16 @@ variable "edge_worker_artifact_url" {
 }
 
 variable "edge_worker_artifact_sha256" {
+  type    = string
+  default = ""
+}
+
+variable "container_image_git" {
+  type    = string
+  default = ""
+}
+
+variable "container_image_agent" {
   type    = string
   default = ""
 }
@@ -1774,6 +1821,24 @@ function managedCompatImplementationHcl({
           grant_read          = "native"
           grant_write         = "native"
           grant_publish       = "native"
+        }
+        ${options}
+      },
+      {
+        shape          = "ContainerService"
+        implementation = "cloudflare_container"
+        ${plugin}
+        interfaces = {
+          oci_container       = "native"
+          private_http        = "native"
+          service_connection  = "native"
+          resource_connection = "native"
+          env_projection      = "native"
+          env                 = "native"
+          grant_read          = "native"
+          grant_write         = "native"
+          grant_publish       = "native"
+          grant_consume       = "native"
         }
         ${options}
       },
@@ -1994,6 +2059,12 @@ if (import.meta.main) {
         edgeWorkerArtifactSha256:
           argValue("--edge-worker-artifact-sha256") ??
           process.env.TAKOSUMI_LIVE_EDGE_WORKER_ARTIFACT_SHA256,
+        containerImageGit:
+          argValue("--container-image-git") ??
+          process.env.TAKOSUMI_PROOF_CONTAINER_IMAGE_GIT,
+        containerImageAgent:
+          argValue("--container-image-agent") ??
+          process.env.TAKOSUMI_PROOF_CONTAINER_IMAGE_AGENT,
         profile: profileFromArgs(),
         ...(outputPath ? { outputPath } : {}),
       })
