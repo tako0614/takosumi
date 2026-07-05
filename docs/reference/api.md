@@ -212,6 +212,13 @@ SQLDatabase
 ContainerService
 ```
 
+Takos のような複合 product も、専用の `takosumi_takos` resource ではなく、
+この汎用 shape の合成として表します。例えば `takos-worker` は `EdgeWorker`、
+workspace/control DB は `SQLDatabase`、file/workspace object は `ObjectBucket`、
+agent job / event は `Queue`、`takos-git` / `takos-agent` は
+`ContainerService` です。足りない service form が出た場合だけ、同じ prior-art
+gate を通して新しい typed shape を追加します。
+
 `ObjectBucket` があっても、data-plane は S3-compatible API を使います。
 `AI Gateway` は provider resource ではなく OpenAI-compatible endpoint と env/secret
 projection として扱います。
