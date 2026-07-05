@@ -213,6 +213,14 @@ SQLDatabase
 ContainerService
 ```
 
+Composite products such as Takos are still expressed as this set of generic
+shapes, not as a dedicated `takosumi_takos` resource. For example, the
+`takos-worker` is an `EdgeWorker`, the workspace/control database is a
+`SQLDatabase`, file and workspace objects use `ObjectBucket`, agent jobs and
+events use `Queue`, and `takos-git` / `takos-agent` are `ContainerService`
+resources. If Takos later needs a service form these shapes cannot express, add
+that missing typed shape only after the same prior-art gate passes.
+
 Even when `ObjectBucket` exists, the data plane remains S3-compatible. AI
 Gateway is not a provider resource; apps consume it as an OpenAI-compatible
 endpoint through env/secret projection.

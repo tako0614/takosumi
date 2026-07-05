@@ -189,6 +189,24 @@ appears, new designs should prefer the universal surface. The Takosumi shape can
 remain for import continuity, migration, managed-target placement, policy, or
 metering, but it is not mandatory.
 
+Takos is a representative consumer of this rule. Takos should be described as
+the composition of generic Resource Shapes it actually needs, not as a
+product-specific catch-all shape:
+
+```text
+Takos distribution:
+  EdgeWorker        -> takos-worker
+  SQLDatabase       -> workspace/control database
+  KVStore           -> session/cache/state binding
+  ObjectBucket      -> files and workspace objects
+  Queue             -> agent jobs and product events
+  ContainerService  -> takos-git and takos-agent containers
+```
+
+Do not add `takosumi_takos` or an equivalent one-resource wrapper. If Takos
+later needs a service form that these generic shapes cannot express, add the
+missing service form only after the same prior-art gate passes.
+
 Adapters report capabilities and perform preview/apply/observe/delete work.
 Initial adapter families can include OpenTofu, Cloudflare, AWS, Kubernetes, VM,
 and Takosumi-native adapters.
