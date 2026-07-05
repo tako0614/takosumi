@@ -667,6 +667,28 @@ Do not collapse these into a generic `service` or into EdgeWorker. The service
 form is the user-facing contract; the backend is selected by TargetPool,
 Policy, capability evidence, and ResolutionLock.
 
+Takos itself should be representable as a composition of these generic service
+forms, not as a special `takosumi_takos` catch-all resource:
+
+```text
+Takos distribution:
+  EdgeWorker        -> takos-worker
+  SQLDatabase       -> workspace/control database
+  KVStore           -> session/cache/state binding
+  ObjectBucket      -> files and workspace objects
+  Queue             -> agent jobs and product events
+  ContainerService  -> takos-git and takos-agent containers
+```
+
+This keeps Takos on the same provider-neutral shape model as third-party apps.
+If a future Takos component needs a service form that is not covered by these
+shapes, add that missing service form only after the prior-art gate passes. The
+proof command is:
+
+```bash
+bun run opentofu:takos-shape-provider-proof
+```
+
 ### 4.4 AI Gateway Is Not A Resource Shape
 
 AI Gateway remains a Takosumi Cloud / operator service endpoint, not a default

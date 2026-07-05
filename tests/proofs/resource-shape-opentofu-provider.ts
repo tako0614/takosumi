@@ -28,6 +28,7 @@ const SHAPES = [
 ] as const;
 
 type ShapeKind = (typeof SHAPES)[number];
+type ProofProfile = "generic" | "takos-distribution";
 
 interface ProofResource {
   readonly apiVersion: typeof API_VERSION;
@@ -68,6 +69,7 @@ interface ProofTargetPoolRecord {
 export interface ResourceShapeOpenTofuProviderProof {
   readonly kind: typeof PROOF_KIND;
   readonly status: "passed";
+  readonly profile: ProofProfile;
   readonly generatedAt: string;
   readonly tofuVersion: string;
   readonly providerBinaryDigest: string;
@@ -77,10 +79,25 @@ export interface ResourceShapeOpenTofuProviderProof {
     readonly previewRequestCount: number;
     readonly putResourceKinds: readonly ShapeKind[];
     readonly deleteResourceKinds: readonly ShapeKind[];
+    readonly expectedResourceCountsByKind: Record<ShapeKind, number>;
+    readonly putResourceCountsByKind: Record<ShapeKind, number>;
+    readonly deleteResourceCountsByKind: Record<ShapeKind, number>;
     readonly targetPoolPutCount: number;
     readonly targetPoolDeleteCount: number;
     readonly outputKeys: readonly string[];
     readonly applyOutputDigest: string;
+    readonly composition?: {
+      readonly app: "takos";
+      readonly note: string;
+      readonly worker: "EdgeWorker";
+      readonly durableResources: readonly [
+        "SQLDatabase",
+        "KVStore",
+        "ObjectBucket",
+        "Queue",
+      ];
+      readonly containers: readonly ["ContainerService"];
+    };
   };
 }
 
@@ -136,6 +153,7 @@ interface LiveProofOptions {
 
 export async function runResourceShapeOpenTofuProviderProof(
   options: {
+    readonly profile?: ProofProfile;
     readonly outputPath?: string;
     readonly now?: () => string;
   } = {},
@@ -166,7 +184,9 @@ export async function runResourceShapeOpenTofuProviderProof(
 }
 `,
     );
-    await writeFile(join(moduleDir, "main.tf"), moduleHcl());
+    const profile = options.profile ?? "generic";
+    const expectedResourceCountsByKind = expectedCountsForProfile(profile);
+    await writeFile(join(moduleDir, "main.tf"), moduleHcl(profile));
 
     const env = {
       ...process.env,
@@ -211,13 +231,14 @@ export async function runResourceShapeOpenTofuProviderProof(
       env,
     );
 
-    serverState.assertComplete();
+    serverState.assertComplete(expectedResourceCountsByKind);
     const outputKeys = Object.keys(
       JSON.parse(outputsJson) as Record<string, unknown>,
     ).sort();
     const proof: ResourceShapeOpenTofuProviderProof = {
       kind: PROOF_KIND,
       status: "passed",
+      profile,
       generatedAt: options.now?.() ?? new Date().toISOString(),
       tofuVersion: (
         await runCommand(["tofu", "version", "-json"], moduleDir, env)
@@ -232,20 +253,44 @@ export async function runResourceShapeOpenTofuProviderProof(
         previewRequestCount: serverState.previewCount,
         putResourceKinds: serverState.putKinds(),
         deleteResourceKinds: serverState.deleteKinds(),
+        expectedResourceCountsByKind,
+        putResourceCountsByKind: serverState.putCountsByKind(),
+        deleteResourceCountsByKind: serverState.deleteCountsByKind(),
         targetPoolPutCount: serverState.targetPoolPutCount,
         targetPoolDeleteCount: serverState.targetPoolDeleteCount,
         outputKeys,
         applyOutputDigest: digestBytes(Buffer.from(outputsJson)),
+        ...(profile === "takos-distribution"
+          ? {
+              composition: {
+                app: "takos",
+                note: "Takos is expressed as generic Resource Shapes: one EdgeWorker, durable data/binding shapes, queues, and separate container services. This proof deliberately avoids a takosumi_takos catch-all resource.",
+                worker: "EdgeWorker",
+                durableResources: [
+                  "SQLDatabase",
+                  "KVStore",
+                  "ObjectBucket",
+                  "Queue",
+                ],
+                containers: ["ContainerService"],
+              },
+            }
+          : {}),
       },
     };
-    if (proof.evidence.plannedResourceCount < SHAPES.length + 1) {
+    const expectedManagedResources =
+      Object.values(expectedResourceCountsByKind).reduce(
+        (sum, count) => sum + count,
+        0,
+      ) + 1;
+    if (proof.evidence.plannedResourceCount < expectedManagedResources) {
       throw new Error(
-        `expected at least ${SHAPES.length + 1} planned resources, got ${proof.evidence.plannedResourceCount}`,
+        `expected at least ${expectedManagedResources} planned resources, got ${proof.evidence.plannedResourceCount}`,
       );
     }
-    if (proof.evidence.stateResourceCount < SHAPES.length + 1) {
+    if (proof.evidence.stateResourceCount < expectedManagedResources) {
       throw new Error(
-        `expected at least ${SHAPES.length + 1} state resources, got ${proof.evidence.stateResourceCount}`,
+        `expected at least ${expectedManagedResources} state resources, got ${proof.evidence.stateResourceCount}`,
       );
     }
     if (options.outputPath) {
@@ -631,14 +676,27 @@ class ResourceShapeProofServer {
     ].sort();
   }
 
-  assertComplete(): void {
-    const putKinds = this.putKinds();
-    const deleteKinds = this.deleteKinds();
+  putCountsByKind(): Record<ShapeKind, number> {
+    return countResourcesByKind(this.appliedResources);
+  }
+
+  deleteCountsByKind(): Record<ShapeKind, number> {
+    return countResourcesByKind(this.deletedResources);
+  }
+
+  assertComplete(expectedCounts: Record<ShapeKind, number>): void {
+    const putCounts = this.putCountsByKind();
+    const deleteCounts = this.deleteCountsByKind();
     for (const kind of SHAPES) {
-      if (!putKinds.includes(kind))
-        throw new Error(`Resource API did not receive PUT for ${kind}`);
-      if (!deleteKinds.includes(kind)) {
-        throw new Error(`Resource API did not receive DELETE for ${kind}`);
+      const expected = expectedCounts[kind];
+      if (putCounts[kind] < expected)
+        throw new Error(
+          `Resource API received ${putCounts[kind]} PUTs for ${kind}; expected ${expected}`,
+        );
+      if (deleteCounts[kind] < expected) {
+        throw new Error(
+          `Resource API received ${deleteCounts[kind]} DELETEs for ${kind}; expected ${expected}`,
+        );
       }
     }
     if (this.targetPoolPutCount < 1)
@@ -662,7 +720,48 @@ async function buildProviderBinary(providerDir: string): Promise<string> {
   return binaryPath;
 }
 
-function moduleHcl(): string {
+function expectedCountsForProfile(
+  profile: ProofProfile,
+): Record<ShapeKind, number> {
+  if (profile === "takos-distribution") {
+    return {
+      EdgeWorker: 1,
+      ObjectBucket: 1,
+      KVStore: 1,
+      Queue: 2,
+      SQLDatabase: 1,
+      ContainerService: 2,
+    };
+  }
+  return {
+    EdgeWorker: 1,
+    ObjectBucket: 1,
+    KVStore: 1,
+    Queue: 1,
+    SQLDatabase: 1,
+    ContainerService: 1,
+  };
+}
+
+function countResourcesByKind(
+  resources: readonly ProofResource[],
+): Record<ShapeKind, number> {
+  const counts = Object.fromEntries(SHAPES.map((kind) => [kind, 0])) as Record<
+    ShapeKind,
+    number
+  >;
+  for (const resource of resources) {
+    counts[resource.kind]++;
+  }
+  return counts;
+}
+
+function moduleHcl(profile: ProofProfile): string {
+  if (profile === "takos-distribution") return takosDistributionModuleHcl();
+  return genericModuleHcl();
+}
+
+function genericModuleHcl(): string {
   return `terraform {
   required_providers {
     takosumi = {
@@ -816,6 +915,193 @@ output "shape_urls" {
   }
 }
 `;
+}
+
+function takosDistributionModuleHcl(): string {
+  return `${modulePreambleHcl()}
+
+${proofTargetPoolHcl("takos-proof-target")}
+
+resource "takosumi_edge_worker" "takos_worker" {
+  name               = "takos-worker"
+  artifact_path      = "/work/dist/takos-worker.js"
+  compatibility_date = "2026-06-29"
+  profiles           = ["workers_bindings", "node_compat"]
+  target_pool        = takosumi_target_pool.default.name
+}
+
+resource "takosumi_sql_database" "workspace" {
+  name            = "takos-workspace"
+  engine          = "sqlite"
+  migrations_path = "deploy/opentofu/migrations"
+  target_pool     = takosumi_target_pool.default.name
+}
+
+resource "takosumi_kv_store" "session" {
+  name        = "takos-session"
+  consistency = "eventual"
+  target_pool = takosumi_target_pool.default.name
+}
+
+resource "takosumi_object_bucket" "files" {
+  name        = "takos-files"
+  interfaces  = ["s3_api", "signed_url"]
+  target_pool = takosumi_target_pool.default.name
+}
+
+resource "takosumi_queue" "agent_jobs" {
+  name           = "takos-agent-jobs"
+  max_retries    = 5
+  max_batch_size = 10
+  target_pool    = takosumi_target_pool.default.name
+}
+
+resource "takosumi_queue" "events" {
+  name           = "takos-events"
+  max_retries    = 3
+  max_batch_size = 50
+  target_pool    = takosumi_target_pool.default.name
+}
+
+resource "takosumi_container_service" "git" {
+  name        = "takos-git"
+  image       = "ghcr.io/takosjp/takos-git:1.0.0"
+  ports       = [8080]
+  public_http = false
+  target_pool = takosumi_target_pool.default.name
+
+  environment = {
+    TAKOS_SERVICE = "git"
+  }
+}
+
+resource "takosumi_container_service" "agent" {
+  name        = "takos-agent"
+  image       = "ghcr.io/takosjp/takos-agent:1.0.0"
+  ports       = [8080]
+  public_http = false
+  target_pool = takosumi_target_pool.default.name
+
+  environment = {
+    TAKOS_SERVICE = "agent"
+  }
+}
+
+output "takos_shape_ids" {
+  value = {
+    worker      = takosumi_edge_worker.takos_worker.id
+    workspace   = takosumi_sql_database.workspace.id
+    session     = takosumi_kv_store.session.id
+    files       = takosumi_object_bucket.files.id
+    agent_jobs  = takosumi_queue.agent_jobs.id
+    events      = takosumi_queue.events.id
+    git         = takosumi_container_service.git.id
+    agent       = takosumi_container_service.agent.id
+    target_pool = takosumi_target_pool.default.id
+  }
+}
+
+output "takos_shape_outputs" {
+  value = {
+    worker     = takosumi_edge_worker.takos_worker.outputs
+    workspace  = takosumi_sql_database.workspace.outputs
+    session    = takosumi_kv_store.session.outputs
+    files      = takosumi_object_bucket.files.outputs
+    agent_jobs = takosumi_queue.agent_jobs.outputs
+    events     = takosumi_queue.events.outputs
+    git        = takosumi_container_service.git.outputs
+    agent      = takosumi_container_service.agent.outputs
+  }
+}
+`;
+}
+
+function modulePreambleHcl(): string {
+  return `terraform {
+  required_providers {
+    takosumi = {
+      source  = "${PROVIDER_SOURCE}"
+      version = "${PROVIDER_VERSION}"
+    }
+  }
+}
+
+variable "endpoint" {
+  type = string
+}
+
+provider "takosumi" {
+  endpoint = var.endpoint
+  space    = "${SPACE}"
+}`;
+}
+
+function proofTargetPoolHcl(targetName: string): string {
+  return `resource "takosumi_target_pool" "default" {
+  name = "default"
+
+  target = [{
+    name     = "${targetName}"
+    type     = "takosumi_native"
+    ref      = "local-proof"
+    priority = 100
+
+    implementation = [
+      {
+        shape                = "EdgeWorker"
+        implementation       = "proof_edge_worker"
+        native_resource_type = "proof.edge_worker"
+        interfaces = {
+          worker_fetch     = "native"
+          workers_bindings = "native"
+        }
+      },
+      {
+        shape                = "ObjectBucket"
+        implementation       = "proof_object_bucket"
+        native_resource_type = "proof.object_bucket"
+        interfaces = {
+          s3_api     = "native"
+          signed_url = "native"
+        }
+      },
+      {
+        shape                = "KVStore"
+        implementation       = "proof_kv_store"
+        native_resource_type = "proof.kv_store"
+        interfaces = {
+          kv_api = "native"
+        }
+      },
+      {
+        shape                = "Queue"
+        implementation       = "proof_queue"
+        native_resource_type = "proof.queue"
+        interfaces = {
+          publish = "native"
+          consume = "native"
+        }
+      },
+      {
+        shape                = "SQLDatabase"
+        implementation       = "proof_sql_database"
+        native_resource_type = "proof.sql_database"
+        interfaces = {
+          sqlite = "native"
+        }
+      },
+      {
+        shape                = "ContainerService"
+        implementation       = "proof_container_service"
+        native_resource_type = "proof.container_service"
+        interfaces = {
+          oci_container = "native"
+          public_http   = "shim"
+        }
+      }
+    ]
+  }]
+}`;
 }
 
 function liveMaterializableShapes(
@@ -1271,9 +1557,20 @@ if (import.meta.main) {
         ...(outputPath ? { outputPath } : {}),
       })
     : await runResourceShapeOpenTofuProviderProof({
+        profile: profileFromArgs(),
         ...(outputPath ? { outputPath } : {}),
       });
   console.log(JSON.stringify(proof, null, 2));
+}
+
+function profileFromArgs(): ProofProfile {
+  const profile = argValue("--profile") ?? "generic";
+  if (profile === "generic" || profile === "takos-distribution") {
+    return profile;
+  }
+  throw new Error(
+    `unsupported --profile ${profile}; expected generic or takos-distribution`,
+  );
 }
 
 function argValue(name: string): string | undefined {
