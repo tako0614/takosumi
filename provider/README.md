@@ -61,6 +61,14 @@ Ordinary S3/R2/GCS/MinIO buckets, Kubernetes resources, VMs, and provider-owned
 cloud services should use existing OpenTofu providers through the plain Stack
 flow when that is enough.
 
+Takos itself is not a reason to add a product-specific provider resource. The
+Takos distribution should be expressed as a composition of generic service
+forms such as `takosumi_edge_worker`, `takosumi_sql_database`,
+`takosumi_kv_store`, `takosumi_object_bucket`, `takosumi_queue`, and
+`takosumi_container_service`. The provider proof
+`bun run opentofu:takos-shape-provider-proof` exercises that composition and
+intentionally avoids a `takosumi_takos` catch-all resource.
+
 ## Provider / API Boundary
 
 `provider-neutral` in Takosumi docs means vendor-independent as a Takosumi
