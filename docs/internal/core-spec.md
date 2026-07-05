@@ -555,8 +555,9 @@ Hosted Resource Shape API and compatibility API calls are attributed to a
 Workspace, not to a required app-installation record. A request may carry a
 Capsule / installation id when it exists, but direct `takosumi` provider and
 Cloudflare-compatible import calls can be metered with only an authenticated
-actor and verified Workspace. Cloud-only payment enforcement may precharge those
-billable writes before forwarding; OSS core remains limited to disabled/showback
+actor and verified Workspace. Cloud-only payment enforcement authorizes the
+normalized dispatch plan after selected-manager availability is confirmed and
+before forwarding to the backend. OSS core remains limited to disabled/showback
 usage recording unless an operator injects an enforcement port.
 
 Usage amounts are USD-denominated. New code writes `usdMicros`; legacy
