@@ -249,6 +249,70 @@ test("operator release activator forwards only explicitly allowlisted operator e
   }
 });
 
+test("operator release activator pins temporary and Bun cache dirs to the job workdir", async () => {
+  const tempDir = await mkdtemp(
+    join(tmpdir(), "takosumi-operator-release-runtime-"),
+  );
+  try {
+    const sourceDir = join(tempDir, "src");
+    const archivePath = join(tempDir, "source.tar.zst");
+    const resultPath = join(tempDir, "activation-runtime.txt");
+    const workRoot = join(tempDir, "work");
+    await mkdir(sourceDir, { recursive: true });
+    await writeFile(join(sourceDir, "app.txt"), "plain source\n");
+    createArchive(sourceDir, archivePath);
+    const digest = await sha256File(archivePath);
+
+    const result = await runReleaseActivation(
+      {
+        ...validPayload({
+          command: [
+            process.execPath,
+            "-e",
+            [
+              `const names = ["TMPDIR", "TEMP", "TMP", "BUN_INSTALL_CACHE_DIR", "BUN_TMPDIR", "XDG_CACHE_HOME", "NODE_COMPILE_CACHE"]`,
+              `await Bun.write(Bun.env.ACTIVATION_RESULT_FILE, names.map((name) => name + "=" + Bun.env[name]).join("\\n"))`,
+            ].join(";"),
+          ],
+          env: { ACTIVATION_RESULT_FILE: resultPath },
+        }),
+        sourceSnapshot: {
+          archiveObjectKey:
+            "spaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
+          archiveDigest: digest,
+        },
+      },
+      {
+        commandEnv: {
+          PATH: process.env.PATH,
+          HOME: process.env.HOME,
+          TMPDIR: "/tmp/parent-tmp-must-not-leak",
+          BUN_INSTALL_CACHE_DIR: "/tmp/parent-cache-must-not-leak",
+        },
+        downloadArchive: async (_payload, targetPath) => {
+          await writeFile(targetPath, await readFile(archivePath));
+        },
+        workRoot,
+      },
+    );
+
+    expect(result.status).toBe("succeeded");
+    const values = (await readFile(resultPath, "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => line.split("=").at(1) ?? "");
+    expect(values.length).toBe(7);
+    for (const value of values) {
+      expect(value.startsWith(workRoot)).toBe(true);
+      expect(value).toContain("/release-");
+      expect(value).not.toContain("parent-tmp-must-not-leak");
+      expect(value).not.toContain("parent-cache-must-not-leak");
+    }
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("operator release activator accepts async jobs and exposes status", async () => {
   let invoked = 0;
   const handler = createReleaseActivatorFetchHandler({
