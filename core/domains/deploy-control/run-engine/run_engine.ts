@@ -830,11 +830,15 @@ export class RunEngine {
     context: DeployControlActorContext,
     internal: CreateInstallationPlanInternal = {},
   ): Promise<PlanRunResponse> {
-    await this.#seededProfiles;
+    await planCreationStage("runner_profile_seed", this.#seededProfiles);
     requireNonEmptyString(installationId, "installationId");
-    const installation = await this.#requireInstallation(installationId);
-    const installConfig = await this.#store.getInstallConfig(
-      installation.installConfigId,
+    const installation = await planCreationStage(
+      "installation_load",
+      this.#requireInstallation(installationId),
+    );
+    const installConfig = await planCreationStage(
+      "install_config_load",
+      this.#store.getInstallConfig(installation.installConfigId),
     );
     if (!installConfig) {
       throw new OpenTofuControllerError(
@@ -854,7 +858,10 @@ export class RunEngine {
     let source: Source;
     let snapshot: SourceSnapshot;
     if (installation.sourceId) {
-      const stored = await this.#store.getSource(installation.sourceId);
+      const stored = await planCreationStage(
+        "source_load",
+        this.#store.getSource(installation.sourceId),
+      );
       if (!stored) {
         throw new OpenTofuControllerError(
           "not_found",
@@ -869,19 +876,28 @@ export class RunEngine {
         ? await this.#destroySourceSnapshotIdForInstallation(installation)
         : undefined;
       const resolved = internal.sourceSnapshotId
-        ? await this.#requireSourceSnapshotForSource(
-            stored.id,
-            internal.sourceSnapshotId,
+        ? await planCreationStage(
+            "source_snapshot_pin",
+            this.#requireSourceSnapshotForSource(
+              stored.id,
+              internal.sourceSnapshotId,
+            ),
           )
         : destroySnapshotId
-          ? await this.#requireSourceSnapshotForSource(
-              stored.id,
-              destroySnapshotId,
+          ? await planCreationStage(
+              "source_snapshot_destroy_pin",
+              this.#requireSourceSnapshotForSource(
+                stored.id,
+                destroySnapshotId,
+              ),
             )
-          : await this.#resolveLatestSnapshot(
-              stored.id,
-              stored.defaultRef,
-              stored.defaultPath,
+          : await planCreationStage(
+              "source_snapshot_latest",
+              this.#resolveLatestSnapshot(
+                stored.id,
+                stored.defaultRef,
+                stored.defaultPath,
+              ),
             );
       if (!resolved) {
         // Typed 409: the Installation cannot plan until a SourceSnapshot exists
@@ -907,7 +923,10 @@ export class RunEngine {
             `pinned upload/artifact SourceSnapshot through the internal upload-compat seam`,
         );
       }
-      const pinned = await this.#store.getSourceSnapshot(pinnedSnapshotId);
+      const pinned = await planCreationStage(
+        "upload_source_snapshot_load",
+        this.#store.getSourceSnapshot(pinnedSnapshotId),
+      );
       const installationWorkspaceId =
         installation.workspaceId ?? installation.spaceId;
       const pinnedWorkspaceId = pinned?.workspaceId ?? pinned?.spaceId;
@@ -923,9 +942,12 @@ export class RunEngine {
     }
     // The Installation's current state generation drives the dispatch
     // restore/persist arithmetic. No prior StateSnapshot -> generation 0.
-    const latestState = await this.#store.getLatestStateSnapshot(
-      installation.id,
-      installation.environment,
+    const latestState = await planCreationStage(
+      "latest_state_load",
+      this.#store.getLatestStateSnapshot(
+        installation.id,
+        installation.environment,
+      ),
     );
     const baseStateGeneration = latestState?.generation ?? 0;
     const operation = destroy
