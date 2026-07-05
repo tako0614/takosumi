@@ -5,7 +5,7 @@
  * tabbed view remains for advanced and legacy routes.
  */
 import "../../styles/wave-a.css";
-import { Match, Show, Switch } from "solid-js";
+import { lazy, Match, Show, Switch } from "solid-js";
 import { Settings2 } from "lucide-solid";
 import { useParams } from "@solidjs/router";
 import AppShell from "../account/components/shell/AppShell.tsx";
@@ -21,7 +21,6 @@ import ConnectionsTab from "./tabs/ConnectionsTab.tsx";
 import BillingTab from "./tabs/BillingTab.tsx";
 import BackupsTab from "./tabs/BackupsTab.tsx";
 import SharesTab from "./tabs/SharesTab.tsx";
-import { CloudResourcesPanel } from "../cloud/CloudResourcesView.tsx";
 
 type TabId =
   | "general"
@@ -33,6 +32,12 @@ type TabId =
   | "shares";
 
 type StandaloneTabId = Extract<TabId, "connections" | "billing">;
+
+const CloudResourcesPanel = lazy(() =>
+  import("../cloud/CloudResourcesView.tsx").then((m) => ({
+    default: m.CloudResourcesPanel,
+  })),
+);
 
 interface WorkspaceSettingsViewProps {
   readonly standaloneTab?: StandaloneTabId;
