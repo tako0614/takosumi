@@ -315,7 +315,6 @@ function genericCapsuleOutputAllowlist(
   if (outputNames.length === 0) return configured;
   const allowlist: Record<string, OutputAllowlistEntry> = { ...configured };
   for (const name of outputNames) {
-    if (name === "takosumi_release") continue;
     if (Object.prototype.hasOwnProperty.call(allowlist, name)) continue;
     allowlist[name] = { from: name, type: "json" };
   }
