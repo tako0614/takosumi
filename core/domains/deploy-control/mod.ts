@@ -484,9 +484,9 @@ export interface ReleaseActivationInput {
    */
   readonly nonSensitiveOutputs: Readonly<Record<string, JsonValue>>;
   /**
-   * Dispatch-only provider credentials for runner-executed release commands.
+   * Dispatch-only provider credentials for release commands.
    * Minted immediately before activation from the same reviewed ProviderBinding
-   * set as apply/destroy; never persisted or sent to operator webhooks.
+   * set as apply/destroy; never persisted or recorded in activity.
    */
   readonly credentials?: RunCredentials;
   /**
