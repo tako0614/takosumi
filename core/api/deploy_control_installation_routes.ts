@@ -38,7 +38,6 @@ import {
 import { OpenTofuControllerError } from "../domains/deploy-control/errors.ts";
 import { normalizeVariablePathRecord } from "../domains/deploy-control/validation.ts";
 import {
-  DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
   defaultCapsuleOutputAllowlist,
 } from "../domains/capsules/official_seed.ts";
 import { pageSorted } from "takosumi-contract/pagination";
@@ -196,9 +195,9 @@ function parseInstallConfigListView(
 
 function isTemplateCatalogInstallConfig(config: InstallConfig): boolean {
   if (config.spaceId !== undefined) return false;
-  if (config.id === DEFAULT_CAPSULE_INSTALL_CONFIG_ID) return true;
   if (config.catalog?.source === undefined) return false;
-  return config.trustLevel === "official" || config.trustLevel === "trusted";
+  if (config.sourceKind !== "generic_capsule") return false;
+  return config.trustLevel === "trusted";
 }
 
 function parseIncludeDestroyed(
@@ -709,7 +708,7 @@ export function mountDeployControlInstallationRoutes(
             config.spaceId === undefined && isSelectableInstallConfig(config),
         );
         const scoped =
-          spaceId === undefined
+          spaceId === undefined || view.view === "template-catalog"
             ? []
             : (await installations!.listInstallConfigs(spaceId)).filter(
                 isSelectableInstallConfig,
