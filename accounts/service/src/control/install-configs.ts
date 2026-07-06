@@ -270,9 +270,8 @@ function parseInstallConfigListView(
 function isTemplateCatalogInstallConfig(config: InstallConfig): boolean {
   if (config.workspaceId !== undefined) return false;
   if (config.id === DEFAULT_CAPSULE_INSTALL_CONFIG_ID) return true;
-  return (
-    config.trustLevel === "official" && config.catalog?.source !== undefined
-  );
+  if (config.catalog?.source === undefined) return false;
+  return config.trustLevel === "official" || config.trustLevel === "trusted";
 }
 
 async function listInstallConfigs(

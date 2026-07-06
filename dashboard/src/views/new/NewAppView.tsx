@@ -1066,7 +1066,10 @@ function Inner() {
       }
       const value = catalogInputValue(entry, field).trim();
       if (field.required && !value) {
-        if (isConnectionScopedCatalogInput(entry, field)) {
+        if (
+          isConnectionScopedCatalogInput(entry, field) ||
+          isProjectNameCatalogInput(field)
+        ) {
           continue;
         }
         return t("new.catalogInput.errorRequired", {
@@ -1241,13 +1244,18 @@ function Inner() {
     storeListingForCurrentSource()?.inputs.find(
       (input) => input.name === "project_name",
     )?.defaultValue;
+  const catalogProjectNameDefault = () =>
+    selectedCatalogEntry()?.inputs.find(
+      (input) => input.name === "project_name",
+    )?.defaultValue;
   const prefilledProjectName = () => {
     const value = currentInstallPrefill()?.vars?.project_name;
     return typeof value === "string" ? value : undefined;
   };
   const supportsProjectNameInput = () =>
     prefilledProjectName() !== undefined ||
-    projectNameHintIsGenerated(storeProjectNameDefault());
+    projectNameHintIsGenerated(storeProjectNameDefault()) ||
+    projectNameHintIsGenerated(catalogProjectNameDefault());
   const defaultProjectName = () => {
     return slugInputValue(name() || capsuleNameFromUrl(sourceGitUrl()));
   };
@@ -1391,8 +1399,7 @@ function Inner() {
 
   const visibleConnections = () => connections() ?? [];
   const selectedManagedProviderConnection = ():
-    | ProviderConnection
-    | undefined => {
+    ProviderConnection | undefined => {
     for (const row of providerRows()) {
       const connection = providerConnectionsForProvider(row.provider).find(
         (candidate) =>
@@ -1464,6 +1471,9 @@ function Inner() {
     field.required &&
     !catalogInputTouched()[catalogInputKey(entry.id, field.name)] &&
     catalogScopeHintValue(entry, field) !== undefined;
+  const isProjectNameCatalogInput = (field: CatalogInputField) =>
+    field.name === "project_name" &&
+    projectNameHintIsGenerated(field.defaultValue);
   const isConnectionScopedCatalogInput = (
     entry: CatalogEntry,
     field: CatalogInputField,
@@ -1472,6 +1482,7 @@ function Inner() {
     entry.inputs.filter(
       (field) =>
         !isConnectionScopedCatalogInput(entry, field) &&
+        !isProjectNameCatalogInput(field) &&
         !HIDDEN_INSTALL_VARIABLE_NAMES.has(field.name) &&
         !catalogInputHasImplicitValue(entry, field),
     );
@@ -1479,6 +1490,7 @@ function Inner() {
     entry.inputs.filter(
       (field) =>
         !isConnectionScopedCatalogInput(entry, field) &&
+        !isProjectNameCatalogInput(field) &&
         !HIDDEN_INSTALL_VARIABLE_NAMES.has(field.name) &&
         catalogInputHasImplicitValue(entry, field),
     );

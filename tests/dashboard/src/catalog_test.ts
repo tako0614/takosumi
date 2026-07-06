@@ -21,9 +21,17 @@ describe("dashboard catalog", () => {
   });
 
   test("product distributions are not generic Takosumi template cards", () => {
-    expect(catalogEntries().map((entry) => entry.templateId)).not.toContain(
-      "takos",
+    const builtInConfigs = officialInstallConfigs();
+    const productConfigs = builtInConfigs.filter((config) =>
+      ["cfg-catalog-yurucommu", "cfg-catalog-takos"].includes(config.id),
     );
+    expect(productConfigs.map((config) => config.sourceKind)).toEqual([
+      "generic_capsule",
+      "generic_capsule",
+    ]);
+    expect(
+      productConfigs.every((config) => config.templateBinding === undefined),
+    ).toBe(true);
   });
 
   test("the internal web app template is browser-openable after apply", () => {
@@ -55,8 +63,12 @@ describe("dashboard catalog", () => {
     expect(
       services
         .sort((a, b) => a.order - b.order)
-        .map((entry) => entry.templateId),
-    ).toEqual(["cloudflare-hello-worker"]);
+        .map((entry) => entry.templateId ?? entry.installConfigId),
+    ).toEqual([
+      "cloudflare-hello-worker",
+      "cfg-catalog-yurucommu",
+      "cfg-catalog-takos",
+    ]);
     expect(buildingBlocks).toEqual([]);
     expect(entries.some((entry) => entry.surface === "example")).toBe(false);
   });
@@ -77,6 +89,7 @@ describe("dashboard catalog", () => {
       const config = builtInConfigs.find(
         (builtIn) => builtIn.id === entry.installConfigId,
       );
+      if (!config?.templateBinding) continue;
       const template = defaultTemplateRegistry.require(
         config!.templateBinding!.templateId,
         config!.templateBinding!.templateVersion,
@@ -96,6 +109,7 @@ describe("dashboard catalog", () => {
       const config = builtInConfigs.find(
         (builtIn) => builtIn.id === entry.installConfigId,
       );
+      if (!config?.templateBinding) continue;
       expect(config, entry.templateId).toBeDefined();
       expect(config?.sourceKind).toBe("first_party_capsule");
       expect(config?.templateBinding, entry.templateId).toBeDefined();
@@ -160,7 +174,11 @@ describe("dashboard catalog", () => {
       expect(
         new URLSearchParams(buildNewQuery(listing)).get("ref"),
         `${listing.id} install handoff ref`,
-      ).toBe(listing.source.resolvedCommit);
+      ).toBeNull();
+      expect(
+        new URLSearchParams(buildNewQuery(listing)).get("installConfigId"),
+        `${listing.id} install handoff config`,
+      ).toBe(listing.installConfigId);
     }
     expect(
       installableAppStoreListings.some((listing) =>

@@ -99,6 +99,26 @@ interface OfficialCatalogSpec {
   readonly inputs: readonly InstallConfigCatalogInput[];
 }
 
+interface CuratedGitCatalogSpec {
+  readonly id: string;
+  readonly name: string;
+  readonly source: {
+    readonly git: string;
+    readonly ref: string;
+    readonly path: string;
+  };
+  readonly order: number;
+  readonly surface: InstallConfigCatalogSurface;
+  readonly kind: InstallConfigCatalogKind;
+  readonly provider: string;
+  readonly suggestedName: string;
+  readonly badge: InstallConfigCatalogText;
+  readonly displayName: InstallConfigCatalogText;
+  readonly description: InstallConfigCatalogText;
+  readonly inputs: readonly InstallConfigCatalogInput[];
+  readonly outputAllowlist: Readonly<Record<string, OutputAllowlistEntry>>;
+}
+
 const OFFICIAL_CATALOG: Readonly<Record<string, OfficialCatalogSpec>> = {
   "cloudflare-hello-worker": {
     sourcePath: "providers/cloudflare/modules/cloudflare-hello-worker/module",
@@ -152,6 +172,106 @@ const OFFICIAL_CATALOG: Readonly<Record<string, OfficialCatalogSpec>> = {
   },
 };
 
+const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
+  {
+    id: "cfg-catalog-yurucommu",
+    name: "yurucommu",
+    source: {
+      git: "https://github.com/tako0614/yurucommu.git",
+      ref: "1fe727f1843c0c4a91fece16cbc73950225e078d",
+      path: ".",
+    },
+    order: 100,
+    surface: "service",
+    kind: "worker",
+    provider: "cloudflare",
+    suggestedName: "yurucommu",
+    badge: text("追加候補", "Installable"),
+    displayName: text("yurucommu", "yurucommu"),
+    description: text(
+      "自分用のコミュニティ / ActivityPub アプリをホストします。",
+      "Host a personal community / ActivityPub app.",
+    ),
+    inputs: [
+      {
+        name: "project_name",
+        type: "string",
+        defaultValue: "service-name-with-space",
+        label: text("サービス名", "Service name"),
+      },
+      {
+        name: "enable_cloudflare_resources",
+        type: "boolean",
+        defaultValue: "true",
+        label: text("Cloudflare リソースを作成", "Create Cloudflare resources"),
+      },
+      {
+        name: "enable_cloudflare_worker_script",
+        type: "boolean",
+        defaultValue: "true",
+        label: text("Worker を公開", "Publish Worker"),
+      },
+      {
+        name: "worker_bundle_url",
+        type: "string",
+        defaultValue:
+          "https://github.com/tako0614/yurucommu-core/releases/download/v2.0.0/takos-worker.js",
+        label: text("Worker artifact URL", "Worker artifact URL"),
+      },
+      {
+        name: "worker_bundle_sha256",
+        type: "string",
+        defaultValue:
+          "5a5713b2cc548414951c51a469b32bdba756d2101933575d0ab230131eaa8c95",
+        label: text("Worker artifact SHA-256", "Worker artifact SHA-256"),
+      },
+    ],
+    outputAllowlist: {
+      url: { from: "url", type: "url" },
+      app_deployment: { from: "app_deployment", type: "json" },
+    },
+  },
+  {
+    id: "cfg-catalog-takos",
+    name: "takos",
+    source: {
+      git: "https://github.com/tako0614/takos.git",
+      ref: "082a37ac9ff6da68cceb6d4a3458fe6a6e1961ea",
+      path: "deploy/opentofu",
+    },
+    order: 110,
+    surface: "service",
+    kind: "worker",
+    provider: "cloudflare",
+    suggestedName: "takos",
+    badge: text("追加候補", "Installable"),
+    displayName: text("Takos", "Takos"),
+    description: text(
+      "AI ワークスペースを自分の環境にホストします。",
+      "Host the Takos AI workspace in your own environment.",
+    ),
+    inputs: [
+      {
+        name: "project_name",
+        type: "string",
+        defaultValue: "service-name-with-space",
+        label: text("サービス名", "Service name"),
+      },
+      {
+        name: "release_container_images",
+        type: "json",
+        defaultValue:
+          '{"runtime":"registry.cloudflare.com/a10162d23653f1ad1193dabf520a5dd0/takos-worker-runtime:0.10.0-bfdd9f8bb79c","executor":"registry.cloudflare.com/a10162d23653f1ad1193dabf520a5dd0/takos-agent-executor:0.10.0-bfdd9f8bb79c"}',
+        label: text("Release container images", "Release container images"),
+      },
+    ],
+    outputAllowlist: {
+      url: { from: "url", type: "url" },
+      app_deployment: { from: "app_deployment", type: "json" },
+    },
+  },
+];
+
 function catalogMetadataForTemplate(
   template: TemplateDefinition,
   source: OfficialCatalogSource = TAKOSUMI_OFFICIAL_CATALOG_SOURCE,
@@ -175,6 +295,36 @@ function catalogMetadataForTemplate(
     name: spec.name,
     description: spec.description,
     inputs: spec.inputs,
+  };
+}
+
+function installConfigFromCuratedGitCatalog(
+  spec: CuratedGitCatalogSpec,
+  now: string,
+): InstallConfig {
+  return {
+    id: spec.id,
+    name: spec.name,
+    sourceKind: "generic_capsule",
+    installType: "opentofu_module",
+    trustLevel: "trusted",
+    variableMapping: {},
+    outputAllowlist: spec.outputAllowlist,
+    policy: {},
+    catalog: {
+      source: spec.source,
+      order: spec.order,
+      surface: spec.surface,
+      kind: spec.kind,
+      provider: spec.provider,
+      suggestedName: spec.suggestedName,
+      badge: spec.badge,
+      name: spec.displayName,
+      description: spec.description,
+      inputs: spec.inputs,
+    },
+    createdAt: now,
+    updatedAt: now,
   };
 }
 
@@ -308,6 +458,9 @@ export function officialInstallConfigs(
         officialCatalogSource: options.officialCatalogSource,
       }),
     );
+  }
+  for (const spec of CURATED_GIT_CATALOG) {
+    configs.push(installConfigFromCuratedGitCatalog(spec, nowIso));
   }
   return configs;
 }

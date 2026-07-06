@@ -92,42 +92,27 @@ describe("store link handoff", () => {
     expect(params.has("var.enable_cloudflare_resources")).toBe(false);
   });
 
-  test("yurucommu handoff carries the Worker artifact inputs for OpenTofu", () => {
+  test("yurucommu handoff uses the curated InstallConfig instead of raw Git vars", () => {
     const yurucommu = installableAppStoreListings.find(
       (entry) => entry.id === "yurucommu",
     );
     expect(yurucommu).toBeDefined();
     const params = new URLSearchParams(buildNewQuery(yurucommu!));
 
-    expect(params.get("git")).toBe("https://github.com/tako0614/yurucommu.git");
-    expect(params.get("ref")).toBe("1fe727f1843c0c4a91fece16cbc73950225e078d");
-    expect(params.get("varjson.enable_cloudflare_resources")).toBe("true");
-    expect(params.get("varjson.enable_cloudflare_worker_script")).toBe("true");
-    expect(params.get("var.worker_bundle_url")).toBe(
-      "https://github.com/tako0614/yurucommu-core/releases/download/v2.0.0/takos-worker.js",
-    );
-    expect(params.get("var.worker_bundle_sha256")).toBe(
-      "5a5713b2cc548414951c51a469b32bdba756d2101933575d0ab230131eaa8c95",
-    );
+    expect(params.get("installConfigId")).toBe("cfg-catalog-yurucommu");
+    expect(params.has("git")).toBe(false);
+    expect(params.has("varjson.enable_cloudflare_resources")).toBe(false);
   });
 
-  test("takos handoff carries release container images for operator activation", () => {
+  test("takos handoff uses the curated InstallConfig instead of raw Git vars", () => {
     const takos = installableAppStoreListings.find(
       (entry) => entry.id === "takos",
     );
     expect(takos).toBeDefined();
     const params = new URLSearchParams(buildNewQuery(takos!));
 
-    expect(params.get("git")).toBe("https://github.com/tako0614/takos.git");
-    expect(params.get("ref")).toBe("082a37ac9ff6da68cceb6d4a3458fe6a6e1961ea");
-    const rawImages = params.get("varjson.release_container_images");
-    expect(rawImages).toBeTruthy();
-    const images = JSON.parse(rawImages!);
-    expect(images).toEqual({
-      runtime:
-        "registry.cloudflare.com/a10162d23653f1ad1193dabf520a5dd0/takos-worker-runtime:0.10.0-bfdd9f8bb79c",
-      executor:
-        "registry.cloudflare.com/a10162d23653f1ad1193dabf520a5dd0/takos-agent-executor:0.10.0-bfdd9f8bb79c",
-    });
+    expect(params.get("installConfigId")).toBe("cfg-catalog-takos");
+    expect(params.has("git")).toBe(false);
+    expect(params.has("varjson.release_container_images")).toBe(false);
   });
 });
