@@ -315,7 +315,16 @@ describe("/new flow guidance", () => {
     expect(installableAppListingsSource).toContain("worker_bundle_url");
     expect(installableAppListingsSource).toContain("worker_bundle_sha256");
     expect(installableAppListingsSource).toContain(
+      "https://github.com/tako0614/yurucommu/releases/download/v2.0.0/takos-worker.js",
+    );
+    expect(installableAppListingsSource).toContain(
+      "394eb640ebf9227d429a62ff38052d26763b370244cac8d05017f38861b8f6ac",
+    );
+    expect(installableAppListingsSource).not.toContain(
       "https://github.com/tako0614/yurucommu-core/releases/download/v2.0.0/takos-worker.js",
+    );
+    expect(installableAppListingsSource).not.toContain(
+      "5a5713b2cc548414951c51a469b32bdba756d2101933575d0ab230131eaa8c95",
     );
     expect(installableAppListingsSource).toContain('id: "takos"');
     expect(installableAppListingsSource).toContain(
