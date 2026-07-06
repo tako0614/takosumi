@@ -40,7 +40,7 @@ import {
   Trash,
 } from "lucide-solid";
 import type { JsonValue } from "takosumi-contract";
-import { providerEnvRule } from "takosumi-contract/provider-env-rules";
+import { isCredentialFreeUtilityProvider } from "takosumi-contract/provider-env-rules";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import {
@@ -109,6 +109,7 @@ import {
 import {
   Badge,
   Button,
+  Checkbox,
   FormField,
   Input,
   Select,
@@ -151,7 +152,28 @@ const HIDDEN_INSTALL_VARIABLE_NAMES = new Set([
   "worker_bundle_sha256",
 ]);
 
+// Well-known credential-free OpenTofu providers (by short name / tail) that are
+// NOT a credential boundary, so an install must not force a Provider Connection
+// for them. `isCredentialFreeUtilityProvider` already covers the canonical
+// http / random / tls; this set adds the other common credential-free providers
+// and also matches bare local-name declarations (e.g. `null`, `local`).
+const CREDENTIAL_FREE_PROVIDER_TAILS = new Set([
+  "http",
+  "random",
+  "tls",
+  "null",
+  "local",
+  "time",
+  "external",
+  "archive",
+  "cloudinit",
+  "template",
+]);
+
 function CatalogIcon(props: { readonly entry: CatalogEntry }) {
+  if (props.entry.iconUrl) {
+    return <img src={props.entry.iconUrl} alt="" loading="lazy" />;
+  }
   switch (props.entry.kind) {
     case "worker":
       return <Cloud size={20} />;
@@ -581,6 +603,21 @@ function installVariableDisplayValue(value: JsonValue): string {
   return typeof value === "string" ? value : JSON.stringify(value);
 }
 
+function routePatternFromAppUrl(
+  value: JsonValue | undefined,
+): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  try {
+    const url = new URL(trimmed);
+    if (url.protocol !== "https:" || !url.hostname) return undefined;
+    return `${url.hostname}/*`;
+  } catch {
+    return undefined;
+  }
+}
+
 function inputVariableRowsFromPrefill(
   vars: Readonly<Record<string, JsonValue>> | undefined,
 ): readonly InputVariableRow[] {
@@ -623,6 +660,7 @@ function catalogMetadataFromStoreListing(
     badge: listing.badge,
     name: listing.name,
     description: listing.description,
+    ...(listing.iconUrl ? { iconUrl: listing.iconUrl } : {}),
     inputs: listing.inputs.map((input) => ({
       name: input.name,
       ...(input.type ? { type: input.type } : {}),
@@ -1004,6 +1042,13 @@ function Inner() {
       catalogDefaultInputValue(entry, field, workspaceId())
     );
   };
+  const catalogInputBooleanChecked = (
+    entry: CatalogEntry,
+    field: CatalogInputField,
+  ) =>
+    ["true", "1", "yes", "on"].includes(
+      catalogInputValue(entry, field).trim().toLowerCase(),
+    );
   const updateCatalogInputValue = (
     entry: CatalogEntry,
     field: CatalogInputField,
@@ -1429,12 +1474,19 @@ function Inner() {
       !connection ||
       sameProviderFamily(connection.providerSource, "cloudflare")
     ) {
+      const managedAppUrl =
+        typeof current.app_url === "string" && current.app_url.trim()
+          ? current.app_url.trim()
+          : `https://${managedAppHost}`;
       setDefault("worker_name", projectNameVariable());
-      setDefault("app_url", `https://${managedAppHost}`);
+      setDefault("app_url", managedAppUrl);
       setDefault("cloudflare_account_id", connection?.scopeHints?.accountId);
       setDefault("account_id", connection?.scopeHints?.accountId);
       setDefault("cloudflare_route_zone_id", connection?.scopeHints?.zoneId);
-      setDefault("cloudflare_route_pattern", `${managedAppHost}/*`);
+      setDefault(
+        "cloudflare_route_pattern",
+        routePatternFromAppUrl(managedAppUrl) ?? `${managedAppHost}/*`,
+      );
       if (
         variables.has("enable_workers_dev_subdomain") &&
         current.enable_workers_dev_subdomain === undefined
@@ -1481,13 +1533,20 @@ function Inner() {
     entry: CatalogEntry,
     field: CatalogInputField,
   ) => entry.provider === "cloudflare" && field.name === "accountId";
+  const isAdvancedCatalogInput = (
+    entry: CatalogEntry,
+    field: CatalogInputField,
+  ) =>
+    field.advanced === true ||
+    field.secret === true ||
+    catalogInputHasImplicitValue(entry, field);
   const visibleCatalogInputs = (entry: CatalogEntry) =>
     entry.inputs.filter(
       (field) =>
         !isConnectionScopedCatalogInput(entry, field) &&
         !isProjectNameCatalogInput(field) &&
         !HIDDEN_INSTALL_VARIABLE_NAMES.has(field.name) &&
-        !catalogInputHasImplicitValue(entry, field),
+        !isAdvancedCatalogInput(entry, field),
     );
   const advancedCatalogInputs = (entry: CatalogEntry) =>
     entry.inputs.filter(
@@ -1495,7 +1554,7 @@ function Inner() {
         !isConnectionScopedCatalogInput(entry, field) &&
         !isProjectNameCatalogInput(field) &&
         !HIDDEN_INSTALL_VARIABLE_NAMES.has(field.name) &&
-        catalogInputHasImplicitValue(entry, field),
+        isAdvancedCatalogInput(entry, field),
     );
   const hasMissingAdvancedCatalogInputs = () => {
     const entry = selectedCatalogEntry();
@@ -1604,8 +1663,19 @@ function Inner() {
   };
   const providerLabel = (provider: string) =>
     providerDisplayName(providerTail(provider));
+  // Any provider that is a credential boundary needs a Provider Connection (the
+  // user's own key) — NOT only the curated preset providers. This is what lets
+  // an install bind a bring-your-own-key connection for an ARBITRARY OpenTofu
+  // provider, not just the presets we ship a guided form for. Credential-free
+  // providers never force a connection: isCredentialFreeUtilityProvider covers
+  // the canonical http / random / tls, and the tail set below covers the other
+  // common credential-free providers (null / local / time / external / archive /
+  // cloudinit / template) — including bare local-name declarations — so a Capsule
+  // that uses e.g. null_resource / local_file / time_static is not falsely
+  // blocked on a bogus key.
   const providerRequiresConnection = (provider: string) =>
-    providerEnvRule(provider) !== undefined;
+    !isCredentialFreeUtilityProvider(provider) &&
+    !CREDENTIAL_FREE_PROVIDER_TAILS.has(providerTail(provider));
   const sameProviderFamily = (
     requiredProvider: string,
     connectionProvider: string,
@@ -2293,11 +2363,16 @@ function Inner() {
       throwIfStaleFlow(flow);
       setStepPlan("done");
       const runId = extractRunId(planEnvelope);
-      navigate(
-        runId
-          ? (appendAppHandoff(`/runs/${runId}`, appHandoff) ?? `/runs/${runId}`)
-          : "/",
-      );
+      if (runId) {
+        // Install is one action: tell the run screen to auto-continue to apply
+        // when the plan is clean (no approval / no destructive change), so the
+        // visitor never has to press "deploy" on a plan console.
+        const base =
+          appendAppHandoff(`/runs/${runId}`, appHandoff) ?? `/runs/${runId}`;
+        navigate(base + (base.includes("?") ? "&" : "?") + "auto=install");
+      } else {
+        navigate("/");
+      }
     } catch (err) {
       if (isAbortError(err) || !isCurrentFlow(flow)) {
         return;
@@ -2775,26 +2850,56 @@ function Inner() {
                         <For each={visibleCatalogInputs(entry())}>
                           {(field) => (
                             <FormField
-                              label={field.label[locale()]}
+                              label={
+                                field.type === "boolean"
+                                  ? undefined
+                                  : field.label[locale()]
+                              }
                               hint={field.helper?.[locale()]}
                               required={field.required}
                             >
-                              <Input
-                                id={`catalog-input-${entry().id}-${field.name}`}
-                                name={`catalogInput:${field.name}`}
-                                type="text"
-                                value={catalogInputValue(entry(), field)}
-                                onInput={(e) =>
-                                  updateCatalogInputValue(
+                              <Show
+                                when={field.type === "boolean"}
+                                fallback={
+                                  <Input
+                                    id={`catalog-input-${entry().id}-${field.name}`}
+                                    name={`catalogInput:${field.name}`}
+                                    type={field.secret ? "password" : "text"}
+                                    value={catalogInputValue(entry(), field)}
+                                    onInput={(e) =>
+                                      updateCatalogInputValue(
+                                        entry(),
+                                        field,
+                                        e.currentTarget.value,
+                                      )
+                                    }
+                                    placeholder={field.placeholder ?? ""}
+                                    autocomplete={
+                                      field.secret ? "new-password" : "off"
+                                    }
+                                    spellcheck={false}
+                                  />
+                                }
+                              >
+                                <Checkbox
+                                  id={`catalog-input-${entry().id}-${field.name}`}
+                                  name={`catalogInput:${field.name}`}
+                                  label={field.label[locale()]}
+                                  checked={catalogInputBooleanChecked(
                                     entry(),
                                     field,
-                                    e.currentTarget.value,
-                                  )
-                                }
-                                placeholder={field.placeholder ?? ""}
-                                autocomplete="off"
-                                spellcheck={false}
-                              />
+                                  )}
+                                  onChange={(e) =>
+                                    updateCatalogInputValue(
+                                      entry(),
+                                      field,
+                                      e.currentTarget.checked
+                                        ? "true"
+                                        : "false",
+                                    )
+                                  }
+                                />
+                              </Show>
                             </FormField>
                           )}
                         </For>
@@ -2836,26 +2941,56 @@ function Inner() {
                           <For each={advancedCatalogInputs(entry())}>
                             {(field) => (
                               <FormField
-                                label={field.label[locale()]}
+                                label={
+                                  field.type === "boolean"
+                                    ? undefined
+                                    : field.label[locale()]
+                                }
                                 hint={field.helper?.[locale()]}
                                 required={field.required}
                               >
-                                <Input
-                                  id={`catalog-input-advanced-${entry().id}-${field.name}`}
-                                  name={`catalogInputAdvanced:${field.name}`}
-                                  type="text"
-                                  value={catalogInputValue(entry(), field)}
-                                  onInput={(e) =>
-                                    updateCatalogInputValue(
+                                <Show
+                                  when={field.type === "boolean"}
+                                  fallback={
+                                    <Input
+                                      id={`catalog-input-advanced-${entry().id}-${field.name}`}
+                                      name={`catalogInputAdvanced:${field.name}`}
+                                      type={field.secret ? "password" : "text"}
+                                      value={catalogInputValue(entry(), field)}
+                                      onInput={(e) =>
+                                        updateCatalogInputValue(
+                                          entry(),
+                                          field,
+                                          e.currentTarget.value,
+                                        )
+                                      }
+                                      placeholder={field.placeholder ?? ""}
+                                      autocomplete={
+                                        field.secret ? "new-password" : "off"
+                                      }
+                                      spellcheck={false}
+                                    />
+                                  }
+                                >
+                                  <Checkbox
+                                    id={`catalog-input-advanced-${entry().id}-${field.name}`}
+                                    name={`catalogInputAdvanced:${field.name}`}
+                                    label={field.label[locale()]}
+                                    checked={catalogInputBooleanChecked(
                                       entry(),
                                       field,
-                                      e.currentTarget.value,
-                                    )
-                                  }
-                                  placeholder={field.placeholder ?? ""}
-                                  autocomplete="off"
-                                  spellcheck={false}
-                                />
+                                    )}
+                                    onChange={(e) =>
+                                      updateCatalogInputValue(
+                                        entry(),
+                                        field,
+                                        e.currentTarget.checked
+                                          ? "true"
+                                          : "false",
+                                      )
+                                    }
+                                  />
+                                </Show>
                               </FormField>
                             )}
                           </For>

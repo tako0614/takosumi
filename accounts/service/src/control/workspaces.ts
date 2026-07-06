@@ -100,7 +100,11 @@ import type {
   PublicRun,
 } from "takosumi-contract/runs";
 import type { JsonValue } from "takosumi-contract";
-import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
+import {
+  TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_IDENTITY_OIDC,
+  normalizeIssuer,
+  type TakosumiSubject,
+} from "@takosjp/takosumi-accounts-contract";
 import type {
   AppCapsuleMode,
   AppCapsuleStatus,
@@ -108,7 +112,7 @@ import type {
   WorkspaceKind,
 } from "../ledger.ts";
 import type { SharedCellRuntimeAllocator } from "../runtime.ts";
-import type { AccountsStore } from "../store.ts";
+import type { AccountsStore, OidcClientRecord } from "../store.ts";
 import type {
   ControlPlaneOperations,
   RunGroupWithRunsLike,
@@ -298,6 +302,7 @@ export async function handleWorkspaces(
           request,
           operations,
           store,
+          ctx.issuer,
           ctx.session.subject,
           workspaceId,
         );
@@ -1147,6 +1152,7 @@ async function createCapsule(
   request: Request,
   operations: ControlPlaneOperations,
   store: AccountsStore,
+  issuer: string | undefined,
   sessionSubject: string,
   workspaceId: string,
 ): Promise<Response> {
@@ -1213,6 +1219,7 @@ async function createCapsule(
     );
   }
   let resolvedInstallConfigId = installConfigId;
+  let resolvedInstallConfig: InstallConfig | undefined;
   if (
     (vars !== undefined && Object.keys(vars).length > 0) ||
     runnerProfileId ||
@@ -1253,6 +1260,7 @@ async function createCapsule(
       updatedAt: now,
     });
     resolvedInstallConfigId = config.id;
+    resolvedInstallConfig = config;
   }
   const installation = await operations.installations.createCapsule({
     workspaceId,
@@ -1261,6 +1269,15 @@ async function createCapsule(
     sourceId,
     installConfigId: resolvedInstallConfigId,
   });
+  if (resolvedInstallConfig && issuer) {
+    await maybeAttachTakosumiAccountsOidc({
+      operations,
+      store,
+      issuer,
+      capsule: installation,
+      installConfig: resolvedInstallConfig,
+    });
+  }
   return jsonStatus({ capsule: publicCapsule(installation) }, 201);
 }
 
@@ -1273,6 +1290,104 @@ function scopedCloneOutputAllowlist(
   return baseConfig.sourceKind === "generic_capsule"
     ? defaultCapsuleOutputAllowlist()
     : baseConfig.outputAllowlist;
+}
+
+async function maybeAttachTakosumiAccountsOidc(input: {
+  readonly operations: ControlPlaneOperations;
+  readonly store: AccountsStore;
+  readonly issuer: string;
+  readonly capsule: Capsule;
+  readonly installConfig: InstallConfig;
+}): Promise<void> {
+  if (!shouldAutoProvisionTakosumiAccountsOidc(input.installConfig)) return;
+  if (hasTakosumiAccountsOidcVariables(input.installConfig.variableMapping)) {
+    return;
+  }
+  const redirectOrigin = appOriginFromInstallVariables(
+    input.installConfig.variableMapping,
+  );
+  if (!redirectOrigin) return;
+
+  const issuerUrl = normalizeIssuer(input.issuer);
+  const now = Date.now();
+  const redirectUris = [`${redirectOrigin}/api/auth/callback/takos`];
+  const existing = await input.store.findOidcClientForCapsule(input.capsule.id);
+  const client: OidcClientRecord = existing
+    ? {
+        ...existing,
+        issuerUrl,
+        redirectUris,
+        allowedScopes: ["openid", "profile", "email"],
+        tokenEndpointAuthMethod: "none",
+        updatedAt: now,
+      }
+    : {
+        clientId: `toc_${crypto.randomUUID()}`,
+        capsuleId: input.capsule.id,
+        namespacePath: TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_IDENTITY_OIDC,
+        issuerUrl,
+        redirectUris,
+        allowedScopes: ["openid", "profile", "email"],
+        subjectMode: "pairwise",
+        tokenEndpointAuthMethod: "none",
+        clientSecretHash: undefined,
+        createdAt: now,
+        updatedAt: now,
+      };
+  await input.store.saveOidcClient(client);
+  await input.operations.installations.putInstallConfig({
+    ...input.installConfig,
+    variableMapping: {
+      ...input.installConfig.variableMapping,
+      takosumi_accounts_issuer_url: client.issuerUrl,
+      takosumi_accounts_client_id: client.clientId,
+    },
+    updatedAt: new Date(now).toISOString(),
+  });
+}
+
+function shouldAutoProvisionTakosumiAccountsOidc(
+  config: InstallConfig,
+): boolean {
+  if (config.catalog?.templateId === "yurucommu") return true;
+  const git = config.catalog?.source?.git.toLowerCase() ?? "";
+  return /(^|[:/])tako0614\/yurucommu(?:\.git)?$/u.test(git);
+}
+
+function hasTakosumiAccountsOidcVariables(
+  variables: InstallConfig["variableMapping"],
+): boolean {
+  return (
+    typeof variables.takosumi_accounts_issuer_url === "string" &&
+    variables.takosumi_accounts_issuer_url.trim() !== "" &&
+    typeof variables.takosumi_accounts_client_id === "string" &&
+    variables.takosumi_accounts_client_id.trim() !== ""
+  );
+}
+
+function appOriginFromInstallVariables(
+  variables: InstallConfig["variableMapping"],
+): string | undefined {
+  const appUrl = stringInstallVariable(variables.app_url);
+  if (appUrl) {
+    try {
+      const url = new URL(appUrl);
+      if (url.protocol === "https:" && url.hostname) return url.origin;
+    } catch {
+      return undefined;
+    }
+  }
+  const projectName = stringInstallVariable(variables.project_name);
+  if (projectName && /^[a-z][a-z0-9-]{1,50}[a-z0-9]$/u.test(projectName)) {
+    return `https://${projectName}.app.takos.jp`;
+  }
+  return undefined;
+}
+
+function stringInstallVariable(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() !== ""
+    ? value.trim()
+    : undefined;
 }
 
 function normalizedVarsValue(

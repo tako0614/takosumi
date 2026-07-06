@@ -107,10 +107,13 @@ import {
 import {
   handleStripeBillingCheckout,
   handleStripeBillingPortal,
+  handleStripeBillingWebhook,
   TAKOSUMI_ACCOUNTS_BILLING_SMOKE_TOKEN_HEADER,
   TAKOSUMI_ACCOUNTS_BILLING_STRIPE_CHECKOUT_PATH,
   TAKOSUMI_ACCOUNTS_BILLING_STRIPE_PORTAL_PATH,
+  TAKOSUMI_ACCOUNTS_BILLING_STRIPE_WEBHOOK_PATH,
   type StripeBillingCheckoutOptions,
+  type StripeBillingWebhookOptions,
 } from "./billing-checkout.ts";
 import { base64UrlEncodeBytes, constantTimeEqual } from "./encoding.ts";
 import {
@@ -189,8 +192,12 @@ export type {
 export {
   TAKOSUMI_ACCOUNTS_BILLING_SMOKE_TOKEN_HEADER,
   TAKOSUMI_ACCOUNTS_BILLING_STRIPE_CHECKOUT_PATH,
+  TAKOSUMI_ACCOUNTS_BILLING_STRIPE_WEBHOOK_PATH,
 } from "./billing-checkout.ts";
-export type { StripeBillingCheckoutOptions } from "./billing-checkout.ts";
+export type {
+  StripeBillingCheckoutOptions,
+  StripeBillingWebhookOptions,
+} from "./billing-checkout.ts";
 export type { LoginEmailAllowlist } from "./login-email-allowlist.ts";
 export { createOpenPlatformAccessPolicy } from "./platform-access-policy.ts";
 export type {
@@ -275,6 +282,7 @@ export interface AccountsHandlerOptions {
   controlPlaneOperations?: ControlPlaneOperations;
   publicBillingPlans?: readonly Record<string, unknown>[];
   billingCheckout?: StripeBillingCheckoutOptions;
+  billingWebhook?: StripeBillingWebhookOptions;
   runtimeServiceTokens?: RuntimeServiceTokenOptions;
   bindingMaterializer?: ServiceBindingMaterializer;
   sharedCellRuntime?: SharedCellRuntimeAllocator;
@@ -321,6 +329,7 @@ export interface EphemeralAccountsHandlerOptions {
   controlPlaneOperations?: ControlPlaneOperations;
   publicBillingPlans?: readonly Record<string, unknown>[];
   billingCheckout?: StripeBillingCheckoutOptions;
+  billingWebhook?: StripeBillingWebhookOptions;
   runtimeServiceTokens?: RuntimeServiceTokenOptions;
   bindingMaterializer?: ServiceBindingMaterializer;
   sharedCellRuntime?: SharedCellRuntimeAllocator;
@@ -899,6 +908,24 @@ export function createAccountsHandler(
       });
     }
 
+    if (isStripeBillingWebhookPath(url.pathname)) {
+      if (request.method !== "POST") return methodNotAllowed("POST");
+      if (!options.billingWebhook) {
+        return errorJson(
+          "feature_unavailable",
+          "Stripe billing webhook is not configured.",
+          503,
+          request,
+        );
+      }
+      return await handleStripeBillingWebhook({
+        request,
+        store,
+        operations: options.controlPlaneOperations,
+        webhook: options.billingWebhook,
+      });
+    }
+
     if (url.pathname === TAKOSUMI_ACCOUNTS_ACCOUNT_TOKENS_PATH) {
       if (request.method === "GET") {
         return await handleListPersonalAccessTokens({ request, url, store });
@@ -1285,6 +1312,7 @@ export function createAccountsHandler(
             request,
             url,
             store,
+            issuer,
             operations: options.controlPlaneOperations,
             publicBillingPlans: options.publicBillingPlans,
             sharedCellRuntime: options.sharedCellRuntime,
@@ -1300,6 +1328,13 @@ export function createAccountsHandler(
     const response = await inner(request);
     return withSecurityHeaders(response, isProductionIssuer);
   };
+}
+
+function isStripeBillingWebhookPath(pathname: string): boolean {
+  return (
+    pathname === TAKOSUMI_ACCOUNTS_BILLING_STRIPE_WEBHOOK_PATH ||
+    pathname === `/api${TAKOSUMI_ACCOUNTS_BILLING_STRIPE_WEBHOOK_PATH}`
+  );
 }
 
 const AI_GATEWAY_RUNTIME_SERVICE_SCOPES = [
