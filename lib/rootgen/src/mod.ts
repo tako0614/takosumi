@@ -469,9 +469,13 @@ function renderGenericOutputsTf(
   const blocks = Object.entries(outputAllowlist).map(([name, spec]) => {
     assertIdentifier(name, "rootgen: output name");
     assertOutputPath(spec.from);
+    const valueExpr =
+      name === "takosumi_release"
+        ? `module.app.${spec.from}`
+        : `try(module.app.${spec.from}, "")`;
     return [
       `output ${hclString(name)} {`,
-      `  value = try(module.app.${spec.from}, "")`,
+      `  value = ${valueExpr}`,
       "}",
     ].join("\n");
   });
@@ -480,7 +484,7 @@ function renderGenericOutputsTf(
     blocks.push(
       [
         `output ${hclString(name)} {`,
-        `  value = try(module.app.${name}, null)`,
+        `  value = module.app.${name}`,
         "}",
       ].join("\n"),
     );

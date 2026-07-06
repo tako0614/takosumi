@@ -485,7 +485,7 @@ test("generateGenericCapsuleRoot wraps arbitrary capsule inputs and outputs", ()
     'value = try(module.app.metadata.hostname, "")',
   );
   expect(files["outputs.tf"]).toContain(
-    'output "takosumi_release" {\n  value = try(module.app.takosumi_release, null)\n}',
+    'output "takosumi_release" {\n  value = module.app.takosumi_release\n}',
   );
   expect(files["outputs.tf"]).not.toContain('output "app_deployment"');
 });
@@ -504,7 +504,7 @@ test("generateGenericCapsuleRoot omits empty required_providers for provider-fre
   expect(files["main.tf"]).toContain('module "app"');
   expect(files["outputs.tf"]).toContain('value = try(module.app.url, "")');
   expect(files["outputs.tf"]).toContain(
-    "value = try(module.app.takosumi_release, null)",
+    "value = module.app.takosumi_release",
   );
   expect(files["outputs.tf"]).not.toContain("module.app.app_deployment");
 });
@@ -521,6 +521,9 @@ test("generateGenericCapsuleRoot does not duplicate control outputs when allowli
 
   expect(files["outputs.tf"]!.match(/output "takosumi_release"/g)).toHaveLength(
     1,
+  );
+  expect(files["outputs.tf"]).toContain(
+    'output "takosumi_release" {\n  value = module.app.takosumi_release\n}',
   );
   expect(files["outputs.tf"]).not.toContain("module.app.app_deployment");
 });
