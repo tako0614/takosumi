@@ -1076,3 +1076,77 @@ output "url" {
   expect(report.level).toBe("ready");
   expect(report.findings).toEqual([]);
 });
+
+test("createCompatibilityCheck defaults to curated InstallConfig modulePath", async () => {
+  const observedOptions: unknown[] = [];
+  const { store, service } = makeService({
+    readCapsuleSourceFiles: async (_snapshot, options) => {
+      observedOptions.push(options);
+      return [
+        {
+          path: "main.tf",
+          text: `
+terraform {
+  required_providers {
+    cloudflare = {
+      source = "cloudflare/cloudflare"
+    }
+  }
+}
+
+resource "cloudflare_d1_database" "db" {
+  account_id = var.account_id
+  name       = "db"
+}
+
+output "url" {
+  value = "https://example.com"
+}
+`,
+        },
+      ];
+    },
+  });
+  await store.putInstallConfig({
+    id: "cfg-catalog-takos",
+    name: "takos",
+    trustLevel: "official",
+    modulePath: "deploy/opentofu",
+    variableMapping: {},
+    outputAllowlist: {},
+    policy: {
+      allowedProviders: ["cloudflare/cloudflare"],
+      allowedResourceTypes: ["cloudflare_d1_database"],
+    },
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
+  const { source } = await service.createSource({
+    spaceId: "space_1",
+    name: "takos",
+    url: "https://github.com/tako0614/takos.git",
+  });
+  const { run } = await service.createSync(source.id);
+  await store.putSourceSnapshot({
+    id: run.snapshotId!,
+    sourceId: source.id,
+    url: source.url,
+    ref: "main",
+    resolvedCommit: "abc123",
+    path: ".",
+    archiveObjectKey: run.archiveObjectKey,
+    archiveDigest: "sha256:source",
+    archiveSizeBytes: 100,
+    fetchedByRunId: run.id,
+    fetchedAt: "2026-06-06T00:00:00.000Z",
+  });
+
+  const { report } = await service.createCompatibilityCheck(source.id, {
+    sourceSnapshotId: run.snapshotId,
+    installConfigId: "cfg-catalog-takos",
+  });
+
+  expect(observedOptions).toEqual([{ modulePath: "deploy/opentofu" }]);
+  expect(report.level).toBe("ready");
+  expect(report.findings).toEqual([]);
+});
