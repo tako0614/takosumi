@@ -1660,11 +1660,13 @@ test("installation plan reuses a preflight CompatibilityReport hint without rech
   expect(runner.planJobs).toHaveLength(1);
   expect(runner.planJobs[0]?.generatedRoot?.moduleFiles).toBeUndefined();
   const mainTf = runner.planJobs[0]!.generatedRoot!.files["main.tf"]!;
+  const outputsTf = runner.planJobs[0]!.generatedRoot!.files["outputs.tf"]!;
   expect(mainTf).toContain('project_name = "yuru-e2e"');
   expect(mainTf).toContain("enable_cloudflare_resources = true");
   expect(mainTf).toContain('cloudflare_account_id = "acct_scope_123"');
   expect(mainTf).toContain('cloudflare_workers_subdomain = "team-workers"');
   expect(mainTf).not.toContain("fixture-provider-token");
+  expect(outputsTf).toContain('output "takosumi_release"');
 });
 
 test("installation plan reuses the latest matching preflight CompatibilityReport when the client omits the hint", async () => {

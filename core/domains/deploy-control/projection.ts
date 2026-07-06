@@ -116,6 +116,7 @@ export function projectOutputAllowlistPublicOutputs(
   );
   const result: DeploymentOutput[] = [];
   for (const [publicName, spec] of Object.entries(outputAllowlist)) {
+    if (publicName === "takosumi_release") continue;
     if (!(publicName in projected)) continue;
     const kind = templateOutputKind(spec.type);
     const value = projected[publicName]!;
