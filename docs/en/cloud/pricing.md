@@ -49,6 +49,7 @@ display.
 | Workers Script       | operation   | `$0.001` / operation      |
 | KV / D1 / R2 ops     | operation   | `$0.0005` / operation     |
 | KV / D1 / R2 storage | GB-hour     | `$0.10` / 1M GB-hours     |
+| Vector Index         | operation   | `$0.0005` / operation     |
 | Workflows            | operation   | `$0.001` / operation      |
 | Containers           | vCPU-second | `$1.00` / 1M vCPU-seconds |
 | Queues               | operation   | `$0.0005` / operation     |
