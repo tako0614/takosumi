@@ -160,7 +160,10 @@ export class PlanResolutionService {
       credentialRequiredProviders,
     );
     const providerEnvBindings = providerEnvBindingsFromResolved(resolved);
-    const providerInputDefaults = providerInputDefaultsFromResolved(resolved);
+    const providerInputDefaults = providerInputDefaultsFromResolved(
+      resolved,
+      installation,
+    );
     const usesCloudOnlyGatewayMaterialization = resolved.some(
       (entry) => (entry.materialization as string) === "gateway",
     );
@@ -316,6 +319,7 @@ function requiredProvidersFromResolved(
 
 function providerInputDefaultsFromResolved(
   resolved: readonly ResolvedInstallationProviderEnvBinding[],
+  installation: Installation,
 ): Readonly<Record<string, JsonValue>> {
   const inputs: Record<string, JsonValue> = {};
   for (const entry of resolved) {
@@ -334,6 +338,19 @@ function providerInputDefaultsFromResolved(
         mergeObjectInput(inputs, "cloudflare", {
           api_base_url: providerBaseUrl,
         });
+        const managedAppHost = managedCloudflareAppHost(
+          connection,
+          installation,
+        );
+        if (managedAppHost) {
+          inputs.worker_name = managedAppHost.workerName;
+          inputs.app_url = `https://${managedAppHost.host}`;
+          const zoneId = nonEmptyString(connection.scopeHints?.zoneId);
+          if (zoneId) {
+            inputs.cloudflare_route_zone_id = zoneId;
+            inputs.cloudflare_route_pattern = `${managedAppHost.host}/*`;
+          }
+        }
       }
       const workersSubdomain = nonEmptyString(
         connection.scopeHints?.workersSubdomain,
@@ -348,6 +365,35 @@ function providerInputDefaultsFromResolved(
     }
   }
   return inputs;
+}
+
+function managedCloudflareAppHost(
+  connection: ResolvedInstallationProviderEnvBinding["connection"],
+  installation: Installation,
+): { readonly workerName: string; readonly host: string } | undefined {
+  if (!connection?.scopeHints?.managedProvider) return undefined;
+  if (!managedProviderBaseUrl(connection)) return undefined;
+  const workerName = cloudflareWorkerNameFromCapsule(installation);
+  if (!workerName) return undefined;
+  return { workerName, host: `${workerName}.app.takos.jp` };
+}
+
+function cloudflareWorkerNameFromCapsule(
+  installation: Installation,
+): string | undefined {
+  const preferred = nonEmptyString(installation.slug) ?? installation.name;
+  const normalized = preferred
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/^-+/g, "")
+    .replace(/-+$/g, "")
+    .replace(/-{2,}/g, "-")
+    .slice(0, 52)
+    .replace(/-+$/g, "");
+  if (!/^[a-z][a-z0-9-]{1,50}[a-z0-9]$/u.test(normalized)) {
+    return undefined;
+  }
+  return normalized;
 }
 
 function mergeObjectInput(

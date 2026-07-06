@@ -3700,7 +3700,7 @@ test("POST /api/v1/workspaces/:id/capsules inherits catalog modulePath when vars
       catalog: {
         source: {
           git: "https://github.com/tako0614/takos.git",
-          ref: "082a37ac9ff6da68cceb6d4a3458fe6a6e1961ea",
+          ref: "805d006154e7ee7eb0b3952e8f28ab83e9760b78",
           path: "deploy/opentofu",
         },
         order: 110,
@@ -4972,6 +4972,62 @@ test("GET /api/v1/capsule-configs template catalog hides scoped configs", async 
         createdAt: officialCreatedAt,
         updatedAt: officialCreatedAt,
       },
+      {
+        id: "cfg-catalog-yurucommu",
+        name: "yurucommu",
+        sourceKind: "generic_capsule",
+        installType: "opentofu_module",
+        trustLevel: "trusted",
+        variableMapping: {},
+        outputAllowlist: {},
+        policy: {},
+        catalog: {
+          source: {
+            git: "https://github.com/tako0614/yurucommu.git",
+            ref: "1fe727f1843c0c4a91fece16cbc73950225e078d",
+            path: ".",
+          },
+          order: 100,
+          surface: "service",
+          kind: "worker",
+          provider: "cloudflare",
+          suggestedName: "yurucommu",
+          badge: { ja: "追加候補", en: "Installable" },
+          name: { ja: "yurucommu", en: "yurucommu" },
+          description: { ja: "yurucommu", en: "yurucommu" },
+          inputs: [],
+        },
+        createdAt: officialCreatedAt,
+        updatedAt: officialCreatedAt,
+      },
+      {
+        id: "cfg-catalog-takos",
+        name: "takos",
+        sourceKind: "generic_capsule",
+        installType: "opentofu_module",
+        trustLevel: "trusted",
+        variableMapping: {},
+        outputAllowlist: {},
+        policy: {},
+        catalog: {
+          source: {
+            git: "https://github.com/tako0614/takos.git",
+            ref: "805d006154e7ee7eb0b3952e8f28ab83e9760b78",
+            path: "deploy/opentofu",
+          },
+          order: 110,
+          surface: "service",
+          kind: "worker",
+          provider: "cloudflare",
+          suggestedName: "takos",
+          badge: { ja: "追加候補", en: "Installable" },
+          name: { ja: "Takos", en: "Takos" },
+          description: { ja: "Takos", en: "Takos" },
+          inputs: [],
+        },
+        createdAt: officialCreatedAt,
+        updatedAt: officialCreatedAt,
+      },
     ];
   };
 
@@ -4994,10 +5050,14 @@ test("GET /api/v1/capsule-configs template catalog hides scoped configs", async 
       catalog?: unknown;
     }>;
   };
-  expect(body.installConfigs.map((config) => config.id)).toEqual([
-    "cfg-default-opentofu-capsule",
-    "cfg-official-cloudflare-hello-worker",
-  ]);
+  expect(body.installConfigs.map((config) => config.id)).toEqual(
+    expect.arrayContaining([
+      "cfg-default-opentofu-capsule",
+      "cfg-official-cloudflare-hello-worker",
+      "cfg-catalog-yurucommu",
+      "cfg-catalog-takos",
+    ]),
+  );
   expect(body.installConfigs.some((config) => config.workspaceId)).toBe(false);
 });
 

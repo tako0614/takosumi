@@ -255,8 +255,24 @@ describe("/new Provider Connections return context", () => {
   test("/new uses a managed provider connection to derive the default app.takos.jp URL", () => {
     expect(newAppViewSource).toContain("selectedManagedProviderConnection");
     expect(newAppViewSource).toContain("managedProviderVariableDefaults");
+    expect(newAppViewSource).toContain(
+      "managedCatalogProviderForCurrentSource",
+    );
+    expect(newAppViewSource).toContain("rowCanUseManagedProviderFallback");
+    expect(newAppViewSource).toContain("hasManagedCloudflareProviderFallback");
     expect(newAppViewSource).toContain("rowHasManagedProviderDefault");
-    expect(newAppViewSource).toContain("if (rowHasManagedProviderDefault(row)) return false");
+    expect(newAppViewSource).toContain(
+      "if (rowHasManagedProviderDefault(row)) return false",
+    );
+    expect(newAppViewSource).toContain(
+      "if (rowCanUseManagedProviderFallback(row)) continue",
+    );
+    expect(newAppViewSource).toContain(
+      ".filter((row) => row.connectionId.trim())",
+    );
+    expect(newAppViewSource).toContain(
+      "if (!connection && !hasManagedCloudflareProviderFallback()) return {}",
+    );
     expect(newAppViewSource).toContain(
       "new Set(compatibility()?.rootModuleVariables ?? [])",
     );
@@ -267,7 +283,7 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).toContain('"cloudflare_route_zone_id"');
     expect(newAppViewSource).toContain('"cloudflare_route_pattern"');
     expect(newAppViewSource).toContain('"enable_workers_dev_subdomain"');
-    expect(newAppViewSource).toContain("connection.scopeHints?.zoneId");
+    expect(newAppViewSource).toContain("connection?.scopeHints?.zoneId");
   });
 
   test("/new only asks for Provider Connections when the provider has credential env rules", () => {

@@ -23,6 +23,7 @@ function makeService(
     }) => Promise<void>;
     readCapsuleSourceFiles?: (
       snapshot: SourceSnapshot,
+      options?: { readonly modulePath?: string },
     ) => Promise<readonly { readonly path: string; readonly text: string }[]>;
     normalizedArtifactStorage?: MemoryObjectStorage;
   } = {},
@@ -1013,4 +1014,65 @@ test("createCompatibilityCheck returns an unsupported report when analysis fails
     createdBy: "system",
   });
   expect(compatibilityRun?.errorCode).toBe("runner unavailable");
+});
+
+test("createCompatibilityCheck treats snapshot path as restored archive root", async () => {
+  const observedOptions: unknown[] = [];
+  const { store, service } = makeService({
+    readCapsuleSourceFiles: async (_snapshot, options) => {
+      observedOptions.push(options);
+      return [
+        {
+          path: "main.tf",
+          text: `
+terraform {
+  required_providers {
+    cloudflare = {
+      source = "cloudflare/cloudflare"
+    }
+  }
+}
+
+resource "cloudflare_d1_database" "db" {
+  account_id = var.account_id
+  name       = "db"
+}
+
+output "url" {
+  value = "https://example.com"
+}
+`,
+        },
+      ];
+    },
+  });
+  const { source } = await service.createSource({
+    spaceId: "space_1",
+    name: "takos",
+    url: "https://github.com/tako0614/takos.git",
+    defaultPath: "deploy/opentofu",
+  });
+  const { run } = await service.createSync(source.id);
+  await store.putSourceSnapshot({
+    id: run.snapshotId!,
+    sourceId: source.id,
+    url: source.url,
+    ref: "main",
+    resolvedCommit: "abc123",
+    path: "deploy/opentofu",
+    archiveObjectKey: run.archiveObjectKey,
+    archiveDigest: "sha256:source",
+    archiveSizeBytes: 100,
+    fetchedByRunId: run.id,
+    fetchedAt: "2026-06-06T00:00:00.000Z",
+  });
+
+  const { report } = await service.createCompatibilityCheck(source.id, {
+    sourceSnapshotId: run.snapshotId,
+    modulePath: "deploy/opentofu",
+  });
+
+  expect(observedOptions).toEqual([undefined]);
+  expect(report.level).toBe("ready");
+  expect(report.findings).toEqual([]);
 });

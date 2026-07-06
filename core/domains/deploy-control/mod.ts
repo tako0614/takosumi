@@ -2041,14 +2041,46 @@ export function snapshotModuleSource(
   snapshot: SourceSnapshot,
   modulePath?: string,
 ): OpenTofuModuleSource {
+  const restoredArchiveModulePath = modulePathWithinSnapshotArchive(
+    snapshot,
+    modulePath,
+  );
   return {
     kind: "git",
     url: normalizeGitUrlToHttps(source.url),
     ...(snapshot.resolvedCommit
       ? { commit: snapshot.resolvedCommit.toLowerCase() }
       : {}),
-    ...(modulePath ? { modulePath } : {}),
+    ...(restoredArchiveModulePath
+      ? { modulePath: restoredArchiveModulePath }
+      : {}),
   };
+}
+
+function modulePathWithinSnapshotArchive(
+  snapshot: SourceSnapshot,
+  modulePath: string | undefined,
+): string | undefined {
+  const requested = normalizeRelativeModulePath(modulePath);
+  if (!requested) return undefined;
+  const snapshotPath = normalizeRelativeModulePath(snapshot.path);
+  if (!snapshotPath) return requested;
+  if (requested === snapshotPath) return undefined;
+  const prefix = `${snapshotPath}/`;
+  if (requested.startsWith(prefix)) {
+    return requested.slice(prefix.length) || undefined;
+  }
+  return requested;
+}
+
+function normalizeRelativeModulePath(
+  path: string | undefined,
+): string | undefined {
+  const value = path?.trim();
+  if (!value || value === ".") return undefined;
+  const normalized = value.replace(/\\/g, "/").replace(/^\.\/+/, "");
+  if (!normalized || normalized === ".") return undefined;
+  return normalized.replace(/\/+$/g, "");
 }
 
 /**

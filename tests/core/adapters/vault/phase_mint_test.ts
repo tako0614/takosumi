@@ -925,6 +925,86 @@ test("mintForInstallationProviderEnvBindings uses managed-provider issuer before
   ]);
 });
 
+test("mintForInstallationProviderEnvBindings rejects managed-provider connections without an issuer", async () => {
+  const { store, vault } = makeVault();
+  const operatorConn = await markVerified(
+    store,
+    await vault.register({
+      provider: "cloudflare",
+      authMethod: "static_secret",
+      values: { CLOUDFLARE_API_TOKEN: "operator-static-token" },
+      scopeHints: {
+        managedProvider: true,
+        providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      },
+    }),
+  );
+
+  let err: unknown;
+  try {
+    await vault.mintForInstallationProviderEnvBindings(
+      "space_other",
+      [
+        {
+          provider: "cloudflare",
+          alias: "zone",
+          connectionId: operatorConn.id,
+        },
+      ],
+      { installationId: "inst_1234567890abcdef" },
+    );
+  } catch (caught) {
+    err = caught;
+  }
+
+  expect(err).toBeInstanceOf(ConnectionVaultError);
+  expect((err as ConnectionVaultError).code).toBe("failed_precondition");
+  expect((err as Error).message).toContain(
+    "requires a managed provider credential issuer",
+  );
+});
+
+test("mintForInstallationProviderEnvBindings rejects managed-provider connections when issuer returns no token", async () => {
+  const { store, vault } = makeVault({
+    managedProviderCredentialIssuer: async () => undefined,
+  });
+  const operatorConn = await markVerified(
+    store,
+    await vault.register({
+      provider: "cloudflare",
+      authMethod: "static_secret",
+      values: { CLOUDFLARE_API_TOKEN: "operator-static-token" },
+      scopeHints: {
+        managedProvider: true,
+        providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      },
+    }),
+  );
+
+  let err: unknown;
+  try {
+    await vault.mintForInstallationProviderEnvBindings(
+      "space_other",
+      [
+        {
+          provider: "cloudflare",
+          alias: "zone",
+          connectionId: operatorConn.id,
+        },
+      ],
+      { installationId: "inst_1234567890abcdef" },
+    );
+  } catch (caught) {
+    err = caught;
+  }
+
+  expect(err).toBeInstanceOf(ConnectionVaultError);
+  expect((err as ConnectionVaultError).code).toBe("failed_precondition");
+  expect((err as Error).message).toContain(
+    "could not mint a run-scoped provider token",
+  );
+});
+
 test("mintForInstallationProviderEnvBindings contributes no TF_VAR for a provider without an arg mapping", async () => {
   const { store, vault } = makeVault();
   const conn = await markVerified(

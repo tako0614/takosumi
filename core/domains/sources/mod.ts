@@ -806,15 +806,21 @@ export class SourcesService {
     sourceSnapshot: SourceSnapshot,
     options?: { readonly modulePath?: string },
   ): Promise<readonly CapsuleSourceFile[]> {
-    const key = `${sourceSnapshot.id}\0${options?.modulePath ?? ""}`;
+    const modulePath = modulePathWithinSnapshotArchive(
+      sourceSnapshot,
+      options?.modulePath,
+    );
+    const normalizedOptions = modulePath ? { modulePath } : undefined;
+    const key = `${sourceSnapshot.id}\0${modulePath ?? ""}`;
     const existing = this.#sourceFilesCache.get(key);
     if (existing) return existing;
-    const pending = this.#readCapsuleSourceFiles(sourceSnapshot, options).catch(
-      (error: unknown) => {
-        this.#sourceFilesCache.delete(key);
-        throw error;
-      },
-    );
+    const pending = this.#readCapsuleSourceFiles(
+      sourceSnapshot,
+      normalizedOptions,
+    ).catch((error: unknown) => {
+      this.#sourceFilesCache.delete(key);
+      throw error;
+    });
     this.#sourceFilesCache.set(key, pending);
     return pending;
   }
@@ -988,6 +994,32 @@ function safeSnapshotPath(path: string | undefined): string {
     );
   }
   return value;
+}
+
+function modulePathWithinSnapshotArchive(
+  snapshot: SourceSnapshot,
+  modulePath: string | undefined,
+): string | undefined {
+  const requested = normalizeRelativeModulePath(modulePath);
+  if (!requested) return undefined;
+  const snapshotPath = normalizeRelativeModulePath(snapshot.path);
+  if (!snapshotPath) return requested;
+  if (requested === snapshotPath) return undefined;
+  const prefix = `${snapshotPath}/`;
+  if (requested.startsWith(prefix)) {
+    return requested.slice(prefix.length) || undefined;
+  }
+  return requested;
+}
+
+function normalizeRelativeModulePath(
+  path: string | undefined,
+): string | undefined {
+  const value = nonEmpty(path);
+  if (!value || value === ".") return undefined;
+  const normalized = value.replace(/\\/g, "/").replace(/^\.\/+/, "");
+  if (!normalized || normalized === ".") return undefined;
+  return normalized.replace(/\/+$/g, "");
 }
 
 function compatibilityCheckFailureAnalysis(

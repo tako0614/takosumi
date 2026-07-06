@@ -1414,7 +1414,7 @@ function Inner() {
     current: Readonly<Record<string, JsonValue>>,
   ): Record<string, JsonValue> => {
     const connection = selectedManagedProviderConnection();
-    if (!connection) return {};
+    if (!connection && !hasManagedCloudflareProviderFallback()) return {};
     const variables = new Set(compatibility()?.rootModuleVariables ?? []);
     if (variables.size === 0) return {};
     const defaults: Record<string, JsonValue> = {};
@@ -1425,12 +1425,15 @@ function Inner() {
       defaults[name] = value;
     };
     const managedAppHost = `${projectNameVariable()}.app.takos.jp`;
-    if (sameProviderFamily(connection.providerSource, "cloudflare")) {
+    if (
+      !connection ||
+      sameProviderFamily(connection.providerSource, "cloudflare")
+    ) {
       setDefault("worker_name", projectNameVariable());
       setDefault("app_url", `https://${managedAppHost}`);
-      setDefault("cloudflare_account_id", connection.scopeHints?.accountId);
-      setDefault("account_id", connection.scopeHints?.accountId);
-      setDefault("cloudflare_route_zone_id", connection.scopeHints?.zoneId);
+      setDefault("cloudflare_account_id", connection?.scopeHints?.accountId);
+      setDefault("account_id", connection?.scopeHints?.accountId);
+      setDefault("cloudflare_route_zone_id", connection?.scopeHints?.zoneId);
       setDefault("cloudflare_route_pattern", `${managedAppHost}/*`);
       if (
         variables.has("enable_workers_dev_subdomain") &&
@@ -1662,10 +1665,23 @@ function Inner() {
       }))
       .sort((a, b) => b.score - a.score || a.index - b.index)
       .map((entry) => entry.connection);
+  const managedCatalogProviderForCurrentSource = (): string | undefined =>
+    selectedCatalogEntry()?.provider ??
+    storeListingForCurrentSource()?.provider;
+  const rowCanUseManagedProviderFallback = (row: ProviderConnectionRow) => {
+    const managedProvider = managedCatalogProviderForCurrentSource();
+    return (
+      managedProvider !== undefined &&
+      providerTail(managedProvider) === providerTail(row.provider) &&
+      providerTail(row.provider) === "cloudflare"
+    );
+  };
+  const hasManagedCloudflareProviderFallback = () =>
+    providerRows().some(rowCanUseManagedProviderFallback);
   const rowHasManagedProviderDefault = (row: ProviderConnectionRow) => {
-    const listing = storeListingForCurrentSource();
-    if (!listing) return false;
-    if (providerTail(listing.provider) !== providerTail(row.provider)) {
+    const managedProvider = managedCatalogProviderForCurrentSource();
+    if (!managedProvider) return false;
+    if (providerTail(managedProvider) !== providerTail(row.provider)) {
       return false;
     }
     const best = providerConnectionsForRow(row)[0];
@@ -1677,6 +1693,7 @@ function Inner() {
   };
   const providerNeedsConnection = (row: ProviderConnectionRow) =>
     providerRequiresConnection(row.provider) &&
+    !rowCanUseManagedProviderFallback(row) &&
     providerConnectionsForProvider(row.provider).length === 0;
   const needsCloudCredential = () =>
     compatibility() !== null && providerRows().some(providerNeedsConnection);
@@ -1778,6 +1795,7 @@ function Inner() {
     for (const row of providerRows()) {
       const candidates = providerConnectionsForProvider(row.provider);
       if (!row.connectionId.trim()) {
+        if (rowCanUseManagedProviderFallback(row)) continue;
         return t("new.providers.errorConnection", {
           provider: row.provider,
         });
@@ -1796,6 +1814,7 @@ function Inner() {
   const providerConnectionsPayload = (): CapsuleProviderConnectionBindings =>
     providerRows()
       .filter((row) => providerRequiresConnection(row.provider))
+      .filter((row) => row.connectionId.trim())
       .map((row) => ({
         provider: row.provider,
         ...(row.alias ? { alias: row.alias } : {}),
