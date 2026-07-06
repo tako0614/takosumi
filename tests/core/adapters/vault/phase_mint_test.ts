@@ -14,6 +14,9 @@ function makeVault(
     fetch?: typeof fetch;
     store?: InMemoryOpenTofuDeploymentStore;
     now?: () => Date;
+    managedProviderCredentialIssuer?: ConstructorParameters<
+      typeof StaticSecretConnectionVault
+    >[0]["managedProviderCredentialIssuer"];
   } = {},
 ) {
   const store = overrides.store ?? new InMemoryOpenTofuDeploymentStore();
@@ -26,6 +29,12 @@ function makeVault(
     now: overrides.now ?? (() => new Date("2026-06-04T00:00:00.000Z")),
     newId: () => `conn_test${(counter += 1).toString().padStart(12, "0")}`,
     fetch: overrides.fetch as never,
+    ...(overrides.managedProviderCredentialIssuer
+      ? {
+          managedProviderCredentialIssuer:
+            overrides.managedProviderCredentialIssuer,
+        }
+      : {}),
   });
   return { store, vault };
 }
@@ -840,6 +849,80 @@ test("mintForInstallationProviderEnvBindings mints an operator connection from a
   expect(bundle.env).toEqual({
     TF_VAR_cloudflare_zone_api_token: "operator-cf-token",
   });
+});
+
+test("mintForInstallationProviderEnvBindings uses managed-provider issuer before stored operator material", async () => {
+  const calls: {
+    readonly workspaceId: string;
+    readonly installationId?: string;
+    readonly connectionId: string;
+    readonly delivery: string;
+  }[] = [];
+  const { store, vault } = makeVault({
+    managedProviderCredentialIssuer: async (request) => {
+      calls.push({
+        workspaceId: request.workspaceId,
+        ...(request.installationId
+          ? { installationId: request.installationId }
+          : {}),
+        connectionId: request.connection.id,
+        delivery: request.delivery,
+      });
+      return {
+        values: { CLOUDFLARE_API_TOKEN: "takmpt_run_scoped" },
+        issuer: "takosumi_managed_provider_token",
+        temporary: true,
+        expiresAt: "2026-06-04T00:15:00.000Z",
+        ttlSeconds: 900,
+        secretValueStored: false,
+      };
+    },
+  });
+  const operatorConn = await markVerified(
+    store,
+    await vault.register({
+      provider: "cloudflare",
+      authMethod: "static_secret",
+      values: { CLOUDFLARE_API_TOKEN: "operator-static-token" },
+      scopeHints: {
+        managedProvider: true,
+        providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      },
+    }),
+  );
+
+  const bundle = await vault.mintForInstallationProviderEnvBindings(
+    "space_other",
+    [{ provider: "cloudflare", alias: "zone", connectionId: operatorConn.id }],
+    { installationId: "inst_1234567890abcdef" },
+  );
+
+  expect(bundle.env).toEqual({
+    TF_VAR_cloudflare_zone_api_token: "takmpt_run_scoped",
+  });
+  expect(calls).toEqual([
+    {
+      workspaceId: "space_other",
+      installationId: "inst_1234567890abcdef",
+      connectionId: operatorConn.id,
+      delivery: "generated_root_variable",
+    },
+  ]);
+  expect(bundle.providerCredentialEvidence).toEqual([
+    {
+      providerEnvId: operatorConn.id,
+      connectionId: operatorConn.id,
+      provider: "cloudflare",
+      delivery: "generated_root_variable",
+      rootOnly: true,
+      temporary: true,
+      ttlEnforced: true,
+      expiresAt: "2026-06-04T00:15:00.000Z",
+      ttlSeconds: 900,
+      issuer: "takosumi_managed_provider_token",
+      secretValueStored: false,
+    },
+  ]);
 });
 
 test("mintForInstallationProviderEnvBindings contributes no TF_VAR for a provider without an arg mapping", async () => {

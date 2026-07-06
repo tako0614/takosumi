@@ -15,13 +15,19 @@ import { LocalOperatorConfig } from "../../core/adapters/operator-config/mod.ts"
 import { NoopProviderMaterializer } from "../../core/adapters/provider/mod.ts";
 import { MemoryQueueAdapter } from "../../core/adapters/queue/mod.ts";
 import { MemoryEncryptedSecretStore } from "../../core/adapters/secret-store/mod.ts";
-import { selectSecretBoundaryCrypto } from "../../core/adapters/secret-store/memory.ts";
+import {
+  selectSecretBoundaryCrypto,
+  type SecretBoundaryCrypto,
+} from "../../core/adapters/secret-store/memory.ts";
+import { StaticSecretConnectionVault } from "../../core/adapters/vault/mod.ts";
+import type { ManagedProviderCredentialIssuer } from "../../core/adapters/vault/mod.ts";
 import { ImmutableSourceAdapter } from "../../core/adapters/source/mod.ts";
 import { InMemoryObservabilitySink } from "../../core/domains/observability/mod.ts";
 import type {
   EnqueueRun,
   ReleaseActivator,
 } from "../../core/domains/deploy-control/mod.ts";
+import type { OpenTofuDeploymentStore } from "../../core/domains/deploy-control/store.ts";
 import type { EnqueueSourceSync } from "../../core/domains/sources/mod.ts";
 import type { InstallationCoordination } from "../../core/domains/deploy-control/installation_lease.ts";
 import type { RunnerProfile } from "@takosumi/internal/deploy-control-api";
@@ -71,12 +77,20 @@ import {
   type TakosumiOperatorCapabilities,
   type TakosumiResourceCapabilities,
 } from "takosumi-contract/capabilities";
+import { providerCredentialArgs } from "takosumi-contract/provider-env-rules";
+import {
+  createManagedProviderRunToken,
+  managedProviderRunTokenSecret,
+} from "../../core/shared/managed_provider_tokens.ts";
 
 const RESOURCE_SHAPE_RUN_WAIT_TIMEOUT_MS = 300_000;
 const RESOURCE_SHAPE_DELETE_TIMEOUT_MS =
   RESOURCE_SHAPE_RUN_WAIT_TIMEOUT_MS * 2 + 60_000;
 const RESOURCE_SHAPE_ADAPTER_PLUGIN_HANDLERS_ENV =
   "TAKOSUMI_RESOURCE_ADAPTER_PLUGIN_HANDLERS";
+const CLOUD_MANAGED_CLOUDFLARE_COMPAT_CONNECTION_ID =
+  "conn_operator_takosumi_cloud_cloudflare_compat";
+const CLOUD_MANAGED_CLOUDFLARE_COMPAT_PROFILE = "compat.cloudflare.workers.v1";
 
 export async function createWorkerServiceApp(
   env: CloudflareWorkerEnv,
@@ -122,6 +136,19 @@ export async function createWorkerServiceApp(
   // run — the previously-missing wiring that broke provider plan/apply in the
   // deployed worker.
   const secretCrypto = selectSecretBoundaryCrypto({ env: runtimeEnv });
+  const providerBaseUrlAllowlist = parseProviderBaseUrlAllowlist(
+    env.TAKOSUMI_RESOURCE_PROVIDER_BASE_URL_ALLOWLIST,
+  );
+  const allowOperatorBackedProviderEnvs = envFlag(
+    env.TAKOSUMI_ALLOW_OPERATOR_BACKED_PROVIDER_ENVS,
+  );
+  await seedCloudManagedProviderConnections({
+    env,
+    store: opentofuDeploymentStore,
+    secretCrypto,
+    providerBaseUrlAllowlist,
+    allowOperatorBackedProviderEnvs,
+  });
   // Control backups (spec §33 / §26): seal the bundle with the at-rest crypto
   // and write to R2_BACKUPS. Absent binding -> backups stay disabled (501).
   const backupArtifactStore = backupArtifactStoreFromEnv(
@@ -151,6 +178,8 @@ export async function createWorkerServiceApp(
   const officialCatalogSource = officialCatalogSourceFromEnv(env);
   const resourceShapeCapabilities = resourceShapeCapabilitiesFromEnv(env);
   const operatorCapabilities = operatorCapabilitiesFromEnv(env);
+  const managedProviderCredentialIssuer =
+    managedProviderCredentialIssuerFromEnv(env);
   return await createTakosumiService({
     role,
     runtimeEnv,
@@ -160,9 +189,7 @@ export async function createWorkerServiceApp(
     takosumiRevokeDebtStore: deployStores.revokeDebtStore,
     opentofuDeploymentStore,
     resourceShapeStores: createD1ResourceShapeStores(env.TAKOSUMI_CONTROL_DB),
-    resourceShapeAllowedProviderBaseUrls: parseProviderBaseUrlAllowlist(
-      env.TAKOSUMI_RESOURCE_PROVIDER_BASE_URL_ALLOWLIST,
-    ),
+    resourceShapeAllowedProviderBaseUrls: providerBaseUrlAllowlist,
     resourceShapeAdapterFactory: ({ controller, capsules }) => {
       const adapter = new OpentofuResourceShapeAdapter(
         new ControllerOpentofuRunPort({
@@ -185,7 +212,11 @@ export async function createWorkerServiceApp(
     ...(officialCatalogSource ? { officialCatalogSource } : {}),
     opentofuRunner,
     providerEnvRunner: opentofuRunner,
+    allowOperatorBackedProviderEnvs,
     secretCrypto,
+    ...(managedProviderCredentialIssuer
+      ? { managedProviderCredentialIssuer }
+      : {}),
     // Async run lifecycle: when the run queue is bound, the create path persists
     // the run `queued` and returns immediately; the `queue()` consumer in this
     // same worker drives execution. Without the binding, the controller's
@@ -217,6 +248,43 @@ export async function createWorkerServiceApp(
     ...(dependencyValueSealer ? { dependencyValueSealer } : {}),
     ...(releaseActivator ? { releaseActivator } : {}),
   });
+}
+
+function managedProviderCredentialIssuerFromEnv(
+  env: CloudflareWorkerEnv,
+): ManagedProviderCredentialIssuer | undefined {
+  const secret = managedProviderRunTokenSecret(env);
+  if (!secret) return undefined;
+  return async (request) => {
+    const { workspaceId, connection, phase } = request;
+    if (connection.scopeHints?.managedProvider !== true) return undefined;
+    const providerBaseUrl = connection.scopeHints.providerBaseUrl?.trim();
+    if (!providerBaseUrl) return undefined;
+    const tokenArg = providerCredentialArgs(connection.provider).find(
+      (arg) => arg.arg === "api_token" || arg.envName.endsWith("_API_TOKEN"),
+    );
+    if (!tokenArg) return undefined;
+    const issued = await createManagedProviderRunToken({
+      secret,
+      workspaceId,
+      ...(request.installationId
+        ? { installationId: request.installationId }
+        : {}),
+      connectionId: connection.id,
+      provider: connection.provider,
+      providerBaseUrl,
+      ...(phase ? { phase } : {}),
+      scopes: ["write"],
+    });
+    return {
+      values: { [tokenArg.envName]: issued.token },
+      issuer: "takosumi_managed_provider_token",
+      temporary: true,
+      expiresAt: issued.expiresAt,
+      ttlSeconds: issued.ttlSeconds,
+      secretValueStored: false,
+    };
+  };
 }
 
 function resourceShapeActorFromRequest(request: Request): ActorContext {
@@ -440,6 +508,74 @@ function parseProviderBaseUrlAllowlist(value: unknown): readonly string[] {
     }
   }
   return out;
+}
+
+function envFlag(value: unknown): boolean {
+  if (typeof value === "boolean") return value;
+  if (typeof value !== "string") return false;
+  const normalized = value.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes";
+}
+
+async function seedCloudManagedProviderConnections(input: {
+  readonly env: CloudflareWorkerEnv;
+  readonly store: OpenTofuDeploymentStore;
+  readonly secretCrypto: SecretBoundaryCrypto;
+  readonly providerBaseUrlAllowlist: readonly string[];
+  readonly allowOperatorBackedProviderEnvs: boolean;
+}): Promise<void> {
+  if (!input.allowOperatorBackedProviderEnvs) return;
+  const apiToken =
+    stringEnvValue(input.env.TAKOSUMI_CLOUDFLARE_API_TOKEN) ??
+    stringEnvValue(input.env.CLOUDFLARE_API_TOKEN);
+  if (!apiToken) return;
+
+  const providerBaseUrl = input.providerBaseUrlAllowlist.find((url) =>
+    url.includes("/compat/cloudflare/client/v4"),
+  );
+  if (!providerBaseUrl) return;
+
+  const virtualAccountId =
+    stringEnvValue(input.env.TAKOSUMI_CLOUDFLARE_VIRTUAL_ACCOUNT_ID) ??
+    "ts_acc_takosumi_cloud";
+  const virtualZoneId = stringEnvValue(
+    input.env.TAKOSUMI_CLOUDFLARE_VIRTUAL_ZONE_ID,
+  );
+  const now = new Date();
+  const seedVault = new StaticSecretConnectionVault({
+    store: input.store,
+    crypto: input.secretCrypto,
+    now: () => now,
+    newId: () => CLOUD_MANAGED_CLOUDFLARE_COMPAT_CONNECTION_ID,
+  });
+  const connection = await seedVault.register({
+    provider: "cloudflare",
+    kind: "cloudflare_api_token",
+    scope: "operator",
+    displayName: "Takosumi Cloud",
+    materialization: "secret",
+    scopeHints: {
+      accountId: virtualAccountId,
+      ...(virtualZoneId ? { zoneId: virtualZoneId } : {}),
+      managedProvider: true,
+      managedProviderProfile: CLOUD_MANAGED_CLOUDFLARE_COMPAT_PROFILE,
+      providerBaseUrl,
+    },
+    values: { CLOUDFLARE_API_TOKEN: apiToken },
+  });
+  const nowIso = now.toISOString();
+  await input.store.putConnection({
+    ...connection,
+    status: "verified",
+    verifiedAt: connection.verifiedAt ?? nowIso,
+    updatedAt: nowIso,
+  });
+}
+
+function stringEnvValue(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 /**

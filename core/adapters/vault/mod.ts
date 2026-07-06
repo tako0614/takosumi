@@ -128,6 +128,30 @@ export class CredentialBundle {
 
 export type RegisterConnectionInput = CreateConnectionRequest;
 
+export interface ManagedProviderCredentialIssueRequest {
+  readonly workspaceId: string;
+  readonly installationId?: string;
+  readonly connection: Connection;
+  readonly phase?: MintPhase;
+  readonly delivery: ProviderCredentialMintEvidence["delivery"];
+}
+
+export interface ManagedProviderCredentialIssueResult {
+  readonly values: Readonly<Record<string, string>>;
+  readonly issuer: NonNullable<ProviderCredentialMintEvidence["issuer"]>;
+  readonly temporary: boolean;
+  readonly expiresAt?: string;
+  readonly ttlSeconds?: number;
+  readonly secretValueStored?: false;
+}
+
+export type ManagedProviderCredentialIssuer = (
+  request: ManagedProviderCredentialIssueRequest,
+) =>
+  | ManagedProviderCredentialIssueResult
+  | undefined
+  | Promise<ManagedProviderCredentialIssueResult | undefined>;
+
 function workspaceIdForConnectionInput(
   input: RegisterConnectionInput,
 ): string | undefined {
@@ -216,6 +240,7 @@ export type InstallationProviderEnvBindingDelivery =
 
 export interface InstallationProviderEnvBindingMintOptions {
   readonly phase?: MintPhase;
+  readonly installationId?: string;
   /**
    * `generated_root_variable` is the normal OpenTofu plan/apply path: provider
    * credentials become TF_VAR_<provider>_<alias>_<arg> so only the generated
@@ -363,6 +388,7 @@ export interface StaticSecretConnectionVaultDependencies {
   readonly fetch?: VaultFetch;
   readonly now?: () => Date;
   readonly newId?: () => string;
+  readonly managedProviderCredentialIssuer?: ManagedProviderCredentialIssuer;
 }
 
 export class StaticSecretConnectionVault implements ConnectionVault {
@@ -371,6 +397,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
   readonly #fetch: VaultFetch;
   readonly #now: () => Date;
   readonly #newId: () => string;
+  readonly #managedProviderCredentialIssuer?: ManagedProviderCredentialIssuer;
 
   constructor(deps: StaticSecretConnectionVaultDependencies) {
     this.#store = deps.store;
@@ -378,6 +405,8 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     this.#fetch = deps.fetch ?? ((input, init) => fetch(input, init));
     this.#now = deps.now ?? (() => new Date());
     this.#newId = deps.newId ?? defaultConnectionId;
+    this.#managedProviderCredentialIssuer =
+      deps.managedProviderCredentialIssuer;
   }
 
   async register(input: RegisterConnectionInput): Promise<Connection> {
@@ -850,7 +879,14 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         continue;
       }
       if (delivery === "provider_env") {
-        const minted = await this.#mintProviderValues(connection, delivery);
+        const minted =
+          (await this.#mintManagedProviderValues(spaceId, connection, {
+            phase,
+            delivery,
+            ...(options?.installationId
+              ? { installationId: options.installationId }
+              : {}),
+          })) ?? (await this.#mintProviderValues(connection, delivery));
         evidence.push(minted.evidence);
         mergeCredentialEnv(env, minted.values, entry);
         continue;
@@ -862,10 +898,15 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         // connection was the generic-env carrier handled above.
         continue;
       }
-      const minted = await this.#mintProviderValues(
-        connection,
-        "generated_root_variable",
-      );
+      const minted =
+        (await this.#mintManagedProviderValues(spaceId, connection, {
+          phase,
+          delivery: "generated_root_variable",
+          ...(options?.installationId
+            ? { installationId: options.installationId }
+            : {}),
+        })) ??
+        (await this.#mintProviderValues(connection, "generated_root_variable"));
       evidence.push(minted.evidence);
       const localProvider = providerLocalName(connection.provider);
       for (const { envName, arg } of argMap) {
@@ -918,6 +959,48 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     } catch (error) {
       throw wrapDriverError(error);
     }
+  }
+
+  async #mintManagedProviderValues(
+    workspaceId: string,
+    connection: Connection,
+    options: {
+      readonly installationId?: string;
+      readonly phase?: MintPhase;
+      readonly delivery: ProviderCredentialMintEvidence["delivery"];
+    },
+  ): Promise<MintedProviderValues | undefined> {
+    if (connection.scopeHints?.managedProvider !== true) return undefined;
+    const issuer = this.#managedProviderCredentialIssuer;
+    if (!issuer) return undefined;
+    const issued = await issuer({
+      workspaceId,
+      ...(options.installationId ? { installationId: options.installationId } : {}),
+      connection,
+      delivery: options.delivery,
+      ...(options.phase ? { phase: options.phase } : {}),
+    });
+    if (!issued) return undefined;
+    return {
+      values: issued.values,
+      evidence: {
+        providerEnvId: connection.id,
+        connectionId: connection.id,
+        provider: connection.provider,
+        delivery: options.delivery,
+        rootOnly: options.delivery === "generated_root_variable",
+        temporary: issued.temporary,
+        ttlEnforced: issued.ttlSeconds !== undefined && issued.ttlSeconds > 0,
+        ...(issued.expiresAt ? { expiresAt: issued.expiresAt } : {}),
+        ...(issued.ttlSeconds !== undefined && issued.ttlSeconds > 0
+          ? { ttlSeconds: issued.ttlSeconds }
+          : {}),
+        issuer: issued.issuer,
+        ...(issued.secretValueStored === false
+          ? { secretValueStored: false }
+          : {}),
+      },
+    };
   }
 
   /**
@@ -1371,6 +1454,9 @@ function normalizeScope(
     accountId?: string;
     zoneId?: string;
     workersSubdomain?: string;
+    managedProvider?: boolean;
+    providerBaseUrl?: string;
+    managedProviderProfile?: string;
     cloudflareTokenVending?: ConnectionScopeHints["cloudflareTokenVending"];
     username?: string;
     knownHostsEntry?: string;
@@ -1392,6 +1478,21 @@ function normalizeScope(
     scope.workersSubdomain.length > 0
   ) {
     out.workersSubdomain = scope.workersSubdomain;
+  }
+  if (scope.managedProvider === true) {
+    out.managedProvider = true;
+  }
+  if (
+    typeof scope.providerBaseUrl === "string" &&
+    scope.providerBaseUrl.length > 0
+  ) {
+    out.providerBaseUrl = scope.providerBaseUrl;
+  }
+  if (
+    typeof scope.managedProviderProfile === "string" &&
+    scope.managedProviderProfile.length > 0
+  ) {
+    out.managedProviderProfile = scope.managedProviderProfile;
   }
   const cloudflareTokenVending = normalizeCloudflareTokenVending(
     scope.cloudflareTokenVending,
