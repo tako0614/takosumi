@@ -7,6 +7,7 @@ import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import {
+  isProviderEnvName,
   isReservedProviderEnvName,
   PROVIDER_CREDENTIAL_ENV_RULES,
 } from "../contract/provider-env-rules.ts";
@@ -33,6 +34,9 @@ interface ReleaseActivationPayload {
   readonly sourceSnapshot: {
     readonly archiveObjectKey: string;
     readonly archiveDigest: string;
+  };
+  readonly credentials?: {
+    readonly env: Readonly<Record<string, string>>;
   };
   readonly nonSensitiveOutputs?: Readonly<Record<string, unknown>>;
   readonly commands: readonly ReleaseActivationCommand[];
@@ -218,6 +222,7 @@ export function parsePayload(raw: unknown): ReleaseActivationPayload {
   assertSafeArchiveObjectKey(archiveObjectKey);
   assertSha256Digest(archiveDigest, "sourceSnapshot.archiveDigest");
   const commands = parseCommands(value.commands);
+  const payloadCredentials = parsePayloadCredentials(value.credentials);
   return {
     kind: RELEASE_ACTIVATION_KIND,
     ...(typeof value.planRunId === "string"
@@ -235,8 +240,35 @@ export function parsePayload(raw: unknown): ReleaseActivationPayload {
     ...(isRecord(value.nonSensitiveOutputs)
       ? { nonSensitiveOutputs: value.nonSensitiveOutputs }
       : {}),
+    ...(payloadCredentials ? { credentials: payloadCredentials } : {}),
     commands,
   };
+}
+
+function parsePayloadCredentials(
+  raw: unknown,
+): ReleaseActivationPayload["credentials"] | undefined {
+  if (!isRecord(raw)) return undefined;
+  const rawEnv = isRecord(raw.env) ? raw.env : undefined;
+  if (!rawEnv) return undefined;
+  const env: Record<string, string> = {};
+  for (const [name, value] of Object.entries(rawEnv)) {
+    if (!isAllowedPayloadCredentialEnvName(name)) {
+      throw new Error(`release activation credential env is not allowed: ${name}`);
+    }
+    if (typeof value !== "string" || !value || /[\0\r\n]/u.test(value)) {
+      throw new Error(`release activation credential env is invalid: ${name}`);
+    }
+    env[name] = value;
+  }
+  return Object.keys(env).length > 0 ? { env } : undefined;
+}
+
+function isAllowedPayloadCredentialEnvName(name: string): boolean {
+  return (
+    PROVIDER_CREDENTIAL_ENV_NAMES.has(name) ||
+    (isProviderEnvName(name) && !isReservedProviderEnvName(name))
+  );
 }
 
 function parseCommands(raw: unknown): readonly ReleaseActivationCommand[] {
@@ -422,9 +454,13 @@ function runReleaseCommand(
     parentEnv,
     commandEnvAllowlist,
   );
+  const credentialEnv = payload.credentials?.env ?? {};
+  assertNoCommandCredentialEnvOverlap(command.env ?? {}, credentialEnv);
   const env = {
     ...materializerBaseEnv(parentEnv),
     ...explicitOperatorEnv,
+    ...(command.env ?? {}),
+    ...credentialEnv,
     TAKOSUMI_RELEASE_RUN_ID: releaseRunId,
     TAKOSUMI_APPLY_RUN_ID: payload.applyRunId,
     ...(payload.installation?.id
@@ -444,12 +480,11 @@ function runReleaseCommand(
       ...(payload.deployment ? { deployment: payload.deployment } : {}),
       outputs,
     }),
-    ...(command.env ?? {}),
     ...materializerRuntimeEnv(runtimeRoot),
   };
   assertNoUnexpectedCredentialEnv(
     env,
-    new Set(Object.keys(explicitOperatorEnv)),
+    new Set([...Object.keys(explicitOperatorEnv), ...Object.keys(credentialEnv)]),
   );
   const [cmd, ...args] = command.command;
   const result = spawnSync(cmd!, args, {
@@ -459,8 +494,12 @@ function runReleaseCommand(
     maxBuffer: 128 * 1024 * 1024,
   });
   if (result.error || result.status !== 0) {
-    const stdoutTail = tailText(result.stdout);
-    const stderrTail = tailText(result.stderr);
+    const stdoutTail = tailText(
+      redactReleaseCommandOutput(result.stdout, credentialEnv),
+    );
+    const stderrTail = tailText(
+      redactReleaseCommandOutput(result.stderr, credentialEnv),
+    );
     throw new Error(
       [
         `release command failed (${result.status ?? "unknown"}): ${command.id}`,
@@ -474,9 +513,36 @@ function runReleaseCommand(
   }
 }
 
+function assertNoCommandCredentialEnvOverlap(
+  commandEnv: Readonly<Record<string, string>>,
+  credentialEnv: Readonly<Record<string, string>>,
+): void {
+  for (const name of Object.keys(commandEnv)) {
+    if (Object.prototype.hasOwnProperty.call(credentialEnv, name)) {
+      throw new Error(`release command env must not override credential ${name}`);
+    }
+  }
+}
+
 function tailText(value: string | null | undefined, limit = 16 * 1024): string {
   if (!value) return "";
   return value.length <= limit ? value : value.slice(value.length - limit);
+}
+
+function redactReleaseCommandOutput(
+  value: string | null | undefined,
+  credentialEnv: Readonly<Record<string, string>>,
+): string {
+  let out = value ?? "";
+  for (const secret of Object.values(credentialEnv)) {
+    if (secret.length < 6) continue;
+    out = out.replace(new RegExp(escapeRegExp(secret), "g"), "[REDACTED]");
+  }
+  return out;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function materializerBaseEnv(

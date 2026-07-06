@@ -100,11 +100,11 @@ describe("store link handoff", () => {
     const params = new URLSearchParams(buildNewQuery(yurucommu!));
 
     expect(params.get("git")).toBe("https://github.com/tako0614/yurucommu.git");
-    expect(params.get("ref")).toBe("5bace37eac259d1aa1b313b3ded31c03c518c1b8");
+    expect(params.get("ref")).toBe("1fe727f1843c0c4a91fece16cbc73950225e078d");
     expect(params.get("varjson.enable_cloudflare_resources")).toBe("true");
     expect(params.get("varjson.enable_cloudflare_worker_script")).toBe("true");
     expect(params.get("var.worker_bundle_url")).toBe(
-      "https://github.com/tako0614/yurucommu/releases/download/v2.0.0/takos-worker.js",
+      "https://github.com/tako0614/yurucommu-core/releases/download/v2.0.0/takos-worker.js",
     );
     expect(params.get("var.worker_bundle_sha256")).toBe(
       "5a5713b2cc548414951c51a469b32bdba756d2101933575d0ab230131eaa8c95",
@@ -119,7 +119,7 @@ describe("store link handoff", () => {
     const params = new URLSearchParams(buildNewQuery(takos!));
 
     expect(params.get("git")).toBe("https://github.com/tako0614/takos.git");
-    expect(params.get("ref")).toBe("a4d0375aee7cb7466db6f5d4512ef65eda16e8b9");
+    expect(params.get("ref")).toBe("8157ba6cfe8036fbcf5c7ac4cad718c47ce111b8");
     const rawImages = params.get("varjson.release_container_images");
     expect(rawImages).toBeTruthy();
     const images = JSON.parse(rawImages!);

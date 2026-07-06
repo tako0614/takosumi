@@ -249,6 +249,163 @@ test("operator release activator forwards only explicitly allowlisted operator e
   }
 });
 
+test("operator release activator forwards payload provider credentials", async () => {
+  const tempDir = await mkdtemp(
+    join(tmpdir(), "takosumi-operator-release-prov-"),
+  );
+  try {
+    const sourceDir = join(tempDir, "src");
+    const archivePath = join(tempDir, "source.tar.zst");
+    const resultPath = join(tempDir, "activation-result.txt");
+    await mkdir(sourceDir, { recursive: true });
+    await writeFile(join(sourceDir, "app.txt"), "plain source\n");
+    createArchive(sourceDir, archivePath);
+    const digest = await sha256File(archivePath);
+
+    const result = await runReleaseActivation(
+      {
+        ...validPayload({
+          command: [
+            process.execPath,
+            "-e",
+            [
+              `await Bun.write(Bun.env.ACTIVATION_RESULT_FILE, [Bun.env.CLOUDFLARE_API_TOKEN ?? "missing", Bun.env.CLOUDFLARE_ACCOUNT_ID ?? "missing", Bun.env.TAKOSUMI_APPLY_RUN_ID].join(":"))`,
+            ].join(";"),
+          ],
+          env: { ACTIVATION_RESULT_FILE: resultPath },
+        }),
+        credentials: {
+          env: {
+            CLOUDFLARE_API_TOKEN: "payload-token",
+            CLOUDFLARE_ACCOUNT_ID: "ts_acc_takosumi_cloud",
+          },
+        },
+        sourceSnapshot: {
+          archiveObjectKey:
+            "spaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
+          archiveDigest: digest,
+        },
+      },
+      {
+        commandEnv: {
+          PATH: process.env.PATH,
+          CLOUDFLARE_API_TOKEN: "operator-token-must-not-win",
+        },
+        downloadArchive: async (_payload, targetPath) => {
+          await writeFile(targetPath, await readFile(archivePath));
+        },
+        workRoot: join(tempDir, "work"),
+      },
+    );
+
+    expect(result.status).toBe("succeeded");
+    await expect(readFile(resultPath, "utf8")).resolves.toBe(
+      "payload-token:ts_acc_takosumi_cloud:run_apply_1",
+    );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("operator release activator rejects command env that overrides payload credentials", async () => {
+  const tempDir = await mkdtemp(
+    join(tmpdir(), "takosumi-operator-release-env-overlap-"),
+  );
+  try {
+    const sourceDir = join(tempDir, "src");
+    const archivePath = join(tempDir, "source.tar.zst");
+    await mkdir(sourceDir, { recursive: true });
+    await writeFile(join(sourceDir, "app.txt"), "plain source\n");
+    createArchive(sourceDir, archivePath);
+    const digest = await sha256File(archivePath);
+
+    await expect(
+      runReleaseActivation(
+        {
+          ...validPayload({
+            env: {
+              CUSTOM_ENDPOINT: "https://from-command.example.test",
+            },
+          }),
+          credentials: {
+            env: {
+              CUSTOM_ENDPOINT: "https://from-credential.example.test",
+            },
+          },
+          sourceSnapshot: {
+            archiveObjectKey:
+              "spaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
+            archiveDigest: digest,
+          },
+        },
+        {
+          commandEnv: { PATH: process.env.PATH },
+          downloadArchive: async (_payload, targetPath) => {
+            await writeFile(targetPath, await readFile(archivePath));
+          },
+          workRoot: join(tempDir, "work"),
+        },
+      ),
+    ).rejects.toThrow(
+      "release command env must not override credential CUSTOM_ENDPOINT",
+    );
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test("operator release activator redacts payload provider credentials on failure", async () => {
+  const tempDir = await mkdtemp(
+    join(tmpdir(), "takosumi-operator-release-redaction-"),
+  );
+  try {
+    const sourceDir = join(tempDir, "src");
+    const archivePath = join(tempDir, "source.tar.zst");
+    await mkdir(sourceDir, { recursive: true });
+    await writeFile(join(sourceDir, "app.txt"), "plain source\n");
+    createArchive(sourceDir, archivePath);
+    const digest = await sha256File(archivePath);
+    const payloadToken = "payload-token-to-redact";
+
+    await expect(
+      runReleaseActivation(
+        {
+          ...validPayload({
+            command: [
+              process.execPath,
+              "-e",
+              [
+                `console.log("stdout " + Bun.env.CLOUDFLARE_API_TOKEN)`,
+                `console.error("stderr " + Bun.env.CLOUDFLARE_API_TOKEN)`,
+                `process.exit(1)`,
+              ].join(";"),
+            ],
+          }),
+          credentials: {
+            env: {
+              CLOUDFLARE_API_TOKEN: payloadToken,
+            },
+          },
+          sourceSnapshot: {
+            archiveObjectKey:
+              "spaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
+            archiveDigest: digest,
+          },
+        },
+        {
+          commandEnv: { PATH: process.env.PATH },
+          downloadArchive: async (_payload, targetPath) => {
+            await writeFile(targetPath, await readFile(archivePath));
+          },
+          workRoot: join(tempDir, "work"),
+        },
+      ),
+    ).rejects.toThrow("stdout [REDACTED]");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 test("operator release activator pins temporary and Bun cache dirs to the job workdir", async () => {
   const tempDir = await mkdtemp(
     join(tmpdir(), "takosumi-operator-release-runtime-"),
