@@ -3644,6 +3644,75 @@ test("POST /api/v1/workspaces/:id/capsules carries store catalog metadata into t
   expect(createCall.installConfigId).toEqual(config.id);
 });
 
+test("POST /api/v1/workspaces/:id/capsules auto-provisions Takosumi Accounts OIDC for yurucommu", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const { request: req, url } = request(
+    "POST",
+    "/api/v1/workspaces/space_a/capsules",
+    {
+      cookie,
+      body: {
+        name: "yurucommu",
+        environment: "production",
+        sourceId: "src_x",
+        installConfigId: "cfg_x",
+        vars: {
+          project_name: "yurucommu-space-a",
+          app_url: "https://community.example.test",
+        },
+        catalog: {
+          templateId: "yurucommu",
+          source: {
+            git: "https://github.com/tako0614/yurucommu.git",
+            ref: "1fe727f1843c0c4a91fece16cbc73950225e078d",
+            path: ".",
+          },
+          order: 1000,
+          surface: "service",
+          kind: "worker",
+          provider: "cloudflare",
+          suggestedName: "yurucommu",
+          badge: { ja: "追加候補", en: "Installable" },
+          name: { ja: "yurucommu", en: "yurucommu" },
+          description: {
+            ja: "コミュニティを公開",
+            en: "Host a community",
+          },
+          inputs: [],
+        },
+      },
+    },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+    issuer: ORIGIN,
+  });
+
+  expect(response?.status).toEqual(201);
+  const oidcClient = await store.findOidcClientForCapsule("inst_new");
+  expect(oidcClient?.issuerUrl).toEqual(ORIGIN);
+  expect(oidcClient?.redirectUris).toEqual([
+    "https://community.example.test/api/auth/callback/takos",
+  ]);
+  expect(oidcClient?.tokenEndpointAuthMethod).toEqual("none");
+  const config = operations.calls.putInstallConfig?.[0] as {
+    variableMapping: Record<string, unknown>;
+  };
+  expect(config.variableMapping.project_name).toEqual("yurucommu-space-a");
+  expect(config.variableMapping.app_url).toEqual(
+    "https://community.example.test",
+  );
+  expect(config.variableMapping.takosumi_accounts_issuer_url).toEqual(ORIGIN);
+  expect(config.variableMapping.takosumi_accounts_client_id).toEqual(
+    oidcClient?.clientId,
+  );
+});
+
 test("POST /api/v1/workspaces/:id/capsules stores modulePath in a scoped InstallConfig", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);

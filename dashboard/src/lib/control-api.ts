@@ -449,10 +449,13 @@ export interface InstallConfig {
     readonly badge: { readonly ja: string; readonly en: string };
     readonly name: { readonly ja: string; readonly en: string };
     readonly description: { readonly ja: string; readonly en: string };
+    readonly iconUrl?: string;
     readonly inputs: readonly {
       readonly name: string;
       readonly type?: "string" | "number" | "boolean" | "json";
       readonly required?: boolean;
+      readonly advanced?: boolean;
+      readonly secret?: boolean;
       readonly defaultValue?: string;
       readonly label: { readonly ja: string; readonly en: string };
       readonly helper?: { readonly ja: string; readonly en: string };
@@ -1786,6 +1789,42 @@ async function getRunWithOptions(
 
 export async function getRun(id: string): Promise<Run> {
   return await getRunWithOptions(id);
+}
+
+/**
+ * Subscribe to a run's status over SSE (`GET /runs/:id/stream`). The server
+ * pushes the run on every change and closes at a terminal status, so the run
+ * screen updates in real time instead of polling. Same-origin cookie auth
+ * (EventSource sends credentials). Returns a disposer; falls back via `onError`
+ * when EventSource is unavailable or the stream drops.
+ */
+export function openRunStream(
+  id: string,
+  handlers: {
+    readonly onRun: (run: Run) => void;
+    readonly onOpen?: () => void;
+    readonly onError?: () => void;
+  },
+): () => void {
+  if (typeof EventSource === "undefined") {
+    handlers.onError?.();
+    return () => {};
+  }
+  const source = new EventSource(
+    `${BASE}/runs/${encodeURIComponent(id)}/stream`,
+    { withCredentials: true },
+  );
+  source.onopen = () => handlers.onOpen?.();
+  source.onmessage = (event) => {
+    try {
+      const data = JSON.parse(event.data) as { run?: Run };
+      if (data?.run) handlers.onRun(data.run);
+    } catch {
+      /* ignore a malformed frame */
+    }
+  };
+  source.onerror = () => handlers.onError?.();
+  return () => source.close();
 }
 
 export async function approveRun(

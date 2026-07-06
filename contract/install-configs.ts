@@ -171,6 +171,8 @@ export interface InstallConfigCatalogInput {
   readonly name: string;
   readonly type?: "string" | "number" | "boolean" | "json";
   readonly required?: boolean;
+  readonly advanced?: boolean;
+  readonly secret?: boolean;
   readonly defaultValue?: string;
   readonly label: InstallConfigCatalogText;
   readonly helper?: InstallConfigCatalogText;
@@ -194,6 +196,7 @@ export interface InstallConfigCatalogMetadata {
   readonly badge: InstallConfigCatalogText;
   readonly name: InstallConfigCatalogText;
   readonly description: InstallConfigCatalogText;
+  readonly iconUrl?: string;
   readonly inputs: readonly InstallConfigCatalogInput[];
 }
 

@@ -14,7 +14,7 @@ export const installableAppStoreListings: readonly TcsListing[] = [
       git: "https://github.com/tako0614/yurucommu.git",
       ref: "main",
       path: ".",
-      resolvedCommit: "1fe727f1843c0c4a91fece16cbc73950225e078d",
+      resolvedCommit: "de0c72f3741c3f2bed633c7dd995fa412d5074c2",
     },
     kind: "app",
     surface: "service",
@@ -27,12 +27,36 @@ export const installableAppStoreListings: readonly TcsListing[] = [
       "Host a personal community / ActivityPub app.",
     ),
     badge: text("追加候補", "Installable"),
+    iconUrl:
+      "https://raw.githubusercontent.com/tako0614/yurucommu/de0c72f3741c3f2bed633c7dd995fa412d5074c2/public/icons/yurucommu.svg",
     inputs: [
       {
         name: "project_name",
         type: "string",
         defaultValue: "service-name-with-space",
         label: text("サービス名", "Service name"),
+      },
+      {
+        name: "app_url",
+        type: "string",
+        label: text("公開URL", "Public URL"),
+        helper: text(
+          "空欄ならサービス名から app.takos.jp のURLを使います。独自ドメインを使う場合は https:// から入力します。",
+          "Leave empty to use an app.takos.jp URL from the service name. Enter an https:// URL to use a custom domain.",
+        ),
+        placeholder: "https://my-app.app.takos.jp",
+      },
+      {
+        name: "auth_password_hash",
+        type: "string",
+        advanced: true,
+        secret: true,
+        label: text("パスワード fallback", "Password fallback"),
+        helper: text(
+          "通常はTakosumi Accountsで自動ログインします。OIDCを使わない時だけ、PBKDF2 hashまたは一時トークンを入力します。",
+          "Takosumi Accounts signs in automatically by default. Enter a PBKDF2 hash or bootstrap token only when you do not use OIDC.",
+        ),
+        placeholder: "optional",
       },
       {
         name: "enable_cloudflare_resources",
@@ -50,14 +74,14 @@ export const installableAppStoreListings: readonly TcsListing[] = [
         name: "worker_bundle_url",
         type: "string",
         defaultValue:
-          "https://github.com/tako0614/yurucommu/releases/download/v2.0.0/takos-worker.js",
+          "https://github.com/tako0614/yurucommu/releases/download/v2.0.1/takos-worker.js",
         label: text("Worker artifact URL", "Worker artifact URL"),
       },
       {
         name: "worker_bundle_sha256",
         type: "string",
         defaultValue:
-          "394eb640ebf9227d429a62ff38052d26763b370244cac8d05017f38861b8f6ac",
+          "866184ea1861b848770cbe64bed4e22d73778365c33ef693d81040e3baf04d50",
         label: text("Worker artifact SHA-256", "Worker artifact SHA-256"),
       },
     ],
@@ -93,12 +117,24 @@ export const installableAppStoreListings: readonly TcsListing[] = [
       "Host the Takos AI workspace in your own environment.",
     ),
     badge: text("追加候補", "Installable"),
+    iconUrl:
+      "https://raw.githubusercontent.com/tako0614/takos/805d006154e7ee7eb0b3952e8f28ab83e9760b78/web/public/logo.png",
     inputs: [
       {
         name: "project_name",
         type: "string",
         defaultValue: "service-name-with-space",
         label: text("サービス名", "Service name"),
+      },
+      {
+        name: "app_url",
+        type: "string",
+        label: text("公開URL", "Public URL"),
+        helper: text(
+          "空欄ならサービス名から app.takos.jp のURLを使います。独自ドメインを使う場合は https:// から入力します。",
+          "Leave empty to use an app.takos.jp URL from the service name. Enter an https:// URL to use a custom domain.",
+        ),
+        placeholder: "https://my-workspace.app.takos.jp",
       },
       {
         name: "release_container_images",

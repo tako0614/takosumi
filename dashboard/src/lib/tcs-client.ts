@@ -25,6 +25,8 @@ export interface TcsListingInput {
   readonly name: string;
   readonly type?: "string" | "number" | "boolean" | "json";
   readonly required?: boolean;
+  readonly advanced?: boolean;
+  readonly secret?: boolean;
   readonly defaultValue?: string;
   readonly label: TcsLocalizedText;
   readonly helper?: TcsLocalizedText;
