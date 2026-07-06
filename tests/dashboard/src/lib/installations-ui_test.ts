@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   appSurfacesFromDeployment,
+  appSurfaceFromInstallConfigCatalog,
   appSurfacesFromOutputs,
   effectiveCapsuleStatus,
   isDeploymentPubliclyOpenable,
@@ -46,11 +47,67 @@ describe("installation presentation status", () => {
 });
 
 describe("appSurfacesFromOutputs", () => {
-  test("returns [] without app metadata — a bare launch URL is not an app", () => {
+  test("catalog service metadata declares a pending app surface before first apply", () => {
+    expect(
+      appSurfaceFromInstallConfigCatalog(
+        {
+          id: "cfg_yurucommu",
+          name: "yurucommu",
+          sourceKind: "first_party_capsule",
+          trustLevel: "official",
+          catalog: {
+            order: 1,
+            surface: "service",
+            kind: "worker",
+            provider: "cloudflare",
+            suggestedName: "yurucommu",
+            badge: { ja: "追加候補", en: "Installable" },
+            name: { ja: "yurucommu", en: "yurucommu" },
+            description: { ja: "コミュニティ", en: "Community" },
+            inputs: [],
+          },
+          createdAt: "2026-07-05T00:00:00.000Z",
+          updatedAt: "2026-07-05T00:00:00.000Z",
+        },
+        "ja",
+      ),
+    ).toEqual({ name: "yurucommu" });
+  });
+
+  test("catalog building blocks do not declare launcher app surfaces", () => {
+    expect(
+      appSurfaceFromInstallConfigCatalog(
+        {
+          id: "cfg_bucket",
+          name: "bucket",
+          sourceKind: "first_party_capsule",
+          trustLevel: "official",
+          catalog: {
+            order: 1,
+            surface: "building_block",
+            kind: "storage",
+            provider: "s3",
+            suggestedName: "bucket",
+            badge: { ja: "部品", en: "Block" },
+            name: { ja: "Bucket", en: "Bucket" },
+            description: { ja: "ストレージ", en: "Storage" },
+            inputs: [],
+          },
+          createdAt: "2026-07-05T00:00:00.000Z",
+          updatedAt: "2026-07-05T00:00:00.000Z",
+        },
+        "ja",
+      ),
+    ).toBeUndefined();
+  });
+
+  test("falls back to a bare launch URL when no app metadata exists", () => {
     expect(appSurfacesFromOutputs({})).toEqual([]);
-    expect(appSurfacesFromOutputs({ url: "https://x.test/" })).toEqual([]);
+    expect(appSurfacesFromOutputs({ url: "https://x.test/" })).toEqual([
+      { url: "https://x.test/" },
+    ]);
     expect(appSurfacesFromOutputs({ launch_url: "https://x.test/" })).toEqual(
-      [],
+      [{ url: "https://x.test/" }],
     );
   });
 
@@ -154,7 +211,9 @@ describe("release activation launch gating", () => {
     outputsPublic: {
       app_name: "Yurucommu",
       launch_url: "https://yuru.test/",
-      takosumi_release: { post_apply: [{ command: ["bun", "run", "release"] }] },
+      takosumi_release: {
+        post_apply: [{ command: ["bun", "run", "release"] }],
+      },
     },
   };
 

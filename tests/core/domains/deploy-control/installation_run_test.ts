@@ -818,6 +818,76 @@ test("requested scalar Cloudflare Capsule inputs can be filled from provider sco
   expect(mainTf).not.toContain("fixture-provider-token");
 });
 
+test("managed Cloudflare Capsule inputs derive app.takos.jp launch defaults server-side", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  const seeded = await seedInstallationModel(store, {
+    name: "Yuru Managed App",
+    environment: "preview",
+    installConfig: {
+      variableMapping: {
+        worker_name: null,
+        app_url: null,
+        cloudflare_route_zone_id: null,
+        cloudflare_route_pattern: null,
+        cloudflare: {
+          account_id: null,
+          api_base_url: null,
+        },
+      },
+    },
+  });
+  await putConnectionWithProviderEnv(store, {
+    ...cloudflareConnection(
+      "conn_cloudflare_scope",
+      seeded.installation.spaceId,
+    ),
+    scopeHints: {
+      managedProvider: true,
+      providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      accountId: "ts_acc_takosumi_cloud",
+      zoneId: "zone_takosumi_cloud",
+    },
+  });
+  await store.putInstallationProviderEnvBindingSet({
+    id: "profile_cloudflare_scope",
+    spaceId: seeded.installation.spaceId,
+    installationId: seeded.installation.id,
+    environment: seeded.installation.environment,
+    bindings: [
+      {
+        provider: "cloudflare",
+        alias: "main",
+        connectionId: "conn_cloudflare_scope",
+      },
+    ],
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
+  const profile = multiProviderRunnerProfile();
+  const controller = controllerWith(store, runner, {
+    runnerProfiles: [profile],
+    defaultRunnerProfileId: profile.id,
+  });
+
+  const { planRun } = await controller.createInstallationPlan(
+    seeded.installation.id,
+  );
+
+  expect(planRun.status).toEqual("succeeded");
+  const mainTf = runner.planJobs[0]!.generatedRoot!.files["main.tf"]!;
+  expect(mainTf).toContain('worker_name = "yuru-managed-app"');
+  expect(mainTf).toContain('app_url = "https://yuru-managed-app.app.takos.jp"');
+  expect(mainTf).toContain('cloudflare_route_zone_id = "zone_takosumi_cloud"');
+  expect(mainTf).toContain(
+    'cloudflare_route_pattern = "yuru-managed-app.app.takos.jp/*"',
+  );
+  expect(mainTf).toContain(
+    'cloudflare = jsondecode("{\\"account_id\\":\\"ts_acc_takosumi_cloud\\",\\"api_base_url\\":\\"https://app.takosumi.com/compat/cloudflare/client/v4\\"}")',
+  );
+  expect(mainTf).not.toContain("fixture-provider-token");
+});
+
 test("declared generic Capsule Cloudflare inputs and outputs are wired from source shape", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   const runner = recordingRunner();

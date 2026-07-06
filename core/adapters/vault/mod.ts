@@ -972,7 +972,12 @@ export class StaticSecretConnectionVault implements ConnectionVault {
   ): Promise<MintedProviderValues | undefined> {
     if (connection.scopeHints?.managedProvider !== true) return undefined;
     const issuer = this.#managedProviderCredentialIssuer;
-    if (!issuer) return undefined;
+    if (!issuer) {
+      throw new ConnectionVaultError(
+        "failed_precondition",
+        `managed provider connection ${connection.id} requires a managed provider credential issuer`,
+      );
+    }
     const issued = await issuer({
       workspaceId,
       ...(options.installationId ? { installationId: options.installationId } : {}),
@@ -980,7 +985,12 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       delivery: options.delivery,
       ...(options.phase ? { phase: options.phase } : {}),
     });
-    if (!issued) return undefined;
+    if (!issued) {
+      throw new ConnectionVaultError(
+        "failed_precondition",
+        `managed provider connection ${connection.id} could not mint a run-scoped provider token`,
+      );
+    }
     return {
       values: issued.values,
       evidence: {
