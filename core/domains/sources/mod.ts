@@ -366,12 +366,14 @@ export class SourcesService {
     // Policy precedence: an existing Installation's own InstallConfig wins; only
     // when none is supplied does a curated `installConfigId` (the catalog
     // deep-link path) gate the pre-install check against its bounded policy.
-    const policy = request.installationId
-      ? await this.#compatibilityPolicyForInstallation(
-          stored,
-          request.installationId,
-        )
-      : await this.#compatibilityPolicyForInstallConfig(
+    const context = request.installationId
+      ? {
+          policy: await this.#compatibilityPolicyForInstallation(
+            stored,
+            request.installationId,
+          ),
+        }
+      : await this.#compatibilityContextForInstallConfig(
           stored.spaceId,
           request.installConfigId,
         );
@@ -382,8 +384,10 @@ export class SourcesService {
       ...(request.installationId
         ? { installationId: request.installationId }
         : {}),
-      ...(request.modulePath ? { modulePath: request.modulePath } : {}),
-      ...(policy ? { policy } : {}),
+      ...(request.modulePath ?? context.modulePath
+        ? { modulePath: request.modulePath ?? context.modulePath }
+        : {}),
+      ...(context.policy ? { policy: context.policy } : {}),
     });
   }
 
@@ -682,7 +686,19 @@ export class SourcesService {
     spaceId: string,
     installConfigId: string | undefined,
   ): Promise<PolicyConfig | undefined> {
-    if (!installConfigId) return undefined;
+    return (
+      await this.#compatibilityContextForInstallConfig(spaceId, installConfigId)
+    ).policy;
+  }
+
+  async #compatibilityContextForInstallConfig(
+    spaceId: string,
+    installConfigId: string | undefined,
+  ): Promise<{
+    readonly policy?: PolicyConfig;
+    readonly modulePath?: string;
+  }> {
+    if (!installConfigId) return {};
     const config = await this.#store.getInstallConfig(installConfigId);
     if (!config) {
       throw new OpenTofuControllerError(
@@ -697,7 +713,10 @@ export class SourcesService {
       );
     }
     const space = await this.#store.getSpace(spaceId);
-    return mergePolicyConfigs(space?.policy, config.policy);
+    return {
+      policy: mergePolicyConfigs(space?.policy, config.policy),
+      ...(config.modulePath ? { modulePath: config.modulePath } : {}),
+    };
   }
 
   async #persistNormalizedArtifact(
