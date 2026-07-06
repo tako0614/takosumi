@@ -120,6 +120,14 @@ const TEST_CLOUD_USAGE_PRICE_BOOK = JSON.stringify({
       minimumChargeUsdMicros: 500,
     },
     {
+      meterIdPrefix: "cloudflare:vectorize:",
+      kind: "gateway_compute",
+      unit: "operation",
+      chargeUsdMicrosPerUnit: 500,
+      estimatedCostUsdMicrosPerUnit: 100,
+      minimumChargeUsdMicros: 500,
+    },
+    {
       meterIdPrefix: "cloudflare:workflows:",
       kind: "gateway_compute",
       unit: "operation",
@@ -1197,6 +1205,68 @@ test("platform Cloud usage record route prices and spends runtime usage", async 
         kind: "gateway_compute",
         quantity: 1,
         usdMicros: 1_000,
+        source: "resource_meter",
+        spendRequired: true,
+        createdAt: "2026-06-28T10:00:01.000Z",
+      }),
+    },
+  ]);
+});
+
+test("platform Cloud usage record route prices Vectorize managed operations", async () => {
+  const recorded: {
+    readonly spaceId: string;
+    readonly input: unknown;
+  }[] = [];
+  const url = new URL("https://app.takosumi.com/internal/platform/cloud/usage");
+  const response = await handlePlatformCloudUsageRecordRequest(
+    new Request(url, {
+      method: "POST",
+      headers: {
+        authorization: "Bearer usage-secret",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        spaceId: "space_cloud",
+        periodStart: "2026-06-28T10:00:00.000Z",
+        periodEnd: "2026-06-28T10:00:01.000Z",
+        meters: [
+          {
+            installationId: "inst_cloud",
+            meterId: "cloudflare:vectorize:create",
+            resourceFamily: "cloudflare.vectorize",
+            resourceId: "vectorize:takos-embeddings",
+            operation: "create",
+            kind: "gateway_compute",
+            quantity: 1,
+          },
+        ],
+      }),
+    }),
+    url,
+    {
+      TAKOSUMI_CLOUD_USAGE_PRICE_BOOK: TEST_CLOUD_USAGE_PRICE_BOOK,
+      TAKOSUMI_CLOUD_USAGE_RECORD_TOKEN: "usage-secret",
+    } as never,
+    async (spaceId, input) => {
+      recorded.push({ spaceId, input });
+    },
+  );
+
+  expect(response?.status).toBe(202);
+  expect(await response?.json()).toEqual({ ok: true, usageEvents: 1 });
+  expect(recorded).toEqual([
+    {
+      spaceId: "space_cloud",
+      input: expect.objectContaining({
+        installationId: "inst_cloud",
+        meterId: "cloudflare:vectorize:create",
+        resourceFamily: "cloudflare.vectorize",
+        resourceId: "vectorize:takos-embeddings",
+        operation: "create",
+        kind: "gateway_compute",
+        quantity: 1,
+        usdMicros: 500,
         source: "resource_meter",
         spendRequired: true,
         createdAt: "2026-06-28T10:00:01.000Z",
