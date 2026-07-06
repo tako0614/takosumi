@@ -180,6 +180,14 @@ describe("dashboard catalog", () => {
         `${listing.id} install handoff config`,
       ).toBe(listing.installConfigId);
     }
+    const takos = installableAppStoreListings.find(
+      (listing) => listing.id === "takos",
+    );
+    const releaseImagesDefault = takos?.inputs.find(
+      (input) => input.name === "release_container_images",
+    )?.defaultValue;
+    expect(releaseImagesDefault).toContain("0.10.0-3cfcc10f7ad1");
+    expect(releaseImagesDefault).not.toContain("0.10.0-bfdd9f8bb79c");
     expect(
       installableAppStoreListings.some((listing) =>
         listing.name.ja.includes("Webアプリを公開"),

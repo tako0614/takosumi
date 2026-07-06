@@ -25,6 +25,11 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
   readonly RUNNER?: DurableObjectNamespace;
   /** Operator control-plane bearer for deploy-control routes mounted by hosts. */
   readonly TAKOSUMI_DEPLOY_CONTROL_TOKEN?: string;
+  /**
+   * HMAC secret for run-scoped managed-provider tokens. When unset, the platform
+   * uses TAKOSUMI_DEPLOY_CONTROL_TOKEN as the compatibility fallback.
+   */
+  readonly TAKOSUMI_MANAGED_PROVIDER_TOKEN_SECRET?: string;
   readonly TAKOSUMI_ACCOUNTS_STRIPE_SECRET_KEY?: string;
   readonly TAKOSUMI_ACCOUNTS_STRIPE_API_BASE?: string;
   readonly TAKOSUMI_ENVIRONMENT?: string;
@@ -130,6 +135,16 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
    * string array. Unset means provider base URL overrides are rejected.
    */
   readonly TAKOSUMI_RESOURCE_PROVIDER_BASE_URL_ALLOWLIST?: string;
+  /**
+   * Cloud/Operator-only switch that lets verified operator-scoped managed
+   * Provider Connections back Workspace OpenTofu runs. OSS/self-host default is
+   * off unless the operator deliberately sets this.
+   */
+  readonly TAKOSUMI_ALLOW_OPERATOR_BACKED_PROVIDER_ENVS?: string;
+  readonly TAKOSUMI_CLOUDFLARE_API_TOKEN?: string;
+  readonly CLOUDFLARE_API_TOKEN?: string;
+  readonly TAKOSUMI_CLOUDFLARE_VIRTUAL_ACCOUNT_ID?: string;
+  readonly TAKOSUMI_CLOUDFLARE_VIRTUAL_ZONE_ID?: string;
 }
 
 export type OpenTofuRunAction =

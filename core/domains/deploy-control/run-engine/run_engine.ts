@@ -295,12 +295,7 @@ function requestedGenericCapsuleVariables(
       (moduleFiles ? collectRootModuleVariableNames(moduleFiles) : []),
   );
   if (declaredInputs.size === 0) return explicit;
-  const requested: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(explicit)) {
-    if (declaredInputs.has(key)) {
-      requested[key] = value;
-    }
-  }
+  const requested: Record<string, unknown> = { ...explicit };
   for (const key of Object.keys(providerInputDefaults)) {
     if (!declaredInputs.has(key)) continue;
     if (Object.prototype.hasOwnProperty.call(requested, key)) continue;
@@ -1816,7 +1811,8 @@ export class RunEngine {
 
   /**
    * Run-scoped provider env binding resolution. Required providers must be
-   * covered by explicit ProviderBindings.
+   * covered by ProviderBindings, except for Cloud/operator deployments where a
+   * single public managed ProviderConnection may satisfy the provider family.
    * Lazily constructs the shared {@link ConnectionsService} so the SAME instance
    * resolves provider env bindings for rootgen (via {@link PlanResolutionService}) and for the
    * mint path (`#resolveRunInstallationProviderEnvBindings`).
@@ -3071,9 +3067,9 @@ export class RunEngine {
       allowOperatorBackedProviderEnvs: this.#allowOperatorBackedProviderEnvs,
     });
     const profile = await this.#requireRunnerProfile(planRun.runnerProfileId);
-    // Run-scoped: explicit ProviderBindings only. The same
-    // resolution feeds rootgen, so the minted TF_VAR credentials line up with the
-    // generated provider blocks.
+    // Run-scoped: ProviderBindings plus the same Cloud/operator managed
+    // fallback used by rootgen. This keeps minted TF_VAR credentials lined up
+    // with the generated provider blocks.
     return await this.#connectionsService.resolveProviderEnvBindingsForRun(
       installation,
       providersRequiringProviderEnvBindings(planRun.requiredProviders, profile),

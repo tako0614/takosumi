@@ -22,6 +22,7 @@ interface ReleaseActivationPayload {
   readonly kind: typeof RELEASE_ACTIVATION_KIND;
   readonly planRunId?: string;
   readonly applyRunId: string;
+  readonly workspaceId?: string;
   readonly spaceId?: string;
   readonly installation?: {
     readonly id?: string;
@@ -229,6 +230,9 @@ export function parsePayload(raw: unknown): ReleaseActivationPayload {
       ? { planRunId: value.planRunId }
       : {}),
     applyRunId,
+    ...(typeof value.workspaceId === "string"
+      ? { workspaceId: value.workspaceId }
+      : {}),
     ...(typeof value.spaceId === "string" ? { spaceId: value.spaceId } : {}),
     ...(isRecord(value.installation)
       ? { installation: pickInstallation(value.installation) }
@@ -254,7 +258,9 @@ function parsePayloadCredentials(
   const env: Record<string, string> = {};
   for (const [name, value] of Object.entries(rawEnv)) {
     if (!isAllowedPayloadCredentialEnvName(name)) {
-      throw new Error(`release activation credential env is not allowed: ${name}`);
+      throw new Error(
+        `release activation credential env is not allowed: ${name}`,
+      );
     }
     if (typeof value !== "string" || !value || /[\0\r\n]/u.test(value)) {
       throw new Error(`release activation credential env is invalid: ${name}`);
@@ -475,7 +481,9 @@ function runReleaseCommand(
       releaseRunId,
       ...(payload.planRunId ? { planRunId: payload.planRunId } : {}),
       applyRunId: payload.applyRunId,
-      ...(payload.spaceId ? { workspaceId: payload.spaceId } : {}),
+      ...((payload.workspaceId ?? payload.spaceId)
+        ? { workspaceId: payload.workspaceId ?? payload.spaceId }
+        : {}),
       ...(payload.installation ? { installation: payload.installation } : {}),
       ...(payload.deployment ? { deployment: payload.deployment } : {}),
       outputs,
@@ -484,7 +492,10 @@ function runReleaseCommand(
   };
   assertNoUnexpectedCredentialEnv(
     env,
-    new Set([...Object.keys(explicitOperatorEnv), ...Object.keys(credentialEnv)]),
+    new Set([
+      ...Object.keys(explicitOperatorEnv),
+      ...Object.keys(credentialEnv),
+    ]),
   );
   const [cmd, ...args] = command.command;
   const result = spawnSync(cmd!, args, {
@@ -519,7 +530,9 @@ function assertNoCommandCredentialEnvOverlap(
 ): void {
   for (const name of Object.keys(commandEnv)) {
     if (Object.prototype.hasOwnProperty.call(credentialEnv, name)) {
-      throw new Error(`release command env must not override credential ${name}`);
+      throw new Error(
+        `release command env must not override credential ${name}`,
+      );
     }
   }
 }

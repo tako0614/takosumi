@@ -3679,6 +3679,81 @@ test("POST /api/v1/workspaces/:id/capsules stores modulePath in a scoped Install
   expect(config.modulePath).toEqual("deploy/opentofu");
 });
 
+test("POST /api/v1/workspaces/:id/capsules inherits catalog modulePath when vars create a scoped InstallConfig", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  operations.installations.getInstallConfig = async (id) => {
+    operations.calls.getInstallConfig = [id];
+    return {
+      id,
+      name: "takos",
+      sourceKind: "generic_capsule",
+      installType: "opentofu_module",
+      trustLevel: "trusted",
+      modulePath: "deploy/opentofu",
+      variableMapping: {},
+      outputAllowlist: {
+        app_deployment: { from: "app_deployment", type: "json" },
+      },
+      policy: {},
+      catalog: {
+        source: {
+          git: "https://github.com/tako0614/takos.git",
+          ref: "082a37ac9ff6da68cceb6d4a3458fe6a6e1961ea",
+          path: "deploy/opentofu",
+        },
+        order: 110,
+        surface: "service",
+        kind: "worker",
+        provider: "cloudflare",
+        suggestedName: "takos",
+        badge: { ja: "追加候補", en: "Installable" },
+        name: { ja: "Takos", en: "Takos" },
+        description: { ja: "AI ワークスペース", en: "AI workspace" },
+        inputs: [],
+      },
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:00Z",
+    };
+  };
+  const { request: req, url } = request(
+    "POST",
+    "/api/v1/workspaces/space_a/capsules",
+    {
+      cookie,
+      body: {
+        name: "takos",
+        environment: "staging",
+        sourceId: "src_x",
+        installConfigId: "cfg-catalog-takos",
+        vars: { project_name: "takos-space-a" },
+      },
+    },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(201);
+  const config = operations.calls.putInstallConfig?.[0] as {
+    id: string;
+    internal?: unknown;
+    modulePath?: string;
+    catalog?: { source?: { path?: string } };
+    outputAllowlist?: Record<string, unknown>;
+  };
+  expect(config.id.startsWith("icfg_")).toEqual(true);
+  expect(config.internal).toEqual({ reason: "per_install_overrides" });
+  expect(config.modulePath).toBe("deploy/opentofu");
+  expect(config.catalog?.source?.path).toBe("deploy/opentofu");
+  expect(config.outputAllowlist).toEqual({
+    app_deployment: { from: "app_deployment", type: "json" },
+  });
+});
+
 test("POST /api/v1/workspaces/:id/capsules accepts repo-root modulePath", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);

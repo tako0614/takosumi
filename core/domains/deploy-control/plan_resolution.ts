@@ -24,8 +24,8 @@
  *     controller for the dispatch path);
  *   - `resolveInstallationProviderEnvBindingsForRun` — delegates to the controller's lazily
  *     constructed {@link ConnectionsService} so the SAME instance resolves the
- *     run-scoped Provider Env bindings for rootgen here and for
- *     credential mint at run time.
+ *     run-scoped Provider Env bindings for rootgen here and for credential
+ *     mint at run time, including host-enabled managed fallbacks.
  */
 
 import type { JsonValue } from "takosumi-contract";
@@ -68,7 +68,10 @@ export interface InstallTypePlanContext {
   readonly installType: GeneratedRootInstallType;
   /** Provider mapping derived from the resolved provider env bindings. */
   readonly providerEnvBindings: readonly RootInstallationProviderEnvBinding[];
-  /** Fully-qualified provider addresses derived from explicit Provider Bindings. */
+  /**
+   * Fully-qualified provider addresses derived from resolved ProviderBindings,
+   * including a Cloud/operator managed fallback when the host enables it.
+   */
   readonly requiredProvidersFromBindings: readonly string[];
   /**
    * Non-secret provider scope metadata available to fill requested Capsule
@@ -98,7 +101,7 @@ export interface ResolvedTemplatePlan {
  * mirrors the controller's own handle; `resolveInstallationProviderEnvBindingsForRun` delegates to
  * the controller's lazily constructed {@link ConnectionsService} so the SAME
  * instance resolves the run-scoped provider env bindings here and on the mint
- * path.
+ * path, including host-enabled managed fallbacks.
  */
 export interface PlanResolutionServiceDependencies {
   readonly templateRegistry: TemplateRegistry;
@@ -136,8 +139,8 @@ export class PlanResolutionService {
 
   /**
    * Derives the §13 install-type plan context for a template-bound installation
-   * config: the generated-root install type and the provider aliases from the
-   * Capsule's resolved ProviderBindings.
+   * config: the generated-root install type and provider aliases from the
+   * Capsule's resolved ProviderBindings or host-enabled managed fallback.
    * Provider Env bindings resolve through the {@link ConnectionsService} so
    * connection changes take effect on the next plan.
    */
@@ -148,10 +151,10 @@ export class PlanResolutionService {
     credentialRequiredProviders: readonly string[],
   ): Promise<InstallTypePlanContext> {
     // Run-scoped resolution so generated-root provider blocks come from the
-    // reviewed ProviderBinding records only. The caller filters the
-    // full required provider set down to providers that require credential
-    // material; no-credential providers remain on PlanRun.requiredProviders but
-    // do not force a ProviderConnection.
+    // reviewed ProviderBinding records or the host-enabled managed fallback.
+    // The caller filters the full required provider set down to providers that
+    // require credential material; no-credential providers remain on
+    // PlanRun.requiredProviders but do not force a ProviderConnection.
     const resolved = await this.#resolveInstallationProviderEnvBindingsForRun(
       installation,
       credentialRequiredProviders,
@@ -280,13 +283,25 @@ export function providerEnvBindingsFromResolved(
       entry.connection?.kind === "generic_env_provider"
         ? "provider_env"
         : "generated_root_variable";
+    const baseUrl = managedProviderBaseUrl(entry.connection);
     providers.push({
       provider,
       ...(entry.alias ? { alias: entry.alias } : {}),
       credentialDelivery,
+      ...(baseUrl ? { baseUrl } : {}),
     });
   }
   return providers;
+}
+
+function managedProviderBaseUrl(
+  connection: ResolvedInstallationProviderEnvBinding["connection"] | undefined,
+): string | undefined {
+  if (!connection?.scopeHints?.managedProvider) return undefined;
+  const baseUrl = connection.scopeHints.providerBaseUrl;
+  return typeof baseUrl === "string" && baseUrl.trim()
+    ? baseUrl.trim()
+    : undefined;
 }
 
 function requiredProvidersFromResolved(
@@ -312,6 +327,13 @@ function providerInputDefaultsFromResolved(
         inputs.cloudflare_account_id = accountId;
         inputs.account_id = accountId;
         mergeObjectInput(inputs, "cloudflare", { account_id: accountId });
+      }
+      const providerBaseUrl = managedProviderBaseUrl(connection);
+      if (providerBaseUrl) {
+        inputs.cloudflare_api_base_url = providerBaseUrl;
+        mergeObjectInput(inputs, "cloudflare", {
+          api_base_url: providerBaseUrl,
+        });
       }
       const workersSubdomain = nonEmptyString(
         connection.scopeHints?.workersSubdomain,

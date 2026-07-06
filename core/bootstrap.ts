@@ -70,7 +70,10 @@ import { ConnectionsService } from "./domains/connections/mod.ts";
 import { DependenciesService } from "./domains/dependencies/mod.ts";
 import { OutputSharesService } from "./domains/output-shares/mod.ts";
 import type { SensitiveOutputResolver } from "./domains/output-shares/mod.ts";
-import type { ConnectionVault } from "./adapters/vault/mod.ts";
+import type {
+  ConnectionVault,
+  ManagedProviderCredentialIssuer,
+} from "./adapters/vault/mod.ts";
 import { StaticSecretConnectionVault } from "./adapters/vault/mod.ts";
 import type { SecretBoundaryCrypto } from "./adapters/secret-store/memory.ts";
 import { RunGroupsService } from "./domains/run-groups/mod.ts";
@@ -444,6 +447,14 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
    * instead of re-assembling the vault + store itself.
    */
   readonly secretCrypto?: SecretBoundaryCrypto;
+  /**
+   * Host-injected credential issuer for operator managed-provider compatibility
+   * Connections. OSS/self-host leaves this undefined and the Vault falls back to
+   * the stored static secret. Takosumi Cloud uses it to mint run-scoped,
+   * Workspace-bound provider tokens for compatibility profiles that cannot carry
+   * custom billing headers.
+   */
+  readonly managedProviderCredentialIssuer?: ManagedProviderCredentialIssuer;
   /**
    * Out-of-process run dispatch seam. The Workers adapter injects a producer
    * that enqueues onto `RUN_QUEUE`; when omitted the controller
@@ -930,6 +941,12 @@ export async function createTakosumiService(
       ? new StaticSecretConnectionVault({
           store: sharedOpenTofuStore,
           crypto: options.secretCrypto,
+          ...(options.managedProviderCredentialIssuer
+            ? {
+                managedProviderCredentialIssuer:
+                  options.managedProviderCredentialIssuer,
+              }
+            : {}),
         })
       : undefined);
   // Activity domain (Core Specification §27 / §34): the Space-scoped audit

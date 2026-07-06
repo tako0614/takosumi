@@ -59,6 +59,11 @@ import {
   type UsageResourceMetadata,
   type UsageResourceMetadataValue,
 } from "takosumi-contract/billing";
+import {
+  isManagedProviderRunToken,
+  managedProviderRunTokenSecret,
+  verifyManagedProviderRunToken,
+} from "../../core/shared/managed_provider_tokens.ts";
 import type { TakosumiOperations } from "../../core/bootstrap.ts";
 import {
   OpenTofuControllerError,
@@ -3103,6 +3108,19 @@ export async function verifyPlatformCloudExtensionSession(
   env: CloudflareWorkerEnv,
   route?: PlatformCloudExtensionRoute,
 ): Promise<PlatformCloudExtensionSessionContext> {
+  const managedProviderToken =
+    platformCloudExtensionManagedProviderRunToken(request);
+  if (managedProviderToken) {
+    const managedProviderSession =
+      await verifyPlatformCloudExtensionManagedProviderRunToken(
+        request,
+        env,
+        managedProviderToken,
+        route,
+      );
+    if (managedProviderSession.authenticated) return managedProviderSession;
+  }
+
   const serviceToken = platformCloudExtensionServiceAccessToken(request);
   if (serviceToken) {
     const serviceSession = await verifyPlatformCloudExtensionServiceAccessToken(
@@ -3147,6 +3165,38 @@ export async function verifyPlatformCloudExtensionSession(
   } catch {
     return { authenticated: false };
   }
+}
+
+async function verifyPlatformCloudExtensionManagedProviderRunToken(
+  request: Request,
+  env: CloudflareWorkerEnv,
+  token: string,
+  route?: PlatformCloudExtensionRoute,
+): Promise<PlatformCloudExtensionSessionContext> {
+  const secret = managedProviderRunTokenSecret(env);
+  if (!secret) return { authenticated: false };
+  const verified = await verifyManagedProviderRunToken(token, {
+    secret,
+    ...(route
+      ? { expectedProviderBaseUrl: platformCloudExtensionRouteBaseUrl(request, route) }
+      : {}),
+  });
+  if (!verified.ok) return { authenticated: false };
+  const payload = verified.payload;
+  const scopes = [...payload.scopes];
+  if (!platformCloudExtensionScopesAllowAccess(scopes, route)) {
+    return { authenticated: false };
+  }
+  return {
+    authenticated: true,
+    authKind: "service-token",
+    subject: payload.sub,
+    spaceId: payload.workspaceId,
+    ...(payload.installationId
+      ? { installationId: payload.installationId }
+      : {}),
+    scopes,
+  };
 }
 
 export type PlatformCloudExtensionIntrospectFetch = (
@@ -3303,6 +3353,24 @@ function platformCloudExtensionServiceAccessToken(
 ): string | undefined {
   const token = bearerValue(request.headers.get("authorization"));
   return token?.startsWith("taksrv_") ? token : undefined;
+}
+
+function platformCloudExtensionManagedProviderRunToken(
+  request: Request,
+): string | undefined {
+  const token = bearerValue(request.headers.get("authorization"));
+  return token && isManagedProviderRunToken(token) ? token : undefined;
+}
+
+function platformCloudExtensionRouteBaseUrl(
+  request: Request,
+  route: PlatformCloudExtensionRoute,
+): string {
+  const url = new URL(request.url);
+  url.pathname = route.basePath;
+  url.search = "";
+  url.hash = "";
+  return url.href.replace(/\/+$/u, "");
 }
 
 function bearerValue(authorization: string | null): string | undefined {

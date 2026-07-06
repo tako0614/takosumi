@@ -266,11 +266,12 @@ function releaseActivatorInsecureAllowed(
 
 function releaseActivationWebhookPayload(input: ReleaseActivationInput) {
   const credentialEnv = releaseActivationCredentialEnv(input.credentials);
+  const workspaceId = input.applyRun.workspaceId ?? input.applyRun.spaceId;
   return {
     kind: RELEASE_ACTIVATOR_KIND,
     planRunId: input.planRun.id,
     applyRunId: input.applyRun.id,
-    spaceId: input.applyRun.spaceId,
+    ...(workspaceId ? { workspaceId, spaceId: workspaceId } : {}),
     installation: {
       id: input.installation.id,
       name: input.installation.name,
@@ -313,7 +314,9 @@ function releaseActivationCredentialEnv(
 ): Readonly<Record<string, string>> | undefined {
   if (!credentials) return undefined;
   const env =
-    "env" in credentials && credentials.env && typeof credentials.env === "object"
+    "env" in credentials &&
+    credentials.env &&
+    typeof credentials.env === "object"
       ? credentials.env
       : credentials;
   const out: Record<string, string> = {};

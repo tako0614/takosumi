@@ -43,6 +43,7 @@ test("webhook release activator posts minimal non-secret apply evidence", async 
     kind: "takosumi.operator.release-activation@v1",
     planRunId: "run_plan_1",
     applyRunId: "run_apply_1",
+    workspaceId: "space_1",
     spaceId: "space_1",
     installation: {
       id: "inst_1",
@@ -87,6 +88,29 @@ test("webhook release activator posts minimal non-secret apply evidence", async 
   });
   expect(payload).not.toHaveProperty("planRun");
   expect(payload).not.toHaveProperty("applyRun");
+});
+
+test("webhook release activator derives workspace context from canonical applyRun workspaceId", async () => {
+  let capturedPayload: Record<string, unknown> | undefined;
+  const activator = createWebhookReleaseActivator({
+    url: "https://materializer.example.test/activate",
+    token: "release-token",
+    fetcher: async (input, init) => {
+      const request = new Request(input, init);
+      capturedPayload = (await request.json()) as Record<string, unknown>;
+      return Response.json({ status: "succeeded" });
+    },
+  });
+
+  await activator.activate({
+    ...fakeOperatorActivationInput(),
+    applyRun: { id: "run_apply_1", workspaceId: "space_canonical" },
+  } as ReleaseActivationInput);
+
+  expect(capturedPayload).toMatchObject({
+    workspaceId: "space_canonical",
+    spaceId: "space_canonical",
+  });
 });
 
 test("webhook release activator forwards dispatch-only provider credentials", async () => {
