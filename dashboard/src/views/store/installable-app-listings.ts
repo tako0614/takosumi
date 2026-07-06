@@ -104,7 +104,7 @@ export const installableAppStoreListings: readonly TcsListing[] = [
         name: "release_container_images",
         type: "json",
         defaultValue:
-          '{"runtime":"registry.cloudflare.com/a10162d23653f1ad1193dabf520a5dd0/takos-worker-runtime:0.10.0-bfdd9f8bb79c","executor":"registry.cloudflare.com/a10162d23653f1ad1193dabf520a5dd0/takos-agent-executor:0.10.0-bfdd9f8bb79c"}',
+          '{"runtime":"registry.cloudflare.com/a10162d23653f1ad1193dabf520a5dd0/takos-worker-runtime:0.10.0-3cfcc10f7ad1","executor":"registry.cloudflare.com/a10162d23653f1ad1193dabf520a5dd0/takos-agent-executor:0.10.0-3cfcc10f7ad1"}',
         label: text("Release container images", "Release container images"),
       },
     ],

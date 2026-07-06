@@ -160,7 +160,15 @@ export class ConnectionsService {
     const connections = spaceId
       ? await this.#store.listConnections(spaceId)
       : [];
-    return connections.filter((connection) => !isSourceGitKind(connection));
+    const operatorManagedConnections =
+      spaceId && this.#allowOperatorBackedProviderEnvs
+        ? (await this.#store.listOperatorConnections()).filter(
+            isPublicManagedProviderConnection,
+          )
+        : [];
+    return [...connections, ...operatorManagedConnections].filter(
+      (connection) => !isSourceGitKind(connection),
+    );
   }
 
   async getProviderConnection(id: string): Promise<Connection> {
@@ -198,7 +206,7 @@ export class ConnectionsService {
     const explicit = await this.resolveProviderEnvBindings(installation);
     if (requiredProviders.length === 0) return explicit;
 
-    const missing = requiredProviders
+    let missing = requiredProviders
       .filter(
         (required) =>
           !explicit.some((entry) =>
@@ -206,13 +214,25 @@ export class ConnectionsService {
           ),
       )
       .sort();
+    const managedFallbacks =
+      missing.length > 0
+        ? await this.#managedProviderFallbacks(installation, missing)
+        : [];
+    if (managedFallbacks.length > 0) {
+      missing = missing.filter(
+        (required) =>
+          !managedFallbacks.some((entry) =>
+            sameProviderFamily(required, entry.provider),
+          ),
+      );
+    }
     if (missing.length > 0) {
       throw new OpenTofuControllerError(
         "failed_precondition",
         `provider connection is required for providers: ${missing.join(", ")}`,
       );
     }
-    return explicit;
+    return [...explicit, ...managedFallbacks];
   }
 
   async #resolveBinding(
@@ -269,12 +289,56 @@ export class ConnectionsService {
       materialization: connection.materialization,
     };
   }
+
+  async #managedProviderFallbacks(
+    installation: Installation,
+    requiredProviders: readonly string[],
+  ): Promise<readonly ResolvedInstallationProviderEnvBinding[]> {
+    if (!this.#allowOperatorBackedProviderEnvs) return [];
+    const installConfig = await this.#store.getInstallConfig(
+      installation.installConfigId,
+    );
+    const catalogProvider = installConfig?.catalog?.provider;
+    if (typeof catalogProvider !== "string" || !catalogProvider.trim()) {
+      return [];
+    }
+    const candidates = (await this.#store.listOperatorConnections()).filter(
+      (connection) =>
+        isPublicManagedProviderConnection(connection) &&
+        connection.status === "verified" &&
+        !isSourceGitKind(connection),
+    );
+    const resolved: ResolvedInstallationProviderEnvBinding[] = [];
+    for (const provider of requiredProviders) {
+      if (!sameProviderFamily(provider, catalogProvider)) continue;
+      const matches = candidates.filter((connection) =>
+        sameProviderFamily(provider, connection.provider),
+      );
+      if (matches.length !== 1) continue;
+      resolved.push({
+        provider,
+        connection: matches[0]!,
+        materialization: matches[0]!.materialization,
+      });
+    }
+    return resolved;
+  }
 }
 
 function isSourceGitKind(connection: Connection): boolean {
   return (
     connection.kind === "source_git_https_token" ||
     connection.kind === "source_git_ssh_key"
+  );
+}
+
+function isPublicManagedProviderConnection(connection: Connection): boolean {
+  return (
+    connection.scope === "operator" &&
+    connection.spaceId === undefined &&
+    connection.scopeHints?.managedProvider === true &&
+    typeof connection.scopeHints.providerBaseUrl === "string" &&
+    connection.scopeHints.providerBaseUrl.trim().length > 0
   );
 }
 

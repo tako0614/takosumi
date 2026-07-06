@@ -772,8 +772,7 @@ test("requested scalar Cloudflare Capsule inputs can be filled from provider sco
     ),
     scopeHints: {
       managedProvider: true,
-      providerBaseUrl:
-        "https://app.takosumi.com/compat/cloudflare/client/v4",
+      providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
       accountId: "acct_scope_123",
       workersSubdomain: "team-workers",
     },
@@ -991,6 +990,75 @@ test("standard Git Capsule variables stay ordinary OpenTofu inputs", async () =>
   expect(mainTf).toContain('version = "1.2.3"');
   expect(planJob.build).toBeUndefined();
   expect(planJob.prebuiltArtifact).toBeUndefined();
+});
+
+test("explicit generic Capsule variables survive compatibility metadata filtering through apply", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  const releaseImages = {
+    runtime: "registry.cloudflare.com/acc/takos-worker-runtime:0.10.0-abcdef",
+    executor: "registry.cloudflare.com/acc/takos-agent-executor:0.10.0-abcdef",
+  };
+  const seeded = await seedRunnableInstallationModel(store, {
+    environment: "preview",
+    installConfig: {
+      variableMapping: {
+        project_name: "takos-release",
+        release_container_images: releaseImages,
+      },
+    },
+  });
+  await store.putCapsuleCompatibilityReport({
+    id: "caprep_no_release_images",
+    sourceId: seeded.source.id,
+    sourceSnapshotId: seeded.snapshot.id,
+    level: "ready",
+    findings: [],
+    providers: [
+      {
+        source: "cloudflare/cloudflare",
+        aliases: [],
+        allowed: true,
+      },
+    ],
+    resources: [
+      {
+        type: "cloudflare_workers_script",
+        count: 1,
+        allowed: true,
+      },
+    ],
+    dataSources: [],
+    provisioners: [],
+    rootModuleVariables: ["project_name"],
+    rootModuleOutputs: ["takosumi_release", "url"],
+    createdAt: "2026-06-07T00:00:00.000Z",
+  });
+  const controller = controllerWith(store, runner);
+
+  const { planRun } = await controller.createInstallationPlan(
+    seeded.installation.id,
+    {},
+    { compatibilityReportId: "caprep_no_release_images" },
+  );
+
+  expect(planRun.status).toEqual("succeeded");
+  const planMainTf = runner.planJobs[0]!.generatedRoot!.files["main.tf"]!;
+  expect(planMainTf).toContain('project_name = "takos-release"');
+  expect(planMainTf).toContain("release_container_images = jsondecode");
+  expect(planMainTf).toContain("takos-worker-runtime:0.10.0-abcdef");
+  expect(planMainTf).toContain("takos-agent-executor:0.10.0-abcdef");
+
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+
+  expect(applyRun.status).toEqual("succeeded");
+  expect(runner.applyJobs).toHaveLength(1);
+  expect(runner.applyJobs[0]!.generatedRoot!.files["main.tf"]).toEqual(
+    planMainTf,
+  );
 });
 
 test("explicit Cloudflare Capsule variables override provider scope hint defaults", async () => {

@@ -19,9 +19,10 @@ const NAMED = [
 test("officialInstallConfigs seeds the generic Capsule default + first-party template configs", () => {
   const configs = officialInstallConfigs({ now: NOW });
   const templates = defaultTemplateRegistry.list();
-  // One generic Capsule config plus one config per template (except templates
-  // already bound by a named alias, currently only core).
-  expect(configs.length).toBe(templates.length + 1);
+  // One generic Capsule config, two curated generic Capsule app configs, plus
+  // one config per template (except templates already bound by a named alias,
+  // currently only core).
+  expect(configs.length).toBe(templates.length + 3);
   const generic = configs[0];
   expect(generic?.id).toBe(DEFAULT_CAPSULE_INSTALL_CONFIG_ID);
   expect(generic?.sourceKind).toBe("generic_capsule");
@@ -89,7 +90,7 @@ test("hostable official configs expose public catalog metadata for the dashboard
     configs
       .map((config) => config.catalog?.order)
       .filter((order): order is number => order !== undefined),
-  ).toEqual([10]);
+  ).toEqual([10, 100, 110]);
 
   const hello = configs.find(
     (config) => config.catalog?.templateId === "cloudflare-hello-worker",
@@ -109,6 +110,22 @@ test("hostable official configs expose public catalog metadata for the dashboard
 
   const hidden = configs.find((config) => config.name === "core");
   expect(hidden?.catalog).toBeUndefined();
+
+  const yurucommu = configs.find(
+    (config) => config.id === "cfg-catalog-yurucommu",
+  );
+  const takos = configs.find((config) => config.id === "cfg-catalog-takos");
+  expect(yurucommu?.sourceKind).toBe("generic_capsule");
+  expect(yurucommu?.catalog?.source.path).toBe(".");
+  expect(yurucommu?.modulePath).toBeUndefined();
+  expect(takos?.sourceKind).toBe("generic_capsule");
+  expect(takos?.catalog?.source.path).toBe("deploy/opentofu");
+  expect(takos?.modulePath).toBe("deploy/opentofu");
+  const releaseImagesDefault = takos?.catalog?.inputs.find(
+    (input) => input.name === "release_container_images",
+  )?.defaultValue;
+  expect(releaseImagesDefault).toContain("0.10.0-3cfcc10f7ad1");
+  expect(releaseImagesDefault).not.toContain("0.10.0-bfdd9f8bb79c");
 });
 
 test("official catalog source can be operator-selected without changing templates", () => {

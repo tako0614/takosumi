@@ -261,7 +261,7 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
         name: "release_container_images",
         type: "json",
         defaultValue:
-          '{"runtime":"registry.cloudflare.com/a10162d23653f1ad1193dabf520a5dd0/takos-worker-runtime:0.10.0-bfdd9f8bb79c","executor":"registry.cloudflare.com/a10162d23653f1ad1193dabf520a5dd0/takos-agent-executor:0.10.0-bfdd9f8bb79c"}',
+          '{"runtime":"registry.cloudflare.com/a10162d23653f1ad1193dabf520a5dd0/takos-worker-runtime:0.10.0-3cfcc10f7ad1","executor":"registry.cloudflare.com/a10162d23653f1ad1193dabf520a5dd0/takos-agent-executor:0.10.0-3cfcc10f7ad1"}',
         label: text("Release container images", "Release container images"),
       },
     ],
@@ -302,12 +302,14 @@ function installConfigFromCuratedGitCatalog(
   spec: CuratedGitCatalogSpec,
   now: string,
 ): InstallConfig {
+  const modulePath = modulePathFromCatalogSourcePath(spec.source.path);
   return {
     id: spec.id,
     name: spec.name,
     sourceKind: "generic_capsule",
     installType: "opentofu_module",
     trustLevel: "trusted",
+    ...(modulePath ? { modulePath } : {}),
     variableMapping: {},
     outputAllowlist: spec.outputAllowlist,
     policy: {},
@@ -326,6 +328,11 @@ function installConfigFromCuratedGitCatalog(
     createdAt: now,
     updatedAt: now,
   };
+}
+
+function modulePathFromCatalogSourcePath(path: string): string | undefined {
+  const normalized = path.trim();
+  return normalized && normalized !== "." ? normalized : undefined;
 }
 
 function defaultCapsuleInstallConfig(now: string): InstallConfig {
