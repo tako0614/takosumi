@@ -793,8 +793,11 @@ export class StaticSecretConnectionVault implements ConnectionVault {
           requiredEnvGroupsForProvider(provider),
         );
       }
-      assertConnectionVerified(match);
-      const minted = await this.#mintProviderValues(match, "provider_env");
+      assertConnectionVerifiedUnlessManagedProvider(match);
+      const minted =
+        (await this.#mintManagedProviderValues(spaceId, match, {
+          delivery: "provider_env",
+        })) ?? (await this.#mintProviderValues(match, "provider_env"));
       evidence.push(minted.evidence);
       for (const [name, value] of Object.entries(minted.values)) {
         env[name] = value;
@@ -866,7 +869,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
           `connection ${entry.connectionId} provider ${connection.provider} does not match InstallationProviderEnvBinding provider ${entry.provider}`,
         );
       }
-      assertConnectionVerified(connection);
+      assertConnectionVerifiedUnlessManagedProvider(connection);
       assertProviderMintDriverAvailable(connection);
       const customBundle = await this.#mintCustomProviderVariables(
         connection,
@@ -1380,6 +1383,13 @@ function assertConnectionVerified(connection: Connection): void {
       `connection ${connection.id} is ${connection.status} (not verified)`,
     );
   }
+}
+
+function assertConnectionVerifiedUnlessManagedProvider(
+  connection: Connection,
+): void {
+  if (connection.scopeHints?.managedProvider === true) return;
+  assertConnectionVerified(connection);
 }
 
 function assertProviderMintDriverAvailable(connection: Connection): void {
