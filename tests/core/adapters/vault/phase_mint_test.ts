@@ -387,6 +387,65 @@ test("provider-connection connection pool mints an operator connection from any 
   expect(bundle.env.CLOUDFLARE_API_TOKEN).toBe("operator-cf-token");
 });
 
+test("provider-connection connection pool mints a pending managed-provider connection through the issuer", async () => {
+  const { vault } = makeVault({
+    managedProviderCredentialIssuer: async () => ({
+      values: { CLOUDFLARE_API_TOKEN: "takmpt_provider_env" },
+      issuer: "takosumi_managed_provider_token",
+      temporary: true,
+      expiresAt: "2026-06-04T00:15:00.000Z",
+      ttlSeconds: 900,
+      secretValueStored: false,
+    }),
+  });
+  const operatorConn = await vault.register({
+    provider: "cloudflare",
+    authMethod: "static_secret",
+    values: { CLOUDFLARE_API_TOKEN: "operator-static-token" },
+    scopeHints: {
+      managedProvider: true,
+      providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+    },
+  });
+  expect(operatorConn.status).toBe("pending");
+
+  const bundle = await vault.mintForPhase({
+    spaceId: "space_other",
+    phase: "plan",
+    providers: ["cloudflare"],
+    connectionIds: [operatorConn.id],
+  });
+
+  expect(bundle.env.CLOUDFLARE_API_TOKEN).toBe("takmpt_provider_env");
+  expect(bundle.providerCredentialEvidence[0]).toMatchObject({
+    connectionId: operatorConn.id,
+    issuer: "takosumi_managed_provider_token",
+    secretValueStored: false,
+  });
+  expect(JSON.stringify(bundle)).not.toContain("operator-static-token");
+});
+
+test("provider-connection connection pool still rejects a pending non-managed connection", async () => {
+  const { vault } = makeVault();
+  const operatorConn = await vault.register({
+    provider: "cloudflare",
+    authMethod: "static_secret",
+    values: { CLOUDFLARE_API_TOKEN: "operator-cf-token" },
+  });
+  expect(operatorConn.status).toBe("pending");
+
+  await expect(
+    vault.mintForPhase({
+      spaceId: "space_other",
+      phase: "plan",
+      providers: ["cloudflare"],
+      connectionIds: [operatorConn.id],
+    }),
+  ).rejects.toThrow(
+    `connection ${operatorConn.id} is pending (not verified)`,
+  );
+});
+
 test("provider-connection connection pool rejects a connection from another space", async () => {
   const { store, vault } = makeVault();
   const spaceConn = await registerProvider(store, vault); // space_1
@@ -923,6 +982,82 @@ test("mintForInstallationProviderEnvBindings uses managed-provider issuer before
       secretValueStored: false,
     },
   ]);
+});
+
+test("mintForInstallationProviderEnvBindings mints a pending managed-provider connection through the issuer", async () => {
+  const calls: {
+    readonly workspaceId: string;
+    readonly installationId?: string;
+    readonly connectionId: string;
+    readonly delivery: string;
+  }[] = [];
+  const { vault } = makeVault({
+    managedProviderCredentialIssuer: async (request) => {
+      calls.push({
+        workspaceId: request.workspaceId,
+        ...(request.installationId
+          ? { installationId: request.installationId }
+          : {}),
+        connectionId: request.connection.id,
+        delivery: request.delivery,
+      });
+      return {
+        values: { CLOUDFLARE_API_TOKEN: "takmpt_run_scoped" },
+        issuer: "takosumi_managed_provider_token",
+        temporary: true,
+        expiresAt: "2026-06-04T00:15:00.000Z",
+        ttlSeconds: 900,
+        secretValueStored: false,
+      };
+    },
+  });
+  const operatorConn = await vault.register({
+    provider: "cloudflare",
+    authMethod: "static_secret",
+    values: { CLOUDFLARE_API_TOKEN: "operator-static-token" },
+    scopeHints: {
+      managedProvider: true,
+      providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+    },
+  });
+  expect(operatorConn.status).toBe("pending");
+
+  const bundle = await vault.mintForInstallationProviderEnvBindings(
+    "space_other",
+    [{ provider: "cloudflare", alias: "zone", connectionId: operatorConn.id }],
+    { installationId: "inst_1234567890abcdef" },
+  );
+
+  expect(bundle.env).toEqual({
+    TF_VAR_cloudflare_zone_api_token: "takmpt_run_scoped",
+  });
+  expect(calls).toEqual([
+    {
+      workspaceId: "space_other",
+      installationId: "inst_1234567890abcdef",
+      connectionId: operatorConn.id,
+      delivery: "generated_root_variable",
+    },
+  ]);
+  expect(JSON.stringify(bundle)).not.toContain("operator-static-token");
+});
+
+test("mintForInstallationProviderEnvBindings still rejects a pending non-managed connection", async () => {
+  const { vault } = makeVault();
+  const operatorConn = await vault.register({
+    provider: "cloudflare",
+    authMethod: "static_secret",
+    values: { CLOUDFLARE_API_TOKEN: "operator-cf-token" },
+  });
+  expect(operatorConn.status).toBe("pending");
+
+  await expect(
+    vault.mintForInstallationProviderEnvBindings("space_other", [
+      { provider: "cloudflare", alias: "zone", connectionId: operatorConn.id },
+    ]),
+  ).rejects.toThrow(
+    `connection ${operatorConn.id} is pending (not verified)`,
+  );
 });
 
 test("mintForInstallationProviderEnvBindings rejects managed-provider connections without an issuer", async () => {
