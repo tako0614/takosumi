@@ -164,10 +164,7 @@ import {
   stringRecord,
   stringRecordValue,
 } from "./parse.ts";
-import {
-  DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
-  defaultCapsuleOutputAllowlist,
-} from "../../../../core/domains/capsules/official_seed.ts";
+import { defaultCapsuleOutputAllowlist } from "../../../../core/domains/capsules/official_seed.ts";
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import { decodeCursor, pageSorted } from "takosumi-contract/pagination";
 import { appendLedgerEvent } from "../installation-ledger-events.ts";
@@ -269,9 +266,9 @@ function parseInstallConfigListView(
 
 function isTemplateCatalogInstallConfig(config: InstallConfig): boolean {
   if (config.workspaceId !== undefined) return false;
-  if (config.id === DEFAULT_CAPSULE_INSTALL_CONFIG_ID) return true;
   if (config.catalog?.source === undefined) return false;
-  return config.trustLevel === "official" || config.trustLevel === "trusted";
+  if (config.sourceKind !== "generic_capsule") return false;
+  return config.trustLevel === "trusted";
 }
 
 async function listInstallConfigs(
@@ -310,7 +307,7 @@ async function listInstallConfigs(
     if (!auth.ok) return auth.response;
   }
   const scoped =
-    workspaceId === undefined
+    workspaceId === undefined || view.view === "template-catalog"
       ? []
       : (await operations.installations.listInstallConfigs(workspaceId)).filter(
           isSelectableInstallConfig,

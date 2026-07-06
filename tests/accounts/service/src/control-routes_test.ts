@@ -5051,12 +5051,7 @@ test("GET /api/v1/capsule-configs template catalog hides scoped configs", async 
     }>;
   };
   expect(body.installConfigs.map((config) => config.id)).toEqual(
-    expect.arrayContaining([
-      "cfg-default-opentofu-capsule",
-      "cfg-official-cloudflare-hello-worker",
-      "cfg-catalog-yurucommu",
-      "cfg-catalog-takos",
-    ]),
+    ["cfg-catalog-takos", "cfg-catalog-yurucommu"],
   );
   expect(body.installConfigs.some((config) => config.workspaceId)).toBe(false);
 });
