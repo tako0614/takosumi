@@ -51,11 +51,7 @@ export type ConnectionScopeKind = "operator" | "space";
  * projects this through {@link publicProviderConnectionStatus}.
  */
 export type ConnectionStatus =
-  | "pending"
-  | "verified"
-  | "revoked"
-  | "expired"
-  | "error";
+  "pending" | "verified" | "revoked" | "expired" | "error";
 
 /**
  * Single collapsed Provider Connection kind axis. Replaces the former
@@ -78,8 +74,7 @@ export const PROVIDER_CONNECTION_KINDS = [
   "manual",
 ] as const;
 
-export type ProviderConnectionKind =
-  (typeof PROVIDER_CONNECTION_KINDS)[number];
+export type ProviderConnectionKind = (typeof PROVIDER_CONNECTION_KINDS)[number];
 
 /** @deprecated migration-debt alias for {@link ProviderConnectionKind}. */
 export type ConnectionKind = ProviderConnectionKind;
@@ -105,10 +100,7 @@ export function isProviderConnectionMaterialization(
 
 /** Public read-view status for a Provider Connection. */
 export type ProviderConnectionStatus =
-  | "ready"
-  | "needs_setup"
-  | "expired"
-  | "blocked";
+  "ready" | "needs_setup" | "expired" | "blocked";
 
 export const PROVIDER_CONNECTION_STATUSES = [
   "ready",
@@ -142,6 +134,19 @@ export interface ConnectionScopeHints {
   readonly accountId?: string;
   readonly zoneId?: string;
   readonly workersSubdomain?: string;
+  /**
+   * Marks an operator-scoped Provider Connection as a public managed-provider
+   * compatibility endpoint, not as a raw operator credential. Only rows with
+   * this marker may be projected into Workspace provider choices.
+   */
+  readonly managedProvider?: boolean;
+  /**
+   * Provider API base URL injected into the generated OpenTofu provider block
+   * for managed compatibility profiles, e.g.
+   * https://app.takosumi.com/compat/cloudflare/client/v4.
+   */
+  readonly providerBaseUrl?: string;
+  readonly managedProviderProfile?: string;
   readonly cloudflareTokenVending?: CloudflareTokenVendingConfig;
   readonly repoUrl?: string;
   readonly username?: string;

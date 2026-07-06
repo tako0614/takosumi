@@ -218,6 +218,46 @@ describe("/new flow guidance", () => {
     );
   });
 
+  test("known Git sources keep app catalog metadata even when ref differs", () => {
+    expect(newAppViewSource).toContain("storeListingForCurrentSource");
+    expect(newAppViewSource).toContain("storeListingMatchesCurrentSource");
+    expect(newAppViewSource).toContain("localStoreListings().find");
+    expect(newAppViewSource).toContain("sameGitUrl");
+    expect(newAppViewSource).toContain("normalizeSourcePath");
+    expect(newAppViewSource).toContain(
+      "const listing = storeListingForCurrentSource()",
+    );
+    expect(newAppViewSource).not.toContain(
+      "const listing = activeStoreListing();\n    return listing ? catalogMetadataFromStoreListing",
+    );
+  });
+
+  test("known Git sources carry store default variables into the Capsule run", () => {
+    expect(newAppViewSource).toContain("storeListingDefaultVariables");
+    expect(newAppViewSource).toContain("storeProjectNameDefault");
+    expect(newAppViewSource).toContain(
+      "projectNameHintIsGenerated(storeProjectNameDefault())",
+    );
+    expect(newAppViewSource).toContain(
+      "...storeListingDefaultVariables(),\n      ...(currentInstallPrefill()?.vars ?? {})",
+    );
+    expect(newAppViewSource).toContain("storeListingVariableNames");
+    expect(newAppViewSource).toContain("...storeListingVariableNames()");
+  });
+
+  test("prefers managed provider connections for known store sources", () => {
+    expect(newAppViewSource).toContain(
+      "const listing = storeListingForCurrentSource()",
+    );
+    expect(newAppViewSource).toContain(
+      "providerTail(listing.provider) === provider",
+    );
+    expect(newAppViewSource).toContain(
+      "connection.scopeHints?.managedProvider === true",
+    );
+    expect(newAppViewSource).toContain("score += 1_000");
+  });
+
   test("normalizes pasted install links before checking or creating the source", () => {
     expect(newAppViewSource).toContain("const currentInstallPrefill = () =>");
     expect(newAppViewSource).toContain("const sourceGitUrl = () =>");
@@ -275,7 +315,7 @@ describe("/new flow guidance", () => {
     expect(installableAppListingsSource).toContain("worker_bundle_url");
     expect(installableAppListingsSource).toContain("worker_bundle_sha256");
     expect(installableAppListingsSource).toContain(
-      "https://github.com/tako0614/yurucommu/releases/download/v2.0.0/takos-worker.js",
+      "https://github.com/tako0614/yurucommu-core/releases/download/v2.0.0/takos-worker.js",
     );
     expect(installableAppListingsSource).toContain('id: "takos"');
     expect(installableAppListingsSource).toContain(

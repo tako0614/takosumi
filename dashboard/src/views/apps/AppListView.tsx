@@ -1,12 +1,21 @@
 /**
- * Apps home (`/`) — the Workspace app launcher. Only services that DECLARE an
- * app (via well-known OpenTofu outputs) appear here, and a service may declare
+ * Apps home (`/`) — the Workspace app launcher. Services appear when they
+ * declare app surfaces through well-known OpenTofu outputs, or while pending
+ * when their install config has catalog service metadata. A service may declare
  * several launchable surfaces (e.g. a blog's public site + its admin screen),
  * each shown as its own tile. Tapping a tile opens that surface's URL, or the
  * service screen when it has none. The full service list (all Capsules, → the
  * OpenTofu detail) lives on the separate `/services` page.
  */
-import { createMemo, createResource, For, Match, Show, Switch } from "solid-js";
+import {
+  createMemo,
+  createResource,
+  For,
+  Match,
+  onMount,
+  Show,
+  Switch,
+} from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import { Box, Database, Globe, LayoutGrid, Plus, Sparkles } from "lucide-solid";
 import type { JSX } from "solid-js";
@@ -14,23 +23,30 @@ import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import {
   currentWorkspaceId,
+  selectAvailableWorkspaceId,
   setCurrentWorkspaceId,
 } from "../../lib/workspace-state.ts";
+import { listWorkspacesCached } from "../../lib/workspace-list.ts";
 import { getDashboardOverviewCached } from "../../lib/dashboard-overview.ts";
+import { listCapsulesCached } from "../../lib/capsule-list.ts";
+import { listCurrentStateVersionsCached } from "../../lib/current-state-versions.ts";
+import { listInstallConfigsCached } from "../../lib/install-config-list.ts";
 import {
   type ControlApiError,
   createWorkspace,
   type Capsule,
+  type InstallConfig,
   type Workspace,
 } from "../../lib/control-api.ts";
 import {
   type AppSurface,
   appSurfacesFromDeployment,
+  appSurfaceFromInstallConfigCatalog,
   isUrlString,
   isVisibleServiceCapsule,
   needsAttention,
 } from "../../lib/capsules-ui.ts";
-import { t } from "../../i18n/index.ts";
+import { locale, t } from "../../i18n/index.ts";
 import { Button, Toast } from "../../components/ui/index.ts";
 import { createAction } from "../account/lib/action.tsx";
 
@@ -75,32 +91,64 @@ function Inner() {
   const navigate = useNavigate();
   const workspaceId = () => currentWorkspaceId() || undefined;
 
+  onMount(async () => {
+    if (currentWorkspaceId()) return;
+    try {
+      const workspaces = await listWorkspacesCached();
+      const chosen = selectAvailableWorkspaceId(
+        currentWorkspaceId(),
+        workspaces,
+      );
+      if (chosen) setCurrentWorkspaceId(chosen);
+    } catch {
+      // The shell workspace switcher and empty-state action handle this case.
+    }
+  });
+
   const [overview] = createResource(workspaceId, (id) =>
     getDashboardOverviewCached(id),
   );
-  const capsules = createMemo(() => overview()?.capsules ?? []);
+  const fullProjectionWorkspaceId = createMemo(() =>
+    overview()?.nextCapsuleCursor ? workspaceId() : undefined,
+  );
+  const [fullCapsules] = createResource(fullProjectionWorkspaceId, (id) =>
+    listCapsulesCached(id, { includeDestroyed: false }),
+  );
+  const [fullStateVersions] = createResource(fullProjectionWorkspaceId, (id) =>
+    listCurrentStateVersionsCached(id, { includeDestroyed: false }),
+  );
+  const [fullInstallConfigs] = createResource(fullProjectionWorkspaceId, (id) =>
+    listInstallConfigsCached(id),
+  );
+  const capsules = createMemo(() =>
+    mergeById(overview()?.capsules ?? [], fullCapsules() ?? []),
+  );
   const visibleCapsules = createMemo(() =>
     (capsules() ?? []).filter(isVisibleServiceCapsule),
   );
   const activity = createMemo(() => overview()?.activity ?? []);
-  const currentStateVersions = createMemo(
-    () => overview()?.currentStateVersions ?? [],
+  const currentStateVersions = createMemo(() =>
+    mergeById(
+      overview()?.currentStateVersions ?? [],
+      fullStateVersions() ?? [],
+    ),
   );
 
   // Map each Capsule to a type-specific icon via its install config's
   // catalog kind (site / storage / worker) — the fallback when a surface
   // declares no image or icon of its own.
-  const installConfigs = createMemo(() => overview()?.installConfigs ?? []);
-  const kindByConfigId = createMemo(() => {
-    const map = new Map<string, string>();
+  const installConfigs = createMemo(() =>
+    mergeById(overview()?.installConfigs ?? [], fullInstallConfigs() ?? []),
+  );
+  const configById = createMemo(() => {
+    const map = new Map<string, InstallConfig>();
     for (const config of installConfigs() ?? []) {
-      const kind = config.catalog?.kind;
-      if (kind) map.set(config.id, kind);
+      map.set(config.id, config);
     }
     return map;
   });
   const iconForCapsule = (inst: Capsule): JSX.Element =>
-    serviceKindIcon(kindByConfigId().get(inst.installConfigId));
+    serviceKindIcon(configById().get(inst.installConfigId)?.catalog?.kind);
 
   // Declared app surfaces per service. The current StateVersion rows are loaded
   // through one Workspace projection request instead of N `getDeployment` reads.
@@ -108,7 +156,7 @@ function Inner() {
     const events = activity() ?? [];
     const deployments = new Map(
       (currentStateVersions() ?? []).map((deployment) => [
-        deployment.installationId,
+        deployment.capsuleId ?? deployment.installationId,
         deployment,
       ]),
     );
@@ -121,6 +169,12 @@ function Inner() {
     }
     return map;
   });
+  const fallbackSurfaceForCapsule = (inst: Capsule): AppSurface | undefined => {
+    return appSurfaceFromInstallConfigCatalog(
+      configById().get(inst.installConfigId),
+      locale(),
+    );
+  };
 
   const appTiles = createMemo<AppTile[]>(() => {
     const map = surfacesByCapsule();
@@ -128,12 +182,18 @@ function Inner() {
     const tiles: AppTile[] = [];
     for (const inst of visibleCapsules()) {
       const surfaces = map.get(inst.id);
-      if (!surfaces) continue;
+      if (!surfaces) {
+        const fallback = fallbackSurfaceForCapsule(inst);
+        if (fallback) {
+          tiles.push({ inst, surface: fallback, key: `${inst.id}:catalog` });
+        }
+        continue;
+      }
       surfaces.forEach((surface, i) =>
         tiles.push({ inst, surface, key: `${inst.id}:${i}` }),
       );
     }
-    return tiles;
+    return tiles.sort(compareAppTiles);
   });
 
   const createFirstWorkspace = createAction(async (): Promise<Workspace> => {
@@ -197,6 +257,34 @@ function Inner() {
       </Show>
     </AppShell>
   );
+}
+
+function mergeById<T extends { readonly id: string }>(
+  primary: readonly T[],
+  secondary: readonly T[],
+): readonly T[] {
+  if (secondary.length === 0) return primary;
+  const byId = new Map<string, T>();
+  const merged: T[] = [];
+  for (const item of [...primary, ...secondary]) {
+    if (byId.has(item.id)) continue;
+    byId.set(item.id, item);
+    merged.push(item);
+  }
+  return merged;
+}
+
+function compareAppTiles(a: AppTile, b: AppTile): number {
+  const attentionRank =
+    Number(needsAttention(a.inst)) - Number(needsAttention(b.inst));
+  if (attentionRank !== 0) return attentionRank;
+  return appTileLabel(a).localeCompare(appTileLabel(b), locale(), {
+    sensitivity: "base",
+  });
+}
+
+function appTileLabel(tile: AppTile): string {
+  return tile.surface.name || tile.inst.name;
 }
 
 function LauncherSkeleton() {

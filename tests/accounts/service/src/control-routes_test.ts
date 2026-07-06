@@ -1429,6 +1429,20 @@ test("GET /api/v1/workspaces/:id/current-state-versions reads current StateVersi
           createdAt: "2026-01-01T00:00:00Z",
           updatedAt: "2026-01-01T00:00:00Z",
         },
+        {
+          id: "inst_legacy",
+          workspaceId,
+          name: "legacy",
+          slug: "legacy",
+          sourceId: "src_x",
+          installConfigId: "cfg_x",
+          environment: "prod",
+          currentDeploymentId: "dep_legacy",
+          currentStateGeneration: 1,
+          status: "active",
+          createdAt: "2026-01-01T00:00:00Z",
+          updatedAt: "2026-01-01T00:00:00Z",
+        },
       ],
     } as Awaited<
       ReturnType<ControlPlaneOperations["installations"]["listCapsulesPage"]>
@@ -1449,7 +1463,10 @@ test("GET /api/v1/workspaces/:id/current-state-versions reads current StateVersi
   const body = (await response!.json()) as {
     deployments: Array<Record<string, unknown>>;
   };
-  expect(body.deployments.length).toEqual(1);
+  expect(body.deployments.map((deployment) => deployment.id)).toEqual([
+    "dep_1",
+    "dep_legacy",
+  ]);
   expect(body.deployments[0]?.id).toEqual("dep_1");
   expect(body.deployments[0]?.outputSnapshotId).toBeUndefined();
   expect(body.deployments[0]?.outputsPublic).toEqual({
@@ -1459,7 +1476,10 @@ test("GET /api/v1/workspaces/:id/current-state-versions reads current StateVersi
     "space_a",
     { limit: 25, includeDestroyed: false },
   ]);
-  expect(operations.calls.listDeploymentsByIds).toEqual(["dep_1"]);
+  expect(operations.calls.listDeploymentsByIds).toEqual([
+    "dep_1",
+    "dep_legacy",
+  ]);
   expect(operations.calls.listDeploymentsBySpace).toBeUndefined();
   expect(operations.calls.getDeployment).toBeUndefined();
 });
@@ -1482,6 +1502,20 @@ test("GET /api/v1/dashboard/overview batches launcher data for one Workspace", a
           environment: "prod",
           currentStateVersionId: "dep_1",
           currentStateGeneration: 3,
+          status: "active",
+          createdAt: "2026-01-01T00:00:00Z",
+          updatedAt: "2026-01-01T00:00:00Z",
+        },
+        {
+          id: "inst_legacy",
+          workspaceId,
+          name: "legacy",
+          slug: "legacy",
+          sourceId: "src_x",
+          installConfigId: "cfg_x",
+          environment: "prod",
+          currentDeploymentId: "dep_legacy",
+          currentStateGeneration: 1,
           status: "active",
           createdAt: "2026-01-01T00:00:00Z",
           updatedAt: "2026-01-01T00:00:00Z",
@@ -1529,7 +1563,14 @@ test("GET /api/v1/dashboard/overview batches launcher data for one Workspace", a
   };
   expect(body.workspaces.map((workspace) => workspace.id)).toEqual(["space_a"]);
   expect(body.workspace.id).toEqual("space_a");
-  expect(body.capsules.map((capsule) => capsule.id)).toEqual(["inst_1"]);
+  expect(body.capsules.map((capsule) => capsule.id)).toEqual([
+    "inst_1",
+    "inst_legacy",
+  ]);
+  expect(body.currentStateVersions.map((deployment) => deployment.id)).toEqual([
+    "dep_1",
+    "dep_legacy",
+  ]);
   expect(body.currentStateVersions[0]?.id).toEqual("dep_1");
   expect(body.currentStateVersions[0]?.outputSnapshotId).toBeUndefined();
   expect(body.activity).toEqual([]);
@@ -1540,7 +1581,125 @@ test("GET /api/v1/dashboard/overview batches launcher data for one Workspace", a
   ]);
   expect(operations.calls.activityList).toEqual(["space_a", 50]);
   expect(operations.calls.listInstallConfigs).toEqual(["space_a"]);
-  expect(operations.calls.listDeploymentsByIds).toEqual(["dep_1"]);
+  expect(operations.calls.listDeploymentsByIds).toEqual([
+    "dep_1",
+    "dep_legacy",
+  ]);
+});
+
+test("GET /api/v1/dashboard/overview includes config referenced by returned Capsules beyond the list limit", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  operations.installations.listCapsulesPage = async (workspaceId, params) => {
+    operations.calls.listCapsulesPage = [workspaceId, params];
+    return {
+      items: [
+        {
+          id: "inst_yurucommu",
+          workspaceId,
+          name: "yurucommu",
+          slug: "yurucommu",
+          sourceId: "src_yurucommu",
+          installConfigId: "icfg_1234567890abcdef",
+          environment: "prod",
+          currentStateGeneration: 0,
+          status: "active",
+          createdAt: "2026-01-01T00:00:00Z",
+          updatedAt: "2026-01-01T00:00:00Z",
+        },
+      ],
+    } as Awaited<
+      ReturnType<ControlPlaneOperations["installations"]["listCapsulesPage"]>
+    >;
+  };
+  operations.installations.listInstallConfigs = async (workspaceId) => {
+    operations.calls.listInstallConfigs = [workspaceId];
+    return [
+      {
+        id: "cfg_other",
+        name: "Other",
+        sourceKind: "generic_capsule",
+        installType: "opentofu_module",
+        trustLevel: "trusted",
+        variableMapping: {},
+        outputAllowlist: {},
+        policy: {},
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      },
+    ];
+  };
+  operations.installations.getInstallConfig = async (id) => {
+    operations.calls.getInstallConfig = [id];
+    return {
+      id,
+      name: "yurucommu",
+      sourceKind: "first_party_capsule",
+      installType: "opentofu_module",
+      trustLevel: "official",
+      variableMapping: {},
+      outputAllowlist: {},
+      policy: {},
+      catalog: {
+        source: {
+          git: "https://github.com/tako0614/yurucommu.git",
+          ref: "master",
+          path: ".",
+        },
+        order: 20,
+        surface: "service",
+        kind: "worker",
+        provider: "cloudflare",
+        suggestedName: "yurucommu",
+        badge: { ja: "コミュニティ", en: "Community" },
+        name: { ja: "yurucommu", en: "yurucommu" },
+        description: { ja: "コミュニティを公開", en: "Host a community" },
+        inputs: [],
+      },
+      templateBinding: {
+        templateId: "yurucommu",
+        templateVersion: "1.0.0",
+      },
+      internal: { reason: "per_install_overrides" },
+      createdAt: "2026-01-01T00:00:01Z",
+      updatedAt: "2026-01-01T00:00:01Z",
+    };
+  };
+
+  const { request: req, url } = request(
+    "GET",
+    "/api/v1/dashboard/overview?workspaceId=space_a&includeWorkspaces=false&installConfigLimit=1",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+
+  expect(response?.status).toEqual(200);
+  const body = (await response!.json()) as {
+    installConfigs: Array<{
+      id: string;
+      sourceKind?: string;
+      installType?: string;
+      templateBinding?: unknown;
+      internal?: unknown;
+      catalog?: unknown;
+    }>;
+  };
+  expect(body.installConfigs.map((config) => config.id)).toEqual([
+    "cfg_other",
+    "icfg_1234567890abcdef",
+  ]);
+  expect(body.installConfigs[1]?.sourceKind).toEqual("first_party_capsule");
+  expect(body.installConfigs[1]?.catalog).toBeTruthy();
+  expect(body.installConfigs[1]?.installType).toBeUndefined();
+  expect(body.installConfigs[1]?.templateBinding).toBeUndefined();
+  expect(body.installConfigs[1]?.internal).toBeUndefined();
+  expect(operations.calls.getInstallConfig).toEqual(["icfg_1234567890abcdef"]);
 });
 
 test("GET /api/v1/dashboard/overview can skip Workspace list when Workspace is explicit", async () => {
@@ -2313,13 +2472,13 @@ test("GET /api/v1/billing/plans returns public plan projections", async () => {
     operations,
     publicBillingPlans: [
       {
-        id: "starter",
+        id: "lite",
         kind: "subscription",
         stripePriceId: "price_test_hidden",
         estimatedNetRevenueUsdMicros: 4000000,
-        usdMicros: 3000000,
-        name: { en: "Starter", ja: "Starter" },
-        priceDisplay: { en: "$3 balance", ja: "$3 残高" },
+        usdMicros: 500000,
+        name: { en: "Lite", ja: "Lite" },
+        priceDisplay: { en: "$1/month + usage", ja: "月額 $1 + 従量課金" },
       },
     ],
   });
@@ -2327,12 +2486,14 @@ test("GET /api/v1/billing/plans returns public plan projections", async () => {
   const body = (await response!.json()) as {
     plans: readonly Record<string, unknown>[];
   };
-  expect(body.plans.map((plan) => plan.id)).toEqual(["starter"]);
+  expect(body.plans.map((plan) => plan.id)).toEqual(["lite"]);
   expect(body.plans[0]).not.toHaveProperty("stripePriceId");
   expect(body.plans[0]).not.toHaveProperty("estimatedNetRevenueUsdMicros");
+  expect(body.plans[0]).not.toHaveProperty("usdMicros");
+  expect(body.plans[0]).not.toHaveProperty("credits");
   expect(body.plans[0]?.priceDisplay).toEqual({
-    en: "$3 balance",
-    ja: "$3 残高",
+    en: "$1/month + usage",
+    ja: "月額 $1 + 従量課金",
   });
 });
 
@@ -2970,7 +3131,7 @@ test("GET /api/v1/provider-connections returns the Workspace's provider connecti
   // After the credential-model collapse a Provider Connection IS the unified
   // credential record; the session surface lists the Workspace-scoped rows directly
   // (raw connection ids, no `pcn_` hashing) and never the sealed secret material
-  // nor operator-scoped credentials.
+  // nor raw operator-scoped credentials.
   const operations = fakeOperations({
     connections: {
       listProviderConnections: async () => [
@@ -2986,6 +3147,26 @@ test("GET /api/v1/provider-connections returns the Workspace's provider connecti
           materialization: "secret",
           status: "verified",
           envNames: ["CLOUDFLARE_API_TOKEN"],
+          createdAt: "2026-01-01T00:00:00Z",
+          updatedAt: "2026-01-02T00:00:00Z",
+        },
+        {
+          id: "conn_operator_compat",
+          provider: "cloudflare",
+          providerSource: "registry.opentofu.org/cloudflare/cloudflare",
+          kind: "cloudflare_api_token",
+          scope: "operator",
+          displayName: "Takosumi Cloud",
+          materialization: "secret",
+          status: "verified",
+          envNames: ["CLOUDFLARE_API_TOKEN"],
+          scopeHints: {
+            managedProvider: true,
+            managedProviderProfile: "compat.cloudflare.workers.v1",
+            providerBaseUrl:
+              "https://app.takosumi.com/compat/cloudflare/client/v4",
+            accountId: "ts_acc_takosumi_cloud",
+          },
           createdAt: "2026-01-01T00:00:00Z",
           updatedAt: "2026-01-02T00:00:00Z",
         },
@@ -3033,7 +3214,7 @@ test("GET /api/v1/provider-connections returns the Workspace's provider connecti
   });
   expect(response?.status).toEqual(200);
   const raw = await response!.text();
-  // Operator-scoped credentials never leak into the Workspace listing.
+  // Raw operator-scoped credentials never leak into the Workspace listing.
   expect(raw.includes("conn_operator_secret")).toEqual(false);
   // No sealed secret material is ever projected onto the public record.
   expect(raw.includes("secretRef")).toEqual(false);
@@ -3042,8 +3223,16 @@ test("GET /api/v1/provider-connections returns the Workspace's provider connecti
   const body = JSON.parse(raw) as {
     providerConnections: readonly Record<string, unknown>[];
   };
-  expect(body.providerConnections.length).toEqual(2);
-  expect(Object.keys(body.providerConnections[0]!).sort()).toEqual([
+  expect(body.providerConnections.map((item) => item.id)).toEqual([
+    "conn_operator_compat",
+    "conn_space_secret",
+    "conn_space_secret_2",
+  ]);
+  expect(
+    Object.keys(
+      body.providerConnections.find((item) => item.id === "conn_space_secret")!,
+    ).sort(),
+  ).toEqual([
     "createdAt",
     "displayName",
     "envNames",
@@ -3061,9 +3250,10 @@ test("GET /api/v1/provider-connections returns the Workspace's provider connecti
   expect(body.providerConnections.map((item) => item.status)).toEqual([
     "verified",
     "verified",
+    "verified",
   ]);
   // Public ids are the raw connection ids (the `pcn_` hashing is removed).
-  expect(String(body.providerConnections[0]?.id)).toEqual("conn_space_secret");
+  expect(String(body.providerConnections[1]?.id)).toEqual("conn_space_secret");
 });
 
 test("GET /api/v1/workspaces/:id/gateway-coverages is not an OSS public route", async () => {
@@ -3317,7 +3507,11 @@ test("POST /api/v1/workspaces/:id/capsules stores runnerId and outputAllowlist i
         installConfigId: "cfg_x",
         runnerId: "generic-opentofu-provider",
         outputAllowlist: {
-          app_deployment: { from: "app_deployment", type: "json", required: true },
+          app_deployment: {
+            from: "app_deployment",
+            type: "json",
+            required: true,
+          },
         },
       },
     },
@@ -3344,6 +3538,105 @@ test("POST /api/v1/workspaces/:id/capsules stores runnerId and outputAllowlist i
   expect(config.variableMapping).toEqual({});
   expect(config.outputAllowlist).toEqual({
     app_deployment: { from: "app_deployment", type: "json", required: true },
+  });
+  const createCall = operations.calls.createCapsule?.[0] as {
+    installConfigId: string;
+  };
+  expect(createCall.installConfigId).toEqual(config.id);
+});
+
+test("POST /api/v1/workspaces/:id/capsules carries store catalog metadata into the scoped InstallConfig", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const { request: req, url } = request(
+    "POST",
+    "/api/v1/workspaces/space_a/capsules",
+    {
+      cookie,
+      body: {
+        name: "yurucommu",
+        environment: "production",
+        sourceId: "src_x",
+        installConfigId: "cfg_x",
+        catalog: {
+          templateId: "yurucommu",
+          source: {
+            git: "https://github.com/tako0614/yurucommu.git",
+            ref: "1fe727f1843c0c4a91fece16cbc73950225e078d",
+            path: ".",
+          },
+          order: 1000,
+          surface: "service",
+          kind: "worker",
+          provider: "cloudflare",
+          suggestedName: "yurucommu",
+          badge: { ja: "追加候補", en: "Installable" },
+          name: { ja: "yurucommu", en: "yurucommu" },
+          description: {
+            ja: "コミュニティを公開",
+            en: "Host a community",
+          },
+          inputs: [
+            {
+              name: "worker_bundle_url",
+              type: "string",
+              defaultValue: "https://example.test/worker.js",
+              label: { ja: "Worker artifact URL", en: "Worker artifact URL" },
+            },
+            {
+              name: "release_container_images",
+              type: "json",
+              defaultValue: '{"runtime":"registry.example.test/runtime:1"}',
+              label: {
+                ja: "Release container images",
+                en: "Release container images",
+              },
+            },
+          ],
+        },
+        outputAllowlist: {
+          url: { from: "url", type: "url" },
+          app_deployment: { from: "app_deployment", type: "json" },
+        },
+      },
+    },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+
+  expect(response?.status).toEqual(201);
+  const config = operations.calls.putInstallConfig?.[0] as {
+    id: string;
+    workspaceId: string;
+    internal?: unknown;
+    catalog?: {
+      templateId?: string;
+      source?: { git?: string; ref?: string; path?: string };
+      inputs?: Array<{ name: string; type?: string; defaultValue?: string }>;
+    };
+    outputAllowlist: Record<string, unknown>;
+  };
+  expect(config.id.startsWith("icfg_")).toEqual(true);
+  expect(config.workspaceId).toEqual("space_a");
+  expect(config.internal).toEqual({ reason: "per_install_overrides" });
+  expect(config.catalog?.templateId).toEqual("yurucommu");
+  expect(config.catalog?.source).toEqual({
+    git: "https://github.com/tako0614/yurucommu.git",
+    ref: "1fe727f1843c0c4a91fece16cbc73950225e078d",
+    path: ".",
+  });
+  expect(config.catalog?.inputs?.map((input) => input.type)).toEqual([
+    "string",
+    "json",
+  ]);
+  expect(config.outputAllowlist).toEqual({
+    url: { from: "url", type: "url" },
+    app_deployment: { from: "app_deployment", type: "json" },
   });
   const createCall = operations.calls.createCapsule?.[0] as {
     installConfigId: string;
@@ -3651,6 +3944,107 @@ test("PUT /api/v1/capsules/:id/provider-connections saves provider connection se
     alias: "archive",
     connectionId: "conn_aws",
   });
+});
+
+test("PUT /api/v1/capsules/:id/provider-connections accepts public managed operator connections only", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations({
+    connections: {
+      listProviderConnections: async () => [
+        {
+          id: "conn_operator_secret",
+          provider: "cloudflare",
+          providerSource: "registry.opentofu.org/cloudflare/cloudflare",
+          kind: "cloudflare_api_token",
+          scope: "operator",
+          displayName: "Internal operator secret",
+          materialization: "secret",
+          status: "verified",
+          envNames: ["CLOUDFLARE_API_TOKEN"],
+          createdAt: "2026-01-01T00:00:00Z",
+          updatedAt: "2026-01-01T00:00:00Z",
+        },
+        {
+          id: "conn_operator_takosumi_cloud_cloudflare_compat",
+          provider: "cloudflare",
+          providerSource: "registry.opentofu.org/cloudflare/cloudflare",
+          kind: "cloudflare_api_token",
+          scope: "operator",
+          displayName: "Takosumi Cloud",
+          materialization: "secret",
+          status: "verified",
+          envNames: ["CLOUDFLARE_API_TOKEN"],
+          scopeHints: {
+            managedProvider: true,
+            managedProviderProfile: "compat.cloudflare.workers.v1",
+            providerBaseUrl:
+              "https://app.takosumi.com/compat/cloudflare/client/v4",
+            accountId: "ts_acc_takosumi_cloud",
+          },
+          createdAt: "2026-01-01T00:00:00Z",
+          updatedAt: "2026-01-01T00:00:00Z",
+        },
+      ],
+    },
+  });
+  const { request: req, url } = request(
+    "PUT",
+    "/api/v1/capsules/inst_1/provider-connections",
+    {
+      cookie,
+      body: {
+        connections: [
+          {
+            provider: "registry.opentofu.org/cloudflare/cloudflare",
+            connectionId: "conn_operator_takosumi_cloud_cloudflare_compat",
+          },
+        ],
+      },
+    },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+
+  expect(response?.status).toEqual(200);
+  const saved = operations.calls.putCapsuleProviderEnvBindingSet?.[0] as {
+    bindings: readonly {
+      provider: string;
+      connectionId: string;
+    }[];
+  };
+  expect(saved.bindings[0]).toEqual({
+    provider: "registry.opentofu.org/cloudflare/cloudflare",
+    connectionId: "conn_operator_takosumi_cloud_cloudflare_compat",
+  });
+
+  const { request: blockedReq, url: blockedUrl } = request(
+    "PUT",
+    "/api/v1/capsules/inst_1/provider-connections",
+    {
+      cookie,
+      body: {
+        connections: [
+          {
+            provider: "registry.opentofu.org/cloudflare/cloudflare",
+            connectionId: "conn_operator_secret",
+          },
+        ],
+      },
+    },
+  );
+  const blocked = await handleControlRoute({
+    request: blockedReq,
+    url: blockedUrl,
+    store,
+    operations,
+  });
+  expect(blocked?.status).toEqual(400);
+  expect(await blocked!.text()).toContain("unknown provider connection");
 });
 
 test("POST /api/v1/capsules/:id/plan returns 201", async () => {
@@ -6222,6 +6616,7 @@ test("POST /api/v1/runs/:id/apply projects installation and deployment handles",
   };
   expect(body.capsule?.installType).toBeUndefined();
   expect(body.capsule?.currentOutputId).toBeUndefined();
+  expect(body.capsule?.currentStateVersionId).toBe("dep_1");
   expect(body.deployment?.outputSnapshotId).toBeUndefined();
   expect(JSON.stringify(body)).not.toContain("osnap_secret_1");
 });

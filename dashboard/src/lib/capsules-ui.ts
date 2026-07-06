@@ -2,7 +2,7 @@
  * Shared Capsule-presentation helpers (list + detail).
  */
 import { type MessageKey, t } from "../i18n/index.ts";
-import type { ActivityEvent } from "./control-api.ts";
+import type { ActivityEvent, InstallConfig } from "./control-api.ts";
 
 export const PENDING_NEEDS_ATTENTION_AFTER_MS = 30 * 60 * 1000;
 
@@ -99,10 +99,7 @@ export function launchUrlFromOutputs(
 }
 
 type ReleaseActivationStatus =
-  | "not_required"
-  | "pending"
-  | "succeeded"
-  | "failed";
+  "not_required" | "pending" | "succeeded" | "failed";
 
 interface LaunchableDeployment {
   readonly id: string;
@@ -141,7 +138,8 @@ function releaseActivationEventMatchesDeployment(
   const applyRunId = activityString(metadata.applyRunId);
   const deploymentId = activityString(metadata.deploymentId);
   const eventCapsuleId =
-    activityString(metadata.capsuleId) ?? activityString(metadata.installationId);
+    activityString(metadata.capsuleId) ??
+    activityString(metadata.installationId);
   return (
     event.runId === deployment.applyRunId ||
     applyRunId === deployment.applyRunId ||
@@ -225,6 +223,17 @@ export interface AppSurface {
   readonly url?: string;
 }
 
+export function appSurfaceFromInstallConfigCatalog(
+  config: InstallConfig | undefined,
+  language: "ja" | "en",
+): AppSurface | undefined {
+  const catalog = config?.catalog;
+  if (!catalog || catalog.surface !== "service") return undefined;
+  return {
+    name: catalog.name[language] ?? catalog.suggestedName ?? config.name,
+  };
+}
+
 function nonEmptyString(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
@@ -280,9 +289,7 @@ function surfaceFromAppDeploymentPublish(
   if (!rec || !appDeploymentPublishDeclaresLauncher(rec)) return null;
   const display = recordValue(rec.display) ?? {};
   const name =
-    nonEmptyString(display.title) ??
-    nonEmptyString(rec.name) ??
-    fallbackName;
+    nonEmptyString(display.title) ?? nonEmptyString(rec.name) ?? fallbackName;
   if (!name) return null;
   const declaredOutputs = recordValue(rec.outputs);
   const urlOutput = recordValue(declaredOutputs?.url);
@@ -307,7 +314,11 @@ function surfacesFromAppDeployment(
   const fallbackName = nonEmptyString(value.name);
   const surfaces: AppSurface[] = [];
   for (const entry of publish) {
-    const surface = surfaceFromAppDeploymentPublish(entry, outputs, fallbackName);
+    const surface = surfaceFromAppDeploymentPublish(
+      entry,
+      outputs,
+      fallbackName,
+    );
     if (surface) surfaces.push(surface);
   }
   return surfaces;
@@ -323,6 +334,8 @@ function surfacesFromAppDeployment(
  *   - `app`: a single object, or an array of objects
  *   - flat `app_name` / `app_icon` / `app_image` / `app_url` (single surface;
  *     url falls back to the generic launch URL)
+ *   - a bare `launch_url` / `url` / `app_url` / `public_url` fallback for
+ *     plain OpenTofu apps that expose only a launchable URL
  * Object/array entries require a `name` (nameless entries are dropped); the
  * flat form allows an absent name (the launcher fills in the service name).
  */
@@ -361,6 +374,11 @@ export function appSurfacesFromOutputs(
         url: urlValue(outputs.app_url) ?? launchUrlFromOutputs(outputs),
       });
     }
+  }
+
+  if (surfaces.length === 0) {
+    const url = launchUrlFromOutputs(outputs);
+    if (url) surfaces.push({ url });
   }
 
   return surfaces;

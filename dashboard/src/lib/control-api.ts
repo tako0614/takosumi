@@ -387,6 +387,8 @@ export interface Capsule {
   readonly installConfigId: string;
   readonly environment: string;
   readonly currentStateVersionId?: string;
+  /** @deprecated Older rows used Deployment as the state-version ledger id. */
+  readonly currentDeploymentId?: string;
   readonly currentStateGeneration: number;
   readonly status: CapsuleStatus;
   /**
@@ -460,6 +462,8 @@ export interface InstallConfig {
   readonly createdAt: string;
   readonly updatedAt: string;
 }
+
+type OutputAllowlistEntry = ContractInstallConfig["outputAllowlist"][string];
 
 export type DependencyMode =
   "remote_state" | "variable_injection" | "published_output";
@@ -749,6 +753,7 @@ export type DeploymentStatus =
 export interface PublicDeployment {
   readonly id: string;
   readonly spaceId: string;
+  readonly capsuleId?: string;
   readonly installationId: string;
   readonly environment: string;
   readonly applyRunId: string;
@@ -803,6 +808,9 @@ export interface ConnectionScopeHints {
   readonly accountId?: string;
   readonly zoneId?: string;
   readonly workersSubdomain?: string;
+  readonly managedProvider?: boolean;
+  readonly providerBaseUrl?: string;
+  readonly managedProviderProfile?: string;
   readonly awsRegion?: string;
   readonly gcpProjectId?: string;
   readonly gcpServiceAccountEmail?: string;
@@ -1056,17 +1064,13 @@ export async function listWorkspaceCreditReservations(
 
 /**
  * Public projection of one operator-offered billing plan
- * (`GET /api/v1/billing/plans`, spec §32). `kind: "subscription"` grants
- * USD balance per paid invoice; `kind: "pack"` grants once per purchase. Carries
- * no Stripe price id — checkout is started by `planId` and the server resolves
- * the price.
+ * (`GET /api/v1/billing/plans`, spec §32). The server resolves the Stripe
+ * price and internal usage allowance from `planId`; the public projection does
+ * not expose Stripe ids or the subscription allowance amount.
  */
 export interface PublicBillingPlan {
   readonly id: string;
-  readonly kind: "subscription" | "pack";
-  readonly usdMicros?: number;
-  /** @deprecated Compatibility fallback for older platform projections. */
-  readonly credits?: number;
+  readonly kind: "subscription";
   readonly name: { readonly ja: string; readonly en: string };
   readonly priceDisplay: { readonly ja: string; readonly en: string };
 }
@@ -1248,6 +1252,8 @@ export async function createCapsule(input: {
   readonly installConfigId: string;
   readonly modulePath?: string;
   readonly vars?: Readonly<Record<string, ContractJsonValue>>;
+  readonly outputAllowlist?: Readonly<Record<string, OutputAllowlistEntry>>;
+  readonly catalog?: NonNullable<InstallConfig["catalog"]>;
 }): Promise<Capsule> {
   const body = await controlFetch<{
     capsule: Capsule;
@@ -1264,6 +1270,10 @@ export async function createCapsule(input: {
       ...(input.vars && Object.keys(input.vars).length > 0
         ? { vars: input.vars }
         : {}),
+      ...(input.outputAllowlist && Object.keys(input.outputAllowlist).length > 0
+        ? { outputAllowlist: input.outputAllowlist }
+        : {}),
+      ...(input.catalog ? { catalog: input.catalog } : {}),
     },
   });
   return body.capsule;
@@ -1718,17 +1728,42 @@ async function sourceSyncFailureMessage(
 /** Create a plan run for an Capsule. Returns the opaque Run envelope. */
 export async function planCapsule(
   capsuleId: string,
-  options: { readonly compatibilityReportId?: string } = {},
+  options: {
+    readonly compatibilityReportId?: string;
+    readonly timeoutMs?: number;
+  } = {},
 ): Promise<unknown> {
-  return await controlFetch<unknown>(
-    `${BASE}/capsules/${encodeURIComponent(capsuleId)}/plan`,
-    {
-      method: "POST",
-      body: options.compatibilityReportId
-        ? { compatibilityReportId: options.compatibilityReportId }
-        : {},
-    },
-  );
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const controller =
+    options.timeoutMs && options.timeoutMs > 0
+      ? new AbortController()
+      : undefined;
+  if (controller && options.timeoutMs) {
+    timeout = setTimeout(() => controller.abort(), options.timeoutMs);
+  }
+  try {
+    return await controlFetch<unknown>(
+      `${BASE}/capsules/${encodeURIComponent(capsuleId)}/plan`,
+      {
+        method: "POST",
+        signal: controller?.signal,
+        body: options.compatibilityReportId
+          ? { compatibilityReportId: options.compatibilityReportId }
+          : {},
+      },
+    );
+  } catch (error) {
+    if (controller?.signal.aborted) {
+      throw new ControlApiError(
+        0,
+        "request_timeout",
+        `plan request timed out after ${options.timeoutMs}ms`,
+      );
+    }
+    throw error;
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
 }
 
 export async function destroyPlanCapsule(capsuleId: string): Promise<unknown> {
@@ -1801,15 +1836,38 @@ export async function getRunCostInfo(id: string): Promise<RunCostInfo> {
  */
 export async function createApplyRun(
   planRunId: string,
-  input: { readonly confirmDestructive?: boolean } = {},
+  input: {
+    readonly confirmDestructive?: boolean;
+    readonly timeoutMs?: number;
+  } = {},
 ): Promise<{ readonly run: Run }> {
-  return await controlFetch<{ run: Run }>(
-    `${BASE}/runs/${encodeURIComponent(planRunId)}/apply`,
-    {
-      method: "POST",
-      body: input.confirmDestructive ? { confirmDestructive: true } : {},
-    },
-  );
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const controller =
+    input.timeoutMs && input.timeoutMs > 0 ? new AbortController() : undefined;
+  if (controller && input.timeoutMs) {
+    timeout = setTimeout(() => controller.abort(), input.timeoutMs);
+  }
+  try {
+    return await controlFetch<{ run: Run }>(
+      `${BASE}/runs/${encodeURIComponent(planRunId)}/apply`,
+      {
+        method: "POST",
+        signal: controller?.signal,
+        body: input.confirmDestructive ? { confirmDestructive: true } : {},
+      },
+    );
+  } catch (error) {
+    if (controller?.signal.aborted) {
+      throw new ControlApiError(
+        0,
+        "request_timeout",
+        `apply request timed out after ${input.timeoutMs}ms`,
+      );
+    }
+    throw error;
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
 }
 
 // --- Deployments -----------------------------------------------------------

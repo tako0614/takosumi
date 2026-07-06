@@ -75,10 +75,7 @@ import type {
   ProviderResolution,
   PublicProviderResolution,
 } from "takosumi-contract/provider-resolution";
-import type {
-  OutputShare,
-  OutputShareEntry,
-} from "takosumi-contract/outputs";
+import type { OutputShare, OutputShareEntry } from "takosumi-contract/outputs";
 import type { PublicDeployment } from "takosumi-contract/deployments";
 import type {
   BackupRecord,
@@ -238,6 +235,28 @@ async function listProviderConnections(
   if (!auth.ok) return auth.response;
   const providerConnections = (
     await operations.connections.listProviderConnections(workspaceId)
-  ).filter((connection) => connection.workspaceId !== undefined);
+  ).filter((connection) =>
+    providerConnectionVisibleToWorkspace(connection, workspaceId),
+  );
   return json({ providerConnections });
+}
+
+function providerConnectionVisibleToWorkspace(
+  connection: ProviderConnection,
+  workspaceId: string,
+): boolean {
+  if (
+    connection.workspaceId === workspaceId ||
+    connection.spaceId === workspaceId
+  ) {
+    return true;
+  }
+  return (
+    connection.scope === "operator" &&
+    connection.workspaceId === undefined &&
+    connection.spaceId === undefined &&
+    connection.scopeHints?.managedProvider === true &&
+    typeof connection.scopeHints.providerBaseUrl === "string" &&
+    connection.scopeHints.providerBaseUrl.trim().length > 0
+  );
 }

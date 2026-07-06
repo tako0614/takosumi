@@ -155,7 +155,11 @@ export function publicCapsule(installation: PublicCapsuleInput): PublicCapsule {
     currentOutputId: _currentOutputId,
     ...publicRecord
   } = installation;
-  return publicRecord;
+  const currentStateVersionId =
+    publicRecord.currentStateVersionId ?? publicRecord.currentDeploymentId;
+  return currentStateVersionId
+    ? { ...publicRecord, currentStateVersionId }
+    : publicRecord;
 }
 
 /**
@@ -269,8 +273,13 @@ export async function publicDeployResponse(
   operations: ControlPlaneOperations,
   response: DeployResponse,
 ): Promise<PublicDeployResponse> {
-  const { run, planRun, applyRun, installation: _installation, ...rest } =
-    response;
+  const {
+    run,
+    planRun,
+    applyRun,
+    installation: _installation,
+    ...rest
+  } = response;
   return {
     ...rest,
     run: await publicRun(operations, run),
@@ -411,8 +420,9 @@ export async function resolveProviderConnectionBindings(
   for (const connection of await operations.connections.listProviderConnections(
     workspaceId,
   )) {
-    if (connection.workspaceId !== undefined)
+    if (isBindableProviderConnection(connection, workspaceId)) {
       visibleById.set(connection.id, connection);
+    }
   }
   const resolved: CapsuleProviderEnvBinding[] = [];
   for (const [index, binding] of bindings.entries()) {
@@ -430,6 +440,26 @@ export async function resolveProviderConnectionBindings(
     });
   }
   return { ok: true, bindings: resolved };
+}
+
+function isBindableProviderConnection(
+  connection: ProviderConnection,
+  workspaceId: string,
+): boolean {
+  if (
+    connection.workspaceId === workspaceId ||
+    connection.spaceId === workspaceId
+  ) {
+    return true;
+  }
+  return (
+    connection.scope === "operator" &&
+    connection.workspaceId === undefined &&
+    connection.spaceId === undefined &&
+    connection.scopeHints?.managedProvider === true &&
+    typeof connection.scopeHints.providerBaseUrl === "string" &&
+    connection.scopeHints.providerBaseUrl.trim().length > 0
+  );
 }
 
 // --- Workspace authorization ---------------------------------------------------

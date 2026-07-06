@@ -151,6 +151,7 @@ import {
   connectionScopeHintsFromValues,
   dependencyModeValue,
   dependencyVisibilityValue,
+  installConfigCatalogValue,
   isGoogleCloudProvider,
   isJsonValue,
   isOutputsMapping,
@@ -1081,8 +1082,12 @@ function currentStateVersionIds(
   capsules: readonly Capsule[],
 ): readonly string[] {
   return capsules
-    .map((capsule) => capsule.currentStateVersionId)
+    .map(capsuleCurrentStateVersionId)
     .filter((id): id is string => id !== undefined && id.length > 0);
+}
+
+function capsuleCurrentStateVersionId(capsule: Capsule): string | undefined {
+  return capsule.currentStateVersionId ?? capsule.currentDeploymentId;
 }
 
 function publicDeploymentMap(
@@ -1101,11 +1106,10 @@ function currentDeploymentsInCapsuleOrder(
   deploymentsById: ReadonlyMap<string, PublicDeployment>,
 ): readonly PublicDeployment[] {
   return capsules
-    .map((capsule) =>
-      capsule.currentStateVersionId
-        ? deploymentsById.get(capsule.currentStateVersionId)
-        : undefined,
-    )
+    .map((capsule) => {
+      const id = capsuleCurrentStateVersionId(capsule);
+      return id ? deploymentsById.get(id) : undefined;
+    })
     .filter((row): row is PublicDeployment => row !== undefined);
 }
 
@@ -1116,7 +1120,7 @@ async function listCurrentStateVersionsFromSingleReads(
 ): Promise<readonly PublicDeployment[]> {
   const deployments = await Promise.all(
     capsules.map(async (capsule) => {
-      const currentId = capsule.currentStateVersionId;
+      const currentId = capsuleCurrentStateVersionId(capsule);
       if (!currentId) return undefined;
       try {
         const deployment = await operations.getDeployment(currentId);
@@ -1155,6 +1159,7 @@ async function createCapsule(
   const runnerProfileId =
     stringValue(body.runnerId) ?? stringValue(body.runnerProfileId);
   const outputAllowlist = outputAllowlistValue(body.outputAllowlist);
+  const catalog = installConfigCatalogValue(body.catalog);
   const modulePath = modulePathValue(body.modulePath);
   if (body.modulePath !== undefined && modulePath === undefined) {
     return errorJson(
@@ -1167,6 +1172,13 @@ async function createCapsule(
     return errorJson(
       "invalid_request",
       "outputAllowlist must be an object of { from, type, required? } entries",
+      400,
+    );
+  }
+  if (body.catalog !== undefined && catalog === undefined) {
+    return errorJson(
+      "invalid_request",
+      "catalog must be a valid app-store presentation metadata object",
       400,
     );
   }
@@ -1205,6 +1217,7 @@ async function createCapsule(
     (vars !== undefined && Object.keys(vars).length > 0) ||
     runnerProfileId ||
     outputAllowlist !== undefined ||
+    catalog !== undefined ||
     modulePath !== undefined
   ) {
     const baseConfig =
@@ -1231,6 +1244,7 @@ async function createCapsule(
       name: `${name}-config`,
       internal: { reason: "per_install_overrides" },
       variableMapping: { ...baseConfig.variableMapping, ...(vars ?? {}) },
+      ...(catalog ? { catalog } : {}),
       ...(runnerProfileId ? { runnerId: runnerProfileId } : {}),
       ...(modulePath ? { modulePath } : {}),
       outputAllowlist:
