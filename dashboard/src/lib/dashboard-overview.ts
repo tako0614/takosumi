@@ -1,7 +1,6 @@
 import { getDashboardOverview, type DashboardOverview } from "./control-api.ts";
 import { primeCapsuleListCache } from "./capsule-list.ts";
 import { primeCurrentStateVersionCache } from "./current-state-versions.ts";
-import { primeInstallConfigListCache } from "./install-config-list.ts";
 import { primeWorkspaceListCache } from "./workspace-list.ts";
 
 const CACHE_TTL_MS = 5_000;
@@ -67,11 +66,16 @@ function primeDerivedCaches(overview: DashboardOverview): void {
   }
   const workspaceId = overview.workspace?.id;
   if (!workspaceId) return;
+  if (overview.nextCapsuleCursor !== undefined) {
+    // Dashboard overview is a launcher projection, not a complete list read. Do
+    // not poison the full-list caches with the first page when the server tells
+    // us more Capsules exist.
+    return;
+  }
   primeCapsuleListCache(workspaceId, overview.capsules, {
     includeDestroyed: false,
   });
   primeCurrentStateVersionCache(workspaceId, overview.currentStateVersions, {
     includeDestroyed: false,
   });
-  primeInstallConfigListCache(workspaceId, overview.installConfigs);
 }

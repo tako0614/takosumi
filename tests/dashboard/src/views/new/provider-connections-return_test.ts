@@ -252,6 +252,24 @@ describe("/new Provider Connections return context", () => {
     );
   });
 
+  test("/new uses a managed provider connection to derive the default app.takos.jp URL", () => {
+    expect(newAppViewSource).toContain("selectedManagedProviderConnection");
+    expect(newAppViewSource).toContain("managedProviderVariableDefaults");
+    expect(newAppViewSource).toContain("rowHasManagedProviderDefault");
+    expect(newAppViewSource).toContain("if (rowHasManagedProviderDefault(row)) return false");
+    expect(newAppViewSource).toContain(
+      "new Set(compatibility()?.rootModuleVariables ?? [])",
+    );
+    expect(newAppViewSource).toContain(
+      "const managedAppHost = `${projectNameVariable()}.app.takos.jp`",
+    );
+    expect(newAppViewSource).toContain("`https://${managedAppHost}`");
+    expect(newAppViewSource).toContain('"cloudflare_route_zone_id"');
+    expect(newAppViewSource).toContain('"cloudflare_route_pattern"');
+    expect(newAppViewSource).toContain('"enable_workers_dev_subdomain"');
+    expect(newAppViewSource).toContain("connection.scopeHints?.zoneId");
+  });
+
   test("/new only asks for Provider Connections when the provider has credential env rules", () => {
     expect(newAppViewSource).toContain(
       'from "takosumi-contract/provider-env-rules"',
@@ -385,9 +403,7 @@ describe("/new Provider Connections return context", () => {
     expect(controlApiSource).toContain(
       "readonly compatibilityReportId?: string",
     );
-    expect(controlApiSource).toContain(
-      "body: options.compatibilityReportId",
-    );
+    expect(controlApiSource).toContain("body: options.compatibilityReportId");
   });
 
   test("/new clears add-flow busy state when a stale flow is aborted", () => {

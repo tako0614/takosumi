@@ -138,6 +138,11 @@ interface InputVariableRow {
   readonly jsonValue?: JsonValue;
 }
 
+type StoreCatalogMetadata = NonNullable<InstallConfig["catalog"]>;
+type StoreOutputAllowlist = NonNullable<
+  Parameters<typeof createCapsule>[0]["outputAllowlist"]
+>;
+
 const HIDDEN_INSTALL_VARIABLE_NAMES = new Set([
   "enable_cloudflare_resources",
   "enable_cloudflare_worker_script",
@@ -356,6 +361,30 @@ function displayModulePath(value: string): string {
   return value.trim().replace(/^\/+|\/+$/gu, "") || ".";
 }
 
+function normalizeGitUrl(value: string): string {
+  try {
+    const url = new URL(value.trim());
+    url.hash = "";
+    url.search = "";
+    url.pathname = url.pathname.replace(/\/+$/u, "").replace(/\.git$/iu, "");
+    return url.toString().replace(/\/+$/u, "").toLowerCase();
+  } catch {
+    return value
+      .trim()
+      .replace(/\/+$/u, "")
+      .replace(/\.git$/iu, "")
+      .toLowerCase();
+  }
+}
+
+function sameGitUrl(a: string, b: string): boolean {
+  return normalizeGitUrl(a) === normalizeGitUrl(b);
+}
+
+function normalizeSourcePath(value: string): string {
+  return displayModulePath(value).replace(/^\.\//u, "");
+}
+
 function slugInputValue(value: string): string {
   return (
     value
@@ -568,6 +597,62 @@ function inputVariableRowsFromPrefill(
     }));
 }
 
+function catalogKindFromStoreListing(
+  kind: TcsListing["kind"],
+): StoreCatalogMetadata["kind"] {
+  if (kind === "storage") return "storage";
+  if (kind === "site") return "site";
+  return "worker";
+}
+
+function catalogMetadataFromStoreListing(
+  listing: TcsListing,
+): StoreCatalogMetadata {
+  return {
+    templateId: listing.id,
+    source: {
+      git: listing.source.git,
+      ref: listing.source.resolvedCommit ?? listing.source.ref,
+      path: listing.source.path || ".",
+    },
+    order: 1_000,
+    surface: listing.surface,
+    kind: catalogKindFromStoreListing(listing.kind),
+    provider: listing.provider,
+    suggestedName: listing.suggestedName,
+    badge: listing.badge,
+    name: listing.name,
+    description: listing.description,
+    inputs: listing.inputs.map((input) => ({
+      name: input.name,
+      ...(input.type ? { type: input.type } : {}),
+      ...(input.required !== undefined ? { required: input.required } : {}),
+      ...(input.defaultValue !== undefined
+        ? { defaultValue: input.defaultValue }
+        : {}),
+      label: input.label,
+      ...(input.helper ? { helper: input.helper } : {}),
+      ...(input.placeholder ? { placeholder: input.placeholder } : {}),
+    })),
+  };
+}
+
+function outputAllowlistFromStoreListing(
+  listing: TcsListing,
+): StoreOutputAllowlist | undefined {
+  const out: Record<string, StoreOutputAllowlist[string]> = {};
+  for (const output of listing.outputAllowlist) {
+    if (!isSafeInstallVariableName(output.key)) continue;
+    if (!isSafeInstallVariableName(output.from)) continue;
+    out[output.key] = {
+      from: output.from,
+      type: output.type,
+      ...(output.required !== undefined ? { required: output.required } : {}),
+    };
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 function sourceIdFromControlError(error: ControlApiError | undefined): string {
   const body = error?.body;
   if (body && typeof body === "object" && "sourceId" in body) {
@@ -689,6 +774,8 @@ function Inner() {
   const [selectedCatalogId, setSelectedCatalogId] = createSignal<string | null>(
     null,
   );
+  const [selectedStoreListing, setSelectedStoreListing] =
+    createSignal<TcsListing | null>(null);
   const [catalogInputValues, setCatalogInputValues] = createSignal<
     Readonly<Record<string, string>>
   >({});
@@ -995,11 +1082,16 @@ function Inner() {
     return null;
   };
   const clearSelectedCatalog = () => {
-    if (!selectedCatalogId()) return;
+    const hadCatalog = Boolean(selectedCatalogId());
+    const hadStoreListing = Boolean(selectedStoreListing());
+    if (!hadCatalog && !hadStoreListing) return;
     setSelectedCatalogId(null);
-    setCatalogInputValues({});
-    setCatalogInputTouched({});
-    setInstallConfigId(defaultGitInstallConfig()?.id ?? "");
+    setSelectedStoreListing(null);
+    if (hadCatalog) {
+      setCatalogInputValues({});
+      setCatalogInputTouched({});
+      setInstallConfigId(defaultGitInstallConfig()?.id ?? "");
+    }
   };
 
   // Step machine: keep the created Source id so a retry resumes mid-flow.
@@ -1108,11 +1200,54 @@ function Inner() {
   };
   const sourcePath = () =>
     currentInstallPrefill()?.path || path().trim() || ".";
+  const activeStoreListing = (): TcsListing | null => {
+    const listing = selectedStoreListing();
+    if (!listing) return null;
+    const listingRef = listing.source.resolvedCommit ?? listing.source.ref;
+    if (listing.source.git !== sourceGitUrl()) return null;
+    if ((listing.source.path || ".") !== sourcePath()) return null;
+    if (listingRef !== sourceRef()) return null;
+    return listing;
+  };
+  const storeListingForCurrentSource = (): TcsListing | null => {
+    const active = activeStoreListing();
+    if (active) return active;
+    const selected = selectedStoreListing();
+    if (selected && storeListingMatchesCurrentSource(selected)) {
+      return selected;
+    }
+    return (
+      localStoreListings().find((listing) =>
+        storeListingMatchesCurrentSource(listing),
+      ) ?? null
+    );
+  };
+  const storeListingMatchesCurrentSource = (listing: TcsListing): boolean => {
+    if (!sameGitUrl(listing.source.git, sourceGitUrl())) return false;
+    return (
+      normalizeSourcePath(listing.source.path || ".") ===
+      normalizeSourcePath(sourcePath())
+    );
+  };
+  const storeCatalogForRun = () => {
+    const listing = storeListingForCurrentSource();
+    return listing ? catalogMetadataFromStoreListing(listing) : undefined;
+  };
+  const storeOutputAllowlistForRun = () => {
+    const listing = storeListingForCurrentSource();
+    return listing ? outputAllowlistFromStoreListing(listing) : undefined;
+  };
+  const storeProjectNameDefault = () =>
+    storeListingForCurrentSource()?.inputs.find(
+      (input) => input.name === "project_name",
+    )?.defaultValue;
   const prefilledProjectName = () => {
     const value = currentInstallPrefill()?.vars?.project_name;
     return typeof value === "string" ? value : undefined;
   };
-  const supportsProjectNameInput = () => prefilledProjectName() !== undefined;
+  const supportsProjectNameInput = () =>
+    prefilledProjectName() !== undefined ||
+    projectNameHintIsGenerated(storeProjectNameDefault());
   const defaultProjectName = () => {
     return slugInputValue(name() || capsuleNameFromUrl(sourceGitUrl()));
   };
@@ -1151,9 +1286,44 @@ function Inner() {
     }
     return variables;
   };
+  const storeListingDefaultVariables = (): Readonly<
+    Record<string, JsonValue>
+  > => {
+    const listing = storeListingForCurrentSource();
+    if (!listing) return {};
+    const variables: Record<string, JsonValue> = {};
+    for (const field of listing.inputs) {
+      const defaultValue = field.defaultValue?.trim();
+      if (!defaultValue) continue;
+      if (!catalogVariablePath(field.name)) continue;
+      if (
+        field.name === "project_name" &&
+        projectNameHintIsGenerated(defaultValue)
+      ) {
+        continue;
+      }
+      const value = catalogInputJsonValue(field, defaultValue);
+      if (value !== undefined) {
+        setCatalogJsonVariable(variables, field.name, value);
+      }
+    }
+    return variables;
+  };
+  const storeListingVariableNames = () => {
+    const listing = storeListingForCurrentSource();
+    if (!listing) return new Set<string>();
+    return new Set(
+      listing.inputs
+        .map((field) => catalogVariablePath(field.name)?.[0])
+        .filter((name): name is string => name !== undefined),
+    );
+  };
   const inputVariableError = (): string | null => {
     const seen = new Set<string>();
-    const catalogNames = selectedCatalogVariableNames();
+    const catalogNames = new Set([
+      ...selectedCatalogVariableNames(),
+      ...storeListingVariableNames(),
+    ]);
     for (const row of inputVariables()) {
       const variableName = row.name.trim();
       const value = row.value.trim();
@@ -1181,6 +1351,7 @@ function Inner() {
   const shouldOpenServiceAdvanced = () => inputVariables().length > 0;
   const installReturnVariables = (): Readonly<Record<string, JsonValue>> => {
     const variables: Record<string, JsonValue> = {
+      ...storeListingDefaultVariables(),
       ...(currentInstallPrefill()?.vars ?? {}),
     };
     if (supportsProjectNameInput()) {
@@ -1193,6 +1364,7 @@ function Inner() {
   const installVariables = ():
     Readonly<Record<string, JsonValue>> | undefined => {
     const variables: Record<string, JsonValue> = {
+      ...storeListingDefaultVariables(),
       ...(currentInstallPrefill()?.vars ?? {}),
       ...selectedCatalogVariables(),
       ...normalizedInputVariables(),
@@ -1200,6 +1372,7 @@ function Inner() {
     if (supportsProjectNameInput()) {
       variables.project_name = projectNameVariable();
     }
+    Object.assign(variables, managedProviderVariableDefaults(variables));
     return Object.keys(variables).length > 0 ? variables : undefined;
   };
   const currentInstallReturnPath = () =>
@@ -1217,6 +1390,50 @@ function Inner() {
     providerConnectionsHrefForInstallReturn(currentInstallReturnPath());
 
   const visibleConnections = () => connections() ?? [];
+  const selectedManagedProviderConnection = ():
+    | ProviderConnection
+    | undefined => {
+    for (const row of providerRows()) {
+      const connection = providerConnectionsForProvider(row.provider).find(
+        (candidate) =>
+          candidate.id === row.connectionId &&
+          candidate.scopeHints?.managedProvider === true,
+      );
+      if (connection) return connection;
+    }
+    return undefined;
+  };
+  const managedProviderVariableDefaults = (
+    current: Readonly<Record<string, JsonValue>>,
+  ): Record<string, JsonValue> => {
+    const connection = selectedManagedProviderConnection();
+    if (!connection) return {};
+    const variables = new Set(compatibility()?.rootModuleVariables ?? []);
+    if (variables.size === 0) return {};
+    const defaults: Record<string, JsonValue> = {};
+    const setDefault = (name: string, value: JsonValue | undefined) => {
+      if (!variables.has(name)) return;
+      if (current[name] !== undefined) return;
+      if (value === undefined || value === "") return;
+      defaults[name] = value;
+    };
+    const managedAppHost = `${projectNameVariable()}.app.takos.jp`;
+    if (sameProviderFamily(connection.providerSource, "cloudflare")) {
+      setDefault("worker_name", projectNameVariable());
+      setDefault("app_url", `https://${managedAppHost}`);
+      setDefault("cloudflare_account_id", connection.scopeHints?.accountId);
+      setDefault("account_id", connection.scopeHints?.accountId);
+      setDefault("cloudflare_route_zone_id", connection.scopeHints?.zoneId);
+      setDefault("cloudflare_route_pattern", `${managedAppHost}/*`);
+      if (
+        variables.has("enable_workers_dev_subdomain") &&
+        current.enable_workers_dev_subdomain === undefined
+      ) {
+        defaults.enable_workers_dev_subdomain = false;
+      }
+    }
+    return defaults;
+  };
   const catalogScopeHintValue = (
     entry: CatalogEntry,
     field: CatalogInputField,
@@ -1399,6 +1616,14 @@ function Inner() {
   ): number => {
     let score = 0;
     const provider = providerTail(row.provider);
+    const listing = storeListingForCurrentSource();
+    if (
+      listing &&
+      providerTail(listing.provider) === provider &&
+      connection.scopeHints?.managedProvider === true
+    ) {
+      score += 1_000;
+    }
     const wantsWorkersSubdomain =
       row.resourceTypes.includes("cloudflare_workers_script_subdomain") ||
       row.rootModuleVariables.includes("cloudflare") ||
@@ -1425,6 +1650,19 @@ function Inner() {
       }))
       .sort((a, b) => b.score - a.score || a.index - b.index)
       .map((entry) => entry.connection);
+  const rowHasManagedProviderDefault = (row: ProviderConnectionRow) => {
+    const listing = storeListingForCurrentSource();
+    if (!listing) return false;
+    if (providerTail(listing.provider) !== providerTail(row.provider)) {
+      return false;
+    }
+    const best = providerConnectionsForRow(row)[0];
+    return (
+      best !== undefined &&
+      best.id === row.connectionId &&
+      best.scopeHints?.managedProvider === true
+    );
+  };
   const providerNeedsConnection = (row: ProviderConnectionRow) =>
     providerRequiresConnection(row.provider) &&
     providerConnectionsForProvider(row.provider).length === 0;
@@ -1434,6 +1672,7 @@ function Inner() {
     providerRows().filter(providerNeedsConnection);
   const providerRowNeedsVisibleChoice = (row: ProviderConnectionRow) => {
     if (!providerRequiresConnection(row.provider)) return false;
+    if (rowHasManagedProviderDefault(row)) return false;
     const candidates = providerConnectionsForRow(row);
     if (candidates.length !== 1) return true;
     return row.connectionId !== candidates[0]?.id;
@@ -1560,10 +1799,15 @@ function Inner() {
     setExistingCapsule(null);
     setError(null);
   };
-  const applyInstallPrefillInput = (next: InstallPrefill) => {
+  const applyInstallPrefillInput = (
+    next: InstallPrefill,
+    options: { readonly storeListing?: TcsListing } = {},
+  ) => {
     const nextRef = next.ref || "main";
     setActiveTab("git");
     setActiveInstallPrefill(next);
+    setSelectedCatalogId(null);
+    setSelectedStoreListing(options.storeListing ?? null);
     setGitUrl(next.git);
     setRef(displayRef(nextRef));
     setPinnedFullRef(isFullCommitSha(nextRef) ? nextRef : null);
@@ -1591,6 +1835,7 @@ function Inner() {
   const pickCatalogEntry = (entry: CatalogEntry) => {
     if (!entry.source) return;
     void loadConnections();
+    setSelectedStoreListing(null);
     setActiveInstallPrefill(null);
     setLinkDraft("");
     setGitUrl(entry.source.git);
@@ -1630,13 +1875,14 @@ function Inner() {
 
     const prefill = parseInstallPrefill(`?${buildNewQuery(listing)}`);
     if (prefill) {
-      applyInstallPrefillInput(prefill);
+      applyInstallPrefillInput(prefill, { storeListing: listing });
       return;
     }
 
     setActiveTab("git");
     setActiveInstallPrefill(null);
     setSelectedCatalogId(null);
+    setSelectedStoreListing(listing);
     setGitUrl(listing.source.git);
     setRef(displayRef(listing.source.resolvedCommit ?? listing.source.ref));
     setPinnedFullRef(
@@ -1662,6 +1908,7 @@ function Inner() {
       return;
     }
     clearSelectedCatalog();
+    setSelectedStoreListing(null);
     setActiveTab("git");
     setActiveInstallPrefill(null);
     setGitUrl(raw);
@@ -1892,6 +2139,8 @@ function Inner() {
         compatibility()?.installConfigId ?? selectedInstallConfigId(),
       compatibilityReportId: compatibility()?.reportId,
       vars: installVariables(),
+      catalog: storeCatalogForRun(),
+      outputAllowlist: storeOutputAllowlistForRun(),
       sourceId: createdSourceId(),
       capsuleId: createdCapsuleId(),
       syncDone: stepSync() === "done",
@@ -1983,6 +2232,10 @@ function Inner() {
             ? { modulePath: flowInput.path }
             : {}),
           ...(flowInput.vars ? { vars: flowInput.vars } : {}),
+          ...(flowInput.catalog ? { catalog: flowInput.catalog } : {}),
+          ...(flowInput.outputAllowlist
+            ? { outputAllowlist: flowInput.outputAllowlist }
+            : {}),
         });
         throwIfStaleFlow(flow);
         clearCapsuleListCache(workspace);

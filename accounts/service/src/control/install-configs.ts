@@ -209,7 +209,9 @@ export async function handleInstallConfigs(
   return undefined;
 }
 
-function publicInstallConfig(config: InstallConfig): PublicInstallConfig {
+export function publicInstallConfig(
+  config: InstallConfig,
+): PublicInstallConfig {
   const {
     installType: _installType,
     templateBinding: _templateBinding,
@@ -252,7 +254,7 @@ function parseInstallConfigListView(
   if (raw === null || raw === "" || raw === "all") {
     return { ok: true, view: "all" };
   }
-  if (raw === "template-catalog" || raw === "starter-catalog") {
+  if (raw === "template-catalog") {
     return { ok: true, view: "template-catalog" };
   }
   return {
@@ -329,7 +331,7 @@ async function listInstallConfigs(
   });
 }
 
-function isSelectableInstallConfig(config: InstallConfig): boolean {
+export function isSelectableInstallConfig(config: InstallConfig): boolean {
   if (config.internal?.reason === "per_install_overrides") return false;
   const scopedId = config.workspaceId ?? config.spaceId;
   if (scopedId !== undefined && /^icfg_[0-9a-f]{16}$/iu.test(config.id)) {

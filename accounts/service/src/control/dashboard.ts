@@ -11,6 +11,7 @@ import type {
   Capsule,
   InstallConfig,
   PublicCapsule,
+  PublicInstallConfig,
 } from "takosumi-contract/install-configs";
 import type { ActivityEvent } from "takosumi-contract/activity";
 import type { PublicDeployment } from "takosumi-contract/deployments";
@@ -34,6 +35,10 @@ import {
   measureServerTiming,
   serverTimingBucketForPath,
 } from "../server-timing.ts";
+import {
+  isSelectableInstallConfig,
+  publicInstallConfig,
+} from "./install-configs.ts";
 
 const DEFAULT_CAPSULE_LIMIT = 100;
 const DEFAULT_ACTIVITY_LIMIT = 50;
@@ -230,6 +235,12 @@ async function dashboardOverview(
     selectedWorkspace.id,
     capsulePage.items,
   );
+  const visibleInstallConfigs = await listDashboardInstallConfigs(
+    operations,
+    installConfigs,
+    capsulePage.items,
+    installConfigLimit,
+  );
 
   return json({
     workspaces,
@@ -238,7 +249,7 @@ async function dashboardOverview(
     capsules,
     currentStateVersions,
     activity,
-    installConfigs: installConfigs.slice(0, installConfigLimit),
+    installConfigs: visibleInstallConfigs,
     ...(capsulePage.nextCursor !== undefined
       ? { nextCapsuleCursor: capsulePage.nextCursor }
       : {}),
@@ -252,7 +263,7 @@ interface DashboardOverviewResponse {
   readonly capsules: readonly PublicCapsule[];
   readonly currentStateVersions: readonly PublicDeployment[];
   readonly activity: readonly ActivityEvent[];
-  readonly installConfigs: readonly InstallConfig[];
+  readonly installConfigs: readonly PublicInstallConfig[];
   readonly nextCapsuleCursor?: string;
 }
 
@@ -337,7 +348,11 @@ async function listActiveWorkspaceProjectionForSession(
     sessionSubject,
   );
   const sorted = [...all].sort(compareWorkspaceMostRecentFirst);
-  const limited = limitWorkspaces(sorted, options.limit, options.ensureWorkspaceId);
+  const limited = limitWorkspaces(
+    sorted,
+    options.limit,
+    options.ensureWorkspaceId,
+  );
   return {
     workspaces: limited,
     meta: workspaceListMeta(limited, all.length, options.limit),
@@ -360,10 +375,10 @@ function limitWorkspaces(
     (workspace) => workspace.id === ensureWorkspaceId,
   );
   if (!selected) return limited;
-  return [selected, ...limited.filter((workspace) => workspace.id !== selected.id)].slice(
-    0,
-    limit,
-  );
+  return [
+    selected,
+    ...limited.filter((workspace) => workspace.id !== selected.id),
+  ].slice(0, limit);
 }
 
 function workspaceListMeta(
@@ -412,7 +427,7 @@ async function listCurrentStateVersions(
   capsules: readonly Capsule[],
 ): Promise<readonly PublicDeployment[]> {
   const ids = capsules
-    .map((capsule) => capsule.currentStateVersionId)
+    .map(capsuleCurrentStateVersionId)
     .filter((id): id is string => typeof id === "string" && id.length > 0);
   if (ids.length === 0) return [];
   const rows = operations.listDeploymentsByIds
@@ -424,12 +439,86 @@ async function listCurrentStateVersions(
       : await Promise.all(ids.map((id) => operations.getDeployment(id)));
   const byId = new Map(rows.map((row) => [row.id, publicDeployment(row)]));
   return capsules
-    .map((capsule) =>
-      capsule.currentStateVersionId
-        ? byId.get(capsule.currentStateVersionId)
-        : undefined,
-    )
+    .map((capsule) => {
+      const id = capsuleCurrentStateVersionId(capsule);
+      return id ? byId.get(id) : undefined;
+    })
     .filter((row): row is PublicDeployment => row !== undefined);
+}
+
+function capsuleCurrentStateVersionId(capsule: Capsule): string | undefined {
+  return capsule.currentStateVersionId ?? capsule.currentDeploymentId;
+}
+
+async function listDashboardInstallConfigs(
+  operations: ControlPlaneOperations,
+  listedConfigs: readonly InstallConfig[],
+  capsules: readonly Capsule[],
+  limit: number,
+): Promise<readonly PublicInstallConfig[]> {
+  const referencedIds = orderedReferencedInstallConfigIds(capsules);
+  const referencedIdSet = new Set(referencedIds);
+  const byId = new Map<string, InstallConfig>();
+  const result: InstallConfig[] = [];
+  let listedCount = 0;
+
+  const append = (
+    config: InstallConfig,
+    options: { readonly referenced: boolean },
+  ): void => {
+    if (byId.has(config.id)) return;
+    if (!isDashboardInstallConfigVisible(config, options)) return;
+    byId.set(config.id, config);
+    result.push(config);
+  };
+
+  for (const config of listedConfigs) {
+    if (listedCount < limit) {
+      append(config, { referenced: referencedIdSet.has(config.id) });
+      listedCount += 1;
+      continue;
+    }
+    if (referencedIdSet.has(config.id)) {
+      append(config, { referenced: true });
+    }
+  }
+
+  for (const id of referencedIds) {
+    if (byId.has(id)) continue;
+    try {
+      append(await operations.installations.getInstallConfig(id), {
+        referenced: true,
+      });
+    } catch {
+      // A stale Capsule row can point at a retired or deleted config. The
+      // launcher can still show the Capsule from its own record; do not fail
+      // the whole overview projection for missing presentation metadata.
+    }
+  }
+
+  return result.map(publicInstallConfig);
+}
+
+function isDashboardInstallConfigVisible(
+  config: InstallConfig,
+  options: { readonly referenced: boolean },
+): boolean {
+  if (isSelectableInstallConfig(config)) return true;
+  return options.referenced && config.catalog?.surface === "service";
+}
+
+function orderedReferencedInstallConfigIds(
+  capsules: readonly Capsule[],
+): readonly string[] {
+  const seen = new Set<string>();
+  const ids: string[] = [];
+  for (const capsule of capsules) {
+    const id = capsule.installConfigId;
+    if (typeof id !== "string" || id.length === 0 || seen.has(id)) continue;
+    seen.add(id);
+    ids.push(id);
+  }
+  return ids;
 }
 
 function parseLimitOrDefault(

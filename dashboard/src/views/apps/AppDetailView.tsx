@@ -119,7 +119,8 @@ function Inner() {
   const deploysCapsuleId = () => (tab() === "deploys" ? capsuleId() : null);
   const graphWorkspaceId = () =>
     tab() === "overview" ? (workspaceId() ?? null) : null;
-  const currentStateVersionId = () => capsule()?.currentStateVersionId ?? null;
+  const currentStateVersionId = () =>
+    capsule()?.currentStateVersionId ?? capsule()?.currentDeploymentId ?? null;
   const [profile, { refetch: refetchProfile }] = createResource(
     settingsCapsuleId,
     getCapsuleProviderConnectionSet,
@@ -179,7 +180,8 @@ function Inner() {
     const current = currentStateVersion();
     if (current) return current;
     const list = deploymentHistory();
-    const currentId = capsule()?.currentStateVersionId;
+    const currentId =
+      capsule()?.currentStateVersionId ?? capsule()?.currentDeploymentId;
     return (
       (currentId && list.find((d) => d.id === currentId)) ||
       list[0] ||

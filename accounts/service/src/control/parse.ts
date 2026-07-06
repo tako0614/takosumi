@@ -50,6 +50,11 @@ import type { Workspace, WorkspaceType } from "takosumi-contract/workspaces";
 import type {
   CapsuleProviderEnvBindingSet,
   InstallConfig,
+  InstallConfigCatalogInput,
+  InstallConfigCatalogKind,
+  InstallConfigCatalogMetadata,
+  InstallConfigCatalogSurface,
+  InstallConfigCatalogText,
   Capsule,
   OutputAllowlistEntry,
   PolicyConfig,
@@ -76,10 +81,7 @@ import type {
   ProviderResolution,
   PublicProviderResolution,
 } from "takosumi-contract/provider-resolution";
-import type {
-  OutputShare,
-  OutputShareEntry,
-} from "takosumi-contract/outputs";
+import type { OutputShare, OutputShareEntry } from "takosumi-contract/outputs";
 import type { PublicDeployment } from "takosumi-contract/deployments";
 import type {
   BackupRecord,
@@ -176,6 +178,184 @@ export function outputAllowlistValue(
     };
   }
   return out;
+}
+
+export function installConfigCatalogValue(
+  value: unknown,
+): InstallConfigCatalogMetadata | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const order = numberValue(record.order);
+  const surface = catalogSurfaceValue(record.surface);
+  const kind = catalogKindValue(record.kind);
+  const provider = boundedStringValue(record.provider, 64);
+  const suggestedName = boundedStringValue(record.suggestedName, 96);
+  const badge = catalogTextValue(record.badge);
+  const name = catalogTextValue(record.name);
+  const description = catalogTextValue(record.description);
+  const inputs = catalogInputsValue(record.inputs);
+  if (
+    order === undefined ||
+    !surface ||
+    !kind ||
+    !provider ||
+    !suggestedName ||
+    !badge ||
+    !name ||
+    !description ||
+    !inputs
+  ) {
+    return undefined;
+  }
+  const templateId = boundedTokenValue(record.templateId, 128);
+  const templateVersion = boundedTokenValue(record.templateVersion, 128);
+  const source = catalogSourceValue(record.source);
+  if (record.source !== undefined && !source) return undefined;
+  return {
+    ...(templateId ? { templateId } : {}),
+    ...(templateVersion ? { templateVersion } : {}),
+    ...(source ? { source } : {}),
+    order,
+    surface,
+    kind,
+    provider,
+    suggestedName,
+    badge,
+    name,
+    description,
+    inputs,
+  };
+}
+
+function numberValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
+}
+
+function boundedStringValue(
+  value: unknown,
+  maxLength: number,
+): string | undefined {
+  const raw = stringValue(value)?.trim();
+  if (!raw || raw.length > maxLength) return undefined;
+  return raw;
+}
+
+function boundedTokenValue(
+  value: unknown,
+  maxLength: number,
+): string | undefined {
+  if (value === undefined) return undefined;
+  const raw = boundedStringValue(value, maxLength);
+  if (!raw || !/^[A-Za-z0-9_.:-]+$/u.test(raw)) return undefined;
+  return raw;
+}
+
+function catalogTextValue(
+  value: unknown,
+): InstallConfigCatalogText | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const ja = boundedStringValue(record.ja, 500);
+  const en = boundedStringValue(record.en, 500);
+  return ja && en ? { ja, en } : undefined;
+}
+
+function catalogSourceValue(
+  value: unknown,
+): InstallConfigCatalogMetadata["source"] | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const git = boundedStringValue(record.git, 2048);
+  const ref = boundedStringValue(record.ref, 256);
+  const parsedPath = modulePathValue(record.path);
+  if (record.path !== undefined && parsedPath === undefined) return undefined;
+  const path = parsedPath === "" ? "." : (parsedPath ?? ".");
+  if (!git || !/^https?:\/\/|^git@/u.test(git) || !ref) return undefined;
+  return { git, ref, path };
+}
+
+function catalogSurfaceValue(
+  value: unknown,
+): InstallConfigCatalogSurface | undefined {
+  return value === "service" ||
+    value === "building_block" ||
+    value === "example"
+    ? value
+    : undefined;
+}
+
+function catalogKindValue(
+  value: unknown,
+): InstallConfigCatalogKind | undefined {
+  return value === "worker" || value === "storage" || value === "site"
+    ? value
+    : undefined;
+}
+
+function catalogInputsValue(
+  value: unknown,
+): readonly InstallConfigCatalogInput[] | undefined {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 50) return undefined;
+  const inputs: InstallConfigCatalogInput[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      return undefined;
+    }
+    const record = item as Record<string, unknown>;
+    const name = boundedTokenValue(record.name, 64);
+    const type =
+      record.type === undefined
+        ? undefined
+        : record.type === "string" ||
+            record.type === "number" ||
+            record.type === "boolean" ||
+            record.type === "json"
+          ? record.type
+          : undefined;
+    const required = booleanValue(record.required);
+    const defaultValue =
+      record.defaultValue === undefined
+        ? undefined
+        : boundedStringValue(record.defaultValue, 2048);
+    const label = catalogTextValue(record.label);
+    const helper =
+      record.helper === undefined ? undefined : catalogTextValue(record.helper);
+    const placeholder =
+      record.placeholder === undefined
+        ? undefined
+        : boundedStringValue(record.placeholder, 256);
+    if (
+      !name ||
+      (record.type !== undefined && !type) ||
+      (record.defaultValue !== undefined && defaultValue === undefined) ||
+      !label ||
+      (record.helper !== undefined && !helper) ||
+      (record.placeholder !== undefined && placeholder === undefined)
+    ) {
+      return undefined;
+    }
+    inputs.push({
+      name,
+      ...(type ? { type } : {}),
+      ...(required !== undefined ? { required } : {}),
+      ...(defaultValue !== undefined ? { defaultValue } : {}),
+      label,
+      ...(helper ? { helper } : {}),
+      ...(placeholder ? { placeholder } : {}),
+    });
+  }
+  return inputs;
 }
 
 export function modulePathValue(value: unknown): string | undefined {
@@ -397,7 +577,9 @@ export function spaceTypeValue(value: unknown): WorkspaceType | undefined {
   return value === "personal" || value === "organization" ? value : undefined;
 }
 
-export function dependencyModeValue(value: unknown): DependencyMode | undefined {
+export function dependencyModeValue(
+  value: unknown,
+): DependencyMode | undefined {
   return value === "variable_injection" ||
     value === "remote_state" ||
     value === "published_output"
@@ -461,7 +643,9 @@ export function outputShareSensitivePolicy(
   };
 }
 
-export function parseLimit(value: string | null): number | undefined | "invalid" {
+export function parseLimit(
+  value: string | null,
+): number | undefined | "invalid" {
   if (value === null || value === "") return undefined;
   const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed) || parsed <= 0) return "invalid";

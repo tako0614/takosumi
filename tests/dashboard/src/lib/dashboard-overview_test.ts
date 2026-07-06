@@ -107,7 +107,7 @@ afterEach(() => {
 });
 
 describe("getDashboardOverviewCached", () => {
-  test("shares the in-flight overview request and primes list caches", async () => {
+  test("shares the in-flight overview request and primes complete list caches", async () => {
     const calls = stubOverviewFetch();
 
     const [a, b] = await Promise.all([
@@ -138,7 +138,94 @@ describe("getDashboardOverviewCached", () => {
     expect((await listInstallConfigsCached("space_1"))[0]?.id).toBe(
       "cfg_yurucommu",
     );
-    expect(calls()).toHaveLength(1);
+    expect(calls()).toHaveLength(2);
+    expect(calls()[1]).toBe("/api/v1/capsule-configs?workspaceId=space_1");
+  });
+
+  test("does not prime full-list caches from a capped overview page", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const path = typeof input === "string" ? input : String(input);
+      calls.push(path);
+      if (path.startsWith("/api/v1/workspaces/space_1/capsules")) {
+        return new Response(
+          JSON.stringify({
+            capsules: [
+              {
+                id: "inst_full",
+                workspaceId: "space_1",
+                name: "Full list app",
+                slug: "full-list-app",
+                installConfigId: "cfg_full",
+                environment: "prod",
+                currentStateGeneration: 0,
+                status: "active",
+                createdAt: "2026-07-02T00:00:00.000Z",
+                updatedAt: "2026-07-02T00:00:00.000Z",
+              },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          workspaces: [
+            {
+              id: "space_1",
+              handle: "prod",
+              displayName: "Production",
+              type: "personal",
+              ownerUserId: "user_1",
+              createdAt: "2026-07-02T00:00:00.000Z",
+              updatedAt: "2026-07-02T00:00:00.000Z",
+            },
+          ],
+          workspace: {
+            id: "space_1",
+            handle: "prod",
+            displayName: "Production",
+            type: "personal",
+            ownerUserId: "user_1",
+            createdAt: "2026-07-02T00:00:00.000Z",
+            updatedAt: "2026-07-02T00:00:00.000Z",
+          },
+          capsules: [
+            {
+              id: "inst_page",
+              workspaceId: "space_1",
+              name: "First page app",
+              slug: "first-page-app",
+              installConfigId: "cfg_page",
+              environment: "prod",
+              currentStateGeneration: 0,
+              status: "active",
+              createdAt: "2026-07-02T00:00:00.000Z",
+              updatedAt: "2026-07-02T00:00:00.000Z",
+            },
+          ],
+          currentStateVersions: [],
+          activity: [],
+          installConfigs: [],
+          nextCapsuleCursor: "cursor_next",
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+
+    await getDashboardOverviewCached("space_1");
+
+    expect(
+      (
+        await listCapsulesCached("space_1", {
+          includeDestroyed: false,
+        })
+      )[0]?.id,
+    ).toBe("inst_full");
+    expect(calls).toEqual([
+      "/api/v1/dashboard/overview?workspaceId=space_1&includeWorkspaces=false",
+      "/api/v1/workspaces/space_1/capsules?includeDestroyed=false",
+    ]);
   });
 
   test("does not clear the primed Workspace list when overview omits Workspaces", async () => {

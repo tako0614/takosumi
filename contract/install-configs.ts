@@ -27,24 +27,17 @@ export type TrustLevel = "official" | "trusted" | "space" | "raw";
  * `installType` or generated-root authoring details.
  */
 export type PublicInstallConfigSourceKind =
-  | "generic_capsule"
-  | "first_party_capsule";
+  "generic_capsule" | "first_party_capsule";
 
 /**
  * Stored sourceKind. The old `official_template` value may exist in pre-v1
  * rows and is normalized out of every public projection.
  */
 export type InstallConfigSourceKind =
-  | PublicInstallConfigSourceKind
-  | "official_template";
+  PublicInstallConfigSourceKind | "official_template";
 
 export type OutputValueType =
-  | "string"
-  | "url"
-  | "hostname"
-  | "number"
-  | "boolean"
-  | "json";
+  "string" | "url" | "hostname" | "number" | "boolean" | "json";
 
 /** One outputAllowlist entry: project raw output `from` under the entry key. */
 export interface OutputAllowlistEntry {
@@ -146,10 +139,7 @@ export interface PolicyConfig {
 export interface BackupConfig {
   readonly enabled: boolean;
   readonly mode:
-    | "none"
-    | "artifact_export"
-    | "provider_snapshot"
-    | "custom_command";
+    "none" | "artifact_export" | "provider_snapshot" | "custom_command";
   readonly command?: readonly string[];
   readonly outputPath?: string;
 }
@@ -161,15 +151,10 @@ export interface NormalizationConfig {
 }
 
 export type InstallConfigCatalogSurface =
-  | "service"
-  | "building_block"
-  | "example";
+  "service" | "building_block" | "example";
 export type InstallConfigCatalogKind = "worker" | "storage" | "site";
 export type InstallConfigCatalogDefault =
-  | "service-name"
-  | "service-name-with-space"
-  | "main"
-  | "us-east-1";
+  "service-name" | "service-name-with-space" | "main" | "us-east-1";
 
 export interface InstallConfigCatalogText {
   readonly ja: string;
@@ -184,9 +169,9 @@ export interface InstallConfigCatalogSource {
 
 export interface InstallConfigCatalogInput {
   readonly name: string;
-  readonly type?: "string" | "number" | "boolean";
+  readonly type?: "string" | "number" | "boolean" | "json";
   readonly required?: boolean;
-  readonly defaultValue?: InstallConfigCatalogDefault;
+  readonly defaultValue?: string;
   readonly label: InstallConfigCatalogText;
   readonly helper?: InstallConfigCatalogText;
   readonly placeholder?: string;

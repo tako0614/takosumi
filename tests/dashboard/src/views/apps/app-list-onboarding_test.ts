@@ -17,15 +17,18 @@ describe("AppListView app launcher", () => {
   test("first-run home onboards to add a service", () => {
     expect(appListSource).toContain("function WorkspaceStartPanel");
     expect(appListSource).toContain("visibleCapsules().length > 0");
+    expect(appListSource).toContain("listWorkspacesCached");
+    expect(appListSource).toContain("selectAvailableWorkspaceId");
+    expect(appListSource).toContain("if (chosen) setCurrentWorkspaceId(chosen)");
     expect(appListSource).toContain('href="/new"');
     expect(appListSource).toContain('t("apps.start.optionCatalog")');
     expect(appListSource).not.toContain('href="/new?mode=link"');
     expect(appListSource).not.toContain('t("apps.start.add")');
   });
 
-  test("apps page is a grid of DECLARED app surfaces, not every service", () => {
-    // Opt-in: only services that declare app metadata appear, read via the
-    // surface reader; one service may contribute several flat-mapped tiles.
+  test("apps page is a grid of launchable app surfaces, not every service row", () => {
+    // Prefer declared app metadata, but also keep plain OpenTofu apps visible
+    // when they expose a launch URL. One service may contribute several tiles.
     expect(installationsUiSource).toContain(
       "export function appSurfacesFromOutputs",
     );
@@ -39,11 +42,19 @@ describe("AppListView app launcher", () => {
     expect(installationsUiSource).toContain('inst.status !== "destroyed"');
     expect(appListSource).toContain("appSurfacesFromDeployment");
     expect(appListSource).toContain("getDashboardOverviewCached");
+    expect(appListSource).toContain("listCapsulesCached");
+    expect(appListSource).toContain("listCurrentStateVersionsCached");
+    expect(appListSource).toContain("listInstallConfigsCached");
+    expect(appListSource).toContain("overview()?.nextCapsuleCursor");
+    expect(appListSource).toContain("mergeById");
     expect(appListSource).toContain("overview()?.activity");
     expect(appListSource).toContain("surfacesByCapsule");
     expect(appListSource).toContain("overview()?.currentStateVersions");
     expect(appListSource).not.toMatch(/\bgetDeployment\(/);
     expect(appListSource).toContain("const appTiles = createMemo");
+    expect(appListSource).toContain("compareAppTiles");
+    expect(appListSource).toContain("appTileLabel");
+    expect(appListSource).toContain("return tiles.sort(compareAppTiles)");
     expect(appListSource).toContain("function AppLauncher");
     expect(appListSource).toContain("function AppTileView");
     expect(appListSource).toContain("isVisibleServiceCapsule");
