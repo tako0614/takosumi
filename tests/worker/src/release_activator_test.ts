@@ -89,6 +89,38 @@ test("webhook release activator posts minimal non-secret apply evidence", async 
   expect(payload).not.toHaveProperty("applyRun");
 });
 
+test("webhook release activator forwards dispatch-only provider credentials", async () => {
+  let capturedPayload: Record<string, unknown> | undefined;
+  const activator = createWebhookReleaseActivator({
+    url: "https://materializer.example.test/activate",
+    token: "release-token",
+    fetcher: async (input, init) => {
+      const request = new Request(input, init);
+      capturedPayload = (await request.json()) as Record<string, unknown>;
+      return Response.json({ status: "succeeded" });
+    },
+  });
+
+  await activator.activate({
+    ...fakeOperatorActivationInput(),
+    credentials: {
+      env: {
+        CLOUDFLARE_API_TOKEN: "fixture-provider-token",
+        CLOUDFLARE_ACCOUNT_ID: "ts_acc_takosumi_cloud",
+      },
+    },
+  } as ReleaseActivationInput);
+
+  expect(capturedPayload?.credentials).toEqual({
+    env: {
+      CLOUDFLARE_API_TOKEN: "fixture-provider-token",
+      CLOUDFLARE_ACCOUNT_ID: "ts_acc_takosumi_cloud",
+    },
+  });
+  expect(capturedPayload).not.toHaveProperty("planRun");
+  expect(capturedPayload).not.toHaveProperty("applyRun");
+});
+
 test("runner release activator runs opaque post-apply commands", async () => {
   let capturedJob:
     | Parameters<

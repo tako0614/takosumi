@@ -265,6 +265,7 @@ function releaseActivatorInsecureAllowed(
 }
 
 function releaseActivationWebhookPayload(input: ReleaseActivationInput) {
+  const credentialEnv = releaseActivationCredentialEnv(input.credentials);
   return {
     kind: RELEASE_ACTIVATOR_KIND,
     planRunId: input.planRun.id,
@@ -289,6 +290,7 @@ function releaseActivationWebhookPayload(input: ReleaseActivationInput) {
       stateGeneration: input.outputSnapshot.stateGeneration,
       outputDigest: input.outputSnapshot.outputDigest,
     },
+    ...(credentialEnv ? { credentials: { env: credentialEnv } } : {}),
     ...(input.sourceSnapshot
       ? {
           sourceSnapshot: {
@@ -304,6 +306,21 @@ function releaseActivationWebhookPayload(input: ReleaseActivationInput) {
     nonSensitiveOutputs: input.nonSensitiveOutputs,
     commands: input.commands,
   };
+}
+
+function releaseActivationCredentialEnv(
+  credentials: ReleaseActivationInput["credentials"] | undefined,
+): Readonly<Record<string, string>> | undefined {
+  if (!credentials) return undefined;
+  const env =
+    "env" in credentials && credentials.env && typeof credentials.env === "object"
+      ? credentials.env
+      : credentials;
+  const out: Record<string, string> = {};
+  for (const [name, value] of Object.entries(env)) {
+    if (typeof value === "string") out[name] = value;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 function releaseCommandRunId(applyRunId: string): string {

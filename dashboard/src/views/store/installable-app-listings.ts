@@ -13,7 +13,7 @@ export const installableAppStoreListings: readonly TcsListing[] = [
       git: "https://github.com/tako0614/yurucommu.git",
       ref: "main",
       path: ".",
-      resolvedCommit: "5bace37eac259d1aa1b313b3ded31c03c518c1b8",
+      resolvedCommit: "1fe727f1843c0c4a91fece16cbc73950225e078d",
     },
     kind: "app",
     surface: "service",
@@ -49,7 +49,7 @@ export const installableAppStoreListings: readonly TcsListing[] = [
         name: "worker_bundle_url",
         type: "string",
         defaultValue:
-          "https://github.com/tako0614/yurucommu/releases/download/v2.0.0/takos-worker.js",
+          "https://github.com/tako0614/yurucommu-core/releases/download/v2.0.0/takos-worker.js",
         label: text("Worker artifact URL", "Worker artifact URL"),
       },
       {
@@ -78,7 +78,7 @@ export const installableAppStoreListings: readonly TcsListing[] = [
       git: "https://github.com/tako0614/takos.git",
       ref: "main",
       path: "deploy/opentofu",
-      resolvedCommit: "a4d0375aee7cb7466db6f5d4512ef65eda16e8b9",
+      resolvedCommit: "8157ba6cfe8036fbcf5c7ac4cad718c47ce111b8",
     },
     kind: "app",
     surface: "service",
