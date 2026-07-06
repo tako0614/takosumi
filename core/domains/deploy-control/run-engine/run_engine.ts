@@ -5463,9 +5463,7 @@ export class RunEngine {
     readonly commands: readonly ReleaseActivationCommand[];
     readonly phase: "apply" | "destroy";
   }): Promise<RunCredentials | undefined> {
-    if (!input.commands.some((command) => command.executor !== "operator")) {
-      return undefined;
-    }
+    if (input.commands.length === 0) return undefined;
     return (
       await this.#runEnv.resolveRunEnvironment({
         planRun: input.planRun,

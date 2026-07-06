@@ -754,9 +754,11 @@ test("requested scalar Cloudflare Capsule inputs can be filled from provider sco
       variableMapping: {
         cloudflare_account_id: null,
         account_id: null,
+        cloudflare_api_base_url: null,
         cloudflare_workers_subdomain: null,
         workersSubdomain: null,
         cloudflare: {
+          api_base_url: null,
           workers_subdomain: null,
         },
         untouched: null,
@@ -769,6 +771,9 @@ test("requested scalar Cloudflare Capsule inputs can be filled from provider sco
       seeded.installation.spaceId,
     ),
     scopeHints: {
+      managedProvider: true,
+      providerBaseUrl:
+        "https://app.takosumi.com/compat/cloudflare/client/v4",
       accountId: "acct_scope_123",
       workersSubdomain: "team-workers",
     },
@@ -802,10 +807,13 @@ test("requested scalar Cloudflare Capsule inputs can be filled from provider sco
   const mainTf = runner.planJobs[0]!.generatedRoot!.files["main.tf"]!;
   expect(mainTf).toContain('cloudflare_account_id = "acct_scope_123"');
   expect(mainTf).toContain('account_id = "acct_scope_123"');
+  expect(mainTf).toContain(
+    'cloudflare_api_base_url = "https://app.takosumi.com/compat/cloudflare/client/v4"',
+  );
   expect(mainTf).toContain('cloudflare_workers_subdomain = "team-workers"');
   expect(mainTf).toContain('workersSubdomain = "team-workers"');
   expect(mainTf).toContain(
-    'cloudflare = jsondecode("{\\"account_id\\":\\"acct_scope_123\\",\\"workers_subdomain\\":\\"team-workers\\"}")',
+    'cloudflare = jsondecode("{\\"account_id\\":\\"acct_scope_123\\",\\"api_base_url\\":\\"https://app.takosumi.com/compat/cloudflare/client/v4\\",\\"workers_subdomain\\":\\"team-workers\\"}")',
   );
   expect(mainTf).toContain("untouched = null");
   expect(mainTf).not.toContain("fixture-provider-token");
@@ -2833,6 +2841,68 @@ test("runner release commands receive dispatch-only provider credentials", async
       id: "publish",
       phase: "post_apply",
       executor: "runner",
+      command: ["bun", "run", "app:activate"],
+      workingDirectory: ".",
+      timeoutSeconds: 1200,
+    },
+  ]);
+  expect(activations[0]?.credentials).toEqual({
+    CLOUDFLARE_API_TOKEN: "fixture-provider-token",
+  });
+
+  const activity = (await store.listActivityEvents("space_test")).find(
+    (event) => event.action === "release_activation.succeeded",
+  );
+  expect(JSON.stringify(activity)).not.toContain("fixture-provider-token");
+});
+
+test("operator release commands receive dispatch-only provider credentials", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner(
+    {},
+    {
+      takosumi_release: {
+        sensitive: false,
+        value: {
+          post_apply: [
+            {
+              id: "publish",
+              executor: "operator",
+              command: ["bun", "run", "app:activate"],
+              working_directory: ".",
+              timeoutSeconds: "1200",
+            },
+          ],
+        },
+      },
+      launch_url: { sensitive: false, value: "https://x.example" },
+    },
+  );
+  await seedRunnableInstallationModel(store, { environment: "preview" });
+  const activations: ReleaseActivationInput[] = [];
+  const controller = controllerWith(store, runner, {
+    activity: activityRecorderFor(store),
+    releaseActivator: {
+      activate: (input) => {
+        activations.push(input);
+        return Promise.resolve({ status: "succeeded" });
+      },
+    },
+  });
+
+  const { planRun } = await controller.createInstallationPlan("inst_fixture");
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+
+  expect(applyRun.status).toBe("succeeded");
+  expect(activations).toHaveLength(1);
+  expect(activations[0]?.commands).toEqual([
+    {
+      id: "publish",
+      phase: "post_apply",
+      executor: "operator",
       command: ["bun", "run", "app:activate"],
       workingDirectory: ".",
       timeoutSeconds: 1200,
