@@ -9,6 +9,7 @@ const text = (ja: string, en: string) => ({ ja, en });
 export const installableAppStoreListings: readonly TcsListing[] = [
   {
     id: "yurucommu",
+    installConfigId: "cfg-catalog-yurucommu",
     source: {
       git: "https://github.com/tako0614/yurucommu.git",
       ref: "main",
@@ -74,6 +75,7 @@ export const installableAppStoreListings: readonly TcsListing[] = [
   },
   {
     id: "takos",
+    installConfigId: "cfg-catalog-takos",
     source: {
       git: "https://github.com/tako0614/takos.git",
       ref: "main",

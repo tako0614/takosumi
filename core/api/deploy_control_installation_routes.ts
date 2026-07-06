@@ -174,7 +174,7 @@ function parseInstallConfigListView(
   if (raw === undefined || raw === "" || raw === "all") {
     return { kind: "ok", view: "all" };
   }
-  if (raw === "template-catalog" || raw === "starter-catalog") {
+  if (raw === "template-catalog") {
     return { kind: "ok", view: "template-catalog" };
   }
   return {
@@ -197,9 +197,8 @@ function parseInstallConfigListView(
 function isTemplateCatalogInstallConfig(config: InstallConfig): boolean {
   if (config.spaceId !== undefined) return false;
   if (config.id === DEFAULT_CAPSULE_INSTALL_CONFIG_ID) return true;
-  return (
-    config.trustLevel === "official" && config.catalog?.source !== undefined
-  );
+  if (config.catalog?.source === undefined) return false;
+  return config.trustLevel === "official" || config.trustLevel === "trusted";
 }
 
 function parseIncludeDestroyed(
