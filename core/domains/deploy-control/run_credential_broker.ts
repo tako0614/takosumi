@@ -222,10 +222,12 @@ export class RunCredentialBroker {
         );
         return { ...bundle.env };
       }
+      const installationId =
+        planRun.installationContext?.installationId ?? planRun.installationId;
       const perAlias = await vault!.mintForInstallationProviderEnvBindings(
         planRun.workspaceId ?? planRun.spaceId,
         providerEntries,
-        { phase, delivery },
+        { phase, delivery, ...(installationId ? { installationId } : {}) },
       );
       const evidence = [
         ...bundle.providerCredentialEvidence,

@@ -32,6 +32,7 @@ import {
   platformCloudExtensionRoutes,
   platformCloudExtensionSessionCanAccessCapsuleProjection,
   platformCloudExtensionVerifiedBillingSession,
+  verifyPlatformCloudExtensionSession,
   platformResourceShapeApiEnabled,
   isPlatformMetricsDashboardPath,
   isPlatformMetricsPath,
@@ -49,6 +50,7 @@ import {
   type SourcePollOperations,
   type SourceWebhookOperations,
 } from "../../../deploy/platform/worker.ts";
+import { createManagedProviderRunToken } from "../../../core/shared/managed_provider_tokens.ts";
 
 const TEST_CLOUD_USAGE_PRICE_BOOK = JSON.stringify({
   minimumGrossMarginBps: 3_000,
@@ -2282,6 +2284,69 @@ test("cloud extension billing context keeps service tokens bound to token metada
     error: "cloud_extension_billing_context_mismatch",
     reason: "usage_workspace_id_mismatch",
   });
+});
+
+test("cloud extension authenticates managed provider run tokens with Workspace context", async () => {
+  const issued = await createManagedProviderRunToken({
+    secret: "managed-secret",
+    workspaceId: "space_cc8dbfedfc6347d5",
+    installationId: "inst_ca4ebb681fb24044",
+    connectionId: "conn_operator_takosumi_cloud_cloudflare_compat",
+    provider: "cloudflare",
+    providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+    scopes: ["write"],
+  });
+  expect(issued.token).toMatch(/^takmpt_[A-Za-z0-9_-]+$/);
+
+  const session = await verifyPlatformCloudExtensionSession(
+    new Request(
+      "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/ts_acc_takosumi_cloud/d1/database",
+      {
+        method: "POST",
+        headers: { authorization: `Bearer ${issued.token}` },
+      },
+    ),
+    { TAKOSUMI_MANAGED_PROVIDER_TOKEN_SECRET: "managed-secret" } as never,
+    {
+      basePath: "/compat/cloudflare/client/v4",
+      handlerKey: "TAKOSUMI_CLOUD_PROVIDER_COMPAT_CLOUDFLARE_WORKERS",
+      requiredScopes: ["write"],
+    },
+  );
+
+  expect(session).toEqual({
+    authenticated: true,
+    authKind: "service-token",
+    subject: "takosumi-managed-provider-run",
+    spaceId: "space_cc8dbfedfc6347d5",
+    installationId: "inst_ca4ebb681fb24044",
+    scopes: ["write"],
+  });
+});
+
+test("cloud extension rejects managed provider run tokens for another provider base URL", async () => {
+  const issued = await createManagedProviderRunToken({
+    secret: "managed-secret",
+    workspaceId: "space_cc8dbfedfc6347d5",
+    provider: "cloudflare",
+    providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+    scopes: ["write"],
+  });
+
+  const session = await verifyPlatformCloudExtensionSession(
+    new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
+      method: "POST",
+      headers: { authorization: `Bearer ${issued.token}` },
+    }),
+    { TAKOSUMI_MANAGED_PROVIDER_TOKEN_SECRET: "managed-secret" } as never,
+    {
+      basePath: "/gateway/ai/v1",
+      handlerKey: "TAKOSUMI_CLOUD_AI",
+      requiredScopes: ["write"],
+    },
+  );
+
+  expect(session).toEqual({ authenticated: false });
 });
 
 test("cloud extension billing context accepts Capsule projection ids", async () => {
