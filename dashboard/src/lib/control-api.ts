@@ -1366,6 +1366,7 @@ export async function patchInstallConfig(
     readonly removeVariables?: readonly string[];
     readonly catalogInputDefaults?: Readonly<Record<string, string>>;
     readonly catalogSourceRef?: string;
+    readonly outputAllowlist?: Readonly<Record<string, OutputAllowlistEntry>>;
   },
 ): Promise<InstallConfig> {
   const body = await controlFetch<{ installConfig: InstallConfig }>(
@@ -1384,6 +1385,10 @@ export async function patchInstallConfig(
           : {}),
         ...(input.catalogSourceRef
           ? { catalogSourceRef: input.catalogSourceRef }
+          : {}),
+        ...(input.outputAllowlist &&
+        Object.keys(input.outputAllowlist).length > 0
+          ? { outputAllowlist: input.outputAllowlist }
           : {}),
       },
     },
