@@ -42,14 +42,14 @@ describe("AppListView app launcher", () => {
       "export function isVisibleServiceCapsule",
     );
     expect(installationsUiSource).toContain('inst.status !== "destroyed"');
-    expect(appListSource).toContain("appSurfacesFromDeployment");
+    // Launcher reads surface URLs ungated so the tile opens the app's link.
+    expect(appListSource).toContain("appSurfacesFromOutputs");
     expect(appListSource).toContain("getDashboardOverviewCached");
     expect(appListSource).toContain("listCapsulesCached");
     expect(appListSource).toContain("listCurrentStateVersionsCached");
     expect(appListSource).toContain("listInstallConfigsCached");
     expect(appListSource).toContain("overview()?.nextCapsuleCursor");
     expect(appListSource).toContain("mergeById");
-    expect(appListSource).toContain("overview()?.activity");
     expect(appListSource).toContain("surfacesByCapsule");
     expect(appListSource).toContain("overview()?.currentStateVersions");
     expect(appListSource).not.toMatch(/\bgetDeployment\(/);
@@ -66,10 +66,9 @@ describe("AppListView app launcher", () => {
     expect(appListSource).toContain('class="av-tile av-tile-add"');
     expect(appListSource).toContain('class="av-tile-manage"');
     expect(appListSource).toContain('class="av-tile-actions"');
-    expect(appListSource).toContain('class="av-tile-manage av-tile-delete"');
     expect(appListSource).toContain('t("apps.manage")');
-    expect(appListSource).toContain('t("common.delete")');
-    expect(appListSource).toContain('t("app.danger.destroyTitle")');
+    // The launcher tile keeps only "manage" — no destructive delete affordance.
+    expect(appListSource).not.toContain("av-tile-delete");
     expect(appListSource).toContain("av-tile-name");
     // No admin-console fields on the launcher (those live on /services).
     expect(appListSource).not.toContain("StatusBadge");
@@ -114,7 +113,6 @@ describe("AppListView app launcher", () => {
     expect(appViewsCssSource).toContain(".av-tile-icon");
     expect(appViewsCssSource).toContain(".av-tile-actions");
     expect(appViewsCssSource).toContain(".av-tile-manage");
-    expect(appViewsCssSource).toContain(".av-tile-delete");
     expect(appViewsCssSource).toContain(".av-tile-dot");
     expect(appViewsCssSource).toContain(".av-tile-image");
     expect(appViewsCssSource).toContain(".av-tile-emoji");
@@ -125,13 +123,12 @@ describe("AppListView app launcher", () => {
   test("opens the surface URL when present, else the service screen", () => {
     expect(appListSource).toContain("function AppTileView");
     expect(appListSource).toContain("when={surface().url}");
-    expect(appListSource).toContain("appSurfacesFromDeployment");
+    expect(appListSource).toContain("appSurfacesFromOutputs");
     expect(appListSource).toContain('target="_blank"');
     expect(appListSource).toContain("props.openDetail(tile.inst)");
     expect(appListSource).toContain('class="av-tile-manage"');
-    expect(appListSource).toContain(
-      '`/services/${encodeURIComponent(props.tile.inst.id)}/danger`',
-    );
+    // Tapping the icon goes straight to the app's link (declared surface URL).
+    expect(appListSource).toContain("href={url()}");
     expect(appListSource).not.toContain("window.open");
     // Needs-attention is a corner dot + screen-reader label, not a status pill.
     expect(appListSource).toContain("av-tile-dot");

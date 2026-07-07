@@ -730,14 +730,6 @@
   color: var(--tg-fg);
   outline: none;
 }
-.av-tile-delete {
-  color: var(--tg-danger);
-}
-.av-tile-delete:hover,
-.av-tile-delete:focus-visible {
-  background: color-mix(in srgb, var(--tg-danger) 10%, transparent);
-  color: var(--tg-danger);
-}
 .av-tile-skel {
   width: 100%;
   aspect-ratio: 1 / 1;
