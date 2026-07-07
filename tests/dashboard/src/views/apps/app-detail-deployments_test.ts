@@ -41,6 +41,11 @@ describe("Installation detail deployment surface", () => {
     expect(source.indexOf('t("apps.reviewChanges")')).toBeGreaterThan(
       source.indexOf("function DeploysTab"),
     );
+    expect(source).toContain('icon={<Trash2 size={16} />}');
+    expect(source).toContain('t("common.delete")');
+    expect(source.indexOf('t("common.delete")')).toBeLessThan(
+      source.indexOf("<Tabs items={tabItems()}"),
+    );
     expect(source.indexOf('t("app.deploys.backup")')).toBeGreaterThan(
       source.indexOf('t("app.deploys.advancedActions")'),
     );
