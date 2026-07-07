@@ -5076,6 +5076,9 @@ const D1_PROVIDER_CATALOG_OWNERSHIP_REPAIR_STATEMENTS = [
              or gateway_eligible <> 0`,
 ] as const;
 
+// Historical checksum source for migration 9. Do not add new indexes here:
+// live ledgers already store this migration checksum. New indexes belong in the
+// initial ensure-DDL tail and in a new additive migration.
 const D1_OPEN_TOFU_CANONICAL_INDEX_STATEMENTS = [
   `create unique index if not exists spaces_handle_unique
       on spaces (handle)`,
@@ -5203,12 +5206,6 @@ const D1_OPEN_TOFU_CANONICAL_INDEX_STATEMENTS = [
       on credit_reservations (run_id)`,
   `create index if not exists credit_reservations_status_idx
       on credit_reservations (status)`,
-  `create index if not exists public_host_reservations_workspace_idx
-      on public_host_reservations (workspace_id)`,
-  `create index if not exists public_host_reservations_installation_idx
-      on public_host_reservations (installation_id)`,
-  `create index if not exists public_host_reservations_status_idx
-      on public_host_reservations (status)`,
   `create index if not exists backups_space_idx
       on backups (space_id)`,
   `create index if not exists backups_installation_idx
