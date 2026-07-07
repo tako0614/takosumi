@@ -5406,6 +5406,92 @@ test("DELETE /api/v1/capsules/:id abandons unapplied projections when destroy pl
   );
 });
 
+test("DELETE /api/v1/capsules/:id abandons unapplied projections when credential minting is pending", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const now = Date.now();
+  store.saveAppCapsule({
+    capsuleId: "inst_pending_mint",
+    accountId: "acct_pending_mint",
+    workspaceId: "space_a",
+    appId: "pending-mint",
+    sourceGitUrl: "https://github.com/example/infra.git",
+    sourceRef: "main",
+    sourceCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    planDigest: `sha256:${"f".repeat(64)}`,
+    mode: "shared-cell",
+    status: "failed",
+    createdBySubject: "tsub_ctrl",
+    createdAt: now,
+    updatedAt: now,
+  });
+  const baseOperations = fakeOperations();
+  const pendingCapsule = {
+    id: "inst_pending_mint",
+    workspaceId: "space_a",
+    sourceId: "src_pending_mint",
+    name: "pending-mint",
+    slug: "pending-mint",
+    installType: "opentofu_module",
+    installConfigId: "cfg_pending_mint",
+    environment: "prod",
+    currentStateGeneration: 0,
+    status: "error",
+    createdAt: "2026-01-01T00:00:00Z",
+    updatedAt: "2026-01-01T00:00:00Z",
+  };
+  const operations = fakeOperations({
+    installations: {
+      ...baseOperations.installations,
+      getCapsule: async () =>
+        pendingCapsule as unknown as Awaited<
+          ReturnType<ControlPlaneOperations["installations"]["getCapsule"]>
+        >,
+      patchCapsuleStatus: async (id, status) =>
+        ({
+          ...pendingCapsule,
+          id,
+          status,
+          updatedAt: "2026-01-02T00:00:00Z",
+        }) as unknown as Awaited<
+          ReturnType<
+            ControlPlaneOperations["installations"]["patchCapsuleStatus"]
+          >
+        >,
+    },
+    createCapsuleDestroyPlan: async () => {
+      const error = new Error(
+        "credential_mint_failed: connection conn_operator_takosumi_cloud_cloudflare_compat is pending (not verified)",
+      ) as Error & { code: string };
+      error.code = "failed_precondition";
+      throw error;
+    },
+  });
+
+  const { request: req, url } = request(
+    "DELETE",
+    "/api/v1/capsules/inst_pending_mint",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+
+  expect(response?.status).toEqual(202);
+  const body = (await response!.json()) as {
+    abandoned: boolean;
+    capsule: { status: string };
+    projectionStatus: string;
+  };
+  expect(body.abandoned).toEqual(true);
+  expect(body.capsule.status).toEqual("error");
+  expect(body.projectionStatus).toEqual("failed");
+  expect(store.findAppCapsule("inst_pending_mint")?.status).toEqual("failed");
+});
+
 test("POST /api/v1/capsules/:id/dependencies derives workspaceId from the consumer", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);

@@ -98,7 +98,8 @@ export class ControlApiError extends Error {
   get isAppHostnameUnavailable(): boolean {
     return (
       this.reason === "app_hostname_unavailable" ||
-      /^app_hostname_unavailable:/u.test(this.message)
+      /^app_hostname_unavailable\b/u.test(this.message) ||
+      /\balready claimed by Capsule\b.*\bWorkspace\b/iu.test(this.message)
     );
   }
 }
@@ -1320,6 +1321,28 @@ export async function createCapsule(input: {
     },
   });
   return body.capsule;
+}
+
+export interface DeleteCapsuleResult {
+  readonly capsule: Capsule;
+  readonly abandoned?: boolean;
+  readonly projectionStatus?: string;
+}
+
+/**
+ * Deletes an Capsule from the dashboard flow.
+ *
+ * Applied Capsules still return a destroy-plan Run envelope; unapplied failed
+ * Capsules may be abandoned immediately by the backend so broken first installs
+ * do not get stuck behind provider/state prerequisites.
+ */
+export async function deleteCapsule(
+  capsuleId: string,
+): Promise<DeleteCapsuleResult | unknown> {
+  return await controlFetch<DeleteCapsuleResult | unknown>(
+    `${BASE}/capsules/${encodeURIComponent(capsuleId)}`,
+    { method: "DELETE" },
+  );
 }
 
 export async function getCapsuleProviderConnectionSet(

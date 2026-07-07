@@ -491,9 +491,15 @@ function isProviderConnectionNotReadyForDestroyError(error: unknown): boolean {
   if (controllerErrorCode(error) !== "failed_precondition") return false;
   const message = error instanceof Error ? error.message : String(error);
   return (
-    /\bProvider Env\b/.test(message) &&
-    /\bstatus\b/.test(message) &&
-    /\bis not ready\b/.test(message)
+    (/\bProvider Env\b/.test(message) &&
+      /\bstatus\b/.test(message) &&
+      /\bis not ready\b/.test(message)) ||
+    (/credential_mint_failed:/u.test(message) &&
+      /\bconnection\b/u.test(message) &&
+      /\bpending\b/u.test(message)) ||
+    (/\bconnection\b/u.test(message) &&
+      /\bis pending\b/u.test(message) &&
+      /\bnot verified\b/u.test(message))
   );
 }
 

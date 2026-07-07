@@ -43,6 +43,8 @@ describe("Installation detail deployment surface", () => {
     );
     expect(source).toContain("icon={<Trash2 size={16} />}");
     expect(source).toContain('t("common.delete")');
+    expect(source).toContain("deleteCapsule(capsuleId())");
+    expect(source).toContain('navigate("/services")');
     expect(source.indexOf('t("common.delete")')).toBeLessThan(
       source.indexOf("<Tabs items={tabItems()}"),
     );

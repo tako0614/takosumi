@@ -697,6 +697,8 @@ export const en: Record<keyof typeof ja, string> = {
   "new.hostnameConflict.suggest": "Use suggested ID",
   "new.error.alreadyExists":
     "“{name}” is already added. Open it from the service list.",
+  "new.error.alreadyExistsGeneric":
+    "This service is already added. Open the existing service instead of creating another one.",
   "new.error.notRunnable":
     "This service cannot be added yet. Resolve the listed items, then check again.",
 
