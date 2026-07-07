@@ -508,6 +508,23 @@ function installationHasClaimablePublicState(
   );
 }
 
+function publicHostClaimPriority(installation: Installation): number {
+  switch (installation.status) {
+    case "active":
+      return 400;
+    case "stale":
+      return 300;
+    case "error":
+      return installation.currentStateGeneration > 0 ? 200 : 0;
+    case "pending":
+      return installation.currentStateGeneration > 0 ? 100 : 0;
+    case "disabled":
+      return 50;
+    case "destroyed":
+      return 0;
+  }
+}
+
 function workspaceOutputsWithReleaseDescriptor(
   workspaceOutputs: Readonly<Record<string, JsonValue>>,
   outputs: OpenTofuApplyResult["outputs"],
@@ -1970,6 +1987,7 @@ export class RunEngine {
         readonly installationId: string;
         readonly installationName: string;
         readonly workspaceId: string;
+        readonly priority: number;
       }
     >
   > {
@@ -1979,6 +1997,7 @@ export class RunEngine {
         readonly installationId: string;
         readonly installationName: string;
         readonly workspaceId: string;
+        readonly priority: number;
       }
     >();
     const installations = await this.#store.listInstallations();
@@ -1997,12 +2016,15 @@ export class RunEngine {
         continue;
       }
       for (const host of hosts) {
-        if (claims.has(host)) continue;
-        claims.set(host, {
+        const candidate = {
           installationId: installation.id,
           installationName: installation.name,
           workspaceId: installation.workspaceId ?? installation.spaceId,
-        });
+          priority: publicHostClaimPriority(installation),
+        };
+        const current = claims.get(host);
+        if (current && current.priority >= candidate.priority) continue;
+        claims.set(host, candidate);
       }
     }
     return claims;

@@ -1069,6 +1069,127 @@ test("managed Cloudflare app.takos.jp host is globally claimed across Workspaces
   );
 });
 
+test("managed Cloudflare app.takos.jp host claim prefers active Capsule over stale historical output", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  const stale = await seedInstallationModel(store, {
+    spaceId: "space_stale",
+    sourceId: "src_stale",
+    snapshotId: "snap_stale",
+    installConfigId: "cfg_stale",
+    installationId: "inst_stale",
+    name: "Shared App Stale",
+    environment: "preview",
+  });
+  await store.putOutputSnapshot({
+    id: "out_stale",
+    workspaceId: stale.installation.spaceId,
+    spaceId: stale.installation.spaceId,
+    capsuleId: stale.installation.id,
+    installationId: stale.installation.id,
+    stateGeneration: 1,
+    rawOutputArtifactKey: "outputs/stale.json.enc",
+    publicOutputs: { url: "https://shared-app.app.takos.jp" },
+    workspaceOutputs: { url: "https://shared-app.app.takos.jp" },
+    spaceOutputs: { url: "https://shared-app.app.takos.jp" },
+    outputDigest: "sha256:stale",
+    createdAt: "2026-06-06T00:00:00.000Z",
+  });
+  await store.putInstallation({
+    ...stale.installation,
+    status: "stale",
+    currentStateGeneration: 1,
+    currentOutputSnapshotId: "out_stale",
+  });
+
+  const active = await seedInstallationModel(store, {
+    spaceId: "space_active",
+    sourceId: "src_active",
+    snapshotId: "snap_active",
+    installConfigId: "cfg_active",
+    installationId: "inst_active",
+    name: "Shared App Active",
+    environment: "preview",
+  });
+  await store.putOutputSnapshot({
+    id: "out_active",
+    workspaceId: active.installation.spaceId,
+    spaceId: active.installation.spaceId,
+    capsuleId: active.installation.id,
+    installationId: active.installation.id,
+    stateGeneration: 1,
+    rawOutputArtifactKey: "outputs/active.json.enc",
+    publicOutputs: { url: "https://shared-app.app.takos.jp" },
+    workspaceOutputs: { url: "https://shared-app.app.takos.jp" },
+    spaceOutputs: { url: "https://shared-app.app.takos.jp" },
+    outputDigest: "sha256:active",
+    createdAt: "2026-06-06T00:01:00.000Z",
+  });
+  await store.putInstallation({
+    ...active.installation,
+    status: "active",
+    currentStateGeneration: 1,
+    currentOutputSnapshotId: "out_active",
+  });
+
+  const challenger = await seedInstallationModel(store, {
+    spaceId: "space_challenger",
+    sourceId: "src_challenger",
+    snapshotId: "snap_challenger",
+    installConfigId: "cfg_challenger",
+    installationId: "inst_challenger",
+    name: "Shared App Challenger",
+    environment: "preview",
+    installConfig: {
+      variableMapping: {
+        worker_name: "shared-app",
+        app_url: null,
+        cloudflare: {
+          account_id: null,
+          api_base_url: null,
+        },
+      },
+    },
+  });
+  await putConnectionWithProviderEnv(store, {
+    ...cloudflareConnection(
+      "conn_cloudflare_challenger",
+      challenger.installation.spaceId,
+    ),
+    scopeHints: {
+      managedProvider: true,
+      providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      accountId: "ts_acc_takosumi_cloud",
+    },
+  });
+  await store.putInstallationProviderEnvBindingSet({
+    id: "profile_cloudflare_challenger",
+    spaceId: challenger.installation.spaceId,
+    installationId: challenger.installation.id,
+    environment: challenger.installation.environment,
+    bindings: [
+      {
+        provider: "cloudflare",
+        alias: "main",
+        connectionId: "conn_cloudflare_challenger",
+      },
+    ],
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
+  const profile = multiProviderRunnerProfile();
+  const controller = controllerWith(store, runner, {
+    runnerProfiles: [profile],
+    defaultRunnerProfileId: profile.id,
+  });
+
+  await expect(
+    controller.createInstallationPlan(challenger.installation.id),
+  ).rejects.toThrow(
+    "app_hostname_unavailable: shared-app.app.takos.jp is already claimed by Capsule Shared App Active (inst_active) in Workspace space_active",
+  );
+});
+
 test("managed Cloudflare host claim ignores unapplied pending Capsules", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   const runner = recordingRunner();
