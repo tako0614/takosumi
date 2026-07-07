@@ -3393,4 +3393,126 @@ drop index if exists takosumi_public_host_reservations_installation_idx;
 drop index if exists takosumi_public_host_reservations_workspace_idx;
 drop table if exists takosumi_public_host_reservations;`,
     },
+    {
+      id: "deploy.public_host_reservations.backfill",
+      version: 64,
+      domain: "deploy",
+      description:
+        "Backfill public host reservations from existing Capsule output URLs so SQL-backed Operators inherit the same hostname ownership guarantees as the D1 platform worker. When historical outputs conflict, active Capsules win over stale/error/pending rows; workers.dev preview hosts are intentionally ignored.",
+      sql: `with output_links as (
+  select c.id as installation_id,
+         c.space_id as workspace_id,
+         c.name as installation_name,
+         c.status as installation_status,
+         c.created_at as installation_created_at,
+         coalesce(
+           nullif(c.installation_json->>'currentOutputId', ''),
+           nullif(c.installation_json->>'currentOutputSnapshotId', '')
+         ) as output_id,
+         case
+           when coalesce(c.installation_json->>'currentStateGeneration', '') ~ '^[0-9]+$'
+             then (c.installation_json->>'currentStateGeneration')::integer
+           else 0
+         end as current_state_generation
+  from takosumi_capsules c
+  where c.status != 'destroyed'
+),
+raw_hosts as (
+  select l.installation_id,
+         l.workspace_id,
+         l.installation_name,
+         l.installation_status,
+         l.installation_created_at,
+         l.current_state_generation,
+         urls.url
+  from output_links l
+  join takosumi_outputs o on o.id = l.output_id
+  cross join lateral (
+    values
+      (o.snapshot_json #>> '{publicOutputs,url}'),
+      (o.snapshot_json #>> '{publicOutputs,launch_url}'),
+      (o.snapshot_json #>> '{publicOutputs,app_url}'),
+      (o.snapshot_json #>> '{publicOutputs,public_url}'),
+      (o.snapshot_json #>> '{publicOutputs,app_deployment,url}'),
+      (o.snapshot_json #>> '{publicOutputs,app_deployment,launch_url}'),
+      (o.snapshot_json #>> '{publicOutputs,app_deployment,app_url}'),
+      (o.snapshot_json #>> '{workspaceOutputs,url}'),
+      (o.snapshot_json #>> '{workspaceOutputs,launch_url}'),
+      (o.snapshot_json #>> '{workspaceOutputs,app_url}'),
+      (o.snapshot_json #>> '{workspaceOutputs,public_url}'),
+      (o.snapshot_json #>> '{workspaceOutputs,app_deployment,url}'),
+      (o.snapshot_json #>> '{workspaceOutputs,app_deployment,launch_url}'),
+      (o.snapshot_json #>> '{workspaceOutputs,app_deployment,app_url}')
+  ) as urls(url)
+),
+parsed_hosts as (
+  select installation_id,
+         workspace_id,
+         installation_name,
+         installation_status,
+         installation_created_at,
+         lower(
+           case
+             when url like 'https://%' then split_part(substring(url from 9), '/', 1)
+             else null
+           end
+         ) as hostname,
+         case
+           when installation_status = 'active' then 400
+           when installation_status = 'stale' then 300
+           when installation_status = 'error' and current_state_generation > 0 then 200
+           when installation_status = 'pending' and current_state_generation > 0 then 100
+           when installation_status = 'disabled' then 50
+           else 0
+         end as priority
+  from raw_hosts
+  where url is not null
+),
+distinct_hosts as (
+  select hostname,
+         installation_id,
+         workspace_id,
+         installation_name,
+         installation_status,
+         installation_created_at,
+         max(priority) as priority
+  from parsed_hosts
+  where hostname is not null
+    and hostname != ''
+    and hostname not like '%.workers.dev'
+  group by hostname, installation_id, workspace_id, installation_name,
+           installation_status, installation_created_at
+),
+ranked as (
+  select *,
+         row_number() over (
+           partition by hostname
+           order by priority desc, installation_created_at desc, installation_id desc
+         ) as rn
+  from distinct_hosts
+)
+insert into takosumi_public_host_reservations (
+  hostname, workspace_id, installation_id, installation_name,
+  status, reserved_at, updated_at, released_at
+)
+select hostname,
+       workspace_id,
+       installation_id,
+       installation_name,
+       'reserved',
+       to_char(clock_timestamp() at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+       to_char(clock_timestamp() at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"'),
+       null
+from ranked
+where rn = 1
+on conflict (hostname) do update set
+  workspace_id = excluded.workspace_id,
+  installation_id = excluded.installation_id,
+  installation_name = excluded.installation_name,
+  status = 'reserved',
+  updated_at = excluded.updated_at,
+  released_at = null
+where takosumi_public_host_reservations.status = 'released'
+   or takosumi_public_host_reservations.installation_id = excluded.installation_id`,
+    },
   ]);
