@@ -3406,6 +3406,55 @@ test("POST /api/v1/workspaces/:id/capsules creates a Capsule", async () => {
   expect(createCall.workspaceId).toEqual("space_a");
 });
 
+test("POST /api/v1/workspaces/:id/capsules accepts a legacy spaceId-only Source", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations({
+    getSource: async (id) => ({
+      source: {
+        id,
+        spaceId: "space_a",
+        name: "legacy",
+        url: "https://example.test/legacy.git",
+        defaultRef: "main",
+        defaultPath: ".",
+        status: "active",
+        autoSync: false,
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      } as unknown as Awaited<
+        ReturnType<ControlPlaneOperations["getSource"]>
+      >["source"],
+    }),
+  });
+  const { request: req, url } = request(
+    "POST",
+    "/api/v1/workspaces/space_a/capsules",
+    {
+      cookie,
+      body: {
+        name: "app",
+        environment: "prod",
+        sourceId: "src_legacy",
+        installConfigId: "cfg_x",
+      },
+    },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(201);
+  const createCall = operations.calls.createCapsule?.[0] as {
+    workspaceId: string;
+    sourceId: string;
+  };
+  expect(createCall.workspaceId).toEqual("space_a");
+  expect(createCall.sourceId).toEqual("src_legacy");
+});
+
 test("POST /api/v1/workspaces/:id/capsules stores per-install vars in a scoped InstallConfig", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
@@ -5327,6 +5376,86 @@ test("Sources: GET requires workspaceId, POST + sync return 201", async () => {
   });
   expect(reportResp?.status).toEqual(200);
   expect(operations.calls.getCompatibilityReport?.[0]).toEqual("caprep_1");
+});
+
+test("Sources: legacy spaceId-only Source can sync, snapshot, and authorize reports", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const legacySource = (id: string) =>
+    ({
+      id,
+      spaceId: "space_a",
+      name: "legacy",
+      url: "https://example.test/legacy.git",
+      defaultRef: "main",
+      defaultPath: ".",
+      status: "active",
+      autoSync: false,
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:00Z",
+    }) as unknown as Awaited<
+      ReturnType<ControlPlaneOperations["getSource"]>
+    >["source"];
+  const operations = fakeOperations({
+    getSource: async (id) => ({ source: legacySource(id) }),
+  });
+
+  const getSource = request("GET", "/api/v1/sources/src_legacy", { cookie });
+  const getSourceResp = await handleControlRoute({
+    request: getSource.request,
+    url: getSource.url,
+    store,
+    operations,
+  });
+  expect(getSourceResp?.status).toEqual(200);
+
+  const sync = request("POST", "/api/v1/sources/src_legacy/sync", { cookie });
+  const syncResp = await handleControlRoute({
+    request: sync.request,
+    url: sync.url,
+    store,
+    operations,
+  });
+  expect(syncResp?.status).toEqual(201);
+  expect(operations.calls.createSourceSync?.[0]).toEqual("src_legacy");
+
+  const snapshots = request("GET", "/api/v1/sources/src_legacy/snapshots", {
+    cookie,
+  });
+  const snapshotsResp = await handleControlRoute({
+    request: snapshots.request,
+    url: snapshots.url,
+    store,
+    operations,
+  });
+  expect(snapshotsResp?.status).toEqual(200);
+
+  const compatibility = request(
+    "POST",
+    "/api/v1/sources/src_legacy/compatibility-check",
+    {
+      cookie,
+      body: { sourceSnapshotId: "snap_1" },
+    },
+  );
+  const compatibilityResp = await handleControlRoute({
+    request: compatibility.request,
+    url: compatibility.url,
+    store,
+    operations,
+  });
+  expect(compatibilityResp?.status).toEqual(201);
+
+  const report = request("GET", "/api/v1/compatibility-reports/caprep_1", {
+    cookie,
+  });
+  const reportResp = await handleControlRoute({
+    request: report.request,
+    url: report.url,
+    store,
+    operations,
+  });
+  expect(reportResp?.status).toEqual(200);
 });
 
 test("Providers: catalog entries are public to session", async () => {

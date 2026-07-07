@@ -178,6 +178,20 @@ import { appendLedgerEvent } from "../installation-ledger-events.ts";
 import { base64UrlEncodeBytes } from "../encoding.ts";
 import { canTransitionAppCapsuleStatus } from "../ledger.ts";
 
+function sourceWorkspaceId(
+  source: Readonly<{ workspaceId?: string; spaceId?: string }>,
+): string | undefined {
+  return stringValue(source.workspaceId) ?? stringValue(source.spaceId);
+}
+
+function sourceWorkspaceIdentityMissing(): Response {
+  return errorJson(
+    "internal_error",
+    "source is missing Workspace identity",
+    500,
+  );
+}
+
 export async function handleSources(
   ctx: ControlDispatchContext,
   segments: readonly string[],
@@ -204,10 +218,12 @@ export async function handleSources(
       const sourceId = decodeURIComponent(segments[1] ?? "");
       if (method !== "POST") return methodNotAllowed("POST");
       const { source } = await operations.getSource(sourceId);
+      const workspaceId = sourceWorkspaceId(source);
+      if (!workspaceId) return sourceWorkspaceIdentityMissing();
       const auth = await requireWorkspaceAccess({
         operations,
         store,
-        workspaceId: source.workspaceId,
+        workspaceId,
         subject: ctx.session.subject,
       });
       if (!auth.ok) return auth.response;
@@ -220,10 +236,12 @@ export async function handleSources(
       const sourceId = decodeURIComponent(segments[1] ?? "");
       if (method !== "GET") return methodNotAllowed("GET");
       const { source } = await operations.getSource(sourceId);
+      const workspaceId = sourceWorkspaceId(source);
+      if (!workspaceId) return sourceWorkspaceIdentityMissing();
       const auth = await requireWorkspaceAccess({
         operations,
         store,
-        workspaceId: source.workspaceId,
+        workspaceId,
         subject: ctx.session.subject,
       });
       if (!auth.ok) return auth.response;
@@ -235,10 +253,12 @@ export async function handleSources(
       const sourceId = decodeURIComponent(segments[1] ?? "");
       if (method !== "POST") return methodNotAllowed("POST");
       const { source } = await operations.getSource(sourceId);
+      const workspaceId = sourceWorkspaceId(source);
+      if (!workspaceId) return sourceWorkspaceIdentityMissing();
       const auth = await requireWorkspaceAccess({
         operations,
         store,
-        workspaceId: source.workspaceId,
+        workspaceId,
         subject: ctx.session.subject,
       });
       if (!auth.ok) return auth.response;
@@ -282,10 +302,12 @@ export async function handleSources(
     if (segments.length === 2) {
       const sourceId = decodeURIComponent(segments[1] ?? "");
       const { source } = await operations.getSource(sourceId);
+      const workspaceId = sourceWorkspaceId(source);
+      if (!workspaceId) return sourceWorkspaceIdentityMissing();
       const auth = await requireWorkspaceAccess({
         operations,
         store,
-        workspaceId: source.workspaceId,
+        workspaceId,
         subject: ctx.session.subject,
       });
       if (!auth.ok) return auth.response;
@@ -319,7 +341,7 @@ export async function handleCompatibilityReports(
     const response = await operations.getCompatibilityReport(reportId);
     const report = response.report;
     const reportWorkspaceId = report.sourceId
-      ? (await operations.getSource(report.sourceId)).source.workspaceId
+      ? sourceWorkspaceId((await operations.getSource(report.sourceId)).source)
       : report.capsuleId
         ? (
             await operations.installations.getCapsule(
