@@ -852,7 +852,12 @@ export async function runHandler(
     if (controllerCode) {
       const publicError = publicControllerError(err);
       return c.json(
-        errorEnvelope(c, controllerCode, publicError.message),
+        errorEnvelope(
+          c,
+          controllerCode,
+          publicError.message,
+          publicError.details,
+        ),
         controllerHttpStatus(controllerCode),
       );
     }
@@ -894,13 +899,17 @@ function controllerErrorMessage(error: unknown): string {
 
 function publicControllerError(error: unknown): {
   readonly message: string;
+  readonly details?: unknown;
 } {
   const message = controllerErrorMessage(error);
   if (
     /^app_hostname_unavailable\b/u.test(message) ||
     /\balready claimed by Capsule\b.*\bWorkspace\b/iu.test(message)
   ) {
-    return { message: "app_hostname_unavailable: already exists" };
+    return {
+      message: "app_hostname_unavailable: already exists",
+      details: { reason: "app_hostname_unavailable" },
+    };
   }
   return { message };
 }
@@ -1122,12 +1131,14 @@ export function errorEnvelope(
   c: Context,
   code: DeployControlErrorCode,
   message: string,
+  details?: unknown,
 ): DeployControlErrorEnvelope {
   return {
     error: {
       code,
       message,
       requestId: resolveRequestId(c),
+      ...(details !== undefined ? { details } : {}),
     },
   };
 }
