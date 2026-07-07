@@ -1777,6 +1777,135 @@ test("accounts handler projects space-direct apply responses without deployment 
   expect(stored?.planDigest).toEqual("sha256:space-direct");
 });
 
+test("accounts handler reads current deployment outputs for existing Capsule projection details", async () => {
+  const store = new InMemoryAccountsStore();
+  const session = seedAccountSession(store, "tsub_projection_owner");
+  seedOwnedWorkspace(
+    store,
+    "tsub_projection_owner",
+    "acct_projection",
+    "space_projection",
+  );
+  const now = Date.now();
+  await store.saveAppCapsule({
+    capsuleId: "inst_projection",
+    accountId: "acct_projection",
+    workspaceId: "space_projection",
+    appId: "example.projection",
+    sourceGitUrl: "https://github.com/example/projection.git",
+    sourceRef: "main",
+    sourceCommit: "0123456789abcdef0123456789abcdef01234567",
+    planDigest: "sha256:projection",
+    artifactDigest: "sha256:projection",
+    mode: "self-hosted",
+    status: "ready",
+    createdBySubject: "tsub_projection_owner",
+    createdAt: now,
+    updatedAt: now,
+  });
+  let getCapsuleCalled = false;
+  let listDeploymentsCalled = false;
+  const handler = createAccountsHandler({
+    store,
+    deployControl: {
+      operations: deployControlOperationsStub({
+        getCapsule: (id) => {
+          getCapsuleCalled = true;
+          if (id !== "inst_projection") {
+            throw new Error(`unexpected capsule id ${id}`);
+          }
+          return Promise.resolve({
+            capsule: {
+              id: "inst_projection",
+              workspaceId: "space_projection",
+              name: "projection",
+              slug: "projection",
+              status: "active",
+              environment: "production",
+              installConfigId: "cfg_projection",
+              currentStateVersionId: "dep_projection",
+              currentStateGeneration: 1,
+              createdAt: "2026-07-07T00:00:00.000Z",
+              updatedAt: "2026-07-07T00:00:01.000Z",
+            },
+          } as unknown as GetCapsuleResponse);
+        },
+        listDeployments: (id) => {
+          listDeploymentsCalled = true;
+          if (id !== "inst_projection") {
+            throw new Error(`unexpected deployments capsule id ${id}`);
+          }
+          return Promise.resolve({
+            deployments: [
+              {
+                id: "dep_projection",
+                capsuleId: "inst_projection",
+                status: "active",
+                outputsPublic: {
+                  url: "https://projection.example.test",
+                  app_deployment: {
+                    name: "projection",
+                    publish: [
+                      {
+                        name: "launcher",
+                        type: "interface.ui.surface",
+                        display: { title: "Projection" },
+                      },
+                    ],
+                  },
+                },
+                createdAt: "2026-07-07T00:00:01.000Z",
+              },
+            ],
+          } as unknown as Awaited<
+            ReturnType<DeployControlOperations["listDeployments"]>
+          >);
+        },
+      }),
+    },
+  });
+
+  const response = await handler(
+    new Request(
+      "https://accounts.example.test/v1/capsule-projections/inst_projection",
+      { headers: accountSessionHeaders(session) },
+    ),
+  );
+  expect(response.status).toEqual(200);
+  const body = await response.json();
+  expect(getCapsuleCalled).toEqual(true);
+  expect(listDeploymentsCalled).toEqual(true);
+  expect(body.installation.launch_url).toEqual(
+    "https://projection.example.test",
+  );
+  expect(body.installation.launch.url).toEqual(
+    "https://projection.example.test",
+  );
+  expect(body.installation.deployment_outputs).toEqual([
+    {
+      name: "url",
+      kind: "url",
+      value: "https://projection.example.test",
+      sensitive: false,
+    },
+    {
+      name: "app_deployment",
+      kind: "app_deployment",
+      value: {
+        name: "projection",
+        publish: [
+          {
+            name: "launcher",
+            type: "interface.ui.surface",
+            display: { title: "Projection" },
+          },
+        ],
+      },
+      sensitive: false,
+    },
+  ]);
+});
+
 test("accounts handler validates installation facade request before space deployControl apply", async () => {
   let dispatched = false;
   const store = new InMemoryAccountsStore();

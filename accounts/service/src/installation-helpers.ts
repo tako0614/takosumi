@@ -55,6 +55,14 @@ export interface ActivatedHttpDomainProjection {
   readonly verifiedAt?: string;
 }
 
+export interface DeploymentOutputProjection {
+  readonly name: string;
+  readonly kind: string;
+  readonly value: unknown;
+  readonly sensitive: false;
+  readonly labels?: Readonly<Record<string, string>>;
+}
+
 export function isSha256HexDigest(value: string): boolean {
   return /^sha256:[0-9a-f]{64}$/.test(value);
 }
@@ -678,6 +686,7 @@ export function installationEnvelope(input: {
   oidcClient?: OidcClientRecord;
   runtimeBinding?: RuntimeBindingRecord;
   activatedHttpDomain?: ActivatedHttpDomainProjection;
+  deploymentOutputs?: readonly DeploymentOutputProjection[];
   eventsUrl: string;
 }): Record<string, unknown> {
   void input.bindings;
@@ -686,24 +695,27 @@ export function installationEnvelope(input: {
   const launch = input.activatedHttpDomain
     ? serializeActivatedHttpDomainProjection(input.activatedHttpDomain)
     : null;
-  const deploymentOutputs = input.activatedHttpDomain
-    ? [
-        {
-          name: "launch_url",
-          kind: "launch_url",
-          value: input.activatedHttpDomain.url,
-          sensitive: false,
-          ...(input.activatedHttpDomain.deploymentOutputRef
-            ? {
-                labels: {
-                  deploymentOutputRef:
-                    input.activatedHttpDomain.deploymentOutputRef,
-                },
-              }
-            : {}),
-        },
-      ]
-    : [];
+  const deploymentOutputs =
+    input.deploymentOutputs && input.deploymentOutputs.length > 0
+      ? input.deploymentOutputs
+      : input.activatedHttpDomain
+        ? [
+            {
+              name: "launch_url",
+              kind: "launch_url",
+              value: input.activatedHttpDomain.url,
+              sensitive: false,
+              ...(input.activatedHttpDomain.deploymentOutputRef
+                ? {
+                    labels: {
+                      deploymentOutputRef:
+                        input.activatedHttpDomain.deploymentOutputRef,
+                    },
+                  }
+                : {}),
+            },
+          ]
+        : [];
   return {
     installation: {
       ...serializeAppCapsule(input.installation),
@@ -720,6 +732,18 @@ export function installationEnvelope(input: {
       events_url: input.eventsUrl,
     },
   };
+}
+
+export function deploymentOutputsFromPublicRecord(
+  outputsPublic: unknown,
+): readonly DeploymentOutputProjection[] {
+  if (!isRecord(outputsPublic)) return [];
+  return Object.entries(outputsPublic).map(([name, value]) => ({
+    name,
+    kind: name,
+    value,
+    sensitive: false,
+  }));
 }
 
 export function serializeAppCapsule(
