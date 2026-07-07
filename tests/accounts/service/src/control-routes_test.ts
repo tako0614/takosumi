@@ -6823,9 +6823,10 @@ test("Cloudflare OAuth: start authorizes and callback redirects to /connections,
   // The authenticated subject is bound into the OAuth state at start time.
   expect(signedSubject).toEqual(subject);
 
-  // The callback arrives via a top-level CROSS-SITE redirect: NO session cookie
-  // (SameSite=Strict does not ride it) and NO Authorization header. The flow
-  // must still complete by authorizing from the signed state's subject.
+  // The callback arrives via a top-level CROSS-SITE redirect. It sends no
+  // Authorization header, and the flow must still complete even if browser
+  // cookie policy withholds the session cookie by authorizing from the signed
+  // state's subject.
   const callback = request(
     "GET",
     "/api/v1/connections/cloudflare/oauth/callback?code=cf-code&state=signed",
@@ -6857,11 +6858,10 @@ test("Cloudflare OAuth: start authorizes and callback redirects to /connections,
 });
 
 test("Cloudflare OAuth callback without the session cookie still completes (cross-site redirect)", async () => {
-  // Regression guard for the SameSite=Strict gap: a browser following the
-  // dash.cloudflare.com -> worker redirect sends neither header nor cookie.
-  // Before the fix the up-front requireAccountSession returned 401 JSON and the
-  // user never reached /connections. The callback must authorize from the
-  // signed state subject alone.
+  // Regression guard for cross-site callback brittleness: a browser or privacy
+  // policy can withhold the session cookie, and the redirect sends no
+  // Authorization header. The callback must authorize from the signed state
+  // subject alone so the user still reaches /connections.
   const store = new InMemoryAccountsStore();
   // The owning account exists, but we deliberately present NO cookie.
   seedSession(store, { subject: "tsub_ctrl" });

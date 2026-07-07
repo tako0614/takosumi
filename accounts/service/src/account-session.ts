@@ -54,8 +54,10 @@ export async function requireAccountSession(input: {
  *      OAuth callback / passkey complete — the canonical browser path).
  *
  * Cookie sources are preferred for new browser flows because the cookie
- * is `HttpOnly` / `Secure` / `SameSite=Strict`; clients must not write
- * to `localStorage` (Agent 6 item 7).
+ * is `HttpOnly` / `Secure` / `SameSite=Lax`; clients must not write
+ * to `localStorage` (Agent 6 item 7). Lax is required for Takosumi Accounts
+ * to act as an OIDC issuer for apps on other origins: the browser must send
+ * the account session on the top-level `/oauth/authorize` navigation.
  */
 export function extractAccountSessionId(request: Request): string | null {
   const bearer = bearerToken(request.headers.get("authorization"));
@@ -141,7 +143,7 @@ export function serializeAccountSessionCookie(
     `${ACCOUNT_SESSION_COOKIE_NAME}=${encodeURIComponent(sessionId)}`,
     `Path=${options.path ?? "/"}`,
     "HttpOnly",
-    "SameSite=Strict",
+    "SameSite=Lax",
     `Max-Age=${options.maxAgeSeconds}`,
     options.secure ? "Secure" : "",
   ]
@@ -154,7 +156,7 @@ export function clearAccountSessionCookie(secure: boolean): string {
     `${ACCOUNT_SESSION_COOKIE_NAME}=`,
     "Path=/",
     "HttpOnly",
-    "SameSite=Strict",
+    "SameSite=Lax",
     "Max-Age=0",
     secure ? "Secure" : "",
   ]
