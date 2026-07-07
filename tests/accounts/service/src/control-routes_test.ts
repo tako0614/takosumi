@@ -4439,6 +4439,82 @@ test("POST /api/v1/capsules/:id/plan returns 201", async () => {
   expect(operations.calls.getRunCost).toContain("plan_1");
 });
 
+test("POST /api/v1/capsules/:id/plan backfills Takosumi Accounts OIDC for existing yurucommu Capsules", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  operations.installations.getInstallConfig = async (id) => {
+    operations.calls.getInstallConfig = [id];
+    return {
+      id,
+      name: "legacy-yurucommu-config",
+      sourceKind: "generic_capsule",
+      installType: "opentofu_module",
+      trustLevel: "trusted",
+      variableMapping: {
+        project_name: "yurucommu",
+        app_url: "https://yurucommu.app.takos.jp",
+      },
+      outputAllowlist: {},
+      policy: {},
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:00Z",
+    };
+  };
+  operations.getSource = async (id) => {
+    operations.calls.getSource = [id];
+    return {
+      source: {
+        id,
+        workspaceId: "space_a",
+        spaceId: "space_a",
+        name: "yurucommu",
+        url: "https://github.com/tako0614/yurucommu.git",
+        defaultRef: "master",
+        defaultPath: ".",
+        status: "active",
+        autoSync: false,
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      },
+    };
+  };
+  const { request: req, url } = request(
+    "POST",
+    "/api/v1/capsules/inst_1/plan",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+    issuer: ORIGIN,
+  });
+
+  expect(response?.status).toEqual(201);
+  const oidcClient = await store.findOidcClientForCapsule("inst_1");
+  expect(oidcClient?.issuerUrl).toEqual(ORIGIN);
+  expect(oidcClient?.redirectUris).toEqual([
+    "https://yurucommu.app.takos.jp/api/auth/callback/takos",
+  ]);
+  expect(oidcClient?.tokenEndpointAuthMethod).toEqual("none");
+  const config = operations.calls.putInstallConfig?.[0] as {
+    variableMapping: Record<string, unknown>;
+  };
+  expect(config.variableMapping.app_url).toEqual(
+    "https://yurucommu.app.takos.jp",
+  );
+  expect(config.variableMapping.takosumi_accounts_issuer_url).toEqual(ORIGIN);
+  expect(config.variableMapping.takosumi_accounts_client_id).toEqual(
+    oidcClient?.clientId,
+  );
+  expect(operations.calls.createCapsulePlan?.[0]).toEqual({
+    capsuleId: "inst_1",
+    options: undefined,
+  });
+});
+
 test("POST /api/v1/capsules/:id/plan forwards a preflight compatibility report hint", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
