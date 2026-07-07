@@ -38,6 +38,7 @@ import {
   type BackupRecord,
   type ActivityEvent,
   type ControlApiError,
+  type InstallConfig,
   type CapsuleProviderConnectionBinding,
   type CapsuleProviderConnectionBindings,
   type ProviderConnection,
@@ -46,6 +47,7 @@ import {
   destroyPlanCapsule,
   extractRunId,
   getDeployment,
+  getInstallConfig,
   getCapsuleProviderConnectionSet,
   getCapsule,
   getWorkspaceGraph,
@@ -54,6 +56,7 @@ import {
   listProviderConnections,
   listSources,
   planCapsule,
+  patchInstallConfig,
   putCapsuleProviderConnectionSet,
 } from "../../lib/control-api.ts";
 import { createAction } from "../account/lib/action.tsx";
@@ -74,13 +77,20 @@ import {
   releaseActivationStatusForDeployment,
   outputLabel,
 } from "../../lib/capsules-ui.ts";
-import { formatDateTime, setDocumentTitle, t } from "../../i18n/index.ts";
+import {
+  formatDateTime,
+  locale,
+  setDocumentTitle,
+  t,
+} from "../../i18n/index.ts";
 import { useConfirmDialog } from "../../lib/confirm-dialog.ts";
 import {
   Badge,
   Button,
   Card,
   CardHeader,
+  Checkbox,
+  FormField,
   EmptyState,
   Input,
   KVList,
@@ -89,7 +99,9 @@ import {
   Skeleton,
   StatusBadge,
   Tabs,
+  Textarea,
 } from "../../components/ui/index.ts";
+import type { JsonValue } from "takosumi-contract";
 
 type TabId = "overview" | "deploys" | "settings" | "danger";
 
@@ -125,6 +137,12 @@ function Inner() {
   const [profile, { refetch: refetchProfile }] = createResource(
     settingsCapsuleId,
     getCapsuleProviderConnectionSet,
+  );
+  const settingsInstallConfigId = () =>
+    tab() === "settings" ? (capsule()?.installConfigId ?? null) : null;
+  const [installConfig, { refetch: refetchInstallConfig }] = createResource(
+    settingsInstallConfigId,
+    getInstallConfig,
   );
   const [sources] = createResource(settingsWorkspaceId, listSources);
   const [deployments] = createResource(deploysCapsuleId, listDeployments);
@@ -389,12 +407,18 @@ function Inner() {
                   <Match when={tab() === "settings"}>
                     <SettingsTab
                       source={source()}
+                      installConfig={installConfig()}
+                      installConfigLoading={installConfig.loading}
                       providerConnections={profile()?.bindings}
                       availableProviderConnections={providerConnections() ?? []}
                       capsuleId={capsuleId()}
                       dangerHref={`/services/${encodeURIComponent(capsuleId())}/danger`}
                       onSaved={() =>
-                        void Promise.all([refetchProfile(), refetchCapsule()])
+                        void Promise.all([
+                          refetchProfile(),
+                          refetchInstallConfig(),
+                          refetchCapsule(),
+                        ])
                       }
                     />
                   </Match>
@@ -996,6 +1020,237 @@ function buildProviderConnections(
   return { connections };
 }
 
+type ConfigVariableType = "string" | "number" | "boolean" | "json";
+
+interface ConfigVariableRow {
+  id: string;
+  originalName?: string;
+  name: string;
+  label: string;
+  helper?: string;
+  placeholder?: string;
+  value: string;
+  type: ConfigVariableType;
+  required: boolean;
+  secret: boolean;
+  advanced: boolean;
+  catalog: boolean;
+  hasExistingValue: boolean;
+  deleted?: boolean;
+}
+
+const SYSTEM_CONFIG_VARIABLES = new Set([
+  "takosumi_accounts_issuer_url",
+  "takosumi_accounts_client_id",
+]);
+
+function configRowsFromInstallConfig(
+  config: InstallConfig | undefined,
+): readonly ConfigVariableRow[] {
+  if (!config) return [];
+  const variables = config.variableMapping ?? {};
+  const rows: ConfigVariableRow[] = [];
+  const seen = new Set<string>();
+  for (const input of config.catalog?.inputs ?? []) {
+    if (SYSTEM_CONFIG_VARIABLES.has(input.name)) continue;
+    const type = input.type ?? "string";
+    const value = variables[input.name] ?? input.defaultValue ?? "";
+    rows.push({
+      id: `catalog:${input.name}`,
+      originalName: input.name,
+      name: input.name,
+      label: localizedText(input.label) ?? input.name,
+      helper: localizedText(input.helper),
+      placeholder: input.placeholder,
+      value: input.secret ? "" : configValueToText(value, type),
+      type,
+      required: input.required === true,
+      secret: input.secret === true || variableNameLooksSecret(input.name),
+      advanced: input.advanced === true,
+      catalog: true,
+      hasExistingValue: Object.prototype.hasOwnProperty.call(
+        variables,
+        input.name,
+      ),
+    });
+    seen.add(input.name);
+  }
+  for (const [name, value] of Object.entries(variables)) {
+    if (SYSTEM_CONFIG_VARIABLES.has(name) || seen.has(name)) continue;
+    const type = inferConfigVariableType(value);
+    const secret = variableNameLooksSecret(name);
+    rows.push({
+      id: `custom:${name}`,
+      originalName: name,
+      name,
+      label: name,
+      value: secret ? "" : configValueToText(value, type),
+      type,
+      required: false,
+      secret,
+      advanced: true,
+      catalog: false,
+      hasExistingValue: true,
+    });
+  }
+  return rows;
+}
+
+function primaryConfigVariableNames(
+  config: InstallConfig | undefined,
+): ReadonlySet<string> {
+  const installExperience = config?.catalog?.installExperience;
+  return new Set(
+    [
+      installExperience?.serviceName?.variable,
+      installExperience?.publicEndpoint?.subdomainVariable,
+      installExperience?.publicEndpoint?.urlVariable,
+      installExperience?.initialSecret?.variable,
+      "project_name",
+      "worker_name",
+      "app_url",
+    ].filter((name): name is string => Boolean(name)),
+  );
+}
+
+function localizedText(
+  text: { readonly ja: string; readonly en: string } | undefined,
+): string | undefined {
+  if (!text) return undefined;
+  return locale() === "ja" ? text.ja : text.en;
+}
+
+function variableNameLooksSecret(name: string): boolean {
+  return /(^|[_-])(password|passwd|token|secret|api[_-]?key|private[_-]?key)([_-]|$)/iu.test(
+    name,
+  );
+}
+
+function inferConfigVariableType(value: unknown): ConfigVariableType {
+  if (typeof value === "boolean") return "boolean";
+  if (typeof value === "number") return "number";
+  if (value !== null && typeof value === "object") return "json";
+  return "string";
+}
+
+function configValueToText(value: unknown, type: ConfigVariableType): string {
+  if (value === null || value === undefined) return "";
+  if (type === "json") {
+    return typeof value === "string" ? value : JSON.stringify(value, null, 2);
+  }
+  if (type === "boolean")
+    return value === true || value === "true" ? "true" : "false";
+  return typeof value === "string" ? value : String(value);
+}
+
+function configSummaryItems(config: InstallConfig | undefined) {
+  if (!config) return [];
+  const variables = config.variableMapping ?? {};
+  const endpoint = config.catalog?.installExperience?.publicEndpoint;
+  const subdomainVariable = endpoint?.subdomainVariable ?? "worker_name";
+  const urlVariable = endpoint?.urlVariable ?? "app_url";
+  const subdomain = stringConfigValue(variables[subdomainVariable]);
+  const publicUrl = stringConfigValue(variables[urlVariable]);
+  const oidcReady =
+    stringConfigValue(variables.takosumi_accounts_issuer_url) &&
+    stringConfigValue(variables.takosumi_accounts_client_id);
+  return [
+    ...(publicUrl
+      ? [{ label: t("app.config.publicUrl"), value: <code>{publicUrl}</code> }]
+      : []),
+    ...(subdomain
+      ? [{ label: t("app.config.subdomain"), value: <code>{subdomain}</code> }]
+      : []),
+    {
+      label: t("app.config.oidc"),
+      value: oidcReady ? t("app.config.oidcOn") : t("app.config.oidcOff"),
+    },
+    {
+      label: t("app.config.updatedAt"),
+      value: formatDateTime(config.updatedAt),
+    },
+  ];
+}
+
+function stringConfigValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function newCustomConfigRow(index: number): ConfigVariableRow {
+  return {
+    id: `new:${Date.now()}:${index}`,
+    name: "",
+    label: t("app.config.customName"),
+    value: "",
+    type: "string",
+    required: false,
+    secret: false,
+    advanced: true,
+    catalog: false,
+    hasExistingValue: false,
+  };
+}
+
+function buildConfigVariablePatch(rows: readonly ConfigVariableRow[]):
+  | {
+      readonly variableMapping: Readonly<Record<string, JsonValue>>;
+      readonly removeVariables: readonly string[];
+    }
+  | { readonly error: string } {
+  const variableMapping: Record<string, JsonValue> = {};
+  const removeVariables = new Set<string>();
+  const seen = new Set<string>();
+  for (const row of rows) {
+    const originalName = row.originalName?.trim();
+    if (row.deleted) {
+      if (originalName) removeVariables.add(originalName);
+      continue;
+    }
+    const name = row.name.trim();
+    if (!name) {
+      if (!row.value.trim()) continue;
+      return { error: t("app.config.errorNameRequired") };
+    }
+    if (/\s/u.test(name)) {
+      return { error: t("app.config.errorNameInvalid", { name }) };
+    }
+    if (seen.has(name)) {
+      return { error: t("app.config.errorNameDuplicate", { name }) };
+    }
+    seen.add(name);
+    if (originalName && originalName !== name)
+      removeVariables.add(originalName);
+    if (row.secret && row.value.trim() === "") continue;
+    const parsed = parseConfigVariableValue(row);
+    if ("error" in parsed) return parsed;
+    variableMapping[name] = parsed.value;
+  }
+  return { variableMapping, removeVariables: [...removeVariables] };
+}
+
+function parseConfigVariableValue(
+  row: ConfigVariableRow,
+): { readonly value: JsonValue } | { readonly error: string } {
+  const raw = row.value.trim();
+  if (row.type === "boolean") return { value: raw === "true" };
+  if (row.type === "number") {
+    const value = Number(raw);
+    if (!Number.isFinite(value)) {
+      return { error: t("app.config.errorNumber", { name: row.name }) };
+    }
+    return { value };
+  }
+  if (row.type === "json") {
+    if (!raw) return { value: null };
+    try {
+      return { value: JSON.parse(raw) as JsonValue };
+    } catch {
+      return { error: t("app.config.errorJson", { name: row.name }) };
+    }
+  }
+  return { value: row.value };
+}
+
 function SettingsTab(props: {
   readonly source:
     | {
@@ -1006,19 +1261,27 @@ function SettingsTab(props: {
         readonly status: string;
       }
     | undefined;
+  readonly installConfig: InstallConfig | undefined;
+  readonly installConfigLoading: boolean;
   readonly providerConnections: CapsuleProviderConnectionBindings | undefined;
   readonly availableProviderConnections: readonly ProviderConnection[];
   readonly capsuleId: string;
   readonly dangerHref: string;
-  readonly onSaved: () => void;
+  readonly onSaved: () => void | Promise<void>;
 }) {
   const [rows, setRows] = createSignal<CapsuleProviderConnectionRow[]>([]);
+  const [variableRows, setVariableRows] = createSignal<ConfigVariableRow[]>([]);
   const [formError, setFormError] = createSignal<string | null>(null);
+  const [configError, setConfigError] = createSignal<string | null>(null);
 
   createEffect(() => {
     const providerConnections = props.providerConnections;
     if (!providerConnections) return;
     setRows(providerConnections.map(providerConnectionToRow));
+  });
+
+  createEffect(() => {
+    setVariableRows([...configRowsFromInstallConfig(props.installConfig)]);
   });
 
   const update = (
@@ -1028,6 +1291,31 @@ function SettingsTab(props: {
     setRows((prev) =>
       prev.map((row, i) => (i === index ? { ...row, ...patch } : row)),
     );
+  const updateVariable = (id: string, patch: Partial<ConfigVariableRow>) =>
+    setVariableRows((prev) =>
+      prev.map((row) => (row.id === id ? { ...row, ...patch } : row)),
+    );
+  const removeVariable = (id: string) => updateVariable(id, { deleted: true });
+
+  const primaryNames = createMemo(() =>
+    primaryConfigVariableNames(props.installConfig),
+  );
+  const visibleVariableRows = createMemo(() =>
+    variableRows().filter((row) => !row.deleted),
+  );
+  const primaryVariableRows = createMemo(() =>
+    visibleVariableRows().filter(
+      (row) => !row.advanced || primaryNames().has(row.name),
+    ),
+  );
+  const advancedVariableRows = createMemo(() =>
+    visibleVariableRows().filter(
+      (row) => row.advanced && !primaryNames().has(row.name),
+    ),
+  );
+  const configSummary = createMemo(() =>
+    configSummaryItems(props.installConfig),
+  );
 
   const saveProfile = createAction(async () => {
     setFormError(null);
@@ -1042,11 +1330,115 @@ function SettingsTab(props: {
       props.capsuleId,
       providerConnections.connections,
     );
-    props.onSaved();
+    await props.onSaved();
+  });
+  const saveVariables = createAction(async () => {
+    setConfigError(null);
+    if (!props.installConfig) {
+      setConfigError(t("app.config.notReady"));
+      return;
+    }
+    const patch = buildConfigVariablePatch(variableRows());
+    if ("error" in patch) {
+      setConfigError(patch.error);
+      return;
+    }
+    await patchInstallConfig(props.installConfig.id, patch);
+    await props.onSaved();
   });
 
   return (
     <>
+      <details class="wb-disclosure" open>
+        <summary>{t("app.config.title")}</summary>
+        <Card>
+          <CardHeader
+            title={t("app.config.title")}
+            subtitle={t("app.config.subtitle")}
+          />
+          <Switch>
+            <Match when={props.installConfigLoading}>
+              <p class="muted">{t("common.loading")}</p>
+            </Match>
+            <Match when={!props.installConfig}>
+              <p class="muted">{t("app.config.notReady")}</p>
+            </Match>
+            <Match when={props.installConfig}>
+              <Show when={configSummary().length > 0}>
+                <KVList items={configSummary()} />
+              </Show>
+              <form
+                class="wb-input-vars"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void saveVariables.run();
+                }}
+              >
+                <Show
+                  when={primaryVariableRows().length > 0}
+                  fallback={<p class="muted">{t("app.config.empty")}</p>}
+                >
+                  <VariableRows
+                    rows={primaryVariableRows()}
+                    onChange={updateVariable}
+                    onRemove={removeVariable}
+                  />
+                </Show>
+                <details class="wb-disclosure">
+                  <summary>{t("app.config.advanced")}</summary>
+                  <VariableRows
+                    rows={advancedVariableRows()}
+                    onChange={updateVariable}
+                    onRemove={removeVariable}
+                  />
+                  <div class="wa-form-actions">
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      type="button"
+                      onClick={() =>
+                        setVariableRows((prev) => [
+                          ...prev,
+                          newCustomConfigRow(prev.length),
+                        ])
+                      }
+                    >
+                      {t("app.config.addVariable")}
+                    </Button>
+                  </div>
+                </details>
+                <div class="wa-form-actions">
+                  <Button
+                    variant="primary"
+                    type="submit"
+                    disabled={saveVariables.busy()}
+                    busy={saveVariables.busy()}
+                  >
+                    {saveVariables.busy()
+                      ? t("common.saving")
+                      : t("common.save")}
+                  </Button>
+                </div>
+                <Show when={configError()}>
+                  {(m) => (
+                    <p class="wa-error" role="alert">
+                      {m()}
+                    </p>
+                  )}
+                </Show>
+                <Show when={saveVariables.error()}>
+                  {(m) => (
+                    <p class="wa-error" role="alert">
+                      {m()}
+                    </p>
+                  )}
+                </Show>
+              </form>
+            </Match>
+          </Switch>
+        </Card>
+      </details>
+
       <details class="wb-disclosure">
         <summary>{t("app.bindings.title")}</summary>
         <Card>
@@ -1252,5 +1644,93 @@ function SettingsTab(props: {
         />
       </Card>
     </>
+  );
+}
+
+function VariableRows(props: {
+  readonly rows: readonly ConfigVariableRow[];
+  readonly onChange: (id: string, patch: Partial<ConfigVariableRow>) => void;
+  readonly onRemove: (id: string) => void;
+}) {
+  return (
+    <div class="wb-variable-list">
+      <For each={props.rows}>
+        {(row) => (
+          <div class="wb-variable-row">
+            <FormField label={row.catalog ? row.label : t("app.config.name")}>
+              <Input
+                value={row.name}
+                disabled={row.catalog}
+                placeholder={t("app.config.customName")}
+                onInput={(e) =>
+                  props.onChange(row.id, { name: e.currentTarget.value })
+                }
+              />
+            </FormField>
+            <FormField
+              label={row.catalog ? t("app.config.value") : row.label}
+              hint={
+                row.secret && row.hasExistingValue && row.value.trim() === ""
+                  ? t("app.config.secretHint")
+                  : row.helper
+              }
+              required={row.required}
+            >
+              <ConfigVariableInput row={row} onChange={props.onChange} />
+            </FormField>
+            <Button
+              variant="ghost"
+              size="sm"
+              type="button"
+              onClick={() => props.onRemove(row.id)}
+            >
+              {row.catalog ? t("app.config.reset") : t("app.config.remove")}
+            </Button>
+          </div>
+        )}
+      </For>
+    </div>
+  );
+}
+
+function ConfigVariableInput(props: {
+  readonly row: ConfigVariableRow;
+  readonly onChange: (id: string, patch: Partial<ConfigVariableRow>) => void;
+}) {
+  const setValue = (value: string) => props.onChange(props.row.id, { value });
+  return (
+    <Switch>
+      <Match when={props.row.type === "boolean"}>
+        <Checkbox
+          checked={props.row.value === "true"}
+          onChange={(e) => setValue(e.currentTarget.checked ? "true" : "false")}
+          label={t("app.config.enabled")}
+        />
+      </Match>
+      <Match when={props.row.type === "json"}>
+        <Textarea
+          rows={4}
+          value={props.row.value}
+          placeholder={props.row.placeholder}
+          onInput={(e) => setValue(e.currentTarget.value)}
+        />
+      </Match>
+      <Match when={props.row.type === "number"}>
+        <Input
+          type="number"
+          value={props.row.value}
+          placeholder={props.row.placeholder}
+          onInput={(e) => setValue(e.currentTarget.value)}
+        />
+      </Match>
+      <Match when={props.row.type === "string"}>
+        <Input
+          type={props.row.secret ? "password" : "text"}
+          value={props.row.value}
+          placeholder={props.row.placeholder}
+          onInput={(e) => setValue(e.currentTarget.value)}
+        />
+      </Match>
+    </Switch>
   );
 }

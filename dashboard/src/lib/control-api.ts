@@ -433,6 +433,8 @@ export interface InstallConfig {
   readonly sourceKind: "generic_capsule" | "first_party_capsule";
   readonly trustLevel: TrustLevel;
   readonly modulePath?: string;
+  readonly variableMapping: Readonly<Record<string, unknown>>;
+  readonly outputAllowlist: Readonly<Record<string, OutputAllowlistEntry>>;
   readonly catalog?: {
     readonly templateId?: string;
     readonly templateVersion?: string;
@@ -1341,6 +1343,45 @@ export async function listInstallConfigs(
     })}`,
     (body) => (body.installConfigs as readonly InstallConfig[]) ?? [],
   );
+}
+
+export async function getInstallConfig(id: string): Promise<InstallConfig> {
+  const body = await controlFetch<{ installConfig: InstallConfig }>(
+    `${BASE}/capsule-configs/${encodeURIComponent(id)}`,
+  );
+  return body.installConfig;
+}
+
+export async function patchInstallConfig(
+  id: string,
+  input: {
+    readonly variableMapping?: Readonly<Record<string, ContractJsonValue>>;
+    readonly removeVariables?: readonly string[];
+    readonly catalogInputDefaults?: Readonly<Record<string, string>>;
+    readonly catalogSourceRef?: string;
+  },
+): Promise<InstallConfig> {
+  const body = await controlFetch<{ installConfig: InstallConfig }>(
+    `${BASE}/capsule-configs/${encodeURIComponent(id)}`,
+    {
+      method: "PATCH",
+      body: {
+        ...(input.variableMapping
+          ? { variableMapping: input.variableMapping }
+          : {}),
+        ...(input.removeVariables && input.removeVariables.length > 0
+          ? { removeVariables: input.removeVariables }
+          : {}),
+        ...(input.catalogInputDefaults
+          ? { catalogInputDefaults: input.catalogInputDefaults }
+          : {}),
+        ...(input.catalogSourceRef
+          ? { catalogSourceRef: input.catalogSourceRef }
+          : {}),
+      },
+    },
+  );
+  return body.installConfig;
 }
 
 export async function listTemplateCatalogInstallConfigs(

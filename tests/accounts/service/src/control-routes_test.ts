@@ -5375,6 +5375,7 @@ test("PATCH /api/v1/capsule-configs/:id updates only scoped per-install variable
     {
       cookie,
       body: {
+        removeVariables: ["project_name", "does_not_exist"],
         variableMapping: {
           worker_bundle_url: "https://example.test/v2.0.1/takos-worker.js",
           worker_bundle_sha256: "new-sha",
@@ -5402,7 +5403,6 @@ test("PATCH /api/v1/capsule-configs/:id updates only scoped per-install variable
     };
   };
   expect(saved.variableMapping).toEqual({
-    project_name: "yurucommu",
     worker_bundle_url: "https://example.test/v2.0.1/takos-worker.js",
     worker_bundle_sha256: "new-sha",
   });
