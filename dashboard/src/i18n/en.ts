@@ -243,7 +243,7 @@ export const en: Record<keyof typeof ja, string> = {
   "app.tab.overview": "Overview",
   "app.tab.deploys": "Updates",
   "app.tab.settings": "Settings",
-  "app.tab.danger": "Danger zone",
+  "app.tab.danger": "Delete",
   "app.notFound": "Service not found",
   "app.backToList": "Back to list",
   "app.outputs.title": "Public links",

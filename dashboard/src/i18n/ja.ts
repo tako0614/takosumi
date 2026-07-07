@@ -246,7 +246,7 @@ export const ja = {
   "app.tab.overview": "概要",
   "app.tab.deploys": "更新",
   "app.tab.settings": "設定",
-  "app.tab.danger": "危険な操作",
+  "app.tab.danger": "削除",
   "app.notFound": "サービスが見つかりません",
   "app.backToList": "一覧へ",
   "app.outputs.title": "公開リンク",
