@@ -699,6 +699,8 @@ export const ja = {
   "new.hostnameConflict.suggest": "候補IDを使う",
   "new.error.alreadyExists":
     "「{name}」は既に追加されています。一覧から既存サービスを開いてください。",
+  "new.error.alreadyExistsGeneric":
+    "このサービスは既に追加されています。一覧から既存サービスを開いてください。",
   "new.error.notRunnable":
     "この確認結果ではまだ追加できません。表示された手直し内容を解消してから、もう一度確認してください。",
 

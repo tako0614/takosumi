@@ -44,7 +44,7 @@ import {
   type ProviderConnection,
   createDeploymentRollbackPlan,
   createCapsuleBackup,
-  destroyPlanCapsule,
+  deleteCapsule,
   extractRunId,
   getDeployment,
   getInstallConfig,
@@ -102,6 +102,9 @@ import {
   Textarea,
 } from "../../components/ui/index.ts";
 import type { JsonValue } from "takosumi-contract";
+import { clearCapsuleListCache } from "../../lib/capsule-list.ts";
+import { clearCurrentStateVersionCache } from "../../lib/current-state-versions.ts";
+import { clearDashboardOverviewCache } from "../../lib/dashboard-overview.ts";
 
 type TabId = "overview" | "deploys" | "settings" | "danger";
 
@@ -255,9 +258,19 @@ function Inner() {
     if (runId) navigate(`/runs/${runId}`);
   });
   const destroyPlan = createAction(async () => {
-    const envelope = await destroyPlanCapsule(capsuleId());
+    const workspace = capsule()?.workspaceId;
+    const envelope = await deleteCapsule(capsuleId());
     const runId = extractRunId(envelope);
-    if (runId) navigate(`/runs/${runId}`);
+    if (workspace) {
+      clearCapsuleListCache(workspace);
+      clearCurrentStateVersionCache(workspace);
+      clearDashboardOverviewCache(workspace);
+    }
+    if (runId) {
+      navigate(`/runs/${runId}`);
+      return;
+    }
+    navigate("/services");
   });
   const backup = createAction(async (): Promise<BackupRecord> => {
     return await createCapsuleBackup(capsuleId());
