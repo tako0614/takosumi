@@ -81,4 +81,31 @@ describe("storage access token", () => {
     // Unknown scopes fall back to read-only.
     expect(storageVerbsFromScopes([])).toEqual(["r", "l"]);
   });
+
+  test("rejects a token with an empty prefix", async () => {
+    const { token } = await mint({ prefix: "" });
+    const result = await verifyStorageAccessToken(KEY, token, 1_000_000_100);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe("version");
+  });
+
+  // Frozen cross-repo vector — the SAME golden string asserted in
+  // takos-storage/src/token.test.ts. Guards the byte-for-byte wire contract
+  // against drift on either side.
+  test("verifies its own golden vector (cross-repo anchor)", async () => {
+    const GOLDEN =
+      "takstor_eyJ2IjoxLCJ3cyI6InNwYWNlX2dvMWRnbzFkZ28xZGdvMWQiLCJzdWIiOiJpbnN0X2dvMWRnbzFkZ28xZGdvMWQiLCJwZngiOiJzcGFjZV9nbzFkZ28xZGdvMWRnbzFkL2luc3RfZ28xZGdvMWRnbzFkZ28xZC8iLCJjYXAiOlsiciIsInciLCJsIl0sImF1ZCI6InRha29zLnN0b3JhZ2Uud29ya3NwYWNlIiwiaWF0IjoxMDAwMDAwMDAwLCJleHAiOjEwMDAwMDA5MDB9.V_Z3zmwEPfIj7lRniLhgHKTYCJnZsZ2lW4ST8be9IAc";
+    const result = await verifyStorageAccessToken(
+      "golden-key-fixed-0123456789abcdef",
+      GOLDEN,
+      1_000_000_500,
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.payload.pfx).toBe(
+        "space_go1dgo1dgo1dgo1d/inst_go1dgo1dgo1dgo1d/",
+      );
+      expect(result.payload.cap).toEqual(["r", "w", "l"]);
+    }
+  });
 });

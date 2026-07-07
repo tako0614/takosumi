@@ -121,7 +121,9 @@ export async function verifyStorageAccessToken(
   if (
     payload.v !== 1 ||
     payload.aud !== STORAGE_ACCESS_TOKEN_AUDIENCE ||
-    !Array.isArray(payload.cap)
+    !Array.isArray(payload.cap) ||
+    typeof payload.pfx !== "string" ||
+    payload.pfx.length === 0
   ) {
     return { ok: false, reason: "version" };
   }

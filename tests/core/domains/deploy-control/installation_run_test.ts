@@ -45,6 +45,7 @@ import { ActivityService } from "../../../../core/domains/activity/mod.ts";
 import { InMemoryObservabilitySink } from "../../../../core/domains/observability/mod.ts";
 import type {
   Connection,
+  Deployment,
   OpenTofuOutputEnvelope,
   PlanRun,
   PlanResourceChange,
@@ -826,13 +827,30 @@ test("managed Cloudflare Capsule inputs derive app.takos.jp launch defaults serv
     environment: "preview",
     installConfig: {
       variableMapping: {
-        worker_name: null,
-        app_url: null,
         cloudflare_route_zone_id: null,
         cloudflare_route_pattern: null,
         cloudflare: {
           account_id: null,
           api_base_url: null,
+        },
+      },
+      catalog: {
+        order: 100,
+        surface: "service",
+        kind: "worker",
+        provider: "cloudflare",
+        suggestedName: "yurucommu",
+        badge: { ja: "追加候補", en: "Installable" },
+        name: { ja: "yurucommu", en: "yurucommu" },
+        description: { ja: "テスト", en: "Test" },
+        inputs: [],
+        installExperience: {
+          publicEndpoint: {
+            subdomainVariable: "worker_name",
+            urlVariable: "app_url",
+            routePatternVariable: "cloudflare_route_pattern",
+            baseDomain: "app.takos.jp",
+          },
         },
       },
     },
@@ -1065,7 +1083,7 @@ test("managed Cloudflare app.takos.jp host is globally claimed across Workspaces
   await expect(
     controller.createInstallationPlan(second.installation.id),
   ).rejects.toThrow(
-    "app_hostname_unavailable: shared-app.app.takos.jp is already claimed",
+    "app_hostname_unavailable: shared-app.app.takos.jp already exists",
   );
 });
 
@@ -1186,7 +1204,7 @@ test("managed Cloudflare app.takos.jp host claim prefers active Capsule over sta
   await expect(
     controller.createInstallationPlan(challenger.installation.id),
   ).rejects.toThrow(
-    "app_hostname_unavailable: shared-app.app.takos.jp is already claimed by Capsule Shared App Active (inst_active) in Workspace space_active",
+    "app_hostname_unavailable: shared-app.app.takos.jp already exists",
   );
 });
 
@@ -1294,6 +1312,84 @@ test("managed Cloudflare host claim ignores unapplied pending Capsules", async (
   );
 
   expect(planRun.status).toEqual("succeeded");
+});
+
+test("Deployment read projection hides app.takos.jp URLs owned by another Capsule", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  const stale = await seedInstallationModel(store, {
+    spaceId: "space_stale",
+    sourceId: "src_stale",
+    snapshotId: "snap_stale",
+    installConfigId: "cfg_stale",
+    installationId: "inst_stale",
+    name: "Shared App Stale",
+    environment: "preview",
+  });
+  const owner = await seedInstallationModel(store, {
+    spaceId: "space_owner",
+    sourceId: "src_owner",
+    snapshotId: "snap_owner",
+    installConfigId: "cfg_owner",
+    installationId: "inst_owner",
+    name: "Shared App Owner",
+    environment: "preview",
+  });
+  await store.reservePublicHost({
+    hostname: "shared-app.app.takos.jp",
+    workspaceId: owner.installation.spaceId,
+    installationId: owner.installation.id,
+    installationName: owner.installation.name,
+    now: "2026-06-06T00:00:00.000Z",
+  });
+  const deployment: Deployment = {
+    id: "dep_stale",
+    spaceId: stale.installation.spaceId,
+    installationId: stale.installation.id,
+    environment: stale.installation.environment,
+    applyRunId: "apply_stale",
+    sourceSnapshotId: stale.snapshot.id,
+    stateGeneration: 1,
+    outputSnapshotId: "out_stale",
+    outputsPublic: {
+      url: "https://shared-app.app.takos.jp",
+      app_deployment: {
+        url: "https://shared-app.app.takos.jp",
+        status: "ready",
+      },
+      health: "ready",
+    },
+    status: "active",
+    createdAt: "2026-06-06T00:00:00.000Z",
+  };
+  await store.putDeployment(deployment);
+  await store.putInstallation({
+    ...stale.installation,
+    status: "active",
+    currentDeploymentId: deployment.id,
+  });
+  const controller = controllerWith(store, runner);
+
+  const outputs = await controller.listDeploymentOutputs(stale.installation.id);
+  expect(outputs.outputs).toEqual([
+    {
+      name: "app_deployment",
+      kind: "app_deployment",
+      value: { status: "ready" },
+      sensitive: false,
+    },
+    {
+      name: "health",
+      kind: "health",
+      value: "ready",
+      sensitive: false,
+    },
+  ]);
+  const projected = await controller.getDeployment(deployment.id);
+  expect(projected.outputsPublic).toEqual({
+    app_deployment: { status: "ready" },
+    health: "ready",
+  });
 });
 
 test("managed Cloudflare app.takos.jp host is atomically reserved by successful plans", async () => {
@@ -1404,7 +1500,7 @@ test("managed Cloudflare app.takos.jp host is atomically reserved by successful 
   await expect(
     controller.createInstallationPlan(second.installation.id),
   ).rejects.toThrow(
-    "app_hostname_unavailable: reserved-app.app.takos.jp is already claimed",
+    "app_hostname_unavailable: reserved-app.app.takos.jp already exists",
   );
 });
 

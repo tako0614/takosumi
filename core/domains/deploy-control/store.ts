@@ -607,6 +607,9 @@ export interface OpenTofuDeploymentStore {
   reservePublicHost(
     input: ReservePublicHostInput,
   ): Promise<ReservePublicHostResult>;
+  getPublicHostReservation(
+    hostname: string,
+  ): Promise<PublicHostReservation | undefined>;
   releasePublicHostsForInstallation(
     installationId: string,
     now: string,
@@ -1395,6 +1398,14 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     };
     this.#publicHostReservations.set(hostname, reservation);
     return Promise.resolve({ reserved: true, reservation });
+  }
+
+  getPublicHostReservation(
+    hostname: string,
+  ): Promise<PublicHostReservation | undefined> {
+    return Promise.resolve(
+      this.#publicHostReservations.get(hostname.toLowerCase()),
+    );
   }
 
   releasePublicHostsForInstallation(

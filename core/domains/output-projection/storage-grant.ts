@@ -78,6 +78,17 @@ export function planStorageWorkspaceGrants(
   context: StorageGrantContext,
 ): readonly StorageGrantPlan[] {
   if (producerExport.name !== STORAGE_WORKSPACE_PUBLICATION) return [];
+  // The `/`-joined prefix relies on slash-free ids; a `/` in either id would
+  // blur prefix boundaries between consumers. Ids are server-generated
+  // (space_<hex> / inst_<hex>), so this is a defensive guard, not a live path.
+  if (
+    !context.workspaceId ||
+    !context.consumerInstallationId ||
+    context.workspaceId.includes("/") ||
+    context.consumerInstallationId.includes("/")
+  ) {
+    return [];
+  }
   const apiUrl = firstEndpointUrl(producerExport);
   const prefix = `${context.workspaceId}/${context.consumerInstallationId}/`;
 

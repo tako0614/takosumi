@@ -15,6 +15,18 @@
  * next run once the consume is declared. This mirrors how sealed sensitive
  * outputs are consumed by {@link DependencyResolutionService}.
  *
+ * PRODUCER TRUST: any installable Capsule is arbitrary Git, so a same-workspace
+ * Capsule could impersonate the storage publication (export the name + a forged
+ * signing key) to become a confused-deputy backend. Producer selection is
+ * therefore PINNED: an installation created from the official takos-storage
+ * InstallConfig is trusted; otherwise a lone non-official exporter is accepted
+ * (self-host single-storage), but ANY ambiguity (multiple candidates) fails
+ * CLOSED — no grant is minted.
+ *
+ * FAIL-OPEN: storage is an optional backend, so this never blocks a consumer
+ * apply. All resolution is wrapped so a decrypt failure, another app's malformed
+ * output, or a store error yields "no grant" rather than a failed run.
+ *
  * Like the {@link RunCredentialBroker}, the returned env is attached to the
  * runner dispatch ONLY — never persisted, never logged — and rides the same
  * dispatch-only credential channel (excluded from the plan-content digest).
@@ -36,6 +48,9 @@ import type { OpenTofuDeploymentStore } from "./store.ts";
 
 const SIGNING_KEY_OUTPUT_NAME = "takos_storage_signing_key";
 
+/** The official catalog InstallConfig id for the takos-storage producer. */
+const OFFICIAL_STORAGE_INSTALL_CONFIG_ID = "cfg-catalog-takos-storage";
+
 // Well-known OpenTofu input variables a storage consumer (e.g. takos-office)
 // declares; the runner admits only `TF_VAR_*` names into the sandbox env.
 const TF_VAR_API_URL = "TF_VAR_takos_storage_api_url";
@@ -48,6 +63,8 @@ export interface StorageGrantBrokerDependencies {
   readonly now: () => number;
   /** Host-injected resolver that decrypts the producer's sealed signing key. */
   readonly sensitiveOutputResolver?: SensitiveOutputResolver;
+  /** Optional log sink for fail-open diagnostics. */
+  readonly onSkip?: (reason: string, detail: Record<string, unknown>) => void;
 }
 
 type StoreOutputSnapshot = NonNullable<
@@ -58,6 +75,7 @@ interface ResolvedStorageProducer {
   readonly installationId: string;
   readonly output: StoreOutputSnapshot;
   readonly export: ProjectedServiceExport;
+  readonly official: boolean;
 }
 
 export class StorageGrantBroker {
@@ -65,21 +83,37 @@ export class StorageGrantBroker {
   readonly #newId: (prefix: string) => string;
   readonly #now: () => number;
   readonly #sensitiveOutputResolver?: SensitiveOutputResolver;
+  readonly #onSkip?: (reason: string, detail: Record<string, unknown>) => void;
 
   constructor(dependencies: StorageGrantBrokerDependencies) {
     this.#store = dependencies.store;
     this.#newId = dependencies.newId;
     this.#now = dependencies.now;
     this.#sensitiveOutputResolver = dependencies.sensitiveOutputResolver;
+    this.#onSkip = dependencies.onSkip;
   }
 
   /**
    * Returns the `TF_VAR_*` env to inject for a consumer's storage grant, or
-   * `undefined` when the run does not consume workspace storage (or no producer
-   * is installed / the signing key can't be resolved — fail open so a consumer
-   * apply is never blocked by an absent optional storage backend).
+   * `undefined` when the run does not consume workspace storage, no trusted
+   * producer resolves, or resolution fails. Never throws (fail-open).
    */
   async mintStorageGrantEnv(
+    planRun: PlanRun,
+    phase: "plan" | "apply" | "destroy",
+    auditRunId: string,
+  ): Promise<Record<string, string> | undefined> {
+    try {
+      return await this.#resolveStorageGrantEnv(planRun, phase, auditRunId);
+    } catch (error) {
+      this.#skip("storage_grant_resolution_error", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
+    }
+  }
+
+  async #resolveStorageGrantEnv(
     planRun: PlanRun,
     phase: "plan" | "apply" | "destroy",
     auditRunId: string,
@@ -114,6 +148,9 @@ export class StorageGrantBroker {
       typeof signingKey.value !== "string" ||
       signingKey.value.length === 0
     ) {
+      this.#skip("producer_signing_key_unresolved", {
+        producerInstallationId: producer.installationId,
+      });
       return undefined;
     }
 
@@ -133,7 +170,6 @@ export class StorageGrantBroker {
     if (grant.apiUrl) env[TF_VAR_API_URL] = grant.apiUrl;
 
     await this.#recordMintEvidence({
-      planRun,
       phase,
       auditRunId,
       workspaceId,
@@ -152,11 +188,17 @@ export class StorageGrantBroker {
       consumerInstallationId,
     );
     if (!output) return [];
-    const { serviceBindings } = projectServicesFromOutputs(
-      output.workspaceOutputs as Readonly<Record<string, JsonValue>>,
-      { allowExtensionCapabilities: true },
-    );
-    return serviceBindings.filter(
+    let bindings: readonly ProjectedServiceBinding[];
+    try {
+      bindings = projectServicesFromOutputs(
+        output.workspaceOutputs as Readonly<Record<string, JsonValue>>,
+        { allowExtensionCapabilities: true },
+      ).serviceBindings;
+    } catch {
+      // A malformed consumer output must not block the consumer's own run.
+      return [];
+    }
+    return bindings.filter(
       (binding) =>
         binding.selector.name === STORAGE_WORKSPACE_PUBLICATION ||
         binding.selector.serviceExportId === STORAGE_WORKSPACE_PUBLICATION ||
@@ -164,35 +206,62 @@ export class StorageGrantBroker {
     );
   }
 
+  /**
+   * Resolves the trusted storage producer in the workspace. Prefers an
+   * installation created from the official takos-storage InstallConfig; falls
+   * back to a lone non-official exporter (self-host). Any ambiguity (0 or >1
+   * candidate after preference) fails CLOSED.
+   */
   async #findProducer(
     workspaceId: string,
     consumerInstallationId: string,
   ): Promise<ResolvedStorageProducer | undefined> {
     const installations = await this.#store.listInstallations(workspaceId);
+    const exporters: ResolvedStorageProducer[] = [];
     for (const installation of installations) {
       if (installation.id === consumerInstallationId) continue;
       const output = await this.#store.getLatestOutputSnapshot(installation.id);
       if (!output) continue;
-      const { serviceExports } = projectServicesFromOutputs(
-        output.workspaceOutputs as Readonly<Record<string, JsonValue>>,
-        { allowExtensionCapabilities: true },
-      );
+      let serviceExports: readonly ProjectedServiceExport[];
+      try {
+        serviceExports = projectServicesFromOutputs(
+          output.workspaceOutputs as Readonly<Record<string, JsonValue>>,
+          { allowExtensionCapabilities: true },
+        ).serviceExports;
+      } catch {
+        // Another app's malformed output must not abort producer discovery.
+        continue;
+      }
       const storageExport = serviceExports.find(
         (exported) => exported.name === STORAGE_WORKSPACE_PUBLICATION,
       );
-      if (storageExport) {
-        return {
-          installationId: installation.id,
-          output,
-          export: storageExport,
-        };
-      }
+      if (!storageExport) continue;
+      exporters.push({
+        installationId: installation.id,
+        output,
+        export: storageExport,
+        official:
+          installation.installConfigId === OFFICIAL_STORAGE_INSTALL_CONFIG_ID,
+      });
     }
-    return undefined;
+
+    if (exporters.length === 0) return undefined;
+    const official = exporters.filter((candidate) => candidate.official);
+    const candidates = official.length > 0 ? official : exporters;
+    if (candidates.length !== 1) {
+      // Fail closed: an impersonating same-workspace exporter (or two legit
+      // installs) makes producer selection untrustworthy — mint nothing.
+      this.#skip("ambiguous_storage_producer", {
+        workspaceId,
+        exporterCount: exporters.length,
+        officialCount: official.length,
+      });
+      return undefined;
+    }
+    return candidates[0];
   }
 
   async #recordMintEvidence(input: {
-    readonly planRun: PlanRun;
     readonly phase: "plan" | "apply" | "destroy";
     readonly auditRunId: string;
     readonly workspaceId: string;
@@ -223,5 +292,9 @@ export class StorageGrantBroker {
       ],
       createdAt: new Date(this.#now()).toISOString(),
     });
+  }
+
+  #skip(reason: string, detail: Record<string, unknown>): void {
+    this.#onSkip?.(reason, detail);
   }
 }

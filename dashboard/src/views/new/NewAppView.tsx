@@ -663,17 +663,6 @@ function routePatternFromAppUrl(
   }
 }
 
-function managedWorkerNameFromVariables(
-  current: Readonly<Record<string, JsonValue>>,
-  variableName: string,
-  fallback: string,
-): string {
-  const value = current[variableName];
-  if (typeof value !== "string") return fallback;
-  const trimmed = slugInputValue(value);
-  return trimmed || fallback;
-}
-
 function managedBaseDomain(value: string | undefined): string {
   const trimmed = (value ?? "").trim().toLowerCase();
   return /^[a-z0-9.-]+$/u.test(trimmed) && trimmed.includes(".")
@@ -1558,38 +1547,37 @@ function Inner() {
       (variables.has("cloudflare_route_pattern")
         ? "cloudflare_route_pattern"
         : undefined);
-    const publicBaseDomain = managedBaseDomain(publicEndpoint?.baseDomain);
-    const managedWorkerName = managedWorkerNameFromVariables(
-      current,
-      subdomainVariable ?? "worker_name",
-      projectNameVariable(),
-    );
-    const managedAppHost = `${managedWorkerName}.${publicBaseDomain}`;
     if (
       !connection ||
       sameProviderFamily(connection.providerSource, "cloudflare")
     ) {
+      const publicBaseDomain = managedBaseDomain(publicEndpoint?.baseDomain);
+      const currentSubdomain =
+        subdomainVariable && typeof current[subdomainVariable] === "string"
+          ? current[subdomainVariable].trim()
+          : "";
       const currentAppUrl =
         urlVariable && typeof current[urlVariable] === "string"
           ? current[urlVariable].trim()
           : "";
-      const managedAppUrl = currentAppUrl || `https://${managedAppHost}`;
-      if (subdomainVariable) {
-        setDefault(subdomainVariable, managedWorkerName);
+      const managedAppHost = currentSubdomain
+        ? `${currentSubdomain}.${publicBaseDomain}`
+        : "";
+      const managedAppUrl =
+        currentAppUrl || (managedAppHost ? `https://${managedAppHost}` : "");
+      if (managedAppHost && subdomainVariable !== "worker_name") {
+        setDefault("worker_name", currentSubdomain);
       }
-      if (subdomainVariable !== "worker_name") {
-        setDefault("worker_name", managedWorkerName);
-      }
-      if (urlVariable) {
+      if (managedAppUrl && urlVariable) {
         setDefault(urlVariable, managedAppUrl);
       }
-      if (urlVariable !== "app_url") {
+      if (managedAppUrl && urlVariable !== "app_url") {
         setDefault("app_url", managedAppUrl);
       }
       setDefault("cloudflare_account_id", connection?.scopeHints?.accountId);
       setDefault("account_id", connection?.scopeHints?.accountId);
       setDefault("cloudflare_route_zone_id", connection?.scopeHints?.zoneId);
-      if (routePatternVariable) {
+      if (managedAppUrl && routePatternVariable) {
         setDefault(
           routePatternVariable,
           routePatternFromAppUrl(managedAppUrl) ?? `${managedAppHost}/*`,

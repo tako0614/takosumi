@@ -896,6 +896,20 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     return { reserved: false, reservation, reason: "already_reserved" };
   }
 
+  async getPublicHostReservation(
+    hostname: string,
+  ): Promise<PublicHostReservation | undefined> {
+    const rows = await this.#client.query<Record<string, unknown>>(
+      `select hostname, workspace_id, installation_id, installation_name,
+              status, reserved_at, updated_at, released_at
+       from takosumi_public_host_reservations
+       where hostname = $1`,
+      [hostname.toLowerCase()],
+    );
+    const row = rows.rows[0];
+    return row ? publicHostReservationFromRow(row) : undefined;
+  }
+
   async releasePublicHostsForInstallation(
     installationId: string,
     now: string,

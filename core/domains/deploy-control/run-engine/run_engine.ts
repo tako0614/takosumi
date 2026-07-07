@@ -286,16 +286,37 @@ type RecordActivityArgs = Omit<
   readonly spaceId?: string;
 };
 
-function requestedGenericCapsuleVariables(
-  explicit: Readonly<Record<string, unknown>>,
-  providerInputDefaults: Readonly<Record<string, JsonValue>>,
+function declaredGenericCapsuleInputNames(
   moduleFiles: readonly OpenTofuCapsuleSourceFile[] | undefined,
   rootModuleVariables: readonly string[] | undefined,
-): Readonly<Record<string, unknown>> {
-  const declaredInputs = new Set(
+): ReadonlySet<string> {
+  return new Set(
     rootModuleVariables ??
       (moduleFiles ? collectRootModuleVariableNames(moduleFiles) : []),
   );
+}
+
+function publicEndpointVariableNames(
+  installConfig: InstallConfig,
+): ReadonlySet<string> {
+  const endpoint = installConfig.catalog?.installExperience?.publicEndpoint;
+  if (!endpoint) return new Set();
+  return new Set(
+    [
+      endpoint.subdomainVariable,
+      endpoint.urlVariable,
+      endpoint.routePatternVariable,
+    ]
+      .map((name) => nonEmptyStringValue(name))
+      .filter((name): name is string => name !== undefined),
+  );
+}
+
+function requestedGenericCapsuleVariables(
+  explicit: Readonly<Record<string, unknown>>,
+  providerInputDefaults: Readonly<Record<string, JsonValue>>,
+  declaredInputs: ReadonlySet<string>,
+): Readonly<Record<string, unknown>> {
   if (declaredInputs.size === 0) return explicit;
   const requested: Record<string, unknown> = { ...explicit };
   for (const key of Object.keys(providerInputDefaults)) {
@@ -446,22 +467,38 @@ function hasManagedCloudflareProviderDefaults(
 
 function finalizeManagedCloudflarePublicHostVariables(input: {
   readonly explicit: Readonly<Record<string, JsonValue>>;
+  readonly installation: Installation;
+  readonly declaredInputs: ReadonlySet<string>;
+  readonly endpointVariables: ReadonlySet<string>;
   readonly providerInputDefaults: Readonly<Record<string, JsonValue>>;
   readonly variables: Readonly<Record<string, JsonValue>>;
 }): Readonly<Record<string, JsonValue>> {
   if (!hasManagedCloudflareProviderDefaults(input.providerInputDefaults)) {
     return input.variables;
   }
-  const workerName = nonEmptyStringValue(input.variables.worker_name);
+  const canSet = (name: string) =>
+    Object.prototype.hasOwnProperty.call(input.variables, name) ||
+    input.declaredInputs.has(name) ||
+    input.endpointVariables.has(name);
+  const out: Record<string, JsonValue> = { ...input.variables };
+  let workerName = nonEmptyStringValue(out.worker_name);
+  if (
+    !workerName &&
+    !nonEmptyStringValue(input.explicit.worker_name) &&
+    canSet("worker_name")
+  ) {
+    workerName = workerNameFromCapsule(input.installation);
+    if (workerName) out.worker_name = workerName;
+  }
   if (!workerName || !validManagedWorkerName(workerName)) {
-    return input.variables;
+    return out;
   }
   const host = `${workerName}.${MANAGED_APP_DOMAIN}`;
-  const out: Record<string, JsonValue> = { ...input.variables };
-  if (!nonEmptyStringValue(input.explicit.app_url)) {
+  if (!nonEmptyStringValue(input.explicit.app_url) && canSet("app_url")) {
     out.app_url = `https://${host}`;
   }
   if (
+    canSet("cloudflare_route_pattern") &&
     nonEmptyStringValue(out.cloudflare_route_zone_id) &&
     !nonEmptyStringValue(input.explicit.cloudflare_route_pattern)
   ) {
@@ -485,6 +522,10 @@ function workerNameFromCapsule(installation: Installation): string | undefined {
   const maxBaseLength = Math.max(1, 52 - suffix.length - 1);
   const normalized = `${base.slice(0, maxBaseLength).replace(/-+$/g, "")}-${suffix}`;
   return validManagedWorkerName(normalized) ? normalized : undefined;
+}
+
+function publicHostUnavailableMessage(host: string): string {
+  return `app_hostname_unavailable: ${host} already exists`;
 }
 
 function managedWorkerNameSuffix(installationId: string): string {
@@ -1879,11 +1920,18 @@ export class RunEngine {
       input.installConfig.modulePath,
       { skipReady: input.skipReadySourceFileDiscovery === true },
     );
+    const declaredInputs = declaredGenericCapsuleInputNames(
+      moduleFiles,
+      input.compatibilityReport?.rootModuleVariables,
+    );
     const explicitVariables = normalizeVariables(
       input.installConfig.variableMapping,
     );
     const variables = finalizeManagedCloudflarePublicHostVariables({
       explicit: explicitVariables,
+      installation: input.installation,
+      declaredInputs,
+      endpointVariables: publicEndpointVariableNames(input.installConfig),
       providerInputDefaults: installTypePlan.providerInputDefaults,
       variables: normalizeVariables(
         mergeJsonVariableDefaults(
@@ -1891,8 +1939,7 @@ export class RunEngine {
           requestedGenericCapsuleVariables(
             explicitVariables,
             installTypePlan.providerInputDefaults,
-            moduleFiles,
-            input.compatibilityReport?.rootModuleVariables,
+            declaredInputs,
           ),
         ),
       ),
@@ -1937,9 +1984,7 @@ export class RunEngine {
       if (!claim || claim.installationId === installation.id) continue;
       throw new OpenTofuControllerError(
         "failed_precondition",
-        `app_hostname_unavailable: ${host} is already claimed by Capsule ` +
-          `${claim.installationName} (${claim.installationId}) in Workspace ` +
-          `${claim.workspaceId}`,
+        publicHostUnavailableMessage(host),
       );
     }
     const workspaceId = installation.workspaceId ?? installation.spaceId;
@@ -1956,9 +2001,7 @@ export class RunEngine {
       const reservation = result.reservation;
       throw new OpenTofuControllerError(
         "failed_precondition",
-        `app_hostname_unavailable: ${host} is already claimed by Capsule ` +
-          `${reservation.installationName} (${reservation.installationId}) ` +
-          `in Workspace ${reservation.workspaceId}`,
+        publicHostUnavailableMessage(host),
       );
     }
   }

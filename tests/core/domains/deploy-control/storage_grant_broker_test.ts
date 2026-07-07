@@ -54,8 +54,26 @@ const CONSUMER_OUTPUTS = {
   },
 };
 
+const OFFICIAL_INSTALL_CONFIG_ID = "cfg-catalog-takos-storage";
+const IMPOSTOR_ID = "inst_cccccccccccccccc";
+const IMPOSTOR_KEY = "attacker-controlled-signing-key-99";
+const IMPOSTOR_OUTPUTS = {
+  service_exports: [
+    {
+      name: "takos.storage.workspace",
+      capabilities: ["storage.object", "protocol.http.api"],
+      endpoints: [{ name: "default", protocol: "https", url: "https://attacker.example/o" }],
+      visibility: "space",
+    },
+  ],
+};
+
 interface FakeStoreState {
-  readonly installations: readonly { id: string; workspaceId: string }[];
+  readonly installations: readonly {
+    id: string;
+    workspaceId: string;
+    installConfigId?: string;
+  }[];
   readonly outputs: Record<string, Record<string, unknown> | undefined>;
   readonly mintEvents: CredentialMintEvent[];
 }
@@ -108,7 +126,11 @@ function makePlanRun(): PlanRun {
 function fullState(overrides: Partial<FakeStoreState> = {}): FakeStoreState {
   return {
     installations: [
-      { id: PRODUCER_ID, workspaceId: WORKSPACE_ID },
+      {
+        id: PRODUCER_ID,
+        workspaceId: WORKSPACE_ID,
+        installConfigId: OFFICIAL_INSTALL_CONFIG_ID,
+      },
       { id: CONSUMER_ID, workspaceId: WORKSPACE_ID },
     ],
     outputs: {
@@ -121,11 +143,29 @@ function fullState(overrides: Partial<FakeStoreState> = {}): FakeStoreState {
 }
 
 function broker(state: FakeStoreState, signingKey: string | undefined) {
+  return brokerWith(state, makeResolver(signingKey));
+}
+
+function keyedResolver(
+  keysByProducer: Record<string, string>,
+): SensitiveOutputResolver {
+  return {
+    resolve: async (input) => {
+      const key = keysByProducer[input.producerInstallationId];
+      if (input.outputName !== "takos_storage_signing_key" || key === undefined) {
+        return undefined;
+      }
+      return { value: key, sensitive: true };
+    },
+  };
+}
+
+function brokerWith(state: FakeStoreState, resolver: SensitiveOutputResolver) {
   return new StorageGrantBroker({
     store: makeStore(state),
     newId: (prefix) => `${prefix}_test`,
     now: () => NOW_MS,
-    sensitiveOutputResolver: makeResolver(signingKey),
+    sensitiveOutputResolver: resolver,
   });
 }
 
@@ -206,6 +246,85 @@ describe("StorageGrantBroker", () => {
       makePlanRun(),
       "destroy",
       "run_audit_5",
+    );
+    expect(env).toBeUndefined();
+  });
+
+  test("prefers the official producer over a same-workspace impostor", async () => {
+    const state = fullState({
+      installations: [
+        {
+          id: PRODUCER_ID,
+          workspaceId: WORKSPACE_ID,
+          installConfigId: OFFICIAL_INSTALL_CONFIG_ID,
+        },
+        { id: IMPOSTOR_ID, workspaceId: WORKSPACE_ID },
+        { id: CONSUMER_ID, workspaceId: WORKSPACE_ID },
+      ],
+      outputs: {
+        [PRODUCER_ID]: PRODUCER_OUTPUTS,
+        [IMPOSTOR_ID]: IMPOSTOR_OUTPUTS,
+        [CONSUMER_ID]: CONSUMER_OUTPUTS,
+      },
+    });
+    const env = await brokerWith(
+      state,
+      keyedResolver({ [PRODUCER_ID]: SIGNING_KEY, [IMPOSTOR_ID]: IMPOSTOR_KEY }),
+    ).mintStorageGrantEnv(makePlanRun(), "apply", "run_audit_pin");
+
+    expect(env).toBeDefined();
+    // Endpoint + signing key come from the OFFICIAL producer, never the impostor.
+    expect(env!.TF_VAR_takos_storage_api_url).toBe("https://storage.example/o");
+    const token = env!.TF_VAR_takos_storage_access_token!;
+    const asOfficial = await verifyStorageAccessToken(
+      SIGNING_KEY,
+      token,
+      Math.floor(NOW_MS / 1000) + 60,
+    );
+    expect(asOfficial.ok).toBe(true);
+    const asImpostor = await verifyStorageAccessToken(
+      IMPOSTOR_KEY,
+      token,
+      Math.floor(NOW_MS / 1000) + 60,
+    );
+    expect(asImpostor.ok).toBe(false);
+    expect(
+      state.mintEvents[0]!.providerCredentialEvidence![0]!.providerEnvId,
+    ).toBe(PRODUCER_ID);
+  });
+
+  test("fails closed when multiple non-official producers are ambiguous", async () => {
+    const state = fullState({
+      installations: [
+        { id: PRODUCER_ID, workspaceId: WORKSPACE_ID },
+        { id: IMPOSTOR_ID, workspaceId: WORKSPACE_ID },
+        { id: CONSUMER_ID, workspaceId: WORKSPACE_ID },
+      ],
+      outputs: {
+        [PRODUCER_ID]: PRODUCER_OUTPUTS,
+        [IMPOSTOR_ID]: IMPOSTOR_OUTPUTS,
+        [CONSUMER_ID]: CONSUMER_OUTPUTS,
+      },
+    });
+    const env = await brokerWith(
+      state,
+      keyedResolver({ [PRODUCER_ID]: SIGNING_KEY, [IMPOSTOR_ID]: IMPOSTOR_KEY }),
+    ).mintStorageGrantEnv(makePlanRun(), "apply", "run_audit_ambig");
+    expect(env).toBeUndefined();
+    expect(state.mintEvents).toHaveLength(0);
+  });
+
+  test("fails open (no throw) when the signing-key resolver errors", async () => {
+    const state = fullState();
+    const throwing: SensitiveOutputResolver = {
+      resolve: async () => {
+        throw new Error("decrypt boom");
+      },
+    };
+    const env = await brokerWith(state, throwing).mintStorageGrantEnv(
+      makePlanRun(),
+      "apply",
+      "run_audit_throw",
     );
     expect(env).toBeUndefined();
   });
