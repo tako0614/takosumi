@@ -86,7 +86,10 @@ export function resolveEnabledRunnerProfiles(
   options: RunnerProfileEnablementOptions = {},
 ): readonly RunnerProfile[] {
   const byId = new Map(allProfiles.map((profile) => [profile.id, profile]));
-  const requestedIds = parseEnabledRunnerProfileIds(envValue);
+  const requestedIds = parseEnabledRunnerProfileIds(
+    envValue,
+    options.defaultEnableGenericProvider ?? false,
+  );
   const enabled: RunnerProfile[] = [];
   const unknownIds: string[] = [];
   for (const id of requestedIds) {
@@ -110,21 +113,42 @@ export interface RunnerProfileEnablementOptions {
   readonly requireGatewayEgressEvidence?: boolean;
   readonly egressEnforcementEvidenceRef?: string;
   readonly egressEnforcementEvidenceDigest?: string;
+  /**
+   * When `TAKOSUMI_ENABLED_RUNNER_PROFILES` is unset, whether to also
+   * default-enable the wildcard {@link GENERIC_ANY_PROVIDER_RUNNER_PROFILE_ID}
+   * profile so a self-host runs ANY OpenTofu provider with the user's own key
+   * out of the box (no operator opt-in step). Takosumi imposes no provider
+   * allowlist and no runner egress allowlist (egress is host-governed), so this
+   * is the right default for single-tenant self-host where the operator is the
+   * user. It stays `false` for open multi-tenant deployments, where the operator
+   * opts the generic surface in explicitly alongside host-level egress
+   * governance.
+   */
+  readonly defaultEnableGenericProvider?: boolean;
 }
 
 /**
  * Parse the CSV env value into a deduplicated, order-preserving list of profile
- * ids. Unset / empty / whitespace-only input defaults to `["cloudflare-default"]`.
+ * ids. Unset / empty / whitespace-only input defaults to `["cloudflare-default"]`
+ * — plus {@link GENERIC_ANY_PROVIDER_RUNNER_PROFILE_ID} when
+ * `defaultEnableGenericProvider` is set (self-host "any provider with your own
+ * key" default).
  */
 export function parseEnabledRunnerProfileIds(
   envValue: string | undefined,
+  defaultEnableGenericProvider = false,
 ): readonly string[] {
   const ids = (envValue ?? "")
     .split(",")
     .map((entry) => entry.trim())
     .filter((entry) => entry.length > 0);
   if (ids.length === 0) {
-    return [DEFAULT_ENABLED_RUNNER_PROFILE_ID];
+    return defaultEnableGenericProvider
+      ? [
+          DEFAULT_ENABLED_RUNNER_PROFILE_ID,
+          GENERIC_ANY_PROVIDER_RUNNER_PROFILE_ID,
+        ]
+      : [DEFAULT_ENABLED_RUNNER_PROFILE_ID];
   }
   const seen = new Set<string>();
   const deduped: string[] = [];
@@ -137,6 +161,15 @@ export function parseEnabledRunnerProfileIds(
 }
 
 const DEFAULT_ENABLED_RUNNER_PROFILE_ID = "cloudflare-default";
+
+/**
+ * The wildcard runner profile that admits ANY OpenTofu provider
+ * (`allowedProviders: ["*"]`, `networkPolicy` mode `operator-managed`). It is
+ * the execution surface for a user's own-key (`generic_env_provider`)
+ * connection to an arbitrary provider. Exported so composition + auto-selection
+ * identify it without re-declaring the literal.
+ */
+export const GENERIC_ANY_PROVIDER_RUNNER_PROFILE_ID = "generic-opentofu-provider";
 
 function withProfileEnabledLabel(
   profile: RunnerProfile,
@@ -270,7 +303,7 @@ export function createDefaultRunnerProfiles(
       networkPolicy: networkFor("docker"),
     }),
     defaultProviderRunnerProfile(now, {
-      id: "generic-opentofu-provider",
+      id: GENERIC_ANY_PROVIDER_RUNNER_PROFILE_ID,
       name: "Generic OpenTofu provider",
       description:
         "Operator-enabled runner profile for arbitrary OpenTofu providers using explicit generic-env Provider Connections.",

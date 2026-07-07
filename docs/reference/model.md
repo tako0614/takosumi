@@ -100,6 +100,15 @@ must be upper-snake environment identifiers such as `SNOWFLAKE_PASSWORD`; they
 become the run-local CredentialRecipe, subject to runner policy, provider plugin
 policy, and egress policy. Runner/runtime-reserved env names are rejected.
 
+Using your own key is not gated by Takosumi. There is no provider allowlist and
+no operator approval: if you supply the credential, any OpenTofu/Terraform
+provider runs. A self-hosted Takosumi enables the wildcard runner surface by
+default, and the control plane auto-selects a runner profile that admits the
+Capsule's providers, so an arbitrary provider runs without naming a profile.
+A ProviderConnection you supply with your own key is never metered or billed by
+Takosumi — only Takosumi-provided managed resources are billed (see
+[Cloud pricing](../cloud/pricing.md)).
+
 ## Runner Policy
 
 Runner policy, provider allowlists, lockfile/mirror rules, resource limits, and
@@ -115,7 +124,7 @@ the portable speed mechanisms.
 
 The user-facing flow should feel like installing an app, but the model remains
 Git-native and OpenTofu-native. Creating a new service uses the same guided
-install flow as adding an app: choose a starter or install link, configure the
+install flow as adding an app: choose a template or install link, configure the
 smallest visible inputs, review the plan, then deploy. Takosumi should not add a
 separate low-level "create service" CRUD surface for ordinary users; the full
 service list can expose details after creation, while the add path stays

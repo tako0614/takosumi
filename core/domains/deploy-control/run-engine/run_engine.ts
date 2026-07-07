@@ -46,6 +46,7 @@ import type {
   SourceSnapshot,
   SourceSyncRun,
 } from "takosumi-contract/sources";
+import { sameProviderFamily } from "takosumi-contract/provider-env-rules";
 import { redactString } from "takosumi-contract/redaction";
 import { downstreamClosure } from "takosumi-graph";
 import {
@@ -53,6 +54,7 @@ import {
   evaluateQuotaPolicy,
   evaluateResourceAllowlist,
   evaluateScopeBoundary,
+  providerMatches,
 } from "takosumi-policy";
 import { generateGenericCapsuleRoot } from "takosumi-rootgen";
 import { stableJsonDigest } from "../../../adapters/source/digest.ts";
@@ -304,6 +306,27 @@ function requestedGenericCapsuleVariables(
   return requested;
 }
 
+function providerEnvResolutionProviders(
+  providers: readonly string[],
+  installConfig: InstallConfig,
+  runnerProfile?: Pick<RunnerProfile, "requireCredentialRefs">,
+): readonly string[] {
+  const credentialProviders = providersRequiringProviderEnvBindings(
+    providers,
+    runnerProfile,
+  );
+  const catalogProvider = installConfig.catalog?.provider;
+  if (typeof catalogProvider !== "string" || !catalogProvider.trim()) {
+    return credentialProviders;
+  }
+  return normalizeProviders([
+    ...credentialProviders,
+    ...providers.filter((provider) =>
+      sameProviderFamily(provider, catalogProvider),
+    ),
+  ]);
+}
+
 function genericCapsuleOutputAllowlist(
   configured: InstallConfig["outputAllowlist"],
   moduleFiles: readonly OpenTofuCapsuleSourceFile[] | undefined,
@@ -504,7 +527,7 @@ export class RunEngine {
     requireNonEmptyString(workspaceId, "workspaceId");
     const requestCapsuleId = request.capsuleId ?? request.installationId;
     validateSource(request.source);
-    const profile = await this.#requireRunnerProfile(
+    let profile = await this.#requireRunnerProfile(
       request.runnerProfileId ?? this.#defaultRunnerProfileId,
     );
     const operation =
@@ -534,17 +557,12 @@ export class RunEngine {
         installationId: installation.id,
         environment: installation.environment,
       };
-    // Resource Shape adapters pass an internal generated root that fully
-    // overrides the backing Capsule's nominal Source. Keep local source
-    // rejection for user-supplied Capsule runs, but do not reject the internal
-    // placeholder source when the runner will execute generatedRoot instead.
-    if (!internal.genericRootDispatch?.generatedRoot) {
-      validateSourceAllowedByProfile(request.source, profile);
-    }
     const now = this.#now();
     const variables = normalizeVariables(request.variables);
     // Cloud-only gateway materialization is rejected here; OSS Takosumi never
-    // rewrites a provider base_url.
+    // rewrites a provider base_url. The runner profile is ignored by this step
+    // and by template resolution, so the Capsule's required providers are
+    // profile-independent and can drive runner-profile auto-selection below.
     const installTypePlan =
       await this.#planResolution.applyGatewayEndpointBaseUrl(
         internal.installTypePlan,
@@ -558,6 +576,26 @@ export class RunEngine {
     const declaredProviders = templatePlan
       ? normalizeProviders(templatePlan.requiredProviders)
       : normalizeProviders(request.requiredProviders ?? []);
+    // When the caller did not pin a runner profile, auto-select the enabled
+    // profile that admits the Capsule's required providers — preferring a
+    // specific match (so a Cloudflare Capsule keeps `cloudflare-default`) and
+    // falling back to the wildcard generic-provider surface. This is what lets a
+    // user's own-key (`generic_env_provider`) connection to an ARBITRARY
+    // provider run without the caller naming a profile. Only already-enabled,
+    // operator-curated profiles are candidates, so auto-selection never widens
+    // the operator's admitted provider surface — it only removes the manual
+    // "which runner profile?" step.
+    if (request.runnerProfileId === undefined) {
+      profile = this.#selectRunnerProfileForProviders(profile, declaredProviders);
+    }
+    // Resource Shape adapters pass an internal generated root that fully
+    // overrides the backing Capsule's nominal Source. Keep local source
+    // rejection for user-supplied Capsule runs, but do not reject the internal
+    // placeholder source when the runner will execute generatedRoot instead.
+    // Validated against the final (possibly auto-selected) profile.
+    if (!internal.genericRootDispatch?.generatedRoot) {
+      validateSourceAllowedByProfile(request.source, profile);
+    }
     const allowNoProviders =
       (templatePlan !== undefined &&
         templatePlan.template.policy.allowedProviders.length === 0) ||
@@ -1565,13 +1603,11 @@ export class RunEngine {
       const requiredProviders = template.policy.allowedProviders.map(
         canonicalProviderAddress,
       );
-      const credentialRequiredProviders =
-        providersRequiringProviderEnvBindings(requiredProviders);
       const installTypePlan = await this.#planResolution.resolveInstallTypePlan(
         input.installation,
         input.installConfig,
         installType,
-        credentialRequiredProviders,
+        providerEnvResolutionProviders(requiredProviders, input.installConfig),
       );
       return {
         request: {
@@ -1626,7 +1662,11 @@ export class RunEngine {
       input.installation,
       input.installConfig,
       input.installConfig.installType,
-      providersRequiringProviderEnvBindings(requiredProviders, profile),
+      providerEnvResolutionProviders(
+        requiredProviders,
+        input.installConfig,
+        profile,
+      ),
     );
     const bindingProviders = installTypePlan.requiredProvidersFromBindings;
     if (requiredProviders.length === 0 && bindingProviders.length > 0) {
@@ -1635,7 +1675,11 @@ export class RunEngine {
         input.installation,
         input.installConfig,
         input.installConfig.installType,
-        providersRequiringProviderEnvBindings(requiredProviders, profile),
+        providerEnvResolutionProviders(
+          requiredProviders,
+          input.installConfig,
+          profile,
+        ),
       );
     }
     const moduleFiles = await this.#sourceModuleFilesForGenericCapsule(
@@ -3066,12 +3110,25 @@ export class RunEngine {
       allowOperatorBackedProviderEnvs: this.#allowOperatorBackedProviderEnvs,
     });
     const profile = await this.#requireRunnerProfile(planRun.runnerProfileId);
+    const installConfig = await this.#store.getInstallConfig(
+      installation.installConfigId,
+    );
+    if (!installConfig) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `install_config_not_found: ${installation.installConfigId}`,
+      );
+    }
     // Run-scoped: ProviderBindings plus the same Cloud/operator managed
     // fallback used by rootgen. This keeps minted TF_VAR credentials lined up
     // with the generated provider blocks.
     return await this.#connectionsService.resolveProviderEnvBindingsForRun(
       installation,
-      providersRequiringProviderEnvBindings(planRun.requiredProviders, profile),
+      providerEnvResolutionProviders(
+        planRun.requiredProviders,
+        installConfig,
+        profile,
+      ),
     );
   }
 
@@ -4531,15 +4588,20 @@ export class RunEngine {
     readonly finishedAt: number;
   }): Promise<void> {
     if (input.startedAt === undefined) return;
+    const space = await this.#store.getSpace(input.spaceId);
+    const billingSubjectId = space?.ownerUserId ?? input.spaceId;
     const durationMs = Math.max(0, input.finishedAt - input.startedAt);
     const quantity = durationMs / 60_000;
     const usdMicros = runnerMinuteUsdMicros(quantity);
     await this.#store.putUsageEvent({
       id: this.#newId("usage"),
-      workspaceId: input.spaceId,
-      spaceId: input.spaceId,
+      workspaceId: billingSubjectId,
+      spaceId: billingSubjectId,
       ...(input.installationId ? { installationId: input.installationId } : {}),
       runId: input.runId,
+      resourceMetadata: {
+        source_workspace_id: input.spaceId,
+      },
       kind: "runner_minute",
       quantity,
       usdMicros,
@@ -5298,8 +5360,23 @@ export class RunEngine {
     readonly outputSnapshot: OutputSnapshot;
     readonly result: OpenTofuApplyResult;
   }): Promise<void> {
-    const nonSensitiveOutputs = releaseActivationOutputs(input.result.outputs);
-    const commands = releaseActivationCommands(input.result.outputs);
+    let nonSensitiveOutputs = releaseActivationOutputs(input.result.outputs);
+    let commands = releaseActivationCommands(input.result.outputs);
+    if (commands.length === 0) {
+      const snapshotOutputs = jsonRecordFromPublicOutputs(
+        input.outputSnapshot.workspaceOutputs as Readonly<
+          Record<string, unknown>
+        >,
+      );
+      const snapshotCommands = releaseActivationCommandsFromPublicOutputs(
+        snapshotOutputs,
+        "post_apply",
+      );
+      if (snapshotCommands.length > 0) {
+        commands = snapshotCommands;
+        nonSensitiveOutputs = snapshotOutputs;
+      }
+    }
     const sourceSnapshot =
       commands.length > 0
         ? await this.#store.getSourceSnapshot(input.deployment.sourceSnapshotId)
@@ -5337,6 +5414,19 @@ export class RunEngine {
         commands,
         ...(sourceSnapshot ? { sourceSnapshot } : {}),
       });
+      if (result.status === "skipped" && commands.length > 0) {
+        await this.#recordReleaseActivationActivity({
+          ...input,
+          status: "failed",
+          kind: result.kind,
+          message:
+            result.message ??
+            "release activator skipped declared post-apply commands",
+          commandCount: commands.length,
+          outputCount: Object.keys(nonSensitiveOutputs).length,
+        });
+        return;
+      }
       if (result.status === "skipped") return;
       await this.#recordReleaseActivationActivity({
         ...input,
@@ -5424,7 +5514,21 @@ export class RunEngine {
         commands,
         ...(sourceSnapshot ? { sourceSnapshot } : {}),
       });
-      if (result.status === "skipped") return;
+      if (result.status === "skipped") {
+        await this.#recordReleaseActivationActivity({
+          applyRun: input.applyRun,
+          installation: input.installation,
+          deployment,
+          status: "failed",
+          kind: result.kind,
+          message:
+            result.message ??
+            "release activator skipped declared pre-destroy commands",
+          commandCount: commands.length,
+          outputCount: Object.keys(nonSensitiveOutputs).length,
+        });
+        return;
+      }
       await this.#recordReleaseActivationActivity({
         applyRun: input.applyRun,
         installation: input.installation,
@@ -6009,6 +6113,51 @@ export class RunEngine {
     return profile;
   }
 
+  /**
+   * Auto-selects the runner profile for a plan whose caller did not pin one.
+   * Used only when `request.runnerProfileId` is absent, so an explicit choice is
+   * always respected.
+   *
+   * Candidates are the operator-curated enabled profiles only
+   * ({@link #runnerProfilesById}); auto-selection therefore never admits a
+   * provider the operator did not already enable a surface for — it just removes
+   * the "which runner profile?" step so a user's own-key connection to an
+   * arbitrary OpenTofu provider runs by default. Preference order:
+   *   1. keep the current (default) profile if it already admits every provider;
+   *   2. a specific (non-wildcard) enabled profile that admits every provider;
+   *   3. an enabled wildcard (`["*"]`) surface (the generic-provider profile)
+   *      that also admits every provider (its deny-list, if any, does not deny
+   *      them);
+   *   4. otherwise keep the current profile so policy blocks the run exactly as
+   *      before (the operator enabled no surface for these providers).
+   * Every candidate is admission-tested with {@link profileAdmitsAllProviders},
+   * which mirrors the §25 provider allow/deny evaluation, so a selected profile
+   * passes the provider-allowlist policy layer for these providers (given the
+   * operator-enabled profile set injected into {@link #runnerProfilesById}).
+   */
+  #selectRunnerProfileForProviders(
+    currentProfile: RunnerProfile,
+    declaredProviders: readonly string[],
+  ): RunnerProfile {
+    if (declaredProviders.length === 0) return currentProfile;
+    if (profileAdmitsAllProviders(currentProfile, declaredProviders)) {
+      return currentProfile;
+    }
+    const candidates = [...this.#runnerProfilesById.values()];
+    const specific = candidates.find(
+      (candidate) =>
+        !candidate.allowedProviders.includes("*") &&
+        profileAdmitsAllProviders(candidate, declaredProviders),
+    );
+    if (specific) return specific;
+    const wildcard = candidates.find(
+      (candidate) =>
+        candidate.allowedProviders.includes("*") &&
+        profileAdmitsAllProviders(candidate, declaredProviders),
+    );
+    return wildcard ?? currentProfile;
+  }
+
   async #requirePlanRun(id: string): Promise<PlanRun> {
     const planRun = await this.#store.getPlanRun(id);
     if (!planRun) {
@@ -6043,4 +6192,26 @@ export class RunEngine {
 
 function isGeneratedRootSourceSnapshot(snapshot: SourceSnapshot): boolean {
   return snapshot.url.startsWith("takosumi://generated-root/");
+}
+
+/**
+ * True when `profile` admits every provider in `providers`. Mirrors the §25
+ * provider allow/deny evaluation: a provider must be matched by an allow rule
+ * (`"*"` wildcard or hierarchical {@link providerMatches}) AND not matched by any
+ * deny rule (a denial overrides an allow). Keeping this aligned with
+ * {@link evaluateProviderAllowlist} means an auto-selected profile passes the
+ * provider-allowlist policy layer for the same providers.
+ */
+function profileAdmitsAllProviders(
+  profile: RunnerProfile,
+  providers: readonly string[],
+): boolean {
+  const denied = profile.deniedProviders ?? [];
+  return providers.every(
+    (provider) =>
+      !denied.some((rule) => providerMatches(provider, rule)) &&
+      profile.allowedProviders.some(
+        (allowed) => allowed === "*" || providerMatches(provider, allowed),
+      ),
+  );
 }

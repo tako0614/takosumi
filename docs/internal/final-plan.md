@@ -543,7 +543,7 @@ any backend API call:
 
 ```text
 OpenTofu provider / Compatibility API / Resource Shape API / Dashboard action / AI Gateway
-  -> auth + billing Workspace
+  -> auth + source Workspace + owner billing account
   -> Resource / NativeResource normalization
   -> TargetPool / Policy / ResolutionLock (Resource Shape entrypoints)
   -> CloudManagedOperation
@@ -719,7 +719,7 @@ Cloud managed-operation boundary:
 
 ```text
 /gateway/ai/v1
-  -> auth + billing Workspace
+  -> auth + source Workspace + owner billing account
   -> CloudManagedOperation(entrypoint = ai_gateway)
   -> CloudManagedDispatchPlan
   -> selected manager configured check
@@ -1152,6 +1152,11 @@ payment enforcement
 invoice
 support and abuse workflows
 ```
+
+Usage attribution keeps the source Workspace / Capsule for drill-down, but the
+commercial payer and credit balance are owner-account scoped. A user does not
+maintain separate credit balances for every Workspace they own; Cloud-managed
+resources spend from the owning user's account balance.
 
 If credits are exhausted in Takosumi Cloud, Cloud-managed resources should stop
 or degrade according to product policy. That enforcement is not OSS core.

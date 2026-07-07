@@ -1,5 +1,5 @@
 /**
- * Workspace billing and USD-denominated usage ledger contract.
+ * Owner-account billing and USD-denominated usage ledger contract.
  *
  * New billing code must use `usdMicros` fields: 1 USD = 1,000,000 micros.
  * Older `credits` fields remain as wire/storage compatibility aliases and are
@@ -127,7 +127,7 @@ export type BillingSettings =
 
 export interface BillingAccount {
   readonly id: string;
-  readonly ownerType: "user" | "space";
+  readonly ownerType: "user";
   readonly ownerId: string;
   readonly provider: "stripe" | "manual" | "none";
   readonly stripeCustomerId?: string;
@@ -208,10 +208,7 @@ export interface CreditReservation {
 }
 
 export type BillingAutoRechargeAttemptStatus =
-  | "pending"
-  | "pending_unknown"
-  | "succeeded"
-  | "failed";
+  "pending" | "pending_unknown" | "succeeded" | "failed";
 
 export interface BillingAutoRechargeAttempt {
   readonly id: string;
@@ -248,10 +245,7 @@ export type UsageEventKind =
   | "ai_output_token";
 
 export type UsageEventSource =
-  | "runner"
-  | "resource_meter"
-  | "billing_reconciliation"
-  | "manual_adjustment";
+  "runner" | "resource_meter" | "billing_reconciliation" | "manual_adjustment";
 
 /**
  * Provider/runtime-defined family for grouping billable managed resources.
@@ -501,7 +495,9 @@ export interface BillingEnforcement {
    * Apply-time precondition. Throws when an enforce reservation is missing /
    * expired so the apply fails closed; OSS is a no-op.
    */
-  assertReservationSatisfied(ctx: BillingReservationCheckContext): Promise<void>;
+  assertReservationSatisfied(
+    ctx: BillingReservationCheckContext,
+  ): Promise<void>;
   /** Capture the reserved amount on a successful apply (Cloud debits balance). */
   captureRunBilling(ctx: BillingCaptureContext): Promise<void>;
   /** Release a reservation on a failed/abandoned apply (Cloud restores balance). */

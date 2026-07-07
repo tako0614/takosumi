@@ -612,7 +612,7 @@ export interface TakosumiOperations {
    * audit trail over the same shared ledger.
    */
   readonly activity: ActivityService;
-  /** Space billing + credit ledger facade (Core Specification §28). */
+  /** Owner-account billing + credit ledger facade (Core Specification §28). */
   getWorkspaceBilling(spaceId: string): Promise<{
     readonly billing: {
       readonly settings: BillingSettings;

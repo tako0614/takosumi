@@ -1,14 +1,15 @@
 # Operations: Workspace Cost Showback and Quota Monitoring
 
 > このページでわかること: Takosumi operated environments の cloud spend、
-> Workspace showback、quota usage、Capsule attribution、reconciliation cadence。
-> canonical attribution unit は Workspace で、Capsule は Run attribution
-> dimension です。OSS/operator cost mode は `disabled` / `showback` のいずれかです。
+> owner account showback、quota usage、Workspace / Capsule attribution、
+> reconciliation cadence。commercial payer は owner account で、Workspace は usage
+> attribution / permission scope、Capsule は Run attribution dimension です。
+> OSS/operator cost mode は `disabled` / `showback` のいずれかです。
 
 この runbook は Takosumi for Operator の cost monitoring / showback readiness の正本です。
 Takosumi control plane / runner から発生する run traffic は、最終的に
-Workspace-scoped usage として集計します。Capsule id は cost drill-down 用の
-label であり、payment / official billing の正本ではありません。
+owner-account usage として集計し、発生元 Workspace と Capsule id を cost drill-down 用の
+label として残します。Workspace は payment / official billing の正本ではありません。
 
 Dashboard artifact target:
 
@@ -26,7 +27,8 @@ but must not present official billing as part of Takosumi OSS or Takosumi for Op
 
 **Cost attribution hierarchy** (canonical):
 
-- **Workspace**: quota/showback policy、usage rollup、audit scope の正本。
+- **Owner account**: payer / credit balance / commercial usage rollup の正本。
+- **Workspace**: quota/showback policy、source attribution、audit scope の正本。
 - **Project**: product/service grouping for cost slicing.
 - **Capsule**: Workspace / Project 配下の OpenTofu Capsule 実行単位。Run usage の
   attribution dimension。
@@ -46,16 +48,16 @@ Cost mode:
 対象は Takosumi operated production / staging environments の Workspace showback と
 Capsule-attributed usage です。
 
-| Surface                          | Owner                    | Cost source                                                                            |
-| -------------------------------- | ------------------------ | -------------------------------------------------------------------------------------- |
-| Takosumi runner usage            | Takosumi platform worker | Run ledger + queue / container execution meters                                        |
-| Platform resource usage          | Takosumi platform worker | platform control/state/artifact meters joined to Workspace / Capsule attribution       |
-| Workspace provider usage         | User cloud account       | user cloud bill; OSS Takosumi records showback/control/state/artifact evidence only    |
-| Custom provider usage            | User provider account    | cost estimate may be unavailable; OSS Takosumi records showback/control/state evidence |
-| Artifact / backup storage usage  | Takosumi platform worker | object inventory joined to Workspace / Capsule attribution                             |
-| Showback ingest / reconciliation | Takosumi platform worker | resource meters idempotently joined to Workspace use                                   |
-| Cloud-only compat managed usage  | Takosumi Cloud closed    | Cloud extension usage reports joined to Workspace usage ledger                         |
-| Cloud provider infrastructure    | operator                 | Cloudflare / provider invoice/export                                                   |
+| Surface                          | Owner                    | Cost source                                                                                   |
+| -------------------------------- | ------------------------ | --------------------------------------------------------------------------------------------- |
+| Takosumi runner usage            | Takosumi platform worker | Run ledger + queue / container execution meters                                               |
+| Platform resource usage          | Takosumi platform worker | platform control/state/artifact meters joined to Workspace / Capsule attribution              |
+| Workspace provider usage         | User cloud account       | user cloud bill; OSS Takosumi records showback/control/state/artifact evidence only           |
+| Custom provider usage            | User provider account    | cost estimate may be unavailable; OSS Takosumi records showback/control/state evidence        |
+| Artifact / backup storage usage  | Takosumi platform worker | object inventory joined to Workspace / Capsule attribution                                    |
+| Showback ingest / reconciliation | Takosumi platform worker | resource meters idempotently joined to Workspace use                                          |
+| Cloud-only compat managed usage  | Takosumi Cloud closed    | Cloud extension usage reports joined to owner account usage ledger with Workspace attribution |
+| Cloud provider infrastructure    | operator                 | Cloudflare / provider invoice/export                                                          |
 
 invoice、payment processor reconciliation、secret を含む official billing credential は
 repo 外の operator vault に残します。本 public doc は observable metric contract と

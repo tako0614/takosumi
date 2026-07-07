@@ -35,7 +35,7 @@ test("createTauriMobileViteConfig builds shared mobile dev-server wiring", () =>
 test("createTauriMobileViteConfig keeps desktop dev server local by default", () => {
   const config = createTauriMobileViteConfig({
     devPort: 1421,
-    importMetaUrl: "file:///repo/yurucommu/mobile/vite.config.ts",
+    importMetaUrl: "file:///repo/yurucommu-mobile/vite.config.ts",
     env: {},
   });
 

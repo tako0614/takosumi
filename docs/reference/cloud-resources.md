@@ -70,8 +70,8 @@ Operator/internal jobs:
 
 すべての Cloud managed resource は、実 backend API を叩く前に Cloud extension
 共通層を通します。入口が Cloudflare-compatible OpenTofu provider、`takosumi/takosumi`
-provider、Compatibility API、または Dashboard のどれであっても、認証、Workspace
-billing context、Resource / NativeResource への正規化、共通 managed operation
+provider、Compatibility API、または Dashboard のどれであっても、認証、発生元
+Workspace context、owner billing context、Resource / NativeResource への正規化、共通 managed operation
 descriptor、selected manager の利用可否確認、usage / credit guard を通り、その後に
 manager が backend を選びます。API entrypoint は user-facing protocol を決めるだけで、
 backend choice は manager descriptor / dispatch plan の責務です。`takosumi_*` Resource Shape として入る場合は、
@@ -79,7 +79,7 @@ backend choice は manager descriptor / dispatch plan の責務です。`takosum
 
 ```text
 OpenTofu provider via compat / takosumi provider via Resource Shape API / Compatibility API / Dashboard action
-  -> auth + billing Workspace
+  -> auth + source Workspace + owner billing account
   -> Resource / NativeResource normalization
   -> TargetPool / Policy / ResolutionLock (Resource Shape entrypoints)
   -> CloudManagedOperation
@@ -200,4 +200,4 @@ ProviderConnection / ProviderBinding で切り替えます。manifest に raw se
 
 Takosumi Cloud では、この import path は app installation 登録なしでも使えます。
 ただし認証済み token と課金対象 Workspace は必須です。billable な write は
-Workspace credits から引かれ、残高不足なら compatibility endpoint の実行前に止まります。
+所有ユーザーの account credits から引かれ、残高不足なら compatibility endpoint の実行前に止まります。

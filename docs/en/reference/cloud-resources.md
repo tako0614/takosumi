@@ -75,7 +75,7 @@ Every Cloud managed resource passes through the shared Cloud extension layer
 before a backend API is called. Whether the entrypoint is a
 Cloudflare-compatible OpenTofu provider, the `takosumi/takosumi` provider, a
 Compatibility API, or a Dashboard action, the request passes through auth,
-Workspace billing context, Resource / NativeResource normalization, a common
+source Workspace context, owner billing context, Resource / NativeResource normalization, a common
 managed operation descriptor, selected-manager availability checks, usage /
 credit guard, and then the selected manager chooses the backend. When the
 entrypoint is a `takosumi_*` Resource Shape, TargetPool / Policy /
@@ -83,7 +83,7 @@ ResolutionLock are also part of the path before manager dispatch.
 
 ```text
 OpenTofu provider via compat / takosumi provider via Resource Shape API / Compatibility API / Dashboard action
-  -> auth + billing Workspace
+  -> auth + source Workspace + owner billing account
   -> Resource / NativeResource normalization
   -> TargetPool / Policy / ResolutionLock (Resource Shape entrypoints)
   -> CloudManagedOperation
@@ -194,5 +194,6 @@ Binding / Provider Connection. Do not put raw secrets in the manifest.
 
 On Takosumi Cloud, this import path can be used without creating an app
 installation first. It still requires an authenticated token and a billing
-Workspace. Billable writes spend Workspace credits and are not forwarded to the
-compatibility endpoint when the Workspace has insufficient balance.
+source Workspace. Billable writes spend the owning user's account credits and
+are not forwarded to the compatibility endpoint when the owner account has
+insufficient balance.

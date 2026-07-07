@@ -123,7 +123,7 @@ cd takosumi
 bun run operator:release-activator -- serve \
   --source-bucket "$TAKOSUMI_RELEASE_SOURCE_BUCKET" \
   --wrangler-config "$TAKOSUMI_RELEASE_WRANGLER_CONFIG" \
-  --command-env-allowlist CLOUDFLARE_API_TOKEN,CLOUDFLARE_ACCOUNT_ID
+  --command-env-allowlist CLOUDFLARE_API_TOKEN,CLOUDFLARE_ACCOUNT_ID,CLOUDFLARE_CONTAINERS_API_TOKEN
 ```
 
 It fetches the SourceSnapshot archive from R2, verifies the recorded digest,
@@ -145,6 +145,12 @@ operator explicitly names them in `--command-env-allowlist` (or
 `TAKOSUMI_RELEASE_COMMAND_ENV_ALLOWLIST`). The OpenTofu
 `takosumi_release.post_apply.env` descriptor remains non-secret and cannot carry
 provider tokens, database URLs, DSNs, or other credential material.
+For Takos releases that roll out Cloudflare Containers, allowlist
+`CLOUDFLARE_CONTAINERS_API_TOKEN` as an operator-held deploy token. The Takos
+release command uses it only for the final `wrangler deploy` step by mapping it
+to Wrangler's standard `CLOUDFLARE_API_TOKEN` / `CF_API_TOKEN` env names; D1
+migrations, output verification, and other Cloudflare API checks keep using the
+normal Provider Connection credential from the activation payload.
 
 ## Promotion Record
 

@@ -109,6 +109,7 @@ describe("Run review ProviderConnection evidence", () => {
 
   test("does not render an empty diagnostics card on normal run reviews", () => {
     expect(runViewSource).toContain("const diagnosticRows = createMemo");
+    expect(runViewSource).toContain("const creditsRequired = createMemo");
     expect(runViewSource).toContain("const showDiagnosticsPanel = createMemo");
     expect(runViewSource).toContain("<Show when={showDiagnosticsPanel()}>");
     expect(runViewSource).toContain('t("run.diagnostics.failed")');
@@ -120,6 +121,89 @@ describe("Run review ProviderConnection evidence", () => {
     );
     expect(en["run.diagnostics.failed"]).toContain("Open details");
     expect(ja["run.diagnostics.failed"]).toContain("詳細");
+  });
+
+  test("classifies credit gate failures as a billing action instead of raw OpenTofu failure", () => {
+    expect(runViewSource).toContain("function isCreditsRequiredRun");
+    expect(runViewSource).toContain("cloud_extension_insufficient_credits");
+    expect(runViewSource).toContain('run.errorCode === "credits_required"');
+    expect(runViewSource).toContain('t("run.summary.creditsRequired")');
+    expect(runViewSource).toContain('t("run.summary.creditsRequiredHint")');
+    expect(runViewSource).toContain('t("run.diagnostics.creditsRequired")');
+    expect(runViewSource).toContain(
+      't("run.diagnostics.creditsRequiredShort")',
+    );
+    expect(runViewSource).toContain(
+      't("run.diagnostics.creditsRequiredDetail")',
+    );
+    expect(en["run.summary.creditsRequired"]).toContain("Credits");
+    expect(ja["run.summary.creditsRequired"]).toContain("クレジット");
+    expect(en["run.diagnostics.creditsRequired"]).toContain("credits");
+    expect(ja["run.diagnostics.creditsRequired"]).toContain("クレジット");
+  });
+
+  test("classifies stale connected-account verification failures as a re-review action", () => {
+    expect(runViewSource).toContain("function accessIssueForRun");
+    expect(runViewSource).toContain("credential_mint_failed");
+    expect(runViewSource).toContain("pending (not verified)");
+    expect(runViewSource).not.toContain(
+      'run.errorCode === "credential_mint_failed"',
+    );
+    expect(runViewSource).toContain('"provider_connection_not_ready"');
+    expect(runViewSource).toContain(
+      't("run.summary.connectionVerificationRequired")',
+    );
+    expect(runViewSource).toContain(
+      't("run.summary.connectionVerificationHint")',
+    );
+    expect(runViewSource).toContain(
+      't("run.diagnostics.connectionVerificationRequired")',
+    );
+    expect(runViewSource).toContain(
+      't("run.diagnostics.connectionVerificationShort")',
+    );
+    expect(runViewSource).toContain(
+      't("run.diagnostics.connectionVerificationDetail")',
+    );
+    expect(runViewSource).toContain("connectionVerificationRequired())");
+    expect(en["run.summary.connectionVerificationRequired"]).toContain(
+      "Connected account",
+    );
+    expect(ja["run.summary.connectionVerificationRequired"]).toContain(
+      "接続済みアカウント",
+    );
+    expect(en["run.diagnostics.connectionVerificationDetail"]).toContain(
+      "Review the changes again",
+    );
+    expect(ja["run.diagnostics.connectionVerificationDetail"]).toContain(
+      "もう一度変更を確認",
+    );
+  });
+
+  test("classifies the other credential access failures without raw provider errors", () => {
+    expect(runViewSource).toContain('"provider_connection_setup_required"');
+    expect(runViewSource).toContain('"provider_connection_changed"');
+    expect(runViewSource).toContain('"credential_service_unavailable"');
+    expect(runViewSource).toContain('t("run.summary.connectionSetupRequired")');
+    expect(runViewSource).toContain('t("run.summary.connectionChanged")');
+    expect(runViewSource).toContain('t("run.summary.credentialServiceIssue")');
+    expect(runViewSource).toContain(
+      't("run.diagnostics.connectionSetupRequired")',
+    );
+    expect(runViewSource).toContain('t("run.diagnostics.connectionChanged")');
+    expect(runViewSource).toContain(
+      't("run.diagnostics.credentialServiceIssue")',
+    );
+    expect(en["run.summary.connectionSetupRequired"]).toContain(
+      "Connected account setup",
+    );
+    expect(ja["run.summary.connectionSetupRequired"]).toContain(
+      "接続済みアカウント",
+    );
+    expect(en["run.summary.credentialServiceIssue"]).toContain(
+      "Access preparation",
+    );
+    expect(ja["run.summary.credentialServiceIssue"]).toContain("アクセス準備");
   });
 
   test("redacts secret-shaped values before rendering run diagnostics", () => {

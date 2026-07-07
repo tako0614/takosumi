@@ -116,7 +116,7 @@ test("personal access token migration stores Accounts PATs without raw secrets",
   expect(migration).toContain("personal_access_tokens_subject_idx");
 });
 
-test("personal access token workspace migration stores default billing workspace", async () => {
+test("personal access token workspace migration stores default source Workspace", async () => {
   const migration = await readMigration(
     "029_personal_access_tokens_workspace.sql",
   );

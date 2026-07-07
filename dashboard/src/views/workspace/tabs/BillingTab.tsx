@@ -1,14 +1,14 @@
 /**
  * Workspace settings — billing / usage. The Takosumi Cloud billing surface:
- *   - plan / USD balance-pack cards from the operator catalog
+ *   - subscription plan cards from the operator catalog
  *     (`GET /api/v1/billing/plans`) → Stripe Checkout by `planId`
- *   - balance + billing-mode explanation
+ *   - spend guard + billing-mode explanation
  *   - Stripe customer portal (payment methods / invoices)
  *   - usage events as folded support history
  *
  * The old debug controls (billing-mode select, free top-up input,
- * paste-a-price-ID checkout) are gone: billing mode is operator-selected and
- * USD balance enters through paid checkout only.
+ * paste-a-price-ID checkout) are gone: billing mode and plan allowance are
+ * operator-selected and not exposed as a customer-facing quota grant.
  */
 import "../../../styles/wave-b.css";
 import {
@@ -80,10 +80,7 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
   const subscriptions = createMemo(() =>
     (plans() ?? []).filter((plan) => plan.kind === "subscription"),
   );
-  const packs = createMemo(() =>
-    (plans() ?? []).filter((plan) => plan.kind === "pack"),
-  );
-  const hasBillingCatalog = createMemo(() => (plans()?.length ?? 0) > 0);
+  const hasBillingCatalog = createMemo(() => subscriptions().length > 0);
   const canStartCheckout = createMemo(
     () => cloudBilling() && hasBillingCatalog(),
   );
@@ -100,16 +97,19 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
     }
     return t(MODE_KEY[currentMode] ?? "billing.mode.disabled");
   });
-  const availableLabel = createMemo(() =>
-    cloudBilling()
-      ? t("billing.balance.available")
-      : t("billing.quota.available"),
-  );
   const reservedLabel = createMemo(() =>
     cloudBilling()
       ? t("billing.balance.reserved")
       : t("billing.quota.reserved"),
   );
+  const cloudSpendStatus = createMemo(() => {
+    const currentMode = mode() ?? "disabled";
+    if (currentMode === "disabled") return t("billing.balance.actionRequired");
+    if (balanceAvailableUsdMicros(balance()) <= 0) {
+      return t("billing.balance.actionRequired");
+    }
+    return t("billing.balance.ready");
+  });
 
   // One-time checkout-result banner (the Stripe redirect lands back here with
   // ?checkout=success|cancelled). Read once, then strip from the URL.
@@ -219,11 +219,6 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
       <div class="av-plan-text">
         <span class="av-plan-name">{planDisplayName(plan)}</span>
         <span class="av-plan-price">{plan.priceDisplay[locale()]}</span>
-        <span class="av-plan-credits">
-          {plan.kind === "subscription"
-            ? t("billing.plans.perMonth", { n: formatPlanUsd(plan) })
-            : t("billing.packs.amount", { n: formatPlanUsd(plan) })}
-        </span>
       </div>
       <Button
         variant="primary"
@@ -235,9 +230,7 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
       >
         {checkoutBusyId() === plan.id
           ? t("billing.checkout.starting")
-          : plan.kind === "subscription"
-            ? t("billing.plans.subscribe")
-            : t("billing.packs.buy")}
+          : t("billing.plans.subscribe")}
       </Button>
     </li>
   );
@@ -277,10 +270,17 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
           <Match when={billing()}>
             <KVList
               items={[
-                {
-                  label: availableLabel(),
-                  value: formatUsdMicros(balanceAvailableUsdMicros(balance())),
-                },
+                cloudBilling()
+                  ? {
+                      label: t("billing.balance.available"),
+                      value: cloudSpendStatus(),
+                    }
+                  : {
+                      label: t("billing.quota.available"),
+                      value: formatUsdMicros(
+                        balanceAvailableUsdMicros(balance()),
+                      ),
+                    },
               ]}
             />
             <Show when={balanceReservedUsdMicros(balance()) > 0}>
@@ -360,19 +360,9 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
                 when={hasBillingCatalog()}
                 fallback={<p class="muted">{t("billing.plans.none")}</p>}
               >
-                <Show when={subscriptions().length > 0}>
-                  <ul class="av-plan-list">
-                    <For each={subscriptions()}>{planCard}</For>
-                  </ul>
-                </Show>
-                <Show when={packs().length > 0}>
-                  <h2 class="tg-card-title av-plan-section">
-                    {t("billing.packs.title")}
-                  </h2>
-                  <ul class="av-plan-list">
-                    <For each={packs()}>{planCard}</For>
-                  </ul>
-                </Show>
+                <ul class="av-plan-list">
+                  <For each={subscriptions()}>{planCard}</For>
+                </ul>
               </Show>
             </Match>
           </Switch>
@@ -495,20 +485,6 @@ function balanceReservedUsdMicros(balance: CreditBalance | undefined): number {
   );
 }
 
-function formatPlanUsd(plan: PublicBillingPlan): string {
-  return formatUsdMicros(planUsdMicros(plan));
-}
-
 function planDisplayName(plan: PublicBillingPlan): string {
-  if (plan.kind === "pack") {
-    return t("billing.packs.balance", { n: formatPlanUsd(plan) });
-  }
   return plan.name[locale()];
-}
-
-function planUsdMicros(plan: PublicBillingPlan): number {
-  if (typeof plan.usdMicros === "number" && Number.isFinite(plan.usdMicros)) {
-    return plan.usdMicros;
-  }
-  return Math.round((plan.credits ?? 0) * 1_000_000);
 }

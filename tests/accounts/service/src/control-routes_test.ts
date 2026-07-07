@@ -1587,6 +1587,62 @@ test("GET /api/v1/dashboard/overview batches launcher data for one Workspace", a
   ]);
 });
 
+test("GET /api/v1/dashboard/overview returns when optional StateVersion projection stalls", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = deploymentOperations("space_a");
+  operations.installations.listCapsulesPage = async (workspaceId, params) => {
+    operations.calls.listCapsulesPage = [workspaceId, params];
+    return {
+      items: [
+        {
+          id: "inst_timeout",
+          workspaceId,
+          name: "timeout-app",
+          slug: "timeout-app",
+          sourceId: "src_x",
+          installConfigId: "cfg_x",
+          environment: "prod",
+          currentStateVersionId: "dep_timeout",
+          currentStateGeneration: 1,
+          status: "active",
+          createdAt: "2026-01-01T00:00:00Z",
+          updatedAt: "2026-01-01T00:00:00Z",
+        },
+      ],
+    } as Awaited<
+      ReturnType<ControlPlaneOperations["installations"]["listCapsulesPage"]>
+    >;
+  };
+  operations.listDeploymentsByIds = (ids) => {
+    operations.calls.listDeploymentsByIds = [...ids];
+    return new Promise(() => {});
+  };
+
+  const { request: req, url } = request(
+    "GET",
+    "/api/v1/dashboard/overview?workspaceId=space_a",
+    { cookie },
+  );
+  const startedAt = Date.now();
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+
+  expect(Date.now() - startedAt).toBeLessThan(2_500);
+  expect(response?.status).toEqual(200);
+  const body = (await response!.json()) as {
+    capsules: Array<Record<string, unknown>>;
+    currentStateVersions: unknown[];
+  };
+  expect(body.capsules.map((capsule) => capsule.id)).toEqual(["inst_timeout"]);
+  expect(body.currentStateVersions).toEqual([]);
+  expect(operations.calls.listDeploymentsByIds).toEqual(["dep_timeout"]);
+});
+
 test("GET /api/v1/dashboard/overview compacts activity metadata for launcher payloads", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
@@ -5285,9 +5341,10 @@ test("GET /api/v1/capsule-configs template catalog hides scoped configs", async 
       catalog?: unknown;
     }>;
   };
-  expect(body.installConfigs.map((config) => config.id)).toEqual(
-    ["cfg-catalog-takos", "cfg-catalog-yurucommu"],
-  );
+  expect(body.installConfigs.map((config) => config.id)).toEqual([
+    "cfg-catalog-takos",
+    "cfg-catalog-yurucommu",
+  ]);
   expect(body.installConfigs.some((config) => config.workspaceId)).toBe(false);
 });
 

@@ -13,7 +13,7 @@
 - API endpoint、request / response shape、認証、error shape
 - Resource Shape、Compatibility API、ProviderConnection、CredentialRecipe、ProviderBinding の公開仕様
 - supported / preview / planned / unsupported の compatibility matrix
-- Takosumi Cloud の公開価格、無料枠、credit 消費、残高不足時の fail-closed 動作
+- Takosumi Cloud の公開価格、無料枠、usage billing、spend guard の fail-closed 動作
 - secret を再表示しない、logs に出さない、Run sandbox にだけ注入する、といった security contract
 
 公開 contract として必要な情報を、非公開メモを読まないと分からない状態にはしません。
@@ -28,7 +28,7 @@
 | product / edition boundary  | Takosumi、Takosumi for Operator、Takosumi Cloud の外部定義       | 設計候補、迷った案、未確定ロードマップ              |
 | API / compatibility surface | endpoint、capability、認証、error、supported/preview/unsupported | handler wiring、closed repo path、private route     |
 | Resource Shape              | schema、lifecycle、state/import/drift の外部挙動                 | adapter 実装詳細、private target inventory          |
-| Cloud pricing / credits     | customer price、無料枠、credit exhaustion、auto charge 挙動      | price id、原価表、margin guard、reconciliation 手順 |
+| Cloud pricing / billing     | customer price、無料枠、spend guard、auto charge 挙動      | price id、原価表、margin guard、reconciliation 手順 |
 | security / secret handling  | secret 非再表示、log redaction、run-scoped injection             | secret file path、vault path、operator token        |
 
 公開 docs から `docs/internal/` や `docs/operations/` へ直接リンクして、仕様説明を
@@ -86,9 +86,8 @@ API / pricing / legal reference
 ```text
 customer pays
 free tier
-included credits
 usage prices
-credit exhaustion behavior
+spend guard behavior
 auto charge behavior
 refund / cancellation surface
 ```

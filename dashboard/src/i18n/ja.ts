@@ -37,7 +37,7 @@ export const ja = {
   "common.empty": "データがありません",
 
   // --- nav / shell ----------------------------------------------------------
-  "nav.home": "サービス",
+  "nav.home": "アプリ",
   "nav.apps": "アプリ",
   "nav.services": "サービス",
   "nav.add": "追加",
@@ -46,12 +46,12 @@ export const ja = {
   "store.subtitle": "ストアから追加できるアプリやサービスを探します。",
   "store.noWorkspace": "先に Workspace を選択してください。",
   "nav.cloudResources": "クラウド",
-  "nav.runs": "更新履歴",
+  "nav.runs": "アクティビティ",
   "nav.connections": "接続済みアカウント",
   "nav.billing": "お支払い",
   "nav.activity": "操作履歴",
   "nav.primary": "主な操作",
-  "nav.manage": "詳細",
+  "nav.manage": "管理",
   "nav.accountSection": "アカウント",
   "nav.notifications": "通知",
   "nav.workspaceSettings": "設定",
@@ -187,8 +187,32 @@ export const ja = {
 
   // --- Service list (home) --------------------------------------------------
   "apps.title": "アプリ",
-  "apps.subtitle": "追加したサービスを開けます。",
+  "apps.subtitle": "追加したアプリをここから開けます。",
   "apps.add": "サービスを追加",
+  "apps.addShort": "足す",
+  "apps.sectionYours": "あなたのアプリ",
+  "apps.sectionBrowse": "さがす",
+  "apps.browseSub": "おすすめ",
+  "apps.browseAll": "ストアを開く",
+  "apps.addToLibrary": "ライブラリに足す",
+  "install.installing": "{name} を追加中…",
+  "install.installingGeneric": "追加中…",
+  "install.wait": "そのままお待ちください",
+  "install.step.fetch": "コードを取得",
+  "install.step.check": "互換性を確認",
+  "install.step.deploy": "デプロイ",
+  "install.step.done": "仕上げ",
+  "install.doneTitle": "{name} を追加しました",
+  "install.doneTitleGeneric": "追加しました",
+  "install.doneSub": "デプロイ完了。すぐに使えます。",
+  "install.open": "アプリを開く",
+  "install.toApps": "アプリ一覧へ",
+  "install.gateTitle": "確認が必要です",
+  "install.gateSub": "続けるには内容の確認が必要です。",
+  "install.gateCta": "内容を確認する",
+  "install.errorTitle": "追加できませんでした",
+  "install.errorSub": "詳細を確認して、もう一度お試しください。",
+  "install.errorCta": "詳細を見る",
   "apps.attention": "要対応が {n} 件あります",
   "apps.attentionView": "通知を確認",
   "apps.needsAttention": "要対応",
@@ -199,7 +223,7 @@ export const ja = {
   "apps.reviewChanges": "変更を確認",
   "apps.start.aria": "最初のサービス",
   "apps.start.kicker": "まだサービスがありません",
-  "apps.start.titleEmpty": "サービスを追加して始める",
+  "apps.start.titleEmpty": "最初のアプリを追加しよう",
   "apps.start.bodyEmpty": "アプリを選ぶか、リンクを貼って追加します。",
   "apps.start.optionCatalog": "追加する",
   "apps.start.optionCatalogSub": "アプリ候補やリンクから追加できます。",
@@ -325,6 +349,22 @@ export const ja = {
   "run.summary.applySucceeded": "デプロイが完了しました。",
   "run.summary.failed": "{operation}に失敗しました。",
   "run.summary.failedHint": "下の診断とログで原因を確認できます。",
+  "run.summary.creditsRequired": "クレジットが必要です。",
+  "run.summary.creditsRequiredHint":
+    "アカウントにクレジットを追加してから、もう一度デプロイしてください。",
+  "run.summary.connectionVerificationRequired":
+    "接続済みアカウントの確認が必要です。",
+  "run.summary.connectionVerificationHint":
+    "この実行を作成した後に接続状態が変わった可能性があります。もう一度変更を確認してからデプロイしてください。",
+  "run.summary.connectionSetupRequired": "接続済みアカウントの設定が必要です。",
+  "run.summary.connectionSetupHint":
+    "必要な provider connection を選ぶか設定を完了してから、もう一度デプロイしてください。",
+  "run.summary.connectionChanged": "接続済みアカウントを確認し直してください。",
+  "run.summary.connectionChangedHint":
+    "この実行を確認した後に接続済みアカウントが変わっています。現在の変更を確認し直してからデプロイしてください。",
+  "run.summary.credentialServiceIssue": "アクセス準備を完了できませんでした。",
+  "run.summary.credentialServiceHint":
+    "一時的な provider アクセスを準備できませんでした。もう一度試し、続く場合はサポートに連絡してください。",
   "run.summary.blocked": "ポリシーにより実行が止まっています。",
   "run.summary.driftDone": "ズレの確認が完了しました。",
   "run.summary.fallback": "実行の状態: {status}",
@@ -341,10 +381,11 @@ export const ja = {
   "run.destructiveConfirm": "破壊的な変更を承知のうえで実行",
   "run.stop": "やめる",
   "run.cost.required": "見積もり金額: 約 {n}",
-  "run.cost.balance": "残高: {n}",
+  "run.cost.balance": "利用可能枠: {n}",
   "run.cost.shortfall":
-    "USD残高が約 {n} 不足しているため、このまま実行できません。",
-  "run.cost.blocked": "残高または上限の都合により、このまま実行できません。",
+    "利用上限または支払い状態により、このまま実行できません。",
+  "run.cost.blocked":
+    "支払い状態または上限の都合により、このまま実行できません。",
   "run.cost.capacityNeeded": "必要な容量: 約 {n}",
   "run.cost.capacity": "利用可能な容量: {n}",
   "run.cost.capacityShortfall":
@@ -409,12 +450,41 @@ export const ja = {
   "run.diag.severity.info": "情報",
   "run.diagnostics.failed":
     "完了できませんでした。原因を確認する場合だけ詳細を開いてください。",
+  "run.diagnostics.creditsRequired":
+    "所有者アカウントのクレジット残高が足りないため停止しました。クレジットを追加すると、同じ変更をもう一度実行できます。",
+  "run.diagnostics.creditsRequiredShort": "クレジット残高が不足しています。",
+  "run.diagnostics.creditsRequiredDetail":
+    "お支払い画面でクレジットを追加してから、もう一度デプロイしてください。",
+  "run.diagnostics.connectionVerificationRequired":
+    "接続済みアカウントへのアクセス準備中に停止しました。接続が利用可能になっている場合は、もう一度変更を確認してからデプロイしてください。",
+  "run.diagnostics.connectionVerificationShort":
+    "接続済みアカウントを利用できませんでした。",
+  "run.diagnostics.connectionVerificationDetail":
+    "現在の接続状態で確認し直すため、もう一度変更を確認してください。",
+  "run.diagnostics.connectionSetupRequired":
+    "この実行には provider connection の設定が必要です。",
+  "run.diagnostics.connectionSetupShort":
+    "このデプロイに必要な provider アクセスが設定されていません。",
+  "run.diagnostics.connectionSetupDetail":
+    "接続画面で必要な provider connection を選んでから、もう一度デプロイしてください。",
+  "run.diagnostics.connectionChanged":
+    "確認後に provider connection が変更されています。",
+  "run.diagnostics.connectionChangedShort":
+    "確認済みの provider connection が現在の状態と一致しません。",
+  "run.diagnostics.connectionChangedDetail":
+    "現在の接続状態で使うため、もう一度変更を確認してください。",
+  "run.diagnostics.credentialServiceIssue":
+    "この実行用の一時 provider アクセスを準備できませんでした。",
+  "run.diagnostics.credentialServiceShort":
+    "一時 provider アクセスを準備できませんでした。",
+  "run.diagnostics.credentialServiceDetail":
+    "もう一度試してください。続く場合は、Takosumi 側の credential service を確認する必要があります。",
   "run.audit.title": "活動記録",
   "run.audit.empty": "活動記録はありません。",
   "run.audit.detail": "記録の詳細",
 
   // --- run history --------------------------------------------------------------
-  "runList.title": "更新履歴",
+  "runList.title": "アクティビティ",
   "runList.subtitle": "最近の確認・承認・デプロイを新しい順に表示します。",
   "runList.open": "確認",
   "runList.empty.title": "まだ更新履歴はありません",
@@ -666,7 +736,7 @@ export const ja = {
 
   // --- connections -------------------------------------------------------------
   "conn.subtitle":
-    "サービス公開に使うクラウドアカウントやアクセスキーを保存します。",
+    "自分のカギ（クラウドのトークンやアクセスキー）を保存します。カギを入れれば、allowlist なし・承認なしで任意の provider を動かせます。",
   "conn.providerConnections.title": "接続済みアカウント",
   "conn.providerConnections.provider": "接続先",
   "conn.providerConnections.name": "名前",
@@ -754,6 +824,16 @@ export const ja = {
   "conn.guided.connect": "接続を保存",
   "conn.guided.connecting": "接続中...",
   "conn.custom.back": "よく使う接続に戻る",
+  "conn.byok.title": "自分のカギで任意の provider を接続",
+  "conn.byok.body":
+    "Provider source と、その provider が使う環境変数（カギ）を入れるだけ。allowlist も承認もなく、どの OpenTofu / Terraform provider でも動きます。",
+  "conn.byok.noBillingNote":
+    "自分のカギを使う接続に Takosumi の課金はありません。課金対象は Takosumi 提供の managed リソースだけです。",
+  "conn.byok.usePreset": "代わりにガイド付きプリセットを使う",
+  "conn.byok.backToByok": "自分のカギで任意の provider を接続する",
+  "conn.presets.body":
+    "プリセットは設定を楽にするショートカットです（対応 provider の一覧ではありません）。一覧に無い provider は「自分のカギで接続」を使ってください。",
+  "conn.presets.provider": "プリセット（任意のショートカット）",
   "conn.advanced.summary": "アクセス情報を入力",
   "conn.advanced.register": "アクセス情報を保存",
   "conn.register": "接続を保存",
@@ -780,9 +860,9 @@ export const ja = {
   "conn.error.invalidProvider": "接続先が不正です。",
   "conn.error.tokenRequired": "トークンを貼り付けてください。",
   "conn.error.fieldRequired": "{field} は必須です。",
-  "conn.empty.title": "接続済みアカウントはまだありません",
+  "conn.empty.title": "自分のカギで任意の provider を接続",
   "conn.empty.message":
-    "サービスがクラウドアカウントやキーを必要とするときに接続します。",
+    "自分のカギ（クラウドのトークンやキー）を入れれば、allowlist なし・承認なし・課金なしで、どの provider でも動かせます。",
   "conn.test": "アクセス確認",
   "conn.testing": "確認中...",
   "conn.test.notReady":
@@ -1013,21 +1093,23 @@ export const ja = {
 
   // --- billing -------------------------------------------------------------------
   "billing.title": "お支払い",
-  "billing.subtitle":
-    "このワークスペースのプラン、使用量、支払い設定を確認します。",
+  "billing.subtitle": "アカウントのプラン、使用量、支払い設定を確認します。",
   "billing.usageQuotaTitle": "使用量 / 上限",
   "billing.usageQuotaSubtitle":
-    "このワークスペースの上限モード、利用可能な容量、使用量を確認します。",
-  "billing.mode.disabled": "このワークスペースでは課金は無効です。",
+    "アカウントのクレジット、発生元ワークスペース、使用量を確認します。",
+  "billing.mode.disabled": "このアカウントでは課金は無効です。",
   "billing.mode.checkoutOpen":
-    "Takosumi Cloud のリソースに使う USD 残高を追加できます。残高がなくなると Cloud リソースは停止します。",
+    "プランを選択すると Takosumi Cloud リソースを使い始められます。有料操作は上限と支払い状態に基づいて実行前に確認されます。",
   "billing.mode.showback": "使用量は記録されますが、請求はありません。",
-  "billing.mode.enforce": "デプロイには USD 残高が必要です。",
+  "billing.mode.enforce":
+    "有料操作はプラン、上限、支払い状態に基づいて実行前に確認されます。",
   "billing.loading": "課金状態を読み込み中です...",
   "billing.error": "課金状態を読み込めませんでした: {message}",
   "billing.error.unknown": "不明なエラー",
-  "billing.balance.title": "残高",
-  "billing.balance.available": "利用可能残高",
+  "billing.balance.title": "使用状況",
+  "billing.balance.available": "利用状態",
+  "billing.balance.ready": "利用できます",
+  "billing.balance.actionRequired": "プランまたは支払い設定が必要です",
   "billing.balance.reserved": "反映待ちの使用量",
   "billing.quota.title": "上限",
   "billing.quota.available": "利用可能な容量",
@@ -1038,7 +1120,7 @@ export const ja = {
   "billing.plans.error": "プランを読み込めませんでした: {message}",
   "billing.plans.none": "現在、プランは提供されていません。",
   "billing.plans.nonRefundable":
-    "購入前に金額と内容を確認できます。消費済み残高は原則返金対象外です。カード明細には原則として TAKOSUMI と表示されます。",
+    "購入前に金額と内容を確認できます。利用済みのサービスや完了した使用量は原則返金対象外です。カード明細には原則として TAKOSUMI と表示されます。",
   "billing.plans.disabled":
     "現在、このワークスペースでは購入できません。購入が必要になった場合は、この画面にプランが表示されます。",
   "billing.plans.subscribe": "このプランにする",
@@ -1049,10 +1131,6 @@ export const ja = {
   "billing.policies.terms": "利用規約",
   "billing.policies.privacy": "プライバシー",
   "billing.policies.support": "サポート",
-  "billing.packs.title": "残高パック",
-  "billing.packs.amount": "{n}",
-  "billing.packs.balance": "{n} 残高",
-  "billing.packs.buy": "購入する",
   "billing.portal": "支払い方法と請求を管理",
   "billing.portalUnavailable":
     "課金が無効、または受付中のプランがないため、支払い管理は利用できません。",
@@ -1060,7 +1138,7 @@ export const ja = {
   "billing.checkout.starting": "チェックアウトへ移動中...",
   "billing.checkout.failed": "チェックアウトを開始できませんでした — {message}",
   "billing.checkout.success":
-    "購入が完了しました。残高への反映まで少しかかる場合があります。",
+    "プランの手続きが完了しました。反映まで少しかかる場合があります。",
   "billing.checkout.cancelled": "購入をキャンセルしました。",
   "billing.usage.title": "使用量",
   "billing.usage.openHint": "使用履歴を開くと最近の明細を読み込みます。",
@@ -1077,9 +1155,9 @@ export const ja = {
   "billing.usage.credits": "USD",
   "billing.usage.created": "日時",
   "billing.ledger.title": "使用履歴",
-  "billing.reservations.title": "残高予約",
-  "billing.reservations.loading": "残高予約を読み込み中です...",
-  "billing.reservations.error": "残高予約を読み込めませんでした: {message}",
+  "billing.reservations.title": "使用量予約",
+  "billing.reservations.loading": "使用量予約を読み込み中です...",
+  "billing.reservations.error": "使用量予約を読み込めませんでした: {message}",
   "billing.reservations.empty": "予約はまだありません。",
   "billing.reservations.expires": "期限",
 } as const;

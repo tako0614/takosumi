@@ -93,10 +93,10 @@ failed-payment, dunning, refund, and support readiness have passed.
 Spend cap reference:
 
 ```text
-policy://takosumi-cloud/spend-cap/starter-closed-ga
+policy://takosumi-cloud/spend-cap/lite-closed-ga
 ```
 
-Closed-GA starter Workspaces use a USD-denominated monthly spend cap in showback
+Closed-GA Lite Workspaces use a USD-denominated monthly spend cap in showback
 mode. The default launch cap is:
 
 ```text
@@ -115,13 +115,13 @@ spend-cap evidence proves only that the cap policy exists and is reviewable.
 LLM usage policy reference:
 
 ```text
-policy://takosumi-cloud/llm-usage/starter-closed-ga
+policy://takosumi-cloud/llm-usage/lite-closed-ga
 ```
 
 Tool usage policy reference:
 
 ```text
-policy://takosumi-cloud/tool-usage/starter-closed-ga
+policy://takosumi-cloud/tool-usage/lite-closed-ga
 ```
 
 Takosumi Cloud must distinguish hosted platform operations from customer Capsule
@@ -178,7 +178,7 @@ support-owner:takosumi-cloud-operator
 Billing support covers:
 
 - explaining `disabled`, `showback`, and `enforce` modes;
-- locating the customer's Workspace and billing state;
+- locating the customer's source Workspace and owner account billing state;
 - confirming whether paid enforcement is enabled for the cohort;
 - collecting sanitized Stripe or provider event references without exposing
   secrets;
@@ -211,7 +211,7 @@ Minimum topics for the security review:
 The first customer-facing SKU is:
 
 ```text
-takosumi-cloud-starter
+takosumi-cloud-lite
 ```
 
 This SKU means hosted Takosumi Cloud access with Google sign-in, one default
@@ -230,10 +230,10 @@ provider-compatible import endpoint coverage.
 Initial quota policy reference:
 
 ```text
-policy://takosumi-cloud/quota/starter-closed-ga
+policy://takosumi-cloud/quota/lite-closed-ga
 ```
 
-The starter quota must cap at least:
+The Lite quota must cap at least:
 
 - new Capsule creations per Workspace per day;
 - concurrent Runs per Workspace;
@@ -262,7 +262,7 @@ The planned customer-visible units are:
 Billing may remain `disabled` or `showback` for OSS/operator showback while
 access is closed. Takosumi Cloud-provided WfP / AI / managed resources are
 still spend-required: their usage must be priced by
-`TAKOSUMI_CLOUD_USAGE_PRICE_BOOK`, deducted from Workspace USD balance, and
+`TAKOSUMI_CLOUD_USAGE_PRICE_BOOK`, deducted from the owner account USD balance, and
 fail closed when balance is exhausted. Current customer prices and the free
 tier are defined in [`cloud-pricing.md`](cloud-pricing.md).
 

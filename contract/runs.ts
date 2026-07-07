@@ -217,8 +217,9 @@ export interface RunEventsResponse {
  *                            (`disabled` / `showback` / `enforce`).
  *   - `estimatedUsdMicros` — the USD amount the controller estimated this plan
  *                            would consume on apply, in micros.
- *   - `availableUsdMicros` — the Workspace's available USD balance observed when
- *                            a reservation was attempted, in micros, when known.
+ *   - `availableUsdMicros` — the owning account's available USD balance observed
+ *                            when a reservation was attempted, in micros, when
+ *                            known.
  *   - `reservationStatus`  — `reserved` when credits were held, or
  *                            `insufficient_credits` when the reservation could
  *                            not be made (the apply would be blocked under

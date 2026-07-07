@@ -19,7 +19,7 @@ Cloud extension:
 Takosumi Cloud platform worker:
   price book で usdMicros を確定する
   minimum gross margin を検証する
-  Workspace balance から引く
+  owner account balance から引く
   balance が足りなければ fail closed する
 ```
 
@@ -84,8 +84,8 @@ response に出して platform worker に拾わせる経路ではありません
 され、別 Worker としては deploy しません。handler は dispatch 前に同じ platform
 Worker origin の `POST /internal/platform/cloud/usage` へ
 `cloudflare:workers_script:request` meter を送り、platform worker 側の同じ
-`TAKOSUMI_CLOUD_USAGE_PRICE_BOOK` と atomic Workspace balance spend を再利用します。
-token 未設定、`spaceId` 未設定、価格未設定、残高不足はすべて fail closed で、
+`TAKOSUMI_CLOUD_USAGE_PRICE_BOOK` と atomic owner account balance spend を再利用します。
+token 未設定、`spaceId` 未設定、価格未設定、owner account 残高不足はすべて fail closed で、
 user script は dispatch されません。
 
 ## Price book schema
@@ -135,33 +135,35 @@ Cloudflare の公開価格表をそのまま転記したものではありませ
 
 ## Initial customer prices
 
-初期の顧客向け価格はこれです。`$3.00` / `$5.00` は現金として返金・換金できる
-USD ではなく、Takosumi Cloud の usage ledger で消費する USD-denominated balance です。
+初期の顧客向け価格はこれです。subscription plan の内部 allowance は公開 pricing
+には出しません。AI サービスと同じく、ユーザーには plan name、月額、従量課金の
+有無、利用上限、支払い状態を見せます。
 
-| plan / pack          | customer pays | balance grant | conservative net revenue estimate |
-| -------------------- | ------------- | ------------- | --------------------------------- |
-| Starter              | 980円 / month | `$3.00`       | `$4.00`                           |
-| `$5.00` balance pack | 1200円        | `$5.00`       | `$5.00`                           |
+| plan | customer pays | public model              | internal allowance | conservative net revenue estimate |
+| ---- | ------------- | ------------------------- | ------------------ | --------------------------------- |
+| Lite | `$1` / month  | base subscription + usage | `$0.50`            | `$0.70`                           |
+| Plus | `$5` / month  | subscription + usage      | `$3.00`            | `$4.00`                           |
+| Pro  | `$10` / month | subscription + usage      | `$7.00`            | `$8.50`                           |
 
 この表は `TAKOSUMI_BILLING_PLANS` に次の意味で反映します。
 
 ```json
 {
-  "id": "starter",
+  "id": "lite",
   "kind": "subscription",
   "stripePriceId": "price_...",
-  "usdMicros": 3000000,
-  "estimatedNetRevenueUsdMicros": 4000000,
-  "name": { "ja": "Starter", "en": "Starter" },
+  "usdMicros": 500000,
+  "estimatedNetRevenueUsdMicros": 700000,
+  "name": { "ja": "Lite", "en": "Lite" },
   "priceDisplay": {
-    "ja": "月額980円 / $3.00 残高",
-    "en": "JPY 980 / month, $3.00 balance"
+    "ja": "月額 $1 + 従量課金",
+    "en": "$1/month + usage"
   }
 }
 ```
 
-`estimatedNetRevenueUsdMicros` は UI / public API には出しません。operator readiness と
-finance review のための非 secret config です。
+`usdMicros` と `estimatedNetRevenueUsdMicros` は UI / public API には出しません。
+operator readiness、spend guard、finance review のための非 secret config です。
 
 ## Initial usage price book
 
@@ -219,10 +221,10 @@ platform worker の price book が決めます。
 実運用では collector は `POST /cloud/usage/storage-inventory` を
 `cloud_extensions` Seam A 経由で呼びます。この endpoint は closed
 Cloud usage handler にあり、official Cloud wrapper が platform worker 内で
-in-process mount します。platform が検証した billing Workspace context と request
-body の `workspaceId` を照合してから usage header を返します。
+in-process mount します。platform が検証した source Workspace context と request
+body の `workspaceId` を照合し、owner account billing subject を解決してから usage header を返します。
 header は client response から削除され、platform worker が price book で
-`usdMicros` を確定して Workspace usage ledger に記録します。1 request に複数
+`usdMicros` を確定して owner account usage ledger に記録します。1 request に複数
 Workspace を混ぜないでください。複数 Workspace の inventory は Workspace ごとに
 分割して送ります。
 
@@ -246,9 +248,11 @@ runtime guard smoke が必要です。
 
 ## Free tier
 
-無料枠は monthly included USD grant として扱います。初期値は Workspace ごとに
-`$0.25 / month` までです。無料枠は繰り越さず、複数 Workspace 作成で無限に増やせないよう
-closed access / abuse controls / account limit と一緒に運用します。
+無料枠は owner account 単位の monthly included USD grant として扱います。初期値は
+1 ユーザーにつき `$0.25 / month` までです。Workspace は usage attribution と
+drill-down の単位であり、Workspace ごとの別残高は持ちません。無料枠は繰り越さず、
+複数 Workspace 作成で無限に増やせないよう closed access / abuse controls / account
+limit と一緒に運用します。
 
 ```text
 monthlyIncludedUsdMicros:
@@ -268,7 +272,7 @@ availableUsdMicros:
 ## What stops when balance is exhausted
 
 `recordGatewayResourceUsage` は Cloud extension route からの usage に
-`spendRequired: true` を付けます。これにより workspace billing mode がまだ
+`spendRequired: true` を付けます。これにより owner account billing mode がまだ
 `disabled` / closed access の状態でも、Takosumi Cloud が提供する有料 resource は
 残高不足で止まります。
 
@@ -302,7 +306,7 @@ Stripe payment:
   ユーザーから受け取る fiat 金額
 
 Takosumi credit:
-  Workspace に付与する usdMicros 残高
+  所有ユーザーの billing account に付与する usdMicros 残高
 
 Usage price book:
   Cloud resource usage を usdMicros に変換する単価表

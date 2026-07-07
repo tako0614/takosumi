@@ -231,6 +231,7 @@ export function appSurfaceFromInstallConfigCatalog(
   if (!catalog || catalog.surface !== "service") return undefined;
   return {
     name: catalog.name[language] ?? catalog.suggestedName ?? config.name,
+    image: urlValue(catalog.iconUrl),
   };
 }
 
@@ -243,6 +244,32 @@ function urlValue(value: unknown): string | undefined {
   return isUrlString(value) ? value.trim() : undefined;
 }
 
+function publicAssetUrlValue(
+  value: unknown,
+  outputs: Readonly<Record<string, unknown>>,
+): string | undefined {
+  const raw = nonEmptyString(value);
+  if (!raw) return undefined;
+  if (/^https?:\/\//i.test(raw)) return raw.trim();
+  if (!raw.startsWith("/")) return undefined;
+  const base = launchUrlFromOutputs(outputs);
+  if (!base) return undefined;
+  try {
+    return new URL(raw, base).toString();
+  } catch {
+    return undefined;
+  }
+}
+
+function publicIconValue(
+  value: unknown,
+  outputs: Readonly<Record<string, unknown>>,
+): string | undefined {
+  const raw = nonEmptyString(value);
+  if (!raw) return undefined;
+  return publicAssetUrlValue(raw, outputs) ?? raw;
+}
+
 function recordValue(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
@@ -251,15 +278,18 @@ function recordValue(value: unknown): Record<string, unknown> | undefined {
 }
 
 /** Normalize one declared-surface object; null unless it carries a name. */
-function surfaceFromObject(value: unknown): AppSurface | null {
+function surfaceFromObject(
+  value: unknown,
+  outputs: Readonly<Record<string, unknown>>,
+): AppSurface | null {
   const rec = recordValue(value);
   if (!rec) return null;
   const name = nonEmptyString(rec.name);
   if (!name) return null;
   return {
     name,
-    icon: nonEmptyString(rec.icon),
-    image: urlValue(rec.image),
+    icon: publicIconValue(rec.icon, outputs),
+    image: publicAssetUrlValue(rec.image, outputs),
     url: urlValue(rec.url),
   };
 }
@@ -295,8 +325,8 @@ function surfaceFromAppDeploymentPublish(
   const urlOutput = recordValue(declaredOutputs?.url);
   return {
     name,
-    icon: nonEmptyString(display.icon),
-    image: urlValue(display.image),
+    icon: publicIconValue(display.icon, outputs),
+    image: publicAssetUrlValue(display.image, outputs),
     url:
       urlValue(urlOutput?.url) ??
       urlValue(urlOutput?.value) ??
@@ -348,24 +378,24 @@ export function appSurfacesFromOutputs(
 
   if (Array.isArray(outputs.apps)) {
     for (const entry of outputs.apps) {
-      const surface = surfaceFromObject(entry);
+      const surface = surfaceFromObject(entry, outputs);
       if (surface) surfaces.push(surface);
     }
   }
   if (Array.isArray(outputs.app)) {
     for (const entry of outputs.app) {
-      const surface = surfaceFromObject(entry);
+      const surface = surfaceFromObject(entry, outputs);
       if (surface) surfaces.push(surface);
     }
   } else {
-    const single = surfaceFromObject(outputs.app);
+    const single = surfaceFromObject(outputs.app, outputs);
     if (single) surfaces.push(single);
   }
 
   if (surfaces.length === 0) {
     const name = nonEmptyString(outputs.app_name);
-    const icon = nonEmptyString(outputs.app_icon);
-    const image = urlValue(outputs.app_image);
+    const icon = publicIconValue(outputs.app_icon, outputs);
+    const image = publicAssetUrlValue(outputs.app_image, outputs);
     if (name || icon || image) {
       surfaces.push({
         name,

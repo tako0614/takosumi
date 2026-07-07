@@ -301,8 +301,7 @@ test("generateInstallationRoot wires multiple aliases for one child provider", (
 });
 
 test("generateInstallationRoot renders base_url in the provider block when set for a provider compatibility endpoint", () => {
-  const baseUrl =
-    "https://app.takosumi.com/compat/cloudflare/client/v4";
+  const baseUrl = "https://app.takosumi.com/compat/cloudflare/client/v4";
   const { files } = generateInstallationRoot({
     template: WORKER_TEMPLATE,
     inputs: {
@@ -485,7 +484,7 @@ test("generateGenericCapsuleRoot wraps arbitrary capsule inputs and outputs", ()
     'value = try(module.app.metadata.hostname, "")',
   );
   expect(files["outputs.tf"]).toContain(
-    'output "takosumi_release" {\n  value = module.app.takosumi_release\n}',
+    'output "takosumi_release" {\n  value = try(module.app.takosumi_release, null)\n}',
   );
   expect(files["outputs.tf"]).not.toContain('output "app_deployment"');
 });
@@ -504,7 +503,7 @@ test("generateGenericCapsuleRoot omits empty required_providers for provider-fre
   expect(files["main.tf"]).toContain('module "app"');
   expect(files["outputs.tf"]).toContain('value = try(module.app.url, "")');
   expect(files["outputs.tf"]).toContain(
-    "value = module.app.takosumi_release",
+    "value = try(module.app.takosumi_release, null)",
   );
   expect(files["outputs.tf"]).not.toContain("module.app.app_deployment");
 });
@@ -523,7 +522,7 @@ test("generateGenericCapsuleRoot does not duplicate control outputs when allowli
     1,
   );
   expect(files["outputs.tf"]).toContain(
-    'output "takosumi_release" {\n  value = module.app.takosumi_release\n}',
+    'output "takosumi_release" {\n  value = try(module.app.takosumi_release, null)\n}',
   );
   expect(files["outputs.tf"]).not.toContain("module.app.app_deployment");
 });

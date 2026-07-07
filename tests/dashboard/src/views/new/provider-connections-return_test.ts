@@ -279,7 +279,10 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).toContain(
       "const managedAppHost = `${projectNameVariable()}.app.takos.jp`",
     );
-    expect(newAppViewSource).toContain("`https://${managedAppHost}`");
+    expect(newAppViewSource).toContain("routePatternFromAppUrl");
+    expect(newAppViewSource).toContain(
+      "current.app_url === \"string\" && current.app_url.trim()",
+    );
     expect(newAppViewSource).toContain('"cloudflare_route_zone_id"');
     expect(newAppViewSource).toContain('"cloudflare_route_pattern"');
     expect(newAppViewSource).toContain('"enable_workers_dev_subdomain"');
@@ -292,7 +295,7 @@ describe("/new Provider Connections return context", () => {
     );
     expect(newAppViewSource).toContain("const providerRequiresConnection =");
     expect(newAppViewSource).toContain(
-      "providerEnvRule(provider) !== undefined",
+      "!isCredentialFreeUtilityProvider(provider)",
     );
     expect(newAppViewSource).toContain(
       "provider.allowed && providerRequiresConnection(provider.source)",
@@ -551,9 +554,11 @@ describe("/new Provider Connections return context", () => {
 
   test("custom ProviderConnection path asks for provider source and env variables", () => {
     expect(connectionsTabSource).toContain("GENERIC_ENV_PROVIDER_OPTION");
-    expect(connectionsTabSource).toContain('"conn.genericEnv.option"');
-    expect(connectionsTabSource).toContain('"conn.genericEnv.summary"');
-    expect(connectionsTabSource).toContain('"conn.genericEnv.body"');
+    expect(connectionsTabSource).toContain('"conn.byok.title"');
+    expect(connectionsTabSource).toContain('"conn.byok.body"');
+    expect(connectionsTabSource).toContain('"conn.byok.noBillingNote"');
+    expect(connectionsTabSource).toContain('"conn.byok.usePreset"');
+    expect(connectionsTabSource).toContain('"conn.byok.backToByok"');
     expect(connectionsTabSource).toContain(
       'placeholder={t("conn.genericEnv.providerPlaceholder")}',
     );

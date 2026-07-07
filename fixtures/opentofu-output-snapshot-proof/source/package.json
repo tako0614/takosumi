@@ -2,5 +2,6 @@
   "name": "@takos-fixtures/opentofu-output-proof-app",
   "version": "0.1.0",
   "private": true,
+  "license": "AGPL-3.0-only",
   "description": "OpenTofu OutputSnapshot proof source fixture"
 }

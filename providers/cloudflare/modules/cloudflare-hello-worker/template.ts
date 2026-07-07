@@ -1,5 +1,5 @@
 /**
- * First-party starter Capsule module: cloudflare-hello-worker.
+ * First-party sample Capsule module: cloudflare-hello-worker.
  *
  * A runnable Cloudflare Worker with NO build step — the Worker source is baked
  * inline in `module/main.tf`, so `tofu apply` creates a real Worker script and
@@ -11,7 +11,7 @@ import type { TemplateDefinition } from "@takosumi/internal/deploy-control-api";
 
 export const cloudflareHelloWorkerTemplate: TemplateDefinition = {
   id: "cloudflare-hello-worker",
-  name: "Hello Worker (starter)",
+  name: "Hello Worker sample",
   version: "1.0.0",
   description:
     "Deploys a tiny inline Cloudflare Worker (no build) and enables a workers.dev URL.",

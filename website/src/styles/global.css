@@ -533,7 +533,7 @@ section > .container {
   color: var(--tg-fg);
 }
 
-/* Pricing — self-host (free / OSS) vs hosted Takosumi (credit-based) */
+/* Pricing — self-host (free / OSS) vs hosted Takosumi (subscription + usage) */
 .plan-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);

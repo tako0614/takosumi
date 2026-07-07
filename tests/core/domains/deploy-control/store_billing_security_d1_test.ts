@@ -44,17 +44,17 @@ test("d1 store persists security findings and billing ledger rows", async () => 
 
   await store.putBillingAccount({
     id: "bill_1",
-    ownerType: "space",
-    ownerId: "space_1",
+    ownerType: "user",
+    ownerId: "user_1",
     provider: "stripe",
     stripeCustomerId: "cus_1",
     status: "active",
     createdAt: "2026-06-07T00:00:00.000Z",
     updatedAt: "2026-06-07T00:00:00.000Z",
   });
-  expect(
-    await store.getBillingAccountForOwner("space", "space_1"),
-  ).toMatchObject({ id: "bill_1", provider: "stripe" });
+  expect(await store.getBillingAccountForOwner("user", "user_1")).toMatchObject(
+    { id: "bill_1", provider: "stripe" },
+  );
 
   await store.putBillingPlan({
     id: "pro",

@@ -74,6 +74,14 @@ function resolveEnabledRunnerProfilesFromEnv(
         env.TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_REF,
       egressEnforcementEvidenceDigest:
         env.TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_DIGEST,
+      // Self-host (the operator IS the user) default-enables the wildcard
+      // generic-provider surface so "bring your own key -> any OpenTofu
+      // provider" runs out of the box. Open multi-tenant keeps the conservative
+      // default and opts the generic surface in explicitly (there is no
+      // Takosumi runner egress allowlist to protect co-tenants). Deployments
+      // that set TAKOSUMI_ENABLED_RUNNER_PROFILES (e.g. Takosumi Cloud) are
+      // unaffected — this default only applies when the env is unset.
+      defaultEnableGenericProvider: !gatewayAccessOpen,
     },
   );
 }

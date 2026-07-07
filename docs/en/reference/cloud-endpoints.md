@@ -36,8 +36,8 @@ Cloudflare-shaped import path can also be deleted through that compatible
 endpoint's DELETE. It requires a `write`-scoped session and only takes effect
 when the Cloud managed resource has been created. Unsupported endpoint families
 answer 501 fail-closed. DELETE cleanup is not a billable fallback operation, so
-a Workspace that has run out of credit can still destroy or remove
-already-created managed resources. The app does not carry the full
+a source Workspace whose owning account has run out of credit can still destroy
+or remove already-created managed resources. The app does not carry the full
 specification — provider compatibility scope, OpenTofu provider examples, usage
 event contracts, and secret-handling rules belong in docs.
 
@@ -146,22 +146,24 @@ Takosumi Cloud public HTTP traffic for `*.app.takos.jp` and
 `*.app-staging.takos.jp` is dispatched to the Cloud Edge Runtime by the same
 hosted-origin hostname dispatch registry.
 
-## API key / Workspace billing context
+## API key / owner billing context
 
 The Resource Shape API used by the `takosumi` provider (`/v1/resources`,
 `/v1/target-pools`, and `/v1/space-policies`) and the Cloudflare-compatible
 import endpoint (`/compat/cloudflare/client/v4`) can be used without creating a
 Capsule / app installation first. They are not anonymous endpoints. A request
 must authenticate with an account session, personal access token, or service
-token, and the billing Workspace must be verified.
+token, and the source Workspace plus owning user's billing account must be
+verified.
 
-Sessions and personal access tokens may select the billing Workspace with
+Sessions and personal access tokens may select the source Workspace with
 `x-takosumi-cloud-billing-workspace-id`. The platform verifies that the token
-can read that Workspace in the accounts plane before forwarding to the target
-Cloud endpoint family or Resource Shape API. For OpenTofu providers such as the Cloudflare
+can read that Workspace in the accounts plane, resolves the owning user's
+billing account / credit balance, then forwards to the target Cloud endpoint
+family or Resource Shape API. For OpenTofu providers such as the Cloudflare
 provider that do not conveniently attach arbitrary headers, create the personal
 access token with `workspace_id`. The platform then uses the token
-introspection `takosumi.space_id` as the default billing Workspace, so provider
+introspection `takosumi.space_id` as the default source Workspace, so provider
 configuration only needs `api_token` and `base_url`. Service tokens may only
 use the Workspace encoded in token metadata.
 
@@ -176,12 +178,13 @@ The generated provider block contains only `base_url`; the secret does not land
 in HCL, plan output, or state. Targets that deploy to a real Cloudflare account
 continue to use the user's normal Cloudflare ProviderConnection.
 
-Billable writes are precharged against Workspace credits before forwarding. If
+Billable writes are precharged against the owning user's account credits before forwarding. If
 the Workspace context is missing, the token does not match the Workspace, or the
-Workspace has insufficient credits, the request fails closed and is not
+owning user has insufficient credits, the request fails closed and is not
 forwarded to the Cloud endpoint / apply path. Capsule / installation ids are
 optional. When omitted, provider / compatibility API usage is recorded as a
-Workspace usage event without `installationId`.
+owner account usage event without `installationId`, with source Workspace
+metadata preserved.
 
 ## S3-compatible Object Storage endpoint
 
@@ -204,7 +207,7 @@ DELETE /compat/s3/v1/{bucket}/{key}
 
 Normal Cloud API keys (Takosumi Accounts personal access tokens) are not S3 SDK
 credentials. The S3-compatible endpoint verifies AWS SigV4 access key / secret
-access key credentials. Each access key is scoped to a Workspace and optional
+access key credentials. Each access key is scoped to a source Workspace and optional
 bucket allowlist, while bucket descriptors come from the Takosumi Cloud
 managed-resource inventory.
 
@@ -213,8 +216,9 @@ operational configuration health. The dashboard uses it to show configured
 bucket counts.
 
 Read/write/list operations precharge through the Cloud usage ledger. If the
-Workspace USD balance is exhausted, `PUT` fails with `402 PaymentRequired`
-before backend storage is mutated. `DELETE` cleanup intentionally has no
+owning user's USD balance is exhausted, `PUT` fails with `402 PaymentRequired`
+before backend storage is mutated. Source Workspace attribution is preserved on
+the usage event, but credits are held at the owner account level. `DELETE` cleanup intentionally has no
 operation precharge so users can remove already-created managed resources even
 when their balance is exhausted.
 
@@ -252,7 +256,8 @@ account-plane ownership metadata, not a secret.
 
 ## Usage
 
-Cloud usage is recorded as Workspace-scoped usage events.
+Cloud usage is charged to the owning user's account balance and keeps the
+source Workspace as attribution metadata.
 
 ```http
 GET /api/v1/workspaces/{workspaceId}/billing
@@ -285,7 +290,8 @@ Usage events carry quantity, usdMicros, source, and timestamp. They must not
 carry provider credentials, API keys, bearer tokens, database URLs, DSNs,
 passwords, or other secret values.
 
-Cloud managed endpoints record usage into the Workspace usage ledger. A success
+Cloud managed endpoints record usage into the owner account usage ledger and
+preserve source Workspace attribution metadata. A success
 that cannot be recorded must not be returned. If Workspace context is missing,
 credits are insufficient, pricing is unavailable, or scopes do not match, the
 request fails closed before it reaches the downstream provider, AI upstream, or
@@ -313,7 +319,7 @@ backend names must not become the user-facing billing or usage-ledger family.
 Unsupported managed subpaths return 501 instead of proxying to Cloudflare for
 free.
 
-Takosumi can claim a customer has been billed only when the Workspace usage
+Takosumi can claim a customer has been billed only when the owner account usage
 ledger records a usage event and the billing projection reflects it. Upstream
 provider charges alone do not mean Takosumi customer billing is complete.
 Payment-provider export, reconciliation, and concrete price book values are
@@ -390,11 +396,11 @@ Queue map to the selected managed backend primitives.
 same Cloud managed-resource operation boundary. The Resource Shape entrypoint
 uses TargetPool / Policy / ResolutionLock / Adapter dispatch. The compatibility
 entrypoint uses the Cloud extension catalog / auth / usage guard and the compat
-manager's virtual resource ledger. Both verify Workspace context and credits
-before a backend API call, and the manager chooses the backend implementation.
+manager's virtual resource ledger. Both verify source Workspace context and the
+owning account's credits before a backend API call, and the manager chooses the backend implementation.
 Managed compatibility credentials are delivered through provider-native runner
 env, so the Cloudflare provider uses
-`CLOUDFLARE_API_TOKEN=<Workspace-bound Takosumi token>` plus `base_url` to call
+`CLOUDFLARE_API_TOKEN=<source-Workspace-attributed Takosumi token>` plus `base_url` to call
 Takosumi Cloud's compat endpoint. The initial Takosumi Cloud Worker
 implementation uses a Workers for Platforms dispatch namespace, but that is one
 `EdgeWorker` implementation option and is not fixed into the public API or
@@ -402,8 +408,8 @@ provider schema.
 
 All Cloud managed resource entrypoints are peers: Compatibility APIs, existing
 OpenTofu providers, and the `takosumi/takosumi` Resource Shape API differ in
-request shape and ownership ledger. Auth, capability discovery, Workspace usage
-/ credit guard, Resource / NativeResource normalization, and manager dispatch
+request shape and ownership ledger. Auth, capability discovery, owner account
+usage / credit guard, Resource / NativeResource normalization, and manager dispatch
 are shared. Resource Shape entrypoints also apply TargetPool / Policy /
 ResolutionLock. The Cloudflare-compatible
 endpoint is an import / deploy path into this shared Cloud managed operation
@@ -431,6 +437,7 @@ Read routes used by dashboard inventory:
 GET /compat/cloudflare/client/v4/user/tokens/verify
 GET /compat/cloudflare/client/v4/accounts
 GET /compat/cloudflare/client/v4/accounts/{accountId}/workers/scripts
+GET /compat/cloudflare/client/v4/accounts/{accountId}/workers/scripts/{scriptName}/subdomain
 GET /compat/cloudflare/client/v4/accounts/{accountId}/storage/kv/namespaces
 GET /compat/cloudflare/client/v4/accounts/{accountId}/r2/buckets
 GET /compat/cloudflare/client/v4/accounts/{accountId}/d1/database
@@ -440,6 +447,7 @@ Initial target scope:
 
 - Workers scripts
 - Workers routes
+- Workers script subdomain compatibility mapped to `*.app.takos.jp`
 - default `*.app.takos.jp` hostname per HTTP route
 - user-owned custom domains on HTTP routes
 - KV namespaces
@@ -460,7 +468,7 @@ Not in the initial target:
 - Turnstile
 
 Cloudflare billing API compatibility is out of scope. Takosumi Cloud managed
-resource usage must be recorded through the Workspace usage ledger above, not by
+resource usage must be recorded through the owner account usage ledger above, not by
 proxying Cloudflare's billing API.
 
 Workers route records carry hostname fields:
@@ -496,6 +504,13 @@ namespace is first-come-first-served; duplicate reservations return 409.
 certificate provisioning, and runtime dispatch activation are Cloud runtime
 responsibilities. Unverified custom domains are not activated for runtime
 dispatch, and the default hostname remains available.
+
+The `cloudflare_workers_script_subdomain` compatibility route is stored as a
+Takosumi-managed `*.app.takos.jp` public name, not as a Cloudflare
+`workers.dev` hostname. `POST /accounts/{accountId}/workers/scripts/{scriptName}/subdomain`
+with `{"enabled": true, "previews_enabled": false}` creates a virtual Workers
+route at `<script-slug>-<short-id>.app.takos.jp/*`. `previews_enabled: true` is
+outside the initial target scope.
 
 ## OpenTofu provider usage
 

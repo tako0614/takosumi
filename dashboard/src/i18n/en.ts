@@ -34,7 +34,7 @@ export const en: Record<keyof typeof ja, string> = {
   "common.empty": "No data.",
 
   // --- nav / shell ----------------------------------------------------------
-  "nav.home": "Services",
+  "nav.home": "Apps",
   "nav.apps": "Apps",
   "nav.services": "Services",
   "nav.add": "Add",
@@ -43,12 +43,12 @@ export const en: Record<keyof typeof ja, string> = {
   "store.subtitle": "Find apps and services to add from the store.",
   "store.noWorkspace": "Select a Workspace first.",
   "nav.cloudResources": "Cloud",
-  "nav.runs": "Updates",
+  "nav.runs": "Activity",
   "nav.connections": "Connected accounts",
   "nav.billing": "Billing",
   "nav.activity": "Activity",
   "nav.primary": "Primary",
-  "nav.manage": "More",
+  "nav.manage": "Manage",
   "nav.accountSection": "Account",
   "nav.notifications": "Notifications",
   "nav.workspaceSettings": "Settings",
@@ -184,8 +184,32 @@ export const en: Record<keyof typeof ja, string> = {
 
   // --- Service list (home) --------------------------------------------------
   "apps.title": "Apps",
-  "apps.subtitle": "Open the services you have added.",
+  "apps.subtitle": "Open the apps you have added.",
   "apps.add": "Add service",
+  "apps.addShort": "Add",
+  "apps.sectionYours": "Your apps",
+  "apps.sectionBrowse": "Browse",
+  "apps.browseSub": "Suggested",
+  "apps.browseAll": "Open store",
+  "apps.addToLibrary": "Add to library",
+  "install.installing": "Adding {name}…",
+  "install.installingGeneric": "Adding…",
+  "install.wait": "This only takes a moment",
+  "install.step.fetch": "Fetch code",
+  "install.step.check": "Check compatibility",
+  "install.step.deploy": "Deploy",
+  "install.step.done": "Finish",
+  "install.doneTitle": "Added {name}",
+  "install.doneTitleGeneric": "Added",
+  "install.doneSub": "Deployed and ready to use.",
+  "install.open": "Open app",
+  "install.toApps": "Go to apps",
+  "install.gateTitle": "Needs your review",
+  "install.gateSub": "This install needs a quick review before it continues.",
+  "install.gateCta": "Review",
+  "install.errorTitle": "Couldn't add it",
+  "install.errorSub": "Check the details and try again.",
+  "install.errorCta": "See details",
   "apps.attention": "{n} items need attention",
   "apps.attentionView": "View notifications",
   "apps.needsAttention": "Needs attention",
@@ -196,7 +220,7 @@ export const en: Record<keyof typeof ja, string> = {
   "apps.reviewChanges": "Review changes",
   "apps.start.aria": "First service",
   "apps.start.kicker": "No services yet",
-  "apps.start.titleEmpty": "Add a service to start",
+  "apps.start.titleEmpty": "Add your first app",
   "apps.start.bodyEmpty": "Choose an app or paste an install link.",
   "apps.start.optionCatalog": "Add service",
   "apps.start.optionCatalogSub": "Choose an app or add from a link.",
@@ -324,6 +348,22 @@ export const en: Record<keyof typeof ja, string> = {
   "run.summary.failed": "{operation} failed.",
   "run.summary.failedHint":
     "Check the diagnostics and logs below for the cause.",
+  "run.summary.creditsRequired": "Credits are required.",
+  "run.summary.creditsRequiredHint":
+    "Add credits to your account, then run the deploy again.",
+  "run.summary.connectionVerificationRequired":
+    "Connected account check is needed.",
+  "run.summary.connectionVerificationHint":
+    "The connected account may have changed since this run was created. Review the changes again, then deploy.",
+  "run.summary.connectionSetupRequired": "Connected account setup is needed.",
+  "run.summary.connectionSetupHint":
+    "Choose or finish setting up the provider connection, then run the deploy again.",
+  "run.summary.connectionChanged": "Review the connected account again.",
+  "run.summary.connectionChangedHint":
+    "The connected account changed after this run was reviewed. Review the current changes again before deploying.",
+  "run.summary.credentialServiceIssue": "Access preparation did not finish.",
+  "run.summary.credentialServiceHint":
+    "Takosumi could not prepare temporary provider access. Try again, or contact support if it continues.",
   "run.summary.blocked": "Blocked by policy.",
   "run.summary.driftDone": "Drift check complete.",
   "run.summary.fallback": "Status: {status}",
@@ -340,10 +380,10 @@ export const en: Record<keyof typeof ja, string> = {
   "run.destructiveConfirm": "Proceed, accepting the destructive changes",
   "run.stop": "Cancel",
   "run.cost.required": "Estimated cost: ~{n}",
-  "run.cost.balance": "Balance: {n}",
+  "run.cost.balance": "Available capacity: {n}",
   "run.cost.shortfall":
-    "Your USD balance is short by about {n}, so this cannot run.",
-  "run.cost.blocked": "This cannot run due to balance or limits.",
+    "This cannot run because of your usage limit or payment state.",
+  "run.cost.blocked": "This cannot run due to payment state or limits.",
   "run.cost.capacityNeeded": "Capacity needed: ~{n}",
   "run.cost.capacity": "Available capacity: {n}",
   "run.cost.capacityShortfall":
@@ -407,12 +447,42 @@ export const en: Record<keyof typeof ja, string> = {
   "run.diag.severity.info": "Info",
   "run.diagnostics.failed":
     "This did not finish. Open details only when you need troubleshooting information.",
+  "run.diagnostics.creditsRequired":
+    "This stopped because the owner account does not have enough credits. Add credits, then run the same change again.",
+  "run.diagnostics.creditsRequiredShort":
+    "The owner account does not have enough credits.",
+  "run.diagnostics.creditsRequiredDetail":
+    "Add credits from billing, then run the deploy again.",
+  "run.diagnostics.connectionVerificationRequired":
+    "This run stopped while preparing access to a connected account. If the connection is now ready, review the changes again before deploying.",
+  "run.diagnostics.connectionVerificationShort":
+    "Connected account access was not ready.",
+  "run.diagnostics.connectionVerificationDetail":
+    "Review the changes again so Takosumi can use the current connected account state.",
+  "run.diagnostics.connectionSetupRequired":
+    "This run needs a provider connection before Takosumi can deploy it.",
+  "run.diagnostics.connectionSetupShort":
+    "Provider access is not configured for this deploy.",
+  "run.diagnostics.connectionSetupDetail":
+    "Open connections, choose the required provider connection, then run the deploy again.",
+  "run.diagnostics.connectionChanged":
+    "The provider connection changed after this run was reviewed.",
+  "run.diagnostics.connectionChangedShort":
+    "The reviewed provider connection is no longer current.",
+  "run.diagnostics.connectionChangedDetail":
+    "Create a new review so the deploy uses the current connected account state.",
+  "run.diagnostics.credentialServiceIssue":
+    "Takosumi could not prepare temporary provider access for this run.",
+  "run.diagnostics.credentialServiceShort":
+    "Temporary provider access could not be prepared.",
+  "run.diagnostics.credentialServiceDetail":
+    "Try again. If this keeps happening, contact support because the platform credential service may need attention.",
   "run.audit.title": "Activity record",
   "run.audit.empty": "No activity records.",
   "run.audit.detail": "Record detail",
 
   // --- run history --------------------------------------------------------------
-  "runList.title": "Updates",
+  "runList.title": "Activity",
   "runList.subtitle": "Recent reviews, approvals, and deploys, newest first.",
   "runList.open": "Review",
   "runList.empty.title": "No updates yet",
@@ -662,7 +732,7 @@ export const en: Record<keyof typeof ja, string> = {
 
   // --- connections -------------------------------------------------------------
   "conn.subtitle":
-    "Save cloud accounts and access keys used when publishing services.",
+    "Save your own keys (cloud tokens and access keys). With your key, any provider runs — no allowlist, no approval.",
   "conn.providerConnections.title": "Connected accounts",
   "conn.providerConnections.provider": "Connection",
   "conn.providerConnections.name": "Name",
@@ -748,6 +818,16 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.guided.connect": "Save connection",
   "conn.guided.connecting": "Connecting...",
   "conn.custom.back": "Back to common connections",
+  "conn.byok.title": "Connect any provider with your own key",
+  "conn.byok.body":
+    "Just enter a provider source and the environment variables (keys) it uses. No allowlist, no approval — any OpenTofu / Terraform provider runs.",
+  "conn.byok.noBillingNote":
+    "Connections that use your own key are never billed by Takosumi. Only Takosumi-provided managed resources are billed.",
+  "conn.byok.usePreset": "Use a guided preset instead",
+  "conn.byok.backToByok": "Connect any provider with your own key",
+  "conn.presets.body":
+    "Presets are optional setup shortcuts (not the list of supported providers). For a provider not listed, use “bring your own key”.",
+  "conn.presets.provider": "Preset (optional shortcut)",
   "conn.advanced.summary": "Enter access values",
   "conn.advanced.register": "Save access values",
   "conn.register": "Save connection",
@@ -774,9 +854,9 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.error.invalidProvider": "Invalid connection target.",
   "conn.error.tokenRequired": "Paste a token.",
   "conn.error.fieldRequired": "{field} is required.",
-  "conn.empty.title": "No connected accounts yet",
+  "conn.empty.title": "Connect any provider with your own key",
   "conn.empty.message":
-    "Connect an account when a service needs a cloud account or key.",
+    "Enter your own key (a cloud token or key) and any provider runs — no allowlist, no approval, no billing.",
   "conn.test": "Check access",
   "conn.testing": "Checking...",
   "conn.test.notReady": "The account is not ready yet (status: {status}).",
@@ -1002,20 +1082,23 @@ export const en: Record<keyof typeof ja, string> = {
   // --- billing -------------------------------------------------------------------
   "billing.title": "Billing",
   "billing.subtitle":
-    "Review plans, usage, and payment settings for this workspace.",
+    "Review plans, usage, and payment settings for your account.",
   "billing.usageQuotaTitle": "Usage / quota",
   "billing.usageQuotaSubtitle":
-    "Review this workspace's quota mode, available capacity, and usage.",
-  "billing.mode.disabled": "Billing is disabled for this workspace.",
+    "Review account credits, source Workspace attribution, and usage.",
+  "billing.mode.disabled": "Billing is disabled for this account.",
   "billing.mode.checkoutOpen":
-    "Add USD balance for Takosumi Cloud resources. Cloud resources stop when the balance runs out.",
+    "Choose a plan to start using Takosumi Cloud resources. Paid operations are checked against limits and payment state before execution.",
   "billing.mode.showback": "Usage is recorded, but nothing is charged.",
-  "billing.mode.enforce": "Deploys require a USD balance.",
+  "billing.mode.enforce":
+    "Paid operations are checked against your plan, limits, and payment state before execution.",
   "billing.loading": "Loading billing status...",
   "billing.error": "Could not load billing status: {message}",
   "billing.error.unknown": "Unknown error",
-  "billing.balance.title": "Balance",
-  "billing.balance.available": "Available balance",
+  "billing.balance.title": "Usage status",
+  "billing.balance.available": "Status",
+  "billing.balance.ready": "Ready",
+  "billing.balance.actionRequired": "Plan or payment setup required",
   "billing.balance.reserved": "Pending use",
   "billing.quota.title": "Quota",
   "billing.quota.available": "Available capacity",
@@ -1026,7 +1109,7 @@ export const en: Record<keyof typeof ja, string> = {
   "billing.plans.error": "Could not load plans: {message}",
   "billing.plans.none": "No plans are offered right now.",
   "billing.plans.nonRefundable":
-    "Review the amount and contents before checkout. Consumed balance is generally not refundable. Card statements generally show TAKOSUMI.",
+    "Review the amount and contents before checkout. Used services and completed usage are generally not refundable. Card statements generally show TAKOSUMI.",
   "billing.plans.disabled":
     "Purchases are not available for this workspace right now. Plans will appear here when checkout is open.",
   "billing.plans.subscribe": "Choose this plan",
@@ -1037,10 +1120,6 @@ export const en: Record<keyof typeof ja, string> = {
   "billing.policies.terms": "Terms",
   "billing.policies.privacy": "Privacy",
   "billing.policies.support": "Support",
-  "billing.packs.title": "Balance packs",
-  "billing.packs.amount": "{n}",
-  "billing.packs.balance": "{n} balance",
-  "billing.packs.buy": "Buy",
   "billing.portal": "Manage payment and invoices",
   "billing.portalUnavailable":
     "Payment management is unavailable while billing is disabled or no plans are open.",
@@ -1048,7 +1127,7 @@ export const en: Record<keyof typeof ja, string> = {
   "billing.checkout.starting": "Redirecting to checkout...",
   "billing.checkout.failed": "Could not start checkout — {message}",
   "billing.checkout.success":
-    "Purchase complete. Balance may take a moment to arrive.",
+    "Plan checkout complete. It may take a moment to update.",
   "billing.checkout.cancelled": "Checkout cancelled.",
   "billing.usage.title": "Usage",
   "billing.usage.openHint": "Open usage history to load recent entries.",
@@ -1066,9 +1145,8 @@ export const en: Record<keyof typeof ja, string> = {
   "billing.usage.created": "Created",
   "billing.ledger.title": "Usage history",
   "billing.reservations.title": "Balance reservations",
-  "billing.reservations.loading": "Loading balance reservations...",
-  "billing.reservations.error":
-    "Could not load balance reservations: {message}",
+  "billing.reservations.loading": "Loading usage reservations...",
+  "billing.reservations.error": "Could not load usage reservations: {message}",
   "billing.reservations.empty": "No reservations yet.",
   "billing.reservations.expires": "Expires",
 };

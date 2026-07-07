@@ -75,10 +75,7 @@ import type {
   ProviderResolution,
   PublicProviderResolution,
 } from "takosumi-contract/provider-resolution";
-import type {
-  OutputShare,
-  OutputShareEntry,
-} from "takosumi-contract/outputs";
+import type { OutputShare, OutputShareEntry } from "takosumi-contract/outputs";
 import type { PublicDeployment } from "takosumi-contract/deployments";
 import type {
   BackupRecord,
@@ -210,12 +207,7 @@ export async function handleRuns(
     const leaf = segments[2];
     if (leaf === "approve" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
-      return await approveRun(
-        request,
-        operations,
-        runId,
-        ctx.session.subject,
-      );
+      return await approveRun(request, operations, runId, ctx.session.subject);
     }
     if (leaf === "apply" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
@@ -248,8 +240,113 @@ export async function handleRuns(
       // reservation status, credit-shortfall reasons). Workspace-gated above.
       return json({ cost: await operations.getRunCost(runId) });
     }
+    if (leaf === "stream" && segments.length === 3) {
+      if (method !== "GET") return methodNotAllowed("GET");
+      // Real-time run status over SSE: one server-held connection per viewer
+      // that pushes the run on every status/heartbeat/summary change and closes
+      // at a terminal status — so the dashboard subscribes instead of polling.
+      // Workspace access was already enforced above.
+      return runStatusStream(ctx, runId, run);
+    }
   }
   return undefined;
+}
+
+const TERMINAL_RUN_STATUSES = new Set([
+  "succeeded",
+  "failed",
+  "cancelled",
+  "expired",
+]);
+
+/** SSE stream of a run's status. Reads the in-process controller projection and
+ * emits the run only when it changes; keeps the connection warm with comments;
+ * closes on a terminal status or after a safety cap (the client reconnects). */
+function runStatusStream(
+  ctx: ControlDispatchContext,
+  runId: string,
+  initialRun: Awaited<
+    ReturnType<ControlDispatchContext["operations"]["getRun"]>
+  >,
+): Response {
+  const { operations, request } = ctx;
+  const encoder = new TextEncoder();
+  // Cost guard: this is a per-viewer server-side read loop, so keep the D1
+  // reads bounded — start modest, back off while nothing changes (deploys take
+  // minutes), reset to responsive on a change, and hard-cap the lifetime so a
+  // stream can never leak into an unbounded read loop (the client reconnects).
+  const MIN_MS = 2500;
+  const MAX_INTERVAL_MS = 8000;
+  const MAX_MS = 8 * 60 * 1000;
+  let cancelled = false;
+
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      const onAbort = () => {
+        cancelled = true;
+      };
+      request.signal.addEventListener("abort", onAbort);
+      const send = (payload: unknown) => {
+        controller.enqueue(
+          encoder.encode(`data: ${JSON.stringify(payload)}\n\n`),
+        );
+      };
+      const isTerminal = (status: string) => TERMINAL_RUN_STATUSES.has(status);
+      try {
+        let last = await publicRun(operations, initialRun);
+        send({ run: last });
+        const startedAt = Date.now();
+        let interval = MIN_MS;
+        while (
+          !cancelled &&
+          !isTerminal(last.status) &&
+          Date.now() - startedAt < MAX_MS
+        ) {
+          await new Promise((resolve) => setTimeout(resolve, interval));
+          if (cancelled) break;
+          let current;
+          try {
+            current = await publicRun(
+              operations,
+              await operations.getRun(runId),
+            );
+          } catch {
+            break;
+          }
+          if (
+            current.status !== last.status ||
+            current.heartbeatAt !== last.heartbeatAt ||
+            current.summary !== last.summary
+          ) {
+            send({ run: current });
+            last = current;
+            interval = MIN_MS; // responsive again right after a change
+          } else {
+            controller.enqueue(encoder.encode(`: ping\n\n`));
+            interval = Math.min(MAX_INTERVAL_MS, Math.round(interval * 1.4));
+          }
+        }
+      } finally {
+        request.signal.removeEventListener("abort", onAbort);
+        try {
+          controller.close();
+        } catch {
+          /* already closed */
+        }
+      }
+    },
+    cancel() {
+      cancelled = true;
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-cache, no-transform",
+      "x-accel-buffering": "no",
+    },
+  });
 }
 
 export async function handleRunGroups(

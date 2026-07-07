@@ -140,12 +140,21 @@
 .tcs-card {
   background: var(--c-panel);
   border: 1px solid var(--c-border);
-  border-radius: 10px;
+  border-radius: 14px;
   padding: 14px;
   display: flex;
   flex-direction: column;
   gap: 12px;
   min-height: 204px;
+  transition:
+    transform 0.14s ease,
+    box-shadow 0.14s ease,
+    border-color 0.14s ease;
+}
+.tcs-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--tg-line-strong, var(--c-border));
+  box-shadow: var(--tg-shadow-card-hover, 0 10px 24px rgba(16, 24, 40, 0.1));
 }
 .tcs-card-top {
   display: grid;
@@ -159,32 +168,40 @@
   gap: 7px;
   min-width: 0;
 }
+/* Glossy, colorful app artwork — same visual language as the home launcher
+   tiles, so browsing reads as picking apps, not scanning a table. White glyph
+   on a per-kind gradient, top highlight + a soft colored cast shadow. */
 .tcs-app-icon {
+  position: relative;
   display: inline-grid;
   place-items: center;
-  width: 54px;
-  height: 54px;
+  width: 60px;
+  height: 60px;
   flex: none;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--c-border) 70%, transparent);
-  border-radius: 13px;
-  background: color-mix(in srgb, var(--c-accent) 12%, var(--c-panel2));
-  color: var(--c-accent2);
+  border: 0;
+  border-radius: 16px;
+  background: linear-gradient(145deg, #5b8cff, #2f5fd6);
+  color: #fff;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.16),
+    0 8px 16px -6px color-mix(in srgb, var(--c-accent) 45%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.3);
+}
+.tcs-app-icon svg {
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.2));
 }
 .tcs-app-icon[data-kind="app"] {
-  background: color-mix(in srgb, var(--c-accent) 16%, var(--c-panel2));
+  background: linear-gradient(145deg, #7c5cff, #4b2fd6);
 }
 .tcs-app-icon[data-kind="worker"] {
-  background: color-mix(in srgb, #0f766e 14%, var(--c-panel2));
-  color: #0f766e;
+  background: linear-gradient(145deg, #14b8a6, #0f766e);
 }
 .tcs-app-icon[data-kind="storage"] {
-  background: color-mix(in srgb, #b45309 13%, var(--c-panel2));
-  color: #b45309;
+  background: linear-gradient(145deg, #f59e0b, #b45309);
 }
 .tcs-app-icon[data-kind="site"] {
-  background: color-mix(in srgb, #2563eb 13%, var(--c-panel2));
-  color: #2563eb;
+  background: linear-gradient(145deg, #3b82f6, #2563eb);
 }
 .tcs-app-icon img {
   width: 100%;

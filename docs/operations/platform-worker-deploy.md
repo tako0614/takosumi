@@ -472,12 +472,13 @@ bun run smoke:cloud-extensions -- \
   --cloud-usage-installation-id <cloud-usage-installation-id> \
   --json
 
-# GA strict: Cloud credit gate. This mutates only the explicit scratch
-# Workspace by granting a tiny USD balance, spending it once through
-# /internal/platform/cloud/usage, then proving the next usage is blocked.
+# GA strict: Cloud credit gate. This mutates only the owner account of the
+# explicit scratch source Workspace by granting a tiny USD balance, spending it
+# once through /internal/platform/cloud/usage, then proving the next usage is
+# blocked.
 bun run smoke:cloud-billing-credit-gate -- \
   --url https://app.takosumi.com \
-  --workspace-id <scratch-workspace-id-with-no-required-balance> \
+  --workspace-id <scratch-source-workspace-id-owned-by-an-account-with-no-required-balance> \
   --usage-record-token-file ../takosumi-private/.secrets/production/TAKOSUMI_CLOUD_USAGE_RECORD_TOKEN \
   --deploy-control-token-file ../takosumi-private/.secrets/production/TAKOSUMI_DEPLOY_CONTROL_TOKEN \
   --top-up-usd-micros 1000 \

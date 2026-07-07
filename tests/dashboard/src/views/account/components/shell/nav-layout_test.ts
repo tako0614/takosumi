@@ -138,10 +138,13 @@ describe("dashboard shell navigation layout", () => {
     expect(spaceSwitcherSource).toContain('class="topbar-workspace-current"');
     expect(spaceSwitcherSource).toContain("selectedWorkspaceName()");
     expect(spaceSwitcherSource).toContain("switcherOpen()");
-    expect(spaceSwitcherSource).toContain("value={selectedWorkspaceId()}");
+    // The picker is a popover menu (not a native <select>): the active
+    // workspace is a checked menuitemradio, chosen by tapping the item.
+    expect(spaceSwitcherSource).toContain('role="menuitemradio"');
     expect(spaceSwitcherSource).toContain(
-      "selected={workspace.id === selectedWorkspaceId()}",
+      "aria-checked={workspace.id === selectedWorkspaceId()}",
     );
+    expect(spaceSwitcherSource).not.toContain("topbar-workspace-select");
     expect(spaceSwitcherSource).toContain("setSwitcherOpen(false)");
     expect(workspaceSettingsSource).toContain("when={workspaceId()}");
     expect(workspaceSettingsSource).toContain("keyed");

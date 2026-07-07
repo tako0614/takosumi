@@ -2,21 +2,21 @@
 
 Takosumi Cloud is the official hosted Takosumi for Operator. It provides the
 Git-based OpenTofu control plane, managed targets, Cloud-operated managed
-service backends, USD credits / usage metering, and operator support as an
+service backends, billing / usage metering, and operator support as an
 official operation.
 
 Takosumi Cloud covers more than one service form. Add an app or service from Git,
 attach the resources it needs as bindings, and keep deploys and updates
 recorded through OpenTofu/Terraform. Edge JS runtime, Object Storage, KV,
 Database, Queue, AI, and Container are peer managed resources. Usage spends
-from a USD credit balance.
+through the plan, limits, and payment-state spend guard.
 
 ```text
 Takosumi Cloud =
   official hosted Takosumi for Operator
   + official managed target pools
   + Cloud-operated managed service backends
-  + billing / credits / usage metering
+  + billing / usage metering / spend guard
   + support / operations
 
 Takosumi Cloud Resources =
@@ -33,7 +33,7 @@ Takosumi Cloud Resources =
 - configure secrets and environment variables
 - use KV / Object Storage / Database / Queue / AI as bindings
 - deploy from a Git URL through OpenTofu/Terraform
-- inspect usage, balance, API keys, and resource inventory in the Dashboard
+- inspect usage, payment state, API keys, and resource inventory in the Dashboard
 
 ## Runtime
 
@@ -45,13 +45,15 @@ Database, Queue, and AI.
 Every Cloud managed resource entrypoint uses the same managed operation
 pipeline before a backend API is called. Whether the request comes from a
 compatibility endpoint, the `takosumi/takosumi` provider, or the Dashboard, it
-passes through authentication, Workspace billing context, Resource /
+passes through authentication, source Workspace context, owner billing context, Resource /
 NativeResource normalization, managed-operation dispatch planning,
-selected-manager availability checks, usage / credit guard, and then manager
+selected-manager availability checks, usage / spend guard, and then manager
 dispatch. The selected manager chooses Workers for Platforms, R2, D1, KV,
 Queues, Containers, or another operator backend. A recognized service form whose
 manager is not configured fails before usage is charged and before any backend
 API call; it does not fall back to another compatibility path.
+Billing is not separated per Workspace: usage preserves the source Workspace as
+metadata, while credits are spent from the owning user's account balance.
 
 Durable workflows use Dynamic Workers with `@cloudflare/dynamic-workflows` when
 available. Operator/internal jobs use normal Cloudflare Workflows.
@@ -144,14 +146,15 @@ Initial rollout:
 | Containers       | Planned            |
 | Stateful apps    | Planned            |
 
-## Credits
+## Billing and Spend Guard
 
-Takosumi Cloud runs on USD credits. Billable operations are priced by the Cloud
-price book and stop before execution when the Workspace balance is insufficient.
-Cleanup and destroy operations remain available after credit depletion so users
-can remove resources instead of leaving them stranded.
+Takosumi Cloud runs on subscription plans and usage metering. Billable
+operations are priced by the Cloud price book and stop before execution when
+the plan, limits, or payment state do not allow the operation. Cleanup and
+destroy operations remain available after a spend-guard block so users can
+remove resources instead of leaving them stranded.
 
-Public prices, free-tier terms, usage rates, and credit-exhaustion behavior are
+Public prices, free-tier terms, usage rates, and spend-guard behavior are
 documented in [Takosumi Cloud pricing](./pricing.md). Runtime price books,
 payment-provider synchronization, margin guards, and reconciliation are
 operator operation details, not public contracts.

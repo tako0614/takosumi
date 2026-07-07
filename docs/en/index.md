@@ -161,10 +161,10 @@ official SLA / support / abuse controls
 ```
 
 Takosumi Cloud is the official hosted operation. It can offer EdgeWorker,
-Container, Object Storage, KV, Database, Queue, AI Gateway, and credits as
-official managed resources. Its Cloudflare Workers-compatible profile is an
-import and deploy path for existing Workers-oriented apps, not full Cloudflare
-API compatibility.
+Container, Object Storage, KV, Database, Queue, and AI Gateway as official
+managed resources, with official billing / usage metering / spend guard
+operation. Its Cloudflare Workers-compatible profile is an import and deploy
+path for existing Workers-oriented apps, not full Cloudflare API compatibility.
 
 Cloudflare-compatible imports, existing OpenTofu providers, Dashboard actions,
 and `takosumi/takosumi` Resource Shapes normalize into the Cloud managed
