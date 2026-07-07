@@ -504,7 +504,7 @@ async function startCloudflareOAuth(
   if (!auth.ok) return auth.response;
   const started = await helper.start({
     // Bind the OAuth state to the authenticated subject so the cross-site
-    // callback can authorize without the SameSite=Strict session cookie.
+    // callback can authorize without depending on a session cookie.
     subject: sessionSubject,
     workspaceId,
     ...(stringValue(body.displayName)
@@ -516,16 +516,16 @@ async function startCloudflareOAuth(
 
 /**
  * Completes the Cloudflare OAuth helper flow. This is the BACKEND callback the
- * upstream redirects to via a top-level CROSS-SITE redirect, so the browser
- * sends no Authorization header and (because the session cookie is
- * `SameSite=Strict`) no session cookie either. This handler therefore does NOT
- * call `requireAccountSession`; it authorizes from the authenticated subject
- * that the cookie-gated `start` signed INTO the HMAC OAuth state. It exchanges
- * the code, registers the resulting Workspace-owned `generic_env_provider` Connection,
- * and then REDIRECTS the browser back to the dashboard `/connections` screen
- * with a result query (never a JSON body, never the token). No new SPA route is
- * introduced — the dashboard owns `/connections` already and reads the
- * `connected` / `connection_error` query.
+ * upstream redirects to via a top-level CROSS-SITE redirect. The browser sends
+ * no Authorization header, and cookie policy can withhold the session cookie.
+ * This handler therefore does NOT call `requireAccountSession`; it authorizes
+ * from the authenticated subject that the cookie-gated `start` signed INTO the
+ * HMAC OAuth state. It exchanges the code, registers the resulting
+ * Workspace-owned `generic_env_provider` Connection, and then REDIRECTS the
+ * browser back to the dashboard `/connections` screen with a result query
+ * (never a JSON body, never the token). No new SPA route is introduced — the
+ * dashboard owns `/connections` already and reads the `connected` /
+ * `connection_error` query.
  *
  * Called directly by {@link handleControlRoute} BEFORE the session gate (it is
  * the one cross-site control route); it is never reached through `dispatch`.

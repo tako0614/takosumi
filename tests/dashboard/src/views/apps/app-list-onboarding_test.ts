@@ -19,7 +19,9 @@ describe("AppListView app launcher", () => {
     expect(appListSource).toContain("visibleCapsules().length > 0");
     expect(appListSource).toContain("listWorkspacesCached");
     expect(appListSource).toContain("selectAvailableWorkspaceId");
-    expect(appListSource).toContain("if (chosen) setCurrentWorkspaceId(chosen)");
+    expect(appListSource).toContain(
+      "if (chosen) setCurrentWorkspaceId(chosen)",
+    );
     expect(appListSource).toContain('href="/new"');
     expect(appListSource).toContain('t("apps.start.optionCatalog")');
     expect(appListSource).not.toContain('href="/new?mode=link"');
@@ -62,6 +64,8 @@ describe("AppListView app launcher", () => {
     expect(appListSource).toContain('class="av-launcher"');
     expect(appListSource).toContain('class="av-tile"');
     expect(appListSource).toContain('class="av-tile av-tile-add"');
+    expect(appListSource).toContain('class="av-tile-manage"');
+    expect(appListSource).toContain('t("apps.manage")');
     expect(appListSource).toContain("av-tile-name");
     // No admin-console fields on the launcher (those live on /services).
     expect(appListSource).not.toContain("StatusBadge");
@@ -104,6 +108,7 @@ describe("AppListView app launcher", () => {
     expect(appViewsCssSource).toContain(".av-launcher");
     expect(appViewsCssSource).toContain(".av-tile");
     expect(appViewsCssSource).toContain(".av-tile-icon");
+    expect(appViewsCssSource).toContain(".av-tile-manage");
     expect(appViewsCssSource).toContain(".av-tile-dot");
     expect(appViewsCssSource).toContain(".av-tile-image");
     expect(appViewsCssSource).toContain(".av-tile-emoji");
@@ -117,6 +122,7 @@ describe("AppListView app launcher", () => {
     expect(appListSource).toContain("appSurfacesFromDeployment");
     expect(appListSource).toContain('target="_blank"');
     expect(appListSource).toContain("props.openDetail(tile.inst)");
+    expect(appListSource).toContain('class="av-tile-manage"');
     expect(appListSource).not.toContain("window.open");
     // Needs-attention is a corner dot + screen-reader label, not a status pill.
     expect(appListSource).toContain("av-tile-dot");

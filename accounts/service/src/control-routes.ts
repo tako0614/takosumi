@@ -175,13 +175,12 @@ export async function handleControlRoute(
 
   // The credential-OAuth callback is the ONE control route reached by a
   // top-level CROSS-SITE redirect (dash.cloudflare.com -> this origin). The
-  // browser sends no Authorization header and, because the `takosumi_session`
-  // cookie is `SameSite=Strict`, does NOT send the session cookie either, so
-  // `requireAccountSession` here would always 401 and the user would land on a
-  // raw 401 JSON instead of being redirected back to /connections. The callback
-  // therefore authenticates from the authenticated subject embedded in the
-  // HMAC-signed OAuth state (minted by the cookie-authenticated `start`), not
-  // from the session cookie. Route it BEFORE the session gate.
+  // browser sends no Authorization header, and privacy/cookie policy can still
+  // withhold the session cookie, so `requireAccountSession` would make the
+  // callback brittle. The callback therefore authenticates from the
+  // authenticated subject embedded in the HMAC-signed OAuth state (minted by
+  // the cookie-authenticated `start`), not from the session cookie. Route it
+  // BEFORE the session gate.
   if (isCloudflareOAuthCallbackPath(url.pathname, request.method, prefix)) {
     const operations = context.operations;
     if (!operations) return controlPlaneUnavailable();
@@ -249,8 +248,8 @@ function controlRouteRequiredScope(
 /**
  * True for `GET /api/v1/connections/cloudflare/oauth/callback`. This is the
  * only control route reached cross-site, so it is dispatched before the
- * `SameSite=Strict` session-cookie gate and authorizes from the signed OAuth
- * state instead (see {@link handleControlRoute}).
+ * session-cookie gate and authorizes from the signed OAuth state instead
+ * (see {@link handleControlRoute}).
  */
 function isCloudflareOAuthCallbackPath(
   pathname: string,
