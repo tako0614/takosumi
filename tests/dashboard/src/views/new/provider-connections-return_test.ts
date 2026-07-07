@@ -355,12 +355,17 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).toContain("addFlowErrorMessage");
     expect(newAppViewSource).toContain("apiError?.isAppHostnameUnavailable");
     expect(newAppViewSource).toContain('"new.error.appHostnameUnavailable"');
+    expect(newAppViewSource).toContain("appHostnameConflict");
+    expect(newAppViewSource).toContain("uniqueServiceIdCandidate");
+    expect(newAppViewSource).toContain('"new.hostnameConflict.suggest"');
     expect(en["new.error.appHostnameUnavailable"]).toContain(
       "already in use",
     );
     expect(ja["new.error.appHostnameUnavailable"]).toContain(
       "既に使われています",
     );
+    expect(en["new.hostnameConflict.body"]).not.toContain("workspace");
+    expect(ja["new.hostnameConflict.body"]).not.toContain("ワークスペース");
     expect(newAppViewSource).toContain('"new.error.genericWithDetails"');
     expect(en["new.error.genericWithDetails"]).toContain("{message}");
     expect(ja["new.error.genericWithDetails"]).toContain("{message}");
