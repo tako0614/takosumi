@@ -66,6 +66,8 @@ describe("dashboard catalog", () => {
       "cloudflare-hello-worker",
       "cfg-catalog-yurucommu",
       "cfg-catalog-takos",
+      "cfg-catalog-takos-storage",
+      "cfg-catalog-takos-git",
     ]);
     expect(buildingBlocks).toEqual([]);
     expect(entries.some((entry) => entry.surface === "example")).toBe(false);

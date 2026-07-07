@@ -71,6 +71,8 @@ export interface TcsListing {
   readonly id: string;
   /** Dashboard-local hint for installable entries; external TCS nodes omit it. */
   readonly installConfigId?: string;
+  /** Dashboard aggregation hint used to rehydrate `/new` hand-offs. */
+  readonly primaryServer?: string;
   readonly source: TcsListingSource;
   readonly kind: TcsListingKind;
   readonly surface: TcsListingSurface;

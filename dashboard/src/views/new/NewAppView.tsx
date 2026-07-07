@@ -96,7 +96,7 @@ import {
 import { locale, t } from "../../i18n/index.ts";
 import { StoreBrowser } from "../store/StoreBrowser.tsx";
 import { buildNewQuery } from "../store/store-link.ts";
-import type { TcsListing } from "../../lib/tcs-client.ts";
+import { fetchTcsListing, type TcsListing } from "../../lib/tcs-client.ts";
 import {
   clearCapsuleListCache,
   listCapsulesCached,
@@ -716,6 +716,21 @@ function catalogKindFromStoreListing(
   return "worker";
 }
 
+function catalogSurfaceFromStoreListing(
+  surface: TcsListing["surface"],
+): StoreCatalogMetadata["surface"] {
+  if (surface === "building_block") return "building_block";
+  if (surface === "example") return "example";
+  return "service";
+}
+
+function safeCatalogToken(value: string): string | undefined {
+  const trimmed = value.trim();
+  return trimmed && /^[A-Za-z0-9_.:-]{1,128}$/u.test(trimmed)
+    ? trimmed
+    : undefined;
+}
+
 function nonEmptyCatalogText(
   value: StoreCatalogMetadata["badge"],
 ): StoreCatalogMetadata["badge"] | undefined {
@@ -729,15 +744,16 @@ function catalogMetadataFromStoreListing(
     ja: listing.suggestedName,
     en: listing.suggestedName,
   };
+  const templateId = safeCatalogToken(listing.id);
   return {
-    templateId: listing.id,
+    ...(templateId ? { templateId } : {}),
     source: {
       git: listing.source.git,
       ref: listing.source.resolvedCommit ?? listing.source.ref,
       path: listing.source.path || ".",
     },
     order: 1_000,
-    surface: listing.surface,
+    surface: catalogSurfaceFromStoreListing(listing.surface),
     kind: catalogKindFromStoreListing(listing.kind),
     provider: listing.provider,
     suggestedName: listing.suggestedName,
@@ -862,6 +878,29 @@ function parseInitialInstallConfigId(search: string): string | null {
   return raw;
 }
 
+function parseInitialTcsHandoff(
+  search: string,
+): { readonly base: string; readonly listingId: string } | null {
+  const params = new URLSearchParams(search);
+  const base = params.get("tcsBase")?.trim();
+  const listingId = params.get("tcsListing")?.trim();
+  if (!base || !listingId || !/^[A-Za-z0-9_.:@/-]{1,256}$/u.test(listingId)) {
+    return null;
+  }
+  try {
+    const url = new URL(base);
+    if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+    url.hash = "";
+    url.search = "";
+    return {
+      base: url.toString().replace(/\/+$/u, ""),
+      listingId,
+    };
+  } catch {
+    return null;
+  }
+}
+
 function initialAddTab(search: string): "catalog" | "git" {
   // Start on the service browser. Install links and pasted source links enter
   // the same flow after a source is selected.
@@ -880,6 +919,7 @@ function Inner() {
   // check, then the explicit add button).
   const initialSearch = typeof location === "undefined" ? "" : location.search;
   const appHandoff = appHandoffFromSearch(initialSearch);
+  const initialTcsHandoff = parseInitialTcsHandoff(initialSearch);
   const initialInstallPrefill =
     typeof location === "undefined"
       ? undefined
@@ -2161,6 +2201,28 @@ function Inner() {
     if (!entry) return;
     initialCatalogApplied = true;
     pickCatalogEntry(entry);
+  });
+
+  let initialTcsHandoffApplied = false;
+  createEffect(() => {
+    if (initialTcsHandoffApplied || !initialTcsHandoff) return;
+    initialTcsHandoffApplied = true;
+    void (async () => {
+      try {
+        const listing = await fetchTcsListing(
+          initialTcsHandoff.base,
+          initialTcsHandoff.listingId,
+        );
+        if (!listing || !storeListingMatchesCurrentSource(listing)) return;
+        setSelectedStoreListing({
+          ...listing,
+          primaryServer: initialTcsHandoff.base,
+        });
+      } catch {
+        // The Git/ref/path query remains enough to install as a plain Capsule;
+        // a failed store rehydrate must not block direct install links.
+      }
+    })();
   });
 
   createEffect(() => {
