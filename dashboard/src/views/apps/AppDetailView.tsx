@@ -30,6 +30,7 @@ import {
   ExternalLink,
   RotateCcw,
   Settings2,
+  Trash2,
 } from "lucide-solid";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
@@ -324,6 +325,18 @@ function Inner() {
                           {t("apps.openApp")}
                         </Button>
                       )}
+                    </Show>
+                    <Show when={inst().status !== "destroyed"}>
+                      <Button
+                        variant="danger"
+                        type="button"
+                        disabled={destroyPlan.busy()}
+                        busy={destroyPlan.busy()}
+                        onClick={() => void confirmDestroy()}
+                        icon={<Trash2 size={16} />}
+                      >
+                        {t("common.delete")}
+                      </Button>
                     </Show>
                   </div>
                 }
