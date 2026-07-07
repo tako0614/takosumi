@@ -286,16 +286,37 @@ type RecordActivityArgs = Omit<
   readonly spaceId?: string;
 };
 
-function requestedGenericCapsuleVariables(
-  explicit: Readonly<Record<string, unknown>>,
-  providerInputDefaults: Readonly<Record<string, JsonValue>>,
+function declaredGenericCapsuleInputNames(
   moduleFiles: readonly OpenTofuCapsuleSourceFile[] | undefined,
   rootModuleVariables: readonly string[] | undefined,
-): Readonly<Record<string, unknown>> {
-  const declaredInputs = new Set(
+): ReadonlySet<string> {
+  return new Set(
     rootModuleVariables ??
       (moduleFiles ? collectRootModuleVariableNames(moduleFiles) : []),
   );
+}
+
+function publicEndpointVariableNames(
+  installConfig: InstallConfig,
+): ReadonlySet<string> {
+  const endpoint = installConfig.catalog?.installExperience?.publicEndpoint;
+  if (!endpoint) return new Set();
+  return new Set(
+    [
+      endpoint.subdomainVariable,
+      endpoint.urlVariable,
+      endpoint.routePatternVariable,
+    ]
+      .map((name) => nonEmptyStringValue(name))
+      .filter((name): name is string => name !== undefined),
+  );
+}
+
+function requestedGenericCapsuleVariables(
+  explicit: Readonly<Record<string, unknown>>,
+  providerInputDefaults: Readonly<Record<string, JsonValue>>,
+  declaredInputs: ReadonlySet<string>,
+): Readonly<Record<string, unknown>> {
   if (declaredInputs.size === 0) return explicit;
   const requested: Record<string, unknown> = { ...explicit };
   for (const key of Object.keys(providerInputDefaults)) {
@@ -446,22 +467,38 @@ function hasManagedCloudflareProviderDefaults(
 
 function finalizeManagedCloudflarePublicHostVariables(input: {
   readonly explicit: Readonly<Record<string, JsonValue>>;
+  readonly installation: Installation;
+  readonly declaredInputs: ReadonlySet<string>;
+  readonly endpointVariables: ReadonlySet<string>;
   readonly providerInputDefaults: Readonly<Record<string, JsonValue>>;
   readonly variables: Readonly<Record<string, JsonValue>>;
 }): Readonly<Record<string, JsonValue>> {
   if (!hasManagedCloudflareProviderDefaults(input.providerInputDefaults)) {
     return input.variables;
   }
-  const workerName = nonEmptyStringValue(input.variables.worker_name);
+  const canSet = (name: string) =>
+    Object.prototype.hasOwnProperty.call(input.variables, name) ||
+    input.declaredInputs.has(name) ||
+    input.endpointVariables.has(name);
+  const out: Record<string, JsonValue> = { ...input.variables };
+  let workerName = nonEmptyStringValue(out.worker_name);
+  if (
+    !workerName &&
+    !nonEmptyStringValue(input.explicit.worker_name) &&
+    canSet("worker_name")
+  ) {
+    workerName = workerNameFromCapsule(input.installation);
+    if (workerName) out.worker_name = workerName;
+  }
   if (!workerName || !validManagedWorkerName(workerName)) {
-    return input.variables;
+    return out;
   }
   const host = `${workerName}.${MANAGED_APP_DOMAIN}`;
-  const out: Record<string, JsonValue> = { ...input.variables };
-  if (!nonEmptyStringValue(input.explicit.app_url)) {
+  if (!nonEmptyStringValue(input.explicit.app_url) && canSet("app_url")) {
     out.app_url = `https://${host}`;
   }
   if (
+    canSet("cloudflare_route_pattern") &&
     nonEmptyStringValue(out.cloudflare_route_zone_id) &&
     !nonEmptyStringValue(input.explicit.cloudflare_route_pattern)
   ) {
@@ -487,6 +524,10 @@ function workerNameFromCapsule(installation: Installation): string | undefined {
   return validManagedWorkerName(normalized) ? normalized : undefined;
 }
 
+function publicHostUnavailableMessage(): string {
+  return "app_hostname_unavailable: already exists";
+}
+
 function managedWorkerNameSuffix(installationId: string): string {
   const stripped = installationId.replace(/^inst[_-]?/u, "");
   const normalized = stripped
@@ -506,6 +547,23 @@ function installationHasClaimablePublicState(
     installation.status === "active" ||
     installation.status === "stale",
   );
+}
+
+function publicHostClaimPriority(installation: Installation): number {
+  switch (installation.status) {
+    case "active":
+      return 400;
+    case "stale":
+      return 300;
+    case "error":
+      return installation.currentStateGeneration > 0 ? 200 : 0;
+    case "pending":
+      return installation.currentStateGeneration > 0 ? 100 : 0;
+    case "disabled":
+      return 50;
+    case "destroyed":
+      return 0;
+  }
 }
 
 function workspaceOutputsWithReleaseDescriptor(
@@ -710,7 +768,7 @@ export class RunEngine {
     if (installation.workspaceId !== workspaceId) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        `capsule ${installation.id} belongs to workspace ${installation.workspaceId}, not ${workspaceId}`,
+        "capsule is not available to this workspace",
       );
     }
     const installationContext: PlanRunInstallationContext =
@@ -799,6 +857,13 @@ export class RunEngine {
     const sourceDigest = await stableJsonDigest(request.source);
     const variablesDigest = await stableJsonDigest(variables);
     const policyDecisionDigest = await stableJsonDigest(policy);
+    if (
+      policy.status === "passed" &&
+      operation !== "destroy" &&
+      internal.driftCheck !== true
+    ) {
+      await this.#reservePublicHostsForPlan(installation, variables, now);
+    }
     const planRunId = this.#newId("plan");
     const sourceSnapshotId =
       internal.sourceSnapshotId ??
@@ -1135,8 +1200,7 @@ export class RunEngine {
       if (!pinned || pinnedWorkspaceId !== installationWorkspaceId) {
         throw new OpenTofuControllerError(
           "not_found",
-          `upload SourceSnapshot ${pinnedSnapshotId} not found in ` +
-            `workspace ${installationWorkspaceId}`,
+          "upload/artifact SourceSnapshot not found in this workspace",
         );
       }
       snapshot = pinned;
@@ -1855,11 +1919,18 @@ export class RunEngine {
       input.installConfig.modulePath,
       { skipReady: input.skipReadySourceFileDiscovery === true },
     );
+    const declaredInputs = declaredGenericCapsuleInputNames(
+      moduleFiles,
+      input.compatibilityReport?.rootModuleVariables,
+    );
     const explicitVariables = normalizeVariables(
       input.installConfig.variableMapping,
     );
     const variables = finalizeManagedCloudflarePublicHostVariables({
       explicit: explicitVariables,
+      installation: input.installation,
+      declaredInputs,
+      endpointVariables: publicEndpointVariableNames(input.installConfig),
       providerInputDefaults: installTypePlan.providerInputDefaults,
       variables: normalizeVariables(
         mergeJsonVariableDefaults(
@@ -1867,13 +1938,11 @@ export class RunEngine {
           requestedGenericCapsuleVariables(
             explicitVariables,
             installTypePlan.providerInputDefaults,
-            moduleFiles,
-            input.compatibilityReport?.rootModuleVariables,
+            declaredInputs,
           ),
         ),
       ),
     });
-    await this.#assertPublicHostsAvailable(input.installation, variables);
     const outputAllowlist = genericCapsuleOutputAllowlist(
       input.installConfig.outputAllowlist,
       moduleFiles,
@@ -1901,9 +1970,10 @@ export class RunEngine {
     };
   }
 
-  async #assertPublicHostsAvailable(
+  async #reservePublicHostsForPlan(
     installation: Installation,
     variables: Readonly<Record<string, JsonValue>>,
+    now: number,
   ): Promise<void> {
     const requestedHosts = publicHostsFromVariables(variables);
     if (requestedHosts.length === 0) return;
@@ -1913,10 +1983,42 @@ export class RunEngine {
       if (!claim || claim.installationId === installation.id) continue;
       throw new OpenTofuControllerError(
         "failed_precondition",
-        `app_hostname_unavailable: ${host} is already claimed by Capsule ` +
-          `${claim.installationName} (${claim.installationId}) in Workspace ` +
-          `${claim.workspaceId}`,
+        publicHostUnavailableMessage(),
       );
+    }
+    const workspaceId = installation.workspaceId ?? installation.spaceId;
+    const nowIso = new Date(now).toISOString();
+    for (const host of requestedHosts) {
+      const result = await this.#store.reservePublicHost({
+        hostname: host,
+        workspaceId,
+        installationId: installation.id,
+        installationName: installation.name,
+        now: nowIso,
+      });
+      if (result.reserved) continue;
+      const reservation = result.reservation;
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        publicHostUnavailableMessage(),
+      );
+    }
+  }
+
+  async #releasePublicHostsForInstallation(
+    installationId: string,
+    now: number,
+  ): Promise<void> {
+    try {
+      await this.#store.releasePublicHostsForInstallation(
+        installationId,
+        new Date(now).toISOString(),
+      );
+    } catch (error) {
+      log.warn("deploy_control.public_host_release_failed", {
+        installationId,
+        error,
+      });
     }
   }
 
@@ -1927,6 +2029,7 @@ export class RunEngine {
         readonly installationId: string;
         readonly installationName: string;
         readonly workspaceId: string;
+        readonly priority: number;
       }
     >
   > {
@@ -1936,6 +2039,7 @@ export class RunEngine {
         readonly installationId: string;
         readonly installationName: string;
         readonly workspaceId: string;
+        readonly priority: number;
       }
     >();
     const installations = await this.#store.listInstallations();
@@ -1954,12 +2058,15 @@ export class RunEngine {
         continue;
       }
       for (const host of hosts) {
-        if (claims.has(host)) continue;
-        claims.set(host, {
+        const candidate = {
           installationId: installation.id,
           installationName: installation.name,
           workspaceId: installation.workspaceId ?? installation.spaceId,
-        });
+          priority: publicHostClaimPriority(installation),
+        };
+        const current = claims.get(host);
+        if (current && current.priority >= candidate.priority) continue;
+        claims.set(host, candidate);
       }
     }
     return claims;
@@ -3469,7 +3576,7 @@ export class RunEngine {
     if (!backup || backup.spaceId !== spaceId) {
       throw new OpenTofuControllerError(
         "not_found",
-        `backup ${backupId} not found in space ${spaceId}`,
+        "backup not found in this workspace",
       );
     }
     const restoreServiceData = request.restoreServiceData === true;
@@ -3506,7 +3613,7 @@ export class RunEngine {
     if (!installation || installation.spaceId !== spaceId) {
       throw new OpenTofuControllerError(
         "not_found",
-        `installation ${installationId} not found in space ${spaceId}`,
+        "capsule not found in this workspace",
       );
     }
     const environment =
@@ -6289,6 +6396,7 @@ export class RunEngine {
       if (dispatch.generatedRoot) {
         await this.#store.deletePlanRunInputs(planRun.id);
       }
+      await this.#releasePublicHostsForInstallation(installation.id, now);
       // Activity (§27 / §34): a successful destroy tore the Installation down.
       await this.#recordActivity({
         spaceId: completed.spaceId,

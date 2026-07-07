@@ -18,10 +18,7 @@
  * names stay until the rename converges.)
  */
 
-import type {
-  Capsule,
-  CapsuleStatus,
-} from "takosumi-contract/capsules";
+import type { Capsule, CapsuleStatus } from "takosumi-contract/capsules";
 import type {
   CapsuleProviderEnvBindingSet,
   InstallConfig,
@@ -107,7 +104,7 @@ export class CapsulesService {
     if (!workspace) {
       throw new OpenTofuControllerError(
         "invalid_argument",
-        `workspaceId ${request.workspaceId} does not exist`,
+        "workspace does not exist",
       );
     }
     // A git Source is optional only for legacy upload/artifact-origin Capsules.
@@ -119,7 +116,7 @@ export class CapsulesService {
       if (!source || sourceWorkspaceId !== request.workspaceId) {
         throw new OpenTofuControllerError(
           "invalid_argument",
-          `sourceId ${request.sourceId} does not exist in workspace ${request.workspaceId}`,
+          "source is not available to this workspace",
         );
       }
     }
@@ -133,7 +130,7 @@ export class CapsulesService {
       ) {
         throw new OpenTofuControllerError(
           "invalid_argument",
-          `installConfigId ${request.installConfigId} does not exist`,
+          "install config does not exist",
         );
       }
       throw error;
@@ -141,7 +138,7 @@ export class CapsulesService {
     if (isRetiredOfficialInstallConfigId(config.id)) {
       throw new OpenTofuControllerError(
         "invalid_argument",
-        `installConfigId ${request.installConfigId} is a retired built-in alias; use a Git URL Capsule config instead`,
+        "install config is retired; use a Git URL Capsule config instead",
       );
     }
     // A workspace-scoped InstallConfig may only be used by its owning Workspace;
@@ -153,7 +150,7 @@ export class CapsulesService {
     ) {
       throw new OpenTofuControllerError(
         "invalid_argument",
-        `installConfigId ${request.installConfigId} is not available to workspace ${request.workspaceId}`,
+        "install config is not available to this workspace",
       );
     }
     const existing = await this.#store.getInstallationByName(
@@ -164,11 +161,9 @@ export class CapsulesService {
     if (existing) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        `capsule @${workspace.handle}/${request.name} (${request.environment}) already exists`,
+        "capsule already exists",
         {
           reason: "duplicate_capsule",
-          capsuleId: existing.id,
-          workspaceId: request.workspaceId,
           name: request.name,
           environment: request.environment,
         },
@@ -292,7 +287,7 @@ export class CapsulesService {
       if (!workspace) {
         throw new OpenTofuControllerError(
           "invalid_argument",
-          `workspaceId ${configWorkspaceId} does not exist`,
+          "workspace does not exist",
         );
       }
     }
@@ -358,8 +353,7 @@ export class CapsulesService {
     ) {
       throw new OpenTofuControllerError(
         "invalid_argument",
-        `provider env binding set workspaceId ${profile.workspaceId} does not match ` +
-          `capsule ${profile.capsuleId} workspace ${capsule.workspaceId}`,
+        "provider env binding set workspace does not match capsule workspace",
       );
     }
     return await this.#store.putInstallationProviderEnvBindingSet(profile);
@@ -380,7 +374,9 @@ export class CapsulesService {
   // --- Transient deprecated aliases (removed at rename convergence) ----------
 
   /** @deprecated transient alias for {@link createCapsule}. */
-  async createInstallation(request: CreateInstallationRequest): Promise<Capsule> {
+  async createInstallation(
+    request: CreateInstallationRequest,
+  ): Promise<Capsule> {
     return await this.createCapsule({
       workspaceId: request.workspaceId ?? request.spaceId ?? "",
       name: request.name,
@@ -479,7 +475,10 @@ function hasLegacyArtifactConfig(config: InstallConfig): boolean {
 
 function isSelectableInstallConfig(config: InstallConfig): boolean {
   if (config.internal?.reason === "per_install_overrides") return false;
-  if (config.workspaceId !== undefined && /^icfg_[0-9a-f]{16}$/iu.test(config.id)) {
+  if (
+    config.workspaceId !== undefined &&
+    /^icfg_[0-9a-f]{16}$/iu.test(config.id)
+  ) {
     return false;
   }
   return true;

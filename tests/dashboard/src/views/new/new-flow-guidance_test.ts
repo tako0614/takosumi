@@ -18,13 +18,6 @@ const controlApiSource = readFileSync(
   resolve(here, "../../../../../dashboard/src/lib/control-api.ts"),
   "utf8",
 );
-const installableAppListingsSource = readFileSync(
-  resolve(
-    here,
-    "../../../../../dashboard/src/views/store/installable-app-listings.ts",
-  ),
-  "utf8",
-);
 
 describe("/new flow guidance", () => {
   test("keeps /new focused instead of layering guide and progress chrome", () => {
@@ -71,8 +64,10 @@ describe("/new flow guidance", () => {
 
   test("integrates service browsing and link install into /new", () => {
     expect(newAppViewSource).toContain("StoreBrowser");
-    expect(newAppViewSource).toContain("localStoreListings");
-    expect(newAppViewSource).toContain("installableAppStoreListings");
+    // Discovery is store-driven; no hardcoded local catalog is injected.
+    expect(newAppViewSource).not.toContain("localStoreListings");
+    expect(newAppViewSource).not.toContain("installableAppStoreListings");
+    expect(newAppViewSource).not.toContain("localListings=");
     expect(newAppViewSource).not.toContain("catalogEntryToListing");
     expect(newAppViewSource).toContain("pickStoreListing");
     expect(newAppViewSource).toContain("startLinkImport");
@@ -80,7 +75,7 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain('class="av-link-entry"');
     expect(newAppViewSource).toContain("showSourceControls={false}");
     expect(newAppViewSource).toContain("showSortControl={false}");
-    expect(newAppViewSource).toContain("showKindFilters={false}");
+    expect(newAppViewSource).not.toContain("showKindFilters");
     expect(newAppViewSource).toContain("function CatalogIcon");
     expect(newAppViewSource).not.toContain("function catalogKindLabel");
     expect(newAppViewSource).not.toContain("function CatalogCard");
@@ -221,7 +216,10 @@ describe("/new flow guidance", () => {
   test("known Git sources keep app catalog metadata even when ref differs", () => {
     expect(newAppViewSource).toContain("storeListingForCurrentSource");
     expect(newAppViewSource).toContain("storeListingMatchesCurrentSource");
-    expect(newAppViewSource).toContain("localStoreListings().find");
+    // Install metadata comes from the picked store listing (selectedStoreListing),
+    // not a hardcoded local catalog.
+    expect(newAppViewSource).toContain("selectedStoreListing()");
+    expect(newAppViewSource).not.toContain("localStoreListings");
     expect(newAppViewSource).toContain("sameGitUrl");
     expect(newAppViewSource).toContain("normalizeSourcePath");
     expect(newAppViewSource).toContain(
@@ -233,6 +231,20 @@ describe("/new flow guidance", () => {
     );
     expect(newAppViewSource).not.toContain(
       "const listing = activeStoreListing();\n    return listing ? catalogMetadataFromStoreListing",
+    );
+  });
+
+  test("store catalog metadata is normalized before being sent to the control API", () => {
+    expect(newAppViewSource).toContain("DEFAULT_STORE_BADGE");
+    expect(newAppViewSource).toContain("nonEmptyCatalogText(listing.badge)");
+    expect(newAppViewSource).toContain(
+      "badge: nonEmptyCatalogText(listing.badge) ?? DEFAULT_STORE_BADGE",
+    );
+    expect(newAppViewSource).toContain(
+      "name: nonEmptyCatalogText(listing.name) ?? fallbackName",
+    );
+    expect(newAppViewSource).toContain(
+      "description: nonEmptyCatalogText(listing.description) ?? fallbackName",
     );
   });
 
@@ -309,58 +321,18 @@ describe("/new flow guidance", () => {
     expect(ja["new.error.configLoading"]).toContain("追加設定を読み込み中");
   });
 
-  test("/new displays real installable app listings, not internal templates", () => {
-    expect(installableAppListingsSource).toContain('id: "yurucommu"');
-    expect(installableAppListingsSource).toContain(
-      'git: "https://github.com/tako0614/yurucommu.git"',
-    );
-    expect(installableAppListingsSource).toContain('ref: "main"');
-    expect(installableAppListingsSource).toContain("resolvedCommit:");
-    expect(installableAppListingsSource).toContain("worker_bundle_url");
-    expect(installableAppListingsSource).toContain("worker_bundle_sha256");
-    expect(installableAppListingsSource).toContain('name: "worker_name"');
-    expect(installableAppListingsSource).toContain("公開サブドメイン");
-    expect(installableAppListingsSource).toContain('name: "app_url"');
-    expect(installableAppListingsSource).toContain("独自URL");
-    expect(installableAppListingsSource).toContain("app.takos.jp");
-    expect(installableAppListingsSource).toContain("auth_password_hash");
-    expect(installableAppListingsSource).toContain("secret: true");
-    expect(installableAppListingsSource).toContain("初期パスワード");
-    expect(installableAppListingsSource).toContain("installExperience:");
-    expect(installableAppListingsSource).toContain(
-      'subdomainVariable: "worker_name"',
-    );
-    expect(installableAppListingsSource).toContain('urlVariable: "app_url"');
-    expect(installableAppListingsSource).toContain(
-      'baseDomain: "app.takos.jp"',
-    );
-    expect(installableAppListingsSource).toContain(
-      "https://github.com/tako0614/yurucommu/releases/download/v2.0.1/takos-worker.js",
-    );
-    expect(installableAppListingsSource).toContain(
-      "866184ea1861b848770cbe64bed4e22d73778365c33ef693d81040e3baf04d50",
-    );
-    expect(installableAppListingsSource).not.toContain(
-      "https://github.com/tako0614/yurucommu-core/releases/download/v2.0.0/takos-worker.js",
-    );
-    expect(installableAppListingsSource).not.toContain(
-      "5a5713b2cc548414951c51a469b32bdba756d2101933575d0ab230131eaa8c95",
-    );
-    expect(installableAppListingsSource).toContain('id: "takos"');
-    expect(installableAppListingsSource).toContain(
-      'git: "https://github.com/tako0614/takos.git"',
-    );
-    expect(installableAppListingsSource).toContain('path: "deploy/opentofu"');
-    expect(installableAppListingsSource).not.toContain(
-      "cloudflare-hello-worker",
-    );
-    expect(installableAppListingsSource).not.toContain("Webアプリを公開");
-    expect(installableAppListingsSource).toContain("追加候補");
-    expect(installableAppListingsSource).toContain("Installable");
-    expect(newAppViewSource).toContain(
-      "localStoreListings = createMemo<readonly TcsListing[]>",
-    );
-    expect(newAppViewSource).toContain("() => installableAppStoreListings");
+  test("/new sources installable apps from the store, not a hardcoded catalog", () => {
+    // The dashboard-local installable-app-listings.ts is retired; discovery is
+    // served by the takosumi-store node(s) and the picked listing carries its
+    // own install metadata (source, inputs, installExperience).
+    expect(newAppViewSource).not.toContain("installable-app-listings");
+    expect(newAppViewSource).not.toContain("installableAppStoreListings");
+    expect(newAppViewSource).not.toContain("localStoreListings");
+    // The /new embedded browser fetches from the store on mount (no
+    // loadRemoteOnMount={false} that would leave it dependent on a local list).
+    expect(newAppViewSource).not.toContain("loadRemoteOnMount={false}");
+    expect(newAppViewSource).toContain("selectedStoreListing");
+    expect(newAppViewSource).toContain("listing.installExperience");
   });
 
   test("/new uses active Capsule list reads instead of loading destroyed history", () => {

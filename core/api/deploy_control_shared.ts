@@ -690,7 +690,7 @@ export function ensurePlanCreatePermission(
 ): void {
   const operation =
     request.operation ??
-    (request.capsuleId ?? request.installationId ? "update" : "create");
+    ((request.capsuleId ?? request.installationId) ? "update" : "create");
   ensureSpacePermission(principal, request.workspaceId ?? request.spaceId);
   ensureOperationPermission(principal, operation);
   if (request.runnerProfileId) {
@@ -723,9 +723,7 @@ export function ensureSpacePermission(
   if (spaceId && spacePermissionAllows(principal, spaceId)) return;
   throw new OpenTofuControllerError(
     "permission_denied",
-    `deploy control principal ${principal.actor} cannot access space ${
-      spaceId ?? "<unknown>"
-    }`,
+    "deploy control principal cannot access this workspace",
   );
 }
 

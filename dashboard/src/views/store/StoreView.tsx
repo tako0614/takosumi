@@ -17,7 +17,6 @@ import {
 import { listWorkspacesCached } from "../../lib/workspace-list.ts";
 import { StoreBrowser } from "./StoreBrowser.tsx";
 import { buildNewQuery } from "./store-link.ts";
-import { installableAppStoreListings } from "./installable-app-listings.ts";
 import type { TcsListing } from "../../lib/tcs-client.ts";
 
 function Inner() {
@@ -58,7 +57,6 @@ function Inner() {
         </header>
         <StoreBrowser
           locale={locale()}
-          localListings={installableAppStoreListings}
           onInstall={onConfigure}
           onConfigure={onConfigure}
         />

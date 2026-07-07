@@ -40,24 +40,37 @@ describe("ControlApiError source-sync classification", () => {
 });
 
 describe("ControlApiError duplicate service classification", () => {
-  test("reads typed duplicate reasons from deploy-control error details", () => {
+  test("reads typed duplicate capsule reasons without owner details", () => {
     const error = new ControlApiError(
       409,
       "failed_precondition",
-      "installation @workspace/takos (production) already exists",
+      "capsule already exists",
       {
         error: {
           code: "failed_precondition",
-          message: "installation @workspace/takos (production) already exists",
+          message: "capsule already exists",
           details: {
-            reason: "duplicate_installation",
-            installationId: "inst_existing",
+            reason: "duplicate_capsule",
             name: "takos",
             environment: "production",
           },
         },
       },
     );
+
+    expect(error.reason).toBe("duplicate_capsule");
+    expect(error.isDuplicateService).toBe(true);
+  });
+
+  test("keeps typed duplicate installation compatibility", () => {
+    const error = new ControlApiError(409, "failed_precondition", "exists", {
+      error: {
+        code: "failed_precondition",
+        details: {
+          reason: "duplicate_installation",
+        },
+      },
+    });
 
     expect(error.reason).toBe("duplicate_installation");
     expect(error.isDuplicateService).toBe(true);
@@ -89,5 +102,35 @@ describe("ControlApiError duplicate service classification", () => {
 
     expect(error.reason).toBe("compatibility_report_not_runnable");
     expect(error.isDuplicateService).toBe(false);
+  });
+});
+
+describe("ControlApiError app hostname classification", () => {
+  test("classifies app hostname collisions without exposing owner details", () => {
+    const error = new ControlApiError(
+      409,
+      "failed_precondition",
+      "app_hostname_unavailable: already exists",
+    );
+
+    expect(error.isAppHostnameUnavailable).toBe(true);
+    expect(error.isDuplicateService).toBe(false);
+  });
+
+  test("reads typed app hostname collision reasons when present", () => {
+    const error = new ControlApiError(
+      409,
+      "failed_precondition",
+      "app_hostname_unavailable: already exists",
+      {
+        error: {
+          code: "failed_precondition",
+          details: { reason: "app_hostname_unavailable" },
+        },
+      },
+    );
+
+    expect(error.reason).toBe("app_hostname_unavailable");
+    expect(error.isAppHostnameUnavailable).toBe(true);
   });
 });

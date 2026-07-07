@@ -340,7 +340,7 @@ test("source phase rejects a connection from another space", async () => {
       phase: "source",
       sourceConnectionId: conn.id,
     }),
-  ).rejects.toThrow(/not found in space space_2/);
+  ).rejects.toThrow(/connection not found in this workspace/);
 });
 
 test("mint (legacy provider path) never selects a git connection", async () => {
@@ -441,9 +441,7 @@ test("provider-connection connection pool still rejects a pending non-managed co
       providers: ["cloudflare"],
       connectionIds: [operatorConn.id],
     }),
-  ).rejects.toThrow(
-    `connection ${operatorConn.id} is pending (not verified)`,
-  );
+  ).rejects.toThrow(`connection ${operatorConn.id} is pending (not verified)`);
 });
 
 test("provider-connection connection pool rejects a connection from another space", async () => {
@@ -1055,9 +1053,7 @@ test("mintForInstallationProviderEnvBindings still rejects a pending non-managed
     vault.mintForInstallationProviderEnvBindings("space_other", [
       { provider: "cloudflare", alias: "zone", connectionId: operatorConn.id },
     ]),
-  ).rejects.toThrow(
-    `connection ${operatorConn.id} is pending (not verified)`,
-  );
+  ).rejects.toThrow(`connection ${operatorConn.id} is pending (not verified)`);
 });
 
 test("mintForInstallationProviderEnvBindings rejects managed-provider connections without an issuer", async () => {

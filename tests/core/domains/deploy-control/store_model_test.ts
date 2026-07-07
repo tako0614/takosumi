@@ -1258,6 +1258,39 @@ test("Deployment store: put/get/list-by-id/list-by-installation are symmetric", 
   }
 });
 
+test("D1 deployment store reads text JSON public outputs from existing rows", async () => {
+  const db = new SqliteFakeD1();
+  const store = new CloudflareD1OpenTofuDeploymentStore(db);
+  await store.putDeployment(
+    deployment({
+      id: "dep_text_json",
+      outputsPublic: {
+        url: "https://takos.app.takos.jp",
+        app_deployment: { name: "takos" },
+      },
+    }),
+  );
+  await db
+    .prepare(
+      "update deployments set outputs_public_json = ? where id = ?",
+    )
+    .bind(
+      JSON.stringify({
+        url: "https://takos.app.takos.jp",
+        app_deployment: { name: "takos" },
+      }),
+      "dep_text_json",
+    )
+    .run();
+
+  const got = await store.getDeployment("dep_text_json");
+
+  expect(got?.outputsPublic).toEqual({
+    url: "https://takos.app.takos.jp",
+    app_deployment: { name: "takos" },
+  });
+});
+
 test("commitAppliedDeployment: writes the atomic unit + supersedes the prior deployment", async () => {
   for (const [label, store] of await forEachStore()) {
     // Seed an installation that already has a current (active) deployment +

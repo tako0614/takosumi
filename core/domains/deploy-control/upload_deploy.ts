@@ -70,11 +70,11 @@ export async function deployUpload(
   ) {
     throw new OpenTofuControllerError(
       "invalid_argument",
-      `snapshot ${request.snapshotId} is not an upload/artifact snapshot in space ${workspaceId}`,
+      "snapshot is not an upload/artifact snapshot in this workspace",
     );
   }
 
-  // 2. Resolve the existing source-less legacy Capsule @workspace/name.
+  // 2. Resolve the existing source-less legacy Capsule in the target workspace.
   const existingForSpace = await deps.installations.listCapsules(workspaceId);
   let installation = existingForSpace.find(
     (row) => row.name === request.name && row.environment === environment,
@@ -85,8 +85,7 @@ export async function deployUpload(
     if (installation.sourceId) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        `installation @${workspaceId}/${request.name} is bound to a git ` +
-          `Source; deploy through its Source instead of an upload`,
+        "the existing service is bound to a git Source; deploy through its Source instead of an upload",
       );
     }
     installConfigId = installation.installConfigId;
@@ -104,7 +103,7 @@ export async function deployUpload(
   } else {
     throw new OpenTofuControllerError(
       "failed_precondition",
-      `upload deploy can only update an existing source-less legacy Capsule @${workspaceId}/${request.name}; create a Git URL Source/Capsule and run plan/apply instead`,
+      "upload deploy can only update an existing source-less legacy Capsule; create a Git URL Source/Capsule and run plan/apply instead",
     );
   }
   if (providerEnvBindings !== undefined) {

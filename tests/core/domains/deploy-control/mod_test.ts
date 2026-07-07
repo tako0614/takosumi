@@ -505,7 +505,7 @@ test("PlanRun rejects installation operations outside the requested space", asyn
       source: SOURCE,
       requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
     }),
-  ).rejects.toThrow(/belongs to workspace space_a/);
+  ).rejects.toThrow(/capsule is not available to this workspace/);
 });
 
 test("PlanRun requires an existing Installation regardless of operation", async () => {

@@ -11,12 +11,7 @@ export interface CredentialMintEvent {
   readonly connectionId?: string;
   readonly providerEnvId?: string;
   readonly phase:
-    | "source"
-    | "normalize"
-    | "build"
-    | "plan"
-    | "apply"
-    | "destroy";
+    "source" | "normalize" | "build" | "plan" | "apply" | "destroy";
   /**
    * Legacy physical column name. For provider credential mints this stores
    * provider keys. For source sync it stores `source`.
@@ -47,6 +42,7 @@ export interface ProviderCredentialMintEvidence {
     | "aws_sts_assume_role"
     | "cloudflare_api_token_vending"
     | "takosumi_managed_provider_token"
+    | "takosumi_storage_scoped_token"
     | "static_secret";
   readonly secretValueStored?: false;
 }

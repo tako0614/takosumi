@@ -1,6 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import { installableAppStoreListings } from "../../../dashboard/src/views/store/installable-app-listings.ts";
-import { buildNewQuery } from "../../../dashboard/src/views/store/store-link.ts";
 import { officialInstallConfigs } from "../../../core/domains/capsules/official_seed.ts";
 import { defaultTemplateRegistry } from "../../../core/domains/templates/mod.ts";
 
@@ -133,102 +131,6 @@ describe("dashboard catalog", () => {
         }
       }
     }
-  });
-
-  test("/new installable app listings show actual apps instead of generic templates", () => {
-    expect(
-      installableAppStoreListings.map((listing) => listing.id).sort(),
-    ).toEqual(["takos", "yurucommu"]);
-    expect(
-      installableAppStoreListings.map((listing) => [
-        listing.id,
-        listing.kind,
-        listing.source.git,
-        listing.source.ref,
-        listing.source.path,
-      ]),
-    ).toEqual([
-      [
-        "yurucommu",
-        "app",
-        "https://github.com/tako0614/yurucommu.git",
-        "main",
-        ".",
-      ],
-      [
-        "takos",
-        "app",
-        "https://github.com/tako0614/takos.git",
-        "main",
-        "deploy/opentofu",
-      ],
-    ]);
-    for (const listing of installableAppStoreListings) {
-      expect(listing.provider).toBe("cloudflare");
-      expect(listing.badge.ja).toBe("追加候補");
-      expect(listing.badge.en).toBe("Installable");
-      expect(listing.iconUrl, `${listing.id} icon`).toMatch(/^https:\/\//);
-      expect(
-        listing.installExperience?.serviceName?.variable,
-        `${listing.id} service name input`,
-      ).toBe("project_name");
-      expect(
-        listing.installExperience?.publicEndpoint?.subdomainVariable,
-        `${listing.id} public subdomain input`,
-      ).toBe("worker_name");
-      expect(
-        listing.installExperience?.publicEndpoint?.urlVariable,
-        `${listing.id} public URL input`,
-      ).toBe("app_url");
-      expect(
-        listing.installExperience?.publicEndpoint?.baseDomain,
-        `${listing.id} public base domain`,
-      ).toBe("app.takos.jp");
-      expect(
-        listing.source.resolvedCommit,
-        `${listing.id} resolved commit`,
-      ).toMatch(/^[0-9a-f]{40}$/);
-      expect(
-        new URLSearchParams(buildNewQuery(listing)).get("ref"),
-        `${listing.id} install handoff ref`,
-      ).toBeNull();
-      expect(
-        new URLSearchParams(buildNewQuery(listing)).get("installConfigId"),
-        `${listing.id} install handoff config`,
-      ).toBe(listing.installConfigId);
-    }
-    const takos = installableAppStoreListings.find(
-      (listing) => listing.id === "takos",
-    );
-    expect(takos?.outputAllowlist).toContainEqual({
-      key: "takosumi_release",
-      from: "takosumi_release",
-      type: "json",
-      required: false,
-    });
-    const releaseImagesDefault = takos?.inputs.find(
-      (input) => input.name === "release_container_images",
-    )?.defaultValue;
-    expect(releaseImagesDefault).toContain("0.10.0-3cfcc10f7ad1");
-    expect(releaseImagesDefault).not.toContain("0.10.0-bfdd9f8bb79c");
-    expect(
-      installableAppStoreListings.some((listing) =>
-        listing.name.ja.includes("Webアプリを公開"),
-      ),
-    ).toBe(false);
-    expect(
-      installableAppStoreListings.some(
-        (listing) => listing.id === "cloudflare-hello-worker",
-      ),
-    ).toBe(false);
-    const yurucommu = installableAppStoreListings.find(
-      (listing) => listing.id === "yurucommu",
-    );
-    expect(yurucommu?.installExperience?.initialSecret).toEqual({
-      variable: "auth_password_hash",
-      kind: "password_or_hash",
-      optional: true,
-    });
   });
 
   test("curated service catalog metadata declares product icons", () => {

@@ -181,6 +181,26 @@
 .wb-input-vars {
   max-width: 720px;
 }
+/* Grouped sub-sections inside one "詳細設定" disclosure. */
+.wb-advanced-group {
+  display: grid;
+  gap: var(--tg-s-2);
+}
+.wb-advanced-group + .wb-advanced-group,
+.wb-input-vars > .wb-advanced-group + .wb-stack {
+  margin-top: var(--tg-s-4);
+  padding-top: var(--tg-s-4);
+  border-top: 1px solid var(--tg-line);
+}
+.wb-subhead {
+  display: flex;
+  align-items: center;
+  gap: var(--tg-s-1);
+  margin: 0;
+  font-size: var(--tg-fs-sm);
+  font-weight: 650;
+  color: var(--tg-fg);
+}
 .wb-variable-list {
   display: flex;
   flex-direction: column;
@@ -201,17 +221,6 @@
 }
 .wb-input-vars > .wb-form-actions {
   margin-top: var(--tg-s-3);
-}
-.wb-source-advanced {
-  max-width: 720px;
-}
-.wb-source-access {
-  max-width: 720px;
-}
-.wb-source-access > summary {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--tg-s-2);
 }
 .wb-source-token-grid {
   display: grid;
@@ -460,7 +469,7 @@
     bottom: calc(
       var(--tg-mobile-tab-h) + var(--tg-s-2) + env(safe-area-inset-bottom, 0px)
     );
-    z-index: 35;
+    z-index: var(--tg-z-nav);
     margin-top: var(--tg-s-2);
     padding: 0;
     border: 0;

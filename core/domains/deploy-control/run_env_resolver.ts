@@ -30,11 +30,27 @@ type RunCredentialMintPort = Pick<
   "mintRunCredentials" | "mintReleaseCommandCredentials"
 >;
 
+/**
+ * Optional bind-time storage-grant mint. Returns the `TF_VAR_*` env to inject
+ * for a consumer's `takos.storage.workspace` consume, or `undefined` when the
+ * run does not consume workspace storage. Merged into the dispatch-only
+ * credential env (never persisted).
+ */
+export interface StorageGrantMintPort {
+  mintStorageGrantEnv(
+    planRun: PlanRun,
+    phase: "plan" | "apply" | "destroy",
+    auditRunId: string,
+  ): Promise<Record<string, string> | undefined>;
+}
+
 export interface RunEnvResolverDependencies {
   readonly credentials: RunCredentialMintPort;
   readonly resolveRunInstallationProviderEnvBindings: (
     planRun: PlanRun,
   ) => Promise<readonly ResolvedInstallationProviderEnvBinding[] | undefined>;
+  /** Optional bind-time storage-grant issuer (absent on builds without it). */
+  readonly storageGrant?: StorageGrantMintPort;
 }
 
 export interface ResolveRunEnvironmentInput {
@@ -66,11 +82,13 @@ export class RunEnvResolver {
   readonly #resolveRunInstallationProviderEnvBindings: (
     planRun: PlanRun,
   ) => Promise<readonly ResolvedInstallationProviderEnvBinding[] | undefined>;
+  readonly #storageGrant?: StorageGrantMintPort;
 
   constructor(dependencies: RunEnvResolverDependencies) {
     this.#credentials = dependencies.credentials;
     this.#resolveRunInstallationProviderEnvBindings =
       dependencies.resolveRunInstallationProviderEnvBindings;
+    this.#storageGrant = dependencies.storageGrant;
   }
 
   async resolveRunEnvironment(
@@ -104,10 +122,24 @@ export class RunEnvResolver {
             input.phase,
             input.auditRunId,
           );
+    // Bind-time storage grant: for the OpenTofu run (not release commands), mint
+    // a scoped storage token for any `takos.storage.workspace` consume and merge
+    // its TF_VAR_* env into the dispatch-only credential channel.
+    const withStorage =
+      this.#storageGrant && input.credentialContext !== "release_command"
+        ? mergeStorageEnvIntoCredentials(
+            credentials,
+            await this.#storageGrant.mintStorageGrantEnv(
+              input.planRun,
+              input.phase,
+              input.auditRunId,
+            ),
+          )
+        : credentials;
     return await this.#buildRunEnvironmentEvidence(
       input,
       providerResolutions,
-      credentials,
+      withStorage,
     );
   }
 
@@ -201,6 +233,18 @@ function releaseCommandCredentialPhase(
   throw new Error(
     "release command credentials are only valid for apply/destroy",
   );
+}
+
+function mergeStorageEnvIntoCredentials(
+  credentials: RunCredentials | undefined,
+  storageEnv: Record<string, string> | undefined,
+): RunCredentials | undefined {
+  if (!storageEnv || Object.keys(storageEnv).length === 0) return credentials;
+  if (!credentials) return { ...storageEnv };
+  if (isStructuredRunCredentials(credentials)) {
+    return { ...credentials, env: { ...credentials.env, ...storageEnv } };
+  }
+  return { ...credentials, ...storageEnv };
 }
 
 function credentialEnvNamesFromRunCredentials(
