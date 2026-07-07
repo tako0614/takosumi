@@ -3154,6 +3154,7 @@ function Inner() {
                           <div class="wb-variable-row">
                             <FormField label={t("new.vars.inputName")}>
                               <Input
+                                id={`new-var-name-${index()}`}
                                 name={`varName:${index()}`}
                                 type="text"
                                 value={row.name}
@@ -3169,6 +3170,7 @@ function Inner() {
                             </FormField>
                             <FormField label={t("new.vars.inputValue")}>
                               <Input
+                                id={`new-var-value-${index()}`}
                                 name={`varValue:${index()}`}
                                 type="text"
                                 value={row.value}

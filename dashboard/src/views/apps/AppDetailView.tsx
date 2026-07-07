@@ -1191,6 +1191,10 @@ function newCustomConfigRow(index: number): ConfigVariableRow {
   };
 }
 
+function configControlId(row: ConfigVariableRow, suffix: string): string {
+  return `app-config-${suffix}-${row.id.replace(/[^a-z0-9_-]+/giu, "-")}`;
+}
+
 function buildConfigVariablePatch(rows: readonly ConfigVariableRow[]):
   | {
       readonly variableMapping: Readonly<Record<string, JsonValue>>;
@@ -1659,6 +1663,8 @@ function VariableRows(props: {
           <div class="wb-variable-row">
             <FormField label={row.catalog ? row.label : t("app.config.name")}>
               <Input
+                id={configControlId(row, "name")}
+                name={`configName:${row.id}`}
                 value={row.name}
                 disabled={row.catalog}
                 placeholder={t("app.config.customName")}
@@ -1698,10 +1704,14 @@ function ConfigVariableInput(props: {
   readonly onChange: (id: string, patch: Partial<ConfigVariableRow>) => void;
 }) {
   const setValue = (value: string) => props.onChange(props.row.id, { value });
+  const id = () => configControlId(props.row, "value");
+  const name = () => `configValue:${props.row.name || props.row.id}`;
   return (
     <Switch>
       <Match when={props.row.type === "boolean"}>
         <Checkbox
+          id={id()}
+          name={name()}
           checked={props.row.value === "true"}
           onChange={(e) => setValue(e.currentTarget.checked ? "true" : "false")}
           label={t("app.config.enabled")}
@@ -1709,6 +1719,8 @@ function ConfigVariableInput(props: {
       </Match>
       <Match when={props.row.type === "json"}>
         <Textarea
+          id={id()}
+          name={name()}
           rows={4}
           value={props.row.value}
           placeholder={props.row.placeholder}
@@ -1717,6 +1729,8 @@ function ConfigVariableInput(props: {
       </Match>
       <Match when={props.row.type === "number"}>
         <Input
+          id={id()}
+          name={name()}
           type="number"
           value={props.row.value}
           placeholder={props.row.placeholder}
@@ -1725,6 +1739,8 @@ function ConfigVariableInput(props: {
       </Match>
       <Match when={props.row.type === "string"}>
         <Input
+          id={id()}
+          name={name()}
           type={props.row.secret ? "password" : "text"}
           value={props.row.value}
           placeholder={props.row.placeholder}
