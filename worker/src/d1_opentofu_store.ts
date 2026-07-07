@@ -3514,10 +3514,28 @@ function deploymentFromDrizzleRow(row: {
       : {}),
     stateGeneration: row.stateGeneration,
     outputSnapshotId: row.outputSnapshotId,
-    outputsPublic: row.outputsPublicJson as Record<string, unknown>,
+    outputsPublic: jsonRecordFromD1Value(row.outputsPublicJson),
     status: row.status as Deployment["status"],
     createdAt: row.createdAt,
   };
+}
+
+function jsonRecordFromD1Value(value: unknown): Record<string, unknown> {
+  const parsed =
+    typeof value === "string" && value.trim().length > 0
+      ? parseD1JsonColumn(value)
+      : value;
+  return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+    ? (parsed as Record<string, unknown>)
+    : {};
+}
+
+function parseD1JsonColumn(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return undefined;
+  }
 }
 
 function stateSnapshotFromDrizzleRow(row: {
