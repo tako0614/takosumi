@@ -49,14 +49,6 @@ export async function ensureTakosumiAccountsOidcForCapsule(input: {
   if (!oidcExperience) {
     return;
   }
-  if (
-    hasTakosumiAccountsOidcVariables(
-      input.installConfig.variableMapping,
-      oidcExperience,
-    )
-  ) {
-    return;
-  }
   const redirectOrigin = appOriginFromInstallVariables(
     input.installConfig.variableMapping,
     input.installConfig.catalog?.installExperience?.publicEndpoint,
@@ -68,10 +60,16 @@ export async function ensureTakosumiAccountsOidcForCapsule(input: {
   const callbackPath = normalizedCallbackPath(oidcExperience.callbackPath);
   const redirectUri = `${redirectOrigin}${callbackPath}`;
   const redirectUris = [redirectUri];
-  const existing = await input.store.findOidcClientForCapsule(input.capsule.id);
+  const existing = await oidcClientForCapsuleOrMappedClientId(
+    input.store,
+    input.capsule.id,
+    input.installConfig.variableMapping,
+    oidcExperience,
+  );
   const client: OidcClientRecord = existing
     ? {
         ...existing,
+        capsuleId: input.capsule.id,
         issuerUrl,
         redirectUris,
         allowedScopes: ["openid", "profile", "email"],
@@ -79,7 +77,11 @@ export async function ensureTakosumiAccountsOidcForCapsule(input: {
         updatedAt: now,
       }
     : {
-        clientId: `toc_${crypto.randomUUID()}`,
+        clientId:
+          mappedOidcClientId(
+            input.installConfig.variableMapping,
+            oidcExperience,
+          ) ?? `toc_${crypto.randomUUID()}`,
         capsuleId: input.capsule.id,
         namespacePath: TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_IDENTITY_OIDC,
         issuerUrl,
@@ -108,6 +110,18 @@ export async function ensureTakosumiAccountsOidcForCapsule(input: {
     variableMapping,
     updatedAt: new Date(now).toISOString(),
   });
+}
+
+async function oidcClientForCapsuleOrMappedClientId(
+  store: AccountsStore,
+  capsuleId: string,
+  variables: InstallConfig["variableMapping"],
+  oidcExperience: ResolvedTakosumiAccountsOidcExperience,
+): Promise<OidcClientRecord | undefined> {
+  const byCapsule = await store.findOidcClientForCapsule(capsuleId);
+  if (byCapsule) return byCapsule;
+  const clientId = mappedOidcClientId(variables, oidcExperience);
+  return clientId ? await store.findOidcClient(clientId) : undefined;
 }
 
 export async function ensureTakosumiAccountsOidcForExistingCapsule(input: {
@@ -189,18 +203,12 @@ function isTakosGitUrl(value: unknown): boolean {
   return /(^|[:/])tako0614\/takos(?:\.git)?$/u.test(git);
 }
 
-function hasTakosumiAccountsOidcVariables(
+function mappedOidcClientId(
   variables: InstallConfig["variableMapping"],
   oidcExperience: ResolvedTakosumiAccountsOidcExperience,
-): boolean {
-  const issuer = variables[oidcExperience.issuerUrlVariable];
+): string | undefined {
   const clientId = variables[oidcExperience.clientIdVariable];
-  return (
-    typeof issuer === "string" &&
-    issuer.trim() !== "" &&
-    typeof clientId === "string" &&
-    clientId.trim() !== ""
-  );
+  return stringInstallVariable(clientId);
 }
 
 function normalizedCallbackPath(value: string | undefined): string {
