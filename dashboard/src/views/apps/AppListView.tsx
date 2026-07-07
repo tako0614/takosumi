@@ -17,7 +17,7 @@ import {
   Switch,
 } from "solid-js";
 import { useNavigate } from "@solidjs/router";
-import { Plus, Settings2, Sparkles } from "lucide-solid";
+import { Plus, Settings2, Sparkles, Trash2 } from "lucide-solid";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import {
@@ -470,6 +470,10 @@ function AppTileView(props: {
     </>
   );
 
+  const detailHref = () => `/services/${encodeURIComponent(props.tile.inst.id)}`;
+  const deleteHref = () =>
+    `/services/${encodeURIComponent(props.tile.inst.id)}/danger`;
+
   return (
     <span class="av-tile-wrap">
       <Show
@@ -490,17 +494,23 @@ function AppTileView(props: {
             >
               {body()}
             </a>
-            <button
-              type="button"
-              class="av-tile-manage"
-              onClick={props.onOpenDetail}
-            >
-              <Settings2 size={13} aria-hidden="true" />
-              <span>{t("apps.manage")}</span>
-            </button>
           </>
         )}
       </Show>
+      <span class="av-tile-actions">
+        <a class="av-tile-manage" href={detailHref()}>
+          <Settings2 size={13} aria-hidden="true" />
+          <span>{t("apps.manage")}</span>
+        </a>
+        <a
+          class="av-tile-manage av-tile-delete"
+          href={deleteHref()}
+          title={t("app.danger.destroyTitle")}
+        >
+          <Trash2 size={13} aria-hidden="true" />
+          <span>{t("common.delete")}</span>
+        </a>
+      </span>
     </span>
   );
 }
