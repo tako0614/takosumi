@@ -958,7 +958,13 @@ export function toPublicSource(stored: StoredSource): Source {
     lastSeenCommit: _lastSeenCommit,
     ...rest
   } = stored;
-  return rest;
+  const workspaceId = nonEmpty(rest.workspaceId) ?? nonEmpty(rest.spaceId);
+  const spaceId = nonEmpty(rest.spaceId) ?? workspaceId;
+  return {
+    ...rest,
+    ...(workspaceId ? { workspaceId } : {}),
+    ...(spaceId ? { spaceId } : {}),
+  } as Source;
 }
 
 /** R2_SOURCE archive key layout (agreed contract). */

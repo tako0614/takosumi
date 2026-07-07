@@ -8,6 +8,7 @@ import {
   InMemoryOpenTofuDeploymentStore,
   type StoredSource,
 } from "../../../../core/domains/deploy-control/store.ts";
+import { toPublicSource } from "../../../../core/domains/sources/mod.ts";
 import { CloudflareD1OpenTofuDeploymentStore } from "../../../../worker/src/d1_opentofu_store.ts";
 import { SqliteFakeD1 } from "../../../helpers/deploy-control/sqlite_fake_d1.ts";
 import type {
@@ -97,6 +98,14 @@ const STORES: ReadonlyArray<[string, () => D1SourceStoreSlice]> = [
   ["in-memory", () => new InMemoryOpenTofuDeploymentStore()],
   ["d1", () => new CloudflareD1OpenTofuDeploymentStore(new SqliteFakeD1())],
 ];
+
+test("toPublicSource backfills legacy Source workspaceId from spaceId", () => {
+  const publicSource = toPublicSource(source());
+  expect(publicSource.workspaceId).toEqual("space_1");
+  expect(publicSource.spaceId).toEqual("space_1");
+  expect("hookSecretHash" in publicSource).toBe(false);
+  expect("lastSeenCommit" in publicSource).toBe(false);
+});
 
 for (const [name, make] of STORES) {
   test(`${name}: source put/get/list/delete round-trip`, async () => {
