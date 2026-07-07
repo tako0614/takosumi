@@ -701,12 +701,20 @@
   overflow: hidden;
   overflow-wrap: anywhere;
 }
+.av-tile-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--tg-s-1);
+  flex-wrap: wrap;
+  max-width: 100%;
+  margin-top: -2px;
+}
 .av-tile-manage {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   min-height: 28px;
-  margin-top: -2px;
   padding: 0 var(--tg-s-2);
   border: 0;
   border-radius: var(--tg-r-full);
@@ -721,6 +729,14 @@
   background: var(--tg-bg-subtle);
   color: var(--tg-fg);
   outline: none;
+}
+.av-tile-delete {
+  color: var(--tg-danger);
+}
+.av-tile-delete:hover,
+.av-tile-delete:focus-visible {
+  background: color-mix(in srgb, var(--tg-danger) 10%, transparent);
+  color: var(--tg-danger);
 }
 .av-tile-skel {
   width: 100%;
@@ -970,14 +986,13 @@
 }
 .av-service-row {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: var(--tg-s-3);
   width: 100%;
   padding: var(--tg-s-3) var(--tg-s-4);
   background: transparent;
   border: 0;
-  cursor: pointer;
   color: var(--tg-fg);
   font: inherit;
   text-align: left;
@@ -985,6 +1000,25 @@
 }
 .av-service-row:hover {
   background: var(--tg-bg-subtle);
+}
+.av-service-row-main {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: var(--tg-s-3);
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.av-service-row-main:focus-visible,
+.av-service-row-delete:focus-visible {
+  outline: 2px solid var(--tg-accent);
+  outline-offset: 3px;
 }
 .av-service-row-icon {
   display: inline-flex;
@@ -1014,6 +1048,22 @@
 .av-service-row-chevron {
   flex: none;
   color: var(--tg-fg-subtle);
+}
+.av-service-row-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 32px;
+  padding: 0 var(--tg-s-2);
+  border-radius: var(--tg-r-full);
+  color: var(--tg-danger);
+  font-size: var(--tg-fs-xs);
+  white-space: nowrap;
+}
+.av-service-row-delete:hover {
+  background: color-mix(in srgb, var(--tg-danger) 10%, transparent);
+  color: var(--tg-danger);
 }
 
 /* ===== recent runs strip (Installation detail / deploys) ===== */
@@ -1634,7 +1684,7 @@ button.tg-tab {
     width: 100%;
   }
 
-  .av-service-row {
+  .av-service-row-main {
     grid-template-columns: auto minmax(0, 1fr) auto auto;
   }
 
