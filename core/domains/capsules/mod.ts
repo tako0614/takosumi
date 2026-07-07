@@ -119,7 +119,7 @@ export class CapsulesService {
       if (!source || sourceWorkspaceId !== request.workspaceId) {
         throw new OpenTofuControllerError(
           "invalid_argument",
-          `sourceId ${request.sourceId} does not exist in workspace ${request.workspaceId}`,
+          `sourceId ${request.sourceId} is not available to this workspace`,
         );
       }
     }
@@ -153,7 +153,7 @@ export class CapsulesService {
     ) {
       throw new OpenTofuControllerError(
         "invalid_argument",
-        `installConfigId ${request.installConfigId} is not available to workspace ${request.workspaceId}`,
+        `installConfigId ${request.installConfigId} is not available to this workspace`,
       );
     }
     const existing = await this.#store.getInstallationByName(
@@ -164,11 +164,9 @@ export class CapsulesService {
     if (existing) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        `capsule @${workspace.handle}/${request.name} (${request.environment}) already exists`,
+        "capsule already exists",
         {
           reason: "duplicate_capsule",
-          capsuleId: existing.id,
-          workspaceId: request.workspaceId,
           name: request.name,
           environment: request.environment,
         },

@@ -474,10 +474,15 @@ describe("/new Provider Connections return context", () => {
   test("duplicate installation errors use typed details before message fallback", () => {
     expect(controlApiSource).toContain("get isDuplicateService()");
     expect(controlApiSource).toContain("function controlErrorDetails");
+    expect(controlApiSource).toContain('"duplicate_capsule"');
     expect(controlApiSource).toContain('"duplicate_installation"');
     expect(newAppViewSource).toContain("error?.isDuplicateService");
     expect(installationsServiceSource).toContain('reason: "duplicate_capsule"');
-    expect(installationsServiceSource).toContain("capsuleId: existing.id");
+    expect(installationsServiceSource).toContain('"capsule already exists"');
+    expect(installationsServiceSource).not.toContain(
+      "`capsule @${workspace.handle}/${request.name}",
+    );
+    expect(installationsServiceSource).not.toContain("capsuleId: existing.id");
     expect(controlSharedSource).toContain("error.details");
     expect(controlSharedSource).toContain("function isRecord");
     // The thin shell still routes through the resource dispatch table.
