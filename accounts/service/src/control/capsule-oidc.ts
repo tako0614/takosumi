@@ -28,6 +28,7 @@ export async function ensureTakosumiAccountsOidcForCapsule(input: {
   }
   const redirectOrigin = appOriginFromInstallVariables(
     input.installConfig.variableMapping,
+    input.installConfig.catalog?.installExperience?.publicEndpoint,
   );
   if (!redirectOrigin) return;
 
@@ -139,21 +140,60 @@ function hasTakosumiAccountsOidcVariables(
 
 function appOriginFromInstallVariables(
   variables: InstallConfig["variableMapping"],
+  publicEndpoint?: NonNullable<
+    NonNullable<InstallConfig["catalog"]>["installExperience"]
+  >["publicEndpoint"],
 ): string | undefined {
-  const appUrl = stringInstallVariable(variables.app_url);
-  if (appUrl) {
+  for (const variableName of uniqueStrings([
+    publicEndpoint?.urlVariable,
+    "app_url",
+  ])) {
+    const appUrl = stringInstallVariable(variables[variableName]);
+    if (!appUrl) continue;
     try {
       const url = new URL(appUrl);
       if (url.protocol === "https:" && url.hostname) return url.origin;
     } catch {
-      return undefined;
+      continue;
     }
   }
-  const projectName = stringInstallVariable(variables.project_name);
-  if (projectName && /^[a-z][a-z0-9-]{1,50}[a-z0-9]$/u.test(projectName)) {
-    return `https://${projectName}.app.takos.jp`;
+  const baseDomain = publicEndpointBaseDomain(publicEndpoint?.baseDomain);
+  for (const variableName of uniqueStrings([
+    publicEndpoint?.subdomainVariable,
+    "worker_name",
+    "project_name",
+  ])) {
+    const subdomain = stringInstallVariable(variables[variableName]);
+    if (subdomain && publicAppSubdomainIsValid(subdomain)) {
+      return `https://${subdomain.toLowerCase()}.${baseDomain}`;
+    }
   }
   return undefined;
+}
+
+function publicEndpointBaseDomain(value: unknown): string {
+  const baseDomain = stringInstallVariable(value)?.toLowerCase();
+  return baseDomain &&
+    /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/u.test(
+      baseDomain,
+    )
+    ? baseDomain
+    : "app.takos.jp";
+}
+
+function publicAppSubdomainIsValid(value: string): boolean {
+  return /^[a-z][a-z0-9-]{1,50}[a-z0-9]$/u.test(value.toLowerCase());
+}
+
+function uniqueStrings(
+  values: readonly (string | undefined)[],
+): readonly string[] {
+  const seen = new Set<string>();
+  for (const value of values) {
+    const normalized = value?.trim();
+    if (normalized) seen.add(normalized);
+  }
+  return [...seen];
 }
 
 function stringInstallVariable(value: unknown): string | undefined {

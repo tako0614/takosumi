@@ -1287,6 +1287,7 @@ async function createCapsule(
       issuer,
       capsule: installation,
       installConfig: resolvedInstallConfig,
+      sourceGitUrl: source.url,
     });
   }
   return jsonStatus({ capsule: publicCapsule(installation) }, 201);
