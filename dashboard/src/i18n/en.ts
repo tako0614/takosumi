@@ -1116,6 +1116,8 @@ export const en: Record<keyof typeof ja, string> = {
   "billing.mode.disabled": "Billing is disabled for this account.",
   "billing.mode.checkoutOpen":
     "Choose a plan to start using Takosumi Cloud resources. Paid operations are checked against limits and payment state before execution.",
+  "billing.mode.cloudCredits":
+    "Credits are shared across your account. Paid operations check this balance before execution.",
   "billing.mode.showback": "Usage is recorded, but nothing is charged.",
   "billing.mode.enforce":
     "Paid operations are checked against your plan, limits, and payment state before execution.",
@@ -1124,6 +1126,8 @@ export const en: Record<keyof typeof ja, string> = {
   "billing.error.unknown": "Unknown error",
   "billing.balance.title": "Usage status",
   "billing.balance.available": "Status",
+  "billing.balance.availableUsd": "Available balance",
+  "billing.balance.status": "Status",
   "billing.balance.ready": "Ready",
   "billing.balance.actionRequired": "Plan or payment setup required",
   "billing.balance.reserved": "Pending use",
