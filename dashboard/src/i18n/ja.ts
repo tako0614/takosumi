@@ -692,7 +692,11 @@ export const ja = {
   "new.error.genericWithDetails":
     "サービスの追加に失敗しました。詳細: {message}",
   "new.error.appHostnameUnavailable":
-    "この公開サブドメインは既に使われています。別の公開サブドメインを入力するか、空欄にして自動で割り当ててください。",
+    "この公開サブドメインは既に使われています。別のサービスIDにして、もう一度お試しください。",
+  "new.hostnameConflict.title": "別のサービスIDにしてください",
+  "new.hostnameConflict.body":
+    "公開URLに使うIDを変えてから、もう一度追加してください。",
+  "new.hostnameConflict.suggest": "候補IDを使う",
   "new.error.alreadyExists":
     "「{name}」はこのワークスペースに既に追加されています。一覧から既存サービスを開いてください。",
   "new.error.notRunnable":
