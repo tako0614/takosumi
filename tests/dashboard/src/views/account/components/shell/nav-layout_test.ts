@@ -72,24 +72,30 @@ describe("dashboard shell navigation layout", () => {
     expect(sidebarSource).not.toContain('href: "/notifications"');
   });
 
-  test("mobile keeps persistent app-first navigation without hosting internals as tabs", () => {
+  test("mobile bottom bar is the app-first launcher/add/settings trio, icon-only", () => {
     expect(mobileTabsSource).toContain('href: "/"');
     expect(mobileTabsSource).toContain('href: "/new"');
-    expect(mobileTabsSource).toContain('href: "/runs"');
     expect(mobileTabsSource).toContain('href: "/advanced/workspace"');
-    expect(mobileTabsSource).toContain('href: "/account"');
+    // Account + activity moved to the top-bar profile avatar; hosting internals
+    // stay out of the bottom bar entirely.
+    expect(mobileTabsSource).not.toContain('href: "/account"');
+    expect(mobileTabsSource).not.toContain('href: "/runs"');
     expect(mobileTabsSource).not.toContain('href: "/store"');
     expect(mobileTabsSource).not.toContain('href: "/services"');
     expect(mobileTabsSource).not.toContain('href: "/connections"');
+    // Icons carry the meaning; the two-character labels are gone (the
+    // accessible name stays as aria-label on each link).
+    expect(mobileTabsSource).not.toContain("mobile-tab-label");
+    expect(mobileTabsSource).toContain("aria-label={tab.label()}");
     expect(shellCssSource).toContain(
       "grid-template-columns: repeat(auto-fit, minmax(56px, 1fr));",
     );
-    expect(shellCssSource).toContain(".topbar-icon-btn.topbar-add");
-    expect(shellCssSource).toContain("display: inline-flex;");
+    // The redundant mobile top-bar "+ add" is gone (the bottom bar owns add).
+    expect(shellCssSource).not.toContain(".topbar-icon-btn.topbar-add");
   });
 
   test("top bar keeps mobile workspace switching without returning brand chrome", () => {
-    expect(topBarSource).toContain('href="/new"');
+    expect(topBarSource).not.toContain('href="/new"');
     expect(topBarSource).toContain('href="/notifications"');
     expect(topBarSource).toContain("<UserMenu />");
     expect(topBarSource).toContain("<WorkspaceSwitcher compact />");

@@ -95,7 +95,6 @@ import {
 } from "../../lib/control-api.ts";
 import { locale, t } from "../../i18n/index.ts";
 import { StoreBrowser } from "../store/StoreBrowser.tsx";
-import { installableAppStoreListings } from "../store/installable-app-listings.ts";
 import { buildNewQuery } from "../store/store-link.ts";
 import type { TcsListing } from "../../lib/tcs-client.ts";
 import {
@@ -145,6 +144,11 @@ type StoreCatalogMetadata = NonNullable<InstallConfig["catalog"]>;
 type StoreOutputAllowlist = NonNullable<
   Parameters<typeof createCapsule>[0]["outputAllowlist"]
 >;
+
+const DEFAULT_STORE_BADGE = {
+  ja: "追加候補",
+  en: "Installable",
+} satisfies StoreCatalogMetadata["badge"];
 
 const HIDDEN_INSTALL_VARIABLE_NAMES = new Set([
   "enable_cloudflare_resources",
@@ -701,9 +705,19 @@ function catalogKindFromStoreListing(
   return "worker";
 }
 
+function nonEmptyCatalogText(
+  value: StoreCatalogMetadata["badge"],
+): StoreCatalogMetadata["badge"] | undefined {
+  return value.ja.trim() && value.en.trim() ? value : undefined;
+}
+
 function catalogMetadataFromStoreListing(
   listing: TcsListing,
 ): StoreCatalogMetadata {
+  const fallbackName = {
+    ja: listing.suggestedName,
+    en: listing.suggestedName,
+  };
   return {
     templateId: listing.id,
     source: {
@@ -716,9 +730,9 @@ function catalogMetadataFromStoreListing(
     kind: catalogKindFromStoreListing(listing.kind),
     provider: listing.provider,
     suggestedName: listing.suggestedName,
-    badge: listing.badge,
-    name: listing.name,
-    description: listing.description,
+    badge: nonEmptyCatalogText(listing.badge) ?? DEFAULT_STORE_BADGE,
+    name: nonEmptyCatalogText(listing.name) ?? fallbackName,
+    description: nonEmptyCatalogText(listing.description) ?? fallbackName,
     ...(listing.iconUrl ? { iconUrl: listing.iconUrl } : {}),
     inputs: listing.inputs.map((input) => ({
       name: input.name,
@@ -1063,9 +1077,6 @@ function Inner() {
           a.name[locale()].localeCompare(b.name[locale()]),
       ),
   );
-  const localStoreListings = createMemo<readonly TcsListing[]>(
-    () => installableAppStoreListings,
-  );
   const defaultGitInstallConfig = () =>
     installConfigList().find(
       (config) => config.id === DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
@@ -1328,11 +1339,9 @@ function Inner() {
     if (selected && storeListingMatchesCurrentSource(selected)) {
       return selected;
     }
-    return (
-      localStoreListings().find((listing) =>
-        storeListingMatchesCurrentSource(listing),
-      ) ?? null
-    );
+    // No hardcoded catalog: install metadata comes from the store listing the
+    // user actually picked (captured in selectedStoreListing).
+    return null;
   };
   const storeListingMatchesCurrentSource = (listing: TcsListing): boolean => {
     if (!sameGitUrl(listing.source.git, sourceGitUrl())) return false;
@@ -2567,215 +2576,206 @@ function Inner() {
     );
 
   const gitFields = () => (
-    <>
-      <FormField label={t("new.git.url")}>
-        <Input
-          id="new-capsule-git-url"
-          name="gitUrl"
-          type="text"
-          value={gitUrl()}
-          onInput={(e) => {
-            clearSelectedCatalog();
-            const parsed = parseInstallPrefillFromInput(e.currentTarget.value);
-            if (parsed) {
-              applyInstallPrefillInput(parsed);
-              return;
-            }
-            setActiveInstallPrefill(null);
-            setGitUrl(e.currentTarget.value);
+    <FormField label={t("new.git.url")}>
+      <Input
+        id="new-capsule-git-url"
+        name="gitUrl"
+        type="text"
+        value={gitUrl()}
+        onInput={(e) => {
+          clearSelectedCatalog();
+          const parsed = parseInstallPrefillFromInput(e.currentTarget.value);
+          if (parsed) {
+            applyInstallPrefillInput(parsed);
+            return;
+          }
+          setActiveInstallPrefill(null);
+          setGitUrl(e.currentTarget.value);
+          resetCompatibility();
+        }}
+        placeholder="https://github.com/your-name/service.git"
+        autocomplete="off"
+        spellcheck={false}
+      />
+    </FormField>
+  );
+
+  const sourceAccessFields = () => (
+    <div class="wb-advanced-group">
+      <h4 class="wb-subhead">
+        <KeyRound size={15} aria-hidden="true" />
+        {t("new.sourceAccess.title")}
+      </h4>
+      <p class="wb-note">{t("new.sourceAccess.body")}</p>
+      <FormField label={t("new.sourceAccess.mode")}>
+        <Select
+          id="new-source-access-mode"
+          name="sourceAccessMode"
+          value={sourceAccessMode()}
+          onChange={(e) => {
+            setSourceAccessMode(e.currentTarget.value as SourceAccessMode);
+            setSourceTokenError(null);
             resetCompatibility();
           }}
-          placeholder="https://github.com/your-name/service.git"
-          autocomplete="off"
-          spellcheck={false}
-        />
+        >
+          <option value="public">{t("new.sourceAccess.public")}</option>
+          <option value="existing">{t("new.sourceAccess.existing")}</option>
+          <option value="token">{t("new.sourceAccess.token")}</option>
+        </Select>
       </FormField>
 
-      <details
-        class="wb-disclosure wb-source-access"
-        open={sourceAccessMode() !== "public"}
-      >
-        <summary>
-          <KeyRound size={15} aria-hidden="true" />
-          {t("new.sourceAccess.title")}
-        </summary>
-        <p class="wb-note">{t("new.sourceAccess.body")}</p>
-        <FormField label={t("new.sourceAccess.mode")}>
+      <Show when={sourceAccessMode() === "existing"}>
+        <FormField label={t("new.sourceAccess.connection")}>
           <Select
-            id="new-source-access-mode"
-            name="sourceAccessMode"
-            value={sourceAccessMode()}
+            id="new-source-auth-connection"
+            name="sourceAuthConnection"
+            value={sourceAuthConnectionId()}
             onChange={(e) => {
-              setSourceAccessMode(e.currentTarget.value as SourceAccessMode);
-              setSourceTokenError(null);
+              setSourceAuthConnectionId(e.currentTarget.value);
               resetCompatibility();
             }}
           >
-            <option value="public">{t("new.sourceAccess.public")}</option>
-            <option value="existing">{t("new.sourceAccess.existing")}</option>
-            <option value="token">{t("new.sourceAccess.token")}</option>
+            <option value="" selected={!sourceAuthConnectionId()}>
+              {t("new.sourceAccess.selectConnection")}
+            </option>
+            <For each={sourceGitConnections()}>
+              {(connection) => (
+                <option
+                  value={connection.id}
+                  selected={connection.id === sourceAuthConnectionId()}
+                >
+                  {sourceConnectionLabel(connection)}
+                </option>
+              )}
+            </For>
           </Select>
         </FormField>
-
-        <Show when={sourceAccessMode() === "existing"}>
-          <FormField label={t("new.sourceAccess.connection")}>
-            <Select
-              id="new-source-auth-connection"
-              name="sourceAuthConnection"
-              value={sourceAuthConnectionId()}
-              onChange={(e) => {
-                setSourceAuthConnectionId(e.currentTarget.value);
-                resetCompatibility();
-              }}
-            >
-              <option value="" selected={!sourceAuthConnectionId()}>
-                {t("new.sourceAccess.selectConnection")}
-              </option>
-              <For each={sourceGitConnections()}>
-                {(connection) => (
-                  <option
-                    value={connection.id}
-                    selected={connection.id === sourceAuthConnectionId()}
-                  >
-                    {sourceConnectionLabel(connection)}
-                  </option>
-                )}
-              </For>
-            </Select>
-          </FormField>
-          <Show when={sourceGitConnections().length === 0}>
-            <p class="wb-note">{t("new.sourceAccess.noConnections")}</p>
-          </Show>
+        <Show when={sourceGitConnections().length === 0}>
+          <p class="wb-note">{t("new.sourceAccess.noConnections")}</p>
         </Show>
+      </Show>
 
-        <Show when={sourceAccessMode() === "token"}>
-          <div class="wb-source-token-grid">
-            <FormField label={t("new.sourceAccess.username")}>
-              <Input
-                id="new-source-token-username"
-                name="sourceTokenUsername"
-                type="text"
-                value={sourceTokenUsername()}
-                onInput={(e) => setSourceTokenUsername(e.currentTarget.value)}
-                placeholder="your-username"
-                autocomplete="username"
-                spellcheck={false}
-              />
-            </FormField>
-            <FormField label={t("new.sourceAccess.accessToken")} required>
-              <Input
-                id="new-source-token"
-                name="sourceAccessToken"
-                type="password"
-                value={sourceToken()}
-                onInput={(e) => {
-                  setSourceToken(e.currentTarget.value);
-                  setSourceTokenError(null);
-                }}
-                placeholder={t("new.sourceAccess.tokenPlaceholder")}
-                autocomplete="new-password"
-                spellcheck={false}
-              />
-            </FormField>
-          </div>
-          <div class="wb-form-actions wb-source-token-actions">
-            <Button
-              type="button"
-              variant="secondary"
-              busy={savingSourceToken()}
-              disabled={savingSourceToken()}
-              onClick={() => void saveSourceTokenConnection()}
-            >
-              {t("new.sourceAccess.saveToken")}
-            </Button>
-          </div>
-          <p class="wb-note">{t("new.sourceAccess.tokenBody")}</p>
-          <Show when={sourceTokenError()}>
-            {(message) => (
-              <p class="wb-error" role="alert">
-                {message()}
-              </p>
-            )}
-          </Show>
-        </Show>
-      </details>
-
-      <details class="wb-disclosure wb-source-advanced">
-        <summary>{t("new.git.advanced")}</summary>
-        <div class="wb-form-row">
-          <FormField label={t("new.git.ref")}>
+      <Show when={sourceAccessMode() === "token"}>
+        <div class="wb-source-token-grid">
+          <FormField label={t("new.sourceAccess.username")}>
             <Input
-              id="new-capsule-ref"
-              name="ref"
+              id="new-source-token-username"
+              name="sourceTokenUsername"
               type="text"
-              value={ref()}
-              onInput={(e) => {
-                clearSelectedCatalog();
-                setPinnedFullRef(null);
-                setRef(e.currentTarget.value);
-                resetCompatibility();
-              }}
-              placeholder="main"
-              autocomplete="off"
+              value={sourceTokenUsername()}
+              onInput={(e) => setSourceTokenUsername(e.currentTarget.value)}
+              placeholder="your-username"
+              autocomplete="username"
               spellcheck={false}
             />
           </FormField>
-          <FormField label={t("new.git.path")}>
+          <FormField label={t("new.sourceAccess.accessToken")} required>
             <Input
-              id="new-capsule-path"
-              name="path"
-              type="text"
-              value={path()}
+              id="new-source-token"
+              name="sourceAccessToken"
+              type="password"
+              value={sourceToken()}
               onInput={(e) => {
-                clearSelectedCatalog();
-                setPath(e.currentTarget.value);
-                resetCompatibility();
+                setSourceToken(e.currentTarget.value);
+                setSourceTokenError(null);
               }}
-              placeholder="."
-              autocomplete="off"
+              placeholder={t("new.sourceAccess.tokenPlaceholder")}
+              autocomplete="new-password"
               spellcheck={false}
             />
           </FormField>
         </div>
-      </details>
-    </>
+        <div class="wb-form-actions wb-source-token-actions">
+          <Button
+            type="button"
+            variant="secondary"
+            busy={savingSourceToken()}
+            disabled={savingSourceToken()}
+            onClick={() => void saveSourceTokenConnection()}
+          >
+            {t("new.sourceAccess.saveToken")}
+          </Button>
+        </div>
+        <p class="wb-note">{t("new.sourceAccess.tokenBody")}</p>
+        <Show when={sourceTokenError()}>
+          {(message) => (
+            <p class="wb-error" role="alert">
+              {message()}
+            </p>
+          )}
+        </Show>
+      </Show>
+    </div>
+  );
+
+  const sourceDetailFields = () => (
+    <div class="wb-advanced-group">
+      <h4 class="wb-subhead">{t("new.git.advanced")}</h4>
+      <div class="wb-form-row">
+        <FormField label={t("new.git.ref")}>
+          <Input
+            id="new-capsule-ref"
+            name="ref"
+            type="text"
+            value={ref()}
+            onInput={(e) => {
+              clearSelectedCatalog();
+              setPinnedFullRef(null);
+              setRef(e.currentTarget.value);
+              resetCompatibility();
+            }}
+            placeholder="main"
+            autocomplete="off"
+            spellcheck={false}
+          />
+        </FormField>
+        <FormField label={t("new.git.path")}>
+          <Input
+            id="new-capsule-path"
+            name="path"
+            type="text"
+            value={path()}
+            onInput={(e) => {
+              clearSelectedCatalog();
+              setPath(e.currentTarget.value);
+              resetCompatibility();
+            }}
+            placeholder="."
+            autocomplete="off"
+            spellcheck={false}
+          />
+        </FormField>
+      </div>
+    </div>
   );
 
   const prefilledLinkReview = () => {
     const capsule = capsuleNameFromUrl(sourceGitUrl());
     return (
-      <>
-        <section class="av-link-review" aria-label={t("new.deeplink.aria")}>
-          <div class="av-link-review-icon" aria-hidden="true">
-            <Download size={20} />
-          </div>
-          <div class="av-link-review-main">
-            <span class="av-link-review-kicker">
-              {t("new.deeplink.kicker")}
-            </span>
-            <h3>{t("new.deeplink.title", { capsule })}</h3>
-            <p>{t("new.deeplink.body")}</p>
-            <dl class="av-link-review-meta">
-              <div>
-                <dt>{t("new.deeplink.source")}</dt>
-                <dd>{sourceHostLabel(sourceGitUrl())}</dd>
-              </div>
-              <div>
-                <dt>{t("new.deeplink.version")}</dt>
-                <dd>{displayRef(sourceRef())}</dd>
-              </div>
-              <div>
-                <dt>{t("new.deeplink.folder")}</dt>
-                <dd>{displayModulePath(sourcePath())}</dd>
-              </div>
-            </dl>
-          </div>
-        </section>
-        <details class="wb-disclosure wb-source-edit">
-          <summary>{t("new.deeplink.editSource")}</summary>
-          {gitFields()}
-        </details>
-      </>
+      <section class="av-link-review" aria-label={t("new.deeplink.aria")}>
+        <div class="av-link-review-icon" aria-hidden="true">
+          <Download size={20} />
+        </div>
+        <div class="av-link-review-main">
+          <span class="av-link-review-kicker">{t("new.deeplink.kicker")}</span>
+          <h3>{t("new.deeplink.title", { capsule })}</h3>
+          <p>{t("new.deeplink.body")}</p>
+          <dl class="av-link-review-meta">
+            <div>
+              <dt>{t("new.deeplink.source")}</dt>
+              <dd>{sourceHostLabel(sourceGitUrl())}</dd>
+            </div>
+            <div>
+              <dt>{t("new.deeplink.version")}</dt>
+              <dd>{displayRef(sourceRef())}</dd>
+            </div>
+            <div>
+              <dt>{t("new.deeplink.folder")}</dt>
+              <dd>{displayModulePath(sourcePath())}</dd>
+            </div>
+          </dl>
+        </div>
+      </section>
     );
   };
   const addSummaryTitle = () =>
@@ -2859,38 +2859,43 @@ function Inner() {
                   <p>{t("new.discovery.subtitle")}</p>
                 </div>
               </div>
-              <form
-                class="av-link-entry"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  startLinkImport();
-                }}
-              >
-                <Input
-                  id="new-service-link"
-                  name="serviceLink"
-                  type="text"
-                  value={linkDraft()}
-                  onInput={(event) => setLinkDraft(event.currentTarget.value)}
-                  placeholder={t("new.discovery.linkPlaceholder")}
-                  autocomplete="off"
-                  spellcheck={false}
-                />
-                <Button variant="primary" type="submit">
-                  {t("new.discovery.linkCta")}
-                </Button>
-              </form>
             </header>
             <StoreBrowser
               locale={locale()}
-              localListings={localStoreListings()}
               onInstall={pickStoreListing}
               onConfigure={pickStoreListing}
               showSourceControls={false}
               showSortControl={false}
-              showKindFilters={false}
-              loadRemoteOnMount={false}
             />
+            <div class="av-manual-entry">
+              <p class="av-manual-entry-lead">
+                {t("new.discovery.manualLead")}
+              </p>
+              <details class="wb-disclosure av-manual-entry-details">
+                <summary>{t("new.discovery.manualToggle")}</summary>
+                <form
+                  class="av-link-entry"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    startLinkImport();
+                  }}
+                >
+                  <Input
+                    id="new-service-link"
+                    name="serviceLink"
+                    type="text"
+                    value={linkDraft()}
+                    onInput={(event) => setLinkDraft(event.currentTarget.value)}
+                    placeholder={t("new.discovery.linkPlaceholder")}
+                    autocomplete="off"
+                    spellcheck={false}
+                  />
+                  <Button variant="primary" type="submit">
+                    {t("new.discovery.linkCta")}
+                  </Button>
+                </form>
+              </details>
+            </div>
           </section>
         </Show>
 
@@ -3059,10 +3064,16 @@ function Inner() {
                   class="wb-disclosure wb-input-vars"
                   open={
                     shouldOpenServiceAdvanced() ||
-                    hasMissingAdvancedCatalogInputs()
+                    hasMissingAdvancedCatalogInputs() ||
+                    sourceAccessMode() !== "public"
                   }
                 >
-                  <summary>{t("new.serviceAdvanced.title")}</summary>
+                  <summary>{t("new.advanced.title")}</summary>
+                  <Show when={!usingSelectedService()}>
+                    <Show when={activeInstallPrefill()}>{gitFields()}</Show>
+                    {sourceAccessFields()}
+                    {sourceDetailFields()}
+                  </Show>
                   <Show when={selectedCatalogEntry()}>
                     {(entry) => (
                       <Show when={advancedCatalogInputs(entry()).length > 0}>

@@ -3365,4 +3365,32 @@ alter table takosumi_capsule_compatibility_reports
 alter table takosumi_capsule_compatibility_reports
   drop column if exists root_module_variables_json;`,
     },
+    {
+      id: "deploy.public_host_reservations.create",
+      version: 63,
+      domain: "deploy",
+      description:
+        "Create the public host reservation ledger used to atomically claim shared hostnames such as <name>.app.takos.jp and user custom domains before a Capsule plan is queued. hostname is the primary key, giving first-writer-wins semantics across Workspaces; reservations are idempotent for the same Capsule and released on successful destroy.",
+      sql: `create table if not exists takosumi_public_host_reservations (
+  hostname          text primary key,
+  workspace_id      text not null,
+  installation_id   text not null,
+  installation_name text not null,
+  status            text not null
+    check (status in ('reserved','released')),
+  reserved_at       text not null,
+  updated_at        text not null,
+  released_at       text
+);
+create index if not exists takosumi_public_host_reservations_workspace_idx
+  on takosumi_public_host_reservations (workspace_id);
+create index if not exists takosumi_public_host_reservations_installation_idx
+  on takosumi_public_host_reservations (installation_id);
+create index if not exists takosumi_public_host_reservations_status_idx
+  on takosumi_public_host_reservations (status);`,
+      down: `drop index if exists takosumi_public_host_reservations_status_idx;
+drop index if exists takosumi_public_host_reservations_installation_idx;
+drop index if exists takosumi_public_host_reservations_workspace_idx;
+drop table if exists takosumi_public_host_reservations;`,
+    },
   ]);

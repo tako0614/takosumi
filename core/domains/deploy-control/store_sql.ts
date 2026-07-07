@@ -90,8 +90,11 @@ import type {
   InstallationPatchGuard,
   OpenTofuDeploymentStore,
   PlanRunInputs,
+  PublicHostReservation,
   PutUsageEventAndSpendCreditsResult,
   RecoverableOpenTofuRunListOptions,
+  ReservePublicHostInput,
+  ReservePublicHostResult,
   StoredRunRecord,
   StoredSecretBlob,
   StoredSource,
@@ -839,6 +842,73 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
       },
     );
     return pageFromProbe(rows.map(normalizeInstallationRecord), limit);
+  }
+
+  async reservePublicHost(
+    input: ReservePublicHostInput,
+  ): Promise<ReservePublicHostResult> {
+    const hostname = input.hostname.toLowerCase();
+    const rows = await this.#client.query<Record<string, unknown>>(
+      `insert into takosumi_public_host_reservations (
+         hostname, workspace_id, installation_id, installation_name,
+         status, reserved_at, updated_at, released_at
+       )
+       values ($1, $2, $3, $4, 'reserved', $5, $5, null)
+       on conflict (hostname) do update
+       set workspace_id = excluded.workspace_id,
+           installation_id = excluded.installation_id,
+           installation_name = excluded.installation_name,
+           status = 'reserved',
+           reserved_at = case
+             when takosumi_public_host_reservations.installation_id = excluded.installation_id
+             then takosumi_public_host_reservations.reserved_at
+             else excluded.reserved_at
+           end,
+           updated_at = excluded.updated_at,
+           released_at = null
+       where takosumi_public_host_reservations.status = 'released'
+          or takosumi_public_host_reservations.installation_id = excluded.installation_id
+       returning hostname, workspace_id, installation_id, installation_name,
+                 status, reserved_at, updated_at, released_at`,
+      [
+        hostname,
+        input.workspaceId,
+        input.installationId,
+        input.installationName,
+        input.now,
+      ],
+    );
+    const won = rows.rows[0];
+    if (won) {
+      return {
+        reserved: true,
+        reservation: publicHostReservationFromRow(won),
+      };
+    }
+    const existing = await this.#client.query<Record<string, unknown>>(
+      `select hostname, workspace_id, installation_id, installation_name,
+              status, reserved_at, updated_at, released_at
+       from takosumi_public_host_reservations
+       where hostname = $1`,
+      [hostname],
+    );
+    const reservation = publicHostReservationFromRow(existing.rows[0]);
+    return { reserved: false, reservation, reason: "already_reserved" };
+  }
+
+  async releasePublicHostsForInstallation(
+    installationId: string,
+    now: string,
+  ): Promise<void> {
+    await this.#client.query(
+      `update takosumi_public_host_reservations
+       set status = 'released',
+           updated_at = $2,
+           released_at = $2
+       where installation_id = $1
+         and status = 'reserved'`,
+      [installationId, now],
+    );
   }
 
   async patchInstallation(
@@ -3508,4 +3578,25 @@ function selectedDriverColumns(query: string): readonly string[] {
     const identifiers = [...part.matchAll(/"?([a-z_][a-z0-9_]*)"?/g)];
     return identifiers.at(-1)?.[1] ?? part.trim().replaceAll('"', "");
   });
+}
+
+function publicHostReservationFromRow(
+  row: Record<string, unknown> | undefined,
+): PublicHostReservation {
+  if (!row) {
+    throw new Error("public host reservation row was not returned");
+  }
+  return {
+    hostname: String(row.hostname),
+    workspaceId: String(row.workspace_id),
+    installationId: String(row.installation_id),
+    installationName: String(row.installation_name),
+    status:
+      row.status === "released" || row.status === "reserved"
+        ? row.status
+        : "reserved",
+    reservedAt: String(row.reserved_at),
+    updatedAt: String(row.updated_at),
+    ...(row.released_at ? { releasedAt: String(row.released_at) } : {}),
+  };
 }

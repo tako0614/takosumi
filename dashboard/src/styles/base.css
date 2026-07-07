@@ -110,7 +110,7 @@ main {
   position: absolute;
   left: var(--tg-s-2);
   top: -56px;
-  z-index: 1000;
+  z-index: var(--tg-z-skip);
   padding: var(--tg-s-2) var(--tg-s-4);
   background: var(--tg-accent);
   color: var(--tg-accent-fg);

@@ -3799,16 +3799,19 @@ test("POST /api/v1/workspaces/:id/capsules carries store catalog metadata into t
             ja: "コミュニティを公開",
             en: "Host a community",
           },
+          iconUrl: "https://example.test/icon.svg",
           inputs: [
             {
               name: "worker_bundle_url",
               type: "string",
+              advanced: true,
               defaultValue: "https://example.test/worker.js",
               label: { ja: "Worker artifact URL", en: "Worker artifact URL" },
             },
             {
               name: "release_container_images",
               type: "json",
+              secret: true,
               defaultValue: '{"runtime":"registry.example.test/runtime:1"}',
               label: {
                 ja: "Release container images",
@@ -3816,6 +3819,27 @@ test("POST /api/v1/workspaces/:id/capsules carries store catalog metadata into t
               },
             },
           ],
+          installExperience: {
+            serviceName: { variable: "project_name" },
+            publicEndpoint: {
+              subdomainVariable: "worker_name",
+              urlVariable: "app_url",
+              routePatternVariable: "cloudflare_route_pattern",
+              baseDomain: "app.takos.jp",
+            },
+            initialSecret: {
+              variable: "auth_password_hash",
+              kind: "password_or_hash",
+              optional: true,
+            },
+            takosumiAccountsOidc: {
+              issuerUrlVariable: "takosumi_accounts_issuer_url",
+              accountsUrlVariable: "takosumi_accounts_url",
+              clientIdVariable: "takosumi_accounts_client_id",
+              redirectUriVariable: "takosumi_accounts_redirect_uri",
+              callbackPath: "/auth/oidc/callback",
+            },
+          },
         },
         outputAllowlist: {
           url: { from: "url", type: "url" },
@@ -3839,7 +3863,18 @@ test("POST /api/v1/workspaces/:id/capsules carries store catalog metadata into t
     catalog?: {
       templateId?: string;
       source?: { git?: string; ref?: string; path?: string };
-      inputs?: Array<{ name: string; type?: string; defaultValue?: string }>;
+      iconUrl?: string;
+      inputs?: Array<{
+        name: string;
+        type?: string;
+        advanced?: boolean;
+        secret?: boolean;
+        defaultValue?: string;
+      }>;
+      installExperience?: {
+        publicEndpoint?: { baseDomain?: string };
+        takosumiAccountsOidc?: { callbackPath?: string };
+      };
     };
     outputAllowlist: Record<string, unknown>;
   };
@@ -3856,6 +3891,15 @@ test("POST /api/v1/workspaces/:id/capsules carries store catalog metadata into t
     "string",
     "json",
   ]);
+  expect(config.catalog?.iconUrl).toEqual("https://example.test/icon.svg");
+  expect(config.catalog?.inputs?.[0]?.advanced).toEqual(true);
+  expect(config.catalog?.inputs?.[1]?.secret).toEqual(true);
+  expect(config.catalog?.installExperience?.publicEndpoint?.baseDomain).toEqual(
+    "app.takos.jp",
+  );
+  expect(
+    config.catalog?.installExperience?.takosumiAccountsOidc?.callbackPath,
+  ).toEqual("/auth/oidc/callback");
   expect(config.outputAllowlist).toEqual({
     url: { from: "url", type: "url" },
     app_deployment: { from: "app_deployment", type: "json" },

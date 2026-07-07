@@ -525,10 +525,11 @@ export const ja = {
   "new.title": "サービスを追加",
   "new.discovery.aria": "追加するサービスを探す",
   "new.discovery.title": "追加するサービスを選ぶ",
-  "new.discovery.subtitle":
-    "よく使うサービスを選ぶか、インストールリンクを貼り付けて追加します。",
+  "new.discovery.subtitle": "よく使うサービスから選んで追加します。",
   "new.discovery.linkPlaceholder": "リンクまたは Git URL",
   "new.discovery.linkCta": "リンクから追加",
+  "new.discovery.manualLead": "お探しのものがありませんか？",
+  "new.discovery.manualToggle": "Git URL / インストールリンクから追加",
   "new.advancedImport.title": "リンクから追加",
   "new.advancedImport.subtitle": "インストールリンクを貼り付けて追加します。",
   "new.selection.subtitle":
@@ -556,7 +557,6 @@ export const ja = {
   "new.deeplink.source": "取得元",
   "new.deeplink.version": "バージョン",
   "new.deeplink.folder": "フォルダ",
-  "new.deeplink.editSource": "取得元を確認・変更",
   "new.git.url": "インストールリンク",
   "new.git.advanced": "取得元の詳細",
   "new.git.ref": "バージョン",
@@ -590,7 +590,7 @@ export const ja = {
   "new.sourceAccess.defaultDisplayName": "{name} 取得元アクセス",
   "new.name": "サービス名",
   "new.vars.projectName": "サービスID",
-  "new.serviceAdvanced.title": "その他のサービス設定",
+  "new.advanced.title": "詳細設定",
   "new.vars.inputsTitle": "その他の設定",
   "new.vars.inputsBody":
     "上にない表示用の入力をアプリから求められた場合だけ使います。",

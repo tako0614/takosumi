@@ -447,6 +447,20 @@ test("D1 Drizzle schema mirrors critical live D1 tables", () => {
     nn("expires_at"),
   ]);
 
+  expect(getTableName(d1Schema.publicHostReservations)).toBe(
+    "public_host_reservations",
+  );
+  expect(columnsOf(d1Schema.publicHostReservations)).toEqual([
+    pk("hostname"),
+    nn("workspace_id"),
+    nn("installation_id"),
+    nn("installation_name"),
+    nn("status"),
+    nn("reserved_at"),
+    nn("updated_at"),
+    nullable("released_at"),
+  ]);
+
   expect(getTableName(d1Schema.credentialMintEvents)).toBe(
     "credential_mint_events",
   );
@@ -552,7 +566,7 @@ test("Worker D1 bootstrap records canonical schema migration ledger", async () =
     .all<D1SchemaMigrationRow>();
   const rows = migrationRows.results ?? [];
   expect(rows.map((row) => row.version)).toEqual([
-    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
+    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
   ]);
   expect(rows.map((row) => row.name)).toEqual([
     "d1_opentofu_connections_and_secret_blobs_shape",
@@ -573,6 +587,7 @@ test("Worker D1 bootstrap records canonical schema migration ledger", async () =
     "d1_opentofu_provider_credential_collapse",
     "d1_opentofu_workspace_capsule_rename",
     "d1_opentofu_compatibility_report_root_interface",
+    "d1_opentofu_public_host_reservations",
   ]);
   for (const row of rows) {
     expect(row.checksum).toMatch(/^sha256:[0-9a-f]{64}$/);
@@ -1221,6 +1236,20 @@ test("Postgres Drizzle schema mirrors critical migration catalog tables", () => 
     nn("reservation_json"),
     nn("created_at"),
     nn("expires_at"),
+  ]);
+
+  expect(getTableName(postgresSchema.publicHostReservations)).toBe(
+    "takosumi_public_host_reservations",
+  );
+  expect(columnsOf(postgresSchema.publicHostReservations)).toEqual([
+    pk("hostname"),
+    nn("workspace_id"),
+    nn("installation_id"),
+    nn("installation_name"),
+    nn("status"),
+    nn("reserved_at"),
+    nn("updated_at"),
+    nullable("released_at"),
   ]);
 
   expect(getTableName(postgresSchema.credentialMintEvents)).toBe(

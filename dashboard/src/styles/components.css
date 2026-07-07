@@ -560,18 +560,32 @@
     padding: 0.42em 0.75em;
   }
 
+  /* Segmented control, but as a single scrollable row: on a phone the settings
+     tabs carry variable-length labels ("使用量 / 上限", "クラウドリソース / キー"),
+     and a fixed grid squeezed them into uneven, wrapping cells. A no-wrap flex
+     strip sizes each tab to its label and scrolls horizontally when they don't
+     all fit. */
   .tg-tabs {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+    display: flex;
+    flex-wrap: nowrap;
     gap: 4px;
     padding: 4px;
     border: 1px solid var(--tg-line);
     border-radius: var(--tg-r-md);
     background: var(--tg-bg-subtle);
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  .tg-tabs::-webkit-scrollbar {
+    display: none;
   }
 
   .tg-tab {
-    min-width: 0;
+    flex: 0 0 auto;
+    white-space: nowrap;
+    text-align: center;
     padding: var(--tg-s-2) var(--tg-s-3);
     border: 0;
     border-radius: var(--tg-r-sm);
@@ -786,7 +800,7 @@
 .tg-confirm-overlay {
   position: fixed;
   inset: 0;
-  z-index: 1000;
+  z-index: var(--tg-z-overlay);
   display: flex;
   align-items: center;
   justify-content: center;

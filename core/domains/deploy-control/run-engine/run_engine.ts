@@ -799,6 +799,13 @@ export class RunEngine {
     const sourceDigest = await stableJsonDigest(request.source);
     const variablesDigest = await stableJsonDigest(variables);
     const policyDecisionDigest = await stableJsonDigest(policy);
+    if (
+      policy.status === "passed" &&
+      operation !== "destroy" &&
+      internal.driftCheck !== true
+    ) {
+      await this.#reservePublicHostsForPlan(installation, variables, now);
+    }
     const planRunId = this.#newId("plan");
     const sourceSnapshotId =
       internal.sourceSnapshotId ??
@@ -1873,7 +1880,6 @@ export class RunEngine {
         ),
       ),
     });
-    await this.#assertPublicHostsAvailable(input.installation, variables);
     const outputAllowlist = genericCapsuleOutputAllowlist(
       input.installConfig.outputAllowlist,
       moduleFiles,
@@ -1901,9 +1907,10 @@ export class RunEngine {
     };
   }
 
-  async #assertPublicHostsAvailable(
+  async #reservePublicHostsForPlan(
     installation: Installation,
     variables: Readonly<Record<string, JsonValue>>,
+    now: number,
   ): Promise<void> {
     const requestedHosts = publicHostsFromVariables(variables);
     if (requestedHosts.length === 0) return;
@@ -1917,6 +1924,42 @@ export class RunEngine {
           `${claim.installationName} (${claim.installationId}) in Workspace ` +
           `${claim.workspaceId}`,
       );
+    }
+    const workspaceId = installation.workspaceId ?? installation.spaceId;
+    const nowIso = new Date(now).toISOString();
+    for (const host of requestedHosts) {
+      const result = await this.#store.reservePublicHost({
+        hostname: host,
+        workspaceId,
+        installationId: installation.id,
+        installationName: installation.name,
+        now: nowIso,
+      });
+      if (result.reserved) continue;
+      const reservation = result.reservation;
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `app_hostname_unavailable: ${host} is already claimed by Capsule ` +
+          `${reservation.installationName} (${reservation.installationId}) ` +
+          `in Workspace ${reservation.workspaceId}`,
+      );
+    }
+  }
+
+  async #releasePublicHostsForInstallation(
+    installationId: string,
+    now: number,
+  ): Promise<void> {
+    try {
+      await this.#store.releasePublicHostsForInstallation(
+        installationId,
+        new Date(now).toISOString(),
+      );
+    } catch (error) {
+      log.warn("deploy_control.public_host_release_failed", {
+        installationId,
+        error,
+      });
     }
   }
 
@@ -6289,6 +6332,7 @@ export class RunEngine {
       if (dispatch.generatedRoot) {
         await this.#store.deletePlanRunInputs(planRun.id);
       }
+      await this.#releasePublicHostsForInstallation(installation.id, now);
       // Activity (§27 / §34): a successful destroy tore the Installation down.
       await this.#recordActivity({
         spaceId: completed.spaceId,

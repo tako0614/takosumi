@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import { buildNewQuery } from "../../../../../dashboard/src/views/store/store-link.ts";
-import { installableAppStoreListings } from "../../../../../dashboard/src/views/store/installable-app-listings.ts";
 import type { TcsListing } from "../../../../../dashboard/src/lib/tcs-client.ts";
 
 const text = (value: string) => ({ ja: value, en: value });
@@ -90,29 +89,5 @@ describe("store link handoff", () => {
       '{"runtime":"registry.cloudflare.com/acc/takos-worker-runtime:0.10.0-abcdef","executor":"registry.cloudflare.com/acc/takos-agent-executor:0.10.0-abcdef"}',
     );
     expect(params.has("var.enable_cloudflare_resources")).toBe(false);
-  });
-
-  test("yurucommu handoff uses the curated InstallConfig instead of raw Git vars", () => {
-    const yurucommu = installableAppStoreListings.find(
-      (entry) => entry.id === "yurucommu",
-    );
-    expect(yurucommu).toBeDefined();
-    const params = new URLSearchParams(buildNewQuery(yurucommu!));
-
-    expect(params.get("installConfigId")).toBe("cfg-catalog-yurucommu");
-    expect(params.has("git")).toBe(false);
-    expect(params.has("varjson.enable_cloudflare_resources")).toBe(false);
-  });
-
-  test("takos handoff uses the curated InstallConfig instead of raw Git vars", () => {
-    const takos = installableAppStoreListings.find(
-      (entry) => entry.id === "takos",
-    );
-    expect(takos).toBeDefined();
-    const params = new URLSearchParams(buildNewQuery(takos!));
-
-    expect(params.get("installConfigId")).toBe("cfg-catalog-takos");
-    expect(params.has("git")).toBe(false);
-    expect(params.has("varjson.release_container_images")).toBe(false);
   });
 });

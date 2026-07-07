@@ -253,6 +253,38 @@ export interface CommitAppliedDeploymentResult {
   readonly applyRunLeaseLost?: true;
 }
 
+export type PublicHostReservationStatus = "reserved" | "released";
+
+export interface PublicHostReservation {
+  readonly hostname: string;
+  readonly workspaceId: string;
+  readonly installationId: string;
+  readonly installationName: string;
+  readonly status: PublicHostReservationStatus;
+  readonly reservedAt: string;
+  readonly updatedAt: string;
+  readonly releasedAt?: string;
+}
+
+export interface ReservePublicHostInput {
+  readonly hostname: string;
+  readonly workspaceId: string;
+  readonly installationId: string;
+  readonly installationName: string;
+  readonly now: string;
+}
+
+export type ReservePublicHostResult =
+  | {
+      readonly reserved: true;
+      readonly reservation: PublicHostReservation;
+    }
+  | {
+      readonly reserved: false;
+      readonly reservation: PublicHostReservation;
+      readonly reason: "already_reserved";
+    };
+
 /** Fields a controller may patch on an Installation row. */
 export type InstallationPatch = Partial<
   Pick<
@@ -572,6 +604,13 @@ export interface OpenTofuDeploymentStore {
     spaceId: string,
     params: CapsuleListPageParams,
   ): Promise<Page<Installation>>;
+  reservePublicHost(
+    input: ReservePublicHostInput,
+  ): Promise<ReservePublicHostResult>;
+  releasePublicHostsForInstallation(
+    installationId: string,
+    now: string,
+  ): Promise<void>;
   patchInstallation(
     id: string,
     patch: InstallationPatch,
@@ -955,6 +994,7 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
   readonly #spaces = new Map<string, Space>();
   readonly #installConfigs = new Map<string, InstallConfig>();
   readonly #installations = new Map<string, Installation>();
+  readonly #publicHostReservations = new Map<string, PublicHostReservation>();
   readonly #deployments = new Map<string, Deployment>();
   readonly #connections = new Map<string, Connection>();
   readonly #secretBlobs = new Map<string, StoredSecretBlob>();
@@ -1323,6 +1363,59 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
         ? rows.filter((row) => row.status !== "destroyed")
         : rows;
     return pageSorted(visibleRows, params);
+  }
+
+  reservePublicHost(
+    input: ReservePublicHostInput,
+  ): Promise<ReservePublicHostResult> {
+    const hostname = input.hostname.toLowerCase();
+    const existing = this.#publicHostReservations.get(hostname);
+    if (
+      existing &&
+      existing.status === "reserved" &&
+      existing.installationId !== input.installationId
+    ) {
+      return Promise.resolve({
+        reserved: false,
+        reservation: existing,
+        reason: "already_reserved",
+      });
+    }
+    const reservation: PublicHostReservation = {
+      hostname,
+      workspaceId: input.workspaceId,
+      installationId: input.installationId,
+      installationName: input.installationName,
+      status: "reserved",
+      reservedAt:
+        existing?.installationId === input.installationId
+          ? existing.reservedAt
+          : input.now,
+      updatedAt: input.now,
+    };
+    this.#publicHostReservations.set(hostname, reservation);
+    return Promise.resolve({ reserved: true, reservation });
+  }
+
+  releasePublicHostsForInstallation(
+    installationId: string,
+    now: string,
+  ): Promise<void> {
+    for (const [hostname, reservation] of this.#publicHostReservations) {
+      if (
+        reservation.installationId !== installationId ||
+        reservation.status !== "reserved"
+      ) {
+        continue;
+      }
+      this.#publicHostReservations.set(hostname, {
+        ...reservation,
+        status: "released",
+        updatedAt: now,
+        releasedAt: now,
+      });
+    }
+    return Promise.resolve();
   }
 
   patchInstallation(

@@ -101,8 +101,11 @@ import type {
   InstallationPatchGuard,
   OpenTofuDeploymentStore,
   PlanRunInputs,
+  PublicHostReservation,
   PutUsageEventAndSpendCreditsResult,
   RecoverableOpenTofuRunListOptions,
+  ReservePublicHostInput,
+  ReservePublicHostResult,
   StoredRunRecord,
   StoredSecretBlob,
   StoredSource,
@@ -777,6 +780,83 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
       },
     );
     return pageFromProbe(rows.map(normalizeInstallationRecord), limit);
+  }
+
+  async reservePublicHost(
+    input: ReservePublicHostInput,
+  ): Promise<ReservePublicHostResult> {
+    await this.#ensureSchema();
+    const hostname = input.hostname.toLowerCase();
+    await this.db
+      .prepare(
+        `insert into public_host_reservations (
+           hostname, workspace_id, installation_id, installation_name,
+           status, reserved_at, updated_at, released_at
+         )
+         values (?, ?, ?, ?, 'reserved', ?, ?, null)
+         on conflict(hostname) do update
+         set workspace_id = excluded.workspace_id,
+             installation_id = excluded.installation_id,
+             installation_name = excluded.installation_name,
+             status = 'reserved',
+             reserved_at = case
+               when public_host_reservations.installation_id = excluded.installation_id
+               then public_host_reservations.reserved_at
+               else excluded.reserved_at
+             end,
+             updated_at = excluded.updated_at,
+             released_at = null
+         where public_host_reservations.status = 'released'
+            or public_host_reservations.installation_id = excluded.installation_id`,
+      )
+      .bind(
+        hostname,
+        input.workspaceId,
+        input.installationId,
+        input.installationName,
+        input.now,
+        input.now,
+      )
+      .run();
+    const reservation = await this.db
+      .prepare(
+        `select hostname, workspace_id, installation_id, installation_name,
+                status, reserved_at, updated_at, released_at
+         from public_host_reservations
+         where hostname = ?`,
+      )
+      .bind(hostname)
+      .first<Record<string, unknown>>();
+    const normalized = publicHostReservationFromD1Row(reservation);
+    if (
+      normalized.status === "reserved" &&
+      normalized.installationId === input.installationId
+    ) {
+      return { reserved: true, reservation: normalized };
+    }
+    return {
+      reserved: false,
+      reservation: normalized,
+      reason: "already_reserved",
+    };
+  }
+
+  async releasePublicHostsForInstallation(
+    installationId: string,
+    now: string,
+  ): Promise<void> {
+    await this.#ensureSchema();
+    await this.db
+      .prepare(
+        `update public_host_reservations
+         set status = 'released',
+             updated_at = ?,
+             released_at = ?
+         where installation_id = ?
+           and status = 'reserved'`,
+      )
+      .bind(now, now, installationId)
+      .run();
   }
 
   async patchInstallation(
@@ -3933,6 +4013,22 @@ export async function ensureD1OpenTofuLedgerSchema(
       on credit_reservations (run_id)`,
     `create index if not exists credit_reservations_status_idx
       on credit_reservations (status)`,
+    `create table if not exists public_host_reservations (
+      hostname text primary key,
+      workspace_id text not null,
+      installation_id text not null,
+      installation_name text not null,
+      status text not null,
+      reserved_at text not null,
+      updated_at text not null,
+      released_at text
+    )`,
+    `create index if not exists public_host_reservations_workspace_idx
+      on public_host_reservations (workspace_id)`,
+    `create index if not exists public_host_reservations_installation_idx
+      on public_host_reservations (installation_id)`,
+    `create index if not exists public_host_reservations_status_idx
+      on public_host_reservations (status)`,
     `create table if not exists backups (
       id text primary key,
       space_id text not null,
@@ -4732,6 +4828,49 @@ capsule_compatibility_reports.root_module_outputs_json text not null default []
       );
     },
   },
+  {
+    version: 19,
+    name: "d1_opentofu_public_host_reservations",
+    checksumSource: `
+public_host_reservations table for atomic hostname claims
+hostname primary key
+workspace / installation / status indexes
+`,
+    async apply(db) {
+      await db
+        .prepare(
+          `create table if not exists public_host_reservations (
+            hostname text primary key,
+            workspace_id text not null,
+            installation_id text not null,
+            installation_name text not null,
+            status text not null,
+            reserved_at text not null,
+            updated_at text not null,
+            released_at text
+          )`,
+        )
+        .run();
+      await db
+        .prepare(
+          `create index if not exists public_host_reservations_workspace_idx
+            on public_host_reservations (workspace_id)`,
+        )
+        .run();
+      await db
+        .prepare(
+          `create index if not exists public_host_reservations_installation_idx
+            on public_host_reservations (installation_id)`,
+        )
+        .run();
+      await db
+        .prepare(
+          `create index if not exists public_host_reservations_status_idx
+            on public_host_reservations (status)`,
+        )
+        .run();
+    },
+  },
 ] as const satisfies readonly D1OpenTofuSchemaMigration[];
 
 /**
@@ -5064,6 +5203,12 @@ const D1_OPEN_TOFU_CANONICAL_INDEX_STATEMENTS = [
       on credit_reservations (run_id)`,
   `create index if not exists credit_reservations_status_idx
       on credit_reservations (status)`,
+  `create index if not exists public_host_reservations_workspace_idx
+      on public_host_reservations (workspace_id)`,
+  `create index if not exists public_host_reservations_installation_idx
+      on public_host_reservations (installation_id)`,
+  `create index if not exists public_host_reservations_status_idx
+      on public_host_reservations (status)`,
   `create index if not exists backups_space_idx
       on backups (space_id)`,
   `create index if not exists backups_installation_idx
@@ -5683,4 +5828,25 @@ async function backfillD1SourceScopedRuns(db: D1Database): Promise<void> {
     )
     .bind(RUN_KIND_SOURCE_SYNC)
     .run();
+}
+
+function publicHostReservationFromD1Row(
+  row: Record<string, unknown> | null,
+): PublicHostReservation {
+  if (!row) {
+    throw new Error("public host reservation row was not returned");
+  }
+  return {
+    hostname: String(row.hostname),
+    workspaceId: String(row.workspace_id),
+    installationId: String(row.installation_id),
+    installationName: String(row.installation_name),
+    status:
+      row.status === "released" || row.status === "reserved"
+        ? row.status
+        : "reserved",
+    reservedAt: String(row.reserved_at),
+    updatedAt: String(row.updated_at),
+    ...(row.released_at ? { releasedAt: String(row.released_at) } : {}),
+  };
 }

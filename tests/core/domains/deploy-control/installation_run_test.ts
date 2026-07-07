@@ -1175,6 +1175,118 @@ test("managed Cloudflare host claim ignores unapplied pending Capsules", async (
   expect(planRun.status).toEqual("succeeded");
 });
 
+test("managed Cloudflare app.takos.jp host is atomically reserved by successful plans", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  const first = await seedInstallationModel(store, {
+    spaceId: "space_first",
+    sourceId: "src_first",
+    snapshotId: "snap_first",
+    installConfigId: "cfg_first",
+    installationId: "inst_first",
+    name: "Reserved App",
+    environment: "preview",
+    installConfig: {
+      variableMapping: {
+        worker_name: "reserved-app",
+        app_url: null,
+        cloudflare: {
+          account_id: null,
+          api_base_url: null,
+        },
+      },
+    },
+  });
+  await putConnectionWithProviderEnv(store, {
+    ...cloudflareConnection(
+      "conn_cloudflare_first",
+      first.installation.spaceId,
+    ),
+    scopeHints: {
+      managedProvider: true,
+      providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      accountId: "ts_acc_takosumi_cloud",
+    },
+  });
+  await store.putInstallationProviderEnvBindingSet({
+    id: "profile_cloudflare_first",
+    spaceId: first.installation.spaceId,
+    installationId: first.installation.id,
+    environment: first.installation.environment,
+    bindings: [
+      {
+        provider: "cloudflare",
+        alias: "main",
+        connectionId: "conn_cloudflare_first",
+      },
+    ],
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
+  const profile = multiProviderRunnerProfile();
+  const controller = controllerWith(store, runner, {
+    runnerProfiles: [profile],
+    defaultRunnerProfileId: profile.id,
+  });
+
+  const firstPlan = await controller.createInstallationPlan(
+    first.installation.id,
+  );
+  expect(firstPlan.planRun.status).toEqual("succeeded");
+
+  const second = await seedInstallationModel(store, {
+    spaceId: "space_second",
+    sourceId: "src_second",
+    snapshotId: "snap_second",
+    installConfigId: "cfg_second",
+    installationId: "inst_second",
+    name: "Reserved App",
+    environment: "preview",
+    installConfig: {
+      variableMapping: {
+        worker_name: "reserved-app",
+        app_url: null,
+        cloudflare: {
+          account_id: null,
+          api_base_url: null,
+        },
+      },
+    },
+  });
+  await putConnectionWithProviderEnv(store, {
+    ...cloudflareConnection(
+      "conn_cloudflare_second",
+      second.installation.spaceId,
+    ),
+    scopeHints: {
+      managedProvider: true,
+      providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      accountId: "ts_acc_takosumi_cloud",
+    },
+  });
+  await store.putInstallationProviderEnvBindingSet({
+    id: "profile_cloudflare_second",
+    spaceId: second.installation.spaceId,
+    installationId: second.installation.id,
+    environment: second.installation.environment,
+    bindings: [
+      {
+        provider: "cloudflare",
+        alias: "main",
+        connectionId: "conn_cloudflare_second",
+      },
+    ],
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
+
+  await expect(
+    controller.createInstallationPlan(second.installation.id),
+  ).rejects.toThrow(
+    "app_hostname_unavailable: reserved-app.app.takos.jp is already claimed",
+  );
+});
+
 test("managed Cloudflare host claim skips corrupt historical Capsules", async () => {
   class CorruptHistoricalOutputStore extends InMemoryOpenTofuDeploymentStore {
     override getLatestOutputSnapshot(
