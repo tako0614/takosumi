@@ -1127,6 +1127,8 @@ export const ja = {
   "billing.mode.disabled": "このアカウントでは課金は無効です。",
   "billing.mode.checkoutOpen":
     "プランを選択すると Takosumi Cloud リソースを使い始められます。有料操作は上限と支払い状態に基づいて実行前に確認されます。",
+  "billing.mode.cloudCredits":
+    "クレジットはアカウント全体で共有されます。有料操作は実行前に残高から確認されます。",
   "billing.mode.showback": "使用量は記録されますが、請求はありません。",
   "billing.mode.enforce":
     "有料操作はプラン、上限、支払い状態に基づいて実行前に確認されます。",
@@ -1135,6 +1137,8 @@ export const ja = {
   "billing.error.unknown": "不明なエラー",
   "billing.balance.title": "使用状況",
   "billing.balance.available": "利用状態",
+  "billing.balance.availableUsd": "利用可能な残高",
+  "billing.balance.status": "状態",
   "billing.balance.ready": "利用できます",
   "billing.balance.actionRequired": "プランまたは支払い設定が必要です",
   "billing.balance.reserved": "反映待ちの使用量",
