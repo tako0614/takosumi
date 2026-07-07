@@ -41,7 +41,7 @@ describe("Installation detail deployment surface", () => {
     expect(source.indexOf('t("apps.reviewChanges")')).toBeGreaterThan(
       source.indexOf("function DeploysTab"),
     );
-    expect(source).toContain('icon={<Trash2 size={16} />}');
+    expect(source).toContain("icon={<Trash2 size={16} />}");
     expect(source).toContain('t("common.delete")');
     expect(source.indexOf('t("common.delete")')).toBeLessThan(
       source.indexOf("<Tabs items={tabItems()}"),
@@ -106,6 +106,26 @@ describe("Installation detail deployment surface", () => {
     expect(source).not.toContain("conn.ownership.ownKey");
   });
 
+  test("keeps service configuration editable from settings without exposing provider credentials", () => {
+    expect(source).toContain("getInstallConfig");
+    expect(source).toContain("patchInstallConfig");
+    expect(source).toContain('t("app.config.title")');
+    expect(source).toContain('t("app.config.publicUrl")');
+    expect(source).toContain('t("app.config.oidc")');
+    expect(source).toContain('t("app.config.advanced")');
+    expect(source).toContain('t("app.config.addVariable")');
+    expect(source).toContain("SYSTEM_CONFIG_VARIABLES");
+    expect(source).toContain("takosumi_accounts_issuer_url");
+    expect(source).toContain("takosumi_accounts_client_id");
+    expect(source).toContain("removeVariables");
+    expect(source).toContain("ConfigVariableInput");
+    expect(source).toContain("VariableRows");
+    expect(source).toContain('type={props.row.secret ? "password" : "text"}');
+    expect(source.indexOf('t("app.config.title")')).toBeLessThan(
+      source.indexOf('t("app.bindings.title")'),
+    );
+  });
+
   test("sets a route-specific title instead of leaking the previous add-service title", () => {
     expect(source).toContain('<Page title={t("app.capsuleSub")}');
     expect(source).toContain("setDocumentTitle(inst.name)");
@@ -125,6 +145,9 @@ describe("Installation detail deployment surface", () => {
     );
     expect(source).toMatch(
       /createResource\(\s*settingsWorkspaceId,\s*listProviderConnections,\s*\)/,
+    );
+    expect(source).toMatch(
+      /createResource\(\s*settingsInstallConfigId,\s*getInstallConfig,\s*\)/,
     );
   });
 
