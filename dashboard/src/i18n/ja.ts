@@ -547,6 +547,8 @@ export const ja = {
   "new.catalogInput.errorRequired": "{label} を入力してください。",
   "new.catalogInput.errorUnsafeValue":
     "{label} の値が長すぎるか、使えない文字を含んでいます。",
+  "new.catalogInput.errorCustomDomain":
+    "{label} は {baseDomain} 配下のURLを使ってください。独自ドメインは所有確認後に設定できます。",
   "new.deeplink.summary":
     "リンクから「{capsule}」の内容が入力されています。確認してから追加してください。",
   "new.deeplink.aria": "リンクから追加するサービス",

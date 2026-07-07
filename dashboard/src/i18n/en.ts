@@ -545,6 +545,8 @@ export const en: Record<keyof typeof ja, string> = {
   "new.catalogInput.errorRequired": "Enter {label}.",
   "new.catalogInput.errorUnsafeValue":
     "{label} contains unsupported characters or is too long.",
+  "new.catalogInput.errorCustomDomain":
+    "Use a URL under {baseDomain} for {label}. Custom domains can be enabled after ownership verification.",
   "new.deeplink.summary":
     "A link filled in “{capsule}”. Review it before adding.",
   "new.deeplink.aria": "Service from link",
