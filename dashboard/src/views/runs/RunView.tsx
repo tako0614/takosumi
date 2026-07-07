@@ -76,6 +76,9 @@ import {
   runStatusLabel,
   runTone,
 } from "../../lib/labels.ts";
+import { clearCapsuleListCache } from "../../lib/capsule-list.ts";
+import { clearCurrentStateVersionCache } from "../../lib/current-state-versions.ts";
+import { clearDashboardOverviewCache } from "../../lib/dashboard-overview.ts";
 import {
   formatDateTime,
   locale,
@@ -627,6 +630,13 @@ function Inner() {
     );
   });
 
+  const clearLauncherCaches = (workspaceId: string | undefined): void => {
+    if (!workspaceId) return;
+    clearCapsuleListCache(workspaceId);
+    clearCurrentStateVersionCache(workspaceId);
+    clearDashboardOverviewCache(workspaceId);
+  };
+
   createEffect(() => {
     const r = run.latest;
     const titleKey =
@@ -638,6 +648,18 @@ function Inner() {
             ? "run.title.plan"
             : "run.title.other";
     setDocumentTitle(t(titleKey as Parameters<typeof t>[0]));
+  });
+
+  const [lastLauncherCacheClearKey, setLastLauncherCacheClearKey] =
+    createSignal<string | undefined>();
+  createEffect(() => {
+    const r = run.latest;
+    if (!r || !isTerminalRunStatus(r.status)) return;
+    if (r.type !== "apply" && r.type !== "destroy_apply") return;
+    const key = `${r.id}:${r.status}:${r.workspaceId}`;
+    if (lastLauncherCacheClearKey() === key) return;
+    setLastLauncherCacheClearKey(key);
+    clearLauncherCaches(r.workspaceId);
   });
 
   // Poll while the run is non-terminal so the screen advances on its own.
@@ -724,6 +746,7 @@ function Inner() {
     }
     setNeedsConfirm(false);
     setApplied(true);
+    clearLauncherCaches(run.latest?.workspaceId);
     // Jump to the apply Run when the backend surfaced its id — that page then
     // polls to "デプロイが完了しました" on its own. Fallback: stay here with the
     // applied notice (the legacy behaviour).
