@@ -690,7 +690,11 @@ export const en: Record<keyof typeof ja, string> = {
   "new.error.genericWithDetails":
     "The service could not be added. Details: {message}",
   "new.error.appHostnameUnavailable":
-    "That public subdomain is already in use. Enter another public subdomain, or leave it blank to assign one automatically.",
+    "That public subdomain is already in use. Choose another Service ID and try again.",
+  "new.hostnameConflict.title": "Choose another Service ID",
+  "new.hostnameConflict.body":
+    "Use a different ID for the public URL, then add the service again.",
+  "new.hostnameConflict.suggest": "Use suggested ID",
   "new.error.alreadyExists":
     "“{name}” is already added to this workspace. Open it from the service list.",
   "new.error.notRunnable":

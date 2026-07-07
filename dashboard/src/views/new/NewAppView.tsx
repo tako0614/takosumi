@@ -466,6 +466,16 @@ function slugInputValue(value: string): string {
   );
 }
 
+function uniqueServiceIdCandidate(value: string): string {
+  const suffix = Math.random().toString(36).slice(2, 6) || "next";
+  const base =
+    slugInputValue(value)
+      .replace(/^[^a-z]+/u, "")
+      .slice(0, 48 - suffix.length - 1)
+      .replace(/-+$/u, "") || "app";
+  return `${base}-${suffix}`;
+}
+
 function workspaceSuffix(value: string | null): string {
   return (value ?? "")
     .replace(/^workspace_/u, "")
@@ -933,9 +943,11 @@ function Inner() {
   const [compatibility, setCompatibility] =
     createSignal<CapsuleCompatibilityResult | null>(null);
   const [checkingCompatibility, setCheckingCompatibility] = createSignal(false);
+  const [appHostnameConflict, setAppHostnameConflict] = createSignal(false);
   const [providerRows, setProviderRows] = createSignal<ProviderConnectionRow[]>(
     [],
   );
+  let projectNameInput: HTMLInputElement | undefined;
 
   const workspaceId = () =>
     currentWorkspaceId() ? currentWorkspaceId() : null;
@@ -1374,6 +1386,15 @@ function Inner() {
   };
   const projectNameVariable = () =>
     slugInputValue(resourcePrefix() || defaultProjectName());
+  const useSuggestedProjectName = () => {
+    const candidate = uniqueServiceIdCandidate(
+      projectNameVariable() || defaultProjectName(),
+    );
+    setResourcePrefixTouched(true);
+    setResourcePrefix(candidate);
+    resetCompatibility();
+    queueMicrotask(() => projectNameInput?.focus());
+  };
   const updateInputVariable = (
     index: number,
     patch: Partial<InputVariableRow>,
@@ -1997,6 +2018,7 @@ function Inner() {
     setCreatedSourceId(null);
     setCreatedCapsuleId(null);
     setExistingCapsule(null);
+    setAppHostnameConflict(false);
     setError(null);
   };
   const applyInstallPrefillInput = (
@@ -2308,6 +2330,7 @@ function Inner() {
     } catch (err) {
       if (isAbortError(err) || !isCurrentFlow(flow)) return;
       const apiError = err instanceof ControlApiError ? err : undefined;
+      setAppHostnameConflict(false);
       if (apiError?.isSourceSyncRequired) {
         const sourceId = sourceIdFromControlError(apiError);
         if (sourceId) setCreatedSourceId(sourceId);
@@ -2317,6 +2340,10 @@ function Inner() {
       } else if (apiError?.code === "source_sync_failed") {
         setStepSource("done");
         setStepSync("error");
+      } else if (apiError?.isAppHostnameUnavailable) {
+        setAppHostnameConflict(true);
+        setStepSource("error");
+        setStepSync("idle");
       } else {
         setStepSource("error");
         setStepSync("idle");
@@ -2507,6 +2534,7 @@ function Inner() {
         return;
       }
       const apiError = err instanceof ControlApiError ? err : undefined;
+      setAppHostnameConflict(false);
       if (apiError?.isSourceSyncRequired) {
         setSyncRequired(true);
         setStepSync("error");
@@ -2514,6 +2542,9 @@ function Inner() {
       } else if (apiError?.code === "source_sync_failed") {
         setStepSync("error");
         setError(sourceFetchErrorMessage(apiError));
+      } else if (apiError?.isAppHostnameUnavailable) {
+        setAppHostnameConflict(true);
+        setError(addFlowErrorMessage(apiError));
       } else if (isDuplicateServiceError(apiError)) {
         setStepInstall(INSTALLATION_DONE);
         setStepPlan("idle");
@@ -3132,9 +3163,11 @@ function Inner() {
                   <Show when={supportsProjectNameInput()}>
                     <FormField label={t("new.vars.projectName")}>
                       <Input
+                        ref={projectNameInput}
                         id="new-project-name"
                         name="project_name"
                         type="text"
+                        invalid={appHostnameConflict()}
                         value={projectNameVariable()}
                         onInput={(e) => {
                           setResourcePrefixTouched(true);
@@ -3465,6 +3498,20 @@ function Inner() {
                       {m()}
                     </p>
                   )}
+                </Show>
+                <Show when={appHostnameConflict() && supportsProjectNameInput()}>
+                  <div class="wb-action-callout" role="note">
+                    <strong>{t("new.hostnameConflict.title")}</strong>
+                    <p>{t("new.hostnameConflict.body")}</p>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      type="button"
+                      onClick={useSuggestedProjectName}
+                    >
+                      {t("new.hostnameConflict.suggest")}
+                    </Button>
+                  </div>
                 </Show>
                 <Show when={existingCapsule()}>
                   {(capsule) => (
