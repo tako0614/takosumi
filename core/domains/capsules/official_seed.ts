@@ -292,6 +292,105 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
     },
   },
   {
+    id: "cfg-catalog-takos-storage",
+    name: "takos-storage",
+    source: {
+      git: "https://github.com/tako0614/takos-storage.git",
+      ref: "3501c67f2497afa537d3ef5977bea77ab422ff84",
+      path: ".",
+    },
+    order: 120,
+    surface: "service",
+    kind: "worker",
+    provider: "cloudflare",
+    suggestedName: "takos-storage",
+    badge: text("追加候補", "Installable"),
+    displayName: text("Takos Storage", "Takos Storage"),
+    description: text(
+      "ワークスペースの object storage サービス。他のアプリがスコープ付きトークンで読み書きします。",
+      "Workspace object-storage service that other apps read/write with bind-time scoped tokens.",
+    ),
+    inputs: [
+      {
+        name: "project_name",
+        type: "string",
+        defaultValue: "takos-storage",
+        label: text("サービス名", "Service name"),
+      },
+      {
+        name: "worker_name",
+        type: "string",
+        label: text("公開サブドメイン", "Public subdomain"),
+        helper: text(
+          "空欄ならサービス名から自動で決めます。入力すると <subdomain>.app.takos.jp として使われます。",
+          "Leave empty to derive it from the service name. When set, it is used as <subdomain>.app.takos.jp.",
+        ),
+        placeholder: "my-storage",
+      },
+      {
+        name: "app_url",
+        type: "string",
+        advanced: true,
+        label: text("独自URL", "Custom URL"),
+        helper: text(
+          "独自ドメインを使う場合だけ https:// から入力します。空欄なら公開サブドメインのURLを使います。",
+          "Enter an https:// URL only for a custom domain. Leave empty to use the public subdomain URL.",
+        ),
+        placeholder: "https://storage.app.takos.jp",
+      },
+      {
+        name: "storage_token_signing_key",
+        type: "string",
+        advanced: true,
+        secret: true,
+        label: text("トークン署名鍵", "Token signing key"),
+        helper: text(
+          "空欄なら自動生成します。通常は入力不要です。",
+          "Leave empty to generate one. Normally not needed.",
+        ),
+        placeholder: "optional",
+      },
+      {
+        name: "enable_cloudflare_resources",
+        type: "boolean",
+        defaultValue: "true",
+        label: text("Cloudflare リソースを作成", "Create Cloudflare resources"),
+      },
+      {
+        name: "enable_cloudflare_worker_script",
+        type: "boolean",
+        defaultValue: "true",
+        label: text("Worker を公開", "Publish Worker"),
+      },
+      {
+        name: "worker_bundle_url",
+        type: "string",
+        advanced: true,
+        label: text("Worker artifact URL", "Worker artifact URL"),
+      },
+      {
+        name: "worker_bundle_sha256",
+        type: "string",
+        advanced: true,
+        label: text("Worker artifact SHA-256", "Worker artifact SHA-256"),
+      },
+    ],
+    installExperience: {
+      serviceName: { variable: "project_name" },
+      publicEndpoint: {
+        subdomainVariable: "worker_name",
+        urlVariable: "app_url",
+        routePatternVariable: "cloudflare_route_pattern",
+        baseDomain: "app.takos.jp",
+      },
+    },
+    outputAllowlist: {
+      url: { from: "url", type: "url" },
+      app_deployment: { from: "app_deployment", type: "json" },
+      service_exports: { from: "service_exports", type: "json" },
+    },
+  },
+  {
     id: "cfg-catalog-takos",
     name: "takos",
     source: {

@@ -63,21 +63,16 @@ export type StandardProjectedCapability =
   (typeof STANDARD_PROJECTED_CAPABILITIES)[number];
 
 export type ProjectedCapability =
-  | StandardProjectedCapability
-  | `${string}.${string}`;
+  StandardProjectedCapability | `${string}.${string}`;
 
 export type ProjectedExportVisibility =
-  | "private"
-  | "space"
-  | "public"
-  | "shared";
+  "private" | "space" | "public" | "shared";
 
 export type ProjectedBindingDependencyMode =
-  | "variable_injection"
-  | "remote_state"
-  | "published_output";
+  "variable_injection" | "remote_state" | "published_output";
 
-export type ProjectedBindingTargetKind = "generated_root" | "workload" | "runtime";
+export type ProjectedBindingTargetKind =
+  "generated_root" | "workload" | "runtime";
 
 export interface ProjectedEndpoint {
   readonly name?: string;
@@ -187,7 +182,9 @@ export function isStandardProjectedCapability(
   return STANDARD_CAPABILITY_SET.has(value);
 }
 
-export function isProjectedCapability(value: string): value is ProjectedCapability {
+export function isProjectedCapability(
+  value: string,
+): value is ProjectedCapability {
   return /^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*)+$/.test(value);
 }
 
@@ -272,7 +269,9 @@ function normalizeProjectedExports(
     }
   }
 
-  const appDeploymentExports = normalizeAppDeploymentPublishExports(outputs.app_deployment);
+  const appDeploymentExports = normalizeAppDeploymentPublishExports(
+    outputs.app_deployment,
+  );
   for (const [index, normalized] of appDeploymentExports.entries()) {
     assertCapabilitiesAllowed(
       normalized.capabilities,
@@ -300,7 +299,9 @@ function normalizeProjectedBindings(
     }
   }
 
-  projected.push(...normalizeAppDeploymentConsumeBindings(outputs.app_deployment));
+  projected.push(
+    ...normalizeAppDeploymentConsumeBindings(outputs.app_deployment),
+  );
   for (const [index, normalized] of projected.entries()) {
     assertCapabilitiesAllowed(
       normalized.selector.capabilities,
@@ -361,13 +362,17 @@ function normalizeProjectedBinding(
     throw new TypeError(`service_bindings[${index}] must be an object`);
   }
   const stableName = stringFieldFor("service_bindings", value, "name", index);
-  const selectorResult = normalizeProjectedBindingSelector(value.selector, index);
+  const selectorResult = normalizeProjectedBindingSelector(
+    value.selector,
+    index,
+  );
   return {
     name: stableName,
     target: normalizeProjectedBindingTarget(value.target, index),
     selector: selectorResult.selector,
     selectorProducerIsSelf: selectorResult.producerIsSelf,
-    dependencyMode: optionalDependencyModeField(value, index) ?? "variable_injection",
+    dependencyMode:
+      optionalDependencyModeField(value, index) ?? "variable_injection",
     grantRequest: normalizeProjectedGrantRequest(
       value.grant_request ?? value.grantRequest,
       index,
@@ -382,7 +387,13 @@ function normalizeProjectedBindingTarget(
   if (!isJsonObject(value)) {
     throw new TypeError(`service_bindings[${index}].target must be an object`);
   }
-  const kind = stringFieldFor("service_bindings", value, "kind", index, ".target");
+  const kind = stringFieldFor(
+    "service_bindings",
+    value,
+    "kind",
+    index,
+    ".target",
+  );
   if (!isProjectedBindingTargetKind(kind)) {
     throw new TypeError(
       `service_bindings[${index}].target.kind must be generated_root, workload, or runtime`,
@@ -390,7 +401,13 @@ function normalizeProjectedBindingTarget(
   }
   return {
     kind,
-    name: optionalStringFor("service_bindings", value, "name", index, ".target"),
+    name: optionalStringFor(
+      "service_bindings",
+      value,
+      "name",
+      index,
+      ".target",
+    ),
     metadata: optionalJsonObjectFieldFor(
       "service_bindings",
       value,
@@ -409,7 +426,9 @@ function normalizeProjectedBindingSelector(
   readonly producerIsSelf?: boolean;
 } {
   if (!isJsonObject(value)) {
-    throw new TypeError(`service_bindings[${index}].selector must be an object`);
+    throw new TypeError(
+      `service_bindings[${index}].selector must be an object`,
+    );
   }
   const capabilities = capabilityArrayFieldFor(
     "service_bindings",
@@ -544,8 +563,14 @@ function normalizeAppDeploymentPublishExports(
     if (!isJsonObject(entry)) {
       throw new TypeError(`app_deployment.publish[${index}] must be an object`);
     }
-    const name = requiredString(entry.name, `app_deployment.publish[${index}].name`);
-    const type = requiredString(entry.type, `app_deployment.publish[${index}].type`);
+    const name = requiredString(
+      entry.name,
+      `app_deployment.publish[${index}].name`,
+    );
+    const type = requiredString(
+      entry.type,
+      `app_deployment.publish[${index}].type`,
+    );
     const capability = capabilityFromAppDeploymentPublicationType(
       type,
       `app_deployment.publish[${index}].type`,
@@ -598,13 +623,17 @@ function normalizeAppDeploymentConsumeBindings(
   const compute = value.compute;
   if (compute === undefined) return [];
   if (!isJsonObject(compute)) {
-    throw new TypeError("app_deployment.compute must be an object when present");
+    throw new TypeError(
+      "app_deployment.compute must be an object when present",
+    );
   }
   const appName = optionalString(value.name, "app_deployment.name");
   const bindings: NormalizedProjectedBinding[] = [];
   for (const [componentName, componentValue] of Object.entries(compute)) {
     if (!isJsonObject(componentValue)) {
-      throw new TypeError(`app_deployment.compute.${componentName} must be an object`);
+      throw new TypeError(
+        `app_deployment.compute.${componentName} must be an object`,
+      );
     }
     const consume = componentValue.consume;
     if (consume === undefined) continue;
@@ -723,7 +752,11 @@ function scopesFromAppDeploymentConsume(
   entry: JsonObject,
   capability: ProjectedCapability,
 ): readonly string[] {
-  const raw = entry.scopes;
+  // Accept both the flat `consume[].scopes` and the nested
+  // `consume[].request.scopes` shape (the latter is what takos-office uses).
+  const raw =
+    entry.scopes ??
+    (isJsonObject(entry.request) ? entry.request.scopes : undefined);
   if (raw !== undefined) {
     if (
       !Array.isArray(raw) ||
@@ -794,7 +827,9 @@ function compactJsonObject(
   ) as JsonObject;
 }
 
-function optionalJsonObject(value: JsonValue | undefined): JsonObject | undefined {
+function optionalJsonObject(
+  value: JsonValue | undefined,
+): JsonObject | undefined {
   return isJsonObject(value) ? value : undefined;
 }
 
@@ -833,7 +868,9 @@ function stringFieldFor(
 ): string {
   const item = value[field];
   if (typeof item !== "string" || item.length === 0) {
-    throw new TypeError(`${outputName}[${index}]${prefix}.${field} is required`);
+    throw new TypeError(
+      `${outputName}[${index}]${prefix}.${field} is required`,
+    );
   }
   return item;
 }
