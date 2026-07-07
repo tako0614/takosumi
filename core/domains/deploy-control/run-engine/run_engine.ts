@@ -169,6 +169,7 @@ import {
   rawOutputArtifactKey,
   redactRunApproval,
   releaseActivationCommands,
+  releaseActivationCommandsFromOutputRecord,
   releaseActivationCommandsFromPublicOutputs,
   releaseActivationOutputs,
   RUN_HEARTBEAT_STALE_MS,
@@ -5773,8 +5774,10 @@ export class RunEngine {
           Record<string, unknown>
         >,
       );
-      const snapshotCommands = releaseActivationCommandsFromPublicOutputs(
-        snapshotOutputs,
+      const snapshotCommands = releaseActivationCommandsFromOutputRecord(
+        input.outputSnapshot.workspaceOutputs as Readonly<
+          Record<string, unknown>
+        >,
         "post_apply",
       );
       if (snapshotCommands.length > 0) {
