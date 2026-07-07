@@ -17,7 +17,7 @@ import {
   Switch,
 } from "solid-js";
 import { useNavigate } from "@solidjs/router";
-import { Plus, Settings2, Sparkles, Trash2 } from "lucide-solid";
+import { Plus, Settings2, Sparkles } from "lucide-solid";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import {
@@ -39,7 +39,7 @@ import {
 } from "../../lib/control-api.ts";
 import {
   type AppSurface,
-  appSurfacesFromDeployment,
+  appSurfacesFromOutputs,
   appSurfaceFromInstallConfigCatalog,
   isUrlString,
   isVisibleServiceCapsule,
@@ -152,7 +152,6 @@ function Inner() {
   const visibleCapsules = createMemo(() =>
     (capsules() ?? []).filter(isVisibleServiceCapsule),
   );
-  const activity = createMemo(() => overview()?.activity ?? []);
   const currentStateVersions = createMemo(() =>
     mergeById(
       overview()?.currentStateVersions ?? [],
@@ -179,7 +178,6 @@ function Inner() {
   // Declared app surfaces per service. The current StateVersion rows are loaded
   // through one Workspace projection request instead of N `getDeployment` reads.
   const surfacesByCapsule = createMemo(() => {
-    const events = activity() ?? [];
     const deployments = new Map(
       (currentStateVersions() ?? []).map((deployment) => [
         deployment.capsuleId ?? deployment.installationId,
@@ -190,7 +188,11 @@ function Inner() {
     for (const inst of visibleCapsules()) {
       const deployment = deployments.get(inst.id);
       if (!deployment) continue;
-      const surfaces = appSurfacesFromDeployment(deployment, events, inst.id);
+      // Read the surface URLs straight from the deployment outputs (ungated):
+      // tapping an app tile goes to the app's own link, not the management
+      // screen, even before release activation. The post-deploy "Open app"
+      // button keeps its own activation gate.
+      const surfaces = appSurfacesFromOutputs(deployment.outputsPublic);
       if (surfaces.length > 0) map.set(inst.id, surfaces);
     }
     return map;
@@ -470,9 +472,8 @@ function AppTileView(props: {
     </>
   );
 
-  const detailHref = () => `/services/${encodeURIComponent(props.tile.inst.id)}`;
-  const deleteHref = () =>
-    `/services/${encodeURIComponent(props.tile.inst.id)}/danger`;
+  const detailHref = () =>
+    `/services/${encodeURIComponent(props.tile.inst.id)}`;
 
   return (
     <span class="av-tile-wrap">
@@ -501,14 +502,6 @@ function AppTileView(props: {
         <a class="av-tile-manage" href={detailHref()}>
           <Settings2 size={13} aria-hidden="true" />
           <span>{t("apps.manage")}</span>
-        </a>
-        <a
-          class="av-tile-manage av-tile-delete"
-          href={deleteHref()}
-          title={t("app.danger.destroyTitle")}
-        >
-          <Trash2 size={13} aria-hidden="true" />
-          <span>{t("common.delete")}</span>
         </a>
       </span>
     </span>
