@@ -3935,6 +3935,90 @@ test("POST /api/v1/workspaces/:id/capsules auto-provisions Takosumi Accounts OID
   );
 });
 
+test("POST /api/v1/workspaces/:id/capsules auto-provisions Takosumi Accounts OIDC for takos", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const { request: req, url } = request(
+    "POST",
+    "/api/v1/workspaces/space_a/capsules",
+    {
+      cookie,
+      body: {
+        name: "takos",
+        environment: "production",
+        sourceId: "src_x",
+        installConfigId: "cfg_x",
+        vars: {
+          project_name: "takos-space-a",
+          app_url: "https://takos.example.test",
+        },
+        catalog: {
+          templateId: "takos",
+          source: {
+            git: "https://github.com/tako0614/takos.git",
+            ref: "main",
+            path: "deploy/opentofu",
+          },
+          order: 110,
+          surface: "service",
+          kind: "worker",
+          provider: "cloudflare",
+          suggestedName: "takos",
+          badge: { ja: "追加候補", en: "Installable" },
+          name: { ja: "Takos", en: "Takos" },
+          description: {
+            ja: "AI ワークスペースを公開",
+            en: "Host an AI workspace",
+          },
+          inputs: [],
+          installExperience: {
+            serviceName: { variable: "project_name" },
+            publicEndpoint: {
+              subdomainVariable: "worker_name",
+              urlVariable: "app_url",
+              baseDomain: "app.takos.jp",
+            },
+            takosumiAccountsOidc: {
+              issuerUrlVariable: "takosumi_accounts_issuer_url",
+              accountsUrlVariable: "takosumi_accounts_url",
+              clientIdVariable: "takosumi_accounts_client_id",
+              redirectUriVariable: "takosumi_accounts_redirect_uri",
+              callbackPath: "/auth/oidc/callback",
+            },
+          },
+        },
+      },
+    },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+    issuer: ORIGIN,
+  });
+
+  expect(response?.status).toEqual(201);
+  const oidcClient = await store.findOidcClientForCapsule("inst_new");
+  expect(oidcClient?.issuerUrl).toEqual(ORIGIN);
+  expect(oidcClient?.redirectUris).toEqual([
+    "https://takos.example.test/auth/oidc/callback",
+  ]);
+  expect(oidcClient?.tokenEndpointAuthMethod).toEqual("none");
+  const config = operations.calls.putInstallConfig?.[0] as {
+    variableMapping: Record<string, unknown>;
+  };
+  expect(config.variableMapping.takosumi_accounts_issuer_url).toEqual(ORIGIN);
+  expect(config.variableMapping.takosumi_accounts_url).toEqual(ORIGIN);
+  expect(config.variableMapping.takosumi_accounts_client_id).toEqual(
+    oidcClient?.clientId,
+  );
+  expect(config.variableMapping.takosumi_accounts_redirect_uri).toEqual(
+    "https://takos.example.test/auth/oidc/callback",
+  );
+});
+
 test("POST /api/v1/workspaces/:id/capsules derives Takosumi Accounts OIDC from the public subdomain variable", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
@@ -4054,7 +4138,7 @@ test("POST /api/v1/workspaces/:id/capsules inherits catalog modulePath when vars
       catalog: {
         source: {
           git: "https://github.com/tako0614/takos.git",
-          ref: "8c8d4f4eabbf52e434d5cee3b20e39cbe3df3333",
+          ref: "0b8ead2bb4ae092463a0b517e4838d68ff311a0e",
           path: "deploy/opentofu",
         },
         order: 110,
@@ -4572,6 +4656,83 @@ test("POST /api/v1/capsules/:id/plan backfills Takosumi Accounts OIDC for existi
   expect(config.variableMapping.takosumi_accounts_issuer_url).toEqual(ORIGIN);
   expect(config.variableMapping.takosumi_accounts_client_id).toEqual(
     oidcClient?.clientId,
+  );
+  expect(operations.calls.createCapsulePlan?.[0]).toEqual({
+    capsuleId: "inst_1",
+    options: undefined,
+  });
+});
+
+test("POST /api/v1/capsules/:id/plan backfills Takosumi Accounts OIDC for existing takos Capsules", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  operations.installations.getInstallConfig = async (id) => {
+    operations.calls.getInstallConfig = [id];
+    return {
+      id,
+      name: "legacy-takos-config",
+      sourceKind: "generic_capsule",
+      installType: "opentofu_module",
+      trustLevel: "trusted",
+      variableMapping: {
+        project_name: "takos",
+        app_url: "https://takos.app.takos.jp",
+      },
+      outputAllowlist: {},
+      policy: {},
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:00Z",
+    };
+  };
+  operations.getSource = async (id) => {
+    operations.calls.getSource = [id];
+    return {
+      source: {
+        id,
+        workspaceId: "space_a",
+        spaceId: "space_a",
+        name: "takos",
+        url: "https://github.com/tako0614/takos.git",
+        defaultRef: "main",
+        defaultPath: "deploy/opentofu",
+        status: "active",
+        autoSync: false,
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      },
+    };
+  };
+  const { request: req, url } = request(
+    "POST",
+    "/api/v1/capsules/inst_1/plan",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+    issuer: ORIGIN,
+  });
+
+  expect(response?.status).toEqual(201);
+  const oidcClient = await store.findOidcClientForCapsule("inst_1");
+  expect(oidcClient?.issuerUrl).toEqual(ORIGIN);
+  expect(oidcClient?.redirectUris).toEqual([
+    "https://takos.app.takos.jp/auth/oidc/callback",
+  ]);
+  expect(oidcClient?.tokenEndpointAuthMethod).toEqual("none");
+  const config = operations.calls.putInstallConfig?.[0] as {
+    variableMapping: Record<string, unknown>;
+  };
+  expect(config.variableMapping.takosumi_accounts_issuer_url).toEqual(ORIGIN);
+  expect(config.variableMapping.takosumi_accounts_url).toEqual(ORIGIN);
+  expect(config.variableMapping.takosumi_accounts_client_id).toEqual(
+    oidcClient?.clientId,
+  );
+  expect(config.variableMapping.takosumi_accounts_redirect_uri).toEqual(
+    "https://takos.app.takos.jp/auth/oidc/callback",
   );
   expect(operations.calls.createCapsulePlan?.[0]).toEqual({
     capsuleId: "inst_1",
@@ -5569,7 +5730,7 @@ test("GET /api/v1/capsule-configs template catalog hides scoped configs", async 
         catalog: {
           source: {
             git: "https://github.com/tako0614/takos.git",
-            ref: "8c8d4f4eabbf52e434d5cee3b20e39cbe3df3333",
+            ref: "0b8ead2bb4ae092463a0b517e4838d68ff311a0e",
             path: "deploy/opentofu",
           },
           order: 110,

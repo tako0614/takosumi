@@ -131,6 +131,11 @@ test("hostable official configs expose public catalog metadata for the dashboard
       kind: "password_or_hash",
       optional: true,
     },
+    takosumiAccountsOidc: {
+      issuerUrlVariable: "takosumi_accounts_issuer_url",
+      clientIdVariable: "takosumi_accounts_client_id",
+      callbackPath: "/api/auth/callback/takos",
+    },
   });
   expect(takos?.sourceKind).toBe("generic_capsule");
   expect(takos?.catalog?.source.path).toBe("deploy/opentofu");
@@ -141,6 +146,13 @@ test("hostable official configs expose public catalog metadata for the dashboard
       subdomainVariable: "worker_name",
       urlVariable: "app_url",
       baseDomain: "app.takos.jp",
+    },
+    takosumiAccountsOidc: {
+      issuerUrlVariable: "takosumi_accounts_issuer_url",
+      accountsUrlVariable: "takosumi_accounts_url",
+      clientIdVariable: "takosumi_accounts_client_id",
+      redirectUriVariable: "takosumi_accounts_redirect_uri",
+      callbackPath: "/auth/oidc/callback",
     },
   });
   expect(takos?.outputAllowlist.takosumi_release).toEqual({

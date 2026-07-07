@@ -279,6 +279,11 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
         kind: "password_or_hash",
         optional: true,
       },
+      takosumiAccountsOidc: {
+        issuerUrlVariable: "takosumi_accounts_issuer_url",
+        clientIdVariable: "takosumi_accounts_client_id",
+        callbackPath: "/api/auth/callback/takos",
+      },
     },
     outputAllowlist: {
       url: { from: "url", type: "url" },
@@ -290,7 +295,7 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
     name: "takos",
     source: {
       git: "https://github.com/tako0614/takos.git",
-      ref: "8c8d4f4eabbf52e434d5cee3b20e39cbe3df3333",
+      ref: "0b8ead2bb4ae092463a0b517e4838d68ff311a0e",
       path: "deploy/opentofu",
     },
     order: 110,
@@ -305,7 +310,7 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
       "Host the Takos AI workspace in your own environment.",
     ),
     iconUrl:
-      "https://raw.githubusercontent.com/tako0614/takos/8c8d4f4eabbf52e434d5cee3b20e39cbe3df3333/web/public/logo.png",
+      "https://raw.githubusercontent.com/tako0614/takos/0b8ead2bb4ae092463a0b517e4838d68ff311a0e/web/public/logo.png",
     inputs: [
       {
         name: "project_name",
@@ -352,6 +357,13 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
         subdomainVariable: "worker_name",
         urlVariable: "app_url",
         baseDomain: "app.takos.jp",
+      },
+      takosumiAccountsOidc: {
+        issuerUrlVariable: "takosumi_accounts_issuer_url",
+        accountsUrlVariable: "takosumi_accounts_url",
+        clientIdVariable: "takosumi_accounts_client_id",
+        redirectUriVariable: "takosumi_accounts_redirect_uri",
+        callbackPath: "/auth/oidc/callback",
       },
     },
     outputAllowlist: {
