@@ -9,7 +9,7 @@
  * the dashboard ships no WebAuthn client yet, and a control that can never
  * work reads as broken. It returns together with the client.
  */
-import { createSignal, type JSX, onMount, Show } from "solid-js";
+import { createEffect, createSignal, type JSX, onMount, Show } from "solid-js";
 import { useNavigate, useSearchParams } from "@solidjs/router";
 import { Monitor, Moon, Sun } from "lucide-solid";
 import { installReturnContext } from "../../lib/install-return-context.ts";
@@ -76,12 +76,17 @@ const THEME_ICON: Record<ThemePreference, () => JSX.Element> = {
 };
 
 export function SignInPanel() {
-  const [params] = useSearchParams<{ return?: string }>();
+  const [params] = useSearchParams<{
+    return?: string;
+    return_to?: string;
+    manual?: string;
+  }>();
   // Start all-disabled and flip on by operator config: failing closed means we
   // never briefly render an enabled button that the backend would 503.
   const [enabled, setEnabled] = createSignal<Record<string, boolean>>({});
   const [providersLoaded, setProvidersLoaded] = createSignal(false);
   const [providersLoadFailed, setProvidersLoadFailed] = createSignal(false);
+  const [autoStarted, setAutoStarted] = createSignal(false);
 
   const loadProviders = () => {
     setProvidersLoaded(false);
@@ -108,6 +113,8 @@ export function SignInPanel() {
   onMount(loadProviders);
 
   const isEnabled = (p: Provider): boolean => enabled()[p] === true;
+  const enabledProviders = (): readonly Provider[] =>
+    PROVIDERS.filter((p) => isEnabled(p.id)).map((p) => p.id);
   const hasEnabledProvider = (): boolean =>
     PROVIDERS.some((p) => isEnabled(p.id));
   const providerSubText = (p: Provider): string | undefined => {
@@ -120,7 +127,22 @@ export function SignInPanel() {
     if (!isEnabled(p)) return;
     rpc.auth.startUpstreamOAuth(p);
   };
-  const pendingInstall = () => installReturnContext(params.return);
+  const shouldAutoStart = (): boolean => {
+    if (!isTakosumiCloudRuntime()) return false;
+    if (params.manual === "1") return false;
+    if (!providersLoaded() || providersLoadFailed()) return false;
+    const ids = enabledProviders();
+    return ids.length === 1 && ids[0] === "google";
+  };
+
+  createEffect(() => {
+    if (autoStarted() || !shouldAutoStart()) return;
+    setAutoStarted(true);
+    select("google");
+  });
+
+  const returnParam = () => params.return || params.return_to;
+  const pendingInstall = () => installReturnContext(returnParam());
   const pendingInstallDetails = () => {
     const ctx = pendingInstall();
     if (!ctx) return "";
