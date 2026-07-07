@@ -1167,6 +1167,7 @@ export function createAccountsHandler(
           capsuleId: capsuleRoute.capsuleId,
           request,
           store,
+          deployControl: options.deployControl,
         });
       }
       if (capsuleRoute.kind === "capsule" && request.method === "DELETE") {
