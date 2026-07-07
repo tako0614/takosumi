@@ -116,8 +116,23 @@ test("hostable official configs expose public catalog metadata for the dashboard
   );
   const takos = configs.find((config) => config.id === "cfg-catalog-takos");
   expect(yurucommu?.sourceKind).toBe("generic_capsule");
+  expect(yurucommu?.catalog?.source.ref).toBe(
+    "17d0b16fa6ffaa1d31efaa5dd9719a7875ec45f4",
+  );
   expect(yurucommu?.catalog?.source.path).toBe(".");
   expect(yurucommu?.modulePath).toBeUndefined();
+  expect(
+    yurucommu?.catalog?.inputs.find(
+      (input) => input.name === "worker_bundle_url",
+    )?.defaultValue,
+  ).toBe(
+    "https://github.com/tako0614/yurucommu/releases/download/v2.0.3/takos-worker-4f184e34c3ddf25c4be6a6c5ade5381173cef04e7fe8068b849ae88bd84c35cc.js",
+  );
+  expect(
+    yurucommu?.catalog?.inputs.find(
+      (input) => input.name === "worker_bundle_sha256",
+    )?.defaultValue,
+  ).toBe("4f184e34c3ddf25c4be6a6c5ade5381173cef04e7fe8068b849ae88bd84c35cc");
   expect(yurucommu?.catalog?.installExperience).toEqual({
     serviceName: { variable: "project_name" },
     publicEndpoint: {
