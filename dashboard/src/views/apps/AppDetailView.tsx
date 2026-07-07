@@ -263,11 +263,15 @@ function Inner() {
 
   const tabItems = () => {
     const base = `/services/${encodeURIComponent(capsuleId())}`;
-    return [
+    const items = [
       { href: base, label: t("app.tab.overview"), end: true },
       { href: `${base}/deploys`, label: t("app.tab.deploys") },
       { href: `${base}/settings`, label: t("app.tab.settings") },
     ];
+    if (capsule()?.status !== "destroyed") {
+      items.push({ href: `${base}/danger`, label: t("app.tab.danger") });
+    }
+    return items;
   };
 
   return (

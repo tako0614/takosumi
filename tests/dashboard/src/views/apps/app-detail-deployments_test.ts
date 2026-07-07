@@ -60,7 +60,7 @@ describe("Installation detail deployment surface", () => {
     expect(source).not.toContain('t("app.deploys.backupCreated", { id:');
   });
 
-  test("keeps technical source details out of the default overview while showing deletion in settings", () => {
+  test("keeps technical source details out of the default overview while showing deletion in settings and tabs", () => {
     expect(source).toContain("function OverviewTab");
     expect(source).toContain("function SettingsTab");
     expect(source).toContain('t("app.settings.removeTitle")');
@@ -68,7 +68,7 @@ describe("Installation detail deployment surface", () => {
     expect(source).toContain(
       '{ href: `${base}/settings`, label: t("app.tab.settings") }',
     );
-    expect(source).not.toContain(
+    expect(source).toContain(
       '{ href: `${base}/danger`, label: t("app.tab.danger") }',
     );
     expect(source).not.toContain('t("app.nextSteps.title")');
