@@ -18,6 +18,7 @@ describe("ServiceListView (/services)", () => {
     expect(serviceListSource).toContain("overview()?.capsules");
     expect(serviceListSource).toContain('class="av-service-rows"');
     expect(serviceListSource).toContain('class="av-service-row"');
+    expect(serviceListSource).toContain('class="av-service-row-main"');
     expect(serviceListSource).toContain(
       "/services/${encodeURIComponent(inst.id)}",
     );
@@ -25,6 +26,17 @@ describe("ServiceListView (/services)", () => {
     expect(serviceListSource).toContain("StatusBadge");
     expect(serviceListSource).toContain("effectiveCapsuleStatus");
     expect(serviceListSource).toContain("relativeTime");
+  });
+
+  test("offers deletion review directly from the service list", () => {
+    expect(serviceListSource).toContain("function ServiceListView");
+    expect(serviceListSource).toContain("const deleteHref = (inst: Capsule)");
+    expect(serviceListSource).toContain(
+      "`/services/${encodeURIComponent(inst.id)}/danger`",
+    );
+    expect(serviceListSource).toContain('class="av-service-row-delete"');
+    expect(serviceListSource).toContain('t("common.delete")');
+    expect(serviceListSource).toContain('t("app.danger.destroyTitle")');
   });
 
   test("is wired to /services, distinct from the Apps home and the detail", () => {
@@ -44,5 +56,7 @@ describe("ServiceListView (/services)", () => {
   test("has dedicated row styling", () => {
     expect(appViewsCssSource).toContain(".av-service-rows");
     expect(appViewsCssSource).toContain(".av-service-row");
+    expect(appViewsCssSource).toContain(".av-service-row-main");
+    expect(appViewsCssSource).toContain(".av-service-row-delete");
   });
 });

@@ -13,6 +13,7 @@ import {
   Globe,
   LayoutGrid,
   Plus,
+  Trash2,
 } from "lucide-solid";
 import type { JSX } from "solid-js";
 import AppShell from "../account/components/shell/AppShell.tsx";
@@ -72,6 +73,8 @@ function Inner() {
   });
   const open = (inst: Capsule) =>
     navigate(`/services/${encodeURIComponent(inst.id)}`);
+  const deleteHref = (inst: Capsule) =>
+    `/services/${encodeURIComponent(inst.id)}/danger`;
 
   return (
     <AppShell>
@@ -106,31 +109,41 @@ function Inner() {
                 <For each={visible()}>
                   {(inst) => (
                     <li>
-                      <button
-                        type="button"
-                        class="av-service-row"
-                        onClick={() => open(inst)}
-                      >
-                        <span class="av-service-row-icon" aria-hidden="true">
-                          {serviceKindIcon(
-                            kindByConfigId().get(inst.installConfigId),
-                          )}
-                        </span>
-                        <span class="av-service-row-name">{inst.name}</span>
-                        <StatusBadge
-                          status={effectiveCapsuleStatus(inst)}
-                          label={capsuleStatusLabel}
-                          tone={capsuleTone}
-                        />
-                        <span class="av-service-row-time">
-                          {relativeTime(inst.updatedAt)}
-                        </span>
-                        <ChevronRight
-                          class="av-service-row-chevron"
-                          size={18}
-                          aria-hidden="true"
-                        />
-                      </button>
+                      <div class="av-service-row">
+                        <button
+                          type="button"
+                          class="av-service-row-main"
+                          onClick={() => open(inst)}
+                        >
+                          <span class="av-service-row-icon" aria-hidden="true">
+                            {serviceKindIcon(
+                              kindByConfigId().get(inst.installConfigId),
+                            )}
+                          </span>
+                          <span class="av-service-row-name">{inst.name}</span>
+                          <StatusBadge
+                            status={effectiveCapsuleStatus(inst)}
+                            label={capsuleStatusLabel}
+                            tone={capsuleTone}
+                          />
+                          <span class="av-service-row-time">
+                            {relativeTime(inst.updatedAt)}
+                          </span>
+                          <ChevronRight
+                            class="av-service-row-chevron"
+                            size={18}
+                            aria-hidden="true"
+                          />
+                        </button>
+                        <a
+                          class="av-service-row-delete"
+                          href={deleteHref(inst)}
+                          title={t("app.danger.destroyTitle")}
+                        >
+                          <Trash2 size={15} aria-hidden="true" />
+                          <span>{t("common.delete")}</span>
+                        </a>
+                      </div>
                     </li>
                   )}
                 </For>
