@@ -123,3 +123,22 @@ test("BillingTab lets a new Cloud workspace start checkout before billing is act
   expect(en["billing.plans.nonRefundable"]).toContain("TAKOSUMI");
   expect(ja["billing.plans.nonRefundable"]).toContain("返金");
 });
+
+test("BillingTab shows Cloud account USD balance instead of only a disabled status", () => {
+  const source = readFileSync(sourcePath, "utf8");
+
+  expect(source).toContain("billing.mode.cloudCredits");
+  expect(source).toContain("balanceAvailableUsdMicros(balance()) > 0");
+  expect(source).toContain('label: t("billing.balance.availableUsd")');
+  expect(source).toContain(
+    "value: formatUsdMicros(\n                          balanceAvailableUsdMicros(balance()),",
+  );
+  expect(source).toContain('label: t("billing.balance.status")');
+  expect(source).not.toContain(
+    'if (currentMode === "disabled") return t("billing.balance.actionRequired");',
+  );
+  expect(en["billing.balance.availableUsd"]).toBe("Available balance");
+  expect(ja["billing.balance.availableUsd"]).toBe("利用可能な残高");
+  expect(en["billing.mode.cloudCredits"]).toContain("shared across your account");
+  expect(ja["billing.mode.cloudCredits"]).toContain("アカウント全体");
+});

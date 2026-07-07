@@ -92,6 +92,9 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
     if (billing.error)
       return t("billing.error", { message: errorMessage(billing.error) });
     const currentMode = mode() ?? "disabled";
+    if (cloudBilling() && balanceAvailableUsdMicros(balance()) > 0) {
+      return t("billing.mode.cloudCredits");
+    }
     if (cloudBilling() && currentMode === "disabled" && hasBillingCatalog()) {
       return t("billing.mode.checkoutOpen");
     }
@@ -104,10 +107,10 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
   );
   const cloudSpendStatus = createMemo(() => {
     const currentMode = mode() ?? "disabled";
-    if (currentMode === "disabled") return t("billing.balance.actionRequired");
     if (balanceAvailableUsdMicros(balance()) <= 0) {
       return t("billing.balance.actionRequired");
     }
+    if (currentMode === "disabled") return t("billing.balance.ready");
     return t("billing.balance.ready");
   });
 
@@ -269,19 +272,29 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
           </Match>
           <Match when={billing()}>
             <KVList
-              items={[
+              items={
                 cloudBilling()
-                  ? {
-                      label: t("billing.balance.available"),
-                      value: cloudSpendStatus(),
-                    }
-                  : {
-                      label: t("billing.quota.available"),
-                      value: formatUsdMicros(
-                        balanceAvailableUsdMicros(balance()),
-                      ),
-                    },
-              ]}
+                  ? [
+                      {
+                        label: t("billing.balance.availableUsd"),
+                        value: formatUsdMicros(
+                          balanceAvailableUsdMicros(balance()),
+                        ),
+                      },
+                      {
+                        label: t("billing.balance.status"),
+                        value: cloudSpendStatus(),
+                      },
+                    ]
+                  : [
+                      {
+                        label: t("billing.quota.available"),
+                        value: formatUsdMicros(
+                          balanceAvailableUsdMicros(balance()),
+                        ),
+                      },
+                    ]
+              }
             />
             <Show when={balanceReservedUsdMicros(balance()) > 0}>
               <details class="wb-disclosure av-billing-ledger">
