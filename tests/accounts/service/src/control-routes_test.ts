@@ -1587,6 +1587,60 @@ test("GET /api/v1/dashboard/overview batches launcher data for one Workspace", a
   ]);
 });
 
+test("GET /api/v1/dashboard/overview compacts activity metadata for launcher payloads", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = deploymentOperations("space_a");
+  operations.activity.list = async (workspaceId, limit) => {
+    operations.calls.activityList = [workspaceId, limit];
+    return [
+      {
+        id: "act_release",
+        workspaceId,
+        spaceId: workspaceId,
+        action: "release_activation.succeeded",
+        targetType: "deployment",
+        targetId: "dep_1",
+        runId: "apply_1",
+        metadata: {
+          capsuleId: "inst_1",
+          deploymentId: "dep_1",
+          applyRunId: "apply_1",
+          operation: "apply",
+          planJson: { large: "x".repeat(10_000) },
+          outputsPublic: { url: "https://app.example.test" },
+          renderedLogs: "log".repeat(1_000),
+        },
+        createdAt: "2026-01-01T00:00:00Z",
+      },
+    ];
+  };
+  const { request: req, url } = request(
+    "GET",
+    "/api/v1/dashboard/overview?workspaceId=space_a",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(200);
+  const body = (await response!.json()) as {
+    activity: Array<{ metadata: Record<string, unknown> }>;
+  };
+  expect(body.activity).toHaveLength(1);
+  expect(body.activity[0]?.metadata).toEqual({
+    capsuleId: "inst_1",
+    deploymentId: "dep_1",
+    applyRunId: "apply_1",
+    operation: "apply",
+  });
+  expect(JSON.stringify(body.activity)).not.toContain("planJson");
+  expect(JSON.stringify(body.activity)).not.toContain("renderedLogs");
+});
+
 test("GET /api/v1/dashboard/overview includes config referenced by returned Capsules beyond the list limit", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);

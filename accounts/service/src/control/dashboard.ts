@@ -248,7 +248,7 @@ async function dashboardOverview(
     workspace: selectedWorkspace,
     capsules,
     currentStateVersions,
-    activity,
+    activity: activity.map(compactDashboardActivityEvent),
     installConfigs: visibleInstallConfigs,
     ...(capsulePage.nextCursor !== undefined
       ? { nextCapsuleCursor: capsulePage.nextCursor }
@@ -272,6 +272,38 @@ interface DashboardBootstrapResponse {
   readonly workspaces?: readonly Workspace[];
   readonly workspaceList?: DashboardWorkspaceListMeta;
 }
+
+function compactDashboardActivityEvent(event: ActivityEvent): ActivityEvent {
+  return {
+    ...event,
+    metadata: compactDashboardActivityMetadata(event.metadata),
+  };
+}
+
+function compactDashboardActivityMetadata(
+  metadata: Readonly<Record<string, unknown>>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const key of DASHBOARD_ACTIVITY_METADATA_KEYS) {
+    const value = metadata[key];
+    if (value !== undefined) out[key] = value;
+  }
+  return out;
+}
+
+const DASHBOARD_ACTIVITY_METADATA_KEYS = [
+  "capsuleId",
+  "installationId",
+  "deploymentId",
+  "applyRunId",
+  "operation",
+  "phase",
+  "policyStatus",
+  "errorCode",
+  "producerInstallationName",
+  "changedOutputs",
+  "reasons",
+] as const;
 
 interface DashboardWorkspaceListMeta {
   readonly total: number;

@@ -102,6 +102,8 @@ import {
   clearCapsuleListCache,
   listCapsulesCached,
 } from "../../lib/capsule-list.ts";
+import { clearCurrentStateVersionCache } from "../../lib/current-state-versions.ts";
+import { clearDashboardOverviewCache } from "../../lib/dashboard-overview.ts";
 import {
   listInstallConfigsCached,
   TEMPLATE_CATALOG_VIEW,
@@ -2340,6 +2342,8 @@ function Inner() {
         });
         throwIfStaleFlow(flow);
         clearCapsuleListCache(workspace);
+        clearCurrentStateVersionCache(workspace);
+        clearDashboardOverviewCache(workspace);
         capsuleId = capsule.id;
         setCreatedCapsuleId(capsuleId);
       } else {
