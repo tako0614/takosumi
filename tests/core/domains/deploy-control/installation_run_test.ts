@@ -3812,6 +3812,7 @@ test("post-apply release commands fall back to OutputSnapshot workspace outputs"
               executor: "operator",
               command: ["bun", "run", "release"],
               working_directory: ".",
+              env_allowlist: ["CLOUDFLARE_API_TOKEN"],
             },
           ],
         },
