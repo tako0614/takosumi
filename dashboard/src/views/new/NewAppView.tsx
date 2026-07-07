@@ -352,7 +352,9 @@ function compatibilityCheckLooksTransient(
 
 function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) {
-    return Promise.reject(new DOMException("Request was aborted.", "AbortError"));
+    return Promise.reject(
+      new DOMException("Request was aborted.", "AbortError"),
+    );
   }
   return new Promise((resolve, reject) => {
     const timeout = globalThis.setTimeout(resolve, ms);
@@ -659,12 +661,20 @@ function routePatternFromAppUrl(
 
 function managedWorkerNameFromVariables(
   current: Readonly<Record<string, JsonValue>>,
+  variableName: string,
   fallback: string,
 ): string {
-  const value = current.worker_name;
+  const value = current[variableName];
   if (typeof value !== "string") return fallback;
   const trimmed = slugInputValue(value);
   return trimmed || fallback;
+}
+
+function managedBaseDomain(value: string | undefined): string {
+  const trimmed = (value ?? "").trim().toLowerCase();
+  return /^[a-z0-9.-]+$/u.test(trimmed) && trimmed.includes(".")
+    ? trimmed
+    : "app.takos.jp";
 }
 
 function inputVariableRowsFromPrefill(
@@ -714,6 +724,8 @@ function catalogMetadataFromStoreListing(
       name: input.name,
       ...(input.type ? { type: input.type } : {}),
       ...(input.required !== undefined ? { required: input.required } : {}),
+      ...(input.advanced !== undefined ? { advanced: input.advanced } : {}),
+      ...(input.secret !== undefined ? { secret: input.secret } : {}),
       ...(input.defaultValue !== undefined
         ? { defaultValue: input.defaultValue }
         : {}),
@@ -721,6 +733,9 @@ function catalogMetadataFromStoreListing(
       ...(input.helper ? { helper: input.helper } : {}),
       ...(input.placeholder ? { placeholder: input.placeholder } : {}),
     })),
+    ...(listing.installExperience
+      ? { installExperience: listing.installExperience }
+      : {}),
   };
 }
 
@@ -1330,6 +1345,9 @@ function Inner() {
     const listing = storeListingForCurrentSource();
     return listing ? catalogMetadataFromStoreListing(listing) : undefined;
   };
+  const installExperienceForCurrentSource = () =>
+    selectedCatalogEntry()?.installExperience ??
+    storeCatalogForRun()?.installExperience;
   const storeOutputAllowlistForRun = () => {
     const listing = storeListingForCurrentSource();
     return listing ? outputAllowlistFromStoreListing(listing) : undefined;
@@ -1518,28 +1536,56 @@ function Inner() {
       if (value === undefined || value === "") return;
       defaults[name] = value;
     };
+    const installExperience = installExperienceForCurrentSource();
+    const publicEndpoint = installExperience?.publicEndpoint;
+    const subdomainVariable =
+      publicEndpoint?.subdomainVariable?.trim() ||
+      (variables.has("worker_name") ? "worker_name" : undefined);
+    const urlVariable =
+      publicEndpoint?.urlVariable?.trim() ||
+      (variables.has("app_url") ? "app_url" : undefined);
+    const routePatternVariable =
+      publicEndpoint?.routePatternVariable?.trim() ||
+      (variables.has("cloudflare_route_pattern")
+        ? "cloudflare_route_pattern"
+        : undefined);
+    const publicBaseDomain = managedBaseDomain(publicEndpoint?.baseDomain);
     const managedWorkerName = managedWorkerNameFromVariables(
       current,
+      subdomainVariable ?? "worker_name",
       projectNameVariable(),
     );
-    const managedAppHost = `${managedWorkerName}.app.takos.jp`;
+    const managedAppHost = `${managedWorkerName}.${publicBaseDomain}`;
     if (
       !connection ||
       sameProviderFamily(connection.providerSource, "cloudflare")
     ) {
-      const managedAppUrl =
-        typeof current.app_url === "string" && current.app_url.trim()
-          ? current.app_url.trim()
-          : `https://${managedAppHost}`;
-      setDefault("worker_name", managedWorkerName);
-      setDefault("app_url", managedAppUrl);
+      const currentAppUrl =
+        urlVariable && typeof current[urlVariable] === "string"
+          ? current[urlVariable].trim()
+          : "";
+      const managedAppUrl = currentAppUrl || `https://${managedAppHost}`;
+      if (subdomainVariable) {
+        setDefault(subdomainVariable, managedWorkerName);
+      }
+      if (subdomainVariable !== "worker_name") {
+        setDefault("worker_name", managedWorkerName);
+      }
+      if (urlVariable) {
+        setDefault(urlVariable, managedAppUrl);
+      }
+      if (urlVariable !== "app_url") {
+        setDefault("app_url", managedAppUrl);
+      }
       setDefault("cloudflare_account_id", connection?.scopeHints?.accountId);
       setDefault("account_id", connection?.scopeHints?.accountId);
       setDefault("cloudflare_route_zone_id", connection?.scopeHints?.zoneId);
-      setDefault(
-        "cloudflare_route_pattern",
-        routePatternFromAppUrl(managedAppUrl) ?? `${managedAppHost}/*`,
-      );
+      if (routePatternVariable) {
+        setDefault(
+          routePatternVariable,
+          routePatternFromAppUrl(managedAppUrl) ?? `${managedAppHost}/*`,
+        );
+      }
       if (
         variables.has("enable_workers_dev_subdomain") &&
         current.enable_workers_dev_subdomain === undefined

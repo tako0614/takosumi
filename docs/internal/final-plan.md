@@ -208,6 +208,33 @@ CI/release pipeline, or an explicitly declared OpenTofu step. Takosumi can run
 the resulting OpenTofu plan and inject credentials, but it does not secretly
 decide where the artifact comes from.
 
+Catalog/store entries can publish an optional `installExperience` mapping that
+helps the dashboard present common setup fields without making the app depend on
+Takosumi-owned repo metadata:
+
+```json
+{
+  "serviceName": { "variable": "project_name" },
+  "publicEndpoint": {
+    "subdomainVariable": "worker_name",
+    "urlVariable": "app_url",
+    "routePatternVariable": "cloudflare_route_pattern",
+    "baseDomain": "app.takos.jp"
+  },
+  "initialSecret": {
+    "variable": "auth_password_hash",
+    "kind": "password_or_hash",
+    "optional": true
+  }
+}
+```
+
+This contract maps standard install concepts to ordinary OpenTofu variables.
+It is not execution authority, not a new repo metadata requirement, and not a
+per-input `purpose` pseudo-standard. Unknown Git modules remain valid plain
+OpenTofu Capsules; they simply receive generic variable inputs unless their
+catalog entry opts into this UX contract.
+
 The preferred fast path is a Git CI or release pipeline that publishes a
 versioned, publicly fetchable artifact plus a SHA-256 digest. The OpenTofu
 module consumes that URL and digest as normal input variables and verifies the
