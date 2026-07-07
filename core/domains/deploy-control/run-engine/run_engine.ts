@@ -1985,6 +1985,7 @@ export class RunEngine {
       throw new OpenTofuControllerError(
         "failed_precondition",
         publicHostUnavailableMessage(),
+        { reason: "app_hostname_unavailable" },
       );
     }
     const workspaceId = installation.workspaceId ?? installation.spaceId;
@@ -2002,6 +2003,7 @@ export class RunEngine {
       throw new OpenTofuControllerError(
         "failed_precondition",
         publicHostUnavailableMessage(),
+        { reason: "app_hostname_unavailable" },
       );
     }
   }

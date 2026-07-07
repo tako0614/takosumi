@@ -3,7 +3,10 @@ import type { Context } from "hono";
 
 import { createApiApp } from "../../../core/api/app.ts";
 import { runHandler } from "../../../core/api/deploy_control_shared.ts";
-import { OpenTofuDeploymentController } from "../../../core/domains/deploy-control/mod.ts";
+import {
+  OpenTofuControllerError,
+  OpenTofuDeploymentController,
+} from "../../../core/domains/deploy-control/mod.ts";
 import { InMemoryOpenTofuDeploymentStore } from "../../../core/domains/deploy-control/store.ts";
 import { seedInstallationModel } from "../../helpers/deploy-control/model_fixture.ts";
 import { OutputSharesService } from "../../../core/domains/output-shares/mod.ts";
@@ -37,6 +40,36 @@ test("runHandler renders structural controller errors without collapsing to 500"
     error: {
       code: "failed_precondition",
       message: "foreign controller failure",
+    },
+  });
+});
+
+test("runHandler hides public hostname reservation owner details", async () => {
+  const context = {
+    req: {
+      path: "/internal/v1/test",
+      method: "POST",
+      header: () => undefined,
+    },
+    json: (body: unknown, status: number) =>
+      new Response(JSON.stringify(body), {
+        status,
+        headers: { "content-type": "application/json" },
+      }),
+  } as unknown as Context;
+
+  const response = await runHandler(context, async () => {
+    throw new OpenTofuControllerError(
+      "failed_precondition",
+      "app_hostname_unavailable: yurucommu.app.takos.jp is already claimed by Capsule yurucommu (inst_1) in Workspace space_1",
+    );
+  });
+
+  expect(response.status).toEqual(409);
+  expect(await response.json()).toMatchObject({
+    error: {
+      code: "failed_precondition",
+      message: "app_hostname_unavailable: already exists",
     },
   });
 });

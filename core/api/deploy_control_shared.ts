@@ -850,8 +850,9 @@ export async function runHandler(
   } catch (err) {
     const controllerCode = controllerErrorCode(err);
     if (controllerCode) {
+      const publicError = publicControllerError(err);
       return c.json(
-        errorEnvelope(c, controllerCode, controllerErrorMessage(err)),
+        errorEnvelope(c, controllerCode, publicError.message),
         controllerHttpStatus(controllerCode),
       );
     }
@@ -889,6 +890,19 @@ function controllerErrorCode(
 
 function controllerErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function publicControllerError(error: unknown): {
+  readonly message: string;
+} {
+  const message = controllerErrorMessage(error);
+  if (
+    /^app_hostname_unavailable\b/u.test(message) ||
+    /\balready claimed by Capsule\b.*\bWorkspace\b/iu.test(message)
+  ) {
+    return { message: "app_hostname_unavailable: already exists" };
+  }
+  return { message };
 }
 
 export async function readJsonBody<T>(
