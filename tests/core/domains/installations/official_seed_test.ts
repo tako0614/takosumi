@@ -137,6 +137,10 @@ test("hostable official configs expose public catalog metadata for the dashboard
       callbackPath: "/api/auth/callback/takos",
     },
   });
+  expect(yurucommu?.outputAllowlist.takosumi_release).toEqual({
+    from: "takosumi_release",
+    type: "json",
+  });
   expect(takos?.sourceKind).toBe("generic_capsule");
   expect(takos?.catalog?.source.path).toBe("deploy/opentofu");
   expect(takos?.modulePath).toBe("deploy/opentofu");

@@ -5546,6 +5546,11 @@ test("PATCH /api/v1/capsule-configs/:id updates only scoped per-install variable
           worker_bundle_url: "https://example.test/v2.0.1/takos-worker.js",
           worker_bundle_sha256: "new-sha",
         },
+        outputAllowlist: {
+          url: { from: "url", type: "url" },
+          app_deployment: { from: "app_deployment", type: "json" },
+          takosumi_release: { from: "takosumi_release", type: "json" },
+        },
       },
     },
   );
@@ -5558,6 +5563,7 @@ test("PATCH /api/v1/capsule-configs/:id updates only scoped per-install variable
   expect(response?.status).toEqual(200);
   const saved = operations.calls.putInstallConfig?.[0] as {
     variableMapping: Record<string, unknown>;
+    outputAllowlist: Record<string, unknown>;
     catalog?: {
       source?: { ref?: string };
       inputs?: Array<{ name: string; defaultValue?: unknown }>;
@@ -5566,6 +5572,11 @@ test("PATCH /api/v1/capsule-configs/:id updates only scoped per-install variable
   expect(saved.variableMapping).toEqual({
     worker_bundle_url: "https://example.test/v2.0.1/takos-worker.js",
     worker_bundle_sha256: "new-sha",
+  });
+  expect(saved.outputAllowlist).toEqual({
+    url: { from: "url", type: "url" },
+    app_deployment: { from: "app_deployment", type: "json" },
+    takosumi_release: { from: "takosumi_release", type: "json" },
   });
   expect(saved.catalog?.source?.ref).toEqual(
     "de0c72f3741c3f2bed633c7dd995fa412d5074c2",

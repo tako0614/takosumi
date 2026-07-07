@@ -288,6 +288,7 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
     outputAllowlist: {
       url: { from: "url", type: "url" },
       app_deployment: { from: "app_deployment", type: "json" },
+      takosumi_release: { from: "takosumi_release", type: "json" },
     },
   },
   {
