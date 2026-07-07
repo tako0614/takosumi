@@ -1062,6 +1062,127 @@ test("managed Cloudflare app.takos.jp host is globally claimed across Workspaces
   );
 });
 
+test("managed Cloudflare host claim skips corrupt historical Capsules", async () => {
+  class CorruptHistoricalOutputStore extends InMemoryOpenTofuDeploymentStore {
+    override getLatestOutputSnapshot(
+      installationId: string,
+    ): ReturnType<InMemoryOpenTofuDeploymentStore["getLatestOutputSnapshot"]> {
+      if (installationId === "inst_corrupt") {
+        return Promise.reject(new Error("corrupt historical output row"));
+      }
+      return super.getLatestOutputSnapshot(installationId);
+    }
+  }
+
+  const store = new CorruptHistoricalOutputStore();
+  const runner = recordingRunner();
+  const corrupt = await seedInstallationModel(store, {
+    spaceId: "space_corrupt",
+    sourceId: "src_corrupt",
+    snapshotId: "snap_corrupt",
+    installConfigId: "cfg_corrupt",
+    installationId: "inst_corrupt",
+    name: "Corrupt Old App",
+    environment: "preview",
+    installConfig: {
+      variableMapping: {
+        worker_name: "fresh-app",
+        app_url: null,
+        cloudflare: {
+          account_id: null,
+          api_base_url: null,
+        },
+      },
+    },
+  });
+  await putConnectionWithProviderEnv(store, {
+    ...cloudflareConnection(
+      "conn_cloudflare_corrupt",
+      corrupt.installation.spaceId,
+    ),
+    scopeHints: {
+      managedProvider: true,
+      providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      accountId: "ts_acc_takosumi_cloud",
+    },
+  });
+  await store.putInstallationProviderEnvBindingSet({
+    id: "profile_cloudflare_corrupt",
+    spaceId: corrupt.installation.spaceId,
+    installationId: corrupt.installation.id,
+    environment: corrupt.installation.environment,
+    bindings: [
+      {
+        provider: "cloudflare",
+        alias: "main",
+        connectionId: "conn_cloudflare_corrupt",
+      },
+    ],
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
+
+  const fresh = await seedInstallationModel(store, {
+    spaceId: "space_fresh",
+    sourceId: "src_fresh",
+    snapshotId: "snap_fresh",
+    installConfigId: "cfg_fresh",
+    installationId: "inst_fresh",
+    name: "Fresh App",
+    environment: "preview",
+    installConfig: {
+      variableMapping: {
+        worker_name: "fresh-app",
+        app_url: null,
+        cloudflare: {
+          account_id: null,
+          api_base_url: null,
+        },
+      },
+    },
+  });
+  await putConnectionWithProviderEnv(store, {
+    ...cloudflareConnection(
+      "conn_cloudflare_fresh",
+      fresh.installation.spaceId,
+    ),
+    scopeHints: {
+      managedProvider: true,
+      providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      accountId: "ts_acc_takosumi_cloud",
+    },
+  });
+  await store.putInstallationProviderEnvBindingSet({
+    id: "profile_cloudflare_fresh",
+    spaceId: fresh.installation.spaceId,
+    installationId: fresh.installation.id,
+    environment: fresh.installation.environment,
+    bindings: [
+      {
+        provider: "cloudflare",
+        alias: "main",
+        connectionId: "conn_cloudflare_fresh",
+      },
+    ],
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
+  const profile = multiProviderRunnerProfile();
+  const controller = controllerWith(store, runner, {
+    runnerProfiles: [profile],
+    defaultRunnerProfileId: profile.id,
+  });
+
+  const { planRun } = await controller.createInstallationPlan(
+    fresh.installation.id,
+  );
+
+  expect(planRun.status).toEqual("succeeded");
+  expect(runner.planJobs[0]?.generatedRoot?.files["main.tf"]).toContain(
+    'app_url = "https://fresh-app.app.takos.jp"',
+  );
+});
+
 test("catalog managed Cloudflare Capsule uses operator fallback without credential-ref profile", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   const runner = recordingRunner();

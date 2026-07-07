@@ -1919,7 +1919,17 @@ export class RunEngine {
     const installations = await this.#store.listInstallations();
     for (const installation of installations) {
       if (installation.status === "destroyed") continue;
-      const hosts = await this.#publicHostsForInstallation(installation);
+      let hosts: readonly string[];
+      try {
+        hosts = await this.#publicHostsForInstallation(installation);
+      } catch (error) {
+        log.warn("deploy_control.public_host_claim_skipped", {
+          installationId: installation.id,
+          workspaceId: installation.workspaceId ?? installation.spaceId,
+          error,
+        });
+        continue;
+      }
       for (const host of hosts) {
         if (claims.has(host)) continue;
         claims.set(host, {
