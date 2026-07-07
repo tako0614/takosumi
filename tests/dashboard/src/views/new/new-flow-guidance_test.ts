@@ -314,11 +314,14 @@ describe("/new flow guidance", () => {
     expect(installableAppListingsSource).toContain("resolvedCommit:");
     expect(installableAppListingsSource).toContain("worker_bundle_url");
     expect(installableAppListingsSource).toContain("worker_bundle_sha256");
+    expect(installableAppListingsSource).toContain('name: "worker_name"');
+    expect(installableAppListingsSource).toContain("公開サブドメイン");
     expect(installableAppListingsSource).toContain('name: "app_url"');
-    expect(installableAppListingsSource).toContain("公開URL");
+    expect(installableAppListingsSource).toContain("独自URL");
     expect(installableAppListingsSource).toContain("app.takos.jp");
     expect(installableAppListingsSource).toContain("auth_password_hash");
     expect(installableAppListingsSource).toContain("secret: true");
+    expect(installableAppListingsSource).toContain("初期パスワード");
     expect(installableAppListingsSource).toContain(
       "https://github.com/tako0614/yurucommu/releases/download/v2.0.1/takos-worker.js",
     );

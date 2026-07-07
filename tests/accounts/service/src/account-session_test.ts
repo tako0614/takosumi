@@ -21,13 +21,13 @@ test("mintAccountSessionId yields a fresh sess_ prefixed identifier", () => {
   expect(first).not.toEqual(second);
 });
 
-test("serializeAccountSessionCookie sets HttpOnly + SameSite=Strict", () => {
+test("serializeAccountSessionCookie sets HttpOnly + SameSite=Lax", () => {
   const cookie = serializeAccountSessionCookie("sess_xyz", {
     secure: true,
     maxAgeSeconds: 60,
   });
   expect(cookie.includes("HttpOnly")).toEqual(true);
-  expect(cookie.includes("SameSite=Strict")).toEqual(true);
+  expect(cookie.includes("SameSite=Lax")).toEqual(true);
   expect(cookie.includes("Secure")).toEqual(true);
   expect(cookie.includes(`${ACCOUNT_SESSION_COOKIE_NAME}=sess_xyz`)).toEqual(
     true,
@@ -38,6 +38,7 @@ test("clearAccountSessionCookie produces Max-Age=0", () => {
   const cookie = clearAccountSessionCookie(true);
   expect(cookie.includes("Max-Age=0")).toEqual(true);
   expect(cookie.includes("HttpOnly")).toEqual(true);
+  expect(cookie.includes("SameSite=Lax")).toEqual(true);
 });
 
 test("extractAccountSessionId prefers Authorization bearer", () => {

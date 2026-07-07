@@ -276,12 +276,13 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).toContain(
       "new Set(compatibility()?.rootModuleVariables ?? [])",
     );
+    expect(newAppViewSource).toContain("managedWorkerNameFromVariables");
     expect(newAppViewSource).toContain(
-      "const managedAppHost = `${projectNameVariable()}.app.takos.jp`",
+      "const managedAppHost = `${managedWorkerName}.app.takos.jp`",
     );
     expect(newAppViewSource).toContain("routePatternFromAppUrl");
     expect(newAppViewSource).toContain(
-      "current.app_url === \"string\" && current.app_url.trim()",
+      'current.app_url === "string" && current.app_url.trim()',
     );
     expect(newAppViewSource).toContain('"cloudflare_route_zone_id"');
     expect(newAppViewSource).toContain('"cloudflare_route_pattern"');

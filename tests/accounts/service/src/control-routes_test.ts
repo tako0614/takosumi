@@ -5251,6 +5251,132 @@ test("GET /api/v1/capsule-configs merges official + scoped", async () => {
   expect(legacyResp?.status).toEqual(200);
 });
 
+test("PATCH /api/v1/capsule-configs/:id updates only scoped per-install variables", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  operations.installations.getInstallConfig = async (id) => {
+    operations.calls.getInstallConfig ??= [];
+    operations.calls.getInstallConfig.push(id);
+    return {
+      id,
+      workspaceId: "space_a",
+      name: "yurucommu-config",
+      sourceKind: "generic_capsule",
+      installType: "opentofu_module",
+      trustLevel: "trusted",
+      internal: { reason: "per_install_overrides" },
+      variableMapping: {
+        project_name: "yurucommu",
+        worker_bundle_url: "https://example.test/v2.0.0/takos-worker.js",
+      },
+      outputAllowlist: {},
+      policy: {},
+      catalog: {
+        templateId: "yurucommu",
+        source: {
+          git: "https://github.com/tako0614/yurucommu.git",
+          ref: "old",
+          path: ".",
+        },
+        order: 1000,
+        surface: "service",
+        kind: "worker",
+        provider: "cloudflare",
+        suggestedName: "yurucommu",
+        badge: { en: "Installable" },
+        name: { en: "yurucommu" },
+        description: { en: "Host yurucommu." },
+        inputs: [
+          {
+            name: "worker_bundle_url",
+            type: "string",
+            defaultValue: "https://example.test/v2.0.0/takos-worker.js",
+          },
+          {
+            name: "worker_bundle_sha256",
+            type: "string",
+            defaultValue: "old-sha",
+          },
+        ],
+      },
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:00Z",
+    };
+  };
+
+  const { request: req, url } = request(
+    "PATCH",
+    "/api/v1/capsule-configs/icfg_scoped",
+    {
+      cookie,
+      body: {
+        variableMapping: {
+          worker_bundle_url: "https://example.test/v2.0.1/takos-worker.js",
+          worker_bundle_sha256: "new-sha",
+        },
+        catalogSourceRef: "de0c72f3741c3f2bed633c7dd995fa412d5074c2",
+        catalogInputDefaults: {
+          worker_bundle_url: "https://example.test/v2.0.1/takos-worker.js",
+          worker_bundle_sha256: "new-sha",
+        },
+      },
+    },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(200);
+  const saved = operations.calls.putInstallConfig?.[0] as {
+    variableMapping: Record<string, unknown>;
+    catalog?: {
+      source?: { ref?: string };
+      inputs?: Array<{ name: string; defaultValue?: unknown }>;
+    };
+  };
+  expect(saved.variableMapping).toEqual({
+    project_name: "yurucommu",
+    worker_bundle_url: "https://example.test/v2.0.1/takos-worker.js",
+    worker_bundle_sha256: "new-sha",
+  });
+  expect(saved.catalog?.source?.ref).toEqual(
+    "de0c72f3741c3f2bed633c7dd995fa412d5074c2",
+  );
+  expect(
+    saved.catalog?.inputs?.find((input) => input.name === "worker_bundle_url")
+      ?.defaultValue,
+  ).toEqual("https://example.test/v2.0.1/takos-worker.js");
+});
+
+test("PATCH /api/v1/capsule-configs/:id rejects shared catalog configs", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const { request: req, url } = request(
+    "PATCH",
+    "/api/v1/capsule-configs/cfg_default",
+    {
+      cookie,
+      body: {
+        variableMapping: {
+          worker_bundle_url: "https://example.test/takos-worker.js",
+        },
+      },
+    },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(400);
+  expect(operations.calls.putInstallConfig).toBeUndefined();
+});
+
 test("GET /api/v1/capsule-configs template catalog hides scoped configs", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
@@ -6697,9 +6823,10 @@ test("Cloudflare OAuth: start authorizes and callback redirects to /connections,
   // The authenticated subject is bound into the OAuth state at start time.
   expect(signedSubject).toEqual(subject);
 
-  // The callback arrives via a top-level CROSS-SITE redirect: NO session cookie
-  // (SameSite=Strict does not ride it) and NO Authorization header. The flow
-  // must still complete by authorizing from the signed state's subject.
+  // The callback arrives via a top-level CROSS-SITE redirect. It sends no
+  // Authorization header, and the flow must still complete even if browser
+  // cookie policy withholds the session cookie by authorizing from the signed
+  // state's subject.
   const callback = request(
     "GET",
     "/api/v1/connections/cloudflare/oauth/callback?code=cf-code&state=signed",
@@ -6731,11 +6858,10 @@ test("Cloudflare OAuth: start authorizes and callback redirects to /connections,
 });
 
 test("Cloudflare OAuth callback without the session cookie still completes (cross-site redirect)", async () => {
-  // Regression guard for the SameSite=Strict gap: a browser following the
-  // dash.cloudflare.com -> worker redirect sends neither header nor cookie.
-  // Before the fix the up-front requireAccountSession returned 401 JSON and the
-  // user never reached /connections. The callback must authorize from the
-  // signed state subject alone.
+  // Regression guard for cross-site callback brittleness: a browser or privacy
+  // policy can withhold the session cookie, and the redirect sends no
+  // Authorization header. The callback must authorize from the signed state
+  // subject alone so the user still reaches /connections.
   const store = new InMemoryAccountsStore();
   // The owning account exists, but we deliberately present NO cookie.
   seedSession(store, { subject: "tsub_ctrl" });

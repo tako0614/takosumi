@@ -344,6 +344,148 @@ function genericCapsuleOutputAllowlist(
   return allowlist;
 }
 
+const MANAGED_APP_DOMAIN = "app.takos.jp";
+const MANAGED_WORKER_NAME_RE = /^[a-z][a-z0-9-]{1,50}[a-z0-9]$/u;
+const PUBLIC_URL_OUTPUT_KEYS = [
+  "url",
+  "launch_url",
+  "app_url",
+  "public_url",
+] as const;
+
+function nonEmptyStringValue(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function isJsonRecordValue(
+  value: unknown,
+): value is Readonly<Record<string, JsonValue>> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function validManagedWorkerName(value: string): boolean {
+  return MANAGED_WORKER_NAME_RE.test(value);
+}
+
+function hostFromHttpsUrlValue(value: unknown): string | undefined {
+  const raw = nonEmptyStringValue(value);
+  if (!raw) return undefined;
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol !== "https:" || !parsed.hostname) return undefined;
+    return parsed.hostname.toLowerCase();
+  } catch {
+    return undefined;
+  }
+}
+
+function hostFromRoutePatternValue(value: unknown): string | undefined {
+  const raw = nonEmptyStringValue(value);
+  if (!raw) return undefined;
+  const host = raw.split("/", 1)[0]?.trim().toLowerCase();
+  return host && !host.includes("*") ? host : undefined;
+}
+
+function managedHostFromWorkerName(value: unknown): string | undefined {
+  const workerName = nonEmptyStringValue(value);
+  if (!workerName || !validManagedWorkerName(workerName)) return undefined;
+  return `${workerName}.${MANAGED_APP_DOMAIN}`;
+}
+
+function publicHostsFromVariables(
+  variables: Readonly<Record<string, unknown>>,
+): readonly string[] {
+  const hosts = new Set<string>();
+  const appUrlHost = hostFromHttpsUrlValue(variables.app_url);
+  if (appUrlHost) hosts.add(appUrlHost);
+  const routeHost = hostFromRoutePatternValue(
+    variables.cloudflare_route_pattern,
+  );
+  if (routeHost) hosts.add(routeHost);
+  const workerHost = managedHostFromWorkerName(variables.worker_name);
+  if (workerHost) hosts.add(workerHost);
+  return [...hosts].sort();
+}
+
+function publicHostsFromOutput(
+  outputs: Readonly<Record<string, unknown>>,
+): readonly string[] {
+  const hosts = new Set<string>();
+  for (const key of PUBLIC_URL_OUTPUT_KEYS) {
+    const host = hostFromHttpsUrlValue(outputs[key]);
+    if (host) hosts.add(host);
+  }
+  const appDeployment = outputs.app_deployment;
+  if (isJsonRecordValue(appDeployment)) {
+    for (const key of PUBLIC_URL_OUTPUT_KEYS) {
+      const host = hostFromHttpsUrlValue(appDeployment[key]);
+      if (host) hosts.add(host);
+    }
+  }
+  const apps = outputs.apps;
+  if (Array.isArray(apps)) {
+    for (const app of apps) {
+      if (!isJsonRecordValue(app)) continue;
+      const host = hostFromHttpsUrlValue(app.url);
+      if (host) hosts.add(host);
+    }
+  }
+  return [...hosts].sort();
+}
+
+function hasManagedCloudflareProviderDefaults(
+  defaults: Readonly<Record<string, JsonValue>>,
+): boolean {
+  if (nonEmptyStringValue(defaults.cloudflare_api_base_url)) return true;
+  const cloudflare = defaults.cloudflare;
+  return (
+    isJsonRecordValue(cloudflare) &&
+    nonEmptyStringValue(cloudflare.api_base_url) !== undefined
+  );
+}
+
+function finalizeManagedCloudflarePublicHostVariables(input: {
+  readonly explicit: Readonly<Record<string, JsonValue>>;
+  readonly providerInputDefaults: Readonly<Record<string, JsonValue>>;
+  readonly variables: Readonly<Record<string, JsonValue>>;
+}): Readonly<Record<string, JsonValue>> {
+  if (!hasManagedCloudflareProviderDefaults(input.providerInputDefaults)) {
+    return input.variables;
+  }
+  const workerName = nonEmptyStringValue(input.variables.worker_name);
+  if (!workerName || !validManagedWorkerName(workerName)) {
+    return input.variables;
+  }
+  const host = `${workerName}.${MANAGED_APP_DOMAIN}`;
+  const out: Record<string, JsonValue> = { ...input.variables };
+  if (!nonEmptyStringValue(input.explicit.app_url)) {
+    out.app_url = `https://${host}`;
+  }
+  if (
+    nonEmptyStringValue(out.cloudflare_route_zone_id) &&
+    !nonEmptyStringValue(input.explicit.cloudflare_route_pattern)
+  ) {
+    out.cloudflare_route_pattern = `${host}/*`;
+  }
+  return out;
+}
+
+function workerNameFromCapsule(installation: Installation): string | undefined {
+  const preferred =
+    nonEmptyStringValue(installation.slug) ??
+    nonEmptyStringValue(installation.name);
+  if (!preferred) return undefined;
+  const normalized = preferred
+    .toLowerCase()
+    .replace(/[^a-z0-9-]+/g, "-")
+    .replace(/^-+/g, "")
+    .replace(/-+$/g, "")
+    .replace(/-{2,}/g, "-")
+    .slice(0, 52)
+    .replace(/-+$/g, "");
+  return validManagedWorkerName(normalized) ? normalized : undefined;
+}
+
 function workspaceOutputsWithReleaseDescriptor(
   workspaceOutputs: Readonly<Record<string, JsonValue>>,
   outputs: OpenTofuApplyResult["outputs"],
@@ -586,7 +728,10 @@ export class RunEngine {
     // the operator's admitted provider surface — it only removes the manual
     // "which runner profile?" step.
     if (request.runnerProfileId === undefined) {
-      profile = this.#selectRunnerProfileForProviders(profile, declaredProviders);
+      profile = this.#selectRunnerProfileForProviders(
+        profile,
+        declaredProviders,
+      );
     }
     // Resource Shape adapters pass an internal generated root that fully
     // overrides the backing Capsule's nominal Source. Keep local source
@@ -1691,17 +1836,22 @@ export class RunEngine {
     const explicitVariables = normalizeVariables(
       input.installConfig.variableMapping,
     );
-    const variables = normalizeVariables(
-      mergeJsonVariableDefaults(
-        installTypePlan.providerInputDefaults,
-        requestedGenericCapsuleVariables(
-          explicitVariables,
+    const variables = finalizeManagedCloudflarePublicHostVariables({
+      explicit: explicitVariables,
+      providerInputDefaults: installTypePlan.providerInputDefaults,
+      variables: normalizeVariables(
+        mergeJsonVariableDefaults(
           installTypePlan.providerInputDefaults,
-          moduleFiles,
-          input.compatibilityReport?.rootModuleVariables,
+          requestedGenericCapsuleVariables(
+            explicitVariables,
+            installTypePlan.providerInputDefaults,
+            moduleFiles,
+            input.compatibilityReport?.rootModuleVariables,
+          ),
         ),
       ),
-    );
+    });
+    await this.#assertPublicHostsAvailable(input.installation, variables);
     const outputAllowlist = genericCapsuleOutputAllowlist(
       input.installConfig.outputAllowlist,
       moduleFiles,
@@ -1727,6 +1877,121 @@ export class RunEngine {
           : {}),
       },
     };
+  }
+
+  async #assertPublicHostsAvailable(
+    installation: Installation,
+    variables: Readonly<Record<string, JsonValue>>,
+  ): Promise<void> {
+    const requestedHosts = publicHostsFromVariables(variables);
+    if (requestedHosts.length === 0) return;
+    const claims = await this.#publicHostClaims();
+    for (const host of requestedHosts) {
+      const claim = claims.get(host);
+      if (!claim || claim.installationId === installation.id) continue;
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `app_hostname_unavailable: ${host} is already claimed by Capsule ` +
+          `${claim.installationName} (${claim.installationId}) in Workspace ` +
+          `${claim.workspaceId}`,
+      );
+    }
+  }
+
+  async #publicHostClaims(): Promise<
+    ReadonlyMap<
+      string,
+      {
+        readonly installationId: string;
+        readonly installationName: string;
+        readonly workspaceId: string;
+      }
+    >
+  > {
+    const claims = new Map<
+      string,
+      {
+        readonly installationId: string;
+        readonly installationName: string;
+        readonly workspaceId: string;
+      }
+    >();
+    const installations = await this.#store.listInstallations();
+    for (const installation of installations) {
+      if (installation.status === "destroyed") continue;
+      const hosts = await this.#publicHostsForInstallation(installation);
+      for (const host of hosts) {
+        if (claims.has(host)) continue;
+        claims.set(host, {
+          installationId: installation.id,
+          installationName: installation.name,
+          workspaceId: installation.workspaceId ?? installation.spaceId,
+        });
+      }
+    }
+    return claims;
+  }
+
+  async #publicHostsForInstallation(
+    installation: Installation,
+  ): Promise<readonly string[]> {
+    const hosts = new Set<string>();
+    const installConfig = await this.#store.getInstallConfig(
+      installation.installConfigId,
+    );
+    if (installConfig) {
+      for (const host of publicHostsFromVariables(
+        normalizeVariables(installConfig.variableMapping),
+      )) {
+        hosts.add(host);
+      }
+    }
+    const outputSnapshot = await this.#store.getLatestOutputSnapshot(
+      installation.id,
+    );
+    if (outputSnapshot) {
+      for (const host of publicHostsFromOutput(outputSnapshot.publicOutputs)) {
+        hosts.add(host);
+      }
+      for (const host of publicHostsFromOutput(
+        outputSnapshot.workspaceOutputs,
+      )) {
+        hosts.add(host);
+      }
+    }
+    if (await this.#usesManagedCloudflareProvider(installation)) {
+      const configWorkerHost = installConfig
+        ? managedHostFromWorkerName(
+            normalizeVariables(installConfig.variableMapping).worker_name,
+          )
+        : undefined;
+      const derivedWorkerHost =
+        configWorkerHost ??
+        managedHostFromWorkerName(workerNameFromCapsule(installation));
+      if (derivedWorkerHost) hosts.add(derivedWorkerHost);
+    }
+    return [...hosts].sort();
+  }
+
+  async #usesManagedCloudflareProvider(
+    installation: Installation,
+  ): Promise<boolean> {
+    const bindingSet =
+      await this.#store.getInstallationProviderEnvBindingSetByInstallation(
+        installation.id,
+        installation.environment,
+      );
+    for (const binding of bindingSet?.bindings ?? []) {
+      if (!sameProviderFamily(binding.provider, "cloudflare")) continue;
+      const connection = await this.#store.getConnection(binding.connectionId);
+      if (
+        connection?.scopeHints?.managedProvider === true &&
+        nonEmptyStringValue(connection.scopeHints.providerBaseUrl)
+      ) {
+        return true;
+      }
+    }
+    return false;
   }
 
   async #genericRootDispatchForRequest(

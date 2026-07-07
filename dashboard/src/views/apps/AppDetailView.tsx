@@ -265,6 +265,7 @@ function Inner() {
     return [
       { href: base, label: t("app.tab.overview"), end: true },
       { href: `${base}/deploys`, label: t("app.tab.deploys") },
+      { href: `${base}/settings`, label: t("app.tab.settings") },
     ];
   };
 
@@ -462,10 +463,7 @@ function OverviewTab(props: {
   readonly hasDeployment: boolean;
   readonly serviceOpenable: boolean;
   readonly releaseActivationStatus:
-    | "not_required"
-    | "pending"
-    | "succeeded"
-    | "failed";
+    "not_required" | "pending" | "succeeded" | "failed";
   readonly outputsLoading: boolean;
   readonly producers: readonly DependencyRow[];
   readonly consumers: readonly DependencyRow[];
@@ -1225,20 +1223,17 @@ function SettingsTab(props: {
         </Card>
       </details>
 
-      <details class="wb-disclosure">
-        <summary>{t("app.tab.danger")}</summary>
-        <Card>
-          <CardHeader
-            title={t("app.settings.removeTitle")}
-            subtitle={t("app.settings.removeBody")}
-            actions={
-              <Button variant="secondary" href={props.dangerHref}>
-                {t("app.settings.removeCta")}
-              </Button>
-            }
-          />
-        </Card>
-      </details>
+      <Card>
+        <CardHeader
+          title={t("app.settings.removeTitle")}
+          subtitle={t("app.settings.removeBody")}
+          actions={
+            <Button variant="danger" href={props.dangerHref}>
+              {t("app.settings.removeCta")}
+            </Button>
+          }
+        />
+      </Card>
     </>
   );
 }

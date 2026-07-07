@@ -32,7 +32,7 @@ describe("Installation detail deployment surface", () => {
     expect(source).toContain('t("app.settings.openCta")');
     expect(source).toContain('t("app.deploys.backup")');
     expect(source).not.toContain('t("app.deploys.generation")');
-    expect(source).not.toContain(
+    expect(source).toContain(
       '{ href: `${base}/settings`, label: t("app.tab.settings") }',
     );
     expect(source.indexOf('t("apps.openApp")')).toBeLessThan(
@@ -55,11 +55,14 @@ describe("Installation detail deployment surface", () => {
     expect(source).not.toContain('t("app.deploys.backupCreated", { id:');
   });
 
-  test("keeps technical source details and deletion out of the default overview", () => {
+  test("keeps technical source details out of the default overview while showing deletion in settings", () => {
     expect(source).toContain("function OverviewTab");
     expect(source).toContain("function SettingsTab");
     expect(source).toContain('t("app.settings.removeTitle")');
     expect(source).toContain('t("app.settings.removeCta")');
+    expect(source).toContain(
+      '{ href: `${base}/settings`, label: t("app.tab.settings") }',
+    );
     expect(source).not.toContain(
       '{ href: `${base}/danger`, label: t("app.tab.danger") }',
     );
@@ -74,8 +77,8 @@ describe("Installation detail deployment surface", () => {
     expect(source).toMatch(
       /<summary>\{t\("app\.settings\.supportDetails"\)\}<\/summary>[\s\S]*<summary>\{t\("app\.source\.title"\)\}<\/summary>/,
     );
-    expect(source).toMatch(
-      /<summary>\{t\("app\.tab\.danger"\)\}<\/summary>[\s\S]*t\("app\.settings\.removeTitle"\)/,
+    expect(source.indexOf('t("app.settings.removeTitle")')).toBeGreaterThan(
+      source.indexOf('t("app.settings.supportDetails")'),
     );
   });
 
