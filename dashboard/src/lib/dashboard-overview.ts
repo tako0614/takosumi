@@ -13,8 +13,15 @@ type CacheEntry = {
 const cache = new Map<string, CacheEntry>();
 const inflight = new Map<string, Promise<DashboardOverview>>();
 
-function cacheKey(workspaceId: string | undefined): string {
-  return workspaceId ?? "";
+interface DashboardOverviewCacheOptions {
+  readonly capsuleLimit?: number;
+}
+
+function cacheKey(
+  workspaceId: string | undefined,
+  options: DashboardOverviewCacheOptions = {},
+): string {
+  return `${workspaceId ?? ""}:${options.capsuleLimit ?? "default"}`;
 }
 
 function fresh(
@@ -30,16 +37,19 @@ export function clearDashboardOverviewCache(workspaceId?: string): void {
     inflight.clear();
     return;
   }
-  const key = cacheKey(workspaceId);
-  cache.delete(key);
-  inflight.delete(key);
+  for (const key of [...cache.keys()]) {
+    if (key.startsWith(`${workspaceId}:`)) cache.delete(key);
+  }
+  for (const key of [...inflight.keys()]) {
+    if (key.startsWith(`${workspaceId}:`)) inflight.delete(key);
+  }
 }
 
 export async function getDashboardOverviewCached(
   workspaceId?: string,
-  options: { readonly force?: boolean } = {},
+  options: DashboardOverviewCacheOptions & { readonly force?: boolean } = {},
 ): Promise<DashboardOverview> {
-  const key = cacheKey(workspaceId);
+  const key = cacheKey(workspaceId, options);
   const current = cache.get(key);
   if (!options.force && fresh(current)) return current.overview;
   const currentInflight = inflight.get(key);
@@ -47,6 +57,7 @@ export async function getDashboardOverviewCached(
 
   const request = getDashboardOverview(workspaceId, {
     includeWorkspaces: workspaceId === undefined,
+    capsuleLimit: options.capsuleLimit,
   })
     .then((overview) => {
       cache.set(key, { overview, cachedAt: Date.now() });

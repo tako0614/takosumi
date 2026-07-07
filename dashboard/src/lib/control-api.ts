@@ -960,12 +960,16 @@ export async function listWorkspaces(): Promise<readonly Workspace[]> {
 
 export async function getDashboardOverview(
   workspaceId?: string,
-  options: { readonly includeWorkspaces?: boolean } = {},
+  options: {
+    readonly includeWorkspaces?: boolean;
+    readonly capsuleLimit?: number;
+  } = {},
 ): Promise<DashboardOverview> {
   return await controlFetch<DashboardOverview>(
     `${BASE}/dashboard/overview${query({
       workspaceId,
       includeWorkspaces: options.includeWorkspaces,
+      capsuleLimit: options.capsuleLimit,
     })}`,
   );
 }

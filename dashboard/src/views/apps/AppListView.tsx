@@ -106,7 +106,7 @@ function Inner() {
   });
 
   const [overview] = createResource(workspaceId, (id) =>
-    getDashboardOverviewCached(id),
+    getDashboardOverviewCached(id, { capsuleLimit: 500 }),
   );
   const fullProjectionWorkspaceId = createMemo(() =>
     overview()?.nextCapsuleCursor ? workspaceId() : undefined,
