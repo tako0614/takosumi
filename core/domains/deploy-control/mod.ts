@@ -840,6 +840,7 @@ export interface GenericRootPlanContext {
 export interface GenericRootDispatchContext {
   readonly generatedRoot: DispatchGeneratedRoot;
   readonly outputAllowlist: InstallConfig["outputAllowlist"];
+  readonly managedPublicHostDomainsOnly?: boolean;
   /**
    * Credential delivery expected by this generated root. Omitted means the
    * normal root-variable OpenTofu path.

@@ -973,6 +973,61 @@ test("managed Cloudflare Capsule explicit worker_name drives app.takos.jp URL de
   );
 });
 
+test("managed Cloudflare Capsule rejects unverified custom public app_url", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  const seeded = await seedInstallationModel(store, {
+    name: "Yuru Managed App",
+    environment: "preview",
+    installConfig: {
+      variableMapping: {
+        app_url: "https://community.example.com",
+        cloudflare: {
+          account_id: null,
+          api_base_url: null,
+        },
+      },
+    },
+  });
+  await putConnectionWithProviderEnv(store, {
+    ...cloudflareConnection(
+      "conn_cloudflare_scope",
+      seeded.installation.spaceId,
+    ),
+    scopeHints: {
+      managedProvider: true,
+      providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      accountId: "ts_acc_takosumi_cloud",
+    },
+  });
+  await store.putInstallationProviderEnvBindingSet({
+    id: "profile_cloudflare_scope",
+    spaceId: seeded.installation.spaceId,
+    installationId: seeded.installation.id,
+    environment: seeded.installation.environment,
+    bindings: [
+      {
+        provider: "cloudflare",
+        alias: "main",
+        connectionId: "conn_cloudflare_scope",
+      },
+    ],
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
+  const profile = multiProviderRunnerProfile();
+  const controller = controllerWith(store, runner, {
+    runnerProfiles: [profile],
+    defaultRunnerProfileId: profile.id,
+  });
+
+  await expect(
+    controller.createInstallationPlan(seeded.installation.id),
+  ).rejects.toThrow(
+    "custom_domain_verification_required: custom domains must be verified before managed deploy",
+  );
+});
+
 test("managed Cloudflare app.takos.jp host is globally claimed across Workspaces", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   const runner = recordingRunner();
@@ -1082,9 +1137,7 @@ test("managed Cloudflare app.takos.jp host is globally claimed across Workspaces
 
   await expect(
     controller.createInstallationPlan(second.installation.id),
-  ).rejects.toThrow(
-    "app_hostname_unavailable: already exists",
-  );
+  ).rejects.toThrow("app_hostname_unavailable: already exists");
 });
 
 test("managed Cloudflare app.takos.jp host claim prefers active Capsule over stale historical output", async () => {
@@ -1203,9 +1256,7 @@ test("managed Cloudflare app.takos.jp host claim prefers active Capsule over sta
 
   await expect(
     controller.createInstallationPlan(challenger.installation.id),
-  ).rejects.toThrow(
-    "app_hostname_unavailable: already exists",
-  );
+  ).rejects.toThrow("app_hostname_unavailable: already exists");
 });
 
 test("managed Cloudflare host claim ignores unapplied pending Capsules", async () => {
@@ -1499,9 +1550,7 @@ test("managed Cloudflare app.takos.jp host is atomically reserved by successful 
 
   await expect(
     controller.createInstallationPlan(second.installation.id),
-  ).rejects.toThrow(
-    "app_hostname_unavailable: already exists",
-  );
+  ).rejects.toThrow("app_hostname_unavailable: already exists");
 });
 
 test("managed Cloudflare host claim skips corrupt historical Capsules", async () => {

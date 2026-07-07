@@ -503,13 +503,18 @@ function publicEndpointHost(url: string): string | undefined {
   }
 }
 
-function hostIsUnderBaseDomain(host: string, baseDomain: string): boolean {
+function hostIsManagedBaseDomainSubdomain(
+  host: string,
+  baseDomain: string,
+): boolean {
   const normalizedHost = host.toLowerCase();
   const normalizedBase = baseDomain.toLowerCase();
-  return (
-    normalizedHost === normalizedBase ||
-    normalizedHost.endsWith(`.${normalizedBase}`)
+  if (!normalizedHost.endsWith(`.${normalizedBase}`)) return false;
+  const prefix = normalizedHost.slice(
+    0,
+    normalizedHost.length - normalizedBase.length - 1,
   );
+  return /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(prefix);
 }
 
 function catalogInputKey(entryId: string, fieldName: string): string {
@@ -571,10 +576,7 @@ function catalogDefaultInputValue(
   if (field.name === publicEndpoint?.subdomainVariable) {
     return scopedServiceSlug;
   }
-  if (
-    field.name === publicEndpoint?.urlVariable &&
-    publicEndpoint.baseDomain
-  ) {
+  if (field.name === publicEndpoint?.urlVariable && publicEndpoint.baseDomain) {
     return `https://${scopedServiceSlug}.${publicEndpoint.baseDomain}`;
   }
   switch (field.defaultValue) {
@@ -808,6 +810,29 @@ function catalogMetadataFromStoreListing(
     ...(listing.installExperience
       ? { installExperience: listing.installExperience }
       : {}),
+  };
+}
+
+function catalogEntryIdFromStoreListing(listing: TcsListing): string {
+  return `store:${safeCatalogToken(listing.id) ?? slugInputValue(listing.suggestedName)}`;
+}
+
+function catalogEntryFromStoreListing(
+  listing: TcsListing,
+  installConfigId: string,
+): CatalogEntry {
+  const catalog = catalogMetadataFromStoreListing(listing);
+  return {
+    id: catalogEntryIdFromStoreListing(listing),
+    installConfigId,
+    createdAt: listing.createdAt,
+    updatedAt: listing.updatedAt,
+    ...catalog,
+    source: catalog.source ?? {
+      git: listing.source.git,
+      ref: listing.source.resolvedCommit ?? listing.source.ref,
+      path: listing.source.path || ".",
+    },
   };
 }
 
@@ -1197,11 +1222,28 @@ function Inner() {
       ? (allCatalogEntries().find((entry) => entry.id === id) ?? null)
       : null;
   };
+  const storeServiceEntry = (): CatalogEntry | null => {
+    const listing = selectedStoreListing();
+    if (!listing) return null;
+    return catalogEntryFromStoreListing(
+      listing,
+      listing.installConfigId ??
+        defaultGitInstallConfig()?.id ??
+        DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
+    );
+  };
+  const selectedServiceEntry = () =>
+    selectedCatalogEntry() ?? storeServiceEntry();
   const catalogInputValue = (entry: CatalogEntry, field: CatalogInputField) => {
     const key = catalogInputKey(entry.id, field.name);
     return (
       catalogInputValues()[key] ??
-      catalogDefaultInputValue(entry, field, workspaceId(), defaultProjectName())
+      catalogDefaultInputValue(
+        entry,
+        field,
+        workspaceId(),
+        defaultProjectName(),
+      )
     );
   };
   const catalogInputBooleanChecked = (
@@ -1228,7 +1270,7 @@ function Inner() {
     resetCompatibility();
   };
   const selectedCatalogVariables = () => {
-    const entry = selectedCatalogEntry();
+    const entry = selectedServiceEntry();
     if (!entry) return {};
     const variables: Record<string, JsonValue> = {};
     for (const field of entry.inputs) {
@@ -1245,7 +1287,7 @@ function Inner() {
   const selectedCatalogReturnVariables = (): Readonly<
     Record<string, string>
   > => {
-    const entry = selectedCatalogEntry();
+    const entry = selectedServiceEntry();
     if (!entry) return {};
     const variables: Record<string, string> = {};
     for (const field of entry.inputs) {
@@ -1256,7 +1298,7 @@ function Inner() {
     return variables;
   };
   const selectedCatalogVariableNames = () => {
-    const entry = selectedCatalogEntry();
+    const entry = selectedServiceEntry();
     if (!entry) return new Set<string>();
     return new Set(
       entry.inputs
@@ -1265,7 +1307,7 @@ function Inner() {
     );
   };
   const catalogInputError = (): string | null => {
-    const entry = selectedCatalogEntry();
+    const entry = selectedServiceEntry();
     if (!entry) return null;
     for (const field of entry.inputs) {
       if (!catalogVariablePath(field.name)) {
@@ -1292,7 +1334,7 @@ function Inner() {
       if (value && field.name === publicEndpoint?.urlVariable) {
         const baseDomain = managedBaseDomain(publicEndpoint.baseDomain);
         const host = publicEndpointHost(value);
-        if (!host || !hostIsUnderBaseDomain(host, baseDomain)) {
+        if (!host || !hostIsManagedBaseDomainSubdomain(host, baseDomain)) {
           return t("new.catalogInput.errorCustomDomain", {
             label: field.label[locale()],
             baseDomain,
@@ -1308,7 +1350,7 @@ function Inner() {
     if (!hadCatalog && !hadStoreListing) return;
     setSelectedCatalogId(null);
     setSelectedStoreListing(null);
-    if (hadCatalog) {
+    if (hadCatalog || hadStoreListing) {
       setCatalogInputValues({});
       setCatalogInputTouched({});
       setInstallConfigId(defaultGitInstallConfig()?.id ?? "");
@@ -1453,7 +1495,7 @@ function Inner() {
     return listing ? catalogMetadataFromStoreListing(listing) : undefined;
   };
   const installExperienceForCurrentSource = () =>
-    selectedCatalogEntry()?.installExperience ??
+    selectedServiceEntry()?.installExperience ??
     storeCatalogForRun()?.installExperience;
   const storeOutputAllowlistForRun = () => {
     const listing = storeListingForCurrentSource();
@@ -1464,7 +1506,7 @@ function Inner() {
       (input) => input.name === "project_name",
     )?.defaultValue;
   const catalogProjectNameDefault = () =>
-    selectedCatalogEntry()?.inputs.find(
+    selectedServiceEntry()?.inputs.find(
       (input) => input.name === "project_name",
     )?.defaultValue;
   const prefilledProjectName = () => {
@@ -1772,7 +1814,7 @@ function Inner() {
         isAdvancedCatalogInput(entry, field),
     );
   const hasMissingAdvancedCatalogInputs = () => {
-    const entry = selectedCatalogEntry();
+    const entry = selectedServiceEntry();
     if (!entry || !compatibility()) return false;
     return advancedCatalogInputs(entry).some(
       (field) => field.required && !catalogInputValue(entry, field).trim(),
@@ -1951,7 +1993,7 @@ function Inner() {
       .sort((a, b) => b.score - a.score || a.index - b.index)
       .map((entry) => entry.connection);
   const managedCatalogProviderForCurrentSource = (): string | undefined =>
-    selectedCatalogEntry()?.provider ??
+    selectedServiceEntry()?.provider ??
     storeListingForCurrentSource()?.provider;
   const rowCanUseManagedProviderFallback = (row: ProviderConnectionRow) => {
     const managedProvider = managedCatalogProviderForCurrentSource();
@@ -2121,10 +2163,12 @@ function Inner() {
     options: { readonly storeListing?: TcsListing } = {},
   ) => {
     const nextRef = next.ref || "main";
-    setActiveTab("git");
+    const storeListing = options.storeListing;
+    if (storeListing) void loadConnections();
+    setActiveTab(storeListing ? "catalog" : "git");
     setActiveInstallPrefill(next);
     setSelectedCatalogId(null);
-    setSelectedStoreListing(options.storeListing ?? null);
+    setSelectedStoreListing(storeListing ?? null);
     setGitUrl(next.git);
     setRef(displayRef(nextRef));
     setPinnedFullRef(isFullCommitSha(nextRef) ? nextRef : null);
@@ -2132,7 +2176,27 @@ function Inner() {
     if (next.name || !name().trim()) {
       setName(next.name ?? capsuleNameFromUrl(next.git));
     }
-    setInputVariables(inputVariableRowsFromPrefill(next.vars));
+    if (storeListing) {
+      const entry = catalogEntryFromStoreListing(
+        storeListing,
+        storeListing.installConfigId ??
+          defaultGitInstallConfig()?.id ??
+          DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
+      );
+      const defaults: Record<string, string> = {};
+      for (const field of entry.inputs) {
+        const value = next.vars?.[field.name];
+        if (value === undefined) continue;
+        defaults[catalogInputKey(entry.id, field.name)] =
+          installVariableDisplayValue(value);
+      }
+      setCatalogInputValues(defaults);
+      setCatalogInputTouched({});
+      setInputVariables([]);
+      setInstallConfigId(entry.installConfigId);
+    } else {
+      setInputVariables(inputVariableRowsFromPrefill(next.vars));
+    }
     const nextProjectName =
       typeof next.vars?.project_name === "string"
         ? next.vars.project_name
@@ -2183,6 +2247,7 @@ function Inner() {
     setActiveTab("catalog");
   };
   const pickStoreListing = (listing: TcsListing) => {
+    void loadConnections();
     const localEntry = listing.installConfigId
       ? allCatalogEntries().find(
           (entry) =>
@@ -2201,7 +2266,7 @@ function Inner() {
       return;
     }
 
-    setActiveTab("git");
+    setActiveTab("catalog");
     setActiveInstallPrefill(null);
     setSelectedCatalogId(null);
     setSelectedStoreListing(listing);
@@ -2214,6 +2279,13 @@ function Inner() {
     );
     setPath(listing.source.path || ".");
     setName(listing.suggestedName);
+    setInstallConfigId(
+      listing.installConfigId ??
+        defaultGitInstallConfig()?.id ??
+        DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
+    );
+    setCatalogInputValues({});
+    setCatalogInputTouched({});
     setInputVariables([]);
     resetCompatibility();
   };
@@ -2269,6 +2341,8 @@ function Inner() {
           ...listing,
           primaryServer: initialTcsHandoff.base,
         });
+        setActiveTab("catalog");
+        void loadConnections();
       } catch {
         // The Git/ref/path query remains enough to install as a plain Capsule;
         // a failed store rehydrate must not block direct install links.
@@ -2277,7 +2351,7 @@ function Inner() {
   });
 
   createEffect(() => {
-    const entry = selectedCatalogEntry();
+    const entry = selectedServiceEntry();
     if (!entry) return;
     setCatalogInputValues((current) => {
       let changed = false;
@@ -2309,7 +2383,7 @@ function Inner() {
     compatibilityRunnable() &&
     providerConnectionError() === null;
   const usingSelectedService = () =>
-    activeTab() !== "git" && Boolean(sourceGitUrl());
+    Boolean(selectedServiceEntry()) && Boolean(sourceGitUrl());
   const hasChosenSource = () =>
     activeTab() === "git" || usingSelectedService() || Boolean(sourceGitUrl());
   const addGuideStage = (): "select" | "configure" | "review" => {
@@ -2923,18 +2997,18 @@ function Inner() {
     );
   };
   const addSummaryTitle = () =>
-    selectedCatalogEntry()?.name[locale()] ||
+    selectedServiceEntry()?.name[locale()] ||
     name().trim() ||
     capsuleNameFromUrl(sourceGitUrl()) ||
     t("new.advancedImport.title");
   const addSummaryDescription = () =>
-    selectedCatalogEntry()?.description[locale()] ||
+    selectedServiceEntry()?.description[locale()] ||
     (activeTab() === "git"
       ? t("new.advancedImport.subtitle")
       : t("new.selection.subtitle"));
   const addSummaryProvider = () =>
-    selectedCatalogEntry()
-      ? providerDisplayName(selectedCatalogEntry()!.provider)
+    selectedServiceEntry()
+      ? providerDisplayName(selectedServiceEntry()!.provider)
       : sourceHostLabel(sourceGitUrl());
 
   return (
@@ -3049,7 +3123,7 @@ function Inner() {
               <div class="av-add-flow-selected">
                 <div class="av-add-flow-icon" aria-hidden="true">
                   <Show
-                    when={selectedCatalogEntry()}
+                    when={selectedServiceEntry()}
                     fallback={<Download size={22} />}
                   >
                     {(entry) => <CatalogIcon entry={entry()} />}
@@ -3063,13 +3137,13 @@ function Inner() {
                   </span>
                   <h2>
                     {usingSelectedService()
-                      ? (selectedCatalogEntry()?.name[locale()] ??
+                      ? (selectedServiceEntry()?.name[locale()] ??
                         sourceSummaryTitle())
                       : t("new.advancedImport.title")}
                   </h2>
                   <p>
                     {usingSelectedService()
-                      ? (selectedCatalogEntry()?.description[locale()] ??
+                      ? (selectedServiceEntry()?.description[locale()] ??
                         t("new.selection.subtitle"))
                       : t("new.advancedImport.subtitle")}
                   </p>
@@ -3102,7 +3176,7 @@ function Inner() {
                   {activeInstallPrefill() ? prefilledLinkReview() : gitFields()}
                 </Show>
 
-                <Show when={selectedCatalogEntry()}>
+                <Show when={selectedServiceEntry()}>
                   {(entry) => (
                     <section class="av-service-setup">
                       <div class="av-service-setup-head">
@@ -3186,7 +3260,7 @@ function Inner() {
                   )}
                 </Show>
 
-                <Show when={!selectedCatalogEntry()}>
+                <Show when={!selectedServiceEntry()}>
                   <FormField label={t("new.name")}>
                     <Input
                       id="new-capsule-name"
@@ -3218,7 +3292,7 @@ function Inner() {
                     {sourceAccessFields()}
                     {sourceDetailFields()}
                   </Show>
-                  <Show when={selectedCatalogEntry()}>
+                  <Show when={selectedServiceEntry()}>
                     {(entry) => (
                       <Show when={advancedCatalogInputs(entry()).length > 0}>
                         <section class="wb-stack">
@@ -3621,7 +3695,9 @@ function Inner() {
                     </p>
                   )}
                 </Show>
-                <Show when={appHostnameConflict() && supportsProjectNameInput()}>
+                <Show
+                  when={appHostnameConflict() && supportsProjectNameInput()}
+                >
                   <div class="wb-action-callout" role="note">
                     <strong>{t("new.hostnameConflict.title")}</strong>
                     <p>{t("new.hostnameConflict.body")}</p>
@@ -3662,7 +3738,7 @@ function Inner() {
                   <div class="av-add-summary-head">
                     <span class="av-add-summary-icon" aria-hidden="true">
                       <Show
-                        when={selectedCatalogEntry()}
+                        when={selectedServiceEntry()}
                         fallback={<Download size={22} />}
                       >
                         {(entry) => <CatalogIcon entry={entry()} />}

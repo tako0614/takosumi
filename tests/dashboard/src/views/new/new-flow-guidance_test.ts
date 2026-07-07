@@ -70,6 +70,12 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).not.toContain("localListings=");
     expect(newAppViewSource).not.toContain("catalogEntryToListing");
     expect(newAppViewSource).toContain("pickStoreListing");
+    expect(newAppViewSource).toContain(
+      'setActiveTab(storeListing ? "catalog" : "git")',
+    );
+    expect(newAppViewSource).toContain(
+      "applyInstallPrefillInput(prefill, { storeListing: listing })",
+    );
     expect(newAppViewSource).toContain("startLinkImport");
     expect(newAppViewSource).toContain('class="av-add-discovery"');
     expect(newAppViewSource).toContain('class="av-link-entry"');
@@ -406,6 +412,12 @@ describe("/new flow guidance", () => {
 
   test("selected catalog services use friendly setup fields instead of raw variables", () => {
     expect(newAppViewSource).toContain("selectedCatalogEntry");
+    expect(newAppViewSource).toContain("storeServiceEntry");
+    expect(newAppViewSource).toContain("selectedServiceEntry");
+    expect(newAppViewSource).toContain(
+      "selectedCatalogEntry() ?? storeServiceEntry()",
+    );
+    expect(newAppViewSource).toContain("catalogEntryFromStoreListing");
     expect(newAppViewSource).toContain("selectedCatalogVariables");
     expect(newAppViewSource).toContain("selectedCatalogReturnVariables");
     expect(newAppViewSource).toContain("catalogInputJsonValue");
@@ -440,8 +452,9 @@ describe("/new flow guidance", () => {
   test("service setup defaults managed domains without app-specific branches", () => {
     expect(newAppViewSource).toContain("serviceIdSeed");
     expect(newAppViewSource).toContain("publicEndpoint?.subdomainVariable");
-    expect(newAppViewSource).toContain("hostIsUnderBaseDomain");
+    expect(newAppViewSource).toContain("hostIsManagedBaseDomainSubdomain");
     expect(newAppViewSource).toContain("new.catalogInput.errorCustomDomain");
+    expect(newAppViewSource).not.toContain("hostIsUnderBaseDomain");
     expect(newAppViewSource).not.toContain('entry.id === "takos"');
     expect(newAppViewSource).not.toContain('entry.id === "yurucommu"');
   });
