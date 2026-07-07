@@ -133,4 +133,14 @@ describe("ControlApiError app hostname classification", () => {
     expect(error.reason).toBe("app_hostname_unavailable");
     expect(error.isAppHostnameUnavailable).toBe(true);
   });
+
+  test("classifies older verbose hostname collision messages", () => {
+    const error = new ControlApiError(
+      409,
+      "failed_precondition",
+      "app_hostname_unavailable: yurucommu.app.takos.jp is already claimed by Capsule yurucommu (inst_1) in Workspace space_1",
+    );
+
+    expect(error.isAppHostnameUnavailable).toBe(true);
+  });
 });

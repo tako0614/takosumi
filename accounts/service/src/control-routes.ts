@@ -313,6 +313,9 @@ async function dispatch(input: DispatchInput): Promise<Response> {
 function normalizePublicControlSegments(
   segments: readonly string[],
 ): readonly string[] {
+  if (segments[0] === "source-sync-runs") {
+    return segments.map((segment, index) => (index === 0 ? "runs" : segment));
+  }
   if (segments[0] === "capsule-configs") {
     return segments.map((segment, index) =>
       index === 0 ? "install-configs" : segment,

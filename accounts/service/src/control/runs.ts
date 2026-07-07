@@ -188,6 +188,25 @@ export async function handleRuns(
   method: string,
 ): Promise<Response | undefined> {
   const { request, url, operations, store } = ctx;
+  const staleSourceSyncRunRead =
+    segments[0] === "source-sync-runs" && segments.length === 2;
+  // Stale dashboard assets from before the Run route consolidation polled
+  // /api/v1/source-sync-runs/:id. Keep this read-only alias so already-open
+  // production tabs do not spin on 404s during source sync waits. New clients
+  // use /api/v1/runs/:id; this route intentionally has no leaf actions.
+  if (staleSourceSyncRunRead) {
+    if (method !== "GET") return methodNotAllowed("GET");
+    const runId = decodeURIComponent(segments[1] ?? "");
+    const run = await operations.getRun(runId);
+    const auth = await requireWorkspaceAccess({
+      operations,
+      store,
+      workspaceId: run.workspaceId,
+      subject: ctx.session.subject,
+    });
+    if (!auth.ok) return auth.response;
+    return json({ run: await publicRun(operations, run) });
+  }
   // /api/v1/runs/:id ; .../apply ; .../approve ; .../logs ; .../cost
   if (segments[0] === "runs" && segments.length >= 2) {
     const runId = decodeURIComponent(segments[1] ?? "");
