@@ -232,6 +232,10 @@ async function patchScopedInstallConfig(
   const variableMappingPatch = body.variableMapping;
   const removeVariables = stringArrayValue(body.removeVariables);
   const catalogInputDefaults = body.catalogInputDefaults;
+  const outputAllowlistPatch =
+    body.outputAllowlist === undefined
+      ? undefined
+      : outputAllowlistValue(body.outputAllowlist);
   if (
     variableMappingPatch !== undefined &&
     !isPlainJsonObject(variableMappingPatch)
@@ -256,6 +260,16 @@ async function patchScopedInstallConfig(
     return errorJson(
       "invalid_request",
       "removeVariables must be an array of variable names",
+      400,
+    );
+  }
+  if (
+    body.outputAllowlist !== undefined &&
+    outputAllowlistPatch === undefined
+  ) {
+    return errorJson(
+      "invalid_request",
+      "outputAllowlist must be an object of { from, type, required? } entries",
       400,
     );
   }
@@ -289,6 +303,7 @@ async function patchScopedInstallConfig(
   const updated = await operations.installations.putInstallConfig({
     ...config,
     variableMapping: nextVariableMapping,
+    outputAllowlist: outputAllowlistPatch ?? config.outputAllowlist,
     catalog:
       config.catalog && (catalogSourceRef || catalogInputDefaults)
         ? {
