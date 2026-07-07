@@ -96,6 +96,20 @@ export const installableAppStoreListings: readonly TcsListing[] = [
         label: text("Worker artifact SHA-256", "Worker artifact SHA-256"),
       },
     ],
+    installExperience: {
+      serviceName: { variable: "project_name" },
+      publicEndpoint: {
+        subdomainVariable: "worker_name",
+        urlVariable: "app_url",
+        routePatternVariable: "cloudflare_route_pattern",
+        baseDomain: "app.takos.jp",
+      },
+      initialSecret: {
+        variable: "auth_password_hash",
+        kind: "password_or_hash",
+        optional: true,
+      },
+    },
     outputAllowlist: [
       { key: "url", from: "url", type: "url", required: false },
       {
@@ -135,14 +149,21 @@ export const installableAppStoreListings: readonly TcsListing[] = [
         name: "project_name",
         type: "string",
         defaultValue: "service-name-with-space",
-        label: text(
-          "サービス名 / 公開サブドメイン",
-          "Service name / public subdomain",
-        ),
+        label: text("サービス名", "Service name"),
         helper: text(
-          "Takosではこの値がリソース名と app.takos.jp のサブドメインに使われます。",
-          "For Takos, this value is used for resource names and the app.takos.jp subdomain.",
+          "リソース名のベースに使われます。公開URLは次の公開サブドメインで指定できます。",
+          "Used as the resource name base. The public URL can be set with the public subdomain below.",
         ),
+      },
+      {
+        name: "worker_name",
+        type: "string",
+        label: text("公開サブドメイン", "Public subdomain"),
+        helper: text(
+          "空欄ならサービス名から自動で決めます。入力すると <subdomain>.app.takos.jp として使われます。",
+          "Leave empty to derive it from the service name. When set, it is used as <subdomain>.app.takos.jp.",
+        ),
+        placeholder: "my-workspace",
       },
       {
         name: "app_url",
@@ -163,6 +184,14 @@ export const installableAppStoreListings: readonly TcsListing[] = [
         label: text("Release container images", "Release container images"),
       },
     ],
+    installExperience: {
+      serviceName: { variable: "project_name" },
+      publicEndpoint: {
+        subdomainVariable: "worker_name",
+        urlVariable: "app_url",
+        baseDomain: "app.takos.jp",
+      },
+    },
     outputAllowlist: [
       { key: "url", from: "url", type: "url", required: false },
       {
