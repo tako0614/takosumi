@@ -39,7 +39,7 @@ export type StorageAccessTokenVerifyResult =
     };
 
 export const STORAGE_ACCESS_TOKEN_PREFIX = "takstor_";
-export const STORAGE_ACCESS_TOKEN_AUDIENCE = "takos.storage.workspace";
+export const STORAGE_ACCESS_TOKEN_AUDIENCE = "takos.storage.object";
 
 const MIN_TTL_SECONDS = 60;
 const MAX_TTL_SECONDS = 3600;
@@ -133,7 +133,7 @@ export async function verifyStorageAccessToken(
   return { ok: true, payload };
 }
 
-/** Maps `takos.storage.workspace` grant scopes (`files:read` / `files:write`) to token verbs. */
+/** Maps `takos.storage.object` grant scopes (`files:read` / `files:write`) to token verbs. */
 export function storageVerbsFromScopes(
   scopes: readonly string[],
 ): readonly StorageTokenVerb[] {

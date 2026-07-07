@@ -296,7 +296,7 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
     name: "takos-storage",
     source: {
       git: "https://github.com/tako0614/takos-storage.git",
-      ref: "6d83b570bbc4439e7b81f4035494a630b3c5e81f",
+      ref: "913dc9ff1c18efbf0c6de81f1fb05f4746eb6573",
       path: ".",
     },
     order: 120,

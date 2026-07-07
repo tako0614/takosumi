@@ -16,7 +16,7 @@ const NOW_MS = 1_700_000_000_000;
 const PRODUCER_OUTPUTS = {
   service_exports: [
     {
-      name: "takos.storage.workspace",
+      name: "takos.storage.object",
       capabilities: ["storage.object", "protocol.http.api"],
       endpoints: [
         {
@@ -39,12 +39,12 @@ const CONSUMER_OUTPUTS = {
         kind: "worker",
         consume: [
           {
-            publication: "takos.storage.workspace",
+            publication: "takos.storage.object",
             request: { scopes: ["files:read", "files:write"] },
             inject: {
               env: {
-                url: "TAKOS_STORAGE_API_URL",
-                token: "TAKOS_STORAGE_ACCESS_TOKEN",
+                url: "TAKOS_OBJECT_API_URL",
+                token: "TAKOS_OBJECT_ACCESS_TOKEN",
               },
             },
           },
@@ -60,7 +60,7 @@ const IMPOSTOR_KEY = "attacker-controlled-signing-key-99";
 const IMPOSTOR_OUTPUTS = {
   service_exports: [
     {
-      name: "takos.storage.workspace",
+      name: "takos.storage.object",
       capabilities: ["storage.object", "protocol.http.api"],
       endpoints: [{ name: "default", protocol: "https", url: "https://attacker.example/o" }],
       visibility: "space",
@@ -178,12 +178,12 @@ describe("StorageGrantBroker", () => {
       "run_audit_1",
     );
     expect(env).toBeDefined();
-    expect(env!.TF_VAR_takos_storage_api_url).toBe("https://storage.example/o");
-    expect(env!.TF_VAR_takos_storage_key_prefix).toBe(
+    expect(env!.TF_VAR_takos_object_api_url).toBe("https://storage.example/o");
+    expect(env!.TF_VAR_takos_object_key_prefix).toBe(
       `${WORKSPACE_ID}/${CONSUMER_ID}/`,
     );
 
-    const token = env!.TF_VAR_takos_storage_access_token!;
+    const token = env!.TF_VAR_takos_object_access_token!;
     const verified = await verifyStorageAccessToken(
       SIGNING_KEY,
       token,
@@ -274,8 +274,8 @@ describe("StorageGrantBroker", () => {
 
     expect(env).toBeDefined();
     // Endpoint + signing key come from the OFFICIAL producer, never the impostor.
-    expect(env!.TF_VAR_takos_storage_api_url).toBe("https://storage.example/o");
-    const token = env!.TF_VAR_takos_storage_access_token!;
+    expect(env!.TF_VAR_takos_object_api_url).toBe("https://storage.example/o");
+    const token = env!.TF_VAR_takos_object_access_token!;
     const asOfficial = await verifyStorageAccessToken(
       SIGNING_KEY,
       token,

@@ -1,7 +1,7 @@
 /**
  * Storage workspace grant resolution.
  *
- * The bind-time issuer behind a `takos.storage.workspace` consume. Given a
+ * The bind-time issuer behind a `takos.storage.object` consume. Given a
  * consumer Capsule's projected service bindings (from {@link projectServicesFromOutputs}
  * on the consumer's outputs) and the producer `takos-storage` export + its
  * signing key, this resolves what scoped token(s) to mint and which env vars to
@@ -24,14 +24,14 @@ import type {
   ProjectedServiceExport,
 } from "./service-projection.ts";
 
-export const STORAGE_WORKSPACE_PUBLICATION = STORAGE_ACCESS_TOKEN_AUDIENCE;
+export const STORAGE_OBJECT_PUBLICATION = STORAGE_ACCESS_TOKEN_AUDIENCE;
 
-const DEFAULT_URL_ENV = "TAKOS_STORAGE_API_URL";
-const DEFAULT_TOKEN_ENV = "TAKOS_STORAGE_ACCESS_TOKEN";
-const DEFAULT_PREFIX_ENV = "TAKOS_STORAGE_KEY_PREFIX";
+const DEFAULT_URL_ENV = "TAKOS_OBJECT_API_URL";
+const DEFAULT_TOKEN_ENV = "TAKOS_OBJECT_ACCESS_TOKEN";
+const DEFAULT_PREFIX_ENV = "TAKOS_OBJECT_KEY_PREFIX";
 
 export interface StorageGrantPlan {
-  /** Publication being satisfied — always {@link STORAGE_WORKSPACE_PUBLICATION}. */
+  /** Publication being satisfied — always {@link STORAGE_OBJECT_PUBLICATION}. */
   readonly publication: string;
   /** Producer object-API base URL, when the producer export advertises one. */
   readonly apiUrl?: string;
@@ -70,14 +70,14 @@ export interface StorageProducer {
 
 /**
  * Pure: resolve the grant plans a consumer's bindings request against a
- * `takos.storage.workspace` producer export. Does not mint.
+ * `takos.storage.object` producer export. Does not mint.
  */
 export function planStorageWorkspaceGrants(
   consumerBindings: readonly ProjectedServiceBinding[],
   producerExport: ProjectedServiceExport,
   context: StorageGrantContext,
 ): readonly StorageGrantPlan[] {
-  if (producerExport.name !== STORAGE_WORKSPACE_PUBLICATION) return [];
+  if (producerExport.name !== STORAGE_OBJECT_PUBLICATION) return [];
   // The `/`-joined prefix relies on slash-free ids; a `/` in either id would
   // blur prefix boundaries between consumers. Ids are server-generated
   // (space_<hex> / inst_<hex>), so this is a defensive guard, not a live path.
@@ -97,7 +97,7 @@ export function planStorageWorkspaceGrants(
     if (!selectsStoragePublication(binding)) continue;
     const injectEnvNames = injectEnvNamesFromBinding(binding);
     plans.push({
-      publication: STORAGE_WORKSPACE_PUBLICATION,
+      publication: STORAGE_OBJECT_PUBLICATION,
       ...(apiUrl ? { apiUrl } : {}),
       prefix,
       verbs: storageVerbsFromScopes(binding.grantRequest.scopes),
@@ -154,8 +154,8 @@ export async function issueStorageWorkspaceGrants(
 }
 
 function selectsStoragePublication(binding: ProjectedServiceBinding): boolean {
-  if (binding.selector.name === STORAGE_WORKSPACE_PUBLICATION) return true;
-  if (binding.selector.serviceExportId === STORAGE_WORKSPACE_PUBLICATION)
+  if (binding.selector.name === STORAGE_OBJECT_PUBLICATION) return true;
+  if (binding.selector.serviceExportId === STORAGE_OBJECT_PUBLICATION)
     return true;
   return binding.selector.capabilities.includes("storage.object");
 }

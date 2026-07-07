@@ -1,6 +1,6 @@
 /**
  * Storage-grant mint broker — the bind-time issuer behind a
- * `takos.storage.workspace` consume.
+ * `takos.storage.object` consume.
  *
  * When a CONSUMER installation runs, this resolves whether it consumes the
  * workspace storage service, finds the PRODUCER (`takos-storage`) installation
@@ -37,7 +37,7 @@ import type { JsonValue } from "../../../contract/types.ts";
 import { projectServicesFromOutputs } from "../output-projection/service-projection.ts";
 import {
   issueStorageWorkspaceGrants,
-  STORAGE_WORKSPACE_PUBLICATION,
+  STORAGE_OBJECT_PUBLICATION,
 } from "../output-projection/storage-grant.ts";
 import type {
   ProjectedServiceBinding,
@@ -53,9 +53,9 @@ const OFFICIAL_STORAGE_INSTALL_CONFIG_ID = "cfg-catalog-takos-storage";
 
 // Well-known OpenTofu input variables a storage consumer (e.g. takos-office)
 // declares; the runner admits only `TF_VAR_*` names into the sandbox env.
-const TF_VAR_API_URL = "TF_VAR_takos_storage_api_url";
-const TF_VAR_ACCESS_TOKEN = "TF_VAR_takos_storage_access_token";
-const TF_VAR_KEY_PREFIX = "TF_VAR_takos_storage_key_prefix";
+const TF_VAR_API_URL = "TF_VAR_takos_object_api_url";
+const TF_VAR_ACCESS_TOKEN = "TF_VAR_takos_object_access_token";
+const TF_VAR_KEY_PREFIX = "TF_VAR_takos_object_key_prefix";
 
 export interface StorageGrantBrokerDependencies {
   readonly store: OpenTofuDeploymentStore;
@@ -200,8 +200,8 @@ export class StorageGrantBroker {
     }
     return bindings.filter(
       (binding) =>
-        binding.selector.name === STORAGE_WORKSPACE_PUBLICATION ||
-        binding.selector.serviceExportId === STORAGE_WORKSPACE_PUBLICATION ||
+        binding.selector.name === STORAGE_OBJECT_PUBLICATION ||
+        binding.selector.serviceExportId === STORAGE_OBJECT_PUBLICATION ||
         binding.selector.capabilities.includes("storage.object"),
     );
   }
@@ -233,7 +233,7 @@ export class StorageGrantBroker {
         continue;
       }
       const storageExport = serviceExports.find(
-        (exported) => exported.name === STORAGE_WORKSPACE_PUBLICATION,
+        (exported) => exported.name === STORAGE_OBJECT_PUBLICATION,
       );
       if (!storageExport) continue;
       exporters.push({

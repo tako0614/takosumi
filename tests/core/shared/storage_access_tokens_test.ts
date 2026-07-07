@@ -29,7 +29,7 @@ describe("storage access token", () => {
     const result = await verifyStorageAccessToken(KEY, token, 1_000_000_100);
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.payload.aud).toBe("takos.storage.workspace");
+      expect(result.payload.aud).toBe("takos.storage.object");
       expect(result.payload.cap).toEqual(["r", "w", "l"]);
       expect(result.payload.pfx).toBe(
         "space_00112233aabbccdd/inst_0011223344556677/",
@@ -94,7 +94,7 @@ describe("storage access token", () => {
   // against drift on either side.
   test("verifies its own golden vector (cross-repo anchor)", async () => {
     const GOLDEN =
-      "takstor_eyJ2IjoxLCJ3cyI6InNwYWNlX2dvMWRnbzFkZ28xZGdvMWQiLCJzdWIiOiJpbnN0X2dvMWRnbzFkZ28xZGdvMWQiLCJwZngiOiJzcGFjZV9nbzFkZ28xZGdvMWRnbzFkL2luc3RfZ28xZGdvMWRnbzFkZ28xZC8iLCJjYXAiOlsiciIsInciLCJsIl0sImF1ZCI6InRha29zLnN0b3JhZ2Uud29ya3NwYWNlIiwiaWF0IjoxMDAwMDAwMDAwLCJleHAiOjEwMDAwMDA5MDB9.V_Z3zmwEPfIj7lRniLhgHKTYCJnZsZ2lW4ST8be9IAc";
+      "takstor_eyJ2IjoxLCJ3cyI6InNwYWNlX2dvMWRnbzFkZ28xZGdvMWQiLCJzdWIiOiJpbnN0X2dvMWRnbzFkZ28xZGdvMWQiLCJwZngiOiJzcGFjZV9nbzFkZ28xZGdvMWRnbzFkL2luc3RfZ28xZGdvMWRnbzFkZ28xZC8iLCJjYXAiOlsiciIsInciLCJsIl0sImF1ZCI6InRha29zLnN0b3JhZ2Uub2JqZWN0IiwiaWF0IjoxMDAwMDAwMDAwLCJleHAiOjEwMDAwMDA5MDB9.dquD2sbJ1zPXqAp0FMCuUs8Mg_rV6BnKNr2mUvWaQhc";
     const result = await verifyStorageAccessToken(
       "golden-key-fixed-0123456789abcdef",
       GOLDEN,
