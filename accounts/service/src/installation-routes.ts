@@ -8,13 +8,18 @@ import {
 } from "./ledger.ts";
 import type { AccountsStore } from "./store.ts";
 import {
+  type ActivatedHttpDomainProjection,
   activatedHttpDomainProjectionFromEvents,
+  deploymentOutputsFromPublicRecord,
+  type DeploymentOutputProjection,
   installationEnvelope,
   serializeAppCapsule,
   serializeCapsuleEvent,
 } from "./installation-helpers.ts";
 import { errorJson, json } from "./http-helpers.ts";
 import { requireAccountsBearer } from "./account-session.ts";
+import type { DeployControlFacadeOptions } from "./deploy-control-facade.ts";
+import { activatedHttpDomainProjectionFromCoreOutputs } from "./installation-lifecycle-shared.ts";
 
 /**
  * Pagination guard constants for the list endpoints in this file and the
@@ -176,6 +181,7 @@ export async function handleGetAppCapsule(input: {
   capsuleId: string;
   request: Request;
   store: AccountsStore;
+  deployControl?: DeployControlFacadeOptions;
 }): Promise<Response> {
   const bearer = await requireAccountsBearer({
     request: input.request,
@@ -211,14 +217,72 @@ export async function handleGetAppCapsule(input: {
   const events = await input.store.listCapsuleEvents(
     input.capsuleId,
   );
+  const eventActivatedHttpDomain =
+    activatedHttpDomainProjectionFromEvents(events);
+  const currentDeploymentProjection = eventActivatedHttpDomain
+    ? undefined
+    : await currentDeploymentProjectionFromDeployControl({
+        deployControl: input.deployControl,
+        capsuleId: input.capsuleId,
+      });
   return json(
     installationEnvelope({
       installation,
       oidcClient,
-      activatedHttpDomain: activatedHttpDomainProjectionFromEvents(events),
+      activatedHttpDomain:
+        eventActivatedHttpDomain ??
+        currentDeploymentProjection?.activatedHttpDomain,
+      deploymentOutputs: currentDeploymentProjection?.deploymentOutputs,
       eventsUrl: takosumiAccountsCapsuleEventsPath(input.capsuleId),
     }),
   );
+}
+
+async function currentDeploymentProjectionFromDeployControl(input: {
+  deployControl?: DeployControlFacadeOptions;
+  capsuleId: string;
+}): Promise<
+  | {
+      readonly activatedHttpDomain?: ActivatedHttpDomainProjection;
+      readonly deploymentOutputs: readonly DeploymentOutputProjection[];
+    }
+  | undefined
+> {
+  if (!input.deployControl) return undefined;
+  try {
+    const capsuleResponse = await input.deployControl.operations.getCapsule(
+      input.capsuleId,
+    );
+    const capsule = capsuleResponse.capsule ?? capsuleResponse.installation;
+    const currentDeploymentId =
+      typeof capsule.currentStateVersionId === "string" &&
+      capsule.currentStateVersionId.length > 0
+        ? capsule.currentStateVersionId
+        : typeof capsule.currentDeploymentId === "string" &&
+            capsule.currentDeploymentId.length > 0
+          ? capsule.currentDeploymentId
+          : undefined;
+    const deployments = (
+      await input.deployControl.operations.listDeployments(input.capsuleId)
+    ).deployments;
+    const deployment = currentDeploymentId
+      ? deployments.find((entry) => entry.id === currentDeploymentId)
+      : deployments.find((entry) => entry.status === "active");
+    if (!deployment) return undefined;
+    const deploymentOutputs = deploymentOutputsFromPublicRecord(
+      deployment.outputsPublic,
+    );
+    return {
+      activatedHttpDomain: activatedHttpDomainProjectionFromCoreOutputs({
+        deploymentId: deployment.id,
+        outputs: deployment.outputsPublic,
+        now: Date.now(),
+      }),
+      deploymentOutputs,
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 /**
