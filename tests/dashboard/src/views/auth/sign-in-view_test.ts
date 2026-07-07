@@ -105,6 +105,20 @@ describe("SignInView disabled OAuth guidance", () => {
     expect(signInViewSource).toContain('fill="#34a853"');
   });
 
+  test("auto-starts the sole Cloud Google sign-in method with a manual escape hatch", () => {
+    expect(signInViewSource).toContain("createEffect(() =>");
+    expect(signInViewSource).toContain("const shouldAutoStart = ():");
+    expect(signInViewSource).toContain("if (!isTakosumiCloudRuntime()) return false");
+    expect(signInViewSource).toContain('if (params.manual === "1") return false');
+    expect(signInViewSource).toContain('ids.length === 1 && ids[0] === "google"');
+    expect(signInViewSource).toContain('select("google")');
+  });
+
+  test("accepts legacy return_to links while normalizing onto the sign-in screen", () => {
+    expect(signInViewSource).toContain("return_to?: string");
+    expect(signInViewSource).toContain("params.return || params.return_to");
+  });
+
   test("uses Cloud-specific copy only on the Takosumi Cloud runtime", () => {
     expect(signInViewSource).toContain(
       'isTakosumiCloudRuntime() ? "auth.signInCloud" : "auth.signIn"',

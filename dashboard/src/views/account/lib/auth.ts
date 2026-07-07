@@ -43,7 +43,11 @@ export function startUpstreamOAuth(provider: Provider): void {
   // Preserve intended return URL (e.g. user landed on /capsules unauth
   // and was bounced to /sign-in; after auth we want to send them back there).
   const url = new URL(location.href);
-  const intended = safeOAuthReturnTo(url.searchParams.get("return"));
+  const returnParam = url.searchParams.get("return");
+  const legacyReturnToParam = url.searchParams.get("return_to");
+  const intended = safeOAuthReturnTo(
+    returnParam && returnParam.trim() ? returnParam : legacyReturnToParam,
+  );
   sessionStorage.setItem(RETURN_KEY, intended);
 
   location.assign(
