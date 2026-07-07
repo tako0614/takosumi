@@ -366,6 +366,8 @@ describe("/new Provider Connections return context", () => {
     );
     expect(en["new.hostnameConflict.body"]).not.toContain("workspace");
     expect(ja["new.hostnameConflict.body"]).not.toContain("ワークスペース");
+    expect(en["new.error.alreadyExists"]).not.toContain("workspace");
+    expect(ja["new.error.alreadyExists"]).not.toContain("ワークスペース");
     expect(newAppViewSource).toContain('"new.error.genericWithDetails"');
     expect(en["new.error.genericWithDetails"]).toContain("{message}");
     expect(ja["new.error.genericWithDetails"]).toContain("{message}");
