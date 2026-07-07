@@ -494,6 +494,24 @@ function workspaceSuffix(value: string | null): string {
     .toLowerCase();
 }
 
+function publicEndpointHost(url: string): string | undefined {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "https:" ? parsed.hostname.toLowerCase() : "";
+  } catch {
+    return undefined;
+  }
+}
+
+function hostIsUnderBaseDomain(host: string, baseDomain: string): boolean {
+  const normalizedHost = host.toLowerCase();
+  const normalizedBase = baseDomain.toLowerCase();
+  return (
+    normalizedHost === normalizedBase ||
+    normalizedHost.endsWith(`.${normalizedBase}`)
+  );
+}
+
 function catalogInputKey(entryId: string, fieldName: string): string {
   return `${entryId}:${fieldName}`;
 }
@@ -543,14 +561,27 @@ function catalogDefaultInputValue(
   entry: CatalogEntry,
   field: CatalogInputField,
   workspaceId: string | null,
+  serviceSlug?: string,
 ): string {
   const base = slugInputValue(entry.suggestedName);
   const suffix = workspaceSuffix(workspaceId);
+  const scopedServiceSlug =
+    serviceSlug || (suffix ? `${base}-${suffix}` : base);
+  const publicEndpoint = entry.installExperience?.publicEndpoint;
+  if (field.name === publicEndpoint?.subdomainVariable) {
+    return scopedServiceSlug;
+  }
+  if (
+    field.name === publicEndpoint?.urlVariable &&
+    publicEndpoint.baseDomain
+  ) {
+    return `https://${scopedServiceSlug}.${publicEndpoint.baseDomain}`;
+  }
   switch (field.defaultValue) {
     case "service-name":
       return base;
     case "service-name-with-space":
-      return suffix ? `${base}-${suffix}` : base;
+      return scopedServiceSlug;
     case "main":
       return "main";
     case "us-east-1":
@@ -979,6 +1010,9 @@ function Inner() {
     ? ""
     : initialProjectName;
   const [name, setName] = createSignal(initialName);
+  const [serviceIdSeed] = createSignal(
+    Math.random().toString(36).slice(2, 6) || "next",
+  );
   const [resourcePrefix, setResourcePrefix] = createSignal(
     initialResourcePrefix,
   );
@@ -1167,7 +1201,7 @@ function Inner() {
     const key = catalogInputKey(entry.id, field.name);
     return (
       catalogInputValues()[key] ??
-      catalogDefaultInputValue(entry, field, workspaceId())
+      catalogDefaultInputValue(entry, field, workspaceId(), defaultProjectName())
     );
   };
   const catalogInputBooleanChecked = (
@@ -1253,6 +1287,17 @@ function Inner() {
         return t("new.catalogInput.errorUnsafeValue", {
           label: field.label[locale()],
         });
+      }
+      const publicEndpoint = entry.installExperience?.publicEndpoint;
+      if (value && field.name === publicEndpoint?.urlVariable) {
+        const baseDomain = managedBaseDomain(publicEndpoint.baseDomain);
+        const host = publicEndpointHost(value);
+        if (!host || !hostIsUnderBaseDomain(host, baseDomain)) {
+          return t("new.catalogInput.errorCustomDomain", {
+            label: field.label[locale()],
+            baseDomain,
+          });
+        }
       }
     }
     return null;
@@ -1431,7 +1476,8 @@ function Inner() {
     projectNameHintIsGenerated(storeProjectNameDefault()) ||
     projectNameHintIsGenerated(catalogProjectNameDefault());
   const defaultProjectName = () => {
-    return slugInputValue(name() || capsuleNameFromUrl(sourceGitUrl()));
+    const base = slugInputValue(name() || capsuleNameFromUrl(sourceGitUrl()));
+    return slugInputValue(`${base}-${serviceIdSeed()}`);
   };
   const projectNameVariable = () =>
     slugInputValue(resourcePrefix() || defaultProjectName());
@@ -2122,7 +2168,12 @@ function Inner() {
     for (const field of entry.inputs) {
       defaults[catalogInputKey(entry.id, field.name)] =
         catalogScopeHintValue(entry, field) ??
-        catalogDefaultInputValue(entry, field, workspaceId());
+        catalogDefaultInputValue(
+          entry,
+          field,
+          workspaceId(),
+          defaultProjectName(),
+        );
     }
     setCatalogInputValues(defaults);
     setCatalogInputTouched({});

@@ -437,6 +437,15 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).not.toContain('repo.endsWith("/takos")');
   });
 
+  test("service setup defaults managed domains without app-specific branches", () => {
+    expect(newAppViewSource).toContain("serviceIdSeed");
+    expect(newAppViewSource).toContain("publicEndpoint?.subdomainVariable");
+    expect(newAppViewSource).toContain("hostIsUnderBaseDomain");
+    expect(newAppViewSource).toContain("new.catalogInput.errorCustomDomain");
+    expect(newAppViewSource).not.toContain('entry.id === "takos"');
+    expect(newAppViewSource).not.toContain('entry.id === "yurucommu"');
+  });
+
   test("selected catalog services can use safe cloud-account hints instead of duplicate setup input", () => {
     const hintSourceStart = newAppViewSource.indexOf(
       "const catalogScopeHintValue",
