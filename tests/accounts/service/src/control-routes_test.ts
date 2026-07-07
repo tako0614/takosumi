@@ -3935,6 +3935,68 @@ test("POST /api/v1/workspaces/:id/capsules auto-provisions Takosumi Accounts OID
   );
 });
 
+test("POST /api/v1/workspaces/:id/capsules derives Takosumi Accounts OIDC from the public subdomain variable", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations({
+    getSource: async (id) => ({
+      source: {
+        id,
+        workspaceId: "space_a",
+        spaceId: "space_a",
+        name: "yurucommu",
+        url: "https://github.com/tako0614/yurucommu.git",
+        defaultRef: "master",
+        defaultPath: ".",
+        status: "active",
+        autoSync: false,
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      } as unknown as Awaited<
+        ReturnType<ControlPlaneOperations["getSource"]>
+      >["source"],
+    }),
+  });
+  const { request: req, url } = request(
+    "POST",
+    "/api/v1/workspaces/space_a/capsules",
+    {
+      cookie,
+      body: {
+        name: "community",
+        environment: "production",
+        sourceId: "src_yurucommu",
+        installConfigId: "cfg_x",
+        vars: {
+          project_name: "community",
+          worker_name: "community-a",
+        },
+      },
+    },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+    issuer: ORIGIN,
+  });
+
+  expect(response?.status).toEqual(201);
+  const oidcClient = await store.findOidcClientForCapsule("inst_new");
+  expect(oidcClient?.redirectUris).toEqual([
+    "https://community-a.app.takos.jp/api/auth/callback/takos",
+  ]);
+  const config = operations.calls.putInstallConfig?.at(-1) as {
+    variableMapping: Record<string, unknown>;
+  };
+  expect(config.variableMapping.worker_name).toEqual("community-a");
+  expect(config.variableMapping.takosumi_accounts_issuer_url).toEqual(ORIGIN);
+  expect(config.variableMapping.takosumi_accounts_client_id).toEqual(
+    oidcClient?.clientId,
+  );
+});
+
 test("POST /api/v1/workspaces/:id/capsules stores modulePath in a scoped InstallConfig", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
