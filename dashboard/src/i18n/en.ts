@@ -188,6 +188,7 @@ export const en: Record<keyof typeof ja, string> = {
   "apps.add": "Add service",
   "apps.addShort": "Add",
   "apps.sectionYours": "Your apps",
+  "apps.manage": "Manage",
   "apps.sectionBrowse": "Browse",
   "apps.browseSub": "Suggested",
   "apps.browseAll": "Open store",

@@ -586,6 +586,13 @@
   justify-content: center;
   width: 100%;
 }
+.av-tile-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  max-width: 152px;
+}
 .av-tile {
   display: flex;
   flex-direction: column;
@@ -694,6 +701,27 @@
   overflow: hidden;
   overflow-wrap: anywhere;
 }
+.av-tile-manage {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 28px;
+  margin-top: -2px;
+  padding: 0 var(--tg-s-2);
+  border: 0;
+  border-radius: var(--tg-r-full);
+  background: transparent;
+  color: var(--tg-fg-muted);
+  font: inherit;
+  font-size: var(--tg-fs-xs);
+  cursor: pointer;
+}
+.av-tile-manage:hover,
+.av-tile-manage:focus-visible {
+  background: var(--tg-bg-subtle);
+  color: var(--tg-fg);
+  outline: none;
+}
 .av-tile-skel {
   width: 100%;
   aspect-ratio: 1 / 1;
@@ -734,15 +762,6 @@
   height: 100%;
   object-fit: cover;
   border-radius: inherit;
-}
-/* Curated logo (e.g. Takos): a contained mark centred on a calm tile, not an
-   edge-to-edge cover crop. */
-.av-tile-icon-logo {
-  background: var(--tg-bg-subtle);
-}
-.av-tile-logo {
-  object-fit: contain;
-  padding: 20%;
 }
 .av-tile-emoji {
   font-size: 42px;

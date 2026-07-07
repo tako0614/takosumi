@@ -191,6 +191,7 @@ export const ja = {
   "apps.add": "サービスを追加",
   "apps.addShort": "足す",
   "apps.sectionYours": "あなたのアプリ",
+  "apps.manage": "管理",
   "apps.sectionBrowse": "さがす",
   "apps.browseSub": "おすすめ",
   "apps.browseAll": "ストアを開く",
