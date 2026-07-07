@@ -1,16 +1,12 @@
 /**
- * Mobile bottom bar keeps only everyday destinations. Technical hosting
- * management remains available from account/settings surfaces instead of
- * taking over the first screen on small devices.
+ * Mobile bottom bar: the app-first everyday destinations only — the launcher,
+ * add-an-app, and settings. Icons carry the meaning (labels are dropped for a
+ * calmer bar; the accessible name stays on each link). Account and activity
+ * history are reached from the profile avatar in the top bar, and deeper hosting
+ * management stays inside settings.
  */
 import { A, useLocation } from "@solidjs/router";
-import {
-  Clock3,
-  Compass,
-  LayoutGrid,
-  Settings,
-  UserCircle2,
-} from "lucide-solid";
+import { LayoutGrid, Plus, Settings } from "lucide-solid";
 import { For } from "solid-js";
 import { t } from "../../../../i18n/index.ts";
 
@@ -18,14 +14,12 @@ export default function MobileTabs() {
   const loc = useLocation();
   const tabs = () => [
     { href: "/", label: () => t("nav.apps"), icon: LayoutGrid, end: true },
-    { href: "/new", label: () => t("nav.add"), icon: Compass },
-    { href: "/runs", label: () => t("nav.runs"), icon: Clock3 },
+    { href: "/new", label: () => t("nav.add"), icon: Plus },
     {
       href: "/advanced/workspace",
       label: () => t("nav.workspaceSettingsShort"),
       icon: Settings,
     },
-    { href: "/account", label: () => t("nav.account"), icon: UserCircle2 },
   ];
   const isActive = (href: string, end?: boolean) =>
     end
@@ -43,8 +37,7 @@ export default function MobileTabs() {
             }}
             aria-label={tab.label()}
           >
-            <tab.icon size={22} />
-            <span class="mobile-tab-label">{tab.label()}</span>
+            <tab.icon size={24} />
           </A>
         )}
       </For>

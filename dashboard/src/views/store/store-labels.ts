@@ -13,13 +13,6 @@ const CATEGORY_LABELS: Record<string, { ja: string; en: string }> = {
   workspace: { ja: "ワークスペース", en: "Workspace" },
 };
 
-const KIND_LABELS: Record<string, { ja: string; en: string }> = {
-  app: { ja: "アプリ", en: "App" },
-  worker: { ja: "Webアプリ", en: "Web app" },
-  storage: { ja: "ストレージ", en: "Storage" },
-  site: { ja: "Webサイト", en: "Website" },
-};
-
 const PROVIDER_LABELS: Record<string, string> = {
   aws: "AWS",
   cloudflare: "Cloudflare",
@@ -59,10 +52,6 @@ function readableToken(value: string): string {
 
 export function tcsCategoryLabel(value: string, locale: TcsLocale): string {
   return localized(CATEGORY_LABELS[value], locale) ?? readableToken(value);
-}
-
-export function tcsKindLabel(value: string, locale: TcsLocale): string {
-  return localized(KIND_LABELS[value], locale) ?? readableToken(value);
 }
 
 export function tcsProviderLabel(value: string): string {

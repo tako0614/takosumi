@@ -101,8 +101,11 @@ import type {
   InstallationPatchGuard,
   OpenTofuDeploymentStore,
   PlanRunInputs,
+  PublicHostReservation,
   PutUsageEventAndSpendCreditsResult,
   RecoverableOpenTofuRunListOptions,
+  ReservePublicHostInput,
+  ReservePublicHostResult,
   StoredRunRecord,
   StoredSecretBlob,
   StoredSource,
@@ -777,6 +780,99 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
       },
     );
     return pageFromProbe(rows.map(normalizeInstallationRecord), limit);
+  }
+
+  async reservePublicHost(
+    input: ReservePublicHostInput,
+  ): Promise<ReservePublicHostResult> {
+    await this.#ensureSchema();
+    const hostname = input.hostname.toLowerCase();
+    await this.db
+      .prepare(
+        `insert into public_host_reservations (
+           hostname, workspace_id, installation_id, installation_name,
+           status, reserved_at, updated_at, released_at
+         )
+         values (?, ?, ?, ?, 'reserved', ?, ?, null)
+         on conflict(hostname) do update
+         set workspace_id = excluded.workspace_id,
+             installation_id = excluded.installation_id,
+             installation_name = excluded.installation_name,
+             status = 'reserved',
+             reserved_at = case
+               when public_host_reservations.installation_id = excluded.installation_id
+               then public_host_reservations.reserved_at
+               else excluded.reserved_at
+             end,
+             updated_at = excluded.updated_at,
+             released_at = null
+         where public_host_reservations.status = 'released'
+            or public_host_reservations.installation_id = excluded.installation_id`,
+      )
+      .bind(
+        hostname,
+        input.workspaceId,
+        input.installationId,
+        input.installationName,
+        input.now,
+        input.now,
+      )
+      .run();
+    const reservation = await this.db
+      .prepare(
+        `select hostname, workspace_id, installation_id, installation_name,
+                status, reserved_at, updated_at, released_at
+         from public_host_reservations
+         where hostname = ?`,
+      )
+      .bind(hostname)
+      .first<Record<string, unknown>>();
+    const normalized = publicHostReservationFromD1Row(reservation);
+    if (
+      normalized.status === "reserved" &&
+      normalized.installationId === input.installationId
+    ) {
+      return { reserved: true, reservation: normalized };
+    }
+    return {
+      reserved: false,
+      reservation: normalized,
+      reason: "already_reserved",
+    };
+  }
+
+  async getPublicHostReservation(
+    hostname: string,
+  ): Promise<PublicHostReservation | undefined> {
+    await this.#ensureSchema();
+    const row = await this.db
+      .prepare(
+        `select hostname, workspace_id, installation_id, installation_name,
+                status, reserved_at, updated_at, released_at
+         from public_host_reservations
+         where hostname = ?`,
+      )
+      .bind(hostname.toLowerCase())
+      .first<Record<string, unknown>>();
+    return row ? publicHostReservationFromD1Row(row) : undefined;
+  }
+
+  async releasePublicHostsForInstallation(
+    installationId: string,
+    now: string,
+  ): Promise<void> {
+    await this.#ensureSchema();
+    await this.db
+      .prepare(
+        `update public_host_reservations
+         set status = 'released',
+             updated_at = ?,
+             released_at = ?
+         where installation_id = ?
+           and status = 'reserved'`,
+      )
+      .bind(now, now, installationId)
+      .run();
   }
 
   async patchInstallation(
@@ -3434,10 +3530,28 @@ function deploymentFromDrizzleRow(row: {
       : {}),
     stateGeneration: row.stateGeneration,
     outputSnapshotId: row.outputSnapshotId,
-    outputsPublic: row.outputsPublicJson as Record<string, unknown>,
+    outputsPublic: jsonRecordFromD1Value(row.outputsPublicJson),
     status: row.status as Deployment["status"],
     createdAt: row.createdAt,
   };
+}
+
+function jsonRecordFromD1Value(value: unknown): Record<string, unknown> {
+  const parsed =
+    typeof value === "string" && value.trim().length > 0
+      ? parseD1JsonColumn(value)
+      : value;
+  return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+    ? (parsed as Record<string, unknown>)
+    : {};
+}
+
+function parseD1JsonColumn(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return undefined;
+  }
 }
 
 function stateSnapshotFromDrizzleRow(row: {
@@ -3933,6 +4047,22 @@ export async function ensureD1OpenTofuLedgerSchema(
       on credit_reservations (run_id)`,
     `create index if not exists credit_reservations_status_idx
       on credit_reservations (status)`,
+    `create table if not exists public_host_reservations (
+      hostname text primary key,
+      workspace_id text not null,
+      installation_id text not null,
+      installation_name text not null,
+      status text not null,
+      reserved_at text not null,
+      updated_at text not null,
+      released_at text
+    )`,
+    `create index if not exists public_host_reservations_workspace_idx
+      on public_host_reservations (workspace_id)`,
+    `create index if not exists public_host_reservations_installation_idx
+      on public_host_reservations (installation_id)`,
+    `create index if not exists public_host_reservations_status_idx
+      on public_host_reservations (status)`,
     `create table if not exists backups (
       id text primary key,
       space_id text not null,
@@ -4732,6 +4862,165 @@ capsule_compatibility_reports.root_module_outputs_json text not null default []
       );
     },
   },
+  {
+    version: 19,
+    name: "d1_opentofu_public_host_reservations",
+    checksumSource: `
+public_host_reservations table for atomic hostname claims
+hostname primary key
+workspace / installation / status indexes
+`,
+    async apply(db) {
+      await db
+        .prepare(
+          `create table if not exists public_host_reservations (
+            hostname text primary key,
+            workspace_id text not null,
+            installation_id text not null,
+            installation_name text not null,
+            status text not null,
+            reserved_at text not null,
+            updated_at text not null,
+            released_at text
+          )`,
+        )
+        .run();
+      await db
+        .prepare(
+          `create index if not exists public_host_reservations_workspace_idx
+            on public_host_reservations (workspace_id)`,
+        )
+        .run();
+      await db
+        .prepare(
+          `create index if not exists public_host_reservations_installation_idx
+            on public_host_reservations (installation_id)`,
+        )
+        .run();
+      await db
+        .prepare(
+          `create index if not exists public_host_reservations_status_idx
+            on public_host_reservations (status)`,
+        )
+        .run();
+    },
+  },
+  {
+    version: 20,
+    name: "d1_opentofu_public_host_reservations_backfill",
+    checksumSource: `
+backfill public_host_reservations from existing Capsule output URLs
+dedupe url launch_url app_url per Capsule
+prefer active over stale over error over pending over disabled
+skip workers.dev hosts
+`,
+    async apply(db) {
+      await db
+        .prepare(
+          `with raw_hosts as (
+            select c.id as installation_id,
+                   c.space_id as workspace_id,
+                   c.name as installation_name,
+                   c.status as installation_status,
+                   c.created_at as installation_created_at,
+                   json_extract(o.record_json, '$.publicOutputs.url') as url
+            from capsules c
+            join outputs o on o.id = c.current_output_snapshot_id
+            where c.status != 'destroyed'
+            union all
+            select c.id, c.space_id, c.name, c.status, c.created_at,
+                   json_extract(o.record_json, '$.publicOutputs.launch_url')
+            from capsules c
+            join outputs o on o.id = c.current_output_snapshot_id
+            where c.status != 'destroyed'
+            union all
+            select c.id, c.space_id, c.name, c.status, c.created_at,
+                   json_extract(o.record_json, '$.publicOutputs.app_url')
+            from capsules c
+            join outputs o on o.id = c.current_output_snapshot_id
+            where c.status != 'destroyed'
+          ),
+          parsed_hosts as (
+            select installation_id,
+                   workspace_id,
+                   installation_name,
+                   installation_status,
+                   installation_created_at,
+                   lower(
+                     case
+                       when url like 'https://%' then
+                         case
+                           when instr(substr(url, 9), '/') > 0
+                             then substr(substr(url, 9), 1, instr(substr(url, 9), '/') - 1)
+                           else substr(url, 9)
+                         end
+                       else null
+                     end
+                   ) as hostname,
+                   case installation_status
+                     when 'active' then 400
+                     when 'stale' then 300
+                     when 'error' then 200
+                     when 'pending' then 100
+                     when 'disabled' then 50
+                     else 0
+                   end as priority
+            from raw_hosts
+            where url is not null
+          ),
+          distinct_hosts as (
+            select hostname,
+                   installation_id,
+                   workspace_id,
+                   installation_name,
+                   installation_status,
+                   installation_created_at,
+                   max(priority) as priority
+            from parsed_hosts
+            where hostname is not null
+              and hostname != ''
+              and hostname not like '%.workers.dev'
+            group by hostname, installation_id
+          ),
+          ranked as (
+            select *,
+                   row_number() over (
+                     partition by hostname
+                     order by priority desc, installation_created_at desc, installation_id desc
+                   ) as rn
+            from distinct_hosts
+          ),
+          migration_clock as (
+            select strftime('%Y-%m-%dT%H:%M:%fZ', 'now') as now
+          )
+          insert into public_host_reservations (
+            hostname, workspace_id, installation_id, installation_name,
+            status, reserved_at, updated_at, released_at
+          )
+          select hostname,
+                 workspace_id,
+                 installation_id,
+                 installation_name,
+                 'reserved',
+                 migration_clock.now,
+                 migration_clock.now,
+                 null
+          from ranked
+          cross join migration_clock
+          where rn = 1
+          on conflict(hostname) do update set
+            workspace_id = excluded.workspace_id,
+            installation_id = excluded.installation_id,
+            installation_name = excluded.installation_name,
+            status = 'reserved',
+            updated_at = excluded.updated_at,
+            released_at = null
+          where public_host_reservations.status = 'released'
+             or public_host_reservations.installation_id = excluded.installation_id`,
+        )
+        .run();
+    },
+  },
 ] as const satisfies readonly D1OpenTofuSchemaMigration[];
 
 /**
@@ -4937,6 +5226,9 @@ const D1_PROVIDER_CATALOG_OWNERSHIP_REPAIR_STATEMENTS = [
              or gateway_eligible <> 0`,
 ] as const;
 
+// Historical checksum source for migration 9. Do not add new indexes here:
+// live ledgers already store this migration checksum. New indexes belong in the
+// initial ensure-DDL tail and in a new additive migration.
 const D1_OPEN_TOFU_CANONICAL_INDEX_STATEMENTS = [
   `create unique index if not exists spaces_handle_unique
       on spaces (handle)`,
@@ -5683,4 +5975,25 @@ async function backfillD1SourceScopedRuns(db: D1Database): Promise<void> {
     )
     .bind(RUN_KIND_SOURCE_SYNC)
     .run();
+}
+
+function publicHostReservationFromD1Row(
+  row: Record<string, unknown> | null,
+): PublicHostReservation {
+  if (!row) {
+    throw new Error("public host reservation row was not returned");
+  }
+  return {
+    hostname: String(row.hostname),
+    workspaceId: String(row.workspace_id),
+    installationId: String(row.installation_id),
+    installationName: String(row.installation_name),
+    status:
+      row.status === "released" || row.status === "reserved"
+        ? row.status
+        : "reserved",
+    reservedAt: String(row.reserved_at),
+    updatedAt: String(row.updated_at),
+    ...(row.released_at ? { releasedAt: String(row.released_at) } : {}),
+  };
 }

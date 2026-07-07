@@ -1183,15 +1183,9 @@
   margin: 0 auto 0 0;
 }
 .av-add-discovery-head {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(280px, 420px);
-  align-items: end;
+  display: flex;
+  align-items: center;
   gap: var(--tg-s-4);
-  padding: var(--tg-s-4);
-  border: 1px solid var(--tg-line);
-  border-radius: var(--tg-r-md);
-  background: var(--tg-bg-elev);
-  box-shadow: var(--tg-shadow-xs);
 }
 .av-add-discovery-title {
   display: grid;
@@ -1227,6 +1221,37 @@
   grid-template-columns: minmax(0, 1fr) max-content;
   gap: var(--tg-s-2);
   min-width: 0;
+}
+
+/* Secondary escape hatch below the store: paste a Git URL / install link. */
+.av-manual-entry {
+  display: grid;
+  gap: var(--tg-s-2);
+  margin-top: var(--tg-s-2);
+  padding-top: var(--tg-s-4);
+  border-top: 1px solid var(--tg-line);
+}
+.av-manual-entry-lead {
+  margin: 0;
+  color: var(--tg-fg-muted);
+  font-size: var(--tg-fs-sm);
+}
+.av-manual-entry-details > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--tg-s-2);
+  width: fit-content;
+  padding: 0;
+  cursor: pointer;
+  color: var(--tg-accent-text);
+  font-size: var(--tg-fs-sm);
+  font-weight: 600;
+}
+.av-manual-entry-details[open] > summary {
+  margin-bottom: var(--tg-s-3);
+}
+.av-manual-entry-details .av-link-entry {
+  max-width: 560px;
 }
 
 .av-add-flow {
@@ -1490,9 +1515,6 @@
   margin: 2px 0 0;
   overflow-wrap: anywhere;
   font-weight: 700;
-}
-.wb-source-edit {
-  max-width: 720px;
 }
 .av-service-setup {
   display: grid;

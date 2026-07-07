@@ -1,14 +1,15 @@
 /**
  * TopBar — chrome over the content well: the current section title on the left;
- * [+ add (mobile only)] [bell + needs-attention badge] [profile menu] on the
- * right. Brand and primary nav live in the sidebar; this bar names where you
- * are (important on mobile, where the sidebar is hidden) and carries the global
- * create / notifications / account affordances. The bell badge counts services
- * needing attention in the current Workspace.
+ * [bell + needs-attention badge] [profile menu] on the right. Brand and primary
+ * nav live in the sidebar; this bar names where you are (important on mobile,
+ * where the sidebar is hidden) and carries the global notifications / account
+ * affordances (the profile avatar opens account, activity, and preferences).
+ * Adding an app is owned by the sidebar (desktop) and the bottom bar (mobile).
+ * The bell badge counts services needing attention in the current Workspace.
  */
 import { A, useLocation } from "@solidjs/router";
 import { createMemo, createSignal, onCleanup, Show } from "solid-js";
-import { Bell, Plus } from "lucide-solid";
+import { Bell } from "lucide-solid";
 import UserMenu from "../auth/UserMenu.tsx";
 import WorkspaceSwitcher from "./WorkspaceSwitcher.tsx";
 import { currentWorkspaceId } from "../../../../lib/workspace-state.ts";
@@ -75,13 +76,6 @@ export default function TopBar() {
         <WorkspaceSwitcher compact />
       </div>
       <div class="topbar-actions">
-        <A
-          href="/new"
-          class="topbar-icon-btn topbar-add"
-          aria-label={t("nav.add")}
-        >
-          <Plus size={18} />
-        </A>
         <A
           href="/notifications"
           class="topbar-icon-btn topbar-bell"

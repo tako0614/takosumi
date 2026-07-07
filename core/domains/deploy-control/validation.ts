@@ -47,7 +47,7 @@ export function validatePlannedInstallationCurrent(input: {
   if (input.installation.spaceId !== input.planRun.spaceId) {
     throw new OpenTofuControllerError(
       "failed_precondition",
-      `installation ${input.installation.id} no longer belongs to PlanRun space ${input.planRun.spaceId}`,
+      "capsule no longer belongs to the planned workspace",
     );
   }
   const actualCurrentDeploymentId =
@@ -97,11 +97,7 @@ export function normalizeVariables(
 }
 
 const VARIABLE_PATH_SEGMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
-const RESERVED_OBJECT_KEYS = new Set([
-  "__proto__",
-  "constructor",
-  "prototype",
-]);
+const RESERVED_OBJECT_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 
 export function normalizeVariablePathRecord(
   variables: Readonly<Record<string, unknown>>,
@@ -237,7 +233,11 @@ function isJsonObject(
 }
 
 export function validateOperation(operation: OpenTofuOperation): void {
-  if (operation === "create" || operation === "update" || operation === "destroy") {
+  if (
+    operation === "create" ||
+    operation === "update" ||
+    operation === "destroy"
+  ) {
     return;
   }
   throw new OpenTofuControllerError(
@@ -257,7 +257,8 @@ export function validateSource(source: OpenTofuModuleSource): void {
     case "git":
       requireNonEmptyString(source.url, "source.url");
       validateHttpsSourceUrl(source.url, "git source url");
-      if (source.ref !== undefined) requireNonEmptyString(source.ref, "source.ref");
+      if (source.ref !== undefined)
+        requireNonEmptyString(source.ref, "source.ref");
       if (source.commit !== undefined) {
         requireNonEmptyString(source.commit, "source.commit");
         if (!/^[0-9a-f]{40}$|^[0-9a-f]{64}$/i.test(source.commit)) {
@@ -267,7 +268,8 @@ export function validateSource(source: OpenTofuModuleSource): void {
           );
         }
       }
-      if (source.ref !== undefined) validateSafeGitSelector(source.ref, "source.ref");
+      if (source.ref !== undefined)
+        validateSafeGitSelector(source.ref, "source.ref");
       break;
     case "prepared":
       requireNonEmptyString(source.url, "source.url");

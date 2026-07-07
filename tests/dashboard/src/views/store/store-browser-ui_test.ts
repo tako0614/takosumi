@@ -32,9 +32,16 @@ describe("StoreBrowser install UI", () => {
     );
     expect(storeBrowserCss).toContain(".tcs-card-open h3");
     expect(storeBrowserCss).not.toContain(".tcs-card-open h4");
-    expect(storeBrowserSource).toContain("AppWindow");
-    expect(storeBrowserSource).toContain("Globe2");
-    expect(storeBrowserSource).toContain("HardDrive");
+    // Face is the repo's declared icon (full-bleed) with a monogram fallback —
+    // not a per-kind glyph. Kind is not a browse facet anymore.
+    expect(storeBrowserSource).toContain("function monogramInitials");
+    expect(storeBrowserSource).toContain('class="tcs-app-mono"');
+    expect(storeBrowserCss).toContain(".tcs-app-mono");
+    expect(storeBrowserSource).not.toContain("data-kind");
+    expect(storeBrowserSource).not.toContain("tcsKindLabel");
+    expect(storeBrowserSource).not.toContain("tcs-badge");
+    expect(storeBrowserSource).not.toContain("showKindFilters");
+    expect(storeBrowserSource).not.toContain("localListings");
     expect(storeBrowserSource).toContain(
       'install: { ja: "インストール", en: "Install" }',
     );
@@ -55,10 +62,11 @@ describe("StoreBrowser install UI", () => {
     expect(storeBrowserCss).toContain("width: 100%");
   });
 
-  test("passes local installable app listings into the standalone Store tab", () => {
-    expect(storeViewSource).toContain("installableAppStoreListings");
-    expect(storeViewSource).toContain(
-      "localListings={installableAppStoreListings}",
-    );
+  test("the standalone Store tab is store-driven, not a hardcoded catalog", () => {
+    // Discovery comes from the takosumi-store node(s); the dashboard no longer
+    // injects a local catalog.
+    expect(storeViewSource).not.toContain("installableAppStoreListings");
+    expect(storeViewSource).not.toContain("localListings");
+    expect(storeViewSource).toContain("<StoreBrowser");
   });
 });

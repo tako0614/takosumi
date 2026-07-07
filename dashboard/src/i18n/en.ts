@@ -523,10 +523,11 @@ export const en: Record<keyof typeof ja, string> = {
   "new.title": "Add service",
   "new.discovery.aria": "Find a service to add",
   "new.discovery.title": "Choose a service to add",
-  "new.discovery.subtitle":
-    "Pick a common service or paste an install link to add one.",
+  "new.discovery.subtitle": "Pick a service to add.",
   "new.discovery.linkPlaceholder": "Install link or Git URL",
   "new.discovery.linkCta": "Add from link",
+  "new.discovery.manualLead": "Can't find what you need?",
+  "new.discovery.manualToggle": "Add from a Git URL / install link",
   "new.advancedImport.title": "Add from link",
   "new.advancedImport.subtitle": "Paste an install link to add it.",
   "new.selection.subtitle": "Check it first. Deploy happens after review.",
@@ -554,7 +555,6 @@ export const en: Record<keyof typeof ja, string> = {
   "new.deeplink.source": "Source",
   "new.deeplink.version": "Version",
   "new.deeplink.folder": "Folder",
-  "new.deeplink.editSource": "Review or change source",
   "new.git.url": "Install link",
   "new.git.advanced": "Source details",
   "new.git.ref": "Version",
@@ -587,7 +587,7 @@ export const en: Record<keyof typeof ja, string> = {
   "new.sourceAccess.defaultDisplayName": "{name} source access",
   "new.name": "Service name",
   "new.vars.projectName": "Service ID",
-  "new.serviceAdvanced.title": "More service settings",
+  "new.advanced.title": "Advanced settings",
   "new.vars.inputsTitle": "Other settings",
   "new.vars.inputsBody":
     "Add extra visible inputs only when the app asks for something not shown above.",
@@ -689,6 +689,8 @@ export const en: Record<keyof typeof ja, string> = {
     "The service could not be added. Check the details and try again.",
   "new.error.genericWithDetails":
     "The service could not be added. Details: {message}",
+  "new.error.appHostnameUnavailable":
+    "That public subdomain is already in use. Enter another public subdomain, or leave it blank to assign one automatically.",
   "new.error.alreadyExists":
     "“{name}” is already added to this workspace. Open it from the service list.",
   "new.error.notRunnable":

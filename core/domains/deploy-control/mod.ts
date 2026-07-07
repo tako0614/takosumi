@@ -235,6 +235,7 @@ import {
 } from "./provider_policy.ts";
 import { DriftService } from "./drift_service.ts";
 import { RunCredentialBroker } from "./run_credential_broker.ts";
+import { StorageGrantBroker } from "./storage_grant_broker.ts";
 import {
   RunEnvironmentResolutionError,
   RunEnvResolver,
@@ -1127,6 +1128,14 @@ export class OpenTofuDeploymentController {
       credentials: this.#credentials,
       resolveRunInstallationProviderEnvBindings: (planRun) =>
         this.#runEngine.resolveRunInstallationProviderEnvBindings(planRun),
+      storageGrant: new StorageGrantBroker({
+        store: this.#store,
+        newId: this.#newId,
+        now: this.#now,
+        ...(this.#sensitiveOutputResolver
+          ? { sensitiveOutputResolver: this.#sensitiveOutputResolver }
+          : {}),
+      }),
     });
     this.#dependencies = new DependencyResolutionService({
       store: this.#store,
@@ -1679,10 +1688,7 @@ export class OpenTofuDeploymentController {
   async #requireSpace(spaceId: string) {
     const space = await this.#store.getSpace(spaceId);
     if (!space) {
-      throw new OpenTofuControllerError(
-        "not_found",
-        `space ${spaceId} not found`,
-      );
+      throw new OpenTofuControllerError("not_found", "workspace not found");
     }
     return space;
   }

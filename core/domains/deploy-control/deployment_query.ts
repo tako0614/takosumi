@@ -126,7 +126,11 @@ export class DeploymentQuery {
       params ?? {},
     );
     return {
-      deployments: items,
+      deployments: await Promise.all(
+        items.map((deployment) =>
+          deploymentWithOwnedPublicOutputs(this.#store, deployment),
+        ),
+      ),
       ...(nextCursor !== undefined ? { nextCursor } : {}),
     };
   }
@@ -149,9 +153,12 @@ export class DeploymentQuery {
   ): Promise<ListDeploymentOutputsResponse> {
     const installation = await requireInstallation(this.#store, installationId);
     if (!installation.currentDeploymentId) return { outputs: [] };
-    const deployment = await this.#store.getDeployment(
+    const rawDeployment = await this.#store.getDeployment(
       installation.currentDeploymentId,
     );
+    const deployment = rawDeployment
+      ? await deploymentWithOwnedPublicOutputs(this.#store, rawDeployment)
+      : undefined;
     const outputsPublic = deployment?.outputsPublic ?? {};
     return {
       outputs: Object.entries(outputsPublic).map(([name, value]) => ({
@@ -176,6 +183,140 @@ export class DeploymentQuery {
         `deployment ${id} not found`,
       );
     }
-    return deployment;
+    return await deploymentWithOwnedPublicOutputs(this.#store, deployment);
   }
+}
+
+const PUBLIC_HOST_URL_OUTPUT_KEYS = new Set([
+  "url",
+  "launch_url",
+  "app_url",
+  "public_url",
+  "service_url",
+  "takosumi_launch_url",
+  "takosumi_service_url",
+]);
+
+const OMIT_PUBLIC_OUTPUT = Symbol("omit-public-output");
+
+type ScrubbedPublicOutput = unknown | typeof OMIT_PUBLIC_OUTPUT;
+
+async function deploymentWithOwnedPublicOutputs(
+  store: OpenTofuDeploymentStore,
+  deployment: Deployment,
+): Promise<Deployment> {
+  const cache = new Map<string, Promise<boolean>>();
+  const outputEntries = await Promise.all(
+    Object.entries(deployment.outputsPublic).map(async ([key, value]) => {
+      const scrubbed = await scrubPublicOutputValue({
+        store,
+        installationId: deployment.installationId,
+        key,
+        value,
+        cache,
+      });
+      return scrubbed === OMIT_PUBLIC_OUTPUT
+        ? undefined
+        : ([key, scrubbed] as const);
+    }),
+  );
+  const outputsPublic = Object.fromEntries(
+    outputEntries.filter((entry): entry is readonly [string, unknown] =>
+      Boolean(entry),
+    ),
+  );
+  return { ...deployment, outputsPublic };
+}
+
+async function scrubPublicOutputValue(input: {
+  readonly store: OpenTofuDeploymentStore;
+  readonly installationId: string;
+  readonly key: string;
+  readonly value: unknown;
+  readonly cache: Map<string, Promise<boolean>>;
+}): Promise<ScrubbedPublicOutput> {
+  if (typeof input.value === "string") {
+    const host = hostFromHttpsUrl(input.value);
+    if (
+      host &&
+      (PUBLIC_HOST_URL_OUTPUT_KEYS.has(input.key) ||
+        host.endsWith(".app.takos.jp")) &&
+      !(await publicHostOwnedByInstallation(
+        input.store,
+        input.installationId,
+        host,
+        input.cache,
+      ))
+    ) {
+      return OMIT_PUBLIC_OUTPUT;
+    }
+    return input.value;
+  }
+  if (Array.isArray(input.value)) {
+    const items = await Promise.all(
+      input.value.map((value) =>
+        scrubPublicOutputValue({
+          ...input,
+          key: input.key,
+          value,
+        }),
+      ),
+    );
+    return items.filter((value) => value !== OMIT_PUBLIC_OUTPUT);
+  }
+  if (isRecord(input.value)) {
+    const entries = await Promise.all(
+      Object.entries(input.value).map(async ([key, value]) => {
+        const scrubbed = await scrubPublicOutputValue({
+          ...input,
+          key,
+          value,
+        });
+        return scrubbed === OMIT_PUBLIC_OUTPUT
+          ? undefined
+          : ([key, scrubbed] as const);
+      }),
+    );
+    return Object.fromEntries(
+      entries.filter((entry): entry is readonly [string, unknown] =>
+        Boolean(entry),
+      ),
+    );
+  }
+  return input.value;
+}
+
+async function publicHostOwnedByInstallation(
+  store: OpenTofuDeploymentStore,
+  installationId: string,
+  hostname: string,
+  cache: Map<string, Promise<boolean>>,
+): Promise<boolean> {
+  const normalized = hostname.toLowerCase();
+  let cached = cache.get(normalized);
+  if (!cached) {
+    cached = store
+      .getPublicHostReservation(normalized)
+      .then((reservation) => {
+        if (!reservation || reservation.status !== "reserved") return true;
+        return reservation.installationId === installationId;
+      })
+      .catch(() => true);
+    cache.set(normalized, cached);
+  }
+  return await cached;
+}
+
+function hostFromHttpsUrl(value: string): string | undefined {
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "https:" || !parsed.hostname) return undefined;
+    return parsed.hostname.toLowerCase();
+  } catch {
+    return undefined;
+  }
+}
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }

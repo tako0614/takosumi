@@ -206,8 +206,11 @@ export class BackupsService {
   async createBackup(rawRequest: CreateBackupRequest): Promise<BackupRecord> {
     // Accept both the new Workspace/Capsule field names and the transient
     // deprecated Space/Installation names until the rename converges.
-    const workspaceId = (rawRequest.workspaceId ?? rawRequest.spaceId ?? "")
-      .trim();
+    const workspaceId = (
+      rawRequest.workspaceId ??
+      rawRequest.spaceId ??
+      ""
+    ).trim();
     const capsuleId = rawRequest.capsuleId ?? rawRequest.installationId;
     const request: CreateBackupRequest = {
       ...rawRequest,
@@ -230,10 +233,7 @@ export class BackupsService {
     }
     const space = await this.#store.getSpace(spaceId);
     if (!space) {
-      throw new OpenTofuControllerError(
-        "not_found",
-        `space ${spaceId} not found`,
-      );
+      throw new OpenTofuControllerError("not_found", "workspace not found");
     }
 
     const createdAt = this.#now().toISOString();
@@ -531,8 +531,8 @@ export class BackupsService {
         // the pointer to the R2_STATE object).
         stateSnapshots.push({
           id: snapshot.id,
-          spaceId: (snapshot.workspaceId ?? snapshot.spaceId),
-          installationId: (snapshot.capsuleId ?? snapshot.installationId),
+          spaceId: snapshot.workspaceId ?? snapshot.spaceId,
+          installationId: snapshot.capsuleId ?? snapshot.installationId,
           environment: snapshot.environment,
           generation: snapshot.generation,
           objectKey: snapshot.objectKey,
@@ -1065,11 +1065,7 @@ export type PublicSource = Omit<
 
 /** Strips the internal {@link StoredSource} fields, keeping the public Source. */
 function stripSource(source: StoredSource): PublicSource {
-  const {
-    hookSecretHash: _h,
-    lastSeenCommit: _l,
-    ...rest
-  } = source;
+  const { hookSecretHash: _h, lastSeenCommit: _l, ...rest } = source;
   return rest;
 }
 

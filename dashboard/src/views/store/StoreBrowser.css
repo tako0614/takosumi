@@ -128,9 +128,6 @@
   border-color: var(--c-accent);
   color: var(--c-accent-fg);
 }
-.tcs-chip.tcs-kind.active {
-  background: var(--c-accent2);
-}
 
 .tcs-grid {
   display: grid;
@@ -168,9 +165,9 @@
   gap: 7px;
   min-width: 0;
 }
-/* Glossy, colorful app artwork — same visual language as the home launcher
-   tiles, so browsing reads as picking apps, not scanning a table. White glyph
-   on a per-kind gradient, top highlight + a soft colored cast shadow. */
+/* App artwork — full-bleed declared icon (app-store style), or a monogram
+   fallback when the repo declares none. Same visual language as the home
+   launcher tiles, so browsing reads as picking apps, not scanning a table. */
 .tcs-app-icon {
   position: relative;
   display: inline-grid;
@@ -188,30 +185,17 @@
     0 8px 16px -6px color-mix(in srgb, var(--c-accent) 45%, transparent),
     inset 0 1px 0 rgba(255, 255, 255, 0.3);
 }
-.tcs-app-icon svg {
+.tcs-app-mono {
+  font-family: var(--tg-font-display, inherit);
+  font-weight: 700;
+  font-size: 1.4rem;
+  letter-spacing: 0.02em;
   filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.2));
-}
-.tcs-app-icon[data-kind="app"] {
-  background: linear-gradient(145deg, #7c5cff, #4b2fd6);
-}
-.tcs-app-icon[data-kind="worker"] {
-  background: linear-gradient(145deg, #14b8a6, #0f766e);
-}
-.tcs-app-icon[data-kind="storage"] {
-  background: linear-gradient(145deg, #f59e0b, #b45309);
-}
-.tcs-app-icon[data-kind="site"] {
-  background: linear-gradient(145deg, #3b82f6, #2563eb);
 }
 .tcs-app-icon img {
   width: 100%;
   height: 100%;
   object-fit: cover;
-}
-.tcs-card-head {
-  display: flex;
-  gap: 6px;
-  min-width: 0;
 }
 .tcs-card-open {
   background: none;
@@ -254,17 +238,6 @@
   min-width: 112px;
 }
 
-.tcs-badge {
-  background: var(--c-panel2);
-  color: var(--c-accent2);
-  border-radius: 6px;
-  padding: 2px 8px;
-  font-size: 0.73rem;
-}
-.tcs-badge.tcs-official {
-  background: rgba(244, 193, 82, 0.16);
-  color: var(--c-official);
-}
 .tcs-tag {
   background: var(--c-panel2);
   border-radius: 6px;

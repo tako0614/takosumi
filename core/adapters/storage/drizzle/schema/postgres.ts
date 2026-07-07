@@ -571,6 +571,29 @@ export const creditReservations = pgTable(
   ],
 );
 
+export const publicHostReservations = pgTable(
+  names.publicHostReservations,
+  {
+    hostname: text("hostname").primaryKey(),
+    workspaceId: text("workspace_id").notNull(),
+    installationId: text("installation_id").notNull(),
+    installationName: text("installation_name").notNull(),
+    status: text("status").notNull(),
+    reservedAt: text("reserved_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+    releasedAt: text("released_at"),
+  },
+  (table) => [
+    index("takosumi_public_host_reservations_workspace_idx").on(
+      table.workspaceId,
+    ),
+    index("takosumi_public_host_reservations_installation_idx").on(
+      table.installationId,
+    ),
+    index("takosumi_public_host_reservations_status_idx").on(table.status),
+  ],
+);
+
 export const credentialMintEvents = pgTable(
   names.credentialMintEvents,
   {

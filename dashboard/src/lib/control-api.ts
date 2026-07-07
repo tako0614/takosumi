@@ -85,9 +85,20 @@ export class ControlApiError extends Error {
   /** True when creating a service hit the Workspace/name/environment guard. */
   get isDuplicateService(): boolean {
     return (
+      this.reason === "duplicate_capsule" ||
       this.reason === "duplicate_installation" ||
       (this.status === 409 &&
-        /installation\s+.+\s+already exists/iu.test(this.message))
+        /\b(?:capsule|installation)\b\s+.*already exists/iu.test(
+          this.message,
+        ))
+    );
+  }
+
+  /** True when a requested public app hostname is already reserved. */
+  get isAppHostnameUnavailable(): boolean {
+    return (
+      this.reason === "app_hostname_unavailable" ||
+      /^app_hostname_unavailable:/u.test(this.message)
     );
   }
 }

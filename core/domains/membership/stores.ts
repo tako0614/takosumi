@@ -39,9 +39,7 @@ export class InMemoryMembershipSpaceStore implements MembershipSpaceStore {
     space: MembershipSpace,
   ): Promise<Result<MembershipSpace, DomainError>> {
     if (this.#spaces.has(space.id)) {
-      return Promise.resolve(
-        err(conflict("space already exists", { spaceId: space.id })),
-      );
+      return Promise.resolve(err(conflict("space already exists")));
     }
     this.#spaces.set(space.id, space);
     return Promise.resolve(ok(space));
@@ -61,20 +59,11 @@ export class InMemoryGroupStore implements GroupStore {
 
   create(group: Group): Promise<Result<Group, DomainError>> {
     if (this.#groups.has(group.id)) {
-      return Promise.resolve(
-        err(conflict("group already exists", { groupId: group.id })),
-      );
+      return Promise.resolve(err(conflict("group already exists")));
     }
     for (const existing of this.#groups.values()) {
       if (existing.spaceId === group.spaceId && existing.slug === group.slug) {
-        return Promise.resolve(
-          err(
-            conflict("group slug already exists", {
-              spaceId: group.spaceId,
-              slug: group.slug,
-            }),
-          ),
-        );
+        return Promise.resolve(err(conflict("group slug already exists")));
       }
     }
     this.#groups.set(group.id, group);
@@ -121,8 +110,8 @@ export class InMemorySpaceMembershipStore implements SpaceMembershipStore {
 
   listBySpace(spaceId: SpaceId): Promise<readonly SpaceMembership[]> {
     return Promise.resolve(
-      [...this.#memberships.values()].filter((membership) =>
-        membership.spaceId === spaceId
+      [...this.#memberships.values()].filter(
+        (membership) => membership.spaceId === spaceId,
       ),
     );
   }
@@ -133,7 +122,7 @@ export async function requireMembershipSpace(
   spaceId: SpaceId,
 ): Promise<Result<MembershipSpace, DomainError>> {
   const space = await store.get(spaceId);
-  if (!space) return err(notFound("space not found", { spaceId }));
+  if (!space) return err(notFound("space not found"));
   return ok(space);
 }
 
