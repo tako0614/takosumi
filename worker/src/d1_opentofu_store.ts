@@ -841,6 +841,22 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     };
   }
 
+  async getPublicHostReservation(
+    hostname: string,
+  ): Promise<PublicHostReservation | undefined> {
+    await this.#ensureSchema();
+    const row = await this.db
+      .prepare(
+        `select hostname, workspace_id, installation_id, installation_name,
+                status, reserved_at, updated_at, released_at
+         from public_host_reservations
+         where hostname = ?`,
+      )
+      .bind(hostname.toLowerCase())
+      .first<Record<string, unknown>>();
+    return row ? publicHostReservationFromD1Row(row) : undefined;
+  }
+
   async releasePublicHostsForInstallation(
     installationId: string,
     now: string,

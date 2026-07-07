@@ -110,7 +110,7 @@ describe("ControlApiError app hostname classification", () => {
     const error = new ControlApiError(
       409,
       "failed_precondition",
-      "app_hostname_unavailable: yurucommu.app.takos.jp already exists",
+      "app_hostname_unavailable: already exists",
     );
 
     expect(error.isAppHostnameUnavailable).toBe(true);
@@ -121,7 +121,7 @@ describe("ControlApiError app hostname classification", () => {
     const error = new ControlApiError(
       409,
       "failed_precondition",
-      "app_hostname_unavailable: yurucommu.app.takos.jp already exists",
+      "app_hostname_unavailable: already exists",
       {
         error: {
           code: "failed_precondition",

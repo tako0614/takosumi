@@ -524,8 +524,8 @@ function workerNameFromCapsule(installation: Installation): string | undefined {
   return validManagedWorkerName(normalized) ? normalized : undefined;
 }
 
-function publicHostUnavailableMessage(host: string): string {
-  return `app_hostname_unavailable: ${host} already exists`;
+function publicHostUnavailableMessage(): string {
+  return "app_hostname_unavailable: already exists";
 }
 
 function managedWorkerNameSuffix(installationId: string): string {
@@ -1984,7 +1984,7 @@ export class RunEngine {
       if (!claim || claim.installationId === installation.id) continue;
       throw new OpenTofuControllerError(
         "failed_precondition",
-        publicHostUnavailableMessage(host),
+        publicHostUnavailableMessage(),
       );
     }
     const workspaceId = installation.workspaceId ?? installation.spaceId;
@@ -2001,7 +2001,7 @@ export class RunEngine {
       const reservation = result.reservation;
       throw new OpenTofuControllerError(
         "failed_precondition",
-        publicHostUnavailableMessage(host),
+        publicHostUnavailableMessage(),
       );
     }
   }

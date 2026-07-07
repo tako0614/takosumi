@@ -1083,7 +1083,7 @@ test("managed Cloudflare app.takos.jp host is globally claimed across Workspaces
   await expect(
     controller.createInstallationPlan(second.installation.id),
   ).rejects.toThrow(
-    "app_hostname_unavailable: shared-app.app.takos.jp already exists",
+    "app_hostname_unavailable: already exists",
   );
 });
 
@@ -1204,7 +1204,7 @@ test("managed Cloudflare app.takos.jp host claim prefers active Capsule over sta
   await expect(
     controller.createInstallationPlan(challenger.installation.id),
   ).rejects.toThrow(
-    "app_hostname_unavailable: shared-app.app.takos.jp already exists",
+    "app_hostname_unavailable: already exists",
   );
 });
 
@@ -1500,7 +1500,7 @@ test("managed Cloudflare app.takos.jp host is atomically reserved by successful 
   await expect(
     controller.createInstallationPlan(second.installation.id),
   ).rejects.toThrow(
-    "app_hostname_unavailable: reserved-app.app.takos.jp already exists",
+    "app_hostname_unavailable: already exists",
   );
 });
 
