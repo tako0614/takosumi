@@ -390,7 +390,9 @@ function containsUnsafeAppDeploymentDescriptorValue(value: JsonValue): boolean {
   return containsSecretLikeAppDeploymentDescriptorValue(value);
 }
 
-function containsSecretLikeAppDeploymentDescriptorValue(value: JsonValue): boolean {
+function containsSecretLikeAppDeploymentDescriptorValue(
+  value: JsonValue,
+): boolean {
   const stack: JsonValue[] = [value];
   let inspected = 0;
   while (stack.length > 0) {
@@ -478,14 +480,123 @@ export function stateLockEvidence(
 }
 
 export function errorDiagnostic(error: unknown): RunDiagnostic {
+  const message = errorMessage(error);
+  const classified = classifiedErrorDiagnostic(message);
+  if (classified) return classified;
   return {
     severity: "error",
-    message: errorMessage(error),
+    message,
   };
 }
 
 export function errorMessage(error: unknown): string {
   return redactString(error instanceof Error ? error.message : String(error));
+}
+
+function classifiedErrorDiagnostic(message: string): RunDiagnostic | undefined {
+  if (isCreditRequiredErrorMessage(message)) {
+    return {
+      severity: "error",
+      message:
+        "credits_required: insufficient credits for this Takosumi Cloud operation",
+      detail: message,
+    };
+  }
+  if (isProviderConnectionNotReadyErrorMessage(message)) {
+    return {
+      severity: "error",
+      message:
+        "provider_connection_not_ready: connected account verification is required",
+      detail: message,
+    };
+  }
+  if (isProviderConnectionChangedErrorMessage(message)) {
+    return {
+      severity: "error",
+      message:
+        "provider_connection_changed: connected account evidence changed after planning",
+      detail: message,
+    };
+  }
+  if (isProviderConnectionSetupErrorMessage(message)) {
+    return {
+      severity: "error",
+      message:
+        "provider_connection_setup_required: connected account setup is required",
+      detail: message,
+    };
+  }
+  if (isCredentialServiceUnavailableErrorMessage(message)) {
+    return {
+      severity: "error",
+      message:
+        "credential_service_unavailable: provider credential preparation is unavailable",
+      detail: message,
+    };
+  }
+  return undefined;
+}
+
+function isCreditRequiredErrorMessage(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("cloud_extension_insufficient_credits") ||
+    normalized.includes('"reason":"insufficient_credits"') ||
+    normalized.includes('"reason": "insufficient_credits"') ||
+    (normalized.includes("reservationstatus") &&
+      normalized.includes("insufficient_credits")) ||
+    normalized.includes("usd balance reservation failed") ||
+    normalized.includes("insufficient credits")
+  );
+}
+
+function isProviderConnectionChangedErrorMessage(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("resolved_bindings_changed") ||
+    normalized.includes("re-plan before apply")
+  );
+}
+
+function isProviderConnectionNotReadyErrorMessage(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    (normalized.includes("credential_mint_failed") &&
+      normalized.includes("not verified")) ||
+    normalized.includes("pending (not verified)") ||
+    (normalized.includes("provider connection") &&
+      normalized.includes("status pending is not verified"))
+  );
+}
+
+function isProviderConnectionSetupErrorMessage(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("credential_mint_failed") &&
+    (normalized.includes("provider connection evidence is required") ||
+      normalized.includes("provider connection resolution is required") ||
+      normalized.includes("root-only provider connection is required") ||
+      (normalized.includes("connection ") &&
+        normalized.includes(" not found")) ||
+      normalized.includes("provider connection is required") ||
+      normalized.includes("belongs to another space") ||
+      normalized.includes("git source connection") ||
+      normalized.includes("cannot back a provider env binding") ||
+      (normalized.includes("provider ") &&
+        normalized.includes(" does not match")))
+  );
+}
+
+function isCredentialServiceUnavailableErrorMessage(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    normalized.includes("credential_mint_failed") &&
+    (normalized.includes("connection vault is not configured") ||
+      normalized.includes("requires a managed provider credential issuer") ||
+      normalized.includes("could not mint a run-scoped provider token") ||
+      normalized.includes("gateway materialization is takosumi cloud-only") ||
+      normalized.includes("mint driver"))
+  );
 }
 
 export function redactRunDiagnostics(

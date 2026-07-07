@@ -265,6 +265,7 @@ function isCreditsRequiredText(value: string | undefined): boolean {
   if (!value) return false;
   const normalized = value.toLowerCase();
   return (
+    normalized.includes("credits_required") ||
     normalized.includes("cloud_extension_insufficient_credits") ||
     normalized.includes('"reason":"insufficient_credits"') ||
     normalized.includes('"reason": "insufficient_credits"') ||
@@ -300,6 +301,18 @@ function accessIssueFromText(
 ): AccessIssueKind | undefined {
   if (!value) return undefined;
   const normalized = value.toLowerCase();
+  if (normalized.includes("provider_connection_changed")) {
+    return "connection_changed";
+  }
+  if (normalized.includes("provider_connection_not_ready")) {
+    return "connection_verification";
+  }
+  if (normalized.includes("provider_connection_setup_required")) {
+    return "connection_setup";
+  }
+  if (normalized.includes("credential_service_unavailable")) {
+    return "credential_service";
+  }
   if (
     normalized.includes("resolved_bindings_changed") ||
     normalized.includes("re-plan before apply")
