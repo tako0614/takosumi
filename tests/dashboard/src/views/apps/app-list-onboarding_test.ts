@@ -57,6 +57,9 @@ describe("AppListView app launcher", () => {
     expect(appListSource).toContain("compareAppTiles");
     expect(appListSource).toContain("appTileLabel");
     expect(appListSource).toContain("return tiles.sort(compareAppTiles)");
+    expect(appListSource).toContain(
+      "Number(needsAttention(b.inst)) - Number(needsAttention(a.inst))",
+    );
     expect(appListSource).toContain("function AppLauncher");
     expect(appListSource).toContain("function AppTileView");
     expect(appListSource).toContain("isVisibleServiceCapsule");

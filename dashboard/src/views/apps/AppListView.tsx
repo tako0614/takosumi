@@ -303,8 +303,10 @@ function mergeById<T extends { readonly id: string }>(
 }
 
 function compareAppTiles(a: AppTile, b: AppTile): number {
+  // Prioritize apps that need attention so broken/stale installs do not get
+  // buried behind healthy services on the everyday launcher.
   const attentionRank =
-    Number(needsAttention(a.inst)) - Number(needsAttention(b.inst));
+    Number(needsAttention(b.inst)) - Number(needsAttention(a.inst));
   if (attentionRank !== 0) return attentionRank;
   return appTileLabel(a).localeCompare(appTileLabel(b), locale(), {
     sensitivity: "base",
