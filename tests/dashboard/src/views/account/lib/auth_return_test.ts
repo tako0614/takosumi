@@ -3,10 +3,14 @@ import {
   completeUpstreamOAuth,
   recallOAuthReturnTo,
   safeOAuthReturnTo,
+  startUpstreamOAuth,
 } from "../../../../../../dashboard/src/views/account/lib/auth.ts";
 
 const ORIGINAL_SESSION_STORAGE = globalThis.sessionStorage;
 const ORIGINAL_FETCH = globalThis.fetch;
+const ORIGINAL_CRYPTO = globalThis.crypto;
+const ORIGINAL_LOCATION = globalThis.location;
+const ORIGINAL_WINDOW = globalThis.window;
 
 afterEach(() => {
   if (ORIGINAL_SESSION_STORAGE === undefined) {
@@ -15,6 +19,21 @@ afterEach(() => {
     globalThis.sessionStorage = ORIGINAL_SESSION_STORAGE;
   }
   globalThis.fetch = ORIGINAL_FETCH;
+  if (ORIGINAL_CRYPTO === undefined) {
+    Reflect.deleteProperty(globalThis, "crypto");
+  } else {
+    globalThis.crypto = ORIGINAL_CRYPTO;
+  }
+  if (ORIGINAL_LOCATION === undefined) {
+    Reflect.deleteProperty(globalThis, "location");
+  } else {
+    globalThis.location = ORIGINAL_LOCATION;
+  }
+  if (ORIGINAL_WINDOW === undefined) {
+    Reflect.deleteProperty(globalThis, "window");
+  } else {
+    globalThis.window = ORIGINAL_WINDOW;
+  }
 });
 
 test("safeOAuthReturnTo keeps same-origin paths", () => {
@@ -77,4 +96,48 @@ test("completeUpstreamOAuth keeps the saved return path when callback exchange f
   );
   expect(storage.get("tg_oauth_state")).toBe("state_a");
   expect(storage.get("tg_oauth_provider")).toBe("google");
+});
+
+test("startUpstreamOAuth preserves return_to when legacy links reach /login", () => {
+  const storage = new Map<string, string>();
+  globalThis.sessionStorage = {
+    getItem: (key: string) => storage.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      storage.set(key, value);
+    },
+    removeItem: (key: string) => {
+      storage.delete(key);
+    },
+    clear: () => storage.clear(),
+    key: (index: number) => Array.from(storage.keys())[index] ?? null,
+    get length() {
+      return storage.size;
+    },
+  };
+  globalThis.crypto = {
+    getRandomValues: <T extends ArrayBufferView>(array: T): T => {
+      new Uint8Array(array.buffer, array.byteOffset, array.byteLength).fill(7);
+      return array;
+    },
+  } as Crypto;
+  const assigned: string[] = [];
+  Object.defineProperty(globalThis, "location", {
+    configurable: true,
+    value: {
+      href: "https://app.takosumi.com/login?return_to=%2Fnew%3FinstallConfigId%3Dcfg-catalog-yurucommu",
+      origin: "https://app.takosumi.com",
+      assign: (href: string) => assigned.push(href),
+    },
+  });
+  Object.defineProperty(globalThis, "window", {
+    configurable: true,
+    value: globalThis,
+  });
+
+  startUpstreamOAuth("google");
+
+  expect(storage.get("tg_oauth_return")).toBe(
+    "/new?installConfigId=cfg-catalog-yurucommu",
+  );
+  expect(assigned[0]).toContain("/v1/auth/upstream/authorize?");
 });
