@@ -66,12 +66,17 @@ test("runHandler hides public hostname reservation owner details", async () => {
   });
 
   expect(response.status).toEqual(409);
-  expect(await response.json()).toMatchObject({
+  const body = await response.json();
+  expect(body).toMatchObject({
     error: {
       code: "failed_precondition",
       message: "app_hostname_unavailable: already exists",
+      details: { reason: "app_hostname_unavailable" },
     },
   });
+  expect(JSON.stringify(body)).not.toMatch(
+    /\b(?:Workspace|Capsule|inst_1|space_1|yurucommu\.app\.takos\.jp)\b/u,
+  );
 });
 
 test("deploy_control_internal_routes — internal seam endpoints respond with 501 when controller is absent", async () => {
