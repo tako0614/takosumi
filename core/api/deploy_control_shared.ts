@@ -850,10 +850,11 @@ export async function runHandler(
   try {
     return await fn();
   } catch (err) {
-    if (err instanceof OpenTofuControllerError) {
+    const controllerCode = controllerErrorCode(err);
+    if (controllerCode) {
       return c.json(
-        errorEnvelope(c, err.code, err.message),
-        controllerHttpStatus(err.code),
+        errorEnvelope(c, controllerCode, controllerErrorMessage(err)),
+        controllerHttpStatus(controllerCode),
       );
     }
     const requestId = resolveRequestId(c);
@@ -874,6 +875,22 @@ export async function runHandler(
       500,
     );
   }
+}
+
+function controllerErrorCode(
+  error: unknown,
+): OpenTofuControllerErrorCode | undefined {
+  if (error instanceof OpenTofuControllerError) return error.code;
+  if (typeof error !== "object" || error === null) return undefined;
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" &&
+    code in DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE
+    ? (code as OpenTofuControllerErrorCode)
+    : undefined;
+}
+
+function controllerErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 export async function readJsonBody<T>(

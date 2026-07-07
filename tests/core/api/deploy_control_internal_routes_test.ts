@@ -1,12 +1,45 @@
 import { expect, test } from "bun:test";
+import type { Context } from "hono";
 
 import { createApiApp } from "../../../core/api/app.ts";
+import { runHandler } from "../../../core/api/deploy_control_shared.ts";
 import { OpenTofuDeploymentController } from "../../../core/domains/deploy-control/mod.ts";
 import { InMemoryOpenTofuDeploymentStore } from "../../../core/domains/deploy-control/store.ts";
 import { seedInstallationModel } from "../../helpers/deploy-control/model_fixture.ts";
 import { OutputSharesService } from "../../../core/domains/output-shares/mod.ts";
 import type { Output as OutputSnapshot } from "takosumi-contract/outputs";
 import type { Workspace as Space } from "takosumi-contract/workspaces";
+
+class ForeignControllerError extends Error {
+  readonly code = "failed_precondition";
+}
+
+test("runHandler renders structural controller errors without collapsing to 500", async () => {
+  const context = {
+    req: {
+      path: "/internal/v1/test",
+      method: "POST",
+      header: () => undefined,
+    },
+    json: (body: unknown, status: number) =>
+      new Response(JSON.stringify(body), {
+        status,
+        headers: { "content-type": "application/json" },
+      }),
+  } as unknown as Context;
+
+  const response = await runHandler(context, async () => {
+    throw new ForeignControllerError("foreign controller failure");
+  });
+
+  expect(response.status).toEqual(409);
+  expect(await response.json()).toMatchObject({
+    error: {
+      code: "failed_precondition",
+      message: "foreign controller failure",
+    },
+  });
+});
 
 test("deploy_control_internal_routes — internal seam endpoints respond with 501 when controller is absent", async () => {
   const app = await createApiApp({
