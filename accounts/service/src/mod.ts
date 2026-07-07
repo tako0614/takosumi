@@ -69,6 +69,7 @@ import {
 import {
   handleGetAppCapsule,
   handleListAppCapsules,
+  handleListCapsuleServices,
   handleListCapsuleEvents,
 } from "./installation-routes.ts";
 import { signEs256Jwt } from "./jwt.ts";
@@ -1262,6 +1263,14 @@ export function createAccountsHandler(
           store,
         });
       }
+      if (capsuleRoute.kind === "services" && request.method === "GET") {
+        return await handleListCapsuleServices({
+          capsuleId: capsuleRoute.capsuleId,
+          request,
+          store,
+          deployControl: options.deployControl,
+        });
+      }
       if (
         capsuleRoute.kind === "service-rotate-token" &&
         request.method === "POST"
@@ -1813,6 +1822,7 @@ function capsuleRouteAccountAccess(
   }
   if (
     (route.kind === "events" ||
+      route.kind === "services" ||
       route.kind === "export-operation" ||
       route.kind === "export-download") &&
     method === "GET"

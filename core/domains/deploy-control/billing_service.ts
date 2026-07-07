@@ -1,11 +1,13 @@
 /**
- * Showback billing / usage facade (§28 / §32; Space billing).
+ * Showback billing / usage facade (§28 / §32; owner billing).
  *
  * OSS Takosumi (and Takosumi for-Operators) only ever runs a NON-blocking
- * Workspace-scoped ledger: `disabled` (no ledger) or `showback` (record a
- * transparent cost estimate + usage WITHOUT ever blocking apply). Official
- * billing, enforced payment gates, Stripe, and per-plan quota that BLOCK apply
- * are Takosumi Cloud-only CLOSED features.
+ * owner-account ledger: `disabled` (no ledger) or `showback` (record a
+ * transparent cost estimate + usage WITHOUT ever blocking apply). The
+ * Workspace remains the permission/source boundary; the billing subject is the
+ * owning user so one user's Workspaces spend from the same account balance.
+ * Official billing, enforced payment gates, Stripe, and per-plan quota that
+ * BLOCK apply are Takosumi Cloud-only CLOSED features.
  *
  * This collaborator therefore:
  *   - computes the transparent plan cost estimate,
@@ -262,19 +264,39 @@ export class BillingService {
     return space?.billingSettings ?? this.#defaultBillingSettings;
   }
 
+  async #billingSubjectForSpace(spaceId: string): Promise<{
+    readonly space: Space;
+    readonly sourceWorkspaceId: string;
+    readonly billingSubjectId: string;
+  }> {
+    const space = await this.#requireSpace(spaceId);
+    return {
+      space,
+      sourceWorkspaceId: space.id,
+      billingSubjectId: space.ownerUserId,
+    };
+  }
+
   async #billingPlanForSpace(spaceId: string) {
-    const subscription = await this.#store.getSpaceSubscription(spaceId);
+    const { sourceWorkspaceId, billingSubjectId } =
+      await this.#billingSubjectForSpace(spaceId);
+    const subscription =
+      (await this.#store.getSpaceSubscription(billingSubjectId)) ??
+      (billingSubjectId === sourceWorkspaceId
+        ? undefined
+        : await this.#store.getSpaceSubscription(sourceWorkspaceId));
     if (!subscription) return undefined;
     const plan = await this.#store.getBillingPlan(subscription.planId);
     return plan ? { subscription, plan } : undefined;
   }
 
   /**
-   * Monthly-credit bookkeeping for a subscribed Space. Inert for OSS-only
+   * Monthly-credit bookkeeping for a subscribed billing subject. Inert for OSS-only
    * deployments (no subscription rows exist without Cloud enforcement); kept so
    * the usage service can call it uniformly. No Stripe, no blocking.
    */
   async reconcileSpaceMonthlyCredits(spaceId: string): Promise<void> {
+    const { billingSubjectId } = await this.#billingSubjectForSpace(spaceId);
     const billingPlan = await this.#billingPlanForSpace(spaceId);
     if (!billingPlan) return;
     if (
@@ -289,14 +311,14 @@ export class BillingService {
     if (!Number.isFinite(periodStartMs) || periodStartMs > this.#now()) {
       return;
     }
-    const balance = await this.#store.getCreditBalance(spaceId);
+    const balance = await this.#store.getCreditBalance(billingSubjectId);
     const nowIso = new Date(this.#now()).toISOString();
     const includedUsdMicros = billingPlanIncludedUsdMicros(billingPlan.plan);
     const includedCredits = usdMicrosToLegacyCredits(includedUsdMicros);
     if (!balance) {
       await this.#store.putCreditBalance({
-        workspaceId: spaceId,
-        spaceId,
+        workspaceId: billingSubjectId,
+        spaceId: billingSubjectId,
         availableUsdMicros: includedUsdMicros,
         reservedUsdMicros: 0,
         monthlyIncludedUsdMicros: includedUsdMicros,
@@ -317,7 +339,7 @@ export class BillingService {
     ) {
       return;
     }
-    await this.#store.reconcileMonthlyCredits(spaceId, {
+    await this.#store.reconcileMonthlyCredits(billingSubjectId, {
       newMonthly: includedCredits,
       periodStartIso: new Date(periodStartMs).toISOString(),
       updatedAt: nowIso,
@@ -338,7 +360,11 @@ export class BillingService {
     readonly reasons: readonly string[];
     readonly audit?: Readonly<Record<string, JsonValue>>;
   }> {
-    const settings = await this.billingSettingsForSpace(input.planRun.workspaceId ?? input.planRun.spaceId);
+    const sourceWorkspaceId =
+      input.planRun.workspaceId ?? input.planRun.spaceId;
+    const { billingSubjectId } =
+      await this.#billingSubjectForSpace(sourceWorkspaceId);
+    const settings = await this.billingSettingsForSpace(sourceWorkspaceId);
     if (settings.mode === "disabled") {
       return {
         reasons: [],
@@ -349,7 +375,7 @@ export class BillingService {
         },
       };
     }
-    await this.reconcileSpaceMonthlyCredits(input.planRun.workspaceId ?? input.planRun.spaceId);
+    await this.reconcileSpaceMonthlyCredits(sourceWorkspaceId);
     const estimatedUsdMicros = estimatePlanUsdMicros(
       input.planRun,
       input.result,
@@ -364,7 +390,8 @@ export class BillingService {
 
     // Seam B quota port (OSS no-op: no plan limits).
     const quota = await this.#quota.evaluatePlanQuota({
-      spaceId: input.planRun.spaceId,
+      workspaceId: billingSubjectId,
+      spaceId: sourceWorkspaceId,
       estimatedUsdMicros,
       planResourceChanges: changes,
     });
@@ -372,7 +399,8 @@ export class BillingService {
 
     // Seam B enforcement port (OSS no-op: never blocks, never charges).
     const enforced = await this.#enforcement.reservePlanBilling({
-      spaceId: input.planRun.spaceId,
+      workspaceId: billingSubjectId,
+      spaceId: sourceWorkspaceId,
       runId: input.planRun.id,
       ...(input.planRun.installationId
         ? { installationId: input.planRun.installationId }
@@ -414,10 +442,13 @@ export class BillingService {
     readonly reasons: readonly string[];
     readonly audit?: Readonly<Record<string, JsonValue>>;
   }> {
+    const billingSubjectId = await this.#billingSubjectIdForPlanRun(
+      input.planRun,
+    );
     const reservation: CreditReservation = {
       id: this.#newId("creditres"),
-      workspaceId: input.planRun.workspaceId ?? input.planRun.spaceId,
-      spaceId: input.planRun.workspaceId,
+      workspaceId: billingSubjectId,
+      spaceId: billingSubjectId,
       runId: input.planRun.id,
       estimatedUsdMicros: input.estimatedUsdMicros,
       estimatedCredits: input.estimatedCredits,
@@ -442,10 +473,14 @@ export class BillingService {
    * may throw (e.g. expired reservation / insufficient balance) to fail closed.
    */
   async assertApplyBillingReservation(planRun: PlanRun): Promise<void> {
-    const settings = await this.billingSettingsForSpace(planRun.workspaceId ?? planRun.spaceId);
+    const sourceWorkspaceId = planRun.workspaceId ?? planRun.spaceId;
+    const { billingSubjectId } =
+      await this.#billingSubjectForSpace(sourceWorkspaceId);
+    const settings = await this.billingSettingsForSpace(sourceWorkspaceId);
     if (settings.mode === "disabled") return;
     await this.#enforcement.assertReservationSatisfied({
-      spaceId: planRun.spaceId,
+      workspaceId: billingSubjectId,
+      spaceId: sourceWorkspaceId,
       runId: planRun.id,
       now: this.#now(),
     });
@@ -467,14 +502,21 @@ export class BillingService {
     if (!reservation) return;
     if (reservation.status !== "reserved") return;
     const reservedUsdMicros = creditReservationEstimatedUsdMicros(reservation);
+    const sourceWorkspaceId =
+      input.planRun.workspaceId ?? input.planRun.spaceId;
+    const { billingSubjectId } =
+      await this.#billingSubjectForSpace(sourceWorkspaceId);
     await this.#store.putUsageEvent({
       id: this.#newId("usage"),
-      workspaceId: (input.planRun.workspaceId ?? input.planRun.spaceId),
-      spaceId: input.planRun.workspaceId,
+      workspaceId: billingSubjectId,
+      spaceId: billingSubjectId,
       ...(input.planRun.capsuleId
         ? { capsuleId: input.planRun.capsuleId }
         : {}),
       runId: input.applyRun.id,
+      resourceMetadata: {
+        source_workspace_id: sourceWorkspaceId,
+      },
       kind: "operation",
       quantity: 1,
       usdMicros: reservedUsdMicros,
@@ -488,7 +530,8 @@ export class BillingService {
       status: "captured",
     });
     await this.#enforcement.captureRunBilling({
-      spaceId: input.planRun.spaceId,
+      workspaceId: billingSubjectId,
+      spaceId: sourceWorkspaceId,
       runId: input.planRun.id,
       applyRunId: input.applyRun.id,
       ...(input.planRun.installationId
@@ -504,6 +547,9 @@ export class BillingService {
    * released and delegates any balance restore to the enforcement port.
    */
   async releaseApplyBillingReservation(planRun: PlanRun): Promise<void> {
+    const sourceWorkspaceId = planRun.workspaceId ?? planRun.spaceId;
+    const { billingSubjectId } =
+      await this.#billingSubjectForSpace(sourceWorkspaceId);
     const reservation = await this.#store.getCreditReservationForRun(
       planRun.id,
     );
@@ -514,9 +560,16 @@ export class BillingService {
       });
     }
     await this.#enforcement.releaseReservation({
-      spaceId: planRun.spaceId,
+      workspaceId: billingSubjectId,
+      spaceId: sourceWorkspaceId,
       runId: planRun.id,
       now: this.#now(),
     });
+  }
+
+  async #billingSubjectIdForPlanRun(planRun: PlanRun): Promise<string> {
+    return (
+      await this.#billingSubjectForSpace(planRun.workspaceId ?? planRun.spaceId)
+    ).billingSubjectId;
   }
 }

@@ -2,7 +2,7 @@
   "name": "@takosjp/takosumi-cli",
   "version": "0.0.1",
   "private": true,
-  "license": "AGPL-3.0-only",
+  "license": "MIT",
   "type": "module",
   "exports": {
     ".": "./src/main.ts"

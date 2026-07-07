@@ -17,8 +17,7 @@ import {
   Switch,
 } from "solid-js";
 import { useNavigate } from "@solidjs/router";
-import { Box, Database, Globe, LayoutGrid, Plus, Sparkles } from "lucide-solid";
-import type { JSX } from "solid-js";
+import { Plus, Sparkles } from "lucide-solid";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import {
@@ -61,30 +60,57 @@ export default function AppListView() {
   return <Page title={t("apps.title")}>{() => <Inner />}</Page>;
 }
 
-/** A type-specific launcher icon so services read as distinct apps, not rows. */
-function serviceKindIcon(kind: string | undefined): JSX.Element {
+/** Kind key for the tinted monogram fallback tile (worker/site/storage/…). */
+function kindClass(kind: string | undefined): string {
   switch (kind) {
     case "site":
-      return <Globe />;
     case "storage":
-      return <Database />;
     case "worker":
-      return <Box />;
+      return `av-tile-k-${kind}`;
     default:
-      return <LayoutGrid />;
+      return "av-tile-k-default";
   }
 }
 
 /**
- * Vivid, deterministic app-icon color per tile. Hue by grid position via the
- * golden angle (137.5°) so consecutive icons land far apart on the wheel — even
- * a few tiles always read as clearly distinct colors. Fixed saturation /
- * lightness keeps every glyph-on-color icon glossy on both themes. (Tiles with
- * a declared image / icon use that instead of the colored glyph.)
+ * Fallback face for an app that declares no icon: its initials on a kind-tinted
+ * tile. Distinct-by-name + distinct-by-kind so a screen of undeclared apps
+ * never reads as identical boxes (declared image / emoji icons are preferred).
  */
-function appIconColor(index: number): readonly [string, string] {
-  const hue = Math.round((index * 137.508 + 210) % 360);
-  return [`hsl(${hue} 72% 56%)`, `hsl(${hue} 76% 44%)`];
+function monogramInitials(name: string): string {
+  const segments = name
+    .replace(/^(ts-e2e-|takosumi-|takos-)/i, "")
+    .split(/[-_\s./]+/)
+    .filter(Boolean);
+  const chars = (segments[0]?.[0] ?? name[0] ?? "?") + (segments[1]?.[0] ?? "");
+  return chars.toUpperCase().slice(0, 2);
+}
+
+interface CuratedAppIcon {
+  readonly image?: string;
+  readonly emoji?: string;
+}
+
+/**
+ * Curated marks for first-party apps that declare no icon of their own, so
+ * official services (Takos, yurucommu, …) show a real graphic instead of an
+ * initials monogram. Takos uses its logo image; the others use a
+ * representative emoji. Matched by display name (most specific first); unknown
+ * apps still fall through to the monogram.
+ */
+const CURATED_APP_ICONS: readonly (readonly [RegExp, CuratedAppIcon])[] = [
+  [/yurucommu/i, { emoji: "🌐" }],
+  [/yurumeet/i, { emoji: "💬" }],
+  [/takos[-_\s]?office/i, { emoji: "📄" }],
+  [/takos[-_\s]?computer/i, { emoji: "🖥️" }],
+  [/road[-_\s]?to[-_\s]?me/i, { emoji: "🎯" }],
+  [/takos/i, { image: "/tako.png" }],
+];
+function curatedAppIcon(name: string): CuratedAppIcon | undefined {
+  for (const [pattern, icon] of CURATED_APP_ICONS) {
+    if (pattern.test(name)) return icon;
+  }
+  return undefined;
 }
 
 function Inner() {
@@ -147,8 +173,8 @@ function Inner() {
     }
     return map;
   });
-  const iconForCapsule = (inst: Capsule): JSX.Element =>
-    serviceKindIcon(configById().get(inst.installConfigId)?.catalog?.kind);
+  const kindForCapsule = (inst: Capsule): string | undefined =>
+    configById().get(inst.installConfigId)?.catalog?.kind;
 
   // Declared app surfaces per service. The current StateVersion rows are loaded
   // through one Workspace projection request instead of N `getDeployment` reads.
@@ -247,7 +273,7 @@ function Inner() {
                   <AppLauncher
                     tiles={appTiles()}
                     openDetail={openDetail}
-                    iconFor={iconForCapsule}
+                    kindFor={kindForCapsule}
                   />
                 </Match>
               </Switch>
@@ -336,49 +362,53 @@ function NoWorkspaceStartPanel(props: {
 function AppLauncher(props: {
   readonly tiles: readonly AppTile[];
   readonly openDetail: (inst: Capsule) => void;
-  readonly iconFor: (inst: Capsule) => JSX.Element;
+  readonly kindFor: (inst: Capsule) => string | undefined;
 }) {
   return (
-    <ul class="av-launcher">
-      <For each={props.tiles}>
-        {(tile, index) => (
-          <li>
-            <AppTileView
-              tile={tile}
-              index={index()}
-              icon={props.iconFor(tile.inst)}
-              onOpenDetail={() => props.openDetail(tile.inst)}
-            />
-          </li>
-        )}
-      </For>
-      <li>
-        <a class="av-tile av-tile-add" href="/new">
-          <span class="av-tile-icon" aria-hidden="true">
-            <Plus />
-          </span>
-          <span class="av-tile-name">{t("apps.add")}</span>
-        </a>
-      </li>
-    </ul>
+    <>
+      <div class="av-section-head">
+        <h2>{t("apps.sectionYours")}</h2>
+        <span class="av-section-head-count">{props.tiles.length}</span>
+      </div>
+      <ul class="av-launcher">
+        <For each={props.tiles}>
+          {(tile) => (
+            <li>
+              <AppTileView
+                tile={tile}
+                kind={props.kindFor(tile.inst)}
+                onOpenDetail={() => props.openDetail(tile.inst)}
+              />
+            </li>
+          )}
+        </For>
+        <li>
+          <a class="av-tile av-tile-add" href="/new">
+            <span class="av-tile-icon" aria-hidden="true">
+              <Plus />
+            </span>
+            <span class="av-tile-name">{t("apps.addShort")}</span>
+          </a>
+        </li>
+      </ul>
+    </>
   );
 }
 
 /**
- * One surface tile. The face is the declared image, else a declared icon
- * (image-URL or emoji/glyph), else the service's type icon on a colored tile.
- * A live surface URL renders an anchor (new tab); otherwise a button opens the
- * service screen. Needs-attention shows as a corner dot (+ screen-reader text).
+ * One surface tile. The face is the declared image, else a declared emoji icon,
+ * else the app's initials on a kind-tinted monogram tile — so undeclared apps
+ * stay distinct rather than reading as identical boxes. A live surface URL
+ * renders an anchor (new tab); otherwise a button opens the service screen.
+ * Needs-attention shows as a corner dot (+ screen-reader text).
  */
 function AppTileView(props: {
   readonly tile: AppTile;
-  readonly index: number;
-  readonly icon: JSX.Element;
+  readonly kind: string | undefined;
   readonly onOpenDetail: () => void;
 }) {
   const surface = () => props.tile.surface;
   const attention = () => needsAttention(props.tile.inst);
-  const color = appIconColor(props.index);
   const name = () => surface().name ?? props.tile.inst.name;
   const imageSrc = () =>
     surface().image ??
@@ -387,22 +417,51 @@ function AppTileView(props: {
       : undefined);
   const emojiIcon = () =>
     surface().icon && !isUrlString(surface().icon) ? surface().icon : undefined;
+  // First-party apps that declare no icon fall back to a curated mark (Takos
+  // logo / representative emoji) before the initials monogram, so official
+  // services never read as plain letters.
+  const curated = () =>
+    imageSrc() || emojiIcon() ? undefined : curatedAppIcon(name());
+  const curatedImage = () => curated()?.image;
+  const curatedEmoji = () => curated()?.emoji;
+  const isMonogram = () =>
+    !imageSrc() && !emojiIcon() && !curatedImage() && !curatedEmoji();
 
   const body = () => (
     <>
       <span
         class="av-tile-icon"
-        classList={{ "av-tile-icon-image": Boolean(imageSrc()) }}
-        style={{ "--app-c1": color[0], "--app-c2": color[1] }}
+        classList={{
+          "av-tile-icon-image": Boolean(imageSrc()) || Boolean(curatedImage()),
+          "av-tile-icon-logo": Boolean(curatedImage()),
+          [kindClass(props.kind)]: isMonogram(),
+        }}
         aria-hidden="true"
       >
-        <Switch fallback={props.icon}>
+        <Switch
+          fallback={
+            <span class="av-tile-mono">{monogramInitials(name())}</span>
+          }
+        >
           <Match when={imageSrc()}>
             {(src) => (
               <img class="av-tile-image" src={src()} alt="" loading="lazy" />
             )}
           </Match>
           <Match when={emojiIcon()}>
+            {(emo) => <span class="av-tile-emoji">{emo()}</span>}
+          </Match>
+          <Match when={curatedImage()}>
+            {(src) => (
+              <img
+                class="av-tile-image av-tile-logo"
+                src={src()}
+                alt=""
+                loading="lazy"
+              />
+            )}
+          </Match>
+          <Match when={curatedEmoji()}>
             {(emo) => <span class="av-tile-emoji">{emo()}</span>}
           </Match>
         </Switch>

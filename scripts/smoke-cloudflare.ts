@@ -5,7 +5,7 @@
  * Cloudflare account, verifies the Worker script exists through the Cloudflare
  * API, probes the workers.dev URL when possible, then destroys it. This keeps
  * the smoke focused on Takosumi's current first-party Cloudflare service form:
- * a runnable Worker starter. Object storage is intentionally not tested here;
+ * a runnable Worker sample. Object storage is intentionally not tested here;
  * R2/S3/GCS should use existing OpenTofu providers in ordinary Stack flows.
  *
  * Credentials come ONLY from the environment — never the repo. Set them inline
@@ -108,7 +108,7 @@ async function probeWorkerUrl(url: string): Promise<void> {
     }
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
-  throw new Error(`worker URL did not return the expected starter page: ${url}`);
+  throw new Error(`worker URL did not return the expected sample page: ${url}`);
 }
 
 async function main(): Promise<void> {
@@ -189,7 +189,7 @@ async function main(): Promise<void> {
 
     console.log(`\n> probing ${publicUrl}...`);
     await probeWorkerUrl(publicUrl);
-    console.log("  ok: worker URL returned the starter page");
+    console.log("  ok: worker URL returned the sample page");
   } finally {
     if (applied && process.env.SMOKE_KEEP !== "1") {
       console.log("\n> destroying...");

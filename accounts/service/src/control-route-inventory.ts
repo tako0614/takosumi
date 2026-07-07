@@ -139,7 +139,7 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
     {
       method: "GET",
       path: "/api/v1/workspaces/{workspaceId}/billing",
-      summary: "Read Workspace billing state",
+      summary: "Read owner account billing state for a Workspace route",
       auth: "account-session",
     },
     {

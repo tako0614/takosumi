@@ -42,8 +42,8 @@ describe("RunsListView", () => {
   });
 
   test("keeps run history copy user-facing", () => {
-    expect(en["runList.title"]).toBe("Updates");
-    expect(ja["runList.title"]).toBe("更新履歴");
+    expect(en["runList.title"]).toBe("Activity");
+    expect(ja["runList.title"]).toBe("アクティビティ");
     expect(en["runList.subtitle"]).not.toContain("ledger");
     expect(ja["runList.subtitle"]).not.toContain("台帳");
   });

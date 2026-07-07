@@ -138,10 +138,10 @@ inputs, not in Takosumi runner dispatch semantics.
 Do not hard-code Cloud-only edition branches into core. Add framework-level code behind capabilities and keep official
 managed capacity, closed native-resource internals, and enforced billing in Operator/Cloud integration points.
 
-OSS operator quota/showback machinery is implemented as a Workspace- or
-Organization-scoped ledger with operator-selected mode: `disabled` (self-host
-default, no billing UI gate) or `showback` (record estimates and usage without
-blocking apply). Official billing, enforced payment gates (the Stripe
+OSS operator quota/showback machinery keeps Workspace / Capsule attribution but
+uses an owner-account billing subject with operator-selected mode: `disabled`
+(self-host default, no billing UI gate) or `showback` (record estimates and
+usage without blocking apply). Official billing, enforced payment gates (the Stripe
 `BillingEnforcement` Seam B port), usage metering sold as a service, and
 abuse/support workflows are Takosumi Cloud-only closed features in
 `takosumi-cloud/`.

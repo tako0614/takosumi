@@ -124,7 +124,12 @@ export default function ConnectionsTab(props: { readonly workspaceId: string }) 
     ? installReturnPathFromContext(installReturn)
     : undefined;
   // ----- register form state -----------------------------------------------
-  const [provider, setProvider] = createSignal(PROVIDERS[0]?.provider ?? "");
+  // Default to the bring-your-own-key path: connecting ANY provider with the
+  // user's own credential is the first-class flow (no allowlist, no approval, no
+  // billing). The curated presets below are optional setup shortcuts.
+  const [provider, setProvider] = createSignal<string>(
+    GENERIC_ENV_PROVIDER_OPTION,
+  );
   const [displayName, setDisplayName] = createSignal("");
   // Secret material lives ONLY for the lifetime of the form; cleared on submit.
   const [values, setValues] = createSignal<Record<string, string>>({});
@@ -648,7 +653,28 @@ export default function ConnectionsTab(props: { readonly workspaceId: string }) 
           />
           <div class="wc-form">
             <Show when={!isGenericEnvProvider()}>
-              <FormField label={t("conn.add.provider")}>
+              {/* Presets are optional setup shortcuts; the first-class path is
+                  bringing your own key for any provider (button returns there). */}
+              <div class="wc-preset-intro">
+                <p class="muted">{t("conn.presets.body")}</p>
+                <div class="wc-form-actions">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    type="button"
+                    onClick={() => {
+                      setProvider(GENERIC_ENV_PROVIDER_OPTION);
+                      setValues({});
+                      setHelperToken("");
+                      setGenericEnvProvider("");
+                      setEnvPairs([{ name: "", value: "" }]);
+                    }}
+                  >
+                    {t("conn.byok.backToByok")}
+                  </Button>
+                </div>
+              </div>
+              <FormField label={t("conn.presets.provider")}>
                 <Select
                   id="connection-provider"
                   name="provider"
@@ -667,27 +693,6 @@ export default function ConnectionsTab(props: { readonly workspaceId: string }) 
                   </For>
                 </Select>
               </FormField>
-
-              <details class="connection-advanced">
-                <summary>{t("conn.genericEnv.summary")}</summary>
-                <p class="muted">{t("conn.genericEnv.body")}</p>
-                <div class="wc-form-actions">
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    type="button"
-                    onClick={() => {
-                      setProvider(GENERIC_ENV_PROVIDER_OPTION);
-                      setValues({});
-                      setHelperToken("");
-                      setGenericEnvProvider("");
-                      setEnvPairs([{ name: "", value: "" }]);
-                    }}
-                  >
-                    {t("conn.genericEnv.option")}
-                  </Button>
-                </div>
-              </details>
             </Show>
 
             <details class="connection-advanced">
@@ -914,8 +919,14 @@ export default function ConnectionsTab(props: { readonly workspaceId: string }) 
                 </Show>
               }
             >
-              {/* Generic service editor for providers without a preset form. */}
+              {/* First-class bring-your-own-key editor: any OpenTofu provider,
+                  no allowlist / approval / billing. */}
               <div class="wc-guided">
+                <div class="wc-byok-intro">
+                  <h4 class="wc-byok-title">{t("conn.byok.title")}</h4>
+                  <p class="muted">{t("conn.byok.body")}</p>
+                  <p class="wc-byok-note">{t("conn.byok.noBillingNote")}</p>
+                </div>
                 <div class="wc-form-actions">
                   <Button
                     variant="ghost"
@@ -926,7 +937,7 @@ export default function ConnectionsTab(props: { readonly workspaceId: string }) 
                       setEnvPairs([{ name: "", value: "" }]);
                     }}
                   >
-                    {t("conn.custom.back")}
+                    {t("conn.byok.usePreset")}
                   </Button>
                 </div>
                 <form

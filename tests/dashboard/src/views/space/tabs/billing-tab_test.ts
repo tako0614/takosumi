@@ -100,7 +100,8 @@ test("BillingTab lets a new Cloud workspace start checkout before billing is act
   const plansSwitchIndex = source.indexOf("<Switch>", nonRefundableIndex);
   const policyLinksIndex = source.indexOf('class="av-billing-policy-links"');
   const subscriptionListIndex = source.indexOf(
-    "<Show when={subscriptions().length > 0}>",
+    '<ul class="av-plan-list">',
+    nonRefundableIndex,
   );
 
   expect(checkoutMemoIndex).toBeGreaterThan(0);

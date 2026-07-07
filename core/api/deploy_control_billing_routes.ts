@@ -2,9 +2,10 @@
  * §28 billing public routes.
  *
  * These handlers expose the control-plane billing ledger already used by
- * plan/apply: settings + USD balance, usage events, manual USD top-up, and
- * billing settings change. Stripe checkout/subscription orchestration remains an
- * operator/account-plane integration layered behind these records.
+ * plan/apply: settings, owner-account USD balance, usage events, manual USD
+ * top-up, and billing settings change. Workspace route ids remain the
+ * permission/source boundary. Stripe checkout/subscription orchestration remains
+ * an operator/account-plane integration layered behind these records.
  */
 
 import type { BillingSettings } from "takosumi-contract/billing";
@@ -35,16 +36,19 @@ export const DEPLOY_CONTROL_BILLING_ENDPOINTS: readonly DeployControlEndpoint[] 
     {
       method: "GET",
       path: TAKOSUMI_WORKSPACE_BILLING_ROUTE,
-      summary: "Reads Workspace billing settings and USD balance.",
+      summary: "Reads billing settings and owner-account USD balance.",
       auth: "deploy-control-token",
       operationId: "getWorkspaceBilling",
-      openapi: { pathParams: ["workspaceId"], okSchema: "SpaceBillingResponse" },
+      openapi: {
+        pathParams: ["workspaceId"],
+        okSchema: "SpaceBillingResponse",
+      },
       notImplementedMessage: "billing not wired",
     },
     {
       method: "GET",
       path: TAKOSUMI_WORKSPACE_USAGE_ROUTE,
-      summary: "Lists Workspace usage events.",
+      summary: "Lists owner-account usage events for a Workspace route.",
       auth: "deploy-control-token",
       operationId: "listWorkspaceUsage",
       openapi: { pathParams: ["workspaceId"], okSchema: "SpaceUsageResponse" },
@@ -53,7 +57,7 @@ export const DEPLOY_CONTROL_BILLING_ENDPOINTS: readonly DeployControlEndpoint[] 
     {
       method: "GET",
       path: TAKOSUMI_WORKSPACE_CREDIT_RESERVATIONS_ROUTE,
-      summary: "Lists Workspace credit reservations.",
+      summary: "Lists owner-account credit reservations for a Workspace route.",
       auth: "deploy-control-token",
       operationId: "listWorkspaceCreditReservations",
       openapi: {
@@ -65,7 +69,7 @@ export const DEPLOY_CONTROL_BILLING_ENDPOINTS: readonly DeployControlEndpoint[] 
     {
       method: "POST",
       path: TAKOSUMI_WORKSPACE_CREDITS_TOP_UP_ROUTE,
-      summary: "Adds manual credits to a Workspace balance.",
+      summary: "Adds manual credits to the owning account balance.",
       auth: "deploy-control-token",
       operationId: "topUpWorkspaceCredits",
       openapi: {
@@ -78,7 +82,7 @@ export const DEPLOY_CONTROL_BILLING_ENDPOINTS: readonly DeployControlEndpoint[] 
     {
       method: "POST",
       path: TAKOSUMI_WORKSPACE_SUBSCRIPTION_CHANGE_ROUTE,
-      summary: "Changes Workspace billing settings.",
+      summary: "Changes billing settings for this Workspace source boundary.",
       auth: "deploy-control-token",
       operationId: "changeWorkspaceSubscription",
       openapi: {

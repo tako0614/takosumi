@@ -6,8 +6,8 @@ import { A, useLocation } from "@solidjs/router";
 import {
   ArrowLeft,
   Clock3,
+  Compass,
   LayoutGrid,
-  Plus,
   Server,
   Settings,
   UserCircle2,
@@ -33,7 +33,7 @@ type NavItem = {
 
 const PRIMARY: NavItem[] = [
   { href: "/", labelKey: "nav.apps", icon: LayoutGrid, end: true },
-  { href: "/new", labelKey: "nav.add", icon: Plus },
+  { href: "/new", labelKey: "nav.add", icon: Compass },
   { href: "/runs", labelKey: "nav.runs", icon: Clock3 },
   { href: "/account", labelKey: "nav.account", icon: UserCircle2 },
 ];

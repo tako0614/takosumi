@@ -109,7 +109,8 @@ common Cloud managed-operation boundary before the upstream model call:
 
 Successful responses can also emit Cloud extension usage report headers for
 post-response token meters. The platform worker strips those headers before
-returning the response and records them in the Workspace usage ledger.
+returning the response and records them in the owner account usage ledger with
+source Workspace attribution.
 Supported AI meter kinds are:
 
 - `ai_request`
@@ -127,7 +128,7 @@ x-takosumi-cloud-usage-meters: [{"meterId":"ai:takosumi-default:request","kind":
 
 If these headers are present but the ledger write fails, the platform route
 fails closed with `502` rather than returning an unmetered success. Billing and
-Stripe reconciliation use the Workspace usage ledger as the source of truth.
+Stripe reconciliation use the owner account usage ledger as the source of truth.
 
 Tokens are rotated through the account-plane Capsule projection route:
 
@@ -176,10 +177,10 @@ Production pricing is finalized by the platform worker's
 accepted for closed AI Gateway fallback/compatibility and local tests, but the
 public Cloud pricing page is the customer-facing pricing source of truth and
 the operator price book is its runtime projection. The platform worker records
-the priced report in the Workspace usage ledger and strips the internal headers
+the priced report in the owner account usage ledger and strips the internal headers
 before returning the client response. If the auth context has no `spaceId`, the
 AI Gateway does not emit a usage report because the request cannot be billed to
-a Workspace.
+a source Workspace / owner account.
 
 `workers_ai_binding` profiles may set `gateway.id` to route `env.AI.run()`
 through Cloudflare AI Gateway from inside the Worker. Use `default` unless the
@@ -348,7 +349,7 @@ the Takosumi Cloud private `smoke:cloud-extensions` command with
 AI Gateway billing readiness is proven through the usage ledger, not response
 headers. The platform strips internal usage headers before returning the
 OpenAI-compatible response, so GA smoke should rotate a runtime service token,
-call chat/embeddings, then read the target Workspace usage ledger and
+call chat/embeddings, then read the target owner account usage ledger and
 confirm a new `source: "resource_meter"` / `kind: "ai_request"` event for the
 same Workspace and service resource. Use `--require-ai-runtime-service-token
 --ai-service-resource-id <id> --require-ai-usage-ledger

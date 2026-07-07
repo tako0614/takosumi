@@ -1066,7 +1066,7 @@ test("operator billing route is deploy-control bearer gated", async () => {
   expect(subscriptionCalls).toHaveLength(0);
 });
 
-test("operator billing route reads and changes Space billing settings", async () => {
+test("operator billing route reads and changes billing settings for the source Workspace boundary", async () => {
   const { ops, subscriptionCalls, topUpCalls } = makeOperatorBillingOps();
   const env = { TAKOSUMI_DEPLOY_CONTROL_TOKEN: "operator-secret" } as never;
   const headers = {
@@ -1914,7 +1914,7 @@ test("platform Resource Shape API routes are routed before accounts and bearer-g
   expect(authorized.status).toBe(200);
 });
 
-test("platform Resource Shape API accepts user tokens without installation registration and charges Workspace credits", async () => {
+test("platform Resource Shape API accepts user tokens without installation registration and charges owner account credits", async () => {
   const recorded: {
     readonly spaceId: string;
     readonly input: unknown;
@@ -1993,7 +1993,7 @@ test("platform Resource Shape API accepts user tokens without installation regis
   ).toBeUndefined();
 });
 
-test("platform Resource Shape API fails closed before forwarding when Workspace credits are insufficient", async () => {
+test("platform Resource Shape API fails closed before forwarding when owner account credits are insufficient", async () => {
   let recorded = false;
   const env = {
     TAKOSUMI_CONTROL_DB: new SqliteFakeD1(),
@@ -2256,7 +2256,7 @@ test("cloud extension route injects verified session context and strips raw cred
   ]);
 });
 
-test("cloud extension route rejects spoofed billing Workspace context", async () => {
+test("cloud extension route rejects spoofed source Workspace context", async () => {
   let forwarded = false;
   const response = await handlePlatformCloudExtensionRouteRequest(
     new Request("https://app.takosumi.com/gateway/ai/v1/chat/completions", {
@@ -3028,7 +3028,7 @@ test("cloud extension fallback usage can meter nested R2 object keys", async () 
   ]);
 });
 
-test("cloud extension fallback usage requires billing Workspace context for billable writes", async () => {
+test("cloud extension fallback usage requires source Workspace context for billable writes", async () => {
   let forwarded = false;
   const response = await handlePlatformCloudExtensionRouteRequest(
     new Request(

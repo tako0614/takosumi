@@ -168,7 +168,8 @@ Takosumi Cloud =
 ```
 
 Takosumi Cloud では EdgeWorker、Container、Object Storage、KV、Database、
-Queue、AI Gateway、credits などを公式 managed resources として提供します。
+Queue、AI Gateway などを公式 managed resources として提供し、billing / usage metering /
+spend guard を公式運用します。
 
 [Takosumi Cloud](./cloud/index.md) に、公開用の compatibility matrix と service rollout をまとめています。
 

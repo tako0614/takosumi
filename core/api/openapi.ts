@@ -2306,7 +2306,7 @@ function artifactSchemas(): Record<string, Record<string, unknown>> {
 }
 
 /**
- * Space-scoped billing ledger: settings, USD balance/usage/reservation,
+ * Owner-account billing ledger: settings, USD balance/usage/reservation,
  * account/subscription/plan records, and the billing request+response wrappers.
  */
 function billingSchemas(): Record<string, Record<string, unknown>> {
@@ -2474,7 +2474,7 @@ function billingSchemas(): Record<string, Record<string, unknown>> {
       ],
       properties: {
         id: { type: "string" },
-        ownerType: { type: "string", enum: ["user", "space"] },
+        ownerType: { type: "string", enum: ["user"] },
         ownerId: { type: "string" },
         provider: { type: "string", enum: ["stripe", "manual", "none"] },
         stripeCustomerId: { type: "string" },

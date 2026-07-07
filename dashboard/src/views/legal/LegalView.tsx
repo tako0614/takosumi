@@ -65,29 +65,29 @@ const COPY: Record<Locale, Record<PageKey, PageCopy>> = {
     "terms-of-service": {
       title: "Takosumi Cloud 利用規約",
       eyebrow: "Cloud service terms",
-      lead: "Takosumi Cloud は、公式にホストされた Takosumi for Operator です。Git と OpenTofu を使ったデプロイ、公式 managed targets、残高、使用量、請求機能を提供します。",
+      lead: "Takosumi Cloud は、公式にホストされた Takosumi for Operator です。Git と OpenTofu を使ったデプロイ、公式 managed targets、使用量、上限、請求機能を提供します。",
       updated: "最終更新: 2026-07-03",
       sections: [
         {
           title: "サービスの内容",
           body: [
             "Takosumi Cloud はデジタルサービスです。物理商品の発送、配送、返品はありません。",
-            "利用できる機能は、ワークスペース、プラン、残高、利用可能な managed resources、対象地域、運用状態によって変わることがあります。",
-            "OpenTofu run、Cloud リソース、Compatibility API、AI Gateway、Object Storage、Database、Queue などの利用は、表示された使用量と残高に基づいて管理されます。",
+            "利用できる機能は、ワークスペース、プラン、利用上限、利用可能な managed resources、対象地域、運用状態によって変わることがあります。",
+            "OpenTofu run、Cloud リソース、Compatibility API、AI Gateway、Object Storage、Database、Queue などの利用は、表示された使用量、上限、支払い状態に基づいて管理されます。",
           ],
         },
         {
-          title: "支払いと残高",
+          title: "支払いと使用量",
           body: [
             "購入前に、金額、通貨、内容、更新条件を checkout または billing 画面で確認できます。",
-            "Takosumi Cloud の残高は USD 建ての利用枠です。現金、預金、電子マネー、引き出し可能な資産ではありません。",
+            "Takosumi Cloud のプランや使用量はデジタルサービスの利用権であり、現金、預金、電子マネー、引き出し可能な資産ではありません。",
             `カード明細には原則として ${STATEMENT_DESCRIPTOR} と表示されます。`,
           ],
         },
         {
           title: "利用停止と制限",
           body: [
-            "残高が不足している場合、有料の managed resource 実行、Compatibility API、AI Gateway、追加デプロイは実行前に停止されることがあります。",
+            "支払い状態や利用上限により、有料の managed resource 実行、Compatibility API、AI Gateway、追加デプロイは実行前に停止されることがあります。",
             "不正利用、過剰な負荷、規約違反、支払い失敗、セキュリティリスクがある場合、アクセスや実行を制限することがあります。",
             "破壊的な削除や外部 provider の状態変更は、ユーザーが内容を確認してから実行する必要があります。",
           ],
@@ -121,7 +121,7 @@ const COPY: Record<Locale, Record<PageKey, PageCopy>> = {
           title: "取得する情報",
           body: [
             "アカウント情報、ログインセッション、ワークスペース、プロジェクト、Capsule、Source、ProviderConnection、Run、StateVersion、Output、AuditEvent などのメタデータを扱います。",
-            "Git URL、ref、module path、plan/apply の履歴、使用量、残高、quota、billing event、dashboard 操作ログを扱います。",
+            "Git URL、ref、module path、plan/apply の履歴、使用量、quota、billing event、dashboard 操作ログを扱います。",
             "Secret 値は書き込み専用として扱い、ログや公開レスポンスに表示しないように設計します。",
           ],
         },
@@ -151,20 +151,20 @@ const COPY: Record<Locale, Record<PageKey, PageCopy>> = {
     "refund-policy": {
       title: "返金ポリシー",
       eyebrow: "Refund policy",
-      lead: "Takosumi Cloud はデジタルサービスです。利用済みの残高や完了した managed resource usage は原則として返金対象外ですが、明確な請求エラーなどは確認します。",
+      lead: "Takosumi Cloud はデジタルサービスです。完了した managed resource usage や開始済みのサービス期間は原則として返金対象外ですが、明確な請求エラーなどは確認します。",
       updated: "最終更新: 2026-07-03",
       sections: [
         {
           title: "返金対象になり得るケース",
           body: [
             "重複請求、明確な請求エラー、購入後にサービス障害で利用できなかった場合、法令上必要な場合は確認します。",
-            "返金ではなく、残高調整や credit 付与で対応する場合があります。",
+            "返金ではなく、請求調整や service credit 付与で対応する場合があります。",
           ],
         },
         {
           title: "通常返金対象外のもの",
           body: [
-            "消費済みの残高、完了した実行、開始済みのサービス期間、ユーザー操作による provider usage、外部 provider 側の費用は通常返金対象外です。",
+            "完了した実行、開始済みのサービス期間、ユーザー操作による provider usage、外部 provider 側の費用は通常返金対象外です。",
             "物理商品の返品、配送、交換はありません。",
           ],
         },
@@ -181,7 +181,7 @@ const COPY: Record<Locale, Record<PageKey, PageCopy>> = {
     "cancellation-policy": {
       title: "キャンセルポリシー",
       eyebrow: "Cancellation policy",
-      lead: "月額プランや有料機能はいつでも停止できます。停止後は次回更新が止まり、残高不足時は有料実行が実行前に止まります。",
+      lead: "月額プランや有料機能はいつでも停止できます。停止後は次回更新が止まり、支払い状態や利用上限により有料実行が実行前に止まります。",
       updated: "最終更新: 2026-07-03",
       sections: [
         {
@@ -193,9 +193,9 @@ const COPY: Record<Locale, Record<PageKey, PageCopy>> = {
           ],
         },
         {
-          title: "残高と有料リソース",
+          title: "使用量と有料リソース",
           body: [
-            "Takosumi Cloud の残高は USD 建ての利用枠です。残高が不足すると、有料の managed resource、Compatibility API、AI Gateway、追加デプロイは実行前に止まります。",
+            "支払い状態や利用上限により、有料の managed resource、Compatibility API、AI Gateway、追加デプロイは実行前に止まります。",
             "可能な範囲で、エクスポート、削除、destroy、ログ確認、請求確認などの安全な後処理は残せるようにします。",
           ],
         },
@@ -238,29 +238,29 @@ const COPY: Record<Locale, Record<PageKey, PageCopy>> = {
     "terms-of-service": {
       title: "Takosumi Cloud Terms of Service",
       eyebrow: "Cloud service terms",
-      lead: "Takosumi Cloud is the official hosted Takosumi for Operator. It provides Git and OpenTofu deploys, official managed targets, balance, usage, and billing features.",
+      lead: "Takosumi Cloud is the official hosted Takosumi for Operator. It provides Git and OpenTofu deploys, official managed targets, usage, limits, and billing features.",
       updated: "Last updated: 2026-07-03",
       sections: [
         {
           title: "Service",
           body: [
             "Takosumi Cloud is a digital service. There is no physical shipping, delivery, return, or exchange.",
-            "Available features depend on the workspace, plan, balance, managed resources, region, and operational status.",
-            "OpenTofu runs, Cloud resources, Compatibility APIs, AI Gateway, Object Storage, Database, Queue, and related features are managed through visible usage and balance.",
+            "Available features depend on the workspace, plan, usage limits, managed resources, region, and operational status.",
+            "OpenTofu runs, Cloud resources, Compatibility APIs, AI Gateway, Object Storage, Database, Queue, and related features are managed through visible usage, limits, and payment state.",
           ],
         },
         {
-          title: "Payment and balance",
+          title: "Payment and usage",
           body: [
             "Before checkout, the amount, currency, contents, and renewal terms are shown in Checkout or the billing screen.",
-            "Takosumi Cloud balance is a USD-denominated usage balance. It is not cash, a deposit, electronic money, or a withdrawable asset.",
+            "Takosumi Cloud plans and usage are digital service access, not cash, a deposit, electronic money, or a withdrawable asset.",
             `Card statements generally show ${STATEMENT_DESCRIPTOR}.`,
           ],
         },
         {
           title: "Suspension and limits",
           body: [
-            "When balance is insufficient, paid managed resource execution, Compatibility APIs, AI Gateway calls, and additional deploys may stop before they run.",
+            "Paid managed resource execution, Compatibility APIs, AI Gateway calls, and additional deploys may stop before they run when payment state or usage limits require it.",
             "Access or execution may be limited for abuse, excessive load, policy violations, failed payment, or security risk.",
             "Destructive deletion and external provider changes require the user to review what will run.",
           ],
@@ -294,7 +294,7 @@ const COPY: Record<Locale, Record<PageKey, PageCopy>> = {
           title: "Information we process",
           body: [
             "We process metadata for accounts, login sessions, workspaces, projects, Capsules, Sources, ProviderConnections, Runs, StateVersions, Outputs, and AuditEvents.",
-            "We process Git URLs, refs, module paths, plan/apply history, usage, balance, quota, billing events, and dashboard operation logs.",
+            "We process Git URLs, refs, module paths, plan/apply history, usage, quota, billing events, and dashboard operation logs.",
             "Secret values are treated as write-only material and are designed not to appear in logs or public responses.",
           ],
         },
@@ -324,20 +324,20 @@ const COPY: Record<Locale, Record<PageKey, PageCopy>> = {
     "refund-policy": {
       title: "Refund Policy",
       eyebrow: "Refund policy",
-      lead: "Takosumi Cloud is a digital service. Consumed balance and completed managed resource usage are generally not refundable, but clear billing errors and similar cases can be reviewed.",
+      lead: "Takosumi Cloud is a digital service. Completed managed resource usage and started service periods are generally not refundable, but clear billing errors and similar cases can be reviewed.",
       updated: "Last updated: 2026-07-03",
       sections: [
         {
           title: "Cases we may review",
           body: [
             "We may review duplicate charges, clear billing errors, service outages that prevented use shortly after purchase, and cases where a refund is legally required.",
-            "A balance adjustment or credit may be offered instead of a payment refund.",
+            "A billing adjustment or service credit may be offered instead of a payment refund.",
           ],
         },
         {
           title: "Generally not refundable",
           body: [
-            "Consumed balance, completed executions, started service periods, provider usage caused by user actions, and external provider costs are generally not refundable.",
+            "Completed executions, started service periods, provider usage caused by user actions, and external provider costs are generally not refundable.",
             "There are no physical returns, delivery refunds, or exchanges.",
           ],
         },
@@ -354,7 +354,7 @@ const COPY: Record<Locale, Record<PageKey, PageCopy>> = {
     "cancellation-policy": {
       title: "Cancellation Policy",
       eyebrow: "Cancellation policy",
-      lead: "Paid plans and features can be stopped at any time. Cancellation stops future renewals, and insufficient balance stops paid execution before it runs.",
+      lead: "Paid plans and features can be stopped at any time. Cancellation stops future renewals, and payment state or usage limits can stop paid execution before it runs.",
       updated: "Last updated: 2026-07-03",
       sections: [
         {
@@ -366,9 +366,9 @@ const COPY: Record<Locale, Record<PageKey, PageCopy>> = {
           ],
         },
         {
-          title: "Balance and paid resources",
+          title: "Usage and paid resources",
           body: [
-            "Takosumi Cloud balance is a USD-denominated usage balance. When balance is insufficient, paid managed resources, Compatibility APIs, AI Gateway calls, and additional deploys stop before execution.",
+            "Payment state or usage limits can stop paid managed resources, Compatibility APIs, AI Gateway calls, and additional deploys before execution.",
             "Safe follow-up actions such as export, deletion, destroy, log review, and billing review should remain available where possible.",
           ],
         },

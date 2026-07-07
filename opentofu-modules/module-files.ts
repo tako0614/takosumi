@@ -233,7 +233,7 @@ const cloudflareHelloWorkerMainTf = hcl`terraform {
   }
 }
 
-# Starter capsule: a runnable Cloudflare Worker with NO build step and a
+# Sample capsule: a runnable Cloudflare Worker with NO build step and a
 # workers.dev URL. Unlike cloudflare-worker-service (which uploads a built
 # artifact) this bakes the Worker source inline. Provider credentials are minted
 # by Takosumi at dispatch (CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID); no

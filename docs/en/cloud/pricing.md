@@ -1,45 +1,50 @@
 # Takosumi Cloud pricing
 
-This page is the public pricing and credit contract for Takosumi Cloud.
-It contains only customer-facing prices, free-tier terms, and credit-exhaustion
-behavior. Payment-provider synchronization, runtime price books, margin guards,
-cost estimates, and reconciliation belong in operator procedures, not in the
-public contract.
+This page is the public pricing and billing contract for Takosumi Cloud.
+It contains only customer-facing prices, free-tier terms, usage limits, and
+spend-guard behavior. Payment-provider synchronization, runtime price books,
+margin guards, cost estimates, and reconciliation belong in operator
+procedures, not in the public contract.
 
-## Plans and Credit Packs
+## Subscription Plans
 
-Takosumi Cloud uses USD-denominated credits. Credits are a balance consumed by
-the Takosumi Cloud usage ledger; they are not cash USD and cannot be redeemed
-or exchanged as cash.
+Takosumi Cloud combines monthly subscriptions with usage billing. Public plan
+cards do not show a "usable dollar amount" or credit grant. Like AI services,
+they show the plan name, monthly price, whether usage billing applies, usage
+limits, and payment status.
 
-| Plan / pack          | Customer pays   | Credit grant |
-| -------------------- | --------------- | ------------ |
-| Starter              | JPY 980 / month | `$3.00`      |
-| `$5.00` balance pack | JPY 1200        | `$5.00`      |
+| Plan    | Customer pays | Public billing model      |
+| ------- | ------------- | ------------------------- |
+| Lite    | `$1` / month  | Base subscription + usage |
+| Plus    | `$5` / month  | Subscription with usage   |
+| Pro     | `$10` / month | Subscription with usage   |
 
 Checkout and Dashboard billing views must match this public pricing. If they
-do not match, do not continue the purchase or additional charge; contact
-support.
+do not match, do not continue the purchase or plan change; contact support.
 
-## Free Tier
+## Usage and Limits
 
-Each Workspace may receive a monthly included credit grant. The initial value is
-`$0.25 / month` per Workspace.
+Takosumi Cloud records usage internally in USD micro-units. However,
+subscription plan allowance and cost-accounting values are not part of the
+public plan display. The Dashboard may show usage, billable operations, payment
+state, limits, and history when useful.
 
 ```text
-monthly included credit:
-  $0.25 per Workspace per month
+subscription:
+  public: plan name + monthly price + usage billing
+  internal: allowance / usage ledger / spend guard
 ```
 
-The free tier does not roll over. Usage beyond the free tier spends purchased
-credits at the same usage prices. When credit is insufficient, billable create,
-deploy, runtime, data-plane write/query/message, and instance operations stop
-before execution.
+Billable create, deploy, runtime, data-plane write/query/message, and instance
+operations pass through the spend guard before execution. If payment setup,
+limits, internal allowance, or available capacity is insufficient, the request
+fails closed before it reaches a Cloud endpoint, AI upstream, runtime dispatch,
+or provider-compatible write path.
 
 ## Usage Prices
 
-Usage is recorded in `usdMicros`. The Dashboard may round values for USD
-display.
+Usage is recorded internally as `usdMicros`. The following rates are the
+customer-facing usage rates.
 
 | Family               | Unit        | Customer price            |
 | -------------------- | ----------- | ------------------------- |
@@ -60,28 +65,38 @@ is actually enabled. This table is the pricing contract; it does not mean every
 service is enabled for every user. Check the rollout matrix in
 [Takosumi Cloud](./index.md) and the Dashboard endpoint status for availability.
 
-## Credit Exhaustion
+## Spend Guard
 
-Takosumi Cloud precharges billable writes, deploys, runtime dispatch, and
+Takosumi Cloud preauthorizes billable writes, deploys, runtime dispatch, and
 data-plane operations before execution.
 
 ```text
-enough available credit:
+allowed by plan / spending limit:
   record usage event
   execute the operation
 
-not enough available credit:
+not allowed:
   fail closed before downstream execution
 ```
 
-When credit is insufficient, the request does not proceed to the Cloud
-endpoint, AI upstream, runtime dispatch, or provider-compatible write path.
-Successful billable operations are recorded as Workspace usage events and
-reflected in the billing projection.
+When payment state or limits do not allow an operation, the request does not
+proceed to the Cloud endpoint, AI upstream, runtime dispatch, or
+provider-compatible write path. Successful billable operations are recorded as
+owner-account usage events with source Workspace attribution and reflected in
+the billing projection.
 
 Destroy / DELETE cleanup is the exception. Cleanup should remain available
 without an additional precharge so users can remove already-created resources
-after credit depletion.
+after a limit or payment-state block.
+
+## Bring your own key is never billed
+
+Takosumi Cloud bills only Takosumi-provided managed resources (the subscription
+plus the metered families in Usage Prices above). An external provider you
+connect with your OWN Provider Connection (your own key) is billed by that
+provider directly — Takosumi never meters or spend-gates it. When your balance
+is exhausted, runs that use your own-key providers and the OSS OpenTofu run
+ledger are not stopped. Provider choice has no allowlist and no approval.
 
 ## Secret and Billing Safety
 
@@ -97,4 +112,5 @@ These values are not stored in the usage ledger:
 - payment provider secrets
 
 If a Cloud endpoint cannot record usage, lacks a price, has invalid Workspace
-context, lacks scope, or has insufficient credit, it fails closed.
+context, lacks scope, or fails the payment-state / limit check, it fails
+closed.

@@ -5,6 +5,7 @@ import {
   projectOutputAllowlistSpaceOutputs,
   projectTemplatePublicOutputs,
 } from "../../../../core/domains/deploy-control/projection.ts";
+import { compactErrorCode } from "../../../../core/domains/deploy-control/projection_run.ts";
 
 test("output allowlist projection drops optional nested JSON secret material", () => {
   const outputs = {
@@ -146,7 +147,11 @@ test("output allowlist projection still rejects app_deployment values with concr
   expect(() =>
     projectOutputAllowlistSpaceOutputs(
       {
-        app_deployment: { from: "app_deployment", type: "json", required: true },
+        app_deployment: {
+          from: "app_deployment",
+          type: "json",
+          required: true,
+        },
       },
       outputs,
     ),
@@ -217,6 +222,46 @@ test("template public string outputs allow ordinary labels containing secret wor
       sensitive: false,
     },
   ]);
+});
+
+test("compact error codes classify managed Cloud credit gates as credit-required", () => {
+  expect(
+    compactErrorCode(
+      'OpenTofu runner rejected apply run plan_123: 500 (POST "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/ts_acc/d1/database": 402 Payment Required {"error":"cloud_extension_insufficient_credits","reason":"insufficient_credits"})',
+    ),
+  ).toBe("credits_required");
+
+  expect(
+    compactErrorCode(
+      "USD balance reservation failed: $0.01 estimated but only $0.00 available",
+    ),
+  ).toBe("credits_required");
+});
+
+test("compact error codes classify provider credential preparation failures", () => {
+  expect(
+    compactErrorCode(
+      "credential_mint_failed: connection conn_operator_takosumi_cloud_cloudflare_compat is pending (not verified)",
+    ),
+  ).toBe("provider_connection_not_ready");
+
+  expect(
+    compactErrorCode(
+      "credential_mint_failed: installation provider connection resolution is required",
+    ),
+  ).toBe("provider_connection_setup_required");
+
+  expect(
+    compactErrorCode(
+      "resolved_bindings_changed: plan run plan_123 was reviewed against different provider connections than are now resolved; re-plan before apply",
+    ),
+  ).toBe("provider_connection_changed");
+
+  expect(
+    compactErrorCode(
+      "credential_mint_failed: managed provider connection conn_cloud requires a managed provider credential issuer",
+    ),
+  ).toBe("credential_service_unavailable");
 });
 
 test("template public string outputs still reject concrete secret-shaped values", () => {

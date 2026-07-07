@@ -44,6 +44,7 @@ const DEFAULT_CAPSULE_LIMIT = 100;
 const DEFAULT_ACTIVITY_LIMIT = 50;
 const DEFAULT_INSTALL_CONFIG_LIMIT = 200;
 const DEFAULT_WORKSPACE_BOOTSTRAP_LIMIT = 50;
+const DASHBOARD_OPTIONAL_PROJECTION_TIMEOUT_MS = 1_200;
 
 export async function handleDashboard(
   ctx: ControlDispatchContext,
@@ -256,20 +257,32 @@ async function dashboardOverview(
       limit: capsuleLimit,
       includeDestroyed: false,
     }),
-    operations.activity.list(selectedWorkspace.id, activityLimit),
-    operations.installations.listInstallConfigs(selectedWorkspace.id),
+    optionalDashboardProjection(
+      operations.activity.list(selectedWorkspace.id, activityLimit),
+      [],
+    ),
+    optionalDashboardProjection(
+      operations.installations.listInstallConfigs(selectedWorkspace.id),
+      [],
+    ),
   ]);
   const capsules = capsulePage.items.map(publicCapsule);
-  const currentStateVersions = await listCurrentStateVersions(
-    operations,
-    selectedWorkspace.id,
-    capsulePage.items,
+  const currentStateVersions = await optionalDashboardProjection(
+    listCurrentStateVersions(
+      operations,
+      selectedWorkspace.id,
+      capsulePage.items,
+    ),
+    [],
   );
-  const visibleInstallConfigs = await listDashboardInstallConfigs(
-    operations,
-    installConfigs,
-    capsulePage.items,
-    installConfigLimit,
+  const visibleInstallConfigs = await optionalDashboardProjection(
+    listDashboardInstallConfigs(
+      operations,
+      installConfigs,
+      capsulePage.items,
+      installConfigLimit,
+    ),
+    [],
   );
 
   return json({
@@ -284,6 +297,27 @@ async function dashboardOverview(
       ? { nextCapsuleCursor: capsulePage.nextCursor }
       : {}),
   } satisfies DashboardOverviewResponse);
+}
+
+async function optionalDashboardProjection<T>(
+  promise: Promise<T>,
+  fallback: T,
+): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((resolve) => {
+        timeout = setTimeout(() => {
+          resolve(fallback);
+        }, DASHBOARD_OPTIONAL_PROJECTION_TIMEOUT_MS);
+      }),
+    ]);
+  } catch {
+    return fallback;
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
 }
 
 interface DashboardOverviewResponse {

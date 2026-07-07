@@ -197,7 +197,8 @@ preflight uses `--checkout-smoke` after deploy so every configured plan proves i
 can create a Stripe Checkout Session through the live worker.
 
 Usage-based Cloud resources need a separate Stripe invoice item price map. The
-Cloud extension records customer-facing usage into the Workspace usage ledger;
+Cloud extension records customer-facing usage into the owner account usage ledger
+with source Workspace attribution;
 then an operator job calls the account-plane
 `POST /v1/billing/stripe/usage-invoice-items` route with
 `x-takosumi-billing-usage-sync-token`. The route can receive the recorded
@@ -234,7 +235,7 @@ public usage metadata.
 
 Cloud extensions should emit precise usage headers. The platform worker also
 records fallback operation usage for successful Gateway requests that have a
-verified billing Workspace context and no usage headers, so a missing Cloud
+verified source Workspace context and no usage headers, so a missing Cloud
 extension usage header does not silently skip billing evidence. Treat this as a
 GA safety net; it does not replace precise token, request, or storage metering
 inside the closed Cloud extension.

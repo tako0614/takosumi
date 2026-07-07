@@ -1,8 +1,8 @@
-# cloudflare-hello-worker (first-party starter Capsule module)
+# cloudflare-hello-worker (first-party sample Capsule module)
 
 A runnable Cloudflare Worker with **no build step** — the Worker source is
 baked inline, so `tofu apply` creates a real Worker script without a separate
-build. This starter also enables the script's workers.dev subdomain, so a fresh
+build. This sample also enables the script's workers.dev subdomain, so a fresh
 install produces a browser-openable URL.
 
 - Provider: `cloudflare/cloudflare` (v5). Authentication is via environment

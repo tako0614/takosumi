@@ -53,7 +53,7 @@ export interface PlatformCloudExtensionRoute {
    * Optional generic metering fallback for closed Cloud extensions that have not
    * yet emitted platform usage headers. The rule describes path/method matching
    * and customer-facing meter names. A request matching a rule must resolve a
-   * verified Workspace billing context before the bound service is called. The
+   * verified source Workspace context before the bound service is called. The
    * rule does not encode any provider-specific behavior in OSS code.
    */
   readonly fallbackUsage?: readonly PlatformCloudExtensionFallbackUsageRule[];

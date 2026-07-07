@@ -32,7 +32,7 @@ export const USE_CASES: readonly UseCase[] = [
     name: "Yurucommu",
     desc: "セルフホスト ActivityPub SNS",
     note: "自分のドメインで動く連合 SNS",
-    href: "https://github.com/tako0614/yurucommu",
+    href: "https://github.com/tako0614/yurucommu-core",
     cta: "リポジトリを見る",
   },
   {

@@ -26,7 +26,8 @@ rehearsal が provider-free in-process smoke runner に落ちない。
 この test bed は **Takosumi (service + Accounts + cloud worker + dashboard)** の integration test 専用。 Takos product (`takos-app`) や bundled app (yurucommu) の動作確認は各 repo 内の test に任せる:
 
 - `takos/` — Takos product 固有の test (`bun test` / Playwright 等)
-- `yurucommu/` — yurucommu 固有の test
+- `yurucommu-core/` — yurucommu server / ActivityPub / Capsule 固有の test
+- `yurucommu/` — yurucommu 公式 client の dev mirror
 
 該当 product を local-substrate の service として直起動する運用は扱わない。OpenTofu module repo は deploy control run ledger の入力として扱い、個別 product の runtime smoke は各 product repo 側で実行する。
 
@@ -135,7 +136,7 @@ Vite server on host port 5173:
 )
 
 # separate shell, from the repository root
-cd yurucommu
+cd yurucommu-core
 bun run dev:web
 
 # from the repository root

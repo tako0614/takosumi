@@ -1,10 +1,10 @@
 /**
- * Space usage / credit reporting facade (§28 / §32 usage metering; Space billing
+ * Usage / credit reporting facade (§28 / §32 usage metering; owner billing
  * reads + adjustments).
  *
  * A thin collaborator pulled out of `OpenTofuDeploymentController`: it owns the
- * Space-scoped billing READ projection (`getSpaceBilling` / `listSpaceUsage` /
- * `listSpaceCreditReservations`), the operator/meter usage-event writes
+ * owner-account billing READ projection (`getSpaceBilling` / `listSpaceUsage`
+ * / `listSpaceCreditReservations`), the operator/meter usage-event writes
  * (`recordMeteredUsage`), the invoice reconciliation adjustment
  * (`reconcileInvoiceUsage`), and the manual credit top-up
  * (`topUpSpaceCredits`). The controller holds one instance and re-exposes
@@ -69,7 +69,7 @@ export interface RecordMeteredUsageInput {
   readonly source: Exclude<UsageEventSource, "runner">;
   /**
    * Cloud-only metering paths set this when a successful resource operation must
-   * atomically debit the Workspace USD balance. OSS/operator showback callers
+   * atomically debit the owner account USD balance. OSS/operator showback callers
    * leave it unset so usage stays observational.
    */
   readonly spendRequired?: boolean;
@@ -104,10 +104,10 @@ export interface UsageReportingServiceDependencies {
 }
 
 /**
- * Collaborator owning the Space usage / credit reporting subsystem: the billing
- * read projection, operator/meter usage-event writes, invoice reconciliation, and
- * manual credit top-up. Behavior is identical to the prior inline controller
- * methods.
+ * Collaborator owning the usage / credit reporting subsystem. Workspace routes
+ * remain the source/permission boundary, but credit balance, reservations, and
+ * usage spend are keyed to the owning user so one account funds all Workspaces
+ * owned by that user.
  */
 export class UsageReportingService {
   readonly #store: OpenTofuDeploymentStore;
@@ -134,15 +134,19 @@ export class UsageReportingService {
     };
   }> {
     requireNonEmptyString(spaceId, "spaceId");
-    await this.#requireSpace(spaceId);
+    const { sourceWorkspaceId, billingSubjectId } =
+      await this.#billingSubjectForSpace(spaceId);
     await this.#billing.reconcileSpaceMonthlyCredits(spaceId);
     const settings = await this.#billing.billingSettingsForSpace(spaceId);
-    const balance = await this.#store.getCreditBalance(spaceId);
+    const balance = await this.#store.getCreditBalance(billingSubjectId);
     const account = await this.#store.getBillingAccountForOwner(
-      "space",
-      spaceId,
+      "user",
+      billingSubjectId,
     );
-    const subscription = await this.#store.getSpaceSubscription(spaceId);
+    const subscription = await this.#spaceSubscriptionForBillingSubject(
+      billingSubjectId,
+      sourceWorkspaceId,
+    );
     const plan = subscription
       ? await this.#store.getBillingPlan(subscription.planId)
       : undefined;
@@ -165,9 +169,9 @@ export class UsageReportingService {
     readonly nextCursor?: string;
   }> {
     requireNonEmptyString(spaceId, "spaceId");
-    await this.#requireSpace(spaceId);
+    const { billingSubjectId } = await this.#billingSubjectForSpace(spaceId);
     const { items, nextCursor } = await this.#store.listUsageEventsPage(
-      spaceId,
+      billingSubjectId,
       params ?? {},
     );
     return {
@@ -181,7 +185,8 @@ export class UsageReportingService {
     input: RecordMeteredUsageInput,
   ): Promise<{ readonly usageEvent: UsageEvent }> {
     requireNonEmptyString(spaceId, "spaceId");
-    await this.#requireSpace(spaceId);
+    const { sourceWorkspaceId, billingSubjectId } =
+      await this.#billingSubjectForSpace(spaceId);
     if (input.source === "billing_reconciliation") {
       throw new OpenTofuControllerError(
         "invalid_argument",
@@ -195,8 +200,14 @@ export class UsageReportingService {
       );
     }
     const usageEvent = normalizeMeteredUsageEvent(
-      spaceId,
-      input,
+      billingSubjectId,
+      {
+        ...input,
+        resourceMetadata: usageMetadataWithSourceWorkspace(
+          input.resourceMetadata,
+          sourceWorkspaceId,
+        ),
+      },
       () => this.#newId("usage"),
       () => new Date(this.#now()).toISOString(),
     );
@@ -217,7 +228,8 @@ export class UsageReportingService {
             "metered usage spend failed: insufficient USD balance",
             {
               reason: "insufficient_credits",
-              workspaceId: spaceId,
+              workspaceId: sourceWorkspaceId,
+              billingSubjectId,
               usdMicros,
             },
           );
@@ -235,10 +247,18 @@ export class UsageReportingService {
       readonly source: "billing_reconciliation";
     },
   ): Promise<{ readonly usageEvent: UsageEvent }> {
+    const { sourceWorkspaceId, billingSubjectId } =
+      await this.#billingSubjectForSpace(spaceId);
     const usageEvent = await this.#store.putUsageEvent(
       normalizeMeteredUsageEvent(
-        spaceId,
-        input,
+        billingSubjectId,
+        {
+          ...input,
+          resourceMetadata: usageMetadataWithSourceWorkspace(
+            input.resourceMetadata,
+            sourceWorkspaceId,
+          ),
+        },
         () => this.#newId("usage"),
         () => new Date(this.#now()).toISOString(),
       ),
@@ -251,10 +271,11 @@ export class UsageReportingService {
     input: ReconcileInvoiceUsageInput,
   ): Promise<InvoiceUsageReconciliation> {
     requireNonEmptyString(spaceId, "spaceId");
-    await this.#requireSpace(spaceId);
+    const { sourceWorkspaceId, billingSubjectId } =
+      await this.#billingSubjectForSpace(spaceId);
     requireNonEmptyString(input.invoiceId, "invoiceId");
     const period = normalizeInvoiceUsagePeriod(input);
-    const events = await this.#store.listUsageEvents(spaceId);
+    const events = await this.#store.listUsageEvents(billingSubjectId);
     const invoicedUsdMicros = invoiceInputUsdMicros(input);
     const meteredUsdMicros = events
       .filter((event) => isMeteredInvoiceUsageSource(event.source))
@@ -276,7 +297,8 @@ export class UsageReportingService {
         source: "billing_reconciliation",
         idempotencyKey: [
           "invoice-reconciliation",
-          spaceId,
+          billingSubjectId,
+          sourceWorkspaceId,
           input.invoiceId,
           period.periodStart,
           period.periodEnd,
@@ -302,9 +324,10 @@ export class UsageReportingService {
     readonly creditReservations: readonly CreditReservation[];
   }> {
     requireNonEmptyString(spaceId, "spaceId");
-    await this.#requireSpace(spaceId);
+    const { billingSubjectId } = await this.#billingSubjectForSpace(spaceId);
     return {
-      creditReservations: await this.#store.listCreditReservations(spaceId),
+      creditReservations:
+        await this.#store.listCreditReservations(billingSubjectId),
     };
   }
 
@@ -313,20 +336,53 @@ export class UsageReportingService {
     input: { readonly usdMicros?: number; readonly credits?: number },
   ): Promise<{ readonly balance: CreditBalance }> {
     requireNonEmptyString(spaceId, "spaceId");
-    await this.#requireSpace(spaceId);
+    const { billingSubjectId } = await this.#billingSubjectForSpace(spaceId);
     const usdMicros = topUpInputUsdMicros(input);
     await this.#billing.reconcileSpaceMonthlyCredits(spaceId);
     const nowIso = new Date(this.#now()).toISOString();
     // Atomic grant (single UPDATE): concurrent webhook deliveries — or a top-up
     // racing the monthly reconcile — cannot lose updates (was a read-modify-
     // write get→compute→putCreditBalance).
-    const balance = await this.#store.addCredits(spaceId, {
+    const balance = await this.#store.addCredits(billingSubjectId, {
       usdMicros,
       credits: usdMicrosToLegacyCredits(usdMicros),
       updatedAt: nowIso,
     });
     return { balance };
   }
+
+  async #billingSubjectForSpace(spaceId: string): Promise<{
+    readonly sourceWorkspaceId: string;
+    readonly billingSubjectId: string;
+  }> {
+    const space = await this.#requireSpace(spaceId);
+    return {
+      sourceWorkspaceId: space.id,
+      billingSubjectId: space.ownerUserId,
+    };
+  }
+
+  async #spaceSubscriptionForBillingSubject(
+    billingSubjectId: string,
+    sourceWorkspaceId: string,
+  ): Promise<SpaceSubscription | undefined> {
+    return (
+      (await this.#store.getSpaceSubscription(billingSubjectId)) ??
+      (billingSubjectId === sourceWorkspaceId
+        ? undefined
+        : await this.#store.getSpaceSubscription(sourceWorkspaceId))
+    );
+  }
+}
+
+function usageMetadataWithSourceWorkspace(
+  metadata: UsageResourceMetadata | undefined,
+  sourceWorkspaceId: string,
+): UsageResourceMetadata {
+  return {
+    ...(metadata ?? {}),
+    source_workspace_id: sourceWorkspaceId,
+  };
 }
 
 function normalizeMeteredUsageEvent(

@@ -34,6 +34,7 @@ import {
   sharedCellRuntimeBinding,
   type SharedCellRuntimeAllocator,
   type StripeBillingCheckoutOptions,
+  type StripeBillingWebhookOptions,
 } from "@takosjp/takosumi-accounts-service";
 import { isAccountsApiPath, isWorkerLocalPath } from "./routes.ts";
 import { checkPlatformBindings } from "./bindings-check.ts";
@@ -67,7 +68,7 @@ export interface CloudflareWorkerEnv {
   readonly TAKOSUMI_ACCOUNTS_LAUNCH_TOKEN_PAIRWISE_SECRET?: string;
   /**
    * Cloud-only managed resource price book. The platform worker applies this to
-   * Cloud extension usage before it records and spends Workspace USD balance.
+   * Cloud extension usage before it records and spends owner account USD balance.
    */
   readonly TAKOSUMI_CLOUD_USAGE_PRICE_BOOK?: string;
   readonly TAKOSUMI_ACCOUNTS_PASSKEY_RP_ID?: string;
@@ -136,6 +137,7 @@ export interface CloudflareWorkerEnv {
   // embedded deploy-control service's `TAKOSUMI_DEPLOY_CONTROL_TOKEN` gate.
   readonly TAKOSUMI_DEPLOY_CONTROL_TOKEN?: string;
   readonly TAKOSUMI_ACCOUNTS_STRIPE_SECRET_KEY?: string;
+  readonly TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_SECRET?: string;
   readonly TAKOSUMI_ACCOUNTS_BILLING_CHECKOUT_SMOKE_TOKEN?: string;
   readonly TAKOSUMI_ACCOUNTS_BILLING_REDIRECT_ALLOWLIST?: string;
   readonly TAKOSUMI_ACCOUNTS_MATERIALIZE_DRILL_TOKEN?: string;
@@ -443,6 +445,7 @@ async function buildAccountsHandler(
     ...(controlPlaneOperations ? { controlPlaneOperations } : {}),
     publicBillingPlans: parsePublicBillingPlans(env),
     billingCheckout: parseStripeBillingCheckout(env, options.stripeFetch),
+    billingWebhook: parseStripeBillingWebhook(env),
     runtimeServiceTokens: parseRuntimeServiceTokens(env, clients),
     serviceGraphMaterialResolver: parseServiceGraphMaterials(env),
     exportWorker: parseR2ExportWorker(env, issuer),
@@ -1148,16 +1151,80 @@ function parseStripeBillingCheckout(
       const id = optionalString(entry.id);
       const kind = optionalString(entry.kind);
       const stripePriceId = optionalString(entry.stripePriceId);
+      const usdMicros = optionalPositiveSafeInteger(entry.usdMicros);
       if (!id || !kind || !stripePriceId) {
         throw new TypeError(
           `TAKOSUMI_BILLING_PLANS[${index}] must include id, kind, and stripePriceId for checkout`,
         );
       }
-      return { id, kind, stripePriceId };
+      return {
+        id,
+        kind,
+        stripePriceId,
+        ...(usdMicros ? { usdMicros } : {}),
+      };
     }),
     redirectAllowlist: splitList(rawRedirectAllowlist),
     smokeToken,
     ...(stripeFetch ? { fetch: stripeFetch } : {}),
+  };
+}
+
+function parseStripeBillingWebhook(
+  env: CloudflareWorkerEnv,
+): StripeBillingWebhookOptions | undefined {
+  const webhookSecret = optionalString(
+    env.TAKOSUMI_ACCOUNTS_STRIPE_WEBHOOK_SECRET,
+  );
+  const rawPlans = optionalString(env.TAKOSUMI_BILLING_PLANS);
+  if (!webhookSecret && !rawPlans) return undefined;
+  if (!webhookSecret) {
+    console.warn(
+      JSON.stringify({
+        event: "stripe_billing_webhook_disabled",
+        reason: "missing_webhook_secret",
+      }),
+    );
+    return undefined;
+  }
+  if (!rawPlans) {
+    throw new TypeError(
+      "Stripe billing webhook requires TAKOSUMI_BILLING_PLANS",
+    );
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawPlans);
+  } catch {
+    throw new TypeError("TAKOSUMI_BILLING_PLANS must be valid JSON");
+  }
+  if (!Array.isArray(parsed)) {
+    throw new TypeError("TAKOSUMI_BILLING_PLANS must be a JSON array");
+  }
+  return {
+    webhookSecret,
+    plans: parsed.map((entry, index) => {
+      if (!isRecord(entry)) {
+        throw new TypeError(
+          `TAKOSUMI_BILLING_PLANS[${index}] must be an object`,
+        );
+      }
+      const id = optionalString(entry.id);
+      const kind = optionalString(entry.kind);
+      const stripePriceId = optionalString(entry.stripePriceId);
+      const usdMicros = optionalPositiveSafeInteger(entry.usdMicros);
+      if (!id || !kind || !stripePriceId) {
+        throw new TypeError(
+          `TAKOSUMI_BILLING_PLANS[${index}] must include id, kind, and stripePriceId for webhook reconciliation`,
+        );
+      }
+      return {
+        id,
+        kind,
+        stripePriceId,
+        ...(usdMicros ? { usdMicros } : {}),
+      };
+    }),
   };
 }
 
@@ -1640,9 +1707,11 @@ function requireCommitPinnedEvidencePairs(
 }
 
 function isDashboardAssetPath(pathname: string): boolean {
-  return pathname === "/favicon.ico" ||
+  return (
+    pathname === "/favicon.ico" ||
     pathname.startsWith("/assets/") ||
-    pathname.startsWith("/opentofu/providers/");
+    pathname.startsWith("/opentofu/providers/")
+  );
 }
 
 function dashboardAssetResponse(response: Response, method: string): Response {
@@ -1674,6 +1743,16 @@ function optionalInteger(value: unknown): number | undefined {
   const parsed = Number(raw);
   if (!Number.isInteger(parsed) || parsed < 0) {
     throw new TypeError(`expected a non-negative integer, received ${raw}`);
+  }
+  return parsed;
+}
+
+function optionalPositiveSafeInteger(value: unknown): number | undefined {
+  const raw = typeof value === "number" ? String(value) : optionalString(value);
+  if (!raw) return undefined;
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new TypeError(`expected a positive safe integer, received ${raw}`);
   }
   return parsed;
 }

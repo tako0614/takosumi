@@ -577,8 +577,8 @@ test("Deployment + StateVersion shape", () => {
 test("Billing and security ledger shapes", () => {
   const billing: BillingAccount = {
     id: "ba_1",
-    ownerType: "space",
-    ownerId: "space_1",
+    ownerType: "user",
+    ownerId: "user_1",
     provider: "stripe",
     status: "active",
     createdAt: "2026-06-07T00:00:00Z",
