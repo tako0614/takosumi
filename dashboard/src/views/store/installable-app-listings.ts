@@ -115,7 +115,7 @@ export const installableAppStoreListings: readonly TcsListing[] = [
       git: "https://github.com/tako0614/takos.git",
       ref: "main",
       path: "deploy/opentofu",
-      resolvedCommit: "805d006154e7ee7eb0b3952e8f28ab83e9760b78",
+      resolvedCommit: "8c8d4f4eabbf52e434d5cee3b20e39cbe3df3333",
     },
     kind: "app",
     surface: "service",
@@ -129,7 +129,7 @@ export const installableAppStoreListings: readonly TcsListing[] = [
     ),
     badge: text("追加候補", "Installable"),
     iconUrl:
-      "https://raw.githubusercontent.com/tako0614/takos/805d006154e7ee7eb0b3952e8f28ab83e9760b78/web/public/logo.png",
+      "https://raw.githubusercontent.com/tako0614/takos/8c8d4f4eabbf52e434d5cee3b20e39cbe3df3333/web/public/logo.png",
     inputs: [
       {
         name: "project_name",
