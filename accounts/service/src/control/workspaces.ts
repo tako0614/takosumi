@@ -183,6 +183,12 @@ import { appendLedgerEvent } from "../installation-ledger-events.ts";
 import { base64UrlEncodeBytes } from "../encoding.ts";
 import { canTransitionAppCapsuleStatus } from "../ledger.ts";
 
+function sourceWorkspaceId(
+  source: Readonly<{ workspaceId?: string; spaceId?: string }>,
+): string | undefined {
+  return stringValue(source.workspaceId) ?? stringValue(source.spaceId);
+}
+
 export async function handleWorkspaces(
   ctx: ControlDispatchContext,
   segments: readonly string[],
@@ -1204,11 +1210,19 @@ async function createCapsule(
     );
   }
   const { source } = await operations.getSource(sourceId);
-  if (source.workspaceId !== workspaceId) {
+  const sourceOwnerWorkspaceId = sourceWorkspaceId(source);
+  if (!sourceOwnerWorkspaceId) {
+    return errorJson(
+      "internal_error",
+      "source is missing Workspace identity",
+      500,
+    );
+  }
+  if (sourceOwnerWorkspaceId !== workspaceId) {
     const auth = await requireWorkspaceAccess({
       operations,
       store,
-      workspaceId: source.workspaceId,
+      workspaceId: sourceOwnerWorkspaceId,
       subject: sessionSubject,
     });
     if (!auth.ok) return auth.response;
