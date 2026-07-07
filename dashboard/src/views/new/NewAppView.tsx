@@ -388,14 +388,23 @@ function sourceFetchErrorMessage(
 function safeControlApiErrorMessage(
   apiError: ControlApiError | undefined,
 ): string | undefined {
+  if (apiError?.isAppHostnameUnavailable || apiError?.isDuplicateService) {
+    return undefined;
+  }
   const message = apiError?.message.replace(/\s+/gu, " ").trim();
   if (!message) return undefined;
+  if (/\balready claimed by Capsule\b.*\bWorkspace\b/iu.test(message)) {
+    return undefined;
+  }
   return message.length > 240 ? `${message.slice(0, 237)}...` : message;
 }
 
 function addFlowErrorMessage(apiError: ControlApiError | undefined): string {
   if (apiError?.isAppHostnameUnavailable) {
     return t("new.error.appHostnameUnavailable");
+  }
+  if (apiError?.isDuplicateService) {
+    return t("new.error.alreadyExistsGeneric");
   }
   const message = safeControlApiErrorMessage(apiError);
   return message
