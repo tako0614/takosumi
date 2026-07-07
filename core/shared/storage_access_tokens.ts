@@ -53,6 +53,12 @@ export interface MintStorageAccessTokenInput {
   readonly verbs: readonly StorageTokenVerb[];
   readonly ttlSeconds?: number;
   readonly now?: () => number;
+  /**
+   * Token audience — the consuming service's publication name. Defaults to the
+   * object-store audience; the git service passes `takos.git.hosting`. The wire
+   * format is identical, so one minter serves every scoped-token service.
+   */
+  readonly audience?: string;
 }
 
 export async function mintStorageAccessToken(
@@ -71,7 +77,7 @@ export async function mintStorageAccessToken(
     sub: input.installationId,
     pfx: input.prefix,
     cap: dedupeVerbs(input.verbs),
-    aud: STORAGE_ACCESS_TOKEN_AUDIENCE,
+    aud: input.audience ?? STORAGE_ACCESS_TOKEN_AUDIENCE,
     iat: nowSeconds,
     exp,
   };

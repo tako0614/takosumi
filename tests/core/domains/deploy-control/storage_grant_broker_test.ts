@@ -106,7 +106,7 @@ function makeResolver(signingKey: string | undefined): SensitiveOutputResolver {
   return {
     resolve: async (input) => {
       if (
-        input.outputName !== "takos_storage_signing_key" ||
+        !input.outputName.endsWith("_signing_key") ||
         signingKey === undefined
       ) {
         return undefined;
@@ -152,7 +152,7 @@ function keyedResolver(
   return {
     resolve: async (input) => {
       const key = keysByProducer[input.producerInstallationId];
-      if (input.outputName !== "takos_storage_signing_key" || key === undefined) {
+      if (!input.outputName.endsWith("_signing_key") || key === undefined) {
         return undefined;
       }
       return { value: key, sensitive: true };
@@ -328,4 +328,67 @@ describe("StorageGrantBroker", () => {
     );
     expect(env).toBeUndefined();
   });
+
+  test("mints a read-only clone grant for a takos.git.hosting consumer", async () => {
+    const GIT_PRODUCER_ID = "inst_dddddddddddddddd";
+    const state: FakeStoreState = {
+      installations: [
+        {
+          id: GIT_PRODUCER_ID,
+          workspaceId: WORKSPACE_ID,
+          installConfigId: "cfg-catalog-takos-git",
+        },
+        { id: CONSUMER_ID, workspaceId: WORKSPACE_ID },
+      ],
+      outputs: {
+        [GIT_PRODUCER_ID]: {
+          service_exports: [
+            {
+              name: "takos.git.hosting",
+              capabilities: ["source.git.smart_http", "protocol.http.api"],
+              endpoints: [{ name: "default", protocol: "https", url: "https://git.example/git" }],
+              visibility: "space",
+            },
+          ],
+        },
+        [CONSUMER_ID]: {
+          app_deployment: {
+            name: "consumer",
+            compute: {
+              web: {
+                kind: "worker",
+                consume: [{ publication: "takos.git.hosting", request: { scopes: [] } }],
+              },
+            },
+          },
+        },
+      },
+      mintEvents: [],
+    };
+    const env = await broker(state, SIGNING_KEY).mintStorageGrantEnv(
+      makePlanRun(),
+      "apply",
+      "run_git",
+    );
+    expect(env).toBeDefined();
+    expect(env!.TF_VAR_takos_git_http_url).toBe("https://git.example/git");
+    expect(env!.TF_VAR_takos_git_repo_prefix).toBe(CONSUMER_ID);
+
+    const payload = decodeTokenPayload(env!.TF_VAR_takos_git_access_token!);
+    expect(payload.aud).toBe("takos.git.hosting");
+    expect(payload.pfx).toBe(CONSUMER_ID);
+    expect(payload.cap).toEqual(["r"]);
+    expect(state.mintEvents[0]!.providerCredentialEvidence![0]!.provider).toBe("takos.git");
+  });
 });
+
+function decodeTokenPayload(token: string): Record<string, unknown> {
+  const body = token.slice("takstor_".length).split(".")[0]!;
+  const normalized = body.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized.padEnd(
+    normalized.length + ((4 - (normalized.length % 4)) % 4),
+    "=",
+  );
+  const bytes = Uint8Array.from(atob(padded), (ch) => ch.charCodeAt(0));
+  return JSON.parse(new TextDecoder().decode(bytes)) as Record<string, unknown>;
+}
