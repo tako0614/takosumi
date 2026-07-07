@@ -372,7 +372,7 @@ describe("/new Provider Connections return context", () => {
     );
     expect(
       newAppViewSource.match(/sourceAuthConnectionIdForRun\(\)/g) ?? [],
-    ).toHaveLength(2);
+    ).toHaveLength(3);
     expect(controlApiSource).toContain(
       "export async function createSourceHttpsTokenConnection",
     );
@@ -485,6 +485,16 @@ describe("/new Provider Connections return context", () => {
       '"new.compat.issue.providerCredentials.message"',
     );
     expect(newAppViewSource).toContain('"new.compat.issue.lockfile.message"');
+  });
+
+  test("/new retries transient compatibility checks after source sync races", () => {
+    expect(newAppViewSource).toContain("compatibilityCheckLooksTransient");
+    expect(newAppViewSource).toContain("abortableDelay(1_500");
+    expect(newAppViewSource).toContain("operation was aborted");
+    expect(newAppViewSource).toContain("compatibility_check runner");
+    expect(newAppViewSource).toContain(
+      "sourceId: result.sourceId ?? createdSourceId() ?? undefined",
+    );
   });
 
   test("connections tab gives form controls stable names", () => {

@@ -3986,6 +3986,7 @@ test("POST /api/v1/workspaces/:id/capsules inherits catalog modulePath when vars
       variableMapping: {},
       outputAllowlist: {
         app_deployment: { from: "app_deployment", type: "json" },
+        takosumi_release: { from: "takosumi_release", type: "json" },
       },
       policy: {},
       catalog: {
@@ -4042,6 +4043,7 @@ test("POST /api/v1/workspaces/:id/capsules inherits catalog modulePath when vars
   expect(config.catalog?.source?.path).toBe("deploy/opentofu");
   expect(config.outputAllowlist).toEqual({
     app_deployment: { from: "app_deployment", type: "json" },
+    takosumi_release: { from: "takosumi_release", type: "json" },
   });
 });
 
