@@ -17,7 +17,7 @@ import {
   Switch,
 } from "solid-js";
 import { useNavigate } from "@solidjs/router";
-import { Plus, Sparkles } from "lucide-solid";
+import { Plus, Settings2, Sparkles } from "lucide-solid";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import {
@@ -433,7 +433,6 @@ function AppTileView(props: {
         class="av-tile-icon"
         classList={{
           "av-tile-icon-image": Boolean(imageSrc()) || Boolean(curatedImage()),
-          "av-tile-icon-logo": Boolean(curatedImage()),
           [kindClass(props.kind)]: isMonogram(),
         }}
         aria-hidden="true"
@@ -453,12 +452,7 @@ function AppTileView(props: {
           </Match>
           <Match when={curatedImage()}>
             {(src) => (
-              <img
-                class="av-tile-image av-tile-logo"
-                src={src()}
-                alt=""
-                loading="lazy"
-              />
+              <img class="av-tile-image" src={src()} alt="" loading="lazy" />
             )}
           </Match>
           <Match when={curatedEmoji()}>
@@ -477,25 +471,37 @@ function AppTileView(props: {
   );
 
   return (
-    <Show
-      when={surface().url}
-      fallback={
-        <button type="button" class="av-tile" onClick={props.onOpenDetail}>
-          {body()}
-        </button>
-      }
-    >
-      {(url) => (
-        <a
-          class="av-tile"
-          href={url()}
-          target="_blank"
-          rel="noreferrer noopener"
-        >
-          {body()}
-        </a>
-      )}
-    </Show>
+    <span class="av-tile-wrap">
+      <Show
+        when={surface().url}
+        fallback={
+          <button type="button" class="av-tile" onClick={props.onOpenDetail}>
+            {body()}
+          </button>
+        }
+      >
+        {(url) => (
+          <>
+            <a
+              class="av-tile"
+              href={url()}
+              target="_blank"
+              rel="noreferrer noopener"
+            >
+              {body()}
+            </a>
+            <button
+              type="button"
+              class="av-tile-manage"
+              onClick={props.onOpenDetail}
+            >
+              <Settings2 size={13} aria-hidden="true" />
+              <span>{t("apps.manage")}</span>
+            </button>
+          </>
+        )}
+      </Show>
+    </span>
   );
 }
 

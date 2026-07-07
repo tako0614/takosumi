@@ -620,6 +620,16 @@ function routePatternFromAppUrl(
   }
 }
 
+function managedWorkerNameFromVariables(
+  current: Readonly<Record<string, JsonValue>>,
+  fallback: string,
+): string {
+  const value = current.worker_name;
+  if (typeof value !== "string") return fallback;
+  const trimmed = slugInputValue(value);
+  return trimmed || fallback;
+}
+
 function inputVariableRowsFromPrefill(
   vars: Readonly<Record<string, JsonValue>> | undefined,
 ): readonly InputVariableRow[] {
@@ -1471,7 +1481,11 @@ function Inner() {
       if (value === undefined || value === "") return;
       defaults[name] = value;
     };
-    const managedAppHost = `${projectNameVariable()}.app.takos.jp`;
+    const managedWorkerName = managedWorkerNameFromVariables(
+      current,
+      projectNameVariable(),
+    );
+    const managedAppHost = `${managedWorkerName}.app.takos.jp`;
     if (
       !connection ||
       sameProviderFamily(connection.providerSource, "cloudflare")
@@ -1480,7 +1494,7 @@ function Inner() {
         typeof current.app_url === "string" && current.app_url.trim()
           ? current.app_url.trim()
           : `https://${managedAppHost}`;
-      setDefault("worker_name", projectNameVariable());
+      setDefault("worker_name", managedWorkerName);
       setDefault("app_url", managedAppUrl);
       setDefault("cloudflare_account_id", connection?.scopeHints?.accountId);
       setDefault("account_id", connection?.scopeHints?.accountId);
