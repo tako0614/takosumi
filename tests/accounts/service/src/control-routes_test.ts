@@ -1786,6 +1786,69 @@ test("GET /api/v1/dashboard/overview can skip Workspace list when Workspace is e
   expect(operations.calls.getWorkspace).toEqual(["space_a"]);
 });
 
+test("GET /api/v1/dashboard/overview falls back when requested Workspace is archived", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie, subject } = seedSession(store);
+  const active = {
+    id: "space_active",
+    handle: "active",
+    displayName: "Active",
+    type: "personal" as const,
+    ownerUserId: subject,
+    createdAt: "2026-01-02T00:00:00Z",
+    updatedAt: "2026-01-02T00:00:00Z",
+  };
+  const archived = {
+    ...active,
+    id: "space_archived",
+    handle: "archived",
+    displayName: "Archived",
+    createdAt: "2026-01-01T00:00:00Z",
+    updatedAt: "2026-01-01T00:00:00Z",
+    archivedAt: "2026-01-03T00:00:00Z",
+  };
+  const operations = fakeOperations({
+    spaces: {
+      listWorkspacesByOwner: async (ownerUserId) => {
+        operations.calls.listWorkspacesByOwner = [ownerUserId];
+        return [archived, active];
+      },
+      getWorkspace: async (id) => {
+        operations.calls.getWorkspace = [id];
+        return id === archived.id ? archived : active;
+      },
+    },
+  });
+  const { request: req, url } = request(
+    "GET",
+    "/api/v1/dashboard/overview?workspaceId=space_archived",
+    { cookie },
+  );
+
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+
+  expect(response?.status).toEqual(200);
+  const body = (await response!.json()) as {
+    workspaces: Array<{ id: string }>;
+    workspace: { id: string };
+    capsules: Array<{ workspaceId: string }>;
+  };
+  expect(body.workspaces.map((workspace) => workspace.id)).toEqual([
+    "space_active",
+  ]);
+  expect(body.workspace.id).toEqual("space_active");
+  expect(body.capsules.map((capsule) => capsule.workspaceId)).toEqual([
+    "space_active",
+  ]);
+  expect(operations.calls.getWorkspace).toEqual(["space_archived"]);
+  expect(operations.calls.listCapsulesPage?.[0]).toEqual("space_active");
+});
+
 test("GET /api/v1/dashboard/bootstrap returns session and Workspaces", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie, subject } = seedSession(store);
