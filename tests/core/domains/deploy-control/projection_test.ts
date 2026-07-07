@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 
 import {
+  errorDiagnostic,
   projectOutputAllowlistPublicOutputs,
   projectOutputAllowlistSpaceOutputs,
   projectTemplatePublicOutputs,
@@ -236,6 +237,20 @@ test("compact error codes classify managed Cloud credit gates as credit-required
       "USD balance reservation failed: $0.01 estimated but only $0.00 available",
     ),
   ).toBe("credits_required");
+});
+
+test("error diagnostics summarize managed Cloud credit gates before raw runner detail", () => {
+  const diagnostic = errorDiagnostic(
+    new Error(
+      'OpenTofu runner rejected apply run plan_123: 500 (POST "https://app.takosumi.com/compat/cloudflare/client/v4/accounts/ts_acc/d1/database": 402 Payment Required {"error":"cloud_extension_insufficient_credits","reason":"insufficient_credits"})',
+    ),
+  );
+
+  expect(diagnostic.message).toBe(
+    "credits_required: insufficient credits for this Takosumi Cloud operation",
+  );
+  expect(diagnostic.detail).toContain("OpenTofu runner rejected apply run");
+  expect(diagnostic.detail).toContain("cloud_extension_insufficient_credits");
 });
 
 test("compact error codes classify provider credential preparation failures", () => {

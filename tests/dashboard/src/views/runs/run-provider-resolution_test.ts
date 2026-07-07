@@ -125,6 +125,7 @@ describe("Run review ProviderConnection evidence", () => {
 
   test("classifies credit gate failures as a billing action instead of raw OpenTofu failure", () => {
     expect(runViewSource).toContain("function isCreditsRequiredRun");
+    expect(runViewSource).toContain("credits_required");
     expect(runViewSource).toContain("cloud_extension_insufficient_credits");
     expect(runViewSource).toContain('run.errorCode === "credits_required"');
     expect(runViewSource).toContain('t("run.summary.creditsRequired")');
@@ -146,6 +147,7 @@ describe("Run review ProviderConnection evidence", () => {
     expect(runViewSource).toContain("function accessIssueForRun");
     expect(runViewSource).toContain("credential_mint_failed");
     expect(runViewSource).toContain("pending (not verified)");
+    expect(runViewSource).toContain("provider_connection_not_ready");
     expect(runViewSource).not.toContain(
       'run.errorCode === "credential_mint_failed"',
     );
