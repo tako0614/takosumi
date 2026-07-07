@@ -185,9 +185,39 @@ async function dashboardOverview(
     } satisfies DashboardOverviewResponse);
   }
 
-  const selectedWorkspace =
+  let selectedWorkspace =
     workspaces.find((workspace) => workspace.id === selectedWorkspaceId) ??
     (await operations.spaces.getWorkspace(selectedWorkspaceId));
+  if (isArchivedWorkspace(selectedWorkspace)) {
+    const fallbackWorkspaces =
+      workspaces.length > 0
+        ? workspaces
+        : (
+            await listActiveWorkspaceProjectionForSession(
+              operations,
+              store,
+              sessionSubject,
+              {
+                limit: workspaceLimit,
+              },
+            )
+          ).workspaces;
+    const fallback = fallbackWorkspaces.find(
+      (workspace) => !isArchivedWorkspace(workspace),
+    );
+    if (!fallback) {
+      return json({
+        workspaces,
+        workspaceList: workspaceList.meta,
+        workspace: null,
+        capsules: [],
+        currentStateVersions: [],
+        activity: [],
+        installConfigs: [],
+      } satisfies DashboardOverviewResponse);
+    }
+    selectedWorkspace = fallback;
+  }
   const auth = await requireWorkspaceAccess({
     operations,
     store,
