@@ -184,6 +184,12 @@ describe("dashboard catalog", () => {
     const takos = installableAppStoreListings.find(
       (listing) => listing.id === "takos",
     );
+    expect(takos?.outputAllowlist).toContainEqual({
+      key: "takosumi_release",
+      from: "takosumi_release",
+      type: "json",
+      required: false,
+    });
     const releaseImagesDefault = takos?.inputs.find(
       (input) => input.name === "release_container_images",
     )?.defaultValue;

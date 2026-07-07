@@ -327,6 +327,43 @@ function compatibilitySummaryDisplay(
   return t("new.compat.summary.reviewRequired");
 }
 
+function compatibilityCheckLooksTransient(
+  result: CapsuleCompatibilityResult,
+): boolean {
+  if (result.level === "ready" || result.level === "auto_capsulized") {
+    return false;
+  }
+  const text = [
+    result.summary,
+    ...result.diagnostics.flatMap((diagnostic) => [
+      diagnostic.code ?? "",
+      diagnostic.message,
+      diagnostic.detail ?? "",
+    ]),
+  ]
+    .join("\n")
+    .toLowerCase();
+  return (
+    (text.includes("retry") && text.includes("source sync")) ||
+    text.includes("operation was aborted") ||
+    text.includes("compatibility_check runner")
+  );
+}
+
+function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) {
+    return Promise.reject(new DOMException("Request was aborted.", "AbortError"));
+  }
+  return new Promise((resolve, reject) => {
+    const timeout = globalThis.setTimeout(resolve, ms);
+    const onAbort = () => {
+      globalThis.clearTimeout(timeout);
+      reject(new DOMException("Request was aborted.", "AbortError"));
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 function sourceFetchErrorMessage(
   apiError: ControlApiError | undefined,
 ): string {
@@ -2163,7 +2200,7 @@ function Inner() {
     try {
       await loadProviderConnections().catch(() => []);
       throwIfStaleFlow(flow);
-      const result = await checkCapsuleCompatibility({
+      let result = await checkCapsuleCompatibility({
         workspaceId: workspaceId()!,
         sourceId: createdSourceId() ?? undefined,
         gitUrl: sourceGitUrl(),
@@ -2187,6 +2224,34 @@ function Inner() {
         },
       });
       throwIfStaleFlow(flow);
+      if (compatibilityCheckLooksTransient(result)) {
+        await abortableDelay(1_500, flow.controller.signal);
+        throwIfStaleFlow(flow);
+        result = await checkCapsuleCompatibility({
+          workspaceId: workspaceId()!,
+          sourceId: result.sourceId ?? createdSourceId() ?? undefined,
+          gitUrl: sourceGitUrl(),
+          ref: sourceRef(),
+          path: sourcePath(),
+          name: name().trim(),
+          authConnectionId: sourceAuthConnectionIdForRun(),
+          installConfigId: selectedInstallConfigId(),
+          signal: flow.controller.signal,
+          onSourceCreated: (sourceId) => {
+            if (isCurrentFlow(flow)) setCreatedSourceId(sourceId);
+          },
+          onSourceSyncProgress: (progress) => {
+            if (!isCurrentFlow(flow)) return;
+            if (progress.run?.status) {
+              setSourceSyncRunStatus(progress.run.status);
+            }
+            if (progress.elapsedMs > 8_000) {
+              setSourceSyncSlow(true);
+            }
+          },
+        });
+        throwIfStaleFlow(flow);
+      }
       if (result.sourceId) {
         setCreatedSourceId(result.sourceId);
       }

@@ -171,6 +171,12 @@ export const installableAppStoreListings: readonly TcsListing[] = [
         type: "json",
         required: false,
       },
+      {
+        key: "takosumi_release",
+        from: "takosumi_release",
+        type: "json",
+        required: false,
+      },
     ],
     createdAt: now,
     updatedAt: now,
