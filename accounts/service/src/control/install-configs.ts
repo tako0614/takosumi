@@ -230,6 +230,7 @@ async function patchScopedInstallConfig(
   const body = await readJsonObject(request);
   if (!body) return errorJson("invalid_request", "invalid request", 400);
   const variableMappingPatch = body.variableMapping;
+  const removeVariables = stringArrayValue(body.removeVariables);
   const catalogInputDefaults = body.catalogInputDefaults;
   if (
     variableMappingPatch !== undefined &&
@@ -248,6 +249,13 @@ async function patchScopedInstallConfig(
     return errorJson(
       "invalid_request",
       "catalogInputDefaults must be a JSON object",
+      400,
+    );
+  }
+  if (body.removeVariables !== undefined && removeVariables === undefined) {
+    return errorJson(
+      "invalid_request",
+      "removeVariables must be an array of variable names",
       400,
     );
   }
@@ -272,20 +280,23 @@ async function patchScopedInstallConfig(
     catalogInputDefaultStrings[key] = value;
   }
   const catalogSourceRef = stringValue(body.catalogSourceRef);
+  const nextVariableMapping = { ...config.variableMapping };
+  for (const name of removeVariables ?? []) {
+    delete nextVariableMapping[name];
+  }
+  Object.assign(nextVariableMapping, variableMappingPatch ?? {});
   const now = new Date().toISOString();
   const updated = await operations.installations.putInstallConfig({
     ...config,
-    variableMapping: {
-      ...config.variableMapping,
-      ...(variableMappingPatch ?? {}),
-    },
+    variableMapping: nextVariableMapping,
     catalog:
       config.catalog && (catalogSourceRef || catalogInputDefaults)
         ? {
             ...config.catalog,
-            source: catalogSourceRef && config.catalog.source
-              ? { ...config.catalog.source, ref: catalogSourceRef }
-              : config.catalog.source,
+            source:
+              catalogSourceRef && config.catalog.source
+                ? { ...config.catalog.source, ref: catalogSourceRef }
+                : config.catalog.source,
             inputs: catalogInputDefaults
               ? config.catalog.inputs.map((input) =>
                   Object.prototype.hasOwnProperty.call(
@@ -304,6 +315,18 @@ async function patchScopedInstallConfig(
     updatedAt: now,
   });
   return json({ installConfig: publicInstallConfig(updated) });
+}
+
+function stringArrayValue(value: unknown): readonly string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) return undefined;
+  const out: string[] = [];
+  for (const item of value) {
+    if (typeof item !== "string") return undefined;
+    const trimmed = item.trim();
+    if (trimmed) out.push(trimmed);
+  }
+  return out;
 }
 
 export function publicInstallConfig(
