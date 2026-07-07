@@ -389,6 +389,16 @@ function validManagedWorkerName(value: string): boolean {
   return MANAGED_WORKER_NAME_RE.test(value);
 }
 
+function isManagedAppHost(host: string): boolean {
+  const normalizedHost = host.toLowerCase();
+  if (!normalizedHost.endsWith(`.${MANAGED_APP_DOMAIN}`)) return false;
+  const prefix = normalizedHost.slice(
+    0,
+    normalizedHost.length - MANAGED_APP_DOMAIN.length - 1,
+  );
+  return /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(prefix);
+}
+
 function hostFromHttpsUrlValue(value: unknown): string | undefined {
   const raw = nonEmptyStringValue(value);
   if (!raw) return undefined;
@@ -466,6 +476,16 @@ function hasManagedCloudflareProviderDefaults(
   );
 }
 
+function hasManagedCloudflareProviderBindings(
+  bindings: readonly RootInstallationProviderEnvBinding[],
+): boolean {
+  return bindings.some(
+    (binding) =>
+      sameProviderFamily(binding.provider, "cloudflare") &&
+      nonEmptyStringValue(binding.baseUrl) !== undefined,
+  );
+}
+
 function finalizeManagedCloudflarePublicHostVariables(input: {
   readonly explicit: Readonly<Record<string, JsonValue>>;
   readonly installation: Installation;
@@ -527,6 +547,10 @@ function workerNameFromCapsule(installation: Installation): string | undefined {
 
 function publicHostUnavailableMessage(): string {
   return "app_hostname_unavailable: already exists";
+}
+
+function customDomainVerificationRequiredMessage(): string {
+  return "custom_domain_verification_required: custom domains must be verified before managed deploy";
 }
 
 function managedWorkerNameSuffix(installationId: string): string {
@@ -863,7 +887,13 @@ export class RunEngine {
       operation !== "destroy" &&
       internal.driftCheck !== true
     ) {
-      await this.#reservePublicHostsForPlan(installation, variables, now);
+      await this.#reservePublicHostsForPlan(installation, variables, now, {
+        managedDomainsOnly:
+          hasManagedCloudflareProviderDefaults(
+            installTypePlan?.providerInputDefaults ?? {},
+          ) ||
+          internal.genericRootDispatch?.managedPublicHostDomainsOnly === true,
+      });
     }
     const planRunId = this.#newId("plan");
     const sourceSnapshotId =
@@ -1975,9 +2005,20 @@ export class RunEngine {
     installation: Installation,
     variables: Readonly<Record<string, JsonValue>>,
     now: number,
+    options: { readonly managedDomainsOnly?: boolean } = {},
   ): Promise<void> {
     const requestedHosts = publicHostsFromVariables(variables);
     if (requestedHosts.length === 0) return;
+    if (options.managedDomainsOnly === true) {
+      for (const host of requestedHosts) {
+        if (isManagedAppHost(host)) continue;
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          customDomainVerificationRequiredMessage(),
+          { reason: "custom_domain_verification_required" },
+        );
+      }
+    }
     const claims = await this.#publicHostClaims();
     for (const host of requestedHosts) {
       const claim = claims.get(host);
@@ -2167,6 +2208,9 @@ export class RunEngine {
         ...(moduleFiles && moduleFiles.length > 0 ? { moduleFiles } : {}),
       },
       outputAllowlist: context.outputAllowlist,
+      managedPublicHostDomainsOnly: hasManagedCloudflareProviderBindings(
+        context.providerEnvBindings,
+      ),
     };
   }
 
