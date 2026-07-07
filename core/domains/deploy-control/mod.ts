@@ -2273,6 +2273,15 @@ export function releaseActivationCommandsFromPublicOutputs(
   return parseReleaseCommandDescriptor(descriptor, phase).slice(0, 20);
 }
 
+export function releaseActivationCommandsFromOutputRecord(
+  outputs: Readonly<Record<string, unknown>>,
+  phase: ReleaseActivationCommand["phase"],
+): readonly ReleaseActivationCommand[] {
+  const descriptor = outputs.takosumi_release;
+  if (!isJsonValue(descriptor)) return [];
+  return parseReleaseCommandDescriptor(descriptor, phase).slice(0, 20);
+}
+
 function parseReleaseCommandDescriptor(
   descriptor: JsonValue,
   phase: ReleaseActivationCommand["phase"],
