@@ -273,7 +273,7 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
     name: "takos",
     source: {
       git: "https://github.com/tako0614/takos.git",
-      ref: "805d006154e7ee7eb0b3952e8f28ab83e9760b78",
+      ref: "8c8d4f4eabbf52e434d5cee3b20e39cbe3df3333",
       path: "deploy/opentofu",
     },
     order: 110,
@@ -288,7 +288,7 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
       "Host the Takos AI workspace in your own environment.",
     ),
     iconUrl:
-      "https://raw.githubusercontent.com/tako0614/takos/805d006154e7ee7eb0b3952e8f28ab83e9760b78/web/public/logo.png",
+      "https://raw.githubusercontent.com/tako0614/takos/8c8d4f4eabbf52e434d5cee3b20e39cbe3df3333/web/public/logo.png",
     inputs: [
       {
         name: "project_name",
