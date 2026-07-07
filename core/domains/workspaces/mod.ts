@@ -72,7 +72,7 @@ export class WorkspacesService {
     if (existing) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        `workspace handle @${request.handle} is already taken`,
+        "workspace already exists",
       );
     }
     const nowIso = this.#now().toISOString();
@@ -98,10 +98,7 @@ export class WorkspacesService {
     requireNonEmptyString(id, "id");
     const workspace = await this.#store.getSpace(id);
     if (!workspace) {
-      throw new OpenTofuControllerError(
-        "not_found",
-        `workspace ${id} not found`,
-      );
+      throw new OpenTofuControllerError("not_found", "workspace not found");
     }
     return workspace;
   }

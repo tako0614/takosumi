@@ -134,7 +134,7 @@ test("createSource rejects an authConnectionId that is not in the space", async 
       url: "https://github.com/a/b",
       authConnectionId: "conn_missing",
     }),
-  ).rejects.toThrow(/does not exist in space/);
+  ).rejects.toThrow(/auth connection does not exist in this workspace/);
 });
 
 test("createSource accepts an authConnectionId present in the space", async () => {
@@ -766,7 +766,7 @@ test("createCompatibilityCheck rejects a curated installConfig from another spac
       sourceSnapshotId: run.snapshotId,
       installConfigId: "cfg_other_space",
     }),
-  ).rejects.toThrow(/not available in space/);
+  ).rejects.toThrow(/install config is not available to this workspace/);
 });
 
 test("createCompatibilityCheck rejects an installation from another space", async () => {
@@ -809,7 +809,7 @@ test("createCompatibilityCheck rejects an installation from another space", asyn
       sourceSnapshotId: run.snapshotId,
       installationId: "inst_foreign",
     }),
-  ).rejects.toThrow(/not in source space/);
+  ).rejects.toThrow(/capsule is not available to this source workspace/);
 });
 
 test("createCompatibilityCheck rejects an installation for another source", async () => {
@@ -931,7 +931,9 @@ output "public_url" {
   // Guided providers (aws) need no explicit-connection nudge; unknown providers
   // (vercel/draft) are flagged to wire an explicit Provider Connection.
   const genericConnectionMessages = report.findings
-    .filter((finding) => finding.code === "generic_provider_connection_required")
+    .filter(
+      (finding) => finding.code === "generic_provider_connection_required",
+    )
     .map((finding) => finding.message);
   expect(
     genericConnectionMessages.some((message) =>

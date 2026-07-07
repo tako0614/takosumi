@@ -44,7 +44,10 @@ import {
   type PageParams,
   pageSorted,
 } from "takosumi-contract/pagination";
-import { OpenTofuControllerError, requireNonEmptyString } from "../deploy-control/errors.ts";
+import {
+  OpenTofuControllerError,
+  requireNonEmptyString,
+} from "../deploy-control/errors.ts";
 import type { OpenTofuDeploymentStore } from "../deploy-control/store.ts";
 import {
   type ActivityRecorder,
@@ -125,8 +128,10 @@ export class OutputSharesService {
 
   constructor(dependencies: OutputSharesServiceDependencies) {
     this.#store = dependencies.store;
-    this.#newId = dependencies.newId ??
-      ((prefix) => `${prefix}_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`);
+    this.#newId =
+      dependencies.newId ??
+      ((prefix) =>
+        `${prefix}_${crypto.randomUUID().replaceAll("-", "").slice(0, 16)}`);
     this.#now = dependencies.now ?? (() => new Date().toISOString());
     this.#activity = dependencies.activity ?? NOOP_ACTIVITY_RECORDER;
     this.#sensitiveOutputResolver = dependencies.sensitiveOutputResolver;
@@ -144,7 +149,8 @@ export class OutputSharesService {
   async createShare(request: CreateOutputShareRequest): Promise<OutputShare> {
     // Accept both the new Workspace/Capsule field names and the transient
     // deprecated Space/Installation names until the rename converges.
-    const fromWorkspaceId = request.fromWorkspaceId ?? request.fromSpaceId ?? "";
+    const fromWorkspaceId =
+      request.fromWorkspaceId ?? request.fromSpaceId ?? "";
     const toWorkspaceId = request.toWorkspaceId ?? request.toSpaceId ?? "";
     const producerCapsuleId =
       request.producerCapsuleId ?? request.producerInstallationId ?? "";
@@ -169,9 +175,7 @@ export class OutputSharesService {
     }
     const entries = normalizeEntries(request.outputs, request.sensitivePolicy);
 
-    const producer = await this.#store.getInstallation(
-      producerCapsuleId,
-    );
+    const producer = await this.#store.getInstallation(producerCapsuleId);
     if (!producer) {
       throw new OpenTofuControllerError(
         "not_found",
@@ -183,8 +187,7 @@ export class OutputSharesService {
     if (producer.spaceId !== fromWorkspaceId) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        `producer installation ${producerCapsuleId} belongs to ` +
-          `space ${producer.spaceId}, not the granting space ${fromWorkspaceId}`,
+        "producer capsule is not available to the granting workspace",
       );
     }
     // The consumer Space must exist (you cannot grant to nothing).
@@ -192,7 +195,7 @@ export class OutputSharesService {
     if (!toSpace) {
       throw new OpenTofuControllerError(
         "not_found",
-        `consumer space ${toWorkspaceId} not found`,
+        "consumer workspace not found",
       );
     }
 
@@ -201,12 +204,8 @@ export class OutputSharesService {
     // has not produced. Sensitive entries are not stored in spaceOutputs; they
     // require explicit policy plus a host resolver that re-checks the encrypted
     // raw output artifact before plan-time published_output injection.
-    const latest = await this.#store.getLatestOutputSnapshot(
-      producerCapsuleId,
-    );
-    const available = new Set(
-      latest ? Object.keys(latest.spaceOutputs) : [],
-    );
+    const latest = await this.#store.getLatestOutputSnapshot(producerCapsuleId);
+    const available = new Set(latest ? Object.keys(latest.spaceOutputs) : []);
     const missing = entries
       .filter((entry) => entry.sensitive !== true)
       .map((entry) => entry.name)
@@ -215,10 +214,12 @@ export class OutputSharesService {
       throw new OpenTofuControllerError(
         "failed_precondition",
         `output share names not present in the producer's latest output ` +
-        `snapshot: ${missing.join(", ")}`,
+          `snapshot: ${missing.join(", ")}`,
       );
     }
-    const sensitiveEntries = entries.filter((entry) => entry.sensitive === true);
+    const sensitiveEntries = entries.filter(
+      (entry) => entry.sensitive === true,
+    );
     if (sensitiveEntries.length > 0) {
       if (!latest) {
         throw new OpenTofuControllerError(
@@ -289,9 +290,7 @@ export class OutputSharesService {
    * (`fromSpaceId === spaceId`) and the grants it RECEIVED (`toSpaceId ===
    * spaceId`) — de-duplicated and ordered oldest-first.
    */
-  async listForWorkspace(
-    workspaceId: string,
-  ): Promise<readonly OutputShare[]> {
+  async listForWorkspace(workspaceId: string): Promise<readonly OutputShare[]> {
     requireNonEmptyString(workspaceId, "workspaceId");
     const [granted, received] = await Promise.all([
       this.#store.listOutputSharesFromSpace(workspaceId),
@@ -299,8 +298,9 @@ export class OutputSharesService {
     ]);
     const byId = new Map<string, OutputShare>();
     for (const share of [...granted, ...received]) byId.set(share.id, share);
-    return Array.from(byId.values()).sort((a, b) =>
-      a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)
+    return Array.from(byId.values()).sort(
+      (a, b) =>
+        a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
     );
   }
 

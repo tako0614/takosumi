@@ -983,7 +983,9 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     }
     const issued = await issuer({
       workspaceId,
-      ...(options.installationId ? { installationId: options.installationId } : {}),
+      ...(options.installationId
+        ? { installationId: options.installationId }
+        : {}),
       connection,
       delivery: options.delivery,
       ...(options.phase ? { phase: options.phase } : {}),
@@ -1140,7 +1142,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     if (connection.scope === "space" && connection.spaceId !== spaceId) {
       throw new ConnectionVaultError(
         "not_found",
-        `connection ${connectionId} not found in space ${spaceId}`,
+        "connection not found in this workspace",
       );
     }
     if (connection.status === "revoked") {

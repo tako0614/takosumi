@@ -1688,10 +1688,7 @@ export class OpenTofuDeploymentController {
   async #requireSpace(spaceId: string) {
     const space = await this.#store.getSpace(spaceId);
     if (!space) {
-      throw new OpenTofuControllerError(
-        "not_found",
-        `space ${spaceId} not found`,
-      );
+      throw new OpenTofuControllerError("not_found", "workspace not found");
     }
     return space;
   }

@@ -70,7 +70,7 @@ export async function deployUpload(
   ) {
     throw new OpenTofuControllerError(
       "invalid_argument",
-      `snapshot ${request.snapshotId} is not an upload/artifact snapshot in space ${workspaceId}`,
+      "snapshot is not an upload/artifact snapshot in this workspace",
     );
   }
 

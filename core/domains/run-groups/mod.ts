@@ -125,7 +125,7 @@ export class RunGroupsService {
     if (members.size === 0) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        `nothing_to_update: space ${spaceId} has no stale installations to re-plan`,
+        "nothing_to_update: no stale capsules to re-plan",
       );
     }
     // Topological layers over the member set, restricted to edges whose BOTH
@@ -149,7 +149,7 @@ export class RunGroupsService {
         if (!installationById.has(installationId)) {
           throw new OpenTofuControllerError(
             "failed_precondition",
-            `nothing_to_update: installation ${installationId} not found in space ${spaceId}`,
+            "nothing_to_update: capsule is not available to this workspace",
           );
         }
         const response = await this.#controller.createInstallationPlan(
@@ -211,7 +211,7 @@ export class RunGroupsService {
     if (installations.length === 0) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        `nothing_to_drift_check: space ${spaceId} has no active installations to drift-check`,
+        "nothing_to_drift_check: no active capsules to drift-check",
       );
     }
 
@@ -374,9 +374,7 @@ function topologicalLayersOrPrecondition(
     if (error instanceof GraphCycleError) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        `dependency_cycle: space ${spaceId} dependency graph contains a cycle ` +
-          `(${error.cycle.join(" -> ")}); resolve the cycle before running a ` +
-          `RunGroup`,
+        "dependency_cycle: workspace dependency graph contains a cycle; resolve the cycle before running a RunGroup",
       );
     }
     throw error;

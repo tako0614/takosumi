@@ -37,9 +37,7 @@ import {
 } from "./deploy_control_shared.ts";
 import { OpenTofuControllerError } from "../domains/deploy-control/errors.ts";
 import { normalizeVariablePathRecord } from "../domains/deploy-control/validation.ts";
-import {
-  defaultCapsuleOutputAllowlist,
-} from "../domains/capsules/official_seed.ts";
+import { defaultCapsuleOutputAllowlist } from "../domains/capsules/official_seed.ts";
 import { pageSorted } from "takosumi-contract/pagination";
 import {
   TAKOSUMI_API_CAPSULE_STATE_VERSIONS_ROUTE,
@@ -860,7 +858,7 @@ async function createScopedInstallConfigForInstallation(input: {
   ) {
     throw new OpenTofuControllerError(
       "invalid_argument",
-      `installConfigId ${input.baseInstallConfigId} is not available to space ${input.spaceId}`,
+      "install config is not available to this workspace",
     );
   }
   const now = new Date().toISOString();

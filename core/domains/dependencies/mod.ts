@@ -170,10 +170,7 @@ export class DependenciesService {
     // published_output edge: an empty map would pin nothing. remote_state relaxes
     // this — a bare `terraform_remote_state` read needs no name mapping — but a
     // non-empty remote_state mapping is still validated below.
-    if (
-      req.mode !== "remote_state" &&
-      Object.keys(req.outputs).length === 0
-    ) {
+    if (req.mode !== "remote_state" && Object.keys(req.outputs).length === 0) {
       throw new OpenTofuControllerError(
         "invalid_argument",
         "dependency outputs mapping must declare at least one producer->consumer output",
@@ -181,18 +178,14 @@ export class DependenciesService {
     }
     validateOutputMappings(req.outputs);
 
-    const producer = await this.#store.getInstallation(
-      producerCapsuleId,
-    );
+    const producer = await this.#store.getInstallation(producerCapsuleId);
     if (!producer) {
       throw new OpenTofuControllerError(
         "not_found",
         `producer installation ${producerCapsuleId} not found`,
       );
     }
-    const consumer = await this.#store.getInstallation(
-      consumerCapsuleId,
-    );
+    const consumer = await this.#store.getInstallation(consumerCapsuleId);
     if (!consumer) {
       throw new OpenTofuControllerError(
         "not_found",
@@ -204,8 +197,7 @@ export class DependenciesService {
     if (consumer.spaceId !== workspaceId) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        `dependency consumer (${consumer.spaceId}) must belong to space ` +
-          `${workspaceId}`,
+        "dependency consumer must belong to this workspace",
       );
     }
     if (req.visibility === "space") {
@@ -214,8 +206,7 @@ export class DependenciesService {
       if (producer.spaceId !== workspaceId) {
         throw new OpenTofuControllerError(
           "failed_precondition",
-          `dependency producer (${producer.spaceId}) and consumer ` +
-            `(${consumer.spaceId}) must both belong to space ${workspaceId}`,
+          "dependency producer and consumer must both belong to this workspace",
         );
       }
     } else {
@@ -225,8 +216,7 @@ export class DependenciesService {
       if (producer.spaceId === consumer.spaceId) {
         throw new OpenTofuControllerError(
           "failed_precondition",
-          `cross_space dependency producer and consumer both belong to space ` +
-            `${producer.spaceId}; use a space-visibility dependency instead`,
+          "cross_space dependency producer and consumer are in the same workspace; use a workspace-visibility dependency instead",
         );
       }
       await this.#assertActiveShareCovers(producer, consumer, req.outputs);
@@ -266,10 +256,7 @@ export class DependenciesService {
    * check-then-write in {@link DependenciesService.createDependency} cannot be
    * interleaved across isolates.
    */
-  #withSpaceGraphLease<T>(
-    spaceId: string,
-    work: () => Promise<T>,
-  ): Promise<T> {
+  #withSpaceGraphLease<T>(spaceId: string, work: () => Promise<T>): Promise<T> {
     if (!this.#coordination) return work();
     return withSpaceLease(
       this.#coordination,
@@ -364,9 +351,7 @@ export class DependenciesService {
     if (missing.length > 0) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        `output_share_required: no active OutputShare from space ` +
-          `${producer.workspaceId} to space ${consumer.workspaceId} covers ` +
-          `${missing.join(", ")} for producer installation ${producer.id}`,
+        "output_share_required: no active OutputShare covers the requested outputs",
       );
     }
   }
@@ -377,9 +362,7 @@ export class DependenciesService {
    * consumers) and edges where it is the CONSUMER (`asConsumer`, its upstream
    * producers). Spec §14.
    */
-  async listForCapsule(
-    capsuleId: string,
-  ): Promise<InstallationDependencies> {
+  async listForCapsule(capsuleId: string): Promise<InstallationDependencies> {
     requireNonEmptyString(capsuleId, "capsuleId");
     const [asProducer, asConsumer] = await Promise.all([
       this.#store.listDependenciesForProducer(capsuleId),
@@ -429,9 +412,7 @@ export class DependenciesService {
    * projection (spec §14): the account-plane `/api/v1/workspaces/:id/graph`
    * route pairs these edges with the Space's Installations to render the DAG.
    */
-  async listByWorkspace(
-    workspaceId: string,
-  ): Promise<readonly Dependency[]> {
+  async listByWorkspace(workspaceId: string): Promise<readonly Dependency[]> {
     requireNonEmptyString(workspaceId, "workspaceId");
     return await this.#store.listDependenciesBySpace(workspaceId);
   }

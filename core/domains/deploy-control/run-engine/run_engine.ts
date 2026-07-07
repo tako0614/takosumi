@@ -768,7 +768,7 @@ export class RunEngine {
     if (installation.workspaceId !== workspaceId) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        `capsule ${installation.id} belongs to workspace ${installation.workspaceId}, not ${workspaceId}`,
+        "capsule is not available to this workspace",
       );
     }
     const installationContext: PlanRunInstallationContext =
@@ -1200,8 +1200,7 @@ export class RunEngine {
       if (!pinned || pinnedWorkspaceId !== installationWorkspaceId) {
         throw new OpenTofuControllerError(
           "not_found",
-          `upload SourceSnapshot ${pinnedSnapshotId} not found in ` +
-            `workspace ${installationWorkspaceId}`,
+          "upload/artifact SourceSnapshot not found in this workspace",
         );
       }
       snapshot = pinned;
@@ -3577,7 +3576,7 @@ export class RunEngine {
     if (!backup || backup.spaceId !== spaceId) {
       throw new OpenTofuControllerError(
         "not_found",
-        `backup ${backupId} not found in space ${spaceId}`,
+        "backup not found in this workspace",
       );
     }
     const restoreServiceData = request.restoreServiceData === true;
@@ -3614,7 +3613,7 @@ export class RunEngine {
     if (!installation || installation.spaceId !== spaceId) {
       throw new OpenTofuControllerError(
         "not_found",
-        `installation ${installationId} not found in space ${spaceId}`,
+        "capsule not found in this workspace",
       );
     }
     const environment =
