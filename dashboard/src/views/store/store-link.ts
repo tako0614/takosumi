@@ -16,6 +16,10 @@ export function buildNewQuery(listing: TcsListing): string {
     params.set("installConfigId", listing.installConfigId);
     return params.toString();
   }
+  if (listing.primaryServer) {
+    params.set("tcsBase", listing.primaryServer);
+    params.set("tcsListing", listing.id);
+  }
   params.set("git", listing.source.git);
   params.set("ref", listing.source.resolvedCommit ?? listing.source.ref);
   if (listing.source.path) params.set("path", listing.source.path);
