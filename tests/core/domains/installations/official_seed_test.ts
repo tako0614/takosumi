@@ -121,6 +121,10 @@ test("hostable official configs expose public catalog metadata for the dashboard
   expect(takos?.sourceKind).toBe("generic_capsule");
   expect(takos?.catalog?.source.path).toBe("deploy/opentofu");
   expect(takos?.modulePath).toBe("deploy/opentofu");
+  expect(takos?.outputAllowlist.takosumi_release).toEqual({
+    from: "takosumi_release",
+    type: "json",
+  });
   const releaseImagesDefault = takos?.catalog?.inputs.find(
     (input) => input.name === "release_container_images",
   )?.defaultValue;
