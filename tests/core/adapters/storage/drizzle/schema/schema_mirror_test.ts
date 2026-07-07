@@ -566,7 +566,7 @@ test("Worker D1 bootstrap records canonical schema migration ledger", async () =
     .all<D1SchemaMigrationRow>();
   const rows = migrationRows.results ?? [];
   expect(rows.map((row) => row.version)).toEqual([
-    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
   ]);
   expect(rows.map((row) => row.name)).toEqual([
     "d1_opentofu_connections_and_secret_blobs_shape",
@@ -588,6 +588,7 @@ test("Worker D1 bootstrap records canonical schema migration ledger", async () =
     "d1_opentofu_workspace_capsule_rename",
     "d1_opentofu_compatibility_report_root_interface",
     "d1_opentofu_public_host_reservations",
+    "d1_opentofu_public_host_reservations_backfill",
   ]);
   for (const row of rows) {
     expect(row.checksum).toMatch(/^sha256:[0-9a-f]{64}$/);

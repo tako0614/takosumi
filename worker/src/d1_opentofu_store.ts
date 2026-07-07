@@ -4871,6 +4871,122 @@ workspace / installation / status indexes
         .run();
     },
   },
+  {
+    version: 20,
+    name: "d1_opentofu_public_host_reservations_backfill",
+    checksumSource: `
+backfill public_host_reservations from existing Capsule output URLs
+dedupe url launch_url app_url per Capsule
+prefer active over stale over error over pending over disabled
+skip workers.dev hosts
+`,
+    async apply(db) {
+      await db
+        .prepare(
+          `with raw_hosts as (
+            select c.id as installation_id,
+                   c.space_id as workspace_id,
+                   c.name as installation_name,
+                   c.status as installation_status,
+                   c.created_at as installation_created_at,
+                   json_extract(o.record_json, '$.publicOutputs.url') as url
+            from capsules c
+            join outputs o on o.id = c.current_output_snapshot_id
+            where c.status != 'destroyed'
+            union all
+            select c.id, c.space_id, c.name, c.status, c.created_at,
+                   json_extract(o.record_json, '$.publicOutputs.launch_url')
+            from capsules c
+            join outputs o on o.id = c.current_output_snapshot_id
+            where c.status != 'destroyed'
+            union all
+            select c.id, c.space_id, c.name, c.status, c.created_at,
+                   json_extract(o.record_json, '$.publicOutputs.app_url')
+            from capsules c
+            join outputs o on o.id = c.current_output_snapshot_id
+            where c.status != 'destroyed'
+          ),
+          parsed_hosts as (
+            select installation_id,
+                   workspace_id,
+                   installation_name,
+                   installation_status,
+                   installation_created_at,
+                   lower(
+                     case
+                       when url like 'https://%' then
+                         case
+                           when instr(substr(url, 9), '/') > 0
+                             then substr(substr(url, 9), 1, instr(substr(url, 9), '/') - 1)
+                           else substr(url, 9)
+                         end
+                       else null
+                     end
+                   ) as hostname,
+                   case installation_status
+                     when 'active' then 400
+                     when 'stale' then 300
+                     when 'error' then 200
+                     when 'pending' then 100
+                     when 'disabled' then 50
+                     else 0
+                   end as priority
+            from raw_hosts
+            where url is not null
+          ),
+          distinct_hosts as (
+            select hostname,
+                   installation_id,
+                   workspace_id,
+                   installation_name,
+                   installation_status,
+                   installation_created_at,
+                   max(priority) as priority
+            from parsed_hosts
+            where hostname is not null
+              and hostname != ''
+              and hostname not like '%.workers.dev'
+            group by hostname, installation_id
+          ),
+          ranked as (
+            select *,
+                   row_number() over (
+                     partition by hostname
+                     order by priority desc, installation_created_at desc, installation_id desc
+                   ) as rn
+            from distinct_hosts
+          ),
+          migration_clock as (
+            select strftime('%Y-%m-%dT%H:%M:%fZ', 'now') as now
+          )
+          insert into public_host_reservations (
+            hostname, workspace_id, installation_id, installation_name,
+            status, reserved_at, updated_at, released_at
+          )
+          select hostname,
+                 workspace_id,
+                 installation_id,
+                 installation_name,
+                 'reserved',
+                 migration_clock.now,
+                 migration_clock.now,
+                 null
+          from ranked
+          cross join migration_clock
+          where rn = 1
+          on conflict(hostname) do update set
+            workspace_id = excluded.workspace_id,
+            installation_id = excluded.installation_id,
+            installation_name = excluded.installation_name,
+            status = 'reserved',
+            updated_at = excluded.updated_at,
+            released_at = null
+          where public_host_reservations.status = 'released'
+             or public_host_reservations.installation_id = excluded.installation_id`,
+        )
+        .run();
+    },
+  },
 ] as const satisfies readonly D1OpenTofuSchemaMigration[];
 
 /**
