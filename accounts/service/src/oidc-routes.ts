@@ -255,9 +255,7 @@ async function resolveOidcAuthorizationSubject(input: {
         "per-installation OIDC clients require pairwiseSubjectSecret",
     };
   }
-  const installation = await input.store.findAppCapsule(
-    input.client.capsuleId,
-  );
+  const installation = await input.store.findAppCapsule(input.client.capsuleId);
   if (!installation) {
     return {
       ok: false,
@@ -374,7 +372,7 @@ export async function handleAuthorize(input: {
     request: input.request,
     store: input.store,
   });
-  if (!session.ok) return session.response;
+  if (!session.ok) return authorizeSignInRedirect(input.url);
   const subject = await resolveOidcAuthorizationSubject({
     client,
     flow: input.flow,
@@ -413,6 +411,15 @@ export async function handleAuthorize(input: {
   const state = input.url.searchParams.get("state");
   if (state) redirect.searchParams.set("state", state);
   return Response.redirect(redirect, 302);
+}
+
+function authorizeSignInRedirect(authorizeUrl: URL): Response {
+  const signInUrl = new URL("/sign-in", authorizeUrl.origin);
+  signInUrl.searchParams.set(
+    "return",
+    `${authorizeUrl.pathname}${authorizeUrl.search}`,
+  );
+  return Response.redirect(signInUrl, 302);
 }
 
 export async function handleToken(input: {
