@@ -4809,6 +4809,100 @@ test("POST /api/v1/capsules/:id/plan backfills Takosumi Accounts OIDC for existi
   });
 });
 
+test("POST /api/v1/capsules/:id/plan reconciles existing Takosumi Accounts OIDC redirect URI", async () => {
+  const store = new InMemoryAccountsStore();
+  store.saveOidcClient({
+    clientId: "toc_existing_takos",
+    capsuleId: "inst_1",
+    namespacePath: "takosumi.identity.oidc",
+    issuerUrl: ORIGIN,
+    redirectUris: ["https://old-takos.app.takos.jp/auth/oidc/callback"],
+    allowedScopes: ["openid"],
+    subjectMode: "pairwise",
+    tokenEndpointAuthMethod: "none",
+    clientSecretHash: undefined,
+    createdAt: 1,
+    updatedAt: 1,
+  });
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  operations.installations.getInstallConfig = async (id) => {
+    operations.calls.getInstallConfig = [id];
+    return {
+      id,
+      name: "takos-config",
+      sourceKind: "generic_capsule",
+      installType: "opentofu_module",
+      trustLevel: "trusted",
+      variableMapping: {
+        project_name: "takos",
+        app_url: "https://takos-new.app.takos.jp",
+        takosumi_accounts_issuer_url: ORIGIN,
+        takosumi_accounts_url: ORIGIN,
+        takosumi_accounts_client_id: "toc_existing_takos",
+        takosumi_accounts_redirect_uri:
+          "https://old-takos.app.takos.jp/auth/oidc/callback",
+      },
+      outputAllowlist: {},
+      policy: {},
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:00Z",
+    };
+  };
+  operations.getSource = async (id) => {
+    operations.calls.getSource = [id];
+    return {
+      source: {
+        id,
+        workspaceId: "space_a",
+        spaceId: "space_a",
+        name: "takos",
+        url: "https://github.com/tako0614/takos.git",
+        defaultRef: "main",
+        defaultPath: "deploy/opentofu",
+        status: "active",
+        autoSync: false,
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      },
+    };
+  };
+
+  const { request: req, url } = request(
+    "POST",
+    "/api/v1/capsules/inst_1/plan",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+    issuer: ORIGIN,
+  });
+
+  expect(response?.status).toEqual(201);
+  const oidcClient = await store.findOidcClientForCapsule("inst_1");
+  expect(oidcClient?.clientId).toEqual("toc_existing_takos");
+  expect(oidcClient?.redirectUris).toEqual([
+    "https://takos-new.app.takos.jp/auth/oidc/callback",
+  ]);
+  expect(oidcClient?.allowedScopes).toEqual(["openid", "profile", "email"]);
+  const config = operations.calls.putInstallConfig?.[0] as {
+    variableMapping: Record<string, unknown>;
+  };
+  expect(config.variableMapping.takosumi_accounts_client_id).toEqual(
+    "toc_existing_takos",
+  );
+  expect(config.variableMapping.takosumi_accounts_redirect_uri).toEqual(
+    "https://takos-new.app.takos.jp/auth/oidc/callback",
+  );
+  expect(operations.calls.createCapsulePlan?.[0]).toEqual({
+    capsuleId: "inst_1",
+    options: undefined,
+  });
+});
+
 test("POST /api/v1/capsules/:id/plan forwards a preflight compatibility report hint", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);

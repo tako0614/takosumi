@@ -56,7 +56,10 @@ import {
   evaluateScopeBoundary,
   providerMatches,
 } from "takosumi-policy";
-import { generateGenericCapsuleRoot } from "takosumi-rootgen";
+import {
+  generateGenericCapsuleRoot,
+  type RootInstallationProviderEnvBinding,
+} from "takosumi-rootgen";
 import { stableJsonDigest } from "../../../adapters/source/digest.ts";
 import { log } from "../../../shared/log.ts";
 import {
