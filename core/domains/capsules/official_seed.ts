@@ -183,7 +183,7 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
     name: "yurucommu",
     source: {
       git: "https://github.com/tako0614/yurucommu.git",
-      ref: "de0c72f3741c3f2bed633c7dd995fa412d5074c2",
+      ref: "17d0b16fa6ffaa1d31efaa5dd9719a7875ec45f4",
       path: ".",
     },
     order: 100,
@@ -198,7 +198,7 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
       "Host a personal community / ActivityPub app.",
     ),
     iconUrl:
-      "https://raw.githubusercontent.com/tako0614/yurucommu/de0c72f3741c3f2bed633c7dd995fa412d5074c2/public/icons/yurucommu.svg",
+      "https://raw.githubusercontent.com/tako0614/yurucommu/17d0b16fa6ffaa1d31efaa5dd9719a7875ec45f4/public/icons/yurucommu.svg",
     inputs: [
       {
         name: "project_name",
@@ -255,14 +255,14 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
         name: "worker_bundle_url",
         type: "string",
         defaultValue:
-          "https://github.com/tako0614/yurucommu/releases/download/v2.0.1/takos-worker.js",
+          "https://github.com/tako0614/yurucommu/releases/download/v2.0.3/takos-worker-4f184e34c3ddf25c4be6a6c5ade5381173cef04e7fe8068b849ae88bd84c35cc.js",
         label: text("Worker artifact URL", "Worker artifact URL"),
       },
       {
         name: "worker_bundle_sha256",
         type: "string",
         defaultValue:
-          "866184ea1861b848770cbe64bed4e22d73778365c33ef693d81040e3baf04d50",
+          "4f184e34c3ddf25c4be6a6c5ade5381173cef04e7fe8068b849ae88bd84c35cc",
         label: text("Worker artifact SHA-256", "Worker artifact SHA-256"),
       },
     ],
