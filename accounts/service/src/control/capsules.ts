@@ -185,6 +185,7 @@ import { decodeCursor, pageSorted } from "takosumi-contract/pagination";
 import { appendLedgerEvent } from "../installation-ledger-events.ts";
 import { base64UrlEncodeBytes } from "../encoding.ts";
 import { canTransitionAppCapsuleStatus } from "../ledger.ts";
+import { ensureTakosumiAccountsOidcForExistingCapsule } from "./capsule-oidc.ts";
 
 export async function handleCapsules(
   ctx: ControlDispatchContext,
@@ -238,6 +239,12 @@ export async function handleCapsules(
               body.runnerProfileId.trim()
             ? body.runnerProfileId.trim()
             : undefined;
+      await ensureTakosumiAccountsOidcForExistingCapsule({
+        operations,
+        store,
+        issuer: ctx.issuer,
+        capsule: installation,
+      });
       const response = await operations.createCapsulePlan(
         capsuleId,
         compatibilityReportId || runnerProfileId
