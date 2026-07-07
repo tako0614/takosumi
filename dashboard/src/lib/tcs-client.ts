@@ -33,6 +33,23 @@ export interface TcsListingInput {
   readonly placeholder?: string;
 }
 
+export interface TcsInstallExperience {
+  readonly serviceName?: {
+    readonly variable: string;
+  };
+  readonly publicEndpoint?: {
+    readonly subdomainVariable?: string;
+    readonly urlVariable?: string;
+    readonly routePatternVariable?: string;
+    readonly baseDomain?: string;
+  };
+  readonly initialSecret?: {
+    readonly variable: string;
+    readonly kind?: "password" | "password_or_hash" | "token";
+    readonly optional?: boolean;
+  };
+}
+
 export interface TcsListingOutput {
   readonly key: string;
   readonly from: string;
@@ -58,6 +75,7 @@ export interface TcsListing {
   readonly badge: TcsLocalizedText;
   readonly iconUrl?: string;
   readonly inputs: readonly TcsListingInput[];
+  readonly installExperience?: TcsInstallExperience;
   readonly outputAllowlist: readonly TcsListingOutput[];
   readonly publisher?: {
     readonly handle: string;

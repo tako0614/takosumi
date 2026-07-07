@@ -118,9 +118,31 @@ test("hostable official configs expose public catalog metadata for the dashboard
   expect(yurucommu?.sourceKind).toBe("generic_capsule");
   expect(yurucommu?.catalog?.source.path).toBe(".");
   expect(yurucommu?.modulePath).toBeUndefined();
+  expect(yurucommu?.catalog?.installExperience).toEqual({
+    serviceName: { variable: "project_name" },
+    publicEndpoint: {
+      subdomainVariable: "worker_name",
+      urlVariable: "app_url",
+      routePatternVariable: "cloudflare_route_pattern",
+      baseDomain: "app.takos.jp",
+    },
+    initialSecret: {
+      variable: "auth_password_hash",
+      kind: "password_or_hash",
+      optional: true,
+    },
+  });
   expect(takos?.sourceKind).toBe("generic_capsule");
   expect(takos?.catalog?.source.path).toBe("deploy/opentofu");
   expect(takos?.modulePath).toBe("deploy/opentofu");
+  expect(takos?.catalog?.installExperience).toEqual({
+    serviceName: { variable: "project_name" },
+    publicEndpoint: {
+      subdomainVariable: "worker_name",
+      urlVariable: "app_url",
+      baseDomain: "app.takos.jp",
+    },
+  });
   expect(takos?.outputAllowlist.takosumi_release).toEqual({
     from: "takosumi_release",
     type: "json",

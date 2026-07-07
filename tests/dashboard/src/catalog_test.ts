@@ -169,6 +169,22 @@ describe("dashboard catalog", () => {
       expect(listing.badge.en).toBe("Installable");
       expect(listing.iconUrl, `${listing.id} icon`).toMatch(/^https:\/\//);
       expect(
+        listing.installExperience?.serviceName?.variable,
+        `${listing.id} service name input`,
+      ).toBe("project_name");
+      expect(
+        listing.installExperience?.publicEndpoint?.subdomainVariable,
+        `${listing.id} public subdomain input`,
+      ).toBe("worker_name");
+      expect(
+        listing.installExperience?.publicEndpoint?.urlVariable,
+        `${listing.id} public URL input`,
+      ).toBe("app_url");
+      expect(
+        listing.installExperience?.publicEndpoint?.baseDomain,
+        `${listing.id} public base domain`,
+      ).toBe("app.takos.jp");
+      expect(
         listing.source.resolvedCommit,
         `${listing.id} resolved commit`,
       ).toMatch(/^[0-9a-f]{40}$/);
@@ -205,6 +221,14 @@ describe("dashboard catalog", () => {
         (listing) => listing.id === "cloudflare-hello-worker",
       ),
     ).toBe(false);
+    const yurucommu = installableAppStoreListings.find(
+      (listing) => listing.id === "yurucommu",
+    );
+    expect(yurucommu?.installExperience?.initialSecret).toEqual({
+      variable: "auth_password_hash",
+      kind: "password_or_hash",
+      optional: true,
+    });
   });
 
   test("curated service catalog metadata declares product icons", () => {

@@ -25,6 +25,7 @@ export type {
   InstallConfigCatalogSource,
   InstallConfigCatalogSurface,
   InstallConfigCatalogText,
+  InstallConfigInstallExperience,
   InstallBuildConfig,
   InstallPrebuiltArtifactConfig,
   NormalizationConfig,

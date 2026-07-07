@@ -161,6 +161,23 @@ export interface InstallConfigCatalogText {
   readonly en: string;
 }
 
+export interface InstallConfigInstallExperience {
+  readonly serviceName?: {
+    readonly variable: string;
+  };
+  readonly publicEndpoint?: {
+    readonly subdomainVariable?: string;
+    readonly urlVariable?: string;
+    readonly routePatternVariable?: string;
+    readonly baseDomain?: string;
+  };
+  readonly initialSecret?: {
+    readonly variable: string;
+    readonly kind?: "password" | "password_or_hash" | "token";
+    readonly optional?: boolean;
+  };
+}
+
 export interface InstallConfigCatalogSource {
   readonly git: string;
   readonly ref: string;
@@ -198,6 +215,7 @@ export interface InstallConfigCatalogMetadata {
   readonly description: InstallConfigCatalogText;
   readonly iconUrl?: string;
   readonly inputs: readonly InstallConfigCatalogInput[];
+  readonly installExperience?: InstallConfigInstallExperience;
 }
 
 /**

@@ -227,6 +227,10 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain(
       "const listing = storeListingForCurrentSource()",
     );
+    expect(newAppViewSource).toContain("listing.installExperience");
+    expect(newAppViewSource).toContain(
+      "{ installExperience: listing.installExperience }",
+    );
     expect(newAppViewSource).not.toContain(
       "const listing = activeStoreListing();\n    return listing ? catalogMetadataFromStoreListing",
     );
@@ -322,6 +326,14 @@ describe("/new flow guidance", () => {
     expect(installableAppListingsSource).toContain("auth_password_hash");
     expect(installableAppListingsSource).toContain("secret: true");
     expect(installableAppListingsSource).toContain("初期パスワード");
+    expect(installableAppListingsSource).toContain("installExperience:");
+    expect(installableAppListingsSource).toContain(
+      'subdomainVariable: "worker_name"',
+    );
+    expect(installableAppListingsSource).toContain('urlVariable: "app_url"');
+    expect(installableAppListingsSource).toContain(
+      'baseDomain: "app.takos.jp"',
+    );
     expect(installableAppListingsSource).toContain(
       "https://github.com/tako0614/yurucommu/releases/download/v2.0.1/takos-worker.js",
     );

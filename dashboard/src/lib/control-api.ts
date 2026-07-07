@@ -461,6 +461,22 @@ export interface InstallConfig {
       readonly helper?: { readonly ja: string; readonly en: string };
       readonly placeholder?: string;
     }[];
+    readonly installExperience?: {
+      readonly serviceName?: {
+        readonly variable: string;
+      };
+      readonly publicEndpoint?: {
+        readonly subdomainVariable?: string;
+        readonly urlVariable?: string;
+        readonly routePatternVariable?: string;
+        readonly baseDomain?: string;
+      };
+      readonly initialSecret?: {
+        readonly variable: string;
+        readonly kind?: "password" | "password_or_hash" | "token";
+        readonly optional?: boolean;
+      };
+    };
   };
   readonly createdAt: string;
   readonly updatedAt: string;

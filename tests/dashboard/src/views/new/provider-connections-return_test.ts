@@ -276,14 +276,19 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).toContain(
       "new Set(compatibility()?.rootModuleVariables ?? [])",
     );
-    expect(newAppViewSource).toContain("managedWorkerNameFromVariables");
+    expect(newAppViewSource).toContain("installExperienceForCurrentSource");
     expect(newAppViewSource).toContain(
-      "const managedAppHost = `${managedWorkerName}.app.takos.jp`",
+      "const publicEndpoint = installExperience?.publicEndpoint",
+    );
+    expect(newAppViewSource).toContain("managedWorkerNameFromVariables");
+    expect(newAppViewSource).toContain("publicEndpoint?.subdomainVariable");
+    expect(newAppViewSource).toContain("publicEndpoint?.urlVariable");
+    expect(newAppViewSource).toContain("managedBaseDomain");
+    expect(newAppViewSource).toContain(
+      "const managedAppHost = `${managedWorkerName}.${publicBaseDomain}`",
     );
     expect(newAppViewSource).toContain("routePatternFromAppUrl");
-    expect(newAppViewSource).toContain(
-      'current.app_url === "string" && current.app_url.trim()',
-    );
+    expect(newAppViewSource).toContain("const currentAppUrl =");
     expect(newAppViewSource).toContain('"cloudflare_route_zone_id"');
     expect(newAppViewSource).toContain('"cloudflare_route_pattern"');
     expect(newAppViewSource).toContain('"enable_workers_dev_subdomain"');

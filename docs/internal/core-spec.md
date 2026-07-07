@@ -138,6 +138,55 @@ Takosumi does not decide app artifact semantics. If a module needs an image
 reference, release tag, object key, URL, or digest, the module declares a normal
 variable or provider/data-source logic.
 
+## Install Catalog Experience Contract
+
+Catalog entries may expose an optional `installExperience` object. This is a
+dashboard/store UX contract, not execution authority and not a Takosumi-owned
+repo metadata requirement.
+
+The OpenTofu module still owns its variable names. `installExperience` maps
+standard install concepts to those module variables:
+
+```json
+{
+  "serviceName": { "variable": "project_name" },
+  "publicEndpoint": {
+    "subdomainVariable": "worker_name",
+    "urlVariable": "app_url",
+    "routePatternVariable": "cloudflare_route_pattern",
+    "baseDomain": "app.takos.jp"
+  },
+  "initialSecret": {
+    "variable": "auth_password_hash",
+    "kind": "password_or_hash",
+    "optional": true
+  }
+}
+```
+
+Rules:
+
+```text
+serviceName:
+  friendly resource/service name input.
+
+publicEndpoint:
+  optional public subdomain, URL, route pattern, and default base domain.
+  The dashboard may derive defaults such as <subdomain>.app.takos.jp from this
+  mapping, but the module still receives plain variables.
+
+initialSecret:
+  optional first-run password/token input for apps that need one.
+  OIDC-backed apps should prefer automatic sign-in and treat this as fallback.
+```
+
+Do not add `purpose` flags to individual inputs as a pseudo-standard. The
+contract is the mapping from standard install concepts to module variables.
+Unknown modules remain valid plain OpenTofu Capsules; without
+`installExperience`, Takosumi only uses generic variable defaults and
+well-known compatibility fallbacks such as `worker_name` / `app_url` when the
+root module declares those variables.
+
 ## Performance Model
 
 Takosumi should feel like an app install flow without leaving the
