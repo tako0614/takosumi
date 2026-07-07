@@ -188,7 +188,9 @@ export async function handleInstallConfigs(
     );
   }
   if (segments.length === 2 && segments[0] === "install-configs") {
-    if (method !== "GET") return methodNotAllowed("GET");
+    if (method !== "GET" && method !== "PATCH") {
+      return methodNotAllowed("GET, PATCH");
+    }
     const installConfigId = decodeURIComponent(segments[1] ?? "");
     const config =
       await operations.installations.getInstallConfig(installConfigId);
@@ -201,9 +203,107 @@ export async function handleInstallConfigs(
       });
       if (!auth.ok) return auth.response;
     }
-    return json({ installConfig: publicInstallConfig(config) });
+    if (method === "GET") {
+      return json({ installConfig: publicInstallConfig(config) });
+    }
+    return await patchScopedInstallConfig(request, operations, config);
   }
   return undefined;
+}
+
+async function patchScopedInstallConfig(
+  request: Request,
+  operations: ControlPlaneOperations,
+  config: InstallConfig,
+): Promise<Response> {
+  const scopedWorkspaceId = config.workspaceId ?? config.spaceId;
+  if (
+    !scopedWorkspaceId ||
+    config.internal?.reason !== "per_install_overrides"
+  ) {
+    return errorJson(
+      "invalid_request",
+      "only Workspace-scoped per-install Capsule configs can be patched",
+      400,
+    );
+  }
+  const body = await readJsonObject(request);
+  if (!body) return errorJson("invalid_request", "invalid request", 400);
+  const variableMappingPatch = body.variableMapping;
+  const catalogInputDefaults = body.catalogInputDefaults;
+  if (
+    variableMappingPatch !== undefined &&
+    !isPlainJsonObject(variableMappingPatch)
+  ) {
+    return errorJson(
+      "invalid_request",
+      "variableMapping must be a JSON object",
+      400,
+    );
+  }
+  if (
+    catalogInputDefaults !== undefined &&
+    !isPlainJsonObject(catalogInputDefaults)
+  ) {
+    return errorJson(
+      "invalid_request",
+      "catalogInputDefaults must be a JSON object",
+      400,
+    );
+  }
+  const catalogInputDefaultStrings: Record<string, string> = {};
+  for (const [key, value] of Object.entries(variableMappingPatch ?? {})) {
+    if (!isJsonValue(value)) {
+      return errorJson(
+        "invalid_request",
+        `variableMapping.${key} must be a JSON value`,
+        400,
+      );
+    }
+  }
+  for (const [key, value] of Object.entries(catalogInputDefaults ?? {})) {
+    if (typeof value !== "string") {
+      return errorJson(
+        "invalid_request",
+        `catalogInputDefaults.${key} must be a string`,
+        400,
+      );
+    }
+    catalogInputDefaultStrings[key] = value;
+  }
+  const catalogSourceRef = stringValue(body.catalogSourceRef);
+  const now = new Date().toISOString();
+  const updated = await operations.installations.putInstallConfig({
+    ...config,
+    variableMapping: {
+      ...config.variableMapping,
+      ...(variableMappingPatch ?? {}),
+    },
+    catalog:
+      config.catalog && (catalogSourceRef || catalogInputDefaults)
+        ? {
+            ...config.catalog,
+            source: catalogSourceRef && config.catalog.source
+              ? { ...config.catalog.source, ref: catalogSourceRef }
+              : config.catalog.source,
+            inputs: catalogInputDefaults
+              ? config.catalog.inputs.map((input) =>
+                  Object.prototype.hasOwnProperty.call(
+                    catalogInputDefaultStrings,
+                    input.name,
+                  )
+                    ? {
+                        ...input,
+                        defaultValue: catalogInputDefaultStrings[input.name],
+                      }
+                    : input,
+                )
+              : config.catalog.inputs,
+          }
+        : config.catalog,
+    updatedAt: now,
+  });
+  return json({ installConfig: publicInstallConfig(updated) });
 }
 
 export function publicInstallConfig(
