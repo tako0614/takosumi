@@ -355,7 +355,7 @@ export async function handleCreateAppCapsule(input: {
     if (existingLedgerAccount.legalOwnerSubject !== createdBySubject) {
       return errorJson(
         "account_claim_conflict",
-        "accountId is already owned by a different Takosumi subject",
+        "already exists",
         409,
       );
     }
@@ -375,7 +375,7 @@ export async function handleCreateAppCapsule(input: {
     ) {
       return errorJson(
         "account_claim_conflict",
-        "accountId was claimed by another install while creating this one",
+        "already exists",
         409,
       );
     }
@@ -398,7 +398,7 @@ export async function handleCreateAppCapsule(input: {
     if (!confirmedWorkspace || confirmedWorkspace.accountId !== accountId) {
       return errorJson(
         "space_claim_conflict",
-        "workspaceId was claimed by another account while creating this one",
+        "already exists",
         409,
       );
     }

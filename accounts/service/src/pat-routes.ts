@@ -100,7 +100,7 @@ export async function handleCreatePersonalAccessToken(input: {
     if (!ownsWorkspace) {
       return errorJson(
         "workspace_not_found",
-        "workspace_id must reference a Workspace owned by the token subject",
+        "workspace not found",
         404,
       );
     }
