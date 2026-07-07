@@ -475,15 +475,37 @@ function workerNameFromCapsule(installation: Installation): string | undefined {
     nonEmptyStringValue(installation.slug) ??
     nonEmptyStringValue(installation.name);
   if (!preferred) return undefined;
-  const normalized = preferred
+  const base = preferred
     .toLowerCase()
     .replace(/[^a-z0-9-]+/g, "-")
     .replace(/^-+/g, "")
     .replace(/-+$/g, "")
-    .replace(/-{2,}/g, "-")
-    .slice(0, 52)
-    .replace(/-+$/g, "");
+    .replace(/-{2,}/g, "-");
+  const suffix = managedWorkerNameSuffix(installation.id);
+  const maxBaseLength = Math.max(1, 52 - suffix.length - 1);
+  const normalized = `${base.slice(0, maxBaseLength).replace(/-+$/g, "")}-${suffix}`;
   return validManagedWorkerName(normalized) ? normalized : undefined;
+}
+
+function managedWorkerNameSuffix(installationId: string): string {
+  const stripped = installationId.replace(/^inst[_-]?/u, "");
+  const normalized = stripped
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "")
+    .slice(0, 8);
+  return normalized || "capsule";
+}
+
+function installationHasClaimablePublicState(
+  installation: Installation,
+): boolean {
+  return Boolean(
+    installation.currentDeploymentId ||
+    installation.currentStateVersionId ||
+    installation.currentStateGeneration > 0 ||
+    installation.status === "active" ||
+    installation.status === "stale",
+  );
 }
 
 function workspaceOutputsWithReleaseDescriptor(
@@ -1919,6 +1941,7 @@ export class RunEngine {
     const installations = await this.#store.listInstallations();
     for (const installation of installations) {
       if (installation.status === "destroyed") continue;
+      if (!installationHasClaimablePublicState(installation)) continue;
       let hosts: readonly string[];
       try {
         hosts = await this.#publicHostsForInstallation(installation);
