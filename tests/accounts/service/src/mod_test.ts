@@ -2793,9 +2793,15 @@ test("ephemeral accounts handler completes authorization code flow", async () =>
   authorizeUrl.searchParams.set("code_challenge_method", "S256");
 
   const noSessionResponse = await handler(new Request(authorizeUrl));
-  expect(noSessionResponse.status).toEqual(401);
-  expect(noSessionResponse.headers.get("www-authenticate")).toEqual(
-    'Bearer error="invalid_session"',
+  expect(noSessionResponse.status).toEqual(302);
+  const signInRedirect = new URL(
+    noSessionResponse.headers.get("location") ?? "",
+  );
+  expect(signInRedirect.origin + signInRedirect.pathname).toEqual(
+    "https://accounts.example.test/sign-in",
+  );
+  expect(signInRedirect.searchParams.get("return")).toEqual(
+    `${authorizeUrl.pathname}${authorizeUrl.search}`,
   );
 
   const authorizeResponse = await handler(

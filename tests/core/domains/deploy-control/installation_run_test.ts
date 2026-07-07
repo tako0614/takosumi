@@ -876,11 +876,13 @@ test("managed Cloudflare Capsule inputs derive app.takos.jp launch defaults serv
 
   expect(planRun.status).toEqual("succeeded");
   const mainTf = runner.planJobs[0]!.generatedRoot!.files["main.tf"]!;
-  expect(mainTf).toContain('worker_name = "yuru-managed-app"');
-  expect(mainTf).toContain('app_url = "https://yuru-managed-app.app.takos.jp"');
+  expect(mainTf).toContain('worker_name = "yuru-managed-app-fixture"');
+  expect(mainTf).toContain(
+    'app_url = "https://yuru-managed-app-fixture.app.takos.jp"',
+  );
   expect(mainTf).toContain('cloudflare_route_zone_id = "zone_takosumi_cloud"');
   expect(mainTf).toContain(
-    'cloudflare_route_pattern = "yuru-managed-app.app.takos.jp/*"',
+    'cloudflare_route_pattern = "yuru-managed-app-fixture.app.takos.jp/*"',
   );
   expect(mainTf).toContain(
     'cloudflare = jsondecode("{\\"account_id\\":\\"ts_acc_takosumi_cloud\\",\\"api_base_url\\":\\"https://app.takosumi.com/compat/cloudflare/client/v4\\"}")',
@@ -966,7 +968,7 @@ test("managed Cloudflare app.takos.jp host is globally claimed across Workspaces
     environment: "preview",
     installConfig: {
       variableMapping: {
-        worker_name: null,
+        worker_name: "shared-app",
         app_url: null,
         cloudflare: {
           account_id: null,
@@ -1008,6 +1010,11 @@ test("managed Cloudflare app.takos.jp host is globally claimed across Workspaces
   });
 
   await controller.createInstallationPlan(first.installation.id);
+  await store.putInstallation({
+    ...first.installation,
+    status: "active",
+    currentStateGeneration: 1,
+  });
 
   const second = await seedInstallationModel(store, {
     spaceId: "space_second",
@@ -1019,7 +1026,7 @@ test("managed Cloudflare app.takos.jp host is globally claimed across Workspaces
     environment: "preview",
     installConfig: {
       variableMapping: {
-        worker_name: null,
+        worker_name: "shared-app",
         app_url: null,
         cloudflare: {
           account_id: null,
@@ -1060,6 +1067,112 @@ test("managed Cloudflare app.takos.jp host is globally claimed across Workspaces
   ).rejects.toThrow(
     "app_hostname_unavailable: shared-app.app.takos.jp is already claimed",
   );
+});
+
+test("managed Cloudflare host claim ignores unapplied pending Capsules", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  const first = await seedInstallationModel(store, {
+    spaceId: "space_first",
+    sourceId: "src_first",
+    snapshotId: "snap_first",
+    installConfigId: "cfg_first",
+    installationId: "inst_first",
+    name: "Shared App",
+    environment: "preview",
+    installConfig: {
+      variableMapping: {
+        worker_name: "shared-app",
+        app_url: null,
+        cloudflare: {
+          account_id: null,
+          api_base_url: null,
+        },
+      },
+    },
+  });
+  await putConnectionWithProviderEnv(store, {
+    ...cloudflareConnection(
+      "conn_cloudflare_first",
+      first.installation.spaceId,
+    ),
+    scopeHints: {
+      managedProvider: true,
+      providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      accountId: "ts_acc_takosumi_cloud",
+    },
+  });
+  await store.putInstallationProviderEnvBindingSet({
+    id: "profile_cloudflare_first",
+    spaceId: first.installation.spaceId,
+    installationId: first.installation.id,
+    environment: first.installation.environment,
+    bindings: [
+      {
+        provider: "cloudflare",
+        alias: "main",
+        connectionId: "conn_cloudflare_first",
+      },
+    ],
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
+  const second = await seedInstallationModel(store, {
+    spaceId: "space_second",
+    sourceId: "src_second",
+    snapshotId: "snap_second",
+    installConfigId: "cfg_second",
+    installationId: "inst_second",
+    name: "Shared App",
+    environment: "preview",
+    installConfig: {
+      variableMapping: {
+        worker_name: "shared-app",
+        app_url: null,
+        cloudflare: {
+          account_id: null,
+          api_base_url: null,
+        },
+      },
+    },
+  });
+  await putConnectionWithProviderEnv(store, {
+    ...cloudflareConnection(
+      "conn_cloudflare_second",
+      second.installation.spaceId,
+    ),
+    scopeHints: {
+      managedProvider: true,
+      providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      accountId: "ts_acc_takosumi_cloud",
+    },
+  });
+  await store.putInstallationProviderEnvBindingSet({
+    id: "profile_cloudflare_second",
+    spaceId: second.installation.spaceId,
+    installationId: second.installation.id,
+    environment: second.installation.environment,
+    bindings: [
+      {
+        provider: "cloudflare",
+        alias: "main",
+        connectionId: "conn_cloudflare_second",
+      },
+    ],
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
+  const profile = multiProviderRunnerProfile();
+  const controller = controllerWith(store, runner, {
+    runnerProfiles: [profile],
+    defaultRunnerProfileId: profile.id,
+  });
+
+  const { planRun } = await controller.createInstallationPlan(
+    second.installation.id,
+  );
+
+  expect(planRun.status).toEqual("succeeded");
 });
 
 test("managed Cloudflare host claim skips corrupt historical Capsules", async () => {
@@ -1105,6 +1218,11 @@ test("managed Cloudflare host claim skips corrupt historical Capsules", async ()
       providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
       accountId: "ts_acc_takosumi_cloud",
     },
+  });
+  await store.putInstallation({
+    ...corrupt.installation,
+    status: "active",
+    currentStateGeneration: 1,
   });
   await store.putInstallationProviderEnvBindingSet({
     id: "profile_cloudflare_corrupt",
@@ -1294,9 +1412,9 @@ output "url" {
     'cloudflare = jsondecode("{\\"account_id\\":\\"ts_acc_takosumi_cloud\\",\\"api_base_url\\":\\"https://app.takosumi.com/compat/cloudflare/client/v4\\"}")',
   );
   expect(mainTf).toContain(
-    'app_url = "https://takos-managed-app.app.takos.jp"',
+    'app_url = "https://takos-managed-app-fixture.app.takos.jp"',
   );
-  expect(mainTf).toContain('worker_name = "takos-managed-app"');
+  expect(mainTf).toContain('worker_name = "takos-managed-app-fixture"');
 });
 
 test("declared generic Capsule Cloudflare inputs and outputs are wired from source shape", async () => {

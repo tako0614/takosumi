@@ -382,18 +382,28 @@ function cloudflareWorkerNameFromCapsule(
   installation: Installation,
 ): string | undefined {
   const preferred = nonEmptyString(installation.slug) ?? installation.name;
-  const normalized = preferred
+  const base = preferred
     .toLowerCase()
     .replace(/[^a-z0-9-]+/g, "-")
     .replace(/^-+/g, "")
     .replace(/-+$/g, "")
-    .replace(/-{2,}/g, "-")
-    .slice(0, 52)
-    .replace(/-+$/g, "");
+    .replace(/-{2,}/g, "-");
+  const suffix = managedWorkerNameSuffix(installation.id);
+  const maxBaseLength = Math.max(1, 52 - suffix.length - 1);
+  const normalized = `${base.slice(0, maxBaseLength).replace(/-+$/g, "")}-${suffix}`;
   if (!/^[a-z][a-z0-9-]{1,50}[a-z0-9]$/u.test(normalized)) {
     return undefined;
   }
   return normalized;
+}
+
+function managedWorkerNameSuffix(installationId: string): string {
+  const stripped = installationId.replace(/^inst[_-]?/u, "");
+  const normalized = stripped
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "")
+    .slice(0, 8);
+  return normalized || "capsule";
 }
 
 function mergeObjectInput(
