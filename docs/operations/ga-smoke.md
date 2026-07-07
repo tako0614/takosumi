@@ -85,7 +85,7 @@ The command:
 
 R2/S3 storage should be validated through existing providers or the scoped
 `compat.s3.v1` endpoint when an operator exposes it. Do not use a first-party
-R2 starter as the Layer 2 proof; Layer 2 is the product control-plane path and
+R2 sample as the Layer 2 proof; Layer 2 is the product control-plane path and
 uses `cloudflare-hello-worker` because it needs no build artifact and can be
 created, verified, and destroyed by the platform loop.
 

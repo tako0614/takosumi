@@ -17,7 +17,7 @@ async function makeApp() {
     updatedAt: "2026-06-07T00:00:00.000Z",
   });
   await store.putCreditBalance({
-    spaceId: "space_12345678",
+    spaceId: "user_1",
     availableCredits: 12,
     reservedCredits: 2,
     monthlyIncludedCredits: 10,
@@ -37,9 +37,9 @@ async function makeApp() {
     updatedAt: "2026-06-01T00:00:00.000Z",
   });
   await store.putBillingAccount({
-    id: "bill_space_12345678",
-    ownerType: "space",
-    ownerId: "space_12345678",
+    id: "bill_user_1",
+    ownerType: "user",
+    ownerId: "user_1",
     provider: "stripe",
     stripeCustomerId: "cus_123",
     status: "active",
@@ -48,8 +48,8 @@ async function makeApp() {
   });
   await store.putSpaceSubscription({
     id: "sub_123",
-    spaceId: "space_12345678",
-    billingAccountId: "bill_space_12345678",
+    spaceId: "user_1",
+    billingAccountId: "bill_user_1",
     planId: "pro",
     status: "active",
     currentPeriodStart: "2026-06-01T00:00:00.000Z",
@@ -59,7 +59,10 @@ async function makeApp() {
   });
   await store.putUsageEvent({
     id: "usage_1",
-    spaceId: "space_12345678",
+    spaceId: "user_1",
+    resourceMetadata: {
+      source_workspace_id: "space_12345678",
+    },
     runId: "apply_1",
     kind: "operation",
     quantity: 1,
@@ -70,7 +73,7 @@ async function makeApp() {
   });
   await store.putCreditReservation({
     id: "cres_1",
-    spaceId: "space_12345678",
+    spaceId: "user_1",
     runId: "plan_1",
     estimatedCredits: 28,
     status: "reserved",
@@ -118,8 +121,8 @@ test("GET /internal/v1/workspaces/:spaceId/billing returns settings and balance"
     billing: {
       settings: { mode: "showback", provider: "none" },
       balance: {
-        workspaceId: "space_12345678",
-        spaceId: "space_12345678",
+        workspaceId: "user_1",
+        spaceId: "user_1",
         availableUsdMicros: 702_000_000,
         reservedUsdMicros: 2_000_000,
         monthlyIncludedUsdMicros: 700_000_000,
@@ -131,9 +134,9 @@ test("GET /internal/v1/workspaces/:spaceId/billing returns settings and balance"
         updatedAt: expect.any(String),
       },
       account: {
-        id: "bill_space_12345678",
-        ownerType: "space",
-        ownerId: "space_12345678",
+        id: "bill_user_1",
+        ownerType: "user",
+        ownerId: "user_1",
         provider: "stripe",
         stripeCustomerId: "cus_123",
         status: "active",
@@ -142,8 +145,8 @@ test("GET /internal/v1/workspaces/:spaceId/billing returns settings and balance"
       },
       subscription: {
         id: "sub_123",
-        spaceId: "space_12345678",
-        billingAccountId: "bill_space_12345678",
+        spaceId: "user_1",
+        billingAccountId: "bill_user_1",
         planId: "pro",
         status: "active",
         currentPeriodStart: "2026-06-01T00:00:00.000Z",

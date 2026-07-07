@@ -888,6 +888,122 @@ test("managed Cloudflare Capsule inputs derive app.takos.jp launch defaults serv
   expect(mainTf).not.toContain("fixture-provider-token");
 });
 
+test("catalog managed Cloudflare Capsule uses operator fallback without credential-ref profile", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  const seeded = await seedInstallationModel(store, {
+    name: "Takos Managed App",
+    environment: "preview",
+    installConfig: {
+      variableMapping: {
+        project_name: "takos-managed",
+        cloudflare: {
+          account_id: null,
+          api_base_url: null,
+        },
+        app_url: null,
+        worker_name: null,
+      },
+      catalog: {
+        order: 100,
+        surface: "service",
+        kind: "worker",
+        provider: "cloudflare",
+        suggestedName: "takos",
+        badge: { ja: "追加候補", en: "Installable" },
+        name: { ja: "Takos", en: "Takos" },
+        description: { ja: "Takos", en: "Takos" },
+        inputs: [],
+      },
+    },
+  });
+  await store.putConnection({
+    ...cloudflareConnection("conn_operator_managed"),
+    spaceId: undefined,
+    scope: "operator",
+    materialization: "secret",
+    scopeHints: {
+      managedProvider: true,
+      providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      accountId: "ts_acc_takosumi_cloud",
+    },
+  });
+  const sourcesService = new SourcesService({
+    store,
+    now: () => new Date("2026-06-07T00:00:00.000Z"),
+    newId: (prefix) => `${prefix}_managed_catalog`,
+    readCapsuleSourceFiles: () =>
+      Promise.resolve([
+        {
+          path: "main.tf",
+          text: `
+terraform {
+  required_providers {
+    cloudflare = {
+      source = "cloudflare/cloudflare"
+    }
+  }
+}
+
+variable "project_name" {
+  type = string
+}
+
+variable "cloudflare" {
+  type = object({
+    account_id = string
+    api_base_url = optional(string)
+  })
+}
+
+variable "app_url" {
+  type = string
+}
+
+variable "worker_name" {
+  type = string
+}
+
+output "url" {
+  value = var.app_url
+}
+`,
+        },
+      ]),
+  });
+  const profile: RunnerProfile = {
+    ...multiProviderRunnerProfile([
+      "registry.opentofu.org/cloudflare/cloudflare",
+    ]),
+    credentialRefs: [],
+    requireCredentialRefs: false,
+  };
+  const controller = controllerWith(store, runner, {
+    runnerProfiles: [profile],
+    defaultRunnerProfileId: profile.id,
+    sourcesService,
+    allowOperatorBackedProviderEnvs: true,
+  });
+
+  const { planRun } = await controller.createInstallationPlan(
+    seeded.installation.id,
+  );
+
+  expect(planRun.status).toEqual("succeeded");
+  const mainTf = runner.planJobs[0]!.generatedRoot!.files["main.tf"]!;
+  expect(mainTf).toContain(
+    'base_url = "https://app.takosumi.com/compat/cloudflare/client/v4"',
+  );
+  expect(mainTf).toContain("cloudflare = cloudflare");
+  expect(mainTf).toContain(
+    'cloudflare = jsondecode("{\\"account_id\\":\\"ts_acc_takosumi_cloud\\",\\"api_base_url\\":\\"https://app.takosumi.com/compat/cloudflare/client/v4\\"}")',
+  );
+  expect(mainTf).toContain(
+    'app_url = "https://takos-managed-app.app.takos.jp"',
+  );
+  expect(mainTf).toContain('worker_name = "takos-managed-app"');
+});
+
 test("declared generic Capsule Cloudflare inputs and outputs are wired from source shape", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   const runner = recordingRunner();
@@ -2934,6 +3050,72 @@ test("release activator receives neutral post-apply commands as opaque argv", as
   });
 });
 
+test("post-apply release commands fall back to OutputSnapshot workspace outputs", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const originalCommit = store.commitAppliedDeployment.bind(store);
+  store.commitAppliedDeployment = (
+    input: Parameters<OpenTofuDeploymentStore["commitAppliedDeployment"]>[0],
+  ) => {
+    if (input.outputSnapshot) {
+      const mutable = input.outputSnapshot as unknown as {
+        workspaceOutputs: Record<string, unknown>;
+        spaceOutputs: Record<string, unknown>;
+      };
+      const workspaceOutputs = {
+        ...mutable.workspaceOutputs,
+        takosumi_release: {
+          post_apply: [
+            {
+              id: "publish-from-snapshot",
+              executor: "operator",
+              command: ["bun", "run", "release"],
+              working_directory: ".",
+            },
+          ],
+        },
+      };
+      mutable.workspaceOutputs = workspaceOutputs;
+      mutable.spaceOutputs = workspaceOutputs;
+    }
+    return originalCommit(input);
+  };
+  const runner = recordingRunner(
+    {},
+    {
+      launch_url: { sensitive: false, value: "https://x.example" },
+    },
+  );
+  await seedRunnableInstallationModel(store, { environment: "preview" });
+  const activations: ReleaseActivationInput[] = [];
+  const controller = controllerWith(store, runner, {
+    activity: activityRecorderFor(store),
+    releaseActivator: {
+      activate: (input) => {
+        activations.push(input);
+        return Promise.resolve({ status: "succeeded" });
+      },
+    },
+  });
+
+  const { planRun } = await controller.createInstallationPlan("inst_fixture");
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+
+  expect(applyRun.status).toBe("succeeded");
+  expect(activations).toHaveLength(1);
+  expect(activations[0]?.commands).toEqual([
+    {
+      id: "publish-from-snapshot",
+      phase: "post_apply",
+      executor: "operator",
+      command: ["bun", "run", "release"],
+      workingDirectory: ".",
+    },
+  ]);
+});
+
 test("runner release commands receive dispatch-only provider credentials", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   const runner = recordingRunner(
@@ -3286,6 +3468,67 @@ test("pre-destroy release command failures do not block OpenTofu destroy", async
   });
 });
 
+test("pre-destroy release activator skipped result is recorded when commands were declared", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner(
+    {},
+    {
+      takosumi_release: {
+        sensitive: false,
+        value: {
+          pre_destroy: [
+            {
+              id: "delete-worker",
+              executor: "operator",
+              command: ["bun", "run", "takosumi:release", "--", "--destroy"],
+              working_directory: ".",
+            },
+          ],
+        },
+      },
+      launch_url: { sensitive: false, value: "https://x.example" },
+    },
+  );
+  await seedRunnableInstallationModel(store, { environment: "preview" });
+  const controller = controllerWith(store, runner, {
+    activity: activityRecorderFor(store),
+    releaseActivator: {
+      activate: () =>
+        Promise.resolve({
+          status: "skipped",
+          kind: "operator.release",
+        }),
+    },
+  });
+
+  const create = await controller.createInstallationPlan("inst_fixture");
+  await controller.createApplyRun({
+    planRunId: create.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(create.planRun),
+  });
+
+  const destroy =
+    await controller.createInstallationDestroyPlan("inst_fixture");
+  await controller.approveRun(destroy.planRun.id);
+  const { applyRun, installation } = await controller.createApplyRun({
+    planRunId: destroy.planRun.id,
+    expected: applyExpectedGuardFromPlanRun(destroy.planRun),
+  });
+
+  expect(applyRun.status).toBe("succeeded");
+  expect(installation?.status).toBe("destroyed");
+  const activity = (await store.listActivityEvents("space_test")).find(
+    (event) =>
+      event.action === "release_activation.failed" &&
+      event.runId === applyRun.id,
+  );
+  expect(activity?.metadata).toMatchObject({
+    activationKind: "operator.release",
+    commandCount: 1,
+    message: "release activator skipped declared pre-destroy commands",
+  });
+});
+
 test("pre-destroy release commands fail destroy when no release activator is configured", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   const runner = recordingRunner(
@@ -3417,6 +3660,89 @@ test("release activator failure records activity without failing apply", async (
   });
 });
 
+test("release activator skipped result is recorded when commands were declared", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner(
+    {},
+    {
+      takosumi_release: {
+        sensitive: false,
+        value: {
+          post_apply: [
+            {
+              id: "publish",
+              executor: "operator",
+              command: ["bun", "run", "release"],
+            },
+          ],
+        },
+      },
+      launch_url: { sensitive: false, value: "https://x.example" },
+    },
+  );
+  await seedRunnableInstallationModel(store, { environment: "preview" });
+  const controller = controllerWith(store, runner, {
+    activity: activityRecorderFor(store),
+    releaseActivator: {
+      activate: () =>
+        Promise.resolve({
+          status: "skipped",
+          kind: "operator.release",
+        }),
+    },
+  });
+
+  const { planRun } = await controller.createInstallationPlan("inst_fixture");
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+
+  expect(applyRun.status).toBe("succeeded");
+  const activity = (await store.listActivityEvents("space_test")).find(
+    (event) => event.action === "release_activation.failed",
+  );
+  expect(activity?.metadata).toMatchObject({
+    activationKind: "operator.release",
+    commandCount: 1,
+    message: "release activator skipped declared post-apply commands",
+  });
+});
+
+test("release activator skipped result without commands remains a no-op", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner(
+    {},
+    {
+      launch_url: { sensitive: false, value: "https://x.example" },
+    },
+  );
+  await seedRunnableInstallationModel(store, { environment: "preview" });
+  const controller = controllerWith(store, runner, {
+    activity: activityRecorderFor(store),
+    releaseActivator: {
+      activate: () =>
+        Promise.resolve({
+          status: "skipped",
+          kind: "operator.release",
+        }),
+    },
+  });
+
+  const { planRun } = await controller.createInstallationPlan("inst_fixture");
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+
+  expect(applyRun.status).toBe("succeeded");
+  expect(
+    (await store.listActivityEvents("space_test")).some((event) =>
+      event.action.startsWith("release_activation."),
+    ),
+  ).toBe(false);
+});
+
 test("Space-owned Provider Connection apply is not capped by Cloud-only managed-resource policy", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   const runner = recordingRunner();
@@ -3495,7 +3821,7 @@ test("showback billing records reservation and usage without blocking apply", as
   expect(planRun.status).toBe("succeeded");
   const reservation = await store.getCreditReservationForRun(planRun.id);
   expect(reservation).toMatchObject({
-    spaceId: "space_test",
+    spaceId: "user_test",
     runId: planRun.id,
     estimatedCredits: 1,
     status: "reserved",
@@ -3511,13 +3837,16 @@ test("showback billing records reservation and usage without blocking apply", as
   expect((await store.getCreditReservationForRun(planRun.id))?.status).toBe(
     "captured",
   );
-  const usageEvents = await store.listUsageEvents("space_test");
+  const usageEvents = await store.listUsageEvents("user_test");
   expect(usageEvents).toEqual(
     expect.arrayContaining([
       expect.objectContaining({
         runId: applyRun.id,
         kind: "operation",
         credits: 1,
+        resourceMetadata: {
+          source_workspace_id: "space_test",
+        },
         source: "runner",
       }),
     ]),
@@ -3709,6 +4038,7 @@ test("controller drives the enforcement port through plan reserve and apply capt
     mode: "showback",
   });
   expect(await store.getCreditReservationForRun(planRun.id)).toMatchObject({
+    spaceId: "user_test",
     status: "reserved",
     mode: "showback",
     estimatedCredits: 1,
@@ -3731,7 +4061,7 @@ test("controller drives the enforcement port through plan reserve and apply capt
   expect((await store.getCreditReservationForRun(planRun.id))?.status).toBe(
     "captured",
   );
-  const usageEvents = await store.listUsageEvents("space_test");
+  const usageEvents = await store.listUsageEvents("user_test");
   expect(
     usageEvents.some(
       (event) => event.runId === applyRun.id && event.kind === "operation",
@@ -3764,14 +4094,18 @@ test("resource meter usage reconciliation is idempotent and rejects runner sourc
   });
 
   expect(second.usageEvent).toEqual(first.usageEvent);
-  expect(await store.listUsageEvents("space_test")).toEqual([
+  expect(await store.listUsageEvents("user_test")).toEqual([
     expect.objectContaining({
+      workspaceId: "user_test",
       installationId: "inst_fixture",
       kind: "backup_storage_gb_hour",
       quantity: 12.5,
       credits: 3,
       source: "resource_meter",
       idempotencyKey: "meter:inst_fixture:storage:2026-06-07T00",
+      resourceMetadata: expect.objectContaining({
+        source_workspace_id: "space_test",
+      }),
     }),
   ]);
   await expect(
@@ -3817,9 +4151,9 @@ test("resource meter usage reconciliation is idempotent and rejects runner sourc
   );
 });
 
-test("metered usage can atomically spend Workspace USD balance when required", async () => {
+test("metered usage can atomically spend owner account USD balance when required", async () => {
   const { store, controller } = await seededController();
-  await store.addCredits("space_test", {
+  await store.addCredits("user_test", {
     usdMicros: 1_000_000,
     updatedAt: "2026-06-07T00:00:00.000Z",
   });
@@ -3854,15 +4188,75 @@ test("metered usage can atomically spend Workspace USD balance when required", a
   });
 
   expect(retry.usageEvent.id).toBe(first.usageEvent.id);
-  expect(await store.listUsageEvents("space_test")).toHaveLength(1);
-  expect(await store.getCreditBalance("space_test")).toMatchObject({
+  expect(await store.listUsageEvents("user_test")).toHaveLength(1);
+  expect(first.usageEvent).toMatchObject({
+    workspaceId: "user_test",
+    resourceMetadata: expect.objectContaining({
+      source_workspace_id: "space_test",
+    }),
+  });
+  expect(await store.getCreditBalance("user_test")).toMatchObject({
     availableUsdMicros: 750_000,
   });
 });
 
+test("owner account credits are shared across Workspaces owned by the same user", async () => {
+  const { store, controller } = await seededController();
+  const baseSpace = (await store.getSpace("space_test"))!;
+  await store.putSpace({
+    ...baseSpace,
+    id: "space_second",
+    handle: "second",
+    displayName: "Second",
+    ownerUserId: "user_test",
+    createdAt: "2026-06-07T00:00:00.000Z",
+    updatedAt: "2026-06-07T00:00:00.000Z",
+  });
+
+  await controller.topUpSpaceCredits("space_test", {
+    usdMicros: 1_000_000,
+  });
+  expect(await store.getCreditBalance("space_test")).toBeUndefined();
+  expect(await store.getCreditBalance("user_test")).toMatchObject({
+    availableUsdMicros: 1_000_000,
+  });
+
+  await controller.recordMeteredUsage("space_second", {
+    meterId: "cloudflare:d1:create",
+    resourceFamily: "cloudflare.d1",
+    resourceId: "database:main",
+    operation: "create",
+    kind: "gateway_storage_gb_hour",
+    quantity: 1,
+    usdMicros: 250_000,
+    source: "resource_meter",
+    spendRequired: true,
+    idempotencyKey: "cloud-extension:/compat:space_second:d1:create",
+    createdAt: "2026-06-07T00:01:00.000Z",
+  });
+
+  expect(await store.getCreditBalance("user_test")).toMatchObject({
+    availableUsdMicros: 750_000,
+  });
+  const { billing } = await controller.getSpaceBilling("space_second");
+  expect(billing.balance).toMatchObject({
+    workspaceId: "user_test",
+    availableUsdMicros: 750_000,
+  });
+  const { usageEvents } = await controller.listSpaceUsage("space_second");
+  expect(usageEvents).toEqual([
+    expect.objectContaining({
+      workspaceId: "user_test",
+      resourceMetadata: expect.objectContaining({
+        source_workspace_id: "space_second",
+      }),
+    }),
+  ]);
+});
+
 test("metered usage spend fails closed without inserting usage on short balance", async () => {
   const { store, controller } = await seededController();
-  await store.addCredits("space_test", {
+  await store.addCredits("user_test", {
     usdMicros: 100_000,
     updatedAt: "2026-06-07T00:00:00.000Z",
   });
@@ -3886,8 +4280,8 @@ test("metered usage spend fails closed without inserting usage on short balance"
     code: "failed_precondition",
     details: expect.objectContaining({ reason: "insufficient_credits" }),
   });
-  expect(await store.listUsageEvents("space_test")).toHaveLength(0);
-  expect(await store.getCreditBalance("space_test")).toMatchObject({
+  expect(await store.listUsageEvents("user_test")).toHaveLength(0);
+  expect(await store.getCreditBalance("user_test")).toMatchObject({
     availableUsdMicros: 100_000,
   });
 });
@@ -3896,9 +4290,13 @@ test("invoice usage reconciliation records billing adjustment idempotently", asy
   const { store, controller } = await seededController();
   await store.putUsageEvent({
     id: "usage_runner",
-    spaceId: "space_test",
+    workspaceId: "user_test",
+    spaceId: "user_test",
     installationId: "inst_fixture",
     runId: "apply_fixture",
+    resourceMetadata: {
+      source_workspace_id: "space_test",
+    },
     kind: "runner_minute",
     quantity: 1.5,
     credits: 2,
@@ -3948,11 +4346,11 @@ test("invoice usage reconciliation records billing adjustment idempotently", asy
       credits: 4,
       source: "billing_reconciliation",
       idempotencyKey:
-        "invoice-reconciliation:space_test:in_123:2026-06-07T00:00:00.000Z:2026-06-07T01:00:00.000Z",
+        "invoice-reconciliation:user_test:space_test:in_123:2026-06-07T00:00:00.000Z:2026-06-07T01:00:00.000Z",
     },
   });
   expect(
-    (await store.listUsageEvents("space_test")).filter(
+    (await store.listUsageEvents("user_test")).filter(
       (event) => event.source === "billing_reconciliation",
     ),
   ).toHaveLength(1);

@@ -26,7 +26,6 @@ function publicBillingPlan(
   return {
     id: plan.id,
     kind: plan.kind,
-    usdMicros: plan.usdMicros,
     name: plan.name,
     priceDisplay: plan.priceDisplay,
   };

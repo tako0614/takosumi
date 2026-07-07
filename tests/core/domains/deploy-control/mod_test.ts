@@ -981,6 +981,15 @@ test("runner profile policy blocks unsupported providers before execution", asyn
     now: () => 30,
     newId: deterministicIds(),
     runner: fakeRunner(),
+    // Only the Cloudflare surface is enabled — no profile admits AWS and there is
+    // no wildcard generic surface. Runner-profile auto-selection therefore finds
+    // no admitting profile, keeps the default, and policy blocks AWS before
+    // execution. (With an enabled AWS or wildcard surface, auto-selection would
+    // instead route the run there — that positive path is covered by
+    // runner_profile_autoselect_test.ts.)
+    runnerProfiles: createDefaultRunnerProfiles(30).filter(
+      (profile) => profile.id === "cloudflare-default",
+    ),
   });
 
   const { planRun } = await controller.createPlanRun(request);

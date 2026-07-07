@@ -1,8 +1,8 @@
 /**
  * Pricing / ownership facts. Public numbers mirror the operator plan specs:
- * Starter is JPY 980/month with a $3.00 Takosumi Cloud balance grant; an extra
- * $5.00 balance pack is JPY 1,200. Stripe IDs, net-revenue estimates, and
- * readiness evidence stay in operator-private state.
+ * Takosumi Cloud has subscription tiers starting at $1/month. Internal
+ * allowance, Stripe IDs, net-revenue estimates, and readiness evidence stay in
+ * operator-private state.
  */
 
 export interface PlanFeature {
@@ -44,15 +44,14 @@ export const PRICING_PLANS: readonly PricingPlan[] = [
   {
     id: "platform",
     name: "Takosumi Cloud",
-    price: "月額980円",
-    priceNote:
-      "$3.00 残高付き。追加の $5.00 残高パックは 1,200円。無料枠あり。",
+    price: "月額 $1 から",
+    priceNote: "Lite / Plus / Pro。どのプランも月額と従量課金の組み合わせです。",
     tagline: "公式ホスティング版。セットアップ不要ですぐ使えます。",
     features: [
       { label: "公式ホスティング。ブラウザからサービスを追加・更新できます" },
-      { label: "USD 残高制 — Cloud リソース使用量を細かく差し引きます" },
+      { label: "AI サービスのように、プランと従量課金で利用量を管理します" },
       {
-        label: "無料枠は上限付き。残高がなくなると Cloud リソースは止まります",
+        label: "使いすぎを防ぐため、上限や支払い設定に応じて実行前に止まります",
       },
       {
         label: "料金表は Takosumi Cloud が決め、原価割れしない単価で運用します",

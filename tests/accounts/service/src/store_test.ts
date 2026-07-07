@@ -231,7 +231,7 @@ test("InMemoryAccountsStore indexes billing accounts by subject and Stripe custo
     lastCreditAmount: 1200,
     lastCreditCurrency: "usd",
     lastPlanTransitionEventId: "evt_plan",
-    lastPlanFromCode: "starter",
+    lastPlanFromCode: "lite",
     lastPlanToCode: "pro",
     lastPlanTransitionedAt: 1_200,
     lastTaxEventId: "evt_tax",

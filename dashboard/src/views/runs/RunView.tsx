@@ -43,6 +43,8 @@ import {
   listActivity,
   listDeployments,
   listProviderConnections,
+  listRuns,
+  openRunStream,
   planCapsule,
   type ProviderConnection,
   type ProviderResolution,
@@ -99,6 +101,8 @@ import {
   type Tone,
 } from "../../components/ui/index.ts";
 
+const APPLY_REQUEST_TIMEOUT_MS = 45_000;
+
 export default function RunView() {
   return <Page>{() => <Inner />}</Page>;
 }
@@ -134,6 +138,26 @@ function costShortfallUsdMicros(cost: RunCostInfo): number | undefined {
       ? undefined
       : Math.round(cost.creditShortfall * 1_000_000))
   );
+}
+
+function isRequestTimeout(error: unknown): boolean {
+  return error instanceof ControlApiError && error.code === "request_timeout";
+}
+
+function latestApplyRunForPlan(
+  runs: readonly Run[],
+  planRun: Run,
+): Run | undefined {
+  const planCreatedAt = Date.parse(planRun.createdAt);
+  return runs.find((candidate) => {
+    if (candidate.type !== "apply") return false;
+    if (candidate.capsuleId !== planRun.capsuleId) return false;
+    if (Number.isNaN(planCreatedAt)) return true;
+    const candidateCreatedAt = Date.parse(candidate.createdAt);
+    return Number.isNaN(candidateCreatedAt)
+      ? true
+      : candidateCreatedAt >= planCreatedAt;
+  });
 }
 
 function hasCostToShow(cost: RunCostInfo): boolean {
@@ -237,10 +261,201 @@ function diagnosticDisplayText(value: string | undefined): string | undefined {
   return redacted.length > 4_000 ? `${redacted.slice(0, 4_000)}...` : redacted;
 }
 
+function isCreditsRequiredText(value: string | undefined): boolean {
+  if (!value) return false;
+  const normalized = value.toLowerCase();
+  return (
+    normalized.includes("cloud_extension_insufficient_credits") ||
+    normalized.includes('"reason":"insufficient_credits"') ||
+    normalized.includes('"reason": "insufficient_credits"') ||
+    (normalized.includes("reservationstatus") &&
+      normalized.includes("insufficient_credits")) ||
+    normalized.includes("usd balance reservation failed") ||
+    normalized.includes("insufficient credits")
+  );
+}
+
+function isCreditsRequiredRun(
+  run: Run,
+  diagnostics: readonly RunDiagnostic[],
+): boolean {
+  return (
+    run.errorCode === "credits_required" ||
+    diagnostics.some(
+      (diagnostic) =>
+        isCreditsRequiredText(diagnostic.message) ||
+        isCreditsRequiredText(diagnostic.detail),
+    )
+  );
+}
+
+type AccessIssueKind =
+  | "connection_verification"
+  | "connection_setup"
+  | "connection_changed"
+  | "credential_service";
+
+function accessIssueFromText(
+  value: string | undefined,
+): AccessIssueKind | undefined {
+  if (!value) return undefined;
+  const normalized = value.toLowerCase();
+  if (
+    normalized.includes("resolved_bindings_changed") ||
+    normalized.includes("re-plan before apply")
+  ) {
+    return "connection_changed";
+  }
+  if (
+    (normalized.includes("credential_mint_failed") &&
+      normalized.includes("not verified")) ||
+    normalized.includes("pending (not verified)") ||
+    (normalized.includes("provider connection") &&
+      normalized.includes("status pending is not verified"))
+  ) {
+    return "connection_verification";
+  }
+  if (
+    normalized.includes("credential_mint_failed") &&
+    (normalized.includes("provider connection evidence is required") ||
+      normalized.includes("provider connection resolution is required") ||
+      normalized.includes("root-only provider connection is required") ||
+      (normalized.includes("connection ") &&
+        normalized.includes(" not found")) ||
+      normalized.includes("provider connection is required") ||
+      normalized.includes("belongs to another space") ||
+      normalized.includes("git source connection") ||
+      normalized.includes("cannot back a provider env binding") ||
+      (normalized.includes("provider ") &&
+        normalized.includes(" does not match")))
+  ) {
+    return "connection_setup";
+  }
+  if (
+    normalized.includes("credential_mint_failed") &&
+    (normalized.includes("connection vault is not configured") ||
+      normalized.includes("requires a managed provider credential issuer") ||
+      normalized.includes("could not mint a run-scoped provider token") ||
+      normalized.includes("gateway materialization is takosumi cloud-only") ||
+      normalized.includes("mint driver"))
+  ) {
+    return "credential_service";
+  }
+  return undefined;
+}
+
+function accessIssueFromErrorCode(
+  errorCode: string | undefined,
+): AccessIssueKind | undefined {
+  switch (errorCode) {
+    case "provider_connection_not_ready":
+      return "connection_verification";
+    case "provider_connection_setup_required":
+      return "connection_setup";
+    case "provider_connection_changed":
+      return "connection_changed";
+    case "credential_service_unavailable":
+      return "credential_service";
+    default:
+      return undefined;
+  }
+}
+
+function accessIssueForRun(
+  run: Run,
+  diagnostics: readonly RunDiagnostic[],
+): AccessIssueKind | undefined {
+  const codeIssue = accessIssueFromErrorCode(run.errorCode);
+  if (codeIssue) return codeIssue;
+  for (const diagnostic of diagnostics) {
+    const issue =
+      accessIssueFromText(diagnostic.message) ??
+      accessIssueFromText(diagnostic.detail);
+    if (issue) return issue;
+  }
+  return undefined;
+}
+
+function accessIssueSummary(issue: AccessIssueKind): {
+  readonly text: string;
+  readonly sub: string;
+} {
+  switch (issue) {
+    case "connection_verification":
+      return {
+        text: t("run.summary.connectionVerificationRequired"),
+        sub: t("run.summary.connectionVerificationHint"),
+      };
+    case "connection_setup":
+      return {
+        text: t("run.summary.connectionSetupRequired"),
+        sub: t("run.summary.connectionSetupHint"),
+      };
+    case "connection_changed":
+      return {
+        text: t("run.summary.connectionChanged"),
+        sub: t("run.summary.connectionChangedHint"),
+      };
+    case "credential_service":
+      return {
+        text: t("run.summary.credentialServiceIssue"),
+        sub: t("run.summary.credentialServiceHint"),
+      };
+  }
+}
+
+function accessIssueDiagnostic(issue: AccessIssueKind): {
+  readonly title: string;
+  readonly short: string;
+  readonly detail: string;
+} {
+  switch (issue) {
+    case "connection_verification":
+      return {
+        title: t("run.diagnostics.connectionVerificationRequired"),
+        short: t("run.diagnostics.connectionVerificationShort"),
+        detail: t("run.diagnostics.connectionVerificationDetail"),
+      };
+    case "connection_setup":
+      return {
+        title: t("run.diagnostics.connectionSetupRequired"),
+        short: t("run.diagnostics.connectionSetupShort"),
+        detail: t("run.diagnostics.connectionSetupDetail"),
+      };
+    case "connection_changed":
+      return {
+        title: t("run.diagnostics.connectionChanged"),
+        short: t("run.diagnostics.connectionChangedShort"),
+        detail: t("run.diagnostics.connectionChangedDetail"),
+      };
+    case "credential_service":
+      return {
+        title: t("run.diagnostics.credentialServiceIssue"),
+        short: t("run.diagnostics.credentialServiceShort"),
+        detail: t("run.diagnostics.credentialServiceDetail"),
+      };
+  }
+}
+
 function DiagnosticRow(props: { diagnostic: RunDiagnostic }) {
+  const creditsRequired = () =>
+    isCreditsRequiredText(props.diagnostic.message) ||
+    isCreditsRequiredText(props.diagnostic.detail);
+  const accessIssue = () =>
+    accessIssueFromText(props.diagnostic.message) ??
+    accessIssueFromText(props.diagnostic.detail);
   const message = () =>
-    diagnosticDisplayText(props.diagnostic.message) ?? "diagnostic";
-  const detail = () => diagnosticDisplayText(props.diagnostic.detail);
+    creditsRequired()
+      ? t("run.diagnostics.creditsRequiredShort")
+      : accessIssue()
+        ? accessIssueDiagnostic(accessIssue()!).short
+        : (diagnosticDisplayText(props.diagnostic.message) ?? "diagnostic");
+  const detail = () =>
+    creditsRequired()
+      ? t("run.diagnostics.creditsRequiredDetail")
+      : accessIssue()
+        ? accessIssueDiagnostic(accessIssue()!).detail
+        : diagnosticDisplayText(props.diagnostic.detail);
   return (
     <li class={`wa-diag wa-diag-${props.diagnostic.severity}`}>
       <span class="wa-diag-sev">
@@ -575,8 +790,23 @@ function Inner() {
   const appHandoff = appHandoffFromSearch(
     typeof location === "undefined" ? "" : location.search,
   );
+  // Install context: NewAppView sends the plan run here with ?auto=install so
+  // this screen shows a clean App-Store-style install progress instead of the
+  // technical run console. withAuto() preserves the flag across the plan→apply
+  // hop and any re-plan so the whole install reads as one flow.
+  const autoInstall =
+    typeof location !== "undefined" &&
+    new URLSearchParams(location.search).get("auto") === "install";
+  const withAuto = (path: string) =>
+    autoInstall
+      ? path + (path.includes("?") ? "&" : "?") + "auto=install"
+      : path;
+  const [forceConsole, setForceConsole] = createSignal(false);
 
-  const [run, { refetch: refetchRun }] = createResource(runId, getRun);
+  const [run, { refetch: refetchRun, mutate: mutateRun }] = createResource(
+    runId,
+    getRun,
+  );
   const [logs, { refetch: refetchLogs }] = createResource(runId, getRunLogs);
   const [cost] = createResource(runId, async (id) => {
     try {
@@ -655,17 +885,69 @@ function Inner() {
   createEffect(() => {
     const r = run.latest;
     if (!r || !isTerminalRunStatus(r.status)) return;
-    if (r.type !== "apply" && r.type !== "destroy_apply") return;
+    if (r.type !== "apply" && r.type !== "destroy_apply") {
+      return;
+    }
     const key = `${r.id}:${r.status}:${r.workspaceId}`;
     if (lastLauncherCacheClearKey() === key) return;
     setLastLauncherCacheClearKey(key);
     clearLauncherCaches(r.workspaceId);
   });
 
-  // Poll while the run is non-terminal so the screen advances on its own.
+  // Primary: subscribe to run status over SSE (real-time push, no client poll).
+  // The 3s poll below stays as a fallback for when the stream can't connect.
+  const [sseActive, setSseActive] = createSignal(false);
+  createEffect(() => {
+    const id = runId();
+    if (!id) return;
+    let disposed = false;
+    const close = openRunStream(id, {
+      onOpen: () => {
+        if (!disposed) setSseActive(true);
+      },
+      onRun: (r) => {
+        if (disposed) return;
+        mutateRun(r);
+        void refetchLogs();
+        if (isTerminalRunStatus(r.status)) {
+          disposed = true;
+          setSseActive(false);
+          close();
+        }
+      },
+      onError: () => setSseActive(false),
+    });
+    onCleanup(() => {
+      disposed = true;
+      setSseActive(false);
+      close();
+    });
+  });
+
+  // Fallback poll while the run is non-terminal and the SSE stream is not
+  // driving updates. Considerate: pauses on a hidden tab (and refetches on
+  // return) and yields entirely to SSE when the stream is live.
+  const [pageVisible, setPageVisible] = createSignal(
+    typeof document === "undefined" || document.visibilityState !== "hidden",
+  );
+  if (typeof document !== "undefined") {
+    const onVisibility = () => {
+      const visible = document.visibilityState !== "hidden";
+      setPageVisible(visible);
+      if (visible && run.latest && !isTerminalRunStatus(run.latest.status)) {
+        void refetchRun();
+        void refetchLogs();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    onCleanup(() =>
+      document.removeEventListener("visibilitychange", onVisibility),
+    );
+  }
   createEffect(() => {
     const current = run.latest;
     if (!current || isTerminalRunStatus(current.status)) return;
+    if (!pageVisible() || sseActive()) return;
     const timer = setTimeout(() => {
       void refetchRun();
       void refetchLogs();
@@ -700,8 +982,22 @@ function Inner() {
     providerRows().filter(providerResolutionNeedsAttention),
   );
   const diagnosticRows = createMemo(() => logs()?.diagnostics ?? []);
+  const creditsRequired = createMemo(() => {
+    const r = run.latest;
+    return r ? isCreditsRequiredRun(r, diagnosticRows()) : false;
+  });
+  const connectionVerificationRequired = createMemo(() => {
+    const r = run.latest;
+    return r ? accessIssueForRun(r, diagnosticRows()) !== undefined : false;
+  });
+  const runAccessIssue = createMemo(() => {
+    const r = run.latest;
+    return r ? accessIssueForRun(r, diagnosticRows()) : undefined;
+  });
   const showDiagnosticsPanel = createMemo(
     () =>
+      creditsRequired() ||
+      connectionVerificationRequired() ||
       diagnosticRows().length > 0 ||
       Boolean(logs.error) ||
       (logs.loading && run.latest?.status === "failed"),
@@ -731,8 +1027,12 @@ function Inner() {
 
   const deploy = createAction(async (confirmDestructive?: boolean) => {
     let envelope: unknown;
+    const currentRun = run.latest;
     try {
-      envelope = await createApplyRun(runId(), { confirmDestructive });
+      envelope = await createApplyRun(runId(), {
+        confirmDestructive,
+        timeoutMs: APPLY_REQUEST_TIMEOUT_MS,
+      });
     } catch (error) {
       if (
         error instanceof ControlApiError &&
@@ -742,23 +1042,57 @@ function Inner() {
         setNeedsConfirm(true);
         return;
       }
-      throw error;
+      if (currentRun && isRequestTimeout(error)) {
+        const recovered = latestApplyRunForPlan(
+          await listRuns(currentRun.workspaceId, 30),
+          currentRun,
+        );
+        if (recovered) {
+          envelope = { run: recovered };
+        } else {
+          envelope = await createApplyRun(runId(), {
+            confirmDestructive,
+            timeoutMs: APPLY_REQUEST_TIMEOUT_MS,
+          });
+        }
+      } else {
+        throw error;
+      }
     }
     setNeedsConfirm(false);
     setApplied(true);
-    clearLauncherCaches(run.latest?.workspaceId);
+    clearLauncherCaches(currentRun?.workspaceId);
     // Jump to the apply Run when the backend surfaced its id — that page then
     // polls to "デプロイが完了しました" on its own. Fallback: stay here with the
     // applied notice (the legacy behaviour).
     const applyRunId = extractRunId(envelope);
     if (applyRunId && applyRunId !== runId()) {
       navigate(
-        appendAppHandoff(`/runs/${applyRunId}`, appHandoff) ??
-          `/runs/${applyRunId}`,
+        withAuto(
+          appendAppHandoff(`/runs/${applyRunId}`, appHandoff) ??
+            `/runs/${applyRunId}`,
+        ),
       );
       return;
     }
     await Promise.all([refetchRun(), refetchLogs()]);
+  });
+
+  // One-action install: NewAppView sends the plan run here with ?auto=install.
+  // When the plan is clean (succeeded, policy pass, no approval, no destructive
+  // change) we continue straight to apply so the visitor never presses "deploy"
+  // on a plan console. Any gate (approval / destructive / policy / delete)
+  // falls through to the explicit review + action button below.
+  const [autoContinued, setAutoContinued] = createSignal(false);
+  createEffect(() => {
+    const r = run.latest;
+    if (!autoInstall || autoContinued() || applied() || deploy.busy() || !r) {
+      return;
+    }
+    if (isDeployableRun(r) && !requiresDestructiveConfirmation(r)) {
+      setAutoContinued(true);
+      void deploy.run(false);
+    }
   });
 
   const retryPlan = createAction(async () => {
@@ -768,8 +1102,10 @@ function Inner() {
     const newRunId = extractRunId(envelope);
     if (newRunId) {
       navigate(
-        appendAppHandoff(`/runs/${newRunId}`, appHandoff) ??
-          `/runs/${newRunId}`,
+        withAuto(
+          appendAppHandoff(`/runs/${newRunId}`, appHandoff) ??
+            `/runs/${newRunId}`,
+        ),
       );
     }
   });
@@ -778,6 +1114,47 @@ function Inner() {
   const costBlocked = () => costInfo()?.blocked === true;
   const appConnectHref = () =>
     createAppHandoffConnectHref(appHandoff, completedRunLaunchUrl());
+
+  // --- install progress layer (App-Store-style, shown when ?auto=install) -----
+  type InstallStepKey = "fetch" | "check" | "deploy" | "done";
+  const INSTALL_STEPS: readonly InstallStepKey[] = [
+    "fetch",
+    "check",
+    "deploy",
+    "done",
+  ];
+  type InstallState =
+    | { readonly phase: "progress"; readonly step: InstallStepKey }
+    | { readonly phase: "gate" }
+    | { readonly phase: "error" }
+    | { readonly phase: "done" };
+  const installState = createMemo((): InstallState => {
+    const r = run.latest;
+    if (!r) return { phase: "progress", step: "fetch" };
+    if (r.status === "failed") return { phase: "error" };
+    if (r.type === "apply" || r.type === "destroy_apply") {
+      return r.status === "succeeded"
+        ? { phase: "done" }
+        : { phase: "progress", step: "deploy" };
+    }
+    // review (plan) run
+    if (r.status === "waiting_approval") return { phase: "gate" };
+    if (r.status === "succeeded") {
+      // Clean plan auto-continues to apply; a gate stops for explicit review.
+      return r.policyStatus === "pass" && !requiresDestructiveConfirmation(r)
+        ? { phase: "progress", step: "deploy" }
+        : { phase: "gate" };
+    }
+    return { phase: "progress", step: "check" };
+  });
+  const installStepIndex = (step: InstallStepKey): number =>
+    INSTALL_STEPS.indexOf(step);
+  const installActiveIndex = createMemo(() => {
+    const s = installState();
+    if (s.phase === "done") return INSTALL_STEPS.length;
+    if (s.phase === "progress") return installStepIndex(s.step);
+    return installStepIndex("check");
+  });
 
   // --- summary layer ---------------------------------------------------------
 
@@ -800,6 +1177,22 @@ function Inner() {
         return { kind: "ok", text: t("run.summary.applySucceeded") };
       }
       if (r.status === "failed") {
+        if (isCreditsRequiredRun(r, diagnosticRows())) {
+          return {
+            kind: "action",
+            text: t("run.summary.creditsRequired"),
+            sub: t("run.summary.creditsRequiredHint"),
+          };
+        }
+        const accessIssue = accessIssueForRun(r, diagnosticRows());
+        if (accessIssue) {
+          const accessSummary = accessIssueSummary(accessIssue);
+          return {
+            kind: "action",
+            text: accessSummary.text,
+            sub: accessSummary.sub,
+          };
+        }
         return {
           kind: "error",
           text: t("run.summary.failed", { operation: operationLabel(r.type) }),
@@ -849,6 +1242,22 @@ function Inner() {
               };
         }
         case "failed":
+          if (isCreditsRequiredRun(r, diagnosticRows())) {
+            return {
+              kind: "action",
+              text: t("run.summary.creditsRequired"),
+              sub: t("run.summary.creditsRequiredHint"),
+            };
+          }
+          const accessIssue = accessIssueForRun(r, diagnosticRows());
+          if (accessIssue) {
+            const accessSummary = accessIssueSummary(accessIssue);
+            return {
+              kind: "action",
+              text: accessSummary.text,
+              sub: accessSummary.sub,
+            };
+          }
           return {
             kind: "error",
             text: t("run.summary.failed", {
@@ -958,431 +1367,621 @@ function Inner() {
     return t("run.title.other");
   };
 
+  const installStepLabel = (step: InstallStepKey): string =>
+    step === "fetch"
+      ? t("install.step.fetch")
+      : step === "check"
+        ? t("install.step.check")
+        : step === "deploy"
+          ? t("install.step.deploy")
+          : t("install.step.done");
+
+  /** Clean App-Store-style install screen (progress → done → open/return),
+   * shown instead of the technical run console while ?auto=install is set. */
+  const installScreen = () => {
+    const st = installState();
+    const name = appName();
+    return (
+      <div class="av-install">
+        <Switch>
+          <Match when={st.phase === "done"}>
+            <div class="av-install-card av-install-done">
+              <span class="av-install-check" aria-hidden="true">
+                ✓
+              </span>
+              <h2>
+                {name
+                  ? t("install.doneTitle", { name })
+                  : t("install.doneTitleGeneric")}
+              </h2>
+              <p>{t("install.doneSub")}</p>
+              <div class="av-install-actions">
+                <Show when={completedRunLaunchUrl()}>
+                  {(url) => (
+                    <a
+                      class="tg-btn tg-btn-primary tg-btn-lg tg-btn-block"
+                      href={url()}
+                      target="_blank"
+                      rel="noreferrer noopener"
+                    >
+                      {t("install.open")}
+                    </a>
+                  )}
+                </Show>
+                <Show when={appConnectHref()}>
+                  {(href) => (
+                    <a
+                      class="tg-btn tg-btn-secondary tg-btn-block"
+                      href={href()}
+                    >
+                      {t("run.appHandoff.open", {
+                        app: appHandoffProductLabel(appHandoff!.product),
+                      })}
+                    </a>
+                  )}
+                </Show>
+                <a class="tg-btn tg-btn-ghost tg-btn-block" href="/">
+                  {t("install.toApps")}
+                </a>
+              </div>
+            </div>
+          </Match>
+          <Match when={st.phase === "error"}>
+            <div class="av-install-card">
+              <span
+                class="av-install-badge av-install-badge-error"
+                aria-hidden="true"
+              >
+                !
+              </span>
+              <h2>{t("install.errorTitle")}</h2>
+              <p>{t("install.errorSub")}</p>
+              <div class="av-install-actions">
+                <button
+                  type="button"
+                  class="tg-btn tg-btn-secondary tg-btn-block"
+                  onClick={() => setForceConsole(true)}
+                >
+                  {t("install.errorCta")}
+                </button>
+                <a class="tg-btn tg-btn-ghost tg-btn-block" href="/">
+                  {t("install.toApps")}
+                </a>
+              </div>
+            </div>
+          </Match>
+          <Match when={st.phase === "gate"}>
+            <div class="av-install-card">
+              <span
+                class="av-install-badge av-install-badge-gate"
+                aria-hidden="true"
+              >
+                ?
+              </span>
+              <h2>{t("install.gateTitle")}</h2>
+              <p>{t("install.gateSub")}</p>
+              <div class="av-install-actions">
+                <button
+                  type="button"
+                  class="tg-btn tg-btn-primary tg-btn-block"
+                  onClick={() => setForceConsole(true)}
+                >
+                  {t("install.gateCta")}
+                </button>
+                <a class="tg-btn tg-btn-ghost tg-btn-block" href="/">
+                  {t("install.toApps")}
+                </a>
+              </div>
+            </div>
+          </Match>
+          <Match when={st.phase === "progress"}>
+            <div class="av-install-card av-install-progress">
+              <div class="av-install-head">
+                <span class="av-install-icon" aria-hidden="true">
+                  {name ? name.slice(0, 2).toUpperCase() : "··"}
+                </span>
+                <div class="av-install-head-text">
+                  <h2>{name ?? t("install.installingGeneric")}</h2>
+                  <p class="muted">{t("install.wait")}</p>
+                </div>
+              </div>
+              <div class="av-install-bar" aria-hidden="true">
+                <i
+                  style={{
+                    width: `${Math.min(
+                      100,
+                      Math.round(
+                        ((installActiveIndex() + 0.5) / INSTALL_STEPS.length) *
+                          100,
+                      ),
+                    )}%`,
+                  }}
+                />
+              </div>
+              <p class="av-install-phase">
+                <span class="av-install-spin" aria-hidden="true" />
+                {installStepLabel(
+                  INSTALL_STEPS[
+                    Math.min(installActiveIndex(), INSTALL_STEPS.length - 1)
+                  ],
+                )}
+              </p>
+            </div>
+          </Match>
+        </Switch>
+      </div>
+    );
+  };
+
   return (
     <AppShell>
-      <PageHeader
-        title={
-          <span class="wa-title-row">
-            {pageTitle()}
-            <Show when={run.latest}>
-              {(r) => (
-                <StatusBadge
-                  status={r().status}
-                  label={runStatusLabel}
-                  tone={runTone}
-                />
-              )}
-            </Show>
-          </span>
-        }
-        subtitle={appName() ? `${appName()}` : undefined}
-        actions={
-          <Show
-            when={capsuleId()}
-            fallback={
-              <Button variant="ghost" href="/">
-                {t("app.backToList")}
-              </Button>
-            }
-          >
-            {(id) => (
-              <Button
-                variant="ghost"
-                href={`/services/${encodeURIComponent(id())}`}
-              >
-                {t("run.backToApp")}
-              </Button>
-            )}
-          </Show>
-        }
-      />
-
-      <Switch>
-        <Match when={run.loading}>
-          <Card>
-            <Skeleton variant="block" />
-          </Card>
-        </Match>
-        <Match when={run.error}>
-          <EmptyState
-            icon={<Activity size={28} />}
-            title={t("common.unknown")}
-            message={(run.error as ControlApiError).message}
-          />
-        </Match>
-        <Match when={run()}>
-          {(r) => (
-            <div class="wa-stack">
-              {/* ===== summary layer ===== */}
-              <Card>
-                <Show when={summary()}>
-                  {(s) => (
-                    <div class={`av-run-summary av-run-summary-${s().kind}`}>
-                      <Show when={s().kind === "progress"}>
-                        <span class="av-run-spinner" aria-hidden="true" />
-                      </Show>
-                      <div class="av-run-summary-text">
-                        <p class="av-run-summary-line">{s().text}</p>
-                        <Show when={s().sub}>
-                          {(sub) => <p class="av-run-summary-sub">{sub()}</p>}
-                        </Show>
-                      </div>
-                    </div>
-                  )}
-                </Show>
-
-                {/* cost (backend values only) */}
-                <Show
-                  when={(() => {
-                    const c = costInfo();
-                    if (!c || !isDeployableRun(r())) return undefined;
-                    return isTakosumiCloudRuntime()
-                      ? hasCostToShow(c)
-                        ? c
-                        : undefined
-                      : c.blocked
-                        ? c
-                        : undefined;
-                  })()}
-                >
-                  {(c) => <CostNotice cost={c()} />}
-                </Show>
-
-                {/* primary action */}
-                <div class="wa-form-actions">
-                  <Show when={r().status === "waiting_approval"}>
-                    <Button
-                      variant="primary"
-                      type="button"
-                      busy={approve.busy()}
-                      onClick={() => void approve.run()}
-                    >
-                      {approve.busy() ? t("run.approving") : t("run.approve")}
-                    </Button>
-                  </Show>
-
-                  <Show
-                    when={
-                      !applied() &&
-                      isDeployableRun(r()) &&
-                      !requiresDestructiveConfirmation(r())
-                    }
-                  >
-                    <Button
-                      variant={
-                        r().type === "destroy_plan" ? "danger" : "primary"
-                      }
-                      type="button"
-                      disabled={deploy.busy() || costBlocked()}
-                      busy={deploy.busy()}
-                      onClick={() => void deploy.run(undefined)}
-                    >
-                      {deploy.busy()
-                        ? t("run.deploying")
-                        : costBlocked()
-                          ? t("run.deployBlocked")
-                          : t("run.deploy")}
-                    </Button>
-                  </Show>
-
-                  <Show
-                    when={
-                      r().status === "failed" &&
-                      isReviewRun(r()) &&
-                      r().capsuleId
-                    }
-                  >
-                    <Button
-                      variant="secondary"
-                      type="button"
-                      busy={retryPlan.busy()}
-                      onClick={() => void retryPlan.run()}
-                    >
-                      {t("run.retryPlan")}
-                    </Button>
-                  </Show>
-
-                  <Show
-                    when={
-                      r().status === "succeeded" &&
-                      (r().type === "apply" || r().type === "destroy_apply") &&
-                      capsuleId()
-                    }
-                  >
-                    {(id) => (
-                      <>
-                        <Show when={completedRunLaunchUrl()}>
-                          {(url) => (
-                            <Button
-                              variant="primary"
-                              href={url()}
-                              target="_blank"
-                              rel="noreferrer noopener"
-                              icon={<ExternalLink size={16} />}
-                            >
-                              {t("apps.openApp")}
-                            </Button>
-                          )}
-                        </Show>
-                        <Show when={appConnectHref()}>
-                          {(href) => (
-                            <Button variant="secondary" href={href()}>
-                              {t("run.appHandoff.open", {
-                                app: appHandoffProductLabel(
-                                  appHandoff!.product,
-                                ),
-                              })}
-                            </Button>
-                          )}
-                        </Show>
-                        <Button
-                          variant={
-                            completedRunLaunchUrl() ? "secondary" : "primary"
-                          }
-                          href={`/services/${encodeURIComponent(id())}`}
-                        >
-                          {t("run.backToApp")}
-                        </Button>
-                      </>
-                    )}
-                  </Show>
-                </div>
-
-                {/* destructive double-confirmation */}
-                <Show when={!applied() && requiresDestructiveConfirmation(r())}>
-                  <p class="wa-deploy-warn">{t("run.destructiveWarning")}</p>
-                  <div class="wa-form-actions">
-                    <Button
-                      variant="secondary"
-                      type="button"
-                      disabled={deploy.busy()}
-                      onClick={() => {
-                        setNeedsConfirm(false);
-                        const id = capsuleId();
-                        if (id) navigate(`/services/${encodeURIComponent(id)}`);
-                      }}
-                    >
-                      {t("run.stop")}
-                    </Button>
-                    <Button
-                      variant="danger"
-                      type="button"
-                      disabled={deploy.busy() || costBlocked()}
-                      busy={deploy.busy()}
-                      onClick={() => void deploy.run(true)}
-                    >
-                      {deploy.busy()
-                        ? t("run.deploying")
-                        : costBlocked()
-                          ? t("run.deployBlocked")
-                          : t("run.destructiveConfirm")}
-                    </Button>
-                  </div>
-                </Show>
-
-                <Show when={approve.error()}>
-                  {(m) => (
-                    <p class="wa-error" role="alert">
-                      {m()}
-                    </p>
-                  )}
-                </Show>
-                <Show when={deploy.error()}>
-                  {(m) => (
-                    <p class="wa-error" role="alert">
-                      {m()}
-                    </p>
-                  )}
-                </Show>
-                <Show when={retryPlan.error()}>
-                  {(m) => (
-                    <p class="wa-error" role="alert">
-                      {m()}
-                    </p>
-                  )}
-                </Show>
-              </Card>
-
-              {/* ===== changes (counts always, lists folded) ===== */}
-              <Card>
-                <CardHeader title={t("run.changes.title")} />
-                <div class="wa-change-strip">
-                  <span class="wa-change-stat wa-change-create">
-                    {t("run.changes.create")}{" "}
-                    <strong>{changeCounts().create}</strong>
-                  </span>
-                  <span class="wa-change-stat wa-change-update">
-                    {t("run.changes.update")}{" "}
-                    <strong>{changeCounts().update}</strong>
-                  </span>
-                  <span class="wa-change-stat wa-change-delete">
-                    {t("run.changes.delete")}{" "}
-                    <strong>{changeCounts().delete}</strong>
-                  </span>
-                </div>
-                <Show when={changes().length > 0}>
-                  <details class="wb-disclosure">
-                    <summary>{t("common.details")}</summary>
-                    <div class="wa-change-grid">
-                      <For each={["create", "update", "delete"] as const}>
-                        {(action) => (
-                          <div class="wa-change-col">
-                            <h4>
-                              {t(
-                                `run.changes.${action}` as Parameters<
-                                  typeof t
-                                >[0],
-                              )}
-                            </h4>
-                            <Show
-                              when={
-                                changes().filter((c) => c.action === action)
-                                  .length > 0
-                              }
-                              fallback={<p class="muted">{t("common.none")}</p>}
-                            >
-                              <ul>
-                                <For
-                                  each={changes().filter(
-                                    (c) => c.action === action,
-                                  )}
-                                >
-                                  {(item) => (
-                                    <li>
-                                      <code>{item.label}</code>
-                                    </li>
-                                  )}
-                                </For>
-                              </ul>
-                            </Show>
-                          </div>
-                        )}
-                      </For>
-                    </div>
-                  </details>
-                </Show>
-              </Card>
-
-              {/* ===== change detail — surfaced by default, not buried ===== */}
-              <Show when={planResources().some(isActionablePlanResource)}>
-                <Card>
-                  <PlanResourceReview resources={planResources()} />
-                </Card>
-              </Show>
-
-              <Show when={providerRowsNeedingAttention().length > 0}>
-                <details class="wb-disclosure">
-                  <summary>{t("run.connections.reviewTitle")}</summary>
-                  <Card>
-                    <p class="wa-notice">{t("run.connections.reviewBody")}</p>
-                    <ProviderResolutionTable
-                      rows={providerRowsNeedingAttention()}
-                    />
-                  </Card>
-                </details>
-              </Show>
-
-              {/* ===== diagnostics — shown only when there is signal ===== */}
-              <Show when={showDiagnosticsPanel()}>
-                <Card>
-                  <CardHeader title={t("run.diagnostics.title")} />
-                  <Switch>
-                    <Match when={logs.loading}>
-                      <Skeleton variant="row" count={2} />
-                    </Match>
-                    <Match when={logs.error}>
-                      <p class="wa-error">
-                        {t("common.fetchFailed", {
-                          message: (logs.error as ControlApiError).message,
-                        })}
-                      </p>
-                    </Match>
-                    <Match when={diagnosticRows().length > 0}>
-                      <Show when={r().status === "failed"}>
-                        <p class="wa-error">{t("run.diagnostics.failed")}</p>
-                      </Show>
-                      <details class="wb-disclosure">
-                        <summary>
-                          {t("common.details")}{" "}
-                          <Badge tone="muted">{diagnosticRows().length}</Badge>
-                        </summary>
-                        <ul class="wa-diags">
-                          <For each={diagnosticRows()}>
-                            {(d) => <DiagnosticRow diagnostic={d} />}
-                          </For>
-                        </ul>
-                      </details>
-                    </Match>
-                  </Switch>
-                </Card>
-              </Show>
-
-              {/* ===== expert details (folded) ===== */}
-              <details class="wb-disclosure">
-                <summary>{t("run.details.title")}</summary>
-                <div class="wa-stack">
-                  <Card>
-                    <KVList items={supportDetailItems(r())} />
-                  </Card>
-                  <details class="wb-disclosure">
-                    <summary>{t("run.details.debug")}</summary>
-                    <Card>
-                      <KVList items={debugDetailItems(r())} />
-                    </Card>
-                  </details>
-                  <Card>
-                    <CardHeader title={t("run.inputs.title")} />
-                    <Show
-                      when={inputs().length > 0}
-                      fallback={<p class="muted">{t("run.inputs.empty")}</p>}
-                    >
-                      <NameList names={inputs()} />
-                    </Show>
-                  </Card>
-                  <Card>
-                    <CardHeader title={t("run.connections.title")} />
-                    <Show
-                      when={
-                        connections().length > 0 || providerRows().length > 0
-                      }
-                      fallback={
-                        <p class="muted">{t("run.connections.empty")}</p>
-                      }
-                    >
-                      <Show
-                        when={providerRows().length > 0}
-                        fallback={<NameList names={connections()} />}
-                      >
-                        <ProviderResolutionTable rows={providerRows()} />
-                      </Show>
-                    </Show>
-                  </Card>
-                  <details class="wb-disclosure">
-                    <summary>
-                      {t("run.audit.title")}{" "}
-                      <Badge tone="muted">
-                        {(logs()?.auditEvents ?? []).length}
-                      </Badge>
-                    </summary>
-                    <Card>
-                      <Show
-                        when={(logs()?.auditEvents ?? []).length > 0}
-                        fallback={<p class="muted">{t("run.audit.empty")}</p>}
-                      >
-                        <ul class="wa-audit">
-                          <For each={logs()?.auditEvents ?? []}>
-                            {(event) => <AuditEventRow event={event} />}
-                          </For>
-                        </ul>
-                      </Show>
-                    </Card>
-                  </details>
-                </div>
-              </details>
-            </div>
-          )}
-        </Match>
-      </Switch>
+      <Show when={autoInstall && !forceConsole()} fallback={installConsole()}>
+        {installScreen()}
+      </Show>
     </AppShell>
   );
+
+  function installConsole() {
+    return (
+      <>
+        <PageHeader
+          title={
+            <span class="wa-title-row">
+              {pageTitle()}
+              <Show when={run.latest}>
+                {(r) => (
+                  <StatusBadge
+                    status={r().status}
+                    label={runStatusLabel}
+                    tone={runTone}
+                  />
+                )}
+              </Show>
+            </span>
+          }
+          subtitle={appName() ? `${appName()}` : undefined}
+          actions={
+            <Show
+              when={capsuleId()}
+              fallback={
+                <Button variant="ghost" href="/">
+                  {t("app.backToList")}
+                </Button>
+              }
+            >
+              {(id) => (
+                <Button
+                  variant="ghost"
+                  href={`/services/${encodeURIComponent(id())}`}
+                >
+                  {t("run.backToApp")}
+                </Button>
+              )}
+            </Show>
+          }
+        />
+
+        <Switch>
+          <Match when={run.loading}>
+            <Card>
+              <Skeleton variant="block" />
+            </Card>
+          </Match>
+          <Match when={run.error}>
+            <EmptyState
+              icon={<Activity size={28} />}
+              title={t("common.unknown")}
+              message={(run.error as ControlApiError).message}
+            />
+          </Match>
+          <Match when={run()}>
+            {(r) => (
+              <div class="wa-stack">
+                {/* ===== summary layer ===== */}
+                <Card>
+                  <Show when={summary()}>
+                    {(s) => (
+                      <div class={`av-run-summary av-run-summary-${s().kind}`}>
+                        <Show when={s().kind === "progress"}>
+                          <span class="av-run-spinner" aria-hidden="true" />
+                        </Show>
+                        <div class="av-run-summary-text">
+                          <p class="av-run-summary-line">{s().text}</p>
+                          <Show when={s().sub}>
+                            {(sub) => <p class="av-run-summary-sub">{sub()}</p>}
+                          </Show>
+                        </div>
+                      </div>
+                    )}
+                  </Show>
+
+                  {/* cost (backend values only) */}
+                  <Show
+                    when={(() => {
+                      const c = costInfo();
+                      if (!c || !isDeployableRun(r())) return undefined;
+                      return isTakosumiCloudRuntime()
+                        ? hasCostToShow(c)
+                          ? c
+                          : undefined
+                        : c.blocked
+                          ? c
+                          : undefined;
+                    })()}
+                  >
+                    {(c) => <CostNotice cost={c()} />}
+                  </Show>
+
+                  {/* primary action */}
+                  <div class="wa-form-actions">
+                    <Show when={r().status === "waiting_approval"}>
+                      <Button
+                        variant="primary"
+                        type="button"
+                        busy={approve.busy()}
+                        onClick={() => void approve.run()}
+                      >
+                        {approve.busy() ? t("run.approving") : t("run.approve")}
+                      </Button>
+                    </Show>
+
+                    <Show
+                      when={
+                        !applied() &&
+                        isDeployableRun(r()) &&
+                        !requiresDestructiveConfirmation(r())
+                      }
+                    >
+                      <Button
+                        variant={
+                          r().type === "destroy_plan" ? "danger" : "primary"
+                        }
+                        type="button"
+                        disabled={deploy.busy() || costBlocked()}
+                        busy={deploy.busy()}
+                        onClick={() => void deploy.run(undefined)}
+                      >
+                        {deploy.busy()
+                          ? t("run.deploying")
+                          : costBlocked()
+                            ? t("run.deployBlocked")
+                            : t("run.deploy")}
+                      </Button>
+                    </Show>
+
+                    <Show
+                      when={
+                        r().status === "failed" &&
+                        (isReviewRun(r()) ||
+                          connectionVerificationRequired()) &&
+                        r().capsuleId
+                      }
+                    >
+                      <Button
+                        variant="secondary"
+                        type="button"
+                        busy={retryPlan.busy()}
+                        onClick={() => void retryPlan.run()}
+                      >
+                        {t("run.retryPlan")}
+                      </Button>
+                    </Show>
+
+                    <Show
+                      when={
+                        r().status === "succeeded" &&
+                        (r().type === "apply" ||
+                          r().type === "destroy_apply") &&
+                        capsuleId()
+                      }
+                    >
+                      {(id) => (
+                        <>
+                          <Show when={completedRunLaunchUrl()}>
+                            {(url) => (
+                              <Button
+                                variant="primary"
+                                href={url()}
+                                target="_blank"
+                                rel="noreferrer noopener"
+                                icon={<ExternalLink size={16} />}
+                              >
+                                {t("apps.openApp")}
+                              </Button>
+                            )}
+                          </Show>
+                          <Show when={appConnectHref()}>
+                            {(href) => (
+                              <Button variant="secondary" href={href()}>
+                                {t("run.appHandoff.open", {
+                                  app: appHandoffProductLabel(
+                                    appHandoff!.product,
+                                  ),
+                                })}
+                              </Button>
+                            )}
+                          </Show>
+                          <Button
+                            variant={
+                              completedRunLaunchUrl() ? "secondary" : "primary"
+                            }
+                            href={`/services/${encodeURIComponent(id())}`}
+                          >
+                            {t("run.backToApp")}
+                          </Button>
+                        </>
+                      )}
+                    </Show>
+                  </div>
+
+                  {/* destructive double-confirmation */}
+                  <Show
+                    when={!applied() && requiresDestructiveConfirmation(r())}
+                  >
+                    <p class="wa-deploy-warn">{t("run.destructiveWarning")}</p>
+                    <div class="wa-form-actions">
+                      <Button
+                        variant="secondary"
+                        type="button"
+                        disabled={deploy.busy()}
+                        onClick={() => {
+                          setNeedsConfirm(false);
+                          const id = capsuleId();
+                          if (id)
+                            navigate(`/services/${encodeURIComponent(id)}`);
+                        }}
+                      >
+                        {t("run.stop")}
+                      </Button>
+                      <Button
+                        variant="danger"
+                        type="button"
+                        disabled={deploy.busy() || costBlocked()}
+                        busy={deploy.busy()}
+                        onClick={() => void deploy.run(true)}
+                      >
+                        {deploy.busy()
+                          ? t("run.deploying")
+                          : costBlocked()
+                            ? t("run.deployBlocked")
+                            : t("run.destructiveConfirm")}
+                      </Button>
+                    </div>
+                  </Show>
+
+                  <Show when={approve.error()}>
+                    {(m) => (
+                      <p class="wa-error" role="alert">
+                        {m()}
+                      </p>
+                    )}
+                  </Show>
+                  <Show when={deploy.error()}>
+                    {(m) => (
+                      <p class="wa-error" role="alert">
+                        {m()}
+                      </p>
+                    )}
+                  </Show>
+                  <Show when={retryPlan.error()}>
+                    {(m) => (
+                      <p class="wa-error" role="alert">
+                        {m()}
+                      </p>
+                    )}
+                  </Show>
+                </Card>
+
+                {/* ===== changes (counts always, lists folded) ===== */}
+                <Card>
+                  <CardHeader title={t("run.changes.title")} />
+                  <div class="wa-change-strip">
+                    <span class="wa-change-stat wa-change-create">
+                      {t("run.changes.create")}{" "}
+                      <strong>{changeCounts().create}</strong>
+                    </span>
+                    <span class="wa-change-stat wa-change-update">
+                      {t("run.changes.update")}{" "}
+                      <strong>{changeCounts().update}</strong>
+                    </span>
+                    <span class="wa-change-stat wa-change-delete">
+                      {t("run.changes.delete")}{" "}
+                      <strong>{changeCounts().delete}</strong>
+                    </span>
+                  </div>
+                  <Show when={changes().length > 0}>
+                    <details class="wb-disclosure">
+                      <summary>{t("common.details")}</summary>
+                      <div class="wa-change-grid">
+                        <For each={["create", "update", "delete"] as const}>
+                          {(action) => (
+                            <div class="wa-change-col">
+                              <h4>
+                                {t(
+                                  `run.changes.${action}` as Parameters<
+                                    typeof t
+                                  >[0],
+                                )}
+                              </h4>
+                              <Show
+                                when={
+                                  changes().filter((c) => c.action === action)
+                                    .length > 0
+                                }
+                                fallback={
+                                  <p class="muted">{t("common.none")}</p>
+                                }
+                              >
+                                <ul>
+                                  <For
+                                    each={changes().filter(
+                                      (c) => c.action === action,
+                                    )}
+                                  >
+                                    {(item) => (
+                                      <li>
+                                        <code>{item.label}</code>
+                                      </li>
+                                    )}
+                                  </For>
+                                </ul>
+                              </Show>
+                            </div>
+                          )}
+                        </For>
+                      </div>
+                    </details>
+                  </Show>
+                </Card>
+
+                {/* ===== change detail — surfaced by default, not buried ===== */}
+                <Show when={planResources().some(isActionablePlanResource)}>
+                  <Card>
+                    <PlanResourceReview resources={planResources()} />
+                  </Card>
+                </Show>
+
+                <Show when={providerRowsNeedingAttention().length > 0}>
+                  <details class="wb-disclosure">
+                    <summary>{t("run.connections.reviewTitle")}</summary>
+                    <Card>
+                      <p class="wa-notice">{t("run.connections.reviewBody")}</p>
+                      <ProviderResolutionTable
+                        rows={providerRowsNeedingAttention()}
+                      />
+                    </Card>
+                  </details>
+                </Show>
+
+                {/* ===== diagnostics — shown only when there is signal ===== */}
+                <Show when={showDiagnosticsPanel()}>
+                  <Card>
+                    <CardHeader title={t("run.diagnostics.title")} />
+                    <Show when={creditsRequired()}>
+                      <div class="wa-stack">
+                        <p class="wa-notice">
+                          {t("run.diagnostics.creditsRequired")}
+                        </p>
+                        <Show when={isTakosumiCloudRuntime()}>
+                          <Button variant="secondary" size="sm" href="/billing">
+                            {t("run.cost.billingCta")}
+                          </Button>
+                        </Show>
+                      </div>
+                    </Show>
+                    <Show when={connectionVerificationRequired()}>
+                      <div class="wa-stack">
+                        <p class="wa-notice">
+                          {accessIssueDiagnostic(runAccessIssue()!).title}
+                        </p>
+                      </div>
+                    </Show>
+                    <Switch>
+                      <Match when={logs.loading}>
+                        <Skeleton variant="row" count={2} />
+                      </Match>
+                      <Match when={logs.error}>
+                        <p class="wa-error">
+                          {t("common.fetchFailed", {
+                            message: (logs.error as ControlApiError).message,
+                          })}
+                        </p>
+                      </Match>
+                      <Match when={diagnosticRows().length > 0}>
+                        <Show
+                          when={
+                            r().status === "failed" &&
+                            !creditsRequired() &&
+                            !connectionVerificationRequired()
+                          }
+                        >
+                          <p class="wa-error">{t("run.diagnostics.failed")}</p>
+                        </Show>
+                        <details class="wb-disclosure">
+                          <summary>
+                            {t("common.details")}{" "}
+                            <Badge tone="muted">
+                              {diagnosticRows().length}
+                            </Badge>
+                          </summary>
+                          <ul class="wa-diags">
+                            <For each={diagnosticRows()}>
+                              {(d) => <DiagnosticRow diagnostic={d} />}
+                            </For>
+                          </ul>
+                        </details>
+                      </Match>
+                    </Switch>
+                  </Card>
+                </Show>
+
+                {/* ===== expert details (folded) ===== */}
+                <details class="wb-disclosure">
+                  <summary>{t("run.details.title")}</summary>
+                  <div class="wa-stack">
+                    <Card>
+                      <KVList items={supportDetailItems(r())} />
+                    </Card>
+                    <details class="wb-disclosure">
+                      <summary>{t("run.details.debug")}</summary>
+                      <Card>
+                        <KVList items={debugDetailItems(r())} />
+                      </Card>
+                    </details>
+                    <Card>
+                      <CardHeader title={t("run.inputs.title")} />
+                      <Show
+                        when={inputs().length > 0}
+                        fallback={<p class="muted">{t("run.inputs.empty")}</p>}
+                      >
+                        <NameList names={inputs()} />
+                      </Show>
+                    </Card>
+                    <Card>
+                      <CardHeader title={t("run.connections.title")} />
+                      <Show
+                        when={
+                          connections().length > 0 || providerRows().length > 0
+                        }
+                        fallback={
+                          <p class="muted">{t("run.connections.empty")}</p>
+                        }
+                      >
+                        <Show
+                          when={providerRows().length > 0}
+                          fallback={<NameList names={connections()} />}
+                        >
+                          <ProviderResolutionTable rows={providerRows()} />
+                        </Show>
+                      </Show>
+                    </Card>
+                    <details class="wb-disclosure">
+                      <summary>
+                        {t("run.audit.title")}{" "}
+                        <Badge tone="muted">
+                          {(logs()?.auditEvents ?? []).length}
+                        </Badge>
+                      </summary>
+                      <Card>
+                        <Show
+                          when={(logs()?.auditEvents ?? []).length > 0}
+                          fallback={<p class="muted">{t("run.audit.empty")}</p>}
+                        >
+                          <ul class="wa-audit">
+                            <For each={logs()?.auditEvents ?? []}>
+                              {(event) => <AuditEventRow event={event} />}
+                            </For>
+                          </ul>
+                        </Show>
+                      </Card>
+                    </details>
+                  </div>
+                </details>
+              </div>
+            )}
+          </Match>
+        </Switch>
+      </>
+    );
+  }
 }

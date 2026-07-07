@@ -2,10 +2,7 @@ import {
   takosumiAccountsCapsuleEventsPath,
   type TakosumiSubject,
 } from "@takosjp/takosumi-accounts-contract";
-import {
-  type CapsuleRecord,
-  verifyCapsuleEventHashChain,
-} from "./ledger.ts";
+import { type CapsuleRecord, verifyCapsuleEventHashChain } from "./ledger.ts";
 import type { AccountsStore } from "./store.ts";
 import {
   type ActivatedHttpDomainProjection,
@@ -32,6 +29,7 @@ import { activatedHttpDomainProjectionFromCoreOutputs } from "./installation-lif
  */
 export const LIST_PAGE_DEFAULT_LIMIT = 50;
 export const LIST_PAGE_MAX_LIMIT = 200;
+const CURRENT_DEPLOYMENT_PROJECTION_TIMEOUT_MS = 1_200;
 
 export function parsePageLimit(value: string | null): number | "invalid" {
   if (value === null || value === "") return LIST_PAGE_DEFAULT_LIMIT;
@@ -165,7 +163,8 @@ export async function handleListAppCapsules(input: {
   ) {
     return errorJson("installation_not_found", "installation not found", 404);
   }
-  const installations = await input.store.listAppCapsulesForWorkspace(workspaceId);
+  const installations =
+    await input.store.listAppCapsulesForWorkspace(workspaceId);
   const page = paginateById(installations, {
     getId: (installation) => installation.capsuleId,
     limit,
@@ -189,9 +188,7 @@ export async function handleGetAppCapsule(input: {
     scope: "read",
   });
   if (!bearer.ok) return bearer.response;
-  const installation = await input.store.findAppCapsule(
-    input.capsuleId,
-  );
+  const installation = await input.store.findAppCapsule(input.capsuleId);
   if (!installation)
     return errorJson("installation_not_found", "installation not found", 404);
   if (
@@ -214,9 +211,7 @@ export async function handleGetAppCapsule(input: {
   const oidcClient = await input.store.findOidcClientForCapsule(
     input.capsuleId,
   );
-  const events = await input.store.listCapsuleEvents(
-    input.capsuleId,
-  );
+  const events = await input.store.listCapsuleEvents(input.capsuleId);
   const eventActivatedHttpDomain =
     activatedHttpDomainProjectionFromEvents(events);
   const currentDeploymentProjection = eventActivatedHttpDomain
@@ -238,6 +233,76 @@ export async function handleGetAppCapsule(input: {
   );
 }
 
+export async function handleListCapsuleServices(input: {
+  capsuleId: string;
+  request: Request;
+  store: AccountsStore;
+  deployControl?: DeployControlFacadeOptions;
+}): Promise<Response> {
+  const bearer = await requireAccountsBearer({
+    request: input.request,
+    store: input.store,
+    scope: "read",
+  });
+  if (!bearer.ok) return bearer.response;
+  const installation = await input.store.findAppCapsule(input.capsuleId);
+  if (!installation) {
+    return errorJson("installation_not_found", "installation not found", 404);
+  }
+  if (
+    !(await subjectCanAccessCapsule(
+      input.store,
+      bearer.auth.subject,
+      installation,
+    ))
+  ) {
+    return errorJson("installation_not_found", "installation not found", 404);
+  }
+
+  const events = await input.store.listCapsuleEvents(input.capsuleId);
+  const eventActivatedHttpDomain =
+    activatedHttpDomainProjectionFromEvents(events);
+  const currentDeploymentProjection = eventActivatedHttpDomain
+    ? undefined
+    : await currentDeploymentProjectionFromDeployControl({
+        deployControl: input.deployControl,
+        capsuleId: input.capsuleId,
+      });
+  const deploymentOutputs =
+    currentDeploymentProjection?.deploymentOutputs ??
+    (eventActivatedHttpDomain
+      ? [
+          {
+            name: "launch_url",
+            kind: "launch_url",
+            value: eventActivatedHttpDomain.url,
+            sensitive: false,
+          } satisfies DeploymentOutputProjection,
+        ]
+      : []);
+
+  return json({
+    services: deploymentOutputs.map(deploymentOutputServiceSummary),
+  });
+}
+
+function deploymentOutputServiceSummary(output: DeploymentOutputProjection) {
+  const secretConfigured =
+    (output as { readonly sensitive?: unknown }).sensitive === true;
+  const endpoint =
+    !secretConfigured && typeof output.value === "string" && output.value.trim()
+      ? output.value.trim()
+      : null;
+  return {
+    id: output.name,
+    capability: "deployment.outputs",
+    status: endpoint ? "ready" : "not_configured",
+    endpoint,
+    secret_configured: secretConfigured,
+    token_expires_at: null,
+  };
+}
+
 async function currentDeploymentProjectionFromDeployControl(input: {
   deployControl?: DeployControlFacadeOptions;
   capsuleId: string;
@@ -250,38 +315,57 @@ async function currentDeploymentProjectionFromDeployControl(input: {
 > {
   if (!input.deployControl) return undefined;
   try {
-    const capsuleResponse = await input.deployControl.operations.getCapsule(
-      input.capsuleId,
+    return await withProjectionTimeout(
+      (async () => {
+        const capsuleResponse =
+          await input.deployControl!.operations.getCapsule(input.capsuleId);
+        const capsule = capsuleResponse.capsule ?? capsuleResponse.installation;
+        const currentDeploymentId =
+          typeof capsule.currentStateVersionId === "string" &&
+          capsule.currentStateVersionId.length > 0
+            ? capsule.currentStateVersionId
+            : typeof capsule.currentDeploymentId === "string" &&
+                capsule.currentDeploymentId.length > 0
+              ? capsule.currentDeploymentId
+              : undefined;
+        const deployments = (
+          await input.deployControl!.operations.listDeployments(input.capsuleId)
+        ).deployments;
+        const deployment = currentDeploymentId
+          ? deployments.find((entry) => entry.id === currentDeploymentId)
+          : deployments.find((entry) => entry.status === "active");
+        if (!deployment) return undefined;
+        const deploymentOutputs = deploymentOutputsFromPublicRecord(
+          deployment.outputsPublic,
+        );
+        return {
+          activatedHttpDomain: activatedHttpDomainProjectionFromCoreOutputs({
+            deploymentId: deployment.id,
+            outputs: deployment.outputsPublic,
+            now: Date.now(),
+          }),
+          deploymentOutputs,
+        };
+      })(),
     );
-    const capsule = capsuleResponse.capsule ?? capsuleResponse.installation;
-    const currentDeploymentId =
-      typeof capsule.currentStateVersionId === "string" &&
-      capsule.currentStateVersionId.length > 0
-        ? capsule.currentStateVersionId
-        : typeof capsule.currentDeploymentId === "string" &&
-            capsule.currentDeploymentId.length > 0
-          ? capsule.currentDeploymentId
-          : undefined;
-    const deployments = (
-      await input.deployControl.operations.listDeployments(input.capsuleId)
-    ).deployments;
-    const deployment = currentDeploymentId
-      ? deployments.find((entry) => entry.id === currentDeploymentId)
-      : deployments.find((entry) => entry.status === "active");
-    if (!deployment) return undefined;
-    const deploymentOutputs = deploymentOutputsFromPublicRecord(
-      deployment.outputsPublic,
-    );
-    return {
-      activatedHttpDomain: activatedHttpDomainProjectionFromCoreOutputs({
-        deploymentId: deployment.id,
-        outputs: deployment.outputsPublic,
-        now: Date.now(),
-      }),
-      deploymentOutputs,
-    };
   } catch {
     return undefined;
+  }
+}
+
+async function withProjectionTimeout<T>(promise: Promise<T>): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => {
+          reject(new Error("current deployment projection timed out"));
+        }, CURRENT_DEPLOYMENT_PROJECTION_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
   }
 }
 
@@ -358,9 +442,7 @@ export async function handleListCapsuleEvents(input: {
   if (afterId === "invalid") {
     return errorJson("invalid_request", "cursor is malformed", 400);
   }
-  const installation = await input.store.findAppCapsule(
-    input.capsuleId,
-  );
+  const installation = await input.store.findAppCapsule(input.capsuleId);
   if (!installation)
     return errorJson("installation_not_found", "installation not found", 404);
   if (
@@ -372,9 +454,7 @@ export async function handleListCapsuleEvents(input: {
   ) {
     return errorJson("installation_not_found", "installation not found", 404);
   }
-  const allEvents = await input.store.listCapsuleEvents(
-    input.capsuleId,
-  );
+  const allEvents = await input.store.listCapsuleEvents(input.capsuleId);
   const typeFilter = installationEventTypeFilter(
     input.url.searchParams.get("types"),
   );

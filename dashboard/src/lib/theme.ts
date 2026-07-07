@@ -16,9 +16,11 @@ function systemTheme(): ResolvedTheme {
 }
 
 function readPreference(): ThemePreference {
-  if (typeof localStorage === "undefined") return "system";
+  // Dark-first product: absent an explicit choice, default to dark rather than
+  // following the OS. Users can still pick "light" or "system" in preferences.
+  if (typeof localStorage === "undefined") return "dark";
   const stored = localStorage.getItem(STORAGE_KEY);
-  return isThemePreference(stored) ? stored : "system";
+  return isThemePreference(stored) ? stored : "dark";
 }
 
 function resolveTheme(preference: ThemePreference): ResolvedTheme {
@@ -31,7 +33,10 @@ const [resolvedTheme, setResolvedTheme] = createSignal<ResolvedTheme>(
   resolveTheme(themePreference()),
 );
 
-function applyTheme(preference: ThemePreference, resolved: ResolvedTheme): void {
+function applyTheme(
+  preference: ThemePreference,
+  resolved: ResolvedTheme,
+): void {
   if (typeof document === "undefined") return;
   const root = document.documentElement;
   root.dataset.theme = resolved;
@@ -41,7 +46,7 @@ function applyTheme(preference: ThemePreference, resolved: ResolvedTheme): void 
     'meta[name="theme-color"]',
   );
   if (themeColor) {
-    themeColor.content = resolved === "dark" ? "#101316" : "#f6f7f9";
+    themeColor.content = resolved === "dark" ? "#141416" : "#f5f5f6";
   }
 }
 

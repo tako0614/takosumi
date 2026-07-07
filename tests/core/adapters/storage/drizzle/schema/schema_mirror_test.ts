@@ -1464,12 +1464,12 @@ test("billing USD micros migration backfills legacy credit rows", async () => {
         id, name, monthly_base_price, included_credits,
         limits_json, plan_json, created_at, updated_at
       ) values (
-        'starter', 'Starter', 0, 2, '{}', '{}',
+        'lite', 'Lite', 0, 2, '{}', '{}',
         '2026-06-01T00:00:00.000Z', '2026-06-01T00:00:00.000Z'
       )`,
     );
     const insertedPlan = await db.query<{ included_usd_micros: number }>(
-      `select included_usd_micros from takosumi_plans where id = 'starter'`,
+      `select included_usd_micros from takosumi_plans where id = 'lite'`,
     );
     expect(insertedPlan.rows[0]?.included_usd_micros).toBe(2_000_000);
     await db.exec(

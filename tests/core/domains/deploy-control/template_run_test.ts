@@ -295,7 +295,7 @@ test("template plan is blocked when the plan introduces a disallowed resource ty
         type: "cloudflare_workers_script",
         actions: ["create"],
       },
-      // Not in the Worker starter template allowlist.
+      // Not in the Worker sample template allowlist.
       {
         address: "module.app.cloudflare_r2_bucket.x",
         type: "cloudflare_r2_bucket",

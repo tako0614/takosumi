@@ -4,7 +4,13 @@
  * taking over the first screen on small devices.
  */
 import { A, useLocation } from "@solidjs/router";
-import { Clock3, LayoutGrid, Plus, Settings, UserCircle2 } from "lucide-solid";
+import {
+  Clock3,
+  Compass,
+  LayoutGrid,
+  Settings,
+  UserCircle2,
+} from "lucide-solid";
 import { For } from "solid-js";
 import { t } from "../../../../i18n/index.ts";
 
@@ -12,7 +18,7 @@ export default function MobileTabs() {
   const loc = useLocation();
   const tabs = () => [
     { href: "/", label: () => t("nav.apps"), icon: LayoutGrid, end: true },
-    { href: "/new", label: () => t("nav.add"), icon: Plus },
+    { href: "/new", label: () => t("nav.add"), icon: Compass },
     { href: "/runs", label: () => t("nav.runs"), icon: Clock3 },
     {
       href: "/advanced/workspace",
@@ -37,7 +43,8 @@ export default function MobileTabs() {
             }}
             aria-label={tab.label()}
           >
-            <tab.icon size={24} />
+            <tab.icon size={22} />
+            <span class="mobile-tab-label">{tab.label()}</span>
           </A>
         )}
       </For>

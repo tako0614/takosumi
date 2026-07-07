@@ -234,13 +234,13 @@ test("Cloudflare Accounts Worker exposes public billing plans from env", async (
     createEnv(d1, {
       TAKOSUMI_BILLING_PLANS: JSON.stringify([
         {
-          id: "starter",
+          id: "lite",
           kind: "subscription",
           stripePriceId: "price_test_hidden",
-          estimatedNetRevenueUsdMicros: 4000000,
-          usdMicros: 3000000,
-          name: { en: "Starter", ja: "Starter" },
-          priceDisplay: { en: "$3 balance", ja: "$3 残高" },
+          estimatedNetRevenueUsdMicros: 700000,
+          usdMicros: 500000,
+          name: { en: "Lite", ja: "Lite" },
+          priceDisplay: { en: "$1/month + usage", ja: "月額 $1 + 従量課金" },
         },
       ]),
     }),
@@ -252,11 +252,10 @@ test("Cloudflare Accounts Worker exposes public billing plans from env", async (
   };
   assert.deepEqual(body.plans, [
     {
-      id: "starter",
+      id: "lite",
       kind: "subscription",
-      usdMicros: 3000000,
-      name: { en: "Starter", ja: "Starter" },
-      priceDisplay: { en: "$3 balance", ja: "$3 残高" },
+      name: { en: "Lite", ja: "Lite" },
+      priceDisplay: { en: "$1/month + usage", ja: "月額 $1 + 従量課金" },
     },
   ]);
 });
@@ -306,7 +305,7 @@ test("Cloudflare Accounts Worker wires Stripe checkout from billing env", async 
       body: JSON.stringify({
         subject: "tsub_route_export",
         spaceId: "space_route_export",
-        planId: "starter",
+        planId: "lite",
         successUrl:
           "https://accounts.example/workspace/settings/billing?checkout=success",
         cancelUrl:
@@ -319,12 +318,12 @@ test("Cloudflare Accounts Worker wires Stripe checkout from billing env", async 
       TAKOSUMI_ACCOUNTS_BILLING_REDIRECT_ALLOWLIST: "https://accounts.example",
       TAKOSUMI_BILLING_PLANS: JSON.stringify([
         {
-          id: "starter",
+          id: "lite",
           kind: "subscription",
           stripePriceId: "price_test_worker_hidden",
-          usdMicros: 3000000,
-          name: { en: "Starter", ja: "Starter" },
-          priceDisplay: { en: "$3 balance", ja: "$3 残高" },
+          usdMicros: 500000,
+          name: { en: "Lite", ja: "Lite" },
+          priceDisplay: { en: "$1/month + usage", ja: "月額 $1 + 従量課金" },
         },
       ]),
     }),
@@ -335,7 +334,7 @@ test("Cloudflare Accounts Worker wires Stripe checkout from billing env", async 
     session_id: "cs_test_worker",
     url: "https://checkout.stripe.com/c/pay/cs_test_worker",
     mode: "subscription",
-    plan_id: "starter",
+    plan_id: "lite",
     workspace_id: "space_route_export",
   });
   assert.equal(stripeRequests.length, 1);

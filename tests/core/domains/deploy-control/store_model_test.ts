@@ -3107,33 +3107,33 @@ test("Billing ledger store: balance, reservation, and usage round-trip", async (
     });
 
     await store.putBillingAccount({
-      id: "bill_space_1",
-      ownerType: "space",
-      ownerId: "space_1",
+      id: "bill_user_1",
+      ownerType: "user",
+      ownerId: "user_1",
       provider: "stripe",
       stripeCustomerId: "cus_1",
       status: "active",
       createdAt: "2026-06-07T00:00:00.000Z",
       updatedAt: "2026-06-07T00:00:00.000Z",
     });
-    expect(await store.getBillingAccount("bill_space_1"), label).toMatchObject({
-      id: "bill_space_1",
-      ownerType: "space",
-      ownerId: "space_1",
+    expect(await store.getBillingAccount("bill_user_1"), label).toMatchObject({
+      id: "bill_user_1",
+      ownerType: "user",
+      ownerId: "user_1",
       stripeCustomerId: "cus_1",
       status: "active",
     });
     expect(
-      await store.getBillingAccountForOwner("space", "space_1"),
+      await store.getBillingAccountForOwner("user", "user_1"),
       label,
     ).toMatchObject({
-      id: "bill_space_1",
+      id: "bill_user_1",
       provider: "stripe",
     });
     await store.putSpaceSubscription({
       id: "sub_1",
-      spaceId: "space_1",
-      billingAccountId: "bill_space_1",
+      spaceId: "user_1",
+      billingAccountId: "bill_user_1",
       planId: "pro",
       status: "active",
       currentPeriodStart: "2026-06-01T00:00:00.000Z",
@@ -3141,10 +3141,10 @@ test("Billing ledger store: balance, reservation, and usage round-trip", async (
       createdAt: "2026-06-07T00:00:00.000Z",
       updatedAt: "2026-06-07T00:00:00.000Z",
     });
-    expect(await store.getSpaceSubscription("space_1"), label).toMatchObject({
+    expect(await store.getSpaceSubscription("user_1"), label).toMatchObject({
       id: "sub_1",
-      spaceId: "space_1",
-      billingAccountId: "bill_space_1",
+      spaceId: "user_1",
+      billingAccountId: "bill_user_1",
       planId: "pro",
       status: "active",
     });
@@ -3247,7 +3247,7 @@ test("Billing ledger store: balance, reservation, and usage round-trip", async (
       id: "takosumi-autorecharge:space_1:plan_1",
       spaceId: "space_1",
       runId: "plan_1",
-      billingAccountId: "bill_space_1",
+      billingAccountId: "bill_user_1",
       idempotencyKey: "takosumi-autorecharge:space_1:plan_1",
       periodStart: "2026-06-01T00:00:00.000Z",
       periodEnd: "2026-07-01T00:00:00.000Z",

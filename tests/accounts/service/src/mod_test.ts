@@ -163,6 +163,29 @@ function accountSessionHeaders(sessionId: string): HeadersInit {
   return { authorization: `Bearer ${sessionId}` };
 }
 
+async function stripeSignature(
+  payload: string,
+  secret: string,
+  timestamp = Math.floor(Date.now() / 1000),
+): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const signature = await crypto.subtle.sign(
+    "HMAC",
+    key,
+    new TextEncoder().encode(`${timestamp}.${payload}`),
+  );
+  const hex = [...new Uint8Array(signature)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+  return `t=${timestamp},v1=${hex}`;
+}
+
 function billingCheckoutOperations(
   subject: TakosumiSubject = "tsub_owner",
 ): ControlPlaneOperations {
@@ -272,6 +295,7 @@ function testCapsuleRouteNeedsAccountBearer(
   return (
     method === "GET" &&
     (kind === "events" ||
+      kind === "services" ||
       kind === "export-operation" ||
       kind === "export-download")
   );
@@ -1904,6 +1928,181 @@ test("accounts handler reads current deployment outputs for existing Capsule pro
       sensitive: false,
     },
   ]);
+});
+
+test("accounts handler returns Capsule details when deployment projection stalls", async () => {
+  const store = new InMemoryAccountsStore();
+  const session = seedAccountSession(store, "tsub_projection_timeout_owner");
+  seedOwnedWorkspace(
+    store,
+    "tsub_projection_timeout_owner",
+    "acct_projection_timeout",
+    "space_projection_timeout",
+  );
+  const now = Date.now();
+  await store.saveAppCapsule({
+    capsuleId: "inst_projection_timeout",
+    accountId: "acct_projection_timeout",
+    workspaceId: "space_projection_timeout",
+    appId: "example.projection-timeout",
+    sourceGitUrl: "https://github.com/example/projection-timeout.git",
+    sourceRef: "main",
+    sourceCommit: "0123456789abcdef0123456789abcdef01234567",
+    planDigest: "sha256:projection-timeout",
+    artifactDigest: "sha256:projection-timeout",
+    mode: "self-hosted",
+    status: "ready",
+    createdBySubject: "tsub_projection_timeout_owner",
+    createdAt: now,
+    updatedAt: now,
+  });
+  let getCapsuleCalled = false;
+  let listDeploymentsCalled = false;
+  const handler = createAccountsHandler({
+    store,
+    deployControl: {
+      operations: deployControlOperationsStub({
+        getCapsule: (id) => {
+          getCapsuleCalled = true;
+          if (id !== "inst_projection_timeout") {
+            throw new Error(`unexpected capsule id ${id}`);
+          }
+          return new Promise<GetCapsuleResponse>(() => {});
+        },
+        listDeployments: (id) => {
+          listDeploymentsCalled = true;
+          throw new Error(`unexpected deployments capsule id ${id}`);
+        },
+      }),
+    },
+  });
+
+  const startedAt = Date.now();
+  const response = await handler(
+    new Request(
+      "https://accounts.example.test/v1/capsule-projections/inst_projection_timeout",
+      { headers: accountSessionHeaders(session) },
+    ),
+  );
+
+  expect(Date.now() - startedAt).toBeLessThan(2_500);
+  expect(response.status).toEqual(200);
+  expect(getCapsuleCalled).toEqual(true);
+  expect(listDeploymentsCalled).toEqual(false);
+  const body = await response.json();
+  expect(body.installation.id).toEqual("inst_projection_timeout");
+  expect(body.installation.launch_url).toEqual(null);
+  expect(body.installation.deployment_outputs).toEqual([]);
+});
+
+test("accounts handler projects Capsule services from current deployment outputs", async () => {
+  const store = new InMemoryAccountsStore();
+  const session = seedAccountSession(store, "tsub_projection_services_owner");
+  seedOwnedWorkspace(
+    store,
+    "tsub_projection_services_owner",
+    "acct_projection_services",
+    "space_projection_services",
+  );
+  const now = Date.now();
+  await store.saveAppCapsule({
+    capsuleId: "inst_projection_services",
+    accountId: "acct_projection_services",
+    workspaceId: "space_projection_services",
+    appId: "example.projection-services",
+    sourceGitUrl: "https://github.com/example/projection-services.git",
+    sourceRef: "main",
+    sourceCommit: "0123456789abcdef0123456789abcdef01234567",
+    planDigest: "sha256:projection-services",
+    artifactDigest: "sha256:projection-services",
+    mode: "self-hosted",
+    status: "ready",
+    createdBySubject: "tsub_projection_services_owner",
+    createdAt: now,
+    updatedAt: now,
+  });
+  let getCapsuleCalled = false;
+  let listDeploymentsCalled = false;
+  const handler = createAccountsHandler({
+    store,
+    deployControl: {
+      operations: deployControlOperationsStub({
+        getCapsule: (id) => {
+          getCapsuleCalled = true;
+          if (id !== "inst_projection_services") {
+            throw new Error(`unexpected capsule id ${id}`);
+          }
+          return Promise.resolve({
+            capsule: {
+              id: "inst_projection_services",
+              workspaceId: "space_projection_services",
+              name: "projection-services",
+              slug: "projection-services",
+              status: "active",
+              environment: "production",
+              installConfigId: "cfg_projection_services",
+              currentStateVersionId: "dep_projection_services",
+              currentStateGeneration: 1,
+              createdAt: "2026-07-07T00:00:00.000Z",
+              updatedAt: "2026-07-07T00:00:01.000Z",
+            },
+          } as unknown as GetCapsuleResponse);
+        },
+        listDeployments: (id) => {
+          listDeploymentsCalled = true;
+          if (id !== "inst_projection_services") {
+            throw new Error(`unexpected deployments capsule id ${id}`);
+          }
+          return Promise.resolve({
+            deployments: [
+              {
+                id: "dep_projection_services",
+                capsuleId: "inst_projection_services",
+                status: "active",
+                outputsPublic: {
+                  url: "https://projection-services.example.test",
+                  service_exports: {
+                    api: "https://projection-services.example.test/api",
+                  },
+                },
+                createdAt: "2026-07-07T00:00:01.000Z",
+              },
+            ],
+          } as unknown as Awaited<
+            ReturnType<DeployControlOperations["listDeployments"]>
+          >);
+        },
+      }),
+    },
+  });
+
+  const response = await handler(
+    new Request(
+      "https://accounts.example.test/v1/capsule-projections/inst_projection_services/services",
+      { headers: accountSessionHeaders(session) },
+    ),
+  );
+
+  expect(response.status).toEqual(200);
+  expect(getCapsuleCalled).toEqual(true);
+  expect(listDeploymentsCalled).toEqual(true);
+  const body = await response.json();
+  expect(body.services).toContainEqual({
+    id: "url",
+    capability: "deployment.outputs",
+    status: "ready",
+    endpoint: "https://projection-services.example.test",
+    secret_configured: false,
+    token_expires_at: null,
+  });
+  expect(body.services).toContainEqual({
+    id: "service_exports",
+    capability: "deployment.outputs",
+    status: "not_configured",
+    endpoint: null,
+    secret_configured: false,
+    token_expires_at: null,
+  });
 });
 
 test("accounts handler validates installation facade request before space deployControl apply", async () => {
@@ -5463,9 +5662,10 @@ test("accounts handler creates Stripe Checkout Sessions without exposing price i
       stripeSecretKey: "sk_test_checkout",
       plans: [
         {
-          id: "starter",
+          id: "lite",
           kind: "subscription",
-          stripePriceId: "price_test_starter",
+          stripePriceId: "price_test_lite",
+          usdMicros: 5_000_000,
         },
       ],
       redirectAllowlist: ["https://accounts.example.test"],
@@ -5492,7 +5692,7 @@ test("accounts handler creates Stripe Checkout Sessions without exposing price i
       body: JSON.stringify({
         subject: "tsub_billing_checkout",
         workspaceId: "space_billing",
-        planId: "starter",
+        planId: "lite",
         successUrl:
           "https://accounts.example.test/workspace/settings/billing?checkout=success",
         cancelUrl:
@@ -5511,17 +5711,142 @@ test("accounts handler creates Stripe Checkout Sessions without exposing price i
   expect(stripeRequests.length).toEqual(1);
   const params = stripeRequests[0]!;
   expect(params.get("mode")).toEqual("subscription");
-  expect(params.get("line_items[0][price]")).toEqual("price_test_starter");
+  expect(params.get("line_items[0][price]")).toEqual("price_test_lite");
   expect(params.get("metadata[takosumi_subject]")).toEqual(
     "tsub_billing_checkout",
   );
   expect(params.get("metadata[takosumi_workspace_id]")).toEqual(
     "space_billing",
   );
-  expect(params.get("metadata[takosumi_plan_id]")).toEqual("starter");
+  expect(params.get("metadata[takosumi_plan_id]")).toEqual("lite");
+  expect(params.get("metadata[space_id]")).toEqual("space_billing");
+  expect(params.get("metadata[plan_code]")).toEqual("lite");
+  expect(params.get("metadata[usd_micros]")).toEqual("5000000");
   expect(params.get("subscription_data[metadata][takosumi_plan_id]")).toEqual(
-    "starter",
+    "lite",
   );
+  expect(params.get("subscription_data[metadata][space_id]")).toEqual(
+    "space_billing",
+  );
+  expect(params.get("subscription_data[metadata][usd_micros]")).toEqual(
+    "5000000",
+  );
+});
+
+test("accounts handler accepts signed Stripe webhooks and grants owner account credits once", async () => {
+  const store = new InMemoryAccountsStore();
+  seedAccountSession(store, "tsub_billing_webhook");
+  store.saveBillingAccount({
+    billingAccountId: "bill_billing_webhook",
+    subject: "tsub_billing_webhook",
+    provider: "stripe",
+    stripeCustomerId: "cus_webhook",
+    status: "past_due",
+    createdAt: 1_000,
+    updatedAt: 1_000,
+  });
+  const topUps: {
+    workspaceId: string;
+    input: { usdMicros?: number; credits?: number };
+  }[] = [];
+  const operations = {
+    ...billingCheckoutOperations("tsub_billing_webhook"),
+    topUpWorkspaceCredits: async (
+      workspaceId: string,
+      input: { usdMicros?: number; credits?: number },
+    ) => {
+      topUps.push({ workspaceId, input });
+      return {
+        balance: {
+          workspaceId,
+          spaceId: workspaceId,
+          availableUsdMicros: input.usdMicros ?? 0,
+          reservedUsdMicros: 0,
+          monthlyIncludedUsdMicros: 0,
+          purchasedUsdMicros: input.usdMicros ?? 0,
+          availableCredits: (input.usdMicros ?? 0) / 1_000_000,
+          reservedCredits: 0,
+          monthlyIncludedCredits: 0,
+          purchasedCredits: (input.usdMicros ?? 0) / 1_000_000,
+          updatedAt: "2026-07-06T00:00:00.000Z",
+        },
+      };
+    },
+  } as unknown as ControlPlaneOperations;
+  const handler = createAccountsHandler({
+    store,
+    controlPlaneOperations: operations,
+    billingWebhook: {
+      webhookSecret: "whsec_test",
+      plans: [
+        {
+          id: "lite",
+          kind: "subscription",
+          stripePriceId: "price_test_lite",
+          usdMicros: 5_000_000,
+        },
+      ],
+    },
+  });
+  const payload = JSON.stringify({
+    id: "evt_invoice_paid_once",
+    type: "invoice.paid",
+    data: {
+      object: {
+        id: "in_webhook",
+        object: "invoice",
+        customer: "cus_webhook",
+        lines: { data: [{ period: { end: 1_800_000_000 } }] },
+        subscription_details: {
+          metadata: {
+            takosumi_workspace_id: "space_billing",
+            takosumi_plan_id: "lite",
+            takosumi_usd_micros: "5000000",
+          },
+        },
+      },
+    },
+  });
+  const signature = await stripeSignature(payload, "whsec_test");
+
+  const response = await handler(
+    new Request("https://accounts.example.test/api/v1/billing/stripe/webhook", {
+      method: "POST",
+      headers: { "stripe-signature": signature },
+      body: payload,
+    }),
+  );
+  expect(response.status).toEqual(200);
+  expect(await response.json()).toMatchObject({
+    received: true,
+    duplicate: false,
+    event_id: "evt_invoice_paid_once",
+    status: "processed",
+  });
+  expect(topUps).toEqual([
+    {
+      workspaceId: "space_billing",
+      input: { usdMicros: 5_000_000 },
+    },
+  ]);
+  expect(
+    store.findBillingAccountByStripeCustomerId("cus_webhook")?.status,
+  ).toEqual("active");
+
+  const duplicate = await handler(
+    new Request("https://accounts.example.test/v1/billing/stripe/webhook", {
+      method: "POST",
+      headers: { "stripe-signature": signature },
+      body: payload,
+    }),
+  );
+  expect(duplicate.status).toEqual(200);
+  expect(await duplicate.json()).toMatchObject({
+    received: true,
+    duplicate: true,
+    event_id: "evt_invoice_paid_once",
+  });
+  expect(topUps).toHaveLength(1);
 });
 
 test("accounts handler creates Stripe Billing Portal Sessions for existing customers", async () => {
@@ -5601,20 +5926,20 @@ test("accounts handler lets billing checkout smoke bypass only launch readiness"
       smokeToken: "smoke_token",
       plans: [
         {
-          id: "usd_balance_5",
-          kind: "pack",
-          stripePriceId: "price_test_pack",
+          id: "lite",
+          kind: "subscription",
+          stripePriceId: "price_test_lite",
         },
       ],
       redirectAllowlist: ["https://accounts.example.test"],
       fetch: async (_url, init) => {
         stripeRequestCount += 1;
         const params = new URLSearchParams(String(init?.body ?? ""));
-        expect(params.get("mode")).toEqual("payment");
-        expect(params.get("customer_creation")).toEqual("always");
+        expect(params.get("mode")).toEqual("subscription");
+        expect(params.get("customer_creation")).toEqual(null);
         expect(
-          params.get("payment_intent_data[metadata][takosumi_plan_id]"),
-        ).toEqual("usd_balance_5");
+          params.get("subscription_data[metadata][takosumi_plan_id]"),
+        ).toEqual("lite");
         return new Response(
           JSON.stringify({
             id: "cs_test_smoke",
@@ -5631,7 +5956,7 @@ test("accounts handler lets billing checkout smoke bypass only launch readiness"
   const requestBody = {
     subject: "tsub_billing_smoke",
     spaceId: "space_smoke",
-    planId: "usd_balance_5",
+    planId: "lite",
     successUrl:
       "https://accounts.example.test/workspace/settings/billing?checkout=success",
     cancelUrl:

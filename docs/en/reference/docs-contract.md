@@ -13,7 +13,7 @@ Published docs include:
 - API endpoints, request / response shapes, authentication, and error shapes
 - Resource Shape, Compatibility API, ProviderConnection, CredentialRecipe, and ProviderBinding specs
 - supported / preview / planned / unsupported compatibility matrices
-- Takosumi Cloud public prices, free tier, credit consumption, and fail-closed behavior when credits run out
+- Takosumi Cloud public prices, free tier, usage billing, and fail-closed spend guard behavior
 - security contracts such as no secret redisplay, no secret logs, and run-scoped secret injection
 
 Required public contract information must not depend on unpublished notes.
@@ -28,7 +28,7 @@ without reading internal notes or operator runbooks.
 | product / edition boundary  | external Takosumi, Takosumi for Operator, and Takosumi Cloud definitions | design alternatives and unsettled roadmap notes       |
 | API / compatibility surface | endpoint, capability, auth, errors, supported/preview/unsupported        | handler wiring, closed repo paths, and private routes |
 | Resource Shape              | schema, lifecycle, state/import/drift behavior                           | adapter internals and private target inventory        |
-| Cloud pricing / credits     | customer prices, free tier, credit exhaustion, auto charge behavior      | price IDs, cost tables, margin guards, reconciliation |
+| Cloud pricing / billing     | customer prices, free tier, spend guard, auto charge behavior      | price IDs, cost tables, margin guards, reconciliation |
 | security / secret handling  | no secret redisplay, log redaction, run-scoped injection                 | secret file paths, vault paths, and operator tokens   |
 
 Published pages must not link to `docs/internal/` or `docs/operations/` as a
@@ -89,9 +89,8 @@ Published pricing pages include:
 ```text
 customer pays
 free tier
-included credits
 usage prices
-credit exhaustion behavior
+spend guard behavior
 auto charge behavior
 refund / cancellation surface
 ```

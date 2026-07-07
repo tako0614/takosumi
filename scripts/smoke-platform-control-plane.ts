@@ -191,6 +191,7 @@ export interface PlatformControlPlaneSmokeOptions {
   readonly sourceRef?: string;
   readonly sourcePath?: string;
   readonly modulePath?: string;
+  readonly installConfigId?: string;
   readonly sourceName?: string;
   readonly timeoutSeconds: number;
   readonly deployTimeoutSeconds: number;
@@ -280,6 +281,7 @@ export interface PlatformControlPlaneSmokeResult {
     readonly sourceRef?: string;
     readonly sourcePath?: string;
     readonly modulePath?: string;
+    readonly installConfigId?: string;
   };
 }
 
@@ -316,6 +318,7 @@ interface CliArgs {
   readonly sourceRef?: string;
   readonly sourcePath?: string;
   readonly modulePath?: string;
+  readonly installConfigId?: string;
   readonly sourceName?: string;
   readonly verificationMode?: string;
   readonly varsJson?: string;
@@ -703,6 +706,8 @@ export async function resolveOptions(
   const sourceRef = args.sourceRef ?? env.TAKOSUMI_SMOKE_SOURCE_REF ?? "main";
   const sourcePath = args.sourcePath ?? env.TAKOSUMI_SMOKE_SOURCE_PATH ?? ".";
   const modulePath = args.modulePath ?? env.TAKOSUMI_SMOKE_MODULE_PATH;
+  const installConfigId =
+    args.installConfigId ?? env.TAKOSUMI_SMOKE_INSTALL_CONFIG_ID;
   const sourceName =
     args.sourceName ?? env.TAKOSUMI_SMOKE_SOURCE_NAME ?? undefined;
   const sourceMode = "git" as const;
@@ -713,18 +718,27 @@ export async function resolveOptions(
         : DEFAULT_CAPSULE_DIR),
   );
   const resolvedAppName = args.appName ?? defaultAppName();
-  const defaultVars = defaultSmokeVars({
-    accountId: cloudflareAccountId.value,
-    appName: resolvedAppName,
-    workersSubdomain: cloudflareWorkersSubdomain.value,
-    providerless: providerlessOpenTofuSmoke,
-  });
   const explicitVars = await readJsonRecordInput({
     inline: args.varsJson ?? env.TAKOSUMI_SMOKE_VARS_JSON,
     file: args.varsJsonFile ?? env.TAKOSUMI_SMOKE_VARS_JSON_FILE,
     label: "vars",
     fallback: {},
   });
+  const defaultVars =
+    providerlessOpenTofuSmoke && Object.keys(explicitVars).length > 0
+      ? {}
+      : defaultSmokeVars({
+          accountId: cloudflareAccountId.value,
+          appName: resolvedAppName,
+          workersSubdomain: cloudflareWorkersSubdomain.value,
+          providerless: providerlessOpenTofuSmoke,
+          variableStyle: defaultSmokeVariableStyle({
+            sourceGitUrl,
+            sourcePath,
+            modulePath,
+            installConfigId,
+          }),
+        });
   const vars = mergeJsonRecords(defaultVars, explicitVars);
   const outputAllowlist = parseOutputAllowlist(
     await readJsonRecordInput({
@@ -798,6 +812,7 @@ export async function resolveOptions(
     ...(sourceGitUrl ? { sourceRef } : {}),
     ...(sourceGitUrl ? { sourcePath } : {}),
     ...(modulePath ? { modulePath } : {}),
+    ...(installConfigId ? { installConfigId } : {}),
     ...(sourceGitUrl && sourceName ? { sourceName } : {}),
     timeoutSeconds: parsePositiveInteger(
       args.timeoutSeconds,
@@ -1546,15 +1561,28 @@ async function resolveSpaceId(
     readonly spaces?: readonly {
       readonly id: string;
       readonly handle: string;
+      readonly archivedAt?: string;
     }[];
   }>({
     baseUrl: options.url,
     token: options.accountSessionToken,
-    path: `${API_PREFIX}/workspaces`,
+    path: `${API_PREFIX}/workspaces?includeArchived=true`,
   });
   const match = (response.spaces ?? []).find(
     (space) => space.handle === normalized,
   );
+  if (match?.id) {
+    if (typeof match.archivedAt === "string" && match.archivedAt.length > 0) {
+      await requestJson({
+        baseUrl: options.url,
+        token: options.accountSessionToken,
+        method: "PATCH",
+        path: `${API_PREFIX}/workspaces/${encodeURIComponent(match.id)}`,
+        body: { archived: false },
+      });
+    }
+    return match.id;
+  }
   if (!match) {
     if (options.ensureSpace) {
       const created = await requestJson<{
@@ -1580,7 +1608,6 @@ async function resolveSpaceId(
       `workspace @${normalized} was not found; pass --ensure-workspace or create the scratch Workspace first`,
     );
   }
-  return match.id;
 }
 
 async function createSpaceCloudflareConnection(
@@ -1780,7 +1807,7 @@ async function deployGitSourceCapsule(
       `source sync run ${sourceSyncRun.id} succeeded without sourceSnapshotId`,
     );
   }
-  const installConfigId = await findGenericCapsuleInstallConfigId(
+  const installConfigId = await findSmokeCapsuleInstallConfigId(
     options,
     input.spaceId,
   );
@@ -1916,7 +1943,7 @@ async function syncSmokeSource(
   return completed as RunRecord & { readonly sourceSnapshotId: string };
 }
 
-async function findGenericCapsuleInstallConfigId(
+async function findSmokeCapsuleInstallConfigId(
   options: PlatformControlPlaneSmokeOptions,
   spaceId: string,
 ): Promise<string> {
@@ -1930,6 +1957,17 @@ async function findGenericCapsuleInstallConfigId(
     )}`,
   });
   const configs = response.installConfigs ?? [];
+  if (options.installConfigId) {
+    const match = configs.find(
+      (config) => config.id === options.installConfigId,
+    );
+    if (!match?.id) {
+      throw new Error(
+        `install config ${options.installConfigId} was not available to the scratch Workspace`,
+      );
+    }
+    return match.id;
+  }
   const match = configs.find(isSelectableGenericCapsuleInstallConfig);
   if (!match?.id) {
     const scopedGenericCount = configs.filter(
@@ -2843,7 +2881,13 @@ async function assertGenericDeploymentLedger(
   }
   const publicOutputNames = Object.keys(outputsPublic).sort();
   const missingRequiredOutputs = Object.entries(options.outputAllowlist)
-    .filter(([, spec]) => spec.required === true)
+    .filter(
+      ([name, spec]) =>
+        spec.required === true &&
+        // `takosumi_release` is intentionally consumed by the release
+        // activator and filtered out of public deployment outputs.
+        name !== "takosumi_release",
+    )
     .map(([name]) => name)
     .filter((name) => !publicOutputNames.includes(name));
   if (missingRequiredOutputs.length > 0) {
@@ -3529,11 +3573,41 @@ function dryRunReleaseActivationStatus(
   return requirement === "any" ? "succeeded" : requirement;
 }
 
+type DefaultSmokeVariableStyle =
+  | "legacy_cloudflare_worker_sample"
+  | "portable_cloudflare_module";
+
+function defaultSmokeVariableStyle(input: {
+  readonly sourceGitUrl?: string;
+  readonly sourcePath?: string;
+  readonly modulePath?: string;
+  readonly installConfigId?: string;
+}): DefaultSmokeVariableStyle {
+  const installConfigId = input.installConfigId?.trim() ?? "";
+  if (
+    installConfigId === "cloudflare-hello-worker" ||
+    installConfigId === "cloudflare-worker-service"
+  ) {
+    return "legacy_cloudflare_worker_sample";
+  }
+  const sourcePath = input.sourcePath?.trim() ?? "";
+  const modulePath = input.modulePath?.trim() ?? "";
+  const moduleKey = `${sourcePath}/${modulePath}`;
+  if (
+    moduleKey.includes("providers/cloudflare/modules/cloudflare-hello-worker") ||
+    moduleKey.includes("providers/cloudflare/modules/cloudflare-worker-service")
+  ) {
+    return "legacy_cloudflare_worker_sample";
+  }
+  return "portable_cloudflare_module";
+}
+
 function defaultSmokeVars(input: {
   readonly accountId: string;
   readonly appName: string;
   readonly workersSubdomain: string;
   readonly providerless?: boolean;
+  readonly variableStyle: DefaultSmokeVariableStyle;
 }): Readonly<Record<string, JsonSmokeValue>> {
   if (input.providerless) {
     return {
@@ -3541,10 +3615,14 @@ function defaultSmokeVars(input: {
       base_url: `https://example.invalid/${input.appName}`,
     };
   }
+  if (input.variableStyle === "legacy_cloudflare_worker_sample") {
+    return {
+      accountId: input.accountId,
+      appName: input.appName,
+      workersSubdomain: input.workersSubdomain,
+    };
+  }
   return {
-    accountId: input.accountId,
-    appName: input.appName,
-    workersSubdomain: input.workersSubdomain,
     target: "cloudflare",
     project_name: input.appName,
     cloudflare: {
@@ -3888,6 +3966,9 @@ function publicInputSummary(options: PlatformControlPlaneSmokeOptions): {
           sourceRef: options.sourceRef ?? "main",
           sourcePath: options.sourcePath ?? ".",
           ...(options.modulePath ? { modulePath: options.modulePath } : {}),
+          ...(options.installConfigId
+            ? { installConfigId: options.installConfigId }
+            : {}),
         }
       : {}),
   };
@@ -4230,6 +4311,32 @@ async function runSelfTest(): Promise<void> {
   if (serializedProviderless.includes("keyless-selftest")) {
     throw new Error("providerless self-test leaked vars content");
   }
+  const managedCompatOptions = await resolveOptions(
+    {
+      dryRun: true,
+      url: "https://app-staging.takosumi.com",
+      workspace: "space_selftest",
+      capsuleDir: "/private/takos-opentofu-module",
+      appName: "takos-managed-selftest",
+      ensureSpace: true,
+      sessionTokenFile: "/private/account-session-token",
+      cloudflareConnectionMode: "none",
+      verificationMode: "opentofu",
+      varsJson:
+        '{"target":"cloudflare","project_name":"takos-managed-selftest","environment":"selftest","cloudflare":{"account_id":"ts_acc_takosumi_cloud","api_base_url":"https://app.takosumi.com/compat/cloudflare/client/v4","workers_subdomain":"app.takos.jp"}}',
+      outputAllowlistJson:
+        '{"url":{"from":"url","type":"url","required":true},"worker_name":{"from":"worker_name","type":"string","required":true}}',
+    },
+    {},
+  );
+  if (
+    "name" in managedCompatOptions.vars ||
+    "base_url" in managedCompatOptions.vars
+  ) {
+    throw new Error(
+      "managed compat self-test should not inherit providerless default vars",
+    );
+  }
   const currentHelloHtml =
     '<!doctype html><meta charset="utf-8"><title>Hello from Takosumi</title>' +
     "<h1>It works</h1><p>This Worker was provisioned by a Takosumi Capsule.</p>";
@@ -4290,6 +4397,44 @@ async function runSelfTest(): Promise<void> {
       "https://example.invalid/takosumi-keyless-default-selftest"
   ) {
     throw new Error("providerless self-test did not default keyless vars");
+  }
+  const takosModuleOptions = await resolveOptions(
+    {
+      dryRun: true,
+      url: "https://app-staging.takosumi.com",
+      workspace: "space_selftest",
+      cloudflareAccountIdFile: "/private/cloudflare-account-id",
+      cloudflareWorkersSubdomainFile: "/private/cloudflare-workers-subdomain",
+      appName: "takos-release-selftest",
+      ensureSpace: true,
+      sessionTokenFile: "/private/account-session-token",
+      cloudflareApiTokenFile: "/private/cloudflare-token",
+      sourceGitUrl: "https://github.com/tako0614/takos.git",
+      sourcePath: ".",
+      modulePath: "deploy/opentofu",
+      varsJson:
+        '{"release_container_images":{"runtime":"registry.cloudflare.com/acc_123/takos-worker-runtime:0.10.0-test","executor":"registry.cloudflare.com/acc_123/takos-agent-executor:0.10.0-test"}}',
+      verificationMode: "opentofu",
+    },
+    {},
+  );
+  if (
+    "appName" in takosModuleOptions.vars ||
+    "accountId" in takosModuleOptions.vars ||
+    "workersSubdomain" in takosModuleOptions.vars
+  ) {
+    throw new Error("Takos module defaults leaked legacy Cloudflare inputs");
+  }
+  if (takosModuleOptions.vars.project_name !== "takos-release-selftest") {
+    throw new Error("Takos module defaults did not set project_name");
+  }
+  const takosCloudflareVars = takosModuleOptions.vars.cloudflare;
+  if (
+    !isPlainJsonObject(takosCloudflareVars) ||
+    takosCloudflareVars.account_id !== "<redacted>" ||
+    takosCloudflareVars.workers_subdomain !== "<redacted>"
+  ) {
+    throw new Error("Takos module defaults did not set cloudflare object");
   }
   const gitOptions = await resolveOptions(
     {
@@ -4545,6 +4690,7 @@ Options:
   --source-ref <ref>                              Git ref for --source-git-url, default main
   --source-path <path>                            Source archive path inside the Git repo, default .
   --module-path <path>                            OpenTofu Capsule module path inside the SourceSnapshot archive
+  --install-config-id <id>                        install config to use for the Capsule, default selectable generic Capsule
   --source-name <name>                            Source display name, default <app-name>-source
   --verification-mode <cloudflare-worker|opentofu> default cloudflare-worker; opentofu verifies plan/apply/destroy without public Worker checks
   --vars-json <json>                              OpenTofu variable object passed to the generated root

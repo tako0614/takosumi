@@ -24,7 +24,7 @@ The shared bundled-HCL catalog (`module-files.ts`) and the catalog parity test
 (`module-files_test.ts`) stay here because they cover `core` plus every provider
 module. The id+version registry is `core/domains/templates/registry.ts`.
 
-Storage starter modules are intentionally not part of the install catalog.
+Storage sample modules are intentionally not part of the install catalog.
 Ordinary S3/R2/GCS/MinIO buckets should use existing OpenTofu providers or
 standard S3-compatible endpoints through the plain Stack flow. Resource Shape
 planner modules such as `cloudflare-r2-bucket` are internal lowering targets for

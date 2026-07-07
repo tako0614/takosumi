@@ -64,6 +64,7 @@ describe("appSurfacesFromOutputs", () => {
             badge: { ja: "追加候補", en: "Installable" },
             name: { ja: "yurucommu", en: "yurucommu" },
             description: { ja: "コミュニティ", en: "Community" },
+            iconUrl: "https://example.test/yurucommu.svg",
             inputs: [],
           },
           createdAt: "2026-07-05T00:00:00.000Z",
@@ -71,7 +72,10 @@ describe("appSurfacesFromOutputs", () => {
         },
         "ja",
       ),
-    ).toEqual({ name: "yurucommu" });
+    ).toEqual({
+      name: "yurucommu",
+      image: "https://example.test/yurucommu.svg",
+    });
   });
 
   test("catalog building blocks do not declare launcher app surfaces", () => {
@@ -106,9 +110,9 @@ describe("appSurfacesFromOutputs", () => {
     expect(appSurfacesFromOutputs({ url: "https://x.test/" })).toEqual([
       { url: "https://x.test/" },
     ]);
-    expect(appSurfacesFromOutputs({ launch_url: "https://x.test/" })).toEqual(
-      [{ url: "https://x.test/" }],
-    );
+    expect(appSurfacesFromOutputs({ launch_url: "https://x.test/" })).toEqual([
+      { url: "https://x.test/" },
+    ]);
   });
 
   test("flat form: app_name + generic launch URL fallback", () => {
@@ -136,6 +140,7 @@ describe("appSurfacesFromOutputs", () => {
             display: {
               title: "Yurucommu",
               description: "Self-hosted social app",
+              icon: "/icons/yurucommu.svg",
               category: "social",
             },
             spec: { launcher: true },
@@ -146,6 +151,7 @@ describe("appSurfacesFromOutputs", () => {
 
     expect(surfaces).toHaveLength(1);
     expect(surfaces[0]?.name).toBe("Yurucommu");
+    expect(surfaces[0]?.icon).toBe("https://yuru.test/icons/yurucommu.svg");
     expect(surfaces[0]?.url).toBe("https://yuru.test/");
   });
 

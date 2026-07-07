@@ -37,10 +37,10 @@
   align-items: center;
   justify-content: center;
   gap: var(--tg-s-2);
-  min-height: 36px;
-  padding: 0 var(--tg-s-4);
-  border-radius: var(--tg-r-md);
-  font-weight: 600;
+  min-height: 38px;
+  padding: 0 var(--tg-s-5);
+  border-radius: var(--tg-r-full);
+  font-weight: 680;
   font-size: var(--tg-fs-sm);
   border: 1px solid transparent;
   background: transparent;
@@ -162,7 +162,7 @@
 .tg-card {
   background: var(--tg-bg-elev);
   border: 1px solid var(--tg-line);
-  border-radius: var(--tg-r-lg);
+  border-radius: var(--tg-r-xl);
   padding: var(--tg-s-5);
   position: relative;
   overflow: hidden;
@@ -322,11 +322,11 @@
 .tg-input,
 .tg-select,
 .tg-textarea {
-  padding: var(--tg-s-2) var(--tg-s-3);
-  min-height: 38px;
+  padding: var(--tg-s-2) var(--tg-s-4);
+  min-height: 40px;
   background: var(--tg-bg-elev);
-  border: 1px solid var(--tg-line);
-  border-radius: var(--tg-r-md);
+  border: 1px solid var(--tg-line-strong);
+  border-radius: var(--tg-r-lg);
   color: var(--tg-fg);
   font-family: var(--tg-font-body);
   font-size: var(--tg-fs-base);

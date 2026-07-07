@@ -37,7 +37,7 @@ RUN set -eux; \
 # for provider binaries only.
 #
 # Mirror list covers the providers the bundled first-party modules require:
-# cloudflare + random + tls for Cloudflare starter modules. Generic AWS/S3/R2/GCS
+# cloudflare + random + tls for Cloudflare sample modules. Generic AWS/S3/R2/GCS
 # stacks use the ordinary provider install/cache path instead of a Takosumi-owned
 # storage template baked into the image. google is still omitted for size; it
 # falls through to `direct` (network) install unless a strict mirror policy

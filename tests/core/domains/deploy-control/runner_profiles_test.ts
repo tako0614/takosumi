@@ -200,3 +200,34 @@ test("parseEnabledRunnerProfileIds normalizes CSV input", () => {
   expect(parseEnabledRunnerProfileIds("")).toEqual(["cloudflare-default"]);
   expect(parseEnabledRunnerProfileIds("a, b ,a,,c")).toEqual(["a", "b", "c"]);
 });
+
+test("self-host default-enables the generic wildcard profile when opted in", () => {
+  // Unset env + defaultEnableGenericProvider -> cloudflare-default AND the
+  // wildcard generic-opentofu-provider surface, so a fresh self-host runs any
+  // provider with the user's own key without an operator opt-in.
+  expect(parseEnabledRunnerProfileIds(undefined, true)).toEqual([
+    "cloudflare-default",
+    "generic-opentofu-provider",
+  ]);
+  const enabled = resolveEnabledRunnerProfiles(SEEDS, undefined, {
+    defaultEnableGenericProvider: true,
+  });
+  expect(idsOf(enabled)).toEqual([
+    "cloudflare-default",
+    "generic-opentofu-provider",
+  ]);
+  const generic = enabled.find(
+    (profile) => profile.id === "generic-opentofu-provider",
+  );
+  expect(generic?.allowedProviders).toEqual(["*"]);
+  expect(generic?.labels?.["takosumi.com/profile-enabled"]).toEqual("true");
+});
+
+test("defaultEnableGenericProvider only applies when the env is unset", () => {
+  // An explicit CSV always wins over the self-host default, so an operator can
+  // still curate a narrower surface (or omit the generic profile) on purpose.
+  const enabled = resolveEnabledRunnerProfiles(SEEDS, "cloudflare-default", {
+    defaultEnableGenericProvider: true,
+  });
+  expect(idsOf(enabled)).toEqual(["cloudflare-default"]);
+});

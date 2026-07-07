@@ -167,6 +167,7 @@ describe("dashboard catalog", () => {
       expect(listing.provider).toBe("cloudflare");
       expect(listing.badge.ja).toBe("追加候補");
       expect(listing.badge.en).toBe("Installable");
+      expect(listing.iconUrl, `${listing.id} icon`).toMatch(/^https:\/\//);
       expect(
         listing.source.resolvedCommit,
         `${listing.id} resolved commit`,
@@ -198,5 +199,13 @@ describe("dashboard catalog", () => {
         (listing) => listing.id === "cloudflare-hello-worker",
       ),
     ).toBe(false);
+  });
+
+  test("curated service catalog metadata declares product icons", () => {
+    const icons = new Map(
+      catalogEntries().map((entry) => [entry.installConfigId, entry.iconUrl]),
+    );
+    expect(icons.get("cfg-catalog-yurucommu")).toContain("yurucommu.svg");
+    expect(icons.get("cfg-catalog-takos")).toContain("logo.png");
   });
 });

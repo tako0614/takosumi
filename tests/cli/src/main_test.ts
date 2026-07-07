@@ -294,9 +294,9 @@ function structuredEvidenceFieldsForTest(
       return {
         briefRef: "doc://launch/brief",
         targetCustomer: "early-self-hostable-team",
-        launchScope: "platform-capsule-starter",
-        sku: "starter",
-        quotaPlanRef: "policy://launch/starter-quotas",
+        launchScope: "platform-capsule-lite",
+        sku: "lite",
+        quotaPlanRef: "policy://launch/lite-quotas",
         billingMeterRef: "meter://agent-compute-minutes",
         supportTier: "standard",
         supportSlaRef: "policy://support/standard-sla",
@@ -349,7 +349,7 @@ function structuredEvidenceFieldsForTest(
     case "plan-transition":
       return {
         subscriptionId: "sub_rehearsal",
-        fromPlan: "starter",
+        fromPlan: "lite",
         toPlan: "pro",
       };
     case "failed-payment":
@@ -430,13 +430,13 @@ function structuredEvidenceFieldsForTest(
       };
     case "quota-plan":
       return {
-        planId: "starter",
-        quotaPlanRef: "policy://quota/starter",
+        planId: "lite",
+        quotaPlanRef: "policy://quota/lite",
       };
     case "spend-cap":
       return {
         workspaceId: "ws_rehearsal",
-        spendCapRef: "policy://spend-cap/starter",
+        spendCapRef: "policy://spend-cap/lite",
         cap: 100,
         currency: "USD",
       };
@@ -6336,7 +6336,7 @@ test("accounts migrate dry-run prints ordered migration plan", async () => {
     driver: "postgres",
     source: "--database-url",
   });
-  expect(plan.migrations.length).toEqual(28);
+  expect(plan.migrations.length).toEqual(29);
   expect(plan.migrations[0].name).toEqual("001_app_installation_ledger.sql");
   expect(plan.migrations[16].name).toEqual(
     "017_drop_binding_grant_runtime_binding.sql",

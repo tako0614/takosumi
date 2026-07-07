@@ -1,6 +1,6 @@
 # Quickstart
 
-Start with the normal Takosumi Cloud flow. In the browser, choose a starter or
+Start with the normal Takosumi Cloud flow. In the browser, choose a template or
 paste a Git URL, review the required connections and planned changes, then
 deploy.
 
@@ -10,7 +10,7 @@ control plane directly.
 ## Takosumi Cloud
 
 1. Open `https://app.takosumi.com/`.
-2. Choose **Add service**, then pick a starter or paste a Git URL that contains
+2. Choose **Add service**, then pick a template or paste a Git URL that contains
    an OpenTofu/Terraform module.
 3. Connect the cloud account the service needs. Credentials are stored in a
    ProviderConnection, not in the manifest or a local `.env` file.

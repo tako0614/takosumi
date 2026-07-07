@@ -471,20 +471,18 @@ function renderGenericOutputsTf(
     assertOutputPath(spec.from);
     const valueExpr =
       name === "takosumi_release"
-        ? `module.app.${spec.from}`
+        ? `try(module.app.${spec.from}, null)`
         : `try(module.app.${spec.from}, "")`;
-    return [
-      `output ${hclString(name)} {`,
-      `  value = ${valueExpr}`,
-      "}",
-    ].join("\n");
+    return [`output ${hclString(name)} {`, `  value = ${valueExpr}`, "}"].join(
+      "\n",
+    );
   });
   for (const name of GENERIC_CONTROL_OUTPUTS) {
     if (name in outputAllowlist) continue;
     blocks.push(
       [
         `output ${hclString(name)} {`,
-        `  value = module.app.${name}`,
+        `  value = try(module.app.${name}, null)`,
         "}",
       ].join("\n"),
     );
