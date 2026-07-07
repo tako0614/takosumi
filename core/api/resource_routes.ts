@@ -217,7 +217,7 @@ export function registerResourceShapeRoutes(
     if (!record) {
       return errorResponse(c, {
         code: "not_found",
-        message: `TargetPool ${c.req.param("name")} was not found in space ${space.value}`,
+        message: "TargetPool was not found in this space",
       });
     }
     return c.json(record, 200);

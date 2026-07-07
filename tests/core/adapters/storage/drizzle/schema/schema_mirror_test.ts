@@ -447,6 +447,20 @@ test("D1 Drizzle schema mirrors critical live D1 tables", () => {
     nn("expires_at"),
   ]);
 
+  expect(getTableName(d1Schema.publicHostReservations)).toBe(
+    "public_host_reservations",
+  );
+  expect(columnsOf(d1Schema.publicHostReservations)).toEqual([
+    pk("hostname"),
+    nn("workspace_id"),
+    nn("installation_id"),
+    nn("installation_name"),
+    nn("status"),
+    nn("reserved_at"),
+    nn("updated_at"),
+    nullable("released_at"),
+  ]);
+
   expect(getTableName(d1Schema.credentialMintEvents)).toBe(
     "credential_mint_events",
   );
@@ -552,7 +566,7 @@ test("Worker D1 bootstrap records canonical schema migration ledger", async () =
     .all<D1SchemaMigrationRow>();
   const rows = migrationRows.results ?? [];
   expect(rows.map((row) => row.version)).toEqual([
-    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
+    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
   ]);
   expect(rows.map((row) => row.name)).toEqual([
     "d1_opentofu_connections_and_secret_blobs_shape",
@@ -573,6 +587,8 @@ test("Worker D1 bootstrap records canonical schema migration ledger", async () =
     "d1_opentofu_provider_credential_collapse",
     "d1_opentofu_workspace_capsule_rename",
     "d1_opentofu_compatibility_report_root_interface",
+    "d1_opentofu_public_host_reservations",
+    "d1_opentofu_public_host_reservations_backfill",
   ]);
   for (const row of rows) {
     expect(row.checksum).toMatch(/^sha256:[0-9a-f]{64}$/);
@@ -1223,6 +1239,20 @@ test("Postgres Drizzle schema mirrors critical migration catalog tables", () => 
     nn("expires_at"),
   ]);
 
+  expect(getTableName(postgresSchema.publicHostReservations)).toBe(
+    "takosumi_public_host_reservations",
+  );
+  expect(columnsOf(postgresSchema.publicHostReservations)).toEqual([
+    pk("hostname"),
+    nn("workspace_id"),
+    nn("installation_id"),
+    nn("installation_name"),
+    nn("status"),
+    nn("reserved_at"),
+    nn("updated_at"),
+    nullable("released_at"),
+  ]);
+
   expect(getTableName(postgresSchema.credentialMintEvents)).toBe(
     "takosumi_credential_mint_events",
   );
@@ -1507,6 +1537,120 @@ test("billing USD micros migration backfills legacy credit rows", async () => {
       `select estimated_usd_micros from takosumi_credit_reservations where id = 'creditres_1'`,
     );
     expect(updatedReservation.rows[0]?.estimated_usd_micros).toBe(6_000_000);
+  } finally {
+    await db.close();
+  }
+});
+
+test("Postgres public host reservation backfill prefers active Capsule outputs", async () => {
+  const create = postgresStorageMigrationStatements.find(
+    (entry) => entry.id === "deploy.public_host_reservations.create",
+  );
+  const backfill = postgresStorageMigrationStatements.find(
+    (entry) => entry.id === "deploy.public_host_reservations.backfill",
+  );
+  expect(create).toBeDefined();
+  expect(backfill).toBeDefined();
+
+  const db = new PGlite();
+  try {
+    await db.exec(`create table takosumi_capsules (
+      id text primary key,
+      space_id text not null,
+      name text not null,
+      environment text not null,
+      source_id text,
+      install_config_id text not null,
+      current_state_version_id text,
+      status text not null,
+      installation_json jsonb not null,
+      created_at text not null,
+      updated_at text not null
+    )`);
+    await db.exec(`create table takosumi_outputs (
+      id text primary key,
+      space_id text not null,
+      installation_id text not null,
+      state_generation integer not null,
+      snapshot_json jsonb not null,
+      created_at text not null
+    )`);
+    for (const statement of splitSqlStatements(create!.sql)) {
+      await db.exec(statement);
+    }
+    await db.exec(`
+      insert into takosumi_outputs values
+        (
+          'out_stale', 'space_stale', 'inst_stale', 1,
+          '{"publicOutputs":{"url":"https://shared.app.takos.jp"},"workspaceOutputs":{}}',
+          '2026-06-06T00:00:00.000Z'
+        ),
+        (
+          'out_active', 'space_active', 'inst_active', 1,
+          '{"publicOutputs":{},"workspaceOutputs":{"app_url":"https://shared.app.takos.jp"}}',
+          '2026-06-06T00:01:00.000Z'
+        ),
+        (
+          'out_preview', 'space_preview', 'inst_preview', 1,
+          '{"publicOutputs":{"url":"https://preview.workers.dev"},"workspaceOutputs":{}}',
+          '2026-06-06T00:02:00.000Z'
+        )
+    `);
+    await db.exec(`
+      insert into takosumi_capsules values
+        (
+          'inst_stale', 'space_stale', 'Shared Stale', 'preview', null,
+          'cfg_stale', 'sv_stale', 'stale',
+          '{"id":"inst_stale","workspaceId":"space_stale","currentOutputId":"out_stale","currentStateGeneration":1}',
+          '2026-06-06T00:00:00.000Z', '2026-06-06T00:00:00.000Z'
+        ),
+        (
+          'inst_active', 'space_active', 'Shared Active', 'preview', null,
+          'cfg_active', 'sv_active', 'active',
+          '{"id":"inst_active","workspaceId":"space_active","currentOutputId":"out_active","currentStateGeneration":1}',
+          '2026-06-06T00:01:00.000Z', '2026-06-06T00:01:00.000Z'
+        ),
+        (
+          'inst_preview', 'space_preview', 'Preview', 'preview', null,
+          'cfg_preview', 'sv_preview', 'active',
+          '{"id":"inst_preview","workspaceId":"space_preview","currentOutputId":"out_preview","currentStateGeneration":1}',
+          '2026-06-06T00:02:00.000Z', '2026-06-06T00:02:00.000Z'
+        )
+    `);
+
+    for (const statement of splitSqlStatements(backfill!.sql)) {
+      await db.exec(statement);
+    }
+    // Re-run once to guard idempotency and same-owner conflict handling.
+    for (const statement of splitSqlStatements(backfill!.sql)) {
+      await db.exec(statement);
+    }
+
+    const shared = await db.query<{
+      workspace_id: string;
+      installation_id: string;
+      installation_name: string;
+      status: string;
+    }>(
+      `select workspace_id, installation_id, installation_name, status
+       from takosumi_public_host_reservations
+       where hostname = 'shared.app.takos.jp'`,
+    );
+    expect(shared.rows).toEqual([
+      {
+        workspace_id: "space_active",
+        installation_id: "inst_active",
+        installation_name: "Shared Active",
+        status: "reserved",
+      },
+    ]);
+
+    const preview = await db.query<{ n: number }>(
+      `select count(*)::int as n
+       from takosumi_public_host_reservations
+       where hostname = 'preview.workers.dev'`,
+    );
+    expect(preview.rows[0]?.n).toBe(0);
   } finally {
     await db.close();
   }

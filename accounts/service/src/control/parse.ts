@@ -51,6 +51,7 @@ import type {
   CapsuleProviderEnvBindingSet,
   InstallConfig,
   InstallConfigCatalogInput,
+  InstallConfigInstallExperience,
   InstallConfigCatalogKind,
   InstallConfigCatalogMetadata,
   InstallConfigCatalogSurface,
@@ -197,6 +198,14 @@ export function installConfigCatalogValue(
   const name = catalogTextValue(record.name);
   const description = catalogTextValue(record.description);
   const inputs = catalogInputsValue(record.inputs);
+  const iconUrl =
+    record.iconUrl === undefined
+      ? undefined
+      : boundedStringValue(record.iconUrl, 2048);
+  const installExperience =
+    record.installExperience === undefined
+      ? undefined
+      : installExperienceValue(record.installExperience);
   if (
     order === undefined ||
     !surface ||
@@ -206,7 +215,9 @@ export function installConfigCatalogValue(
     !badge ||
     !name ||
     !description ||
-    !inputs
+    !inputs ||
+    (record.iconUrl !== undefined && iconUrl === undefined) ||
+    (record.installExperience !== undefined && installExperience === undefined)
   ) {
     return undefined;
   }
@@ -226,7 +237,9 @@ export function installConfigCatalogValue(
     badge,
     name,
     description,
+    ...(iconUrl ? { iconUrl } : {}),
     inputs,
+    ...(installExperience ? { installExperience } : {}),
   };
 }
 
@@ -349,6 +362,8 @@ function catalogInputsValue(
       name,
       ...(type ? { type } : {}),
       ...(required !== undefined ? { required } : {}),
+      ...(record.advanced === true ? { advanced: true } : {}),
+      ...(record.secret === true ? { secret: true } : {}),
       ...(defaultValue !== undefined ? { defaultValue } : {}),
       label,
       ...(helper ? { helper } : {}),
@@ -356,6 +371,178 @@ function catalogInputsValue(
     });
   }
   return inputs;
+}
+
+function catalogVariableNameValue(value: unknown): string | undefined {
+  const raw = boundedStringValue(value, 128);
+  return raw && /^[A-Za-z_][A-Za-z0-9_]*$/u.test(raw) ? raw : undefined;
+}
+
+function catalogPathValue(value: unknown): string | undefined {
+  const raw = boundedStringValue(value, 256);
+  return raw && raw.startsWith("/") ? raw : undefined;
+}
+
+function optionalCatalogVariable(
+  value: unknown,
+): string | undefined | false {
+  if (value === undefined) return undefined;
+  return catalogVariableNameValue(value) ?? false;
+}
+
+function installExperienceValue(
+  value: unknown,
+): InstallConfigInstallExperience | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const out: {
+    serviceName?: { variable: string };
+    publicEndpoint?: {
+      subdomainVariable?: string;
+      urlVariable?: string;
+      routePatternVariable?: string;
+      baseDomain?: string;
+    };
+    initialSecret?: {
+      variable: string;
+      kind?: "password" | "password_or_hash" | "token";
+      optional?: boolean;
+    };
+    takosumiAccountsOidc?: {
+      issuerUrlVariable?: string;
+      accountsUrlVariable?: string;
+      clientIdVariable?: string;
+      redirectUriVariable?: string;
+      callbackPath?: string;
+    };
+  } = {};
+
+  if (record.serviceName !== undefined) {
+    if (
+      !record.serviceName ||
+      typeof record.serviceName !== "object" ||
+      Array.isArray(record.serviceName)
+    ) {
+      return undefined;
+    }
+    const variable = catalogVariableNameValue(
+      (record.serviceName as Record<string, unknown>).variable,
+    );
+    if (!variable) return undefined;
+    out.serviceName = { variable };
+  }
+
+  if (record.publicEndpoint !== undefined) {
+    if (
+      !record.publicEndpoint ||
+      typeof record.publicEndpoint !== "object" ||
+      Array.isArray(record.publicEndpoint)
+    ) {
+      return undefined;
+    }
+    const endpoint = record.publicEndpoint as Record<string, unknown>;
+    const subdomainVariable = optionalCatalogVariable(
+      endpoint.subdomainVariable,
+    );
+    const urlVariable = optionalCatalogVariable(endpoint.urlVariable);
+    const routePatternVariable = optionalCatalogVariable(
+      endpoint.routePatternVariable,
+    );
+    const baseDomain =
+      endpoint.baseDomain === undefined
+        ? undefined
+        : boundedStringValue(endpoint.baseDomain, 255);
+    if (
+      subdomainVariable === false ||
+      urlVariable === false ||
+      routePatternVariable === false ||
+      (endpoint.baseDomain !== undefined && baseDomain === undefined)
+    ) {
+      return undefined;
+    }
+    out.publicEndpoint = {
+      ...(subdomainVariable ? { subdomainVariable } : {}),
+      ...(urlVariable ? { urlVariable } : {}),
+      ...(routePatternVariable ? { routePatternVariable } : {}),
+      ...(baseDomain ? { baseDomain } : {}),
+    };
+  }
+
+  if (record.initialSecret !== undefined) {
+    if (
+      !record.initialSecret ||
+      typeof record.initialSecret !== "object" ||
+      Array.isArray(record.initialSecret)
+    ) {
+      return undefined;
+    }
+    const secret = record.initialSecret as Record<string, unknown>;
+    const variable = catalogVariableNameValue(secret.variable);
+    const kind =
+      secret.kind === undefined
+        ? undefined
+        : secret.kind === "password" ||
+            secret.kind === "password_or_hash" ||
+            secret.kind === "token"
+          ? secret.kind
+          : undefined;
+    const optional = booleanValue(secret.optional);
+    if (
+      !variable ||
+      (secret.kind !== undefined && kind === undefined) ||
+      (secret.optional !== undefined && optional === undefined)
+    ) {
+      return undefined;
+    }
+    out.initialSecret = {
+      variable,
+      ...(kind ? { kind } : {}),
+      ...(optional !== undefined ? { optional } : {}),
+    };
+  }
+
+  if (record.takosumiAccountsOidc !== undefined) {
+    if (
+      !record.takosumiAccountsOidc ||
+      typeof record.takosumiAccountsOidc !== "object" ||
+      Array.isArray(record.takosumiAccountsOidc)
+    ) {
+      return undefined;
+    }
+    const oidc = record.takosumiAccountsOidc as Record<string, unknown>;
+    const issuerUrlVariable = optionalCatalogVariable(oidc.issuerUrlVariable);
+    const accountsUrlVariable = optionalCatalogVariable(
+      oidc.accountsUrlVariable,
+    );
+    const clientIdVariable = optionalCatalogVariable(oidc.clientIdVariable);
+    const redirectUriVariable = optionalCatalogVariable(
+      oidc.redirectUriVariable,
+    );
+    const callbackPath =
+      oidc.callbackPath === undefined
+        ? undefined
+        : catalogPathValue(oidc.callbackPath);
+    if (
+      issuerUrlVariable === false ||
+      accountsUrlVariable === false ||
+      clientIdVariable === false ||
+      redirectUriVariable === false ||
+      (oidc.callbackPath !== undefined && callbackPath === undefined)
+    ) {
+      return undefined;
+    }
+    out.takosumiAccountsOidc = {
+      ...(issuerUrlVariable ? { issuerUrlVariable } : {}),
+      ...(accountsUrlVariable ? { accountsUrlVariable } : {}),
+      ...(clientIdVariable ? { clientIdVariable } : {}),
+      ...(redirectUriVariable ? { redirectUriVariable } : {}),
+      ...(callbackPath ? { callbackPath } : {}),
+    };
+  }
+
+  return out;
 }
 
 export function modulePathValue(value: unknown): string | undefined {

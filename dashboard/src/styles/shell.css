@@ -144,7 +144,7 @@
   -webkit-backdrop-filter: blur(8px);
   position: sticky;
   top: 0;
-  z-index: 30;
+  z-index: var(--tg-z-header);
 }
 .topbar-title {
   min-width: 0;
@@ -161,15 +161,6 @@
   display: flex;
   align-items: center;
   gap: var(--tg-s-2);
-}
-.topbar-icon-btn.topbar-add {
-  display: none;
-  color: var(--tg-accent-text);
-}
-.topbar-icon-btn.topbar-add:hover {
-  background: var(--tg-accent-soft);
-  border-color: color-mix(in srgb, var(--tg-accent) 45%, var(--tg-line));
-  color: var(--tg-accent);
 }
 /* ===== Workspace switcher (global, in topbar) ===== */
 .topbar-mobile-workspace {
@@ -257,7 +248,7 @@
   position: absolute;
   top: calc(100% + 6px);
   left: 0;
-  z-index: 60;
+  z-index: var(--tg-z-popover);
   min-width: 240px;
   max-width: 300px;
   padding: var(--tg-s-1);
@@ -424,7 +415,7 @@
   border-radius: var(--tg-r-md);
   box-shadow: var(--tg-shadow-lg);
   padding: var(--tg-s-2);
-  z-index: 60;
+  z-index: var(--tg-z-popover);
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -547,9 +538,6 @@
     gap: var(--tg-s-1);
     margin-left: var(--tg-s-2);
   }
-  .topbar-icon-btn.topbar-add {
-    display: inline-flex;
-  }
   .app-shell-content {
     padding: var(--tg-s-4) var(--tg-s-3)
       calc(
@@ -568,26 +556,19 @@
     grid-template-columns: repeat(auto-fit, minmax(56px, 1fr));
     background: var(--tg-bg-elev);
     border-top: 1px solid var(--tg-line);
-    z-index: 40;
+    z-index: var(--tg-z-nav);
   }
   .mobile-tab {
     position: relative;
     display: flex;
-    flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 3px;
     color: var(--tg-fg-subtle);
     text-decoration: none;
-    font-size: 0.62rem;
-    font-weight: 600;
     transition: color var(--tg-dur) var(--tg-ease);
   }
   .mobile-tab svg {
     flex: none;
-  }
-  .mobile-tab-label {
-    line-height: 1;
   }
   .mobile-tab:active {
     color: var(--tg-fg-muted);

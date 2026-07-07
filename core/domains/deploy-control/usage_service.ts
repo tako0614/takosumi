@@ -228,8 +228,6 @@ export class UsageReportingService {
             "metered usage spend failed: insufficient USD balance",
             {
               reason: "insufficient_credits",
-              workspaceId: sourceWorkspaceId,
-              billingSubjectId,
               usdMicros,
             },
           );

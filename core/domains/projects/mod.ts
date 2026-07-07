@@ -128,7 +128,7 @@ export class ProjectsService {
     if (existing) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        `project slug ${request.slug} is already taken in workspace ${request.workspaceId}`,
+        "project already exists",
       );
     }
     const nowIso = this.#now().toISOString();

@@ -15,15 +15,8 @@ import {
   type Component,
 } from "solid-js";
 import {
-  AppWindow,
-  Box,
-  Globe2,
-  HardDrive,
-} from "lucide-solid";
-import {
   initTcsState,
   loadMoreTcs,
-  mergeTcsListingBatches,
   sortTcsItems,
   type AggregatedTcsListing,
   type TcsAggregateState,
@@ -35,11 +28,7 @@ import {
   removeTcsServer,
 } from "../../lib/tcs-servers.ts";
 import type { TcsListing, TcsSort } from "../../lib/tcs-client.ts";
-import {
-  tcsCategoryLabel,
-  tcsKindLabel,
-  tcsProviderLabel,
-} from "./store-labels.ts";
+import { tcsCategoryLabel, tcsProviderLabel } from "./store-labels.ts";
 import "./StoreBrowser.css";
 
 type Status = {
@@ -117,8 +106,6 @@ function listingSearchText(listing: TcsListing, locale: TcsLocale): string {
     listing.suggestedName,
     listing.provider,
     tcsProviderLabel(listing.provider),
-    listing.kind,
-    tcsKindLabel(listing.kind, locale),
     listing.category,
     tcsCategoryLabel(listing.category, locale),
     listing.source.git,
@@ -127,30 +114,25 @@ function listingSearchText(listing: TcsListing, locale: TcsLocale): string {
     .toLowerCase();
 }
 
-function listingIconComponent(
-  listing: TcsListing,
-): Component<{ readonly size?: number }> {
-  switch (listing.kind) {
-    case "app":
-      return AppWindow;
-    case "worker":
-      return Box;
-    case "storage":
-      return HardDrive;
-    case "site":
-      return Globe2;
-  }
+/** Monogram fallback (1–2 chars) for a listing whose repo declares no icon. */
+function monogramInitials(name: string): string {
+  const trimmed = name.trim();
+  if (!trimmed) return "?";
+  const compact = trimmed.replace(/[^\p{L}\p{N}]+/gu, "");
+  return (compact.slice(0, 2) || trimmed.slice(0, 1)).toUpperCase();
 }
 
-function listingIcon(listing: TcsListing) {
-  const Icon = listingIconComponent(listing);
+function listingIcon(listing: TcsListing, locale: TcsLocale) {
   return (
-    <span
-      class="tcs-app-icon"
-      data-kind={listing.kind}
-      aria-hidden="true"
-    >
-      <Show when={listing.iconUrl} fallback={<Icon size={24} />}>
+    <span class="tcs-app-icon" aria-hidden="true">
+      <Show
+        when={listing.iconUrl}
+        fallback={
+          <span class="tcs-app-mono">
+            {monogramInitials(pick(listing.name, locale))}
+          </span>
+        }
+      >
         {(src) => <img src={src()} alt="" loading="lazy" />}
       </Show>
     </span>
@@ -171,13 +153,11 @@ const EMPTY: TcsAggregateState = {
 
 export interface StoreBrowserProps {
   readonly locale: TcsLocale;
-  readonly localListings?: readonly TcsListing[];
   readonly onInstall: (listing: TcsListing) => Promise<void> | void;
   readonly onConfigure: (listing: TcsListing) => void;
   readonly canQuickInstall?: (listing: TcsListing) => boolean;
   readonly showSourceControls?: boolean;
   readonly showSortControl?: boolean;
-  readonly showKindFilters?: boolean;
   readonly loadRemoteOnMount?: boolean;
 }
 
@@ -186,7 +166,6 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
   const [searchInput, setSearchInput] = createSignal("");
   const [activeQuery, setActiveQuery] = createSignal("");
   const [fCategory, setFCategory] = createSignal("");
-  const [fKind, setFKind] = createSignal("");
   const [agg, setAgg] = createSignal<TcsAggregateState>(EMPTY);
   const [selected, setSelected] = createSignal<AggregatedTcsListing | null>(
     null,
@@ -198,7 +177,6 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
   );
   const showSourceControls = () => props.showSourceControls ?? true;
   const showSortControl = () => props.showSortControl ?? true;
-  const showKindFilters = () => props.showKindFilters ?? true;
 
   const setSearchValue = (value: string) => {
     setSearchInput(value);
@@ -272,38 +250,17 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
     }
   }
 
+  // The store nodes are the single source of installable listings (the
+  // dashboard no longer hardcodes a catalog); they arrive already aggregated.
   const allItems = createMemo(() =>
-    sortTcsItems(
-      mergeTcsListingBatches(
-        mergeTcsListingBatches(
-          [],
-          [
-            {
-              base: "takosumi",
-              isDefault: true,
-              items: props.localListings ?? [],
-            },
-          ],
-        ),
-        agg().items.map((item) => ({
-          base: item.primaryServer,
-          isDefault: item.primaryDefault,
-          items: [item],
-        })),
-      ),
-      sort(),
-      props.locale,
-    ),
+    sortTcsItems(agg().items, sort(), props.locale),
   );
 
-  const facet = (key: "category" | "kind") =>
-    createMemo(() => {
-      const set = new Set<string>();
-      for (const i of allItems()) set.add(i[key]);
-      return [...set].sort();
-    });
-  const categories = facet("category");
-  const kinds = facet("kind");
+  const categories = createMemo(() => {
+    const set = new Set<string>();
+    for (const i of allItems()) set.add(i.category);
+    return [...set].sort();
+  });
 
   const displayed = createMemo(() =>
     allItems().filter(
@@ -312,8 +269,7 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
           listingSearchText(l, props.locale).includes(
             activeQuery().toLowerCase(),
           )) &&
-        (!fCategory() || l.category === fCategory()) &&
-        (!fKind() || l.kind === fKind()),
+        (!fCategory() || l.category === fCategory()),
     ),
   );
 
@@ -381,8 +337,8 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
             class="tcs-btn"
             onClick={() => setShowServers((v) => !v)}
           >
-            {s("serversAdvanced", props.locale)}:{" "}
-            {s("servers", props.locale)} ({agg().status.length})
+            {s("serversAdvanced", props.locale)}: {s("servers", props.locale)} (
+            {agg().status.length})
           </button>
         </Show>
       </div>
@@ -454,20 +410,6 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
             </button>
           )}
         </For>
-        <Show when={showKindFilters()}>
-          <For each={kinds()}>
-            {(k) => (
-              <button
-                type="button"
-                class="tcs-chip tcs-kind"
-                classList={{ active: fKind() === k }}
-                onClick={() => setFKind(fKind() === k ? "" : k)}
-              >
-                {tcsKindLabel(k, props.locale)}
-              </button>
-            )}
-          </For>
-        </Show>
       </div>
 
       <Show
@@ -483,13 +425,8 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
             {(listing) => (
               <div class="tcs-card">
                 <div class="tcs-card-top">
-                  {listingIcon(listing)}
+                  {listingIcon(listing, props.locale)}
                   <div class="tcs-card-main">
-                    <div class="tcs-card-head">
-                      <span class="tcs-badge">
-                        {pick(listing.badge, props.locale)}
-                      </span>
-                    </div>
                     <button
                       type="button"
                       class="tcs-card-open"
@@ -503,9 +440,6 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
                 <div class="tcs-card-meta">
                   <span class="tcs-tag">
                     {tcsProviderLabel(listing.provider)}
-                  </span>
-                  <span class="tcs-tag">
-                    {tcsKindLabel(listing.kind, props.locale)}
                   </span>
                   <Show when={listing.seenOn.length > 1}>
                     <span class="tcs-tag tcs-muted">
@@ -539,11 +473,8 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
             <aside class="tcs-detail" onClick={(e) => e.stopPropagation()}>
               <header>
                 <div class="tcs-detail-title">
-                  {listingIcon(listing())}
+                  {listingIcon(listing(), props.locale)}
                   <div>
-                    <span class="tcs-badge">
-                      {pick(listing().badge, props.locale)}
-                    </span>
                     <h3>{pick(listing().name, props.locale)}</h3>
                   </div>
                 </div>
@@ -567,9 +498,6 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
                   </span>
                   <span class="tcs-tag">
                     {tcsCategoryLabel(listing().category, props.locale)}
-                  </span>
-                  <span class="tcs-tag">
-                    {tcsKindLabel(listing().kind, props.locale)}
                   </span>
                 </div>
               </section>

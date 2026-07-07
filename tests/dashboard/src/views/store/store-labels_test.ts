@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test";
 import {
   tcsBadgeLabel,
   tcsCategoryLabel,
-  tcsKindLabel,
   tcsProviderLabel,
 } from "../../../../../dashboard/src/views/store/store-labels.ts";
 
@@ -19,10 +18,7 @@ describe("Store labels", () => {
     expect(tcsCategoryLabel("custom_provider", "en")).toBe("Custom Provider");
   });
 
-  test("renders provider, kind, and badge values without raw catalog tokens", () => {
-    expect(tcsKindLabel("app", "ja")).toBe("アプリ");
-    expect(tcsKindLabel("worker", "ja")).toBe("Webアプリ");
-    expect(tcsKindLabel("site", "en")).toBe("Website");
+  test("renders provider and badge values without raw catalog tokens", () => {
     expect(tcsProviderLabel("takosumi")).toBe("Takosumi");
     expect(tcsProviderLabel("cloudflare")).toBe("Cloudflare");
     expect(tcsProviderLabel("aws")).toBe("AWS");

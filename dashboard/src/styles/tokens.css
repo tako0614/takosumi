@@ -186,6 +186,19 @@
   --tg-topbar-h: 56px;
   --tg-mobile-tab-h: 60px;
 
+  /* Stacking order. One legible scale so chrome, the menus anchored to it, and
+     overlays never fight. The top bar sits ABOVE the fixed bottom bars: it owns
+     a stacking context (sticky + backdrop blur), so its dropdowns are confined
+     to it — the bar itself must outrank the bottom chrome for those menus to
+     cover it. Menus escape to --tg-z-popover only when their anchor is not
+     already inside a higher context (e.g. the sidebar switcher). */
+  --tg-z-nav: 40; /* fixed bottom bars: mobile tabs, sticky form actions */
+  --tg-z-header: 100; /* top bar (+ everything it contains) */
+  --tg-z-popover: 200; /* menus / dropdowns anchored to chrome */
+  --tg-z-overlay: 1000; /* modal / dialog backdrop */
+  --tg-z-toast: 1100; /* transient feedback above modals */
+  --tg-z-skip: 2000; /* skip-to-content, must beat everything */
+
   /* Content well */
   --tg-content-pad: 24px;
   --tg-content-max: 1180px;

@@ -384,7 +384,7 @@ export class SourcesService {
       ...(request.installationId
         ? { installationId: request.installationId }
         : {}),
-      ...(request.modulePath ?? context.modulePath
+      ...((request.modulePath ?? context.modulePath)
         ? { modulePath: request.modulePath ?? context.modulePath }
         : {}),
       ...(context.policy ? { policy: context.policy } : {}),
@@ -629,7 +629,7 @@ export class SourcesService {
     if (installation.spaceId !== spaceId) {
       throw new OpenTofuControllerError(
         "permission_denied",
-        `installation ${installationId} is not in space ${spaceId}`,
+        "capsule is not available to this workspace",
       );
     }
     const [space, config] = await Promise.all([
@@ -654,7 +654,7 @@ export class SourcesService {
     if (installation.spaceId !== source.spaceId) {
       throw new OpenTofuControllerError(
         "permission_denied",
-        `installation ${installationId} is not in source space ${source.spaceId}`,
+        "capsule is not available to this source workspace",
       );
     }
     if (installation.sourceId !== source.id) {
@@ -709,7 +709,7 @@ export class SourcesService {
     if (config.spaceId !== undefined && config.spaceId !== spaceId) {
       throw new OpenTofuControllerError(
         "permission_denied",
-        `install config ${installConfigId} is not available in space ${spaceId}`,
+        "install config is not available to this workspace",
       );
     }
     const space = await this.#store.getSpace(spaceId);
@@ -945,7 +945,7 @@ export class SourcesService {
     if (!connection || connection.spaceId !== spaceId) {
       throw new OpenTofuControllerError(
         "invalid_argument",
-        `authConnectionId ${connectionId} does not exist in space ${spaceId}`,
+        "auth connection does not exist in this workspace",
       );
     }
   }

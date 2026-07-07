@@ -252,7 +252,7 @@ describe("/new Provider Connections return context", () => {
     );
   });
 
-  test("/new uses a managed provider connection to derive the default app.takos.jp URL", () => {
+  test("/new uses a managed provider connection without fixing the default app.takos.jp URL client-side", () => {
     expect(newAppViewSource).toContain("selectedManagedProviderConnection");
     expect(newAppViewSource).toContain("managedProviderVariableDefaults");
     expect(newAppViewSource).toContain(
@@ -280,14 +280,14 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).toContain(
       "const publicEndpoint = installExperience?.publicEndpoint",
     );
-    expect(newAppViewSource).toContain("managedWorkerNameFromVariables");
     expect(newAppViewSource).toContain("publicEndpoint?.subdomainVariable");
     expect(newAppViewSource).toContain("publicEndpoint?.urlVariable");
     expect(newAppViewSource).toContain("managedBaseDomain");
     expect(newAppViewSource).toContain(
-      "const managedAppHost = `${managedWorkerName}.${publicBaseDomain}`",
+      "const managedAppHost = currentSubdomain",
     );
     expect(newAppViewSource).toContain("routePatternFromAppUrl");
+    expect(newAppViewSource).toContain("const currentSubdomain =");
     expect(newAppViewSource).toContain("const currentAppUrl =");
     expect(newAppViewSource).toContain('"cloudflare_route_zone_id"');
     expect(newAppViewSource).toContain('"cloudflare_route_pattern"');
@@ -353,6 +353,14 @@ describe("/new Provider Connections return context", () => {
     expect(controlApiSource).toContain("getRunLogsWithOptions");
     expect(newAppViewSource).toContain("sourceFetchErrorMessage");
     expect(newAppViewSource).toContain("addFlowErrorMessage");
+    expect(newAppViewSource).toContain("apiError?.isAppHostnameUnavailable");
+    expect(newAppViewSource).toContain('"new.error.appHostnameUnavailable"');
+    expect(en["new.error.appHostnameUnavailable"]).toContain(
+      "already in use",
+    );
+    expect(ja["new.error.appHostnameUnavailable"]).toContain(
+      "既に使われています",
+    );
     expect(newAppViewSource).toContain('"new.error.genericWithDetails"');
     expect(en["new.error.genericWithDetails"]).toContain("{message}");
     expect(ja["new.error.genericWithDetails"]).toContain("{message}");
@@ -466,10 +474,15 @@ describe("/new Provider Connections return context", () => {
   test("duplicate installation errors use typed details before message fallback", () => {
     expect(controlApiSource).toContain("get isDuplicateService()");
     expect(controlApiSource).toContain("function controlErrorDetails");
+    expect(controlApiSource).toContain('"duplicate_capsule"');
     expect(controlApiSource).toContain('"duplicate_installation"');
     expect(newAppViewSource).toContain("error?.isDuplicateService");
     expect(installationsServiceSource).toContain('reason: "duplicate_capsule"');
-    expect(installationsServiceSource).toContain("capsuleId: existing.id");
+    expect(installationsServiceSource).toContain('"capsule already exists"');
+    expect(installationsServiceSource).not.toContain(
+      "`capsule @${workspace.handle}/${request.name}",
+    );
+    expect(installationsServiceSource).not.toContain("capsuleId: existing.id");
     expect(controlSharedSource).toContain("error.details");
     expect(controlSharedSource).toContain("function isRecord");
     // The thin shell still routes through the resource dispatch table.

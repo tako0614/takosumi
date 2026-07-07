@@ -45,6 +45,7 @@ import { ActivityService } from "../../../../core/domains/activity/mod.ts";
 import { InMemoryObservabilitySink } from "../../../../core/domains/observability/mod.ts";
 import type {
   Connection,
+  Deployment,
   OpenTofuOutputEnvelope,
   PlanRun,
   PlanResourceChange,
@@ -826,13 +827,30 @@ test("managed Cloudflare Capsule inputs derive app.takos.jp launch defaults serv
     environment: "preview",
     installConfig: {
       variableMapping: {
-        worker_name: null,
-        app_url: null,
         cloudflare_route_zone_id: null,
         cloudflare_route_pattern: null,
         cloudflare: {
           account_id: null,
           api_base_url: null,
+        },
+      },
+      catalog: {
+        order: 100,
+        surface: "service",
+        kind: "worker",
+        provider: "cloudflare",
+        suggestedName: "yurucommu",
+        badge: { ja: "追加候補", en: "Installable" },
+        name: { ja: "yurucommu", en: "yurucommu" },
+        description: { ja: "テスト", en: "Test" },
+        inputs: [],
+        installExperience: {
+          publicEndpoint: {
+            subdomainVariable: "worker_name",
+            urlVariable: "app_url",
+            routePatternVariable: "cloudflare_route_pattern",
+            baseDomain: "app.takos.jp",
+          },
         },
       },
     },
@@ -1065,7 +1083,128 @@ test("managed Cloudflare app.takos.jp host is globally claimed across Workspaces
   await expect(
     controller.createInstallationPlan(second.installation.id),
   ).rejects.toThrow(
-    "app_hostname_unavailable: shared-app.app.takos.jp is already claimed",
+    "app_hostname_unavailable: already exists",
+  );
+});
+
+test("managed Cloudflare app.takos.jp host claim prefers active Capsule over stale historical output", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  const stale = await seedInstallationModel(store, {
+    spaceId: "space_stale",
+    sourceId: "src_stale",
+    snapshotId: "snap_stale",
+    installConfigId: "cfg_stale",
+    installationId: "inst_stale",
+    name: "Shared App Stale",
+    environment: "preview",
+  });
+  await store.putOutputSnapshot({
+    id: "out_stale",
+    workspaceId: stale.installation.spaceId,
+    spaceId: stale.installation.spaceId,
+    capsuleId: stale.installation.id,
+    installationId: stale.installation.id,
+    stateGeneration: 1,
+    rawOutputArtifactKey: "outputs/stale.json.enc",
+    publicOutputs: { url: "https://shared-app.app.takos.jp" },
+    workspaceOutputs: { url: "https://shared-app.app.takos.jp" },
+    spaceOutputs: { url: "https://shared-app.app.takos.jp" },
+    outputDigest: "sha256:stale",
+    createdAt: "2026-06-06T00:00:00.000Z",
+  });
+  await store.putInstallation({
+    ...stale.installation,
+    status: "stale",
+    currentStateGeneration: 1,
+    currentOutputSnapshotId: "out_stale",
+  });
+
+  const active = await seedInstallationModel(store, {
+    spaceId: "space_active",
+    sourceId: "src_active",
+    snapshotId: "snap_active",
+    installConfigId: "cfg_active",
+    installationId: "inst_active",
+    name: "Shared App Active",
+    environment: "preview",
+  });
+  await store.putOutputSnapshot({
+    id: "out_active",
+    workspaceId: active.installation.spaceId,
+    spaceId: active.installation.spaceId,
+    capsuleId: active.installation.id,
+    installationId: active.installation.id,
+    stateGeneration: 1,
+    rawOutputArtifactKey: "outputs/active.json.enc",
+    publicOutputs: { url: "https://shared-app.app.takos.jp" },
+    workspaceOutputs: { url: "https://shared-app.app.takos.jp" },
+    spaceOutputs: { url: "https://shared-app.app.takos.jp" },
+    outputDigest: "sha256:active",
+    createdAt: "2026-06-06T00:01:00.000Z",
+  });
+  await store.putInstallation({
+    ...active.installation,
+    status: "active",
+    currentStateGeneration: 1,
+    currentOutputSnapshotId: "out_active",
+  });
+
+  const challenger = await seedInstallationModel(store, {
+    spaceId: "space_challenger",
+    sourceId: "src_challenger",
+    snapshotId: "snap_challenger",
+    installConfigId: "cfg_challenger",
+    installationId: "inst_challenger",
+    name: "Shared App Challenger",
+    environment: "preview",
+    installConfig: {
+      variableMapping: {
+        worker_name: "shared-app",
+        app_url: null,
+        cloudflare: {
+          account_id: null,
+          api_base_url: null,
+        },
+      },
+    },
+  });
+  await putConnectionWithProviderEnv(store, {
+    ...cloudflareConnection(
+      "conn_cloudflare_challenger",
+      challenger.installation.spaceId,
+    ),
+    scopeHints: {
+      managedProvider: true,
+      providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      accountId: "ts_acc_takosumi_cloud",
+    },
+  });
+  await store.putInstallationProviderEnvBindingSet({
+    id: "profile_cloudflare_challenger",
+    spaceId: challenger.installation.spaceId,
+    installationId: challenger.installation.id,
+    environment: challenger.installation.environment,
+    bindings: [
+      {
+        provider: "cloudflare",
+        alias: "main",
+        connectionId: "conn_cloudflare_challenger",
+      },
+    ],
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
+  const profile = multiProviderRunnerProfile();
+  const controller = controllerWith(store, runner, {
+    runnerProfiles: [profile],
+    defaultRunnerProfileId: profile.id,
+  });
+
+  await expect(
+    controller.createInstallationPlan(challenger.installation.id),
+  ).rejects.toThrow(
+    "app_hostname_unavailable: already exists",
   );
 });
 
@@ -1173,6 +1312,196 @@ test("managed Cloudflare host claim ignores unapplied pending Capsules", async (
   );
 
   expect(planRun.status).toEqual("succeeded");
+});
+
+test("Deployment read projection hides app.takos.jp URLs owned by another Capsule", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  const stale = await seedInstallationModel(store, {
+    spaceId: "space_stale",
+    sourceId: "src_stale",
+    snapshotId: "snap_stale",
+    installConfigId: "cfg_stale",
+    installationId: "inst_stale",
+    name: "Shared App Stale",
+    environment: "preview",
+  });
+  const owner = await seedInstallationModel(store, {
+    spaceId: "space_owner",
+    sourceId: "src_owner",
+    snapshotId: "snap_owner",
+    installConfigId: "cfg_owner",
+    installationId: "inst_owner",
+    name: "Shared App Owner",
+    environment: "preview",
+  });
+  await store.reservePublicHost({
+    hostname: "shared-app.app.takos.jp",
+    workspaceId: owner.installation.spaceId,
+    installationId: owner.installation.id,
+    installationName: owner.installation.name,
+    now: "2026-06-06T00:00:00.000Z",
+  });
+  const deployment: Deployment = {
+    id: "dep_stale",
+    spaceId: stale.installation.spaceId,
+    installationId: stale.installation.id,
+    environment: stale.installation.environment,
+    applyRunId: "apply_stale",
+    sourceSnapshotId: stale.snapshot.id,
+    stateGeneration: 1,
+    outputSnapshotId: "out_stale",
+    outputsPublic: {
+      url: "https://shared-app.app.takos.jp",
+      app_deployment: {
+        url: "https://shared-app.app.takos.jp",
+        status: "ready",
+      },
+      health: "ready",
+    },
+    status: "active",
+    createdAt: "2026-06-06T00:00:00.000Z",
+  };
+  await store.putDeployment(deployment);
+  await store.putInstallation({
+    ...stale.installation,
+    status: "active",
+    currentDeploymentId: deployment.id,
+  });
+  const controller = controllerWith(store, runner);
+
+  const outputs = await controller.listDeploymentOutputs(stale.installation.id);
+  expect(outputs.outputs).toEqual([
+    {
+      name: "app_deployment",
+      kind: "app_deployment",
+      value: { status: "ready" },
+      sensitive: false,
+    },
+    {
+      name: "health",
+      kind: "health",
+      value: "ready",
+      sensitive: false,
+    },
+  ]);
+  const projected = await controller.getDeployment(deployment.id);
+  expect(projected.outputsPublic).toEqual({
+    app_deployment: { status: "ready" },
+    health: "ready",
+  });
+});
+
+test("managed Cloudflare app.takos.jp host is atomically reserved by successful plans", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  const first = await seedInstallationModel(store, {
+    spaceId: "space_first",
+    sourceId: "src_first",
+    snapshotId: "snap_first",
+    installConfigId: "cfg_first",
+    installationId: "inst_first",
+    name: "Reserved App",
+    environment: "preview",
+    installConfig: {
+      variableMapping: {
+        worker_name: "reserved-app",
+        app_url: null,
+        cloudflare: {
+          account_id: null,
+          api_base_url: null,
+        },
+      },
+    },
+  });
+  await putConnectionWithProviderEnv(store, {
+    ...cloudflareConnection(
+      "conn_cloudflare_first",
+      first.installation.spaceId,
+    ),
+    scopeHints: {
+      managedProvider: true,
+      providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      accountId: "ts_acc_takosumi_cloud",
+    },
+  });
+  await store.putInstallationProviderEnvBindingSet({
+    id: "profile_cloudflare_first",
+    spaceId: first.installation.spaceId,
+    installationId: first.installation.id,
+    environment: first.installation.environment,
+    bindings: [
+      {
+        provider: "cloudflare",
+        alias: "main",
+        connectionId: "conn_cloudflare_first",
+      },
+    ],
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
+  const profile = multiProviderRunnerProfile();
+  const controller = controllerWith(store, runner, {
+    runnerProfiles: [profile],
+    defaultRunnerProfileId: profile.id,
+  });
+
+  const firstPlan = await controller.createInstallationPlan(
+    first.installation.id,
+  );
+  expect(firstPlan.planRun.status).toEqual("succeeded");
+
+  const second = await seedInstallationModel(store, {
+    spaceId: "space_second",
+    sourceId: "src_second",
+    snapshotId: "snap_second",
+    installConfigId: "cfg_second",
+    installationId: "inst_second",
+    name: "Reserved App",
+    environment: "preview",
+    installConfig: {
+      variableMapping: {
+        worker_name: "reserved-app",
+        app_url: null,
+        cloudflare: {
+          account_id: null,
+          api_base_url: null,
+        },
+      },
+    },
+  });
+  await putConnectionWithProviderEnv(store, {
+    ...cloudflareConnection(
+      "conn_cloudflare_second",
+      second.installation.spaceId,
+    ),
+    scopeHints: {
+      managedProvider: true,
+      providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      accountId: "ts_acc_takosumi_cloud",
+    },
+  });
+  await store.putInstallationProviderEnvBindingSet({
+    id: "profile_cloudflare_second",
+    spaceId: second.installation.spaceId,
+    installationId: second.installation.id,
+    environment: second.installation.environment,
+    bindings: [
+      {
+        provider: "cloudflare",
+        alias: "main",
+        connectionId: "conn_cloudflare_second",
+      },
+    ],
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
+
+  await expect(
+    controller.createInstallationPlan(second.installation.id),
+  ).rejects.toThrow(
+    "app_hostname_unavailable: already exists",
+  );
 });
 
 test("managed Cloudflare host claim skips corrupt historical Capsules", async () => {
