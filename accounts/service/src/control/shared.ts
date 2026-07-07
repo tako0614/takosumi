@@ -340,16 +340,43 @@ export async function publicApplyActionResponse(
 export function controllerErrorResponse(error: unknown): Response {
   const code = controllerErrorCode(error);
   if (code) {
+    const publicError = publicControllerError(error);
     return errorJson(
       code,
-      error instanceof Error ? error.message : String(error),
+      publicError.message,
       DEPLOY_CONTROL_ERROR_HTTP_STATUS_BY_CODE[code],
       undefined,
       {},
-      isRecord(error) ? error.details : undefined,
+      publicError.details,
     );
   }
   return errorJson("internal_error", "internal error", 500);
+}
+
+function publicControllerError(error: unknown): {
+  readonly message: string;
+  readonly details?: unknown;
+} {
+  const message = error instanceof Error ? error.message : String(error);
+  if (isAppHostnameUnavailableMessage(message)) {
+    return {
+      message: "app_hostname_unavailable: already exists",
+      details: { reason: "app_hostname_unavailable" },
+    };
+  }
+  return {
+    message,
+    ...(isRecord(error) && error.details !== undefined
+      ? { details: error.details }
+      : {}),
+  };
+}
+
+function isAppHostnameUnavailableMessage(message: string): boolean {
+  return (
+    /^app_hostname_unavailable\b/u.test(message) ||
+    /\balready claimed by Capsule\b.*\bWorkspace\b/iu.test(message)
+  );
 }
 
 export function controllerErrorCode(

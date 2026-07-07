@@ -5,6 +5,7 @@ import {
   handleControlRoute,
   isControlRoutePath,
 } from "../../../../accounts/service/src/control-routes.ts";
+import { controllerErrorResponse } from "../../../../accounts/service/src/control/shared.ts";
 import {
   maybeEnsurePersonalWorkspaceForSession,
   personalWorkspaceHandle,
@@ -12,10 +13,29 @@ import {
 import { ACCOUNT_SESSION_COOKIE_NAME } from "../../../../accounts/service/src/account-session.ts";
 import { InMemoryAccountsStore } from "../../../../accounts/service/src/store.ts";
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
+import { OpenTofuControllerError } from "../../../../core/domains/deploy-control/mod.ts";
 
 // --- Test harness ----------------------------------------------------------
 
 const ORIGIN = "https://app.takosumi.test";
+
+test("controllerErrorResponse hides public hostname reservation owner details", async () => {
+  const response = controllerErrorResponse(
+    new OpenTofuControllerError(
+      "failed_precondition",
+      "app_hostname_unavailable: yurucommu.app.takos.jp is already claimed by Capsule yurucommu (inst_1) in Workspace space_1",
+    ),
+  );
+
+  expect(response.status).toEqual(409);
+  expect(await response.json()).toMatchObject({
+    error: {
+      code: "failed_precondition",
+      message: "app_hostname_unavailable: already exists",
+      details: { reason: "app_hostname_unavailable" },
+    },
+  });
+});
 
 /** A live account + session in a fresh store. Returns the cookie header value. */
 function seedSession(
@@ -2335,6 +2355,7 @@ test("anonymous control requests are 401 across the family", async () => {
     ["GET", "/api/v1/compatibility-reports/caprep_1"],
     ["POST", "/api/v1/runs/plan_1/apply"],
     ["GET", "/api/v1/runs/plan_1"],
+    ["GET", "/api/v1/source-sync-runs/ssr_1"],
     ["GET", "/api/v1/runs/plan_1/events"],
     ["POST", "/api/v1/runs/plan_1/cancel"],
     ["GET", "/api/v1/runs/plan_1/cost"],
@@ -4969,6 +4990,48 @@ test("GET /api/v1/runs/:id returns source_sync runs for dashboard polling", asyn
   const { request: req, url } = request("GET", "/api/v1/runs/ssr_1", {
     cookie,
   });
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+  expect(response?.status).toEqual(200);
+  const body = (await response!.json()) as {
+    run: { id: string; type: string; status: string; workspaceId: string };
+  };
+  expect(body.run).toMatchObject({
+    id: "ssr_1",
+    type: "source_sync",
+    status: "running",
+    workspaceId: "space_a",
+  });
+  expect(requestedRunId).toEqual("ssr_1");
+});
+
+test("GET /api/v1/source-sync-runs/:id aliases stale dashboard polling to Run reads", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  let requestedRunId: string | undefined;
+  const operations = fakeOperations({
+    getRun: async (id) => {
+      requestedRunId = id;
+      return {
+        id,
+        workspaceId: "space_a",
+        type: "source_sync",
+        status: "running",
+        sourceSnapshotId: "snap_pending",
+        createdBy: "test",
+        createdAt: "2026-01-01T00:00:00Z",
+      } as Awaited<ReturnType<ControlPlaneOperations["getRun"]>>;
+    },
+  });
+  const { request: req, url } = request(
+    "GET",
+    "/api/v1/source-sync-runs/ssr_1",
+    { cookie },
+  );
   const response = await handleControlRoute({
     request: req,
     url,
