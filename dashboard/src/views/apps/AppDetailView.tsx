@@ -1040,8 +1040,10 @@ interface ConfigVariableRow {
 }
 
 const SYSTEM_CONFIG_VARIABLES = new Set([
+  "takosumi_accounts_url",
   "takosumi_accounts_issuer_url",
   "takosumi_accounts_client_id",
+  "takosumi_accounts_redirect_uri",
 ]);
 
 function configRowsFromInstallConfig(

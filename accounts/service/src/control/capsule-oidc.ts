@@ -7,6 +7,33 @@ import {
 import type { ControlPlaneOperations } from "../control-operations.ts";
 import type { AccountsStore, OidcClientRecord } from "../store.ts";
 
+type InstallExperience = NonNullable<InstallConfig["catalog"]>["installExperience"];
+type TakosumiAccountsOidcExperience = NonNullable<
+  NonNullable<InstallExperience>["takosumiAccountsOidc"]
+>;
+interface ResolvedTakosumiAccountsOidcExperience {
+  readonly issuerUrlVariable: string;
+  readonly clientIdVariable: string;
+  readonly callbackPath: string;
+  readonly accountsUrlVariable?: string;
+  readonly redirectUriVariable?: string;
+}
+
+const DEFAULT_TAKOSUMI_ACCOUNTS_OIDC: ResolvedTakosumiAccountsOidcExperience = {
+  issuerUrlVariable: "takosumi_accounts_issuer_url",
+  clientIdVariable: "takosumi_accounts_client_id",
+  callbackPath: "/api/auth/callback/takos",
+};
+
+const TAKOS_DISTRIBUTION_ACCOUNTS_OIDC: ResolvedTakosumiAccountsOidcExperience =
+  {
+    issuerUrlVariable: "takosumi_accounts_issuer_url",
+    accountsUrlVariable: "takosumi_accounts_url",
+    clientIdVariable: "takosumi_accounts_client_id",
+    redirectUriVariable: "takosumi_accounts_redirect_uri",
+    callbackPath: "/auth/oidc/callback",
+  };
+
 export async function ensureTakosumiAccountsOidcForCapsule(input: {
   readonly operations: ControlPlaneOperations;
   readonly store: AccountsStore;
@@ -15,15 +42,19 @@ export async function ensureTakosumiAccountsOidcForCapsule(input: {
   readonly installConfig: InstallConfig;
   readonly sourceGitUrl?: string;
 }): Promise<void> {
-  if (
-    !shouldAutoProvisionTakosumiAccountsOidc(
-      input.installConfig,
-      input.sourceGitUrl,
-    )
-  ) {
+  const oidcExperience = takosumiAccountsOidcExperience(
+    input.installConfig,
+    input.sourceGitUrl,
+  );
+  if (!oidcExperience) {
     return;
   }
-  if (hasTakosumiAccountsOidcVariables(input.installConfig.variableMapping)) {
+  if (
+    hasTakosumiAccountsOidcVariables(
+      input.installConfig.variableMapping,
+      oidcExperience,
+    )
+  ) {
     return;
   }
   const redirectOrigin = appOriginFromInstallVariables(
@@ -34,7 +65,9 @@ export async function ensureTakosumiAccountsOidcForCapsule(input: {
 
   const issuerUrl = normalizeIssuer(input.issuer);
   const now = Date.now();
-  const redirectUris = [`${redirectOrigin}/api/auth/callback/takos`];
+  const callbackPath = normalizedCallbackPath(oidcExperience.callbackPath);
+  const redirectUri = `${redirectOrigin}${callbackPath}`;
+  const redirectUris = [redirectUri];
   const existing = await input.store.findOidcClientForCapsule(input.capsule.id);
   const client: OidcClientRecord = existing
     ? {
@@ -59,13 +92,20 @@ export async function ensureTakosumiAccountsOidcForCapsule(input: {
         updatedAt: now,
       };
   await input.store.saveOidcClient(client);
+  const variableMapping = {
+    ...input.installConfig.variableMapping,
+    [oidcExperience.issuerUrlVariable]: client.issuerUrl,
+    [oidcExperience.clientIdVariable]: client.clientId,
+    ...(oidcExperience.accountsUrlVariable
+      ? { [oidcExperience.accountsUrlVariable]: client.issuerUrl }
+      : {}),
+    ...(oidcExperience.redirectUriVariable
+      ? { [oidcExperience.redirectUriVariable]: redirectUri }
+      : {}),
+  };
   await input.operations.installations.putInstallConfig({
     ...input.installConfig,
-    variableMapping: {
-      ...input.installConfig.variableMapping,
-      takosumi_accounts_issuer_url: client.issuerUrl,
-      takosumi_accounts_client_id: client.clientId,
-    },
+    variableMapping,
     updatedAt: new Date(now).toISOString(),
   });
 }
@@ -94,15 +134,32 @@ export async function ensureTakosumiAccountsOidcForExistingCapsule(input: {
   });
 }
 
-function shouldAutoProvisionTakosumiAccountsOidc(
+function takosumiAccountsOidcExperience(
   config: InstallConfig,
   sourceGitUrl?: string,
-): boolean {
-  if (config.catalog?.templateId === "yurucommu") return true;
-  return (
+): ResolvedTakosumiAccountsOidcExperience | undefined {
+  const configured = config.catalog?.installExperience?.takosumiAccountsOidc;
+  if (configured) {
+    return {
+      ...DEFAULT_TAKOSUMI_ACCOUNTS_OIDC,
+      ...configured,
+    };
+  }
+  if (
+    config.catalog?.templateId === "takos" ||
+    isTakosGitUrl(config.catalog?.source?.git) ||
+    isTakosGitUrl(sourceGitUrl)
+  ) {
+    return TAKOS_DISTRIBUTION_ACCOUNTS_OIDC;
+  }
+  if (
+    config.catalog?.templateId === "yurucommu" ||
     isYurucommuGitUrl(config.catalog?.source?.git) ||
     isYurucommuGitUrl(sourceGitUrl)
-  );
+  ) {
+    return DEFAULT_TAKOSUMI_ACCOUNTS_OIDC;
+  }
+  return undefined;
 }
 
 async function getCapsuleSourceGitUrl(
@@ -127,15 +184,28 @@ function isYurucommuGitUrl(value: unknown): boolean {
   return /(^|[:/])tako0614\/yurucommu(?:\.git)?$/u.test(git);
 }
 
+function isTakosGitUrl(value: unknown): boolean {
+  const git = stringInstallVariable(value)?.toLowerCase() ?? "";
+  return /(^|[:/])tako0614\/takos(?:\.git)?$/u.test(git);
+}
+
 function hasTakosumiAccountsOidcVariables(
   variables: InstallConfig["variableMapping"],
+  oidcExperience: ResolvedTakosumiAccountsOidcExperience,
 ): boolean {
+  const issuer = variables[oidcExperience.issuerUrlVariable];
+  const clientId = variables[oidcExperience.clientIdVariable];
   return (
-    typeof variables.takosumi_accounts_issuer_url === "string" &&
-    variables.takosumi_accounts_issuer_url.trim() !== "" &&
-    typeof variables.takosumi_accounts_client_id === "string" &&
-    variables.takosumi_accounts_client_id.trim() !== ""
+    typeof issuer === "string" &&
+    issuer.trim() !== "" &&
+    typeof clientId === "string" &&
+    clientId.trim() !== ""
   );
+}
+
+function normalizedCallbackPath(value: string | undefined): string {
+  const trimmed = value?.trim() || DEFAULT_TAKOSUMI_ACCOUNTS_OIDC.callbackPath;
+  return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
 }
 
 function appOriginFromInstallVariables(

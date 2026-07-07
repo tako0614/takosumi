@@ -478,6 +478,13 @@ export interface InstallConfig {
         readonly kind?: "password" | "password_or_hash" | "token";
         readonly optional?: boolean;
       };
+      readonly takosumiAccountsOidc?: {
+        readonly issuerUrlVariable?: string;
+        readonly accountsUrlVariable?: string;
+        readonly clientIdVariable?: string;
+        readonly redirectUriVariable?: string;
+        readonly callbackPath?: string;
+      };
     };
   };
   readonly createdAt: string;
