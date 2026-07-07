@@ -46,8 +46,12 @@ describe("store link handoff", () => {
   });
 
   test("external TCS listings still hand off as explicit Git sources", () => {
-    const query = buildNewQuery(listing());
+    const query = buildNewQuery(
+      listing({ primaryServer: "https://store.takosumi.com/" }),
+    );
     const params = new URLSearchParams(query);
+    expect(params.get("tcsBase")).toBe("https://store.takosumi.com/");
+    expect(params.get("tcsListing")).toBe("installable-worker");
     expect(params.get("git")).toBe(
       "https://github.com/tako0614/takosumi-template.git",
     );
