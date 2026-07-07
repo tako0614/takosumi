@@ -90,6 +90,14 @@ export class ControlApiError extends Error {
         /installation\s+.+\s+already exists/iu.test(this.message))
     );
   }
+
+  /** True when a requested public app hostname is already reserved. */
+  get isAppHostnameUnavailable(): boolean {
+    return (
+      this.reason === "app_hostname_unavailable" ||
+      /^app_hostname_unavailable:/u.test(this.message)
+    );
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -394,6 +394,9 @@ function safeControlApiErrorMessage(
 }
 
 function addFlowErrorMessage(apiError: ControlApiError | undefined): string {
+  if (apiError?.isAppHostnameUnavailable) {
+    return t("new.error.appHostnameUnavailable");
+  }
   const message = safeControlApiErrorMessage(apiError);
   return message
     ? t("new.error.genericWithDetails", { message })

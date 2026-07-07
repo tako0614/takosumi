@@ -689,6 +689,8 @@ export const en: Record<keyof typeof ja, string> = {
     "The service could not be added. Check the details and try again.",
   "new.error.genericWithDetails":
     "The service could not be added. Details: {message}",
+  "new.error.appHostnameUnavailable":
+    "That public subdomain is already in use. Enter another public subdomain, or leave it blank to assign one automatically.",
   "new.error.alreadyExists":
     "“{name}” is already added to this workspace. Open it from the service list.",
   "new.error.notRunnable":

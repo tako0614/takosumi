@@ -353,6 +353,14 @@ describe("/new Provider Connections return context", () => {
     expect(controlApiSource).toContain("getRunLogsWithOptions");
     expect(newAppViewSource).toContain("sourceFetchErrorMessage");
     expect(newAppViewSource).toContain("addFlowErrorMessage");
+    expect(newAppViewSource).toContain("apiError?.isAppHostnameUnavailable");
+    expect(newAppViewSource).toContain('"new.error.appHostnameUnavailable"');
+    expect(en["new.error.appHostnameUnavailable"]).toContain(
+      "already in use",
+    );
+    expect(ja["new.error.appHostnameUnavailable"]).toContain(
+      "既に使われています",
+    );
     expect(newAppViewSource).toContain('"new.error.genericWithDetails"');
     expect(en["new.error.genericWithDetails"]).toContain("{message}");
     expect(ja["new.error.genericWithDetails"]).toContain("{message}");

@@ -91,3 +91,33 @@ describe("ControlApiError duplicate service classification", () => {
     expect(error.isDuplicateService).toBe(false);
   });
 });
+
+describe("ControlApiError app hostname classification", () => {
+  test("classifies app hostname collisions without exposing owner details", () => {
+    const error = new ControlApiError(
+      409,
+      "failed_precondition",
+      "app_hostname_unavailable: yurucommu.app.takos.jp already exists",
+    );
+
+    expect(error.isAppHostnameUnavailable).toBe(true);
+    expect(error.isDuplicateService).toBe(false);
+  });
+
+  test("reads typed app hostname collision reasons when present", () => {
+    const error = new ControlApiError(
+      409,
+      "failed_precondition",
+      "app_hostname_unavailable: yurucommu.app.takos.jp already exists",
+      {
+        error: {
+          code: "failed_precondition",
+          details: { reason: "app_hostname_unavailable" },
+        },
+      },
+    );
+
+    expect(error.reason).toBe("app_hostname_unavailable");
+    expect(error.isAppHostnameUnavailable).toBe(true);
+  });
+});
