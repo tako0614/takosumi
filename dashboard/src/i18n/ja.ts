@@ -698,7 +698,7 @@ export const ja = {
     "公開URLに使うIDを変えてから、もう一度追加してください。",
   "new.hostnameConflict.suggest": "候補IDを使う",
   "new.error.alreadyExists":
-    "「{name}」はこのワークスペースに既に追加されています。一覧から既存サービスを開いてください。",
+    "「{name}」は既に追加されています。一覧から既存サービスを開いてください。",
   "new.error.notRunnable":
     "この確認結果ではまだ追加できません。表示された手直し内容を解消してから、もう一度確認してください。",
 
