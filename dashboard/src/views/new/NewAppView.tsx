@@ -107,10 +107,7 @@ import {
 } from "../../lib/capsule-list.ts";
 import { clearCurrentStateVersionCache } from "../../lib/current-state-versions.ts";
 import { clearDashboardOverviewCache } from "../../lib/dashboard-overview.ts";
-import {
-  listInstallConfigsCached,
-  STORE_VIEW,
-} from "../../lib/install-config-list.ts";
+import { listInstallConfigsCached } from "../../lib/install-config-list.ts";
 import {
   Badge,
   Button,
@@ -197,11 +194,6 @@ type StoreEntry = NonNullable<InstallConfig["store"]> & {
   readonly source: NonNullable<NonNullable<InstallConfig["store"]>["source"]>;
 };
 type StoreInputField = StoreEntry["inputs"][number];
-type StoreInstallConfig = InstallConfig & {
-  readonly store: NonNullable<InstallConfig["store"]> & {
-    readonly source: NonNullable<NonNullable<InstallConfig["store"]>["source"]>;
-  };
-};
 
 function compatibilityTone(level: CapsuleCompatibilityLevel): Tone {
   switch (level) {
@@ -575,45 +567,6 @@ function isStorePublicEndpointField(
   );
 }
 
-function storeSurfaceRank(surface: StoreEntry["surface"]): number {
-  if (surface === "service") return 0;
-  if (surface === "building_block") return 1;
-  return 2;
-}
-
-function storeConfigKey(config: StoreInstallConfig): string {
-  if (config.store.templateId) return `template:${config.store.templateId}`;
-  const source = config.store.source;
-  return `source:${source.git}#${source.path}`;
-}
-
-function storeConfigPriority(config: StoreInstallConfig): number {
-  if (
-    config.workspaceId === undefined ||
-    config.id.startsWith("cfg-official-")
-  ) {
-    return 0;
-  }
-  return 1;
-}
-
-function dedupeStoreConfigs(
-  configs: readonly StoreInstallConfig[],
-): readonly StoreInstallConfig[] {
-  const byKey = new Map<string, StoreInstallConfig>();
-  for (const config of configs) {
-    const key = storeConfigKey(config);
-    const current = byKey.get(key);
-    if (
-      !current ||
-      storeConfigPriority(config) < storeConfigPriority(current)
-    ) {
-      byKey.set(key, config);
-    }
-  }
-  return [...byKey.values()];
-}
-
 const DEFAULT_CAPSULE_INSTALL_CONFIG_ID = "cfg-default-opentofu-capsule";
 
 function storeDefaultInputValue(
@@ -979,12 +932,6 @@ function defaultWorkspaceHandle(): string {
   return `workspace-${time}-${random}`.slice(0, 39);
 }
 
-function parseInitialInstallConfigId(search: string): string | null {
-  const raw = new URLSearchParams(search).get("installConfigId")?.trim();
-  if (!raw || !/^[A-Za-z0-9_.:-]{1,128}$/u.test(raw)) return null;
-  return raw;
-}
-
 function parseInitialTcsHandoff(
   search: string,
 ): { readonly base: string; readonly listingId: string } | null {
@@ -1011,9 +958,7 @@ function parseInitialTcsHandoff(
 function initialAddTab(search: string): "store" | "git" {
   // Start on the service browser. Install links and pasted source links enter
   // the same flow after a source is selected.
-  return parseInitialTcsHandoff(search) ||
-    parseInitialInstallConfigId(search) ||
-    !hasInstallPrefillParams(search)
+  return parseInitialTcsHandoff(search) || !hasInstallPrefillParams(search)
     ? "store"
     : "git";
 }
@@ -1037,7 +982,6 @@ function Inner() {
     typeof location !== "undefined" &&
     !initialInstallPrefill &&
     hasInstallPrefillParams(initialSearch);
-  const initialInstallConfigId = parseInitialInstallConfigId(initialSearch);
   const [linkDraft, setLinkDraft] = createSignal(
     initialInstallPrefill?.git ?? "",
   );
@@ -1047,9 +991,6 @@ function Inner() {
   const [activeTab, setActiveTab] = createSignal<"store" | "git">(
     initialAddTab(initialSearch),
   );
-  const [selectedStoreConfigId, setSelectedStoreConfigId] = createSignal<
-    string | null
-  >(null);
   const [selectedStoreListing, setSelectedStoreListing] =
     createSignal<TcsListing | null>(null);
   const [storeInputValues, setStoreInputValues] = createSignal<
@@ -1101,22 +1042,15 @@ function Inner() {
 
   const workspaceId = () =>
     currentWorkspaceId() ? currentWorkspaceId() : null;
-  const shouldLoadTemplateConfigs = () => {
-    const id = workspaceId();
-    return id && initialInstallConfigId ? id : null;
-  };
   const shouldLoadInstallConfigs = () => {
     const id = workspaceId();
     if (!id) return null;
     if (activeTab() === "git") return id;
-    if (gitUrl().trim() || activeInstallPrefill() || selectedStoreConfigId()) {
+    if (gitUrl().trim() || activeInstallPrefill() || selectedStoreListing()) {
       return id;
     }
     return null;
   };
-  const [templateConfigs] = createResource(shouldLoadTemplateConfigs, (id) =>
-    listInstallConfigsCached(id, { view: STORE_VIEW }),
-  );
   const [installConfigs] = createResource(shouldLoadInstallConfigs, (id) =>
     listInstallConfigsCached(id),
   );
@@ -1205,31 +1139,8 @@ function Inner() {
     window.dispatchEvent(new Event("takosumi:workspaces-changed"));
     return workspace;
   });
-  const templateConfigList = createMemo<readonly InstallConfig[]>(
-    () => templateConfigs() ?? [],
-  );
   const installConfigList = createMemo<readonly InstallConfig[]>(
     () => installConfigs() ?? [],
-  );
-  const allStoreEntries = createMemo<readonly StoreEntry[]>(() =>
-    dedupeStoreConfigs(
-      templateConfigList().filter((config): config is StoreInstallConfig =>
-        Boolean(config.store?.source),
-      ),
-    )
-      .map((config) => ({
-        id: config.store.templateId ?? config.id,
-        installConfigId: config.id,
-        createdAt: config.createdAt,
-        updatedAt: config.updatedAt,
-        ...config.store,
-      }))
-      .sort(
-        (a, b) =>
-          storeSurfaceRank(a.surface) - storeSurfaceRank(b.surface) ||
-          a.order - b.order ||
-          a.name[locale()].localeCompare(b.name[locale()]),
-      ),
   );
   const defaultGitInstallConfig = () =>
     installConfigList().find(
@@ -1260,17 +1171,7 @@ function Inner() {
   };
   const selectedInstallConfig = () => {
     const id = selectedInstallConfigId();
-    return (
-      installConfigList().find((config) => config.id === id) ??
-      templateConfigList().find((config) => config.id === id) ??
-      null
-    );
-  };
-  const selectedStoreEntry = () => {
-    const id = selectedStoreConfigId();
-    return id
-      ? (allStoreEntries().find((entry) => entry.id === id) ?? null)
-      : null;
+    return installConfigList().find((config) => config.id === id) ?? null;
   };
   const storeServiceEntry = (): StoreEntry | null => {
     const listing = selectedStoreListing();
@@ -1282,8 +1183,7 @@ function Inner() {
         DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
     );
   };
-  const selectedServiceEntry = () =>
-    selectedStoreEntry() ?? storeServiceEntry();
+  const selectedServiceEntry = () => storeServiceEntry();
   const storeInputValue = (entry: StoreEntry, field: StoreInputField) => {
     const key = storeInputKey(entry.id, field.name);
     return (
@@ -1433,16 +1333,12 @@ function Inner() {
     return null;
   };
   const clearSelectedStoreEntry = () => {
-    const hadStore = Boolean(selectedStoreConfigId());
     const hadStoreListing = Boolean(selectedStoreListing());
-    if (!hadStore && !hadStoreListing) return;
-    setSelectedStoreConfigId(null);
+    if (!hadStoreListing) return;
     setSelectedStoreListing(null);
-    if (hadStore || hadStoreListing) {
-      setStoreInputValues({});
-      setStoreInputTouched({});
-      setInstallConfigId(defaultGitInstallConfig()?.id ?? "");
-    }
+    setStoreInputValues({});
+    setStoreInputTouched({});
+    setInstallConfigId(defaultGitInstallConfig()?.id ?? "");
   };
 
   // Step machine: keep the created Source id so a retry resumes mid-flow.
@@ -2303,7 +2199,6 @@ function Inner() {
     if (storeListing) void loadConnections();
     setActiveTab(storeListing ? "store" : "git");
     setActiveInstallPrefill(next);
-    setSelectedStoreConfigId(null);
     setSelectedStoreListing(storeListing ?? null);
     setGitUrl(next.git);
     setRef(refInputValue(nextRef));
@@ -2353,51 +2248,8 @@ function Inner() {
     resetCompatibility();
   };
 
-  const pickStoreEntry = (entry: StoreEntry) => {
-    if (!entry.source) return;
-    void loadConnections();
-    setSelectedStoreListing(null);
-    setActiveInstallPrefill(null);
-    setLinkDraft("");
-    setGitUrl(entry.source.git);
-    setRef("");
-    setPinnedFullRef(null);
-    setPath(entry.source.path);
-    setName(entry.suggestedName);
-    setSelectedStoreConfigId(entry.id);
-    setInstallConfigId(entry.installConfigId);
-    const defaults: Record<string, string> = {};
-    for (const field of entry.inputs) {
-      defaults[storeInputKey(entry.id, field.name)] =
-        storeScopeHintValue(entry, field) ??
-        storeDefaultInputValue(
-          entry,
-          field,
-          workspaceId(),
-          defaultProjectName(),
-        );
-    }
-    setStoreInputValues(defaults);
-    setStoreInputTouched({});
-    setResourcePrefix("");
-    setResourcePrefixTouched(false);
-    resetCompatibility();
-    setActiveTab("store");
-  };
   const pickStoreListing = (listing: TcsListing) => {
     void loadConnections();
-    const localEntry = listing.installConfigId
-      ? allStoreEntries().find(
-          (entry) =>
-            entry.installConfigId === listing.installConfigId ||
-            entry.id === listing.installConfigId,
-        )
-      : undefined;
-    if (localEntry) {
-      pickStoreEntry(localEntry);
-      return;
-    }
-
     const prefill = parseInstallPrefill(`?${buildNewQuery(listing)}`);
     if (prefill) {
       applyInstallPrefillInput(prefill, { storeListing: listing });
@@ -2406,7 +2258,6 @@ function Inner() {
 
     setActiveTab("store");
     setActiveInstallPrefill(null);
-    setSelectedStoreConfigId(null);
     setSelectedStoreListing(listing);
     setGitUrl(listing.source.git);
     setRef("");
@@ -2447,19 +2298,6 @@ function Inner() {
     resetCompatibility();
   };
 
-  let initialStoreApplied = false;
-  createEffect(() => {
-    if (initialStoreApplied || !initialInstallConfigId) return;
-    const entry = allStoreEntries().find(
-      (candidate) =>
-        candidate.installConfigId === initialInstallConfigId ||
-        candidate.id === initialInstallConfigId,
-    );
-    if (!entry) return;
-    initialStoreApplied = true;
-    pickStoreEntry(entry);
-  });
-
   let initialTcsHandoffApplied = false;
   createEffect(() => {
     if (initialTcsHandoffApplied || !initialTcsHandoff) return;
@@ -2495,7 +2333,7 @@ function Inner() {
         if (storeInputTouched()[key]) continue;
         if ((next[key] ?? "").trim()) continue;
         const scopeHint = storeScopeHintValue(entry, field);
-        if (!scopeHint) continue;
+        if (scopeHint === undefined) continue;
         next[key] = scopeHint;
         changed = true;
       }
@@ -3600,18 +3438,6 @@ function Inner() {
                     </Show>
                   </section>
                 </details>
-
-                <Show
-                  when={
-                    !templateConfigs.loading &&
-                    templateConfigList().length === 0 &&
-                    !hasChosenSource()
-                  }
-                >
-                  <p class="wb-error" role="alert">
-                    {t("new.error.configMissing")}
-                  </p>
-                </Show>
 
                 <Show
                   when={

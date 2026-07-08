@@ -121,10 +121,12 @@ test("startUpstreamOAuth preserves return_to when legacy links reach /login", ()
     },
   } as Crypto;
   const assigned: string[] = [];
+  const returnTo =
+    "/new?git=https%3A%2F%2Fgithub.com%2Ftako0614%2Fyurucommu.git&path=.";
   Object.defineProperty(globalThis, "location", {
     configurable: true,
     value: {
-      href: "https://app.takosumi.com/login?return_to=%2Fnew%3FinstallConfigId%3Dcfg-catalog-yurucommu",
+      href: `https://app.takosumi.com/login?return_to=${encodeURIComponent(returnTo)}`,
       origin: "https://app.takosumi.com",
       assign: (href: string) => assigned.push(href),
     },
@@ -136,8 +138,6 @@ test("startUpstreamOAuth preserves return_to when legacy links reach /login", ()
 
   startUpstreamOAuth("google");
 
-  expect(storage.get("tg_oauth_return")).toBe(
-    "/new?installConfigId=cfg-catalog-yurucommu",
-  );
+  expect(storage.get("tg_oauth_return")).toBe(returnTo);
   expect(assigned[0]).toContain("/v1/auth/upstream/authorize?");
 });
