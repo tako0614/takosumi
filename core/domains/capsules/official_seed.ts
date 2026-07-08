@@ -311,8 +311,27 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
     },
     outputAllowlist: {
       url: { from: "url", type: "url" },
+      launch_url: { from: "launch_url", type: "url" },
       worker_name: { from: "worker_name", type: "string" },
       app_deployment: { from: "app_deployment", type: "json" },
+      cloudflare_account_id: { from: "cloudflare_account_id", type: "string" },
+      cloudflare_d1_database_id: {
+        from: "cloudflare_d1_database_id",
+        type: "string",
+      },
+      cloudflare_d1_database_name: {
+        from: "cloudflare_d1_database_name",
+        type: "string",
+      },
+      cloudflare_kv_namespace_id: {
+        from: "cloudflare_kv_namespace_id",
+        type: "string",
+      },
+      cloudflare_r2_bucket_name: {
+        from: "cloudflare_r2_bucket_name",
+        type: "string",
+      },
+      cloudflare_queue_names: { from: "cloudflare_queue_names", type: "json" },
       takosumi_release: { from: "takosumi_release", type: "json" },
     },
   },
