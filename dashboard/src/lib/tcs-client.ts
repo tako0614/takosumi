@@ -96,7 +96,10 @@ export type TcsListingSurface = "service" | "building_block" | "example";
 
 export interface TcsListing {
   readonly id: string;
-  /** Dashboard-local hint for installable entries; external TCS nodes omit it. */
+  /**
+   * Internal execution-policy hint for operator-provided listings; external
+   * Store nodes omit it.
+   */
   readonly installConfigId?: string;
   /** Dashboard aggregation hint used to rehydrate `/new` hand-offs. */
   readonly primaryServer?: string;

@@ -79,7 +79,7 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain("startLinkImport");
     expect(newAppViewSource).toContain('class="av-add-discovery"');
     expect(newAppViewSource).toContain('class="av-link-entry"');
-    expect(newAppViewSource).toContain("showSourceControls={false}");
+    expect(newAppViewSource).toContain("showSourceControls={true}");
     expect(newAppViewSource).toContain("showSortControl={false}");
     expect(newAppViewSource).not.toContain("showKindFilters");
     expect(newAppViewSource).toContain("function StoreIcon");
@@ -178,9 +178,9 @@ describe("/new flow guidance", () => {
 
   test("opens /new on service discovery while install links prefill the add flow", () => {
     expect(newAppViewSource).toContain("function initialAddTab");
-    expect(newAppViewSource).toContain(
-      "return parseInitialInstallConfigId(search) || !hasInstallPrefillParams(search)",
-    );
+    expect(newAppViewSource).toContain("parseInitialTcsHandoff(search)");
+    expect(newAppViewSource).toContain("parseInitialInstallConfigId(search)");
+    expect(newAppViewSource).toContain("!hasInstallPrefillParams(search)");
     expect(newAppViewSource).not.toContain('if (hasPrefill) return "git"');
     expect(newAppViewSource).not.toContain('params.get("mode") === "link"');
     expect(newAppViewSource).toContain("initialAddTab(initialSearch)");

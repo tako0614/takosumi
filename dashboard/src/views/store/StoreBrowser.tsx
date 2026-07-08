@@ -73,7 +73,6 @@ const STR = {
     en: "Source and setting names",
   },
   sourceLocation: { ja: "取得元", en: "Source" },
-  version: { ja: "バージョン", en: "Version" },
   folder: { ja: "フォルダ", en: "Folder" },
   inputs: { ja: "設定項目", en: "Settings" },
   noInputs: {
@@ -91,15 +90,8 @@ function s(key: keyof typeof STR, locale: TcsLocale): string {
 function pick(t: { ja: string; en: string }, locale: TcsLocale): string {
   return (locale === "ja" ? t.ja : t.en) || t.en || t.ja;
 }
-function repoUrl(git: string, ref: string | undefined, path: string): string {
-  const base = git.replace(/\.git$/i, "");
-  if (/github\.com/i.test(base) && ref) {
-    return `${base}/tree/${ref}${path ? `/${path}` : ""}`;
-  }
-  return base;
-}
-function sourceVersion(listing: TcsListing): string {
-  return listing.source.ref ?? "Git default branch";
+function repoUrl(git: string): string {
+  return git.replace(/\.git$/i, "");
 }
 function listingSearchText(listing: TcsListing, locale: TcsLocale): string {
   return [
@@ -593,12 +585,6 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
                       <dt>{s("sourceLocation", props.locale)}</dt>
                       <dd class="tcs-mono tcs-break">{listing().source.git}</dd>
                     </div>
-                    <div>
-                      <dt>{s("version", props.locale)}</dt>
-                      <dd class="tcs-mono tcs-break">
-                        {sourceVersion(listing())}
-                      </dd>
-                    </div>
                     <Show when={listing().source.path}>
                       {(path) => (
                         <div>
@@ -610,11 +596,7 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
                   </dl>
                   <a
                     class="tcs-link"
-                    href={repoUrl(
-                      listing().source.git,
-                      listing().source.ref,
-                      listing().source.path,
-                    )}
+                    href={repoUrl(listing().source.git)}
                     target="_blank"
                     rel="noreferrer noopener"
                   >
