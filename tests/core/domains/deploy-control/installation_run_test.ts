@@ -2457,7 +2457,7 @@ test("app_url stays an ordinary OpenTofu input without publicEndpoint mapping", 
   ).resolves.toBeUndefined();
 });
 
-test("explicit generic Capsule variables survive compatibility metadata filtering through apply", async () => {
+test("generic Capsule setup variables are filtered to the declared OpenTofu module interface", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   const runner = recordingRunner();
   const releaseImages = {
@@ -2470,6 +2470,12 @@ test("explicit generic Capsule variables survive compatibility metadata filterin
       variableMapping: {
         project_name: "takos-release",
         release_container_images: releaseImages,
+        takosumi_accounts_client_id: "toc_123",
+        takosumi_accounts_issuer_url: "https://app.takosumi.com",
+        takosumi_accounts_redirect_uri:
+          "https://takos-release.app.takos.jp/auth/oidc/callback",
+        takosumi_accounts_url: "https://app.takosumi.com",
+        worker_name: "takos-release",
       },
     },
   });
@@ -2510,9 +2516,14 @@ test("explicit generic Capsule variables survive compatibility metadata filterin
   expect(planRun.status).toEqual("succeeded");
   const planMainTf = runner.planJobs[0]!.generatedRoot!.files["main.tf"]!;
   expect(planMainTf).toContain('project_name = "takos-release"');
-  expect(planMainTf).toContain("release_container_images = jsondecode");
-  expect(planMainTf).toContain("takos-worker-runtime:0.10.0-abcdef");
-  expect(planMainTf).toContain("takos-agent-executor:0.10.0-abcdef");
+  expect(planMainTf).not.toContain("release_container_images");
+  expect(planMainTf).not.toContain("takos-worker-runtime:0.10.0-abcdef");
+  expect(planMainTf).not.toContain("takos-agent-executor:0.10.0-abcdef");
+  expect(planMainTf).not.toContain("takosumi_accounts_client_id");
+  expect(planMainTf).not.toContain("takosumi_accounts_issuer_url");
+  expect(planMainTf).not.toContain("takosumi_accounts_redirect_uri");
+  expect(planMainTf).not.toContain("takosumi_accounts_url");
+  expect(planMainTf).not.toContain("worker_name");
 
   const { applyRun } = await controller.createApplyRun({
     planRunId: planRun.id,
@@ -2524,6 +2535,73 @@ test("explicit generic Capsule variables survive compatibility metadata filterin
   expect(runner.applyJobs[0]!.generatedRoot!.files["main.tf"]).toEqual(
     planMainTf,
   );
+});
+
+test("generic Capsule with known empty module interface receives no setup variables", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  const seeded = await seedRunnableInstallationModel(store, {
+    environment: "preview",
+    installConfig: {
+      variableMapping: {
+        project_name: "takos-release",
+        release_container_images: {
+          runtime:
+            "registry.cloudflare.com/acc/takos-worker-runtime:0.10.0-abcdef",
+        },
+        takosumi_accounts_client_id: "toc_123",
+        takosumi_accounts_issuer_url: "https://app.takosumi.com",
+        takosumi_accounts_redirect_uri:
+          "https://takos-release.app.takos.jp/auth/oidc/callback",
+        takosumi_accounts_url: "https://app.takosumi.com",
+        worker_name: "takos-release",
+      },
+    },
+  });
+  await store.putCapsuleCompatibilityReport({
+    id: "caprep_no_inputs",
+    sourceId: seeded.source.id,
+    sourceSnapshotId: seeded.snapshot.id,
+    level: "ready",
+    findings: [],
+    providers: [
+      {
+        source: "cloudflare/cloudflare",
+        aliases: [],
+        allowed: true,
+      },
+    ],
+    resources: [
+      {
+        type: "cloudflare_workers_script",
+        count: 1,
+        allowed: true,
+      },
+    ],
+    dataSources: [],
+    provisioners: [],
+    rootModuleVariables: [],
+    rootModuleOutputs: [],
+    createdAt: "2026-06-07T00:00:00.000Z",
+  });
+  const controller = controllerWith(store, runner);
+
+  const { planRun } = await controller.createInstallationPlan(
+    seeded.installation.id,
+    {},
+    { compatibilityReportId: "caprep_no_inputs" },
+  );
+
+  expect(planRun.status).toEqual("succeeded");
+  const planMainTf = runner.planJobs[0]!.generatedRoot!.files["main.tf"]!;
+  expect(planMainTf).toContain('module "app"');
+  expect(planMainTf).not.toContain("project_name");
+  expect(planMainTf).not.toContain("release_container_images");
+  expect(planMainTf).not.toContain("takosumi_accounts_client_id");
+  expect(planMainTf).not.toContain("takosumi_accounts_issuer_url");
+  expect(planMainTf).not.toContain("takosumi_accounts_redirect_uri");
+  expect(planMainTf).not.toContain("takosumi_accounts_url");
+  expect(planMainTf).not.toContain("worker_name");
 });
 
 test("explicit Cloudflare Capsule variables override provider scope hint defaults", async () => {
