@@ -126,28 +126,22 @@ test("hostable official configs expose public catalog metadata for the dashboard
   );
   expect(yurucommu?.catalog?.source.path).toBe(".");
   expect(yurucommu?.modulePath).toBeUndefined();
-  expect(
-    yurucommuInput("worker_bundle_url"),
-  ).toMatchObject({
+  expect(yurucommuInput("worker_bundle_url")).toMatchObject({
     advanced: true,
     defaultValue:
       "https://github.com/tako0614/yurucommu/releases/download/v2.0.3/takos-worker-4f184e34c3ddf25c4be6a6c5ade5381173cef04e7fe8068b849ae88bd84c35cc.js",
   });
-  expect(
-    yurucommuInput("worker_bundle_sha256"),
-  ).toMatchObject({
+  expect(yurucommuInput("worker_bundle_sha256")).toMatchObject({
     advanced: true,
     defaultValue:
       "4f184e34c3ddf25c4be6a6c5ade5381173cef04e7fe8068b849ae88bd84c35cc",
   });
-  expect(
-    yurucommuInput("worker_bundle_url")?.defaultValue,
-  ).toBe(
+  expect(yurucommuInput("worker_bundle_url")?.defaultValue).toBe(
     "https://github.com/tako0614/yurucommu/releases/download/v2.0.3/takos-worker-4f184e34c3ddf25c4be6a6c5ade5381173cef04e7fe8068b849ae88bd84c35cc.js",
   );
-  expect(
-    yurucommuInput("worker_bundle_sha256")?.defaultValue,
-  ).toBe("4f184e34c3ddf25c4be6a6c5ade5381173cef04e7fe8068b849ae88bd84c35cc");
+  expect(yurucommuInput("worker_bundle_sha256")?.defaultValue).toBe(
+    "4f184e34c3ddf25c4be6a6c5ade5381173cef04e7fe8068b849ae88bd84c35cc",
+  );
   expect(yurucommuInput("enable_cloudflare_resources")?.advanced).toBe(true);
   expect(yurucommuInput("enable_cloudflare_worker_script")?.advanced).toBe(
     true,
