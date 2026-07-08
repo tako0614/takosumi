@@ -488,12 +488,15 @@ function isUploadOriginSnapshotMissingError(error: unknown): boolean {
 }
 
 function isProviderConnectionNotReadyForDestroyError(error: unknown): boolean {
-  if (controllerErrorCode(error) !== "failed_precondition") return false;
+  const code = controllerErrorCode(error);
+  if (code !== "failed_precondition" && code !== "not_found") return false;
   const message = error instanceof Error ? error.message : String(error);
   return (
     (/\bProvider Env\b/.test(message) &&
       /\bstatus\b/.test(message) &&
       /\bis not ready\b/.test(message)) ||
+    (/\bProvider Connection\b/u.test(message) &&
+      /\bnot found\b/u.test(message)) ||
     (/credential_mint_failed:/u.test(message) &&
       /\bconnection\b/u.test(message) &&
       /\bpending\b/u.test(message)) ||

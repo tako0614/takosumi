@@ -369,6 +369,11 @@ describe("/new Provider Connections return context", () => {
     expect(ja["new.hostnameConflict.body"]).not.toContain("ワークスペース");
     expect(en["new.error.alreadyExists"]).not.toContain("workspace");
     expect(ja["new.error.alreadyExists"]).not.toContain("ワークスペース");
+    expect(newAppViewSource).toContain("force: options.force");
+    expect(newAppViewSource).toContain("{ force: true }");
+    expect(newAppViewSource).toContain('"new.error.nameReserved"');
+    expect(en["new.error.nameReserved"]).toContain("not found");
+    expect(ja["new.error.nameReserved"]).toContain("現在の一覧");
     expect(newAppViewSource).toContain('"new.error.genericWithDetails"');
     expect(en["new.error.genericWithDetails"]).toContain("{message}");
     expect(ja["new.error.genericWithDetails"]).toContain("{message}");

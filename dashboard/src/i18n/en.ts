@@ -703,6 +703,8 @@ export const en: Record<keyof typeof ja, string> = {
     "“{name}” is already added. Open it from the service list.",
   "new.error.alreadyExistsGeneric":
     "This service is already added. Open the existing service instead of creating another one.",
+  "new.error.nameReserved":
+    "That service name is reserved but was not found in the current list. Refresh services, delete the unfinished service if it appears, or choose another name.",
   "new.error.notRunnable":
     "This service cannot be added yet. Resolve the listed items, then check again.",
 
