@@ -298,8 +298,8 @@ export class ConnectionsService {
     const installConfig = await this.#store.getInstallConfig(
       installation.installConfigId,
     );
-    const catalogProvider = installConfig?.catalog?.provider;
-    if (typeof catalogProvider !== "string" || !catalogProvider.trim()) {
+    const storeProvider = installConfig?.store?.provider;
+    if (typeof storeProvider !== "string" || !storeProvider.trim()) {
       return [];
     }
     const candidates = (await this.#store.listOperatorConnections()).filter(
@@ -310,7 +310,7 @@ export class ConnectionsService {
     );
     const resolved: ResolvedInstallationProviderEnvBinding[] = [];
     for (const provider of requiredProviders) {
-      if (!sameProviderFamily(provider, catalogProvider)) continue;
+      if (!sameProviderFamily(provider, storeProvider)) continue;
       const matches = candidates.filter((connection) =>
         sameProviderFamily(provider, connection.provider),
       );
@@ -345,7 +345,8 @@ function isPublicManagedProviderConnection(connection: Connection): boolean {
 function connectionUsableForProviderBinding(connection: Connection): boolean {
   if (connection.status === "verified") return true;
   return (
-    connection.status === "pending" && isPublicManagedProviderConnection(connection)
+    connection.status === "pending" &&
+    isPublicManagedProviderConnection(connection)
   );
 }
 

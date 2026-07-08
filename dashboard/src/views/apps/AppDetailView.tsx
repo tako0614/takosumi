@@ -1052,7 +1052,7 @@ interface ConfigVariableRow {
   required: boolean;
   secret: boolean;
   advanced: boolean;
-  catalog: boolean;
+  storeField: boolean;
   hasExistingValue: boolean;
   deleted?: boolean;
 }
@@ -1071,12 +1071,12 @@ function configRowsFromInstallConfig(
   const variables = config.variableMapping ?? {};
   const rows: ConfigVariableRow[] = [];
   const seen = new Set<string>();
-  for (const input of config.catalog?.inputs ?? []) {
+  for (const input of config.store?.inputs ?? []) {
     if (SYSTEM_CONFIG_VARIABLES.has(input.name)) continue;
     const type = input.type ?? "string";
     const value = variables[input.name] ?? input.defaultValue ?? "";
     rows.push({
-      id: `catalog:${input.name}`,
+      id: `store:${input.name}`,
       originalName: input.name,
       name: input.name,
       label: localizedText(input.label) ?? input.name,
@@ -1087,7 +1087,7 @@ function configRowsFromInstallConfig(
       required: input.required === true,
       secret: input.secret === true || variableNameLooksSecret(input.name),
       advanced: input.advanced === true,
-      catalog: true,
+      storeField: true,
       hasExistingValue: Object.prototype.hasOwnProperty.call(
         variables,
         input.name,
@@ -1109,7 +1109,7 @@ function configRowsFromInstallConfig(
       required: false,
       secret,
       advanced: true,
-      catalog: false,
+      storeField: false,
       hasExistingValue: true,
     });
   }
@@ -1119,7 +1119,7 @@ function configRowsFromInstallConfig(
 function primaryConfigVariableNames(
   config: InstallConfig | undefined,
 ): ReadonlySet<string> {
-  const installExperience = config?.catalog?.installExperience;
+  const installExperience = config?.store?.installExperience;
   const publicEndpoint = installExperiencePublicEndpoint(installExperience);
   const initialSecret = installExperienceInitialSecret(installExperience);
   return new Set(
@@ -1167,7 +1167,7 @@ function configSummaryItems(config: InstallConfig | undefined) {
   if (!config) return [];
   const variables = config.variableMapping ?? {};
   const endpoint = installExperiencePublicEndpoint(
-    config.catalog?.installExperience,
+    config.store?.installExperience,
   );
   const subdomainVariable = endpoint?.subdomainVariable;
   const urlVariable = endpoint?.urlVariable;
@@ -1212,7 +1212,7 @@ function newCustomConfigRow(index: number): ConfigVariableRow {
     required: false,
     secret: false,
     advanced: true,
-    catalog: false,
+    storeField: false,
     hasExistingValue: false,
   };
 }
@@ -1687,12 +1687,14 @@ function VariableRows(props: {
       <For each={props.rows}>
         {(row) => (
           <div class="wb-variable-row">
-            <FormField label={row.catalog ? row.label : t("app.config.name")}>
+            <FormField
+              label={row.storeField ? row.label : t("app.config.name")}
+            >
               <Input
                 id={configControlId(row, "name")}
                 name={`configName:${row.id}`}
                 value={row.name}
-                disabled={row.catalog}
+                disabled={row.storeField}
                 placeholder={t("app.config.customName")}
                 onInput={(e) =>
                   props.onChange(row.id, { name: e.currentTarget.value })
@@ -1700,7 +1702,7 @@ function VariableRows(props: {
               />
             </FormField>
             <FormField
-              label={row.catalog ? t("app.config.value") : row.label}
+              label={row.storeField ? t("app.config.value") : row.label}
               hint={
                 row.secret && row.hasExistingValue && row.value.trim() === ""
                   ? t("app.config.secretHint")
@@ -1716,7 +1718,7 @@ function VariableRows(props: {
               type="button"
               onClick={() => props.onRemove(row.id)}
             >
-              {row.catalog ? t("app.config.reset") : t("app.config.remove")}
+              {row.storeField ? t("app.config.reset") : t("app.config.remove")}
             </Button>
           </div>
         )}

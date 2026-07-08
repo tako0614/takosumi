@@ -111,8 +111,8 @@ function capsuleHasAppliedState(capsule: {
 }): boolean {
   return Boolean(
     capsule.currentDeploymentId ||
-      capsule.currentStateVersionId ||
-      capsule.currentStateGeneration > 0,
+    capsule.currentStateVersionId ||
+    capsule.currentStateGeneration > 0,
   );
 }
 
@@ -127,8 +127,10 @@ function publicInstallConfig(config: InstallConfig): PublicInstallConfig {
     prebuiltArtifact: _prebuiltArtifact,
     ...publicRecord
   } = config;
+  const store = config.store;
   return {
     ...publicRecord,
+    ...(store ? { store } : {}),
     sourceKind: publicInstallConfigSourceKind(config),
   };
 }
@@ -173,7 +175,7 @@ function compatibilityReportIdFromBody(body: {
   return body.compatibilityReportId.trim();
 }
 
-type InstallConfigListView = "all" | "template-catalog";
+type InstallConfigListView = "all" | "store";
 
 function parseInstallConfigListView(
   raw: string | undefined,
@@ -183,8 +185,8 @@ function parseInstallConfigListView(
   if (raw === undefined || raw === "" || raw === "all") {
     return { kind: "ok", view: "all" };
   }
-  if (raw === "template-catalog") {
-    return { kind: "ok", view: "template-catalog" };
+  if (raw === "store") {
+    return { kind: "ok", view: "store" };
   }
   return {
     kind: "invalid",
@@ -192,7 +194,7 @@ function parseInstallConfigListView(
       JSON.stringify({
         error: {
           code: "invalid_argument",
-          message: "view must be all or template-catalog",
+          message: "view must be all or store",
         },
       }),
       {
@@ -203,9 +205,9 @@ function parseInstallConfigListView(
   };
 }
 
-function isTemplateCatalogInstallConfig(config: InstallConfig): boolean {
+function isStoreInstallConfig(config: InstallConfig): boolean {
   if (config.spaceId !== undefined) return false;
-  if (config.catalog?.source === undefined) return false;
+  if (config.store?.source === undefined) return false;
   if (config.sourceKind !== "generic_capsule") return false;
   return config.trustLevel === "trusted";
 }
@@ -726,14 +728,14 @@ export function mountDeployControlInstallationRoutes(
             config.spaceId === undefined && isSelectableInstallConfig(config),
         );
         const scoped =
-          spaceId === undefined || view.view === "template-catalog"
+          spaceId === undefined || view.view === "store"
             ? []
             : (await installations!.listInstallConfigs(spaceId)).filter(
                 isSelectableInstallConfig,
               );
         const merged = (
-          view.view === "template-catalog"
-            ? official.filter(isTemplateCatalogInstallConfig)
+          view.view === "store"
+            ? official.filter(isStoreInstallConfig)
             : [...official, ...scoped]
         ).sort(
           (a, b) =>

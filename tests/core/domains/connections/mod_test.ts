@@ -261,7 +261,7 @@ test("Cloud mode can satisfy required providers from a single public managed ope
   const store = new InMemoryOpenTofuDeploymentStore();
   const model = await seedInstallationModel(store, {
     installConfig: {
-      catalog: {
+      store: {
         source: {
           git: "https://github.com/tako0614/yurucommu.git",
           ref: "main",
@@ -308,7 +308,7 @@ test("Cloud mode can satisfy required providers from a pending public managed op
   const store = new InMemoryOpenTofuDeploymentStore();
   const model = await seedInstallationModel(store, {
     installConfig: {
-      catalog: {
+      store: {
         source: {
           git: "https://github.com/tako0614/yurucommu.git",
           ref: "main",

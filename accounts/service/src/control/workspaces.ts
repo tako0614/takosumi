@@ -51,7 +51,7 @@ import type { Workspace, WorkspaceType } from "takosumi-contract/workspaces";
 import type {
   CapsuleProviderEnvBindingSet,
   InstallConfig,
-  InstallConfigCatalogInput,
+  InstallConfigStoreInput,
   Capsule,
   OutputAllowlistEntry,
   PolicyConfig,
@@ -152,7 +152,7 @@ import {
   connectionScopeHintsFromValues,
   dependencyModeValue,
   dependencyVisibilityValue,
-  installConfigCatalogValue,
+  installConfigStoreValue,
   isGoogleCloudProvider,
   isJsonValue,
   isOutputsMapping,
@@ -1169,7 +1169,7 @@ async function createCapsule(
   const runnerProfileId =
     stringValue(body.runnerId) ?? stringValue(body.runnerProfileId);
   const outputAllowlist = outputAllowlistValue(body.outputAllowlist);
-  const catalog = installConfigCatalogValue(body.catalog);
+  const storeMetadata = installConfigStoreValue(body.store);
   const modulePath = modulePathValue(body.modulePath);
   if (body.modulePath !== undefined && modulePath === undefined) {
     return errorJson(
@@ -1185,10 +1185,10 @@ async function createCapsule(
       400,
     );
   }
-  if (body.catalog !== undefined && catalog === undefined) {
+  if (body.store !== undefined && storeMetadata === undefined) {
     return errorJson(
       "invalid_request",
-      "catalog must be a valid app-store presentation metadata object",
+      "store must be a valid app-store presentation metadata object",
       400,
     );
   }
@@ -1244,21 +1244,21 @@ async function createCapsule(
       400,
     );
   }
-  const catalogDefaultVars = catalogDefaultVariableMapping(
-    catalog ?? baseConfig.catalog,
+  const storeDefaultVars = storeDefaultVariableMapping(
+    storeMetadata ?? baseConfig.store,
     {
       capsuleName: name,
       workspaceId,
     },
   );
-  const hasCatalogDefaultVars = Object.keys(catalogDefaultVars).length > 0;
+  const hasStoreDefaultVars = Object.keys(storeDefaultVars).length > 0;
   const hasVars = vars !== undefined && Object.keys(vars).length > 0;
   if (
     hasVars ||
-    hasCatalogDefaultVars ||
+    hasStoreDefaultVars ||
     runnerProfileId ||
     outputAllowlist !== undefined ||
-    catalog !== undefined ||
+    storeMetadata !== undefined ||
     modulePath !== undefined
   ) {
     const now = new Date().toISOString();
@@ -1274,10 +1274,10 @@ async function createCapsule(
       internal: { reason: "per_install_overrides" },
       variableMapping: mergeVariableMappings(
         baseConfig.variableMapping,
-        catalogDefaultVars,
+        storeDefaultVars,
         vars ?? {},
       ),
-      ...(catalog ? { catalog } : {}),
+      ...(storeMetadata ? { store: storeMetadata } : {}),
       ...(runnerProfileId ? { runnerId: runnerProfileId } : {}),
       ...(modulePath ? { modulePath } : {}),
       outputAllowlist:
@@ -1308,25 +1308,25 @@ async function createCapsule(
   return jsonStatus({ capsule: publicCapsule(installation) }, 201);
 }
 
-function catalogDefaultVariableMapping(
-  catalog: InstallConfig["catalog"] | undefined,
+function storeDefaultVariableMapping(
+  store: InstallConfig["store"] | undefined,
   options: {
     readonly capsuleName: string;
     readonly workspaceId: string;
   },
 ): Readonly<Record<string, JsonValue>> {
-  if (!catalog) return {};
+  if (!store) return {};
   let out: Record<string, JsonValue> = {};
-  for (const input of catalog.inputs) {
+  for (const input of store.inputs) {
     if (input.secret === true) continue;
     const raw = input.defaultValue?.trim();
     if (!raw) continue;
-    const value = catalogDefaultInputValue(input, raw, catalog, options);
+    const value = storeDefaultInputValue(input, raw, store, options);
     if (value === undefined) continue;
     try {
       out = mergeVariableMappings(
         out,
-        normalizeVariablePathRecord({ [input.name]: value }, "catalog.inputs"),
+        normalizeVariablePathRecord({ [input.name]: value }, "store.inputs"),
       ) as Record<string, JsonValue>;
     } catch {
       continue;
@@ -1335,16 +1335,16 @@ function catalogDefaultVariableMapping(
   return out;
 }
 
-function catalogDefaultInputValue(
-  input: InstallConfigCatalogInput,
+function storeDefaultInputValue(
+  input: InstallConfigStoreInput,
   raw: string,
-  catalog: NonNullable<InstallConfig["catalog"]>,
+  store: NonNullable<InstallConfig["store"]>,
   options: {
     readonly capsuleName: string;
     readonly workspaceId: string;
   },
 ): JsonValue | undefined {
-  const value = symbolicCatalogDefaultValue(raw, catalog, options);
+  const value = symbolicStoreDefaultValue(raw, store, options);
   if (input.type === "boolean") {
     const normalized = value.toLowerCase();
     if (["true", "1", "yes", "on"].includes(normalized)) return true;
@@ -1366,26 +1366,26 @@ function catalogDefaultInputValue(
   return value;
 }
 
-function symbolicCatalogDefaultValue(
+function symbolicStoreDefaultValue(
   value: string,
-  catalog: NonNullable<InstallConfig["catalog"]>,
+  store: NonNullable<InstallConfig["store"]>,
   options: {
     readonly capsuleName: string;
     readonly workspaceId: string;
   },
 ): string {
   if (value === "service-name") {
-    return catalogSlug(options.capsuleName || catalog.suggestedName);
+    return storeSlug(options.capsuleName || store.suggestedName);
   }
   if (value === "service-name-with-space") {
-    const base = catalogSlug(options.capsuleName || catalog.suggestedName);
+    const base = storeSlug(options.capsuleName || store.suggestedName);
     const suffix = workspaceSlugSuffix(options.workspaceId);
     return suffix ? `${base}-${suffix}` : base;
   }
   return value;
 }
 
-function catalogSlug(value: string): string {
+function storeSlug(value: string): string {
   return (
     value
       .trim()

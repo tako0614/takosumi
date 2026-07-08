@@ -364,8 +364,8 @@ export class SourcesService {
       request.sourceSnapshotId,
     );
     // Policy precedence: an existing Installation's own InstallConfig wins; only
-    // when none is supplied does a curated `installConfigId` (the catalog
-    // deep-link path) gate the pre-install check against its bounded policy.
+    // when none is supplied does a curated store `installConfigId` gate the
+    // pre-install check against its bounded policy.
     const context = request.installationId
       ? {
           policy: await this.#compatibilityPolicyForInstallation(
@@ -672,8 +672,8 @@ export class SourcesService {
 
   /**
    * Resolves the Capsule Gate policy for a pre-install compatibility check that
-   * carries a curated `installConfigId` but no Installation yet (the catalog
-   * "選んで入れる" deep-link). The InstallConfig's bounded policy is merged with
+   * carries a curated store `installConfigId` but no Installation yet. The
+   * InstallConfig's bounded policy is merged with
    * the Space policy as a ceiling, exactly as {@link
    * #compatibilityPolicyForInstallation} does for an existing Installation. The
    * instance-wide default allowlist is never touched: the analyzer UNIONs this

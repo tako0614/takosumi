@@ -600,7 +600,7 @@ function isDashboardInstallConfigVisible(
   options: { readonly referenced: boolean },
 ): boolean {
   if (isSelectableInstallConfig(config)) return true;
-  return options.referenced && config.catalog?.surface === "service";
+  return options.referenced && config.store?.surface === "service";
 }
 
 function orderedReferencedInstallConfigIds(

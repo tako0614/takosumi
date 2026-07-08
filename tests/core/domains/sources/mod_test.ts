@@ -612,7 +612,7 @@ output "public_url" {
 });
 
 test("createCompatibilityCheck lifts unsupported -> ready via a curated bounded installConfigId (no Installation)", async () => {
-  // The catalog "選んで入れる" deep-link path: a vetted first-party module whose
+  // The store "選んで入れる" deep-link path: a vetted first-party module whose
   // resource type is OUTSIDE the instance-wide DEFAULT allowlist becomes
   // installable when its curated bounded InstallConfig is supplied, WITHOUT an
   // Installation and WITHOUT widening the default allowlist.
@@ -1110,7 +1110,7 @@ output "url" {
     },
   });
   await store.putInstallConfig({
-    id: "cfg-catalog-takos",
+    id: "cfg-store-takos",
     name: "takos",
     trustLevel: "official",
     modulePath: "deploy/opentofu",
@@ -1145,7 +1145,7 @@ output "url" {
 
   const { report } = await service.createCompatibilityCheck(source.id, {
     sourceSnapshotId: run.snapshotId,
-    installConfigId: "cfg-catalog-takos",
+    installConfigId: "cfg-store-takos",
   });
 
   expect(observedOptions).toEqual([{ modulePath: "deploy/opentofu" }]);
