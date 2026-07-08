@@ -153,7 +153,7 @@ describe("/new Provider Connections return context", () => {
     expect(ja["conn.providerConnections.title"]).toBe("接続済みアカウント");
   });
 
-  test("/new explains rejected external install links instead of silently opening the catalog", () => {
+  test("/new explains rejected external install links instead of silently opening the Store", () => {
     expect(newAppViewSource).toContain("hasInstallPrefillParams");
     expect(newAppViewSource).toContain("installPrefillRejected");
     expect(newAppViewSource).toContain('"new.deeplink.invalidTitle"');
@@ -255,9 +255,7 @@ describe("/new Provider Connections return context", () => {
   test("/new uses a managed provider connection without fixing the default app.takos.jp URL client-side", () => {
     expect(newAppViewSource).toContain("selectedManagedProviderConnection");
     expect(newAppViewSource).toContain("managedProviderVariableDefaults");
-    expect(newAppViewSource).toContain(
-      "managedCatalogProviderForCurrentSource",
-    );
+    expect(newAppViewSource).toContain("managedStoreProviderForCurrentSource");
     expect(newAppViewSource).toContain("managedProviderConnectionForRow");
     expect(newAppViewSource).toContain("rowCanUseManagedProviderFallback");
     expect(newAppViewSource).toContain("hasManagedCloudflareProviderFallback");

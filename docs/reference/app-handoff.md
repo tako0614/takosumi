@@ -38,7 +38,6 @@ dashboard 内では `/new` に canonicalize されることがありますが、
 | ----------------- | -------- | -------------------------------------------------- |
 | `git`             | no       | plain OpenTofu/Terraform module の HTTPS Git URL   |
 | `source`          | no       | `git::...?...` 形式の packed module address        |
-| `installConfigId` | no       | dashboard / catalog が持つ install config id       |
 | `ref`             | no       | Git branch / tag / commit                          |
 | `path`            | no       | repository 内の module path                        |
 | `name`            | no       | service の表示名                                   |
@@ -46,9 +45,10 @@ dashboard 内では `/new` に canonicalize されることがありますが、
 | `product`         | no       | `return_uri` とセットで使う client product key     |
 | `return_uri`      | no       | `product` とセットで使う connection payload 返却先 |
 
-`git`、`source`、`installConfigId` のどれかが作成対象を指定します。`product` は
-作成対象ではありません。`product` と `return_uri` は client へ戻すときだけセットで
-使います。
+`git` または `source` が作成対象を指定します。Store はこの URL を prefill
+するための discovery / presentation 入口であり、作成対象や release ref の
+authority ではありません。`product` は作成対象ではありません。`product` と
+`return_uri` は client へ戻すときだけセットで使います。
 
 `return_uri` がない場合、この URL は通常の hosted-service 作成 link です。この場合
 `product` も付けません。`return_uri` がある場合、Takosumi は `product` と
@@ -63,8 +63,8 @@ dashboard 内では `/new` に canonicalize されることがありますが、
 /install?product=notes-app
 ```
 
-これらは OpenTofu source / install config を指定せず、何を作るかが決まらないため
-App Handoff Protocol ではありません。
+これらは OpenTofu source を指定せず、何を作るかが決まらないため App Handoff
+Protocol ではありません。
 
 例:
 

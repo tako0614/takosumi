@@ -562,6 +562,7 @@ export const en: Record<keyof typeof ja, string> = {
   "new.git.url": "Install link",
   "new.git.advanced": "Source details",
   "new.git.ref": "Version",
+  "new.git.defaultRef": "Git default branch",
   "new.git.path": "Folder",
   "new.sourceAccess.title": "Private link access",
   "new.sourceAccess.body":

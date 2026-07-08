@@ -564,6 +564,7 @@ export const ja = {
   "new.git.url": "インストールリンク",
   "new.git.advanced": "取得元の詳細",
   "new.git.ref": "バージョン",
+  "new.git.defaultRef": "Git の既定ブランチ",
   "new.git.path": "フォルダ",
   "new.sourceAccess.title": "非公開リンクのアクセス",
   "new.sourceAccess.body":

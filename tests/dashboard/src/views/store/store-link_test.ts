@@ -35,14 +35,23 @@ function listing(extra: Partial<TcsListing> = {}): TcsListing {
 }
 
 describe("store link handoff", () => {
-  test("installConfigId-backed installable listings hand off by InstallConfig id", () => {
+  test("installConfigId-backed installable listings still hand off as Git sources", () => {
     const query = buildNewQuery(
-      listing({ installConfigId: "install_cloudflare_worker" }),
+      listing({
+        installConfigId: "install_cloudflare_worker",
+        primaryServer: "https://store.takosumi.com/",
+      }),
     );
     const params = new URLSearchParams(query);
-    expect(params.get("installConfigId")).toBe("install_cloudflare_worker");
-    expect(params.has("git")).toBe(false);
-    expect(params.has("var.project_name")).toBe(false);
+    expect(params.has("installConfigId")).toBe(false);
+    expect(params.get("tcsBase")).toBe("https://store.takosumi.com/");
+    expect(params.get("tcsListing")).toBe("installable-worker");
+    expect(params.get("git")).toBe(
+      "https://github.com/tako0614/takosumi-template.git",
+    );
+    expect(params.has("ref")).toBe(false);
+    expect(params.get("path")).toBe("modules/worker");
+    expect(params.get("var.project_name")).toBe("service-name-with-space");
   });
 
   test("external TCS listings still hand off as explicit Git sources", () => {

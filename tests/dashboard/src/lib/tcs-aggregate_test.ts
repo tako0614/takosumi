@@ -1,5 +1,5 @@
 /**
- * Client-side TCS aggregation: merge across servers, de-dup by (git,ref,path)
+ * Client-side TCS aggregation: merge across servers, de-dup by (git,path)
  * with seenOn, isolate failures, skip search-unsupported nodes, paginate per
  * server. fetch is stubbed so these run without network.
  */
@@ -83,7 +83,7 @@ describe("tcs aggregate", () => {
     expect(s.done).toBe(true);
   });
 
-  test("keeps the installConfigId-backed local listing as primary", () => {
+  test("prefers the default store over installConfig-backed hints", () => {
     const sharedSource = {
       git: "https://github.com/o/shared.git",
       ref: "main",
@@ -94,7 +94,7 @@ describe("tcs aggregate", () => {
       [
         {
           base: "https://app.takosumi.test",
-          isDefault: true,
+          isDefault: false,
           items: [
             {
               ...L("local", sharedSource, "2026-01-01T00:00:00.000Z"),
@@ -104,18 +104,61 @@ describe("tcs aggregate", () => {
         },
         {
           base: "https://store.takosumi.com",
-          isDefault: false,
+          isDefault: true,
           items: [L("external", sharedSource, "2026-02-01T00:00:00.000Z")],
         },
       ],
     );
 
     expect(merged).toHaveLength(1);
-    expect(merged[0]?.installConfigId).toBe("cfg-official-worker");
-    expect(merged[0]?.primaryServer).toBe("https://app.takosumi.test");
+    expect(merged[0]?.id).toBe("external");
+    expect(merged[0]?.installConfigId).toBeUndefined();
+    expect(merged[0]?.primaryServer).toBe("https://store.takosumi.com");
     expect(merged[0]?.seenOn.sort()).toEqual([
       "https://app.takosumi.test",
       "https://store.takosumi.com",
+    ]);
+  });
+
+  test("does not prefer a store listing just because it pins a ref", () => {
+    const sharedSource = {
+      git: "https://github.com/o/shared.git",
+      path: "deploy/opentofu",
+    };
+    const merged = mergeTcsListingBatches(
+      [],
+      [
+        {
+          base: "https://store-default.test",
+          isDefault: true,
+          items: [
+            L(
+              "default",
+              { ...sharedSource, ref: undefined },
+              "2026-01-01T00:00:00.000Z",
+            ),
+          ],
+        },
+        {
+          base: "https://store-pinned.test",
+          isDefault: false,
+          items: [
+            L(
+              "pinned",
+              { ...sharedSource, ref: "v1.2.3" },
+              "2026-02-01T00:00:00.000Z",
+            ),
+          ],
+        },
+      ],
+    );
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0]?.id).toBe("default");
+    expect(merged[0]?.primaryServer).toBe("https://store-default.test");
+    expect(merged[0]?.seenOn.sort()).toEqual([
+      "https://store-default.test",
+      "https://store-pinned.test",
     ]);
   });
 
