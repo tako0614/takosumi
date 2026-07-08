@@ -35,10 +35,9 @@ function listing(extra: Partial<TcsListing> = {}): TcsListing {
 }
 
 describe("store link handoff", () => {
-  test("installConfigId-backed installable listings still hand off as Git sources", () => {
+  test("store listings hand off as Git sources", () => {
     const query = buildNewQuery(
       listing({
-        installConfigId: "install_cloudflare_worker",
         primaryServer: "https://store.takosumi.com/",
       }),
     );

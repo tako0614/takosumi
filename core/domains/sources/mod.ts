@@ -363,9 +363,11 @@ export class SourcesService {
       sourceId,
       request.sourceSnapshotId,
     );
-    // Policy precedence: an existing Installation's own InstallConfig wins; only
-    // when none is supplied does a curated store `installConfigId` gate the
-    // pre-install check against its bounded policy.
+    // Policy precedence: an existing Capsule's own InstallConfig wins. Before a
+    // Capsule exists, the service-side InstallConfig only gates the
+    // pre-install check against bounded policy/module-path hints; Store
+    // listings themselves are discovery/presentation metadata, not execution
+    // authority.
     const context = request.installationId
       ? {
           policy: await this.#compatibilityPolicyForInstallation(
@@ -672,7 +674,7 @@ export class SourcesService {
 
   /**
    * Resolves the Capsule Gate policy for a pre-install compatibility check that
-   * carries a curated store `installConfigId` but no Installation yet. The
+   * carries a service-side `installConfigId` but no Capsule yet. The
    * InstallConfig's bounded policy is merged with
    * the Space policy as a ceiling, exactly as {@link
    * #compatibilityPolicyForInstallation} does for an existing Installation. The

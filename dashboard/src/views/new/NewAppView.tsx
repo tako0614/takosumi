@@ -1178,9 +1178,7 @@ function Inner() {
     if (!listing) return null;
     return storeEntryFromStoreListing(
       listing,
-      listing.installConfigId ??
-        defaultGitInstallConfig()?.id ??
-        DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
+      defaultGitInstallConfig()?.id ?? DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
     );
   };
   const selectedServiceEntry = () => storeServiceEntry();
@@ -2210,9 +2208,7 @@ function Inner() {
     if (storeListing) {
       const entry = storeEntryFromStoreListing(
         storeListing,
-        storeListing.installConfigId ??
-          defaultGitInstallConfig()?.id ??
-          DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
+        defaultGitInstallConfig()?.id ?? DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
       );
       const defaults: Record<string, string> = {};
       for (const field of entry.inputs) {
@@ -2265,9 +2261,7 @@ function Inner() {
     setPath(listing.source.path || ".");
     setName(listing.suggestedName);
     setInstallConfigId(
-      listing.installConfigId ??
-        defaultGitInstallConfig()?.id ??
-        DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
+      defaultGitInstallConfig()?.id ?? DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
     );
     setStoreInputValues({});
     setStoreInputTouched({});
