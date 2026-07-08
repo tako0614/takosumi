@@ -32,6 +32,11 @@ import {
   Settings2,
   Trash2,
 } from "lucide-solid";
+import {
+  installExperienceInitialSecret,
+  installExperiencePublicEndpoint,
+  installExperienceServiceNameVariable,
+} from "takosumi-contract";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import {
@@ -1115,12 +1120,14 @@ function primaryConfigVariableNames(
   config: InstallConfig | undefined,
 ): ReadonlySet<string> {
   const installExperience = config?.catalog?.installExperience;
+  const publicEndpoint = installExperiencePublicEndpoint(installExperience);
+  const initialSecret = installExperienceInitialSecret(installExperience);
   return new Set(
     [
-      installExperience?.serviceName?.variable,
-      installExperience?.publicEndpoint?.subdomainVariable,
-      installExperience?.publicEndpoint?.urlVariable,
-      installExperience?.initialSecret?.variable,
+      installExperienceServiceNameVariable(installExperience),
+      publicEndpoint?.subdomainVariable,
+      publicEndpoint?.urlVariable,
+      initialSecret?.variable,
       "project_name",
     ].filter((name): name is string => Boolean(name)),
   );
@@ -1159,7 +1166,9 @@ function configValueToText(value: unknown, type: ConfigVariableType): string {
 function configSummaryItems(config: InstallConfig | undefined) {
   if (!config) return [];
   const variables = config.variableMapping ?? {};
-  const endpoint = config.catalog?.installExperience?.publicEndpoint;
+  const endpoint = installExperiencePublicEndpoint(
+    config.catalog?.installExperience,
+  );
   const subdomainVariable = endpoint?.subdomainVariable;
   const urlVariable = endpoint?.urlVariable;
   const subdomain = subdomainVariable

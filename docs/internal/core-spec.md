@@ -149,28 +149,49 @@ standard install concepts to those module variables:
 
 ```json
 {
-  "serviceName": { "variable": "project_name" },
-  "publicEndpoint": {
-    "subdomainVariable": "worker_name",
-    "urlVariable": "app_url",
-    "routePatternVariable": "cloudflare_route_pattern",
-    "baseDomain": "app.takos.jp"
-  },
-  "initialSecret": {
-    "variable": "auth_password_hash",
-    "kind": "password_or_hash",
-    "optional": true
-  }
+  "projections": [
+    { "kind": "service_name", "variable": "project_name" },
+    {
+      "kind": "public_endpoint",
+      "variables": {
+        "subdomain": "worker_name",
+        "url": "app_url",
+        "routePattern": "cloudflare_route_pattern"
+      },
+      "baseDomain": "app.takos.jp"
+    },
+    {
+      "kind": "initial_secret",
+      "variable": "auth_password_hash",
+      "secretKind": "password_or_hash",
+      "optional": true
+    },
+    {
+      "kind": "oidc_client",
+      "variables": {
+        "issuerUrl": "takosumi_accounts_issuer_url",
+        "clientId": "takosumi_accounts_client_id"
+      },
+      "callbackPath": "/api/auth/callback/takos"
+    },
+    {
+      "kind": "artifact",
+      "variables": {
+        "url": "worker_bundle_url",
+        "sha256": "worker_bundle_sha256"
+      }
+    }
+  ]
 }
 ```
 
 Rules:
 
 ```text
-serviceName:
+service_name projection:
   friendly resource/service name input.
 
-publicEndpoint:
+public_endpoint projection:
   optional public subdomain, URL, route pattern, and operator-managed base
   domain. The dashboard and run engine may derive defaults such as
   <subdomain>.<managed-base-domain> from this mapping, but the module still
@@ -178,16 +199,27 @@ publicEndpoint:
   domain; other operators can use their own managed base domain under the same
   contract. Managed-base hostnames are broadly available and protected by
   uniqueness / reserved-name / abuse controls. Arbitrary user-owned custom
-  domains are a separate verified-domain lifecycle with plan/quota controls.
+  domains are passed through to the selected provider/adapter path; managed
+  providers may require ownership verification, certificate provisioning,
+  plan/quota, and abuse policy before runtime activation.
 
-initialSecret:
+initial_secret projection:
   optional first-run password/token input for apps that need one.
   OIDC-backed apps should prefer automatic sign-in and treat this as fallback.
+
+oidc_client projection:
+  optional OIDC client variable mapping. Takosumi Accounts can mint client
+  metadata into the mapped variables without the app defining Takosumi-specific
+  manifest files.
+
+artifact projection:
+  optional artifact URL / SHA-256 variable mapping. The values stay ordinary
+  OpenTofu inputs and are usually produced by the app's Git CI/release flow.
 ```
 
 There is no universal requirement that every Capsule has a subdomain, password,
 or Takosumi-specific env block. Apps that need a public endpoint opt into
-`publicEndpoint`; apps that need a first-run secret opt into `initialSecret`;
+`public_endpoint`; apps that need a first-run secret opt into `initial_secret`;
 all other knobs stay ordinary catalog inputs or generic variables and are passed
 to the OpenTofu module unchanged. Advanced catalog inputs such as artifact URL,
 artifact digest, container image maps, and app-specific env still map directly
@@ -199,13 +231,17 @@ Cloudflare toggle, or route variable. Visibility, secret handling, and guided
 setup behavior come from `catalog.inputs[]` plus `installExperience`; unknown
 variables remain generic OpenTofu inputs.
 
+`catalog.inputs[]` can include `format` (`text`, `url`, `hostname`,
+`subdomain`, `password`, `token`, `email`, or `sha256`) for presentation and
+validation. The submitted value remains a normal OpenTofu variable.
+
 Do not add `purpose` flags to individual inputs as a pseudo-standard. The
 contract is the mapping from standard install concepts to module variables.
 Unknown modules remain valid plain OpenTofu Capsules; without
 `installExperience`, Takosumi only uses generic variable defaults. Names such as
 `worker_name`, `app_url`, and `cloudflare_route_pattern` are ordinary OpenTofu
 variables unless the catalog explicitly maps them through
-`installExperience.publicEndpoint`.
+the `public_endpoint` projection.
 
 ## Performance Model
 

@@ -39,7 +39,11 @@ import {
   Plus,
   Trash,
 } from "lucide-solid";
-import type { JsonValue } from "takosumi-contract";
+import {
+  installExperiencePublicEndpoint,
+  installExperienceServiceNameVariable,
+  type JsonValue,
+} from "takosumi-contract";
 import { isCredentialFreeUtilityProvider } from "takosumi-contract/provider-env-rules";
 import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
@@ -513,12 +517,16 @@ function isManagedSubdomainLabel(value: string): boolean {
   return /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(value.trim());
 }
 
+function isSha256Hex(value: string): boolean {
+  return /^[a-f0-9]{64}$/iu.test(value.trim());
+}
+
 function catalogInputKey(entryId: string, fieldName: string): string {
   return `${entryId}:${fieldName}`;
 }
 
 function catalogPublicEndpoint(entry: CatalogEntry) {
-  return entry.installExperience?.publicEndpoint;
+  return installExperiencePublicEndpoint(entry.installExperience);
 }
 
 function catalogEndpointField(
@@ -543,7 +551,7 @@ function catalogPublicEndpointSubdomainField(
 function catalogServiceNameVariable(
   catalog: Pick<CatalogEntry, "installExperience"> | StoreCatalogMetadata,
 ): string | undefined {
-  return catalog.installExperience?.serviceName?.variable?.trim() || undefined;
+  return installExperienceServiceNameVariable(catalog.installExperience);
 }
 
 function catalogServiceNameField(
@@ -618,7 +626,7 @@ function catalogDefaultInputValue(
   const suffix = workspaceSuffix(workspaceId);
   const scopedServiceSlug =
     serviceSlug || (suffix ? `${base}-${suffix}` : base);
-  const publicEndpoint = entry.installExperience?.publicEndpoint;
+  const publicEndpoint = catalogPublicEndpoint(entry);
   if (field.name === publicEndpoint?.subdomainVariable) {
     return scopedServiceSlug;
   }
@@ -1392,19 +1400,23 @@ function Inner() {
           label: field.label[locale()],
         });
       }
-      const publicEndpoint = entry.installExperience?.publicEndpoint;
+      const publicEndpoint = catalogPublicEndpoint(entry);
       if (
         value &&
-        field.name === publicEndpoint?.subdomainVariable &&
+        (field.format === "subdomain" ||
+          field.name === publicEndpoint?.subdomainVariable) &&
         !isManagedSubdomainLabel(value)
       ) {
         return t("new.catalogInput.errorSubdomain", {
           label: field.label[locale()],
-          baseDomain: managedBaseDomain(publicEndpoint.baseDomain),
+          baseDomain: managedBaseDomain(publicEndpoint?.baseDomain),
         });
       }
-      if (value && field.name === publicEndpoint?.urlVariable) {
-        const baseDomain = managedBaseDomain(publicEndpoint.baseDomain);
+      if (
+        value &&
+        (field.format === "url" || field.name === publicEndpoint?.urlVariable)
+      ) {
+        const baseDomain = managedBaseDomain(publicEndpoint?.baseDomain);
         const host = publicEndpointHost(value);
         if (
           !host ||
@@ -1416,6 +1428,11 @@ function Inner() {
             baseDomain,
           });
         }
+      }
+      if (value && field.format === "sha256" && !isSha256Hex(value)) {
+        return t("new.catalogInput.errorUnsafeValue", {
+          label: field.label[locale()],
+        });
       }
     }
     return null;
@@ -1811,7 +1828,7 @@ function Inner() {
       defaults[name] = value;
     };
     const installExperience = installExperienceForCurrentSource();
-    const publicEndpoint = installExperience?.publicEndpoint;
+    const publicEndpoint = installExperiencePublicEndpoint(installExperience);
     if (
       !connection ||
       sameProviderFamily(connection.providerSource, "cloudflare")

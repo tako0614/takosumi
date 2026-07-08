@@ -208,6 +208,7 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
       {
         name: "worker_name",
         type: "string",
+        format: "subdomain",
         label: text("公開サブドメイン", "Public subdomain"),
         helper: text(
           "空欄ならサービス名から自動で決めます。入力すると <subdomain>.app.takos.jp として使われます。",
@@ -218,6 +219,7 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
       {
         name: "app_url",
         type: "string",
+        format: "url",
         advanced: true,
         label: text("独自URL", "Custom URL"),
         helper: text(
@@ -229,6 +231,7 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
       {
         name: "auth_password_hash",
         type: "string",
+        format: "password",
         advanced: true,
         secret: true,
         label: text("初期パスワード", "Initial password"),
@@ -255,6 +258,7 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
       {
         name: "worker_bundle_url",
         type: "string",
+        format: "url",
         advanced: true,
         defaultValue:
           "https://github.com/tako0614/yurucommu/releases/download/v2.0.3/takos-worker-4f184e34c3ddf25c4be6a6c5ade5381173cef04e7fe8068b849ae88bd84c35cc.js",
@@ -263,6 +267,7 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
       {
         name: "worker_bundle_sha256",
         type: "string",
+        format: "sha256",
         advanced: true,
         defaultValue:
           "4f184e34c3ddf25c4be6a6c5ade5381173cef04e7fe8068b849ae88bd84c35cc",
@@ -270,23 +275,39 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
       },
     ],
     installExperience: {
-      serviceName: { variable: "project_name" },
-      publicEndpoint: {
-        subdomainVariable: "worker_name",
-        urlVariable: "app_url",
-        routePatternVariable: "cloudflare_route_pattern",
-        baseDomain: "app.takos.jp",
-      },
-      initialSecret: {
-        variable: "auth_password_hash",
-        kind: "password_or_hash",
-        optional: true,
-      },
-      takosumiAccountsOidc: {
-        issuerUrlVariable: "takosumi_accounts_issuer_url",
-        clientIdVariable: "takosumi_accounts_client_id",
-        callbackPath: "/api/auth/callback/takos",
-      },
+      projections: [
+        { kind: "service_name", variable: "project_name" },
+        {
+          kind: "public_endpoint",
+          variables: {
+            subdomain: "worker_name",
+            url: "app_url",
+            routePattern: "cloudflare_route_pattern",
+          },
+          baseDomain: "app.takos.jp",
+        },
+        {
+          kind: "initial_secret",
+          variable: "auth_password_hash",
+          secretKind: "password_or_hash",
+          optional: true,
+        },
+        {
+          kind: "oidc_client",
+          variables: {
+            issuerUrl: "takosumi_accounts_issuer_url",
+            clientId: "takosumi_accounts_client_id",
+          },
+          callbackPath: "/api/auth/callback/takos",
+        },
+        {
+          kind: "artifact",
+          variables: {
+            url: "worker_bundle_url",
+            sha256: "worker_bundle_sha256",
+          },
+        },
+      ],
     },
     outputAllowlist: {
       url: { from: "url", type: "url" },
@@ -323,6 +344,7 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
       {
         name: "worker_name",
         type: "string",
+        format: "subdomain",
         label: text("公開サブドメイン", "Public subdomain"),
         helper: text(
           "空欄ならサービス名から自動で決めます。入力すると <subdomain>.app.takos.jp として使われます。",
@@ -333,6 +355,7 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
       {
         name: "app_url",
         type: "string",
+        format: "url",
         advanced: true,
         label: text("独自URL", "Custom URL"),
         helper: text(
@@ -344,6 +367,7 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
       {
         name: "storage_token_signing_key",
         type: "string",
+        format: "token",
         advanced: true,
         secret: true,
         label: text("トークン署名鍵", "Token signing key"),
@@ -370,24 +394,38 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
       {
         name: "worker_bundle_url",
         type: "string",
+        format: "url",
         advanced: true,
         label: text("Worker artifact URL", "Worker artifact URL"),
       },
       {
         name: "worker_bundle_sha256",
         type: "string",
+        format: "sha256",
         advanced: true,
         label: text("Worker artifact SHA-256", "Worker artifact SHA-256"),
       },
     ],
     installExperience: {
-      serviceName: { variable: "project_name" },
-      publicEndpoint: {
-        subdomainVariable: "worker_name",
-        urlVariable: "app_url",
-        routePatternVariable: "cloudflare_route_pattern",
-        baseDomain: "app.takos.jp",
-      },
+      projections: [
+        { kind: "service_name", variable: "project_name" },
+        {
+          kind: "public_endpoint",
+          variables: {
+            subdomain: "worker_name",
+            url: "app_url",
+            routePattern: "cloudflare_route_pattern",
+          },
+          baseDomain: "app.takos.jp",
+        },
+        {
+          kind: "artifact",
+          variables: {
+            url: "worker_bundle_url",
+            sha256: "worker_bundle_sha256",
+          },
+        },
+      ],
     },
     outputAllowlist: {
       url: { from: "url", type: "url" },
@@ -424,6 +462,7 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
       {
         name: "worker_name",
         type: "string",
+        format: "subdomain",
         label: text("公開サブドメイン", "Public subdomain"),
         helper: text(
           "空欄ならサービス名から自動で決めます。入力すると <subdomain>.app.takos.jp として使われます。",
@@ -434,6 +473,7 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
       {
         name: "app_url",
         type: "string",
+        format: "url",
         advanced: true,
         label: text("独自URL", "Custom URL"),
         helper: text(
@@ -445,6 +485,7 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
       {
         name: "git_token_signing_key",
         type: "string",
+        format: "token",
         advanced: true,
         secret: true,
         label: text("トークン署名鍵", "Token signing key"),
@@ -471,24 +512,38 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
       {
         name: "worker_bundle_url",
         type: "string",
+        format: "url",
         advanced: true,
         label: text("Worker artifact URL", "Worker artifact URL"),
       },
       {
         name: "worker_bundle_sha256",
         type: "string",
+        format: "sha256",
         advanced: true,
         label: text("Worker artifact SHA-256", "Worker artifact SHA-256"),
       },
     ],
     installExperience: {
-      serviceName: { variable: "project_name" },
-      publicEndpoint: {
-        subdomainVariable: "worker_name",
-        urlVariable: "app_url",
-        routePatternVariable: "cloudflare_route_pattern",
-        baseDomain: "app.takos.jp",
-      },
+      projections: [
+        { kind: "service_name", variable: "project_name" },
+        {
+          kind: "public_endpoint",
+          variables: {
+            subdomain: "worker_name",
+            url: "app_url",
+            routePattern: "cloudflare_route_pattern",
+          },
+          baseDomain: "app.takos.jp",
+        },
+        {
+          kind: "artifact",
+          variables: {
+            url: "worker_bundle_url",
+            sha256: "worker_bundle_sha256",
+          },
+        },
+      ],
     },
     outputAllowlist: {
       url: { from: "url", type: "url" },
@@ -530,6 +585,7 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
       {
         name: "worker_name",
         type: "string",
+        format: "subdomain",
         label: text("公開サブドメイン", "Public subdomain"),
         helper: text(
           "空欄ならサービス名から自動で決めます。入力すると <subdomain>.app.takos.jp として使われます。",
@@ -540,6 +596,7 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
       {
         name: "app_url",
         type: "string",
+        format: "url",
         advanced: true,
         label: text("独自URL", "Custom URL"),
         helper: text(
@@ -558,19 +615,27 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
       },
     ],
     installExperience: {
-      serviceName: { variable: "project_name" },
-      publicEndpoint: {
-        subdomainVariable: "worker_name",
-        urlVariable: "app_url",
-        baseDomain: "app.takos.jp",
-      },
-      takosumiAccountsOidc: {
-        issuerUrlVariable: "takosumi_accounts_issuer_url",
-        accountsUrlVariable: "takosumi_accounts_url",
-        clientIdVariable: "takosumi_accounts_client_id",
-        redirectUriVariable: "takosumi_accounts_redirect_uri",
-        callbackPath: "/auth/oidc/callback",
-      },
+      projections: [
+        { kind: "service_name", variable: "project_name" },
+        {
+          kind: "public_endpoint",
+          variables: {
+            subdomain: "worker_name",
+            url: "app_url",
+          },
+          baseDomain: "app.takos.jp",
+        },
+        {
+          kind: "oidc_client",
+          variables: {
+            issuerUrl: "takosumi_accounts_issuer_url",
+            accountsUrl: "takosumi_accounts_url",
+            clientId: "takosumi_accounts_client_id",
+            redirectUri: "takosumi_accounts_redirect_uri",
+          },
+          callbackPath: "/auth/oidc/callback",
+        },
+      ],
     },
     outputAllowlist: {
       url: { from: "url", type: "url" },

@@ -214,18 +214,39 @@ Takosumi-owned repo metadata:
 
 ```json
 {
-  "serviceName": { "variable": "project_name" },
-  "publicEndpoint": {
-    "subdomainVariable": "worker_name",
-    "urlVariable": "app_url",
-    "routePatternVariable": "cloudflare_route_pattern",
-    "baseDomain": "app.takos.jp"
-  },
-  "initialSecret": {
-    "variable": "auth_password_hash",
-    "kind": "password_or_hash",
-    "optional": true
-  }
+  "projections": [
+    { "kind": "service_name", "variable": "project_name" },
+    {
+      "kind": "public_endpoint",
+      "variables": {
+        "subdomain": "worker_name",
+        "url": "app_url",
+        "routePattern": "cloudflare_route_pattern"
+      },
+      "baseDomain": "app.takos.jp"
+    },
+    {
+      "kind": "initial_secret",
+      "variable": "auth_password_hash",
+      "secretKind": "password_or_hash",
+      "optional": true
+    },
+    {
+      "kind": "oidc_client",
+      "variables": {
+        "issuerUrl": "takosumi_accounts_issuer_url",
+        "clientId": "takosumi_accounts_client_id"
+      },
+      "callbackPath": "/api/auth/callback/takos"
+    },
+    {
+      "kind": "artifact",
+      "variables": {
+        "url": "worker_bundle_url",
+        "sha256": "worker_bundle_sha256"
+      }
+    }
+  ]
 }
 ```
 
@@ -236,7 +257,7 @@ OpenTofu Capsules; they simply receive generic variable inputs unless their
 catalog entry opts into this UX contract. Takosumi must not infer a public
 endpoint from variable names such as `worker_name` or `app_url`; those names are
 ordinary OpenTofu inputs unless the catalog explicitly maps them through
-`installExperience.publicEndpoint`.
+the `public_endpoint` projection.
 
 Subdomain, password, and app-specific env are not universal Takosumi
 requirements. A Capsule that does not need a public endpoint should not show a
@@ -253,6 +274,11 @@ lists for install inputs. If an input should be hidden behind details, marked as
 secret, or surfaced as a common setup field, that presentation comes from
 `catalog.inputs[]` and `installExperience`; the submitted value is still just a
 normal OpenTofu variable.
+
+`catalog.inputs[]` may also provide a presentation `format` for generic UI and
+validation only: `text`, `url`, `hostname`, `subdomain`, `password`, `token`,
+`email`, or `sha256`. This is not a new execution channel; it only tells the
+dashboard how to present and validate the ordinary OpenTofu variable.
 
 The preferred fast path is a Git CI or release pipeline that publishes a
 versioned, publicly fetchable artifact plus a SHA-256 digest. The OpenTofu
@@ -1124,7 +1150,7 @@ Custom Domains
 The managed public hostname contract is one-label DNS names under an
 operator-managed public base domain. Takosumi Cloud's base domain is
 `app.takos.jp`, but the control-plane contract is
-`<label>.<managed-base-domain>` from `installExperience.publicEndpoint`.
+`<label>.<managed-base-domain>` from the `public_endpoint` projection.
 Managed names are first-come-first-served and broadly available for ordinary
 installs. Arbitrary user-owned custom domains are a separate lifecycle and must
 pass ownership verification, certificate provisioning, plan/quota, and abuse

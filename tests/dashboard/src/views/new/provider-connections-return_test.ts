@@ -279,12 +279,8 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).toContain(
       "const isUsableManagedProviderConnection = (connection: ProviderConnection)",
     );
-    expect(newAppViewSource).toContain(
-      'connection.status === "pending" &&',
-    );
-    expect(newAppViewSource).toContain(
-      'connection.scope === "operator" &&',
-    );
+    expect(newAppViewSource).toContain('connection.status === "pending" &&');
+    expect(newAppViewSource).toContain('connection.scope === "operator" &&');
     expect(newAppViewSource).toContain(
       "visibleProviderConnections().filter(isReadyProviderConnection)",
     );
@@ -293,7 +289,7 @@ describe("/new Provider Connections return context", () => {
     );
     expect(newAppViewSource).toContain("installExperienceForCurrentSource");
     expect(newAppViewSource).toContain(
-      "const publicEndpoint = installExperience?.publicEndpoint",
+      "const publicEndpoint = installExperiencePublicEndpoint(installExperience)",
     );
     expect(newAppViewSource).toContain("publicEndpoint?.subdomainVariable");
     expect(newAppViewSource).toContain("publicEndpoint?.urlVariable");
