@@ -1260,6 +1260,14 @@ function Inner() {
     ensureConfigSelected();
     return installConfigId();
   };
+  const selectedInstallConfig = () => {
+    const id = selectedInstallConfigId();
+    return (
+      installConfigList().find((config) => config.id === id) ??
+      templateConfigList().find((config) => config.id === id) ??
+      null
+    );
+  };
   const selectedCatalogEntry = () => {
     const id = selectedCatalogId();
     return id
@@ -1555,12 +1563,18 @@ function Inner() {
   };
   const sourcePath = () =>
     currentInstallPrefill()?.path || path().trim() || ".";
+  const installModulePath = () =>
+    selectedInstallConfig()?.modulePath ??
+    selectedServiceEntry()?.source.path ??
+    currentInstallPrefill()?.path ??
+    path().trim() ||
+    ".";
   const activeStoreListing = (): TcsListing | null => {
     const listing = selectedStoreListing();
     if (!listing) return null;
     const listingRef = listing.source.resolvedCommit ?? listing.source.ref;
     if (listing.source.git !== sourceGitUrl()) return null;
-    if ((listing.source.path || ".") !== sourcePath()) return null;
+    if ((listing.source.path || ".") !== installModulePath()) return null;
     if (listingRef !== sourceRef()) return null;
     return listing;
   };
@@ -1579,7 +1593,7 @@ function Inner() {
     if (!sameGitUrl(listing.source.git, sourceGitUrl())) return false;
     return (
       normalizeSourcePath(listing.source.path || ".") ===
-      normalizeSourcePath(sourcePath())
+      normalizeSourcePath(installModulePath())
     );
   };
   const storeCatalogForRun = () => {
@@ -2619,7 +2633,7 @@ function Inner() {
         sourceId: createdSourceId() ?? undefined,
         gitUrl: sourceGitUrl(),
         ref: sourceRef(),
-        path: sourcePath(),
+        path: installModulePath(),
         name: name().trim(),
         authConnectionId: sourceAuthConnectionIdForRun(),
         installConfigId: selectedInstallConfigId(),
@@ -2646,7 +2660,7 @@ function Inner() {
           sourceId: result.sourceId ?? createdSourceId() ?? undefined,
           gitUrl: sourceGitUrl(),
           ref: sourceRef(),
-          path: sourcePath(),
+          path: installModulePath(),
           name: name().trim(),
           authConnectionId: sourceAuthConnectionIdForRun(),
           installConfigId: selectedInstallConfigId(),
@@ -2734,7 +2748,7 @@ function Inner() {
       name: name().trim(),
       gitUrl: sourceGitUrl(),
       ref: sourceRef(),
-      path: sourcePath(),
+      path: installModulePath(),
       authConnectionId: sourceAuthConnectionIdForRun(),
       installConfigId:
         compatibility()?.installConfigId ?? selectedInstallConfigId(),

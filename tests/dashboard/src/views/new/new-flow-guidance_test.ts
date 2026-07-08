@@ -287,9 +287,11 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain("const sourceGitUrl = () =>");
     expect(newAppViewSource).toContain("gitUrl: sourceGitUrl()");
     expect(newAppViewSource).toContain("ref: sourceRef()");
-    expect(newAppViewSource).toContain("path: sourcePath()");
+    expect(newAppViewSource).toContain("const installModulePath = () =>");
+    expect(newAppViewSource).toContain("path: installModulePath()");
     expect(newAppViewSource).toContain('defaultPath: "."');
     expect(newAppViewSource).toContain("modulePath: flowInput.path");
+    expect(newAppViewSource).toContain("selectedInstallConfig()?.modulePath");
     expect(newAppViewSource).toContain("<dd>{displayRef(sourceRef())}</dd>");
     expect(newAppViewSource).toContain(
       "<dd>{displayModulePath(sourcePath())}</dd>",
