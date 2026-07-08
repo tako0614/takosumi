@@ -936,8 +936,7 @@ This is how Takosumi stays open to providers it does not know yet.
 
 Compatibility APIs are framework capabilities in standard Takosumi.
 Compatibility APIs are scoped, versioned entrypoints into Takosumi. They are
-not a promise of complete cloud API compatibility. Whether a specific
-compatibility profile is enabled is reported through capabilities.
+not a promise of complete cloud API compatibility. Whether a specific compatibility profile is enabled is reported through capabilities.
 
 Examples:
 
