@@ -28,6 +28,7 @@ type TabId =
   | "connections"
   | "billing"
   | "cloud"
+  | "keys"
   | "backups"
   | "shares";
 
@@ -36,6 +37,11 @@ type StandaloneTabId = Extract<TabId, "connections" | "billing">;
 const CloudResourcesPanel = lazy(() =>
   import("../cloud/CloudResourcesView.tsx").then((m) => ({
     default: m.CloudResourcesPanel,
+  })),
+);
+const CloudApiKeysPanel = lazy(() =>
+  import("../cloud/CloudResourcesView.tsx").then((m) => ({
+    default: m.CloudApiKeysPanel,
   })),
 );
 
@@ -67,6 +73,7 @@ function Inner(props: {
       raw === "connections" ||
       raw === "billing" ||
       raw === "cloud" ||
+      raw === "keys" ||
       raw === "backups" ||
       raw === "shares"
       ? raw
@@ -100,6 +107,10 @@ function Inner(props: {
           {
             href: "/advanced/workspace/cloud",
             label: t("workspaceSettings.tab.cloud"),
+          },
+          {
+            href: "/advanced/workspace/keys",
+            label: t("workspaceSettings.tab.keys"),
           },
         ]
       : []),
@@ -143,6 +154,9 @@ function Inner(props: {
               </Match>
               <Match when={tab() === "cloud"}>
                 <CloudResourcesPanel showHeader={false} />
+              </Match>
+              <Match when={tab() === "keys"}>
+                <CloudApiKeysPanel showHeader={false} />
               </Match>
               <Match when={tab() === "backups"}>
                 <BackupsTab workspaceId={id} />

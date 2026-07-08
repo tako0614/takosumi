@@ -24,8 +24,11 @@ FROM oven/bun:1 AS dashboard
 WORKDIR /work
 COPY package.json bun.lock tsconfig.json bunfig.toml /work/
 COPY dashboard /work/dashboard
+COPY docs /work/docs
+COPY app-docs /work/app-docs
+COPY scripts/build-app-docs.sh /work/scripts/build-app-docs.sh
 RUN bun install --frozen-lockfile
-RUN cd dashboard && bun run build
+RUN cd dashboard && bun run build && cd /work && bash scripts/build-app-docs.sh
 
 FROM oven/bun:1
 WORKDIR /app

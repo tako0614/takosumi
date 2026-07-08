@@ -39,20 +39,23 @@ describe("StoreBrowser install UI", () => {
     expect(storeBrowserCss).toContain(".tcs-app-mono");
     expect(storeBrowserSource).not.toContain("data-kind");
     expect(storeBrowserSource).not.toContain("tcsKindLabel");
+    expect(storeBrowserSource).not.toContain("tcsCategoryLabel");
+    expect(storeBrowserSource).not.toContain("tcsProviderLabel");
     expect(storeBrowserSource).not.toContain("tcs-badge");
     expect(storeBrowserSource).not.toContain("showKindFilters");
     expect(storeBrowserSource).not.toContain("localListings");
     expect(storeBrowserSource).toContain(
-      'install: { ja: "インストール", en: "Install" }',
-    );
-    expect(storeBrowserSource).toContain(
-      'configure: { ja: "インストール", en: "Install" }',
+      'install: { ja: "追加", en: "Add" }',
     );
     expect(storeBrowserSource).toContain('name="storeSource"');
     expect(storeBrowserSource).toContain("l.seenOn.includes(activeStore())");
     expect(storeBrowserSource).toContain("listingForActiveStore");
     expect(storeBrowserSource).toContain("primaryServer: base");
     expect(storeBrowserSource).toContain("data-tcs-listing-id={listing.id}");
+    expect(storeBrowserSource).not.toContain("canQuickInstall");
+    expect(storeBrowserSource).not.toContain("installState");
+    expect(storeBrowserSource).not.toContain("handleInstall");
+    expect(storeBrowserSource).not.toContain('class="tcs-filters"');
     expect(storeBrowserSource).not.toContain('s("settings"');
     expect(storeBrowserSource).not.toContain('s("inputs"');
     expect(storeBrowserSource).not.toContain("inputId");
@@ -75,6 +78,7 @@ describe("StoreBrowser install UI", () => {
     // injects a local template list.
     expect(storeViewSource).not.toContain("installableAppStoreListings");
     expect(storeViewSource).not.toContain("localListings");
+    expect(storeViewSource).not.toContain("onInstall=");
     expect(storeViewSource).toContain("<StoreBrowser");
   });
 });

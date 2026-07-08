@@ -23,7 +23,7 @@ rehearsal が provider-free in-process smoke runner に落ちない。
 
 ## Scope — Takosumi-only
 
-この test bed は **Takosumi (service + Accounts + cloud worker + dashboard)** の integration test 専用。 Takos product (`takos-app`) や bundled app (yurucommu) の動作確認は各 repo 内の test に任せる:
+この test bed は **Takosumi (service + Accounts + cloud worker + dashboard)** の integration test 専用。 Takos product (`takos-app`) や installable app (yurucommu) の動作確認は各 repo 内の test に任せる:
 
 - `takos/` — Takos product 固有の test (`bun test` / Playwright 等)
 - `yurucommu-core/` — yurucommu server / ActivityPub / Capsule 固有の test

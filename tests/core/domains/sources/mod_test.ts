@@ -1079,7 +1079,7 @@ output "url" {
   expect(report.findings).toEqual([]);
 });
 
-test("createCompatibilityCheck defaults to curated InstallConfig modulePath", async () => {
+test("createCompatibilityCheck defaults to supplied InstallConfig modulePath", async () => {
   const observedOptions: unknown[] = [];
   const { store, service } = makeService({
     readCapsuleSourceFiles: async (_snapshot, options) => {
@@ -1110,7 +1110,7 @@ output "url" {
     },
   });
   await store.putInstallConfig({
-    id: "cfg-store-takos",
+    id: "cfg-git-takos",
     name: "takos",
     trustLevel: "official",
     modulePath: "deploy/opentofu",
@@ -1145,7 +1145,7 @@ output "url" {
 
   const { report } = await service.createCompatibilityCheck(source.id, {
     sourceSnapshotId: run.snapshotId,
-    installConfigId: "cfg-store-takos",
+    installConfigId: "cfg-git-takos",
   });
 
   expect(observedOptions).toEqual([{ modulePath: "deploy/opentofu" }]);

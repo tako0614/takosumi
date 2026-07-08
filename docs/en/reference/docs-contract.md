@@ -1,8 +1,9 @@
 # Published Docs Contract
 
-This page defines what `takosumi.com/docs` publishes. Published docs contain
-only the external contract that users, self-host operators, and Takosumi Cloud
-customers can rely on.
+This page defines what `takosumi.com/docs` publishes as software docs.
+Published docs contain only the external contract that users and self-host /
+operator readers can rely on. Hosted Cloud service docs live separately at
+`app.takosumi.com/docs`.
 
 ## What Published Docs Include
 
@@ -13,10 +14,25 @@ Published docs include:
 - API endpoints, request / response shapes, authentication, and error shapes
 - Resource Shape, Compatibility API, ProviderConnection, CredentialRecipe, and ProviderBinding specs
 - supported / preview / planned / unsupported compatibility matrices
-- Takosumi Cloud public prices, free tier, usage billing, and fail-closed spend guard behavior
+- external pointers to the Takosumi Cloud hosted docs
 - security contracts such as no secret redisplay, no secret logs, and run-scoped secret injection
 
 Required public contract information must not depend on unpublished notes.
+
+## Software Docs / Hosted Cloud Docs Split
+
+Published docs use separate sites. `takosumi.com/docs` is for software and
+Operator docs. `app.takosumi.com/docs` is for the hosted Cloud service.
+
+| Surface                                     | Subject                              | Include                                                                                                                                            | Exclude                                                                                                   |
+| ------------------------------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
+| Software docs (`takosumi.com/docs`)         | Takosumi OSS / Takosumi for Operator | portable APIs, OpenTofu Stack flow, Resource Shape flow, ProviderConnection, Run ledger, behavior that works on self-hosted and operator endpoints | `app.takosumi.com` pricing, official managed-resource usage, day-to-day Cloud API key operations          |
+| Hosted Cloud docs (`app.takosumi.com/docs`) | Takosumi Cloud                       | official hosted service, managed resources, Cloud endpoint families, pricing, spend guard, Cloud API keys, usage                                   | wording that makes Cloud-only features required Takosumi core behavior or implies every endpoint has them |
+| Operator docs / runbooks                    | operator                             | deployment, secret rotation, evidence, private operational procedures                                                                              | substitutes for public contract docs                                                                      |
+
+When software docs mention Cloud, keep it to definitions and pointers. When
+Cloud docs mention the software model, use it only to explain that Cloud is a
+hosted deployment of the same Takosumi model.
 
 ## Published Pages Must Be Self-Contained
 
@@ -28,7 +44,7 @@ without reading internal notes or operator runbooks.
 | product / edition boundary  | external Takosumi, Takosumi for Operator, and Takosumi Cloud definitions | design alternatives and unsettled roadmap notes       |
 | API / compatibility surface | endpoint, capability, auth, errors, supported/preview/unsupported        | handler wiring, closed repo paths, and private routes |
 | Resource Shape              | schema, lifecycle, state/import/drift behavior                           | adapter internals and private target inventory        |
-| Cloud pricing / billing     | customer prices, free tier, spend guard, auto charge behavior      | price IDs, cost tables, margin guards, reconciliation |
+| Cloud pricing / billing     | customer prices, free tier, spend guard, auto charge behavior            | price IDs, cost tables, margin guards, reconciliation |
 | security / secret handling  | no secret redisplay, log redaction, run-scoped injection                 | secret file paths, vault paths, and operator tokens   |
 
 Published pages must not link to `docs/internal/` or `docs/operations/` as a
@@ -84,7 +100,8 @@ same change.
 
 ## Pricing Split
 
-Published pricing pages include:
+Published pricing pages live in the hosted Cloud docs at
+`app.takosumi.com/docs`. They include:
 
 ```text
 customer pays
@@ -95,7 +112,7 @@ auto charge behavior
 refund / cancellation surface
 ```
 
-Published docs exclude:
+Published software docs and hosted Cloud docs exclude:
 
 ```text
 payment provider price id

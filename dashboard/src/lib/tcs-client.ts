@@ -107,9 +107,12 @@ export interface TcsListing {
   readonly description: TcsLocalizedText;
   readonly badge: TcsLocalizedText;
   readonly iconUrl?: string;
-  readonly inputs: readonly TcsListingInput[];
+  /** Hydrated from repo `.well-known/tcs.json`; store listings do not own setup. */
+  readonly inputs?: readonly TcsListingInput[];
+  /** Hydrated from repo `.well-known/tcs.json`; store listings do not own setup. */
   readonly installExperience?: TcsInstallExperience;
-  readonly outputAllowlist: readonly TcsListingOutput[];
+  /** Hydrated from repo `.well-known/tcs.json`; store listings do not own setup. */
+  readonly outputAllowlist?: readonly TcsListingOutput[];
   readonly publisher?: {
     readonly handle: string;
     readonly displayName?: string;

@@ -56,7 +56,7 @@ import {
   buildSharedCellWarmPoolConfig,
   buildStaticBindingMaterializerConfig,
   buildUpstreamOAuthOptions,
-  buildServiceGraphMaterialResolverConfig,
+  buildRuntimeProjectionMaterialResolverConfig,
   composeBindingMaterializers,
   httpMaterializeWorker,
   staticBindingMaterializer,
@@ -389,10 +389,10 @@ export async function runAccountsServe(
     io.stderr(error instanceof Error ? error.message : String(error));
     return 2;
   }
-  let serviceGraphMaterialResolverConfig;
+  let runtimeProjectionMaterialResolverConfig;
   try {
-    serviceGraphMaterialResolverConfig =
-      await buildServiceGraphMaterialResolverConfig(options);
+    runtimeProjectionMaterialResolverConfig =
+      await buildRuntimeProjectionMaterialResolverConfig(options);
   } catch (error) {
     io.stderr(error instanceof Error ? error.message : String(error));
     return 2;
@@ -485,15 +485,15 @@ export async function runAccountsServe(
           tokenConfigured: Boolean(materializeWorkerConfig.token),
         }
       : { configured: false },
-    serviceGraphMaterialResolver: {
+    runtimeProjectionMaterialResolver: {
       paths: ["takosumi.identity.oidc", "takosumi.billing.usage"],
-      resolver: serviceGraphMaterialResolverConfig
+      resolver: runtimeProjectionMaterialResolverConfig
         ? {
             configured: true,
-            source: serviceGraphMaterialResolverConfig.source,
+            source: runtimeProjectionMaterialResolverConfig.source,
             tokenConfigured: true,
             billingPortalUrl:
-              serviceGraphMaterialResolverConfig.billingPortalUrl,
+              runtimeProjectionMaterialResolverConfig.billingPortalUrl,
           }
         : { configured: false },
     },
@@ -616,7 +616,7 @@ export async function runAccountsServe(
       materializeWorker: materializeWorkerConfig
         ? httpMaterializeWorker(materializeWorkerConfig)
         : undefined,
-      serviceGraphMaterialResolver: serviceGraphMaterialResolverConfig,
+      runtimeProjectionMaterialResolver: runtimeProjectionMaterialResolverConfig,
       exportWorker: exportWorkerConfig
         ? createMetadataOnlyCapsuleExportWorker({
             ...exportWorkerConfig,
@@ -635,7 +635,7 @@ export async function runAccountsServe(
     io.stdout(`Takosumi Accounts listening at http://${hostname}:${port}`);
     io.stdout(`Accounts persistence: ${servePlan.persistence.driver}`);
     io.stdout(
-      `Operator platform services: ${servePlan.serviceGraphMaterialResolver.paths.join(
+      `Operator platform services: ${servePlan.runtimeProjectionMaterialResolver.paths.join(
         ", ",
       )}`,
     );

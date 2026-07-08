@@ -19,5 +19,5 @@ export function dashboardProductName(): "Takos" | "Takosumi" {
 export function dashboardDocsHref(): string {
   return isTakosEmbeddedRuntime()
     ? "https://docs.takos.jp"
-    : "https://takosumi.com/docs";
+    : "https://app.takosumi.com/docs/";
 }

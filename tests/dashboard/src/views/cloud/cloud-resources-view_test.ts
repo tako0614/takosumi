@@ -38,35 +38,79 @@ describe("Cloud resources view", () => {
     );
   });
 
-  test("has compact inventory copy in both locales", () => {
-    expect(en["cloudResources.title"]).toBe("Takosumi Cloud");
-    expect(ja["cloudResources.title"]).toBe("Takosumi Cloud");
-    expect(en["cloudResources.subtitle"]).not.toContain("Worker-compatible");
-    expect(ja["cloudResources.subtitle"]).not.toContain("Worker-compatible");
+  test("has usage-first resource-management copy in both locales", () => {
+    expect(en["cloudResources.title"]).toBe("Cloud resources");
+    expect(ja["cloudResources.title"]).toBe("クラウドリソース");
+    expect(en["cloudResources.subtitle"]).not.toContain("external keys");
+    expect(ja["cloudResources.subtitle"]).not.toContain("外部キー");
+    expect(en["cloudResources.subtitle"]).toContain("usage");
+    expect(ja["cloudResources.subtitle"]).toContain("使用量");
+    expect(en["workspaceSettings.tab.cloud"]).toBe("Cloud resources");
+    expect(ja["workspaceSettings.tab.cloud"]).toBe("クラウドリソース");
+    expect(en["workspaceSettings.tab.keys"]).toBe("API keys");
+    expect(ja["workspaceSettings.tab.keys"]).toBe("APIキー");
+    expect(en["cloudResources.keys.createdNotice"]).toContain("only once");
+    expect(ja["cloudResources.keys.createdNotice"]).toContain("一度だけ");
+    expect(en["cloudResources.keys.secretNotice"]).toContain("prefix");
+    expect(ja["cloudResources.keys.secretNotice"]).toContain("prefix");
+    expect(en["cloudResources.usage.tableTitle"]).toBe(
+      "Usage by resource type",
+    );
+    expect(ja["cloudResources.usage.tableTitle"]).toBe("種類別の使用量");
+    expect(en["cloudResources.usage.estimatedCost"]).toBe("Estimated cost");
+    expect(ja["cloudResources.usage.estimatedCost"]).toBe("見積費用");
     expect(en["cloudResources.inventory.showAll"]).toContain("{count}");
     expect(en["cloudResources.inventory.remaining"]).toContain("{count}");
     expect(ja["cloudResources.inventory.showAll"]).toContain("{count}");
     expect(ja["cloudResources.inventory.remaining"]).toContain("{count}");
     expect(en["common.refresh"]).toBe("Refresh");
     expect(ja["common.refresh"]).toBe("更新");
-    expect(ja["cloudResources.inventory.title"]).toBe("クラウドリソース");
+    expect(ja["cloudResources.inventory.title"]).toBe("リソース一覧");
     expect(ja["cloudResources.keys.title"]).toBe("外部APIキー");
     expect(ja["cloudResources.keys.empty"]).toBe(
       "まだ外部APIキーはありません。",
     );
-    expect(en["cloudResources.s3.buckets"]).toBe("Buckets");
-    expect(en["cloudResources.s3.configuredBuckets"]).toBe("Ready buckets");
-    expect(ja["cloudResources.s3.buckets"]).toBe("Bucket数");
-    expect(ja["cloudResources.s3.configuredBuckets"]).toBe("利用可能Bucket");
   });
 
-  test("loads resource inventory separately from the endpoint overview", () => {
+  test("loads resources and API keys as separate surfaces", () => {
     expect(cloudResourcesViewSource).toContain(
       "export function CloudResourcesPanel",
     );
+    expect(cloudResourcesViewSource).toContain(
+      "export function CloudApiKeysPanel",
+    );
     expect(cloudResourcesViewSource).toContain("getCloudResourcesSnapshot");
-    expect(cloudResourcesViewSource).toContain("getProviderCompatCloudflareWorkersInventory");
+    expect(cloudResourcesViewSource).toContain("getCloudResourceUsageSnapshot");
+    expect(cloudResourcesViewSource).toContain("mergeCloudResourceUsageRows");
+    expect(cloudResourcesViewSource).toContain("getCloudApiKeysSnapshot");
+    expect(cloudResourcesViewSource).toContain(
+      "getProviderCompatCloudflareWorkersInventory",
+    );
     expect(cloudResourcesViewSource).toContain("inventoryLoading");
+  });
+
+  test("leaves docs-owned endpoints and key management off the resources body", () => {
+    const bodyStart = cloudResourcesViewSource.indexOf(
+      "function CloudResourceBody",
+    );
+    const keyCardStart = cloudResourcesViewSource.indexOf(
+      "function ApiKeysCard",
+    );
+    const bodySource = cloudResourcesViewSource.slice(bodyStart, keyCardStart);
+
+    expect(bodySource).toContain('t("cloudResources.usage.title")');
+    expect(bodySource).toContain('t("cloudResources.management.title")');
+    expect(bodySource).toContain("<UsageByResourceCard");
+    expect(bodySource).toContain("<ResourcesCard");
+    expect(bodySource).not.toContain("<ApiKeysCard");
+    expect(bodySource).not.toContain('t("cloudResources.compat.title")');
+    expect(bodySource).not.toContain('t("cloudResources.provider.title")');
+    expect(cloudResourcesViewSource).not.toContain('t("cloudResources.ai.');
+    expect(cloudResourcesViewSource).not.toContain('t("cloudResources.s3.');
+    expect(cloudResourcesViewSource).not.toContain(
+      't("cloudResources.baseUrl")',
+    );
+    expect(cloudResourcesViewSource).not.toContain("EndpointRow");
   });
 
   test("renders the page header before the auth-gated cloud body", () => {
@@ -82,6 +126,23 @@ describe("Cloud resources view", () => {
     expect(cloudResourcesViewSource).toContain("showHeader={false}");
   });
 
+  test("links from cloud resources to the API keys surface", () => {
+    const headerStart = cloudResourcesViewSource.indexOf(
+      "function CloudResourcesHeader",
+    );
+    const loadingStart = cloudResourcesViewSource.indexOf(
+      "function CloudApiKeysHeader",
+    );
+    const headerSource = cloudResourcesViewSource.slice(
+      headerStart,
+      loadingStart,
+    );
+
+    expect(headerSource).toContain('href="/advanced/workspace/keys"');
+    expect(headerSource).toContain('t("workspaceSettings.tab.keys")');
+    expect(headerSource).toContain("<KeyRound");
+  });
+
   test("keeps raw resource identifiers behind an explicit copy action", () => {
     expect(cloudResourcesViewSource).toContain(
       't("cloudResources.resources.copyId")',
@@ -90,7 +151,7 @@ describe("Cloud resources view", () => {
     expect(appViewsCssSource).not.toContain(".av-cloud-res-id");
   });
 
-  test("only exposes currently materialized Cloudflare Workers provider compatibility resource groups", () => {
+  test("uses current inventory groups as detail rows without making them the resource taxonomy", () => {
     for (const key of ["kv", "r2", "d1", "queues", "workflows", "workers"]) {
       expect(cloudResourcesViewSource).toContain(
         `t("cloudResources.inventory.${key}")`,
@@ -102,6 +163,8 @@ describe("Cloud resources view", () => {
         ja[`cloudResources.inventory.${key}` as keyof typeof ja],
       ).toBeTruthy();
     }
+    expect(cloudResourcesViewSource).toContain("RESOURCE_FAMILY_LABEL_KEYS");
+    expect(cloudResourcesViewSource).toContain("friendlyResourceFamilyName");
     for (const key of ["containers", "durableObjects"]) {
       expect(cloudResourcesViewSource).not.toContain(`inv.${key}`);
       expect(
@@ -118,8 +181,16 @@ describe("Cloud resources view", () => {
       "const { confirm } = useConfirmDialog()",
     );
     expect(cloudResourcesViewSource).toContain(
-      "activeCloudApiTokens(props.snapshot.accountTokens.data)",
+      "activeCloudApiTokens(result.data)",
     );
+    expect(cloudResourcesViewSource).toContain(
+      't("cloudResources.keys.createdNotice")',
+    );
+    expect(cloudResourcesViewSource).toContain(
+      't("cloudResources.keys.secretNotice")',
+    );
+    expect(cloudResourcesViewSource).toContain("value={token()}");
+    expect(cloudResourcesViewSource).toContain("{token.prefix}...");
     expect(cloudResourcesViewSource).toContain(
       'title: t("cloudResources.keys.revokeTitle")',
     );

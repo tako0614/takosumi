@@ -18,6 +18,7 @@ import type {
   DeploymentOutput,
   GetCapsuleResponse,
   Capsule,
+  InstallConfig,
   ListDeploymentsResponse,
   OpenTofuModuleSource,
   PlanRun,
@@ -39,6 +40,9 @@ export interface DeployControlOperations {
   createApplyRun(request: CreateApplyRunRequest): Promise<ApplyRunResponse>;
   getCapsule(id: string): Promise<GetCapsuleResponse>;
   listDeployments(capsuleId: string): Promise<ListDeploymentsResponse>;
+  readonly installations?: {
+    getInstallConfig(id: string): Promise<InstallConfig | undefined>;
+  };
   /**
    * Idempotent personal-Workspace creation for the account-plane first-login hook
    * (spec §4: "初回ログイン時に個人 Workspace を自動作成する"). Exposed on the
@@ -317,8 +321,7 @@ async function createPlanRunForFacadeRequest(input: {
   operation: "create" | "update" | "destroy";
   capsuleId?: string;
 }): Promise<{ status: number; contentType: string; payload: unknown }> {
-  const capsuleId =
-    input.capsuleId ?? stringValue(input.body.capsuleId);
+  const capsuleId = input.capsuleId ?? stringValue(input.body.capsuleId);
   let installation: Capsule | undefined;
   if (capsuleId) {
     const installationResult =
@@ -334,6 +337,12 @@ async function createPlanRunForFacadeRequest(input: {
       ? (installationResult.payload.installation as Capsule | undefined)
       : undefined;
   }
+  const installConfig =
+    installation && input.deployControl.operations.installations
+      ? await input.deployControl.operations.installations.getInstallConfig(
+          installation.installConfigId,
+        )
+      : undefined;
 
   // The Workspace-direct Capsule no longer carries a `source` (its source
   // identity lives in the control plane behind `sourceId`, not resolvable
@@ -366,6 +375,31 @@ async function createPlanRunForFacadeRequest(input: {
       },
     };
   }
+  const bodyVariables = isRecord(input.body.variables)
+    ? (input.body.variables as Readonly<Record<string, JsonValue>>)
+    : undefined;
+  const installConfigVariables =
+    installConfig && input.operation === "update"
+      ? (installConfig.variableMapping as Readonly<Record<string, JsonValue>>)
+      : undefined;
+  const variables =
+    installConfigVariables || bodyVariables
+      ? {
+          ...(installConfigVariables ?? {}),
+          ...(bodyVariables ?? {}),
+        }
+      : undefined;
+  const bodyRequiredProviders = Array.isArray(input.body.requiredProviders)
+    ? input.body.requiredProviders.filter(
+        (entry): entry is string => typeof entry === "string",
+      )
+    : undefined;
+  const installConfigRequiredProviders =
+    installConfig && input.operation === "update"
+      ? installConfig.policy.allowedProviders
+      : undefined;
+  const requiredProviders =
+    bodyRequiredProviders ?? installConfigRequiredProviders;
 
   const request: CreatePlanRunRequest = {
     workspaceId,
@@ -380,19 +414,13 @@ async function createPlanRunForFacadeRequest(input: {
             stringValue(input.body.runnerProfileId)!,
         }
       : {}),
-    ...(isRecord(input.body.variables)
+    ...(variables && Object.keys(variables).length > 0
       ? {
-          variables: input.body.variables as Readonly<
-            Record<string, JsonValue>
-          >,
+          variables,
         }
       : {}),
-    ...(Array.isArray(input.body.requiredProviders)
-      ? {
-          requiredProviders: input.body.requiredProviders.filter(
-            (entry): entry is string => typeof entry === "string",
-          ),
-        }
+    ...(requiredProviders && requiredProviders.length > 0
+      ? { requiredProviders }
       : {}),
   };
   const response = await requestDeployControlJson<PlanRunResponse>({
@@ -599,9 +627,7 @@ function adaptPlanRunResult(input: {
       providerLockDigest: planRun.providerLockDigest,
       expected: {
         planRunId: planRun.id,
-        ...(planRun.capsuleId
-          ? { capsuleId: planRun.capsuleId }
-          : {}),
+        ...(planRun.capsuleId ? { capsuleId: planRun.capsuleId } : {}),
         ...(hasCapsuleGuard
           ? {
               currentStateVersionId:
@@ -798,10 +824,7 @@ async function requestDeployControlInProcess(input: {
         const payload = await input.operations.getPlanRun(planRunId);
         return { status: 200, contentType: JSON_CONTENT_TYPE, payload };
       }
-      const deploymentsId = idFromPath(
-        input.path,
-        CAPSULE_STATE_VERSIONS_PATH,
-      );
+      const deploymentsId = idFromPath(input.path, CAPSULE_STATE_VERSIONS_PATH);
       if (deploymentsId !== undefined) {
         const payload = await input.operations.listDeployments(deploymentsId);
         return { status: 200, contentType: JSON_CONTENT_TYPE, payload };

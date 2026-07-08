@@ -125,7 +125,7 @@ production hostname 構造を正確に mirror する dev hostname のみを Cadd
 | `https://road.takos.test/` (= `road.takos.jp`) | `host.docker.internal:1420` | `cd road-to-me/app && bun run dev`    |
 | `https://yurucommu.test/` (= `yurucommu.com`)  | `host.docker.internal:5173` | `cd yurucommu && bun run dev`         |
 
-bundled apps (= `takos-docs` / `takos-slide` / `takos-excel` / `takos-computer`) は **Takos space 内に install されて `*.app.takos.jp` tenant subdomain で serve される** model なので、専用 dev hostname を持たない。 dev では各 Vite dev server を localhost (= `:3001` / `:3002` / `:3003` / etc.) で直起動し、 Takos UI 内から iframe / launch する。
+installable apps (= `takos-office` / `takos-computer` / `yurucommu`) は **Takos Workspace 内に install されて `*.app.takos.jp` tenant subdomain で serve される** model なので、専用 dev hostname を持たない。 dev では各 Vite dev server を localhost (= `:3001` / `:3002` / `:3003` / etc.) で直起動し、 Takos UI 内から iframe / launch する。
 
 複数 product を同時起動する場合 default 5173 が衝突するため、各 vite.config.ts の `server.port` を別 port にずらし、 Caddyfile の該当 entry の port も同期する必要がある。
 
@@ -195,7 +195,7 @@ docs を編集 → `npm --prefix docs run build` を再実行 → ブラウザ r
 ## 既知の制約
 
 - **Pebble root CA は restart 毎に regenerate**: stack を `docker compose down
-  -v` で完全 tear down すると Pebble の root CA が変わる。 dev マシン + 全 LAN client で root CA install を再実行する必要がある。 long-running dev session なら気にしなくて良い。
+-v` で完全 tear down すると Pebble の root CA が変わる。 dev マシン + 全 LAN client で root CA install を再実行する必要がある。 long-running dev session なら気にしなくて良い。
 - **single dev マシン前提**: 同 LAN に 2 つの local-substrate stack を立てる運用は scope 外 (= 各 stack が `*.takosumi.test` を奪い合う)。
 - **LAN client OS**: 本 runbook + LAN client 側 runbook は Linux + systemd-resolved のみ。 macOS / Windows は別タスク。
 - **Vite default port 衝突**: takos product UI / yurucommu / control が default 5173 を使う。同時起動する場合は別 port を割り当てる。

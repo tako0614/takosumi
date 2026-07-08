@@ -179,7 +179,7 @@ LAN client が踏める dev hostname は production hostname を `.com/jp → .t
 | `https://yurucommu.test/`          | yurucommu.com                                                                             |
 | `https://<tenant>.app.takos.test/` | Takosumi が deploy した app の動的 tenant subdomain                                       |
 
-bundled apps (= `takos-office` / `takos-computer` / `yurucommu`)
+installable apps (= `takos-office` / `takos-computer` / `yurucommu`)
 は Takos Workspace 内 install で `*.app.takos.jp` tenant subdomain で serve される
 ため、 専用 dev hostname を持たない。
 

@@ -121,8 +121,8 @@ export interface RuntimeBindingRecord {
 
 /**
  * @internal v1 contract reset: ServiceBindingMaterial is no longer a public concept.
- * Service Graph service binding selections replace it. Retained for
- * internal storage.
+ * Capsule runtime projection materialization replaces it. Retained for internal
+ * storage.
  */
 export interface ServiceBindingMaterialRecord {
   bindingId: string;
@@ -137,8 +137,8 @@ export interface ServiceBindingMaterialRecord {
 
 /**
  * @internal v1 contract reset: ServiceGrantMaterial is no longer a public concept.
- * Retained for compatibility validation and scope-check helpers. Service Graph
- * ServiceGrant is the runtime authority record.
+ * Retained for compatibility validation and scope-check helpers. Capsule
+ * runtime projection grants are the runtime authority records.
  */
 export interface ServiceGrantMaterialRecord {
   grantId: string;
@@ -224,14 +224,10 @@ export interface AppCapsuleLedgerStore {
   ):
     | readonly ServiceGrantMaterialRecord[]
     | Promise<readonly ServiceGrantMaterialRecord[]>;
-  appendCapsuleEvent(
-    record: CapsuleEventRecord,
-  ): void | Promise<void>;
+  appendCapsuleEvent(record: CapsuleEventRecord): void | Promise<void>;
   listCapsuleEvents(
     capsuleId: string,
-  ):
-    | readonly CapsuleEventRecord[]
-    | Promise<readonly CapsuleEventRecord[]>;
+  ): readonly CapsuleEventRecord[] | Promise<readonly CapsuleEventRecord[]>;
 }
 
 export interface ValidationIssue {

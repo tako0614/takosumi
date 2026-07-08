@@ -21,6 +21,11 @@ import {
   Switch,
 } from "solid-js";
 import { ExternalLink } from "lucide-solid";
+import {
+  formatBillingNumber,
+  formatUsdMicros,
+  usageUsdMicros,
+} from "../../../lib/billing-format.ts";
 import { isTakosumiCloudRuntime } from "../../../lib/deployment-brand.ts";
 import { setCurrentWorkspaceId } from "../../../lib/workspace-state.ts";
 import {
@@ -443,9 +448,7 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
       <Show when={cloudBilling()}>
         <Card>
           <CardHeader title={t("billing.plans.title")} />
-          <p class="muted av-plan-policy">
-            {t("billing.plans.nonRefundable")}
-          </p>
+          <p class="muted av-plan-policy">{t("billing.plans.nonRefundable")}</p>
           <nav
             class="av-billing-policy-links"
             aria-label={t("billing.policies.aria")}
@@ -454,12 +457,8 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
             <a href="/legal/cancellation-policy">
               {t("billing.policies.cancellation")}
             </a>
-            <a href="/legal/terms-of-service">
-              {t("billing.policies.terms")}
-            </a>
-            <a href="/legal/privacy-policy">
-              {t("billing.policies.privacy")}
-            </a>
+            <a href="/legal/terms-of-service">{t("billing.policies.terms")}</a>
+            <a href="/legal/privacy-policy">{t("billing.policies.privacy")}</a>
             <a href="/support">{t("billing.policies.support")}</a>
           </nav>
           <Switch>
@@ -609,25 +608,6 @@ function usageKindLabel(kind: string): string {
   }
 }
 
-function formatBillingNumber(value: number): string {
-  return new Intl.NumberFormat(locale() === "ja" ? "ja-JP" : "en-US", {
-    maximumFractionDigits: 3,
-  }).format(value);
-}
-
-function formatUsdMicros(value: number): string {
-  return new Intl.NumberFormat(locale() === "ja" ? "ja-JP" : "en-US", {
-    style: "currency",
-    currency: "USD",
-    minimumFractionDigits: 2,
-    maximumFractionDigits: value % 10_000 === 0 ? 2 : 6,
-  }).format(value / 1_000_000);
-}
-
-function usageUsdMicros(event: UsageEvent): number {
-  return event.usdMicros ?? Math.round(event.credits * 1_000_000);
-}
-
 function balanceAvailableUsdMicros(balance: CreditBalance | undefined): number {
   return (
     balance?.availableUsdMicros ??
@@ -661,7 +641,9 @@ function subscriptionView(
     return {
       plan: stripeSubscription.planCode ?? workspaceBilling?.plan?.name ?? "-",
       status:
-        stripeSubscription.status ?? workspaceBilling?.subscription?.status ?? "-",
+        stripeSubscription.status ??
+        workspaceBilling?.subscription?.status ??
+        "-",
       ...(stripeSubscription.currentPeriodEnd
         ? { currentPeriodEnd: stripeSubscription.currentPeriodEnd }
         : workspaceBilling?.subscription?.currentPeriodEnd

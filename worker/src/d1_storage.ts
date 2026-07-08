@@ -7,7 +7,6 @@ import {
 import { eq } from "drizzle-orm";
 import { drizzle, type DrizzleD1Database } from "drizzle-orm/d1";
 import { sqliteTable, text } from "drizzle-orm/sqlite-core";
-import { applyD1GuardedTableRenames } from "./d1_opentofu_store.ts";
 import type { D1Database } from "./bindings.ts";
 
 const SNAPSHOT_ID = "default";
@@ -22,27 +21,13 @@ const storageSnapshots = sqliteTable("takosumi_cf_storage_snapshots", {
 
 const d1StorageSchema = { storageSnapshots };
 
-/**
- * Retired Service Graph tables (deploy decision D3). The OSS Service Graph
- * ledger is removed; the tables are renamed aside to `*_retired` (recoverable)
- * rather than dropped, and are no longer created or read.
- */
-const D1_SNAPSHOT_RETIRED_TABLE_RENAMES: readonly {
-  readonly from: string;
-  readonly to: string;
-}[] = [
-  {
-    from: "takosumi_service_graph_exports",
-    to: "takosumi_service_graph_exports_retired",
-  },
-  {
-    from: "takosumi_service_graph_bindings",
-    to: "takosumi_service_graph_bindings_retired",
-  },
-  {
-    from: "takosumi_service_graph_grants",
-    to: "takosumi_service_graph_grants_retired",
-  },
+const D1_SNAPSHOT_RETIRED_TABLES: readonly string[] = [
+  "takosumi_service_graph_grants_retired",
+  "takosumi_service_graph_bindings_retired",
+  "takosumi_service_graph_exports_retired",
+  "takosumi_service_graph_grants",
+  "takosumi_service_graph_bindings",
+  "takosumi_service_graph_exports",
 ];
 
 export class CloudflareD1SnapshotStorageDriver implements StorageDriver {
@@ -118,10 +103,9 @@ export class CloudflareD1SnapshotStorageDriver implements StorageDriver {
 }
 
 export async function ensureD1SnapshotSchema(db: D1Database): Promise<void> {
-  // Retire the legacy Service Graph tables aside before ensuring the snapshot
-  // table (idempotent no-op on fresh / already-renamed databases). The DDL that
-  // used to create these tables is removed so the rename-aside is not undone.
-  await applyD1GuardedTableRenames(db, D1_SNAPSHOT_RETIRED_TABLE_RENAMES);
+  for (const tableName of D1_SNAPSHOT_RETIRED_TABLES) {
+    await db.prepare(`drop table if exists ${tableName}`).run();
+  }
   await db
     .prepare(
       `create table if not exists takosumi_cf_storage_snapshots (

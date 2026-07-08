@@ -3926,7 +3926,6 @@ test("POST /api/v1/workspaces/:id/capsules carries store metadata into the scope
   expect(config.store?.templateId).toEqual("yurucommu");
   expect(config.store?.source).toEqual({
     git: "https://github.com/tako0614/yurucommu.git",
-    ref: "1fe727f1843c0c4a91fece16cbc73950225e078d",
     path: ".",
   });
   expect(config.store?.inputs?.map((input) => input.type)).toEqual([
@@ -4010,7 +4009,9 @@ test("POST /api/v1/workspaces/:id/capsules rejects retired install experience fi
   });
 
   expect(response?.status).toEqual(400);
-  expect(await response!.text()).toContain("store must be a valid");
+  expect(await response!.text()).toContain(
+    "store metadata must be omitted or copied from a valid TCS Store listing",
+  );
   expect(operations.calls.putInstallConfig).toBeUndefined();
   expect(operations.calls.createCapsule).toBeUndefined();
 });
@@ -4372,7 +4373,6 @@ test("POST /api/v1/workspaces/:id/capsules inherits store modulePath when vars c
       store: {
         source: {
           git: "https://github.com/tako0614/takos.git",
-          ref: "0b8ead2bb4ae092463a0b517e4838d68ff311a0e",
           path: "deploy/opentofu",
         },
         order: 110,
@@ -4398,7 +4398,7 @@ test("POST /api/v1/workspaces/:id/capsules inherits store modulePath when vars c
         name: "takos",
         environment: "staging",
         sourceId: "src_x",
-        installConfigId: "cfg-store-takos",
+        installConfigId: "cfg-git-takos",
         vars: { project_name: "takos-space-a" },
       },
     },
@@ -4450,7 +4450,6 @@ test("POST /api/v1/workspaces/:id/capsules applies store input defaults as OpenT
       store: {
         source: {
           git: "https://github.com/tako0614/yurucommu.git",
-          ref: "ebe1cb08e67794aaab4722b138a321c78e430291",
           path: ".",
         },
         order: 100,
@@ -4518,7 +4517,7 @@ test("POST /api/v1/workspaces/:id/capsules applies store input defaults as OpenT
         name: "yurucommu",
         environment: "production",
         sourceId: "src_x",
-        installConfigId: "cfg-store-yurucommu",
+        installConfigId: "cfg-git-yurucommu",
         vars: {
           project_name: "custom-yurucommu",
           worker_name: "custom-yurucommu",
@@ -6509,7 +6508,7 @@ test("PATCH /api/v1/capsule-configs/:id rejects shared store configs", async () 
   expect(operations.calls.putInstallConfig).toBeUndefined();
 });
 
-test("GET /api/v1/capsule-configs store view hides scoped configs", async () => {
+test("GET /api/v1/capsule-configs store view hides scoped and nonselectable repo configs", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
@@ -6577,7 +6576,6 @@ test("GET /api/v1/capsule-configs store view hides scoped configs", async () => 
           templateId: "cloudflare-hello-worker",
           source: {
             git: "https://github.com/tako0614/takosumi.git",
-            ref: "abc123",
             path: "providers/cloudflare/modules/cloudflare-hello-worker/module",
           },
           order: 10,
@@ -6593,62 +6591,6 @@ test("GET /api/v1/capsule-configs store view hides scoped configs", async () => 
         templateBinding: {
           templateId: "cloudflare-hello-worker",
           templateVersion: "1.0.0",
-        },
-        createdAt: officialCreatedAt,
-        updatedAt: officialCreatedAt,
-      },
-      {
-        id: "cfg-store-yurucommu",
-        name: "yurucommu",
-        sourceKind: "generic_capsule",
-        installType: "opentofu_module",
-        trustLevel: "trusted",
-        variableMapping: {},
-        outputAllowlist: {},
-        policy: {},
-        store: {
-          source: {
-            git: "https://github.com/tako0614/yurucommu.git",
-            ref: "1fe727f1843c0c4a91fece16cbc73950225e078d",
-            path: ".",
-          },
-          order: 100,
-          surface: "service",
-          kind: "worker",
-          provider: "cloudflare",
-          suggestedName: "yurucommu",
-          badge: { ja: "追加候補", en: "Installable" },
-          name: { ja: "yurucommu", en: "yurucommu" },
-          description: { ja: "yurucommu", en: "yurucommu" },
-          inputs: [],
-        },
-        createdAt: officialCreatedAt,
-        updatedAt: officialCreatedAt,
-      },
-      {
-        id: "cfg-store-takos",
-        name: "takos",
-        sourceKind: "generic_capsule",
-        installType: "opentofu_module",
-        trustLevel: "trusted",
-        variableMapping: {},
-        outputAllowlist: {},
-        policy: {},
-        store: {
-          source: {
-            git: "https://github.com/tako0614/takos.git",
-            ref: "0b8ead2bb4ae092463a0b517e4838d68ff311a0e",
-            path: "deploy/opentofu",
-          },
-          order: 110,
-          surface: "service",
-          kind: "worker",
-          provider: "cloudflare",
-          suggestedName: "takos",
-          badge: { ja: "追加候補", en: "Installable" },
-          name: { ja: "Takos", en: "Takos" },
-          description: { ja: "Takos", en: "Takos" },
-          inputs: [],
         },
         createdAt: officialCreatedAt,
         updatedAt: officialCreatedAt,
@@ -6675,10 +6617,7 @@ test("GET /api/v1/capsule-configs store view hides scoped configs", async () => 
       store?: unknown;
     }>;
   };
-  expect(body.installConfigs.map((config) => config.id)).toEqual([
-    "cfg-store-takos",
-    "cfg-store-yurucommu",
-  ]);
+  expect(body.installConfigs.map((config) => config.id)).toEqual([]);
   expect(body.installConfigs.some((config) => config.workspaceId)).toBe(false);
 });
 

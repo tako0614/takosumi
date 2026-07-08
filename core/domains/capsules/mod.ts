@@ -37,9 +37,10 @@ import {
   NOOP_ACTIVITY_RECORDER,
 } from "../activity/mod.ts";
 import {
-  isRetiredOfficialInstallConfigId,
-  officialInstallConfigs,
-} from "./official_seed.ts";
+  isNonselectableRepositoryStoreInstallConfigId,
+  isRetiredBuiltInInstallConfigId,
+  builtInInstallConfigs,
+} from "./install_config_bootstrap.ts";
 
 /**
  * Capsule name grammar (spec §5): a DNS-style slug. The name doubles as the
@@ -94,7 +95,7 @@ export class CapsulesService {
         `name ${request.name} must match ${CAPSULE_NAME_PATTERN.source}`,
       );
     }
-    if (isRetiredOfficialInstallConfigId(request.installConfigId)) {
+    if (isRetiredBuiltInInstallConfigId(request.installConfigId)) {
       throw new OpenTofuControllerError(
         "invalid_argument",
         `installConfigId ${request.installConfigId} is a retired built-in alias; use a Git URL Capsule config instead`,
@@ -135,7 +136,7 @@ export class CapsulesService {
       }
       throw error;
     }
-    if (isRetiredOfficialInstallConfigId(config.id)) {
+    if (isRetiredBuiltInInstallConfigId(config.id)) {
       throw new OpenTofuControllerError(
         "invalid_argument",
         "install config is retired; use a Git URL Capsule config instead",
@@ -297,7 +298,7 @@ export class CapsulesService {
   async putInstallConfig(config: InstallConfig): Promise<InstallConfig> {
     requireNonEmptyString(config.id, "id");
     requireNonEmptyString(config.name, "name");
-    if (isRetiredOfficialInstallConfigId(config.id)) {
+    if (isRetiredBuiltInInstallConfigId(config.id)) {
       throw new OpenTofuControllerError(
         "invalid_argument",
         `install config ${config.id} is a retired built-in alias`,
@@ -343,11 +344,11 @@ export class CapsulesService {
   async getInstallConfig(id: string): Promise<InstallConfig> {
     requireNonEmptyString(id, "id");
     const config = await this.#store.getInstallConfig(id);
-    if (!config || isRetiredOfficialInstallConfigId(config.id)) {
-      const fallback = this.#officialFallbackInstallConfigs().find(
-        (official) => official.id === id,
+    if (!config || isRetiredBuiltInInstallConfigId(config.id)) {
+      const fallback = this.#sharedFallbackInstallConfigs().find(
+        (sharedConfig) => sharedConfig.id === id,
       );
-      if (fallback && !isRetiredOfficialInstallConfigId(fallback.id)) {
+      if (fallback && !isRetiredBuiltInInstallConfigId(fallback.id)) {
         return fallback;
       }
       throw new OpenTofuControllerError(
@@ -363,12 +364,12 @@ export class CapsulesService {
   ): Promise<readonly InstallConfig[]> {
     const stored = (await this.#store.listInstallConfigs(workspaceId)).filter(
       (config) =>
-        !isRetiredOfficialInstallConfigId(config.id) &&
+        !isRetiredBuiltInInstallConfigId(config.id) &&
         isSelectableInstallConfig(config),
     );
     if (workspaceId !== undefined) return stored;
     const byId = new Map<string, InstallConfig>(
-      this.#officialFallbackInstallConfigs().map((config) => [
+      this.#sharedFallbackInstallConfigs().map((config) => [
         config.id,
         config,
       ]),
@@ -377,9 +378,9 @@ export class CapsulesService {
     return [...byId.values()];
   }
 
-  #officialFallbackInstallConfigs(): readonly InstallConfig[] {
-    return officialInstallConfigs({ now: this.#now }).filter(
-      (config) => !isRetiredOfficialInstallConfigId(config.id),
+  #sharedFallbackInstallConfigs(): readonly InstallConfig[] {
+    return builtInInstallConfigs({ now: this.#now }).filter(
+      (config) => !isRetiredBuiltInInstallConfigId(config.id),
     );
   }
 
@@ -528,6 +529,7 @@ function hasLegacyArtifactConfig(config: InstallConfig): boolean {
 }
 
 function isSelectableInstallConfig(config: InstallConfig): boolean {
+  if (isNonselectableRepositoryStoreInstallConfigId(config.id)) return false;
   if (config.internal?.reason === "per_install_overrides") return false;
   if (
     config.workspaceId !== undefined &&

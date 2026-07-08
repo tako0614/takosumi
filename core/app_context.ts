@@ -244,7 +244,7 @@ export function createInMemoryAppContext(
   const dateClock = options.dateClock ?? (() => new Date());
   const uuidFactory = options.uuidFactory ?? (() => crypto.randomUUID());
 
-  const adapters = createDefaultAppAdapters({
+  const adapters = createDefaultAdapters({
     ...options,
     dateClock,
     uuidFactory,
@@ -281,7 +281,7 @@ export function createInMemoryAppStores(
   return createAppStores(options);
 }
 
-export function createDefaultAppAdapters(
+export function createDefaultAdapters(
   options: AppContextOptions & {
     readonly dateClock?: () => Date;
     readonly uuidFactory?: () => string;

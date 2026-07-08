@@ -4,8 +4,8 @@ This page documents the endpoint families exposed by `app.takosumi.com` for
 Takosumi Cloud. Treat them separately from the portable Takosumi OSS /
 Takosumi for Operator API.
 
-Use [Takosumi Cloud](../cloud/index.md) and
-[Takosumi Cloud resources](./cloud-resources.md) as the public product docs. This
+Use [Takosumi Cloud](./index.md) and
+[Takosumi Cloud resources](./resources.md) as the public product docs. This
 page is the detailed reference for endpoints, usage, API keys, and compatibility
 routes.
 
@@ -299,7 +299,7 @@ runtime dispatch.
 
 Pricing is owned by Takosumi Cloud, not by endpoint request bodies. Requests and
 client headers must not submit `usdMicros` or `credits`. Public prices and
-free-tier terms are shown in [Takosumi Cloud pricing](../cloud/pricing.md) and
+free-tier terms are shown in [Takosumi Cloud pricing](./pricing.md) and
 Dashboard billing views. The real price book, sync procedure, and
 payment-provider operation details belong in operator notes, not in the public
 reference.

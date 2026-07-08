@@ -30,7 +30,7 @@ plane, account plane, dashboard, CLI, runner env, and HTTP routes.
   Catalog ownership axis and the `own_key` / `takos_provided` sentinels are
   removed; a provider binds to an explicit ProviderConnection id, or is omitted
   to fall through to the operator default connection.
-- The Service Graph (ServiceExport / ServiceBinding / ServiceGrant) is removed
+- The Runtime Projection (ServiceExport / ServiceBinding / ServiceGrant) is removed
   from OSS; runtime service surfaces are projected from a Capsule's
   `tofu output -json` by the consuming product profile.
 - The Cloudflare Workers provider compatibility profile, AI Gateway, managed

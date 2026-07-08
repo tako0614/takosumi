@@ -24,7 +24,6 @@ function L(
     id,
     source: {
       git: `https://github.com/o/${id}.git`,
-      ref: "c1",
       path: "",
       ...source,
     },
@@ -63,7 +62,7 @@ function json(body: unknown, status = 200): Response {
     headers: { "content-type": "application/json" },
   });
 }
-const SHARED = { git: "https://github.com/o/shared.git", ref: "deadbeef" };
+const SHARED = { git: "https://github.com/o/shared.git" };
 
 describe("tcs aggregate", () => {
   test("merges + de-dups shared Capsules with seenOn", async () => {
@@ -86,7 +85,6 @@ describe("tcs aggregate", () => {
   test("prefers the default store when the same Git source appears on multiple stores", () => {
     const sharedSource = {
       git: "https://github.com/o/shared.git",
-      ref: "main",
       path: "deploy/opentofu",
     };
     const merged = mergeTcsListingBatches(
@@ -114,7 +112,42 @@ describe("tcs aggregate", () => {
     ]);
   });
 
-  test("does not prefer a store listing just because it pins a ref", () => {
+  test("treats root module path spellings as the same Store source", () => {
+    const merged = mergeTcsListingBatches(
+      [],
+      [
+        {
+          base: "https://a.test",
+          isDefault: true,
+          items: [
+            L("root-empty", {
+              git: "https://github.com/o/root.git",
+              path: "",
+            }),
+          ],
+        },
+        {
+          base: "https://b.test",
+          isDefault: false,
+          items: [
+            L("root-dot", {
+              git: "https://github.com/o/root.git",
+              path: ".",
+            }),
+          ],
+        },
+      ],
+    );
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0]?.id).toBe("root-empty");
+    expect(merged[0]?.seenOn.sort()).toEqual([
+      "https://a.test",
+      "https://b.test",
+    ]);
+  });
+
+  test("does not prefer a store listing just because it carries a stale ref property", () => {
     const sharedSource = {
       git: "https://github.com/o/shared.git",
       path: "deploy/opentofu",
@@ -139,7 +172,10 @@ describe("tcs aggregate", () => {
           items: [
             L(
               "pinned",
-              { ...sharedSource, ref: "v1.2.3" },
+              {
+                ...sharedSource,
+                ref: "v1.2.3",
+              } as unknown as Partial<TcsListing["source"]>,
               "2026-02-01T00:00:00.000Z",
             ),
           ],

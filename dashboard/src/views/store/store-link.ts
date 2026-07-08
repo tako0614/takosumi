@@ -19,8 +19,3 @@ export function buildNewQuery(listing: TcsListing): string {
   params.set("name", listing.suggestedName.slice(0, 96));
   return params.toString();
 }
-
-/** True when a listing needs config the quick-install path can't supply. */
-export function needsConfiguration(listing: TcsListing): boolean {
-  return listing.inputs.some((i) => i.required && !i.defaultValue);
-}

@@ -164,7 +164,10 @@ import {
   stringRecord,
   stringRecordValue,
 } from "./parse.ts";
-import { defaultCapsuleOutputAllowlist } from "../../../../core/domains/capsules/official_seed.ts";
+import {
+  defaultCapsuleOutputAllowlist,
+  isNonselectableRepositoryStoreInstallConfigId,
+} from "../../../../core/domains/capsules/install_config_bootstrap.ts";
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import { decodeCursor, pageSorted } from "takosumi-contract/pagination";
 import { appendLedgerEvent } from "../installation-ledger-events.ts";
@@ -415,12 +418,14 @@ async function listInstallConfigs(
   if (!page.ok) return page.response;
   const view = parseInstallConfigListView(url);
   if (!view.ok) return view.response;
-  // Without a workspaceId only built-in shared configs (workspaceId-less configs) are
-  // returned; with one, built-ins plus that Workspace's own configs —
-  // mirroring the §30 `/api/v1/capsule-configs` projection. The official +
+  // Without a workspaceId only shared configs (workspaceId-less configs) are
+  // returned; with one, shared configs plus that Workspace's own configs —
+  // mirroring the §30 `/api/v1/capsule-configs` projection. The shared +
   // scoped union is a small set, so it is materialized, merge-sorted by
   // (createdAt, id), and bounded with the in-memory keyset pager.
-  const official = (await operations.installations.listInstallConfigs()).filter(
+  const sharedConfigs = (
+    await operations.installations.listInstallConfigs()
+  ).filter(
     (config) =>
       config.workspaceId === undefined &&
       config.spaceId === undefined &&
@@ -443,8 +448,8 @@ async function listInstallConfigs(
         );
   const merged = (
     view.view === "store"
-      ? official.filter(isStoreInstallConfig)
-      : [...official, ...scoped]
+      ? sharedConfigs.filter(isStoreInstallConfig)
+      : [...sharedConfigs, ...scoped]
   ).sort(
     (a, b) =>
       a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
@@ -457,6 +462,7 @@ async function listInstallConfigs(
 }
 
 export function isSelectableInstallConfig(config: InstallConfig): boolean {
+  if (isNonselectableRepositoryStoreInstallConfigId(config.id)) return false;
   if (config.internal?.reason === "per_install_overrides") return false;
   const scopedId = config.workspaceId ?? config.spaceId;
   if (scopedId !== undefined && /^icfg_[0-9a-f]{16}$/iu.test(config.id)) {

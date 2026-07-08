@@ -144,7 +144,7 @@ test("operator release activator restores source archive and runs opaque argv on
               `const context = JSON.parse(Bun.env.TAKOSUMI_RELEASE_CONTEXT_JSON)`,
               `const leakedProvider = Bun.env.CLOUDFLARE_API_TOKEN ?? "missing"`,
               `const leakedToken = Bun.env.TAKOSUMI_RELEASE_ACTIVATOR_TOKEN ?? "missing"`,
-              `await Bun.write(Bun.env.ACTIVATION_RESULT_FILE, [Bun.env.TAKOSUMI_APPLY_RUN_ID, outputs.public_url, context.outputs.public_url, context.applyRunId, context.workspaceId, context.deployment.id, leakedProvider, leakedToken, process.cwd().split("/").pop()].join(":"))`,
+              `await Bun.write(Bun.env.ACTIVATION_RESULT_FILE, [Bun.env.TAKOSUMI_APPLY_RUN_ID, outputs.public_url, context.outputs.public_url, context.applyRunId, context.workspaceId, Bun.env.TAKOSUMI_WORKSPACE_ID, Bun.env.TAKOSUMI_CLOUD_BILLING_WORKSPACE_ID, context.deployment.id, Bun.env.TAKOSUMI_STATE_VERSION_ID, Bun.env.TAKOSUMI_CAPSULE_ID, Bun.env.TAKOSUMI_CLOUD_BILLING_CAPSULE_ID, leakedProvider, leakedToken, process.cwd().split("/").pop()].join(":"))`,
             ].join(";"),
           ],
           env: { ACTIVATION_RESULT_FILE: resultPath },
@@ -179,7 +179,7 @@ test("operator release activator restores source archive and runs opaque argv on
       },
     });
     await expect(readFile(resultPath, "utf8")).resolves.toBe(
-      "run_apply_1:https://app.example.test:https://app.example.test:run_apply_1:space_1:dep_1:missing:missing:source",
+      "run_apply_1:https://app.example.test:https://app.example.test:run_apply_1:space_1:space_1:space_1:dep_1:dep_1:inst_1:inst_1:missing:missing:source",
     );
   } finally {
     await rm(tempDir, { recursive: true, force: true });

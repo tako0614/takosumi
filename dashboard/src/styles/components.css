@@ -561,7 +561,7 @@
   }
 
   /* Segmented control, but as a single scrollable row: on a phone the settings
-     tabs carry variable-length labels ("使用量 / 上限", "クラウドリソース / キー"),
+     tabs carry variable-length labels ("使用量 / 上限", "クラウドリソース"),
      and a fixed grid squeezed them into uneven, wrapping cells. A no-wrap flex
      strip sizes each tab to its label and scrolls horizontally when they don't
      all fit. */

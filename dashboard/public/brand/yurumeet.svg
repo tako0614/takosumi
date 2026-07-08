@@ -1,0 +1,29 @@
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  viewBox="0 0 64 64"
+  role="img"
+  aria-label="Yurumeet"
+>
+  <defs>
+    <linearGradient
+      id="g"
+      x1="0"
+      y1="0"
+      x2="64"
+      y2="64"
+      gradientUnits="userSpaceOnUse"
+    >
+      <stop offset="0" stop-color="#38bdf8" />
+      <stop offset="1" stop-color="#0f766e" />
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="15" fill="url(#g)" />
+  <path
+    d="M18 18h28a8 8 0 0 1 8 8v10a8 8 0 0 1-8 8H33l-10 7v-7h-5a8 8 0 0 1-8-8V26a8 8 0 0 1 8-8Z"
+    fill="#ffffff"
+    opacity=".96"
+  />
+  <circle cx="25" cy="31" r="3" fill="#0f766e" />
+  <circle cx="33" cy="31" r="3" fill="#0f766e" />
+  <circle cx="41" cy="31" r="3" fill="#0f766e" />
+</svg>

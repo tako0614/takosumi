@@ -522,7 +522,7 @@ test("model e2e: DELETE abandons an unapplied Capsule without a destroy plan", a
   );
 });
 
-test("model e2e: install-configs lists the space's seeded config", async () => {
+test("model e2e: install-configs lists the space's configured install config", async () => {
   const { app, operations } = await service();
   const spaceId = await createSpace(app, "configs");
   const installConfigId = await seedInstallConfig(operations, spaceId);

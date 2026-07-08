@@ -42,6 +42,16 @@
   padding: 0 10px;
   font: inherit;
 }
+.tcs-select-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--c-muted);
+  font-size: 0.86rem;
+}
+.tcs-select-label .tcs-sort {
+  min-height: 37px;
+}
 .tcs-btn {
   background: var(--c-panel2);
   border: 1px solid var(--c-border);

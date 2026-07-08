@@ -29,7 +29,7 @@ CredentialRecipes, ProviderBindings, Secrets, Runs, StateVersions, Outputs,
 Runners, and AuditEvents) are created and read through `/api/v1/*`. The current
 `/v1/capsule-projections` route family keeps a legacy path name, but its
 role is supporting account-plane projection for Capsule runtimes: OIDC client
-metadata, Service Graph grant material, operator/showback usage projection when
+metadata, Capsule runtime grant material, operator/showback usage projection when
 enabled, and export handoff. Accounts OIDC should be described as Capsule
 runtime identity projection and operator-managed sign-in support, not as a
 generic login/consent platform for arbitrary public clients. Official billing,

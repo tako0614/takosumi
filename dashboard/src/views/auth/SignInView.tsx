@@ -356,6 +356,10 @@ export function SignInCallbackView() {
         // navigating; otherwise the next route's AuthGuard runs before the
         // /me roundtrip resolves and bounces back to /sign-in.
         await refreshSession();
+        if (requiresDocumentNavigation(returnTo)) {
+          location.assign(returnTo);
+          return;
+        }
         nav(returnTo, { replace: true });
       })
       .catch((err: Error) => {
@@ -393,4 +397,8 @@ export function SignInCallbackView() {
       </Show>
     </div>
   );
+}
+
+export function requiresDocumentNavigation(returnTo: string): boolean {
+  return returnTo === "/oauth" || returnTo.startsWith("/oauth/");
 }

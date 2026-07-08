@@ -282,8 +282,8 @@ async function buildAccountsHandler(
     store,
     ...(config.clients ? { clients: config.clients } : {}),
     platformAccess: config.platformAccess,
-    ...(config.serviceGraphMaterialResolver
-      ? { serviceGraphMaterialResolver: config.serviceGraphMaterialResolver }
+    ...(config.runtimeProjectionMaterialResolver
+      ? { runtimeProjectionMaterialResolver: config.runtimeProjectionMaterialResolver }
       : {}),
     ...(config.loginEmailAllowlist
       ? { loginEmailAllowlist: config.loginEmailAllowlist }

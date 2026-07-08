@@ -2,18 +2,20 @@
 
 The Takosumi CLI is an automation helper for actions you can also do in the
 dashboard. The normal product flow is the dashboard `/install?git=...` / `/new`
-path: choose a service, choose the cloud connection it should use, then
-plan / apply.
+path: choose a service, choose the provider connection it should use, then
+plan / apply. The CLI can target any Takosumi endpoint.
 
 ```bash
-export TAKOSUMI_DEPLOY_CONTROL_URL=https://app.takosumi.com
+export TAKOSUMI_DEPLOY_CONTROL_URL=https://takosumi.example.com
 export TAKOSUMI_DEPLOY_CONTROL_TOKEN=<bearer>
 
-open 'https://app.takosumi.com/install?git=https://github.com/example/photo-blog.git&path=deploy/opentofu&ref=main'
+open "$TAKOSUMI_DEPLOY_CONTROL_URL/install?git=https://github.com/example/photo-blog.git&path=deploy/opentofu&ref=main"
 
 takosumi status <run-id>
 takosumi logs   <run-id>
 ```
+
+When using Takosumi Cloud, the hosted endpoint is `https://app.takosumi.com`.
 
 The CLI does not run OpenTofu directly. The normal creation flow is dashboard
 Git URL install, which creates Source / Capsule / Run records and pins the Git
@@ -27,7 +29,7 @@ Provider credential values are read from files and are never printed.
 
 ```bash
 takosumi connections set-cloudflare-token \
-  --api-token-file /operator/vault/cloudflare-api-token
+  --api-token-file <path-to-cloudflare-token-file>
 
 takosumi connections list
 takosumi connections test conn_...

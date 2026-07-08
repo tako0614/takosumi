@@ -11,7 +11,7 @@ import { createApiApp } from "../../../core/api/app.ts";
 import { OpenTofuDeploymentController } from "../../../core/domains/deploy-control/mod.ts";
 import { InMemoryOpenTofuDeploymentStore } from "../../../core/domains/deploy-control/store.ts";
 import { CapsulesService } from "../../../core/domains/capsules/mod.ts";
-import { officialInstallConfigs } from "../../../core/domains/capsules/official_seed.ts";
+import { builtInInstallConfigs } from "../../../core/domains/capsules/install_config_bootstrap.ts";
 import type { Connection } from "takosumi-contract/connections";
 import type {
   Installation,
@@ -249,22 +249,22 @@ test("GET /internal/v1/workspaces/:id/capsules rejects malformed includeDestroye
   expect(res.status).toBe(400);
 });
 
-test("GET /internal/v1/install-configs caps the official+scoped union at 100 and pages the rest", async () => {
-  // 80 stored official (spaceId-less) + built-in official fallback configs +
+test("GET /internal/v1/install-configs caps the shared+scoped union at 100 and pages the rest", async () => {
+  // 80 stored shared (spaceId-less) configs + shared fallback configs +
   // 170 space-scoped configs are merged into one sorted, paginated union.
-  const official = 80;
+  const shared = 80;
   const scoped = 170;
-  const fallbackOfficialIds = officialInstallConfigs({
+  const fallbackSharedIds = builtInInstallConfigs({
     now: () => new Date("2026-06-20T00:00:00.000Z"),
   })
     .map((config) => config.id)
     .sort();
-  const total = official + scoped + fallbackOfficialIds.length;
+  const total = shared + scoped + fallbackSharedIds.length;
   const app = await makeApp(async (store) => {
-    for (let i = 0; i < official; i += 1) {
+    for (let i = 0; i < shared; i += 1) {
       await store.putInstallConfig(installConfigFixture(i));
     }
-    for (let i = official; i < official + scoped; i += 1) {
+    for (let i = shared; i < shared + scoped; i += 1) {
       await store.putInstallConfig(installConfigFixture(i, SPACE_ID));
     }
   });
@@ -296,12 +296,12 @@ test("GET /internal/v1/install-configs caps the official+scoped union at 100 and
   expect(seen).toHaveLength(total);
   expect(new Set(seen).size).toBe(total); // no dupes
   // Merge-sorted by (createdAt, id) across the union: fixture rows first, then
-  // the built-in official fallback configs created by CapsulesService.
+  // the shared fallback configs created by CapsulesService.
   const fixtureIds = Array.from(
-    { length: official + scoped },
+    { length: shared + scoped },
     (_, i) => `cfg_${String(i).padStart(4, "0")}`,
   );
-  expect(seen).toEqual([...fixtureIds, ...fallbackOfficialIds]);
+  expect(seen).toEqual([...fixtureIds, ...fallbackSharedIds]);
 });
 
 test("GET /internal/v1/install-configs rejects a malformed ?cursor= (400)", async () => {

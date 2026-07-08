@@ -25,7 +25,7 @@ test("release action runs opaque argv commands inside the source snapshot", asyn
                 [
                   `const outputs = JSON.parse(Bun.env.TAKOSUMI_OUTPUTS_JSON)`,
                   `const context = JSON.parse(Bun.env.TAKOSUMI_RELEASE_CONTEXT_JSON)`,
-                  `await Bun.write("release-output.txt", [Bun.env.RELEASE_LABEL, process.cwd().split("/").pop(), outputs.public_url, context.outputs.public_url, context.applyRunId, context.deploymentId].join(":"))`,
+                  `await Bun.write("release-output.txt", [Bun.env.RELEASE_LABEL, process.cwd().split("/").pop(), outputs.public_url, context.outputs.public_url, context.applyRunId, context.workspaceId, Bun.env.TAKOSUMI_WORKSPACE_ID, Bun.env.TAKOSUMI_CLOUD_BILLING_WORKSPACE_ID, context.installation.id, Bun.env.TAKOSUMI_CAPSULE_ID, Bun.env.TAKOSUMI_CLOUD_BILLING_CAPSULE_ID, context.deploymentId, Bun.env.TAKOSUMI_STATE_VERSION_ID].join(":"))`,
                   `console.log("release ok")`,
                 ].join(";"),
               ],
@@ -37,6 +37,7 @@ test("release action runs opaque argv commands inside the source snapshot", asyn
         outputs: { public_url: "https://app.example.test" },
         activation: {
           applyRunId: "run_apply_1",
+          workspaceId: "space_1",
           installationId: "inst_1",
           deploymentId: "dep_1",
         },
@@ -56,7 +57,7 @@ test("release action runs opaque argv commands inside the source snapshot", asyn
     await expect(
       readFile(join(sourceRoot, "scripts", "release-output.txt"), "utf8"),
     ).resolves.toBe(
-      "public:scripts:https://app.example.test:https://app.example.test:run_apply_1:dep_1",
+      "public:scripts:https://app.example.test:https://app.example.test:run_apply_1:space_1:space_1:space_1:inst_1:inst_1:inst_1:dep_1:dep_1",
     );
   } finally {
     await rm(root, { recursive: true, force: true });

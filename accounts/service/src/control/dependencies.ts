@@ -170,7 +170,7 @@ import {
 import {
   DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
   defaultCapsuleOutputAllowlist,
-} from "../../../../core/domains/capsules/official_seed.ts";
+} from "../../../../core/domains/capsules/install_config_bootstrap.ts";
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import { decodeCursor, pageSorted } from "takosumi-contract/pagination";
 import { appendLedgerEvent } from "../installation-ledger-events.ts";

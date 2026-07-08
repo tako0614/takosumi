@@ -50,7 +50,7 @@ cover.
 ```bash
 cd takosumi
 bun test core/api/route_inventory_test.ts
-cd dashboard && bun run build
+bun run check:dashboard
 ```
 
 ## Safety Classes

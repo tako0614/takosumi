@@ -135,7 +135,7 @@ describe("parseInstallPrefill", () => {
     expect(({} as { readonly polluted?: boolean }).polluted).toBeUndefined();
   });
 
-  test("refuses to seed the form from unsafe or absent links", () => {
+  test("refuses to pre-fill the form from unsafe or absent links", () => {
     // no params at all
     expect(parseInstallPrefill("")).toBeUndefined();
     // https only — ssh / scp-like / http are not browser-safe link material

@@ -289,19 +289,19 @@
   display: inline-flex;
   color: var(--tg-accent);
 }
-.av-cloud-endpoint {
+.av-cloud-copy-row {
   display: grid;
   grid-template-columns: max-content minmax(0, 1fr) max-content;
   align-items: center;
   gap: var(--tg-s-2);
   margin: var(--tg-s-3) 0 var(--tg-s-4);
 }
-.av-cloud-endpoint-label {
+.av-cloud-copy-label {
   color: var(--tg-fg-subtle);
   font-size: var(--tg-fs-sm);
   font-weight: 600;
 }
-.av-cloud-endpoint-value {
+.av-cloud-copy-value {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -381,6 +381,11 @@
   gap: 2px;
   min-width: 0;
 }
+.av-cloud-usage-main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
 .av-cloud-token-name {
   font-weight: 700;
   overflow-wrap: anywhere;
@@ -436,12 +441,12 @@
     width: 100%;
   }
 
-  .av-cloud-endpoint {
+  .av-cloud-copy-row {
     grid-template-columns: 1fr;
     align-items: stretch;
   }
 
-  .av-cloud-endpoint-value {
+  .av-cloud-copy-value {
     white-space: normal;
     overflow-wrap: anywhere;
   }

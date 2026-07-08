@@ -93,6 +93,8 @@ export interface ReleaseSpec {
 
 export interface ReleaseActivationSpec {
   readonly applyRunId?: string;
+  readonly workspaceId?: string;
+  readonly spaceId?: string;
   readonly installationId?: string;
   readonly deploymentId?: string;
 }

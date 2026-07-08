@@ -11,7 +11,7 @@ import type {
   PasskeyHttpOptions,
   UpstreamOAuthClientRegistration,
   UpstreamOAuthOptions,
-  ServiceGraphMaterialResolverHttpOptions,
+  RuntimeProjectionMaterialResolverHttpOptions,
 } from "@takosjp/takosumi-accounts-service";
 import {
   createOpenPlatformAccessPolicy,
@@ -67,8 +67,8 @@ export interface NodeAccountsServerConfig {
   readonly databaseUrl: string;
   readonly clients: readonly OidcClientRegistration[] | undefined;
   readonly platformAccess: PlatformAccessPolicy;
-  readonly serviceGraphMaterialResolver:
-    ServiceGraphMaterialResolverHttpOptions | undefined;
+  readonly runtimeProjectionMaterialResolver:
+    RuntimeProjectionMaterialResolverHttpOptions | undefined;
   readonly loginEmailAllowlist: LoginEmailAllowlist | undefined;
   readonly passkeys: PasskeyHttpOptions | undefined;
   readonly upstreamOAuth: UpstreamOAuthOptions | undefined;
@@ -95,7 +95,7 @@ export function parseEnv(
     databaseUrl,
     clients: parseClients(env),
     platformAccess: parsePlatformAccess(env),
-    serviceGraphMaterialResolver: parseServiceGraphMaterials(env),
+    runtimeProjectionMaterialResolver: parseRuntimeProjectionMaterials(env),
     loginEmailAllowlist: parseLoginEmailAllowlist(env, issuer),
     passkeys: parsePasskeys(env),
     upstreamOAuth: parseUpstreamOAuth(env),
@@ -308,12 +308,12 @@ function requireCommitPinnedEvidencePairs(
   }
 }
 
-function parseServiceGraphMaterials(
+function parseRuntimeProjectionMaterials(
   env: Record<string, string | undefined>,
-): ServiceGraphMaterialResolverHttpOptions | undefined {
+): RuntimeProjectionMaterialResolverHttpOptions | undefined {
   const token = optional(
     env,
-    "TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_MATERIAL_RESOLVER_TOKEN",
+    "TAKOSUMI_ACCOUNTS_RUNTIME_PROJECTION_MATERIAL_RESOLVER_TOKEN",
   );
   if (!token) return undefined;
   const billingPortalUrl = optional(
@@ -322,7 +322,7 @@ function parseServiceGraphMaterials(
   );
   const internalUrl = optional(
     env,
-    "TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_MATERIALS_INTERNAL_URL",
+    "TAKOSUMI_ACCOUNTS_RUNTIME_PROJECTION_MATERIALS_INTERNAL_URL",
   );
   return {
     token,
@@ -330,7 +330,7 @@ function parseServiceGraphMaterials(
     ...(internalUrl ? { internalUrl } : {}),
     ...(bool(
       env,
-      "TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_MATERIALS_ALLOW_DIRECT_DEPLOY_CONTROL",
+      "TAKOSUMI_ACCOUNTS_RUNTIME_PROJECTION_MATERIALS_ALLOW_DIRECT_DEPLOY_CONTROL",
     )
       ? { allowDeployControlInstallations: true }
       : {}),
