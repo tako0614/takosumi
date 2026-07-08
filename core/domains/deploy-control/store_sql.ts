@@ -1814,6 +1814,20 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     return profile;
   }
 
+  async deleteInstallationProviderEnvBindingSet(
+    installationId: string,
+    environment: string,
+  ): Promise<void> {
+    await this.#db
+      .delete(pgSchema.providerEnvBindingSets)
+      .where(
+        and(
+          eq(pgSchema.providerEnvBindingSets.installationId, installationId),
+          eq(pgSchema.providerEnvBindingSets.environment, environment),
+        ),
+      );
+  }
+
   async getInstallationProviderEnvBindingSetByInstallation(
     installationId: string,
     environment: string,

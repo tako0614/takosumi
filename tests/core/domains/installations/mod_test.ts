@@ -261,6 +261,23 @@ test("abandonUnappliedCapsule closes the ledger row, releases public hosts, and 
     installationName: installation.name,
     now: "2026-06-06T00:00:00.000Z",
   });
+  await store.putInstallationProviderEnvBindingSet({
+    id: "dpf_1",
+    workspaceId: installation.workspaceId,
+    spaceId: installation.workspaceId,
+    capsuleId: installation.id,
+    installationId: installation.id,
+    environment: installation.environment,
+    bindings: [
+      {
+        provider: "cloudflare",
+        alias: "main",
+        connectionId: "conn_f42e2b50fe904311ad00",
+      },
+    ],
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
 
   const abandoned = await service.abandonUnappliedCapsule(
     installation.id,
@@ -274,6 +291,18 @@ test("abandonUnappliedCapsule closes the ledger row, releases public hosts, and 
   expect(
     (await store.getPublicHostReservation("shop.app.takos.jp"))?.status,
   ).toBe("released");
+  expect(
+    await store.getInstallationProviderEnvBindingSetByInstallation(
+      installation.id,
+      installation.environment,
+    ),
+  ).toBeUndefined();
+  expect(
+    await service.getCapsuleProviderEnvBindingSetByCapsule(
+      installation.id,
+      installation.environment,
+    ),
+  ).toBeUndefined();
   const replacement = await service.createInstallation({
     spaceId: "space_1",
     name: "shop",

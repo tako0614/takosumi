@@ -736,6 +736,10 @@ export interface OpenTofuDeploymentStore {
   putInstallationProviderEnvBindingSet(
     profile: InstallationProviderEnvBindingSet,
   ): Promise<InstallationProviderEnvBindingSet>;
+  deleteInstallationProviderEnvBindingSet(
+    installationId: string,
+    environment: string,
+  ): Promise<void>;
   getInstallationProviderEnvBindingSetByInstallation(
     installationId: string,
     environment: string,
@@ -1811,6 +1815,21 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     }
     this.#providerEnvBindingSets.set(profile.id, profile);
     return Promise.resolve(profile);
+  }
+
+  deleteInstallationProviderEnvBindingSet(
+    installationId: string,
+    environment: string,
+  ): Promise<void> {
+    for (const [key, existing] of this.#providerEnvBindingSets) {
+      if (
+        existing.installationId === installationId &&
+        existing.environment === environment
+      ) {
+        this.#providerEnvBindingSets.delete(key);
+      }
+    }
+    return Promise.resolve();
   }
 
   getInstallationProviderEnvBindingSetByInstallation(
