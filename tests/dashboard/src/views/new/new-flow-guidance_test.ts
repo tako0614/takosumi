@@ -87,14 +87,13 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).not.toContain("function StoreCard");
     expect(newAppViewSource).not.toContain("function ManualImportCard");
     expect(newAppViewSource).not.toContain("const [storeQuery");
-    expect(newAppViewSource).toContain("const allStoreEntries = createMemo");
+    expect(newAppViewSource).not.toContain("const allStoreEntries = createMemo");
     expect(newAppViewSource).not.toContain("const storeEntries = createMemo");
     expect(newAppViewSource).not.toContain("storeEntryMatchesQuery");
-    expect(newAppViewSource).toContain("function dedupeStoreConfigs");
-    expect(newAppViewSource).toContain("function storeConfigPriority");
-    expect(newAppViewSource).toContain("config.workspaceId === undefined");
-    expect(newAppViewSource).toContain('config.id.startsWith("cfg-official-")');
-    expect(newAppViewSource).toContain("config.store?.source");
+    expect(newAppViewSource).not.toContain("function dedupeStoreConfigs");
+    expect(newAppViewSource).not.toContain("function storeConfigPriority");
+    expect(newAppViewSource).not.toContain('config.id.startsWith("cfg-official-")');
+    expect(newAppViewSource).not.toContain("config.store?.source");
     expect(newAppViewSource).not.toContain("const primaryStore = createMemo");
     expect(newAppViewSource).not.toContain(
       "const buildingBlockStore = createMemo",
@@ -179,7 +178,7 @@ describe("/new flow guidance", () => {
   test("opens /new on service discovery while install links prefill the add flow", () => {
     expect(newAppViewSource).toContain("function initialAddTab");
     expect(newAppViewSource).toContain("parseInitialTcsHandoff(search)");
-    expect(newAppViewSource).toContain("parseInitialInstallConfigId(search)");
+    expect(newAppViewSource).not.toContain("parseInitialInstallConfigId");
     expect(newAppViewSource).toContain("!hasInstallPrefillParams(search)");
     expect(newAppViewSource).not.toContain('if (hasPrefill) return "git"');
     expect(newAppViewSource).not.toContain('params.get("mode") === "link"');
@@ -358,19 +357,15 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain("clearCapsuleListCache(workspace)");
   });
 
-  test("/new defers config API reads until a source or installConfig link is selected", () => {
-    expect(newAppViewSource).toContain("const shouldLoadTemplateConfigs = ()");
-    expect(newAppViewSource).toContain(
-      "return id && initialInstallConfigId ? id : null",
-    );
+  test("/new defers config API reads until a Git source or store listing is selected", () => {
+    expect(newAppViewSource).not.toContain("const shouldLoadTemplateConfigs = ()");
+    expect(newAppViewSource).not.toContain("initialInstallConfigId");
     expect(newAppViewSource).toContain("const shouldLoadInstallConfigs = ()");
     expect(newAppViewSource).toContain('activeTab() === "git"');
     expect(newAppViewSource).toContain(
-      "gitUrl().trim() || activeInstallPrefill() || selectedStoreConfigId()",
+      "gitUrl().trim() || activeInstallPrefill() || selectedStoreListing()",
     );
-    expect(newAppViewSource).toMatch(
-      /createResource\(\s*shouldLoadTemplateConfigs/u,
-    );
+    expect(newAppViewSource).not.toMatch(/createResource\(\s*shouldLoadTemplateConfigs/u);
     expect(newAppViewSource).toMatch(
       /createResource\(\s*shouldLoadInstallConfigs/u,
     );
@@ -398,34 +393,32 @@ describe("/new flow guidance", () => {
       'defaultValue: "service-name-with-space"',
     );
     expect(controlApiSource).toContain("listTemplateStoreInstallConfigs");
-    expect(newAppViewSource).toContain("STORE_VIEW");
-    expect(newAppViewSource).toContain("const allStoreEntries = createMemo");
-    expect(newAppViewSource).toContain("selectedStoreEntry");
+    expect(newAppViewSource).not.toContain("STORE_VIEW");
+    expect(newAppViewSource).not.toContain("const allStoreEntries = createMemo");
+    expect(newAppViewSource).not.toContain("selectedStoreEntry");
     expect(newAppViewSource).not.toContain("storeEntryToListing");
     expect(newAppViewSource).not.toContain(
       "createResource(workspaceId, listInstallConfigs)",
     );
   });
 
-  test("install links keep store view loading separate from generic Capsule config", () => {
-    expect(newAppViewSource).toContain("STORE_VIEW");
-    expect(newAppViewSource).toContain("const [templateConfigs]");
+  test("store handoffs use listing metadata and generic Capsule config only", () => {
+    expect(newAppViewSource).not.toContain("STORE_VIEW");
+    expect(newAppViewSource).not.toContain("const [templateConfigs]");
     expect(newAppViewSource).toContain("const [installConfigs]");
     expect(newAppViewSource).toContain("listInstallConfigsCached(id)");
     expect(newAppViewSource).toContain("const installConfigList");
     expect(newAppViewSource).toContain("installConfigList().find");
     expect(newAppViewSource).toContain('sourceKind === "generic_capsule"');
-    expect(newAppViewSource).toContain("templateConfigList().length === 0");
-    expect(newAppViewSource).toContain("!hasChosenSource()");
+    expect(newAppViewSource).not.toContain("templateConfigList().length === 0");
+    expect(newAppViewSource).not.toContain("parseInitialInstallConfigId");
   });
 
   test("selected store services use friendly setup fields instead of raw variables", () => {
-    expect(newAppViewSource).toContain("selectedStoreEntry");
+    expect(newAppViewSource).not.toContain("selectedStoreEntry");
     expect(newAppViewSource).toContain("storeServiceEntry");
     expect(newAppViewSource).toContain("selectedServiceEntry");
-    expect(newAppViewSource).toContain(
-      "selectedStoreEntry() ?? storeServiceEntry()",
-    );
+    expect(newAppViewSource).toContain("const selectedServiceEntry = () => storeServiceEntry()");
     expect(newAppViewSource).toContain("storeEntryFromStoreListing");
     expect(newAppViewSource).toContain("selectedStoreVariables");
     expect(newAppViewSource).toContain("selectedStoreReturnVariables");
@@ -492,7 +485,11 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain("storeInputTouched");
     expect(newAppViewSource).toContain("isConnectionScopedStoreInput");
     expect(newAppViewSource).toContain("hasMissingAdvancedStoreInputs");
-    expect(newAppViewSource).toContain("storeScopeHintValue(entry, field) ??");
+    expect(newAppViewSource).toContain(
+      "const scopeHint = storeScopeHintValue(entry, field)",
+    );
+    expect(newAppViewSource).toContain("if (scopeHint === undefined) continue");
+    expect(newAppViewSource).toContain("next[key] = scopeHint");
     expect(newAppViewSource).toContain(
       "if (storeInputTouched()[key]) continue",
     );
