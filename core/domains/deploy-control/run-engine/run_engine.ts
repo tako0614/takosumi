@@ -279,6 +279,18 @@ function runnerInfrastructureRetryExhaustedError(phase: string): Error {
   );
 }
 
+class PlanAlreadyAppliedReplay extends Error {
+  readonly existingApplyRunId: string;
+
+  constructor(planRunId: string, existingApplyRunId: string) {
+    super(
+      `plan run ${planRunId} has already been applied by apply run ${existingApplyRunId}`,
+    );
+    this.name = "PlanAlreadyAppliedReplay";
+    this.existingApplyRunId = existingApplyRunId;
+  }
+}
+
 /**
  * The single-owner run-serialization port. The controller owns the only
  * `#mutationChains` map + `#runSerialized` implementation and passes this
@@ -2456,8 +2468,9 @@ export class RunEngine {
     }
     // SECURITY (apply-once / idempotency): a `create` plan never carries an
     // installationId, so without this guard each apply allocates a brand-new
-    // Installation + Deployment (and real cloud resources). Reject any apply of a
-    // PlanRun that has already been successfully applied. (update/destroy were
+    // Installation + Deployment (and real cloud resources). Replays of a
+    // successfully-applied PlanRun are idempotent: return the existing apply
+    // response instead of creating a visible failed run. (update/destroy were
     // already replay-protected by the installation currentDeploymentId guard.)
     //
     // This is an OPTIMISTIC pre-check before the per-(Installation,environment)
@@ -2466,13 +2479,12 @@ export class RunEngine {
     // double-apply: the authoritative apply-once re-check runs INSIDE the
     // serialized section against the persisted PlanRun (see
     // `appliedApplyRunId` re-read in the commit path), so the second worker's
-    // dispatch is rejected before it commits any state generation. The pre-
-    // check stays as a cheap early-out for the common (non-concurrent) case.
+    // dispatch is folded into an idempotent replay before it commits any state
+    // generation. The pre-check stays as a cheap early-out for the common
+    // (non-concurrent) case.
     if (planRun.appliedApplyRunId) {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        `plan run ${planRun.id} has already been applied by apply run ${planRun.appliedApplyRunId}`,
-      );
+      await checkApplyExpected(request.expected, planRun);
+      return await this.getApplyRun(planRun.appliedApplyRunId);
     }
     // Destructive-confirmation gate (Phase 1C): a template plan-JSON policy that
     // flagged delete/replace under requireExplicitConfirmation requires the apply
@@ -4435,6 +4447,101 @@ export class RunEngine {
     return failed;
   }
 
+  async #completeApplyRunAsIdempotentReplay(input: {
+    readonly running: ApplyRun;
+    readonly planRun: PlanRun;
+    readonly profile: RunnerProfile;
+    readonly startedAt: number;
+    readonly leaseToken: string;
+    readonly existingApplyRunId: string;
+  }): Promise<ApplyRunResponse> {
+    const existing = await this.#store.getApplyRun(input.existingApplyRunId);
+    if (!existing || existing.status !== "succeeded") {
+      const failed = await this.#failApplyRun(
+        input.running,
+        input.leaseToken,
+        input.profile,
+        input.startedAt,
+        "apply.failed",
+        new OpenTofuControllerError(
+          "failed_precondition",
+          `plan run ${input.planRun.id} was marked applied, but apply run ${input.existingApplyRunId} is not available as a succeeded run`,
+        ),
+      );
+      return { applyRun: failed };
+    }
+    const now = this.#now();
+    const replayed: ApplyRun = {
+      ...input.running,
+      ...(existing.installationId
+        ? {
+            capsuleId: existing.capsuleId ?? existing.installationId,
+            installationId: existing.installationId,
+          }
+        : {}),
+      ...(existing.deploymentId ? { deploymentId: existing.deploymentId } : {}),
+      ...(existing.installationCurrentDeploymentId
+        ? {
+            installationCurrentDeploymentId:
+              existing.installationCurrentDeploymentId,
+          }
+        : {}),
+      ...(existing.stateVersionId
+        ? { stateVersionId: existing.stateVersionId }
+        : {}),
+      status: "succeeded",
+      stateLock:
+        existing.stateLock ??
+        stateLockEvidence(
+          input.profile.stateBackend,
+          input.startedAt,
+          now,
+          "recorded",
+        ),
+      ...(existing.outputs ? { outputs: existing.outputs } : {}),
+      ...(existing.providerResolutions
+        ? { providerResolutions: existing.providerResolutions }
+        : {}),
+      auditEvents: [
+        ...input.running.auditEvents,
+        auditEvent(input.running.id, "apply.idempotent_replay", now, {
+          planRunId: input.planRun.id,
+          existingApplyRunId: input.existingApplyRunId,
+          ...(existing.deploymentId
+            ? { deploymentId: existing.deploymentId }
+            : {}),
+        }),
+      ],
+      updatedAt: now,
+      finishedAt: now,
+      heartbeatAt: now,
+    };
+    const persisted = await this.#persistTerminalRun(
+      "apply",
+      replayed,
+      input.leaseToken,
+    );
+    const applyRun = persisted.run;
+    if (persisted.won) {
+      await this.#recordActivity({
+        spaceId: applyRun.spaceId,
+        action: "run.idempotent_replay",
+        targetType: "run",
+        targetId: applyRun.id,
+        runId: applyRun.id,
+        metadata: {
+          phase: applyRun.operation === "destroy" ? "destroy_apply" : "apply",
+          operation: applyRun.operation,
+          existingApplyRunId: input.existingApplyRunId,
+          ...(applyRun.installationId
+            ? { installationId: applyRun.installationId }
+            : {}),
+        },
+      });
+    }
+    return await this.getApplyRun(applyRun.id);
+  }
+
   async #requeueApplyRunAfterRunnerInfrastructureError(
     running: ApplyRun,
     leaseToken: string | undefined,
@@ -5349,6 +5456,16 @@ export class RunEngine {
         now,
       });
     } catch (error) {
+      if (error instanceof PlanAlreadyAppliedReplay) {
+        return await this.#completeApplyRunAsIdempotentReplay({
+          running,
+          planRun,
+          profile,
+          startedAt,
+          leaseToken,
+          existingApplyRunId: error.existingApplyRunId,
+        });
+      }
       if (runnerDispatched && isRetryableRunnerInfrastructureError(error)) {
         const runningWithEnvironmentFailure = runEnvironmentFailedRun(
           runningForFailure,
@@ -5475,11 +5592,13 @@ export class RunEngine {
     // Apply-once re-check inside the serialized section: a concurrent apply of the
     // same PlanRun is serialized on its id, so re-read the persisted PlanRun here
     // to observe a sibling apply that already completed and marked it applied.
+    // This is an idempotent replay of the same reviewed plan, not a user-visible
+    // failed run.
     const persistedPlan = await this.#store.getPlanRun(planRun.id);
     if (persistedPlan?.appliedApplyRunId) {
-      throw new OpenTofuControllerError(
-        "failed_precondition",
-        `plan run ${planRun.id} has already been applied by apply run ${persistedPlan.appliedApplyRunId}`,
+      throw new PlanAlreadyAppliedReplay(
+        planRun.id,
+        persistedPlan.appliedApplyRunId,
       );
     }
     const plannedInstallation = planRun.installationId

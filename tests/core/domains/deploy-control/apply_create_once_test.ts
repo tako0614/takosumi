@@ -14,8 +14,9 @@
  *     `plan:{planRunId}` lease added for S5.
  *
  * In both cases the inner `#executeApply` re-reads the persisted PlanRun under
- * the lease and rejects a sibling that already marked it applied, so only ONE
- * Deployment is ever recorded.
+ * the lease and folds a sibling that already marked it applied into an
+ * idempotent replay, so only ONE Deployment is ever recorded and the duplicate
+ * apply does not poison the Capsule status.
  */
 
 import { expect, test } from "bun:test";
@@ -154,7 +155,7 @@ async function seedQueuedApply(
   await store.putApplyRun(apply);
 }
 
-test("two applies of the same create plan: exactly one succeeds, the other is rejected, only ONE deployment", async () => {
+test("two applies of the same create plan: exactly one materializes, the other replays, only ONE deployment", async () => {
   const { store, controller, planRun, installationId } = await seedCreatePlan();
 
   // Two ApplyRuns both pass the non-atomic up-front check (modeled by seeding
@@ -171,13 +172,35 @@ test("two applies of the same create plan: exactly one succeeds, the other is re
   );
 
   // Second consumer (redelivered after the first released the lease) re-reads
-  // the now-applied plan under the lease and is rejected — it never allocates a
-  // second Deployment.
+  // the now-applied plan under the lease and is folded into an idempotent
+  // replay — it never allocates a second Deployment and it is not a failed run.
   const second = await controller.runQueuedApply("apply_second");
-  expect(second.applyRun.status).toBe("failed");
-  expect(JSON.stringify(second.applyRun.diagnostics ?? [])).toContain(
-    "has already been applied",
+  expect(second.applyRun.status).toBe("succeeded");
+  expect(second.applyRun.deploymentId).toBe(first.applyRun.deploymentId);
+  expect(second.applyRun.auditEvents.map((event) => event.type)).toContain(
+    "apply.idempotent_replay",
   );
+
+  const deployments = await store.listDeployments(installationId);
+  expect(deployments.length).toBe(1);
+});
+
+test("createApplyRun returns the existing apply response after a plan has already applied", async () => {
+  const { store, controller, planRun, installationId } = await seedCreatePlan();
+
+  const first = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+  expect(first.applyRun.status).toBe("succeeded");
+
+  const replay = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+  expect(replay.applyRun.id).toBe(first.applyRun.id);
+  expect(replay.applyRun.status).toBe("succeeded");
+  expect(replay.deployment?.id).toBe(first.deployment?.id);
 
   const deployments = await store.listDeployments(installationId);
   expect(deployments.length).toBe(1);
