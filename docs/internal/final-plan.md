@@ -1111,6 +1111,11 @@ Managed names are first-come-first-served and broadly available for ordinary
 installs. Arbitrary user-owned custom domains are a separate lifecycle and must
 pass ownership verification, certificate provisioning, plan/quota, and abuse
 policy before runtime activation.
+This is a hard product boundary: operator-owned managed hostnames such as
+`<label>.app.takos.jp` are treated as a broad default namespace, not as scarce
+custom-domain quota. The scarce surface is arbitrary user-owned hostnames.
+Those require verified ownership, account attribution, plan/quota controls, and
+abuse policy before activation.
 
 Implementation can use Cloudflare primitives such as Workers for Platforms,
 Dynamic Workers, R2, D1, KV, Queues, Workflows, Containers, and AI Gateway.

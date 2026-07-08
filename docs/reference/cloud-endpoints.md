@@ -466,9 +466,14 @@ Takosumi Cloud の既定 managed base domain は `app.takos.jp` です。operato
 同じ contract で別の managed base domain を設定できます。
 managed namespace は first-come-first-served で、重複時は 409 を返します。
 409 response は claimant の Workspace / Capsule 名を公開しません。
+managed namespace は custom domain quota とは別枠です。`*.app.takos.jp`
+のような operator-owned base domain 配下の定型 hostname は、重複排他・禁止語・
+abuse rate limit で守り、通常のインストールでは広く使える前提にします。
 `custom_domains` はユーザー所有ドメインです。DNS ownership verification、
 certificate provisioning、runtime dispatch の有効化、plan/quota/abuse policy は
 Cloud runtime 側の責務です。
+任意の apex / subdomain は verified domain として owner account に紐づけ、
+plan/quota/abuse policy で数と利用を制限します。
 未検証 custom domain は runtime で有効化せず、default hostname は維持します。
 
 `cloudflare_workers_script_subdomain` 互換 route は、Cloudflare の

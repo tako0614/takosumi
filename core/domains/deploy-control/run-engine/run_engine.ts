@@ -127,9 +127,10 @@ import {
 } from "../store.ts";
 import {
   DEFAULT_MANAGED_PUBLIC_BASE_DOMAIN,
-  isManagedPublicHost,
   managedPublicBaseDomainFromInstallConfig,
   managedPublicHostFromLabel,
+  normalizeManagedPublicBaseDomains,
+  publicHostPolicyKind,
 } from "../managed_public_domains.ts";
 import { evaluateTemplatePlanPolicy } from "../template_policy.ts";
 import {
@@ -2026,10 +2027,9 @@ export class RunEngine {
       readonly managedBaseDomains?: readonly string[];
     } = {},
   ): Promise<void> {
-    const managedBaseDomains =
-      options.managedBaseDomains && options.managedBaseDomains.length > 0
-        ? options.managedBaseDomains
-        : [DEFAULT_MANAGED_PUBLIC_BASE_DOMAIN];
+    const managedBaseDomains = normalizeManagedPublicBaseDomains(
+      options.managedBaseDomains,
+    );
     const requestedHosts = publicHostsFromVariables(
       variables,
       managedBaseDomains[0],
@@ -2037,13 +2037,8 @@ export class RunEngine {
     if (requestedHosts.length === 0) return;
     if (options.managedDomainsOnly === true) {
       for (const host of requestedHosts) {
-        if (
-          managedBaseDomains.some((baseDomain) =>
-            isManagedPublicHost(host, baseDomain),
-          )
-        ) {
+        if (publicHostPolicyKind(host, managedBaseDomains) !== "custom_domain")
           continue;
-        }
         throw new OpenTofuControllerError(
           "failed_precondition",
           customDomainVerificationRequiredMessage(),

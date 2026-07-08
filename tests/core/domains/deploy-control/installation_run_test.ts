@@ -1133,6 +1133,88 @@ test("managed Cloudflare Capsule rejects unverified custom public app_url", asyn
   );
 });
 
+test("managed Cloudflare Capsule allows managed-base app_url and route pattern without custom-domain quota", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  const seeded = await seedInstallationModel(store, {
+    name: "Managed Public Host App",
+    environment: "preview",
+    installConfig: {
+      variableMapping: {
+        app_url: "https://community.apps.example.org",
+        cloudflare_route_pattern: "community.apps.example.org/*",
+        cloudflare: {
+          account_id: null,
+          api_base_url: null,
+        },
+      },
+      catalog: {
+        order: 100,
+        surface: "service",
+        kind: "worker",
+        provider: "cloudflare",
+        suggestedName: "managed-public-host",
+        badge: { ja: "追加候補", en: "Installable" },
+        name: { ja: "managed", en: "managed" },
+        description: { ja: "テスト", en: "Test" },
+        inputs: [],
+        installExperience: {
+          publicEndpoint: {
+            subdomainVariable: "worker_name",
+            urlVariable: "app_url",
+            routePatternVariable: "cloudflare_route_pattern",
+            baseDomain: "apps.example.org",
+          },
+        },
+      },
+    },
+  });
+  await putConnectionWithProviderEnv(store, {
+    ...cloudflareConnection(
+      "conn_cloudflare_managed_host",
+      seeded.installation.spaceId,
+    ),
+    scopeHints: {
+      managedProvider: true,
+      providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      accountId: "ts_acc_takosumi_cloud",
+    },
+  });
+  await store.putInstallationProviderEnvBindingSet({
+    id: "profile_cloudflare_managed_host",
+    spaceId: seeded.installation.spaceId,
+    installationId: seeded.installation.id,
+    environment: seeded.installation.environment,
+    bindings: [
+      {
+        provider: "cloudflare",
+        alias: "main",
+        connectionId: "conn_cloudflare_managed_host",
+      },
+    ],
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
+  const profile = multiProviderRunnerProfile();
+  const controller = controllerWith(store, runner, {
+    runnerProfiles: [profile],
+    defaultRunnerProfileId: profile.id,
+  });
+
+  const { planRun } = await controller.createInstallationPlan(
+    seeded.installation.id,
+  );
+
+  expect(planRun.status).toEqual("succeeded");
+  await expect(
+    store.getPublicHostReservation("community.apps.example.org"),
+  ).resolves.toMatchObject({
+    hostname: "community.apps.example.org",
+    installationId: seeded.installation.id,
+    status: "reserved",
+  });
+});
+
 test("managed Cloudflare app.takos.jp host is globally claimed across Workspaces", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   const runner = recordingRunner();
