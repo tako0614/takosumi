@@ -427,8 +427,10 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain("storeVariablePath");
     expect(newAppViewSource).toContain("storeInputError");
     expect(newAppViewSource).toContain(
-      "setInstallConfigId(entry.installConfigId)",
+      "defaultGitInstallConfig()?.id ?? DEFAULT_CAPSULE_INSTALL_CONFIG_ID",
     );
+    expect(newAppViewSource).not.toContain("listing.installConfigId");
+    expect(newAppViewSource).not.toContain("storeListing.installConfigId");
     expect(newAppViewSource).toContain('class="av-service-setup"');
     expect(newAppViewSource).toContain('t("new.storeInput.title")');
     expect(newAppViewSource).toContain('t("new.storeInput.subtitle")');
