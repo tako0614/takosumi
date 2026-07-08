@@ -189,7 +189,9 @@ There is no universal requirement that every Capsule has a subdomain, password,
 or Takosumi-specific env block. Apps that need a public endpoint opt into
 `publicEndpoint`; apps that need a first-run secret opt into `initialSecret`;
 all other knobs stay ordinary catalog inputs or generic variables and are passed
-to the OpenTofu module unchanged.
+to the OpenTofu module unchanged. Advanced catalog inputs such as artifact URL,
+artifact digest, container image maps, and app-specific env still map directly
+to OpenTofu variables; they are not hidden runner directives.
 
 Do not add `purpose` flags to individual inputs as a pseudo-standard. The
 contract is the mapping from standard install concepts to module variables.

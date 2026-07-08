@@ -140,6 +140,6 @@ describe("dashboard catalog", () => {
       catalogEntries().map((entry) => [entry.installConfigId, entry.iconUrl]),
     );
     expect(icons.get("cfg-catalog-yurucommu")).toContain("yurucommu.svg");
-    expect(icons.get("cfg-catalog-takos")).toContain("logo.png");
+    expect(icons.get("cfg-catalog-takos")).toContain("takos.svg");
   });
 });

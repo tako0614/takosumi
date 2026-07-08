@@ -545,6 +545,8 @@ export const en: Record<keyof typeof ja, string> = {
   "new.catalogInput.errorRequired": "Enter {label}.",
   "new.catalogInput.errorUnsafeValue":
     "{label} contains unsupported characters or is too long.",
+  "new.catalogInput.errorSubdomain":
+    "Use a single {baseDomain} label for {label}. Lowercase letters, numbers, and hyphens are supported.",
   "new.catalogInput.errorCustomDomain":
     "Use an https:// URL for {label}. {baseDomain} names must use one label; custom domains require ownership verification before deploy.",
   "new.deeplink.summary":
@@ -692,11 +694,11 @@ export const en: Record<keyof typeof ja, string> = {
   "new.error.genericWithDetails":
     "The service could not be added. Details: {message}",
   "new.error.appHostnameUnavailable":
-    "That public subdomain is already in use. Choose another Service ID and try again.",
-  "new.hostnameConflict.title": "Choose another Service ID",
+    "That public URL name is already in use. Choose another name and try again.",
+  "new.hostnameConflict.title": "Choose another public URL name",
   "new.hostnameConflict.body":
-    "Use a different ID for the public URL, then add the service again.",
-  "new.hostnameConflict.suggest": "Use suggested ID",
+    "Use a different name for the public URL, then add the service again.",
+  "new.hostnameConflict.suggest": "Use suggested name",
   "new.error.alreadyExists":
     "“{name}” is already added. Open it from the service list.",
   "new.error.alreadyExistsGeneric":
