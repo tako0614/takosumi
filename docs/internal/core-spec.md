@@ -176,7 +176,9 @@ publicEndpoint:
   <subdomain>.<managed-base-domain> from this mapping, but the module still
   receives plain variables. Takosumi Cloud uses app.takos.jp as its managed base
   domain; other operators can use their own managed base domain under the same
-  contract.
+  contract. Managed-base hostnames are broadly available and protected by
+  uniqueness / reserved-name / abuse controls. Arbitrary user-owned custom
+  domains are a separate verified-domain lifecycle with plan/quota controls.
 
 initialSecret:
   optional first-run password/token input for apps that need one.

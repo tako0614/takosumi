@@ -503,10 +503,16 @@ Cloud default managed base domain is `app.takos.jp`; operators can configure a
 different managed base domain under the same contract. The managed namespace is
 first-come-first-served; duplicate reservations return 409. 409 responses do
 not reveal the claimant Workspace or Capsule name.
+The managed namespace is separate from custom-domain quota. Operator-owned
+base-domain hostnames such as `*.app.takos.jp` are protected by global
+uniqueness, reserved labels, and abuse rate limits, but ordinary installs
+should be able to use them broadly.
 `custom_domains` are user-owned domains. DNS ownership verification,
 certificate provisioning, runtime dispatch activation, and plan/quota/abuse
-policy are Cloud runtime responsibilities. Unverified custom domains are not
-activated for runtime dispatch, and the default hostname remains available.
+policy are Cloud runtime responsibilities. Arbitrary apex or subdomain names
+are attached to the owning account as verified domains and constrained by plan
+and abuse policy. Unverified custom domains are not activated for runtime
+dispatch, and the default hostname remains available.
 
 The `cloudflare_workers_script_subdomain` compatibility route is stored as a
 Takosumi-managed `*.app.takos.jp` public name, not as a Cloudflare

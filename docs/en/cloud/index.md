@@ -104,6 +104,10 @@ yet. This managed namespace does not require DNS ownership verification. To use
 a user-owned domain, add a custom domain and complete DNS ownership
 verification, certificate provisioning, and plan/quota/abuse policy. The custom
 domain then points at the same route.
+Managed namespaces such as `*.app.takos.jp` are separate from custom-domain
+quota and should be broadly available for ordinary app installs. The controls
+are DNS-valid single-label names, global uniqueness, reserved labels, and abuse
+policy.
 
 ```text
 Default URL:
@@ -116,9 +120,11 @@ Custom domains:
 
 The managed namespace is first-come-first-served. A duplicate hostname
 reservation fails, platform-reserved names are unavailable, and claimant
-Workspace/Capsule names are not exposed. The default URL remains available when
-a custom domain is pending, expired, or disabled. This keeps inspection and
-removal possible even during DNS mistakes or domain transfers.
+Workspace/Capsule names are not exposed. Arbitrary apex or subdomain names are
+verified domains attached to the owning account and constrained by plan/quota
+and abuse policy. The default URL remains available when a custom domain is
+pending, expired, or disabled. This keeps inspection and removal possible even
+during DNS mistakes or domain transfers.
 
 ## Service Rollout
 
