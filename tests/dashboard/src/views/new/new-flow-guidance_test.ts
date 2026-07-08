@@ -208,8 +208,8 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain(
       "setInputVariables(inputVariableRowsFromPrefill(next.vars))",
     );
-    expect(newAppViewSource).toContain("SYSTEM_INSTALL_VARIABLE_NAMES");
-    expect(newAppViewSource).toContain("ADVANCED_INSTALL_VARIABLE_NAMES");
+    expect(newAppViewSource).not.toContain("SYSTEM_INSTALL_VARIABLE_NAMES");
+    expect(newAppViewSource).not.toContain("ADVANCED_INSTALL_VARIABLE_NAMES");
     expect(newAppViewSource).toContain("currentInstallPrefill()?.vars ?? {}");
     expect(newAppViewSource).toContain("activeInstallPrefill()");
     expect(newAppViewSource).toContain("? prefilledLinkReview()");

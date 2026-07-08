@@ -241,12 +241,14 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
       {
         name: "enable_cloudflare_resources",
         type: "boolean",
+        advanced: true,
         defaultValue: "true",
         label: text("Cloudflare リソースを作成", "Create Cloudflare resources"),
       },
       {
         name: "enable_cloudflare_worker_script",
         type: "boolean",
+        advanced: true,
         defaultValue: "true",
         label: text("Worker を公開", "Publish Worker"),
       },
@@ -354,12 +356,14 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
       {
         name: "enable_cloudflare_resources",
         type: "boolean",
+        advanced: true,
         defaultValue: "true",
         label: text("Cloudflare リソースを作成", "Create Cloudflare resources"),
       },
       {
         name: "enable_cloudflare_worker_script",
         type: "boolean",
+        advanced: true,
         defaultValue: "true",
         label: text("Worker を公開", "Publish Worker"),
       },
@@ -453,12 +457,14 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
       {
         name: "enable_cloudflare_resources",
         type: "boolean",
+        advanced: true,
         defaultValue: "true",
         label: text("Cloudflare リソースを作成", "Create Cloudflare resources"),
       },
       {
         name: "enable_cloudflare_worker_script",
         type: "boolean",
+        advanced: true,
         defaultValue: "true",
         label: text("Worker を公開", "Publish Worker"),
       },

@@ -248,6 +248,12 @@ knobs are also ordinary OpenTofu variables. The catalog may place them in an
 advanced section, but Takosumi must not turn them into a hidden side channel or
 special non-OpenTofu deploy mechanism.
 
+The dashboard must not maintain hard-coded "system" or "advanced" variable-name
+lists for install inputs. If an input should be hidden behind details, marked as
+secret, or surfaced as a common setup field, that presentation comes from
+`catalog.inputs[]` and `installExperience`; the submitted value is still just a
+normal OpenTofu variable.
+
 The preferred fast path is a Git CI or release pipeline that publishes a
 versioned, publicly fetchable artifact plus a SHA-256 digest. The OpenTofu
 module consumes that URL and digest as normal input variables and verifies the

@@ -193,6 +193,12 @@ to the OpenTofu module unchanged. Advanced catalog inputs such as artifact URL,
 artifact digest, container image maps, and app-specific env still map directly
 to OpenTofu variables; they are not hidden runner directives.
 
+Install presentation is data-driven. The dashboard must not hide or promote
+inputs by hard-coded variable names such as a particular app's artifact URL,
+Cloudflare toggle, or route variable. Visibility, secret handling, and guided
+setup behavior come from `catalog.inputs[]` plus `installExperience`; unknown
+variables remain generic OpenTofu inputs.
+
 Do not add `purpose` flags to individual inputs as a pseudo-standard. The
 contract is the mapping from standard install concepts to module variables.
 Unknown modules remain valid plain OpenTofu Capsules; without
