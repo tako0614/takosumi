@@ -269,7 +269,11 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       this.transport,
       "compatibility_check",
       job.runId,
-      {},
+      {
+        source: {
+          ...(job.modulePath ? { modulePath: job.modulePath } : {}),
+        },
+      },
     );
     const files = result.files;
     if (!Array.isArray(files)) {
