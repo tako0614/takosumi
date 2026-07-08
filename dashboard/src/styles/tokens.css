@@ -11,31 +11,34 @@
 :root[data-theme="dark"] {
   color-scheme: dark;
 
-  /* ===== Palette — dark (default). Quiet neutral canvas, one accent. ===== */
-  --tg-bg: #141416;
-  --tg-bg-elev: #1b1b1e;
-  --tg-bg-subtle: #232327;
-  --tg-bg-hi: #2a2a2f;
-  --tg-fg: #f4f4f5;
-  --tg-fg-muted: #9a9aa2;
-  --tg-fg-subtle: #6a6a72;
-  --tg-line: #2b2b30;
-  --tg-line-strong: #3a3a41;
-  --tg-code-bg: #232327;
-  --tg-code-fg: #f0f0f2;
+  /* ===== Palette — dark (default). "Warm Onyx": a near-black with a faint
+     warm (red-brown) bias so the ground reads chosen, not a default grey, and
+     sits in the same family as the red accent. One accent, deepened a touch
+     off neon toward a refined vermilion. ===== */
+  --tg-bg: #14110f;
+  --tg-bg-elev: #1c1815;
+  --tg-bg-subtle: #241f1b;
+  --tg-bg-hi: #2d2723;
+  --tg-fg: #f7f4f1;
+  --tg-fg-muted: #a8a099;
+  --tg-fg-subtle: #736b64;
+  --tg-line: #2a2420;
+  --tg-line-strong: #3a332d;
+  --tg-code-bg: #241f1b;
+  --tg-code-fg: #f0ece7;
   --tg-fixed-light-bg: #ffffff;
   --tg-fixed-light-fg: #111827;
 
-  --tg-accent: #ff5347;
-  --tg-accent-strong: #ff6f63;
-  --tg-accent-hover: #ff6f63;
+  --tg-accent: #e5473b;
+  --tg-accent-strong: #ff6153;
+  --tg-accent-hover: #ff6153;
   --tg-accent-fg: #ffffff;
-  --tg-accent-soft: #331714;
-  --tg-accent-text: #ff8b83;
+  --tg-accent-soft: #2c1613;
+  --tg-accent-text: #ff9f92;
 
   --tg-grad-from: #ffffff;
-  --tg-grad-mid: #ff6f63;
-  --tg-grad-to: #ff5347;
+  --tg-grad-mid: #ff6153;
+  --tg-grad-to: #e5473b;
 
   --tg-info: #6ea8ff;
   --tg-success: #46c85a;
@@ -51,8 +54,8 @@
   --tg-k-site-fg: #a9cfe0;
   --tg-k-storage-bg: #423823;
   --tg-k-storage-fg: #e0c48a;
-  --tg-k-default-bg: #2c2c33;
-  --tg-k-default-fg: #b6b6c0;
+  --tg-k-default-bg: #2b2521;
+  --tg-k-default-fg: #bcb3a8;
 
   /* Shadows — reserved for genuinely floating things (popovers, sheets,
      success cards). Flat surfaces separate with hairlines, not elevation. */
@@ -62,6 +65,45 @@
     0 2px 6px rgba(0, 0, 0, 0.34), 0 14px 28px -12px rgba(0, 0, 0, 0.62);
   --tg-shadow-md: 0 10px 24px rgba(0, 0, 0, 0.4);
   --tg-shadow-lg: 0 20px 44px rgba(0, 0, 0, 0.52);
+
+  /* ===== Material treatment (dark) — the "premium" layer. Surfaces gain a
+     subtle graded face, a 1px top light (lit-from-above), and soft depth so
+     the UI reads as crafted material instead of flat grey. Theme-paired: the
+     light scope redefines each of these. Referenced by shell/app-views/
+     components CSS through the token name, never inlined. ===== */
+  --tg-canvas:
+    radial-gradient(
+      1100px 560px at 82% -12%,
+      rgba(229, 71, 59, 0.08),
+      transparent 62%
+    ),
+    linear-gradient(180deg, #17130f 0%, #100d0b 60%, #0d0b09 100%);
+  --tg-surface-sidebar: linear-gradient(180deg, #1c1712 0%, #141009 100%);
+  --tg-hairline-soft: rgba(255, 240, 230, 0.06);
+  --tg-tile-face: linear-gradient(158deg, #2b241f 0%, #1e1813 100%);
+  --tg-tile-shadow:
+    inset 0 1px 0 rgba(255, 240, 230, 0.08),
+    inset 0 0 0 1px rgba(255, 240, 230, 0.05),
+    0 8px 20px -8px rgba(0, 0, 0, 0.65), 0 2px 5px rgba(0, 0, 0, 0.4);
+  --tg-tile-shadow-hover:
+    inset 0 1px 0 rgba(255, 240, 230, 0.1),
+    inset 0 0 0 1px rgba(255, 240, 230, 0.07),
+    0 16px 30px -10px rgba(0, 0, 0, 0.72), 0 4px 8px rgba(0, 0, 0, 0.45);
+  --tg-card-inset: inset 0 1px 0 rgba(255, 240, 230, 0.05);
+  --tg-accent-grad: linear-gradient(
+    180deg,
+    var(--tg-accent-strong),
+    var(--tg-accent)
+  );
+  --tg-accent-btn-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.22),
+    0 4px 12px -4px rgba(229, 71, 59, 0.5);
+  --tg-active-grad: linear-gradient(
+    180deg,
+    rgba(229, 71, 59, 0.18),
+    rgba(229, 71, 59, 0.09)
+  );
+  --tg-active-ring: inset 0 0 0 1px rgba(229, 71, 59, 0.26);
 
   /* ===== Theme-independent scales ===== */
   /* Spacing scale */
@@ -130,18 +172,19 @@
 :root[data-theme="light"] {
   color-scheme: light;
 
-  /* ===== Palette — light. Same system, bright ground. ===== */
-  --tg-bg: #f5f5f6;
+  /* ===== Palette — light. Same "Warm Onyx" family on a bright ground: a warm
+     paper white with a faint red-brown bias, not a cold grey. ===== */
+  --tg-bg: #f7f5f2;
   --tg-bg-elev: #ffffff;
-  --tg-bg-subtle: #f1f1f3;
-  --tg-bg-hi: #eaeaee;
-  --tg-fg: #17171a;
-  --tg-fg-muted: #71717a;
-  --tg-fg-subtle: #a1a1aa;
-  --tg-line: #e5e5e8;
-  --tg-line-strong: #d6d6db;
-  --tg-code-bg: #f1f1f3;
-  --tg-code-fg: #27272a;
+  --tg-bg-subtle: #f2efeb;
+  --tg-bg-hi: #eae5df;
+  --tg-fg: #1a1613;
+  --tg-fg-muted: #77716a;
+  --tg-fg-subtle: #a8a199;
+  --tg-line: #e7e1da;
+  --tg-line-strong: #d8d1c8;
+  --tg-code-bg: #f2efeb;
+  --tg-code-fg: #2a2521;
   --tg-fixed-light-bg: #ffffff;
   --tg-fixed-light-fg: #111827;
 
@@ -149,10 +192,10 @@
   --tg-accent-strong: #c42f24;
   --tg-accent-hover: #c42f24;
   --tg-accent-fg: #ffffff;
-  --tg-accent-soft: #fdecea;
+  --tg-accent-soft: #fdece9;
   --tg-accent-text: #c42f24;
 
-  --tg-grad-from: #17171a;
+  --tg-grad-from: #1a1613;
   --tg-grad-mid: #e0362a;
   --tg-grad-to: #c42f24;
 
@@ -177,6 +220,39 @@
     0 2px 4px rgba(16, 24, 40, 0.05), 0 12px 26px -12px rgba(16, 24, 40, 0.16);
   --tg-shadow-md: 0 10px 24px rgba(16, 24, 40, 0.1);
   --tg-shadow-lg: 0 20px 44px rgba(16, 24, 40, 0.16);
+
+  /* Material treatment (light) — theme pair of the dark block above. Highlights
+     become white, depth stays soft and warm-tinted. */
+  --tg-canvas:
+    radial-gradient(
+      1100px 560px at 82% -12%,
+      rgba(224, 54, 42, 0.05),
+      transparent 62%
+    ),
+    linear-gradient(180deg, #f8f6f3 0%, #f1efeb 100%);
+  --tg-surface-sidebar: linear-gradient(180deg, #ffffff 0%, #faf8f5 100%);
+  --tg-hairline-soft: rgba(60, 45, 30, 0.08);
+  --tg-tile-face: linear-gradient(158deg, #ffffff 0%, #f3f0ec 100%);
+  --tg-tile-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    inset 0 0 0 1px rgba(60, 45, 30, 0.08),
+    0 6px 16px -8px rgba(40, 30, 20, 0.2), 0 1px 3px rgba(40, 30, 20, 0.1);
+  --tg-tile-shadow-hover:
+    inset 0 1px 0 rgba(255, 255, 255, 1),
+    inset 0 0 0 1px rgba(60, 45, 30, 0.1),
+    0 14px 28px -10px rgba(40, 30, 20, 0.24), 0 3px 6px rgba(40, 30, 20, 0.12);
+  --tg-card-inset: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  --tg-accent-grad: linear-gradient(180deg, #ec4436, #e0362a);
+  --tg-accent-btn-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.35),
+    0 4px 12px -4px rgba(224, 54, 42, 0.35);
+  --tg-active-grad: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--tg-accent) 12%, transparent),
+    color-mix(in srgb, var(--tg-accent) 6%, transparent)
+  );
+  --tg-active-ring: inset 0 0 0 1px
+    color-mix(in srgb, var(--tg-accent) 22%, transparent);
 }
 
 /* ===== Dashboard-only layout + status tokens (theme-independent). ===== */

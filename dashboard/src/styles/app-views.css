@@ -615,9 +615,7 @@
   transform: translateY(-3px);
 }
 .av-tile:hover .av-tile-icon {
-  box-shadow:
-    inset 0 0 0 1px var(--tg-line-strong),
-    var(--tg-shadow-card-hover);
+  box-shadow: var(--tg-tile-shadow-hover);
 }
 .av-tile:focus-visible {
   outline: none;
@@ -638,11 +636,9 @@
   width: 100%;
   aspect-ratio: 1 / 1;
   border-radius: var(--tg-r-xl);
-  background: var(--tg-bg-subtle);
+  background: var(--tg-tile-face);
   color: var(--tg-fg-muted);
-  box-shadow:
-    inset 0 0 0 1px var(--tg-line),
-    var(--tg-shadow-xs);
+  box-shadow: var(--tg-tile-shadow);
   transition:
     transform var(--tg-dur) var(--tg-ease),
     box-shadow var(--tg-dur) var(--tg-ease);
@@ -661,22 +657,22 @@
 .av-tile-k-worker {
   background: var(--tg-k-worker-bg);
   color: var(--tg-k-worker-fg);
-  box-shadow: var(--tg-shadow-xs);
+  box-shadow: var(--tg-tile-shadow);
 }
 .av-tile-k-site {
   background: var(--tg-k-site-bg);
   color: var(--tg-k-site-fg);
-  box-shadow: var(--tg-shadow-xs);
+  box-shadow: var(--tg-tile-shadow);
 }
 .av-tile-k-storage {
   background: var(--tg-k-storage-bg);
   color: var(--tg-k-storage-fg);
-  box-shadow: var(--tg-shadow-xs);
+  box-shadow: var(--tg-tile-shadow);
 }
 .av-tile-k-default {
   background: var(--tg-k-default-bg);
   color: var(--tg-k-default-fg);
-  box-shadow: var(--tg-shadow-xs);
+  box-shadow: var(--tg-tile-shadow);
 }
 .av-tile-dot {
   position: absolute;
