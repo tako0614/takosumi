@@ -138,11 +138,22 @@ Takosumi does not decide app artifact semantics. If a module needs an image
 reference, release tag, object key, URL, or digest, the module declares a normal
 variable or provider/data-source logic.
 
-## Install Catalog Experience Contract
+## Install Store Experience Contract
 
-Catalog entries may expose an optional `installExperience` object. This is a
-dashboard/store UX contract, not execution authority and not a Takosumi-owned
-repo metadata requirement.
+The install Store is discovery and presentation only. A Store node announces
+that a Git repository/path exists and can present friendly setup fields, icons,
+and descriptions. It does not own release selection: branch, tag, commit,
+SourceSnapshot, update cadence, and auto-sync policy belong to the Git Source /
+Run flow. Dashboard handoff must not pin a Store listing's optional `ref` as the
+installed ref.
+
+Operators and users can switch Store nodes. Switching the Store changes where
+listings are read from and which presentation metadata is used; it does not
+change the Capsule execution model or create a second release authority.
+
+Store entries may expose an optional `installExperience` object. This is a
+dashboard UX contract, not execution authority and not a Takosumi-owned repo
+metadata requirement.
 
 The OpenTofu module still owns its variable names. `installExperience` maps
 standard install concepts to those module variables:
@@ -220,18 +231,18 @@ artifact projection:
 There is no universal requirement that every Capsule has a subdomain, password,
 or Takosumi-specific env block. Apps that need a public endpoint opt into
 `public_endpoint`; apps that need a first-run secret opt into `initial_secret`;
-all other knobs stay ordinary catalog inputs or generic variables and are passed
-to the OpenTofu module unchanged. Advanced catalog inputs such as artifact URL,
+all other knobs stay ordinary store inputs or generic variables and are passed
+to the OpenTofu module unchanged. Advanced store inputs such as artifact URL,
 artifact digest, container image maps, and app-specific env still map directly
 to OpenTofu variables; they are not hidden runner directives.
 
 Install presentation is data-driven. The dashboard must not hide or promote
 inputs by hard-coded variable names such as a particular app's artifact URL,
 Cloudflare toggle, or route variable. Visibility, secret handling, and guided
-setup behavior come from `catalog.inputs[]` plus `installExperience`; unknown
+setup behavior come from `store.inputs[]` plus `installExperience`; unknown
 variables remain generic OpenTofu inputs.
 
-`catalog.inputs[]` can include `format` (`text`, `url`, `hostname`,
+`store.inputs[]` can include `format` (`text`, `url`, `hostname`,
 `subdomain`, `password`, `token`, `email`, or `sha256`) for presentation and
 validation. The submitted value remains a normal OpenTofu variable.
 
@@ -240,7 +251,7 @@ contract is the mapping from standard install concepts to module variables.
 Unknown modules remain valid plain OpenTofu Capsules; without
 `installExperience`, Takosumi only uses generic variable defaults. Names such as
 `worker_name`, `app_url`, and `cloudflare_route_pattern` are ordinary OpenTofu
-variables unless the catalog explicitly maps them through
+variables unless the store explicitly maps them through
 the `public_endpoint` projection.
 
 ## Performance Model

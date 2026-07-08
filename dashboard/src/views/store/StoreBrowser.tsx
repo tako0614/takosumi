@@ -45,9 +45,11 @@ const STR = {
   all: { ja: "すべて", en: "All" },
   sortUpdated: { ja: "更新順", en: "Recently updated" },
   sortName: { ja: "名前順", en: "Name" },
+  storeFilter: { ja: "表示ストア", en: "Store" },
+  allStores: { ja: "すべてのストア", en: "All stores" },
   loadMore: { ja: "もっと読み込む", en: "Load more" },
   none: { ja: "該当するサービスがありません", en: "No matching services" },
-  servers: { ja: "カタログ取得元", en: "Catalog sources" },
+  servers: { ja: "ストア取得元", en: "Store sources" },
   serversAdvanced: { ja: "詳細", en: "Advanced" },
   addServer: { ja: "追加", en: "Add" },
   serverPlaceholder: {
@@ -89,7 +91,7 @@ function s(key: keyof typeof STR, locale: TcsLocale): string {
 function pick(t: { ja: string; en: string }, locale: TcsLocale): string {
   return (locale === "ja" ? t.ja : t.en) || t.en || t.ja;
 }
-function repoUrl(git: string, ref: string, path: string): string {
+function repoUrl(git: string, ref: string | undefined, path: string): string {
   const base = git.replace(/\.git$/i, "");
   if (/github\.com/i.test(base) && ref) {
     return `${base}/tree/${ref}${path ? `/${path}` : ""}`;
@@ -97,7 +99,7 @@ function repoUrl(git: string, ref: string, path: string): string {
   return base;
 }
 function sourceVersion(listing: TcsListing): string {
-  return listing.source.resolvedCommit ?? listing.source.ref;
+  return listing.source.ref ?? "Git default branch";
 }
 function listingSearchText(listing: TcsListing, locale: TcsLocale): string {
   return [
@@ -166,6 +168,7 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
   const [searchInput, setSearchInput] = createSignal("");
   const [activeQuery, setActiveQuery] = createSignal("");
   const [fCategory, setFCategory] = createSignal("");
+  const [activeStore, setActiveStore] = createSignal("");
   const [agg, setAgg] = createSignal<TcsAggregateState>(EMPTY);
   const [selected, setSelected] = createSignal<AggregatedTcsListing | null>(
     null,
@@ -207,6 +210,12 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
       locale: loc,
       items: sortTcsItems(p.items, p.sort, loc),
     }));
+  });
+  createEffect(() => {
+    const selected = activeStore();
+    if (!selected) return;
+    const stillPresent = agg().status.some((st) => st.base === selected);
+    if (!stillPresent) setActiveStore("");
   });
 
   const onSearch = (e: Event) => {
@@ -250,11 +259,13 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
     }
   }
 
-  // The store nodes are the single source of installable listings (the
-  // dashboard no longer hardcodes a catalog); they arrive already aggregated.
+  // Store nodes are the single source of installable listings; the dashboard
+  // no longer hardcodes a built-in template list.
   const allItems = createMemo(() =>
     sortTcsItems(agg().items, sort(), props.locale),
   );
+
+  const storeChoices = createMemo(() => agg().status.map((st) => st.base));
 
   const categories = createMemo(() => {
     const set = new Set<string>();
@@ -262,15 +273,37 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
     return [...set].sort();
   });
 
+  const listingForActiveStore = (
+    listing: AggregatedTcsListing,
+  ): AggregatedTcsListing => {
+    const base = activeStore();
+    if (
+      !base ||
+      !listing.seenOn.includes(base) ||
+      listing.primaryServer === base
+    ) {
+      return listing;
+    }
+    const status = agg().status.find((st) => st.base === base);
+    return {
+      ...listing,
+      primaryServer: base,
+      primaryDefault: status?.isDefault ?? false,
+    };
+  };
+
   const displayed = createMemo(() =>
-    allItems().filter(
-      (l) =>
-        (!activeQuery() ||
-          listingSearchText(l, props.locale).includes(
-            activeQuery().toLowerCase(),
-          )) &&
-        (!fCategory() || l.category === fCategory()),
-    ),
+    allItems()
+      .filter(
+        (l) =>
+          (!activeStore() || l.seenOn.includes(activeStore())) &&
+          (!activeQuery() ||
+            listingSearchText(l, props.locale).includes(
+              activeQuery().toLowerCase(),
+            )) &&
+          (!fCategory() || l.category === fCategory()),
+      )
+      .map((listing) => listingForActiveStore(listing)),
   );
 
   const installButton = (listing: TcsListing) => {
@@ -330,6 +363,22 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
             <option value="updated">{s("sortUpdated", props.locale)}</option>
             <option value="name">{s("sortName", props.locale)}</option>
           </select>
+        </Show>
+        <Show when={storeChoices().length > 1}>
+          <label class="tcs-select-label">
+            <span>{s("storeFilter", props.locale)}</span>
+            <select
+              name="storeSource"
+              class="tcs-sort"
+              value={activeStore()}
+              onChange={(e) => setActiveStore(e.currentTarget.value)}
+            >
+              <option value="">{s("allStores", props.locale)}</option>
+              <For each={storeChoices()}>
+                {(base) => <option value={base}>{base}</option>}
+              </For>
+            </select>
+          </label>
         </Show>
         <Show when={showSourceControls()}>
           <button
@@ -563,7 +612,7 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
                     class="tcs-link"
                     href={repoUrl(
                       listing().source.git,
-                      sourceVersion(listing()),
+                      listing().source.ref,
                       listing().source.path,
                     )}
                     target="_blank"

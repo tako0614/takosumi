@@ -229,6 +229,12 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).not.toContain("localStoreListings");
     expect(newAppViewSource).toContain("sameGitUrl");
     expect(newAppViewSource).toContain("normalizeSourcePath");
+    expect(newAppViewSource).not.toContain(
+      "listing.source.ref && listing.source.ref !== sourceRef()",
+    );
+    expect(newAppViewSource).not.toContain(
+      "...(listing.source.ref ? { ref: listing.source.ref } : {})",
+    );
     expect(newAppViewSource).toContain(
       "const listing = storeListingForCurrentSource()",
     );

@@ -55,7 +55,7 @@ describe("store link handoff", () => {
     expect(params.get("git")).toBe(
       "https://github.com/tako0614/takosumi-template.git",
     );
-    expect(params.get("ref")).toBe("0123456789abcdef0123456789abcdef01234567");
+    expect(params.has("ref")).toBe(false);
     expect(params.get("path")).toBe("modules/worker");
     expect(params.get("var.project_name")).toBe("service-name-with-space");
   });
