@@ -10,7 +10,7 @@
   grid-template-columns: var(--tg-sidebar-w) 1fr;
   min-height: 100svh;
   font-family: var(--tg-font-body);
-  background: var(--tg-bg);
+  background: var(--tg-canvas);
   color: var(--tg-fg);
   line-height: var(--tg-lh-body);
 }
@@ -38,8 +38,9 @@
 
 /* ===== Sidebar (primary nav) ===== */
 .sidebar {
-  background: var(--tg-bg-elev);
-  border-right: 1px solid var(--tg-line);
+  background: var(--tg-surface-sidebar);
+  border-right: 1px solid var(--tg-hairline-soft);
+  box-shadow: 1px 0 0 rgba(0, 0, 0, 0.25);
   display: flex;
   flex-direction: column;
   padding: var(--tg-s-4) var(--tg-s-3);
@@ -79,7 +80,7 @@
 .sidebar-nav-manage {
   margin-top: var(--tg-s-5);
   padding-top: var(--tg-s-4);
-  border-top: 1px solid var(--tg-line);
+  border-top: 1px solid var(--tg-hairline-soft);
 }
 .sidebar-section-label {
   padding: 0 var(--tg-s-3) var(--tg-s-2);
@@ -112,7 +113,8 @@
   color: var(--tg-fg);
 }
 .sidebar-link.active {
-  background: var(--tg-accent-soft);
+  background: var(--tg-active-grad);
+  box-shadow: var(--tg-active-ring);
   color: var(--tg-accent-text);
   font-weight: 700;
 }
@@ -121,7 +123,7 @@
   opacity: 1;
 }
 .sidebar-link.active:hover {
-  background: var(--tg-accent-soft);
+  background: var(--tg-active-grad);
   color: var(--tg-accent-text);
 }
 .sidebar-link-label {
@@ -138,8 +140,8 @@
   align-items: center;
   gap: var(--tg-s-4);
   padding: 0 var(--tg-content-pad);
-  border-bottom: 1px solid var(--tg-line);
-  background: color-mix(in srgb, var(--tg-bg-elev) 94%, transparent);
+  border-bottom: 1px solid var(--tg-hairline-soft);
+  background: color-mix(in srgb, var(--tg-bg-elev) 82%, transparent);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
   position: sticky;
@@ -604,7 +606,7 @@
   align-items: center;
   justify-content: center;
   padding: clamp(56px, 10svh, 104px) var(--tg-s-5);
-  background: var(--tg-bg);
+  background: var(--tg-canvas);
   color: var(--tg-fg);
   font-family: var(--tg-font-body);
   overflow-x: hidden;
@@ -711,7 +713,7 @@
   min-height: 100svh;
   display: grid;
   place-items: center;
-  background: var(--tg-bg);
+  background: var(--tg-canvas);
 }
 .tg-spinner {
   width: 30px;
@@ -738,7 +740,7 @@
   background: var(--tg-bg-elev);
   border: 1px solid var(--tg-line);
   border-radius: var(--tg-r-lg);
-  box-shadow: var(--tg-shadow-sm);
+  box-shadow: var(--tg-card-inset), var(--tg-shadow-md);
 }
 .sign-in-title {
   font-family: var(--tg-font-display);
