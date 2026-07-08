@@ -454,6 +454,9 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain("serviceIdSeed");
     expect(newAppViewSource).toContain("catalogPublicEndpoint(entry)");
     expect(newAppViewSource).toContain('field.format === "subdomain"');
+    expect(newAppViewSource).toContain(
+      "...(input.format ? { format: input.format } : {})",
+    );
     expect(newAppViewSource).toContain("canSuggestPublicHostname");
     expect(newAppViewSource).toContain("catalogPublicEndpointSubdomainField");
     expect(newAppViewSource).toContain("hostIsManagedBaseDomainSubdomain");
