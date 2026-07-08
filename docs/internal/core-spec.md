@@ -185,6 +185,12 @@ initialSecret:
   OIDC-backed apps should prefer automatic sign-in and treat this as fallback.
 ```
 
+There is no universal requirement that every Capsule has a subdomain, password,
+or Takosumi-specific env block. Apps that need a public endpoint opt into
+`publicEndpoint`; apps that need a first-run secret opt into `initialSecret`;
+all other knobs stay ordinary catalog inputs or generic variables and are passed
+to the OpenTofu module unchanged.
+
 Do not add `purpose` flags to individual inputs as a pseudo-standard. The
 contract is the mapping from standard install concepts to module variables.
 Unknown modules remain valid plain OpenTofu Capsules; without

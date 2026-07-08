@@ -552,7 +552,6 @@ function finalizeManagedCloudflarePublicHostVariables(input: {
   if (
     routePatternVariable &&
     canSet(routePatternVariable) &&
-    nonEmptyStringValue(out.cloudflare_route_zone_id) &&
     !nonEmptyStringValue(input.explicit[routePatternVariable])
   ) {
     out[routePatternVariable] = `${host}/*`;
