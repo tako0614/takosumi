@@ -718,7 +718,7 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
     name: "takos",
     source: {
       git: "https://github.com/tako0614/takos.git",
-      ref: "06158aa4886df360c14508a7570dedd84305f884",
+      ref: "c9c155786cdefc1c0367c4444664a348784e6601",
       path: "deploy/opentofu",
     },
     order: 110,
