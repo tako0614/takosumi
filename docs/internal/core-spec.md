@@ -171,9 +171,12 @@ serviceName:
   friendly resource/service name input.
 
 publicEndpoint:
-  optional public subdomain, URL, route pattern, and default base domain.
-  The dashboard may derive defaults such as <subdomain>.app.takos.jp from this
-  mapping, but the module still receives plain variables.
+  optional public subdomain, URL, route pattern, and operator-managed base
+  domain. The dashboard and run engine may derive defaults such as
+  <subdomain>.<managed-base-domain> from this mapping, but the module still
+  receives plain variables. Takosumi Cloud uses app.takos.jp as its managed base
+  domain; other operators can use their own managed base domain under the same
+  contract.
 
 initialSecret:
   optional first-run password/token input for apps that need one.

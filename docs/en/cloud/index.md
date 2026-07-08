@@ -85,9 +85,10 @@ Takosumi Cloud resources are exposed to apps and services as bindings.
 ## Domains
 
 Every public HTTP resource can receive a Takosumi-managed default URL. Users
-can pick a DNS-valid single-label `*.app.takos.jp` hostname on a
-first-come-first-served basis. If no hostname is requested, Takosumi issues a
-safe generated hostname.
+can pick a DNS-valid single-label hostname under an operator-managed public
+base domain on a first-come-first-served basis. The Takosumi Cloud default base
+domain is `app.takos.jp`. If no hostname is requested, Takosumi issues a safe
+generated hostname.
 
 ```text
 User-chosen:
@@ -99,8 +100,10 @@ Auto-issued fallback:
 ```
 
 Use this URL for previews, first deploys, and apps that do not have external DNS
-yet. To use a user-owned domain, add a custom domain and complete DNS ownership
-verification. The custom domain then points at the same route.
+yet. This managed namespace does not require DNS ownership verification. To use
+a user-owned domain, add a custom domain and complete DNS ownership
+verification, certificate provisioning, and plan/quota/abuse policy. The custom
+domain then points at the same route.
 
 ```text
 Default URL:
@@ -111,11 +114,11 @@ Custom domains:
   www.example.com
 ```
 
-The `*.app.takos.jp` namespace is first-come-first-served. A duplicate hostname
-reservation fails, and platform-reserved names are unavailable. The default URL
-remains available when a custom domain is pending, expired, or disabled. This
-keeps inspection and removal possible even during DNS mistakes or domain
-transfers.
+The managed namespace is first-come-first-served. A duplicate hostname
+reservation fails, platform-reserved names are unavailable, and claimant
+Workspace/Capsule names are not exposed. The default URL remains available when
+a custom domain is pending, expired, or disabled. This keeps inspection and
+removal possible even during DNS mistakes or domain transfers.
 
 ## Service Rollout
 
