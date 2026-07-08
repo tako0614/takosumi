@@ -30,8 +30,13 @@ import {
   type CreditBalance,
   type PublicBillingPlan,
   type UsageEvent,
+  type WorkspaceBilling,
 } from "../../../lib/control-api.ts";
 import { rpc } from "../../account/lib/api.ts";
+import type {
+  StripeBillingInvoice,
+  StripeBillingSummary,
+} from "../../account/lib/billing.ts";
 import { consumeBillingReturnSearch } from "../../account/lib/billing-return.ts";
 import { readSession } from "../../account/lib/session.ts";
 import {
@@ -68,6 +73,10 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
     () => (cloudBilling() ? "cloud" : undefined),
     listBillingPlans,
   );
+  const [stripeBilling] = createResource(
+    () => (cloudBilling() ? "cloud" : undefined),
+    () => rpc.billing.summary(),
+  );
   const [usageRequested, setUsageRequested] = createSignal(false);
   const [usagePage] = createResource(
     () => (usageRequested() ? props.workspaceId : undefined),
@@ -79,6 +88,9 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
   const balance = createMemo(() => billing()?.balance);
   const subscriptions = createMemo(() =>
     (plans() ?? []).filter((plan) => plan.kind === "subscription"),
+  );
+  const currentSubscription = createMemo(() =>
+    subscriptionView(stripeBilling(), billing()),
   );
   const hasBillingCatalog = createMemo(() => subscriptions().length > 0);
   const canStartCheckout = createMemo(
@@ -216,6 +228,41 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
     });
     return columns;
   });
+  const invoiceColumns = createMemo<readonly Column<StripeBillingInvoice>[]>(
+    () => [
+      {
+        header: t("billing.invoices.date"),
+        cell: (invoice) =>
+          invoice.createdAt ? formatDateTime(invoice.createdAt) : "-",
+      },
+      {
+        header: t("billing.invoices.status"),
+        cell: (invoice) => invoiceStatusLabel(invoice.status),
+      },
+      {
+        header: t("billing.invoices.amount"),
+        align: "right",
+        cell: (invoice) => invoiceAmount(invoice),
+      },
+      {
+        header: t("billing.invoices.invoice"),
+        align: "right",
+        cell: (invoice) =>
+          invoice.hostedInvoiceUrl ? (
+            <a
+              class="tg-link"
+              href={invoice.hostedInvoiceUrl}
+              target="_blank"
+              rel="noreferrer"
+            >
+              {t("billing.invoices.open")}
+            </a>
+          ) : (
+            "-"
+          ),
+      },
+    ],
+  );
 
   const planCard = (plan: PublicBillingPlan) => (
     <li class="av-plan-card">
@@ -333,6 +380,59 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
         </Show>
       </Card>
 
+      <Card>
+        <CardHeader
+          title={t("billing.subscription.title")}
+          subtitle={t("billing.subscription.subtitle")}
+        />
+        <Switch>
+          <Match when={billing.loading || stripeBilling.loading}>
+            <p class="muted">{t("billing.subscription.loading")}</p>
+          </Match>
+          <Match when={billing.error}>
+            {(error) => (
+              <Toast tone="error">
+                {t("billing.error", { message: errorMessage(error()) })}
+              </Toast>
+            )}
+          </Match>
+          <Match when={stripeBilling.error}>
+            {(error) => (
+              <Toast tone="error">
+                {t("billing.subscription.error", {
+                  message: errorMessage(error()),
+                })}
+              </Toast>
+            )}
+          </Match>
+          <Match when={currentSubscription()}>
+            {(subscription) => (
+              <KVList
+                items={[
+                  {
+                    label: t("billing.subscription.plan"),
+                    value: subscription().plan,
+                  },
+                  {
+                    label: t("billing.subscription.status"),
+                    value: subscriptionStatusLabel(subscription().status),
+                  },
+                  {
+                    label: t("billing.subscription.nextBilling"),
+                    value: subscription().currentPeriodEnd
+                      ? formatDateTime(subscription().currentPeriodEnd!)
+                      : "-",
+                  },
+                ]}
+              />
+            )}
+          </Match>
+          <Match when={!currentSubscription()}>
+            <p class="muted">{t("billing.subscription.empty")}</p>
+          </Match>
+        </Switch>
+      </Card>
+
       <Show when={cloudBilling()}>
         <Card>
           <CardHeader title={t("billing.plans.title")} />
@@ -382,6 +482,43 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
           <Show when={checkoutError()}>
             {(m) => <Toast tone="error">{m()}</Toast>}
           </Show>
+        </Card>
+      </Show>
+
+      <Show when={cloudBilling()}>
+        <Card>
+          <CardHeader
+            title={t("billing.invoices.title")}
+            subtitle={t("billing.invoices.subtitle")}
+          />
+          <Switch>
+            <Match when={stripeBilling.loading}>
+              <p class="muted">{t("billing.invoices.loading")}</p>
+            </Match>
+            <Match when={stripeBilling.error}>
+              {(error) => (
+                <Toast tone="error">
+                  {t("billing.invoices.error", {
+                    message: errorMessage(error()),
+                  })}
+                </Toast>
+              )}
+            </Match>
+            <Match when={stripeBilling()}>
+              {(summary) => (
+                <Show
+                  when={summary().invoices.length > 0}
+                  fallback={<p class="muted">{t("billing.invoices.empty")}</p>}
+                >
+                  <DataTable
+                    columns={invoiceColumns()}
+                    rows={summary().invoices}
+                    rowKey={(invoice) => invoice.id}
+                  />
+                </Show>
+              )}
+            </Match>
+          </Switch>
         </Card>
       </Show>
 
@@ -500,4 +637,53 @@ function balanceReservedUsdMicros(balance: CreditBalance | undefined): number {
 
 function planDisplayName(plan: PublicBillingPlan): string {
   return plan.name[locale()];
+}
+
+interface SubscriptionView {
+  readonly plan: string;
+  readonly status: string;
+  readonly currentPeriodEnd?: string;
+}
+
+function subscriptionView(
+  stripeSummary: StripeBillingSummary | undefined,
+  workspaceBilling: WorkspaceBilling | undefined,
+): SubscriptionView | null {
+  const stripeSubscription = stripeSummary?.subscription;
+  if (stripeSubscription) {
+    return {
+      plan: stripeSubscription.planCode ?? workspaceBilling?.plan?.name ?? "-",
+      status:
+        stripeSubscription.status ?? workspaceBilling?.subscription?.status ?? "-",
+      ...(stripeSubscription.currentPeriodEnd
+        ? { currentPeriodEnd: stripeSubscription.currentPeriodEnd }
+        : workspaceBilling?.subscription?.currentPeriodEnd
+          ? { currentPeriodEnd: workspaceBilling.subscription.currentPeriodEnd }
+          : {}),
+    };
+  }
+  const subscription = workspaceBilling?.subscription;
+  if (!subscription) return null;
+  return {
+    plan: workspaceBilling?.plan?.name ?? subscription.planId,
+    status: subscription.status,
+    currentPeriodEnd: subscription.currentPeriodEnd,
+  };
+}
+
+function subscriptionStatusLabel(status: string): string {
+  const key = `billing.subscription.status.${status}` as MessageKey;
+  return t(key) === key ? status : t(key);
+}
+
+function invoiceStatusLabel(status: string): string {
+  const key = `billing.invoices.status.${status}` as MessageKey;
+  return t(key) === key ? status : t(key);
+}
+
+function invoiceAmount(invoice: StripeBillingInvoice): string {
+  if (invoice.totalUsdMicros !== undefined) {
+    return formatUsdMicros(invoice.totalUsdMicros);
+  }
+  return `${formatBillingNumber(invoice.totalMinor / 100)} ${invoice.currency}`;
 }

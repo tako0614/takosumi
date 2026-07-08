@@ -53,10 +53,13 @@ test("BillingTab keeps checkout plans Cloud-only and leaves usage visible", () =
 
   expect(source).toContain("isTakosumiCloudRuntime");
   expect(source).toContain("<Show when={cloudBilling()}>");
+  expect(source).toContain("rpc.billing.summary");
   expect(source).toContain("const canStartCheckout = createMemo");
   expect(source).toContain("cloudBilling() && hasBillingCatalog()");
   expect(source).toContain("listWorkspaceUsagePage");
   expect(source).toContain('"billing.usage.title"');
+  expect(source).toContain('"billing.subscription.title"');
+  expect(source).toContain('"billing.invoices.title"');
   expect(source).toContain('"billing.plans.title"');
   expect(source).toContain('"billing.portal"');
   expect(source).not.toContain("createResource(listBillingPlans)");
@@ -141,4 +144,17 @@ test("BillingTab shows Cloud account USD balance instead of only a disabled stat
   expect(ja["billing.balance.availableUsd"]).toBe("利用可能な残高");
   expect(en["billing.mode.cloudCredits"]).toContain("shared across your account");
   expect(ja["billing.mode.cloudCredits"]).toContain("アカウント全体");
+});
+
+test("BillingTab surfaces subscription status and invoice history", () => {
+  const source = readFileSync(sourcePath, "utf8");
+
+  expect(source).toContain("currentSubscription");
+  expect(source).toContain("subscriptionStatusLabel");
+  expect(source).toContain("invoiceColumns");
+  expect(source).toContain("invoice.hostedInvoiceUrl");
+  expect(en["billing.subscription.title"]).toBe("Subscription");
+  expect(ja["billing.subscription.title"]).toBe("サブスクリプション");
+  expect(en["billing.invoices.title"]).toBe("Billing history");
+  expect(ja["billing.invoices.title"]).toBe("請求履歴");
 });
