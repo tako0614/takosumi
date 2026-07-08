@@ -107,6 +107,48 @@ test("operator-scoped Provider Connection is Cloud-only and resolves only when e
   expect(resolved[0]?.connection.scope).toBe("operator");
 });
 
+test("Cloud mode resolves a pending public managed operator connection", async () => {
+  const { store, model } = await setup();
+  await store.putConnection(
+    connection({
+      id: "conn_operator_compat_pending",
+      status: "pending",
+      scopeHints: {
+        managedProvider: true,
+        managedProviderProfile: "compat.cloudflare.workers.v1",
+        providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+        accountId: "ts_acc_takosumi_cloud",
+      },
+    }),
+  );
+  await store.putInstallationProviderEnvBindingSet({
+    id: "dp_operator_pending",
+    spaceId: model.space.id,
+    installationId: model.installation.id,
+    environment: model.installation.environment,
+    bindings: [
+      { provider: CLOUDFLARE, connectionId: "conn_operator_compat_pending" },
+    ],
+    createdAt: NOW,
+    updatedAt: NOW,
+  });
+
+  const cloudService = new ConnectionsService({
+    store,
+    newId: (prefix) => `${prefix}_cloud`,
+    now: () => NOW,
+    allowOperatorBackedProviderEnvs: true,
+  });
+  const resolved = await cloudService.resolveProviderEnvBindings(
+    model.installation,
+  );
+  expect(resolved).toHaveLength(1);
+  expect(resolved[0]?.connection.id).toBe("conn_operator_compat_pending");
+  expect(mintableConnectionIds(resolved)).toEqual([
+    "conn_operator_compat_pending",
+  ]);
+});
+
 test("provider connection listing exposes only public managed operator connections in Cloud mode", async () => {
   const { store, model, service } = await setup();
   await store.putConnection(
@@ -262,6 +304,53 @@ test("Cloud mode can satisfy required providers from a single public managed ope
   expect(resolved[0]?.connection.id).toBe("conn_operator_compat");
 });
 
+test("Cloud mode can satisfy required providers from a pending public managed operator connection", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const model = await seedInstallationModel(store, {
+    installConfig: {
+      catalog: {
+        source: {
+          git: "https://github.com/tako0614/yurucommu.git",
+          ref: "main",
+          path: ".",
+        },
+        surface: "service",
+        kind: "worker",
+        provider: "cloudflare",
+        suggestedName: "yurucommu",
+        name: { ja: "yurucommu", en: "yurucommu" },
+        description: { ja: "test", en: "test" },
+      },
+    },
+  });
+  await store.putConnection(
+    connection({
+      id: "conn_operator_compat_pending",
+      status: "pending",
+      scopeHints: {
+        managedProvider: true,
+        managedProviderProfile: "compat.cloudflare.workers.v1",
+        providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+        accountId: "ts_acc_takosumi_cloud",
+      },
+    }),
+  );
+  const cloudService = new ConnectionsService({
+    store,
+    newId: (prefix) => `${prefix}_cloud`,
+    now: () => NOW,
+    allowOperatorBackedProviderEnvs: true,
+  });
+
+  const resolved = await cloudService.resolveProviderEnvBindingsForRun(
+    model.installation,
+    [CLOUDFLARE],
+  );
+
+  expect(resolved).toHaveLength(1);
+  expect(resolved[0]?.connection.id).toBe("conn_operator_compat_pending");
+});
+
 test("Cloud mode does not guess when multiple managed operator connections match", async () => {
   const { store, model } = await setup();
   for (const id of ["conn_operator_compat_a", "conn_operator_compat_b"]) {
@@ -313,6 +402,34 @@ test("a non-verified Provider Connection fails closed before runner dispatch", a
 
   await expect(
     service.resolveProviderEnvBindings(model.installation),
+  ).rejects.toThrow(/status pending is not verified/);
+});
+
+test("Cloud mode still rejects pending non-managed operator connections", async () => {
+  const { store, model } = await setup();
+  await store.putConnection(
+    connection({ id: "conn_operator_pending_secret", status: "pending" }),
+  );
+  await store.putInstallationProviderEnvBindingSet({
+    id: "dp_operator_pending_secret",
+    spaceId: model.space.id,
+    installationId: model.installation.id,
+    environment: model.installation.environment,
+    bindings: [
+      { provider: CLOUDFLARE, connectionId: "conn_operator_pending_secret" },
+    ],
+    createdAt: NOW,
+    updatedAt: NOW,
+  });
+
+  const cloudService = new ConnectionsService({
+    store,
+    newId: (prefix) => `${prefix}_cloud`,
+    now: () => NOW,
+    allowOperatorBackedProviderEnvs: true,
+  });
+  await expect(
+    cloudService.resolveProviderEnvBindings(model.installation),
   ).rejects.toThrow(/status pending is not verified/);
 });
 
