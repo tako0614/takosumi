@@ -233,7 +233,10 @@ This contract maps standard install concepts to ordinary OpenTofu variables.
 It is not execution authority, not a new repo metadata requirement, and not a
 per-input `purpose` pseudo-standard. Unknown Git modules remain valid plain
 OpenTofu Capsules; they simply receive generic variable inputs unless their
-catalog entry opts into this UX contract.
+catalog entry opts into this UX contract. Takosumi must not infer a public
+endpoint from variable names such as `worker_name` or `app_url`; those names are
+ordinary OpenTofu inputs unless the catalog explicitly maps them through
+`installExperience.publicEndpoint`.
 
 The preferred fast path is a Git CI or release pipeline that publishes a
 versioned, publicly fetchable artifact plus a SHA-256 digest. The OpenTofu

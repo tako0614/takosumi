@@ -50,7 +50,6 @@ import {
   generateRootModule,
 } from "takosumi-rootgen";
 import type { ResolvedInstallationProviderEnvBinding } from "../connections/mod.ts";
-import { managedPublicBaseDomainFromInstallConfig } from "./managed_public_domains.ts";
 import { canonicalProviderAddress } from "./provider_policy.ts";
 import { OpenTofuControllerError, requireNonEmptyString } from "./errors.ts";
 import { normalizeProviders } from "./validation.ts";
@@ -161,11 +160,7 @@ export class PlanResolutionService {
       credentialRequiredProviders,
     );
     const providerEnvBindings = providerEnvBindingsFromResolved(resolved);
-    const providerInputDefaults = providerInputDefaultsFromResolved(
-      resolved,
-      installation,
-      installConfig,
-    );
+    const providerInputDefaults = providerInputDefaultsFromResolved(resolved);
     const usesCloudOnlyGatewayMaterialization = resolved.some(
       (entry) => (entry.materialization as string) === "gateway",
     );
@@ -321,8 +316,6 @@ function requiredProvidersFromResolved(
 
 function providerInputDefaultsFromResolved(
   resolved: readonly ResolvedInstallationProviderEnvBinding[],
-  installation: Installation,
-  installConfig: InstallConfig,
 ): Readonly<Record<string, JsonValue>> {
   const inputs: Record<string, JsonValue> = {};
   for (const entry of resolved) {
@@ -341,19 +334,9 @@ function providerInputDefaultsFromResolved(
         mergeObjectInput(inputs, "cloudflare", {
           api_base_url: providerBaseUrl,
         });
-        const managedAppHost = managedCloudflareAppHost(
-          connection,
-          installation,
-          installConfig,
-        );
-        if (managedAppHost) {
-          inputs.worker_name = managedAppHost.workerName;
-          inputs.app_url = `https://${managedAppHost.host}`;
-          const zoneId = nonEmptyString(connection.scopeHints?.zoneId);
-          if (zoneId) {
-            inputs.cloudflare_route_zone_id = zoneId;
-            inputs.cloudflare_route_pattern = `${managedAppHost.host}/*`;
-          }
+        const zoneId = nonEmptyString(connection.scopeHints?.zoneId);
+        if (zoneId) {
+          inputs.cloudflare_route_zone_id = zoneId;
         }
       }
       const workersSubdomain = nonEmptyString(
@@ -369,49 +352,6 @@ function providerInputDefaultsFromResolved(
     }
   }
   return inputs;
-}
-
-function managedCloudflareAppHost(
-  connection: ResolvedInstallationProviderEnvBinding["connection"],
-  installation: Installation,
-  installConfig: InstallConfig,
-): { readonly workerName: string; readonly host: string } | undefined {
-  if (!connection?.scopeHints?.managedProvider) return undefined;
-  if (!managedProviderBaseUrl(connection)) return undefined;
-  const workerName = cloudflareWorkerNameFromCapsule(installation);
-  if (!workerName) return undefined;
-  return {
-    workerName,
-    host: `${workerName}.${managedPublicBaseDomainFromInstallConfig(installConfig)}`,
-  };
-}
-
-function cloudflareWorkerNameFromCapsule(
-  installation: Installation,
-): string | undefined {
-  const preferred = nonEmptyString(installation.slug) ?? installation.name;
-  const base = preferred
-    .toLowerCase()
-    .replace(/[^a-z0-9-]+/g, "-")
-    .replace(/^-+/g, "")
-    .replace(/-+$/g, "")
-    .replace(/-{2,}/g, "-");
-  const suffix = managedWorkerNameSuffix(installation.id);
-  const maxBaseLength = Math.max(1, 52 - suffix.length - 1);
-  const normalized = `${base.slice(0, maxBaseLength).replace(/-+$/g, "")}-${suffix}`;
-  if (!/^[a-z][a-z0-9-]{1,50}[a-z0-9]$/u.test(normalized)) {
-    return undefined;
-  }
-  return normalized;
-}
-
-function managedWorkerNameSuffix(installationId: string): string {
-  const stripped = installationId.replace(/^inst[_-]?/u, "");
-  const normalized = stripped
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "")
-    .slice(0, 8);
-  return normalized || "capsule";
 }
 
 function mergeObjectInput(
