@@ -1122,8 +1122,6 @@ function primaryConfigVariableNames(
       installExperience?.publicEndpoint?.urlVariable,
       installExperience?.initialSecret?.variable,
       "project_name",
-      "worker_name",
-      "app_url",
     ].filter((name): name is string => Boolean(name)),
   );
 }
@@ -1162,10 +1160,14 @@ function configSummaryItems(config: InstallConfig | undefined) {
   if (!config) return [];
   const variables = config.variableMapping ?? {};
   const endpoint = config.catalog?.installExperience?.publicEndpoint;
-  const subdomainVariable = endpoint?.subdomainVariable ?? "worker_name";
-  const urlVariable = endpoint?.urlVariable ?? "app_url";
-  const subdomain = stringConfigValue(variables[subdomainVariable]);
-  const publicUrl = stringConfigValue(variables[urlVariable]);
+  const subdomainVariable = endpoint?.subdomainVariable;
+  const urlVariable = endpoint?.urlVariable;
+  const subdomain = subdomainVariable
+    ? stringConfigValue(variables[subdomainVariable])
+    : undefined;
+  const publicUrl = urlVariable
+    ? stringConfigValue(variables[urlVariable])
+    : undefined;
   const oidcReady =
     stringConfigValue(variables.takosumi_accounts_issuer_url) &&
     stringConfigValue(variables.takosumi_accounts_client_id);

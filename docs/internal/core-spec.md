@@ -188,9 +188,10 @@ initialSecret:
 Do not add `purpose` flags to individual inputs as a pseudo-standard. The
 contract is the mapping from standard install concepts to module variables.
 Unknown modules remain valid plain OpenTofu Capsules; without
-`installExperience`, Takosumi only uses generic variable defaults and
-well-known compatibility fallbacks such as `worker_name` / `app_url` when the
-root module declares those variables.
+`installExperience`, Takosumi only uses generic variable defaults. Names such as
+`worker_name`, `app_url`, and `cloudflare_route_pattern` are ordinary OpenTofu
+variables unless the catalog explicitly maps them through
+`installExperience.publicEndpoint`.
 
 ## Performance Model
 
