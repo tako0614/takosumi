@@ -726,6 +726,7 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
           eq(schema.installations.spaceId, spaceId),
           eq(schema.installations.name, name),
           eq(schema.installations.environment, environment),
+          ne(schema.installations.status, "destroyed"),
         ),
       ),
     );
@@ -3702,8 +3703,11 @@ export async function ensureD1OpenTofuLedgerSchema(
       created_at text not null,
       updated_at text not null
     )`,
-    `create unique index if not exists capsules_space_name_environment_unique
-      on capsules (space_id, name, environment)`,
+    `drop index if exists capsules_space_name_environment_unique`,
+    `drop index if exists installations_space_name_environment_unique`,
+    `create unique index if not exists capsules_space_name_environment_active_unique
+      on capsules (space_id, name, environment)
+      where status != 'destroyed'`,
     `create index if not exists capsules_space_idx
       on capsules (space_id)`,
     `create index if not exists capsules_project_idx
@@ -5021,6 +5025,32 @@ skip workers.dev hosts
         .run();
     },
   },
+  {
+    version: 21,
+    name: "d1_opentofu_capsule_active_name_unique",
+    checksumSource: `
+Capsule name uniqueness applies only to non-destroyed rows
+drop old full-row capsules/installation unique indexes
+create partial active unique index on space/name/environment where status != destroyed
+`,
+    async apply(db) {
+      await db
+        .prepare(`drop index if exists capsules_space_name_environment_unique`)
+        .run();
+      await db
+        .prepare(
+          `drop index if exists installations_space_name_environment_unique`,
+        )
+        .run();
+      await db
+        .prepare(
+          `create unique index if not exists capsules_space_name_environment_active_unique
+          on capsules (space_id, name, environment)
+          where status != 'destroyed'`,
+        )
+        .run();
+    },
+  },
 ] as const satisfies readonly D1OpenTofuSchemaMigration[];
 
 /**
@@ -5925,8 +5955,9 @@ async function rebuildInstallationsTableIfNeeded(
     .run();
   await db
     .prepare(
-      `create unique index if not exists installations_space_name_environment_unique
-      on installations (space_id, name, environment)`,
+      `create unique index if not exists installations_space_name_environment_active_unique
+      on installations (space_id, name, environment)
+      where status != 'destroyed'`,
     )
     .run();
   await db

@@ -220,6 +220,30 @@ test("createInstallation enforces unique(space_id, name, environment)", async ()
   ).rejects.toMatchObject({ code: "failed_precondition" });
 });
 
+test("createInstallation ignores destroyed Capsules when reusing a service name", async () => {
+  const { store, service } = build();
+  await seedAll(store);
+  const destroyed = await service.createInstallation({
+    spaceId: "space_1",
+    name: "shop",
+    environment: "production",
+    sourceId: "src_1",
+    installConfigId: "cfg_1",
+  });
+  await store.putInstallation({ ...destroyed, status: "destroyed" });
+
+  const next = await service.createInstallation({
+    spaceId: "space_1",
+    name: "shop",
+    environment: "production",
+    sourceId: "src_1",
+    installConfigId: "cfg_1",
+  });
+
+  expect(next.id).not.toBe(destroyed.id);
+  expect(next.status).toBe("pending");
+});
+
 test("createInstallation allows the same name in a different environment", async () => {
   const { store, service } = build();
   await seedAll(store);

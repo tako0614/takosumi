@@ -74,6 +74,10 @@ const mirroredMigrationFiles: readonly {
     fileName: "20260430000051_postgres_named_index_parity.sql",
     migrationId: "deploy.postgres_named_index_parity.normalize",
   },
+  {
+    fileName: "20260430000065_capsules_active_name_unique.sql",
+    migrationId: "deploy.capsules_active_name_unique",
+  },
 ];
 
 test("migration catalog creates every declared storage table", () => {

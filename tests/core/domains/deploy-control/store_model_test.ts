@@ -1157,7 +1157,7 @@ test("Workspace mirror fields are restored for Capsules and SourceSnapshots", as
   }
 });
 
-test("Installation unique(space_id, name, environment) is enforced (in-memory)", async () => {
+test("Installation active unique(space_id, name, environment) is enforced (in-memory)", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   await store.putInstallation(installation({ id: "inst_a" }));
   await expect(
@@ -1168,6 +1168,25 @@ test("Installation unique(space_id, name, environment) is enforced (in-memory)",
     installation({ id: "inst_staging", environment: "staging" }),
   );
   expect((await store.listInstallations("space_1")).length).toBe(2);
+});
+
+test("Installation active uniqueness ignores destroyed rows", async () => {
+  for (const [label, store] of await forEachStore()) {
+    await store.putInstallation(
+      installation({ id: "inst_destroyed", status: "destroyed" }),
+    );
+    expect(
+      await store.getInstallationByName("space_1", "shop", "production"),
+      label,
+    ).toBeUndefined();
+
+    await store.putInstallation(installation({ id: "inst_reinstall" }));
+    expect(
+      (await store.getInstallationByName("space_1", "shop", "production"))?.id,
+      label,
+    ).toBe("inst_reinstall");
+    expect((await store.listInstallations("space_1")).length, label).toBe(2);
+  }
 });
 
 test("Installation patch: unguarded mutate is symmetric", async () => {
@@ -1271,9 +1290,7 @@ test("D1 deployment store reads text JSON public outputs from existing rows", as
     }),
   );
   await db
-    .prepare(
-      "update deployments set outputs_public_json = ? where id = ?",
-    )
+    .prepare("update deployments set outputs_public_json = ? where id = ?")
     .bind(
       JSON.stringify({
         url: "https://takos.app.takos.jp",
