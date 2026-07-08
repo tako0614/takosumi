@@ -183,7 +183,7 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
     name: "yurucommu",
     source: {
       git: "https://github.com/tako0614/yurucommu.git",
-      ref: "17d0b16fa6ffaa1d31efaa5dd9719a7875ec45f4",
+      ref: "ebe1cb08e67794aaab4722b138a321c78e430291",
       path: ".",
     },
     order: 100,
@@ -718,7 +718,7 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
     name: "takos",
     source: {
       git: "https://github.com/tako0614/takos.git",
-      ref: "0b8ead2bb4ae092463a0b517e4838d68ff311a0e",
+      ref: "06158aa4886df360c14508a7570dedd84305f884",
       path: "deploy/opentofu",
     },
     order: 110,

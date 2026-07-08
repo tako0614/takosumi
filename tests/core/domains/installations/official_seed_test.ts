@@ -135,7 +135,7 @@ test("hostable official configs expose public catalog metadata for the dashboard
     takos?.catalog?.inputs.find((input) => input.name === name);
   expect(yurucommu?.sourceKind).toBe("generic_capsule");
   expect(yurucommu?.catalog?.source.ref).toBe(
-    "17d0b16fa6ffaa1d31efaa5dd9719a7875ec45f4",
+    "ebe1cb08e67794aaab4722b138a321c78e430291",
   );
   expect(yurucommu?.catalog?.source.path).toBe(".");
   expect(yurucommu?.modulePath).toBeUndefined();
@@ -244,6 +244,9 @@ test("hostable official configs expose public catalog metadata for the dashboard
       "0f75a091e58d463dd45b20f1d1570fa69a9b2a06fe6b1e2f6c5914e75bf209eb",
   });
   expect(takos?.sourceKind).toBe("generic_capsule");
+  expect(takos?.catalog?.source.ref).toBe(
+    "06158aa4886df360c14508a7570dedd84305f884",
+  );
   expect(takos?.catalog?.source.path).toBe("deploy/opentofu");
   expect(takos?.modulePath).toBe("deploy/opentofu");
   expect(takos?.catalog?.installExperience).toEqual({
