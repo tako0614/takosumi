@@ -61,7 +61,7 @@ test("BillingTab keeps checkout plans Cloud-only and leaves usage visible", () =
   expect(source).toContain('"billing.subscription.title"');
   expect(source).toContain('"billing.invoices.title"');
   expect(source).toContain('"billing.plans.title"');
-  expect(source).toContain('"billing.portal"');
+  expect(source).toContain('"billing.subscription.manage"');
   expect(source).not.toContain("createResource(listBillingPlans)");
 });
 
@@ -111,7 +111,7 @@ test("BillingTab lets a new Cloud workspace start checkout before billing is act
   expect(portalMemoIndex).toBeGreaterThan(checkoutMemoIndex);
   expect(source).toContain("cloudBilling() && hasBillingCatalog()");
   expect(source).toContain(
-    'cloudBilling() && mode() !== undefined && mode() !== "disabled"',
+    "stripeBilling()?.configured === true",
   );
   expect(source).not.toContain("billing.plans.disabled");
   expect(source).toContain('href="/legal/refund-policy"');
@@ -153,8 +153,14 @@ test("BillingTab surfaces subscription status and invoice history", () => {
   expect(source).toContain("subscriptionStatusLabel");
   expect(source).toContain("invoiceColumns");
   expect(source).toContain("invoice.hostedInvoiceUrl");
+  expect(source).toContain('"billing.subscription.manage"');
+  expect(source).toContain('"billing.subscription.manageHint"');
   expect(en["billing.subscription.title"]).toBe("Subscription");
   expect(ja["billing.subscription.title"]).toBe("サブスクリプション");
+  expect(en["billing.subscription.manage"]).toBe(
+    "Manage or cancel subscription",
+  );
+  expect(ja["billing.subscription.manage"]).toBe("サブスク管理・解約");
   expect(en["billing.invoices.title"]).toBe("Billing history");
   expect(ja["billing.invoices.title"]).toBe("請求履歴");
 });

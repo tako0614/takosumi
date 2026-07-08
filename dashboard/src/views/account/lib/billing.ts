@@ -115,7 +115,8 @@ export async function startStripePortal(input: {
 }): Promise<StripePortalResult> {
   const returnUrl =
     input.returnUrl ??
-    new URL("/billing?portal=return", location.origin).toString();
+    new URL("/advanced/workspace/billing?portal=return", location.origin)
+      .toString();
   const body = await apiFetch<
     StripePortalResult & { readonly session_id?: string }
   >(paths.STRIPE_PORTAL, {

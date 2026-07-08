@@ -902,10 +902,6 @@ export function createAccountsHandler(
           request,
         );
       }
-      if (!billingCheckoutSmokeAllowed(request, options.billingCheckout)) {
-        const blocked = platformAccessBlocked(options.platformAccess);
-        if (blocked) return blocked;
-      }
       return await handleStripeBillingPortal({
         request,
         store,

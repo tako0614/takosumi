@@ -1158,6 +1158,9 @@ export const en: Record<keyof typeof ja, string> = {
   "billing.subscription.plan": "Plan",
   "billing.subscription.status": "Status",
   "billing.subscription.nextBilling": "Next billing",
+  "billing.subscription.manage": "Manage or cancel subscription",
+  "billing.subscription.manageHint":
+    "Open Stripe to manage payment methods, invoices, plan changes, and cancellation.",
   "billing.subscription.status.active": "Active",
   "billing.subscription.status.trialing": "Trialing",
   "billing.subscription.status.past_due": "Past due",
