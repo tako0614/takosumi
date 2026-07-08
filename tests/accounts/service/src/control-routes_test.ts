@@ -3849,25 +3849,34 @@ test("POST /api/v1/workspaces/:id/capsules carries store catalog metadata into t
             },
           ],
           installExperience: {
-            serviceName: { variable: "project_name" },
-            publicEndpoint: {
-              subdomainVariable: "worker_name",
-              urlVariable: "app_url",
-              routePatternVariable: "cloudflare_route_pattern",
-              baseDomain: "app.takos.jp",
-            },
-            initialSecret: {
-              variable: "auth_password_hash",
-              kind: "password_or_hash",
-              optional: true,
-            },
-            takosumiAccountsOidc: {
-              issuerUrlVariable: "takosumi_accounts_issuer_url",
-              accountsUrlVariable: "takosumi_accounts_url",
-              clientIdVariable: "takosumi_accounts_client_id",
-              redirectUriVariable: "takosumi_accounts_redirect_uri",
-              callbackPath: "/auth/oidc/callback",
-            },
+            projections: [
+              { kind: "service_name", variable: "project_name" },
+              {
+                kind: "public_endpoint",
+                variables: {
+                  subdomain: "worker_name",
+                  url: "app_url",
+                  routePattern: "cloudflare_route_pattern",
+                },
+                baseDomain: "app.takos.jp",
+              },
+              {
+                kind: "initial_secret",
+                variable: "auth_password_hash",
+                secretKind: "password_or_hash",
+                optional: true,
+              },
+              {
+                kind: "oidc_client",
+                variables: {
+                  issuerUrl: "takosumi_accounts_issuer_url",
+                  accountsUrl: "takosumi_accounts_url",
+                  clientId: "takosumi_accounts_client_id",
+                  redirectUri: "takosumi_accounts_redirect_uri",
+                },
+                callbackPath: "/auth/oidc/callback",
+              },
+            ],
           },
         },
         outputAllowlist: {
@@ -3896,13 +3905,17 @@ test("POST /api/v1/workspaces/:id/capsules carries store catalog metadata into t
       inputs?: Array<{
         name: string;
         type?: string;
+        format?: string;
         advanced?: boolean;
         secret?: boolean;
         defaultValue?: string;
       }>;
       installExperience?: {
-        publicEndpoint?: { baseDomain?: string };
-        takosumiAccountsOidc?: { callbackPath?: string };
+        projections?: Array<{
+          kind: string;
+          baseDomain?: string;
+          callbackPath?: string;
+        }>;
       };
     };
     outputAllowlist: Record<string, unknown>;
@@ -3923,11 +3936,15 @@ test("POST /api/v1/workspaces/:id/capsules carries store catalog metadata into t
   expect(config.catalog?.iconUrl).toEqual("https://example.test/icon.svg");
   expect(config.catalog?.inputs?.[0]?.advanced).toEqual(true);
   expect(config.catalog?.inputs?.[1]?.secret).toEqual(true);
-  expect(config.catalog?.installExperience?.publicEndpoint?.baseDomain).toEqual(
-    "app.takos.jp",
-  );
   expect(
-    config.catalog?.installExperience?.takosumiAccountsOidc?.callbackPath,
+    config.catalog?.installExperience?.projections?.find(
+      (projection) => projection.kind === "public_endpoint",
+    )?.baseDomain,
+  ).toEqual("app.takos.jp");
+  expect(
+    config.catalog?.installExperience?.projections?.find(
+      (projection) => projection.kind === "oidc_client",
+    )?.callbackPath,
   ).toEqual("/auth/oidc/callback");
   expect(config.outputAllowlist).toEqual({
     url: { from: "url", type: "url" },
@@ -3937,6 +3954,65 @@ test("POST /api/v1/workspaces/:id/capsules carries store catalog metadata into t
     installConfigId: string;
   };
   expect(createCall.installConfigId).toEqual(config.id);
+});
+
+test("POST /api/v1/workspaces/:id/capsules rejects retired install experience fields", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const { request: req, url } = request(
+    "POST",
+    "/api/v1/workspaces/space_a/capsules",
+    {
+      cookie,
+      body: {
+        name: "yurucommu",
+        environment: "production",
+        sourceId: "src_x",
+        installConfigId: "cfg_x",
+        catalog: {
+          templateId: "yurucommu",
+          source: {
+            git: "https://github.com/tako0614/yurucommu.git",
+            ref: "main",
+            path: ".",
+          },
+          order: 1000,
+          surface: "service",
+          kind: "worker",
+          provider: "cloudflare",
+          suggestedName: "yurucommu",
+          badge: { ja: "追加候補", en: "Installable" },
+          name: { ja: "yurucommu", en: "yurucommu" },
+          description: {
+            ja: "コミュニティを公開",
+            en: "Host a community",
+          },
+          iconUrl: "https://example.test/icon.svg",
+          inputs: [],
+          installExperience: {
+            publicEndpoint: {
+              subdomainVariable: "worker_name",
+              urlVariable: "app_url",
+              baseDomain: "app.takos.jp",
+            },
+          },
+        },
+      },
+    },
+  );
+
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+
+  expect(response?.status).toEqual(400);
+  expect(await response!.text()).toContain("catalog must be a valid");
+  expect(operations.calls.putInstallConfig).toBeUndefined();
+  expect(operations.calls.createCapsule).toBeUndefined();
 });
 
 test("POST /api/v1/workspaces/:id/capsules accepts large catalog default values for OpenTofu inputs", async () => {
@@ -4123,19 +4199,27 @@ test("POST /api/v1/workspaces/:id/capsules auto-provisions Takosumi Accounts OID
           },
           inputs: [],
           installExperience: {
-            serviceName: { variable: "project_name" },
-            publicEndpoint: {
-              subdomainVariable: "worker_name",
-              urlVariable: "app_url",
-              baseDomain: "app.takos.jp",
-            },
-            takosumiAccountsOidc: {
-              issuerUrlVariable: "takosumi_accounts_issuer_url",
-              accountsUrlVariable: "takosumi_accounts_url",
-              clientIdVariable: "takosumi_accounts_client_id",
-              redirectUriVariable: "takosumi_accounts_redirect_uri",
-              callbackPath: "/auth/oidc/callback",
-            },
+            projections: [
+              { kind: "service_name", variable: "project_name" },
+              {
+                kind: "public_endpoint",
+                variables: {
+                  subdomain: "worker_name",
+                  url: "app_url",
+                },
+                baseDomain: "app.takos.jp",
+              },
+              {
+                kind: "oidc_client",
+                variables: {
+                  issuerUrl: "takosumi_accounts_issuer_url",
+                  accountsUrl: "takosumi_accounts_url",
+                  clientId: "takosumi_accounts_client_id",
+                  redirectUri: "takosumi_accounts_redirect_uri",
+                },
+                callbackPath: "/auth/oidc/callback",
+              },
+            ],
           },
         },
       },

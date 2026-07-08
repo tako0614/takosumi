@@ -1,4 +1,10 @@
 import type { Capsule, InstallConfig } from "takosumi-contract/install-configs";
+import {
+  installExperienceOidcClient,
+  installExperiencePublicEndpoint,
+  type OidcClientProjection,
+  type PublicEndpointProjection,
+} from "takosumi-contract";
 import type { Source } from "takosumi-contract/sources";
 import {
   TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_IDENTITY_OIDC,
@@ -7,10 +13,9 @@ import {
 import type { ControlPlaneOperations } from "../control-operations.ts";
 import type { AccountsStore, OidcClientRecord } from "../store.ts";
 
-type InstallExperience = NonNullable<InstallConfig["catalog"]>["installExperience"];
-type TakosumiAccountsOidcExperience = NonNullable<
-  NonNullable<InstallExperience>["takosumiAccountsOidc"]
->;
+type InstallExperience = NonNullable<
+  InstallConfig["catalog"]
+>["installExperience"];
 interface ResolvedTakosumiAccountsOidcExperience {
   readonly issuerUrlVariable: string;
   readonly clientIdVariable: string;
@@ -42,7 +47,7 @@ export async function ensureTakosumiAccountsOidcForCapsule(input: {
   readonly installConfig: InstallConfig;
   readonly sourceGitUrl?: string;
 }): Promise<void> {
-  const oidcExperience = takosumiAccountsOidcExperience(
+  const oidcExperience = installOidcClientExperience(
     input.installConfig,
     input.sourceGitUrl,
   );
@@ -51,7 +56,9 @@ export async function ensureTakosumiAccountsOidcForCapsule(input: {
   }
   const redirectOrigin = appOriginFromInstallVariables(
     input.installConfig.variableMapping,
-    input.installConfig.catalog?.installExperience?.publicEndpoint,
+    installExperiencePublicEndpoint(
+      input.installConfig.catalog?.installExperience,
+    ),
   );
   if (!redirectOrigin) return;
 
@@ -148,11 +155,13 @@ export async function ensureTakosumiAccountsOidcForExistingCapsule(input: {
   });
 }
 
-function takosumiAccountsOidcExperience(
+function installOidcClientExperience(
   config: InstallConfig,
   sourceGitUrl?: string,
 ): ResolvedTakosumiAccountsOidcExperience | undefined {
-  const configured = config.catalog?.installExperience?.takosumiAccountsOidc;
+  const configured = installExperienceOidcClient(
+    config.catalog?.installExperience,
+  );
   if (configured) {
     return {
       ...DEFAULT_TAKOSUMI_ACCOUNTS_OIDC,
@@ -218,9 +227,7 @@ function normalizedCallbackPath(value: string | undefined): string {
 
 function appOriginFromInstallVariables(
   variables: InstallConfig["variableMapping"],
-  publicEndpoint?: NonNullable<
-    NonNullable<InstallConfig["catalog"]>["installExperience"]
-  >["publicEndpoint"],
+  publicEndpoint?: PublicEndpointProjection,
 ): string | undefined {
   for (const variableName of uniqueStrings([
     publicEndpoint?.urlVariable,

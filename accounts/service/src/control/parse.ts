@@ -52,6 +52,7 @@ import type {
   InstallConfig,
   InstallConfigCatalogInput,
   InstallConfigInstallExperience,
+  InstallConfigInstallProjection,
   InstallConfigCatalogKind,
   InstallConfigCatalogMetadata,
   InstallConfigCatalogSurface,
@@ -336,6 +337,10 @@ function catalogInputsValue(
             record.type === "json"
           ? record.type
           : undefined;
+    const format =
+      record.format === undefined
+        ? undefined
+        : catalogInputFormatValue(record.format);
     const required = booleanValue(record.required);
     const defaultValue =
       record.defaultValue === undefined
@@ -351,6 +356,7 @@ function catalogInputsValue(
     if (
       !name ||
       (record.type !== undefined && !type) ||
+      (record.format !== undefined && !format) ||
       (record.defaultValue !== undefined && defaultValue === undefined) ||
       !label ||
       (record.helper !== undefined && !helper) ||
@@ -361,6 +367,7 @@ function catalogInputsValue(
     inputs.push({
       name,
       ...(type ? { type } : {}),
+      ...(format ? { format } : {}),
       ...(required !== undefined ? { required } : {}),
       ...(record.advanced === true ? { advanced: true } : {}),
       ...(record.secret === true ? { secret: true } : {}),
@@ -371,6 +378,21 @@ function catalogInputsValue(
     });
   }
   return inputs;
+}
+
+function catalogInputFormatValue(
+  value: unknown,
+): InstallConfigCatalogInput["format"] | undefined {
+  return value === "text" ||
+    value === "url" ||
+    value === "hostname" ||
+    value === "subdomain" ||
+    value === "password" ||
+    value === "token" ||
+    value === "email" ||
+    value === "sha256"
+    ? value
+    : undefined;
 }
 
 function catalogVariableNameValue(value: unknown): string | undefined {
@@ -396,151 +418,161 @@ function installExperienceValue(
   }
   const record = value as Record<string, unknown>;
   const out: {
-    serviceName?: { variable: string };
-    publicEndpoint?: {
-      subdomainVariable?: string;
-      urlVariable?: string;
-      routePatternVariable?: string;
-      baseDomain?: string;
-    };
-    initialSecret?: {
-      variable: string;
-      kind?: "password" | "password_or_hash" | "token";
-      optional?: boolean;
-    };
-    takosumiAccountsOidc?: {
-      issuerUrlVariable?: string;
-      accountsUrlVariable?: string;
-      clientIdVariable?: string;
-      redirectUriVariable?: string;
-      callbackPath?: string;
-    };
+    projections?: InstallConfigInstallProjection[];
   } = {};
 
-  if (record.serviceName !== undefined) {
-    if (
-      !record.serviceName ||
-      typeof record.serviceName !== "object" ||
-      Array.isArray(record.serviceName)
-    ) {
-      return undefined;
-    }
-    const variable = catalogVariableNameValue(
-      (record.serviceName as Record<string, unknown>).variable,
-    );
-    if (!variable) return undefined;
-    out.serviceName = { variable };
+  if (record.projections === undefined) {
+    return Object.keys(record).length === 0 ? out : undefined;
   }
-
-  if (record.publicEndpoint !== undefined) {
-    if (
-      !record.publicEndpoint ||
-      typeof record.publicEndpoint !== "object" ||
-      Array.isArray(record.publicEndpoint)
-    ) {
-      return undefined;
-    }
-    const endpoint = record.publicEndpoint as Record<string, unknown>;
-    const subdomainVariable = optionalCatalogVariable(
-      endpoint.subdomainVariable,
-    );
-    const urlVariable = optionalCatalogVariable(endpoint.urlVariable);
-    const routePatternVariable = optionalCatalogVariable(
-      endpoint.routePatternVariable,
-    );
-    const baseDomain =
-      endpoint.baseDomain === undefined
-        ? undefined
-        : boundedStringValue(endpoint.baseDomain, 255);
-    if (
-      subdomainVariable === false ||
-      urlVariable === false ||
-      routePatternVariable === false ||
-      (endpoint.baseDomain !== undefined && baseDomain === undefined)
-    ) {
-      return undefined;
-    }
-    out.publicEndpoint = {
-      ...(subdomainVariable ? { subdomainVariable } : {}),
-      ...(urlVariable ? { urlVariable } : {}),
-      ...(routePatternVariable ? { routePatternVariable } : {}),
-      ...(baseDomain ? { baseDomain } : {}),
-    };
+  if (Object.keys(record).some((key) => key !== "projections")) {
+    return undefined;
   }
-
-  if (record.initialSecret !== undefined) {
-    if (
-      !record.initialSecret ||
-      typeof record.initialSecret !== "object" ||
-      Array.isArray(record.initialSecret)
-    ) {
-      return undefined;
-    }
-    const secret = record.initialSecret as Record<string, unknown>;
-    const variable = catalogVariableNameValue(secret.variable);
-    const kind =
-      secret.kind === undefined
-        ? undefined
-        : secret.kind === "password" ||
-            secret.kind === "password_or_hash" ||
-            secret.kind === "token"
-          ? secret.kind
-          : undefined;
-    const optional = booleanValue(secret.optional);
-    if (
-      !variable ||
-      (secret.kind !== undefined && kind === undefined) ||
-      (secret.optional !== undefined && optional === undefined)
-    ) {
-      return undefined;
-    }
-    out.initialSecret = {
-      variable,
-      ...(kind ? { kind } : {}),
-      ...(optional !== undefined ? { optional } : {}),
-    };
-  }
-
-  if (record.takosumiAccountsOidc !== undefined) {
-    if (
-      !record.takosumiAccountsOidc ||
-      typeof record.takosumiAccountsOidc !== "object" ||
-      Array.isArray(record.takosumiAccountsOidc)
-    ) {
-      return undefined;
-    }
-    const oidc = record.takosumiAccountsOidc as Record<string, unknown>;
-    const issuerUrlVariable = optionalCatalogVariable(oidc.issuerUrlVariable);
-    const accountsUrlVariable = optionalCatalogVariable(
-      oidc.accountsUrlVariable,
-    );
-    const clientIdVariable = optionalCatalogVariable(oidc.clientIdVariable);
-    const redirectUriVariable = optionalCatalogVariable(
-      oidc.redirectUriVariable,
-    );
-    const callbackPath =
-      oidc.callbackPath === undefined
-        ? undefined
-        : catalogPathValue(oidc.callbackPath);
-    if (
-      issuerUrlVariable === false ||
-      accountsUrlVariable === false ||
-      clientIdVariable === false ||
-      redirectUriVariable === false ||
-      (oidc.callbackPath !== undefined && callbackPath === undefined)
-    ) {
-      return undefined;
-    }
-    out.takosumiAccountsOidc = {
-      ...(issuerUrlVariable ? { issuerUrlVariable } : {}),
-      ...(accountsUrlVariable ? { accountsUrlVariable } : {}),
-      ...(clientIdVariable ? { clientIdVariable } : {}),
-      ...(redirectUriVariable ? { redirectUriVariable } : {}),
-      ...(callbackPath ? { callbackPath } : {}),
-    };
-  }
+  const projections = installExperienceProjectionsValue(record.projections);
+  if (!projections) return undefined;
+  out.projections = [...projections];
 
   return out;
+}
+
+function installExperienceProjectionsValue(
+  value: unknown,
+): readonly InstallConfigInstallProjection[] | undefined {
+  if (!Array.isArray(value) || value.length > 20) return undefined;
+  const projections: InstallConfigInstallProjection[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      return undefined;
+    }
+    const record = item as Record<string, unknown>;
+    if (record.kind === "service_name") {
+      const variable = catalogVariableNameValue(record.variable);
+      if (!variable) return undefined;
+      projections.push({ kind: "service_name", variable });
+      continue;
+    }
+    if (record.kind === "public_endpoint") {
+      if (
+        !record.variables ||
+        typeof record.variables !== "object" ||
+        Array.isArray(record.variables)
+      ) {
+        return undefined;
+      }
+      const variables = record.variables as Record<string, unknown>;
+      const subdomain = optionalCatalogVariable(variables.subdomain);
+      const url = optionalCatalogVariable(variables.url);
+      const routePattern = optionalCatalogVariable(variables.routePattern);
+      const baseDomain =
+        record.baseDomain === undefined
+          ? undefined
+          : boundedStringValue(record.baseDomain, 255);
+      if (
+        subdomain === false ||
+        url === false ||
+        routePattern === false ||
+        (record.baseDomain !== undefined && baseDomain === undefined)
+      ) {
+        return undefined;
+      }
+      projections.push({
+        kind: "public_endpoint",
+        variables: {
+          ...(subdomain ? { subdomain } : {}),
+          ...(url ? { url } : {}),
+          ...(routePattern ? { routePattern } : {}),
+        },
+        ...(baseDomain ? { baseDomain } : {}),
+      });
+      continue;
+    }
+    if (record.kind === "initial_secret") {
+      const variable = catalogVariableNameValue(record.variable);
+      const secretKind =
+        record.secretKind === undefined
+          ? undefined
+          : record.secretKind === "password" ||
+              record.secretKind === "password_or_hash" ||
+              record.secretKind === "token"
+            ? record.secretKind
+            : undefined;
+      const optional = booleanValue(record.optional);
+      if (
+        !variable ||
+        (record.secretKind !== undefined && secretKind === undefined) ||
+        (record.optional !== undefined && optional === undefined)
+      ) {
+        return undefined;
+      }
+      projections.push({
+        kind: "initial_secret",
+        variable,
+        ...(secretKind ? { secretKind } : {}),
+        ...(optional !== undefined ? { optional } : {}),
+      });
+      continue;
+    }
+    if (record.kind === "oidc_client") {
+      if (
+        !record.variables ||
+        typeof record.variables !== "object" ||
+        Array.isArray(record.variables)
+      ) {
+        return undefined;
+      }
+      const variables = record.variables as Record<string, unknown>;
+      const issuerUrl = optionalCatalogVariable(variables.issuerUrl);
+      const accountsUrl = optionalCatalogVariable(variables.accountsUrl);
+      const clientId = optionalCatalogVariable(variables.clientId);
+      const redirectUri = optionalCatalogVariable(variables.redirectUri);
+      const callbackPath =
+        record.callbackPath === undefined
+          ? undefined
+          : catalogPathValue(record.callbackPath);
+      if (
+        issuerUrl === false ||
+        accountsUrl === false ||
+        clientId === false ||
+        redirectUri === false ||
+        (record.callbackPath !== undefined && callbackPath === undefined)
+      ) {
+        return undefined;
+      }
+      projections.push({
+        kind: "oidc_client",
+        variables: {
+          ...(issuerUrl ? { issuerUrl } : {}),
+          ...(accountsUrl ? { accountsUrl } : {}),
+          ...(clientId ? { clientId } : {}),
+          ...(redirectUri ? { redirectUri } : {}),
+        },
+        ...(callbackPath ? { callbackPath } : {}),
+      });
+      continue;
+    }
+    if (record.kind === "artifact") {
+      if (
+        !record.variables ||
+        typeof record.variables !== "object" ||
+        Array.isArray(record.variables)
+      ) {
+        return undefined;
+      }
+      const variables = record.variables as Record<string, unknown>;
+      const url = optionalCatalogVariable(variables.url);
+      const sha256 = optionalCatalogVariable(variables.sha256);
+      if (url === false || sha256 === false) return undefined;
+      projections.push({
+        kind: "artifact",
+        variables: {
+          ...(url ? { url } : {}),
+          ...(sha256 ? { sha256 } : {}),
+        },
+      });
+      continue;
+    }
+    return undefined;
+  }
+  return projections;
 }
 
 export function modulePathValue(value: unknown): string | undefined {

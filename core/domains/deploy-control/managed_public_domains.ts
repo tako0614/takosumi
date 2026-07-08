@@ -1,4 +1,5 @@
 import type { InstallConfig } from "@takosumi/internal/deploy-control-api";
+import { installExperiencePublicEndpoint } from "takosumi-contract";
 
 export const DEFAULT_MANAGED_PUBLIC_BASE_DOMAIN = "app.takos.jp";
 
@@ -9,7 +10,8 @@ export function managedPublicBaseDomainFromInstallConfig(
 ): string {
   return (
     normalizeManagedPublicBaseDomain(
-      installConfig?.catalog?.installExperience?.publicEndpoint?.baseDomain,
+      installExperiencePublicEndpoint(installConfig?.catalog?.installExperience)
+        ?.baseDomain,
     ) ?? DEFAULT_MANAGED_PUBLIC_BASE_DOMAIN
   );
 }

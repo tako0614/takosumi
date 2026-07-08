@@ -10,7 +10,10 @@
  * public run methods to this engine and keeps the query / billing / connection /
  * source surfaces. Method bodies are moved byte-for-byte.
  */
-import type { JsonValue } from "takosumi-contract";
+import {
+  installExperiencePublicEndpoint,
+  type JsonValue,
+} from "takosumi-contract";
 import type {
   ApplyRun,
   ApplyRunResponse,
@@ -309,7 +312,9 @@ function declaredGenericCapsuleInputNames(
 function publicEndpointVariableNames(
   installConfig: InstallConfig,
 ): ReadonlySet<string> {
-  const endpoint = installConfig.catalog?.installExperience?.publicEndpoint;
+  const endpoint = installExperiencePublicEndpoint(
+    installConfig.catalog?.installExperience,
+  );
   if (!endpoint) return new Set();
   return new Set(
     [
@@ -420,7 +425,9 @@ function publicHostsFromInstallExperienceVariables(
   variables: Readonly<Record<string, unknown>>,
   installConfig: InstallConfig | undefined,
 ): readonly string[] {
-  const endpoint = installConfig?.catalog?.installExperience?.publicEndpoint;
+  const endpoint = installExperiencePublicEndpoint(
+    installConfig?.catalog?.installExperience,
+  );
   if (!endpoint) return [];
 
   const hosts = new Set<string>();
@@ -488,16 +495,6 @@ function hasManagedCloudflareProviderDefaults(
   );
 }
 
-function hasManagedCloudflareProviderBindings(
-  bindings: readonly RootInstallationProviderEnvBinding[],
-): boolean {
-  return bindings.some(
-    (binding) =>
-      sameProviderFamily(binding.provider, "cloudflare") &&
-      nonEmptyStringValue(binding.baseUrl) !== undefined,
-  );
-}
-
 function finalizeManagedCloudflarePublicHostVariables(input: {
   readonly explicit: Readonly<Record<string, JsonValue>>;
   readonly installation: Installation;
@@ -510,8 +507,9 @@ function finalizeManagedCloudflarePublicHostVariables(input: {
   if (!hasManagedCloudflareProviderDefaults(input.providerInputDefaults)) {
     return input.variables;
   }
-  const endpoint =
-    input.installConfig.catalog?.installExperience?.publicEndpoint;
+  const endpoint = installExperiencePublicEndpoint(
+    input.installConfig.catalog?.installExperience,
+  );
   if (!endpoint || input.endpointVariables.size === 0) {
     return input.variables;
   }
@@ -578,10 +576,6 @@ function workerNameFromCapsule(installation: Installation): string | undefined {
 
 function publicHostUnavailableMessage(): string {
   return "app_hostname_unavailable: already exists";
-}
-
-function customDomainVerificationRequiredMessage(): string {
-  return "custom_domain_verification_required: custom domains must be verified before managed deploy";
 }
 
 function managedWorkerNameSuffix(installationId: string): string {
@@ -922,11 +916,6 @@ export class RunEngine {
         installation.installConfigId,
       );
       await this.#reservePublicHostsForPlan(installation, variables, now, {
-        managedDomainsOnly:
-          hasManagedCloudflareProviderDefaults(
-            installTypePlan?.providerInputDefaults ?? {},
-          ) ||
-          internal.genericRootDispatch?.managedPublicHostDomainsOnly === true,
         managedBaseDomains: [
           managedPublicBaseDomainFromInstallConfig(installConfig),
         ],
@@ -2044,7 +2033,6 @@ export class RunEngine {
     variables: Readonly<Record<string, JsonValue>>,
     now: number,
     options: {
-      readonly managedDomainsOnly?: boolean;
       readonly managedBaseDomains?: readonly string[];
     } = {},
   ): Promise<void> {
@@ -2058,20 +2046,14 @@ export class RunEngine {
       variables,
       installConfig,
     );
-    if (requestedHosts.length === 0) return;
-    if (options.managedDomainsOnly === true) {
-      for (const host of requestedHosts) {
-        if (publicHostPolicyKind(host, managedBaseDomains) !== "custom_domain")
-          continue;
-        throw new OpenTofuControllerError(
-          "failed_precondition",
-          customDomainVerificationRequiredMessage(),
-          { reason: "custom_domain_verification_required" },
-        );
-      }
-    }
+    const claimableHosts = requestedHosts.filter(
+      (host) =>
+        publicHostPolicyKind(host, managedBaseDomains) ===
+        "managed_default_hostname",
+    );
+    if (claimableHosts.length === 0) return;
     const claims = await this.#publicHostClaims();
-    for (const host of requestedHosts) {
+    for (const host of claimableHosts) {
       const claim = claims.get(host);
       if (!claim || claim.installationId === installation.id) continue;
       throw new OpenTofuControllerError(
@@ -2082,7 +2064,7 @@ export class RunEngine {
     }
     const workspaceId = installation.workspaceId ?? installation.spaceId;
     const nowIso = new Date(now).toISOString();
-    for (const host of requestedHosts) {
+    for (const host of claimableHosts) {
       const result = await this.#store.reservePublicHost({
         hostname: host,
         workspaceId,
@@ -2228,9 +2210,6 @@ export class RunEngine {
         ...(moduleFiles && moduleFiles.length > 0 ? { moduleFiles } : {}),
       },
       outputAllowlist: context.outputAllowlist,
-      managedPublicHostDomainsOnly: hasManagedCloudflareProviderBindings(
-        context.providerEnvBindings,
-      ),
     };
   }
 
