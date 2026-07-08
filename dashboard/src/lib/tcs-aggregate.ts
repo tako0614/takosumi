@@ -1,6 +1,6 @@
 /**
  * CLIENT-SIDE aggregation across TCS store servers. Fans the read spec out to
- * every known server, merges, and de-duplicates by normalized (git,ref,path)
+ * every known server, merges, and de-duplicates by normalized (git,path)
  * identity (annotating `seenOn`). A slow/failed/non-conforming server is dropped
  * from the render (best-effort) and never blocks the others. No server-to-server
  * traffic — the merge happens here, in the dashboard.
@@ -82,14 +82,6 @@ function isBetterPrimary(
   candidate: AggregatedTcsListing,
   current: AggregatedTcsListing,
 ): boolean {
-  const candidateHasInstallConfig = Boolean(candidate.installConfigId);
-  const currentHasInstallConfig = Boolean(current.installConfigId);
-  if (candidateHasInstallConfig !== currentHasInstallConfig) {
-    return candidateHasInstallConfig;
-  }
-  const c = Boolean(candidate.source.resolvedCommit);
-  const cur = Boolean(current.source.resolvedCommit);
-  if (c !== cur) return c;
   if (candidate.primaryDefault !== current.primaryDefault) {
     return candidate.primaryDefault;
   }

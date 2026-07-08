@@ -38,7 +38,6 @@ Supported query parameters:
 | ----------------- | -------- | --------------------------------------------------- |
 | `git`             | no       | HTTPS Git URL for a plain OpenTofu/Terraform module |
 | `source`          | no       | Packed module address, for example `git::...?...`   |
-| `installConfigId` | no       | Dashboard/catalog install config id                 |
 | `ref`             | no       | Git branch, tag, or commit                          |
 | `path`            | no       | Module path inside the repository                   |
 | `name`            | no       | Display name for the service                        |
@@ -46,9 +45,11 @@ Supported query parameters:
 | `product`         | no       | Client product key, only with `return_uri`          |
 | `return_uri`      | no       | Connection payload target, only with `product`      |
 
-One of `git`, `source`, or `installConfigId` selects what Takosumi should
-create. `product` does not select the install target. Use `product` and
-`return_uri` together only when Takosumi should return to a client.
+`git` or `source` selects what Takosumi should create. Store nodes are
+discovery / presentation entrypoints that prefill this URL; they are not the
+creation target or release-ref authority. `product` does not select the install
+target. Use `product` and `return_uri` together only when Takosumi should return
+to a client.
 
 If `return_uri` is absent, the flow is just a normal hosted-service creation
 link. In that case, do not include `product`. If `return_uri` is present,
@@ -63,8 +64,7 @@ These forms do not exist:
 /install?product=notes-app
 ```
 
-They do not specify an OpenTofu source or install config, so there is no install
-target.
+They do not specify an OpenTofu source, so there is no install target.
 
 Example:
 

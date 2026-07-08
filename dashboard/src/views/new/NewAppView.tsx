@@ -5,8 +5,8 @@
  * Three entry shapes, identical install path:
  *   - Link/source import: the primary path for app install links or raw Git
  *     URLs, including services that are not in the store.
- *   - Examples: curated installable app / known service coordinates returned by
- *     the InstallConfig API. Picking one pre-fills the same Git-backed flow.
+ *   - Store listings: a selected store node announces a Git repository and
+ *     presentation metadata. Picking one pre-fills the same Git-backed flow.
  *   - External install link: another site links `/install?git=…` (or the
  *     packed `?source=git::…` form); the router forwards the query here and
  *     lib/install-link.ts seeds the Git form. A link only PRE-FILLS — the
@@ -416,9 +416,13 @@ function isFullCommitSha(value: string): boolean {
   return /^[0-9a-f]{40}$/iu.test(value.trim());
 }
 
-function displayRef(value: string | undefined): string {
-  const trimmed = value?.trim() || "main";
+function refInputValue(value: string | undefined): string {
+  const trimmed = value?.trim() ?? "";
   return isFullCommitSha(trimmed) ? trimmed.slice(0, 8) : trimmed;
+}
+
+function displayRef(value: string | undefined): string {
+  return refInputValue(value) || t("new.git.defaultRef");
 }
 
 function sourceHostLabel(value: string): string {
@@ -1007,7 +1011,9 @@ function parseInitialTcsHandoff(
 function initialAddTab(search: string): "store" | "git" {
   // Start on the service browser. Install links and pasted source links enter
   // the same flow after a source is selected.
-  return parseInitialInstallConfigId(search) || !hasInstallPrefillParams(search)
+  return parseInitialTcsHandoff(search) ||
+    parseInitialInstallConfigId(search) ||
+    !hasInstallPrefillParams(search)
     ? "store"
     : "git";
 }
@@ -1037,7 +1043,7 @@ function Inner() {
   );
 
   // `/new` opens the install-link form. External `/install?git=…` redirects and
-  // store hand-offs (`?installConfigId=…`) seed the same Git-backed flow.
+  // Store hand-offs (`?tcsBase=…&tcsListing=…`) seed the same Git-backed flow.
   const [activeTab, setActiveTab] = createSignal<"store" | "git">(
     initialAddTab(initialSearch),
   );
@@ -1054,9 +1060,9 @@ function Inner() {
   >({});
   const [activeInstallPrefill, setActiveInstallPrefill] =
     createSignal<InstallPrefill | null>(initialInstallPrefill ?? null);
-  const initialRef = initialInstallPrefill?.ref || "main";
+  const initialRef = initialInstallPrefill?.ref ?? "";
   const [gitUrl, setGitUrl] = createSignal(initialInstallPrefill?.git ?? "");
-  const [ref, setRef] = createSignal(displayRef(initialRef));
+  const [ref, setRef] = createSignal(refInputValue(initialRef));
   const [pinnedFullRef, setPinnedFullRef] = createSignal<string | null>(
     isFullCommitSha(initialRef) ? initialRef : null,
   );
@@ -1534,14 +1540,14 @@ function Inner() {
     const current = ref().trim();
     const pinned = pinnedFullRef();
     if (pinned && current === displayRef(pinned)) return pinned;
-    return current || "main";
+    return current;
   };
   const currentInstallPrefill = () =>
     activeInstallPrefill() ?? parseInstallPrefillFromInput(gitUrl());
   const sourceGitUrl = () => currentInstallPrefill()?.git ?? gitUrl().trim();
   const sourceRef = () => {
     const prefill = currentInstallPrefill();
-    return prefill ? prefill.ref || "main" : effectiveRef();
+    return prefill ? prefill.ref : effectiveRef();
   };
   const sourcePath = () =>
     currentInstallPrefill()?.path || path().trim() || ".";
@@ -2292,7 +2298,7 @@ function Inner() {
     next: InstallPrefill,
     options: { readonly storeListing?: TcsListing } = {},
   ) => {
-    const nextRef = next.ref || "main";
+    const nextRef = next.ref;
     const storeListing = options.storeListing;
     if (storeListing) void loadConnections();
     setActiveTab(storeListing ? "store" : "git");
@@ -2300,7 +2306,7 @@ function Inner() {
     setSelectedStoreConfigId(null);
     setSelectedStoreListing(storeListing ?? null);
     setGitUrl(next.git);
-    setRef(displayRef(nextRef));
+    setRef(refInputValue(nextRef));
     setPinnedFullRef(isFullCommitSha(nextRef) ? nextRef : null);
     setPath(next.path || ".");
     if (next.name || !name().trim()) {
@@ -2354,12 +2360,8 @@ function Inner() {
     setActiveInstallPrefill(null);
     setLinkDraft("");
     setGitUrl(entry.source.git);
-    setRef(displayRef(entry.source.ref));
-    setPinnedFullRef(
-      entry.source.ref && isFullCommitSha(entry.source.ref)
-        ? entry.source.ref
-        : null,
-    );
+    setRef("");
+    setPinnedFullRef(null);
     setPath(entry.source.path);
     setName(entry.suggestedName);
     setSelectedStoreConfigId(entry.id);
@@ -2407,7 +2409,7 @@ function Inner() {
     setSelectedStoreConfigId(null);
     setSelectedStoreListing(listing);
     setGitUrl(listing.source.git);
-    setRef("main");
+    setRef("");
     setPinnedFullRef(null);
     setPath(listing.source.path || ".");
     setName(listing.suggestedName);
@@ -2439,7 +2441,7 @@ function Inner() {
     setActiveInstallPrefill(null);
     setGitUrl(raw);
     setName(name().trim() || capsuleNameFromUrl(raw));
-    setRef("main");
+    setRef("");
     setPinnedFullRef(null);
     setPath(".");
     resetCompatibility();
@@ -3220,7 +3222,7 @@ function Inner() {
               locale={locale()}
               onInstall={pickStoreListing}
               onConfigure={pickStoreListing}
-              showSourceControls={false}
+              showSourceControls={true}
               showSortControl={false}
             />
             <div class="av-manual-entry">

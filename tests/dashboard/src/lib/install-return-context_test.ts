@@ -100,6 +100,29 @@ describe("installReturnContext", () => {
     });
   });
 
+  test("omits ref when the flow uses the Git default branch", () => {
+    const returnPath = installReturnPathFromPrefill({
+      git: "https://github.com/acme/worker.git",
+      ref: "",
+      path: "deploy/opentofu",
+      vars: {
+        project_name: "takos-space",
+      },
+    });
+    expect(returnPath).toEqual(
+      "/new?git=https%3A%2F%2Fgithub.com%2Facme%2Fworker.git&path=deploy%2Fopentofu&var.project_name=takos-space",
+    );
+    expect(installReturnContext(returnPath)).toMatchObject({
+      git: "https://github.com/acme/worker.git",
+      ref: "",
+      path: "deploy/opentofu",
+      vars: {
+        project_name: "takos-space",
+      },
+      label: "worker",
+    });
+  });
+
   test("preserves typed OpenTofu variables in canonical return paths", () => {
     const returnPath = installReturnPathFromPrefill({
       git: "https://github.com/acme/worker.git",
