@@ -4427,6 +4427,139 @@ test("POST /api/v1/workspaces/:id/capsules inherits catalog modulePath when vars
   });
 });
 
+test("POST /api/v1/workspaces/:id/capsules applies catalog input defaults as OpenTofu vars", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  operations.installations.getInstallConfig = async (id) => {
+    operations.calls.getInstallConfig = [id];
+    return {
+      id,
+      name: "yurucommu",
+      sourceKind: "generic_capsule",
+      installType: "opentofu_module",
+      trustLevel: "trusted",
+      variableMapping: {
+        existing_base_var: "kept",
+        project_name: "base-yurucommu",
+      },
+      outputAllowlist: {
+        takosumi_release: { from: "takosumi_release", type: "json" },
+      },
+      policy: {},
+      catalog: {
+        source: {
+          git: "https://github.com/tako0614/yurucommu.git",
+          ref: "ebe1cb08e67794aaab4722b138a321c78e430291",
+          path: ".",
+        },
+        order: 100,
+        surface: "service",
+        kind: "worker",
+        provider: "cloudflare",
+        suggestedName: "yurucommu",
+        badge: { ja: "追加候補", en: "Installable" },
+        name: { ja: "yurucommu", en: "yurucommu" },
+        description: { ja: "コミュニティ", en: "Community" },
+        inputs: [
+          {
+            name: "project_name",
+            type: "string",
+            defaultValue: "service-name-with-space",
+            label: { ja: "サービス名", en: "Service name" },
+          },
+          {
+            name: "enable_cloudflare_resources",
+            type: "boolean",
+            defaultValue: "true",
+            label: {
+              ja: "Cloudflare リソースを作成",
+              en: "Create Cloudflare resources",
+            },
+          },
+          {
+            name: "worker_bundle_url",
+            type: "string",
+            defaultValue: "https://example.test/yurucommu-worker.js",
+            label: {
+              ja: "Worker artifact URL",
+              en: "Worker artifact URL",
+            },
+          },
+          {
+            name: "release_container_images",
+            type: "json",
+            defaultValue:
+              '{"runtime":"registry.example.test/yurucommu/runtime:1"}',
+            label: {
+              ja: "Release container images",
+              en: "Release container images",
+            },
+          },
+          {
+            name: "auth_password_hash",
+            type: "string",
+            secret: true,
+            defaultValue: "do-not-inject",
+            label: { ja: "初期パスワード", en: "Initial password" },
+          },
+        ],
+      },
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:00Z",
+    };
+  };
+  const { request: req, url } = request(
+    "POST",
+    "/api/v1/workspaces/space_a/capsules",
+    {
+      cookie,
+      body: {
+        name: "yurucommu",
+        environment: "production",
+        sourceId: "src_x",
+        installConfigId: "cfg-catalog-yurucommu",
+        vars: {
+          project_name: "custom-yurucommu",
+          worker_name: "custom-yurucommu",
+        },
+      },
+    },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+
+  expect(response?.status).toEqual(201);
+  const config = operations.calls.putInstallConfig?.[0] as {
+    id: string;
+    variableMapping: Record<string, unknown>;
+    outputAllowlist: Record<string, unknown>;
+  };
+  expect(config.id.startsWith("icfg_")).toEqual(true);
+  expect(config.variableMapping).toEqual({
+    existing_base_var: "kept",
+    project_name: "custom-yurucommu",
+    enable_cloudflare_resources: true,
+    worker_bundle_url: "https://example.test/yurucommu-worker.js",
+    release_container_images: {
+      runtime: "registry.example.test/yurucommu/runtime:1",
+    },
+    worker_name: "custom-yurucommu",
+  });
+  expect(config.variableMapping.auth_password_hash).toBeUndefined();
+  expect(config.outputAllowlist).toEqual({
+    takosumi_release: { from: "takosumi_release", type: "json" },
+  });
+  const createCall = operations.calls.createCapsule?.[0] as {
+    installConfigId: string;
+  };
+  expect(createCall.installConfigId).toEqual(config.id);
+});
+
 test("POST /api/v1/workspaces/:id/capsules accepts repo-root modulePath", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);

@@ -51,6 +51,7 @@ import type { Workspace, WorkspaceType } from "takosumi-contract/workspaces";
 import type {
   CapsuleProviderEnvBindingSet,
   InstallConfig,
+  InstallConfigCatalogInput,
   Capsule,
   OutputAllowlistEntry,
   PolicyConfig,
@@ -1231,25 +1232,35 @@ async function createCapsule(
   }
   let resolvedInstallConfigId = installConfigId;
   let resolvedInstallConfig: InstallConfig | undefined;
+  const baseConfig =
+    await operations.installations.getInstallConfig(installConfigId);
   if (
-    (vars !== undefined && Object.keys(vars).length > 0) ||
+    baseConfig.workspaceId !== undefined &&
+    baseConfig.workspaceId !== workspaceId
+  ) {
+    return errorJson(
+      "invalid_request",
+      "installConfigId is not available to the target Workspace.",
+      400,
+    );
+  }
+  const catalogDefaultVars = catalogDefaultVariableMapping(
+    catalog ?? baseConfig.catalog,
+    {
+      capsuleName: name,
+      workspaceId,
+    },
+  );
+  const hasCatalogDefaultVars = Object.keys(catalogDefaultVars).length > 0;
+  const hasVars = vars !== undefined && Object.keys(vars).length > 0;
+  if (
+    hasVars ||
+    hasCatalogDefaultVars ||
     runnerProfileId ||
     outputAllowlist !== undefined ||
     catalog !== undefined ||
     modulePath !== undefined
   ) {
-    const baseConfig =
-      await operations.installations.getInstallConfig(installConfigId);
-    if (
-      baseConfig.workspaceId !== undefined &&
-      baseConfig.workspaceId !== workspaceId
-    ) {
-      return errorJson(
-        "invalid_request",
-        "installConfigId is not available to the target Workspace.",
-        400,
-      );
-    }
     const now = new Date().toISOString();
     const { modulePath: _baseModulePath, ...baseConfigWithoutModulePath } =
       baseConfig;
@@ -1261,7 +1272,11 @@ async function createCapsule(
       workspaceId,
       name: `${name}-config`,
       internal: { reason: "per_install_overrides" },
-      variableMapping: { ...baseConfig.variableMapping, ...(vars ?? {}) },
+      variableMapping: mergeVariableMappings(
+        baseConfig.variableMapping,
+        catalogDefaultVars,
+        vars ?? {},
+      ),
       ...(catalog ? { catalog } : {}),
       ...(runnerProfileId ? { runnerId: runnerProfileId } : {}),
       ...(modulePath ? { modulePath } : {}),
@@ -1291,6 +1306,125 @@ async function createCapsule(
     });
   }
   return jsonStatus({ capsule: publicCapsule(installation) }, 201);
+}
+
+function catalogDefaultVariableMapping(
+  catalog: InstallConfig["catalog"] | undefined,
+  options: {
+    readonly capsuleName: string;
+    readonly workspaceId: string;
+  },
+): Readonly<Record<string, JsonValue>> {
+  if (!catalog) return {};
+  let out: Record<string, JsonValue> = {};
+  for (const input of catalog.inputs) {
+    if (input.secret === true) continue;
+    const raw = input.defaultValue?.trim();
+    if (!raw) continue;
+    const value = catalogDefaultInputValue(input, raw, catalog, options);
+    if (value === undefined) continue;
+    try {
+      out = mergeVariableMappings(
+        out,
+        normalizeVariablePathRecord({ [input.name]: value }, "catalog.inputs"),
+      ) as Record<string, JsonValue>;
+    } catch {
+      continue;
+    }
+  }
+  return out;
+}
+
+function catalogDefaultInputValue(
+  input: InstallConfigCatalogInput,
+  raw: string,
+  catalog: NonNullable<InstallConfig["catalog"]>,
+  options: {
+    readonly capsuleName: string;
+    readonly workspaceId: string;
+  },
+): JsonValue | undefined {
+  const value = symbolicCatalogDefaultValue(raw, catalog, options);
+  if (input.type === "boolean") {
+    const normalized = value.toLowerCase();
+    if (["true", "1", "yes", "on"].includes(normalized)) return true;
+    if (["false", "0", "no", "off"].includes(normalized)) return false;
+    return undefined;
+  }
+  if (input.type === "number") {
+    const numberValue = Number(value);
+    return Number.isFinite(numberValue) ? numberValue : undefined;
+  }
+  if (input.type === "json") {
+    try {
+      const parsed = JSON.parse(value) as unknown;
+      return isJsonValue(parsed) ? parsed : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  return value;
+}
+
+function symbolicCatalogDefaultValue(
+  value: string,
+  catalog: NonNullable<InstallConfig["catalog"]>,
+  options: {
+    readonly capsuleName: string;
+    readonly workspaceId: string;
+  },
+): string {
+  if (value === "service-name") {
+    return catalogSlug(options.capsuleName || catalog.suggestedName);
+  }
+  if (value === "service-name-with-space") {
+    const base = catalogSlug(options.capsuleName || catalog.suggestedName);
+    const suffix = workspaceSlugSuffix(options.workspaceId);
+    return suffix ? `${base}-${suffix}` : base;
+  }
+  return value;
+}
+
+function catalogSlug(value: string): string {
+  return (
+    value
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9-]+/gu, "-")
+      .replace(/^-+|-+$/gu, "")
+      .slice(0, 48) || "capsule"
+  );
+}
+
+function workspaceSlugSuffix(value: string): string {
+  return value
+    .replace(/^(workspace|space)_/u, "")
+    .replace(/[^a-z0-9-]+/giu, "-")
+    .replace(/^-+|-+$/gu, "")
+    .slice(0, 6)
+    .toLowerCase();
+}
+
+function mergeVariableMappings(
+  ...records: readonly Readonly<Record<string, unknown>>[]
+): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const record of records) {
+    for (const [key, value] of Object.entries(record)) {
+      out[key] = mergeVariableMappingValue(out[key], value);
+    }
+  }
+  return out;
+}
+
+function mergeVariableMappingValue(
+  existing: unknown,
+  incoming: unknown,
+): unknown {
+  if (isPlainJsonObject(existing) && isPlainJsonObject(incoming)) {
+    return mergeVariableMappings(existing, incoming);
+  }
+  return incoming;
 }
 
 function scopedCloneOutputAllowlist(
