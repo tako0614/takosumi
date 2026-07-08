@@ -104,6 +104,18 @@ function capsuleResponse(capsule: Capsule): {
   return { capsule: publicInstallation(capsule) };
 }
 
+function capsuleHasAppliedState(capsule: {
+  readonly currentDeploymentId?: string;
+  readonly currentStateVersionId?: string;
+  readonly currentStateGeneration: number;
+}): boolean {
+  return Boolean(
+    capsule.currentDeploymentId ||
+      capsule.currentStateVersionId ||
+      capsule.currentStateGeneration > 0,
+  );
+}
+
 function publicInstallConfig(config: InstallConfig): PublicInstallConfig {
   const {
     installType: _installType,
@@ -608,10 +620,18 @@ export function mountDeployControlInstallationRoutes(
     TAKOSUMI_API_CAPSULE_ROUTE,
     defineRoute({
       ctx,
+      requireService: requireInstallations,
       param: CAPSULE_ID_PARAM,
       handler: async ({ c, principal, id }) => {
         const existing = await controller.getInstallation(id);
         ensureSpacePermission(principal, existing.capsule.workspaceId);
+        if (!capsuleHasAppliedState(existing.capsule)) {
+          const capsule = await installations!.abandonUnappliedCapsule(
+            id,
+            "delete requested before first successful apply",
+          );
+          return c.json({ ...capsuleResponse(capsule), abandoned: true }, 202);
+        }
         const response = await controller.createInstallationDestroyPlan(id, {
           actor: principal.actor,
         });
