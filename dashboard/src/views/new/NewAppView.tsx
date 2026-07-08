@@ -2049,10 +2049,17 @@ function Inner() {
   };
 
   const visibleProviderConnections = () => providerConnections() ?? [];
+  const isUsableManagedProviderConnection = (connection: ProviderConnection) =>
+    connection.status === "pending" &&
+    connection.scope === "operator" &&
+    connection.scopeHints?.managedProvider === true &&
+    typeof connection.scopeHints.providerBaseUrl === "string" &&
+    connection.scopeHints.providerBaseUrl.trim().length > 0;
+  const isReadyProviderConnection = (connection: ProviderConnection) =>
+    connection.status === "verified" ||
+    isUsableManagedProviderConnection(connection);
   const readyProviderConnections = () =>
-    visibleProviderConnections().filter(
-      (connection) => connection.status === "verified",
-    );
+    visibleProviderConnections().filter(isReadyProviderConnection);
   const providerConnectionsForProvider = (provider: string) =>
     readyProviderConnections().filter((connection) =>
       sameProviderFamily(provider, connection.providerSource),
@@ -2133,6 +2140,7 @@ function Inner() {
     providerRows().filter(providerNeedsConnection);
   const providerRowNeedsVisibleChoice = (row: ProviderConnectionRow) => {
     if (!providerRequiresConnection(row.provider)) return false;
+    if (rowCanUseManagedProviderFallback(row)) return false;
     if (rowHasManagedProviderDefault(row)) return false;
     const candidates = providerConnectionsForRow(row);
     if (candidates.length !== 1) return true;
