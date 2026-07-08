@@ -853,6 +853,7 @@ function catalogMetadataFromStoreListing(
     inputs: listing.inputs.map((input) => ({
       name: input.name,
       ...(input.type ? { type: input.type } : {}),
+      ...(input.format ? { format: input.format } : {}),
       ...(input.required !== undefined ? { required: input.required } : {}),
       ...(input.advanced !== undefined ? { advanced: input.advanced } : {}),
       ...(input.secret !== undefined ? { secret: input.secret } : {}),
