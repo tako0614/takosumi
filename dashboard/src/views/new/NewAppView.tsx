@@ -833,9 +833,7 @@ function catalogMetadataFromStoreListing(
     ja: listing.suggestedName,
     en: listing.suggestedName,
   };
-  const templateId = safeCatalogToken(listing.id);
   return {
-    ...(templateId ? { templateId } : {}),
     source: {
       git: listing.source.git,
       ref: listing.source.resolvedCommit ?? listing.source.ref,
@@ -2122,6 +2120,12 @@ function Inner() {
       }))
       .sort((a, b) => b.score - a.score || a.index - b.index)
       .map((entry) => entry.connection);
+  const managedProviderConnectionForRow = (
+    row: ProviderConnectionRow,
+  ): ProviderConnection | undefined =>
+    providerConnectionsForRow(row).find(
+      (connection) => connection.scopeHints?.managedProvider === true,
+    );
   const managedCatalogProviderForCurrentSource = (): string | undefined =>
     selectedServiceEntry()?.provider ??
     storeListingForCurrentSource()?.provider;
@@ -2177,6 +2181,13 @@ function Inner() {
   ): ProviderConnectionRow[] => {
     let changed = false;
     const defaultedRows = rows.map((row) => {
+      if (rowCanUseManagedProviderFallback(row)) {
+        const managed = managedProviderConnectionForRow(row);
+        const connectionId = managed?.id ?? "";
+        if (row.connectionId === connectionId) return row;
+        changed = true;
+        return { ...row, connectionId };
+      }
       const candidates = providerConnectionsForProvider(row.provider);
       if (
         row.connectionId &&

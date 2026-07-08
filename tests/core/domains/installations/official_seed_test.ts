@@ -19,10 +19,10 @@ const NAMED = [
 test("officialInstallConfigs seeds the generic Capsule default + first-party template configs", () => {
   const configs = officialInstallConfigs({ now: NOW });
   const templates = defaultTemplateRegistry.list();
-  // One generic Capsule config, four curated generic Capsule app configs, plus
+  // One generic Capsule config, five curated generic Capsule app configs, plus
   // one config per template (except templates already bound by a named alias,
   // currently only core).
-  expect(configs.length).toBe(templates.length + 5);
+  expect(configs.length).toBe(templates.length + 6);
   const generic = configs[0];
   expect(generic?.id).toBe(DEFAULT_CAPSULE_INSTALL_CONFIG_ID);
   expect(generic?.sourceKind).toBe("generic_capsule");
@@ -91,7 +91,7 @@ test("hostable official configs expose public catalog metadata for the dashboard
       .map((config) => config.catalog?.order)
       .filter((order): order is number => order !== undefined)
       .sort((a, b) => a - b),
-  ).toEqual([10, 100, 110, 120, 130]);
+  ).toEqual([10, 100, 110, 115, 120, 130]);
 
   const hello = configs.find(
     (config) => config.catalog?.templateId === "cloudflare-hello-worker",
@@ -115,9 +115,22 @@ test("hostable official configs expose public catalog metadata for the dashboard
   const yurucommu = configs.find(
     (config) => config.id === "cfg-catalog-yurucommu",
   );
+  const office = configs.find(
+    (config) => config.id === "cfg-catalog-takos-office",
+  );
+  const storage = configs.find(
+    (config) => config.id === "cfg-catalog-takos-storage",
+  );
+  const git = configs.find((config) => config.id === "cfg-catalog-takos-git");
   const takos = configs.find((config) => config.id === "cfg-catalog-takos");
   const yurucommuInput = (name: string) =>
     yurucommu?.catalog?.inputs.find((input) => input.name === name);
+  const officeInput = (name: string) =>
+    office?.catalog?.inputs.find((input) => input.name === name);
+  const storageInput = (name: string) =>
+    storage?.catalog?.inputs.find((input) => input.name === name);
+  const gitInput = (name: string) =>
+    git?.catalog?.inputs.find((input) => input.name === name);
   const takosInput = (name: string) =>
     takos?.catalog?.inputs.find((input) => input.name === name);
   expect(yurucommu?.sourceKind).toBe("generic_capsule");
@@ -184,6 +197,51 @@ test("hostable official configs expose public catalog metadata for the dashboard
   expect(yurucommu?.outputAllowlist.takosumi_release).toEqual({
     from: "takosumi_release",
     type: "json",
+  });
+  expect(office?.sourceKind).toBe("generic_capsule");
+  expect(office?.catalog?.source.git).toBe(
+    "https://github.com/tako0614/takos-office.git",
+  );
+  expect(office?.catalog?.source.ref).toBe(
+    "33420226bcf7d3c6b20d031a2f6b204e16d50f58",
+  );
+  expect(office?.catalog?.source.path).toBe(".");
+  expect(office?.catalog?.iconUrl).toContain("office.svg");
+  expect(officeInput("worker_bundle_url")).toMatchObject({
+    advanced: true,
+    defaultValue:
+      "https://github.com/tako0614/takos-office/releases/download/v0.1.0/worker-f3267ebffba084c891882f993094df475c0ca94bb1ff97411a168bc6fccffe50.js",
+  });
+  expect(officeInput("worker_bundle_sha256")).toMatchObject({
+    advanced: true,
+    defaultValue:
+      "f3267ebffba084c891882f993094df475c0ca94bb1ff97411a168bc6fccffe50",
+  });
+  expect(office?.outputAllowlist.service_exports).toEqual({
+    from: "service_exports",
+    type: "json",
+  });
+  expect(storage?.catalog?.iconUrl).toContain("storage.svg");
+  expect(storageInput("worker_bundle_url")).toMatchObject({
+    advanced: true,
+    defaultValue:
+      "https://github.com/tako0614/takos-storage/releases/download/v0.1.1/worker.js",
+  });
+  expect(storageInput("worker_bundle_sha256")).toMatchObject({
+    advanced: true,
+    defaultValue:
+      "9f9e3a8584048ec49fce4aa2ca9f8b3b942a35c6339c4e4e39aee306a4587a1b",
+  });
+  expect(git?.catalog?.iconUrl).toContain("git.svg");
+  expect(gitInput("worker_bundle_url")).toMatchObject({
+    advanced: true,
+    defaultValue:
+      "https://github.com/tako0614/takos-git/releases/download/v0.1.1/worker.js",
+  });
+  expect(gitInput("worker_bundle_sha256")).toMatchObject({
+    advanced: true,
+    defaultValue:
+      "0f75a091e58d463dd45b20f1d1570fa69a9b2a06fe6b1e2f6c5914e75bf209eb",
   });
   expect(takos?.sourceKind).toBe("generic_capsule");
   expect(takos?.catalog?.source.path).toBe("deploy/opentofu");

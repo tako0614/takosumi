@@ -66,6 +66,7 @@ describe("dashboard catalog", () => {
       "cloudflare-hello-worker",
       "cfg-catalog-yurucommu",
       "cfg-catalog-takos",
+      "cfg-catalog-takos-office",
       "cfg-catalog-takos-storage",
       "cfg-catalog-takos-git",
     ]);
@@ -141,5 +142,8 @@ describe("dashboard catalog", () => {
     );
     expect(icons.get("cfg-catalog-yurucommu")).toContain("yurucommu.svg");
     expect(icons.get("cfg-catalog-takos")).toContain("takos.svg");
+    expect(icons.get("cfg-catalog-takos-office")).toContain("office.svg");
+    expect(icons.get("cfg-catalog-takos-storage")).toContain("storage.svg");
+    expect(icons.get("cfg-catalog-takos-git")).toContain("git.svg");
   });
 });
