@@ -64,14 +64,14 @@ describe("/new flow guidance", () => {
 
   test("integrates service browsing and link install into /new", () => {
     expect(newAppViewSource).toContain("StoreBrowser");
-    // Discovery is store-driven; no hardcoded local catalog is injected.
+    // Discovery is store-driven; no hardcoded local store is injected.
     expect(newAppViewSource).not.toContain("localStoreListings");
     expect(newAppViewSource).not.toContain("installableAppStoreListings");
     expect(newAppViewSource).not.toContain("localListings=");
-    expect(newAppViewSource).not.toContain("catalogEntryToListing");
+    expect(newAppViewSource).not.toContain("storeEntryToListing");
     expect(newAppViewSource).toContain("pickStoreListing");
     expect(newAppViewSource).toContain(
-      'setActiveTab(storeListing ? "catalog" : "git")',
+      'setActiveTab(storeListing ? "store" : "git")',
     );
     expect(newAppViewSource).toContain(
       "applyInstallPrefillInput(prefill, { storeListing: listing })",
@@ -82,24 +82,24 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain("showSourceControls={false}");
     expect(newAppViewSource).toContain("showSortControl={false}");
     expect(newAppViewSource).not.toContain("showKindFilters");
-    expect(newAppViewSource).toContain("function CatalogIcon");
-    expect(newAppViewSource).not.toContain("function catalogKindLabel");
-    expect(newAppViewSource).not.toContain("function CatalogCard");
+    expect(newAppViewSource).toContain("function StoreIcon");
+    expect(newAppViewSource).not.toContain("function storeKindLabel");
+    expect(newAppViewSource).not.toContain("function StoreCard");
     expect(newAppViewSource).not.toContain("function ManualImportCard");
-    expect(newAppViewSource).not.toContain("const [catalogQuery");
-    expect(newAppViewSource).toContain("const allCatalogEntries = createMemo");
-    expect(newAppViewSource).not.toContain("const catalogEntries = createMemo");
-    expect(newAppViewSource).not.toContain("catalogEntryMatchesQuery");
-    expect(newAppViewSource).toContain("function dedupeCatalogConfigs");
-    expect(newAppViewSource).toContain("function catalogConfigPriority");
+    expect(newAppViewSource).not.toContain("const [storeQuery");
+    expect(newAppViewSource).toContain("const allStoreEntries = createMemo");
+    expect(newAppViewSource).not.toContain("const storeEntries = createMemo");
+    expect(newAppViewSource).not.toContain("storeEntryMatchesQuery");
+    expect(newAppViewSource).toContain("function dedupeStoreConfigs");
+    expect(newAppViewSource).toContain("function storeConfigPriority");
     expect(newAppViewSource).toContain("config.workspaceId === undefined");
     expect(newAppViewSource).toContain('config.id.startsWith("cfg-official-")');
-    expect(newAppViewSource).toContain("config.catalog?.source");
-    expect(newAppViewSource).not.toContain("const primaryCatalog = createMemo");
+    expect(newAppViewSource).toContain("config.store?.source");
+    expect(newAppViewSource).not.toContain("const primaryStore = createMemo");
     expect(newAppViewSource).not.toContain(
-      "const buildingBlockCatalog = createMemo",
+      "const buildingBlockStore = createMemo",
     );
-    expect(newAppViewSource).not.toContain("const exampleCatalog = createMemo");
+    expect(newAppViewSource).not.toContain("const exampleStore = createMemo");
     expect(newAppViewSource).not.toContain('entry.surface === "service"');
     expect(newAppViewSource).not.toContain(
       'entry.surface === "building_block"',
@@ -112,14 +112,14 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).not.toContain('t("new.store.examplesTitle")');
     expect(newAppViewSource).not.toContain('class="av-store-section"');
     expect(newAppViewSource).not.toContain(
-      'class="wb-disclosure av-catalog-more"',
+      'class="wb-disclosure av-store-more"',
     );
     expect(newAppViewSource).not.toContain('class="av-store-link-tile"');
     expect(newAppViewSource).not.toContain('class="av-store-link-icon"');
     expect(newAppViewSource).not.toContain('t("new.manualCard.title")');
     expect(newAppViewSource).not.toContain('t("new.manualCard.body")');
     expect(newAppViewSource).not.toContain('class="av-manual-import"');
-    expect(newAppViewSource).not.toContain("av-catalog-card-manual");
+    expect(newAppViewSource).not.toContain("av-store-card-manual");
     expect(newAppViewSource).not.toContain(
       '<details class="wb-disclosure av-manual-import">',
     );
@@ -129,41 +129,41 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain("<Show when={!hasChosenSource()}>");
     expect(newAppViewSource).toMatch(/<Show\s+when=\{hasChosenSource\(\)\}/u);
     expect(newAppViewSource).toContain('activeTab() === "git"');
-    expect(newAppViewSource).toContain('setActiveTab("catalog")');
-    expect(newAppViewSource).not.toContain('<code class="av-catalog-src"');
-    expect(newAppViewSource).not.toContain('t("new.catalog.provider"');
+    expect(newAppViewSource).toContain('setActiveTab("store")');
+    expect(newAppViewSource).not.toContain('<code class="av-store-src"');
+    expect(newAppViewSource).not.toContain('t("new.store.provider"');
     expect(newAppViewSource).not.toContain('aria-label="Add method"');
-    expect(en).not.toHaveProperty("new.tab.catalog");
+    expect(en).not.toHaveProperty("new.tab.store");
     expect(en).not.toHaveProperty("new.tab.git");
-    expect(en).not.toHaveProperty("new.catalog.select");
+    expect(en).not.toHaveProperty("new.store.select");
     expect(en).not.toHaveProperty("new.store.subtitle");
     expect(en).not.toHaveProperty("new.store.title");
     expect(en).not.toHaveProperty("new.store.featuredTitle");
     expect(en).not.toHaveProperty("new.store.searchPlaceholder");
     expect(en).not.toHaveProperty("new.manualCard.title");
     expect(en).not.toHaveProperty("new.manualCard.action");
-    expect(en).not.toHaveProperty("new.catalog.add");
-    expect(en).not.toHaveProperty("new.catalog.kind.worker");
-    expect(en).not.toHaveProperty("new.catalog.kind.site");
+    expect(en).not.toHaveProperty("new.store.add");
+    expect(en).not.toHaveProperty("new.store.kind.worker");
+    expect(en).not.toHaveProperty("new.store.kind.site");
     expect(en["new.summary.provider"]).toBe("Runs on");
     expect(en).not.toHaveProperty("new.store.blocksTitle");
     expect(en).not.toHaveProperty("new.store.examplesTitle");
     expect(en).not.toHaveProperty("new.advancedImport.open");
     expect(en["new.discovery.title"]).toBe("Choose a service to add");
     expect(ja["new.discovery.title"]).toBe("追加するサービスを選ぶ");
-    expect(ja).not.toHaveProperty("new.tab.catalog");
+    expect(ja).not.toHaveProperty("new.tab.store");
     expect(ja).not.toHaveProperty("new.tab.git");
-    expect(ja).not.toHaveProperty("new.catalog.select");
+    expect(ja).not.toHaveProperty("new.store.select");
     expect(ja).not.toHaveProperty("new.store.subtitle");
     expect(ja).not.toHaveProperty("new.store.title");
     expect(ja).not.toHaveProperty("new.store.featuredTitle");
     expect(ja).not.toHaveProperty("new.store.searchPlaceholder");
     expect(ja).not.toHaveProperty("new.manualCard.title");
     expect(ja).not.toHaveProperty("new.manualCard.action");
-    expect(ja).not.toHaveProperty("new.catalog.add");
-    expect(ja).not.toHaveProperty("new.catalog.kind.worker");
-    expect(ja).not.toHaveProperty("new.catalog.kind.site");
-    expect(ja).not.toHaveProperty("new.catalog.kind.storage");
+    expect(ja).not.toHaveProperty("new.store.add");
+    expect(ja).not.toHaveProperty("new.store.kind.worker");
+    expect(ja).not.toHaveProperty("new.store.kind.site");
+    expect(ja).not.toHaveProperty("new.store.kind.storage");
     expect(ja["new.summary.provider"]).toBe("ホスト先");
     expect(ja).not.toHaveProperty("new.store.blocksTitle");
     expect(ja).not.toHaveProperty("new.store.examplesTitle");
@@ -184,7 +184,7 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).not.toContain('if (hasPrefill) return "git"');
     expect(newAppViewSource).not.toContain('params.get("mode") === "link"');
     expect(newAppViewSource).toContain("initialAddTab(initialSearch)");
-    expect(newAppViewSource).toContain('createSignal<"catalog" | "git">(');
+    expect(newAppViewSource).toContain('createSignal<"store" | "git">(');
   });
 
   test("starts the add guide on source selection before a link or service is chosen", () => {
@@ -220,11 +220,11 @@ describe("/new flow guidance", () => {
     );
   });
 
-  test("known Git sources keep app catalog metadata even when ref differs", () => {
+  test("known Git sources keep app store metadata even when ref differs", () => {
     expect(newAppViewSource).toContain("storeListingForCurrentSource");
     expect(newAppViewSource).toContain("storeListingMatchesCurrentSource");
     // Install metadata comes from the picked store listing (selectedStoreListing),
-    // not a hardcoded local catalog.
+    // not a hardcoded local store.
     expect(newAppViewSource).toContain("selectedStoreListing()");
     expect(newAppViewSource).not.toContain("localStoreListings");
     expect(newAppViewSource).toContain("sameGitUrl");
@@ -237,28 +237,28 @@ describe("/new flow guidance", () => {
       "{ installExperience: listing.installExperience }",
     );
     expect(newAppViewSource).not.toContain(
-      "const listing = activeStoreListing();\n    return listing ? catalogMetadataFromStoreListing",
+      "const listing = activeStoreListing();\n    return listing ? storeMetadataFromStoreListing",
     );
   });
 
-  test("store catalog metadata is normalized before being sent to the control API", () => {
+  test("store metadata is normalized before being sent to the control API", () => {
     expect(newAppViewSource).toContain("DEFAULT_STORE_BADGE");
-    expect(newAppViewSource).toContain("nonEmptyCatalogText(listing.badge)");
+    expect(newAppViewSource).toContain("nonEmptyStoreText(listing.badge)");
     expect(newAppViewSource).toContain(
-      "badge: nonEmptyCatalogText(listing.badge) ?? DEFAULT_STORE_BADGE",
+      "badge: nonEmptyStoreText(listing.badge) ?? DEFAULT_STORE_BADGE",
     );
     expect(newAppViewSource).toContain(
-      "name: nonEmptyCatalogText(listing.name) ?? fallbackName",
+      "name: nonEmptyStoreText(listing.name) ?? fallbackName",
     );
     expect(newAppViewSource).toContain(
-      "description: nonEmptyCatalogText(listing.description) ?? fallbackName",
+      "description: nonEmptyStoreText(listing.description) ?? fallbackName",
     );
   });
 
   test("known Git sources carry store default variables into the Capsule run", () => {
     expect(newAppViewSource).toContain("storeListingDefaultVariables");
     expect(newAppViewSource).toContain("storeServiceNameDefault");
-    expect(newAppViewSource).toContain("catalogServiceNameVariable");
+    expect(newAppViewSource).toContain("storeServiceNameVariable");
     expect(newAppViewSource).toContain(
       "serviceNameHintIsGenerated(storeServiceNameDefault())",
     );
@@ -330,7 +330,7 @@ describe("/new flow guidance", () => {
     expect(ja["new.error.configLoading"]).toContain("追加設定を読み込み中");
   });
 
-  test("/new sources installable apps from the store, not a hardcoded catalog", () => {
+  test("/new sources installable apps from the store, not a hardcoded store", () => {
     // The dashboard-local installable-app-listings.ts is retired; discovery is
     // served by the takosumi-store node(s) and the picked listing carries its
     // own install metadata (source, inputs, installExperience).
@@ -360,7 +360,7 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain("const shouldLoadInstallConfigs = ()");
     expect(newAppViewSource).toContain('activeTab() === "git"');
     expect(newAppViewSource).toContain(
-      "gitUrl().trim() || activeInstallPrefill() || selectedCatalogId()",
+      "gitUrl().trim() || activeInstallPrefill() || selectedStoreConfigId()",
     );
     expect(newAppViewSource).toMatch(
       /createResource\(\s*shouldLoadTemplateConfigs/u,
@@ -369,7 +369,7 @@ describe("/new flow guidance", () => {
       /createResource\(\s*shouldLoadInstallConfigs/u,
     );
     expect(newAppViewSource).not.toContain(
-      "createResource(workspaceId, listTemplateCatalogInstallConfigs",
+      "createResource(workspaceId, listTemplateStoreInstallConfigs",
     );
     expect(newAppViewSource).not.toContain(
       "createResource(workspaceId, (id) =>\n    listInstallConfigs(id)",
@@ -383,26 +383,26 @@ describe("/new flow guidance", () => {
       "utf8",
     );
     expect(officialSeedSource).toContain('"cloudflare-hello-worker"');
-    expect(officialSeedSource).toContain("catalogMetadataForTemplate");
-    expect(officialSeedSource).toContain("officialCatalogSource");
+    expect(officialSeedSource).toContain("storeMetadataForTemplate");
+    expect(officialSeedSource).toContain("officialStoreSource");
     expect(officialSeedSource).toContain('name: "accountId"');
     expect(officialSeedSource).toContain('name: "workersSubdomain"');
     expect(officialSeedSource).not.toContain('name: "bucketName"');
     expect(officialSeedSource).toContain(
       'defaultValue: "service-name-with-space"',
     );
-    expect(controlApiSource).toContain("listTemplateCatalogInstallConfigs");
-    expect(newAppViewSource).toContain("TEMPLATE_CATALOG_VIEW");
-    expect(newAppViewSource).toContain("const allCatalogEntries = createMemo");
-    expect(newAppViewSource).toContain("selectedCatalogEntry");
-    expect(newAppViewSource).not.toContain("catalogEntryToListing");
+    expect(controlApiSource).toContain("listTemplateStoreInstallConfigs");
+    expect(newAppViewSource).toContain("STORE_VIEW");
+    expect(newAppViewSource).toContain("const allStoreEntries = createMemo");
+    expect(newAppViewSource).toContain("selectedStoreEntry");
+    expect(newAppViewSource).not.toContain("storeEntryToListing");
     expect(newAppViewSource).not.toContain(
       "createResource(workspaceId, listInstallConfigs)",
     );
   });
 
-  test("install links keep template catalog loading separate from generic Capsule config", () => {
-    expect(newAppViewSource).toContain("TEMPLATE_CATALOG_VIEW");
+  test("install links keep store view loading separate from generic Capsule config", () => {
+    expect(newAppViewSource).toContain("STORE_VIEW");
     expect(newAppViewSource).toContain("const [templateConfigs]");
     expect(newAppViewSource).toContain("const [installConfigs]");
     expect(newAppViewSource).toContain("listInstallConfigsCached(id)");
@@ -413,37 +413,37 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain("!hasChosenSource()");
   });
 
-  test("selected catalog services use friendly setup fields instead of raw variables", () => {
-    expect(newAppViewSource).toContain("selectedCatalogEntry");
+  test("selected store services use friendly setup fields instead of raw variables", () => {
+    expect(newAppViewSource).toContain("selectedStoreEntry");
     expect(newAppViewSource).toContain("storeServiceEntry");
     expect(newAppViewSource).toContain("selectedServiceEntry");
     expect(newAppViewSource).toContain(
-      "selectedCatalogEntry() ?? storeServiceEntry()",
+      "selectedStoreEntry() ?? storeServiceEntry()",
     );
-    expect(newAppViewSource).toContain("catalogEntryFromStoreListing");
-    expect(newAppViewSource).toContain("selectedCatalogVariables");
-    expect(newAppViewSource).toContain("selectedCatalogReturnVariables");
-    expect(newAppViewSource).toContain("catalogInputJsonValue");
-    expect(newAppViewSource).toContain("setCatalogJsonVariable");
-    expect(newAppViewSource).toContain("catalogVariablePath");
-    expect(newAppViewSource).toContain("catalogInputError");
+    expect(newAppViewSource).toContain("storeEntryFromStoreListing");
+    expect(newAppViewSource).toContain("selectedStoreVariables");
+    expect(newAppViewSource).toContain("selectedStoreReturnVariables");
+    expect(newAppViewSource).toContain("storeInputJsonValue");
+    expect(newAppViewSource).toContain("setStoreJsonVariable");
+    expect(newAppViewSource).toContain("storeVariablePath");
+    expect(newAppViewSource).toContain("storeInputError");
     expect(newAppViewSource).toContain(
       "setInstallConfigId(entry.installConfigId)",
     );
     expect(newAppViewSource).toContain('class="av-service-setup"');
-    expect(newAppViewSource).toContain('t("new.catalogInput.title")');
-    expect(newAppViewSource).toContain('t("new.catalogInput.subtitle")');
-    expect(newAppViewSource).not.toContain('t("new.catalogInput.body")');
+    expect(newAppViewSource).toContain('t("new.storeInput.title")');
+    expect(newAppViewSource).toContain('t("new.storeInput.subtitle")');
+    expect(newAppViewSource).not.toContain('t("new.storeInput.body")');
     expect(newAppViewSource).toContain('<FormField label={t("new.name")}>');
-    expect(newAppViewSource).toContain("name={`catalogInput:${field.name}`}");
-    expect(newAppViewSource).toContain("clearSelectedCatalog");
+    expect(newAppViewSource).toContain("name={`storeInput:${field.name}`}");
+    expect(newAppViewSource).toContain("clearSelectedStoreEntry");
     expect(newAppViewSource).toContain("defaultGitInstallConfig()?.id");
     expect(appViewsCssSource).toContain(".av-service-setup-grid");
     expect(appViewsCssSource).toContain(".av-service-setup-head p");
-    expect(en).not.toHaveProperty("new.catalogInput.body");
-    expect(en["new.catalogInput.subtitle"]).toContain("minimum fields");
-    expect(ja).not.toHaveProperty("new.catalogInput.body");
-    expect(ja["new.catalogInput.subtitle"]).toContain("最小限");
+    expect(en).not.toHaveProperty("new.storeInput.body");
+    expect(en["new.storeInput.subtitle"]).toContain("minimum fields");
+    expect(ja).not.toHaveProperty("new.storeInput.body");
+    expect(ja["new.storeInput.subtitle"]).toContain("最小限");
   });
 
   test("does not hard-code Takos repo behavior into the add flow", () => {
@@ -454,23 +454,23 @@ describe("/new flow guidance", () => {
 
   test("service setup defaults managed domains without app-specific branches", () => {
     expect(newAppViewSource).toContain("serviceIdSeed");
-    expect(newAppViewSource).toContain("catalogPublicEndpoint(entry)");
+    expect(newAppViewSource).toContain("storePublicEndpoint(entry)");
     expect(newAppViewSource).toContain('field.format === "subdomain"');
     expect(newAppViewSource).toContain(
       "...(input.format ? { format: input.format } : {})",
     );
     expect(newAppViewSource).toContain("canSuggestPublicHostname");
-    expect(newAppViewSource).toContain("catalogPublicEndpointSubdomainField");
+    expect(newAppViewSource).toContain("storePublicEndpointSubdomainField");
     expect(newAppViewSource).toContain("hostIsManagedBaseDomainSubdomain");
-    expect(newAppViewSource).toContain("new.catalogInput.errorCustomDomain");
+    expect(newAppViewSource).toContain("new.storeInput.errorCustomDomain");
     expect(newAppViewSource).not.toContain("hostIsUnderBaseDomain");
     expect(newAppViewSource).not.toContain('entry.id === "takos"');
     expect(newAppViewSource).not.toContain('entry.id === "yurucommu"');
   });
 
-  test("selected catalog services can use safe cloud-account hints instead of duplicate setup input", () => {
+  test("selected store services can use safe cloud-account hints instead of duplicate setup input", () => {
     const hintSourceStart = newAppViewSource.indexOf(
-      "const catalogScopeHintValue",
+      "const storeScopeHintValue",
     );
     const hintSourceEnd = newAppViewSource.indexOf(
       "const sourceGitConnections",
@@ -480,17 +480,15 @@ describe("/new flow guidance", () => {
     expect(hintSourceEnd).toBeGreaterThan(hintSourceStart);
     const hintSource = newAppViewSource.slice(hintSourceStart, hintSourceEnd);
 
-    expect(newAppViewSource).toContain("catalogScopeHintValue");
+    expect(newAppViewSource).toContain("storeScopeHintValue");
     expect(hintSource).toContain("connection.scopeHints?.accountId");
     expect(hintSource).toContain("connection.scopeHints?.awsRegion");
-    expect(newAppViewSource).toContain("catalogInputTouched");
-    expect(newAppViewSource).toContain("isConnectionScopedCatalogInput");
-    expect(newAppViewSource).toContain("hasMissingAdvancedCatalogInputs");
+    expect(newAppViewSource).toContain("storeInputTouched");
+    expect(newAppViewSource).toContain("isConnectionScopedStoreInput");
+    expect(newAppViewSource).toContain("hasMissingAdvancedStoreInputs");
+    expect(newAppViewSource).toContain("storeScopeHintValue(entry, field) ??");
     expect(newAppViewSource).toContain(
-      "catalogScopeHintValue(entry, field) ??",
-    );
-    expect(newAppViewSource).toContain(
-      "if (catalogInputTouched()[key]) continue",
+      "if (storeInputTouched()[key]) continue",
     );
     expect(newAppViewSource).toContain(
       'if ((next[key] ?? "").trim()) continue',
@@ -503,15 +501,15 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain("const shouldOpenServiceAdvanced = ()");
     expect(newAppViewSource).toContain("normalizedInputVariables");
     expect(newAppViewSource).toContain("installReturnVariables");
-    expect(newAppViewSource).toContain("selectedCatalogVariableNames");
+    expect(newAppViewSource).toContain("selectedStoreVariableNames");
     expect(newAppViewSource).toContain("shouldOpenServiceAdvanced() ||");
-    expect(newAppViewSource).toContain("hasMissingAdvancedCatalogInputs()");
+    expect(newAppViewSource).toContain("hasMissingAdvancedStoreInputs()");
     expect(newAppViewSource).toContain('t("new.vars.inputsTitle")');
     expect(newAppViewSource).toContain("name={`varName:${index()}`}");
     expect(newAppViewSource).toContain("name={`varValue:${index()}`}");
     expect(newAppViewSource).toContain("inputVariableError");
-    expect(en["new.vars.errorCatalogReserved"]).toContain("Service setup");
-    expect(ja["new.vars.errorCatalogReserved"]).toContain("サービス設定");
+    expect(en["new.vars.errorStoreReserved"]).toContain("Service setup");
+    expect(ja["new.vars.errorStoreReserved"]).toContain("サービス設定");
     expect(en["new.vars.inputsBody"].toLowerCase()).toContain("visible inputs");
     expect(ja["new.vars.inputsBody"]).toContain("表示用の入力");
     expect(en["new.vars.inputsTitle"]).not.toBe("Advanced settings");

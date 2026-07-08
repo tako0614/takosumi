@@ -4,7 +4,7 @@
  *
  * Three entry shapes, identical install path:
  *   - Link/source import: the primary path for app install links or raw Git
- *     URLs, including services that are not in the catalog.
+ *     URLs, including services that are not in the store.
  *   - Examples: curated installable app / known service coordinates returned by
  *     the InstallConfig API. Picking one pre-fills the same Git-backed flow.
  *   - External install link: another site links `/install?git=…` (or the
@@ -109,7 +109,7 @@ import { clearCurrentStateVersionCache } from "../../lib/current-state-versions.
 import { clearDashboardOverviewCache } from "../../lib/dashboard-overview.ts";
 import {
   listInstallConfigsCached,
-  TEMPLATE_CATALOG_VIEW,
+  STORE_VIEW,
 } from "../../lib/install-config-list.ts";
 import {
   Badge,
@@ -144,7 +144,7 @@ interface InputVariableRow {
   readonly jsonValue?: JsonValue;
 }
 
-type StoreCatalogMetadata = NonNullable<InstallConfig["catalog"]>;
+type StoreMetadata = NonNullable<InstallConfig["store"]>;
 type StoreOutputAllowlist = NonNullable<
   Parameters<typeof createCapsule>[0]["outputAllowlist"]
 >;
@@ -152,7 +152,7 @@ type StoreOutputAllowlist = NonNullable<
 const DEFAULT_STORE_BADGE = {
   ja: "追加候補",
   en: "Installable",
-} satisfies StoreCatalogMetadata["badge"];
+} satisfies StoreMetadata["badge"];
 
 // Well-known credential-free OpenTofu providers (by short name / tail) that are
 // NOT a credential boundary, so an install must not force a Provider Connection
@@ -172,7 +172,7 @@ const CREDENTIAL_FREE_PROVIDER_TAILS = new Set([
   "template",
 ]);
 
-function CatalogIcon(props: { readonly entry: CatalogEntry }) {
+function StoreIcon(props: { readonly entry: StoreEntry }) {
   if (props.entry.iconUrl) {
     return <img src={props.entry.iconUrl} alt="" loading="lazy" />;
   }
@@ -189,19 +189,17 @@ function CatalogIcon(props: { readonly entry: CatalogEntry }) {
 const INSTALLATION_NAME_PATTERN = /^[a-z0-9-]+$/u;
 const INSTALLATION_DONE: StepState = "done";
 
-type CatalogEntry = NonNullable<InstallConfig["catalog"]> & {
+type StoreEntry = NonNullable<InstallConfig["store"]> & {
   readonly id: string;
   readonly installConfigId: string;
   readonly createdAt: string;
   readonly updatedAt: string;
-  readonly source: NonNullable<NonNullable<InstallConfig["catalog"]>["source"]>;
+  readonly source: NonNullable<NonNullable<InstallConfig["store"]>["source"]>;
 };
-type CatalogInputField = CatalogEntry["inputs"][number];
-type CatalogInstallConfig = InstallConfig & {
-  readonly catalog: NonNullable<InstallConfig["catalog"]> & {
-    readonly source: NonNullable<
-      NonNullable<InstallConfig["catalog"]>["source"]
-    >;
+type StoreInputField = StoreEntry["inputs"][number];
+type StoreInstallConfig = InstallConfig & {
+  readonly store: NonNullable<InstallConfig["store"]> & {
+    readonly source: NonNullable<NonNullable<InstallConfig["store"]>["source"]>;
   };
 };
 
@@ -418,8 +416,8 @@ function isFullCommitSha(value: string): boolean {
   return /^[0-9a-f]{40}$/iu.test(value.trim());
 }
 
-function displayRef(value: string): string {
-  const trimmed = value.trim();
+function displayRef(value: string | undefined): string {
+  const trimmed = value?.trim() || "main";
   return isFullCommitSha(trimmed) ? trimmed.slice(0, 8) : trimmed;
 }
 
@@ -521,53 +519,51 @@ function isSha256Hex(value: string): boolean {
   return /^[a-f0-9]{64}$/iu.test(value.trim());
 }
 
-function catalogInputKey(entryId: string, fieldName: string): string {
+function storeInputKey(entryId: string, fieldName: string): string {
   return `${entryId}:${fieldName}`;
 }
 
-function catalogPublicEndpoint(entry: CatalogEntry) {
+function storePublicEndpoint(entry: StoreEntry) {
   return installExperiencePublicEndpoint(entry.installExperience);
 }
 
-function catalogEndpointField(
-  entry: CatalogEntry,
+function storeEndpointField(
+  entry: StoreEntry,
   name: string | undefined,
-): CatalogInputField | undefined {
+): StoreInputField | undefined {
   const normalized = name?.trim();
   return normalized
     ? entry.inputs.find((field) => field.name === normalized)
     : undefined;
 }
 
-function catalogPublicEndpointSubdomainField(
-  entry: CatalogEntry,
-): CatalogInputField | undefined {
-  return catalogEndpointField(
+function storePublicEndpointSubdomainField(
+  entry: StoreEntry,
+): StoreInputField | undefined {
+  return storeEndpointField(
     entry,
-    catalogPublicEndpoint(entry)?.subdomainVariable,
+    storePublicEndpoint(entry)?.subdomainVariable,
   );
 }
 
-function catalogServiceNameVariable(
-  catalog: Pick<CatalogEntry, "installExperience"> | StoreCatalogMetadata,
+function storeServiceNameVariable(
+  store: Pick<StoreEntry, "installExperience"> | StoreMetadata,
 ): string | undefined {
-  return installExperienceServiceNameVariable(catalog.installExperience);
+  return installExperienceServiceNameVariable(store.installExperience);
 }
 
-function catalogServiceNameField(
-  entry: CatalogEntry,
-): CatalogInputField | undefined {
-  const variable = catalogServiceNameVariable(entry);
+function storeServiceNameField(entry: StoreEntry): StoreInputField | undefined {
+  const variable = storeServiceNameVariable(entry);
   return variable
     ? entry.inputs.find((field) => field.name === variable)
     : undefined;
 }
 
-function isCatalogPublicEndpointField(
-  entry: CatalogEntry,
-  field: CatalogInputField,
+function isStorePublicEndpointField(
+  entry: StoreEntry,
+  field: StoreInputField,
 ): boolean {
-  const endpoint = catalogPublicEndpoint(entry);
+  const endpoint = storePublicEndpoint(entry);
   return (
     field.name === endpoint?.subdomainVariable ||
     field.name === endpoint?.urlVariable ||
@@ -575,19 +571,19 @@ function isCatalogPublicEndpointField(
   );
 }
 
-function catalogSurfaceRank(surface: CatalogEntry["surface"]): number {
+function storeSurfaceRank(surface: StoreEntry["surface"]): number {
   if (surface === "service") return 0;
   if (surface === "building_block") return 1;
   return 2;
 }
 
-function catalogConfigKey(config: CatalogInstallConfig): string {
-  if (config.catalog.templateId) return `template:${config.catalog.templateId}`;
-  const source = config.catalog.source;
-  return `source:${source.git}#${source.ref}:${source.path}`;
+function storeConfigKey(config: StoreInstallConfig): string {
+  if (config.store.templateId) return `template:${config.store.templateId}`;
+  const source = config.store.source;
+  return `source:${source.git}#${source.path}`;
 }
 
-function catalogConfigPriority(config: CatalogInstallConfig): number {
+function storeConfigPriority(config: StoreInstallConfig): number {
   if (
     config.workspaceId === undefined ||
     config.id.startsWith("cfg-official-")
@@ -597,16 +593,16 @@ function catalogConfigPriority(config: CatalogInstallConfig): number {
   return 1;
 }
 
-function dedupeCatalogConfigs(
-  configs: readonly CatalogInstallConfig[],
-): readonly CatalogInstallConfig[] {
-  const byKey = new Map<string, CatalogInstallConfig>();
+function dedupeStoreConfigs(
+  configs: readonly StoreInstallConfig[],
+): readonly StoreInstallConfig[] {
+  const byKey = new Map<string, StoreInstallConfig>();
   for (const config of configs) {
-    const key = catalogConfigKey(config);
+    const key = storeConfigKey(config);
     const current = byKey.get(key);
     if (
       !current ||
-      catalogConfigPriority(config) < catalogConfigPriority(current)
+      storeConfigPriority(config) < storeConfigPriority(current)
     ) {
       byKey.set(key, config);
     }
@@ -616,9 +612,9 @@ function dedupeCatalogConfigs(
 
 const DEFAULT_CAPSULE_INSTALL_CONFIG_ID = "cfg-default-opentofu-capsule";
 
-function catalogDefaultInputValue(
-  entry: CatalogEntry,
-  field: CatalogInputField,
+function storeDefaultInputValue(
+  entry: StoreEntry,
+  field: StoreInputField,
   workspaceId: string | null,
   serviceSlug?: string,
 ): string {
@@ -626,7 +622,7 @@ function catalogDefaultInputValue(
   const suffix = workspaceSuffix(workspaceId);
   const scopedServiceSlug =
     serviceSlug || (suffix ? `${base}-${suffix}` : base);
-  const publicEndpoint = catalogPublicEndpoint(entry);
+  const publicEndpoint = storePublicEndpoint(entry);
   if (field.name === publicEndpoint?.subdomainVariable) {
     return scopedServiceSlug;
   }
@@ -651,13 +647,13 @@ function serviceNameHintIsGenerated(value: string | undefined): boolean {
   return value === "service-name" || value === "service-name-with-space";
 }
 
-function catalogVariablePath(name: string): readonly string[] | undefined {
+function storeVariablePath(name: string): readonly string[] | undefined {
   const path = name.split(".").map((part) => part.trim());
   if (path.length === 0) return undefined;
-  return path.every(isSafeCatalogVariablePathSegment) ? path : undefined;
+  return path.every(isSafeStoreVariablePathSegment) ? path : undefined;
 }
 
-function isSafeCatalogVariablePathSegment(value: string): boolean {
+function isSafeStoreVariablePathSegment(value: string): boolean {
   return (
     /^[A-Za-z_][A-Za-z0-9_]*$/u.test(value) &&
     value !== "__proto__" &&
@@ -666,8 +662,8 @@ function isSafeCatalogVariablePathSegment(value: string): boolean {
   );
 }
 
-function catalogInputJsonValue(
-  field: CatalogInputField,
+function storeInputJsonValue(
+  field: StoreInputField,
   raw: string,
 ): JsonValue | undefined {
   const value = raw.trim();
@@ -682,23 +678,23 @@ function catalogInputJsonValue(
     if (Number.isFinite(numberValue)) return numberValue;
   }
   if (field.type === "json") {
-    const parsed = parseCatalogJsonValue(value);
+    const parsed = parseStoreJsonValue(value);
     if (parsed !== undefined) return parsed;
   }
   return value;
 }
 
-function parseCatalogJsonValue(value: string): JsonValue | undefined {
+function parseStoreJsonValue(value: string): JsonValue | undefined {
   let parsed: unknown;
   try {
     parsed = JSON.parse(value);
   } catch {
     return undefined;
   }
-  return isSafeCatalogJsonValue(parsed) ? parsed : undefined;
+  return isSafeStoreJsonValue(parsed) ? parsed : undefined;
 }
 
-function isSafeCatalogJsonValue(value: unknown, depth = 0): value is JsonValue {
+function isSafeStoreJsonValue(value: unknown, depth = 0): value is JsonValue {
   if (depth > 8) return false;
   if (value === null) return true;
   switch (typeof value) {
@@ -712,25 +708,25 @@ function isSafeCatalogJsonValue(value: unknown, depth = 0): value is JsonValue {
       if (Array.isArray(value)) {
         return (
           value.length <= 64 &&
-          value.every((item) => isSafeCatalogJsonValue(item, depth + 1))
+          value.every((item) => isSafeStoreJsonValue(item, depth + 1))
         );
       }
       return Object.entries(value as Record<string, unknown>).every(
         ([key, nested]) =>
-          isSafeCatalogVariablePathSegment(key) &&
-          isSafeCatalogJsonValue(nested, depth + 1),
+          isSafeStoreVariablePathSegment(key) &&
+          isSafeStoreJsonValue(nested, depth + 1),
       );
     default:
       return false;
   }
 }
 
-function setCatalogJsonVariable(
+function setStoreJsonVariable(
   target: Record<string, JsonValue>,
   name: string,
   value: JsonValue,
 ): void {
-  const path = catalogVariablePath(name);
+  const path = storeVariablePath(name);
   if (!path) return;
   let cursor = target;
   for (const segment of path.slice(0, -1)) {
@@ -797,38 +793,36 @@ function inputVariableRowsFromPrefill(
     }));
 }
 
-function catalogKindFromStoreListing(
+function storeKindFromStoreListing(
   kind: TcsListing["kind"],
-): StoreCatalogMetadata["kind"] {
+): StoreMetadata["kind"] {
   if (kind === "storage") return "storage";
   if (kind === "site") return "site";
   return "worker";
 }
 
-function catalogSurfaceFromStoreListing(
+function storeSurfaceFromStoreListing(
   surface: TcsListing["surface"],
-): StoreCatalogMetadata["surface"] {
+): StoreMetadata["surface"] {
   if (surface === "building_block") return "building_block";
   if (surface === "example") return "example";
   return "service";
 }
 
-function safeCatalogToken(value: string): string | undefined {
+function safeStoreToken(value: string): string | undefined {
   const trimmed = value.trim();
   return trimmed && /^[A-Za-z0-9_.:-]{1,128}$/u.test(trimmed)
     ? trimmed
     : undefined;
 }
 
-function nonEmptyCatalogText(
-  value: StoreCatalogMetadata["badge"],
-): StoreCatalogMetadata["badge"] | undefined {
+function nonEmptyStoreText(
+  value: StoreMetadata["badge"],
+): StoreMetadata["badge"] | undefined {
   return value.ja.trim() && value.en.trim() ? value : undefined;
 }
 
-function catalogMetadataFromStoreListing(
-  listing: TcsListing,
-): StoreCatalogMetadata {
+function storeMetadataFromStoreListing(listing: TcsListing): StoreMetadata {
   const fallbackName = {
     ja: listing.suggestedName,
     en: listing.suggestedName,
@@ -836,17 +830,16 @@ function catalogMetadataFromStoreListing(
   return {
     source: {
       git: listing.source.git,
-      ref: listing.source.resolvedCommit ?? listing.source.ref,
       path: listing.source.path || ".",
     },
     order: 1_000,
-    surface: catalogSurfaceFromStoreListing(listing.surface),
-    kind: catalogKindFromStoreListing(listing.kind),
+    surface: storeSurfaceFromStoreListing(listing.surface),
+    kind: storeKindFromStoreListing(listing.kind),
     provider: listing.provider,
     suggestedName: listing.suggestedName,
-    badge: nonEmptyCatalogText(listing.badge) ?? DEFAULT_STORE_BADGE,
-    name: nonEmptyCatalogText(listing.name) ?? fallbackName,
-    description: nonEmptyCatalogText(listing.description) ?? fallbackName,
+    badge: nonEmptyStoreText(listing.badge) ?? DEFAULT_STORE_BADGE,
+    name: nonEmptyStoreText(listing.name) ?? fallbackName,
+    description: nonEmptyStoreText(listing.description) ?? fallbackName,
     ...(listing.iconUrl ? { iconUrl: listing.iconUrl } : {}),
     inputs: listing.inputs.map((input) => ({
       name: input.name,
@@ -868,24 +861,24 @@ function catalogMetadataFromStoreListing(
   };
 }
 
-function catalogEntryIdFromStoreListing(listing: TcsListing): string {
-  return `store:${safeCatalogToken(listing.id) ?? slugInputValue(listing.suggestedName)}`;
+function storeEntryIdFromStoreListing(listing: TcsListing): string {
+  return `store:${safeStoreToken(listing.id) ?? slugInputValue(listing.suggestedName)}`;
 }
 
-function catalogEntryFromStoreListing(
+function storeEntryFromStoreListing(
   listing: TcsListing,
   installConfigId: string,
-): CatalogEntry {
-  const catalog = catalogMetadataFromStoreListing(listing);
+): StoreEntry {
+  const store = storeMetadataFromStoreListing(listing);
   return {
-    id: catalogEntryIdFromStoreListing(listing),
+    id: storeEntryIdFromStoreListing(listing),
     installConfigId,
     createdAt: listing.createdAt,
     updatedAt: listing.updatedAt,
-    ...catalog,
-    source: catalog.source ?? {
+    ...store,
+    source: store.source ?? {
       git: listing.source.git,
-      ref: listing.source.resolvedCommit ?? listing.source.ref,
+      ...(listing.source.ref ? { ref: listing.source.ref } : {}),
       path: listing.source.path || ".",
     },
   };
@@ -1012,11 +1005,11 @@ function parseInitialTcsHandoff(
   }
 }
 
-function initialAddTab(search: string): "catalog" | "git" {
+function initialAddTab(search: string): "store" | "git" {
   // Start on the service browser. Install links and pasted source links enter
   // the same flow after a source is selected.
   return parseInitialInstallConfigId(search) || !hasInstallPrefillParams(search)
-    ? "catalog"
+    ? "store"
     : "git";
 }
 
@@ -1046,18 +1039,18 @@ function Inner() {
 
   // `/new` opens the install-link form. External `/install?git=…` redirects and
   // store hand-offs (`?installConfigId=…`) seed the same Git-backed flow.
-  const [activeTab, setActiveTab] = createSignal<"catalog" | "git">(
+  const [activeTab, setActiveTab] = createSignal<"store" | "git">(
     initialAddTab(initialSearch),
   );
-  const [selectedCatalogId, setSelectedCatalogId] = createSignal<string | null>(
-    null,
-  );
+  const [selectedStoreConfigId, setSelectedStoreConfigId] = createSignal<
+    string | null
+  >(null);
   const [selectedStoreListing, setSelectedStoreListing] =
     createSignal<TcsListing | null>(null);
-  const [catalogInputValues, setCatalogInputValues] = createSignal<
+  const [storeInputValues, setStoreInputValues] = createSignal<
     Readonly<Record<string, string>>
   >({});
-  const [catalogInputTouched, setCatalogInputTouched] = createSignal<
+  const [storeInputTouched, setStoreInputTouched] = createSignal<
     Readonly<Record<string, boolean>>
   >({});
   const [activeInstallPrefill, setActiveInstallPrefill] =
@@ -1111,13 +1104,13 @@ function Inner() {
     const id = workspaceId();
     if (!id) return null;
     if (activeTab() === "git") return id;
-    if (gitUrl().trim() || activeInstallPrefill() || selectedCatalogId()) {
+    if (gitUrl().trim() || activeInstallPrefill() || selectedStoreConfigId()) {
       return id;
     }
     return null;
   };
   const [templateConfigs] = createResource(shouldLoadTemplateConfigs, (id) =>
-    listInstallConfigsCached(id, { view: TEMPLATE_CATALOG_VIEW }),
+    listInstallConfigsCached(id, { view: STORE_VIEW }),
   );
   const [installConfigs] = createResource(shouldLoadInstallConfigs, (id) =>
     listInstallConfigsCached(id),
@@ -1213,22 +1206,22 @@ function Inner() {
   const installConfigList = createMemo<readonly InstallConfig[]>(
     () => installConfigs() ?? [],
   );
-  const allCatalogEntries = createMemo<readonly CatalogEntry[]>(() =>
-    dedupeCatalogConfigs(
-      templateConfigList().filter((config): config is CatalogInstallConfig =>
-        Boolean(config.catalog?.source),
+  const allStoreEntries = createMemo<readonly StoreEntry[]>(() =>
+    dedupeStoreConfigs(
+      templateConfigList().filter((config): config is StoreInstallConfig =>
+        Boolean(config.store?.source),
       ),
     )
       .map((config) => ({
-        id: config.catalog.templateId ?? config.id,
+        id: config.store.templateId ?? config.id,
         installConfigId: config.id,
         createdAt: config.createdAt,
         updatedAt: config.updatedAt,
-        ...config.catalog,
+        ...config.store,
       }))
       .sort(
         (a, b) =>
-          catalogSurfaceRank(a.surface) - catalogSurfaceRank(b.surface) ||
+          storeSurfaceRank(a.surface) - storeSurfaceRank(b.surface) ||
           a.order - b.order ||
           a.name[locale()].localeCompare(b.name[locale()]),
       ),
@@ -1268,16 +1261,16 @@ function Inner() {
       null
     );
   };
-  const selectedCatalogEntry = () => {
-    const id = selectedCatalogId();
+  const selectedStoreEntry = () => {
+    const id = selectedStoreConfigId();
     return id
-      ? (allCatalogEntries().find((entry) => entry.id === id) ?? null)
+      ? (allStoreEntries().find((entry) => entry.id === id) ?? null)
       : null;
   };
-  const storeServiceEntry = (): CatalogEntry | null => {
+  const storeServiceEntry = (): StoreEntry | null => {
     const listing = selectedStoreListing();
     if (!listing) return null;
-    return catalogEntryFromStoreListing(
+    return storeEntryFromStoreListing(
       listing,
       listing.installConfigId ??
         defaultGitInstallConfig()?.id ??
@@ -1285,45 +1278,40 @@ function Inner() {
     );
   };
   const selectedServiceEntry = () =>
-    selectedCatalogEntry() ?? storeServiceEntry();
-  const catalogInputValue = (entry: CatalogEntry, field: CatalogInputField) => {
-    const key = catalogInputKey(entry.id, field.name);
+    selectedStoreEntry() ?? storeServiceEntry();
+  const storeInputValue = (entry: StoreEntry, field: StoreInputField) => {
+    const key = storeInputKey(entry.id, field.name);
     return (
-      catalogInputValues()[key] ??
-      catalogDefaultInputValue(
-        entry,
-        field,
-        workspaceId(),
-        defaultProjectName(),
-      )
+      storeInputValues()[key] ??
+      storeDefaultInputValue(entry, field, workspaceId(), defaultProjectName())
     );
   };
-  const catalogInputBooleanChecked = (
-    entry: CatalogEntry,
-    field: CatalogInputField,
+  const storeInputBooleanChecked = (
+    entry: StoreEntry,
+    field: StoreInputField,
   ) =>
     ["true", "1", "yes", "on"].includes(
-      catalogInputValue(entry, field).trim().toLowerCase(),
+      storeInputValue(entry, field).trim().toLowerCase(),
     );
-  const updateCatalogInputValue = (
-    entry: CatalogEntry,
-    field: CatalogInputField,
+  const updateStoreInputValue = (
+    entry: StoreEntry,
+    field: StoreInputField,
     value: string,
   ) => {
-    const key = catalogInputKey(entry.id, field.name);
-    const touched = catalogInputTouched();
-    setCatalogInputValues((current) => {
+    const key = storeInputKey(entry.id, field.name);
+    const touched = storeInputTouched();
+    setStoreInputValues((current) => {
       const next: Record<string, string> = {
         ...current,
         [key]: value,
       };
-      const endpoint = catalogPublicEndpoint(entry);
+      const endpoint = storePublicEndpoint(entry);
       const baseDomain = managedBaseDomain(endpoint?.baseDomain);
       const setUntouched = (name: string | undefined, nextValue: string) => {
         const variable = name?.trim();
         if (!variable) return;
-        if (!catalogEndpointField(entry, variable)) return;
-        const targetKey = catalogInputKey(entry.id, variable);
+        if (!storeEndpointField(entry, variable)) return;
+        const targetKey = storeInputKey(entry.id, variable);
         if (touched[targetKey]) return;
         next[targetKey] = nextValue;
       };
@@ -1340,81 +1328,76 @@ function Inner() {
       }
       return next;
     });
-    setCatalogInputTouched((current) => ({
+    setStoreInputTouched((current) => ({
       ...current,
       [key]: true,
     }));
     resetCompatibility();
   };
-  const selectedCatalogVariables = () => {
+  const selectedStoreVariables = () => {
     const entry = selectedServiceEntry();
     if (!entry) return {};
     const variables: Record<string, JsonValue> = {};
     for (const field of entry.inputs) {
-      const value = catalogInputJsonValue(
-        field,
-        catalogInputValue(entry, field),
-      );
+      const value = storeInputJsonValue(field, storeInputValue(entry, field));
       if (value !== undefined) {
-        setCatalogJsonVariable(variables, field.name, value);
+        setStoreJsonVariable(variables, field.name, value);
       }
     }
     return variables;
   };
-  const selectedCatalogReturnVariables = (): Readonly<
-    Record<string, string>
-  > => {
+  const selectedStoreReturnVariables = (): Readonly<Record<string, string>> => {
     const entry = selectedServiceEntry();
     if (!entry) return {};
     const variables: Record<string, string> = {};
     for (const field of entry.inputs) {
       if (!isSafeInstallVariableName(field.name)) continue;
-      const value = catalogInputValue(entry, field).trim();
+      const value = storeInputValue(entry, field).trim();
       if (value) variables[field.name] = value;
     }
     return variables;
   };
-  const selectedCatalogVariableNames = () => {
+  const selectedStoreVariableNames = () => {
     const entry = selectedServiceEntry();
     if (!entry) return new Set<string>();
     return new Set(
       entry.inputs
-        .map((field) => catalogVariablePath(field.name)?.[0])
+        .map((field) => storeVariablePath(field.name)?.[0])
         .filter((name): name is string => name !== undefined),
     );
   };
-  const catalogInputError = (): string | null => {
+  const storeInputError = (): string | null => {
     const entry = selectedServiceEntry();
     if (!entry) return null;
     for (const field of entry.inputs) {
-      if (!catalogVariablePath(field.name)) {
+      if (!storeVariablePath(field.name)) {
         return t("new.vars.errorUnsafeName", { name: field.name });
       }
-      const value = catalogInputValue(entry, field).trim();
+      const value = storeInputValue(entry, field).trim();
       if (field.required && !value) {
         if (
-          isConnectionScopedCatalogInput(entry, field) ||
-          isProjectNameCatalogInput(entry, field)
+          isConnectionScopedStoreInput(entry, field) ||
+          isProjectNameStoreInput(entry, field)
         ) {
           continue;
         }
-        return t("new.catalogInput.errorRequired", {
+        return t("new.storeInput.errorRequired", {
           label: field.label[locale()],
         });
       }
       if (value && !isSafeInstallVariableValue(value)) {
-        return t("new.catalogInput.errorUnsafeValue", {
+        return t("new.storeInput.errorUnsafeValue", {
           label: field.label[locale()],
         });
       }
-      const publicEndpoint = catalogPublicEndpoint(entry);
+      const publicEndpoint = storePublicEndpoint(entry);
       if (
         value &&
         (field.format === "subdomain" ||
           field.name === publicEndpoint?.subdomainVariable) &&
         !isManagedSubdomainLabel(value)
       ) {
-        return t("new.catalogInput.errorSubdomain", {
+        return t("new.storeInput.errorSubdomain", {
           label: field.label[locale()],
           baseDomain: managedBaseDomain(publicEndpoint?.baseDomain),
         });
@@ -1430,29 +1413,29 @@ function Inner() {
           (host.endsWith(`.${baseDomain}`) &&
             !hostIsManagedBaseDomainSubdomain(host, baseDomain))
         ) {
-          return t("new.catalogInput.errorCustomDomain", {
+          return t("new.storeInput.errorCustomDomain", {
             label: field.label[locale()],
             baseDomain,
           });
         }
       }
       if (value && field.format === "sha256" && !isSha256Hex(value)) {
-        return t("new.catalogInput.errorUnsafeValue", {
+        return t("new.storeInput.errorUnsafeValue", {
           label: field.label[locale()],
         });
       }
     }
     return null;
   };
-  const clearSelectedCatalog = () => {
-    const hadCatalog = Boolean(selectedCatalogId());
+  const clearSelectedStoreEntry = () => {
+    const hadStore = Boolean(selectedStoreConfigId());
     const hadStoreListing = Boolean(selectedStoreListing());
-    if (!hadCatalog && !hadStoreListing) return;
-    setSelectedCatalogId(null);
+    if (!hadStore && !hadStoreListing) return;
+    setSelectedStoreConfigId(null);
     setSelectedStoreListing(null);
-    if (hadCatalog || hadStoreListing) {
-      setCatalogInputValues({});
-      setCatalogInputTouched({});
+    if (hadStore || hadStoreListing) {
+      setStoreInputValues({});
+      setStoreInputTouched({});
       setInstallConfigId(defaultGitInstallConfig()?.id ?? "");
     }
   };
@@ -1542,8 +1525,8 @@ function Inner() {
     if (!selectedInstallConfigId()) return t("new.error.configMissing");
     const sourceCredentialError = sourceAccessError();
     if (sourceCredentialError) return sourceCredentialError;
-    const catalogError = catalogInputError();
-    if (catalogError) return catalogError;
+    const storeError = storeInputError();
+    if (storeError) return storeError;
     const variableError = inputVariableError();
     if (variableError) return variableError;
     return null;
@@ -1564,18 +1547,17 @@ function Inner() {
   const sourcePath = () =>
     currentInstallPrefill()?.path || path().trim() || ".";
   const installModulePath = () =>
-    selectedInstallConfig()?.modulePath ??
-    selectedServiceEntry()?.source.path ??
-    currentInstallPrefill()?.path ??
-    path().trim() ||
+    (selectedInstallConfig()?.modulePath ??
+      selectedServiceEntry()?.source.path ??
+      currentInstallPrefill()?.path ??
+      path().trim()) ||
     ".";
   const activeStoreListing = (): TcsListing | null => {
     const listing = selectedStoreListing();
     if (!listing) return null;
-    const listingRef = listing.source.resolvedCommit ?? listing.source.ref;
     if (listing.source.git !== sourceGitUrl()) return null;
     if ((listing.source.path || ".") !== installModulePath()) return null;
-    if (listingRef !== sourceRef()) return null;
+    if (listing.source.ref && listing.source.ref !== sourceRef()) return null;
     return listing;
   };
   const storeListingForCurrentSource = (): TcsListing | null => {
@@ -1585,7 +1567,7 @@ function Inner() {
     if (selected && storeListingMatchesCurrentSource(selected)) {
       return selected;
     }
-    // No hardcoded catalog: install metadata comes from the store listing the
+    // No hardcoded store: install metadata comes from the store listing the
     // user actually picked (captured in selectedStoreListing).
     return null;
   };
@@ -1596,33 +1578,33 @@ function Inner() {
       normalizeSourcePath(installModulePath())
     );
   };
-  const storeCatalogForRun = () => {
+  const storeMetadataForRun = () => {
     const listing = storeListingForCurrentSource();
-    return listing ? catalogMetadataFromStoreListing(listing) : undefined;
+    return listing ? storeMetadataFromStoreListing(listing) : undefined;
   };
   const installExperienceForCurrentSource = () =>
     selectedServiceEntry()?.installExperience ??
-    storeCatalogForRun()?.installExperience;
+    storeMetadataForRun()?.installExperience;
   const storeOutputAllowlistForRun = () => {
     const listing = storeListingForCurrentSource();
     return listing ? outputAllowlistFromStoreListing(listing) : undefined;
   };
   const serviceNameVariableForCurrentSource = () =>
     selectedServiceEntry()
-      ? catalogServiceNameVariable(selectedServiceEntry()!)
-      : catalogServiceNameVariable(storeCatalogForRun() ?? {});
+      ? storeServiceNameVariable(selectedServiceEntry()!)
+      : storeServiceNameVariable(storeMetadataForRun() ?? {});
   const storeServiceNameDefault = () => {
-    const catalog = storeCatalogForRun();
-    const variable = catalog ? catalogServiceNameVariable(catalog) : undefined;
+    const store = storeMetadataForRun();
+    const variable = store ? storeServiceNameVariable(store) : undefined;
     return variable
       ? storeListingForCurrentSource()?.inputs.find(
           (input) => input.name === variable,
         )?.defaultValue
       : undefined;
   };
-  const catalogServiceNameDefault = () =>
+  const storeConfigServiceNameDefault = () =>
     selectedServiceEntry()
-      ? catalogServiceNameField(selectedServiceEntry()!)?.defaultValue
+      ? storeServiceNameField(selectedServiceEntry()!)?.defaultValue
       : undefined;
   const prefilledServiceName = () => {
     const variable = serviceNameVariableForCurrentSource();
@@ -1634,7 +1616,7 @@ function Inner() {
   const supportsServiceNameInput = () =>
     prefilledServiceName() !== undefined ||
     serviceNameHintIsGenerated(storeServiceNameDefault()) ||
-    serviceNameHintIsGenerated(catalogServiceNameDefault());
+    serviceNameHintIsGenerated(storeConfigServiceNameDefault());
   const defaultProjectName = () => {
     const base = slugInputValue(name() || capsuleNameFromUrl(sourceGitUrl()));
     return slugInputValue(`${base}-${serviceIdSeed()}`);
@@ -1644,15 +1626,15 @@ function Inner() {
   const useSuggestedServiceName = () => {
     const entry = selectedServiceEntry();
     const publicEndpointField = entry
-      ? catalogPublicEndpointSubdomainField(entry)
+      ? storePublicEndpointSubdomainField(entry)
       : undefined;
     const candidate = uniqueServiceIdCandidate(
       (entry && publicEndpointField
-        ? catalogInputValue(entry, publicEndpointField)
+        ? storeInputValue(entry, publicEndpointField)
         : serviceNameInputValue()) || defaultProjectName(),
     );
     if (entry && publicEndpointField) {
-      updateCatalogInputValue(entry, publicEndpointField, candidate);
+      updateStoreInputValue(entry, publicEndpointField, candidate);
       return;
     }
     setResourcePrefixTouched(true);
@@ -1664,7 +1646,7 @@ function Inner() {
     const entry = selectedServiceEntry();
     return Boolean(
       supportsServiceNameInput() ||
-      (entry && catalogPublicEndpointSubdomainField(entry)),
+      (entry && storePublicEndpointSubdomainField(entry)),
     );
   };
   const updateInputVariable = (
@@ -1705,23 +1687,23 @@ function Inner() {
   > => {
     const listing = storeListingForCurrentSource();
     if (!listing) return {};
-    const serviceNameVariable = catalogServiceNameVariable(
-      catalogMetadataFromStoreListing(listing),
+    const serviceNameVariable = storeServiceNameVariable(
+      storeMetadataFromStoreListing(listing),
     );
     const variables: Record<string, JsonValue> = {};
     for (const field of listing.inputs) {
       const defaultValue = field.defaultValue?.trim();
       if (!defaultValue) continue;
-      if (!catalogVariablePath(field.name)) continue;
+      if (!storeVariablePath(field.name)) continue;
       if (
         field.name === serviceNameVariable &&
         serviceNameHintIsGenerated(defaultValue)
       ) {
         continue;
       }
-      const value = catalogInputJsonValue(field, defaultValue);
+      const value = storeInputJsonValue(field, defaultValue);
       if (value !== undefined) {
-        setCatalogJsonVariable(variables, field.name, value);
+        setStoreJsonVariable(variables, field.name, value);
       }
     }
     return variables;
@@ -1731,14 +1713,14 @@ function Inner() {
     if (!listing) return new Set<string>();
     return new Set(
       listing.inputs
-        .map((field) => catalogVariablePath(field.name)?.[0])
+        .map((field) => storeVariablePath(field.name)?.[0])
         .filter((name): name is string => name !== undefined),
     );
   };
   const inputVariableError = (): string | null => {
     const seen = new Set<string>();
-    const catalogNames = new Set([
-      ...selectedCatalogVariableNames(),
+    const storeNames = new Set([
+      ...selectedStoreVariableNames(),
       ...storeListingVariableNames(),
     ]);
     const serviceNameVariable = serviceNameVariableForCurrentSource();
@@ -1760,8 +1742,8 @@ function Inner() {
       ) {
         return t("new.vars.errorProjectNameReserved");
       }
-      if (catalogNames.has(variableName)) {
-        return t("new.vars.errorCatalogReserved", { name: variableName });
+      if (storeNames.has(variableName)) {
+        return t("new.vars.errorStoreReserved", { name: variableName });
       }
       if (seen.has(variableName)) {
         return t("new.vars.errorDuplicate", { name: variableName });
@@ -1780,7 +1762,7 @@ function Inner() {
     if (serviceNameVariable && supportsServiceNameInput()) {
       variables[serviceNameVariable] = serviceNameInputValue();
     }
-    Object.assign(variables, selectedCatalogReturnVariables());
+    Object.assign(variables, selectedStoreReturnVariables());
     Object.assign(variables, normalizedInputVariables());
     return variables;
   };
@@ -1789,7 +1771,7 @@ function Inner() {
     const variables: Record<string, JsonValue> = {
       ...storeListingDefaultVariables(),
       ...(currentInstallPrefill()?.vars ?? {}),
-      ...selectedCatalogVariables(),
+      ...selectedStoreVariables(),
       ...normalizedInputVariables(),
     };
     const serviceNameVariable = serviceNameVariableForCurrentSource();
@@ -1887,9 +1869,9 @@ function Inner() {
     }
     return defaults;
   };
-  const catalogScopeHintValue = (
-    entry: CatalogEntry,
-    field: CatalogInputField,
+  const storeScopeHintValue = (
+    entry: StoreEntry,
+    field: StoreInputField,
   ): string | undefined => {
     const matchingConnections = visibleConnections().filter(
       (connection) =>
@@ -1910,49 +1892,43 @@ function Inner() {
     }
     return hints.size === 1 ? Array.from(hints)[0] : undefined;
   };
-  const catalogInputHasImplicitValue = (
-    entry: CatalogEntry,
-    field: CatalogInputField,
+  const storeInputHasImplicitValue = (
+    entry: StoreEntry,
+    field: StoreInputField,
   ) =>
     field.required &&
-    !catalogInputTouched()[catalogInputKey(entry.id, field.name)] &&
-    catalogScopeHintValue(entry, field) !== undefined;
-  const isProjectNameCatalogInput = (
-    entry: CatalogEntry,
-    field: CatalogInputField,
-  ) =>
-    field.name === catalogServiceNameVariable(entry) &&
+    !storeInputTouched()[storeInputKey(entry.id, field.name)] &&
+    storeScopeHintValue(entry, field) !== undefined;
+  const isProjectNameStoreInput = (entry: StoreEntry, field: StoreInputField) =>
+    field.name === storeServiceNameVariable(entry) &&
     serviceNameHintIsGenerated(field.defaultValue);
-  const isConnectionScopedCatalogInput = (
-    entry: CatalogEntry,
-    field: CatalogInputField,
+  const isConnectionScopedStoreInput = (
+    entry: StoreEntry,
+    field: StoreInputField,
   ) => entry.provider === "cloudflare" && field.name === "accountId";
-  const isAdvancedCatalogInput = (
-    entry: CatalogEntry,
-    field: CatalogInputField,
-  ) =>
+  const isAdvancedStoreInput = (entry: StoreEntry, field: StoreInputField) =>
     field.advanced === true ||
     field.secret === true ||
-    catalogInputHasImplicitValue(entry, field);
-  const visibleCatalogInputs = (entry: CatalogEntry) =>
+    storeInputHasImplicitValue(entry, field);
+  const visibleStoreInputs = (entry: StoreEntry) =>
     entry.inputs.filter(
       (field) =>
-        !isConnectionScopedCatalogInput(entry, field) &&
-        !isProjectNameCatalogInput(entry, field) &&
-        !isAdvancedCatalogInput(entry, field),
+        !isConnectionScopedStoreInput(entry, field) &&
+        !isProjectNameStoreInput(entry, field) &&
+        !isAdvancedStoreInput(entry, field),
     );
-  const advancedCatalogInputs = (entry: CatalogEntry) =>
+  const advancedStoreInputs = (entry: StoreEntry) =>
     entry.inputs.filter(
       (field) =>
-        !isConnectionScopedCatalogInput(entry, field) &&
-        !isProjectNameCatalogInput(entry, field) &&
-        isAdvancedCatalogInput(entry, field),
+        !isConnectionScopedStoreInput(entry, field) &&
+        !isProjectNameStoreInput(entry, field) &&
+        isAdvancedStoreInput(entry, field),
     );
-  const hasMissingAdvancedCatalogInputs = () => {
+  const hasMissingAdvancedStoreInputs = () => {
     const entry = selectedServiceEntry();
     if (!entry || !compatibility()) return false;
-    return advancedCatalogInputs(entry).some(
-      (field) => field.required && !catalogInputValue(entry, field).trim(),
+    return advancedStoreInputs(entry).some(
+      (field) => field.required && !storeInputValue(entry, field).trim(),
     );
   };
   const sourceGitConnections = () =>
@@ -2140,11 +2116,11 @@ function Inner() {
     providerConnectionsForRow(row).find(
       (connection) => connection.scopeHints?.managedProvider === true,
     );
-  const managedCatalogProviderForCurrentSource = (): string | undefined =>
+  const managedStoreProviderForCurrentSource = (): string | undefined =>
     selectedServiceEntry()?.provider ??
     storeListingForCurrentSource()?.provider;
   const rowCanUseManagedProviderFallback = (row: ProviderConnectionRow) => {
-    const managedProvider = managedCatalogProviderForCurrentSource();
+    const managedProvider = managedStoreProviderForCurrentSource();
     return (
       managedProvider !== undefined &&
       providerTail(managedProvider) === providerTail(row.provider) &&
@@ -2154,7 +2130,7 @@ function Inner() {
   const hasManagedCloudflareProviderFallback = () =>
     providerRows().some(rowCanUseManagedProviderFallback);
   const rowHasManagedProviderDefault = (row: ProviderConnectionRow) => {
-    const managedProvider = managedCatalogProviderForCurrentSource();
+    const managedProvider = managedStoreProviderForCurrentSource();
     if (!managedProvider) return false;
     if (providerTail(managedProvider) !== providerTail(row.provider)) {
       return false;
@@ -2321,9 +2297,9 @@ function Inner() {
     const nextRef = next.ref || "main";
     const storeListing = options.storeListing;
     if (storeListing) void loadConnections();
-    setActiveTab(storeListing ? "catalog" : "git");
+    setActiveTab(storeListing ? "store" : "git");
     setActiveInstallPrefill(next);
-    setSelectedCatalogId(null);
+    setSelectedStoreConfigId(null);
     setSelectedStoreListing(storeListing ?? null);
     setGitUrl(next.git);
     setRef(displayRef(nextRef));
@@ -2333,7 +2309,7 @@ function Inner() {
       setName(next.name ?? capsuleNameFromUrl(next.git));
     }
     if (storeListing) {
-      const entry = catalogEntryFromStoreListing(
+      const entry = storeEntryFromStoreListing(
         storeListing,
         storeListing.installConfigId ??
           defaultGitInstallConfig()?.id ??
@@ -2343,20 +2319,18 @@ function Inner() {
       for (const field of entry.inputs) {
         const value = next.vars?.[field.name];
         if (value === undefined) continue;
-        defaults[catalogInputKey(entry.id, field.name)] =
+        defaults[storeInputKey(entry.id, field.name)] =
           installVariableDisplayValue(value);
       }
-      setCatalogInputValues(defaults);
-      setCatalogInputTouched({});
+      setStoreInputValues(defaults);
+      setStoreInputTouched({});
       setInputVariables([]);
       setInstallConfigId(entry.installConfigId);
     } else {
       setInputVariables(inputVariableRowsFromPrefill(next.vars));
     }
     const nextServiceNameVariable = storeListing
-      ? catalogServiceNameVariable(
-          catalogMetadataFromStoreListing(storeListing),
-        )
+      ? storeServiceNameVariable(storeMetadataFromStoreListing(storeListing))
       : undefined;
     const nextProjectName =
       nextServiceNameVariable &&
@@ -2375,7 +2349,7 @@ function Inner() {
     resetCompatibility();
   };
 
-  const pickCatalogEntry = (entry: CatalogEntry) => {
+  const pickStoreEntry = (entry: StoreEntry) => {
     if (!entry.source) return;
     void loadConnections();
     setSelectedStoreListing(null);
@@ -2384,41 +2358,43 @@ function Inner() {
     setGitUrl(entry.source.git);
     setRef(displayRef(entry.source.ref));
     setPinnedFullRef(
-      isFullCommitSha(entry.source.ref) ? entry.source.ref : null,
+      entry.source.ref && isFullCommitSha(entry.source.ref)
+        ? entry.source.ref
+        : null,
     );
     setPath(entry.source.path);
     setName(entry.suggestedName);
-    setSelectedCatalogId(entry.id);
+    setSelectedStoreConfigId(entry.id);
     setInstallConfigId(entry.installConfigId);
     const defaults: Record<string, string> = {};
     for (const field of entry.inputs) {
-      defaults[catalogInputKey(entry.id, field.name)] =
-        catalogScopeHintValue(entry, field) ??
-        catalogDefaultInputValue(
+      defaults[storeInputKey(entry.id, field.name)] =
+        storeScopeHintValue(entry, field) ??
+        storeDefaultInputValue(
           entry,
           field,
           workspaceId(),
           defaultProjectName(),
         );
     }
-    setCatalogInputValues(defaults);
-    setCatalogInputTouched({});
+    setStoreInputValues(defaults);
+    setStoreInputTouched({});
     setResourcePrefix("");
     setResourcePrefixTouched(false);
     resetCompatibility();
-    setActiveTab("catalog");
+    setActiveTab("store");
   };
   const pickStoreListing = (listing: TcsListing) => {
     void loadConnections();
     const localEntry = listing.installConfigId
-      ? allCatalogEntries().find(
+      ? allStoreEntries().find(
           (entry) =>
             entry.installConfigId === listing.installConfigId ||
             entry.id === listing.installConfigId,
         )
       : undefined;
     if (localEntry) {
-      pickCatalogEntry(localEntry);
+      pickStoreEntry(localEntry);
       return;
     }
 
@@ -2428,15 +2404,15 @@ function Inner() {
       return;
     }
 
-    setActiveTab("catalog");
+    setActiveTab("store");
     setActiveInstallPrefill(null);
-    setSelectedCatalogId(null);
+    setSelectedStoreConfigId(null);
     setSelectedStoreListing(listing);
     setGitUrl(listing.source.git);
-    setRef(displayRef(listing.source.resolvedCommit ?? listing.source.ref));
+    setRef(displayRef(listing.source.ref));
     setPinnedFullRef(
-      isFullCommitSha(listing.source.resolvedCommit ?? listing.source.ref)
-        ? (listing.source.resolvedCommit ?? listing.source.ref)
+      listing.source.ref && isFullCommitSha(listing.source.ref)
+        ? listing.source.ref
         : null,
     );
     setPath(listing.source.path || ".");
@@ -2446,8 +2422,8 @@ function Inner() {
         defaultGitInstallConfig()?.id ??
         DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
     );
-    setCatalogInputValues({});
-    setCatalogInputTouched({});
+    setStoreInputValues({});
+    setStoreInputTouched({});
     setInputVariables([]);
     resetCompatibility();
   };
@@ -2455,7 +2431,7 @@ function Inner() {
     const raw = linkDraft().trim();
     if (!raw) {
       setActiveTab("git");
-      clearSelectedCatalog();
+      clearSelectedStoreEntry();
       return;
     }
     const parsed = parseInstallPrefillFromInput(raw);
@@ -2463,7 +2439,7 @@ function Inner() {
       applyInstallPrefillInput(parsed);
       return;
     }
-    clearSelectedCatalog();
+    clearSelectedStoreEntry();
     setSelectedStoreListing(null);
     setActiveTab("git");
     setActiveInstallPrefill(null);
@@ -2475,17 +2451,17 @@ function Inner() {
     resetCompatibility();
   };
 
-  let initialCatalogApplied = false;
+  let initialStoreApplied = false;
   createEffect(() => {
-    if (initialCatalogApplied || !initialInstallConfigId) return;
-    const entry = allCatalogEntries().find(
+    if (initialStoreApplied || !initialInstallConfigId) return;
+    const entry = allStoreEntries().find(
       (candidate) =>
         candidate.installConfigId === initialInstallConfigId ||
         candidate.id === initialInstallConfigId,
     );
     if (!entry) return;
-    initialCatalogApplied = true;
-    pickCatalogEntry(entry);
+    initialStoreApplied = true;
+    pickStoreEntry(entry);
   });
 
   let initialTcsHandoffApplied = false;
@@ -2503,7 +2479,7 @@ function Inner() {
           ...listing,
           primaryServer: initialTcsHandoff.base,
         });
-        setActiveTab("catalog");
+        setActiveTab("store");
         void loadConnections();
       } catch {
         // The Git/ref/path query remains enough to install as a plain Capsule;
@@ -2515,14 +2491,14 @@ function Inner() {
   createEffect(() => {
     const entry = selectedServiceEntry();
     if (!entry) return;
-    setCatalogInputValues((current) => {
+    setStoreInputValues((current) => {
       let changed = false;
       const next: Record<string, string> = { ...current };
       for (const field of entry.inputs) {
-        const key = catalogInputKey(entry.id, field.name);
-        if (catalogInputTouched()[key]) continue;
+        const key = storeInputKey(entry.id, field.name);
+        if (storeInputTouched()[key]) continue;
         if ((next[key] ?? "").trim()) continue;
-        const scopeHint = catalogScopeHintValue(entry, field);
+        const scopeHint = storeScopeHintValue(entry, field);
         if (!scopeHint) continue;
         next[key] = scopeHint;
         changed = true;
@@ -2754,7 +2730,7 @@ function Inner() {
         compatibility()?.installConfigId ?? selectedInstallConfigId(),
       compatibilityReportId: compatibility()?.reportId,
       vars: installVariables(),
-      catalog: storeCatalogForRun(),
+      store: storeMetadataForRun(),
       outputAllowlist: storeOutputAllowlistForRun(),
       sourceId: createdSourceId(),
       capsuleId: createdCapsuleId(),
@@ -2848,7 +2824,7 @@ function Inner() {
             ? { modulePath: flowInput.path }
             : {}),
           ...(flowInput.vars ? { vars: flowInput.vars } : {}),
-          ...(flowInput.catalog ? { catalog: flowInput.catalog } : {}),
+          ...(flowInput.store ? { store: flowInput.store } : {}),
           ...(flowInput.outputAllowlist
             ? { outputAllowlist: flowInput.outputAllowlist }
             : {}),
@@ -2969,7 +2945,7 @@ function Inner() {
         type="text"
         value={gitUrl()}
         onInput={(e) => {
-          clearSelectedCatalog();
+          clearSelectedStoreEntry();
           const parsed = parseInstallPrefillFromInput(e.currentTarget.value);
           if (parsed) {
             applyInstallPrefillInput(parsed);
@@ -3105,7 +3081,7 @@ function Inner() {
             type="text"
             value={ref()}
             onInput={(e) => {
-              clearSelectedCatalog();
+              clearSelectedStoreEntry();
               setPinnedFullRef(null);
               setRef(e.currentTarget.value);
               resetCompatibility();
@@ -3122,7 +3098,7 @@ function Inner() {
             type="text"
             value={path()}
             onInput={(e) => {
-              clearSelectedCatalog();
+              clearSelectedStoreEntry();
               setPath(e.currentTarget.value);
               resetCompatibility();
             }}
@@ -3294,7 +3270,7 @@ function Inner() {
                     when={selectedServiceEntry()}
                     fallback={<Download size={22} />}
                   >
-                    {(entry) => <CatalogIcon entry={entry()} />}
+                    {(entry) => <StoreIcon entry={entry()} />}
                   </Show>
                 </div>
                 <div class="av-add-flow-copy">
@@ -3348,8 +3324,8 @@ function Inner() {
                   {(entry) => (
                     <section class="av-service-setup">
                       <div class="av-service-setup-head">
-                        <h3>{t("new.catalogInput.title")}</h3>
-                        <p>{t("new.catalogInput.subtitle")}</p>
+                        <h3>{t("new.storeInput.title")}</h3>
+                        <p>{t("new.storeInput.subtitle")}</p>
                       </div>
                       <div class="av-service-setup-grid">
                         <FormField label={t("new.name")}>
@@ -3367,7 +3343,7 @@ function Inner() {
                             spellcheck={false}
                           />
                         </FormField>
-                        <For each={visibleCatalogInputs(entry())}>
+                        <For each={visibleStoreInputs(entry())}>
                           {(field) => (
                             <FormField
                               label={
@@ -3382,19 +3358,16 @@ function Inner() {
                                 when={field.type === "boolean"}
                                 fallback={
                                   <Input
-                                    id={`catalog-input-${entry().id}-${field.name}`}
-                                    name={`catalogInput:${field.name}`}
+                                    id={`store-input-${entry().id}-${field.name}`}
+                                    name={`storeInput:${field.name}`}
                                     type={field.secret ? "password" : "text"}
                                     invalid={
                                       appHostnameConflict() &&
-                                      isCatalogPublicEndpointField(
-                                        entry(),
-                                        field,
-                                      )
+                                      isStorePublicEndpointField(entry(), field)
                                     }
-                                    value={catalogInputValue(entry(), field)}
+                                    value={storeInputValue(entry(), field)}
                                     onInput={(e) =>
-                                      updateCatalogInputValue(
+                                      updateStoreInputValue(
                                         entry(),
                                         field,
                                         e.currentTarget.value,
@@ -3409,15 +3382,15 @@ function Inner() {
                                 }
                               >
                                 <Checkbox
-                                  id={`catalog-input-${entry().id}-${field.name}`}
-                                  name={`catalogInput:${field.name}`}
+                                  id={`store-input-${entry().id}-${field.name}`}
+                                  name={`storeInput:${field.name}`}
                                   label={field.label[locale()]}
-                                  checked={catalogInputBooleanChecked(
+                                  checked={storeInputBooleanChecked(
                                     entry(),
                                     field,
                                   )}
                                   onChange={(e) =>
-                                    updateCatalogInputValue(
+                                    updateStoreInputValue(
                                       entry(),
                                       field,
                                       e.currentTarget.checked
@@ -3457,7 +3430,7 @@ function Inner() {
                   class="wb-disclosure wb-input-vars"
                   open={
                     shouldOpenServiceAdvanced() ||
-                    hasMissingAdvancedCatalogInputs() ||
+                    hasMissingAdvancedStoreInputs() ||
                     sourceAccessMode() !== "public"
                   }
                 >
@@ -3469,9 +3442,9 @@ function Inner() {
                   </Show>
                   <Show when={selectedServiceEntry()}>
                     {(entry) => (
-                      <Show when={advancedCatalogInputs(entry()).length > 0}>
+                      <Show when={advancedStoreInputs(entry()).length > 0}>
                         <section class="wb-stack">
-                          <For each={advancedCatalogInputs(entry())}>
+                          <For each={advancedStoreInputs(entry())}>
                             {(field) => (
                               <FormField
                                 label={
@@ -3486,19 +3459,19 @@ function Inner() {
                                   when={field.type === "boolean"}
                                   fallback={
                                     <Input
-                                      id={`catalog-input-advanced-${entry().id}-${field.name}`}
-                                      name={`catalogInputAdvanced:${field.name}`}
+                                      id={`store-input-advanced-${entry().id}-${field.name}`}
+                                      name={`storeInputAdvanced:${field.name}`}
                                       type={field.secret ? "password" : "text"}
                                       invalid={
                                         appHostnameConflict() &&
-                                        isCatalogPublicEndpointField(
+                                        isStorePublicEndpointField(
                                           entry(),
                                           field,
                                         )
                                       }
-                                      value={catalogInputValue(entry(), field)}
+                                      value={storeInputValue(entry(), field)}
                                       onInput={(e) =>
-                                        updateCatalogInputValue(
+                                        updateStoreInputValue(
                                           entry(),
                                           field,
                                           e.currentTarget.value,
@@ -3513,15 +3486,15 @@ function Inner() {
                                   }
                                 >
                                   <Checkbox
-                                    id={`catalog-input-advanced-${entry().id}-${field.name}`}
-                                    name={`catalogInputAdvanced:${field.name}`}
+                                    id={`store-input-advanced-${entry().id}-${field.name}`}
+                                    name={`storeInputAdvanced:${field.name}`}
                                     label={field.label[locale()]}
-                                    checked={catalogInputBooleanChecked(
+                                    checked={storeInputBooleanChecked(
                                       entry(),
                                       field,
                                     )}
                                     onChange={(e) =>
-                                      updateCatalogInputValue(
+                                      updateStoreInputValue(
                                         entry(),
                                         field,
                                         e.currentTarget.checked
@@ -3926,7 +3899,7 @@ function Inner() {
                         when={selectedServiceEntry()}
                         fallback={<Download size={22} />}
                       >
-                        {(entry) => <CatalogIcon entry={entry()} />}
+                        {(entry) => <StoreIcon entry={entry()} />}
                       </Show>
                     </span>
                     <div>

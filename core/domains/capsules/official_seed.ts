@@ -22,12 +22,12 @@
 import type { TemplateDefinition } from "@takosumi/internal/deploy-control-api";
 import type {
   InstallConfig,
-  InstallConfigCatalogInput,
+  InstallConfigStoreInput,
   InstallConfigInstallExperience,
-  InstallConfigCatalogKind,
-  InstallConfigCatalogMetadata,
-  InstallConfigCatalogSurface,
-  InstallConfigCatalogText,
+  InstallConfigStoreKind,
+  InstallConfigStoreMetadata,
+  InstallConfigStoreSurface,
+  InstallConfigStoreText,
   InstallType,
   OutputAllowlistEntry,
   PolicyConfig,
@@ -39,19 +39,22 @@ import {
 import type { OpenTofuDeploymentStore } from "../deploy-control/store.ts";
 
 export const DEFAULT_CAPSULE_INSTALL_CONFIG_ID = "cfg-default-opentofu-capsule";
-export interface OfficialCatalogSource {
+export interface OfficialStoreSource {
   readonly git: string;
-  readonly ref: string;
 }
 
-export const TAKOSUMI_OFFICIAL_CATALOG_SOURCE: OfficialCatalogSource = {
+export const TAKOSUMI_OFFICIAL_STORE_SOURCE: OfficialStoreSource = {
   git: "https://github.com/tako0614/takosumi.git",
-  ref: "fcc47907b0154d8bf53872a3336e5653fc88792e",
 } as const;
 
 export const RETIRED_OFFICIAL_INSTALL_CONFIG_IDS = [
   "cfg-official-talk",
   "cfg-official-files",
+  "cfg-catalog-yurucommu",
+  "cfg-catalog-takos-office",
+  "cfg-catalog-takos-storage",
+  "cfg-catalog-takos-git",
+  "cfg-catalog-takos",
 ] as const;
 
 export function isRetiredOfficialInstallConfigId(id: string): boolean {
@@ -83,48 +86,48 @@ const NAMED_OFFICIAL_INSTALLS: readonly NamedOfficialInstall[] = [
   { name: "core", templateId: "core", installType: "core" },
 ];
 
-function text(ja: string, en: string): InstallConfigCatalogText {
+function text(ja: string, en: string): InstallConfigStoreText {
   return { ja, en };
 }
 
-interface OfficialCatalogSpec {
+interface OfficialStoreSpec {
   readonly sourcePath: string;
   readonly order: number;
-  readonly surface: InstallConfigCatalogSurface;
-  readonly kind: InstallConfigCatalogKind;
+  readonly surface: InstallConfigStoreSurface;
+  readonly kind: InstallConfigStoreKind;
   readonly provider: string;
   readonly suggestedName: string;
-  readonly badge: InstallConfigCatalogText;
-  readonly name: InstallConfigCatalogText;
-  readonly description: InstallConfigCatalogText;
+  readonly badge: InstallConfigStoreText;
+  readonly name: InstallConfigStoreText;
+  readonly description: InstallConfigStoreText;
   readonly iconUrl?: string;
-  readonly inputs: readonly InstallConfigCatalogInput[];
+  readonly inputs: readonly InstallConfigStoreInput[];
   readonly installExperience?: InstallConfigInstallExperience;
 }
 
-interface CuratedGitCatalogSpec {
+interface CuratedGitStoreSpec {
   readonly id: string;
   readonly name: string;
   readonly source: {
     readonly git: string;
-    readonly ref: string;
+    readonly ref?: string;
     readonly path: string;
   };
   readonly order: number;
-  readonly surface: InstallConfigCatalogSurface;
-  readonly kind: InstallConfigCatalogKind;
+  readonly surface: InstallConfigStoreSurface;
+  readonly kind: InstallConfigStoreKind;
   readonly provider: string;
   readonly suggestedName: string;
-  readonly badge: InstallConfigCatalogText;
-  readonly displayName: InstallConfigCatalogText;
-  readonly description: InstallConfigCatalogText;
+  readonly badge: InstallConfigStoreText;
+  readonly displayName: InstallConfigStoreText;
+  readonly description: InstallConfigStoreText;
   readonly iconUrl?: string;
-  readonly inputs: readonly InstallConfigCatalogInput[];
+  readonly inputs: readonly InstallConfigStoreInput[];
   readonly installExperience?: InstallConfigInstallExperience;
   readonly outputAllowlist: Readonly<Record<string, OutputAllowlistEntry>>;
 }
 
-const OFFICIAL_CATALOG: Readonly<Record<string, OfficialCatalogSpec>> = {
+const OFFICIAL_STORE: Readonly<Record<string, OfficialStoreSpec>> = {
   "cloudflare-hello-worker": {
     sourcePath: "providers/cloudflare/modules/cloudflare-hello-worker/module",
     order: 10,
@@ -177,13 +180,12 @@ const OFFICIAL_CATALOG: Readonly<Record<string, OfficialCatalogSpec>> = {
   },
 };
 
-const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
+const CURATED_GIT_STORE: readonly CuratedGitStoreSpec[] = [
   {
-    id: "cfg-catalog-yurucommu",
+    id: "cfg-store-yurucommu",
     name: "yurucommu",
     source: {
       git: "https://github.com/tako0614/yurucommu.git",
-      ref: "ebe1cb08e67794aaab4722b138a321c78e430291",
       path: ".",
     },
     order: 100,
@@ -336,11 +338,10 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
     },
   },
   {
-    id: "cfg-catalog-takos-office",
+    id: "cfg-store-takos-office",
     name: "takos-office",
     source: {
       git: "https://github.com/tako0614/takos-office.git",
-      ref: "0c74008efda973f1820a07bd77d305b7d7340c2e",
       path: ".",
     },
     order: 115,
@@ -489,11 +490,10 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
     },
   },
   {
-    id: "cfg-catalog-takos-storage",
+    id: "cfg-store-takos-storage",
     name: "takos-storage",
     source: {
       git: "https://github.com/tako0614/takos-storage.git",
-      ref: "db5e829f92ce5f96b541ad18912f5956265ec28b",
       path: ".",
     },
     order: 120,
@@ -613,11 +613,10 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
     },
   },
   {
-    id: "cfg-catalog-takos-git",
+    id: "cfg-store-takos-git",
     name: "takos-git",
     source: {
       git: "https://github.com/tako0614/takos-git.git",
-      ref: "7e92bffd9aa741d41d48c3edc2746a2086e55a16",
       path: ".",
     },
     order: 130,
@@ -737,11 +736,10 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
     },
   },
   {
-    id: "cfg-catalog-takos",
+    id: "cfg-store-takos",
     name: "takos",
     source: {
       git: "https://github.com/tako0614/takos.git",
-      ref: "3b5f46cce2c92d343580a6dd6ac5fe3c7a21a35d",
       path: "deploy/opentofu",
     },
     order: 110,
@@ -831,18 +829,17 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
   },
 ];
 
-function catalogMetadataForTemplate(
+function storeMetadataForTemplate(
   template: TemplateDefinition,
-  source: OfficialCatalogSource = TAKOSUMI_OFFICIAL_CATALOG_SOURCE,
-): InstallConfigCatalogMetadata | undefined {
-  const spec = OFFICIAL_CATALOG[template.id];
+  source: OfficialStoreSource = TAKOSUMI_OFFICIAL_STORE_SOURCE,
+): InstallConfigStoreMetadata | undefined {
+  const spec = OFFICIAL_STORE[template.id];
   if (!spec) return undefined;
   return {
     templateId: template.id,
     templateVersion: template.version,
     source: {
       git: source.git,
-      ref: source.ref,
       path: spec.sourcePath,
     },
     order: spec.order,
@@ -861,11 +858,11 @@ function catalogMetadataForTemplate(
   };
 }
 
-function installConfigFromCuratedGitCatalog(
-  spec: CuratedGitCatalogSpec,
+function installConfigFromCuratedGitStore(
+  spec: CuratedGitStoreSpec,
   now: string,
 ): InstallConfig {
-  const modulePath = modulePathFromCatalogSourcePath(spec.source.path);
+  const modulePath = modulePathFromStoreSourcePath(spec.source.path);
   return {
     id: spec.id,
     name: spec.name,
@@ -876,7 +873,7 @@ function installConfigFromCuratedGitCatalog(
     variableMapping: {},
     outputAllowlist: spec.outputAllowlist,
     policy: {},
-    catalog: {
+    store: {
       source: spec.source,
       order: spec.order,
       surface: spec.surface,
@@ -897,7 +894,7 @@ function installConfigFromCuratedGitCatalog(
   };
 }
 
-function modulePathFromCatalogSourcePath(path: string): string | undefined {
+function modulePathFromStoreSourcePath(path: string): string | undefined {
   const normalized = path.trim();
   return normalized && normalized !== "." ? normalized : undefined;
 }
@@ -968,12 +965,12 @@ export function installConfigFromTemplate(
     readonly id?: string;
     readonly name?: string;
     readonly installType?: InstallType;
-    readonly officialCatalogSource?: OfficialCatalogSource;
+    readonly officialStoreSource?: OfficialStoreSource;
   } = {},
 ): InstallConfig {
-  const catalog = catalogMetadataForTemplate(
+  const storeMetadata = storeMetadataForTemplate(
     template,
-    options.officialCatalogSource,
+    options.officialStoreSource,
   );
   return {
     id: options.id ?? installConfigIdForTemplate(template.id),
@@ -984,7 +981,7 @@ export function installConfigFromTemplate(
     variableMapping: {},
     outputAllowlist: outputAllowlistFromTemplate(template),
     policy: policyFromTemplate(template),
-    ...(catalog ? { catalog } : {}),
+    ...(storeMetadata ? { store: storeMetadata } : {}),
     templateBinding: {
       templateId: template.id,
       templateVersion: template.version,
@@ -1005,7 +1002,7 @@ export function officialInstallConfigs(
   options: {
     readonly registry?: TemplateRegistry;
     readonly now?: () => Date;
-    readonly officialCatalogSource?: OfficialCatalogSource;
+    readonly officialStoreSource?: OfficialStoreSource;
   } = {},
 ): readonly InstallConfig[] {
   const registry = options.registry ?? defaultTemplateRegistry;
@@ -1020,7 +1017,7 @@ export function officialInstallConfigs(
         id: installConfigIdForName(named.name),
         name: named.name,
         installType: named.installType,
-        officialCatalogSource: options.officialCatalogSource,
+        officialStoreSource: options.officialStoreSource,
       }),
     );
     boundTemplateIds.add(template.id);
@@ -1029,12 +1026,12 @@ export function officialInstallConfigs(
     if (boundTemplateIds.has(template.id)) continue;
     configs.push(
       installConfigFromTemplate(template, nowIso, {
-        officialCatalogSource: options.officialCatalogSource,
+        officialStoreSource: options.officialStoreSource,
       }),
     );
   }
-  for (const spec of CURATED_GIT_CATALOG) {
-    configs.push(installConfigFromCuratedGitCatalog(spec, nowIso));
+  for (const spec of CURATED_GIT_STORE) {
+    configs.push(installConfigFromCuratedGitStore(spec, nowIso));
   }
   return configs;
 }
@@ -1048,7 +1045,7 @@ export async function seedOfficialInstallConfigs(
   options: {
     readonly registry?: TemplateRegistry;
     readonly now?: () => Date;
-    readonly officialCatalogSource?: OfficialCatalogSource;
+    readonly officialStoreSource?: OfficialStoreSource;
   } = {},
 ): Promise<void> {
   for (const config of officialInstallConfigs(options)) {

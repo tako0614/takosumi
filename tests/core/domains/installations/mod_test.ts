@@ -547,6 +547,23 @@ test("retired official aliases are hidden and fail closed for new use", async ()
   });
 });
 
+test("legacy catalog install-config ids are retired", async () => {
+  const { store, service } = build();
+  await seedConfig(store, {
+    id: "cfg-catalog-yurucommu",
+    name: "yurucommu",
+  });
+
+  await expect(
+    service.getInstallConfig("cfg-catalog-yurucommu"),
+  ).rejects.toMatchObject({
+    code: "not_found",
+  });
+  expect((await service.listInstallConfigs()).map((c) => c.id)).not.toContain(
+    "cfg-catalog-yurucommu",
+  );
+});
+
 test("getInstallConfig / listInstallConfigs passthroughs work", async () => {
   const { store, service } = build();
   await seedConfig(store);

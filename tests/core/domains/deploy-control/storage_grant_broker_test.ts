@@ -54,7 +54,7 @@ const CONSUMER_OUTPUTS = {
   },
 };
 
-const OFFICIAL_INSTALL_CONFIG_ID = "cfg-catalog-takos-storage";
+const OFFICIAL_INSTALL_CONFIG_ID = "cfg-store-takos-storage";
 const IMPOSTOR_ID = "inst_cccccccccccccccc";
 const IMPOSTOR_KEY = "attacker-controlled-signing-key-99";
 const IMPOSTOR_OUTPUTS = {
@@ -62,7 +62,13 @@ const IMPOSTOR_OUTPUTS = {
     {
       name: "takos.storage.object",
       capabilities: ["storage.object", "protocol.http.api"],
-      endpoints: [{ name: "default", protocol: "https", url: "https://attacker.example/o" }],
+      endpoints: [
+        {
+          name: "default",
+          protocol: "https",
+          url: "https://attacker.example/o",
+        },
+      ],
       visibility: "space",
     },
   ],
@@ -269,7 +275,10 @@ describe("StorageGrantBroker", () => {
     });
     const env = await brokerWith(
       state,
-      keyedResolver({ [PRODUCER_ID]: SIGNING_KEY, [IMPOSTOR_ID]: IMPOSTOR_KEY }),
+      keyedResolver({
+        [PRODUCER_ID]: SIGNING_KEY,
+        [IMPOSTOR_ID]: IMPOSTOR_KEY,
+      }),
     ).mintStorageGrantEnv(makePlanRun(), "apply", "run_audit_pin");
 
     expect(env).toBeDefined();
@@ -308,7 +317,10 @@ describe("StorageGrantBroker", () => {
     });
     const env = await brokerWith(
       state,
-      keyedResolver({ [PRODUCER_ID]: SIGNING_KEY, [IMPOSTOR_ID]: IMPOSTOR_KEY }),
+      keyedResolver({
+        [PRODUCER_ID]: SIGNING_KEY,
+        [IMPOSTOR_ID]: IMPOSTOR_KEY,
+      }),
     ).mintStorageGrantEnv(makePlanRun(), "apply", "run_audit_ambig");
     expect(env).toBeUndefined();
     expect(state.mintEvents).toHaveLength(0);
@@ -336,7 +348,7 @@ describe("StorageGrantBroker", () => {
         {
           id: GIT_PRODUCER_ID,
           workspaceId: WORKSPACE_ID,
-          installConfigId: "cfg-catalog-takos-git",
+          installConfigId: "cfg-store-takos-git",
         },
         { id: CONSUMER_ID, workspaceId: WORKSPACE_ID },
       ],
@@ -346,7 +358,13 @@ describe("StorageGrantBroker", () => {
             {
               name: "takos.git.hosting",
               capabilities: ["source.git.smart_http", "protocol.http.api"],
-              endpoints: [{ name: "default", protocol: "https", url: "https://git.example/git" }],
+              endpoints: [
+                {
+                  name: "default",
+                  protocol: "https",
+                  url: "https://git.example/git",
+                },
+              ],
               visibility: "space",
             },
           ],
@@ -357,7 +375,9 @@ describe("StorageGrantBroker", () => {
             compute: {
               web: {
                 kind: "worker",
-                consume: [{ publication: "takos.git.hosting", request: { scopes: [] } }],
+                consume: [
+                  { publication: "takos.git.hosting", request: { scopes: [] } },
+                ],
               },
             },
           },
@@ -378,7 +398,9 @@ describe("StorageGrantBroker", () => {
     expect(payload.aud).toBe("takos.git.hosting");
     expect(payload.pfx).toBe(CONSUMER_ID);
     expect(payload.cap).toEqual(["r"]);
-    expect(state.mintEvents[0]!.providerCredentialEvidence![0]!.provider).toBe("takos.git");
+    expect(state.mintEvents[0]!.providerCredentialEvidence![0]!.provider).toBe(
+      "takos.git",
+    );
   });
 });
 

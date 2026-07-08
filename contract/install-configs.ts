@@ -150,18 +150,18 @@ export interface NormalizationConfig {
   readonly allowAliasInjection: boolean;
 }
 
-export type InstallConfigCatalogSurface =
+export type InstallConfigStoreSurface =
   "service" | "building_block" | "example";
-export type InstallConfigCatalogKind = "worker" | "storage" | "site";
-export type InstallConfigCatalogDefault =
+export type InstallConfigStoreKind = "worker" | "storage" | "site";
+export type InstallConfigStoreDefault =
   "service-name" | "service-name-with-space" | "main" | "us-east-1";
 
-export interface InstallConfigCatalogText {
+export interface InstallConfigStoreText {
   readonly ja: string;
   readonly en: string;
 }
 
-export type InstallConfigCatalogInputFormat =
+export type InstallConfigStoreInputFormat =
   | "text"
   | "url"
   | "hostname"
@@ -213,44 +213,50 @@ export interface InstallConfigInstallExperience {
   readonly projections?: readonly InstallConfigInstallProjection[];
 }
 
-export interface InstallConfigCatalogSource {
+export interface InstallConfigStoreSource {
   readonly git: string;
-  readonly ref: string;
+  /**
+   * Optional Git ref hint. Store entries should usually omit this; release and
+   * update selection belongs to the Git Source / SourceSnapshot flow. This is
+   * for externally mirrored store feeds that cannot omit their source ref yet,
+   * not for the built-in store seed.
+   */
+  readonly ref?: string;
   readonly path: string;
 }
 
-export interface InstallConfigCatalogInput {
+export interface InstallConfigStoreInput {
   readonly name: string;
   readonly type?: "string" | "number" | "boolean" | "json";
-  readonly format?: InstallConfigCatalogInputFormat;
+  readonly format?: InstallConfigStoreInputFormat;
   readonly required?: boolean;
   readonly advanced?: boolean;
   readonly secret?: boolean;
   readonly defaultValue?: string;
-  readonly label: InstallConfigCatalogText;
-  readonly helper?: InstallConfigCatalogText;
+  readonly label: InstallConfigStoreText;
+  readonly helper?: InstallConfigStoreText;
   readonly placeholder?: string;
 }
 
 /**
- * Public-safe app-store presentation for an InstallConfig. This is deliberately
- * catalog metadata, not execution authority: plan/apply still resolves the
- * service-side InstallConfig and Provider Bindings.
+ * Public-safe app-store presentation for an InstallConfig. This is discovery
+ * metadata only: Git Source, plan/apply, Provider Bindings, and SourceSnapshot
+ * resolution remain the execution authority.
  */
-export interface InstallConfigCatalogMetadata {
+export interface InstallConfigStoreMetadata {
   readonly templateId?: string;
   readonly templateVersion?: string;
-  readonly source?: InstallConfigCatalogSource;
+  readonly source?: InstallConfigStoreSource;
   readonly order: number;
-  readonly surface: InstallConfigCatalogSurface;
-  readonly kind: InstallConfigCatalogKind;
+  readonly surface: InstallConfigStoreSurface;
+  readonly kind: InstallConfigStoreKind;
   readonly provider: string;
   readonly suggestedName: string;
-  readonly badge: InstallConfigCatalogText;
-  readonly name: InstallConfigCatalogText;
-  readonly description: InstallConfigCatalogText;
+  readonly badge: InstallConfigStoreText;
+  readonly name: InstallConfigStoreText;
+  readonly description: InstallConfigStoreText;
   readonly iconUrl?: string;
-  readonly inputs: readonly InstallConfigCatalogInput[];
+  readonly inputs: readonly InstallConfigStoreInput[];
   readonly installExperience?: InstallConfigInstallExperience;
 }
 
@@ -285,7 +291,7 @@ export interface InstallConfig {
   readonly outputAllowlist: Readonly<Record<string, OutputAllowlistEntry>>;
   readonly policy: PolicyConfig;
   readonly backup?: BackupConfig;
-  readonly catalog?: InstallConfigCatalogMetadata;
+  readonly store?: InstallConfigStoreMetadata;
   /**
    * Internal seam: binds a built-in first-party config to its bundled module.
    * New runs normalize the bundled module into generatedRoot.moduleFiles, the
@@ -312,4 +318,5 @@ export type PublicInstallConfig = Omit<
   | "prebuiltArtifact"
 > & {
   readonly sourceKind: PublicInstallConfigSourceKind;
+  readonly store?: InstallConfigStoreMetadata;
 };

@@ -313,7 +313,7 @@ function publicEndpointVariableNames(
   installConfig: InstallConfig,
 ): ReadonlySet<string> {
   const endpoint = installExperiencePublicEndpoint(
-    installConfig.catalog?.installExperience,
+    installConfig.store?.installExperience,
   );
   if (!endpoint) return new Set();
   return new Set(
@@ -351,14 +351,14 @@ function providerEnvResolutionProviders(
     providers,
     runnerProfile,
   );
-  const catalogProvider = installConfig.catalog?.provider;
-  if (typeof catalogProvider !== "string" || !catalogProvider.trim()) {
+  const storeProvider = installConfig.store?.provider;
+  if (typeof storeProvider !== "string" || !storeProvider.trim()) {
     return credentialProviders;
   }
   return normalizeProviders([
     ...credentialProviders,
     ...providers.filter((provider) =>
-      sameProviderFamily(provider, catalogProvider),
+      sameProviderFamily(provider, storeProvider),
     ),
   ]);
 }
@@ -426,7 +426,7 @@ function publicHostsFromInstallExperienceVariables(
   installConfig: InstallConfig | undefined,
 ): readonly string[] {
   const endpoint = installExperiencePublicEndpoint(
-    installConfig?.catalog?.installExperience,
+    installConfig?.store?.installExperience,
   );
   if (!endpoint) return [];
 
@@ -508,7 +508,7 @@ function finalizeManagedCloudflarePublicHostVariables(input: {
     return input.variables;
   }
   const endpoint = installExperiencePublicEndpoint(
-    input.installConfig.catalog?.installExperience,
+    input.installConfig.store?.installExperience,
   );
   if (!endpoint || input.endpointVariables.size === 0) {
     return input.variables;
