@@ -150,17 +150,6 @@ const DEFAULT_STORE_BADGE = {
   en: "Installable",
 } satisfies StoreCatalogMetadata["badge"];
 
-const SYSTEM_INSTALL_VARIABLE_NAMES = new Set([
-  "enable_cloudflare_resources",
-  "enable_cloudflare_worker_script",
-]);
-
-const ADVANCED_INSTALL_VARIABLE_NAMES = new Set([
-  "release_container_images",
-  "worker_bundle_url",
-  "worker_bundle_sha256",
-]);
-
 // Well-known credential-free OpenTofu providers (by short name / tail) that are
 // NOT a credential boundary, so an install must not force a Provider Connection
 // for them. `isCredentialFreeUtilityProvider` already covers the canonical
@@ -777,10 +766,7 @@ function inputVariableRowsFromPrefill(
   vars: Readonly<Record<string, JsonValue>> | undefined,
 ): readonly InputVariableRow[] {
   return Object.entries(vars ?? {})
-    .filter(
-      ([name]) =>
-        name !== "project_name" && !SYSTEM_INSTALL_VARIABLE_NAMES.has(name),
-    )
+    .filter(([name]) => name !== "project_name")
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([name, value]) => ({
       name,
@@ -1882,14 +1868,12 @@ function Inner() {
   ) =>
     field.advanced === true ||
     field.secret === true ||
-    ADVANCED_INSTALL_VARIABLE_NAMES.has(field.name) ||
     catalogInputHasImplicitValue(entry, field);
   const visibleCatalogInputs = (entry: CatalogEntry) =>
     entry.inputs.filter(
       (field) =>
         !isConnectionScopedCatalogInput(entry, field) &&
         !isProjectNameCatalogInput(field) &&
-        !SYSTEM_INSTALL_VARIABLE_NAMES.has(field.name) &&
         !isAdvancedCatalogInput(entry, field),
     );
   const advancedCatalogInputs = (entry: CatalogEntry) =>
@@ -1897,7 +1881,6 @@ function Inner() {
       (field) =>
         !isConnectionScopedCatalogInput(entry, field) &&
         !isProjectNameCatalogInput(field) &&
-        !SYSTEM_INSTALL_VARIABLE_NAMES.has(field.name) &&
         isAdvancedCatalogInput(entry, field),
     );
   const hasMissingAdvancedCatalogInputs = () => {
