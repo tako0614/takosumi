@@ -973,6 +973,92 @@ test("managed Cloudflare Capsule explicit worker_name drives app.takos.jp URL de
   );
 });
 
+test("managed Cloudflare Capsule honors operator managed public base domain", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  const seeded = await seedInstallationModel(store, {
+    name: "Yuru Managed App",
+    environment: "preview",
+    installConfig: {
+      variableMapping: {
+        worker_name: "custom-yuru",
+        app_url: null,
+        cloudflare_route_zone_id: null,
+        cloudflare_route_pattern: null,
+        cloudflare: {
+          account_id: null,
+          api_base_url: null,
+        },
+      },
+      catalog: {
+        order: 100,
+        surface: "service",
+        kind: "worker",
+        provider: "cloudflare",
+        suggestedName: "yurucommu",
+        badge: { ja: "追加候補", en: "Installable" },
+        name: { ja: "yurucommu", en: "yurucommu" },
+        description: { ja: "テスト", en: "Test" },
+        inputs: [],
+        installExperience: {
+          publicEndpoint: {
+            subdomainVariable: "worker_name",
+            urlVariable: "app_url",
+            routePatternVariable: "cloudflare_route_pattern",
+            baseDomain: "apps.example.org",
+          },
+        },
+      },
+    },
+  });
+  await putConnectionWithProviderEnv(store, {
+    ...cloudflareConnection(
+      "conn_cloudflare_scope",
+      seeded.installation.spaceId,
+    ),
+    scopeHints: {
+      managedProvider: true,
+      providerBaseUrl:
+        "https://operator.example.org/compat/cloudflare/client/v4",
+      accountId: "ts_acc_operator",
+      zoneId: "zone_operator_apps",
+    },
+  });
+  await store.putInstallationProviderEnvBindingSet({
+    id: "profile_cloudflare_scope",
+    spaceId: seeded.installation.spaceId,
+    installationId: seeded.installation.id,
+    environment: seeded.installation.environment,
+    bindings: [
+      {
+        provider: "cloudflare",
+        alias: "main",
+        connectionId: "conn_cloudflare_scope",
+      },
+    ],
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
+  const profile = multiProviderRunnerProfile();
+  const controller = controllerWith(store, runner, {
+    runnerProfiles: [profile],
+    defaultRunnerProfileId: profile.id,
+  });
+
+  const { planRun } = await controller.createInstallationPlan(
+    seeded.installation.id,
+  );
+
+  expect(planRun.status).toEqual("succeeded");
+  const mainTf = runner.planJobs[0]!.generatedRoot!.files["main.tf"]!;
+  expect(mainTf).toContain('worker_name = "custom-yuru"');
+  expect(mainTf).toContain('app_url = "https://custom-yuru.apps.example.org"');
+  expect(mainTf).toContain(
+    'cloudflare_route_pattern = "custom-yuru.apps.example.org/*"',
+  );
+  expect(mainTf).toContain('cloudflare_route_zone_id = "zone_operator_apps"');
+});
+
 test("managed Cloudflare Capsule rejects unverified custom public app_url", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   const runner = recordingRunner();
@@ -985,6 +1071,25 @@ test("managed Cloudflare Capsule rejects unverified custom public app_url", asyn
         cloudflare: {
           account_id: null,
           api_base_url: null,
+        },
+      },
+      catalog: {
+        order: 100,
+        surface: "service",
+        kind: "worker",
+        provider: "cloudflare",
+        suggestedName: "yurucommu",
+        badge: { ja: "追加候補", en: "Installable" },
+        name: { ja: "yurucommu", en: "yurucommu" },
+        description: { ja: "テスト", en: "Test" },
+        inputs: [],
+        installExperience: {
+          publicEndpoint: {
+            subdomainVariable: "worker_name",
+            urlVariable: "app_url",
+            routePatternVariable: "cloudflare_route_pattern",
+            baseDomain: "apps.example.org",
+          },
         },
       },
     },

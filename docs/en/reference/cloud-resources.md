@@ -123,25 +123,33 @@ References:
 ## Domains And Routes
 
 Public HTTP resources can receive a Takosumi-managed default URL. Users can
-reserve a DNS-valid single-label `*.app.takos.jp` hostname on a
-first-come-first-served basis.
+reserve a DNS-valid single-label hostname under an operator-managed public base
+domain on a first-come-first-served basis. The Takosumi Cloud default base
+domain is `app.takos.jp`.
 
 ```text
 https://my-app.app.takos.jp
 ```
 
+This managed default hostname is a constrained namespace that does not require
+DNS ownership verification. Abuse policy, reserved names, and rate controls are
+operator policy, but normal app installs should be able to use it broadly.
+
 Custom domains are additional user-owned hostnames attached to the same route.
-Dashboard and OpenTofu route lifecycle records carry:
+They are separate from managed default hostnames and require DNS ownership
+verification, certificate provisioning, and plan/quota/abuse policy before
+runtime activation. Dashboard and OpenTofu route lifecycle records carry:
 
 | Field              | Meaning                                     |
 | ------------------ | ------------------------------------------- |
-| `default_hostname` | Takosumi managed `*.app.takos.jp` hostname  |
+| `default_hostname` | operator-managed one-label default hostname |
 | `custom_domains`   | verified or pending user-owned hostnames    |
 | `pattern`          | route pattern used by compatibility imports |
 | `target`           | EdgeWorker / ContainerService target        |
 
 `default_hostname` is first-come-first-served. If no hostname is requested,
-Takosumi issues one as `<app-slug>-<short-id>.app.takos.jp`.
+Takosumi issues one as `<app-slug>-<short-id>.<managed-base-domain>`. Conflict
+errors do not reveal the claimant Workspace or Capsule name.
 
 ## Compatibility Matrix
 

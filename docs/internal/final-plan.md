@@ -1103,6 +1103,15 @@ Custom Domains
 *.app.takos.jp names
 ```
 
+The managed public hostname contract is one-label DNS names under an
+operator-managed public base domain. Takosumi Cloud's base domain is
+`app.takos.jp`, but the control-plane contract is
+`<label>.<managed-base-domain>` from `installExperience.publicEndpoint`.
+Managed names are first-come-first-served and broadly available for ordinary
+installs. Arbitrary user-owned custom domains are a separate lifecycle and must
+pass ownership verification, certificate provisioning, plan/quota, and abuse
+policy before runtime activation.
+
 Implementation can use Cloudflare primitives such as Workers for Platforms,
 Dynamic Workers, R2, D1, KV, Queues, Workflows, Containers, and AI Gateway.
 Those are implementation details behind official managed targets.
@@ -1142,7 +1151,7 @@ Takosumi Cloud should support:
 
 ```text
 custom user domains
-first-come names under *.app.takos.jp
+first-come names under the operator managed public base domain
 ```
 
 Route ownership, certificate issuance, abuse policy, and name reservation live

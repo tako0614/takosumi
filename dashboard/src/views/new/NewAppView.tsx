@@ -719,8 +719,14 @@ function routePatternFromAppUrl(
 }
 
 function managedBaseDomain(value: string | undefined): string {
-  const trimmed = (value ?? "").trim().toLowerCase();
-  return /^[a-z0-9.-]+$/u.test(trimmed) && trimmed.includes(".")
+  const trimmed = (value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/^\*\./u, "")
+    .replace(/\.$/u, "");
+  return /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/u.test(
+    trimmed,
+  )
     ? trimmed
     : "app.takos.jp";
 }

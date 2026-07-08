@@ -498,12 +498,15 @@ Response:
 
 `default_hostname` is the immediately usable Takosumi-managed URL. It can be
 requested with `app_subdomain`, `default_hostname`, or `hostname`. If omitted,
-Takosumi issues `<app-slug>-<short-id>.app.takos.jp`. The `*.app.takos.jp`
-namespace is first-come-first-served; duplicate reservations return 409.
+Takosumi issues `<app-slug>-<short-id>.<managed-base-domain>`. The Takosumi
+Cloud default managed base domain is `app.takos.jp`; operators can configure a
+different managed base domain under the same contract. The managed namespace is
+first-come-first-served; duplicate reservations return 409. 409 responses do
+not reveal the claimant Workspace or Capsule name.
 `custom_domains` are user-owned domains. DNS ownership verification,
-certificate provisioning, and runtime dispatch activation are Cloud runtime
-responsibilities. Unverified custom domains are not activated for runtime
-dispatch, and the default hostname remains available.
+certificate provisioning, runtime dispatch activation, and plan/quota/abuse
+policy are Cloud runtime responsibilities. Unverified custom domains are not
+activated for runtime dispatch, and the default hostname remains available.
 
 The `cloudflare_workers_script_subdomain` compatibility route is stored as a
 Takosumi-managed `*.app.takos.jp` public name, not as a Cloudflare
