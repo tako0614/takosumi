@@ -230,6 +230,10 @@ function fakeOperations(
         record("patchCapsuleStatus", id, status);
         return { ...installation(id, "space_a"), status };
       },
+      abandonUnappliedCapsule: async (id, reason) => {
+        record("abandonUnappliedCapsule", id, reason);
+        return { ...installation(id, "space_a"), status: "destroyed" };
+      },
       putCapsuleProviderEnvBindingSet: async (profile) => {
         record("putCapsuleProviderEnvBindingSet", profile);
         return profile;
@@ -5402,9 +5406,11 @@ test("DELETE /api/v1/capsules/:id abandons unapplied upload-origin projections",
     projectionStatus: string;
   };
   expect(body.abandoned).toEqual(true);
-  expect(body.capsule.status).toEqual("error");
-  expect(body.projectionStatus).toEqual("failed");
-  expect(store.findAppCapsule("inst_upload_pending")?.status).toEqual("failed");
+  expect(body.capsule.status).toEqual("destroyed");
+  expect(body.projectionStatus).toEqual("exported");
+  expect(store.findAppCapsule("inst_upload_pending")?.status).toEqual(
+    "exported",
+  );
   expect(
     store
       .listCapsuleEvents("inst_upload_pending")
@@ -5493,10 +5499,10 @@ test("DELETE /api/v1/capsules/:id abandons unapplied projections when destroy pl
     projectionStatus: string;
   };
   expect(body.abandoned).toEqual(true);
-  expect(body.capsule.status).toEqual("error");
-  expect(body.projectionStatus).toEqual("failed");
+  expect(body.capsule.status).toEqual("destroyed");
+  expect(body.projectionStatus).toEqual("exported");
   expect(store.findAppCapsule("inst_pending_provider")?.status).toEqual(
-    "failed",
+    "exported",
   );
 });
 
@@ -5581,10 +5587,87 @@ test("DELETE /api/v1/capsules/:id abandons unapplied projections when a selected
     projectionStatus: string;
   };
   expect(body.abandoned).toEqual(true);
-  expect(body.capsule.status).toEqual("error");
-  expect(body.projectionStatus).toEqual("failed");
+  expect(body.capsule.status).toEqual("destroyed");
+  expect(body.projectionStatus).toEqual("exported");
   expect(store.findAppCapsule("inst_missing_connection")?.status).toEqual(
-    "failed",
+    "exported",
+  );
+});
+
+test("DELETE /api/v1/capsules/:id abandons unapplied Capsules even when the app projection is missing", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const baseOperations = fakeOperations();
+  const pendingCapsule = {
+    id: "inst_missing_projection",
+    workspaceId: "space_a",
+    sourceId: "src_missing_projection",
+    name: "missing-projection",
+    slug: "missing-projection",
+    installType: "opentofu_module",
+    installConfigId: "cfg_missing_projection",
+    environment: "prod",
+    currentStateGeneration: 0,
+    status: "pending",
+    createdAt: "2026-01-01T00:00:00Z",
+    updatedAt: "2026-01-01T00:00:00Z",
+  };
+  const operations = fakeOperations({
+    installations: {
+      ...baseOperations.installations,
+      getCapsule: async () =>
+        pendingCapsule as unknown as Awaited<
+          ReturnType<ControlPlaneOperations["installations"]["getCapsule"]>
+        >,
+      abandonUnappliedCapsule: async (id, reason) => {
+        operations.calls.abandonUnappliedCapsule = [id, reason];
+        return {
+          ...pendingCapsule,
+          id,
+          status: "destroyed",
+          updatedAt: "2026-01-02T00:00:00Z",
+        } as unknown as Awaited<
+          ReturnType<
+            NonNullable<
+              ControlPlaneOperations["installations"]["abandonUnappliedCapsule"]
+            >
+          >
+        >;
+      },
+    },
+    createCapsuleDestroyPlan: async () => {
+      const error = new Error(
+        "Provider Connection conn_f42e2b50fe904311ad00 (provider cloudflare) not found",
+      ) as Error & { code: string };
+      error.code = "not_found";
+      throw error;
+    },
+  });
+
+  const { request: req, url } = request(
+    "DELETE",
+    "/api/v1/capsules/inst_missing_projection",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+
+  expect(response?.status).toEqual(202);
+  const body = (await response!.json()) as {
+    abandoned: boolean;
+    capsule: { status: string };
+    projectionStatus?: string;
+  };
+  expect(body.abandoned).toEqual(true);
+  expect(body.capsule.status).toEqual("destroyed");
+  expect(body.projectionStatus).toBeUndefined();
+  expect(store.findAppCapsule("inst_missing_projection")).toBeUndefined();
+  expect(operations.calls.abandonUnappliedCapsule?.[0]).toEqual(
+    "inst_missing_projection",
   );
 });
 
@@ -5669,9 +5752,11 @@ test("DELETE /api/v1/capsules/:id abandons unapplied projections when credential
     projectionStatus: string;
   };
   expect(body.abandoned).toEqual(true);
-  expect(body.capsule.status).toEqual("error");
-  expect(body.projectionStatus).toEqual("failed");
-  expect(store.findAppCapsule("inst_pending_mint")?.status).toEqual("failed");
+  expect(body.capsule.status).toEqual("destroyed");
+  expect(body.projectionStatus).toEqual("exported");
+  expect(store.findAppCapsule("inst_pending_mint")?.status).toEqual(
+    "exported",
+  );
 });
 
 test("POST /api/v1/capsules/:id/dependencies derives workspaceId from the consumer", async () => {

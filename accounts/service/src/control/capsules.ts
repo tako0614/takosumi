@@ -439,26 +439,33 @@ async function maybeAbandonUnappliedCapsule(input: {
   const projection = await input.store.findAppCapsule(
     input.installation.id,
   );
-  if (!projection) return undefined;
   const installation =
-    await input.operations.installations.patchCapsuleStatus(
-      input.installation.id,
-      "error",
-    );
-  await saveProjectionStatusChange({
-    store: input.store,
-    installation: projection,
-    requestedStatus: "failed",
-    reason,
-  });
-  const updatedProjection = await input.store.findAppCapsule(
-    input.installation.id,
-  );
+    input.operations.installations.abandonUnappliedCapsule !== undefined
+      ? await input.operations.installations.abandonUnappliedCapsule(
+          input.installation.id,
+          reason,
+        )
+      : await input.operations.installations.patchCapsuleStatus(
+          input.installation.id,
+          "destroyed",
+        );
+  let projectionStatus: AppCapsuleStatus | undefined;
+  if (projection) {
+    await saveProjectionStatusChange({
+      store: input.store,
+      installation: projection,
+      requestedStatus: "exported",
+      reason,
+    });
+    projectionStatus =
+      (await input.store.findAppCapsule(input.installation.id))?.status ??
+        "exported";
+  }
   return jsonStatus(
     {
       capsule: publicCapsule(installation),
       abandoned: true,
-      projectionStatus: updatedProjection?.status ?? "failed",
+      ...(projectionStatus ? { projectionStatus } : {}),
     },
     202,
   );

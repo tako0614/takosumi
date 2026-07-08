@@ -221,6 +221,10 @@ export interface ControlPlaneOperations {
     getInstallConfig(id: string): Promise<InstallConfig>;
     listInstallConfigs(workspaceId?: string): Promise<readonly InstallConfig[]>;
     patchCapsuleStatus(id: string, status: Capsule["status"]): Promise<Capsule>;
+    abandonUnappliedCapsule?(
+      id: string,
+      reason: string,
+    ): Promise<Capsule>;
     putCapsuleProviderEnvBindingSet(
       profile: CapsuleProviderEnvBindingSet,
     ): Promise<CapsuleProviderEnvBindingSet>;
