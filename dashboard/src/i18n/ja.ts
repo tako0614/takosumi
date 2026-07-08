@@ -547,6 +547,8 @@ export const ja = {
   "new.catalogInput.errorRequired": "{label} を入力してください。",
   "new.catalogInput.errorUnsafeValue":
     "{label} の値が長すぎるか、使えない文字を含んでいます。",
+  "new.catalogInput.errorSubdomain":
+    "{label} は {baseDomain} の前に付く1段の名前を入力してください。英小文字・数字・ハイフンが使えます。",
   "new.catalogInput.errorCustomDomain":
     "{label} は https:// のURLを使ってください。{baseDomain} は1段の名前だけ使えます。独自ドメインはデプロイ前に所有確認が必要です。",
   "new.deeplink.summary":
@@ -694,11 +696,11 @@ export const ja = {
   "new.error.genericWithDetails":
     "サービスの追加に失敗しました。詳細: {message}",
   "new.error.appHostnameUnavailable":
-    "この公開サブドメインは既に使われています。別のサービスIDにして、もう一度お試しください。",
-  "new.hostnameConflict.title": "別のサービスIDにしてください",
+    "この公開URL名は既に使われています。別の名前にして、もう一度お試しください。",
+  "new.hostnameConflict.title": "別の公開URL名にしてください",
   "new.hostnameConflict.body":
-    "公開URLに使うIDを変えてから、もう一度追加してください。",
-  "new.hostnameConflict.suggest": "候補IDを使う",
+    "公開URLに使う名前を変えてから、もう一度追加してください。",
+  "new.hostnameConflict.suggest": "候補名を使う",
   "new.error.alreadyExists":
     "「{name}」は既に追加されています。一覧から既存サービスを開いてください。",
   "new.error.alreadyExistsGeneric":

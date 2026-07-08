@@ -125,6 +125,24 @@ test("hostable official configs expose public catalog metadata for the dashboard
   expect(
     yurucommu?.catalog?.inputs.find(
       (input) => input.name === "worker_bundle_url",
+    ),
+  ).toMatchObject({
+    advanced: true,
+    defaultValue:
+      "https://github.com/tako0614/yurucommu/releases/download/v2.0.3/takos-worker-4f184e34c3ddf25c4be6a6c5ade5381173cef04e7fe8068b849ae88bd84c35cc.js",
+  });
+  expect(
+    yurucommu?.catalog?.inputs.find(
+      (input) => input.name === "worker_bundle_sha256",
+    ),
+  ).toMatchObject({
+    advanced: true,
+    defaultValue:
+      "4f184e34c3ddf25c4be6a6c5ade5381173cef04e7fe8068b849ae88bd84c35cc",
+  });
+  expect(
+    yurucommu?.catalog?.inputs.find(
+      (input) => input.name === "worker_bundle_url",
     )?.defaultValue,
   ).toBe(
     "https://github.com/tako0614/yurucommu/releases/download/v2.0.3/takos-worker-4f184e34c3ddf25c4be6a6c5ade5381173cef04e7fe8068b849ae88bd84c35cc.js",
@@ -182,6 +200,11 @@ test("hostable official configs expose public catalog metadata for the dashboard
   const releaseImagesDefault = takos?.catalog?.inputs.find(
     (input) => input.name === "release_container_images",
   )?.defaultValue;
+  expect(
+    takos?.catalog?.inputs.find(
+      (input) => input.name === "release_container_images",
+    )?.advanced,
+  ).toBe(true);
   expect(releaseImagesDefault).toContain("0.10.0-3cfcc10f7ad1");
   expect(releaseImagesDefault).not.toContain("0.10.0-bfdd9f8bb79c");
 });

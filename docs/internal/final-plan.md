@@ -243,6 +243,10 @@ requirements. A Capsule that does not need a public endpoint should not show a
 public endpoint field; a Capsule that does not need a first-run secret should
 not show a password/token field. Catalog metadata only maps those common setup
 concepts onto ordinary module variables when the selected app asks for them.
+Artifact URLs, SHA-256 digests, container image maps, and app-specific env
+knobs are also ordinary OpenTofu variables. The catalog may place them in an
+advanced section, but Takosumi must not turn them into a hidden side channel or
+special non-OpenTofu deploy mechanism.
 
 The preferred fast path is a Git CI or release pipeline that publishes a
 versioned, publicly fetchable artifact plus a SHA-256 digest. The OpenTofu

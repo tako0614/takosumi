@@ -197,8 +197,7 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
       "自分用のコミュニティ / ActivityPub アプリをホストします。",
       "Host a personal community / ActivityPub app.",
     ),
-    iconUrl:
-      "https://raw.githubusercontent.com/tako0614/yurucommu/17d0b16fa6ffaa1d31efaa5dd9719a7875ec45f4/public/icons/yurucommu.svg",
+    iconUrl: "/brand/yurucommu.svg",
     inputs: [
       {
         name: "project_name",
@@ -254,6 +253,7 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
       {
         name: "worker_bundle_url",
         type: "string",
+        advanced: true,
         defaultValue:
           "https://github.com/tako0614/yurucommu/releases/download/v2.0.3/takos-worker-4f184e34c3ddf25c4be6a6c5ade5381173cef04e7fe8068b849ae88bd84c35cc.js",
         label: text("Worker artifact URL", "Worker artifact URL"),
@@ -261,6 +261,7 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
       {
         name: "worker_bundle_sha256",
         type: "string",
+        advanced: true,
         defaultValue:
           "4f184e34c3ddf25c4be6a6c5ade5381173cef04e7fe8068b849ae88bd84c35cc",
         label: text("Worker artifact SHA-256", "Worker artifact SHA-256"),
@@ -508,8 +509,7 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
       "AI ワークスペースを自分の環境にホストします。",
       "Host the Takos AI workspace in your own environment.",
     ),
-    iconUrl:
-      "https://raw.githubusercontent.com/tako0614/takos/0b8ead2bb4ae092463a0b517e4838d68ff311a0e/web/public/logo.png",
+    iconUrl: "/brand/takos.svg",
     inputs: [
       {
         name: "project_name",
@@ -545,6 +545,7 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
       {
         name: "release_container_images",
         type: "json",
+        advanced: true,
         defaultValue:
           '{"runtime":"registry.cloudflare.com/a10162d23653f1ad1193dabf520a5dd0/takos-worker-runtime:0.10.0-3cfcc10f7ad1","executor":"registry.cloudflare.com/a10162d23653f1ad1193dabf520a5dd0/takos-agent-executor:0.10.0-3cfcc10f7ad1"}',
         label: text("Release container images", "Release container images"),
