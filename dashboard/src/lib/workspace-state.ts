@@ -16,14 +16,23 @@
 import { createSignal } from "solid-js";
 
 const STORAGE_KEY = "tg_apps_space_id";
+const LEGACY_STORAGE_KEYS = ["takosumi.currentWorkspaceId"] as const;
 
 function readInitial(): string {
   if (typeof localStorage === "undefined") return "";
+  clearLegacyWorkspaceStorageKeys();
   return localStorage.getItem(STORAGE_KEY) ?? "";
 }
 
+function clearLegacyWorkspaceStorageKeys(): void {
+  for (const key of LEGACY_STORAGE_KEYS) {
+    localStorage.removeItem(key);
+  }
+}
+
 // Module-level singletons so every view shares one reactive source of truth.
-const [currentWorkspaceId, setCurrentWorkspaceIdSignal] = createSignal(readInitial());
+const [currentWorkspaceId, setCurrentWorkspaceIdSignal] =
+  createSignal(readInitial());
 
 export { currentWorkspaceId };
 
@@ -33,7 +42,8 @@ export function selectAvailableWorkspaceId(
 ): string {
   if (workspaces.length === 0) return "";
   const trimmed = current.trim();
-  if (trimmed && workspaces.some((workspace) => workspace.id === trimmed)) return trimmed;
+  if (trimmed && workspaces.some((workspace) => workspace.id === trimmed))
+    return trimmed;
   return workspaces[0]!.id;
 }
 
@@ -42,6 +52,7 @@ export function setCurrentWorkspaceId(workspaceId: string): void {
   const next = workspaceId.trim();
   setCurrentWorkspaceIdSignal(next);
   if (typeof localStorage === "undefined") return;
+  clearLegacyWorkspaceStorageKeys();
   if (next) localStorage.setItem(STORAGE_KEY, next);
   else localStorage.removeItem(STORAGE_KEY);
 }

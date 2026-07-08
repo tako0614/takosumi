@@ -158,6 +158,15 @@ records carry:
 Takosumi issues one as `<app-slug>-<short-id>.<managed-base-domain>`. Conflict
 errors do not reveal the claimant Workspace or Capsule name.
 
+In app install / Store catalog flows, this value is passed to ordinary OpenTofu
+variables through the `installExperience` `public_endpoint` projection. For
+example, `subdomain` is the single label for the managed default hostname,
+`url` is a custom domain or managed URL, and `routePattern` is the route
+pattern used by compatibility imports. Takosumi does not infer meaning from
+variable names such as `worker_name` or `app_url` by themselves. Only the
+catalog-declared projection and input `format` drive Dashboard input UX and
+hostname reservation.
+
 ## Compatibility Matrix
 
 The Cloudflare import capability is `compat.cloudflare.workers.v1`. It exposes

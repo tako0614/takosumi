@@ -259,6 +259,36 @@ endpoint from variable names such as `worker_name` or `app_url`; those names are
 ordinary OpenTofu inputs unless the catalog explicitly maps them through
 the `public_endpoint` projection.
 
+Catalog inputs are also plain OpenTofu variable values. `type`, `format`,
+`required`, `advanced`, and `secret` only describe presentation and validation
+for the install UI:
+
+```text
+type:
+  string / number / boolean / json
+
+format:
+  text / url / hostname / subdomain / password / token / email / sha256
+```
+
+These fields do not create a Takosumi-specific manifest or hidden execution
+path. They let a store listing expose necessary install parameters such as
+public subdomain, custom URL, initial password/token, release artifact URL,
+release artifact digest, or arbitrary env-like module variables while keeping
+the app repository a normal OpenTofu module.
+
+`public_endpoint` is a UX projection, not a hard-coded app rule. If it maps a
+`subdomain` variable, Takosumi may reserve
+`<label>.<managed-base-domain>` under the operator-managed public namespace.
+This managed default hostname is first-come-first-served and conflict errors
+must not disclose the owning Workspace or Capsule. If it maps a `url` or
+route-pattern variable that points outside the managed base domain, it is a
+custom/user-owned hostname and must go through domain ownership verification
+before runtime activation in managed target implementations. Generic
+ProviderConnection / non-managed providers may still receive these values as
+ordinary OpenTofu variables; Takosumi should not reject the module merely
+because it chooses to use its own provider-side routing.
+
 Subdomain, password, and app-specific env are not universal Takosumi
 requirements. A Capsule that does not need a public endpoint should not show a
 public endpoint field; a Capsule that does not need a first-run secret should

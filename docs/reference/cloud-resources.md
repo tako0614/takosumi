@@ -162,6 +162,14 @@ Dashboard / OpenTofu route lifecycle は次を扱います。
 `<app-slug>-<short-id>.<managed-base-domain>` のような安全な fallback を
 Takosumi が発行します。重複エラーは claimant の Workspace / Capsule 名を公開しません。
 
+App install / Store catalog では、この値は `installExperience` の
+`public_endpoint` projection から普通の OpenTofu 変数へ渡します。例えば
+`subdomain` は managed default hostname の 1 ラベル、`url` は custom domain
+または managed URL、`routePattern` は互換 API で使う route pattern です。
+Takosumi は `worker_name` や `app_url` という変数名だけを見て意味を推論しません。
+catalog が明示した projection と input `format` だけが Dashboard の入力 UX と
+hostname 予約の根拠です。
+
 ## Compatibility Matrix
 
 Cloudflare import capability は `compat.cloudflare.workers.v1` です。

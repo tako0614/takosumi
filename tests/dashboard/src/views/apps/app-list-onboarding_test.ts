@@ -19,9 +19,9 @@ describe("AppListView app launcher", () => {
     expect(appListSource).toContain("visibleCapsules().length > 0");
     expect(appListSource).toContain("listWorkspacesCached");
     expect(appListSource).toContain("selectAvailableWorkspaceId");
-    expect(appListSource).toContain(
-      "if (chosen) setCurrentWorkspaceId(chosen)",
-    );
+    expect(appListSource).toContain("if (chosen !== current)");
+    expect(appListSource).toContain("ensureAccessibleWorkspaceSelection");
+    expect(appListSource).toContain("clearWorkspaceProjectionCaches");
     expect(appListSource).toContain('href="/new"');
     expect(appListSource).toContain('t("apps.start.optionCatalog")');
     expect(appListSource).not.toContain('href="/new?mode=link"');
@@ -82,6 +82,21 @@ describe("AppListView app launcher", () => {
     // Old "every service" launcher component names are gone.
     expect(appListSource).not.toContain("function ServiceList");
     expect(appListSource).not.toContain("function ServiceTile");
+  });
+
+  test("recovers when the persisted Workspace is no longer accessible", () => {
+    expect(appListSource).toContain("overview.error as ControlApiError");
+    expect(appListSource).toContain("error.status !== 403");
+    expect(appListSource).toContain("error.status !== 404");
+    expect(appListSource).toContain("listWorkspacesCached({");
+    expect(appListSource).toContain("force: options.force");
+    expect(appListSource).toContain(
+      "selectedWorkspaceId: current || undefined",
+    );
+    expect(appListSource).toContain("clearDashboardOverviewCache(id)");
+    expect(appListSource).toContain("clearCapsuleListCache(id)");
+    expect(appListSource).toContain("clearCurrentStateVersionCache(id)");
+    expect(appListSource).toContain("clearInstallConfigListCache(id)");
   });
 
   test("tile face is image → declared icon → kind glyph; empty points at the service list", () => {

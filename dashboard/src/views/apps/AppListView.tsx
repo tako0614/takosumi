@@ -8,6 +8,7 @@
  * OpenTofu detail) lives on the separate `/services` page.
  */
 import {
+  createEffect,
   createMemo,
   createResource,
   For,
@@ -26,10 +27,22 @@ import {
   setCurrentWorkspaceId,
 } from "../../lib/workspace-state.ts";
 import { listWorkspacesCached } from "../../lib/workspace-list.ts";
-import { getDashboardOverviewCached } from "../../lib/dashboard-overview.ts";
-import { listCapsulesCached } from "../../lib/capsule-list.ts";
-import { listCurrentStateVersionsCached } from "../../lib/current-state-versions.ts";
-import { listInstallConfigsCached } from "../../lib/install-config-list.ts";
+import {
+  clearDashboardOverviewCache,
+  getDashboardOverviewCached,
+} from "../../lib/dashboard-overview.ts";
+import {
+  clearCapsuleListCache,
+  listCapsulesCached,
+} from "../../lib/capsule-list.ts";
+import {
+  clearCurrentStateVersionCache,
+  listCurrentStateVersionsCached,
+} from "../../lib/current-state-versions.ts";
+import {
+  clearInstallConfigListCache,
+  listInstallConfigsCached,
+} from "../../lib/install-config-list.ts";
 import {
   type ControlApiError,
   createWorkspace,
@@ -116,16 +129,39 @@ function curatedAppIcon(name: string): CuratedAppIcon | undefined {
 function Inner() {
   const navigate = useNavigate();
   const workspaceId = () => currentWorkspaceId() || undefined;
+  let recoveringWorkspaceSelection = false;
+
+  const clearWorkspaceProjectionCaches = (id: string) => {
+    clearDashboardOverviewCache(id);
+    clearCapsuleListCache(id);
+    clearCurrentStateVersionCache(id);
+    clearInstallConfigListCache(id);
+  };
+
+  const ensureAccessibleWorkspaceSelection = async (
+    options: { readonly force?: boolean } = {},
+  ) => {
+    if (recoveringWorkspaceSelection) return;
+    recoveringWorkspaceSelection = true;
+    try {
+      const current = currentWorkspaceId();
+      const workspaces = await listWorkspacesCached({
+        force: options.force,
+        selectedWorkspaceId: current || undefined,
+      });
+      const chosen = selectAvailableWorkspaceId(current, workspaces);
+      if (chosen !== current) {
+        if (current) clearWorkspaceProjectionCaches(current);
+        setCurrentWorkspaceId(chosen);
+      }
+    } finally {
+      recoveringWorkspaceSelection = false;
+    }
+  };
 
   onMount(async () => {
-    if (currentWorkspaceId()) return;
     try {
-      const workspaces = await listWorkspacesCached();
-      const chosen = selectAvailableWorkspaceId(
-        currentWorkspaceId(),
-        workspaces,
-      );
-      if (chosen) setCurrentWorkspaceId(chosen);
+      await ensureAccessibleWorkspaceSelection();
     } catch {
       // The shell workspace switcher and empty-state action handle this case.
     }
@@ -134,6 +170,19 @@ function Inner() {
   const [overview] = createResource(workspaceId, (id) =>
     getDashboardOverviewCached(id, { capsuleLimit: 500 }),
   );
+  createEffect(() => {
+    const error = overview.error as ControlApiError | undefined;
+    const staleWorkspaceId = workspaceId();
+    if (
+      !staleWorkspaceId ||
+      !error ||
+      (error.status !== 403 && error.status !== 404)
+    ) {
+      return;
+    }
+    clearWorkspaceProjectionCaches(staleWorkspaceId);
+    void ensureAccessibleWorkspaceSelection({ force: true });
+  });
   const fullProjectionWorkspaceId = createMemo(() =>
     overview()?.nextCapsuleCursor ? workspaceId() : undefined,
   );
