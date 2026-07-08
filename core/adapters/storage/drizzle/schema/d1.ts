@@ -6,6 +6,7 @@ import {
   text,
   uniqueIndex,
 } from "drizzle-orm/sqlite-core";
+import { sql } from "drizzle-orm";
 import { deployControlD1TableNames as names } from "./logical.ts";
 
 const jsonText = (name: string) =>
@@ -119,7 +120,6 @@ export const secretBlobs = sqliteTable(
   ],
 );
 
-
 export const installConfigs = sqliteTable(
   names.installConfigs,
   {
@@ -170,11 +170,9 @@ export const installations = sqliteTable(
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [
-    uniqueIndex("capsules_space_name_environment_unique").on(
-      table.spaceId,
-      table.name,
-      table.environment,
-    ),
+    uniqueIndex("capsules_space_name_environment_active_unique")
+      .on(table.spaceId, table.name, table.environment)
+      .where(sql`${table.status} <> 'destroyed'`),
     index("capsules_space_idx").on(table.spaceId),
     index("capsules_project_idx").on(table.projectId),
     index("capsules_current_state_version_idx").on(table.currentDeploymentId),
@@ -280,9 +278,7 @@ export const outputSnapshots = sqliteTable(
     recordJson: jsonText("record_json").notNull(),
     createdAt: text("created_at").notNull(),
   },
-  (table) => [
-    index("outputs_installation_idx").on(table.installationId),
-  ],
+  (table) => [index("outputs_installation_idx").on(table.installationId)],
 );
 
 export const outputShares = sqliteTable(
@@ -359,9 +355,11 @@ export const stateSnapshots = sqliteTable(
     createdAt: text("created_at").notNull(),
   },
   (table) => [
-    uniqueIndex(
-      "state_versions_installation_environment_generation_unique",
-    ).on(table.installationId, table.environment, table.generation),
+    uniqueIndex("state_versions_installation_environment_generation_unique").on(
+      table.installationId,
+      table.environment,
+      table.generation,
+    ),
     index("state_versions_installation_idx").on(table.installationId),
   ],
 );
@@ -560,9 +558,7 @@ export const publicHostReservations = sqliteTable(
   },
   (table) => [
     index("public_host_reservations_workspace_idx").on(table.workspaceId),
-    index("public_host_reservations_installation_idx").on(
-      table.installationId,
-    ),
+    index("public_host_reservations_installation_idx").on(table.installationId),
     index("public_host_reservations_status_idx").on(table.status),
   ],
 );

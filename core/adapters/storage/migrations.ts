@@ -625,7 +625,6 @@ export const postgresStorageTableDefinitions: readonly StorageTableDefinition[] 
         "updated_at",
       ],
       primaryKey: ["id"],
-      uniqueConstraints: [["space_id", "name", "environment"]],
       indexes: [
         ["space_id"],
         ["project_id"],
@@ -3514,5 +3513,20 @@ on conflict (hostname) do update set
   released_at = null
 where takosumi_public_host_reservations.status = 'released'
    or takosumi_public_host_reservations.installation_id = excluded.installation_id`,
+    },
+    {
+      id: "deploy.capsules_active_name_unique",
+      version: 65,
+      domain: "deploy",
+      description:
+        "Make Capsule service-name uniqueness apply only to non-destroyed rows so a destroyed Capsule remains in the audit ledger without blocking a later reinstall in the same Workspace/Space and environment.",
+      sql: `drop index if exists takosumi_capsules_space_name_environment_unique;
+drop index if exists takosumi_opentofu_installations_space_name_environment_unique;
+create unique index if not exists takosumi_capsules_space_name_environment_active_unique
+  on takosumi_capsules (space_id, name, environment)
+  where status <> 'destroyed';`,
+      down: `drop index if exists takosumi_capsules_space_name_environment_active_unique;
+create unique index if not exists takosumi_capsules_space_name_environment_unique
+  on takosumi_capsules (space_id, name, environment);`,
     },
   ]);
