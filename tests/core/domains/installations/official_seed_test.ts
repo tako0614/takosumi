@@ -267,6 +267,10 @@ test("hostable official configs expose public catalog metadata for the dashboard
   );
   expect(takos?.catalog?.source.path).toBe("deploy/opentofu");
   expect(takos?.modulePath).toBe("deploy/opentofu");
+  expect(takos?.outputAllowlist.worker_name).toEqual({
+    from: "worker_name",
+    type: "string",
+  });
   expect(takos?.catalog?.installExperience).toEqual({
     projections: [
       { kind: "service_name", variable: "project_name" },
