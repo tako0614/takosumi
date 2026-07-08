@@ -878,7 +878,6 @@ function storeEntryFromStoreListing(
     ...store,
     source: store.source ?? {
       git: listing.source.git,
-      ...(listing.source.ref ? { ref: listing.source.ref } : {}),
       path: listing.source.path || ".",
     },
   };
@@ -1557,7 +1556,6 @@ function Inner() {
     if (!listing) return null;
     if (listing.source.git !== sourceGitUrl()) return null;
     if ((listing.source.path || ".") !== installModulePath()) return null;
-    if (listing.source.ref && listing.source.ref !== sourceRef()) return null;
     return listing;
   };
   const storeListingForCurrentSource = (): TcsListing | null => {
@@ -2409,12 +2407,8 @@ function Inner() {
     setSelectedStoreConfigId(null);
     setSelectedStoreListing(listing);
     setGitUrl(listing.source.git);
-    setRef(displayRef(listing.source.ref));
-    setPinnedFullRef(
-      listing.source.ref && isFullCommitSha(listing.source.ref)
-        ? listing.source.ref
-        : null,
-    );
+    setRef("main");
+    setPinnedFullRef(null);
     setPath(listing.source.path || ".");
     setName(listing.suggestedName);
     setInstallConfigId(
