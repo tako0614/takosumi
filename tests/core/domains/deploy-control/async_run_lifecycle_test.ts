@@ -846,10 +846,15 @@ test("runner infrastructure errors fail destroy apply after the retry budget is 
       cause: "controller_retry",
     },
   ]);
-  const runnerUsage = (await store.listUsageEvents(applyRun.spaceId)).filter(
+  const space = await store.getSpace(applyRun.spaceId);
+  const billingSubjectId = space?.ownerUserId ?? applyRun.spaceId;
+  const runnerUsage = (await store.listUsageEvents(billingSubjectId)).filter(
     (event) => event.runId === applyRun.id && event.kind === "runner_minute",
   );
   expect(runnerUsage).toHaveLength(1);
+  expect(runnerUsage[0]?.resourceMetadata).toMatchObject({
+    source_workspace_id: applyRun.spaceId,
+  });
 });
 
 test("DLQ backstop marks a non-terminal run failed (retries-exhausted)", async () => {
