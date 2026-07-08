@@ -245,7 +245,7 @@ test("hostable official configs expose public catalog metadata for the dashboard
   });
   expect(takos?.sourceKind).toBe("generic_capsule");
   expect(takos?.catalog?.source.ref).toBe(
-    "06158aa4886df360c14508a7570dedd84305f884",
+    "c9c155786cdefc1c0367c4444664a348784e6601",
   );
   expect(takos?.catalog?.source.path).toBe("deploy/opentofu");
   expect(takos?.modulePath).toBe("deploy/opentofu");
