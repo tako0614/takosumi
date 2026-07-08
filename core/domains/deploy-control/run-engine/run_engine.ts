@@ -125,6 +125,12 @@ import {
   type OpenTofuDeploymentStore,
   type PlanRunInputs,
 } from "../store.ts";
+import {
+  DEFAULT_MANAGED_PUBLIC_BASE_DOMAIN,
+  isManagedPublicHost,
+  managedPublicBaseDomainFromInstallConfig,
+  managedPublicHostFromLabel,
+} from "../managed_public_domains.ts";
 import { evaluateTemplatePlanPolicy } from "../template_policy.ts";
 import {
   normalizeProviders,
@@ -369,7 +375,6 @@ function genericCapsuleOutputAllowlist(
   return allowlist;
 }
 
-const MANAGED_APP_DOMAIN = "app.takos.jp";
 const MANAGED_WORKER_NAME_RE = /^[a-z][a-z0-9-]{1,50}[a-z0-9]$/u;
 const PUBLIC_URL_OUTPUT_KEYS = [
   "url",
@@ -392,16 +397,6 @@ function validManagedWorkerName(value: string): boolean {
   return MANAGED_WORKER_NAME_RE.test(value);
 }
 
-function isManagedAppHost(host: string): boolean {
-  const normalizedHost = host.toLowerCase();
-  if (!normalizedHost.endsWith(`.${MANAGED_APP_DOMAIN}`)) return false;
-  const prefix = normalizedHost.slice(
-    0,
-    normalizedHost.length - MANAGED_APP_DOMAIN.length - 1,
-  );
-  return /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(prefix);
-}
-
 function hostFromHttpsUrlValue(value: unknown): string | undefined {
   const raw = nonEmptyStringValue(value);
   if (!raw) return undefined;
@@ -421,14 +416,18 @@ function hostFromRoutePatternValue(value: unknown): string | undefined {
   return host && !host.includes("*") ? host : undefined;
 }
 
-function managedHostFromWorkerName(value: unknown): string | undefined {
+function managedHostFromWorkerName(
+  value: unknown,
+  baseDomain = DEFAULT_MANAGED_PUBLIC_BASE_DOMAIN,
+): string | undefined {
   const workerName = nonEmptyStringValue(value);
   if (!workerName || !validManagedWorkerName(workerName)) return undefined;
-  return `${workerName}.${MANAGED_APP_DOMAIN}`;
+  return managedPublicHostFromLabel(workerName, baseDomain);
 }
 
 function publicHostsFromVariables(
   variables: Readonly<Record<string, unknown>>,
+  baseDomain = DEFAULT_MANAGED_PUBLIC_BASE_DOMAIN,
 ): readonly string[] {
   const hosts = new Set<string>();
   const appUrlHost = hostFromHttpsUrlValue(variables.app_url);
@@ -437,7 +436,10 @@ function publicHostsFromVariables(
     variables.cloudflare_route_pattern,
   );
   if (routeHost) hosts.add(routeHost);
-  const workerHost = managedHostFromWorkerName(variables.worker_name);
+  const workerHost = managedHostFromWorkerName(
+    variables.worker_name,
+    baseDomain,
+  );
   if (workerHost) hosts.add(workerHost);
   return [...hosts].sort();
 }
@@ -492,6 +494,7 @@ function hasManagedCloudflareProviderBindings(
 function finalizeManagedCloudflarePublicHostVariables(input: {
   readonly explicit: Readonly<Record<string, JsonValue>>;
   readonly installation: Installation;
+  readonly installConfig: InstallConfig;
   readonly declaredInputs: ReadonlySet<string>;
   readonly endpointVariables: ReadonlySet<string>;
   readonly providerInputDefaults: Readonly<Record<string, JsonValue>>;
@@ -500,6 +503,9 @@ function finalizeManagedCloudflarePublicHostVariables(input: {
   if (!hasManagedCloudflareProviderDefaults(input.providerInputDefaults)) {
     return input.variables;
   }
+  const baseDomain = managedPublicBaseDomainFromInstallConfig(
+    input.installConfig,
+  );
   const canSet = (name: string) =>
     Object.prototype.hasOwnProperty.call(input.variables, name) ||
     input.declaredInputs.has(name) ||
@@ -517,7 +523,7 @@ function finalizeManagedCloudflarePublicHostVariables(input: {
   if (!workerName || !validManagedWorkerName(workerName)) {
     return out;
   }
-  const host = `${workerName}.${MANAGED_APP_DOMAIN}`;
+  const host = `${workerName}.${baseDomain}`;
   if (!nonEmptyStringValue(input.explicit.app_url) && canSet("app_url")) {
     out.app_url = `https://${host}`;
   }
@@ -890,12 +896,18 @@ export class RunEngine {
       operation !== "destroy" &&
       internal.driftCheck !== true
     ) {
+      const installConfig = await this.#store.getInstallConfig(
+        installation.installConfigId,
+      );
       await this.#reservePublicHostsForPlan(installation, variables, now, {
         managedDomainsOnly:
           hasManagedCloudflareProviderDefaults(
             installTypePlan?.providerInputDefaults ?? {},
           ) ||
           internal.genericRootDispatch?.managedPublicHostDomainsOnly === true,
+        managedBaseDomains: [
+          managedPublicBaseDomainFromInstallConfig(installConfig),
+        ],
       });
     }
     const planRunId = this.#newId("plan");
@@ -1963,6 +1975,7 @@ export class RunEngine {
     const variables = finalizeManagedCloudflarePublicHostVariables({
       explicit: explicitVariables,
       installation: input.installation,
+      installConfig: input.installConfig,
       declaredInputs,
       endpointVariables: publicEndpointVariableNames(input.installConfig),
       providerInputDefaults: installTypePlan.providerInputDefaults,
@@ -2008,13 +2021,29 @@ export class RunEngine {
     installation: Installation,
     variables: Readonly<Record<string, JsonValue>>,
     now: number,
-    options: { readonly managedDomainsOnly?: boolean } = {},
+    options: {
+      readonly managedDomainsOnly?: boolean;
+      readonly managedBaseDomains?: readonly string[];
+    } = {},
   ): Promise<void> {
-    const requestedHosts = publicHostsFromVariables(variables);
+    const managedBaseDomains =
+      options.managedBaseDomains && options.managedBaseDomains.length > 0
+        ? options.managedBaseDomains
+        : [DEFAULT_MANAGED_PUBLIC_BASE_DOMAIN];
+    const requestedHosts = publicHostsFromVariables(
+      variables,
+      managedBaseDomains[0],
+    );
     if (requestedHosts.length === 0) return;
     if (options.managedDomainsOnly === true) {
       for (const host of requestedHosts) {
-        if (isManagedAppHost(host)) continue;
+        if (
+          managedBaseDomains.some((baseDomain) =>
+            isManagedPublicHost(host, baseDomain),
+          )
+        ) {
+          continue;
+        }
         throw new OpenTofuControllerError(
           "failed_precondition",
           customDomainVerificationRequiredMessage(),
@@ -2126,9 +2155,12 @@ export class RunEngine {
     const installConfig = await this.#store.getInstallConfig(
       installation.installConfigId,
     );
+    const managedBaseDomain =
+      managedPublicBaseDomainFromInstallConfig(installConfig);
     if (installConfig) {
       for (const host of publicHostsFromVariables(
         normalizeVariables(installConfig.variableMapping),
+        managedBaseDomain,
       )) {
         hosts.add(host);
       }
@@ -2150,11 +2182,15 @@ export class RunEngine {
       const configWorkerHost = installConfig
         ? managedHostFromWorkerName(
             normalizeVariables(installConfig.variableMapping).worker_name,
+            managedBaseDomain,
           )
         : undefined;
       const derivedWorkerHost =
         configWorkerHost ??
-        managedHostFromWorkerName(workerNameFromCapsule(installation));
+        managedHostFromWorkerName(
+          workerNameFromCapsule(installation),
+          managedBaseDomain,
+        );
       if (derivedWorkerHost) hosts.add(derivedWorkerHost);
     }
     return [...hosts].sort();

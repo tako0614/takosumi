@@ -50,6 +50,7 @@ import {
   generateRootModule,
 } from "takosumi-rootgen";
 import type { ResolvedInstallationProviderEnvBinding } from "../connections/mod.ts";
+import { managedPublicBaseDomainFromInstallConfig } from "./managed_public_domains.ts";
 import { canonicalProviderAddress } from "./provider_policy.ts";
 import { OpenTofuControllerError, requireNonEmptyString } from "./errors.ts";
 import { normalizeProviders } from "./validation.ts";
@@ -163,6 +164,7 @@ export class PlanResolutionService {
     const providerInputDefaults = providerInputDefaultsFromResolved(
       resolved,
       installation,
+      installConfig,
     );
     const usesCloudOnlyGatewayMaterialization = resolved.some(
       (entry) => (entry.materialization as string) === "gateway",
@@ -320,6 +322,7 @@ function requiredProvidersFromResolved(
 function providerInputDefaultsFromResolved(
   resolved: readonly ResolvedInstallationProviderEnvBinding[],
   installation: Installation,
+  installConfig: InstallConfig,
 ): Readonly<Record<string, JsonValue>> {
   const inputs: Record<string, JsonValue> = {};
   for (const entry of resolved) {
@@ -341,6 +344,7 @@ function providerInputDefaultsFromResolved(
         const managedAppHost = managedCloudflareAppHost(
           connection,
           installation,
+          installConfig,
         );
         if (managedAppHost) {
           inputs.worker_name = managedAppHost.workerName;
@@ -370,12 +374,16 @@ function providerInputDefaultsFromResolved(
 function managedCloudflareAppHost(
   connection: ResolvedInstallationProviderEnvBinding["connection"],
   installation: Installation,
+  installConfig: InstallConfig,
 ): { readonly workerName: string; readonly host: string } | undefined {
   if (!connection?.scopeHints?.managedProvider) return undefined;
   if (!managedProviderBaseUrl(connection)) return undefined;
   const workerName = cloudflareWorkerNameFromCapsule(installation);
   if (!workerName) return undefined;
-  return { workerName, host: `${workerName}.app.takos.jp` };
+  return {
+    workerName,
+    host: `${workerName}.${managedPublicBaseDomainFromInstallConfig(installConfig)}`,
+  };
 }
 
 function cloudflareWorkerNameFromCapsule(

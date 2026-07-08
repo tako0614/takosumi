@@ -461,10 +461,14 @@ Response:
 
 `default_hostname` は即時利用可能な Takosumi managed URL です。
 `app_subdomain` / `default_hostname` / `hostname` で指定できます。指定しない場合は
-Takosumi が `<app-slug>-<short-id>.app.takos.jp` を発行します。
-`*.app.takos.jp` は first-come-first-served で、重複時は 409 を返します。
+Takosumi が `<app-slug>-<short-id>.<managed-base-domain>` を発行します。
+Takosumi Cloud の既定 managed base domain は `app.takos.jp` です。operator は
+同じ contract で別の managed base domain を設定できます。
+managed namespace は first-come-first-served で、重複時は 409 を返します。
+409 response は claimant の Workspace / Capsule 名を公開しません。
 `custom_domains` はユーザー所有ドメインです。DNS ownership verification、
-certificate provisioning、runtime dispatch の有効化は Cloud runtime 側の責務です。
+certificate provisioning、runtime dispatch の有効化、plan/quota/abuse policy は
+Cloud runtime 側の責務です。
 未検証 custom domain は runtime で有効化せず、default hostname は維持します。
 
 `cloudflare_workers_script_subdomain` 互換 route は、Cloudflare の
