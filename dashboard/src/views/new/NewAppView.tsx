@@ -150,9 +150,12 @@ const DEFAULT_STORE_BADGE = {
   en: "Installable",
 } satisfies StoreCatalogMetadata["badge"];
 
-const HIDDEN_INSTALL_VARIABLE_NAMES = new Set([
+const SYSTEM_INSTALL_VARIABLE_NAMES = new Set([
   "enable_cloudflare_resources",
   "enable_cloudflare_worker_script",
+]);
+
+const ADVANCED_INSTALL_VARIABLE_NAMES = new Set([
   "release_container_images",
   "worker_bundle_url",
   "worker_bundle_sha256",
@@ -517,8 +520,47 @@ function hostIsManagedBaseDomainSubdomain(
   return /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(prefix);
 }
 
+function isManagedSubdomainLabel(value: string): boolean {
+  return /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(value.trim());
+}
+
 function catalogInputKey(entryId: string, fieldName: string): string {
   return `${entryId}:${fieldName}`;
+}
+
+function catalogPublicEndpoint(entry: CatalogEntry) {
+  return entry.installExperience?.publicEndpoint;
+}
+
+function catalogEndpointField(
+  entry: CatalogEntry,
+  name: string | undefined,
+): CatalogInputField | undefined {
+  const normalized = name?.trim();
+  return normalized
+    ? entry.inputs.find((field) => field.name === normalized)
+    : undefined;
+}
+
+function catalogPublicEndpointSubdomainField(
+  entry: CatalogEntry,
+): CatalogInputField | undefined {
+  return catalogEndpointField(
+    entry,
+    catalogPublicEndpoint(entry)?.subdomainVariable,
+  );
+}
+
+function isCatalogPublicEndpointField(
+  entry: CatalogEntry,
+  field: CatalogInputField,
+): boolean {
+  const endpoint = catalogPublicEndpoint(entry);
+  return (
+    field.name === endpoint?.subdomainVariable ||
+    field.name === endpoint?.urlVariable ||
+    field.name === endpoint?.routePatternVariable
+  );
 }
 
 function catalogSurfaceRank(surface: CatalogEntry["surface"]): number {
@@ -737,7 +779,7 @@ function inputVariableRowsFromPrefill(
   return Object.entries(vars ?? {})
     .filter(
       ([name]) =>
-        name !== "project_name" && !HIDDEN_INSTALL_VARIABLE_NAMES.has(name),
+        name !== "project_name" && !SYSTEM_INSTALL_VARIABLE_NAMES.has(name),
     )
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([name, value]) => ({
@@ -1265,10 +1307,35 @@ function Inner() {
     value: string,
   ) => {
     const key = catalogInputKey(entry.id, field.name);
-    setCatalogInputValues((current) => ({
-      ...current,
-      [key]: value,
-    }));
+    const touched = catalogInputTouched();
+    setCatalogInputValues((current) => {
+      const next: Record<string, string> = {
+        ...current,
+        [key]: value,
+      };
+      const endpoint = catalogPublicEndpoint(entry);
+      const baseDomain = managedBaseDomain(endpoint?.baseDomain);
+      const setUntouched = (name: string | undefined, nextValue: string) => {
+        const variable = name?.trim();
+        if (!variable) return;
+        if (!catalogEndpointField(entry, variable)) return;
+        const targetKey = catalogInputKey(entry.id, variable);
+        if (touched[targetKey]) return;
+        next[targetKey] = nextValue;
+      };
+      if (field.name === endpoint?.subdomainVariable) {
+        const label = value.trim().toLowerCase();
+        if (isManagedSubdomainLabel(label)) {
+          const host = `${label}.${baseDomain}`;
+          setUntouched(endpoint.urlVariable, `https://${host}`);
+          setUntouched(endpoint.routePatternVariable, `${host}/*`);
+        }
+      } else if (field.name === endpoint?.urlVariable) {
+        const host = publicEndpointHost(value);
+        if (host) setUntouched(endpoint?.routePatternVariable, `${host}/*`);
+      }
+      return next;
+    });
     setCatalogInputTouched((current) => ({
       ...current,
       [key]: true,
@@ -1337,6 +1404,16 @@ function Inner() {
         });
       }
       const publicEndpoint = entry.installExperience?.publicEndpoint;
+      if (
+        value &&
+        field.name === publicEndpoint?.subdomainVariable &&
+        !isManagedSubdomainLabel(value)
+      ) {
+        return t("new.catalogInput.errorSubdomain", {
+          label: field.label[locale()],
+          baseDomain: managedBaseDomain(publicEndpoint.baseDomain),
+        });
+      }
       if (value && field.name === publicEndpoint?.urlVariable) {
         const baseDomain = managedBaseDomain(publicEndpoint.baseDomain);
         const host = publicEndpointHost(value);
@@ -1534,9 +1611,19 @@ function Inner() {
   const projectNameVariable = () =>
     slugInputValue(resourcePrefix() || defaultProjectName());
   const useSuggestedProjectName = () => {
+    const entry = selectedServiceEntry();
+    const publicEndpointField = entry
+      ? catalogPublicEndpointSubdomainField(entry)
+      : undefined;
     const candidate = uniqueServiceIdCandidate(
-      projectNameVariable() || defaultProjectName(),
+      (entry && publicEndpointField
+        ? catalogInputValue(entry, publicEndpointField)
+        : projectNameVariable()) || defaultProjectName(),
     );
+    if (entry && publicEndpointField) {
+      updateCatalogInputValue(entry, publicEndpointField, candidate);
+      return;
+    }
     setResourcePrefixTouched(true);
     setResourcePrefix(candidate);
     resetCompatibility();
@@ -1795,13 +1882,14 @@ function Inner() {
   ) =>
     field.advanced === true ||
     field.secret === true ||
+    ADVANCED_INSTALL_VARIABLE_NAMES.has(field.name) ||
     catalogInputHasImplicitValue(entry, field);
   const visibleCatalogInputs = (entry: CatalogEntry) =>
     entry.inputs.filter(
       (field) =>
         !isConnectionScopedCatalogInput(entry, field) &&
         !isProjectNameCatalogInput(field) &&
-        !HIDDEN_INSTALL_VARIABLE_NAMES.has(field.name) &&
+        !SYSTEM_INSTALL_VARIABLE_NAMES.has(field.name) &&
         !isAdvancedCatalogInput(entry, field),
     );
   const advancedCatalogInputs = (entry: CatalogEntry) =>
@@ -1809,7 +1897,7 @@ function Inner() {
       (field) =>
         !isConnectionScopedCatalogInput(entry, field) &&
         !isProjectNameCatalogInput(field) &&
-        !HIDDEN_INSTALL_VARIABLE_NAMES.has(field.name) &&
+        !SYSTEM_INSTALL_VARIABLE_NAMES.has(field.name) &&
         isAdvancedCatalogInput(entry, field),
     );
   const hasMissingAdvancedCatalogInputs = () => {
@@ -3216,6 +3304,13 @@ function Inner() {
                                     id={`catalog-input-${entry().id}-${field.name}`}
                                     name={`catalogInput:${field.name}`}
                                     type={field.secret ? "password" : "text"}
+                                    invalid={
+                                      appHostnameConflict() &&
+                                      isCatalogPublicEndpointField(
+                                        entry(),
+                                        field,
+                                      )
+                                    }
                                     value={catalogInputValue(entry(), field)}
                                     onInput={(e) =>
                                       updateCatalogInputValue(
@@ -3313,6 +3408,13 @@ function Inner() {
                                       id={`catalog-input-advanced-${entry().id}-${field.name}`}
                                       name={`catalogInputAdvanced:${field.name}`}
                                       type={field.secret ? "password" : "text"}
+                                      invalid={
+                                        appHostnameConflict() &&
+                                        isCatalogPublicEndpointField(
+                                          entry(),
+                                          field,
+                                        )
+                                      }
                                       value={catalogInputValue(entry(), field)}
                                       onInput={(e) =>
                                         updateCatalogInputValue(

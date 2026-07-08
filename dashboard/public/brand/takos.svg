@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Takos">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f87171" />
+      <stop offset="1" stop-color="#dc2626" />
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="15" fill="url(#g)" />
+  <path d="M32 15c4 7.5 11 12.5 11 19.5a11 11 0 1 1-22 0c0-7 7-12 11-19.5z" fill="#fff" />
+  <circle cx="45" cy="19" r="2.6" fill="#fff" opacity="0.9" />
+  <circle cx="19" cy="23" r="1.8" fill="#fff" opacity="0.75" />
+</svg>
