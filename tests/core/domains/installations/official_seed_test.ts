@@ -198,6 +198,33 @@ test("hostable official configs expose public catalog metadata for the dashboard
     from: "takosumi_release",
     type: "json",
   });
+  expect(yurucommu?.outputAllowlist).toMatchObject({
+    launch_url: { from: "launch_url", type: "url" },
+    cloudflare_account_id: {
+      from: "cloudflare_account_id",
+      type: "string",
+    },
+    cloudflare_d1_database_id: {
+      from: "cloudflare_d1_database_id",
+      type: "string",
+    },
+    cloudflare_d1_database_name: {
+      from: "cloudflare_d1_database_name",
+      type: "string",
+    },
+    cloudflare_kv_namespace_id: {
+      from: "cloudflare_kv_namespace_id",
+      type: "string",
+    },
+    cloudflare_r2_bucket_name: {
+      from: "cloudflare_r2_bucket_name",
+      type: "string",
+    },
+    cloudflare_queue_names: {
+      from: "cloudflare_queue_names",
+      type: "json",
+    },
+  });
   expect(office?.sourceKind).toBe("generic_capsule");
   expect(office?.catalog?.source.git).toBe(
     "https://github.com/tako0614/takos-office.git",
