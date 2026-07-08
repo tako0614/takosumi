@@ -540,6 +540,21 @@ function catalogPublicEndpointSubdomainField(
   );
 }
 
+function catalogServiceNameVariable(
+  catalog: Pick<CatalogEntry, "installExperience"> | StoreCatalogMetadata,
+): string | undefined {
+  return catalog.installExperience?.serviceName?.variable?.trim() || undefined;
+}
+
+function catalogServiceNameField(
+  entry: CatalogEntry,
+): CatalogInputField | undefined {
+  const variable = catalogServiceNameVariable(entry);
+  return variable
+    ? entry.inputs.find((field) => field.name === variable)
+    : undefined;
+}
+
 function isCatalogPublicEndpointField(
   entry: CatalogEntry,
   field: CatalogInputField,
@@ -624,7 +639,7 @@ function catalogDefaultInputValue(
   }
 }
 
-function projectNameHintIsGenerated(value: string | undefined): boolean {
+function serviceNameHintIsGenerated(value: string | undefined): boolean {
   return value === "service-name" || value === "service-name-with-space";
 }
 
@@ -766,7 +781,6 @@ function inputVariableRowsFromPrefill(
   vars: Readonly<Record<string, JsonValue>> | undefined,
 ): readonly InputVariableRow[] {
   return Object.entries(vars ?? {})
-    .filter(([name]) => name !== "project_name")
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([name, value]) => ({
       name,
@@ -1061,23 +1075,12 @@ function Inner() {
     ? (initialInstallPrefill.name ??
       capsuleNameFromUrl(initialInstallPrefill.git))
     : "";
-  const initialProjectName =
-    typeof initialInstallPrefill?.vars?.project_name === "string"
-      ? initialInstallPrefill.vars.project_name
-      : "";
-  const initialResourcePrefix = projectNameHintIsGenerated(initialProjectName)
-    ? ""
-    : initialProjectName;
   const [name, setName] = createSignal(initialName);
   const [serviceIdSeed] = createSignal(
     Math.random().toString(36).slice(2, 6) || "next",
   );
-  const [resourcePrefix, setResourcePrefix] = createSignal(
-    initialResourcePrefix,
-  );
-  const [resourcePrefixTouched, setResourcePrefixTouched] = createSignal(
-    initialResourcePrefix !== "",
-  );
+  const [resourcePrefix, setResourcePrefix] = createSignal("");
+  const [resourcePrefixTouched, setResourcePrefixTouched] = createSignal(false);
   const [inputVariables, setInputVariables] = createSignal<
     readonly InputVariableRow[]
   >(inputVariableRowsFromPrefill(initialInstallPrefill?.vars));
@@ -1089,7 +1092,7 @@ function Inner() {
   const [providerRows, setProviderRows] = createSignal<ProviderConnectionRow[]>(
     [],
   );
-  let projectNameInput: HTMLInputElement | undefined;
+  let serviceNameInput: HTMLInputElement | undefined;
 
   const workspaceId = () =>
     currentWorkspaceId() ? currentWorkspaceId() : null;
@@ -1376,7 +1379,7 @@ function Inner() {
       if (field.required && !value) {
         if (
           isConnectionScopedCatalogInput(entry, field) ||
-          isProjectNameCatalogInput(field)
+          isProjectNameCatalogInput(entry, field)
         ) {
           continue;
         }
@@ -1574,29 +1577,41 @@ function Inner() {
     const listing = storeListingForCurrentSource();
     return listing ? outputAllowlistFromStoreListing(listing) : undefined;
   };
-  const storeProjectNameDefault = () =>
-    storeListingForCurrentSource()?.inputs.find(
-      (input) => input.name === "project_name",
-    )?.defaultValue;
-  const catalogProjectNameDefault = () =>
-    selectedServiceEntry()?.inputs.find(
-      (input) => input.name === "project_name",
-    )?.defaultValue;
-  const prefilledProjectName = () => {
-    const value = currentInstallPrefill()?.vars?.project_name;
+  const serviceNameVariableForCurrentSource = () =>
+    selectedServiceEntry()
+      ? catalogServiceNameVariable(selectedServiceEntry()!)
+      : catalogServiceNameVariable(storeCatalogForRun() ?? {});
+  const storeServiceNameDefault = () => {
+    const catalog = storeCatalogForRun();
+    const variable = catalog ? catalogServiceNameVariable(catalog) : undefined;
+    return variable
+      ? storeListingForCurrentSource()?.inputs.find(
+          (input) => input.name === variable,
+        )?.defaultValue
+      : undefined;
+  };
+  const catalogServiceNameDefault = () =>
+    selectedServiceEntry()
+      ? catalogServiceNameField(selectedServiceEntry()!)?.defaultValue
+      : undefined;
+  const prefilledServiceName = () => {
+    const variable = serviceNameVariableForCurrentSource();
+    const value = variable
+      ? currentInstallPrefill()?.vars?.[variable]
+      : undefined;
     return typeof value === "string" ? value : undefined;
   };
-  const supportsProjectNameInput = () =>
-    prefilledProjectName() !== undefined ||
-    projectNameHintIsGenerated(storeProjectNameDefault()) ||
-    projectNameHintIsGenerated(catalogProjectNameDefault());
+  const supportsServiceNameInput = () =>
+    prefilledServiceName() !== undefined ||
+    serviceNameHintIsGenerated(storeServiceNameDefault()) ||
+    serviceNameHintIsGenerated(catalogServiceNameDefault());
   const defaultProjectName = () => {
     const base = slugInputValue(name() || capsuleNameFromUrl(sourceGitUrl()));
     return slugInputValue(`${base}-${serviceIdSeed()}`);
   };
-  const projectNameVariable = () =>
+  const serviceNameInputValue = () =>
     slugInputValue(resourcePrefix() || defaultProjectName());
-  const useSuggestedProjectName = () => {
+  const useSuggestedServiceName = () => {
     const entry = selectedServiceEntry();
     const publicEndpointField = entry
       ? catalogPublicEndpointSubdomainField(entry)
@@ -1604,7 +1619,7 @@ function Inner() {
     const candidate = uniqueServiceIdCandidate(
       (entry && publicEndpointField
         ? catalogInputValue(entry, publicEndpointField)
-        : projectNameVariable()) || defaultProjectName(),
+        : serviceNameInputValue()) || defaultProjectName(),
     );
     if (entry && publicEndpointField) {
       updateCatalogInputValue(entry, publicEndpointField, candidate);
@@ -1613,7 +1628,7 @@ function Inner() {
     setResourcePrefixTouched(true);
     setResourcePrefix(candidate);
     resetCompatibility();
-    queueMicrotask(() => projectNameInput?.focus());
+    queueMicrotask(() => serviceNameInput?.focus());
   };
   const updateInputVariable = (
     index: number,
@@ -1653,14 +1668,17 @@ function Inner() {
   > => {
     const listing = storeListingForCurrentSource();
     if (!listing) return {};
+    const serviceNameVariable = catalogServiceNameVariable(
+      catalogMetadataFromStoreListing(listing),
+    );
     const variables: Record<string, JsonValue> = {};
     for (const field of listing.inputs) {
       const defaultValue = field.defaultValue?.trim();
       if (!defaultValue) continue;
       if (!catalogVariablePath(field.name)) continue;
       if (
-        field.name === "project_name" &&
-        projectNameHintIsGenerated(defaultValue)
+        field.name === serviceNameVariable &&
+        serviceNameHintIsGenerated(defaultValue)
       ) {
         continue;
       }
@@ -1686,6 +1704,7 @@ function Inner() {
       ...selectedCatalogVariableNames(),
       ...storeListingVariableNames(),
     ]);
+    const serviceNameVariable = serviceNameVariableForCurrentSource();
     for (const row of inputVariables()) {
       const variableName = row.name.trim();
       const value = row.value.trim();
@@ -1697,7 +1716,11 @@ function Inner() {
       if (!isSafeInstallVariableValue(value)) {
         return t("new.vars.errorUnsafeValue", { name: variableName });
       }
-      if (supportsProjectNameInput() && variableName === "project_name") {
+      if (
+        serviceNameVariable &&
+        supportsServiceNameInput() &&
+        variableName === serviceNameVariable
+      ) {
         return t("new.vars.errorProjectNameReserved");
       }
       if (catalogNames.has(variableName)) {
@@ -1716,8 +1739,9 @@ function Inner() {
       ...storeListingDefaultVariables(),
       ...(currentInstallPrefill()?.vars ?? {}),
     };
-    if (supportsProjectNameInput()) {
-      variables.project_name = projectNameVariable();
+    const serviceNameVariable = serviceNameVariableForCurrentSource();
+    if (serviceNameVariable && supportsServiceNameInput()) {
+      variables[serviceNameVariable] = serviceNameInputValue();
     }
     Object.assign(variables, selectedCatalogReturnVariables());
     Object.assign(variables, normalizedInputVariables());
@@ -1731,8 +1755,9 @@ function Inner() {
       ...selectedCatalogVariables(),
       ...normalizedInputVariables(),
     };
-    if (supportsProjectNameInput()) {
-      variables.project_name = projectNameVariable();
+    const serviceNameVariable = serviceNameVariableForCurrentSource();
+    if (serviceNameVariable && supportsServiceNameInput()) {
+      variables[serviceNameVariable] = serviceNameInputValue();
     }
     Object.assign(variables, managedProviderVariableDefaults(variables));
     return Object.keys(variables).length > 0 ? variables : undefined;
@@ -1855,9 +1880,12 @@ function Inner() {
     field.required &&
     !catalogInputTouched()[catalogInputKey(entry.id, field.name)] &&
     catalogScopeHintValue(entry, field) !== undefined;
-  const isProjectNameCatalogInput = (field: CatalogInputField) =>
-    field.name === "project_name" &&
-    projectNameHintIsGenerated(field.defaultValue);
+  const isProjectNameCatalogInput = (
+    entry: CatalogEntry,
+    field: CatalogInputField,
+  ) =>
+    field.name === catalogServiceNameVariable(entry) &&
+    serviceNameHintIsGenerated(field.defaultValue);
   const isConnectionScopedCatalogInput = (
     entry: CatalogEntry,
     field: CatalogInputField,
@@ -1873,14 +1901,14 @@ function Inner() {
     entry.inputs.filter(
       (field) =>
         !isConnectionScopedCatalogInput(entry, field) &&
-        !isProjectNameCatalogInput(field) &&
+        !isProjectNameCatalogInput(entry, field) &&
         !isAdvancedCatalogInput(entry, field),
     );
   const advancedCatalogInputs = (entry: CatalogEntry) =>
     entry.inputs.filter(
       (field) =>
         !isConnectionScopedCatalogInput(entry, field) &&
-        !isProjectNameCatalogInput(field) &&
+        !isProjectNameCatalogInput(entry, field) &&
         isAdvancedCatalogInput(entry, field),
     );
   const hasMissingAdvancedCatalogInputs = () => {
@@ -1962,7 +1990,7 @@ function Inner() {
   };
 
   createEffect(() => {
-    if (!supportsProjectNameInput() || resourcePrefixTouched()) return;
+    if (!supportsServiceNameInput() || resourcePrefixTouched()) return;
     setResourcePrefix(defaultProjectName());
   });
 
@@ -2267,13 +2295,19 @@ function Inner() {
     } else {
       setInputVariables(inputVariableRowsFromPrefill(next.vars));
     }
+    const nextServiceNameVariable = storeListing
+      ? catalogServiceNameVariable(
+          catalogMetadataFromStoreListing(storeListing),
+        )
+      : undefined;
     const nextProjectName =
-      typeof next.vars?.project_name === "string"
-        ? next.vars.project_name
+      nextServiceNameVariable &&
+      typeof next.vars?.[nextServiceNameVariable] === "string"
+        ? next.vars[nextServiceNameVariable]
         : undefined;
     if (nextProjectName) {
       const isGeneratedProjectName =
-        projectNameHintIsGenerated(nextProjectName);
+        serviceNameHintIsGenerated(nextProjectName);
       setResourcePrefix(isGeneratedProjectName ? "" : nextProjectName);
       setResourcePrefixTouched(!isGeneratedProjectName);
     } else {
@@ -3440,15 +3474,18 @@ function Inner() {
                       </Show>
                     )}
                   </Show>
-                  <Show when={supportsProjectNameInput()}>
+                  <Show when={supportsServiceNameInput()}>
                     <FormField label={t("new.vars.projectName")}>
                       <Input
-                        ref={projectNameInput}
+                        ref={serviceNameInput}
                         id="new-project-name"
-                        name="project_name"
+                        name={
+                          serviceNameVariableForCurrentSource() ??
+                          "service_name"
+                        }
                         type="text"
                         invalid={appHostnameConflict()}
-                        value={projectNameVariable()}
+                        value={serviceNameInputValue()}
                         onInput={(e) => {
                           setResourcePrefixTouched(true);
                           setResourcePrefix(e.currentTarget.value);
@@ -3780,7 +3817,7 @@ function Inner() {
                   )}
                 </Show>
                 <Show
-                  when={appHostnameConflict() && supportsProjectNameInput()}
+                  when={appHostnameConflict() && supportsServiceNameInput()}
                 >
                   <div class="wb-action-callout" role="note">
                     <strong>{t("new.hostnameConflict.title")}</strong>
@@ -3789,7 +3826,7 @@ function Inner() {
                       variant="secondary"
                       size="sm"
                       type="button"
-                      onClick={useSuggestedProjectName}
+                      onClick={useSuggestedServiceName}
                     >
                       {t("new.hostnameConflict.suggest")}
                     </Button>
