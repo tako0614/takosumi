@@ -282,6 +282,8 @@ describe("/new Provider Connections return context", () => {
     );
     expect(newAppViewSource).toContain("publicEndpoint?.subdomainVariable");
     expect(newAppViewSource).toContain("publicEndpoint?.urlVariable");
+    expect(newAppViewSource).not.toContain('variables.has("worker_name")');
+    expect(newAppViewSource).not.toContain('variables.has("app_url")');
     expect(newAppViewSource).toContain("managedBaseDomain");
     expect(newAppViewSource).toContain(
       "const managedAppHost = currentSubdomain",
@@ -290,7 +292,6 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).toContain("const currentSubdomain =");
     expect(newAppViewSource).toContain("const currentAppUrl =");
     expect(newAppViewSource).toContain('"cloudflare_route_zone_id"');
-    expect(newAppViewSource).toContain('"cloudflare_route_pattern"');
     expect(newAppViewSource).toContain('"enable_workers_dev_subdomain"');
     expect(newAppViewSource).toContain("connection?.scopeHints?.zoneId");
   });

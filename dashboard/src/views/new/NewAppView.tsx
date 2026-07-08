@@ -1703,52 +1703,47 @@ function Inner() {
     };
     const installExperience = installExperienceForCurrentSource();
     const publicEndpoint = installExperience?.publicEndpoint;
-    const subdomainVariable =
-      publicEndpoint?.subdomainVariable?.trim() ||
-      (variables.has("worker_name") ? "worker_name" : undefined);
-    const urlVariable =
-      publicEndpoint?.urlVariable?.trim() ||
-      (variables.has("app_url") ? "app_url" : undefined);
-    const routePatternVariable =
-      publicEndpoint?.routePatternVariable?.trim() ||
-      (variables.has("cloudflare_route_pattern")
-        ? "cloudflare_route_pattern"
-        : undefined);
     if (
       !connection ||
       sameProviderFamily(connection.providerSource, "cloudflare")
     ) {
-      const publicBaseDomain = managedBaseDomain(publicEndpoint?.baseDomain);
-      const currentSubdomain =
-        subdomainVariable && typeof current[subdomainVariable] === "string"
-          ? current[subdomainVariable].trim()
-          : "";
-      const currentAppUrl =
-        urlVariable && typeof current[urlVariable] === "string"
-          ? current[urlVariable].trim()
-          : "";
-      const managedAppHost = currentSubdomain
-        ? `${currentSubdomain}.${publicBaseDomain}`
-        : "";
-      const managedAppUrl =
-        currentAppUrl || (managedAppHost ? `https://${managedAppHost}` : "");
-      if (managedAppHost && subdomainVariable !== "worker_name") {
-        setDefault("worker_name", currentSubdomain);
-      }
-      if (managedAppUrl && urlVariable) {
-        setDefault(urlVariable, managedAppUrl);
-      }
-      if (managedAppUrl && urlVariable !== "app_url") {
-        setDefault("app_url", managedAppUrl);
-      }
       setDefault("cloudflare_account_id", connection?.scopeHints?.accountId);
       setDefault("account_id", connection?.scopeHints?.accountId);
       setDefault("cloudflare_route_zone_id", connection?.scopeHints?.zoneId);
-      if (managedAppUrl && routePatternVariable) {
-        setDefault(
-          routePatternVariable,
-          routePatternFromAppUrl(managedAppUrl) ?? `${managedAppHost}/*`,
-        );
+      if (publicEndpoint) {
+        const subdomainVariable = publicEndpoint.subdomainVariable?.trim();
+        const urlVariable = publicEndpoint.urlVariable?.trim();
+        const routePatternVariable =
+          publicEndpoint.routePatternVariable?.trim();
+        const publicBaseDomain = managedBaseDomain(publicEndpoint.baseDomain);
+        const currentSubdomain =
+          subdomainVariable && typeof current[subdomainVariable] === "string"
+            ? current[subdomainVariable].trim()
+            : "";
+        const currentAppUrl =
+          urlVariable && typeof current[urlVariable] === "string"
+            ? current[urlVariable].trim()
+            : "";
+        const managedAppHost = currentSubdomain
+          ? `${currentSubdomain}.${publicBaseDomain}`
+          : "";
+        const managedAppUrl =
+          currentAppUrl || (managedAppHost ? `https://${managedAppHost}` : "");
+        if (managedAppHost && subdomainVariable !== "worker_name") {
+          setDefault("worker_name", currentSubdomain);
+        }
+        if (managedAppUrl && urlVariable) {
+          setDefault(urlVariable, managedAppUrl);
+        }
+        if (managedAppUrl && urlVariable !== "app_url") {
+          setDefault("app_url", managedAppUrl);
+        }
+        if (managedAppUrl && routePatternVariable) {
+          setDefault(
+            routePatternVariable,
+            routePatternFromAppUrl(managedAppUrl) ?? `${managedAppHost}/*`,
+          );
+        }
       }
       if (
         variables.has("enable_workers_dev_subdomain") &&

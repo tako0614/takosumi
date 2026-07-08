@@ -126,7 +126,6 @@ import {
   type PlanRunInputs,
 } from "../store.ts";
 import {
-  DEFAULT_MANAGED_PUBLIC_BASE_DOMAIN,
   managedPublicBaseDomainFromInstallConfig,
   managedPublicHostFromLabel,
   normalizeManagedPublicBaseDomains,
@@ -417,18 +416,8 @@ function hostFromRoutePatternValue(value: unknown): string | undefined {
   return host && !host.includes("*") ? host : undefined;
 }
 
-function managedHostFromWorkerName(
-  value: unknown,
-  baseDomain = DEFAULT_MANAGED_PUBLIC_BASE_DOMAIN,
-): string | undefined {
-  const workerName = nonEmptyStringValue(value);
-  if (!workerName || !validManagedWorkerName(workerName)) return undefined;
-  return managedPublicHostFromLabel(workerName, baseDomain);
-}
-
 function publicHostsFromVariables(
   variables: Readonly<Record<string, unknown>>,
-  baseDomain = DEFAULT_MANAGED_PUBLIC_BASE_DOMAIN,
 ): readonly string[] {
   const hosts = new Set<string>();
   const appUrlHost = hostFromHttpsUrlValue(variables.app_url);
@@ -437,11 +426,41 @@ function publicHostsFromVariables(
     variables.cloudflare_route_pattern,
   );
   if (routeHost) hosts.add(routeHost);
-  const workerHost = managedHostFromWorkerName(
-    variables.worker_name,
-    baseDomain,
+  return [...hosts].sort();
+}
+
+function publicHostsFromInstallExperienceVariables(
+  variables: Readonly<Record<string, unknown>>,
+  installConfig: InstallConfig | undefined,
+): readonly string[] {
+  const hosts = new Set(publicHostsFromVariables(variables));
+  const endpoint = installConfig?.catalog?.installExperience?.publicEndpoint;
+  if (!endpoint) return [...hosts].sort();
+
+  const baseDomain = managedPublicBaseDomainFromInstallConfig(installConfig);
+  const subdomainVariable = nonEmptyStringValue(endpoint.subdomainVariable);
+  if (subdomainVariable) {
+    const host = managedPublicHostFromLabel(
+      variables[subdomainVariable],
+      baseDomain,
+    );
+    if (host) hosts.add(host);
+  }
+
+  const urlVariable = nonEmptyStringValue(endpoint.urlVariable);
+  if (urlVariable) {
+    const host = hostFromHttpsUrlValue(variables[urlVariable]);
+    if (host) hosts.add(host);
+  }
+
+  const routePatternVariable = nonEmptyStringValue(
+    endpoint.routePatternVariable,
   );
-  if (workerHost) hosts.add(workerHost);
+  if (routePatternVariable) {
+    const host = hostFromRoutePatternValue(variables[routePatternVariable]);
+    if (host) hosts.add(host);
+  }
+
   return [...hosts].sort();
 }
 
@@ -502,6 +521,9 @@ function finalizeManagedCloudflarePublicHostVariables(input: {
   readonly variables: Readonly<Record<string, JsonValue>>;
 }): Readonly<Record<string, JsonValue>> {
   if (!hasManagedCloudflareProviderDefaults(input.providerInputDefaults)) {
+    return input.variables;
+  }
+  if (input.endpointVariables.size === 0) {
     return input.variables;
   }
   const baseDomain = managedPublicBaseDomainFromInstallConfig(
@@ -2030,9 +2052,12 @@ export class RunEngine {
     const managedBaseDomains = normalizeManagedPublicBaseDomains(
       options.managedBaseDomains,
     );
-    const requestedHosts = publicHostsFromVariables(
+    const installConfig = await this.#store.getInstallConfig(
+      installation.installConfigId,
+    );
+    const requestedHosts = publicHostsFromInstallExperienceVariables(
       variables,
-      managedBaseDomains[0],
+      installConfig,
     );
     if (requestedHosts.length === 0) return;
     if (options.managedDomainsOnly === true) {
@@ -2150,12 +2175,10 @@ export class RunEngine {
     const installConfig = await this.#store.getInstallConfig(
       installation.installConfigId,
     );
-    const managedBaseDomain =
-      managedPublicBaseDomainFromInstallConfig(installConfig);
     if (installConfig) {
-      for (const host of publicHostsFromVariables(
+      for (const host of publicHostsFromInstallExperienceVariables(
         normalizeVariables(installConfig.variableMapping),
-        managedBaseDomain,
+        installConfig,
       )) {
         hosts.add(host);
       }
@@ -2173,43 +2196,7 @@ export class RunEngine {
         hosts.add(host);
       }
     }
-    if (await this.#usesManagedCloudflareProvider(installation)) {
-      const configWorkerHost = installConfig
-        ? managedHostFromWorkerName(
-            normalizeVariables(installConfig.variableMapping).worker_name,
-            managedBaseDomain,
-          )
-        : undefined;
-      const derivedWorkerHost =
-        configWorkerHost ??
-        managedHostFromWorkerName(
-          workerNameFromCapsule(installation),
-          managedBaseDomain,
-        );
-      if (derivedWorkerHost) hosts.add(derivedWorkerHost);
-    }
     return [...hosts].sort();
-  }
-
-  async #usesManagedCloudflareProvider(
-    installation: Installation,
-  ): Promise<boolean> {
-    const bindingSet =
-      await this.#store.getInstallationProviderEnvBindingSetByInstallation(
-        installation.id,
-        installation.environment,
-      );
-    for (const binding of bindingSet?.bindings ?? []) {
-      if (!sameProviderFamily(binding.provider, "cloudflare")) continue;
-      const connection = await this.#store.getConnection(binding.connectionId);
-      if (
-        connection?.scopeHints?.managedProvider === true &&
-        nonEmptyStringValue(connection.scopeHints.providerBaseUrl)
-      ) {
-        return true;
-      }
-    }
-    return false;
   }
 
   async #genericRootDispatchForRequest(

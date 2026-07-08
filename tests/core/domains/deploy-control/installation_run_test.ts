@@ -925,6 +925,25 @@ test("managed Cloudflare Capsule explicit worker_name drives app.takos.jp URL de
           api_base_url: null,
         },
       },
+      catalog: {
+        order: 100,
+        surface: "service",
+        kind: "worker",
+        provider: "cloudflare",
+        suggestedName: "yurucommu",
+        badge: { ja: "追加候補", en: "Installable" },
+        name: { ja: "yurucommu", en: "yurucommu" },
+        description: { ja: "テスト", en: "Test" },
+        inputs: [],
+        installExperience: {
+          publicEndpoint: {
+            subdomainVariable: "worker_name",
+            urlVariable: "app_url",
+            routePatternVariable: "cloudflare_route_pattern",
+            baseDomain: "app.takos.jp",
+          },
+        },
+      },
     },
   });
   await putConnectionWithProviderEnv(store, {
@@ -1235,6 +1254,24 @@ test("managed Cloudflare app.takos.jp host is globally claimed across Workspaces
           api_base_url: null,
         },
       },
+      catalog: {
+        order: 100,
+        surface: "service",
+        kind: "worker",
+        provider: "cloudflare",
+        suggestedName: "shared-app",
+        badge: { ja: "追加候補", en: "Installable" },
+        name: { ja: "Shared App", en: "Shared App" },
+        description: { ja: "テスト", en: "Test" },
+        inputs: [],
+        installExperience: {
+          publicEndpoint: {
+            subdomainVariable: "worker_name",
+            urlVariable: "app_url",
+            baseDomain: "app.takos.jp",
+          },
+        },
+      },
     },
   });
   await putConnectionWithProviderEnv(store, {
@@ -1291,6 +1328,24 @@ test("managed Cloudflare app.takos.jp host is globally claimed across Workspaces
         cloudflare: {
           account_id: null,
           api_base_url: null,
+        },
+      },
+      catalog: {
+        order: 100,
+        surface: "service",
+        kind: "worker",
+        provider: "cloudflare",
+        suggestedName: "shared-app",
+        badge: { ja: "追加候補", en: "Installable" },
+        name: { ja: "Shared App", en: "Shared App" },
+        description: { ja: "テスト", en: "Test" },
+        inputs: [],
+        installExperience: {
+          publicEndpoint: {
+            subdomainVariable: "worker_name",
+            urlVariable: "app_url",
+            baseDomain: "app.takos.jp",
+          },
         },
       },
     },
@@ -1405,6 +1460,24 @@ test("managed Cloudflare app.takos.jp host claim prefers active Capsule over sta
         cloudflare: {
           account_id: null,
           api_base_url: null,
+        },
+      },
+      catalog: {
+        order: 100,
+        surface: "service",
+        kind: "worker",
+        provider: "cloudflare",
+        suggestedName: "shared-app",
+        badge: { ja: "追加候補", en: "Installable" },
+        name: { ja: "Shared App", en: "Shared App" },
+        description: { ja: "テスト", en: "Test" },
+        inputs: [],
+        installExperience: {
+          publicEndpoint: {
+            subdomainVariable: "worker_name",
+            urlVariable: "app_url",
+            baseDomain: "app.takos.jp",
+          },
         },
       },
     },
@@ -1650,6 +1723,24 @@ test("managed Cloudflare app.takos.jp host is atomically reserved by successful 
           api_base_url: null,
         },
       },
+      catalog: {
+        order: 100,
+        surface: "service",
+        kind: "worker",
+        provider: "cloudflare",
+        suggestedName: "reserved-app",
+        badge: { ja: "追加候補", en: "Installable" },
+        name: { ja: "Reserved App", en: "Reserved App" },
+        description: { ja: "テスト", en: "Test" },
+        inputs: [],
+        installExperience: {
+          publicEndpoint: {
+            subdomainVariable: "worker_name",
+            urlVariable: "app_url",
+            baseDomain: "app.takos.jp",
+          },
+        },
+      },
     },
   });
   await putConnectionWithProviderEnv(store, {
@@ -1704,6 +1795,24 @@ test("managed Cloudflare app.takos.jp host is atomically reserved by successful 
         cloudflare: {
           account_id: null,
           api_base_url: null,
+        },
+      },
+      catalog: {
+        order: 100,
+        surface: "service",
+        kind: "worker",
+        provider: "cloudflare",
+        suggestedName: "reserved-app",
+        badge: { ja: "追加候補", en: "Installable" },
+        name: { ja: "Reserved App", en: "Reserved App" },
+        description: { ja: "テスト", en: "Test" },
+        inputs: [],
+        installExperience: {
+          publicEndpoint: {
+            subdomainVariable: "worker_name",
+            urlVariable: "app_url",
+            baseDomain: "app.takos.jp",
+          },
         },
       },
     },
@@ -1771,6 +1880,24 @@ test("managed Cloudflare host claim skips corrupt historical Capsules", async ()
           api_base_url: null,
         },
       },
+      catalog: {
+        order: 100,
+        surface: "service",
+        kind: "worker",
+        provider: "cloudflare",
+        suggestedName: "fresh-app",
+        badge: { ja: "追加候補", en: "Installable" },
+        name: { ja: "Fresh App", en: "Fresh App" },
+        description: { ja: "テスト", en: "Test" },
+        inputs: [],
+        installExperience: {
+          publicEndpoint: {
+            subdomainVariable: "worker_name",
+            urlVariable: "app_url",
+            baseDomain: "app.takos.jp",
+          },
+        },
+      },
     },
   });
   await putConnectionWithProviderEnv(store, {
@@ -1822,6 +1949,24 @@ test("managed Cloudflare host claim skips corrupt historical Capsules", async ()
           api_base_url: null,
         },
       },
+      catalog: {
+        order: 100,
+        surface: "service",
+        kind: "worker",
+        provider: "cloudflare",
+        suggestedName: "fresh-app",
+        badge: { ja: "追加候補", en: "Installable" },
+        name: { ja: "Fresh App", en: "Fresh App" },
+        description: { ja: "テスト", en: "Test" },
+        inputs: [],
+        installExperience: {
+          publicEndpoint: {
+            subdomainVariable: "worker_name",
+            urlVariable: "app_url",
+            baseDomain: "app.takos.jp",
+          },
+        },
+      },
     },
   });
   await putConnectionWithProviderEnv(store, {
@@ -1866,7 +2011,7 @@ test("managed Cloudflare host claim skips corrupt historical Capsules", async ()
   );
 });
 
-test("catalog managed Cloudflare Capsule uses operator fallback without credential-ref profile", async () => {
+test("catalog managed Cloudflare Capsule uses operator fallback without implicit public endpoint", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   const runner = recordingRunner();
   const seeded = await seedInstallationModel(store, {
@@ -1976,10 +2121,9 @@ output "url" {
   expect(mainTf).toContain(
     'cloudflare = jsondecode("{\\"account_id\\":\\"ts_acc_takosumi_cloud\\",\\"api_base_url\\":\\"https://app.takosumi.com/compat/cloudflare/client/v4\\"}")',
   );
-  expect(mainTf).toContain(
-    'app_url = "https://takos-managed-app-fixture.app.takos.jp"',
-  );
-  expect(mainTf).toContain('worker_name = "takos-managed-app-fixture"');
+  expect(mainTf).not.toContain("takos-managed-app-fixture.app.takos.jp");
+  expect(mainTf).toContain("app_url = null");
+  expect(mainTf).toContain("worker_name = null");
 });
 
 test("declared generic Capsule Cloudflare inputs and outputs are wired from source shape", async () => {
