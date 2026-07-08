@@ -246,6 +246,51 @@ export class CapsulesService {
     return updated;
   }
 
+  /**
+   * Abandons a Capsule that never reached a successful apply. This is not a
+   * destroy operation: no remote resources are claimed to have been torn down.
+   * It only closes the local ledger row and releases any pre-apply host claims
+   * so the user can reinstall or choose the same public name again.
+   */
+  async abandonUnappliedCapsule(
+    id: string,
+    reason: string,
+  ): Promise<Capsule> {
+    const existing = await this.#requireCapsule(id);
+    if (
+      existing.currentDeploymentId ||
+      existing.currentStateVersionId ||
+      existing.currentStateGeneration > 0
+    ) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `capsule ${id} has applied state and must use the destroy flow`,
+      );
+    }
+    const now = this.#now().toISOString();
+    const updated = await this.#store.patchInstallation(id, {
+      status: "destroyed",
+      updatedAt: now,
+    });
+    if (!updated) {
+      throw new OpenTofuControllerError("not_found", `capsule ${id} not found`);
+    }
+    await this.#store.releasePublicHostsForInstallation(id, now);
+    await this.#activity.record({
+      workspaceId: updated.workspaceId,
+      spaceId: updated.workspaceId,
+      action: "capsule.abandoned",
+      targetType: "capsule",
+      targetId: updated.id,
+      metadata: {
+        name: updated.name,
+        environment: updated.environment,
+        reason,
+      },
+    });
+    return updated;
+  }
+
   // --- InstallConfig (§11) --------------------------------------------------
 
   async putInstallConfig(config: InstallConfig): Promise<InstallConfig> {
