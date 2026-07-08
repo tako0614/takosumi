@@ -2535,9 +2535,11 @@ function Inner() {
     workspace: string,
     capsuleName: string,
     environment: string,
+    options: { readonly force?: boolean } = {},
   ): Promise<Capsule | null> => {
     const capsules = await listCapsulesCached(workspace, {
       includeDestroyed: false,
+      force: options.force,
     });
     return (
       capsules.find(
@@ -2769,6 +2771,7 @@ function Inner() {
           workspace,
           flowInput.name,
           "production",
+          { force: true },
         ).catch(() => null);
         throwIfStaleFlow(flow);
         if (existing) {
@@ -2846,19 +2849,22 @@ function Inner() {
         setAppHostnameConflict(true);
         setError(addFlowErrorMessage(apiError));
       } else if (isDuplicateServiceError(apiError)) {
-        setStepInstall(INSTALLATION_DONE);
         setStepPlan("idle");
         const existing = await findExistingCapsule(
           workspace,
           flowInput.name,
           "production",
+          { force: true },
         ).catch(() => null);
         throwIfStaleFlow(flow);
         if (existing) {
+          setStepInstall(INSTALLATION_DONE);
           setExistingCapsule(existing);
           setError(null);
         } else {
-          setError(t("new.error.alreadyExists", { name: flowInput.name }));
+          setStepInstall("error");
+          setExistingCapsule(null);
+          setError(t("new.error.nameReserved"));
         }
       } else {
         setError(addFlowErrorMessage(apiError));
