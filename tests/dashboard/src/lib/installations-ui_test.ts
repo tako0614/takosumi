@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   appSurfacesFromDeployment,
-  appSurfaceFromInstallConfigCatalog,
+  appSurfaceFromInstallConfigStore,
   appSurfacesFromOutputs,
   effectiveCapsuleStatus,
   isDeploymentPubliclyOpenable,
@@ -47,15 +47,15 @@ describe("installation presentation status", () => {
 });
 
 describe("appSurfacesFromOutputs", () => {
-  test("catalog service metadata declares a pending app surface before first apply", () => {
+  test("store service metadata declares a pending app surface before first apply", () => {
     expect(
-      appSurfaceFromInstallConfigCatalog(
+      appSurfaceFromInstallConfigStore(
         {
           id: "cfg_yurucommu",
           name: "yurucommu",
           sourceKind: "first_party_capsule",
           trustLevel: "official",
-          catalog: {
+          store: {
             order: 1,
             surface: "service",
             kind: "worker",
@@ -78,15 +78,15 @@ describe("appSurfacesFromOutputs", () => {
     });
   });
 
-  test("catalog building blocks do not declare launcher app surfaces", () => {
+  test("store building blocks do not declare launcher app surfaces", () => {
     expect(
-      appSurfaceFromInstallConfigCatalog(
+      appSurfaceFromInstallConfigStore(
         {
           id: "cfg_bucket",
           name: "bucket",
           sourceKind: "first_party_capsule",
           trustLevel: "official",
-          catalog: {
+          store: {
             order: 1,
             surface: "building_block",
             kind: "storage",

@@ -50,13 +50,13 @@ import type { Workspace, WorkspaceType } from "takosumi-contract/workspaces";
 import type {
   CapsuleProviderEnvBindingSet,
   InstallConfig,
-  InstallConfigCatalogInput,
+  InstallConfigStoreInput,
   InstallConfigInstallExperience,
   InstallConfigInstallProjection,
-  InstallConfigCatalogKind,
-  InstallConfigCatalogMetadata,
-  InstallConfigCatalogSurface,
-  InstallConfigCatalogText,
+  InstallConfigStoreKind,
+  InstallConfigStoreMetadata,
+  InstallConfigStoreSurface,
+  InstallConfigStoreText,
   Capsule,
   OutputAllowlistEntry,
   PolicyConfig,
@@ -182,23 +182,23 @@ export function outputAllowlistValue(
   return out;
 }
 
-export function installConfigCatalogValue(
+export function installConfigStoreValue(
   value: unknown,
-): InstallConfigCatalogMetadata | undefined {
+): InstallConfigStoreMetadata | undefined {
   if (value === undefined) return undefined;
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }
   const record = value as Record<string, unknown>;
   const order = numberValue(record.order);
-  const surface = catalogSurfaceValue(record.surface);
-  const kind = catalogKindValue(record.kind);
+  const surface = storeSurfaceValue(record.surface);
+  const kind = storeKindValue(record.kind);
   const provider = boundedStringValue(record.provider, 64);
   const suggestedName = boundedStringValue(record.suggestedName, 96);
-  const badge = catalogTextValue(record.badge);
-  const name = catalogTextValue(record.name);
-  const description = catalogTextValue(record.description);
-  const inputs = catalogInputsValue(record.inputs);
+  const badge = storeTextValue(record.badge);
+  const name = storeTextValue(record.name);
+  const description = storeTextValue(record.description);
+  const inputs = storeInputsValue(record.inputs);
   const iconUrl =
     record.iconUrl === undefined
       ? undefined
@@ -224,7 +224,7 @@ export function installConfigCatalogValue(
   }
   const templateId = boundedTokenValue(record.templateId, 128);
   const templateVersion = boundedTokenValue(record.templateVersion, 128);
-  const source = catalogSourceValue(record.source);
+  const source = storeSourceValue(record.source);
   if (record.source !== undefined && !source) return undefined;
   return {
     ...(templateId ? { templateId } : {}),
@@ -269,9 +269,7 @@ function boundedTokenValue(
   return raw;
 }
 
-function catalogTextValue(
-  value: unknown,
-): InstallConfigCatalogText | undefined {
+function storeTextValue(value: unknown): InstallConfigStoreText | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }
@@ -281,26 +279,25 @@ function catalogTextValue(
   return ja && en ? { ja, en } : undefined;
 }
 
-function catalogSourceValue(
+function storeSourceValue(
   value: unknown,
-): InstallConfigCatalogMetadata["source"] | undefined {
+): InstallConfigStoreMetadata["source"] | undefined {
   if (value === undefined) return undefined;
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }
   const record = value as Record<string, unknown>;
   const git = boundedStringValue(record.git, 2048);
-  const ref = boundedStringValue(record.ref, 256);
   const parsedPath = modulePathValue(record.path);
   if (record.path !== undefined && parsedPath === undefined) return undefined;
   const path = parsedPath === "" ? "." : (parsedPath ?? ".");
-  if (!git || !/^https?:\/\/|^git@/u.test(git) || !ref) return undefined;
-  return { git, ref, path };
+  if (!git || !/^https?:\/\/|^git@/u.test(git)) return undefined;
+  return { git, path };
 }
 
-function catalogSurfaceValue(
+function storeSurfaceValue(
   value: unknown,
-): InstallConfigCatalogSurface | undefined {
+): InstallConfigStoreSurface | undefined {
   return value === "service" ||
     value === "building_block" ||
     value === "example"
@@ -308,20 +305,18 @@ function catalogSurfaceValue(
     : undefined;
 }
 
-function catalogKindValue(
-  value: unknown,
-): InstallConfigCatalogKind | undefined {
+function storeKindValue(value: unknown): InstallConfigStoreKind | undefined {
   return value === "worker" || value === "storage" || value === "site"
     ? value
     : undefined;
 }
 
-function catalogInputsValue(
+function storeInputsValue(
   value: unknown,
-): readonly InstallConfigCatalogInput[] | undefined {
+): readonly InstallConfigStoreInput[] | undefined {
   if (value === undefined) return [];
   if (!Array.isArray(value) || value.length > 50) return undefined;
-  const inputs: InstallConfigCatalogInput[] = [];
+  const inputs: InstallConfigStoreInput[] = [];
   for (const item of value) {
     if (!item || typeof item !== "object" || Array.isArray(item)) {
       return undefined;
@@ -340,15 +335,15 @@ function catalogInputsValue(
     const format =
       record.format === undefined
         ? undefined
-        : catalogInputFormatValue(record.format);
+        : storeInputFormatValue(record.format);
     const required = booleanValue(record.required);
     const defaultValue =
       record.defaultValue === undefined
         ? undefined
         : boundedStringValue(record.defaultValue, 16_384);
-    const label = catalogTextValue(record.label);
+    const label = storeTextValue(record.label);
     const helper =
-      record.helper === undefined ? undefined : catalogTextValue(record.helper);
+      record.helper === undefined ? undefined : storeTextValue(record.helper);
     const placeholder =
       record.placeholder === undefined
         ? undefined
@@ -380,9 +375,9 @@ function catalogInputsValue(
   return inputs;
 }
 
-function catalogInputFormatValue(
+function storeInputFormatValue(
   value: unknown,
-): InstallConfigCatalogInput["format"] | undefined {
+): InstallConfigStoreInput["format"] | undefined {
   return value === "text" ||
     value === "url" ||
     value === "hostname" ||
@@ -395,19 +390,19 @@ function catalogInputFormatValue(
     : undefined;
 }
 
-function catalogVariableNameValue(value: unknown): string | undefined {
+function storeVariableNameValue(value: unknown): string | undefined {
   const raw = boundedStringValue(value, 128);
   return raw && /^[A-Za-z_][A-Za-z0-9_]*$/u.test(raw) ? raw : undefined;
 }
 
-function catalogPathValue(value: unknown): string | undefined {
+function storePathValue(value: unknown): string | undefined {
   const raw = boundedStringValue(value, 256);
   return raw && raw.startsWith("/") ? raw : undefined;
 }
 
-function optionalCatalogVariable(value: unknown): string | undefined | false {
+function optionalStoreVariable(value: unknown): string | undefined | false {
   if (value === undefined) return undefined;
-  return catalogVariableNameValue(value) ?? false;
+  return storeVariableNameValue(value) ?? false;
 }
 
 function installExperienceValue(
@@ -445,7 +440,7 @@ function installExperienceProjectionsValue(
     }
     const record = item as Record<string, unknown>;
     if (record.kind === "service_name") {
-      const variable = catalogVariableNameValue(record.variable);
+      const variable = storeVariableNameValue(record.variable);
       if (!variable) return undefined;
       projections.push({ kind: "service_name", variable });
       continue;
@@ -459,9 +454,9 @@ function installExperienceProjectionsValue(
         return undefined;
       }
       const variables = record.variables as Record<string, unknown>;
-      const subdomain = optionalCatalogVariable(variables.subdomain);
-      const url = optionalCatalogVariable(variables.url);
-      const routePattern = optionalCatalogVariable(variables.routePattern);
+      const subdomain = optionalStoreVariable(variables.subdomain);
+      const url = optionalStoreVariable(variables.url);
+      const routePattern = optionalStoreVariable(variables.routePattern);
       const baseDomain =
         record.baseDomain === undefined
           ? undefined
@@ -486,7 +481,7 @@ function installExperienceProjectionsValue(
       continue;
     }
     if (record.kind === "initial_secret") {
-      const variable = catalogVariableNameValue(record.variable);
+      const variable = storeVariableNameValue(record.variable);
       const secretKind =
         record.secretKind === undefined
           ? undefined
@@ -520,14 +515,14 @@ function installExperienceProjectionsValue(
         return undefined;
       }
       const variables = record.variables as Record<string, unknown>;
-      const issuerUrl = optionalCatalogVariable(variables.issuerUrl);
-      const accountsUrl = optionalCatalogVariable(variables.accountsUrl);
-      const clientId = optionalCatalogVariable(variables.clientId);
-      const redirectUri = optionalCatalogVariable(variables.redirectUri);
+      const issuerUrl = optionalStoreVariable(variables.issuerUrl);
+      const accountsUrl = optionalStoreVariable(variables.accountsUrl);
+      const clientId = optionalStoreVariable(variables.clientId);
+      const redirectUri = optionalStoreVariable(variables.redirectUri);
       const callbackPath =
         record.callbackPath === undefined
           ? undefined
-          : catalogPathValue(record.callbackPath);
+          : storePathValue(record.callbackPath);
       if (
         issuerUrl === false ||
         accountsUrl === false ||
@@ -558,8 +553,8 @@ function installExperienceProjectionsValue(
         return undefined;
       }
       const variables = record.variables as Record<string, unknown>;
-      const url = optionalCatalogVariable(variables.url);
-      const sha256 = optionalCatalogVariable(variables.sha256);
+      const url = optionalStoreVariable(variables.url);
+      const sha256 = optionalStoreVariable(variables.sha256);
       if (url === false || sha256 === false) return undefined;
       projections.push({
         kind: "artifact",

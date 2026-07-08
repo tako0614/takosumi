@@ -18,7 +18,7 @@
   "scripts": {
     "check": "bun run provider:assets && bun run test:provider && bun run check:test-source-boundary && tsc --noEmit && bun run check:dashboard && bun run test:dashboard-new-flow && bun run check:worker-types && bun run check:cloudflare-worker-build",
     "check:test-source-boundary": "bun scripts/check-test-source-boundary.ts",
-    "check:dashboard": "cd dashboard && bunx tsc --noEmit --pretty false -p tsconfig.json && bun run build",
+    "check:dashboard": "(cd dashboard && bunx tsc --noEmit --pretty false -p tsconfig.json && bun run build) && bash scripts/build-app-docs.sh",
     "check:worker-types": "tsc --noEmit -p tsconfig.worker.json",
     "check:cloudflare-worker-build": "bun build --target browser --format esm --external cloudflare:workers deploy/platform/worker.ts --outfile /tmp/takosumi-platform-worker-check.mjs",
     "check:mobile-kit": "cd mobile-kit && bun run check && bun run test",
@@ -67,6 +67,9 @@
     "accounts": "bun cli/src/main.ts",
     "cli": "bun cli/src/main.ts",
     "docs:build": "cd docs && bun run build",
+    "app-docs:build": "bash scripts/build-app-docs.sh",
+    "app-docs:dev": "cd app-docs && ../docs/node_modules/.bin/vitepress dev --host 0.0.0.0",
+    "docs:build:all": "bun run docs:build && bun run app-docs:build",
     "docs:dev": "cd docs && bun run dev",
     "website:build": "bash website/build.sh",
     "website:preview": "cd website && bun run preview",

@@ -6,9 +6,7 @@
 // behavior change; see runner/entrypoint.ts for the re-exported public surface.
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import {
-  isReservedProviderEnvName,
-} from "../../contract/provider-env-rules.ts";
+import { isReservedProviderEnvName } from "../../contract/provider-env-rules.ts";
 import type {
   JsonRecord,
   RunWorkspace,
@@ -35,16 +33,9 @@ import {
   assertDirectory,
   assertRealPathInsideSourceRoot,
 } from "./util.ts";
-import {
-  redactBuildOutput,
-  redactRunnerOutput,
-} from "./redaction.ts";
-import {
-  runCommand,
-} from "./exec.ts";
-import {
-  assertSafeRelativePath,
-} from "./policy.ts";
+import { redactBuildOutput, redactRunnerOutput } from "./redaction.ts";
+import { runCommand } from "./exec.ts";
+import { assertSafeRelativePath } from "./policy.ts";
 import {
   baseCommandEnv,
   allKnownCredentialEnvNames,
@@ -53,11 +44,12 @@ import {
   commandContextFromRequest,
   prepareProviderCredentialFiles,
 } from "./credentials.ts";
-import {
-  workspaceForRun,
-} from "./artifacts.ts";
+import { workspaceForRun } from "./artifacts.ts";
 
-export async function runBackup(runId: string, request: unknown): Promise<JsonRecord> {
+export async function runBackup(
+  runId: string,
+  request: unknown,
+): Promise<JsonRecord> {
   const backup = parseBackup(request);
   if (backup.mode === "provider_snapshot") {
     return await runProviderSnapshotBackup(runId, backup);
@@ -426,7 +418,9 @@ export function normalizeProviderSource(provider: string | undefined): string {
   return value;
 }
 
-export function builtInProviderSnapshotKind(provider: string): string | undefined {
+export function builtInProviderSnapshotKind(
+  provider: string,
+): string | undefined {
   if (provider === "registry.opentofu.org/cloudflare/cloudflare") {
     return "cloudflare-provider-snapshot";
   }
@@ -517,6 +511,12 @@ export function releaseActivation(
     ...(stringField(value, "applyRunId")
       ? { applyRunId: stringField(value, "applyRunId") }
       : {}),
+    ...(stringField(value, "workspaceId")
+      ? { workspaceId: stringField(value, "workspaceId") }
+      : {}),
+    ...(stringField(value, "spaceId")
+      ? { spaceId: stringField(value, "spaceId") }
+      : {}),
     ...(stringField(value, "installationId")
       ? { installationId: stringField(value, "installationId") }
       : {}),
@@ -599,16 +599,30 @@ export function releaseBaseEnv(
   release: ReleaseSpec,
 ): Record<string, string> {
   const outputs = release.outputs ?? {};
+  const workspaceId =
+    release.activation?.workspaceId ?? release.activation?.spaceId;
   return {
     TAKOSUMI_RELEASE_RUN_ID: runId,
     ...(release.activation?.applyRunId
       ? { TAKOSUMI_APPLY_RUN_ID: release.activation.applyRunId }
       : {}),
+    ...(workspaceId
+      ? {
+          TAKOSUMI_WORKSPACE_ID: workspaceId,
+          TAKOSUMI_SPACE_ID: workspaceId,
+          TAKOSUMI_CLOUD_BILLING_WORKSPACE_ID: workspaceId,
+        }
+      : {}),
     ...(release.activation?.installationId
-      ? { TAKOSUMI_CAPSULE_ID: release.activation.installationId }
+      ? {
+          TAKOSUMI_CAPSULE_ID: release.activation.installationId,
+          TAKOSUMI_CLOUD_BILLING_CAPSULE_ID: release.activation.installationId,
+        }
       : {}),
     ...(release.activation?.deploymentId
-      ? { TAKOSUMI_STATE_VERSION_ID: release.activation.deploymentId }
+      ? {
+          TAKOSUMI_STATE_VERSION_ID: release.activation.deploymentId,
+        }
       : {}),
     TAKOSUMI_OUTPUTS_JSON: JSON.stringify(outputs),
     TAKOSUMI_RELEASE_CONTEXT_JSON: JSON.stringify({
@@ -617,8 +631,13 @@ export function releaseBaseEnv(
       ...(release.activation?.applyRunId
         ? { applyRunId: release.activation.applyRunId }
         : {}),
+      ...(workspaceId ? { workspaceId, spaceId: workspaceId } : {}),
       ...(release.activation?.installationId
-        ? { installationId: release.activation.installationId }
+        ? {
+            installationId: release.activation.installationId,
+            capsuleId: release.activation.installationId,
+            installation: { id: release.activation.installationId },
+          }
         : {}),
       ...(release.activation?.deploymentId
         ? { deploymentId: release.activation.deploymentId }
@@ -628,7 +647,9 @@ export function releaseBaseEnv(
   };
 }
 
-export function parseBackupArtifactPointer(stdout: string): JsonRecord | undefined {
+export function parseBackupArtifactPointer(
+  stdout: string,
+): JsonRecord | undefined {
   for (const line of stdout.trim().split(/\r?\n/u).reverse()) {
     const candidate = line.trim();
     if (!candidate.startsWith("{")) continue;

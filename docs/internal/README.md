@@ -34,8 +34,8 @@ docs/operations/
 
 The public docs build excludes `internal/**/*.md` and `operations/**/*.md`.
 When an internal design becomes a stable user/operator contract, rewrite the
-contract into `docs/reference/` or `docs/cloud/` instead of linking readers to
-the internal note.
+contract into `docs/reference/` for software docs or `app-docs/` for hosted
+Cloud docs instead of linking readers to the internal note.
 
 Promotion checklist:
 
@@ -43,7 +43,7 @@ Promotion checklist:
 1. Keep only the stable external contract.
 2. Remove private paths, secret names, raw evidence refs, and handler wiring.
 3. Put API/model behavior in docs/reference/.
-4. Put customer-facing Cloud behavior and pricing in docs/cloud/.
+4. Put customer-facing Cloud behavior and pricing in app-docs/.
 5. Update the English counterpart when the public page has one.
 6. Run the docs boundary and docs build checks.
 ```
@@ -60,7 +60,7 @@ Use public docs for external product and API contracts:
 ../index.md
 ../reference/api.md
 ../reference/model.md
-../cloud/index.md
+../../app-docs/index.md
 ```
 
 Use this directory for implementation planning, architecture decisions, and

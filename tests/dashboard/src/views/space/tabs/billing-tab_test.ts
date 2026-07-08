@@ -97,9 +97,7 @@ test("BillingTab lets a new Cloud workspace start checkout before billing is act
     "const canStartCheckout = createMemo",
   );
   const portalMemoIndex = source.indexOf("const canOpenPortal = createMemo");
-  const nonRefundableIndex = source.indexOf(
-    '<p class="muted av-plan-policy">\n            {t("billing.plans.nonRefundable")}',
-  );
+  const nonRefundableIndex = source.indexOf('t("billing.plans.nonRefundable")');
   const plansSwitchIndex = source.indexOf("<Switch>", nonRefundableIndex);
   const policyLinksIndex = source.indexOf('class="av-billing-policy-links"');
   const subscriptionListIndex = source.indexOf(
@@ -110,9 +108,7 @@ test("BillingTab lets a new Cloud workspace start checkout before billing is act
   expect(checkoutMemoIndex).toBeGreaterThan(0);
   expect(portalMemoIndex).toBeGreaterThan(checkoutMemoIndex);
   expect(source).toContain("cloudBilling() && hasBillingCatalog()");
-  expect(source).toContain(
-    "stripeBilling()?.configured === true",
-  );
+  expect(source).toContain("stripeBilling()?.configured === true");
   expect(source).not.toContain("billing.plans.disabled");
   expect(source).toContain('href="/legal/refund-policy"');
   expect(source).toContain('href="/legal/cancellation-policy"');
@@ -142,7 +138,9 @@ test("BillingTab shows Cloud account USD balance instead of only a disabled stat
   );
   expect(en["billing.balance.availableUsd"]).toBe("Available balance");
   expect(ja["billing.balance.availableUsd"]).toBe("利用可能な残高");
-  expect(en["billing.mode.cloudCredits"]).toContain("shared across your account");
+  expect(en["billing.mode.cloudCredits"]).toContain(
+    "shared across your account",
+  );
   expect(ja["billing.mode.cloudCredits"]).toContain("アカウント全体");
 });
 

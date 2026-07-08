@@ -717,7 +717,7 @@ export async function resolveOptions(
         ? DEFAULT_PROVIDERLESS_CAPSULE_DIR
         : DEFAULT_CAPSULE_DIR),
   );
-  const resolvedAppName = args.appName ?? defaultAppName();
+  const resolvedAppName = args.appName ?? defaultCapsuleName();
   const explicitVars = await readJsonRecordInput({
     inline: args.varsJson ?? env.TAKOSUMI_SMOKE_VARS_JSON,
     file: args.varsJsonFile ?? env.TAKOSUMI_SMOKE_VARS_JSON_FILE,
@@ -3919,7 +3919,7 @@ function normalizeSmokeSourceGitUrl(value: string): string {
   return url.toString();
 }
 
-function defaultAppName(): string {
+function defaultCapsuleName(): string {
   const suffix = Math.random().toString(36).slice(2, 10);
   return `takosumi-smoke-${suffix}`;
 }

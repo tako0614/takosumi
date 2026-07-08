@@ -28,7 +28,7 @@ import {
   signEs256Jwt,
   type UpstreamOAuthClientRegistration,
   type UpstreamOAuthOptions,
-  type ServiceGraphMaterialResolverHttpOptions,
+  type RuntimeProjectionMaterialResolverHttpOptions,
   type LoginEmailAllowlist,
   type RuntimeServiceTokenOptions,
   sharedCellRuntimeBinding,
@@ -58,7 +58,6 @@ export interface CloudflareWorkerEnv {
   readonly TAKOSUMI_ACCOUNTS_CLIENT_SECRET?: string;
   readonly TAKOSUMI_ACCOUNTS_CLIENT_AUTH_METHOD?: string;
   readonly TAKOSUMI_ACCOUNTS_CLIENT_RUNTIME_SERVICE_TOKEN_INTROSPECTION?: string;
-  readonly TAKOSUMI_ACCOUNTS_CLIENT_SERVICE_GRAPH_TOKEN_INTROSPECTION?: string;
   readonly TAKOSUMI_ACCOUNTS_RUNTIME_SERVICE_TOKEN_CLIENT_ID?: string;
   readonly TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK?: string;
   readonly TAKOSUMI_ACCOUNTS_ES256_KEY_ID?: string;
@@ -142,8 +141,8 @@ export interface CloudflareWorkerEnv {
   readonly TAKOSUMI_ACCOUNTS_BILLING_REDIRECT_ALLOWLIST?: string;
   readonly TAKOSUMI_ACCOUNTS_MATERIALIZE_DRILL_TOKEN?: string;
   readonly TAKOSUMI_ACCOUNTS_PRIVACY_OPERATIONS_TOKEN?: string;
-  readonly TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_MATERIAL_RESOLVER_TOKEN?: string;
-  readonly TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_MATERIALS_INTERNAL_URL?: string;
+  readonly TAKOSUMI_ACCOUNTS_RUNTIME_PROJECTION_MATERIAL_RESOLVER_TOKEN?: string;
+  readonly TAKOSUMI_ACCOUNTS_RUNTIME_PROJECTION_MATERIALS_INTERNAL_URL?: string;
   readonly TAKOSUMI_ACCOUNTS_BILLING_PORTAL_URL?: string;
   readonly TAKOSUMI_AI_GATEWAY_DEFAULT_MODEL?: string;
   readonly TAKOSUMI_AI_GATEWAY_PROFILES?: string;
@@ -447,7 +446,7 @@ async function buildAccountsHandler(
     billingCheckout: parseStripeBillingCheckout(env, options.stripeFetch),
     billingWebhook: parseStripeBillingWebhook(env),
     runtimeServiceTokens: parseRuntimeServiceTokens(env, clients),
-    serviceGraphMaterialResolver: parseServiceGraphMaterials(env),
+    runtimeProjectionMaterialResolver: parseRuntimeProjectionMaterials(env),
     exportWorker: parseR2ExportWorker(env, issuer),
     exportDownloadSigningSecret: optionalString(
       env.TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_SECRET,
@@ -790,9 +789,6 @@ function parseRuntimeServiceTokens(
   const enabled =
     enabledEnvFlag(
       env.TAKOSUMI_ACCOUNTS_CLIENT_RUNTIME_SERVICE_TOKEN_INTROSPECTION,
-    ) ||
-    enabledEnvFlag(
-      env.TAKOSUMI_ACCOUNTS_CLIENT_SERVICE_GRAPH_TOKEN_INTROSPECTION,
     );
   if (!enabled) return undefined;
   const clientId =
@@ -1050,18 +1046,18 @@ function parseDeployControl(
   return { operations: deployControlOperations };
 }
 
-function parseServiceGraphMaterials(
+function parseRuntimeProjectionMaterials(
   env: CloudflareWorkerEnv,
-): ServiceGraphMaterialResolverHttpOptions | undefined {
+): RuntimeProjectionMaterialResolverHttpOptions | undefined {
   const token = optionalString(
-    env.TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_MATERIAL_RESOLVER_TOKEN,
+    env.TAKOSUMI_ACCOUNTS_RUNTIME_PROJECTION_MATERIAL_RESOLVER_TOKEN,
   );
   if (!token) return undefined;
   const billingPortalUrl = optionalString(
     env.TAKOSUMI_ACCOUNTS_BILLING_PORTAL_URL,
   );
   const internalUrl = optionalString(
-    env.TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_MATERIALS_INTERNAL_URL,
+    env.TAKOSUMI_ACCOUNTS_RUNTIME_PROJECTION_MATERIALS_INTERNAL_URL,
   );
   return {
     token,

@@ -62,6 +62,7 @@ services:
       - ./caddy/runtime:/runtime:ro
       - ../../../takosumi/website/.output/public:/srv/takosumi-marketing:ro
       - ../../../takosumi/docs/.vitepress/dist:/srv/takosumi-docs:ro
+      # dashboard/dist also contains app.takosumi.com/docs after app-docs:build.
       - ../../../takosumi/dashboard/dist:/srv/takosumi-dashboard:ro
       - caddy-data:/data
       - caddy-config:/config

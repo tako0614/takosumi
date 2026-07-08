@@ -13,11 +13,11 @@ cards do not show a "usable dollar amount" or credit grant. Like AI services,
 they show the plan name, monthly price, whether usage billing applies, usage
 limits, and payment status.
 
-| Plan    | Customer pays | Public billing model      |
-| ------- | ------------- | ------------------------- |
-| Lite    | `$1` / month  | Base subscription + usage |
-| Plus    | `$5` / month  | Subscription with usage   |
-| Pro     | `$10` / month | Subscription with usage   |
+| Plan | Customer pays | Public billing model      |
+| ---- | ------------- | ------------------------- |
+| Lite | `$1` / month  | Base subscription + usage |
+| Plus | `$5` / month  | Subscription with usage   |
+| Pro  | `$10` / month | Subscription with usage   |
 
 Checkout and Dashboard billing views must match this public pricing. If they
 do not match, do not continue the purchase or plan change; contact support.

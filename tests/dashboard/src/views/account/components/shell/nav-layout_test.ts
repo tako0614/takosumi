@@ -164,7 +164,16 @@ describe("dashboard shell navigation layout", () => {
       'label: t("workspaceSettings.tab.cloud")',
     );
     expect(workspaceSettingsSource).toContain(
+      'href: "/advanced/workspace/keys"',
+    );
+    expect(workspaceSettingsSource).toContain(
+      'label: t("workspaceSettings.tab.keys")',
+    );
+    expect(workspaceSettingsSource).toContain(
       "<CloudResourcesPanel showHeader={false} />",
+    );
+    expect(workspaceSettingsSource).toContain(
+      "<CloudApiKeysPanel showHeader={false} />",
     );
     expect(workspaceSettingsSource).not.toContain(
       "<BillingTab workspaceId={id()} />",

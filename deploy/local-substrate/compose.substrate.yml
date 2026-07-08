@@ -443,7 +443,7 @@ services:
         aliases:
           - oauth-mock
 
-  # ---- takosumi dashboard SPA (mirrors app.takosumi.com root) ----
+  # ---- takosumi dashboard SPA (mirrors app.takosumi.com root + /docs) ----
   takosumi-dashboard-build:
     profiles: ["postgres", "workers"]
     image: oven/bun:1
@@ -462,6 +462,7 @@ services:
         export VITE_TAKOSUMI_DASHBOARD_DEV_ACCOUNT_ID="acct_local"
         export VITE_TAKOSUMI_DASHBOARD_DEV_SPACE_ID="space_local"
         bun run build
+        cd /work && bash scripts/build-app-docs.sh
     volumes:
       - ../../../takosumi:/work
 

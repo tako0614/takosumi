@@ -462,6 +462,7 @@ function runReleaseCommand(
   );
   const credentialEnv = payload.credentials?.env ?? {};
   assertNoCommandCredentialEnvOverlap(command.env ?? {}, credentialEnv);
+  const workspaceId = payload.workspaceId ?? payload.spaceId;
   const env = {
     ...materializerBaseEnv(parentEnv),
     ...explicitOperatorEnv,
@@ -469,11 +470,23 @@ function runReleaseCommand(
     ...credentialEnv,
     TAKOSUMI_RELEASE_RUN_ID: releaseRunId,
     TAKOSUMI_APPLY_RUN_ID: payload.applyRunId,
+    ...(workspaceId
+      ? {
+          TAKOSUMI_WORKSPACE_ID: workspaceId,
+          TAKOSUMI_SPACE_ID: workspaceId,
+          TAKOSUMI_CLOUD_BILLING_WORKSPACE_ID: workspaceId,
+        }
+      : {}),
     ...(payload.installation?.id
-      ? { TAKOSUMI_CAPSULE_ID: payload.installation.id }
+      ? {
+          TAKOSUMI_CAPSULE_ID: payload.installation.id,
+          TAKOSUMI_CLOUD_BILLING_CAPSULE_ID: payload.installation.id,
+        }
       : {}),
     ...(payload.deployment?.id
-      ? { TAKOSUMI_STATE_VERSION_ID: payload.deployment.id }
+      ? {
+          TAKOSUMI_STATE_VERSION_ID: payload.deployment.id,
+        }
       : {}),
     TAKOSUMI_OUTPUTS_JSON: JSON.stringify(outputs),
     TAKOSUMI_RELEASE_CONTEXT_JSON: JSON.stringify({
@@ -481,9 +494,7 @@ function runReleaseCommand(
       releaseRunId,
       ...(payload.planRunId ? { planRunId: payload.planRunId } : {}),
       applyRunId: payload.applyRunId,
-      ...((payload.workspaceId ?? payload.spaceId)
-        ? { workspaceId: payload.workspaceId ?? payload.spaceId }
-        : {}),
+      ...(workspaceId ? { workspaceId, spaceId: workspaceId } : {}),
       ...(payload.installation ? { installation: payload.installation } : {}),
       ...(payload.deployment ? { deployment: payload.deployment } : {}),
       outputs,

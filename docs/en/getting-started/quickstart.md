@@ -1,44 +1,23 @@
 # Quickstart
 
-Start with the normal Takosumi Cloud flow. In the browser, choose a template or
-paste a Git URL, review the required connections and planned changes, then
-deploy.
-
-Use the OSS / local runner section later when you want to verify the open-source
-control plane directly.
-
-## Takosumi Cloud
-
-1. Open `https://app.takosumi.com/`.
-2. Choose **Add service**, then pick a template or paste a Git URL that contains
-   an OpenTofu/Terraform module.
-3. Connect the cloud account the service needs. Credentials are stored in a
-   ProviderConnection, not in the manifest or a local `.env` file.
-4. Takosumi shows the fetched source, required connections, and planned changes.
-5. Review and approve the deploy.
-6. After the run succeeds, open the service URL and inspect history, state
-   versions, outputs, and activity.
-
-The underlying model is the same in Cloud and OSS:
+Takosumi has two entry points.
 
 ```text
-Source
-ProviderConnection
-ProviderBinding
-Run
-StateVersion
-Output
-AuditEvent
+Takosumi software:
+  verify the OpenTofu control plane on a self-hosted, local, or operator endpoint
+
+Takosumi Cloud:
+  use the official hosted service and managed resources at app.takosumi.com
 ```
 
-The normal Cloud UI presents those as services, connections, changes, and
-history. Advanced details remain available when needed.
+Start with OSS / local runner when you want to verify Takosumi as software. Use
+the Takosumi Cloud flow when you want the hosted service.
 
 ## OSS / local runner
 
 Takosumi OSS runs existing OpenTofu/Terraform providers as-is. The shortest
-useful check is to register a Cloudflare API token as a ProviderConnection and
-plan/apply a normal `cloudflare/cloudflare` provider manifest.
+useful check is to register a provider credential such as a Cloudflare API token
+as a ProviderConnection and plan/apply a normal provider manifest.
 
 ### Prerequisites
 
@@ -112,7 +91,16 @@ outputs
 audit event
 ```
 
-This OSS quickstart uses the normal Cloudflare provider flow and does not use a
-compatibility profile. Compatibility profiles are OSS capability surfaces, while
-Takosumi Cloud's official managed capacity remains an Operator/Cloud operation
-concern.
+This quickstart focuses on the OpenTofu Stack flow. Compatibility API framework
+is an OSS Takosumi capability surface, while official managed target pools,
+Takosumi-owned native resource internals, enforced billing, and support/SLA
+belong to the Takosumi for Operator / Cloud operation layer.
+
+## Hosted Cloud flow
+
+The hosted service at `app.takosumi.com`, including managed resources, pricing,
+API keys, usage, and spend guard behavior, is documented separately in
+[Takosumi Cloud docs](https://app.takosumi.com/docs/en/).
+
+Cloud uses the same underlying software model, but this quickstart covers only
+the portable Takosumi software / operator endpoint behavior.

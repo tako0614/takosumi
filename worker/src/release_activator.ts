@@ -172,6 +172,7 @@ export function createRunnerReleaseActivator(
             "post-apply release commands require a source snapshot archive",
         };
       }
+      const workspaceId = releaseActivationWorkspaceId(input);
       const result = await runner.release!({
         runId: releaseCommandRunId(input.applyRun.id),
         commands: input.commands,
@@ -179,6 +180,7 @@ export function createRunnerReleaseActivator(
         nonSensitiveOutputs: input.nonSensitiveOutputs,
         ...(input.credentials ? { credentials: input.credentials } : {}),
         applyRunId: input.applyRun.id,
+        ...(workspaceId ? { workspaceId } : {}),
         installationId: input.installation.id,
         deploymentId: input.deployment.id,
       });
@@ -266,7 +268,7 @@ function releaseActivatorInsecureAllowed(
 
 function releaseActivationWebhookPayload(input: ReleaseActivationInput) {
   const credentialEnv = releaseActivationCredentialEnv(input.credentials);
-  const workspaceId = input.applyRun.workspaceId ?? input.applyRun.spaceId;
+  const workspaceId = releaseActivationWorkspaceId(input);
   return {
     kind: RELEASE_ACTIVATOR_KIND,
     planRunId: input.planRun.id,
@@ -307,6 +309,12 @@ function releaseActivationWebhookPayload(input: ReleaseActivationInput) {
     nonSensitiveOutputs: input.nonSensitiveOutputs,
     commands: input.commands,
   };
+}
+
+function releaseActivationWorkspaceId(
+  input: ReleaseActivationInput,
+): string | undefined {
+  return input.applyRun.workspaceId ?? input.applyRun.spaceId;
 }
 
 function releaseActivationCredentialEnv(

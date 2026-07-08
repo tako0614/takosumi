@@ -11,11 +11,11 @@ Takosumi Cloud は月額 subscription と従量課金を組み合わせます。
 「何ドル分使える」という credit grant を plan 表示に出しません。AI サービスの
 ように、プラン名、月額、従量課金の有無、利用上限、支払い設定を見せます。
 
-| Plan    | Customer pays | Public billing model       |
-| ------- | ------------- | -------------------------- |
-| Lite    | `$1` / month  | Base subscription + usage  |
-| Plus    | `$5` / month  | Subscription with usage    |
-| Pro     | `$10` / month | Subscription with usage    |
+| Plan | Customer pays | Public billing model      |
+| ---- | ------------- | ------------------------- |
+| Lite | `$1` / month  | Base subscription + usage |
+| Plus | `$5` / month  | Subscription with usage   |
+| Pro  | `$10` / month | Subscription with usage   |
 
 Checkout と Dashboard の billing 表示は、この公開価格と一致している必要があります。
 表示が食い違う場合は、購入やプラン変更を進めず support に連絡してください。

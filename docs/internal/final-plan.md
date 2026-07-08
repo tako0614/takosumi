@@ -208,9 +208,11 @@ CI/release pipeline, or an explicitly declared OpenTofu step. Takosumi can run
 the resulting OpenTofu plan and inject credentials, but it does not secretly
 decide where the artifact comes from.
 
-Store entries announce installable Git repositories and can publish an optional
-`installExperience` mapping that helps the dashboard present common setup
-fields without making the app depend on Takosumi-owned repo metadata:
+Store listings announce installable Git repositories. A listing is only the
+Git pointer plus lightweight discovery/display metadata such as name,
+description, icon, tags, and publisher. It must not own setup inputs,
+install-flow projections, output allowlists, release artifacts, domain defaults,
+or OIDC wiring:
 
 The store is discovery and presentation only. Git URL, branch, tag, commit,
 module path, SourceSnapshot, and automatic update policy belong to the Git
@@ -220,6 +222,14 @@ installed Capsule.
 Store nodes are switchable. Changing the selected store changes listing
 discovery and presentation metadata only; it must not change how Takosumi
 resolves refs, creates SourceSnapshots, or runs OpenTofu.
+
+A repository may publish `.well-known/tcs.json` as an optional repo-owned
+presentation document for Store indexers. It is not a Takosumi manifest and is
+not required for direct Git installs. It can contain display text, icon URL,
+`modulePath`, setup inputs, `installExperience`, and output allowlist hints. It
+must not contain `git`, `source`, `ref`, `commit`, `resolvedCommit`, or
+`installConfigId`; those belong to the Store listing service and the Git
+Source / Run flow. Do not use source comments as the metadata schema.
 
 ```json
 {
@@ -259,18 +269,18 @@ resolves refs, creates SourceSnapshots, or runs OpenTofu.
 }
 ```
 
-This contract maps standard install concepts to ordinary OpenTofu variables.
-It is not execution authority, not a new repo metadata requirement, and not a
-per-input `purpose` pseudo-standard. Unknown Git modules remain valid plain
-OpenTofu Capsules; they simply receive generic variable inputs unless their
-store entry opts into this UX contract. Takosumi must not infer a public
-endpoint from variable names such as `worker_name` or `app_url`; those names are
-ordinary OpenTofu inputs unless the store explicitly maps them through
-the `public_endpoint` projection.
+This optional repository metadata contract maps standard install concepts to
+ordinary OpenTofu variables. It is not execution authority, not required for
+direct Git installs, and not a per-input `purpose` pseudo-standard. Unknown Git
+modules remain valid plain OpenTofu Capsules; they simply receive generic
+variable inputs unless their repository publishes this UX metadata. Takosumi
+must not infer a public endpoint from variable names such as `worker_name` or
+`app_url`; those names are ordinary OpenTofu inputs unless repository metadata
+explicitly maps them through the `public_endpoint` projection.
 
-Store inputs are also plain OpenTofu variable values. `type`, `format`,
-`required`, `advanced`, and `secret` only describe presentation and validation
-for the install UI:
+Repository-declared inputs are also plain OpenTofu variable values. `type`,
+`format`, `required`, `advanced`, and `secret` only describe presentation and
+validation for the install UI:
 
 ```text
 type:
@@ -281,7 +291,7 @@ format:
 ```
 
 These fields do not create a Takosumi-specific manifest or hidden execution
-path. They let a store listing expose necessary install parameters such as
+path. They let repository metadata expose necessary install parameters such as
 public subdomain, custom URL, initial password/token, release artifact URL,
 release artifact digest, or arbitrary env-like module variables while keeping
 the app repository a normal OpenTofu module.
@@ -301,23 +311,24 @@ because it chooses to use its own provider-side routing.
 Subdomain, password, and app-specific env are not universal Takosumi
 requirements. A Capsule that does not need a public endpoint should not show a
 public endpoint field; a Capsule that does not need a first-run secret should
-not show a password/token field. Store metadata only maps those common setup
-concepts onto ordinary module variables when the selected app asks for them.
+not show a password/token field. Repository metadata only maps those common
+setup concepts onto ordinary module variables when the selected app asks for
+them.
 Artifact URLs, SHA-256 digests, container image maps, and app-specific env
-knobs are also ordinary OpenTofu variables. The store may place them in an
-advanced section, but Takosumi must not turn them into a hidden side channel or
-special non-OpenTofu deploy mechanism.
+knobs are also ordinary OpenTofu variables. Repository metadata may ask the
+dashboard to place them in an advanced section, but Takosumi must not turn them
+into a hidden side channel or special non-OpenTofu deploy mechanism.
 
 The dashboard must not maintain hard-coded "system" or "advanced" variable-name
 lists for install inputs. If an input should be hidden behind details, marked as
 secret, or surfaced as a common setup field, that presentation comes from
-`store.inputs[]` and `installExperience`; the submitted value is still just a
-normal OpenTofu variable.
+repository `.well-known/tcs.json` inputs and `installExperience`; the submitted
+value is still just a normal OpenTofu variable.
 
-`store.inputs[]` may also provide a presentation `format` for generic UI and
-validation only: `text`, `url`, `hostname`, `subdomain`, `password`, `token`,
-`email`, or `sha256`. This is not a new execution channel; it only tells the
-dashboard how to present and validate the ordinary OpenTofu variable.
+Repository metadata inputs may also provide a presentation `format` for generic
+UI and validation only: `text`, `url`, `hostname`, `subdomain`, `password`,
+`token`, `email`, or `sha256`. This is not a new execution channel; it only
+tells the dashboard how to present and validate the ordinary OpenTofu variable.
 
 The preferred fast path is a Git CI or release pipeline that publishes a
 versioned, publicly fetchable artifact plus a SHA-256 digest. The OpenTofu

@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 
 import { CapsulesService } from "../../../../core/domains/capsules/mod.ts";
-import { DEFAULT_CAPSULE_INSTALL_CONFIG_ID } from "../../../../core/domains/capsules/official_seed.ts";
+import { DEFAULT_CAPSULE_INSTALL_CONFIG_ID } from "../../../../core/domains/capsules/install_config_bootstrap.ts";
 import { InMemoryOpenTofuDeploymentStore } from "../../../../core/domains/deploy-control/store.ts";
 import type {
   OpenTofuDeploymentStore,
@@ -507,11 +507,11 @@ test("getInstallConfig keeps pre-v1 official artifact compatibility rows readabl
   });
 });
 
-test("retired official aliases are hidden and fail closed for new use", async () => {
+test("retired built-in aliases are hidden and fail closed for new use", async () => {
   const { store, service } = build();
   await seedAll(store);
   const retired: InstallConfig = {
-    id: "cfg-official-talk",
+    id: "cfg-built-in-talk",
     name: "talk",
     installType: "opentofu_module",
     trustLevel: "official",
@@ -576,7 +576,7 @@ test("getInstallConfig / listInstallConfigs passthroughs work", async () => {
   });
 });
 
-test("official generic Capsule InstallConfig is available even before DB seed", async () => {
+test("built-in generic Capsule InstallConfig is available even before DB seed", async () => {
   const { store, service } = build();
   const configs = await service.listInstallConfigs();
   expect(configs.map((config) => config.id)).toContain(

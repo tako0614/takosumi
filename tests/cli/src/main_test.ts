@@ -771,7 +771,7 @@ function structuredEvidenceFieldsForTest(
       return {
         capsuleId: "cap_rehearsal",
         planRunId: "run_plan_rehearsal",
-        sourceUrl: "https://github.com/tako0614/takos-docs.git",
+        sourceUrl: "https://github.com/tako0614/takos-office.git",
         commitSha: "abcdef0123456789abcdef0123456789abcdef01",
         planDigest: testSha256Digest,
       };
@@ -4912,10 +4912,10 @@ test("accounts serve dry-run prints server plan", async () => {
     configured: false,
   });
   expect(
-    plan.serviceGraphMaterialResolver.paths.includes("takosumi.identity.oidc"),
+    plan.runtimeProjectionMaterialResolver.paths.includes("takosumi.identity.oidc"),
   ).toEqual(true);
   expect(
-    plan.serviceGraphMaterialResolver.paths.includes("takosumi.billing.usage"),
+    plan.runtimeProjectionMaterialResolver.paths.includes("takosumi.billing.usage"),
   ).toEqual(true);
   expect(plan.accountPlaneFacades).toEqual([
     "dashboard web/API",
@@ -5577,7 +5577,7 @@ test("accounts serve dry-run prints materialize worker config", async () => {
   });
 });
 
-test("accounts serve dry-run prints service graph material resolver config", async () => {
+test("accounts serve dry-run prints runtime projection material resolver config", async () => {
   const stdout: string[] = [];
   const stderr: string[] = [];
   const code = await main(
@@ -5585,7 +5585,7 @@ test("accounts serve dry-run prints service graph material resolver config", asy
       "accounts",
       "serve",
       "--dry-run",
-      "--service-graph-material-resolver-token",
+      "--runtime-projection-material-resolver-token",
       "resolver-token",
       "--billing-portal-url",
       "https://cloud.example.test/account/billing",
@@ -5599,9 +5599,9 @@ test("accounts serve dry-run prints service graph material resolver config", asy
   expect(code).toEqual(0);
   expect(stderr).toEqual([]);
   const plan = JSON.parse(stdout.join("\n"));
-  expect(plan.serviceGraphMaterialResolver.resolver).toEqual({
+  expect(plan.runtimeProjectionMaterialResolver.resolver).toEqual({
     configured: true,
-    source: "--service-graph-material-resolver-token",
+    source: "--runtime-projection-material-resolver-token",
     tokenConfigured: true,
     billingPortalUrl: "https://cloud.example.test/account/billing",
   });
@@ -5697,7 +5697,7 @@ test("accounts serve rejects partial materialize worker config", async () => {
   ]);
 });
 
-test("accounts serve rejects billing portal without service graph material resolver token", async () => {
+test("accounts serve rejects billing portal without runtime projection material resolver token", async () => {
   const stdout: string[] = [];
   const stderr: string[] = [];
   const code = await main(
@@ -5717,7 +5717,7 @@ test("accounts serve rejects billing portal without service graph material resol
   expect(code).toEqual(2);
   expect(stdout).toEqual([]);
   expect(stderr).toEqual([
-    "--billing-portal-url requires --service-graph-material-resolver-token or TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_MATERIAL_RESOLVER_TOKEN",
+    "--billing-portal-url requires --runtime-projection-material-resolver-token or TAKOSUMI_ACCOUNTS_RUNTIME_PROJECTION_MATERIAL_RESOLVER_TOKEN",
   ]);
 });
 

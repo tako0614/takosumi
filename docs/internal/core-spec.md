@@ -152,8 +152,15 @@ listings are read from and which presentation metadata is used; it does not
 change the Capsule execution model or create a second release authority.
 
 Store entries may expose an optional `installExperience` object. This is a
-dashboard UX contract, not execution authority and not a Takosumi-owned repo
-metadata requirement.
+dashboard UX contract, not execution authority.
+
+A repository may publish `.well-known/tcs.json` as an optional repo-owned
+presentation document for Store indexers. It is not a Takosumi manifest and is
+not required for direct Git installs. It can contain display text, icon URL,
+`modulePath`, setup inputs, `installExperience`, and output allowlist hints. It
+must not contain `git`, `source`, `ref`, `commit`, `resolvedCommit`, or
+`installConfigId`; those belong to the Store listing service and the Git
+Source / Run flow. Do not use source comments as the metadata schema.
 
 The OpenTofu module still owns its variable names. `installExperience` maps
 standard install concepts to those module variables:

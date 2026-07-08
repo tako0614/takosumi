@@ -138,6 +138,12 @@ release authority: branch, tag, commit, SourceSnapshot, and update policy stay
 in the Source / Run flow. Switching Store nodes changes the read source for
 listings and presentation metadata, not the Capsule execution model.
 
+Repositories may provide `.well-known/tcs.json` for Store indexers. This file is
+optional presentation metadata, not a Takosumi manifest. Direct Git install
+works without it. The file may describe `modulePath`, icon, visible inputs,
+`installExperience`, and output display hints, but it must not own `git`,
+`source`, `ref`, `commit`, `resolvedCommit`, or `installConfigId`.
+
 Takosumi can reuse SourceSnapshots, provider mirrors, provider plugin caches,
 runner capacity controls, and clear progress phases. It must not decide what a
 deployable app artifact is. Worker bundles, container images, release URLs,

@@ -18,7 +18,7 @@
 #
 # Once active, the property is reachable at:
 #   - https://takosumi.com/                      (landing)
-#   - https://takosumi.com/docs/                 (VitePress docs)
+#   - https://takosumi.com/docs/                 (VitePress software docs)
 # The default `takosumi-website.pages.dev` host stays available for
 # preview deploys.
 name = "takosumi-website"

@@ -4,8 +4,8 @@
 契約です。Takosumi OSS / Takosumi for Operator の portable API とは分けて
 扱います。
 
-Cloud の公開説明は [Takosumi Cloud](../cloud/index.md) と
-[Takosumi Cloud resources](./cloud-resources.md) を正本にします。このページは
+Cloud の公開説明は [Takosumi Cloud](./index.md) と
+[Takosumi Cloud resources](./resources.md) を正本にします。このページは
 endpoint、usage、API key、互換 route の契約を確認する詳細 reference です。
 
 アプリ画面の役割は、日常的に見る運用情報をすぐ確認できるようにすることです。
@@ -268,7 +268,7 @@ closed します。
 
 価格は Cloud endpoint request body ではなく Takosumi Cloud 側で決めます。request
 body や client header に `usdMicros` / `credits` を書かせません。公開価格と無料枠は
-[Takosumi Cloud pricing](../cloud/pricing.md) と Dashboard の billing 表示に出します。
+[Takosumi Cloud pricing](./pricing.md) と Dashboard の billing 表示に出します。
 実際の price book、同期手順、payment provider 連携の運用 detail は公開 reference
 ではなく運用メモ側で管理します。
 

@@ -3,18 +3,18 @@ import { expect, test } from "bun:test";
 import { createAccountsHandler } from "../../../../accounts/service/src/mod.ts";
 import { InMemoryAccountsStore } from "../../../../accounts/service/src/store.ts";
 import {
-  createTakosumiServiceGraphMaterialResolver,
+  createTakosumiRuntimeProjectionMaterialResolver,
   TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_BILLING_USAGE,
   TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_IDENTITY_OIDC,
   TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_BILLING_DEFAULT,
   TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_IDENTITY_OIDC,
-  TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_MATERIAL_RESOLVE_PATH,
-  type ServiceGraphMaterial,
-} from "../../../../accounts/service/src/service-graph-material-resolver.ts";
+  TAKOSUMI_ACCOUNTS_RUNTIME_PROJECTION_MATERIAL_RESOLVE_PATH,
+  type RuntimeProjectionMaterial,
+} from "../../../../accounts/service/src/runtime-projection-material-resolver.ts";
 
-test("Accounts service graph material resolver materializes OIDC public clients by default", async () => {
+test("Accounts runtime projection material resolver materializes OIDC public clients by default", async () => {
   const store = new InMemoryAccountsStore();
-  const resolver = createTakosumiServiceGraphMaterialResolver({
+  const resolver = createTakosumiRuntimeProjectionMaterialResolver({
     store,
     issuer: "https://cloud.example.test",
     now: () => 1_700_000_000_000,
@@ -63,9 +63,9 @@ test("Accounts service graph material resolver materializes OIDC public clients 
   expect(client?.clientSecretHash).toEqual(undefined);
 });
 
-test("Accounts service graph material resolver materializes yurucommu-style OIDC client context", async () => {
+test("Accounts runtime projection material resolver materializes yurucommu-style OIDC client context", async () => {
   const store = new InMemoryAccountsStore();
-  const resolver = createTakosumiServiceGraphMaterialResolver({
+  const resolver = createTakosumiRuntimeProjectionMaterialResolver({
     store,
     issuer: "https://app.takosumi.test",
     allowDeployControlCapsules: true,
@@ -109,9 +109,9 @@ test("Accounts service graph material resolver materializes yurucommu-style OIDC
   );
 });
 
-test("Accounts service graph material resolver rejects network-path redirectPaths", async () => {
+test("Accounts runtime projection material resolver rejects network-path redirectPaths", async () => {
   const store = new InMemoryAccountsStore();
-  const resolver = createTakosumiServiceGraphMaterialResolver({
+  const resolver = createTakosumiRuntimeProjectionMaterialResolver({
     store,
     issuer: "https://cloud.example.test",
     now: () => 1_700_000_000_000,
@@ -141,9 +141,9 @@ test("Accounts service graph material resolver rejects network-path redirectPath
   ]);
 });
 
-test("Accounts service graph material resolver can include an operator-internal OIDC URL", async () => {
+test("Accounts runtime projection material resolver can include an operator-internal OIDC URL", async () => {
   const store = new InMemoryAccountsStore();
-  const resolver = createTakosumiServiceGraphMaterialResolver({
+  const resolver = createTakosumiRuntimeProjectionMaterialResolver({
     store,
     issuer: "https://cloud.example.test",
     internalUrl: "http://accounts:8787/",
@@ -162,9 +162,9 @@ test("Accounts service graph material resolver can include an operator-internal 
   expect(material.internalUrl).toEqual("http://accounts:8787");
 });
 
-test("Accounts service graph material resolver never mints confidential clients (no unbacked secretRef)", async () => {
+test("Accounts runtime projection material resolver never mints confidential clients (no unbacked secretRef)", async () => {
   const store = new InMemoryAccountsStore();
-  const resolver = createTakosumiServiceGraphMaterialResolver({
+  const resolver = createTakosumiRuntimeProjectionMaterialResolver({
     store,
     issuer: "https://cloud.example.test",
     now: () => 1_700_000_000_000,
@@ -198,7 +198,7 @@ test("Accounts service graph material resolver never mints confidential clients 
   expect(client?.clientSecretHash).toEqual(undefined);
 });
 
-test("Accounts service graph material resolver reuses existing OIDC client", async () => {
+test("Accounts runtime projection material resolver reuses existing OIDC client", async () => {
   const store = new InMemoryAccountsStore();
   store.saveOidcClient({
     clientId: "toc_existing",
@@ -212,7 +212,7 @@ test("Accounts service graph material resolver reuses existing OIDC client", asy
     createdAt: 1,
     updatedAt: 1,
   });
-  const resolver = createTakosumiServiceGraphMaterialResolver({
+  const resolver = createTakosumiRuntimeProjectionMaterialResolver({
     store,
     issuer: "https://cloud.example.test",
   });
@@ -231,7 +231,7 @@ test("Accounts service graph material resolver reuses existing OIDC client", asy
   expect(material.clientSecretRef).toEqual(undefined);
 });
 
-test("Accounts service graph material resolver reconciles existing OIDC client to current redirect paths and scopes", async () => {
+test("Accounts runtime projection material resolver reconciles existing OIDC client to current redirect paths and scopes", async () => {
   const store = new InMemoryAccountsStore();
   store.saveOidcClient({
     clientId: "toc_existing_reconcile",
@@ -247,7 +247,7 @@ test("Accounts service graph material resolver reconciles existing OIDC client t
     updatedAt: 1_700_000_000_001,
   });
   let now = 1_700_000_000_999;
-  const resolver = createTakosumiServiceGraphMaterialResolver({
+  const resolver = createTakosumiRuntimeProjectionMaterialResolver({
     store,
     issuer: "https://cloud.example.test",
     now: () => now,
@@ -296,9 +296,9 @@ test("Accounts service graph material resolver reconciles existing OIDC client t
   ).toEqual(1_700_000_000_999);
 });
 
-test("Accounts service graph material resolver can project deploy-control installations", async () => {
+test("Accounts runtime projection material resolver can project deploy-control installations", async () => {
   const store = new InMemoryAccountsStore();
-  const resolver = createTakosumiServiceGraphMaterialResolver({
+  const resolver = createTakosumiRuntimeProjectionMaterialResolver({
     store,
     issuer: "https://cloud.example.test",
     allowDeployControlCapsules: true,
@@ -324,7 +324,7 @@ test("Accounts service graph material resolver can project deploy-control instal
   ).toEqual(TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_IDENTITY_OIDC);
 });
 
-test("Accounts service graph material resolver does not reassign existing spaces for deploy control projections", async () => {
+test("Accounts runtime projection material resolver does not reassign existing spaces for deploy control projections", async () => {
   const store = new InMemoryAccountsStore();
   store.saveLedgerAccount({
     accountId: "acct_existing",
@@ -339,7 +339,7 @@ test("Accounts service graph material resolver does not reassign existing spaces
     createdAt: 1,
     updatedAt: 1,
   });
-  const resolver = createTakosumiServiceGraphMaterialResolver({
+  const resolver = createTakosumiRuntimeProjectionMaterialResolver({
     store,
     issuer: "https://cloud.example.test",
     allowDeployControlCapsules: true,
@@ -364,9 +364,9 @@ test("Accounts service graph material resolver does not reassign existing spaces
   ).toEqual("acct_existing");
 });
 
-test("Accounts service graph material resolver supports pathless capability discovery", async () => {
+test("Accounts runtime projection material resolver supports pathless capability discovery", async () => {
   const store = new InMemoryAccountsStore();
-  const resolver = createTakosumiServiceGraphMaterialResolver({
+  const resolver = createTakosumiRuntimeProjectionMaterialResolver({
     store,
     issuer: "https://cloud.example.test",
     now: () => 1_700_000_000_000,
@@ -392,8 +392,8 @@ test("Accounts service graph material resolver supports pathless capability disc
   ]);
 });
 
-test("Accounts service graph material resolver returns empty discovery collection for nonmatching labels", async () => {
-  const resolver = createTakosumiServiceGraphMaterialResolver({
+test("Accounts runtime projection material resolver returns empty discovery collection for nonmatching labels", async () => {
+  const resolver = createTakosumiRuntimeProjectionMaterialResolver({
     store: new InMemoryAccountsStore(),
     issuer: "https://cloud.example.test",
   });
@@ -408,7 +408,7 @@ test("Accounts service graph material resolver returns empty discovery collectio
   ).toEqual([]);
 });
 
-test("Accounts service graph material resolver projects BillingPort material", async () => {
+test("Accounts runtime projection material resolver projects BillingPort material", async () => {
   const store = new InMemoryAccountsStore();
   store.saveLedgerAccount({
     accountId: "acct_1",
@@ -449,7 +449,7 @@ test("Accounts service graph material resolver projects BillingPort material", a
     createdAt: 1,
     updatedAt: 1,
   });
-  const resolver = createTakosumiServiceGraphMaterialResolver({
+  const resolver = createTakosumiRuntimeProjectionMaterialResolver({
     store,
     issuer: "https://cloud.example.test",
     billingPortalUrl: "https://dashboard.example.test/account/billing",
@@ -477,8 +477,8 @@ test("Accounts service graph material resolver projects BillingPort material", a
   expect(material.meteringCredentialRef).toEqual(undefined);
 });
 
-test("Accounts service graph material resolver ignores unknown paths", async () => {
-  const resolver = createTakosumiServiceGraphMaterialResolver({
+test("Accounts runtime projection material resolver ignores unknown paths", async () => {
+  const resolver = createTakosumiRuntimeProjectionMaterialResolver({
     store: new InMemoryAccountsStore(),
     issuer: "https://cloud.example.test",
   });
@@ -491,17 +491,17 @@ test("Accounts service graph material resolver ignores unknown paths", async () 
   ).toEqual(undefined);
 });
 
-test("Accounts handler exposes token-gated service graph material resolver route", async () => {
+test("Accounts handler exposes token-gated runtime projection material resolver route", async () => {
   const store = new InMemoryAccountsStore();
   const handler = createAccountsHandler({
     issuer: "https://cloud.example.test",
     store,
-    serviceGraphMaterialResolver: { token: "resolver-token" },
+    runtimeProjectionMaterialResolver: { token: "resolver-token" },
   });
 
   const unauthorized = await handler(
     new Request(
-      `https://cloud.example.test${TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_MATERIAL_RESOLVE_PATH}`,
+      `https://cloud.example.test${TAKOSUMI_ACCOUNTS_RUNTIME_PROJECTION_MATERIAL_RESOLVE_PATH}`,
       {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -516,7 +516,7 @@ test("Accounts handler exposes token-gated service graph material resolver route
 
   const response = await handler(
     new Request(
-      `https://cloud.example.test${TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_MATERIAL_RESOLVE_PATH}`,
+      `https://cloud.example.test${TAKOSUMI_ACCOUNTS_RUNTIME_PROJECTION_MATERIAL_RESOLVE_PATH}`,
       {
         method: "POST",
         headers: {
@@ -543,12 +543,12 @@ test("Accounts handler resolver route supports pathless discovery collections", 
   const handler = createAccountsHandler({
     issuer: "https://cloud.example.test",
     store,
-    serviceGraphMaterialResolver: { token: "resolver-token" },
+    runtimeProjectionMaterialResolver: { token: "resolver-token" },
   });
 
   const response = await handler(
     new Request(
-      `https://cloud.example.test${TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_MATERIAL_RESOLVE_PATH}`,
+      `https://cloud.example.test${TAKOSUMI_ACCOUNTS_RUNTIME_PROJECTION_MATERIAL_RESOLVE_PATH}`,
       {
         method: "POST",
         headers: {
@@ -579,7 +579,7 @@ test("Accounts handler resolver route supports pathless discovery collections", 
 
   const empty = await handler(
     new Request(
-      `https://cloud.example.test${TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_MATERIAL_RESOLVE_PATH}`,
+      `https://cloud.example.test${TAKOSUMI_ACCOUNTS_RUNTIME_PROJECTION_MATERIAL_RESOLVE_PATH}`,
       {
         method: "POST",
         headers: {
@@ -599,21 +599,21 @@ test("Accounts handler resolver route supports pathless discovery collections", 
 });
 
 function singleMaterial(
-  value: ServiceGraphMaterial | readonly ServiceGraphMaterial[] | undefined,
-): ServiceGraphMaterial {
+  value: RuntimeProjectionMaterial | readonly RuntimeProjectionMaterial[] | undefined,
+): RuntimeProjectionMaterial {
   expect(value).toBeDefined();
   if (Array.isArray(value)) {
     throw new Error("expected a single platform service material");
   }
-  return value as ServiceGraphMaterial;
+  return value as RuntimeProjectionMaterial;
 }
 
 function materialCollection(
-  value: ServiceGraphMaterial | readonly ServiceGraphMaterial[] | undefined,
-): readonly ServiceGraphMaterial[] {
+  value: RuntimeProjectionMaterial | readonly RuntimeProjectionMaterial[] | undefined,
+): readonly RuntimeProjectionMaterial[] {
   expect(value).toBeDefined();
   if (!Array.isArray(value)) {
     throw new Error("expected a platform service material collection");
   }
-  return value as readonly ServiceGraphMaterial[];
+  return value as readonly RuntimeProjectionMaterial[];
 }

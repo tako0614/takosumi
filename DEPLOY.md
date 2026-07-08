@@ -75,7 +75,8 @@ Smoke:
 curl -I https://takosumi.com/
 curl -I https://takosumi.com/docs/
 curl -I https://takosumi.com/docs/reference/model
-curl -I https://takosumi.com/docs/reference/cloud-endpoints
+curl -I https://app.takosumi.com/docs/
+curl -I https://app.takosumi.com/docs/endpoints
 ```
 
 ## Account plane (in-process)

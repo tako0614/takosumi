@@ -5970,8 +5970,7 @@ test("accounts handler exposes Stripe subscription status and invoice history", 
                 amount_paid: 100,
                 amount_due: 0,
                 total: 100,
-                hosted_invoice_url:
-                  "https://invoice.stripe.com/i/in_summary_1",
+                hosted_invoice_url: "https://invoice.stripe.com/i/in_summary_1",
                 invoice_pdf: "https://invoice.stripe.com/i/in_summary_1.pdf",
                 created: 1_789_000_000,
                 paid: true,
@@ -10510,6 +10509,102 @@ test("accounts handler paginates AppCapsule list via cursor and limit", async ()
   expect(overlimit.status).toEqual(400);
 });
 
+test("accounts handler hides archived and destroyed core AppCapsule projections from the default list", async () => {
+  const store = new InMemoryAccountsStore();
+  const now = Date.now();
+  store.saveLedgerAccount({
+    accountId: "acct_projection_sync",
+    legalOwnerSubject: "tsub_projection_sync",
+    createdAt: now,
+    updatedAt: now,
+  });
+  store.saveWorkspace({
+    workspaceId: "space_projection_sync",
+    accountId: "acct_projection_sync",
+    kind: "personal",
+    createdAt: now,
+    updatedAt: now,
+  });
+  const session = seedAccountSession(store, "tsub_projection_sync");
+  for (const [index, status] of (
+    [
+      ["inst_projection_ready", "ready"],
+      ["inst_projection_destroyed", "installing"],
+      ["inst_projection_exported", "exported"],
+    ] as const
+  ).entries()) {
+    store.saveAppCapsule({
+      capsuleId: status[0],
+      accountId: "acct_projection_sync",
+      workspaceId: "space_projection_sync",
+      appId: `example.${status[0]}`,
+      sourceGitUrl: `https://github.com/example/${status[0]}`,
+      sourceRef: "v1.0.0",
+      sourceCommit: "0123456789abcdef0123456789abcdef01234567",
+      planDigest: "sha256:app",
+      mode: "shared-cell",
+      status: status[1],
+      createdBySubject: "tsub_projection_sync",
+      createdAt: now + index,
+      updatedAt: now + index,
+    });
+  }
+  const handler = createAccountsHandler({
+    store,
+    deployControl: {
+      operations: deployControlOperationsStub({
+        getCapsule: (id) =>
+          Promise.resolve({
+            capsule: {
+              id,
+              workspaceId: "space_projection_sync",
+              name: id,
+              slug: id,
+              installConfigId: "cfg_projection_sync",
+              environment: "prod",
+              currentStateGeneration: id === "inst_projection_ready" ? 1 : 0,
+              status:
+                id === "inst_projection_destroyed" ? "destroyed" : "active",
+              createdAt: new Date(now).toISOString(),
+              updatedAt: new Date(now).toISOString(),
+            },
+          } as unknown as GetCapsuleResponse),
+      }),
+    },
+  });
+
+  const visibleResponse = await handler(
+    new Request(
+      "https://accounts.example.test/v1/capsule-projections?space_id=space_projection_sync",
+      { headers: accountSessionHeaders(session) },
+    ),
+  );
+  expect(visibleResponse.status).toEqual(200);
+  const visibleBody = await visibleResponse.json();
+  expect(
+    visibleBody.installations.map((item: { id: string }) => item.id),
+  ).toEqual(["inst_projection_ready"]);
+  expect(store.findAppCapsule("inst_projection_destroyed")?.status).toEqual(
+    "exported",
+  );
+
+  const archivedResponse = await handler(
+    new Request(
+      "https://accounts.example.test/v1/capsule-projections?space_id=space_projection_sync&include_exported=true",
+      { headers: accountSessionHeaders(session) },
+    ),
+  );
+  expect(archivedResponse.status).toEqual(200);
+  const archivedBody = await archivedResponse.json();
+  expect(
+    archivedBody.installations.map((item: { id: string }) => item.id),
+  ).toEqual([
+    "inst_projection_ready",
+    "inst_projection_destroyed",
+    "inst_projection_exported",
+  ]);
+});
+
 test("accounts handler signs export download redirects", async () => {
   const store = new InMemoryAccountsStore();
   const handler = createAccountsHandler({
@@ -10898,7 +10993,7 @@ function base64UrlDecodeBytes(value: string): Uint8Array<ArrayBuffer> {
 }
 
 test("handleUserInfo emits a flat space_memberships claim from the token's space", async () => {
-  // Regression guard for the bundled-app integration break: Office surfaces
+  // Regression guard for the installable-app integration break: Office surfaces
   // read a flat `space_memberships`
   // claim for membership checks. UserInfo must expose it derived from the
   // token's accessible space, alongside the canonical `takosumi.space_id`
@@ -10906,11 +11001,11 @@ test("handleUserInfo emits a flat space_memberships claim from the token's space
   const store = new InMemoryAccountsStore();
   const accessToken = "access-membership-1";
   await store.saveAccessToken(accessToken, {
-    clientId: "takos-docs",
+    clientId: "takos-office",
     scope: "openid profile",
     subject: "tsub_membership",
     capsuleId: "inst-membership",
-    appId: "takos-docs",
+    appId: "takos-office",
     workspaceId: "space-membership",
     role: "member",
     expiresAt: Date.now() + 60_000,

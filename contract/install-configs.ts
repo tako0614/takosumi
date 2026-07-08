@@ -215,13 +215,6 @@ export interface InstallConfigInstallExperience {
 
 export interface InstallConfigStoreSource {
   readonly git: string;
-  /**
-   * Optional Git ref hint. Store entries should usually omit this; release and
-   * update selection belongs to the Git Source / SourceSnapshot flow. This is
-   * for externally mirrored store feeds that cannot omit their source ref yet,
-   * not for the built-in store seed.
-   */
-  readonly ref?: string;
   readonly path: string;
 }
 

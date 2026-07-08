@@ -16,8 +16,8 @@ Use public docs for stable external contracts:
 ../reference/api.md
 ../reference/model.md
 ../reference/docs-contract.md
-../cloud/index.md
-../cloud/pricing.md
+../../app-docs/index.md
+../../app-docs/pricing.md
 ```
 
 Use this directory for operator procedures:

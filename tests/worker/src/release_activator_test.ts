@@ -179,6 +179,7 @@ test("runner release activator runs opaque post-apply commands", async () => {
   expect(capturedJob).toMatchObject({
     runId: "release_run_apply_1",
     applyRunId: "run_apply_1",
+    workspaceId: "space_1",
     installationId: "inst_1",
     deploymentId: "dep_1",
     sourceSnapshot: {
