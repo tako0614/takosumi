@@ -3939,6 +3939,83 @@ test("POST /api/v1/workspaces/:id/capsules carries store catalog metadata into t
   expect(createCall.installConfigId).toEqual(config.id);
 });
 
+test("POST /api/v1/workspaces/:id/capsules accepts large catalog default values for OpenTofu inputs", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const imageMap = Object.fromEntries(
+    Array.from({ length: 80 }, (_, index) => [
+      `service_${index}`,
+      `registry.example.test/takosumi/service-${index}:2026-07-08-${"a".repeat(32)}`,
+    ]),
+  );
+  const defaultValue = JSON.stringify(imageMap);
+  expect(defaultValue.length).toBeGreaterThan(2048);
+  const { request: req, url } = request(
+    "POST",
+    "/api/v1/workspaces/space_a/capsules",
+    {
+      cookie,
+      body: {
+        name: "takos",
+        environment: "production",
+        sourceId: "src_x",
+        installConfigId: "cfg_x",
+        catalog: {
+          templateId: "takos",
+          source: {
+            git: "https://github.com/tako0614/takos.git",
+            ref: "8c8d4f4eabbf52e434d5cee3b20e39cbe3df3333",
+            path: "deploy/opentofu",
+          },
+          order: 1000,
+          surface: "service",
+          kind: "worker",
+          provider: "cloudflare",
+          suggestedName: "takos",
+          badge: { ja: "追加候補", en: "Installable" },
+          name: { ja: "Takos", en: "Takos" },
+          description: {
+            ja: "AI ワークスペースをホスト",
+            en: "Host an AI workspace",
+          },
+          inputs: [
+            {
+              name: "release_container_images",
+              type: "json",
+              advanced: true,
+              defaultValue,
+              label: {
+                ja: "Release container images",
+                en: "Release container images",
+              },
+            },
+          ],
+        },
+      },
+    },
+  );
+
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+
+  expect(response?.status).toEqual(201);
+  const config = operations.calls.putInstallConfig?.[0] as {
+    catalog?: {
+      inputs?: Array<{ name: string; defaultValue?: string }>;
+    };
+  };
+  expect(
+    config.catalog?.inputs?.find(
+      (input) => input.name === "release_container_images",
+    )?.defaultValue,
+  ).toEqual(defaultValue);
+});
+
 test("POST /api/v1/workspaces/:id/capsules auto-provisions Takosumi Accounts OIDC for yurucommu", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
@@ -5754,9 +5831,7 @@ test("DELETE /api/v1/capsules/:id abandons unapplied projections when credential
   expect(body.abandoned).toEqual(true);
   expect(body.capsule.status).toEqual("destroyed");
   expect(body.projectionStatus).toEqual("exported");
-  expect(store.findAppCapsule("inst_pending_mint")?.status).toEqual(
-    "exported",
-  );
+  expect(store.findAppCapsule("inst_pending_mint")?.status).toEqual("exported");
 });
 
 test("POST /api/v1/capsules/:id/dependencies derives workspaceId from the consumer", async () => {

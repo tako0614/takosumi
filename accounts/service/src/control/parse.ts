@@ -340,7 +340,7 @@ function catalogInputsValue(
     const defaultValue =
       record.defaultValue === undefined
         ? undefined
-        : boundedStringValue(record.defaultValue, 2048);
+        : boundedStringValue(record.defaultValue, 16_384);
     const label = catalogTextValue(record.label);
     const helper =
       record.helper === undefined ? undefined : catalogTextValue(record.helper);
@@ -383,9 +383,7 @@ function catalogPathValue(value: unknown): string | undefined {
   return raw && raw.startsWith("/") ? raw : undefined;
 }
 
-function optionalCatalogVariable(
-  value: unknown,
-): string | undefined | false {
+function optionalCatalogVariable(value: unknown): string | undefined | false {
   if (value === undefined) return undefined;
   return catalogVariableNameValue(value) ?? false;
 }
