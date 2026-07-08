@@ -320,7 +320,7 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
     name: "takos-office",
     source: {
       git: "https://github.com/tako0614/takos-office.git",
-      ref: "33420226bcf7d3c6b20d031a2f6b204e16d50f58",
+      ref: "0c74008efda973f1820a07bd77d305b7d7340c2e",
       path: ".",
     },
     order: 115,
@@ -472,7 +472,7 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
     name: "takos-storage",
     source: {
       git: "https://github.com/tako0614/takos-storage.git",
-      ref: "a284c4ab3ce4ecf1302991f45f5c3d99b7c990b0",
+      ref: "db5e829f92ce5f96b541ad18912f5956265ec28b",
       path: ".",
     },
     order: 120,
@@ -595,7 +595,7 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
     name: "takos-git",
     source: {
       git: "https://github.com/tako0614/takos-git.git",
-      ref: "bdcd31989f870d56baa03b2ed589a81e08d02e7c",
+      ref: "7e92bffd9aa741d41d48c3edc2746a2086e55a16",
       path: ".",
     },
     order: 130,
