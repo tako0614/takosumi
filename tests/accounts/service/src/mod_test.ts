@@ -5870,6 +5870,7 @@ test("accounts handler creates Stripe Billing Portal Sessions for existing custo
   const stripeRequests: URLSearchParams[] = [];
   const handler = createAccountsHandler({
     store,
+    platformAccess: { status: "closed" },
     billingCheckout: {
       stripeSecretKey: "sk_test_checkout",
       plans: [],
