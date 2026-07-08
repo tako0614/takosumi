@@ -104,6 +104,9 @@ Auto-issued fallback:
 
 この URL は preview、初回 deploy、外部 DNS をまだ持っていない app の公開に使います。
 これは DNS ownership verification なしで使える managed namespace です。
+`*.app.takos.jp` のような managed namespace は custom domain quota とは別枠で、
+通常の app install では広く使える前提です。必要なのは DNS-valid な 1 ラベル、
+global uniqueness、予約名/abuse policy だけです。
 ユーザー所有ドメインを使う場合は custom domain を追加し、DNS ownership verification、
 certificate provisioning、plan/quota/abuse policy が完了したあと同じ route に
 紐づけます。
@@ -120,6 +123,8 @@ Custom domains:
 managed namespace は first-come-first-served です。同じ hostname を別 route が
 予約しようとした場合は失敗します。platform 用の予約名は使えません。失敗時に
 claimant の Workspace / Capsule 名は公開しません。
+任意の apex / subdomain は所有者 account に紐づく verified domain として扱い、
+plan/quota/abuse policy で制限します。
 custom domain が未検証・期限切れ・無効化された場合でも、default URL は残します。
 これにより DNS 設定ミスやドメイン移管中でも、app の確認と削除ができます。
 

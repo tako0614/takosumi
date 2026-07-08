@@ -2,6 +2,8 @@ import type { InstallConfig } from "@takosumi/internal/deploy-control-api";
 
 export const DEFAULT_MANAGED_PUBLIC_BASE_DOMAIN = "app.takos.jp";
 
+export type PublicHostPolicyKind = "managed_default_hostname" | "custom_domain";
+
 export function managedPublicBaseDomainFromInstallConfig(
   installConfig: InstallConfig | undefined,
 ): string {
@@ -55,6 +57,28 @@ export function isManagedPublicHost(
     normalizedHost.length - normalizedBase.length - 1,
   );
   return isManagedPublicHostLabel(label);
+}
+
+export function publicHostPolicyKind(
+  host: string,
+  baseDomains: readonly string[] = [DEFAULT_MANAGED_PUBLIC_BASE_DOMAIN],
+): PublicHostPolicyKind {
+  return baseDomains.some((baseDomain) => isManagedPublicHost(host, baseDomain))
+    ? "managed_default_hostname"
+    : "custom_domain";
+}
+
+export function normalizeManagedPublicBaseDomains(
+  values: readonly string[] | undefined,
+): readonly string[] {
+  const normalized = new Set<string>();
+  for (const value of values ?? []) {
+    const domain = normalizeManagedPublicBaseDomain(value);
+    if (domain) normalized.add(domain);
+  }
+  return normalized.size > 0
+    ? [...normalized]
+    : [DEFAULT_MANAGED_PUBLIC_BASE_DOMAIN];
 }
 
 function isManagedPublicHostLabel(value: string): boolean {

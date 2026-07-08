@@ -134,11 +134,18 @@ https://my-app.app.takos.jp
 This managed default hostname is a constrained namespace that does not require
 DNS ownership verification. Abuse policy, reserved names, and rate controls are
 operator policy, but normal app installs should be able to use it broadly.
+It is separate from custom-domain quota. Users choose only the single label in
+`<label>.<managed-base-domain>`, while the operator owns the base domain. For
+ordinary installs, Takosumi treats these names as broadly available except for
+global uniqueness, reserved labels, and abuse rate limits.
 
 Custom domains are additional user-owned hostnames attached to the same route.
 They are separate from managed default hostnames and require DNS ownership
 verification, certificate provisioning, and plan/quota/abuse policy before
-runtime activation. Dashboard and OpenTofu route lifecycle records carry:
+runtime activation. Arbitrary apex or subdomain names are not accepted as a
+free namespace; they are verified domains attached to the owning account and
+constrained by plan and abuse policy. Dashboard and OpenTofu route lifecycle
+records carry:
 
 | Field              | Meaning                                     |
 | ------------------ | ------------------------------------------- |

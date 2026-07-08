@@ -139,10 +139,16 @@ https://my-app.app.takos.jp
 この managed default hostname は、DNS ownership verification なしで使える
 定型 namespace です。乱用防止・予約名・レート制限は operator policy で制御しますが、
 通常の app install では広く使える前提にします。
+これは custom domain quota とは別枠です。ユーザーが選べるのは
+`<label>.<managed-base-domain>` の `<label>` だけで、所有権は Takosumi operator
+が持つ base domain の下に閉じます。そのため、通常のインストールでは重複排他と
+禁止語/abuse rate limit 以外の希少 resource として扱いません。
 
 custom domain は同じ route に追加するユーザー所有 hostname です。これは managed
 default hostname とは別物で、DNS ownership verification、certificate
 provisioning、plan/quota/abuse policy を通ったものだけ runtime に有効化します。
+任意の apex / subdomain を自由に受け入れるのではなく、所有者 account ごとの
+verified domain として数・plan・abuse policy を制限します。
 Dashboard / OpenTofu route lifecycle は次を扱います。
 
 | Field              | Meaning                                     |
