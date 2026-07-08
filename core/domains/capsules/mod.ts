@@ -158,7 +158,7 @@ export class CapsulesService {
       request.name,
       request.environment,
     );
-    if (existing) {
+    if (existing && existing.status !== "destroyed") {
       throw new OpenTofuControllerError(
         "failed_precondition",
         "capsule already exists",

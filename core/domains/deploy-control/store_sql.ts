@@ -6,7 +6,7 @@
  * schema migration for every non-indexed field.
  *
  * Logical schema is the Space-direct Installation model: spaces, install_configs,
- * provider_envs, installations (UNIQUE(space_id, name,
+ * provider_envs, installations (active UNIQUE(space_id, name,
  * environment)), provider_env_binding_sets (keyed (installation_id, environment)),
  * state_snapshots (keyed (installation_id, environment, generation) UNIQUE),
  * deployments (new shape), and a SINGLE `runs` table — the internal PlanRun
@@ -737,7 +737,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     );
   }
 
-  // --- installations (§5 / §27, UNIQUE(space_id, name, environment)) --------
+  // --- installations (§5 / §27, active UNIQUE(space_id, name, environment)) -
 
   async putInstallation(installation: Installation): Promise<Installation> {
     const values = installationValues(installation);
@@ -786,6 +786,7 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
           eq(pgSchema.installations.spaceId, spaceId),
           eq(pgSchema.installations.name, name),
           eq(pgSchema.installations.environment, environment),
+          ne(pgSchema.installations.status, "destroyed"),
         ),
       )
       .limit(1);

@@ -9,6 +9,7 @@ import {
   text,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 import { deployControlPostgresTableNames as names } from "./logical.ts";
 
 const json = (name: string) => jsonb(name).$type<unknown>();
@@ -164,11 +165,9 @@ export const installations = pgTable(
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [
-    uniqueIndex("takosumi_capsules_space_name_environment_unique").on(
-      table.spaceId,
-      table.name,
-      table.environment,
-    ),
+    uniqueIndex("takosumi_capsules_space_name_environment_active_unique")
+      .on(table.spaceId, table.name, table.environment)
+      .where(sql`${table.status} <> 'destroyed'`),
     index("takosumi_capsules_space_idx").on(table.spaceId),
     index("takosumi_capsules_project_idx").on(table.projectId),
     index("takosumi_capsules_current_state_version_idx").on(

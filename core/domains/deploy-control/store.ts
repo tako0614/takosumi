@@ -3,7 +3,7 @@
  *
  * The logical schema is the Space-direct OpenTofu Capsule DAG model: spaces,
  * sources(+snapshots), connections(+secret blobs), install_configs,
- * installations (UNIQUE(space_id, name, environment)), provider_env_binding_sets,
+ * installations (active UNIQUE(space_id, name, environment)), provider_env_binding_sets,
  * a SINGLE `runs` table (internal PlanRun / ApplyRun / SourceSyncRun records
  * persist as rows discriminated by run kind; the public §19 Run is a
  * projection), state_snapshots, and deployments.
@@ -586,7 +586,7 @@ export interface OpenTofuDeploymentStore {
   getInstallConfig(id: string): Promise<InstallConfig | undefined>;
   listInstallConfigs(spaceId?: string): Promise<readonly InstallConfig[]>;
 
-  // Installation records (spec §5 / §27, UNIQUE(space_id, name, environment)).
+  // Installation records (spec §5 / §27, active UNIQUE(space_id, name, environment)).
   putInstallation(installation: Installation): Promise<Installation>;
   getInstallation(id: string): Promise<Installation | undefined>;
   getInstallationByName(
@@ -1306,6 +1306,8 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     for (const existing of this.#installations.values()) {
       if (
         existing.id !== installation.id &&
+        existing.status !== "destroyed" &&
+        installation.status !== "destroyed" &&
         existing.spaceId === installation.spaceId &&
         existing.name === installation.name &&
         existing.environment === installation.environment
@@ -1335,6 +1337,7 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     return Promise.resolve(
       Array.from(this.#installations.values()).find(
         (row) =>
+          row.status !== "destroyed" &&
           row.spaceId === spaceId &&
           row.name === name &&
           row.environment === environment,
