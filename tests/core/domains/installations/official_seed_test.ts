@@ -221,6 +221,10 @@ test("hostable official configs expose public catalog metadata for the dashboard
     from: "service_exports",
     type: "json",
   });
+  expect(office?.outputAllowlist.worker_name).toEqual({
+    from: "worker_name",
+    type: "string",
+  });
   expect(storage?.catalog?.iconUrl).toContain("storage.svg");
   expect(storage?.catalog?.source.ref).toBe(
     "db5e829f92ce5f96b541ad18912f5956265ec28b",
@@ -234,6 +238,10 @@ test("hostable official configs expose public catalog metadata for the dashboard
     advanced: true,
     defaultValue:
       "9f9e3a8584048ec49fce4aa2ca9f8b3b942a35c6339c4e4e39aee306a4587a1b",
+  });
+  expect(storage?.outputAllowlist.worker_name).toEqual({
+    from: "worker_name",
+    type: "string",
   });
   expect(git?.catalog?.iconUrl).toContain("git.svg");
   expect(git?.catalog?.source.ref).toBe(
@@ -249,9 +257,13 @@ test("hostable official configs expose public catalog metadata for the dashboard
     defaultValue:
       "0f75a091e58d463dd45b20f1d1570fa69a9b2a06fe6b1e2f6c5914e75bf209eb",
   });
+  expect(git?.outputAllowlist.worker_name).toEqual({
+    from: "worker_name",
+    type: "string",
+  });
   expect(takos?.sourceKind).toBe("generic_capsule");
   expect(takos?.catalog?.source.ref).toBe(
-    "c9c155786cdefc1c0367c4444664a348784e6601",
+    "3b5f46cce2c92d343580a6dd6ac5fe3c7a21a35d",
   );
   expect(takos?.catalog?.source.path).toBe("deploy/opentofu");
   expect(takos?.modulePath).toBe("deploy/opentofu");

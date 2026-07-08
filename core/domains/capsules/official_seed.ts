@@ -463,6 +463,7 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
     },
     outputAllowlist: {
       url: { from: "url", type: "url" },
+      worker_name: { from: "worker_name", type: "string" },
       app_deployment: { from: "app_deployment", type: "json" },
       service_exports: { from: "service_exports", type: "json" },
     },
@@ -586,6 +587,7 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
     },
     outputAllowlist: {
       url: { from: "url", type: "url" },
+      worker_name: { from: "worker_name", type: "string" },
       app_deployment: { from: "app_deployment", type: "json" },
       service_exports: { from: "service_exports", type: "json" },
     },
@@ -709,6 +711,7 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
     },
     outputAllowlist: {
       url: { from: "url", type: "url" },
+      worker_name: { from: "worker_name", type: "string" },
       app_deployment: { from: "app_deployment", type: "json" },
       service_exports: { from: "service_exports", type: "json" },
     },
@@ -718,7 +721,7 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
     name: "takos",
     source: {
       git: "https://github.com/tako0614/takos.git",
-      ref: "c9c155786cdefc1c0367c4444664a348784e6601",
+      ref: "3b5f46cce2c92d343580a6dd6ac5fe3c7a21a35d",
       path: "deploy/opentofu",
     },
     order: 110,
