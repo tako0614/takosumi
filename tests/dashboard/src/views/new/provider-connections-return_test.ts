@@ -262,6 +262,9 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).toContain("hasManagedCloudflareProviderFallback");
     expect(newAppViewSource).toContain("rowHasManagedProviderDefault");
     expect(newAppViewSource).toContain(
+      "if (rowCanUseManagedProviderFallback(row)) return false",
+    );
+    expect(newAppViewSource).toContain(
       "if (rowHasManagedProviderDefault(row)) return false",
     );
     expect(newAppViewSource).toContain(
@@ -272,6 +275,18 @@ describe("/new Provider Connections return context", () => {
     );
     expect(newAppViewSource).toContain(
       "if (!connection && !hasManagedCloudflareProviderFallback()) return {}",
+    );
+    expect(newAppViewSource).toContain(
+      "const isUsableManagedProviderConnection = (connection: ProviderConnection)",
+    );
+    expect(newAppViewSource).toContain(
+      'connection.status === "pending" &&',
+    );
+    expect(newAppViewSource).toContain(
+      'connection.scope === "operator" &&',
+    );
+    expect(newAppViewSource).toContain(
+      "visibleProviderConnections().filter(isReadyProviderConnection)",
     );
     expect(newAppViewSource).toContain(
       "new Set(compatibility()?.rootModuleVariables ?? [])",
