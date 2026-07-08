@@ -284,6 +284,8 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).toContain("publicEndpoint?.urlVariable");
     expect(newAppViewSource).not.toContain('variables.has("worker_name")');
     expect(newAppViewSource).not.toContain('variables.has("app_url")');
+    expect(newAppViewSource).not.toContain('setDefault("worker_name"');
+    expect(newAppViewSource).not.toContain('setDefault("app_url"');
     expect(newAppViewSource).toContain("managedBaseDomain");
     expect(newAppViewSource).toContain(
       "const managedAppHost = currentSubdomain",
@@ -359,9 +361,7 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).toContain("appHostnameConflict");
     expect(newAppViewSource).toContain("uniqueServiceIdCandidate");
     expect(newAppViewSource).toContain('"new.hostnameConflict.suggest"');
-    expect(en["new.error.appHostnameUnavailable"]).toContain(
-      "already in use",
-    );
+    expect(en["new.error.appHostnameUnavailable"]).toContain("already in use");
     expect(ja["new.error.appHostnameUnavailable"]).toContain(
       "既に使われています",
     );
