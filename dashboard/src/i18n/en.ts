@@ -223,8 +223,8 @@ export const en: Record<keyof typeof ja, string> = {
   "apps.start.kicker": "No services yet",
   "apps.start.titleEmpty": "Add your first app",
   "apps.start.bodyEmpty": "Choose an app or paste an install link.",
-  "apps.start.optionCatalog": "Add service",
-  "apps.start.optionCatalogSub": "Choose an app or add from a link.",
+  "apps.start.optionStore": "Add service",
+  "apps.start.optionStoreSub": "Choose an app or add from a link.",
   "apps.empty.aria": "No apps",
   "apps.empty.kicker": "No apps yet",
   "apps.empty.title": "Nothing to open yet",
@@ -539,15 +539,15 @@ export const en: Record<keyof typeof ja, string> = {
   "new.flow.stepReview": "Review",
   "new.summary.aria": "Add summary",
   "new.summary.provider": "Runs on",
-  "new.catalogInput.title": "Service setup",
-  "new.catalogInput.subtitle":
+  "new.storeInput.title": "Service setup",
+  "new.storeInput.subtitle":
     "Name the service and fill the minimum fields needed to publish it.",
-  "new.catalogInput.errorRequired": "Enter {label}.",
-  "new.catalogInput.errorUnsafeValue":
+  "new.storeInput.errorRequired": "Enter {label}.",
+  "new.storeInput.errorUnsafeValue":
     "{label} contains unsupported characters or is too long.",
-  "new.catalogInput.errorSubdomain":
+  "new.storeInput.errorSubdomain":
     "Use a single {baseDomain} label for {label}. Lowercase letters, numbers, and hyphens are supported.",
-  "new.catalogInput.errorCustomDomain":
+  "new.storeInput.errorCustomDomain":
     "Use an https:// URL for {label}. {baseDomain} names must use one label; custom domains require ownership verification before deploy.",
   "new.deeplink.summary":
     "A link filled in “{capsule}”. Review it before adding.",
@@ -593,6 +593,21 @@ export const en: Record<keyof typeof ja, string> = {
   "new.name": "Service name",
   "new.vars.projectName": "Service ID",
   "new.advanced.title": "Advanced settings",
+  "new.env.title": "Environment variables",
+  "new.env.body":
+    "Use this only for runtime environment variables the app can store in plain text. Pass private values through connected accounts or Secrets.",
+  "new.env.name": "Variable name",
+  "new.env.value": "Value",
+  "new.env.add": "Add environment variable",
+  "new.env.remove": "Remove",
+  "new.env.errorNameRequired":
+    "Enter an environment variable name or remove the empty row.",
+  "new.env.errorUnsafeName":
+    "“{name}” cannot be passed as a plain environment variable. Use connected accounts or Secrets for private values.",
+  "new.env.errorUnsafeValue":
+    "The value for “{name}” is too long or contains an unsupported character.",
+  "new.env.errorDuplicate":
+    "Environment variable “{name}” is listed more than once.",
   "new.vars.inputsTitle": "Other settings",
   "new.vars.inputsBody":
     "Add extra visible inputs only when the app asks for something not shown above.",
@@ -607,8 +622,8 @@ export const en: Record<keyof typeof ja, string> = {
   "new.vars.errorUnsafeValue":
     "The value for “{name}” is too long or contains an unsupported character.",
   "new.vars.errorProjectNameReserved":
-    "Use the Service ID field for project_name.",
-  "new.vars.errorCatalogReserved": "Use the Service setup field for “{name}”.",
+    "Use the Service ID field for this value.",
+  "new.vars.errorStoreReserved": "Use the Service setup field for “{name}”.",
   "new.vars.errorDuplicate": "“{name}” is listed more than once.",
   "new.deeplink.invalidTitle": "This install link cannot be used",
   "new.deeplink.invalidBody":
@@ -718,7 +733,8 @@ export const en: Record<keyof typeof ja, string> = {
   "workspaceSettings.tab.connections": "Connections",
   "workspaceSettings.tab.billing": "Billing",
   "workspaceSettings.tab.usageQuota": "Usage / quota",
-  "workspaceSettings.tab.cloud": "Cloud resources / keys",
+  "workspaceSettings.tab.cloud": "Cloud resources",
+  "workspaceSettings.tab.keys": "API keys",
   "workspaceSettings.tab.backups": "Backups",
   "workspaceSettings.tab.shares": "Shared values",
   "workspaceSettings.general.displayName": "Display name",
@@ -1054,9 +1070,9 @@ export const en: Record<keyof typeof ja, string> = {
   "account.preferences.body": "Change language and appearance.",
 
   // --- cloud resources -------------------------------------------------------------
-  "cloudResources.title": "Takosumi Cloud",
+  "cloudResources.title": "Cloud resources",
   "cloudResources.subtitle":
-    "Review external keys and resources currently in use.",
+    "Review current-month usage, estimated cost, and resource inventory by type.",
   "cloudResources.unavailable.title": "Takosumi Cloud only",
   "cloudResources.unavailable.body":
     "Cloud-only endpoints are not provided in this runtime.",
@@ -1074,7 +1090,6 @@ export const en: Record<keyof typeof ja, string> = {
   "cloudResources.copied": "Copied.",
   "cloudResources.status.ready": "Ready",
   "cloudResources.status.check": "Needs check",
-  "cloudResources.baseUrl": "Connection URL",
   "cloudResources.keys.title": "External API keys",
   "cloudResources.keys.subtitle":
     "Create and review keys for apps that call the Takosumi Cloud API.",
@@ -1084,32 +1099,56 @@ export const en: Record<keyof typeof ja, string> = {
   "cloudResources.keys.nameRequired": "Enter a key name.",
   "cloudResources.keys.create": "Create key",
   "cloudResources.keys.created": "Created key",
+  "cloudResources.keys.createdNotice":
+    "Copy this key now. The full key is shown only once.",
   "cloudResources.keys.lastUsed": "Last used",
   "cloudResources.keys.empty": "No external API keys yet.",
+  "cloudResources.keys.secretNotice":
+    "Existing keys show their prefix only. Create a new key if you need a full key value again.",
   "cloudResources.keys.revoke": "Revoke",
   "cloudResources.keys.revokeTitle": "Revoke external API key",
   "cloudResources.keys.revokeMessage":
     "Revoke “{name}”. Apps using this key will no longer be able to connect.",
-  "cloudResources.ai.title": "AI Gateway",
-  "cloudResources.ai.subtitle": "Connection status and default model",
-  "cloudResources.ai.defaultModel": "Default model",
-  "cloudResources.ai.providers": "Upstreams",
-  "cloudResources.ai.models": "Models",
-  "cloudResources.ai.modelDetails": "Model list",
-  "cloudResources.compat.title": "External deploy URL",
-  "cloudResources.compat.subtitle":
-    "Connection details for deploys from external tools.",
-  "cloudResources.compat.token": "Auth status",
-  "cloudResources.compat.account": "Account",
-  "cloudResources.s3.title": "Object storage connection",
-  "cloudResources.s3.subtitle": "Status for object storage access.",
-  "cloudResources.s3.protocol": "Access method",
-  "cloudResources.s3.capability": "Supported features",
-  "cloudResources.s3.buckets": "Buckets",
-  "cloudResources.s3.configuredBuckets": "Ready buckets",
-  "cloudResources.inventory.title": "Cloud resources",
+  "cloudResources.usage.title": "This month",
+  "cloudResources.usage.subtitle": "{period} usage and estimated cost.",
+  "cloudResources.usage.currentMonth": "Current month",
+  "cloudResources.usage.totalCost": "Estimated cost",
+  "cloudResources.usage.resourceTypes": "Resource types",
+  "cloudResources.usage.events": "Usage events",
+  "cloudResources.usage.tableTitle": "Usage by resource type",
+  "cloudResources.usage.tableSubtitle":
+    "All reported resource families are grouped the same way, with inventory counts when a management surface is available.",
+  "cloudResources.usage.resourceType": "Resource type",
+  "cloudResources.usage.resourceCount": "Resources",
+  "cloudResources.usage.quantity": "Usage",
+  "cloudResources.usage.estimatedCost": "Estimated cost",
+  "cloudResources.usage.lastUsed": "Last used",
+  "cloudResources.usage.management": "Management",
+  "cloudResources.usage.manageAvailable": "Inventory",
+  "cloudResources.usage.usageOnly": "Usage only",
+  "cloudResources.usage.checkInventory": "Check",
+  "cloudResources.usage.noUsage": "No usage this month",
+  "cloudResources.usage.empty": "No cloud resource usage this month.",
+  "cloudResources.usage.error": "Could not load usage: {message}",
+  "cloudResources.usage.unit.runnerMinute": "runner min",
+  "cloudResources.usage.unit.gbHour": "GB-hours",
+  "cloudResources.usage.unit.gb": "GB",
+  "cloudResources.usage.unit.compute": "compute units",
+  "cloudResources.usage.unit.aiRequest": "AI requests",
+  "cloudResources.usage.unit.inputToken": "input tokens",
+  "cloudResources.usage.unit.outputToken": "output tokens",
+  "cloudResources.usage.unit.operation": "operations",
+  "cloudResources.management.title": "Management status",
+  "cloudResources.management.subtitle":
+    "Status for the resource management profile used by this workspace.",
+  "cloudResources.management.profile": "Management profile",
+  "cloudResources.management.auth": "Auth status",
+  "cloudResources.management.account": "Account",
+  "cloudResources.management.capabilities": "Capabilities",
+  "cloudResources.inventory.title": "Resource inventory",
   "cloudResources.inventory.subtitle":
-    "Resources available through Takosumi Cloud.",
+    "Inspect or delete resources exposed through available management surfaces.",
+  "cloudResources.inventory.error": "Could not load inventory: {message}",
   "cloudResources.inventory.kv": "KV",
   "cloudResources.inventory.r2": "Object Storage",
   "cloudResources.inventory.d1": "Database",

@@ -226,8 +226,8 @@ export const ja = {
   "apps.start.kicker": "まだサービスがありません",
   "apps.start.titleEmpty": "最初のアプリを追加しよう",
   "apps.start.bodyEmpty": "アプリを選ぶか、リンクを貼って追加します。",
-  "apps.start.optionCatalog": "追加する",
-  "apps.start.optionCatalogSub": "アプリ候補やリンクから追加できます。",
+  "apps.start.optionStore": "追加する",
+  "apps.start.optionStoreSub": "アプリ候補やリンクから追加できます。",
   "apps.empty.aria": "アプリがありません",
   "apps.empty.kicker": "まだアプリがありません",
   "apps.empty.title": "開けるアプリがありません",
@@ -542,14 +542,14 @@ export const ja = {
   "new.flow.stepReview": "確認",
   "new.summary.aria": "追加内容",
   "new.summary.provider": "ホスト先",
-  "new.catalogInput.title": "サービス設定",
-  "new.catalogInput.subtitle": "表示名と、公開に必要な最小限の項目です。",
-  "new.catalogInput.errorRequired": "{label} を入力してください。",
-  "new.catalogInput.errorUnsafeValue":
+  "new.storeInput.title": "サービス設定",
+  "new.storeInput.subtitle": "表示名と、公開に必要な最小限の項目です。",
+  "new.storeInput.errorRequired": "{label} を入力してください。",
+  "new.storeInput.errorUnsafeValue":
     "{label} の値が長すぎるか、使えない文字を含んでいます。",
-  "new.catalogInput.errorSubdomain":
+  "new.storeInput.errorSubdomain":
     "{label} は {baseDomain} の前に付く1段の名前を入力してください。英小文字・数字・ハイフンが使えます。",
-  "new.catalogInput.errorCustomDomain":
+  "new.storeInput.errorCustomDomain":
     "{label} は https:// のURLを使ってください。{baseDomain} は1段の名前だけ使えます。独自ドメインはデプロイ前に所有確認が必要です。",
   "new.deeplink.summary":
     "リンクから「{capsule}」の内容が入力されています。確認してから追加してください。",
@@ -596,6 +596,20 @@ export const ja = {
   "new.name": "サービス名",
   "new.vars.projectName": "サービスID",
   "new.advanced.title": "詳細設定",
+  "new.env.title": "環境変数",
+  "new.env.body":
+    "アプリが公開してよい実行時の環境変数を求める場合だけ使います。秘密値は接続済みアカウントや Secret から渡してください。",
+  "new.env.name": "環境変数名",
+  "new.env.value": "値",
+  "new.env.add": "環境変数を追加",
+  "new.env.remove": "削除",
+  "new.env.errorNameRequired":
+    "環境変数名を入力するか、空の行を削除してください。",
+  "new.env.errorUnsafeName":
+    "「{name}」は平文の環境変数として渡せません。秘密値は接続済みアカウントや Secret から渡してください。",
+  "new.env.errorUnsafeValue":
+    "「{name}」の値が長すぎるか、使えない文字を含んでいます。",
+  "new.env.errorDuplicate": "環境変数「{name}」が重複しています。",
   "new.vars.inputsTitle": "その他の設定",
   "new.vars.inputsBody":
     "上にない表示用の入力をアプリから求められた場合だけ使います。",
@@ -610,8 +624,8 @@ export const ja = {
   "new.vars.errorUnsafeValue":
     "「{name}」の値が長すぎるか、使えない文字を含んでいます。",
   "new.vars.errorProjectNameReserved":
-    "project_name はサービスIDの欄で指定してください。",
-  "new.vars.errorCatalogReserved":
+    "この値はサービスIDの欄で指定してください。",
+  "new.vars.errorStoreReserved":
     "「{name}」はサービス設定の欄で指定してください。",
   "new.vars.errorDuplicate": "「{name}」が重複しています。",
   "new.deeplink.invalidTitle": "このインストールリンクは利用できません",
@@ -720,7 +734,8 @@ export const ja = {
   "workspaceSettings.tab.connections": "接続",
   "workspaceSettings.tab.billing": "お支払い",
   "workspaceSettings.tab.usageQuota": "使用量 / 上限",
-  "workspaceSettings.tab.cloud": "クラウドリソース / キー",
+  "workspaceSettings.tab.cloud": "クラウドリソース",
+  "workspaceSettings.tab.keys": "APIキー",
   "workspaceSettings.tab.backups": "バックアップ",
   "workspaceSettings.tab.shares": "共有値",
   "workspaceSettings.general.displayName": "表示名",
@@ -1066,8 +1081,9 @@ export const ja = {
   "account.preferences.body": "言語と見た目を変更できます。",
 
   // --- cloud resources -------------------------------------------------------------
-  "cloudResources.title": "Takosumi Cloud",
-  "cloudResources.subtitle": "外部キーと利用中のリソースを確認します。",
+  "cloudResources.title": "クラウドリソース",
+  "cloudResources.subtitle":
+    "今月の使用量、見積費用、リソース一覧を種類ごとに確認します。",
   "cloudResources.unavailable.title": "Takosumi Cloud 専用です",
   "cloudResources.unavailable.body":
     "この実行環境では Cloud 専用エンドポイントは提供されていません。",
@@ -1086,7 +1102,6 @@ export const ja = {
   "cloudResources.copied": "コピーしました。",
   "cloudResources.status.ready": "利用可能",
   "cloudResources.status.check": "確認が必要",
-  "cloudResources.baseUrl": "接続先URL",
   "cloudResources.keys.title": "外部APIキー",
   "cloudResources.keys.subtitle":
     "Takosumi Cloud API を呼び出す外部アプリ用のキーを発行・確認します。",
@@ -1096,32 +1111,57 @@ export const ja = {
   "cloudResources.keys.nameRequired": "キー名を入力してください。",
   "cloudResources.keys.create": "キーを作成",
   "cloudResources.keys.created": "作成されたキー",
+  "cloudResources.keys.createdNotice":
+    "このキーを今コピーしてください。完全なキーは作成直後に一度だけ表示されます。",
   "cloudResources.keys.lastUsed": "最終利用",
   "cloudResources.keys.empty": "まだ外部APIキーはありません。",
+  "cloudResources.keys.secretNotice":
+    "既存キーは prefix のみ表示します。完全なキー値が必要な場合は新しいキーを作成してください。",
   "cloudResources.keys.revoke": "取り消し",
   "cloudResources.keys.revokeTitle": "外部APIキーを取り消し",
   "cloudResources.keys.revokeMessage":
     "「{name}」を取り消します。このキーを使っているアプリは接続できなくなります。",
-  "cloudResources.ai.title": "AI Gateway",
-  "cloudResources.ai.subtitle": "接続状態と既定モデル",
-  "cloudResources.ai.defaultModel": "既定モデル",
-  "cloudResources.ai.providers": "接続先数",
-  "cloudResources.ai.models": "モデル",
-  "cloudResources.ai.modelDetails": "モデル一覧",
-  "cloudResources.compat.title": "外部デプロイURL",
-  "cloudResources.compat.subtitle":
-    "外部ツールからデプロイするための接続先です。",
-  "cloudResources.compat.token": "認証状態",
-  "cloudResources.compat.account": "アカウント",
-  "cloudResources.s3.title": "オブジェクトストレージ接続",
-  "cloudResources.s3.subtitle": "オブジェクトストレージ接続の状態です。",
-  "cloudResources.s3.protocol": "方式",
-  "cloudResources.s3.capability": "対応機能",
-  "cloudResources.s3.buckets": "Bucket数",
-  "cloudResources.s3.configuredBuckets": "利用可能Bucket",
-  "cloudResources.inventory.title": "クラウドリソース",
+  "cloudResources.usage.title": "今月",
+  "cloudResources.usage.subtitle": "{period} の使用量と見積費用です。",
+  "cloudResources.usage.currentMonth": "今月",
+  "cloudResources.usage.totalCost": "見積費用",
+  "cloudResources.usage.resourceTypes": "リソース種類",
+  "cloudResources.usage.events": "使用イベント",
+  "cloudResources.usage.tableTitle": "種類別の使用量",
+  "cloudResources.usage.tableSubtitle":
+    "報告された resource family を同じ基準でまとめ、管理面があるものはリソース数も表示します。",
+  "cloudResources.usage.resourceType": "種類",
+  "cloudResources.usage.resourceCount": "リソース数",
+  "cloudResources.usage.quantity": "使用量",
+  "cloudResources.usage.estimatedCost": "見積費用",
+  "cloudResources.usage.lastUsed": "最終利用",
+  "cloudResources.usage.management": "管理",
+  "cloudResources.usage.manageAvailable": "一覧あり",
+  "cloudResources.usage.usageOnly": "使用量のみ",
+  "cloudResources.usage.checkInventory": "確認",
+  "cloudResources.usage.noUsage": "今月の使用なし",
+  "cloudResources.usage.empty": "今月のクラウドリソース使用量はありません。",
+  "cloudResources.usage.error": "使用量を読み込めませんでした: {message}",
+  "cloudResources.usage.unit.runnerMinute": "runner分",
+  "cloudResources.usage.unit.gbHour": "GB時間",
+  "cloudResources.usage.unit.gb": "GB",
+  "cloudResources.usage.unit.compute": "compute unit",
+  "cloudResources.usage.unit.aiRequest": "AIリクエスト",
+  "cloudResources.usage.unit.inputToken": "入力token",
+  "cloudResources.usage.unit.outputToken": "出力token",
+  "cloudResources.usage.unit.operation": "操作",
+  "cloudResources.management.title": "管理状態",
+  "cloudResources.management.subtitle":
+    "このワークスペースで使うリソース管理 profile の状態です。",
+  "cloudResources.management.profile": "管理profile",
+  "cloudResources.management.auth": "認証状態",
+  "cloudResources.management.account": "アカウント",
+  "cloudResources.management.capabilities": "Capability",
+  "cloudResources.inventory.title": "リソース一覧",
   "cloudResources.inventory.subtitle":
-    "Takosumi Cloud 側で使えるリソースです。",
+    "利用可能な管理面から見えるリソースを確認・削除します。",
+  "cloudResources.inventory.error":
+    "リソース一覧を読み込めませんでした: {message}",
   "cloudResources.inventory.kv": "KV",
   "cloudResources.inventory.r2": "オブジェクトストレージ",
   "cloudResources.inventory.d1": "データベース",

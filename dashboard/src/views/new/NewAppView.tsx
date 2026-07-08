@@ -9,7 +9,7 @@
  *     presentation metadata. Picking one pre-fills the same Git-backed flow.
  *   - External install link: another site links `/install?git=…` (or the
  *     packed `?source=git::…` form); the router forwards the query here and
- *     lib/install-link.ts seeds the Git form. A link only PRE-FILLS — the
+ *     lib/install-link.ts pre-fills the Git form. A link only PRE-FILLS — the
  *     summary states the provenance and the visitor still confirms in this
  *     client (compatibility check → explicit add). No worker-side handling.
  *
@@ -139,6 +139,11 @@ interface InputVariableRow {
   readonly name: string;
   readonly value: string;
   readonly jsonValue?: JsonValue;
+}
+
+interface EnvVariableRow {
+  readonly name: string;
+  readonly value: string;
 }
 
 type StoreMetadata = NonNullable<InstallConfig["store"]>;
@@ -742,12 +747,32 @@ function inputVariableRowsFromPrefill(
   vars: Readonly<Record<string, JsonValue>> | undefined,
 ): readonly InputVariableRow[] {
   return Object.entries(vars ?? {})
+    .filter(([name]) => name !== "env")
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([name, value]) => ({
       name,
       value: installVariableDisplayValue(value),
       ...(typeof value === "string" ? {} : { jsonValue: value }),
     }));
+}
+
+function envVariableRowsFromPrefill(
+  vars: Readonly<Record<string, JsonValue>> | undefined,
+): readonly EnvVariableRow[] {
+  const env = vars?.env;
+  if (!isJsonRecord(env)) return [];
+  return Object.entries(env)
+    .filter((entry): entry is [string, string] => typeof entry[1] === "string")
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([name, value]) => ({ name, value }));
+}
+
+function isSafePlainEnvName(name: string): boolean {
+  const trimmed = name.trim();
+  if (!/^[A-Z_][A-Z0-9_]{0,127}$/u.test(trimmed)) return false;
+  return !/(SECRET|TOKEN|PASSWORD|CREDENTIAL|PRIVATE_?KEY|API_?KEY)/iu.test(
+    trimmed,
+  );
 }
 
 function storeKindFromStoreListing(
@@ -968,7 +993,7 @@ function Inner() {
 
   // External install link (client-handled): another site links
   // `/install?git=…` (or the packed `?source=git::…` form), the router
-  // forwards the query here, and the parser seeds the Git form. A link only
+  // forwards the query here, and the parser pre-fills the Git form. A link only
   // PRE-FILLS — the visitor still confirms in this client (compatibility
   // check, then the explicit add button).
   const initialSearch = typeof location === "undefined" ? "" : location.search;
@@ -1030,6 +1055,9 @@ function Inner() {
   const [inputVariables, setInputVariables] = createSignal<
     readonly InputVariableRow[]
   >(inputVariableRowsFromPrefill(initialInstallPrefill?.vars));
+  const [envVariables, setEnvVariables] = createSignal<
+    readonly EnvVariableRow[]
+  >(envVariableRowsFromPrefill(initialInstallPrefill?.vars));
   const [installConfigId, setInstallConfigId] = createSignal("");
   const [compatibility, setCompatibility] =
     createSignal<CapsuleCompatibilityResult | null>(null);
@@ -1280,7 +1308,7 @@ function Inner() {
       if (field.required && !value) {
         if (
           isConnectionScopedStoreInput(entry, field) ||
-          isProjectNameStoreInput(entry, field)
+          isServiceIdentityStoreInput(entry, field)
         ) {
           continue;
         }
@@ -1428,6 +1456,8 @@ function Inner() {
     if (storeError) return storeError;
     const variableError = inputVariableError();
     if (variableError) return variableError;
+    const envError = envVariableError();
+    if (envError) return envError;
     return null;
   };
   const effectiveRef = () => {
@@ -1566,6 +1596,18 @@ function Inner() {
     setInputVariables((rows) => rows.filter((_, i) => i !== index));
     resetCompatibility();
   };
+  const updateEnvVariable = (index: number, patch: Partial<EnvVariableRow>) => {
+    setEnvVariables((rows) =>
+      rows.map((row, i) => (i === index ? { ...row, ...patch } : row)),
+    );
+    resetCompatibility();
+  };
+  const addEnvVariable = () =>
+    setEnvVariables((rows) => [...rows, { name: "", value: "" }]);
+  const removeEnvVariable = (index: number) => {
+    setEnvVariables((rows) => rows.filter((_, i) => i !== index));
+    resetCompatibility();
+  };
   const normalizedInputVariables = (): Record<string, JsonValue> => {
     const variables: Record<string, JsonValue> = {};
     for (const row of inputVariables()) {
@@ -1578,6 +1620,25 @@ function Inner() {
           ? row.jsonValue
           : value;
     }
+    return variables;
+  };
+  const normalizedEnvVariables = (): Record<string, JsonValue> => {
+    const env: Record<string, JsonValue> = {};
+    for (const row of envVariables()) {
+      const name = row.name.trim();
+      const value = row.value.trim();
+      if (!name && !value) continue;
+      env[name] = value;
+    }
+    return env;
+  };
+  const mergeEnvVariables = (
+    variables: Record<string, JsonValue>,
+    env: Readonly<Record<string, JsonValue>>,
+  ) => {
+    if (Object.keys(env).length === 0) return variables;
+    const existing = isJsonRecord(variables.env) ? variables.env : {};
+    variables.env = { ...existing, ...env };
     return variables;
   };
   const storeListingDefaultVariables = (): Readonly<
@@ -1650,7 +1711,28 @@ function Inner() {
     }
     return null;
   };
-  const shouldOpenServiceAdvanced = () => inputVariables().length > 0;
+  const envVariableError = (): string | null => {
+    const seen = new Set<string>();
+    for (const row of envVariables()) {
+      const variableName = row.name.trim();
+      const value = row.value.trim();
+      if (!variableName && !value) continue;
+      if (!variableName) return t("new.env.errorNameRequired");
+      if (!isSafePlainEnvName(variableName)) {
+        return t("new.env.errorUnsafeName", { name: variableName });
+      }
+      if (!isSafeInstallVariableValue(value)) {
+        return t("new.env.errorUnsafeValue", { name: variableName });
+      }
+      if (seen.has(variableName)) {
+        return t("new.env.errorDuplicate", { name: variableName });
+      }
+      seen.add(variableName);
+    }
+    return null;
+  };
+  const shouldOpenServiceAdvanced = () =>
+    inputVariables().length > 0 || envVariables().length > 0;
   const installReturnVariables = (): Readonly<Record<string, JsonValue>> => {
     const variables: Record<string, JsonValue> = {
       ...storeListingDefaultVariables(),
@@ -1662,6 +1744,7 @@ function Inner() {
     }
     Object.assign(variables, selectedStoreReturnVariables());
     Object.assign(variables, normalizedInputVariables());
+    mergeEnvVariables(variables, normalizedEnvVariables());
     return variables;
   };
   const installVariables = ():
@@ -1676,6 +1759,7 @@ function Inner() {
     if (serviceNameVariable && supportsServiceNameInput()) {
       variables[serviceNameVariable] = serviceNameInputValue();
     }
+    mergeEnvVariables(variables, normalizedEnvVariables());
     Object.assign(variables, managedProviderVariableDefaults(variables));
     return Object.keys(variables).length > 0 ? variables : undefined;
   };
@@ -1779,16 +1863,38 @@ function Inner() {
     );
     const hints = new Set<string>();
     for (const connection of matchingConnections) {
-      if (entry.provider === "cloudflare" && field.name === "accountId") {
-        const value = connection.scopeHints?.accountId?.trim();
-        if (value) hints.add(value);
-      }
-      if (entry.provider === "aws" && field.name === "region") {
-        const value = connection.scopeHints?.awsRegion?.trim();
-        if (value) hints.add(value);
-      }
+      const value = scopeHintValueForStoreInput(connection, field);
+      if (value) hints.add(value);
     }
     return hints.size === 1 ? Array.from(hints)[0] : undefined;
+  };
+  const scopeHintValueForStoreInput = (
+    connection: Connection,
+    field: StoreInputField,
+  ): string | undefined => {
+    const name = field.name
+      .trim()
+      .replace(/[^A-Za-z0-9]+/gu, "_")
+      .toLowerCase();
+    const hint =
+      name === "accountid" ||
+      name === "account_id" ||
+      name === "cloudflare_account_id"
+        ? connection.scopeHints?.accountId
+        : name === "zoneid" ||
+            name === "zone_id" ||
+            name === "cloudflare_zone_id" ||
+            name === "cloudflare_route_zone_id"
+          ? connection.scopeHints?.zoneId
+          : name === "region" || name === "aws_region"
+            ? connection.scopeHints?.awsRegion
+            : name === "workerssubdomain" ||
+                name === "workers_subdomain" ||
+                name === "cloudflare_workers_subdomain"
+              ? connection.scopeHints?.workersSubdomain
+              : undefined;
+    const value = hint?.trim();
+    return value || undefined;
   };
   const storeInputHasImplicitValue = (
     entry: StoreEntry,
@@ -1797,13 +1903,16 @@ function Inner() {
     field.required &&
     !storeInputTouched()[storeInputKey(entry.id, field.name)] &&
     storeScopeHintValue(entry, field) !== undefined;
-  const isProjectNameStoreInput = (entry: StoreEntry, field: StoreInputField) =>
+  const isServiceIdentityStoreInput = (
+    entry: StoreEntry,
+    field: StoreInputField,
+  ) =>
     field.name === storeServiceNameVariable(entry) &&
     serviceNameHintIsGenerated(field.defaultValue);
   const isConnectionScopedStoreInput = (
     entry: StoreEntry,
     field: StoreInputField,
-  ) => entry.provider === "cloudflare" && field.name === "accountId";
+  ) => storeInputHasImplicitValue(entry, field);
   const isAdvancedStoreInput = (entry: StoreEntry, field: StoreInputField) =>
     field.advanced === true ||
     field.secret === true ||
@@ -1812,14 +1921,14 @@ function Inner() {
     entry.inputs.filter(
       (field) =>
         !isConnectionScopedStoreInput(entry, field) &&
-        !isProjectNameStoreInput(entry, field) &&
+        !isServiceIdentityStoreInput(entry, field) &&
         !isAdvancedStoreInput(entry, field),
     );
   const advancedStoreInputs = (entry: StoreEntry) =>
     entry.inputs.filter(
       (field) =>
         !isConnectionScopedStoreInput(entry, field) &&
-        !isProjectNameStoreInput(entry, field) &&
+        !isServiceIdentityStoreInput(entry, field) &&
         isAdvancedStoreInput(entry, field),
     );
   const hasMissingAdvancedStoreInputs = () => {
@@ -2220,9 +2329,11 @@ function Inner() {
       setStoreInputValues(defaults);
       setStoreInputTouched({});
       setInputVariables([]);
+      setEnvVariables(envVariableRowsFromPrefill(next.vars));
       setInstallConfigId(entry.installConfigId);
     } else {
       setInputVariables(inputVariableRowsFromPrefill(next.vars));
+      setEnvVariables(envVariableRowsFromPrefill(next.vars));
     }
     const nextServiceNameVariable = storeListing
       ? storeServiceNameVariable(storeMetadataFromStoreListing(storeListing))
@@ -2266,6 +2377,7 @@ function Inner() {
     setStoreInputValues({});
     setStoreInputTouched({});
     setInputVariables([]);
+    setEnvVariables([]);
     resetCompatibility();
   };
   const startLinkImport = () => {
@@ -3362,6 +3474,76 @@ function Inner() {
                       />
                     </FormField>
                   </Show>
+                  <section class="wb-stack">
+                    <h3 class="tg-card-title">{t("new.env.title")}</h3>
+                    <p class="wb-note">{t("new.env.body")}</p>
+                    <div class="wb-variable-list">
+                      <For each={envVariables()}>
+                        {(row, index) => (
+                          <div class="wb-variable-row">
+                            <FormField label={t("new.env.name")}>
+                              <Input
+                                id={`new-env-name-${index()}`}
+                                name={`envName:${index()}`}
+                                type="text"
+                                value={row.name}
+                                onInput={(e) =>
+                                  updateEnvVariable(index(), {
+                                    name: e.currentTarget.value,
+                                  })
+                                }
+                                placeholder="APP_PUBLIC_URL"
+                                autocomplete="off"
+                                autocapitalize="characters"
+                                spellcheck={false}
+                              />
+                            </FormField>
+                            <FormField label={t("new.env.value")}>
+                              <Input
+                                id={`new-env-value-${index()}`}
+                                name={`envValue:${index()}`}
+                                type="text"
+                                value={row.value}
+                                onInput={(e) =>
+                                  updateEnvVariable(index(), {
+                                    value: e.currentTarget.value,
+                                  })
+                                }
+                                placeholder="value"
+                                autocomplete="off"
+                                spellcheck={false}
+                              />
+                            </FormField>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              icon={<Trash size={16} />}
+                              onClick={() => removeEnvVariable(index())}
+                            >
+                              {t("new.env.remove")}
+                            </Button>
+                          </div>
+                        )}
+                      </For>
+                    </div>
+                    <div class="wb-form-actions">
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        icon={<Plus size={16} />}
+                        onClick={addEnvVariable}
+                      >
+                        {t("new.env.add")}
+                      </Button>
+                    </div>
+                    <Show when={envVariableError()}>
+                      {(message) => (
+                        <p class="wb-error" role="alert">
+                          {message()}
+                        </p>
+                      )}
+                    </Show>
+                  </section>
                   <section class="wb-stack">
                     <h3 class="tg-card-title">{t("new.vars.inputsTitle")}</h3>
                     <p class="wb-note">{t("new.vars.inputsBody")}</p>
