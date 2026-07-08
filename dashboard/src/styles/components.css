@@ -74,11 +74,11 @@
   cursor: not-allowed;
 }
 .tg-btn-primary {
-  background: var(--tg-accent);
+  background: var(--tg-accent-grad);
   color: var(--tg-accent-fg);
   -webkit-text-fill-color: var(--tg-accent-fg);
-  border-color: var(--tg-accent);
-  box-shadow: var(--tg-shadow-xs);
+  border-color: transparent;
+  box-shadow: var(--tg-accent-btn-shadow);
 }
 .tg-btn-primary:visited,
 .tg-btn-primary:focus-visible {
@@ -86,11 +86,11 @@
   -webkit-text-fill-color: var(--tg-accent-fg);
 }
 .tg-btn-primary:hover:not(:disabled) {
-  background: var(--tg-accent-hover);
   color: var(--tg-accent-fg);
   -webkit-text-fill-color: var(--tg-accent-fg);
+  filter: brightness(1.06);
   transform: translateY(-1px);
-  box-shadow: var(--tg-shadow-card-hover);
+  box-shadow: var(--tg-accent-btn-shadow), var(--tg-shadow-card-hover);
 }
 .tg-btn-secondary {
   background: var(--tg-bg-elev);
@@ -166,7 +166,7 @@
   padding: var(--tg-s-5);
   position: relative;
   overflow: hidden;
-  box-shadow: var(--tg-shadow-xs);
+  box-shadow: var(--tg-card-inset), var(--tg-shadow-xs);
   transition:
     border-color var(--tg-dur) var(--tg-ease),
     box-shadow var(--tg-dur) var(--tg-ease),
@@ -175,7 +175,7 @@
 .tg-card-hover:hover {
   border-color: var(--tg-line-strong);
   transform: translateY(-2px);
-  box-shadow: var(--tg-shadow-card-hover);
+  box-shadow: var(--tg-card-inset), var(--tg-shadow-card-hover);
 }
 .tg-card-header {
   display: flex;
@@ -694,14 +694,14 @@
   cursor: not-allowed;
 }
 .btn-primary {
-  background: var(--tg-accent);
+  background: var(--tg-accent-grad);
   color: var(--tg-accent-fg);
-  border-color: var(--tg-accent);
-  box-shadow: none;
+  border-color: transparent;
+  box-shadow: var(--tg-accent-btn-shadow);
 }
 .btn-primary:hover:not(:disabled) {
-  background: var(--tg-accent-hover);
   color: var(--tg-accent-fg);
+  filter: brightness(1.06);
 }
 .btn-secondary {
   background: transparent;
