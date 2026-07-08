@@ -485,6 +485,43 @@ test("model e2e: GET /internal/v1/capsules/{id} returns the new shape", async ()
   expect(body.capsule.installType).toBeUndefined();
 });
 
+test("model e2e: DELETE abandons an unapplied Capsule without a destroy plan", async () => {
+  const { app, operations } = await service();
+  const spaceId = await createSpace(app, "abandon");
+  const sourceId = await createSource(app, spaceId);
+  const installConfigId = await seedInstallConfig(operations, spaceId);
+
+  const createRes = await app.request(
+    `/internal/v1/workspaces/${spaceId}/capsules`,
+    {
+      method: "POST",
+      headers: headers({ "content-type": "application/json" }),
+      body: JSON.stringify({
+        name: "broken",
+        environment: "production",
+        sourceId,
+        installConfigId,
+      }),
+    },
+  );
+  expect(createRes.status).toBe(201);
+  const capsuleId = (await createRes.json()).capsule.id as string;
+
+  const deleteRes = await app.request(`/internal/v1/capsules/${capsuleId}`, {
+    method: "DELETE",
+    headers: headers(),
+  });
+
+  expect(deleteRes.status).toBe(202);
+  const body = await deleteRes.json();
+  expect(body.abandoned).toBe(true);
+  expect(body.run).toBeUndefined();
+  expect(body.capsule.status).toBe("destroyed");
+  expect((await operations.installations.getCapsule(capsuleId)).status).toBe(
+    "destroyed",
+  );
+});
+
 test("model e2e: install-configs lists the space's seeded config", async () => {
   const { app, operations } = await service();
   const spaceId = await createSpace(app, "configs");

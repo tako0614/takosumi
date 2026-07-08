@@ -409,6 +409,14 @@ async function deleteCapsule(
       200,
     );
   }
+  if (!capsuleHasAppliedState(installation)) {
+    return await abandonUnappliedCapsule({
+      operations,
+      store,
+      installation,
+      reason: "delete requested before first successful apply",
+    });
+  }
   try {
     const response = await operations.createCapsuleDestroyPlan(capsuleId);
     return jsonStatus(
@@ -441,12 +449,34 @@ async function maybeAbandonUnappliedCapsule(input: {
   }
   const reason = unappliedCapsuleAbandonReason(input.error);
   if (!reason) return undefined;
+  return await abandonUnappliedCapsule({
+    operations: input.operations,
+    store: input.store,
+    installation: input.installation,
+    reason,
+  });
+}
+
+function capsuleHasAppliedState(capsule: Capsule): boolean {
+  return Boolean(
+    capsule.currentDeploymentId ||
+      capsule.currentStateVersionId ||
+      capsule.currentStateGeneration > 0,
+  );
+}
+
+async function abandonUnappliedCapsule(input: {
+  readonly operations: ControlPlaneOperations;
+  readonly store: AccountsStore;
+  readonly installation: Capsule;
+  readonly reason: string;
+}): Promise<Response> {
   const projection = await input.store.findAppCapsule(input.installation.id);
   const installation =
     input.operations.installations.abandonUnappliedCapsule !== undefined
       ? await input.operations.installations.abandonUnappliedCapsule(
           input.installation.id,
-          reason,
+          input.reason,
         )
       : await input.operations.installations.patchCapsuleStatus(
           input.installation.id,
@@ -458,7 +488,7 @@ async function maybeAbandonUnappliedCapsule(input: {
       store: input.store,
       installation: projection,
       requestedStatus: "exported",
-      reason,
+      reason: input.reason,
     });
     projectionStatus =
       (await input.store.findAppCapsule(input.installation.id))?.status ??
