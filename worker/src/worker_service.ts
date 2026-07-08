@@ -276,8 +276,30 @@ function managedProviderCredentialIssuerFromEnv(
       ...(phase ? { phase } : {}),
       scopes: ["write"],
     });
+    const cloudflareAccountId =
+      typeof connection.scopeHints.accountId === "string" &&
+      connection.scopeHints.accountId.trim()
+        ? connection.scopeHints.accountId.trim()
+        : undefined;
+    const cloudflareCompatValues =
+      tokenArg.envName === "CLOUDFLARE_API_TOKEN"
+        ? {
+            CLOUDFLARE_API_BASE_URL: providerBaseUrl,
+            CF_API_BASE_URL: providerBaseUrl,
+            CLOUDFLARE_BASE_URL: providerBaseUrl,
+            ...(cloudflareAccountId
+              ? {
+                  CLOUDFLARE_ACCOUNT_ID: cloudflareAccountId,
+                  CF_ACCOUNT_ID: cloudflareAccountId,
+                }
+              : {}),
+          }
+        : {};
     return {
-      values: { [tokenArg.envName]: issued.token },
+      values: {
+        [tokenArg.envName]: issued.token,
+        ...cloudflareCompatValues,
+      },
       issuer: "takosumi_managed_provider_token",
       temporary: true,
       expiresAt: issued.expiresAt,

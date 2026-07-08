@@ -390,7 +390,12 @@ test("provider-connection connection pool mints an operator connection from any 
 test("provider-connection connection pool mints a pending managed-provider connection through the issuer", async () => {
   const { vault } = makeVault({
     managedProviderCredentialIssuer: async () => ({
-      values: { CLOUDFLARE_API_TOKEN: "takmpt_provider_env" },
+      values: {
+        CLOUDFLARE_API_TOKEN: "takmpt_provider_env",
+        CLOUDFLARE_ACCOUNT_ID: "ts_acc_takosumi_cloud",
+        CLOUDFLARE_API_BASE_URL:
+          "https://app.takosumi.com/compat/cloudflare/client/v4",
+      },
       issuer: "takosumi_managed_provider_token",
       temporary: true,
       expiresAt: "2026-06-04T00:15:00.000Z",
@@ -417,6 +422,10 @@ test("provider-connection connection pool mints a pending managed-provider conne
   });
 
   expect(bundle.env.CLOUDFLARE_API_TOKEN).toBe("takmpt_provider_env");
+  expect(bundle.env.CLOUDFLARE_ACCOUNT_ID).toBe("ts_acc_takosumi_cloud");
+  expect(bundle.env.CLOUDFLARE_API_BASE_URL).toBe(
+    "https://app.takosumi.com/compat/cloudflare/client/v4",
+  );
   expect(bundle.providerCredentialEvidence[0]).toMatchObject({
     connectionId: operatorConn.id,
     issuer: "takosumi_managed_provider_token",
