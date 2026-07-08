@@ -306,6 +306,46 @@ export interface CreditBalance {
   readonly updatedAt: string;
 }
 
+export interface BillingAccount {
+  readonly id: string;
+  readonly ownerType: "user";
+  readonly ownerId: string;
+  readonly provider: "stripe" | "manual" | "none";
+  readonly stripeCustomerId?: string;
+  readonly stripeDefaultPaymentMethodId?: string;
+  readonly status: "active" | "past_due" | "disabled" | "trialing";
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export interface SpaceSubscription {
+  readonly id: string;
+  readonly workspaceId?: string;
+  readonly spaceId?: string;
+  readonly billingAccountId: string;
+  readonly planId: string;
+  readonly status: "active" | "trialing" | "past_due" | "cancelled";
+  readonly currentPeriodStart: string;
+  readonly currentPeriodEnd: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export interface BillingPlan {
+  readonly id: string;
+  readonly name: string;
+  readonly monthlyBasePrice: number;
+  readonly includedUsdMicros?: number;
+  readonly includedCredits: number;
+  readonly limits: {
+    readonly maxEstimatedUsdMicrosPerRun?: number;
+    readonly maxEstimatedCreditsPerRun?: number;
+    readonly quota?: Readonly<Record<string, number>>;
+  };
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
 export interface CreditReservation {
   readonly id: string;
   // Rename convergence: contract carries both as optional during transition.
@@ -381,6 +421,9 @@ export interface UsageEventsPage {
 export interface WorkspaceBilling {
   readonly settings: BillingSettings;
   readonly balance?: CreditBalance;
+  readonly account?: BillingAccount;
+  readonly subscription?: SpaceSubscription;
+  readonly plan?: BillingPlan;
 }
 
 export type TrustLevel = "official" | "trusted" | "space" | "raw";

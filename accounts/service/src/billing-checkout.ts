@@ -15,6 +15,8 @@ export const TAKOSUMI_ACCOUNTS_BILLING_STRIPE_CHECKOUT_PATH =
   "/v1/billing/stripe/checkout";
 export const TAKOSUMI_ACCOUNTS_BILLING_STRIPE_PORTAL_PATH =
   "/v1/billing/stripe/portal";
+export const TAKOSUMI_ACCOUNTS_BILLING_STRIPE_SUMMARY_PATH =
+  "/v1/billing/stripe/summary";
 export const TAKOSUMI_ACCOUNTS_BILLING_STRIPE_WEBHOOK_PATH =
   "/v1/billing/stripe/webhook";
 export const TAKOSUMI_ACCOUNTS_BILLING_SMOKE_TOKEN_HEADER =
@@ -25,6 +27,8 @@ const STRIPE_CHECKOUT_SESSIONS_URL =
   "https://api.stripe.com/v1/checkout/sessions";
 const STRIPE_BILLING_PORTAL_SESSIONS_URL =
   "https://api.stripe.com/v1/billing_portal/sessions";
+const STRIPE_INVOICES_URL = "https://api.stripe.com/v1/invoices";
+const STRIPE_SUBSCRIPTIONS_URL = "https://api.stripe.com/v1/subscriptions";
 
 export interface StripeBillingCheckoutPlan {
   readonly id: string;
@@ -345,6 +349,81 @@ export async function handleStripeBillingPortal(input: {
   );
 }
 
+export async function handleStripeBillingSummary(input: {
+  readonly request: Request;
+  readonly store: AccountsStore;
+  readonly billing: StripeBillingCheckoutOptions;
+}): Promise<Response> {
+  const session = await requireAccountSession({
+    request: input.request,
+    store: input.store,
+  });
+  if (!session.ok) return session.response;
+
+  const account = await input.store.findBillingAccountForSubject(
+    session.subject as TakosumiSubject,
+  );
+  if (!account) {
+    return json(
+      {
+        billing: {
+          configured: false,
+          status: "not_configured",
+          invoices: [],
+        },
+      },
+      200,
+      { "cache-control": "no-store" },
+    );
+  }
+
+  const localSubscription = subscriptionSummaryFromBillingAccount(account);
+  if (!account.stripeCustomerId) {
+    return json(
+      {
+        billing: {
+          configured: true,
+          account: billingAccountSummary(account),
+          subscription: localSubscription,
+          invoices: [],
+        },
+      },
+      200,
+      { "cache-control": "no-store" },
+    );
+  }
+
+  const stripeFetch = input.billing.fetch ?? fetch;
+  const [subscription, invoices] = await Promise.all([
+    account.stripeSubscriptionId
+      ? fetchStripeSubscriptionSummary({
+          stripeFetch,
+          stripeSecretKey: input.billing.stripeSecretKey,
+          subscriptionId: account.stripeSubscriptionId,
+          fallback: localSubscription,
+        })
+      : Promise.resolve(localSubscription),
+    fetchStripeInvoices({
+      stripeFetch,
+      stripeSecretKey: input.billing.stripeSecretKey,
+      customerId: account.stripeCustomerId,
+    }),
+  ]);
+
+  return json(
+    {
+      billing: {
+        configured: true,
+        account: billingAccountSummary(account),
+        subscription,
+        invoices,
+      },
+    },
+    200,
+    { "cache-control": "no-store" },
+  );
+}
+
 export async function handleStripeBillingWebhook(input: {
   readonly request: Request;
   readonly store: AccountsStore;
@@ -459,6 +538,140 @@ export async function handleStripeBillingWebhook(input: {
     200,
     { "cache-control": "no-store" },
   );
+}
+
+function billingAccountSummary(
+  account: Awaited<ReturnType<AccountsStore["findBillingAccountForSubject"]>>,
+): Readonly<Record<string, unknown>> | undefined {
+  if (!account) return undefined;
+  return {
+    billingAccountId: account.billingAccountId,
+    provider: account.provider,
+    status: account.status,
+    planCode: account.planCode ?? null,
+    currentPeriodEnd:
+      typeof account.currentPeriodEndUnix === "number"
+        ? new Date(account.currentPeriodEndUnix * 1000).toISOString()
+        : null,
+    lastInvoiceId: account.lastInvoiceId ?? null,
+    defaultPaymentMethodConfigured: Boolean(
+      account.stripeDefaultPaymentMethodId,
+    ),
+    updatedAt: new Date(account.updatedAt).toISOString(),
+  };
+}
+
+function subscriptionSummaryFromBillingAccount(
+  account: NonNullable<
+    Awaited<ReturnType<AccountsStore["findBillingAccountForSubject"]>>
+  >,
+): Readonly<Record<string, unknown>> | null {
+  if (!account.stripeSubscriptionId && !account.planCode) return null;
+  return {
+    id: account.stripeSubscriptionId ?? null,
+    status: account.status,
+    planCode: account.planCode ?? null,
+    currentPeriodEnd:
+      typeof account.currentPeriodEndUnix === "number"
+        ? new Date(account.currentPeriodEndUnix * 1000).toISOString()
+        : null,
+  };
+}
+
+async function fetchStripeSubscriptionSummary(input: {
+  readonly stripeFetch: typeof fetch;
+  readonly stripeSecretKey: string;
+  readonly subscriptionId: string;
+  readonly fallback: Readonly<Record<string, unknown>> | null;
+}): Promise<Readonly<Record<string, unknown>> | null> {
+  const url = `${STRIPE_SUBSCRIPTIONS_URL}/${encodeURIComponent(
+    input.subscriptionId,
+  )}`;
+  const { stripeFetch } = input;
+  const response = await stripeFetch(url, {
+    method: "GET",
+    headers: {
+      authorization: `Bearer ${input.stripeSecretKey}`,
+      "stripe-version": STRIPE_API_VERSION,
+    },
+  });
+  const body = parseJsonObject(await response.text());
+  if (!response.ok || !body) return input.fallback;
+  return {
+    id: stripeId(body.id) ?? input.subscriptionId,
+    status: stringValue(body.status) ?? stringValue(input.fallback?.status),
+    planCode:
+      stringValue(metadataRecord(body).takosumi_plan_id) ??
+      stringValue(metadataRecord(body).plan_code) ??
+      stringValue(input.fallback?.planCode) ??
+      null,
+    currentPeriodEnd:
+      typeof body.current_period_end === "number"
+        ? new Date(body.current_period_end * 1000).toISOString()
+        : (stringValue(input.fallback?.currentPeriodEnd) ?? null),
+    cancelAtPeriodEnd: body.cancel_at_period_end === true,
+  };
+}
+
+async function fetchStripeInvoices(input: {
+  readonly stripeFetch: typeof fetch;
+  readonly stripeSecretKey: string;
+  readonly customerId: string;
+}): Promise<readonly Readonly<Record<string, unknown>>[]> {
+  const url = new URL(STRIPE_INVOICES_URL);
+  url.searchParams.set("customer", input.customerId);
+  url.searchParams.set("limit", "10");
+  const { stripeFetch } = input;
+  const response = await stripeFetch(url.toString(), {
+    method: "GET",
+    headers: {
+      authorization: `Bearer ${input.stripeSecretKey}`,
+      "stripe-version": STRIPE_API_VERSION,
+    },
+  });
+  const body = parseJsonObject(await response.text());
+  if (!response.ok || !body || !Array.isArray(body.data)) return [];
+  return body.data
+    .filter(isRecord)
+    .map((invoice) => invoiceSummary(invoice))
+    .filter((invoice): invoice is Readonly<Record<string, unknown>> =>
+      Boolean(invoice),
+    );
+}
+
+function invoiceSummary(
+  invoice: Record<string, unknown>,
+): Readonly<Record<string, unknown>> | undefined {
+  const id = stripeId(invoice.id);
+  if (!id) return undefined;
+  const currency = stringValue(invoice.currency)?.toUpperCase() ?? "USD";
+  const amountPaidMinor = integerValue(invoice.amount_paid) ?? 0;
+  const amountDueMinor = integerValue(invoice.amount_due) ?? 0;
+  const totalMinor = integerValue(invoice.total) ?? amountPaidMinor;
+  return {
+    id,
+    number: stringValue(invoice.number) ?? null,
+    status: stringValue(invoice.status) ?? "unknown",
+    currency,
+    amountPaidMinor,
+    amountDueMinor,
+    totalMinor,
+    ...(currency === "USD"
+      ? {
+          amountPaidUsdMicros: amountPaidMinor * 10_000,
+          amountDueUsdMicros: amountDueMinor * 10_000,
+          totalUsdMicros: totalMinor * 10_000,
+        }
+      : {}),
+    hostedInvoiceUrl: stringValue(invoice.hosted_invoice_url) ?? null,
+    invoicePdfUrl: stringValue(invoice.invoice_pdf) ?? null,
+    createdAt:
+      typeof invoice.created === "number"
+        ? new Date(invoice.created * 1000).toISOString()
+        : null,
+    paid: invoice.paid === true,
+    subscriptionId: stripeId(invoice.subscription) ?? null,
+  };
 }
 
 function shouldRetryBillingWebhookEvent(
@@ -950,6 +1163,15 @@ function positiveIntegerValue(value: unknown): number | undefined {
   }
   const parsed = Number(value);
   return positiveSafeInteger(parsed) ? parsed : undefined;
+}
+
+function integerValue(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isSafeInteger(value)) return value;
+  if (typeof value !== "string" || !/^-?[0-9]+$/.test(value)) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : undefined;
 }
 
 function legacyCreditsToUsdMicros(value: unknown): number | undefined {

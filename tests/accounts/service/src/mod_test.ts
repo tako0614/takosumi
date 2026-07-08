@@ -5918,6 +5918,110 @@ test("accounts handler creates Stripe Billing Portal Sessions for existing custo
   );
 });
 
+test("accounts handler exposes Stripe subscription status and invoice history", async () => {
+  const store = new InMemoryAccountsStore();
+  const sessionId = seedAccountSession(store, "tsub_billing_summary");
+  store.saveBillingAccount({
+    billingAccountId: "billing_summary",
+    subject: "tsub_billing_summary",
+    provider: "stripe",
+    stripeCustomerId: "cus_summary",
+    stripeSubscriptionId: "sub_summary",
+    stripePriceId: "price_summary",
+    planCode: "lite",
+    currentPeriodEndUnix: 1_789_081_200,
+    lastInvoiceId: "in_summary_1",
+    status: "active",
+    createdAt: 1_000,
+    updatedAt: 2_000,
+  });
+  const stripeRequests: string[] = [];
+  const handler = createAccountsHandler({
+    store,
+    platformAccess: { status: "closed" },
+    billingCheckout: {
+      stripeSecretKey: "sk_test_checkout",
+      plans: [],
+      redirectAllowlist: ["https://accounts.example.test"],
+      fetch: async function (this: unknown, url) {
+        expect(this).toEqual(undefined);
+        stripeRequests.push(String(url));
+        const parsed = new URL(String(url));
+        if (parsed.pathname === "/v1/subscriptions/sub_summary") {
+          return Response.json({
+            id: "sub_summary",
+            status: "active",
+            current_period_end: 1_789_081_200,
+            cancel_at_period_end: false,
+            metadata: { takosumi_plan_id: "lite" },
+          });
+        }
+        if (parsed.pathname === "/v1/invoices") {
+          expect(parsed.searchParams.get("customer")).toEqual("cus_summary");
+          expect(parsed.searchParams.get("limit")).toEqual("10");
+          return Response.json({
+            data: [
+              {
+                id: "in_summary_1",
+                number: "TS-0001",
+                status: "paid",
+                currency: "usd",
+                amount_paid: 100,
+                amount_due: 0,
+                total: 100,
+                hosted_invoice_url:
+                  "https://invoice.stripe.com/i/in_summary_1",
+                invoice_pdf: "https://invoice.stripe.com/i/in_summary_1.pdf",
+                created: 1_789_000_000,
+                paid: true,
+                subscription: "sub_summary",
+              },
+            ],
+          });
+        }
+        return Response.json({ error: "not_found" }, { status: 404 });
+      },
+    },
+  });
+
+  const response = await handler(
+    new Request("https://accounts.example.test/v1/billing/stripe/summary", {
+      method: "GET",
+      headers: accountSessionHeaders(sessionId),
+    }),
+  );
+
+  expect(response.status).toEqual(200);
+  const body = await response.json();
+  expect(body.billing.account.status).toEqual("active");
+  expect(body.billing.subscription).toMatchObject({
+    id: "sub_summary",
+    status: "active",
+    planCode: "lite",
+    currentPeriodEnd: "2026-09-10T23:00:00.000Z",
+  });
+  expect(body.billing.invoices).toEqual([
+    {
+      id: "in_summary_1",
+      number: "TS-0001",
+      status: "paid",
+      currency: "USD",
+      amountPaidMinor: 100,
+      amountDueMinor: 0,
+      totalMinor: 100,
+      amountPaidUsdMicros: 1_000_000,
+      amountDueUsdMicros: 0,
+      totalUsdMicros: 1_000_000,
+      hostedInvoiceUrl: "https://invoice.stripe.com/i/in_summary_1",
+      invoicePdfUrl: "https://invoice.stripe.com/i/in_summary_1.pdf",
+      createdAt: "2026-09-10T00:26:40.000Z",
+      paid: true,
+      subscriptionId: "sub_summary",
+    },
+  ]);
+  expect(stripeRequests).toHaveLength(2);
+});
+
 test("accounts handler lets billing checkout smoke bypass only launch readiness", async () => {
   const store = new InMemoryAccountsStore();
   const sessionId = seedAccountSession(store, "tsub_billing_smoke");
