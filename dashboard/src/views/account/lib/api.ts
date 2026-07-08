@@ -17,6 +17,7 @@ export const rpc = {
   billing: {
     checkout: billing.startStripeCheckout,
     portal: billing.startStripePortal,
+    summary: billing.getStripeBillingSummary,
   },
   auth: {
     listProviders: auth.listAuthProviders,
@@ -43,5 +44,10 @@ export type {
   ProviderTokenHelper,
 } from "./connections.ts";
 
-export type { StripeCheckoutResult, StripePortalResult } from "./billing.ts";
+export type {
+  StripeBillingInvoice,
+  StripeBillingSummary,
+  StripeCheckoutResult,
+  StripePortalResult,
+} from "./billing.ts";
 export type { CallbackResult } from "./auth.ts";

@@ -108,10 +108,12 @@ import {
 import {
   handleStripeBillingCheckout,
   handleStripeBillingPortal,
+  handleStripeBillingSummary,
   handleStripeBillingWebhook,
   TAKOSUMI_ACCOUNTS_BILLING_SMOKE_TOKEN_HEADER,
   TAKOSUMI_ACCOUNTS_BILLING_STRIPE_CHECKOUT_PATH,
   TAKOSUMI_ACCOUNTS_BILLING_STRIPE_PORTAL_PATH,
+  TAKOSUMI_ACCOUNTS_BILLING_STRIPE_SUMMARY_PATH,
   TAKOSUMI_ACCOUNTS_BILLING_STRIPE_WEBHOOK_PATH,
   type StripeBillingCheckoutOptions,
   type StripeBillingWebhookOptions,
@@ -193,6 +195,8 @@ export type {
 export {
   TAKOSUMI_ACCOUNTS_BILLING_SMOKE_TOKEN_HEADER,
   TAKOSUMI_ACCOUNTS_BILLING_STRIPE_CHECKOUT_PATH,
+  TAKOSUMI_ACCOUNTS_BILLING_STRIPE_PORTAL_PATH,
+  TAKOSUMI_ACCOUNTS_BILLING_STRIPE_SUMMARY_PATH,
   TAKOSUMI_ACCOUNTS_BILLING_STRIPE_WEBHOOK_PATH,
 } from "./billing-checkout.ts";
 export type {
@@ -906,6 +910,25 @@ export function createAccountsHandler(
         request,
         store,
         portal: options.billingCheckout,
+      });
+    }
+
+    if (url.pathname === TAKOSUMI_ACCOUNTS_BILLING_STRIPE_SUMMARY_PATH) {
+      if (request.method !== "GET" && request.method !== "HEAD") {
+        return methodNotAllowed("GET, HEAD");
+      }
+      if (!options.billingCheckout) {
+        return errorJson(
+          "feature_unavailable",
+          "Stripe billing summary is not configured.",
+          503,
+          request,
+        );
+      }
+      return await handleStripeBillingSummary({
+        request,
+        store,
+        billing: options.billingCheckout,
       });
     }
 

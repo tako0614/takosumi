@@ -20,6 +20,47 @@ export interface StripePortalResult {
   readonly sessionId?: string;
 }
 
+export interface StripeBillingInvoice {
+  readonly id: string;
+  readonly number?: string | null;
+  readonly status: string;
+  readonly currency: string;
+  readonly amountPaidMinor: number;
+  readonly amountDueMinor: number;
+  readonly totalMinor: number;
+  readonly amountPaidUsdMicros?: number;
+  readonly amountDueUsdMicros?: number;
+  readonly totalUsdMicros?: number;
+  readonly hostedInvoiceUrl?: string | null;
+  readonly invoicePdfUrl?: string | null;
+  readonly createdAt?: string | null;
+  readonly paid?: boolean;
+  readonly subscriptionId?: string | null;
+}
+
+export interface StripeBillingSummary {
+  readonly configured: boolean;
+  readonly status?: string;
+  readonly account?: {
+    readonly billingAccountId: string;
+    readonly provider: string;
+    readonly status: string;
+    readonly planCode?: string | null;
+    readonly currentPeriodEnd?: string | null;
+    readonly lastInvoiceId?: string | null;
+    readonly defaultPaymentMethodConfigured?: boolean;
+    readonly updatedAt?: string;
+  };
+  readonly subscription?: {
+    readonly id?: string | null;
+    readonly status?: string;
+    readonly planCode?: string | null;
+    readonly currentPeriodEnd?: string | null;
+    readonly cancelAtPeriodEnd?: boolean;
+  } | null;
+  readonly invoices: readonly StripeBillingInvoice[];
+}
+
 export async function startStripeCheckout(input: {
   readonly subject: string;
   readonly planId: string;
@@ -59,6 +100,13 @@ export async function startStripeCheckout(input: {
     url: body.url,
     sessionId: body.sessionId ?? body.session_id,
   };
+}
+
+export async function getStripeBillingSummary(): Promise<StripeBillingSummary> {
+  const body = await apiFetch<{ readonly billing: StripeBillingSummary }>(
+    paths.STRIPE_SUMMARY,
+  );
+  return body.billing;
 }
 
 export async function startStripePortal(input: {

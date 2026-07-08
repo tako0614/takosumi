@@ -23,6 +23,7 @@ export const SESSION_ME = "/v1/account/session/me";
 // build.
 export const STRIPE_CHECKOUT = "/v1/billing/stripe/checkout";
 export const STRIPE_PORTAL = "/v1/billing/stripe/portal";
+export const STRIPE_SUMMARY = "/v1/billing/stripe/summary";
 
 export const UPSTREAM_AUTHORIZE = TAKOSUMI_ACCOUNTS_UPSTREAM_AUTHORIZE_PATH;
 export const UPSTREAM_CALLBACK = TAKOSUMI_ACCOUNTS_UPSTREAM_CALLBACK_PATH;

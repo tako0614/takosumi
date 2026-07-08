@@ -174,10 +174,18 @@ test("transitionAppCapsuleStatus enforces the ledger state machine", () => {
   expect(
     transitionAppCapsuleStatus(installation, "ready", 2000).status,
   ).toEqual("ready");
+  expect(
+    transitionAppCapsuleStatus(installation, "exported", 2000).status,
+  ).toEqual("exported");
   assertThrows(
-    () => transitionAppCapsuleStatus(installation, "exported", 2000),
+    () =>
+      transitionAppCapsuleStatus(
+        { ...installation, status: "exported" },
+        "ready",
+        3000,
+      ),
     TypeError,
-    "installing -> exported",
+    "exported -> ready",
   );
 });
 
