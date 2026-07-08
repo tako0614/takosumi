@@ -1,4 +1,9 @@
-import type { CloudflareWorkerEnv } from "../bindings.ts";
+import type {
+  CloudflareWorkerEnv,
+  R2Bucket,
+  R2Object,
+  R2PutOptions,
+} from "../bindings.ts";
 import { StateArtifactCrypto } from "../state_crypto.ts";
 import { redactString } from "takosumi-contract/redaction";
 
@@ -9,6 +14,8 @@ const SOURCE_ARCHIVE_CONTENT_TYPE = "application/zstd";
 // At-rest content type for AES-GCM ciphertext blobs (state/plan .enc objects).
 const ENCRYPTED_ARTIFACT_CONTENT_TYPE = "application/octet-stream";
 const RUNNER_REQUEST_HEADER_ALLOWLIST = new Set(["content-type"]);
+const R2_PUT_RETRY_ATTEMPTS = 4;
+const R2_PUT_RETRY_BASE_MS = 250;
 
 /**
  * Optional dispatch payload field locating the R2_STATE object for this run.
@@ -556,13 +563,19 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     if (expectedDigest && expectedDigest !== digest) {
       throw new Error(`source archive digest mismatch: ${digest}`);
     }
-    const stored = await bucket.put(archiveObjectKey, bytes, {
-      httpMetadata: { contentType: SOURCE_ARCHIVE_CONTENT_TYPE },
-      customMetadata: {
-        "takosumi-run-id": runId,
-        "takosumi-digest": digest,
+    const stored = await putR2ObjectWithRetry(
+      bucket,
+      archiveObjectKey,
+      bytes,
+      {
+        httpMetadata: { contentType: SOURCE_ARCHIVE_CONTENT_TYPE },
+        customMetadata: {
+          "takosumi-run-id": runId,
+          "takosumi-digest": digest,
+        },
       },
-    });
+      "source archive",
+    );
     return jsonResponse(
       {
         ...payload,
@@ -779,15 +792,21 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     const sealed = await this.#stateCrypto().seal(plaintext);
     const bucket = this.#r2State();
     const objectKey = stateObjectKey(scope);
-    await bucket.put(objectKey, sealed.ciphertext, {
-      httpMetadata: { contentType: ENCRYPTED_ARTIFACT_CONTENT_TYPE },
-      customMetadata: {
-        "takosumi-run-id": runId,
-        "takosumi-content-digest": sealed.contentDigest,
-        "takosumi-ciphertext-length": String(sealed.ciphertextLength),
-        "takosumi-generation": String(scope.generation),
+    await putR2ObjectWithRetry(
+      bucket,
+      objectKey,
+      sealed.ciphertext,
+      {
+        httpMetadata: { contentType: ENCRYPTED_ARTIFACT_CONTENT_TYPE },
+        customMetadata: {
+          "takosumi-run-id": runId,
+          "takosumi-content-digest": sealed.contentDigest,
+          "takosumi-ciphertext-length": String(sealed.ciphertextLength),
+          "takosumi-generation": String(scope.generation),
+        },
       },
-    });
+      "state object",
+    );
     // current.json is written AFTER the state object. If this write fails after
     // the object write, the next restore reconciles by finding the highest
     // sealed generation object with a digest metadata entry and rewrites
@@ -799,10 +818,16 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       runId,
       ciphertextLength: sealed.ciphertextLength,
     };
-    await bucket.put(currentStateKey(scope), JSON.stringify(current), {
-      httpMetadata: { contentType: "application/json" },
-      customMetadata: { "takosumi-run-id": runId },
-    });
+    await putR2ObjectWithRetry(
+      bucket,
+      currentStateKey(scope),
+      JSON.stringify(current),
+      {
+        httpMetadata: { contentType: "application/json" },
+        customMetadata: { "takosumi-run-id": runId },
+      },
+      "state pointer",
+    );
     const payload = await readJsonObject(runnerResponse);
     // M7: an apply persists the raw `tofu output -json` envelope encrypted at
     // rest to R2_ARTIFACTS (spec §26) and echoes `rawOutputsKey` so the
@@ -840,14 +865,20 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     const key = rawOutputsKey(scope, runId);
     const plaintext = new TextEncoder().encode(JSON.stringify(outputs));
     const sealed = await this.#stateCrypto().seal(plaintext);
-    await this.env.R2_ARTIFACTS.put(key, sealed.ciphertext, {
-      httpMetadata: { contentType: ENCRYPTED_ARTIFACT_CONTENT_TYPE },
-      customMetadata: {
-        "takosumi-run-id": runId,
-        "takosumi-content-digest": sealed.contentDigest,
-        "takosumi-ciphertext-length": String(sealed.ciphertextLength),
+    await putR2ObjectWithRetry(
+      this.env.R2_ARTIFACTS,
+      key,
+      sealed.ciphertext,
+      {
+        httpMetadata: { contentType: ENCRYPTED_ARTIFACT_CONTENT_TYPE },
+        customMetadata: {
+          "takosumi-run-id": runId,
+          "takosumi-content-digest": sealed.contentDigest,
+          "takosumi-ciphertext-length": String(sealed.ciphertextLength),
+        },
       },
-    });
+      "raw outputs",
+    );
     return key;
   }
 
@@ -937,16 +968,22 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     );
     const sealed = await this.#stateCrypto().seal(plaintext);
     const objectKey = stateObjectKey(scope);
-    await bucket.put(objectKey, sealed.ciphertext, {
-      httpMetadata: { contentType: ENCRYPTED_ARTIFACT_CONTENT_TYPE },
-      customMetadata: {
-        "takosumi-run-id": runId,
-        "takosumi-content-digest": sealed.contentDigest,
-        "takosumi-ciphertext-length": String(sealed.ciphertextLength),
-        "takosumi-generation": String(scope.generation),
-        "takosumi-restored-from-object": restoreState.objectKey,
+    await putR2ObjectWithRetry(
+      bucket,
+      objectKey,
+      sealed.ciphertext,
+      {
+        httpMetadata: { contentType: ENCRYPTED_ARTIFACT_CONTENT_TYPE },
+        customMetadata: {
+          "takosumi-run-id": runId,
+          "takosumi-content-digest": sealed.contentDigest,
+          "takosumi-ciphertext-length": String(sealed.ciphertextLength),
+          "takosumi-generation": String(scope.generation),
+          "takosumi-restored-from-object": restoreState.objectKey,
+        },
       },
-    });
+      "restored state object",
+    );
     const current = {
       generation: scope.generation,
       objectKey,
@@ -954,10 +991,16 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       runId,
       ciphertextLength: sealed.ciphertextLength,
     };
-    await bucket.put(currentStateKey(scope), JSON.stringify(current), {
-      httpMetadata: { contentType: "application/json" },
-      customMetadata: { "takosumi-run-id": runId },
-    });
+    await putR2ObjectWithRetry(
+      bucket,
+      currentStateKey(scope),
+      JSON.stringify(current),
+      {
+        httpMetadata: { contentType: "application/json" },
+        customMetadata: { "takosumi-run-id": runId },
+      },
+      "restored state pointer",
+    );
     return jsonResponse({ state: current }, 200);
   }
 
@@ -993,7 +1036,8 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     // object-storage ref the consumer restores from still names the plaintext
     // key so #restorePlanArtifact maps it back to `<key>.enc` transparently.
     const sealed = await this.#stateCrypto().seal(bytes);
-    const stored = await this.env.R2_ARTIFACTS.put(
+    const stored = await putR2ObjectWithRetry(
+      this.env.R2_ARTIFACTS,
       encryptedKey(key),
       sealed.ciphertext,
       {
@@ -1004,6 +1048,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           "takosumi-ciphertext-length": String(sealed.ciphertextLength),
         },
       },
+      "plan artifact",
     );
     // Plan JSON sits beside the binary; encrypt it too when the runner produced
     // it (the runner exposes it on the /artifacts/tfplan-json route).
@@ -1044,7 +1089,8 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     const bytes = new Uint8Array(await response.arrayBuffer());
     const digest = await digestBytes(bytes);
     const sealed = await this.#stateCrypto().seal(zstdCompressRaw(bytes));
-    await this.env.R2_ARTIFACTS.put(
+    await putR2ObjectWithRetry(
+      this.env.R2_ARTIFACTS,
       encryptedKey(planJsonArtifactKey(runId, stateScope)),
       sealed.ciphertext,
       {
@@ -1055,6 +1101,7 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
           "takosumi-ciphertext-length": String(sealed.ciphertextLength),
         },
       },
+      "plan json artifact",
     );
   }
 
@@ -1146,14 +1193,20 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
     const bytes = new Uint8Array(await response.arrayBuffer());
     const sealed = await this.#stateCrypto().seal(bytes);
     for (const key of keys) {
-      await this.env.R2_ARTIFACTS.put(encryptedKey(key), sealed.ciphertext, {
-        httpMetadata: { contentType: ENCRYPTED_ARTIFACT_CONTENT_TYPE },
-        customMetadata: {
-          "takosumi-run-id": runId,
-          "takosumi-content-digest": sealed.contentDigest,
-          "takosumi-ciphertext-length": String(sealed.ciphertextLength),
+      await putR2ObjectWithRetry(
+        this.env.R2_ARTIFACTS,
+        encryptedKey(key),
+        sealed.ciphertext,
+        {
+          httpMetadata: { contentType: ENCRYPTED_ARTIFACT_CONTENT_TYPE },
+          customMetadata: {
+            "takosumi-run-id": runId,
+            "takosumi-content-digest": sealed.contentDigest,
+            "takosumi-ciphertext-length": String(sealed.ciphertextLength),
+          },
         },
-      });
+        "state artifact",
+      );
     }
   }
 
@@ -1163,6 +1216,42 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
       ? configured.trim()
       : DEFAULT_PLAN_ARTIFACT_BUCKET;
   }
+}
+
+async function putR2ObjectWithRetry(
+  bucket: R2Bucket,
+  key: string,
+  value: ReadableStream | ArrayBuffer | ArrayBufferView | string | null,
+  options: R2PutOptions | undefined,
+  context: string,
+): Promise<R2Object> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= R2_PUT_RETRY_ATTEMPTS; attempt += 1) {
+    try {
+      return await bucket.put(key, value, options);
+    } catch (error) {
+      lastError = error;
+      if (attempt >= R2_PUT_RETRY_ATTEMPTS || !isRetryableR2PutError(error)) {
+        throw error;
+      }
+      console.warn("OpenTofu runner R2 put failed; retrying", {
+        context,
+        key,
+        attempt,
+        maxAttempts: R2_PUT_RETRY_ATTEMPTS,
+        error: redactedErrorMessage(error, "r2 put failed"),
+      });
+      await sleep(R2_PUT_RETRY_BASE_MS * 2 ** (attempt - 1));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
+function isRetryableR2PutError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /(?:10043|cloudflarestatus\.com|internal error|timed?\s*out|timeout|fetch failed|ECONNRESET|ETIMEDOUT|EAI_AGAIN)/iu.test(
+    message,
+  );
 }
 
 function artifactUrl(baseUrl: URL, runId: string): string {
@@ -1437,13 +1526,19 @@ async function recoverCurrentState(
     }
   }
   if (!best) return undefined;
-  await bucket.put(currentStateKey(scope), JSON.stringify(best), {
-    httpMetadata: { contentType: "application/json" },
-    customMetadata: {
-      "takosumi-reconciled": "true",
-      "takosumi-recovered-generation": String(best.generation),
+  await putR2ObjectWithRetry(
+    bucket,
+    currentStateKey(scope),
+    JSON.stringify(best),
+    {
+      httpMetadata: { contentType: "application/json" },
+      customMetadata: {
+        "takosumi-reconciled": "true",
+        "takosumi-recovered-generation": String(best.generation),
+      },
     },
-  });
+    "state pointer recovery",
+  );
   return best;
 }
 
