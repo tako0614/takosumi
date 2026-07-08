@@ -3,7 +3,7 @@
  *   - subscription plan cards from the operator catalog
  *     (`GET /api/v1/billing/plans`) → Stripe Checkout by `planId`
  *   - spend guard + billing-mode explanation
- *   - Stripe customer portal (payment methods / invoices)
+ *   - Stripe customer portal (payment methods / invoices / cancellation)
  *   - usage events as folded support history
  *
  * The old debug controls (billing-mode select, free top-up input,
@@ -97,7 +97,11 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
     () => cloudBilling() && hasBillingCatalog(),
   );
   const canOpenPortal = createMemo(
-    () => cloudBilling() && mode() !== undefined && mode() !== "disabled",
+    () =>
+      cloudBilling() &&
+      (stripeBilling()?.configured === true ||
+        currentSubscription() !== null ||
+        (mode() !== undefined && mode() !== "disabled")),
   );
   const billingSubtitle = createMemo(() => {
     if (billing.loading) return t("billing.loading");
@@ -358,21 +362,6 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
                 />
               </details>
             </Show>
-            <Show when={canOpenPortal()}>
-              <div class="wc-form-actions">
-                <Button
-                  variant="secondary"
-                  type="button"
-                  busy={portalBusy()}
-                  onClick={() => void openPortal()}
-                  icon={<ExternalLink size={16} />}
-                >
-                  {portalBusy()
-                    ? t("billing.portalOpening")
-                    : t("billing.portal")}
-                </Button>
-              </div>
-            </Show>
           </Match>
         </Switch>
         <Show when={portalError()}>
@@ -407,24 +396,42 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
           </Match>
           <Match when={currentSubscription()}>
             {(subscription) => (
-              <KVList
-                items={[
-                  {
-                    label: t("billing.subscription.plan"),
-                    value: subscription().plan,
-                  },
-                  {
-                    label: t("billing.subscription.status"),
-                    value: subscriptionStatusLabel(subscription().status),
-                  },
-                  {
-                    label: t("billing.subscription.nextBilling"),
-                    value: subscription().currentPeriodEnd
-                      ? formatDateTime(subscription().currentPeriodEnd!)
-                      : "-",
-                  },
-                ]}
-              />
+              <div class="wc-stack-sm">
+                <KVList
+                  items={[
+                    {
+                      label: t("billing.subscription.plan"),
+                      value: subscription().plan,
+                    },
+                    {
+                      label: t("billing.subscription.status"),
+                      value: subscriptionStatusLabel(subscription().status),
+                    },
+                    {
+                      label: t("billing.subscription.nextBilling"),
+                      value: subscription().currentPeriodEnd
+                        ? formatDateTime(subscription().currentPeriodEnd!)
+                        : "-",
+                    },
+                  ]}
+                />
+                <Show when={canOpenPortal()}>
+                  <div class="wc-form-actions">
+                    <Button
+                      variant="secondary"
+                      type="button"
+                      busy={portalBusy()}
+                      onClick={() => void openPortal()}
+                      icon={<ExternalLink size={16} />}
+                    >
+                      {portalBusy()
+                        ? t("billing.portalOpening")
+                        : t("billing.subscription.manage")}
+                    </Button>
+                  </div>
+                  <p class="muted">{t("billing.subscription.manageHint")}</p>
+                </Show>
+              </div>
             )}
           </Match>
           <Match when={!currentSubscription()}>
