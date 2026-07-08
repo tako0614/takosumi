@@ -1558,6 +1558,11 @@ async function resolveSpaceId(
     return normalized;
   }
   const response = await requestJson<{
+    readonly workspaces?: readonly {
+      readonly id: string;
+      readonly handle: string;
+      readonly archivedAt?: string;
+    }[];
     readonly spaces?: readonly {
       readonly id: string;
       readonly handle: string;
@@ -1568,7 +1573,8 @@ async function resolveSpaceId(
     token: options.accountSessionToken,
     path: `${API_PREFIX}/workspaces?includeArchived=true`,
   });
-  const match = (response.spaces ?? []).find(
+  const listedWorkspaces = response.workspaces ?? response.spaces ?? [];
+  const match = listedWorkspaces.find(
     (space) => space.handle === normalized,
   );
   if (match?.id) {
@@ -1586,6 +1592,7 @@ async function resolveSpaceId(
   if (!match) {
     if (options.ensureSpace) {
       const created = await requestJson<{
+        readonly workspace?: { readonly id?: string };
         readonly space?: { readonly id?: string };
       }>({
         baseUrl: options.url,
@@ -1598,9 +1605,11 @@ async function resolveSpaceId(
           type: "personal",
         },
       });
-      const createdId = created.space?.id;
+      const createdId = created.workspace?.id ?? created.space?.id;
       if (!createdId) {
-        throw new Error("space create response did not include space.id");
+        throw new Error(
+          "Workspace create response did not include workspace.id or space.id",
+        );
       }
       return createdId;
     }
@@ -4580,6 +4589,86 @@ async function runSelfTest(): Promise<void> {
   ) {
     throw new Error("self-test deploy timeout failed result shape is wrong");
   }
+  const originalFetch = globalThis.fetch;
+  const originalSmokeTransport = process.env.TAKOSUMI_SMOKE_HTTP_TRANSPORT;
+  delete process.env.TAKOSUMI_SMOKE_HTTP_TRANSPORT;
+  const workspaceResolveCalls: string[] = [];
+  globalThis.fetch = (async (input, init) => {
+    const url = String(input);
+    workspaceResolveCalls.push(
+      `${init?.method ?? "GET"} ${new URL(url).pathname}`,
+    );
+    if (
+      url ===
+      "https://app-staging.takosumi.com/api/v1/workspaces?includeArchived=true"
+    ) {
+      return new Response(
+        JSON.stringify({
+          workspaces: [
+            { id: "space_existing", handle: "existing-workspace" },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    }
+    throw new Error(`unexpected self-test workspace request: ${url}`);
+  }) as typeof fetch;
+  try {
+    const resolved = await resolveSpaceId({
+      ...options,
+      space: "@existing-workspace",
+      ensureSpace: true,
+    });
+    if (resolved !== "space_existing") {
+      throw new Error("self-test did not resolve existing Workspace id");
+    }
+    if (workspaceResolveCalls.some((call) => call.startsWith("POST "))) {
+      throw new Error("self-test posted a duplicate Workspace");
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalSmokeTransport === undefined) {
+      delete process.env.TAKOSUMI_SMOKE_HTTP_TRANSPORT;
+    } else {
+      process.env.TAKOSUMI_SMOKE_HTTP_TRANSPORT = originalSmokeTransport;
+    }
+  }
+  globalThis.fetch = (async (input) => {
+    const url = String(input);
+    if (
+      url ===
+      "https://app-staging.takosumi.com/api/v1/workspaces?includeArchived=true"
+    ) {
+      return new Response(JSON.stringify({ workspaces: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (url === "https://app-staging.takosumi.com/api/v1/workspaces") {
+      return new Response(
+        JSON.stringify({ workspace: { id: "space_created" } }),
+        { status: 201, headers: { "content-type": "application/json" } },
+      );
+    }
+    throw new Error(`unexpected self-test workspace create request: ${url}`);
+  }) as typeof fetch;
+  try {
+    const created = await resolveSpaceId({
+      ...options,
+      space: "@created-workspace",
+      ensureSpace: true,
+    });
+    if (created !== "space_created") {
+      throw new Error("self-test did not accept workspace create response");
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalSmokeTransport === undefined) {
+      delete process.env.TAKOSUMI_SMOKE_HTTP_TRANSPORT;
+    } else {
+      process.env.TAKOSUMI_SMOKE_HTTP_TRANSPORT = originalSmokeTransport;
+    }
+  }
   const timeoutOptions = await resolveOptions(
     {
       dryRun: true,
@@ -4598,7 +4687,6 @@ async function runSelfTest(): Promise<void> {
   if (timeoutOptions.deployTimeoutSeconds !== 7) {
     throw new Error("self-test did not parse --deploy-timeout-seconds");
   }
-  const originalFetch = globalThis.fetch;
   globalThis.fetch = ((_, init) =>
     new Promise<Response>((_, reject) => {
       const signal = init?.signal;

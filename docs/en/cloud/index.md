@@ -41,6 +41,10 @@ Edge JS apps run as `EdgeWorker` resources. Takosumi Cloud can implement them
 with Cloudflare Workers for Platforms and a Takosumi-managed dispatch layer.
 This is one Cloud resource, separate from ContainerService, Object Storage, KV,
 Database, Queue, and AI.
+Cloud-only fetch handlers are mounted by `takosumi-cloud/platform/worker.ts`
+through the OSS platform `cloud_extensions` seam. The AI Gateway,
+Cloudflare Workers-compatible profile, S3-compatible endpoint, and Cloud usage
+endpoint are not deployed as separate Workers.
 
 Every Cloud managed resource entrypoint uses the same managed operation
 pipeline before a backend API is called. Whether the request comes from a
