@@ -19,10 +19,10 @@ const NAMED = [
 test("officialInstallConfigs seeds the generic Capsule default + first-party template configs", () => {
   const configs = officialInstallConfigs({ now: NOW });
   const templates = defaultTemplateRegistry.list();
-  // One generic Capsule config, two curated generic Capsule app configs, plus
+  // One generic Capsule config, four curated generic Capsule app configs, plus
   // one config per template (except templates already bound by a named alias,
   // currently only core).
-  expect(configs.length).toBe(templates.length + 3);
+  expect(configs.length).toBe(templates.length + 5);
   const generic = configs[0];
   expect(generic?.id).toBe(DEFAULT_CAPSULE_INSTALL_CONFIG_ID);
   expect(generic?.sourceKind).toBe("generic_capsule");
@@ -89,8 +89,9 @@ test("hostable official configs expose public catalog metadata for the dashboard
   expect(
     configs
       .map((config) => config.catalog?.order)
-      .filter((order): order is number => order !== undefined),
-  ).toEqual([10, 100, 110]);
+      .filter((order): order is number => order !== undefined)
+      .sort((a, b) => a - b),
+  ).toEqual([10, 100, 110, 120, 130]);
 
   const hello = configs.find(
     (config) => config.catalog?.templateId === "cloudflare-hello-worker",
