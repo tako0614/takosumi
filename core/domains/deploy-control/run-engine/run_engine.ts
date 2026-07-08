@@ -299,14 +299,25 @@ type RecordActivityArgs = Omit<
   readonly spaceId?: string;
 };
 
-function declaredGenericCapsuleInputNames(
+interface DeclaredGenericCapsuleInputs {
+  readonly names: ReadonlySet<string>;
+  readonly known: boolean;
+}
+
+function declaredGenericCapsuleInputs(
   moduleFiles: readonly OpenTofuCapsuleSourceFile[] | undefined,
   rootModuleVariables: readonly string[] | undefined,
-): ReadonlySet<string> {
-  return new Set(
-    rootModuleVariables ??
-      (moduleFiles ? collectRootModuleVariableNames(moduleFiles) : []),
-  );
+): DeclaredGenericCapsuleInputs {
+  if (rootModuleVariables !== undefined) {
+    return { known: true, names: new Set(rootModuleVariables) };
+  }
+  if (moduleFiles !== undefined) {
+    return {
+      known: true,
+      names: new Set(collectRootModuleVariableNames(moduleFiles)),
+    };
+  }
+  return { known: false, names: new Set() };
 }
 
 function publicEndpointVariableNames(
@@ -330,12 +341,16 @@ function publicEndpointVariableNames(
 function requestedGenericCapsuleVariables(
   explicit: Readonly<Record<string, unknown>>,
   providerInputDefaults: Readonly<Record<string, JsonValue>>,
-  declaredInputs: ReadonlySet<string>,
+  declaredInputs: DeclaredGenericCapsuleInputs,
 ): Readonly<Record<string, unknown>> {
-  if (declaredInputs.size === 0) return explicit;
-  const requested: Record<string, unknown> = { ...explicit };
+  if (!declaredInputs.known) return explicit;
+  const requested: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(explicit)) {
+    if (!declaredInputs.names.has(key)) continue;
+    requested[key] = value;
+  }
   for (const key of Object.keys(providerInputDefaults)) {
-    if (!declaredInputs.has(key)) continue;
+    if (!declaredInputs.names.has(key)) continue;
     if (Object.prototype.hasOwnProperty.call(requested, key)) continue;
     requested[key] = null;
   }
@@ -499,7 +514,7 @@ function finalizeManagedCloudflarePublicHostVariables(input: {
   readonly explicit: Readonly<Record<string, JsonValue>>;
   readonly installation: Installation;
   readonly installConfig: InstallConfig;
-  readonly declaredInputs: ReadonlySet<string>;
+  readonly declaredInputs: DeclaredGenericCapsuleInputs;
   readonly endpointVariables: ReadonlySet<string>;
   readonly providerInputDefaults: Readonly<Record<string, JsonValue>>;
   readonly variables: Readonly<Record<string, JsonValue>>;
@@ -524,8 +539,8 @@ function finalizeManagedCloudflarePublicHostVariables(input: {
   );
   const canSet = (name: string) =>
     Object.prototype.hasOwnProperty.call(input.variables, name) ||
-    input.declaredInputs.has(name) ||
-    input.endpointVariables.has(name);
+    input.declaredInputs.names.has(name) ||
+    (!input.declaredInputs.known && input.endpointVariables.has(name));
   const out: Record<string, JsonValue> = { ...input.variables };
   let publicLabel = nonEmptyStringValue(out[subdomainVariable]);
   if (
@@ -1976,7 +1991,7 @@ export class RunEngine {
       input.installConfig.modulePath,
       { skipReady: input.skipReadySourceFileDiscovery === true },
     );
-    const declaredInputs = declaredGenericCapsuleInputNames(
+    const declaredInputs = declaredGenericCapsuleInputs(
       moduleFiles,
       input.compatibilityReport?.rootModuleVariables,
     );
