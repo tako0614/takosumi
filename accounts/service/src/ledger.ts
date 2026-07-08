@@ -243,7 +243,7 @@ export const APP_INSTALLATION_STATUS_TRANSITIONS: Record<
   AppCapsuleStatus,
   readonly AppCapsuleStatus[]
 > = {
-  installing: ["ready", "failed", "suspended"],
+  installing: ["ready", "failed", "suspended", "exported"],
   ready: ["suspended", "exported", "failed"],
   failed: ["installing", "exported"],
   suspended: ["ready", "exported", "failed"],

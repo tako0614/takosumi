@@ -244,6 +244,66 @@ test("createInstallation ignores destroyed Capsules when reusing a service name"
   expect(next.status).toBe("pending");
 });
 
+test("abandonUnappliedCapsule closes the ledger row, releases public hosts, and allows reinstall", async () => {
+  const { store, service } = build();
+  await seedAll(store);
+  const installation = await service.createInstallation({
+    spaceId: "space_1",
+    name: "shop",
+    environment: "production",
+    sourceId: "src_1",
+    installConfigId: "cfg_1",
+  });
+  await store.reservePublicHost({
+    hostname: "shop.app.takos.jp",
+    workspaceId: installation.workspaceId,
+    installationId: installation.id,
+    installationName: installation.name,
+    now: "2026-06-06T00:00:00.000Z",
+  });
+
+  const abandoned = await service.abandonUnappliedCapsule(
+    installation.id,
+    "test abandon",
+  );
+
+  expect(abandoned.status).toBe("destroyed");
+  expect((await store.getInstallation(installation.id))?.status).toBe(
+    "destroyed",
+  );
+  expect(
+    (await store.getPublicHostReservation("shop.app.takos.jp"))?.status,
+  ).toBe("released");
+  const replacement = await service.createInstallation({
+    spaceId: "space_1",
+    name: "shop",
+    environment: "production",
+    sourceId: "src_1",
+    installConfigId: "cfg_1",
+  });
+  expect(replacement.id).not.toBe(installation.id);
+});
+
+test("abandonUnappliedCapsule refuses Capsules with applied state", async () => {
+  const { store, service } = build();
+  await seedAll(store);
+  const installation = await service.createInstallation({
+    spaceId: "space_1",
+    name: "shop",
+    environment: "production",
+    sourceId: "src_1",
+    installConfigId: "cfg_1",
+  });
+  await store.patchInstallation(installation.id, {
+    currentStateGeneration: 1,
+    updatedAt: "2026-06-06T00:01:00.000Z",
+  });
+
+  await expect(
+    service.abandonUnappliedCapsule(installation.id, "test abandon"),
+  ).rejects.toMatchObject({ code: "failed_precondition" });
+});
+
 test("createInstallation allows the same name in a different environment", async () => {
   const { store, service } = build();
   await seedAll(store);
