@@ -258,9 +258,14 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).toContain(
       "managedCatalogProviderForCurrentSource",
     );
+    expect(newAppViewSource).toContain("managedProviderConnectionForRow");
     expect(newAppViewSource).toContain("rowCanUseManagedProviderFallback");
     expect(newAppViewSource).toContain("hasManagedCloudflareProviderFallback");
     expect(newAppViewSource).toContain("rowHasManagedProviderDefault");
+    expect(newAppViewSource).toContain(
+      "const managed = managedProviderConnectionForRow(row)",
+    );
+    expect(newAppViewSource).toContain("const connectionId = managed?.id");
     expect(newAppViewSource).toContain(
       "if (rowCanUseManagedProviderFallback(row)) return false",
     );

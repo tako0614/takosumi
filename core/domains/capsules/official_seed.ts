@@ -316,11 +316,163 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
     },
   },
   {
+    id: "cfg-catalog-takos-office",
+    name: "takos-office",
+    source: {
+      git: "https://github.com/tako0614/takos-office.git",
+      ref: "33420226bcf7d3c6b20d031a2f6b204e16d50f58",
+      path: ".",
+    },
+    order: 115,
+    surface: "service",
+    kind: "worker",
+    provider: "cloudflare",
+    suggestedName: "takos-office",
+    badge: text("追加候補", "Installable"),
+    displayName: text("Takos Office", "Takos Office"),
+    description: text(
+      "Docs / Slide / Sheet をまとめてホストします。ストレージ接続があるとファイルを保存できます。",
+      "Host Docs, Slide, and Sheet in one Worker. Connect storage to persist files.",
+    ),
+    iconUrl: "/brand/office.svg",
+    inputs: [
+      {
+        name: "project_name",
+        type: "string",
+        defaultValue: "takos-office",
+        label: text("サービス名", "Service name"),
+      },
+      {
+        name: "worker_name",
+        type: "string",
+        format: "subdomain",
+        label: text("公開サブドメイン", "Public subdomain"),
+        helper: text(
+          "空欄ならサービス名から自動で決めます。入力すると <subdomain>.app.takos.jp として使われます。",
+          "Leave empty to derive it from the service name. When set, it is used as <subdomain>.app.takos.jp.",
+        ),
+        placeholder: "my-office",
+      },
+      {
+        name: "app_url",
+        type: "string",
+        format: "url",
+        advanced: true,
+        label: text("独自URL", "Custom URL"),
+        helper: text(
+          "独自ドメインを使う場合だけ https:// から入力します。空欄なら公開サブドメインのURLを使います。",
+          "Enter an https:// URL only for a custom domain. Leave empty to use the public subdomain URL.",
+        ),
+        placeholder: "https://office.app.takos.jp",
+      },
+      {
+        name: "takos_storage_api_url",
+        type: "string",
+        format: "url",
+        advanced: true,
+        label: text("Storage API URL", "Storage API URL"),
+        helper: text(
+          "Takos Storage を接続する場合だけ入力します。通常はサービス接続で注入します。",
+          "Enter only when connecting Takos Storage manually. Normally injected by service connection.",
+        ),
+        placeholder: "https://storage.app.takos.jp/o",
+      },
+      {
+        name: "takos_storage_access_token",
+        type: "string",
+        format: "token",
+        advanced: true,
+        secret: true,
+        label: text("Storage access token", "Storage access token"),
+        helper: text(
+          "Takos Storage を手動接続する場合だけ入力します。",
+          "Enter only when connecting Takos Storage manually.",
+        ),
+      },
+      {
+        name: "mcp_auth_token",
+        type: "string",
+        format: "token",
+        advanced: true,
+        secret: true,
+        label: text("MCP token", "MCP token"),
+        helper: text(
+          "空欄なら自動生成します。通常は入力不要です。",
+          "Leave empty to generate one. Normally not needed.",
+        ),
+      },
+      {
+        name: "enable_cloudflare_resources",
+        type: "boolean",
+        advanced: true,
+        defaultValue: "true",
+        label: text("Cloudflare リソースを作成", "Create Cloudflare resources"),
+      },
+      {
+        name: "enable_cloudflare_worker_script",
+        type: "boolean",
+        advanced: true,
+        defaultValue: "true",
+        label: text("Worker を公開", "Publish Worker"),
+      },
+      {
+        name: "worker_bundle_url",
+        type: "string",
+        format: "url",
+        advanced: true,
+        defaultValue:
+          "https://github.com/tako0614/takos-office/releases/download/v0.1.0/worker-f3267ebffba084c891882f993094df475c0ca94bb1ff97411a168bc6fccffe50.js",
+        label: text("Worker artifact URL", "Worker artifact URL"),
+      },
+      {
+        name: "worker_bundle_sha256",
+        type: "string",
+        format: "sha256",
+        advanced: true,
+        defaultValue:
+          "f3267ebffba084c891882f993094df475c0ca94bb1ff97411a168bc6fccffe50",
+        label: text("Worker artifact SHA-256", "Worker artifact SHA-256"),
+      },
+    ],
+    installExperience: {
+      projections: [
+        { kind: "service_name", variable: "project_name" },
+        {
+          kind: "public_endpoint",
+          variables: {
+            subdomain: "worker_name",
+            url: "app_url",
+            routePattern: "cloudflare_route_pattern",
+          },
+          baseDomain: "app.takos.jp",
+        },
+        {
+          kind: "initial_secret",
+          variable: "mcp_auth_token",
+          secretKind: "token",
+          optional: true,
+        },
+        {
+          kind: "artifact",
+          variables: {
+            url: "worker_bundle_url",
+            sha256: "worker_bundle_sha256",
+          },
+        },
+      ],
+    },
+    outputAllowlist: {
+      url: { from: "url", type: "url" },
+      app_deployment: { from: "app_deployment", type: "json" },
+      service_exports: { from: "service_exports", type: "json" },
+    },
+  },
+  {
     id: "cfg-catalog-takos-storage",
     name: "takos-storage",
     source: {
       git: "https://github.com/tako0614/takos-storage.git",
-      ref: "913dc9ff1c18efbf0c6de81f1fb05f4746eb6573",
+      ref: "a284c4ab3ce4ecf1302991f45f5c3d99b7c990b0",
       path: ".",
     },
     order: 120,
@@ -334,6 +486,7 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
       "ワークスペースの object storage サービス。他のアプリがスコープ付きトークンで読み書きします。",
       "Workspace object-storage service that other apps read/write with bind-time scoped tokens.",
     ),
+    iconUrl: "/brand/storage.svg",
     inputs: [
       {
         name: "project_name",
@@ -396,6 +549,8 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
         type: "string",
         format: "url",
         advanced: true,
+        defaultValue:
+          "https://github.com/tako0614/takos-storage/releases/download/v0.1.1/worker.js",
         label: text("Worker artifact URL", "Worker artifact URL"),
       },
       {
@@ -403,6 +558,8 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
         type: "string",
         format: "sha256",
         advanced: true,
+        defaultValue:
+          "9f9e3a8584048ec49fce4aa2ca9f8b3b942a35c6339c4e4e39aee306a4587a1b",
         label: text("Worker artifact SHA-256", "Worker artifact SHA-256"),
       },
     ],
@@ -438,7 +595,7 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
     name: "takos-git",
     source: {
       git: "https://github.com/tako0614/takos-git.git",
-      ref: "b52702fb0cfd3ebbf963b76f143444325de0b629",
+      ref: "bdcd31989f870d56baa03b2ed589a81e08d02e7c",
       path: ".",
     },
     order: 130,
@@ -452,6 +609,7 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
       "ワークスペースの git ホスティングサービス。他のアプリがスコープ付きトークンで clone します。",
       "Workspace git hosting service that other apps clone with bind-time scoped tokens.",
     ),
+    iconUrl: "/brand/git.svg",
     inputs: [
       {
         name: "project_name",
@@ -514,6 +672,8 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
         type: "string",
         format: "url",
         advanced: true,
+        defaultValue:
+          "https://github.com/tako0614/takos-git/releases/download/v0.1.1/worker.js",
         label: text("Worker artifact URL", "Worker artifact URL"),
       },
       {
@@ -521,6 +681,8 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
         type: "string",
         format: "sha256",
         advanced: true,
+        defaultValue:
+          "0f75a091e58d463dd45b20f1d1570fa69a9b2a06fe6b1e2f6c5914e75bf209eb",
         label: text("Worker artifact SHA-256", "Worker artifact SHA-256"),
       },
     ],
