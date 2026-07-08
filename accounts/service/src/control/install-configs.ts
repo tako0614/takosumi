@@ -231,7 +231,7 @@ async function patchScopedInstallConfig(
   if (!body) return errorJson("invalid_request", "invalid request", 400);
   const variableMappingPatch = body.variableMapping;
   const removeVariables = stringArrayValue(body.removeVariables);
-  const catalogInputDefaults = body.catalogInputDefaults;
+  const storeInputDefaults = body.storeInputDefaults;
   const outputAllowlistPatch =
     body.outputAllowlist === undefined
       ? undefined
@@ -247,12 +247,12 @@ async function patchScopedInstallConfig(
     );
   }
   if (
-    catalogInputDefaults !== undefined &&
-    !isPlainJsonObject(catalogInputDefaults)
+    storeInputDefaults !== undefined &&
+    !isPlainJsonObject(storeInputDefaults)
   ) {
     return errorJson(
       "invalid_request",
-      "catalogInputDefaults must be a JSON object",
+      "storeInputDefaults must be a JSON object",
       400,
     );
   }
@@ -273,7 +273,7 @@ async function patchScopedInstallConfig(
       400,
     );
   }
-  const catalogInputDefaultStrings: Record<string, string> = {};
+  const storeInputDefaultStrings: Record<string, string> = {};
   for (const [key, value] of Object.entries(variableMappingPatch ?? {})) {
     if (!isJsonValue(value)) {
       return errorJson(
@@ -283,17 +283,17 @@ async function patchScopedInstallConfig(
       );
     }
   }
-  for (const [key, value] of Object.entries(catalogInputDefaults ?? {})) {
+  for (const [key, value] of Object.entries(storeInputDefaults ?? {})) {
     if (typeof value !== "string") {
       return errorJson(
         "invalid_request",
-        `catalogInputDefaults.${key} must be a string`,
+        `storeInputDefaults.${key} must be a string`,
         400,
       );
     }
-    catalogInputDefaultStrings[key] = value;
+    storeInputDefaultStrings[key] = value;
   }
-  const catalogSourceRef = stringValue(body.catalogSourceRef);
+  const existingStore = config.store;
   const nextVariableMapping = { ...config.variableMapping };
   for (const name of removeVariables ?? []) {
     delete nextVariableMapping[name];
@@ -304,29 +304,23 @@ async function patchScopedInstallConfig(
     ...config,
     variableMapping: nextVariableMapping,
     outputAllowlist: outputAllowlistPatch ?? config.outputAllowlist,
-    catalog:
-      config.catalog && (catalogSourceRef || catalogInputDefaults)
+    store:
+      existingStore && storeInputDefaults
         ? {
-            ...config.catalog,
-            source:
-              catalogSourceRef && config.catalog.source
-                ? { ...config.catalog.source, ref: catalogSourceRef }
-                : config.catalog.source,
-            inputs: catalogInputDefaults
-              ? config.catalog.inputs.map((input) =>
-                  Object.prototype.hasOwnProperty.call(
-                    catalogInputDefaultStrings,
-                    input.name,
-                  )
-                    ? {
-                        ...input,
-                        defaultValue: catalogInputDefaultStrings[input.name],
-                      }
-                    : input,
-                )
-              : config.catalog.inputs,
+            ...existingStore,
+            inputs: existingStore.inputs.map((input) =>
+              Object.prototype.hasOwnProperty.call(
+                storeInputDefaultStrings,
+                input.name,
+              )
+                ? {
+                    ...input,
+                    defaultValue: storeInputDefaultStrings[input.name],
+                  }
+                : input,
+            ),
           }
-        : config.catalog,
+        : existingStore,
     updatedAt: now,
   });
   return json({ installConfig: publicInstallConfig(updated) });
@@ -357,8 +351,10 @@ export function publicInstallConfig(
     prebuiltArtifact: _prebuiltArtifact,
     ...publicRecord
   } = config;
+  const store = config.store;
   return {
     ...publicRecord,
+    ...(store ? { store } : {}),
     sourceKind: publicInstallConfigSourceKind(config),
   };
 }
@@ -377,34 +373,29 @@ function publicInstallConfigSourceKind(
   return "generic_capsule";
 }
 
-type InstallConfigListView = "all" | "template-catalog";
+type InstallConfigListView = "all" | "store";
 
 function parseInstallConfigListView(
   url: URL,
 ):
   | { readonly ok: true; readonly view: InstallConfigListView }
   | { readonly ok: false; readonly response: Response } {
-  const raw =
-    url.searchParams.get("view") ?? url.searchParams.get("catalogView");
+  const raw = url.searchParams.get("view");
   if (raw === null || raw === "" || raw === "all") {
     return { ok: true, view: "all" };
   }
-  if (raw === "template-catalog") {
-    return { ok: true, view: "template-catalog" };
+  if (raw === "store") {
+    return { ok: true, view: "store" };
   }
   return {
     ok: false,
-    response: errorJson(
-      "invalid_request",
-      "view must be all or template-catalog",
-      400,
-    ),
+    response: errorJson("invalid_request", "view must be all or store", 400),
   };
 }
 
-function isTemplateCatalogInstallConfig(config: InstallConfig): boolean {
+function isStoreInstallConfig(config: InstallConfig): boolean {
   if (config.workspaceId !== undefined) return false;
-  if (config.catalog?.source === undefined) return false;
+  if (config.store?.source === undefined) return false;
   if (config.sourceKind !== "generic_capsule") return false;
   return config.trustLevel === "trusted";
 }
@@ -445,14 +436,14 @@ async function listInstallConfigs(
     if (!auth.ok) return auth.response;
   }
   const scoped =
-    workspaceId === undefined || view.view === "template-catalog"
+    workspaceId === undefined || view.view === "store"
       ? []
       : (await operations.installations.listInstallConfigs(workspaceId)).filter(
           isSelectableInstallConfig,
         );
   const merged = (
-    view.view === "template-catalog"
-      ? official.filter(isTemplateCatalogInstallConfig)
+    view.view === "store"
+      ? official.filter(isStoreInstallConfig)
       : [...official, ...scoped]
   ).sort(
     (a, b) =>

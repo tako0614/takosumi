@@ -1779,7 +1779,7 @@ test("GET /api/v1/dashboard/overview includes config referenced by returned Caps
       variableMapping: {},
       outputAllowlist: {},
       policy: {},
-      catalog: {
+      store: {
         source: {
           git: "https://github.com/tako0614/yurucommu.git",
           ref: "master",
@@ -1825,7 +1825,7 @@ test("GET /api/v1/dashboard/overview includes config referenced by returned Caps
       installType?: string;
       templateBinding?: unknown;
       internal?: unknown;
-      catalog?: unknown;
+      store?: unknown;
     }>;
   };
   expect(body.installConfigs.map((config) => config.id)).toEqual([
@@ -1833,7 +1833,7 @@ test("GET /api/v1/dashboard/overview includes config referenced by returned Caps
     "icfg_1234567890abcdef",
   ]);
   expect(body.installConfigs[1]?.sourceKind).toEqual("first_party_capsule");
-  expect(body.installConfigs[1]?.catalog).toBeTruthy();
+  expect(body.installConfigs[1]?.store).toBeTruthy();
   expect(body.installConfigs[1]?.installType).toBeUndefined();
   expect(body.installConfigs[1]?.templateBinding).toBeUndefined();
   expect(body.installConfigs[1]?.internal).toBeUndefined();
@@ -3796,7 +3796,7 @@ test("POST /api/v1/workspaces/:id/capsules stores runnerId and outputAllowlist i
   expect(createCall.installConfigId).toEqual(config.id);
 });
 
-test("POST /api/v1/workspaces/:id/capsules carries store catalog metadata into the scoped InstallConfig", async () => {
+test("POST /api/v1/workspaces/:id/capsules carries store metadata into the scoped InstallConfig", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
@@ -3810,7 +3810,7 @@ test("POST /api/v1/workspaces/:id/capsules carries store catalog metadata into t
         environment: "production",
         sourceId: "src_x",
         installConfigId: "cfg_x",
-        catalog: {
+        store: {
           templateId: "yurucommu",
           source: {
             git: "https://github.com/tako0614/yurucommu.git",
@@ -3898,7 +3898,7 @@ test("POST /api/v1/workspaces/:id/capsules carries store catalog metadata into t
     id: string;
     workspaceId: string;
     internal?: unknown;
-    catalog?: {
+    store?: {
       templateId?: string;
       source?: { git?: string; ref?: string; path?: string };
       iconUrl?: string;
@@ -3923,26 +3923,26 @@ test("POST /api/v1/workspaces/:id/capsules carries store catalog metadata into t
   expect(config.id.startsWith("icfg_")).toEqual(true);
   expect(config.workspaceId).toEqual("space_a");
   expect(config.internal).toEqual({ reason: "per_install_overrides" });
-  expect(config.catalog?.templateId).toEqual("yurucommu");
-  expect(config.catalog?.source).toEqual({
+  expect(config.store?.templateId).toEqual("yurucommu");
+  expect(config.store?.source).toEqual({
     git: "https://github.com/tako0614/yurucommu.git",
     ref: "1fe727f1843c0c4a91fece16cbc73950225e078d",
     path: ".",
   });
-  expect(config.catalog?.inputs?.map((input) => input.type)).toEqual([
+  expect(config.store?.inputs?.map((input) => input.type)).toEqual([
     "string",
     "json",
   ]);
-  expect(config.catalog?.iconUrl).toEqual("https://example.test/icon.svg");
-  expect(config.catalog?.inputs?.[0]?.advanced).toEqual(true);
-  expect(config.catalog?.inputs?.[1]?.secret).toEqual(true);
+  expect(config.store?.iconUrl).toEqual("https://example.test/icon.svg");
+  expect(config.store?.inputs?.[0]?.advanced).toEqual(true);
+  expect(config.store?.inputs?.[1]?.secret).toEqual(true);
   expect(
-    config.catalog?.installExperience?.projections?.find(
+    config.store?.installExperience?.projections?.find(
       (projection) => projection.kind === "public_endpoint",
     )?.baseDomain,
   ).toEqual("app.takos.jp");
   expect(
-    config.catalog?.installExperience?.projections?.find(
+    config.store?.installExperience?.projections?.find(
       (projection) => projection.kind === "oidc_client",
     )?.callbackPath,
   ).toEqual("/auth/oidc/callback");
@@ -3970,7 +3970,7 @@ test("POST /api/v1/workspaces/:id/capsules rejects retired install experience fi
         environment: "production",
         sourceId: "src_x",
         installConfigId: "cfg_x",
-        catalog: {
+        store: {
           templateId: "yurucommu",
           source: {
             git: "https://github.com/tako0614/yurucommu.git",
@@ -4010,12 +4010,12 @@ test("POST /api/v1/workspaces/:id/capsules rejects retired install experience fi
   });
 
   expect(response?.status).toEqual(400);
-  expect(await response!.text()).toContain("catalog must be a valid");
+  expect(await response!.text()).toContain("store must be a valid");
   expect(operations.calls.putInstallConfig).toBeUndefined();
   expect(operations.calls.createCapsule).toBeUndefined();
 });
 
-test("POST /api/v1/workspaces/:id/capsules accepts large catalog default values for OpenTofu inputs", async () => {
+test("POST /api/v1/workspaces/:id/capsules accepts large store default values for OpenTofu inputs", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
@@ -4037,7 +4037,7 @@ test("POST /api/v1/workspaces/:id/capsules accepts large catalog default values 
         environment: "production",
         sourceId: "src_x",
         installConfigId: "cfg_x",
-        catalog: {
+        store: {
           templateId: "takos",
           source: {
             git: "https://github.com/tako0614/takos.git",
@@ -4081,12 +4081,12 @@ test("POST /api/v1/workspaces/:id/capsules accepts large catalog default values 
 
   expect(response?.status).toEqual(201);
   const config = operations.calls.putInstallConfig?.[0] as {
-    catalog?: {
+    store?: {
       inputs?: Array<{ name: string; defaultValue?: string }>;
     };
   };
   expect(
-    config.catalog?.inputs?.find(
+    config.store?.inputs?.find(
       (input) => input.name === "release_container_images",
     )?.defaultValue,
   ).toEqual(defaultValue);
@@ -4110,7 +4110,7 @@ test("POST /api/v1/workspaces/:id/capsules auto-provisions Takosumi Accounts OID
           project_name: "yurucommu-space-a",
           app_url: "https://community.example.test",
         },
-        catalog: {
+        store: {
           templateId: "yurucommu",
           source: {
             git: "https://github.com/tako0614/yurucommu.git",
@@ -4179,7 +4179,7 @@ test("POST /api/v1/workspaces/:id/capsules auto-provisions Takosumi Accounts OID
           project_name: "takos-space-a",
           app_url: "https://takos.example.test",
         },
-        catalog: {
+        store: {
           templateId: "takos",
           source: {
             git: "https://github.com/tako0614/takos.git",
@@ -4350,7 +4350,7 @@ test("POST /api/v1/workspaces/:id/capsules stores modulePath in a scoped Install
   expect(config.modulePath).toEqual("deploy/opentofu");
 });
 
-test("POST /api/v1/workspaces/:id/capsules inherits catalog modulePath when vars create a scoped InstallConfig", async () => {
+test("POST /api/v1/workspaces/:id/capsules inherits store modulePath when vars create a scoped InstallConfig", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
@@ -4369,7 +4369,7 @@ test("POST /api/v1/workspaces/:id/capsules inherits catalog modulePath when vars
         takosumi_release: { from: "takosumi_release", type: "json" },
       },
       policy: {},
-      catalog: {
+      store: {
         source: {
           git: "https://github.com/tako0614/takos.git",
           ref: "0b8ead2bb4ae092463a0b517e4838d68ff311a0e",
@@ -4398,7 +4398,7 @@ test("POST /api/v1/workspaces/:id/capsules inherits catalog modulePath when vars
         name: "takos",
         environment: "staging",
         sourceId: "src_x",
-        installConfigId: "cfg-catalog-takos",
+        installConfigId: "cfg-store-takos",
         vars: { project_name: "takos-space-a" },
       },
     },
@@ -4414,20 +4414,20 @@ test("POST /api/v1/workspaces/:id/capsules inherits catalog modulePath when vars
     id: string;
     internal?: unknown;
     modulePath?: string;
-    catalog?: { source?: { path?: string } };
+    store?: { source?: { path?: string } };
     outputAllowlist?: Record<string, unknown>;
   };
   expect(config.id.startsWith("icfg_")).toEqual(true);
   expect(config.internal).toEqual({ reason: "per_install_overrides" });
   expect(config.modulePath).toBe("deploy/opentofu");
-  expect(config.catalog?.source?.path).toBe("deploy/opentofu");
+  expect(config.store?.source?.path).toBe("deploy/opentofu");
   expect(config.outputAllowlist).toEqual({
     app_deployment: { from: "app_deployment", type: "json" },
     takosumi_release: { from: "takosumi_release", type: "json" },
   });
 });
 
-test("POST /api/v1/workspaces/:id/capsules applies catalog input defaults as OpenTofu vars", async () => {
+test("POST /api/v1/workspaces/:id/capsules applies store input defaults as OpenTofu vars", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
@@ -4447,7 +4447,7 @@ test("POST /api/v1/workspaces/:id/capsules applies catalog input defaults as Ope
         takosumi_release: { from: "takosumi_release", type: "json" },
       },
       policy: {},
-      catalog: {
+      store: {
         source: {
           git: "https://github.com/tako0614/yurucommu.git",
           ref: "ebe1cb08e67794aaab4722b138a321c78e430291",
@@ -4518,7 +4518,7 @@ test("POST /api/v1/workspaces/:id/capsules applies catalog input defaults as Ope
         name: "yurucommu",
         environment: "production",
         sourceId: "src_x",
-        installConfigId: "cfg-catalog-yurucommu",
+        installConfigId: "cfg-store-yurucommu",
         vars: {
           project_name: "custom-yurucommu",
           worker_name: "custom-yurucommu",
@@ -5566,6 +5566,25 @@ test("Capsule session routes patch status, delete via destroy-plan, drift-check,
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
+  operations.installations.getCapsule = async (id) =>
+    ({
+      id,
+      workspaceId: "space_a",
+      name: "app",
+      slug: "app",
+      sourceId: "src_x",
+      installType: "opentofu_module",
+      installConfigId: "cfg_x",
+      environment: "prod",
+      currentOutputId: "osnap_secret_1",
+      currentStateVersionId: "state_1",
+      currentStateGeneration: 1,
+      status: "ready",
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:00Z",
+    }) as Awaited<
+      ReturnType<ControlPlaneOperations["installations"]["getCapsule"]>
+    >;
 
   const patch = request("PATCH", "/api/v1/capsules/inst_1", {
     cookie,
@@ -6377,7 +6396,7 @@ test("PATCH /api/v1/capsule-configs/:id updates only scoped per-install variable
       },
       outputAllowlist: {},
       policy: {},
-      catalog: {
+      store: {
         templateId: "yurucommu",
         source: {
           git: "https://github.com/tako0614/yurucommu.git",
@@ -6421,8 +6440,7 @@ test("PATCH /api/v1/capsule-configs/:id updates only scoped per-install variable
           worker_bundle_url: "https://example.test/v2.0.1/takos-worker.js",
           worker_bundle_sha256: "new-sha",
         },
-        catalogSourceRef: "de0c72f3741c3f2bed633c7dd995fa412d5074c2",
-        catalogInputDefaults: {
+        storeInputDefaults: {
           worker_bundle_url: "https://example.test/v2.0.1/takos-worker.js",
           worker_bundle_sha256: "new-sha",
         },
@@ -6444,7 +6462,7 @@ test("PATCH /api/v1/capsule-configs/:id updates only scoped per-install variable
   const saved = operations.calls.putInstallConfig?.[0] as {
     variableMapping: Record<string, unknown>;
     outputAllowlist: Record<string, unknown>;
-    catalog?: {
+    store?: {
       source?: { ref?: string };
       inputs?: Array<{ name: string; defaultValue?: unknown }>;
     };
@@ -6458,16 +6476,14 @@ test("PATCH /api/v1/capsule-configs/:id updates only scoped per-install variable
     app_deployment: { from: "app_deployment", type: "json" },
     takosumi_release: { from: "takosumi_release", type: "json" },
   });
-  expect(saved.catalog?.source?.ref).toEqual(
-    "de0c72f3741c3f2bed633c7dd995fa412d5074c2",
-  );
+  expect(saved.store?.source?.ref).toEqual("old");
   expect(
-    saved.catalog?.inputs?.find((input) => input.name === "worker_bundle_url")
+    saved.store?.inputs?.find((input) => input.name === "worker_bundle_url")
       ?.defaultValue,
   ).toEqual("https://example.test/v2.0.1/takos-worker.js");
 });
 
-test("PATCH /api/v1/capsule-configs/:id rejects shared catalog configs", async () => {
+test("PATCH /api/v1/capsule-configs/:id rejects shared store configs", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
@@ -6493,7 +6509,7 @@ test("PATCH /api/v1/capsule-configs/:id rejects shared catalog configs", async (
   expect(operations.calls.putInstallConfig).toBeUndefined();
 });
 
-test("GET /api/v1/capsule-configs template catalog hides scoped configs", async () => {
+test("GET /api/v1/capsule-configs store view hides scoped configs", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
@@ -6514,7 +6530,7 @@ test("GET /api/v1/capsule-configs template catalog hides scoped configs", async 
           variableMapping: {},
           outputAllowlist: {},
           policy: {},
-          catalog: {
+          store: {
             source: {
               git: "https://github.com/example/e2e.git",
               ref: "main",
@@ -6557,7 +6573,7 @@ test("GET /api/v1/capsule-configs template catalog hides scoped configs", async 
         variableMapping: {},
         outputAllowlist: {},
         policy: {},
-        catalog: {
+        store: {
           templateId: "cloudflare-hello-worker",
           source: {
             git: "https://github.com/tako0614/takosumi.git",
@@ -6582,7 +6598,7 @@ test("GET /api/v1/capsule-configs template catalog hides scoped configs", async 
         updatedAt: officialCreatedAt,
       },
       {
-        id: "cfg-catalog-yurucommu",
+        id: "cfg-store-yurucommu",
         name: "yurucommu",
         sourceKind: "generic_capsule",
         installType: "opentofu_module",
@@ -6590,7 +6606,7 @@ test("GET /api/v1/capsule-configs template catalog hides scoped configs", async 
         variableMapping: {},
         outputAllowlist: {},
         policy: {},
-        catalog: {
+        store: {
           source: {
             git: "https://github.com/tako0614/yurucommu.git",
             ref: "1fe727f1843c0c4a91fece16cbc73950225e078d",
@@ -6610,7 +6626,7 @@ test("GET /api/v1/capsule-configs template catalog hides scoped configs", async 
         updatedAt: officialCreatedAt,
       },
       {
-        id: "cfg-catalog-takos",
+        id: "cfg-store-takos",
         name: "takos",
         sourceKind: "generic_capsule",
         installType: "opentofu_module",
@@ -6618,7 +6634,7 @@ test("GET /api/v1/capsule-configs template catalog hides scoped configs", async 
         variableMapping: {},
         outputAllowlist: {},
         policy: {},
-        catalog: {
+        store: {
           source: {
             git: "https://github.com/tako0614/takos.git",
             ref: "0b8ead2bb4ae092463a0b517e4838d68ff311a0e",
@@ -6642,7 +6658,7 @@ test("GET /api/v1/capsule-configs template catalog hides scoped configs", async 
 
   const { request: req, url } = request(
     "GET",
-    "/api/v1/capsule-configs?workspaceId=space_a&view=template-catalog",
+    "/api/v1/capsule-configs?workspaceId=space_a&view=store",
     { cookie },
   );
   const response = await handleControlRoute({
@@ -6656,12 +6672,12 @@ test("GET /api/v1/capsule-configs template catalog hides scoped configs", async 
     installConfigs: Array<{
       id: string;
       workspaceId?: string;
-      catalog?: unknown;
+      store?: unknown;
     }>;
   };
   expect(body.installConfigs.map((config) => config.id)).toEqual([
-    "cfg-catalog-takos",
-    "cfg-catalog-yurucommu",
+    "cfg-store-takos",
+    "cfg-store-yurucommu",
   ]);
   expect(body.installConfigs.some((config) => config.workspaceId)).toBe(false);
 });
@@ -6816,7 +6832,7 @@ test("Sources: GET requires workspaceId, POST + sync return 201", async () => {
     modulePath: "deploy/opentofu",
   });
 
-  // Catalog deep-link path: a curated `installConfigId` in the body must be
+  // Store deep-link path: a curated `installConfigId` in the body must be
   // threaded to the operations facade so a vetted first-party module is gated
   // against its own bounded allowlist (without widening the global default).
   const curated = request("POST", "/api/v1/sources/src_x/compatibility-check", {
@@ -6950,7 +6966,7 @@ test("Sources: legacy spaceId-only Source can sync, snapshot, and authorize repo
   expect(reportResp?.status).toEqual(200);
 });
 
-test("Providers: catalog entries are public to session", async () => {
+test("Providers: store entries are public to session", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();

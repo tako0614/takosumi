@@ -404,6 +404,11 @@ export interface UsageEvent {
   readonly spaceId?: string;
   readonly capsuleId?: string;
   readonly runId?: string;
+  readonly meterId?: string;
+  readonly resourceFamily?: string;
+  readonly resourceId?: string;
+  readonly operation?: string;
+  readonly resourceMetadata?: Readonly<Record<string, unknown>>;
   readonly kind: UsageEventKind;
   readonly quantity: number;
   readonly usdMicros?: number;
@@ -488,12 +493,12 @@ export interface InstallConfig {
   readonly modulePath?: string;
   readonly variableMapping: Readonly<Record<string, unknown>>;
   readonly outputAllowlist: Readonly<Record<string, OutputAllowlistEntry>>;
-  readonly catalog?: {
+  readonly store?: {
     readonly templateId?: string;
     readonly templateVersion?: string;
     readonly source?: {
       readonly git: string;
-      readonly ref: string;
+      readonly ref?: string;
       readonly path: string;
     };
     readonly order: number;
@@ -1364,7 +1369,7 @@ export async function createCapsule(input: {
   readonly modulePath?: string;
   readonly vars?: Readonly<Record<string, ContractJsonValue>>;
   readonly outputAllowlist?: Readonly<Record<string, OutputAllowlistEntry>>;
-  readonly catalog?: NonNullable<InstallConfig["catalog"]>;
+  readonly store?: NonNullable<InstallConfig["store"]>;
 }): Promise<Capsule> {
   const body = await controlFetch<{
     capsule: Capsule;
@@ -1384,7 +1389,7 @@ export async function createCapsule(input: {
       ...(input.outputAllowlist && Object.keys(input.outputAllowlist).length > 0
         ? { outputAllowlist: input.outputAllowlist }
         : {}),
-      ...(input.catalog ? { catalog: input.catalog } : {}),
+      ...(input.store ? { store: input.store } : {}),
     },
   });
   return body.capsule;
@@ -1437,9 +1442,9 @@ export async function putCapsuleProviderConnectionSet(
 
 // --- Capsule configs -------------------------------------------------------
 
-export const TEMPLATE_CATALOG_VIEW = "template-catalog" as const;
+export const STORE_VIEW = "store" as const;
 
-export type InstallConfigView = typeof TEMPLATE_CATALOG_VIEW;
+export type InstallConfigView = typeof STORE_VIEW;
 
 export async function listInstallConfigs(
   workspaceId?: string,
@@ -1466,8 +1471,7 @@ export async function patchInstallConfig(
   input: {
     readonly variableMapping?: Readonly<Record<string, ContractJsonValue>>;
     readonly removeVariables?: readonly string[];
-    readonly catalogInputDefaults?: Readonly<Record<string, string>>;
-    readonly catalogSourceRef?: string;
+    readonly storeInputDefaults?: Readonly<Record<string, string>>;
     readonly outputAllowlist?: Readonly<Record<string, OutputAllowlistEntry>>;
   },
 ): Promise<InstallConfig> {
@@ -1482,11 +1486,8 @@ export async function patchInstallConfig(
         ...(input.removeVariables && input.removeVariables.length > 0
           ? { removeVariables: input.removeVariables }
           : {}),
-        ...(input.catalogInputDefaults
-          ? { catalogInputDefaults: input.catalogInputDefaults }
-          : {}),
-        ...(input.catalogSourceRef
-          ? { catalogSourceRef: input.catalogSourceRef }
+        ...(input.storeInputDefaults
+          ? { storeInputDefaults: input.storeInputDefaults }
           : {}),
         ...(input.outputAllowlist &&
         Object.keys(input.outputAllowlist).length > 0
@@ -1498,10 +1499,10 @@ export async function patchInstallConfig(
   return body.installConfig;
 }
 
-export async function listTemplateCatalogInstallConfigs(
+export async function listTemplateStoreInstallConfigs(
   workspaceId?: string,
 ): Promise<readonly InstallConfig[]> {
-  return await listInstallConfigs(workspaceId, { view: TEMPLATE_CATALOG_VIEW });
+  return await listInstallConfigs(workspaceId, { view: STORE_VIEW });
 }
 
 // --- OpenTofu Capsule compatibility ---------------------------------------

@@ -48,6 +48,8 @@ describe("StoreBrowser install UI", () => {
     expect(storeBrowserSource).toContain(
       'configure: { ja: "インストール", en: "Install" }',
     );
+    expect(storeBrowserSource).toContain('name="storeSource"');
+    expect(storeBrowserSource).toContain("l.seenOn.includes(activeStore())");
   });
 
   test("keeps cards stable on desktop and full width on narrow screens", () => {
@@ -62,9 +64,9 @@ describe("StoreBrowser install UI", () => {
     expect(storeBrowserCss).toContain("width: 100%");
   });
 
-  test("the standalone Store tab is store-driven, not a hardcoded catalog", () => {
+  test("the standalone Store tab is store-driven, not a hardcoded template list", () => {
     // Discovery comes from the takosumi-store node(s); the dashboard no longer
-    // injects a local catalog.
+    // injects a local template list.
     expect(storeViewSource).not.toContain("installableAppStoreListings");
     expect(storeViewSource).not.toContain("localListings");
     expect(storeViewSource).toContain("<StoreBrowser");

@@ -14,7 +14,7 @@ import type { ControlPlaneOperations } from "../control-operations.ts";
 import type { AccountsStore, OidcClientRecord } from "../store.ts";
 
 type InstallExperience = NonNullable<
-  InstallConfig["catalog"]
+  InstallConfig["store"]
 >["installExperience"];
 interface ResolvedTakosumiAccountsOidcExperience {
   readonly issuerUrlVariable: string;
@@ -57,7 +57,7 @@ export async function ensureTakosumiAccountsOidcForCapsule(input: {
   const redirectOrigin = appOriginFromInstallVariables(
     input.installConfig.variableMapping,
     installExperiencePublicEndpoint(
-      input.installConfig.catalog?.installExperience,
+      input.installConfig.store?.installExperience,
     ),
   );
   if (!redirectOrigin) return;
@@ -159,9 +159,8 @@ function installOidcClientExperience(
   config: InstallConfig,
   sourceGitUrl?: string,
 ): ResolvedTakosumiAccountsOidcExperience | undefined {
-  const configured = installExperienceOidcClient(
-    config.catalog?.installExperience,
-  );
+  const store = config.store;
+  const configured = installExperienceOidcClient(store?.installExperience);
   if (configured) {
     return {
       ...DEFAULT_TAKOSUMI_ACCOUNTS_OIDC,
@@ -169,15 +168,15 @@ function installOidcClientExperience(
     };
   }
   if (
-    config.catalog?.templateId === "takos" ||
-    isTakosGitUrl(config.catalog?.source?.git) ||
+    store?.templateId === "takos" ||
+    isTakosGitUrl(store?.source?.git) ||
     isTakosGitUrl(sourceGitUrl)
   ) {
     return TAKOS_DISTRIBUTION_ACCOUNTS_OIDC;
   }
   if (
-    config.catalog?.templateId === "yurucommu" ||
-    isYurucommuGitUrl(config.catalog?.source?.git) ||
+    store?.templateId === "yurucommu" ||
+    isYurucommuGitUrl(store?.source?.git) ||
     isYurucommuGitUrl(sourceGitUrl)
   ) {
     return DEFAULT_TAKOSUMI_ACCOUNTS_OIDC;

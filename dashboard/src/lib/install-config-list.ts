@@ -1,11 +1,11 @@
 import {
   listInstallConfigs,
-  TEMPLATE_CATALOG_VIEW,
+  STORE_VIEW,
   type InstallConfig,
   type InstallConfigView,
 } from "./control-api.ts";
 
-export { TEMPLATE_CATALOG_VIEW };
+export { STORE_VIEW };
 
 const CACHE_TTL_MS = 10_000;
 

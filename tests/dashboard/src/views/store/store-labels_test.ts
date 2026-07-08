@@ -18,7 +18,7 @@ describe("Store labels", () => {
     expect(tcsCategoryLabel("custom_provider", "en")).toBe("Custom Provider");
   });
 
-  test("renders provider and badge values without raw catalog tokens", () => {
+  test("renders provider and badge values without raw internal tokens", () => {
     expect(tcsProviderLabel("takosumi")).toBe("Takosumi");
     expect(tcsProviderLabel("cloudflare")).toBe("Cloudflare");
     expect(tcsProviderLabel("aws")).toBe("AWS");

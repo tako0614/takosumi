@@ -10,7 +10,7 @@ export function managedPublicBaseDomainFromInstallConfig(
 ): string {
   return (
     normalizeManagedPublicBaseDomain(
-      installExperiencePublicEndpoint(installConfig?.catalog?.installExperience)
+      installExperiencePublicEndpoint(installConfig?.store?.installExperience)
         ?.baseDomain,
     ) ?? DEFAULT_MANAGED_PUBLIC_BASE_DOMAIN
   );

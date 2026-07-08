@@ -855,7 +855,7 @@ test("managed Cloudflare Capsule inputs derive app.takos.jp launch defaults serv
           api_base_url: null,
         },
       },
-      catalog: {
+      store: {
         order: 100,
         surface: "service",
         kind: "worker",
@@ -944,7 +944,7 @@ test("managed Cloudflare Capsule explicit worker_name drives app.takos.jp URL de
           api_base_url: null,
         },
       },
-      catalog: {
+      store: {
         order: 100,
         surface: "service",
         kind: "worker",
@@ -1009,7 +1009,7 @@ test("managed Cloudflare Capsule explicit worker_name drives app.takos.jp URL de
   );
 });
 
-test("managed Cloudflare public endpoint defaults follow catalog variable mapping", async () => {
+test("managed Cloudflare public endpoint defaults follow store metadata variable mapping", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   const runner = recordingRunner();
   const seeded = await seedInstallationModel(store, {
@@ -1025,7 +1025,7 @@ test("managed Cloudflare public endpoint defaults follow catalog variable mappin
           api_base_url: null,
         },
       },
-      catalog: {
+      store: {
         order: 100,
         surface: "service",
         kind: "worker",
@@ -1111,7 +1111,7 @@ test("managed Cloudflare Capsule honors operator managed public base domain", as
           api_base_url: null,
         },
       },
-      catalog: {
+      store: {
         order: 100,
         surface: "service",
         kind: "worker",
@@ -1192,7 +1192,7 @@ test("managed Cloudflare Capsule passes custom public app_url without Takosumi h
           api_base_url: null,
         },
       },
-      catalog: {
+      store: {
         order: 100,
         surface: "service",
         kind: "worker",
@@ -1270,7 +1270,7 @@ test("managed Cloudflare Capsule allows managed-base app_url and route pattern w
           api_base_url: null,
         },
       },
-      catalog: {
+      store: {
         order: 100,
         surface: "service",
         kind: "worker",
@@ -1355,7 +1355,7 @@ test("managed Cloudflare app.takos.jp host is globally claimed across Workspaces
           api_base_url: null,
         },
       },
-      catalog: {
+      store: {
         order: 100,
         surface: "service",
         kind: "worker",
@@ -1429,7 +1429,7 @@ test("managed Cloudflare app.takos.jp host is globally claimed across Workspaces
           api_base_url: null,
         },
       },
-      catalog: {
+      store: {
         order: 100,
         surface: "service",
         kind: "worker",
@@ -1559,7 +1559,7 @@ test("managed Cloudflare app.takos.jp host claim prefers active Capsule over sta
           api_base_url: null,
         },
       },
-      catalog: {
+      store: {
         order: 100,
         surface: "service",
         kind: "worker",
@@ -1818,7 +1818,7 @@ test("managed Cloudflare app.takos.jp host is atomically reserved by successful 
           api_base_url: null,
         },
       },
-      catalog: {
+      store: {
         order: 100,
         surface: "service",
         kind: "worker",
@@ -1890,7 +1890,7 @@ test("managed Cloudflare app.takos.jp host is atomically reserved by successful 
           api_base_url: null,
         },
       },
-      catalog: {
+      store: {
         order: 100,
         surface: "service",
         kind: "worker",
@@ -1971,7 +1971,7 @@ test("managed Cloudflare host claim skips corrupt historical Capsules", async ()
           api_base_url: null,
         },
       },
-      catalog: {
+      store: {
         order: 100,
         surface: "service",
         kind: "worker",
@@ -2038,7 +2038,7 @@ test("managed Cloudflare host claim skips corrupt historical Capsules", async ()
           api_base_url: null,
         },
       },
-      catalog: {
+      store: {
         order: 100,
         surface: "service",
         kind: "worker",
@@ -2098,7 +2098,7 @@ test("managed Cloudflare host claim skips corrupt historical Capsules", async ()
   );
 });
 
-test("catalog managed Cloudflare Capsule uses operator fallback without implicit public endpoint", async () => {
+test("managed Cloudflare store Capsule uses operator fallback without implicit public endpoint", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   const runner = recordingRunner();
   const seeded = await seedInstallationModel(store, {
@@ -2114,7 +2114,7 @@ test("catalog managed Cloudflare Capsule uses operator fallback without implicit
         app_url: null,
         worker_name: null,
       },
-      catalog: {
+      store: {
         order: 100,
         surface: "service",
         kind: "worker",
@@ -2400,7 +2400,7 @@ test("app_url stays an ordinary OpenTofu input without publicEndpoint mapping", 
           api_base_url: null,
         },
       },
-      catalog: {
+      store: {
         order: 100,
         surface: "service",
         kind: "worker",
