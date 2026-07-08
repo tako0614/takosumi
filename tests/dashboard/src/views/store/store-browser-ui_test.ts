@@ -53,6 +53,9 @@ describe("StoreBrowser install UI", () => {
     expect(storeBrowserSource).toContain("listingForActiveStore");
     expect(storeBrowserSource).toContain("primaryServer: base");
     expect(storeBrowserSource).toContain("data-tcs-listing-id={listing.id}");
+    expect(storeBrowserSource).not.toContain('s("settings"');
+    expect(storeBrowserSource).not.toContain('s("inputs"');
+    expect(storeBrowserSource).not.toContain("inputId");
   });
 
   test("keeps cards stable on desktop and full width on narrow screens", () => {

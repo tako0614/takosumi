@@ -100,7 +100,11 @@ import {
 import { locale, t } from "../../i18n/index.ts";
 import { StoreBrowser } from "../store/StoreBrowser.tsx";
 import { buildNewQuery } from "../store/store-link.ts";
-import { fetchTcsListing, type TcsListing } from "../../lib/tcs-client.ts";
+import {
+  fetchTcsListing,
+  hydrateTcsListingWithRepoMetadata,
+  type TcsListing,
+} from "../../lib/tcs-client.ts";
 import {
   clearCapsuleListCache,
   listCapsulesCached,
@@ -1495,8 +1499,8 @@ function Inner() {
     if (selected && storeListingMatchesCurrentSource(selected)) {
       return selected;
     }
-    // No hardcoded store: install metadata comes from the store listing the
-    // user actually picked (captured in selectedStoreListing).
+    // No hardcoded store: install metadata comes from the repo-owned
+    // `.well-known/tcs.json` hydrated onto the listing the user picked.
     return null;
   };
   const storeListingMatchesCurrentSource = (listing: TcsListing): boolean => {
@@ -2355,30 +2359,44 @@ function Inner() {
     resetCompatibility();
   };
 
-  const pickStoreListing = (listing: TcsListing) => {
-    void loadConnections();
-    const prefill = parseInstallPrefill(`?${buildNewQuery(listing)}`);
-    if (prefill) {
-      applyInstallPrefillInput(prefill, { storeListing: listing });
-      return;
+  const hydrateStoreListing = async (
+    listing: TcsListing,
+    signal?: AbortSignal,
+  ): Promise<TcsListing> => {
+    try {
+      return await hydrateTcsListingWithRepoMetadata(listing, signal);
+    } catch {
+      return listing;
     }
+  };
 
-    setActiveTab("store");
-    setActiveInstallPrefill(null);
-    setSelectedStoreListing(listing);
-    setGitUrl(listing.source.git);
-    setRef("");
-    setPinnedFullRef(null);
-    setPath(listing.source.path || ".");
-    setName(listing.suggestedName);
-    setInstallConfigId(
-      defaultGitInstallConfig()?.id ?? DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
-    );
-    setStoreInputValues({});
-    setStoreInputTouched({});
-    setInputVariables([]);
-    setEnvVariables([]);
-    resetCompatibility();
+  const pickStoreListing = (listing: TcsListing) => {
+    void (async () => {
+      const hydratedListing = await hydrateStoreListing(listing);
+      void loadConnections();
+      const prefill = parseInstallPrefill(`?${buildNewQuery(hydratedListing)}`);
+      if (prefill) {
+        applyInstallPrefillInput(prefill, { storeListing: hydratedListing });
+        return;
+      }
+
+      setActiveTab("store");
+      setActiveInstallPrefill(null);
+      setSelectedStoreListing(hydratedListing);
+      setGitUrl(hydratedListing.source.git);
+      setRef("");
+      setPinnedFullRef(null);
+      setPath(hydratedListing.source.path || ".");
+      setName(hydratedListing.suggestedName);
+      setInstallConfigId(
+        defaultGitInstallConfig()?.id ?? DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
+      );
+      setStoreInputValues({});
+      setStoreInputTouched({});
+      setInputVariables([]);
+      setEnvVariables([]);
+      resetCompatibility();
+    })();
   };
   const startLinkImport = () => {
     const raw = linkDraft().trim();
@@ -2415,10 +2433,11 @@ function Inner() {
           initialTcsHandoff.listingId,
         );
         if (!listing || !storeListingMatchesCurrentSource(listing)) return;
-        setSelectedStoreListing({
+        const hydratedListing = await hydrateStoreListing({
           ...listing,
           primaryServer: initialTcsHandoff.base,
         });
+        setSelectedStoreListing(hydratedListing);
         setActiveTab("store");
         void loadConnections();
       } catch {

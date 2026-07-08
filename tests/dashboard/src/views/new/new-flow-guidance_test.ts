@@ -74,7 +74,7 @@ describe("/new flow guidance", () => {
       'setActiveTab(storeListing ? "store" : "git")',
     );
     expect(newAppViewSource).toContain(
-      "applyInstallPrefillInput(prefill, { storeListing: listing })",
+      "applyInstallPrefillInput(prefill, { storeListing: hydratedListing })",
     );
     expect(newAppViewSource).toContain("startLinkImport");
     expect(newAppViewSource).toContain('class="av-add-discovery"');
@@ -226,9 +226,11 @@ describe("/new flow guidance", () => {
   test("known Git sources keep app store metadata even when ref differs", () => {
     expect(newAppViewSource).toContain("storeListingForCurrentSource");
     expect(newAppViewSource).toContain("storeListingMatchesCurrentSource");
-    // Install metadata comes from the picked store listing (selectedStoreListing),
-    // not a hardcoded local store.
+    // Install metadata comes from repo-owned metadata hydrated onto the picked
+    // store listing, not a hardcoded local store.
     expect(newAppViewSource).toContain("selectedStoreListing()");
+    expect(newAppViewSource).toContain("hydrateTcsListingWithRepoMetadata");
+    expect(newAppViewSource).toContain("hydrateStoreListing");
     expect(newAppViewSource).not.toContain("localStoreListings");
     expect(newAppViewSource).toContain("sameGitUrl");
     expect(newAppViewSource).toContain("normalizeSourcePath");
@@ -341,8 +343,8 @@ describe("/new flow guidance", () => {
 
   test("/new sources installable apps from the store, not a hardcoded store", () => {
     // The dashboard-local installable-app-listings.ts is retired; discovery is
-    // served by the takosumi-store node(s) and the picked listing carries its
-    // own install metadata (source, inputs, installExperience).
+    // served by the takosumi-store node(s); the picked listing is hydrated from
+    // repo-owned metadata for setup inputs and installExperience.
     expect(newAppViewSource).not.toContain("installable-app-listings");
     expect(newAppViewSource).not.toContain("installableAppStoreListings");
     expect(newAppViewSource).not.toContain("localStoreListings");
@@ -350,7 +352,7 @@ describe("/new flow guidance", () => {
     // loadRemoteOnMount={false} that would leave it dependent on a local list).
     expect(newAppViewSource).not.toContain("loadRemoteOnMount={false}");
     expect(newAppViewSource).toContain("selectedStoreListing");
-    expect(newAppViewSource).toContain("listing.installExperience");
+    expect(newAppViewSource).toContain("hydrateTcsListingWithRepoMetadata");
   });
 
   test("/new uses active Capsule list reads instead of loading destroyed history", () => {

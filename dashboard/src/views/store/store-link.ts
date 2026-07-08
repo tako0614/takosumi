@@ -1,7 +1,3 @@
-import {
-  isSafeInstallVariableName,
-  isSafeInstallVariableValue,
-} from "../../lib/install-link.ts";
 import type { TcsListing } from "../../lib/tcs-client.ts";
 
 /**
@@ -21,20 +17,6 @@ export function buildNewQuery(listing: TcsListing): string {
   params.set("git", listing.source.git);
   if (listing.source.path) params.set("path", listing.source.path);
   params.set("name", listing.suggestedName.slice(0, 96));
-  for (const input of listing.inputs) {
-    if (!input.defaultValue) continue;
-    if (!isSafeInstallVariableName(input.name)) continue;
-    if (!isSafeInstallVariableValue(input.defaultValue)) continue;
-    if (
-      input.type === "boolean" ||
-      input.type === "number" ||
-      input.type === "json"
-    ) {
-      params.set(`varjson.${input.name}`, input.defaultValue);
-    } else {
-      params.set(`var.${input.name}`, input.defaultValue);
-    }
-  }
   return params.toString();
 }
 
