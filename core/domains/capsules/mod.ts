@@ -252,10 +252,7 @@ export class CapsulesService {
    * It only closes the local ledger row and releases any pre-apply host claims
    * so the user can reinstall or choose the same public name again.
    */
-  async abandonUnappliedCapsule(
-    id: string,
-    reason: string,
-  ): Promise<Capsule> {
+  async abandonUnappliedCapsule(id: string, reason: string): Promise<Capsule> {
     const existing = await this.#requireCapsule(id);
     if (
       existing.currentDeploymentId ||
@@ -275,6 +272,10 @@ export class CapsulesService {
     if (!updated) {
       throw new OpenTofuControllerError("not_found", `capsule ${id} not found`);
     }
+    await this.#store.deleteInstallationProviderEnvBindingSet(
+      updated.id,
+      updated.environment,
+    );
     await this.#store.releasePublicHostsForInstallation(id, now);
     await this.#activity.record({
       workspaceId: updated.workspaceId,
@@ -401,6 +402,12 @@ export class CapsulesService {
         "provider env binding set workspace does not match capsule workspace",
       );
     }
+    if (capsule.status === "destroyed") {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        `capsule ${profileCapsuleId} is deleted`,
+      );
+    }
     return await this.#store.putInstallationProviderEnvBindingSet(profile);
   }
 
@@ -410,6 +417,8 @@ export class CapsulesService {
   ): Promise<CapsuleProviderEnvBindingSet | undefined> {
     requireNonEmptyString(capsuleId, "capsuleId");
     requireNonEmptyString(environment, "environment");
+    const capsule = await this.#requireCapsule(capsuleId);
+    if (capsule.status === "destroyed") return undefined;
     return await this.#store.getInstallationProviderEnvBindingSetByInstallation(
       capsuleId,
       environment,

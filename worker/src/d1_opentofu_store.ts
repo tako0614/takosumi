@@ -1713,6 +1713,22 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     return profile;
   }
 
+  async deleteInstallationProviderEnvBindingSet(
+    installationId: string,
+    environment: string,
+  ): Promise<void> {
+    await this.#ensureSchema();
+    await this.#orm
+      .delete(schema.providerEnvBindingSets)
+      .where(
+        and(
+          eq(schema.providerEnvBindingSets.installationId, installationId),
+          eq(schema.providerEnvBindingSets.environment, environment),
+        ),
+      )
+      .run();
+  }
+
   async getInstallationProviderEnvBindingSetByInstallation(
     installationId: string,
     environment: string,

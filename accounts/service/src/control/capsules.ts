@@ -76,10 +76,7 @@ import type {
   ProviderResolution,
   PublicProviderResolution,
 } from "takosumi-contract/provider-resolution";
-import type {
-  OutputShare,
-  OutputShareEntry,
-} from "takosumi-contract/outputs";
+import type { OutputShare, OutputShareEntry } from "takosumi-contract/outputs";
 import type { PublicDeployment } from "takosumi-contract/deployments";
 import type {
   BackupRecord,
@@ -197,8 +194,7 @@ export async function handleCapsules(
   // normalized to the historical handler key.
   if (segments[0] === "installations" && segments.length >= 2) {
     const capsuleId = decodeURIComponent(segments[1] ?? "");
-    const installation =
-      await operations.installations.getCapsule(capsuleId);
+    const installation = await operations.installations.getCapsule(capsuleId);
     const auth = await requireWorkspaceAccess({
       operations,
       store,
@@ -214,12 +210,7 @@ export async function handleCapsules(
         return await patchCapsule(request, operations, capsuleId);
       }
       if (method === "DELETE") {
-        return await deleteCapsule(
-          operations,
-          store,
-          installation,
-          capsuleId,
-        );
+        return await deleteCapsule(operations, store, installation, capsuleId);
       }
       return methodNotAllowed("GET, PATCH, DELETE");
     }
@@ -280,8 +271,7 @@ export async function handleCapsules(
     }
     if (leaf === "drift-check" && segments.length === 3) {
       if (method !== "POST") return methodNotAllowed("POST");
-      const response =
-        await operations.createCapsuleDriftCheck(capsuleId);
+      const response = await operations.createCapsuleDriftCheck(capsuleId);
       return jsonStatus(
         await publicPlanActionResponse(operations, response),
         201,
@@ -302,9 +292,7 @@ export async function handleCapsules(
     }
     if (leaf === "dependencies" && segments.length === 3) {
       if (method === "GET") {
-        return json(
-          await operations.dependencies.listForCapsule(capsuleId),
-        );
+        return json(await operations.dependencies.listForCapsule(capsuleId));
       }
       if (method !== "POST") return methodNotAllowed("GET, POST");
       return await createDependency(
@@ -317,10 +305,7 @@ export async function handleCapsules(
     }
     if (leaf === "provider-connections" && segments.length === 3) {
       if (method === "GET") {
-        return await getCapsuleProviderConnectionSet(
-          operations,
-          installation,
-        );
+        return await getCapsuleProviderConnectionSet(operations, installation);
       }
       if (method === "PUT") {
         return await putCapsuleProviderConnectionSet(
@@ -365,8 +350,7 @@ async function getCapsule(
   operations: ControlPlaneOperations,
   capsuleId: string,
 ): Promise<Response> {
-  const installation =
-    await operations.installations.getCapsule(capsuleId);
+  const installation = await operations.installations.getCapsule(capsuleId);
   return json({
     capsule: publicCapsule(installation),
   });
@@ -403,9 +387,30 @@ async function deleteCapsule(
   installation: Capsule,
   capsuleId: string,
 ): Promise<Response> {
+  if (installation.status === "destroyed") {
+    let projectionStatus: AppCapsuleStatus | undefined;
+    const projection = await store.findAppCapsule(capsuleId);
+    if (projection) {
+      await saveProjectionStatusChange({
+        store,
+        installation: projection,
+        requestedStatus: "exported",
+        reason: "delete requested for an already deleted Capsule",
+      });
+      projectionStatus =
+        (await store.findAppCapsule(capsuleId))?.status ?? "exported";
+    }
+    return jsonStatus(
+      {
+        capsule: publicCapsule(installation),
+        alreadyDeleted: true,
+        ...(projectionStatus ? { projectionStatus } : {}),
+      },
+      200,
+    );
+  }
   try {
-    const response =
-      await operations.createCapsuleDestroyPlan(capsuleId);
+    const response = await operations.createCapsuleDestroyPlan(capsuleId);
     return jsonStatus(
       await publicPlanActionResponse(operations, response),
       202,
@@ -436,9 +441,7 @@ async function maybeAbandonUnappliedCapsule(input: {
   }
   const reason = unappliedCapsuleAbandonReason(input.error);
   if (!reason) return undefined;
-  const projection = await input.store.findAppCapsule(
-    input.installation.id,
-  );
+  const projection = await input.store.findAppCapsule(input.installation.id);
   const installation =
     input.operations.installations.abandonUnappliedCapsule !== undefined
       ? await input.operations.installations.abandonUnappliedCapsule(
@@ -459,7 +462,7 @@ async function maybeAbandonUnappliedCapsule(input: {
     });
     projectionStatus =
       (await input.store.findAppCapsule(input.installation.id))?.status ??
-        "exported";
+      "exported";
   }
   return jsonStatus(
     {
@@ -471,9 +474,7 @@ async function maybeAbandonUnappliedCapsule(input: {
   );
 }
 
-function unappliedCapsuleAbandonReason(
-  error: unknown,
-): string | undefined {
+function unappliedCapsuleAbandonReason(error: unknown): string | undefined {
   if (isUploadOriginSnapshotMissingError(error)) {
     return "delete requested before first upload-origin apply";
   }
@@ -517,6 +518,9 @@ async function getCapsuleProviderConnectionSet(
   operations: ControlPlaneOperations,
   installation: Capsule,
 ): Promise<Response> {
+  if (installation.status === "destroyed") {
+    return json({ providerConnectionSet: null });
+  }
   const profile =
     await operations.installations.getCapsuleProviderEnvBindingSetByCapsule(
       installation.id,
@@ -534,6 +538,13 @@ async function putCapsuleProviderConnectionSet(
   operations: ControlPlaneOperations,
   installation: Capsule,
 ): Promise<Response> {
+  if (installation.status === "destroyed") {
+    return errorJson(
+      "invalid_request",
+      "deleted Capsules cannot update provider connections",
+      400,
+    );
+  }
   const body = await readJsonObject(request);
   if (!body) return errorJson("invalid_request", "invalid request", 400);
   const parsed = parseCapsuleProviderConnectionBindings(body.connections);
@@ -569,8 +580,7 @@ async function putCapsuleProviderConnectionSet(
       updatedAt: now,
     });
   return json({
-    providerConnectionSet:
-      await publicCapsuleProviderConnectionSet(profile),
+    providerConnectionSet: await publicCapsuleProviderConnectionSet(profile),
   });
 }
 
@@ -608,17 +618,11 @@ async function createDependency(
   if (!body) return errorJson("invalid_request", "invalid request", 400);
   const producerCapsuleId = stringValue(body.producerCapsuleId);
   if (!producerCapsuleId) {
-    return errorJson(
-      "invalid_request",
-      "producerCapsuleId is required",
-      400,
-    );
+    return errorJson("invalid_request", "producerCapsuleId is required", 400);
   }
   // The consumer is the path Capsule; resolve its Workspace so the edge is
   // created in the right Workspace (mirrors the §30 dependency-create handler).
-  const consumer = await operations.installations.getCapsule(
-    consumerCapsuleId,
-  );
+  const consumer = await operations.installations.getCapsule(consumerCapsuleId);
   const consumerAuth = await requireWorkspaceAccess({
     operations,
     store,
@@ -626,9 +630,7 @@ async function createDependency(
     subject: sessionSubject,
   });
   if (!consumerAuth.ok) return consumerAuth.response;
-  const producer = await operations.installations.getCapsule(
-    producerCapsuleId,
-  );
+  const producer = await operations.installations.getCapsule(producerCapsuleId);
   const producerAuth = await requireWorkspaceAccess({
     operations,
     store,
