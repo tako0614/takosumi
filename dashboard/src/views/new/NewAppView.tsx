@@ -1340,7 +1340,11 @@ function Inner() {
       if (value && field.name === publicEndpoint?.urlVariable) {
         const baseDomain = managedBaseDomain(publicEndpoint.baseDomain);
         const host = publicEndpointHost(value);
-        if (!host || !hostIsManagedBaseDomainSubdomain(host, baseDomain)) {
+        if (
+          !host ||
+          (host.endsWith(`.${baseDomain}`) &&
+            !hostIsManagedBaseDomainSubdomain(host, baseDomain))
+        ) {
           return t("new.catalogInput.errorCustomDomain", {
             label: field.label[locale()],
             baseDomain,

@@ -992,6 +992,94 @@ test("managed Cloudflare Capsule explicit worker_name drives app.takos.jp URL de
   );
 });
 
+test("managed Cloudflare public endpoint defaults follow catalog variable mapping", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  const seeded = await seedInstallationModel(store, {
+    name: "Mapped Public App",
+    environment: "preview",
+    installConfig: {
+      variableMapping: {
+        public_name: null,
+        public_url: null,
+        route_pattern: null,
+        cloudflare_route_zone_id: null,
+        cloudflare: {
+          account_id: null,
+          api_base_url: null,
+        },
+      },
+      catalog: {
+        order: 100,
+        surface: "service",
+        kind: "worker",
+        provider: "cloudflare",
+        suggestedName: "mapped",
+        badge: { ja: "追加候補", en: "Installable" },
+        name: { ja: "Mapped", en: "Mapped" },
+        description: { ja: "テスト", en: "Test" },
+        inputs: [],
+        installExperience: {
+          publicEndpoint: {
+            subdomainVariable: "public_name",
+            urlVariable: "public_url",
+            routePatternVariable: "route_pattern",
+            baseDomain: "app.takos.jp",
+          },
+        },
+      },
+    },
+  });
+  await putConnectionWithProviderEnv(store, {
+    ...cloudflareConnection(
+      "conn_cloudflare_mapped",
+      seeded.installation.spaceId,
+    ),
+    scopeHints: {
+      managedProvider: true,
+      providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      accountId: "ts_acc_takosumi_cloud",
+      zoneId: "zone_takosumi_cloud",
+    },
+  });
+  await store.putInstallationProviderEnvBindingSet({
+    id: "profile_cloudflare_mapped",
+    spaceId: seeded.installation.spaceId,
+    installationId: seeded.installation.id,
+    environment: seeded.installation.environment,
+    bindings: [
+      {
+        provider: "cloudflare",
+        alias: "main",
+        connectionId: "conn_cloudflare_mapped",
+      },
+    ],
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
+  const profile = multiProviderRunnerProfile();
+  const controller = controllerWith(store, runner, {
+    runnerProfiles: [profile],
+    defaultRunnerProfileId: profile.id,
+  });
+
+  const { planRun } = await controller.createInstallationPlan(
+    seeded.installation.id,
+  );
+
+  expect(planRun.status).toEqual("succeeded");
+  const mainTf = runner.planJobs[0]!.generatedRoot!.files["main.tf"]!;
+  expect(mainTf).toContain('public_name = "mapped-public-app-fixture"');
+  expect(mainTf).toContain(
+    'public_url = "https://mapped-public-app-fixture.app.takos.jp"',
+  );
+  expect(mainTf).toContain(
+    'route_pattern = "mapped-public-app-fixture.app.takos.jp/*"',
+  );
+  expect(mainTf).not.toContain("worker_name =");
+  expect(mainTf).not.toContain("app_url =");
+});
+
 test("managed Cloudflare Capsule honors operator managed public base domain", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   const runner = recordingRunner();
@@ -2298,6 +2386,76 @@ test("standard Git Capsule variables stay ordinary OpenTofu inputs", async () =>
   expect(mainTf).toContain('version = "1.2.3"');
   expect(planJob.build).toBeUndefined();
   expect(planJob.prebuiltArtifact).toBeUndefined();
+});
+
+test("app_url stays an ordinary OpenTofu input without publicEndpoint mapping", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  const seeded = await seedInstallationModel(store, {
+    environment: "preview",
+    installConfig: {
+      variableMapping: {
+        app_url: "https://community.example.com",
+        cloudflare: {
+          account_id: null,
+          api_base_url: null,
+        },
+      },
+      catalog: {
+        order: 100,
+        surface: "service",
+        kind: "worker",
+        provider: "cloudflare",
+        suggestedName: "plain-app",
+        badge: { ja: "追加候補", en: "Installable" },
+        name: { ja: "Plain App", en: "Plain App" },
+        description: { ja: "テスト", en: "Test" },
+        inputs: [],
+      },
+    },
+  });
+  await putConnectionWithProviderEnv(store, {
+    ...cloudflareConnection(
+      "conn_cloudflare_managed_plain",
+      seeded.installation.spaceId,
+    ),
+    scopeHints: {
+      managedProvider: true,
+      providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      accountId: "ts_acc_takosumi_cloud",
+    },
+  });
+  await store.putInstallationProviderEnvBindingSet({
+    id: "profile_cloudflare_managed_plain",
+    spaceId: seeded.installation.spaceId,
+    installationId: seeded.installation.id,
+    environment: seeded.installation.environment,
+    bindings: [
+      {
+        provider: "cloudflare",
+        alias: "main",
+        connectionId: "conn_cloudflare_managed_plain",
+      },
+    ],
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
+  const profile = multiProviderRunnerProfile();
+  const controller = controllerWith(store, runner, {
+    runnerProfiles: [profile],
+    defaultRunnerProfileId: profile.id,
+  });
+
+  const { planRun } = await controller.createInstallationPlan(
+    seeded.installation.id,
+  );
+
+  expect(planRun.status).toEqual("succeeded");
+  const mainTf = runner.planJobs[0]!.generatedRoot!.files["main.tf"]!;
+  expect(mainTf).toContain('app_url = "https://community.example.com"');
+  await expect(
+    store.getPublicHostReservation("community.example.com"),
+  ).resolves.toBeUndefined();
 });
 
 test("explicit generic Capsule variables survive compatibility metadata filtering through apply", async () => {

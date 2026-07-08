@@ -416,27 +416,14 @@ function hostFromRoutePatternValue(value: unknown): string | undefined {
   return host && !host.includes("*") ? host : undefined;
 }
 
-function publicHostsFromVariables(
-  variables: Readonly<Record<string, unknown>>,
-): readonly string[] {
-  const hosts = new Set<string>();
-  const appUrlHost = hostFromHttpsUrlValue(variables.app_url);
-  if (appUrlHost) hosts.add(appUrlHost);
-  const routeHost = hostFromRoutePatternValue(
-    variables.cloudflare_route_pattern,
-  );
-  if (routeHost) hosts.add(routeHost);
-  return [...hosts].sort();
-}
-
 function publicHostsFromInstallExperienceVariables(
   variables: Readonly<Record<string, unknown>>,
   installConfig: InstallConfig | undefined,
 ): readonly string[] {
-  const hosts = new Set(publicHostsFromVariables(variables));
   const endpoint = installConfig?.catalog?.installExperience?.publicEndpoint;
-  if (!endpoint) return [...hosts].sort();
+  if (!endpoint) return [];
 
+  const hosts = new Set<string>();
   const baseDomain = managedPublicBaseDomainFromInstallConfig(installConfig);
   const subdomainVariable = nonEmptyStringValue(endpoint.subdomainVariable);
   if (subdomainVariable) {
@@ -523,9 +510,17 @@ function finalizeManagedCloudflarePublicHostVariables(input: {
   if (!hasManagedCloudflareProviderDefaults(input.providerInputDefaults)) {
     return input.variables;
   }
-  if (input.endpointVariables.size === 0) {
+  const endpoint =
+    input.installConfig.catalog?.installExperience?.publicEndpoint;
+  if (!endpoint || input.endpointVariables.size === 0) {
     return input.variables;
   }
+  const subdomainVariable = nonEmptyStringValue(endpoint.subdomainVariable);
+  if (!subdomainVariable) return input.variables;
+  const urlVariable = nonEmptyStringValue(endpoint.urlVariable);
+  const routePatternVariable = nonEmptyStringValue(
+    endpoint.routePatternVariable,
+  );
   const baseDomain = managedPublicBaseDomainFromInstallConfig(
     input.installConfig,
   );
@@ -534,28 +529,33 @@ function finalizeManagedCloudflarePublicHostVariables(input: {
     input.declaredInputs.has(name) ||
     input.endpointVariables.has(name);
   const out: Record<string, JsonValue> = { ...input.variables };
-  let workerName = nonEmptyStringValue(out.worker_name);
+  let publicLabel = nonEmptyStringValue(out[subdomainVariable]);
   if (
-    !workerName &&
-    !nonEmptyStringValue(input.explicit.worker_name) &&
-    canSet("worker_name")
+    !publicLabel &&
+    !nonEmptyStringValue(input.explicit[subdomainVariable]) &&
+    canSet(subdomainVariable)
   ) {
-    workerName = workerNameFromCapsule(input.installation);
-    if (workerName) out.worker_name = workerName;
+    publicLabel = workerNameFromCapsule(input.installation);
+    if (publicLabel) out[subdomainVariable] = publicLabel;
   }
-  if (!workerName || !validManagedWorkerName(workerName)) {
+  if (!publicLabel || !validManagedWorkerName(publicLabel)) {
     return out;
   }
-  const host = `${workerName}.${baseDomain}`;
-  if (!nonEmptyStringValue(input.explicit.app_url) && canSet("app_url")) {
-    out.app_url = `https://${host}`;
+  const host = `${publicLabel}.${baseDomain}`;
+  if (
+    urlVariable &&
+    !nonEmptyStringValue(input.explicit[urlVariable]) &&
+    canSet(urlVariable)
+  ) {
+    out[urlVariable] = `https://${host}`;
   }
   if (
-    canSet("cloudflare_route_pattern") &&
+    routePatternVariable &&
+    canSet(routePatternVariable) &&
     nonEmptyStringValue(out.cloudflare_route_zone_id) &&
-    !nonEmptyStringValue(input.explicit.cloudflare_route_pattern)
+    !nonEmptyStringValue(input.explicit[routePatternVariable])
   ) {
-    out.cloudflare_route_pattern = `${host}/*`;
+    out[routePatternVariable] = `${host}/*`;
   }
   return out;
 }
