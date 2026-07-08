@@ -106,8 +106,10 @@ provider runs. A self-hosted Takosumi enables the wildcard runner surface by
 default, and the control plane auto-selects a runner profile that admits the
 Capsule's providers, so an arbitrary provider runs without naming a profile.
 A ProviderConnection you supply with your own key is never metered or billed by
-Takosumi — only Takosumi-provided managed resources are billed (see
-[Cloud pricing](../cloud/pricing.md)).
+Takosumi software. Self-host and OSS operator endpoints may record showback
+usage, but they do not enforce Takosumi Cloud payment. Takosumi Cloud bills
+only Takosumi-provided managed resources; its customer-facing contract lives in
+[Takosumi Cloud pricing](https://app.takosumi.com/docs/pricing).
 
 ## Runner Policy
 
@@ -129,6 +131,12 @@ smallest visible inputs, review the plan, then deploy. Takosumi should not add a
 separate low-level "create service" CRUD surface for ordinary users; the full
 service list can expose details after creation, while the add path stays
 install-like.
+
+The Store is only discovery and presentation. A Store node announces a Git
+repository/path, icon, description, and visible setup fields. It is not a
+release authority: branch, tag, commit, SourceSnapshot, and update policy stay
+in the Source / Run flow. Switching Store nodes changes the read source for
+listings and presentation metadata, not the Capsule execution model.
 
 Takosumi can reuse SourceSnapshots, provider mirrors, provider plugin caches,
 runner capacity controls, and clear progress phases. It must not decide what a

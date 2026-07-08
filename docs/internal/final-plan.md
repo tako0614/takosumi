@@ -208,9 +208,18 @@ CI/release pipeline, or an explicitly declared OpenTofu step. Takosumi can run
 the resulting OpenTofu plan and inject credentials, but it does not secretly
 decide where the artifact comes from.
 
-Catalog/store entries can publish an optional `installExperience` mapping that
-helps the dashboard present common setup fields without making the app depend on
-Takosumi-owned repo metadata:
+Store entries announce installable Git repositories and can publish an optional
+`installExperience` mapping that helps the dashboard present common setup
+fields without making the app depend on Takosumi-owned repo metadata:
+
+The store is discovery and presentation only. Git URL, branch, tag, commit,
+module path, SourceSnapshot, and automatic update policy belong to the Git
+Source / Run flow; a store node must not become the release authority for an
+installed Capsule.
+
+Store nodes are switchable. Changing the selected store changes listing
+discovery and presentation metadata only; it must not change how Takosumi
+resolves refs, creates SourceSnapshots, or runs OpenTofu.
 
 ```json
 {
@@ -254,12 +263,12 @@ This contract maps standard install concepts to ordinary OpenTofu variables.
 It is not execution authority, not a new repo metadata requirement, and not a
 per-input `purpose` pseudo-standard. Unknown Git modules remain valid plain
 OpenTofu Capsules; they simply receive generic variable inputs unless their
-catalog entry opts into this UX contract. Takosumi must not infer a public
+store entry opts into this UX contract. Takosumi must not infer a public
 endpoint from variable names such as `worker_name` or `app_url`; those names are
-ordinary OpenTofu inputs unless the catalog explicitly maps them through
+ordinary OpenTofu inputs unless the store explicitly maps them through
 the `public_endpoint` projection.
 
-Catalog inputs are also plain OpenTofu variable values. `type`, `format`,
+Store inputs are also plain OpenTofu variable values. `type`, `format`,
 `required`, `advanced`, and `secret` only describe presentation and validation
 for the install UI:
 
@@ -292,20 +301,20 @@ because it chooses to use its own provider-side routing.
 Subdomain, password, and app-specific env are not universal Takosumi
 requirements. A Capsule that does not need a public endpoint should not show a
 public endpoint field; a Capsule that does not need a first-run secret should
-not show a password/token field. Catalog metadata only maps those common setup
+not show a password/token field. Store metadata only maps those common setup
 concepts onto ordinary module variables when the selected app asks for them.
 Artifact URLs, SHA-256 digests, container image maps, and app-specific env
-knobs are also ordinary OpenTofu variables. The catalog may place them in an
+knobs are also ordinary OpenTofu variables. The store may place them in an
 advanced section, but Takosumi must not turn them into a hidden side channel or
 special non-OpenTofu deploy mechanism.
 
 The dashboard must not maintain hard-coded "system" or "advanced" variable-name
 lists for install inputs. If an input should be hidden behind details, marked as
 secret, or surfaced as a common setup field, that presentation comes from
-`catalog.inputs[]` and `installExperience`; the submitted value is still just a
+`store.inputs[]` and `installExperience`; the submitted value is still just a
 normal OpenTofu variable.
 
-`catalog.inputs[]` may also provide a presentation `format` for generic UI and
+`store.inputs[]` may also provide a presentation `format` for generic UI and
 validation only: `text`, `url`, `hostname`, `subdomain`, `password`, `token`,
 `email`, or `sha256`. This is not a new execution channel; it only tells the
 dashboard how to present and validate the ordinary OpenTofu variable.
@@ -385,7 +394,7 @@ not:
 
 When this document says a shape is provider-neutral, it means
 vendor-independent as a Takosumi-owned service contract. It does not mean the
-`takosumi` provider is a generic third-party provider catalog. Ordinary
+`takosumi` provider is a generic third-party provider directory. Ordinary
 provider resources remain in the plain Stack flow. Industry-standard surfaces
 such as S3-compatible APIs, OCI registry APIs, Kubernetes CRDs, CloudEvents, or
 OpenAI-compatible endpoints should stay the external surface when they fit.
@@ -505,7 +514,7 @@ billing account / subscription / plan
 quota / metering / invoice / payment integration
 DB-backed operator configuration
 CLI / API / runbook operations
-managed target catalog
+managed target offerings
 support and abuse tooling
 commercial audit export
 ```

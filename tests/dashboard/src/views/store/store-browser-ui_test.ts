@@ -50,6 +50,8 @@ describe("StoreBrowser install UI", () => {
     );
     expect(storeBrowserSource).toContain('name="storeSource"');
     expect(storeBrowserSource).toContain("l.seenOn.includes(activeStore())");
+    expect(storeBrowserSource).toContain("listingForActiveStore");
+    expect(storeBrowserSource).toContain("primaryServer: base");
   });
 
   test("keeps cards stable on desktop and full width on narrow screens", () => {

@@ -16,7 +16,8 @@ export interface TcsLocalizedText {
 
 export interface TcsListingSource {
   readonly git: string;
-  readonly ref: string;
+  /** Optional display/compat hint only; install ref selection belongs to Source. */
+  readonly ref?: string;
   readonly path: string;
   readonly resolvedCommit?: string;
 }
@@ -229,6 +230,5 @@ export function tcsListingIdentity(source: TcsListingSource): string {
     .trim()
     .replace(/^\.?\/+/, "")
     .replace(/\/+$/, "");
-  const ref = (source.resolvedCommit ?? source.ref).trim().toLowerCase();
-  return `${host}${rest}@${ref}#${path}`;
+  return `${host}${rest}#${path}`;
 }
