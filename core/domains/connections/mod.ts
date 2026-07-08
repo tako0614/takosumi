@@ -276,7 +276,7 @@ export class ConnectionsService {
         `Provider Connection ${binding.connectionId} provider ${connection.provider} does not match binding provider ${binding.provider}`,
       );
     }
-    if (connection.status !== "verified") {
+    if (!connectionUsableForProviderBinding(connection)) {
       throw new OpenTofuControllerError(
         "failed_precondition",
         `Provider Connection ${binding.connectionId} status ${connection.status} is not verified`,
@@ -305,7 +305,7 @@ export class ConnectionsService {
     const candidates = (await this.#store.listOperatorConnections()).filter(
       (connection) =>
         isPublicManagedProviderConnection(connection) &&
-        connection.status === "verified" &&
+        connectionUsableForProviderBinding(connection) &&
         !isSourceGitKind(connection),
     );
     const resolved: ResolvedInstallationProviderEnvBinding[] = [];
@@ -339,6 +339,13 @@ function isPublicManagedProviderConnection(connection: Connection): boolean {
     connection.scopeHints?.managedProvider === true &&
     typeof connection.scopeHints.providerBaseUrl === "string" &&
     connection.scopeHints.providerBaseUrl.trim().length > 0
+  );
+}
+
+function connectionUsableForProviderBinding(connection: Connection): boolean {
+  if (connection.status === "verified") return true;
+  return (
+    connection.status === "pending" && isPublicManagedProviderConnection(connection)
   );
 }
 
