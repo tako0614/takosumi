@@ -1630,6 +1630,13 @@ function Inner() {
     resetCompatibility();
     queueMicrotask(() => serviceNameInput?.focus());
   };
+  const canSuggestPublicHostname = () => {
+    const entry = selectedServiceEntry();
+    return Boolean(
+      supportsServiceNameInput() ||
+      (entry && catalogPublicEndpointSubdomainField(entry)),
+    );
+  };
   const updateInputVariable = (
     index: number,
     patch: Partial<InputVariableRow>,
@@ -3823,7 +3830,7 @@ function Inner() {
                   )}
                 </Show>
                 <Show
-                  when={appHostnameConflict() && supportsServiceNameInput()}
+                  when={appHostnameConflict() && canSuggestPublicHostname()}
                 >
                   <div class="wb-action-callout" role="note">
                     <strong>{t("new.hostnameConflict.title")}</strong>
