@@ -5748,6 +5748,130 @@ test("DELETE /api/v1/capsules/:id abandons unapplied Capsules even when the app 
   );
 });
 
+test("DELETE /api/v1/capsules/:id is idempotent for already deleted Capsules and closes stale projections", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const now = Date.now();
+  store.saveAppCapsule({
+    capsuleId: "inst_already_destroyed",
+    accountId: "acct_already_destroyed",
+    workspaceId: "space_a",
+    appId: "already-destroyed",
+    sourceGitUrl: "https://github.com/example/infra.git",
+    sourceRef: "main",
+    sourceCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    planDigest: `sha256:${"a".repeat(64)}`,
+    mode: "shared-cell",
+    status: "failed",
+    createdBySubject: "tsub_ctrl",
+    createdAt: now,
+    updatedAt: now,
+  });
+  const baseOperations = fakeOperations();
+  const destroyedCapsule = {
+    id: "inst_already_destroyed",
+    workspaceId: "space_a",
+    sourceId: "src_already_destroyed",
+    name: "already-destroyed",
+    slug: "already-destroyed",
+    installType: "opentofu_module",
+    installConfigId: "cfg_already_destroyed",
+    environment: "prod",
+    currentStateGeneration: 0,
+    status: "destroyed",
+    createdAt: "2026-01-01T00:00:00Z",
+    updatedAt: "2026-01-02T00:00:00Z",
+  };
+  const operations = fakeOperations({
+    installations: {
+      ...baseOperations.installations,
+      getCapsule: async () =>
+        destroyedCapsule as unknown as Awaited<
+          ReturnType<ControlPlaneOperations["installations"]["getCapsule"]>
+        >,
+    },
+    createCapsuleDestroyPlan: async () => {
+      throw new Error("destroy plan should not run for deleted Capsules");
+    },
+  });
+
+  const { request: req, url } = request(
+    "DELETE",
+    "/api/v1/capsules/inst_already_destroyed",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+
+  expect(response?.status).toEqual(200);
+  const body = (await response!.json()) as {
+    alreadyDeleted: boolean;
+    capsule: { status: string };
+    projectionStatus: string;
+  };
+  expect(body.alreadyDeleted).toEqual(true);
+  expect(body.capsule.status).toEqual("destroyed");
+  expect(body.projectionStatus).toEqual("exported");
+  expect(store.findAppCapsule("inst_already_destroyed")?.status).toEqual(
+    "exported",
+  );
+  expect(operations.calls.createCapsuleDestroyPlan).toBeUndefined();
+});
+
+test("GET /api/v1/capsules/:id/provider-connections hides bindings for deleted Capsules", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const baseOperations = fakeOperations();
+  const destroyedCapsule = {
+    id: "inst_deleted_bindings",
+    workspaceId: "space_a",
+    sourceId: "src_deleted_bindings",
+    name: "deleted-bindings",
+    slug: "deleted-bindings",
+    installType: "opentofu_module",
+    installConfigId: "cfg_deleted_bindings",
+    environment: "prod",
+    currentStateGeneration: 0,
+    status: "destroyed",
+    createdAt: "2026-01-01T00:00:00Z",
+    updatedAt: "2026-01-02T00:00:00Z",
+  };
+  const operations = fakeOperations({
+    installations: {
+      ...baseOperations.installations,
+      getCapsule: async () =>
+        destroyedCapsule as unknown as Awaited<
+          ReturnType<ControlPlaneOperations["installations"]["getCapsule"]>
+        >,
+    },
+  });
+
+  const { request: req, url } = request(
+    "GET",
+    "/api/v1/capsules/inst_deleted_bindings/provider-connections",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+
+  expect(response?.status).toEqual(200);
+  const body = (await response!.json()) as {
+    providerConnectionSet: unknown;
+  };
+  expect(body.providerConnectionSet).toBeNull();
+  expect(
+    operations.calls.getCapsuleProviderEnvBindingSetByCapsule,
+  ).toBeUndefined();
+});
+
 test("DELETE /api/v1/capsules/:id abandons unapplied projections when credential minting is pending", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);

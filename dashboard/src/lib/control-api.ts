@@ -88,9 +88,7 @@ export class ControlApiError extends Error {
       this.reason === "duplicate_capsule" ||
       this.reason === "duplicate_installation" ||
       (this.status === 409 &&
-        /\b(?:capsule|installation)\b\s+.*already exists/iu.test(
-          this.message,
-        ))
+        /\b(?:capsule|installation)\b\s+.*already exists/iu.test(this.message))
     );
   }
 
@@ -1326,6 +1324,7 @@ export async function createCapsule(input: {
 export interface DeleteCapsuleResult {
   readonly capsule: Capsule;
   readonly abandoned?: boolean;
+  readonly alreadyDeleted?: boolean;
   readonly projectionStatus?: string;
 }
 
