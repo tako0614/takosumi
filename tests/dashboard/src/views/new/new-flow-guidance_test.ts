@@ -257,9 +257,10 @@ describe("/new flow guidance", () => {
 
   test("known Git sources carry store default variables into the Capsule run", () => {
     expect(newAppViewSource).toContain("storeListingDefaultVariables");
-    expect(newAppViewSource).toContain("storeProjectNameDefault");
+    expect(newAppViewSource).toContain("storeServiceNameDefault");
+    expect(newAppViewSource).toContain("catalogServiceNameVariable");
     expect(newAppViewSource).toContain(
-      "projectNameHintIsGenerated(storeProjectNameDefault())",
+      "serviceNameHintIsGenerated(storeServiceNameDefault())",
     );
     expect(newAppViewSource).toContain(
       "...storeListingDefaultVariables(),\n      ...(currentInstallPrefill()?.vars ?? {})",
@@ -299,21 +300,20 @@ describe("/new flow guidance", () => {
     );
   });
 
-  test("generated project_name hints follow the visible service name", () => {
-    expect(newAppViewSource).toContain("function projectNameHintIsGenerated");
+  test("generated service-name hints follow the visible service name mapping", () => {
+    expect(newAppViewSource).toContain("function serviceNameHintIsGenerated");
     expect(newAppViewSource).toContain(
       'value === "service-name" || value === "service-name-with-space"',
     );
-    expect(newAppViewSource).toContain(
-      "const initialResourcePrefix = projectNameHintIsGenerated(initialProjectName)",
-    );
+    expect(newAppViewSource).toContain("serviceNameVariableForCurrentSource");
     expect(newAppViewSource).toContain(
       "slugInputValue(resourcePrefix() || defaultProjectName())",
     );
     expect(newAppViewSource).toContain("const isGeneratedProjectName =");
     expect(newAppViewSource).toContain(
-      "projectNameHintIsGenerated(nextProjectName)",
+      "serviceNameHintIsGenerated(nextProjectName)",
     );
+    expect(newAppViewSource).not.toContain('name="project_name"');
   });
 
   test("does not allow install-link submit before add configuration loads", () => {
