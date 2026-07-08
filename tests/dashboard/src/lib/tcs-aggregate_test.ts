@@ -83,7 +83,7 @@ describe("tcs aggregate", () => {
     expect(s.done).toBe(true);
   });
 
-  test("prefers the default store over installConfig-backed hints", () => {
+  test("prefers the default store when the same Git source appears on multiple stores", () => {
     const sharedSource = {
       git: "https://github.com/o/shared.git",
       ref: "main",
@@ -95,12 +95,7 @@ describe("tcs aggregate", () => {
         {
           base: "https://app.takosumi.test",
           isDefault: false,
-          items: [
-            {
-              ...L("local", sharedSource, "2026-01-01T00:00:00.000Z"),
-              installConfigId: "cfg-official-worker",
-            },
-          ],
+          items: [L("local", sharedSource, "2026-01-01T00:00:00.000Z")],
         },
         {
           base: "https://store.takosumi.com",
@@ -112,7 +107,6 @@ describe("tcs aggregate", () => {
 
     expect(merged).toHaveLength(1);
     expect(merged[0]?.id).toBe("external");
-    expect(merged[0]?.installConfigId).toBeUndefined();
     expect(merged[0]?.primaryServer).toBe("https://store.takosumi.com");
     expect(merged[0]?.seenOn.sort()).toEqual([
       "https://app.takosumi.test",

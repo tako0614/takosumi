@@ -464,7 +464,7 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
         <div class="tcs-grid">
           <For each={displayed()}>
             {(listing) => (
-              <div class="tcs-card">
+              <div class="tcs-card" data-tcs-listing-id={listing.id}>
                 <div class="tcs-card-top">
                   {listingIcon(listing, props.locale)}
                   <div class="tcs-card-main">
