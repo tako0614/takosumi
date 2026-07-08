@@ -87,12 +87,16 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).not.toContain("function StoreCard");
     expect(newAppViewSource).not.toContain("function ManualImportCard");
     expect(newAppViewSource).not.toContain("const [storeQuery");
-    expect(newAppViewSource).not.toContain("const allStoreEntries = createMemo");
+    expect(newAppViewSource).not.toContain(
+      "const allStoreEntries = createMemo",
+    );
     expect(newAppViewSource).not.toContain("const storeEntries = createMemo");
     expect(newAppViewSource).not.toContain("storeEntryMatchesQuery");
     expect(newAppViewSource).not.toContain("function dedupeStoreConfigs");
     expect(newAppViewSource).not.toContain("function storeConfigPriority");
-    expect(newAppViewSource).not.toContain('config.id.startsWith("cfg-official-")');
+    expect(newAppViewSource).not.toContain(
+      'config.id.startsWith("cfg-built-in-")',
+    );
     expect(newAppViewSource).not.toContain("config.store?.source");
     expect(newAppViewSource).not.toContain("const primaryStore = createMemo");
     expect(newAppViewSource).not.toContain(
@@ -358,14 +362,18 @@ describe("/new flow guidance", () => {
   });
 
   test("/new defers config API reads until a Git source or store listing is selected", () => {
-    expect(newAppViewSource).not.toContain("const shouldLoadTemplateConfigs = ()");
+    expect(newAppViewSource).not.toContain(
+      "const shouldLoadTemplateConfigs = ()",
+    );
     expect(newAppViewSource).not.toContain("initialInstallConfigId");
     expect(newAppViewSource).toContain("const shouldLoadInstallConfigs = ()");
     expect(newAppViewSource).toContain('activeTab() === "git"');
     expect(newAppViewSource).toContain(
       "gitUrl().trim() || activeInstallPrefill() || selectedStoreListing()",
     );
-    expect(newAppViewSource).not.toMatch(/createResource\(\s*shouldLoadTemplateConfigs/u);
+    expect(newAppViewSource).not.toMatch(
+      /createResource\(\s*shouldLoadTemplateConfigs/u,
+    );
     expect(newAppViewSource).toMatch(
       /createResource\(\s*shouldLoadInstallConfigs/u,
     );
@@ -379,22 +387,27 @@ describe("/new flow guidance", () => {
   });
 
   test("keeps internal template configs separate from /new app discovery", () => {
-    const officialSeedSource = readFileSync(
-      resolve(here, "../../../../../core/domains/capsules/official_seed.ts"),
+    const bootstrapSource = readFileSync(
+      resolve(
+        here,
+        "../../../../../core/domains/capsules/install_config_bootstrap.ts",
+      ),
       "utf8",
     );
-    expect(officialSeedSource).toContain('"cloudflare-hello-worker"');
-    expect(officialSeedSource).toContain("storeMetadataForTemplate");
-    expect(officialSeedSource).toContain("officialStoreSource");
-    expect(officialSeedSource).toContain('name: "accountId"');
-    expect(officialSeedSource).toContain('name: "workersSubdomain"');
-    expect(officialSeedSource).not.toContain('name: "bucketName"');
-    expect(officialSeedSource).toContain(
+    expect(bootstrapSource).toContain('"cloudflare-hello-worker"');
+    expect(bootstrapSource).toContain("storeMetadataForTemplate");
+    expect(bootstrapSource).toContain("builtInStoreSource");
+    expect(bootstrapSource).toContain('name: "accountId"');
+    expect(bootstrapSource).toContain('name: "workersSubdomain"');
+    expect(bootstrapSource).not.toContain('name: "bucketName"');
+    expect(bootstrapSource).toContain(
       'defaultValue: "service-name-with-space"',
     );
     expect(controlApiSource).toContain("listTemplateStoreInstallConfigs");
     expect(newAppViewSource).not.toContain("STORE_VIEW");
-    expect(newAppViewSource).not.toContain("const allStoreEntries = createMemo");
+    expect(newAppViewSource).not.toContain(
+      "const allStoreEntries = createMemo",
+    );
     expect(newAppViewSource).not.toContain("selectedStoreEntry");
     expect(newAppViewSource).not.toContain("storeEntryToListing");
     expect(newAppViewSource).not.toContain(
@@ -418,7 +431,9 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).not.toContain("selectedStoreEntry");
     expect(newAppViewSource).toContain("storeServiceEntry");
     expect(newAppViewSource).toContain("selectedServiceEntry");
-    expect(newAppViewSource).toContain("const selectedServiceEntry = () => storeServiceEntry()");
+    expect(newAppViewSource).toContain(
+      "const selectedServiceEntry = () => storeServiceEntry()",
+    );
     expect(newAppViewSource).toContain("storeEntryFromStoreListing");
     expect(newAppViewSource).toContain("selectedStoreVariables");
     expect(newAppViewSource).toContain("selectedStoreReturnVariables");
@@ -482,8 +497,13 @@ describe("/new flow guidance", () => {
     const hintSource = newAppViewSource.slice(hintSourceStart, hintSourceEnd);
 
     expect(newAppViewSource).toContain("storeScopeHintValue");
+    expect(newAppViewSource).toContain("scopeHintValueForStoreInput");
     expect(hintSource).toContain("connection.scopeHints?.accountId");
     expect(hintSource).toContain("connection.scopeHints?.awsRegion");
+    expect(hintSource).toContain("connection.scopeHints?.zoneId");
+    expect(hintSource).toContain("connection.scopeHints?.workersSubdomain");
+    expect(hintSource).not.toContain('entry.provider === "cloudflare"');
+    expect(hintSource).not.toContain('entry.provider === "aws"');
     expect(newAppViewSource).toContain("storeInputTouched");
     expect(newAppViewSource).toContain("isConnectionScopedStoreInput");
     expect(newAppViewSource).toContain("hasMissingAdvancedStoreInputs");
@@ -519,6 +539,30 @@ describe("/new flow guidance", () => {
     expect(ja["new.vars.inputsBody"]).toContain("表示用の入力");
     expect(en["new.vars.inputsTitle"]).not.toBe("Advanced settings");
     expect(ja["new.vars.inputsTitle"]).not.toBe("詳細設定");
+  });
+
+  test("keeps plain environment variables dynamic and separate from fixed setup inputs", () => {
+    expect(newAppViewSource).toContain("interface EnvVariableRow");
+    expect(newAppViewSource).toContain("envVariableRowsFromPrefill");
+    expect(newAppViewSource).toContain("isSafePlainEnvName");
+    expect(newAppViewSource).toContain("normalizedEnvVariables");
+    expect(newAppViewSource).toContain("mergeEnvVariables");
+    expect(newAppViewSource).toContain("envVariables().length > 0");
+    expect(newAppViewSource).toContain('t("new.env.title")');
+    expect(newAppViewSource).toContain("name={`envName:${index()}`}");
+    expect(newAppViewSource).toContain("name={`envValue:${index()}`}");
+    expect(newAppViewSource).toContain(
+      "setEnvVariables(envVariableRowsFromPrefill(next.vars))",
+    );
+    expect(newAppViewSource).toContain(
+      "mergeEnvVariables(variables, normalizedEnvVariables())",
+    );
+    expect(en["new.env.title"]).toBe("Environment variables");
+    expect(ja["new.env.title"]).toBe("環境変数");
+    expect(en["new.env.body"].toLowerCase()).toContain("plain text");
+    expect(ja["new.env.body"]).toContain("秘密値");
+    expect(en["new.env.errorUnsafeName"]).toContain("Secrets");
+    expect(ja["new.env.errorUnsafeName"]).toContain("Secret");
   });
 
   test("keeps external connection UI hidden unless there is something to choose", () => {
