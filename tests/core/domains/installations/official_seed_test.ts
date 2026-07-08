@@ -203,7 +203,7 @@ test("hostable official configs expose public catalog metadata for the dashboard
     "https://github.com/tako0614/takos-office.git",
   );
   expect(office?.catalog?.source.ref).toBe(
-    "33420226bcf7d3c6b20d031a2f6b204e16d50f58",
+    "0c74008efda973f1820a07bd77d305b7d7340c2e",
   );
   expect(office?.catalog?.source.path).toBe(".");
   expect(office?.catalog?.iconUrl).toContain("office.svg");
@@ -222,6 +222,9 @@ test("hostable official configs expose public catalog metadata for the dashboard
     type: "json",
   });
   expect(storage?.catalog?.iconUrl).toContain("storage.svg");
+  expect(storage?.catalog?.source.ref).toBe(
+    "db5e829f92ce5f96b541ad18912f5956265ec28b",
+  );
   expect(storageInput("worker_bundle_url")).toMatchObject({
     advanced: true,
     defaultValue:
@@ -233,6 +236,9 @@ test("hostable official configs expose public catalog metadata for the dashboard
       "9f9e3a8584048ec49fce4aa2ca9f8b3b942a35c6339c4e4e39aee306a4587a1b",
   });
   expect(git?.catalog?.iconUrl).toContain("git.svg");
+  expect(git?.catalog?.source.ref).toBe(
+    "7e92bffd9aa741d41d48c3edc2746a2086e55a16",
+  );
   expect(gitInput("worker_bundle_url")).toMatchObject({
     advanced: true,
     defaultValue:
