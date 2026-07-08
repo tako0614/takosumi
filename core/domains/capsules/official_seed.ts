@@ -311,6 +311,7 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
     },
     outputAllowlist: {
       url: { from: "url", type: "url" },
+      worker_name: { from: "worker_name", type: "string" },
       app_deployment: { from: "app_deployment", type: "json" },
       takosumi_release: { from: "takosumi_release", type: "json" },
     },
@@ -804,6 +805,7 @@ const CURATED_GIT_CATALOG: readonly CuratedGitCatalogSpec[] = [
     },
     outputAllowlist: {
       url: { from: "url", type: "url" },
+      worker_name: { from: "worker_name", type: "string" },
       app_deployment: { from: "app_deployment", type: "json" },
       takosumi_release: { from: "takosumi_release", type: "json" },
     },
