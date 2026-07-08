@@ -1733,14 +1733,8 @@ function Inner() {
           : "";
         const managedAppUrl =
           currentAppUrl || (managedAppHost ? `https://${managedAppHost}` : "");
-        if (managedAppHost && subdomainVariable !== "worker_name") {
-          setDefault("worker_name", currentSubdomain);
-        }
         if (managedAppUrl && urlVariable) {
           setDefault(urlVariable, managedAppUrl);
-        }
-        if (managedAppUrl && urlVariable !== "app_url") {
-          setDefault("app_url", managedAppUrl);
         }
         if (managedAppUrl && routePatternVariable) {
           setDefault(

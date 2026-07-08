@@ -1003,7 +1003,6 @@ test("managed Cloudflare public endpoint defaults follow catalog variable mappin
         public_name: null,
         public_url: null,
         route_pattern: null,
-        cloudflare_route_zone_id: null,
         cloudflare: {
           account_id: null,
           api_base_url: null,
@@ -1039,7 +1038,6 @@ test("managed Cloudflare public endpoint defaults follow catalog variable mappin
       managedProvider: true,
       providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
       accountId: "ts_acc_takosumi_cloud",
-      zoneId: "zone_takosumi_cloud",
     },
   });
   await store.putInstallationProviderEnvBindingSet({
@@ -1076,6 +1074,7 @@ test("managed Cloudflare public endpoint defaults follow catalog variable mappin
   expect(mainTf).toContain(
     'route_pattern = "mapped-public-app-fixture.app.takos.jp/*"',
   );
+  expect(mainTf).not.toContain("cloudflare_route_zone_id =");
   expect(mainTf).not.toContain("worker_name =");
   expect(mainTf).not.toContain("app_url =");
 });

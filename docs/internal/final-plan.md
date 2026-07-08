@@ -238,6 +238,12 @@ endpoint from variable names such as `worker_name` or `app_url`; those names are
 ordinary OpenTofu inputs unless the catalog explicitly maps them through
 `installExperience.publicEndpoint`.
 
+Subdomain, password, and app-specific env are not universal Takosumi
+requirements. A Capsule that does not need a public endpoint should not show a
+public endpoint field; a Capsule that does not need a first-run secret should
+not show a password/token field. Catalog metadata only maps those common setup
+concepts onto ordinary module variables when the selected app asks for them.
+
 The preferred fast path is a Git CI or release pipeline that publishes a
 versioned, publicly fetchable artifact plus a SHA-256 digest. The OpenTofu
 module consumes that URL and digest as normal input variables and verifies the
