@@ -459,6 +459,7 @@ export interface ReleaseCommandRunJob {
   readonly nonSensitiveOutputs: Readonly<Record<string, JsonValue>>;
   readonly credentials?: RunCredentials;
   readonly applyRunId: string;
+  readonly workspaceId?: string;
   readonly installationId: string;
   readonly deploymentId: string;
 }
@@ -1858,7 +1859,7 @@ export function applyExpectedGuardFromPlanRun(
 }
 
 /**
- * Resolves an InstallConfig's catalog template binding + its variable mapping
+ * Resolves an InstallConfig's store template binding + its variable mapping
  * (template inputs). Returns `undefined` when the config has no template
  * binding and should be wrapped by the generic generated-root path.
  */

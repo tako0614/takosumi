@@ -1,41 +1,23 @@
 # Quickstart
 
-まず Takosumi Cloud の通常フローです。ブラウザでサービスを選ぶか Git URL
-を貼り、必要な接続と変更内容を確認してから deploy します。
-
-セルフホストや OSS runner を確認したい場合は、後半の「OSS / local runner
-で確認する」を使ってください。
-
-## Takosumi Cloud
-
-1. `https://app.takosumi.com/` を開きます。
-2. **サービスを追加** からスターターを選ぶか、OpenTofu/Terraform module を含む
-   Git URL を貼ります。
-3. 必要なクラウドアカウントを接続します。credential は manifest や `.env`
-   ではなく ProviderConnection に保存されます。
-4. Takosumi が取得内容、必要な接続、変更予定を表示します。
-5. 内容を確認して deploy を承認します。
-6. 完了後、サービスの URL、履歴、state version、outputs、activity を確認できます。
-
-Cloud でも内部モデルは同じです。
+Takosumi には 2 つの入口があります。
 
 ```text
-Source
-ProviderConnection
-ProviderBinding
-Run
-StateVersion
-Output
-AuditEvent
+Takosumi software:
+  self-host / local / operator endpoint で OpenTofu control plane を確認する
+
+Takosumi Cloud:
+  app.takosumi.com の公式 hosted service と managed resources を使う
 ```
 
-通常画面ではこれらを「サービス」「接続」「変更内容」「履歴」として扱い、必要なときだけ詳細を開けるようにします。
+Software としての動きを確認する場合は、まず OSS / local runner から始めます。
+公式 hosted service として使う場合は、後半の Takosumi Cloud flow を使います。
 
-## OSS / local runner で確認する
+## OSS / local runner
 
 Takosumi OSS は既存 OpenTofu/Terraform provider をそのまま実行します。最短確認は
-Cloudflare API token を ProviderConnection に登録し、既存 `cloudflare/cloudflare`
-provider の manifest を plan/apply する流れです。
+Cloudflare API token などの provider credential を ProviderConnection に登録し、
+既存 provider の manifest を plan/apply する流れです。
 
 ### Prerequisites
 
@@ -107,7 +89,16 @@ outputs
 audit event
 ```
 
-Compatibility API framework は OSS Takosumi の capability surface ですが、この
-quickstart は OpenTofu Stack flow に絞るため使いません。公式 managed target pool /
-Takosumi-owned native resource internals / enforced billing / support/SLA は
-Takosumi for Operator / Cloud の運用層です。
+この quickstart は OpenTofu Stack flow に絞っています。Compatibility API framework は
+OSS Takosumi の capability surface ですが、公式 managed target pool、Takosumi-owned
+native resource internals、enforced billing、support/SLA は Takosumi for Operator /
+Cloud の運用層です。
+
+## Hosted Cloud flow
+
+公式 hosted service としての `app.takosumi.com` の使い方、managed resources、
+pricing、API key、usage、spend guard は
+[Takosumi Cloud docs](https://app.takosumi.com/docs/) に分けています。
+
+Cloud でも software の基礎 model は同じですが、この quickstart では portable な
+Takosumi software / operator endpoint の動作だけを扱います。

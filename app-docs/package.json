@@ -1,0 +1,11 @@
+{
+  "name": "takosumi-cloud-docs",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "scripts": {
+    "dev": "../docs/node_modules/.bin/vitepress dev --host 0.0.0.0",
+    "build": "../docs/node_modules/.bin/vitepress build",
+    "preview": "../docs/node_modules/.bin/vitepress preview"
+  }
+}

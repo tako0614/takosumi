@@ -7,6 +7,12 @@ import {
   type TakosumiAccountsPatScope,
   type TakosumiAccountsRevokePatResponse,
 } from "@takosjp/takosumi-accounts-contract";
+import { usageUsdMicros } from "./billing-format.ts";
+import {
+  listWorkspaceUsagePage,
+  type UsageEvent,
+  type UsageEventKind,
+} from "./control-api.ts";
 
 export type CloudResourceResult<T> =
   | { readonly ok: true; readonly data: T }
@@ -142,10 +148,14 @@ export interface ProviderCompatCloudflareWorkersWorkflow {
   readonly modified_on?: string;
 }
 
-export type ProviderCompatCloudflareWorkersWorkerScript = Readonly<Record<string, unknown>>;
+export type ProviderCompatCloudflareWorkersWorkerScript = Readonly<
+  Record<string, unknown>
+>;
 
 export interface ProviderCompatCloudflareWorkersInventory {
-  readonly accounts: CloudResourceResult<readonly ProviderCompatCloudflareWorkersAccount[]>;
+  readonly accounts: CloudResourceResult<
+    readonly ProviderCompatCloudflareWorkersAccount[]
+  >;
   readonly selectedAccountId?: string;
   readonly kvNamespaces: CloudResourceResult<
     readonly ProviderCompatCloudflareWorkersKvNamespace[]
@@ -153,9 +163,15 @@ export interface ProviderCompatCloudflareWorkersInventory {
   readonly d1Databases: CloudResourceResult<
     readonly ProviderCompatCloudflareWorkersD1Database[]
   >;
-  readonly r2Buckets: CloudResourceResult<readonly ProviderCompatCloudflareWorkersR2Bucket[]>;
-  readonly queues: CloudResourceResult<readonly ProviderCompatCloudflareWorkersQueue[]>;
-  readonly workflows: CloudResourceResult<readonly ProviderCompatCloudflareWorkersWorkflow[]>;
+  readonly r2Buckets: CloudResourceResult<
+    readonly ProviderCompatCloudflareWorkersR2Bucket[]
+  >;
+  readonly queues: CloudResourceResult<
+    readonly ProviderCompatCloudflareWorkersQueue[]
+  >;
+  readonly workflows: CloudResourceResult<
+    readonly ProviderCompatCloudflareWorkersWorkflow[]
+  >;
   readonly workerScripts: CloudResourceResult<
     readonly ProviderCompatCloudflareWorkersWorkerScript[]
   >;
@@ -166,25 +182,66 @@ export interface CloudRequestContext {
   readonly installationId?: string;
 }
 
+export interface CloudResourceUsagePeriod {
+  readonly startIso: string;
+  readonly endIso: string;
+}
+
+export interface CloudResourceUsageQuantity {
+  readonly kind: UsageEventKind | string;
+  readonly quantity: number;
+}
+
+export interface CloudResourceUsageRow {
+  readonly key: string;
+  readonly quantities: readonly CloudResourceUsageQuantity[];
+  readonly usdMicros: number;
+  readonly eventCount: number;
+  readonly lastUsedAt?: string;
+}
+
+export interface CloudResourceUsageSnapshot {
+  readonly period: CloudResourceUsagePeriod;
+  readonly rows: readonly CloudResourceUsageRow[];
+  readonly totalUsdMicros: number;
+  readonly eventCount: number;
+}
+
+export interface CloudResourceUsageDisplayRow extends CloudResourceUsageRow {
+  readonly resourceCount?: number;
+  readonly inventoryKind?: CloudflareResourceKind;
+  readonly inventoryError?: string;
+}
+
+interface UsageAccumulator {
+  readonly key: string;
+  readonly quantities: Map<string, number>;
+  usdMicros: number;
+  eventCount: number;
+  lastUsedAt?: string;
+}
+
+const CLOUD_USAGE_PAGE_LIMIT = 200;
+
+const INVENTORY_FAMILY_BY_KIND: Record<CloudflareResourceKind, string> = {
+  kv: "cloudflare.kv",
+  r2: "cloudflare.r2",
+  d1: "cloudflare.d1",
+  queue: "cloudflare.queues",
+  workflow: "cloudflare.workflows",
+  worker: "cloudflare.workers_script",
+};
+
 /**
- * Fast material for the Cloud screen (`/cloud`): Cloud API keys, endpoint
- * status, and route metadata. The heavier Cloudflare-compatible inventory is
+ * Fast material for the Cloud resources screen (`/cloud`): compatibility route
+ * metadata and auth status. The heavier Cloudflare-compatible inventory is
  * loaded separately so the page can become useful before every resource list
- * returns. Usage/billing intentionally lives on the Billing (支払い) tab via
- * `getWorkspaceBilling` / `listWorkspaceUsage`.
+ * returns. Cloud API keys and billing live on their own tabs.
  */
 export interface CloudResourcesSnapshot {
   readonly catalog: CloudExtensionCatalog;
-  readonly aiRoute?: CloudExtensionCatalogItem;
   readonly compatRoute?: CloudExtensionCatalogItem;
-  readonly s3Route?: CloudExtensionCatalogItem;
-  readonly aiStatus: CloudResourceResult<AiGatewayStatus>;
-  readonly aiModels: CloudResourceResult<OpenAiModelList>;
-  readonly s3Status: CloudResourceResult<S3CompatStatus>;
   readonly compatToken: CloudResourceResult<CloudflareTokenVerify>;
-  readonly accountTokens: CloudResourceResult<
-    readonly TakosumiAccountsPatMetadata[]
-  >;
 }
 
 export class CloudResourceError extends Error {
@@ -203,40 +260,158 @@ export async function getCloudResourcesSnapshot(
   const catalog = await cloudFetch<CloudExtensionCatalog>(
     "/__takosumi/cloud/extensions",
   );
-  const aiRoute = aiGatewayRoute(catalog);
   const compatRoute = providerCompatCloudflareWorkersRoute(catalog);
-  const s3Route = s3CompatibleRoute(catalog);
-  const [aiStatus, aiModels, s3Status, compatToken, accountTokens] =
-    await Promise.all([
-      resultFor<AiGatewayStatus>(
-        aiRoute ? `${aiRoute.basePath}/__takosumi/status` : undefined,
-        context,
-      ),
-      resultFor<OpenAiModelList>(
-        aiRoute ? `${aiRoute.basePath}/models` : undefined,
-        context,
-      ),
-      resultFor<S3CompatStatus>(
-        s3Route ? `${s3Route.basePath}/__takosumi/status` : undefined,
-        context,
-      ),
-      resultFor<CloudflareTokenVerify>(
-        compatRoute ? `${compatRoute.basePath}/user/tokens/verify` : undefined,
-        context,
-      ),
-      getAccountTokens(),
-    ]);
+  const compatToken = await resultFor<CloudflareTokenVerify>(
+    compatRoute ? `${compatRoute.basePath}/user/tokens/verify` : undefined,
+    context,
+  );
   return {
     catalog,
-    aiRoute,
     compatRoute,
-    s3Route,
-    aiStatus,
-    aiModels,
-    s3Status,
     compatToken,
-    accountTokens,
   };
+}
+
+export async function getCloudResourceUsageSnapshot(
+  context: CloudRequestContext = {},
+  now = new Date(),
+): Promise<CloudResourceUsageSnapshot> {
+  if (!context.workspaceId) {
+    return summarizeCloudResourceUsageEvents([], currentUtcMonthPeriod(now));
+  }
+  const period = currentUtcMonthPeriod(now);
+  const events: UsageEvent[] = [];
+  let cursor: string | undefined;
+  let reachedBeforePeriod = false;
+  do {
+    const page = await listWorkspaceUsagePage(context.workspaceId, {
+      cursor,
+      limit: CLOUD_USAGE_PAGE_LIMIT,
+    });
+    for (const event of page.usageEvents) {
+      const createdAt = Date.parse(event.createdAt);
+      if (!Number.isFinite(createdAt)) continue;
+      if (createdAt >= Date.parse(period.endIso)) continue;
+      if (createdAt < Date.parse(period.startIso)) {
+        reachedBeforePeriod = true;
+        break;
+      }
+      events.push(event);
+    }
+    cursor = page.nextCursor;
+  } while (cursor && !reachedBeforePeriod);
+
+  return summarizeCloudResourceUsageEvents(events, period);
+}
+
+export function currentUtcMonthPeriod(
+  now = new Date(),
+): CloudResourceUsagePeriod {
+  const year = now.getUTCFullYear();
+  const month = now.getUTCMonth();
+  return {
+    startIso: new Date(Date.UTC(year, month, 1)).toISOString(),
+    endIso: new Date(Date.UTC(year, month + 1, 1)).toISOString(),
+  };
+}
+
+export function summarizeCloudResourceUsageEvents(
+  events: readonly UsageEvent[],
+  period: CloudResourceUsagePeriod,
+): CloudResourceUsageSnapshot {
+  const start = Date.parse(period.startIso);
+  const end = Date.parse(period.endIso);
+  const groups = new Map<string, UsageAccumulator>();
+  let totalUsdMicros = 0;
+  let eventCount = 0;
+
+  for (const event of events) {
+    const createdAt = Date.parse(event.createdAt);
+    if (!Number.isFinite(createdAt) || createdAt < start || createdAt >= end) {
+      continue;
+    }
+    const key = usageResourceFamilyKey(event);
+    const current =
+      groups.get(key) ??
+      ({
+        key,
+        quantities: new Map<string, number>(),
+        usdMicros: 0,
+        eventCount: 0,
+      } satisfies UsageAccumulator);
+    current.quantities.set(
+      event.kind,
+      (current.quantities.get(event.kind) ?? 0) + event.quantity,
+    );
+    current.usdMicros += usageUsdMicros(event);
+    current.eventCount += 1;
+    if (!current.lastUsedAt || event.createdAt > current.lastUsedAt) {
+      current.lastUsedAt = event.createdAt;
+    }
+    groups.set(key, current);
+    totalUsdMicros += usageUsdMicros(event);
+    eventCount += 1;
+  }
+
+  return {
+    period,
+    rows: sortUsageRows(
+      Array.from(groups.values()).map((group) => ({
+        key: group.key,
+        quantities: Array.from(group.quantities.entries())
+          .map(([kind, quantity]) => ({ kind, quantity }))
+          .sort((a, b) => a.kind.localeCompare(b.kind)),
+        usdMicros: group.usdMicros,
+        eventCount: group.eventCount,
+        ...(group.lastUsedAt ? { lastUsedAt: group.lastUsedAt } : {}),
+      })),
+    ),
+    totalUsdMicros,
+    eventCount,
+  };
+}
+
+export function mergeCloudResourceUsageRows(
+  usage: CloudResourceUsageSnapshot | undefined,
+  inventory: ProviderCompatCloudflareWorkersInventory | undefined,
+): readonly CloudResourceUsageDisplayRow[] {
+  const rows = new Map<string, CloudResourceUsageDisplayRow>();
+  for (const row of usage?.rows ?? []) {
+    rows.set(row.key, row);
+  }
+  for (const rollup of cloudResourceInventoryRollups(inventory)) {
+    const current = rows.get(rollup.key);
+    rows.set(rollup.key, {
+      ...(current ?? {
+        key: rollup.key,
+        quantities: [],
+        usdMicros: 0,
+        eventCount: 0,
+      }),
+      resourceCount: rollup.resourceCount,
+      inventoryKind: rollup.kind,
+      ...(rollup.error ? { inventoryError: rollup.error } : {}),
+    });
+  }
+  return sortUsageRows(Array.from(rows.values()));
+}
+
+export function friendlyResourceFamilyName(key: string): string {
+  return key
+    .replace(/[._-]+/g, " ")
+    .split(" ")
+    .map((word) => word.trim())
+    .filter(Boolean)
+    .map((word) => {
+      const upper = word.toUpperCase();
+      if (
+        ["AI", "API", "CPU", "DB", "D1", "GB", "KV", "R2", "S3"].includes(upper)
+      ) {
+        return upper;
+      }
+      return word.charAt(0).toUpperCase() + word.slice(1);
+    })
+    .join(" ");
 }
 
 export function aiGatewayRoute(
@@ -283,10 +458,11 @@ export async function getProviderCompatCloudflareWorkersInventory(
   if (!route) {
     return emptyProviderCompatCloudflareWorkersInventory("not configured");
   }
-  const accounts = await cloudflareListResult<ProviderCompatCloudflareWorkersAccount>(
-    `${route.basePath}/accounts`,
-    context,
-  );
+  const accounts =
+    await cloudflareListResult<ProviderCompatCloudflareWorkersAccount>(
+      `${route.basePath}/accounts`,
+      context,
+    );
   if (!accounts.ok) {
     return {
       accounts,
@@ -416,6 +592,12 @@ export async function revokeCloudApiKey(
   );
 }
 
+export async function getCloudApiKeysSnapshot(): Promise<
+  CloudResourceResult<readonly TakosumiAccountsPatMetadata[]>
+> {
+  return getAccountTokens();
+}
+
 /** The Cloudflare Workers provider compatibility resources the Cloud screen can manage. */
 export type CloudflareResourceKind =
   "kv" | "r2" | "d1" | "queue" | "workflow" | "worker";
@@ -465,7 +647,9 @@ export async function deleteCloudflareResource(input: {
     input.kind,
     input.id,
   );
-  const body = await cloudFetch<ProviderCompatCloudflareWorkersEnvelope<unknown>>(path, {
+  const body = await cloudFetch<
+    ProviderCompatCloudflareWorkersEnvelope<unknown>
+  >(path, {
     method: "DELETE",
     context: input.context,
   });
@@ -477,6 +661,69 @@ export async function deleteCloudflareResource(input: {
       cloudflareEnvelopeError(body) ?? "delete failed",
     );
   }
+}
+
+function usageResourceFamilyKey(event: UsageEvent): string {
+  for (const candidate of [event.resourceFamily, event.meterId, event.kind]) {
+    const value = candidate?.trim();
+    if (!value) continue;
+    if (isInternalCloudBackendName(value)) continue;
+    return value;
+  }
+  return event.kind;
+}
+
+function isInternalCloudBackendName(value: string): boolean {
+  return /(^|[._-])(wfp|workers_for_platforms|dispatch_namespace)([._-]|$)/i.test(
+    value,
+  );
+}
+
+function cloudResourceInventoryRollups(
+  inventory: ProviderCompatCloudflareWorkersInventory | undefined,
+): readonly {
+  readonly key: string;
+  readonly kind: CloudflareResourceKind;
+  readonly resourceCount?: number;
+  readonly error?: string;
+}[] {
+  if (!inventory || !inventory.accounts.ok) return [];
+  return [
+    inventoryRollup("kv", inventory.kvNamespaces),
+    inventoryRollup("r2", inventory.r2Buckets),
+    inventoryRollup("d1", inventory.d1Databases),
+    inventoryRollup("queue", inventory.queues),
+    inventoryRollup("workflow", inventory.workflows),
+    inventoryRollup("worker", inventory.workerScripts),
+  ];
+}
+
+function inventoryRollup(
+  kind: CloudflareResourceKind,
+  result: CloudResourceResult<readonly unknown[]>,
+): {
+  readonly key: string;
+  readonly kind: CloudflareResourceKind;
+  readonly resourceCount?: number;
+  readonly error?: string;
+} {
+  return {
+    key: INVENTORY_FAMILY_BY_KIND[kind],
+    kind,
+    ...(result.ok ? { resourceCount: result.data.length } : {}),
+    ...(!result.ok ? { error: result.error } : {}),
+  };
+}
+
+function sortUsageRows<T extends CloudResourceUsageRow>(
+  rows: readonly T[],
+): readonly T[] {
+  return [...rows].sort(
+    (a, b) =>
+      b.usdMicros - a.usdMicros ||
+      b.eventCount - a.eventCount ||
+      a.key.localeCompare(b.key),
+  );
 }
 
 async function getAccountTokens(): Promise<
@@ -510,10 +757,9 @@ async function cloudflareListResult<T>(
   path: string,
   context: CloudRequestContext = {},
 ): Promise<CloudResourceResult<readonly T[]>> {
-  const result = await resultFor<ProviderCompatCloudflareWorkersEnvelope<unknown>>(
-    path,
-    context,
-  );
+  const result = await resultFor<
+    ProviderCompatCloudflareWorkersEnvelope<unknown>
+  >(path, context);
   if (!result.ok) return result;
   try {
     return { ok: true, data: cloudflareResultArray<T>(result.data) };

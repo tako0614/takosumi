@@ -16,6 +16,7 @@ import {
 import { errorJson, json } from "./http-helpers.ts";
 import { requireAccountsBearer } from "./account-session.ts";
 import type { DeployControlFacadeOptions } from "./deploy-control-facade.ts";
+import { saveProjectionStatusChange } from "./control/projection.ts";
 import { activatedHttpDomainProjectionFromCoreOutputs } from "./installation-lifecycle-shared.ts";
 
 /**
@@ -126,6 +127,7 @@ export async function handleListAppCapsules(input: {
   request: Request;
   url: URL;
   store: AccountsStore;
+  deployControl?: DeployControlFacadeOptions;
 }): Promise<Response> {
   const bearer = await requireAccountsBearer({
     request: input.request,
@@ -165,7 +167,18 @@ export async function handleListAppCapsules(input: {
   }
   const installations =
     await input.store.listAppCapsulesForWorkspace(workspaceId);
-  const page = paginateById(installations, {
+  const reconciled = await reconcileListedAppCapsules({
+    installations,
+    store: input.store,
+    deployControl: input.deployControl,
+  });
+  const includeExported =
+    input.url.searchParams.get("include_exported") === "true" ||
+    input.url.searchParams.get("include_archived") === "true";
+  const visibleInstallations = includeExported
+    ? reconciled
+    : reconciled.filter((installation) => installation.status !== "exported");
+  const page = paginateById(visibleInstallations, {
     getId: (installation) => installation.capsuleId,
     limit,
     afterId,
@@ -174,6 +187,52 @@ export async function handleListAppCapsules(input: {
     installations: page.items.map(serializeAppCapsule),
     next_cursor: page.nextCursor,
   });
+}
+
+async function reconcileListedAppCapsules(input: {
+  readonly installations: readonly CapsuleRecord[];
+  readonly store: AccountsStore;
+  readonly deployControl?: DeployControlFacadeOptions;
+}): Promise<readonly CapsuleRecord[]> {
+  if (!input.deployControl) return input.installations;
+  return await Promise.all(
+    input.installations.map((installation) =>
+      reconcileListedAppCapsule({
+        installation,
+        store: input.store,
+        deployControl: input.deployControl,
+      }),
+    ),
+  );
+}
+
+async function reconcileListedAppCapsule(input: {
+  readonly installation: CapsuleRecord;
+  readonly store: AccountsStore;
+  readonly deployControl?: DeployControlFacadeOptions;
+}): Promise<CapsuleRecord> {
+  if (!input.deployControl || input.installation.status === "exported") {
+    return input.installation;
+  }
+  try {
+    const response = await withProjectionTimeout(
+      input.deployControl.operations.getCapsule(input.installation.capsuleId),
+    );
+    const capsule = response.capsule ?? response.installation;
+    if (capsule.status !== "destroyed") return input.installation;
+    await saveProjectionStatusChange({
+      store: input.store,
+      installation: input.installation,
+      requestedStatus: "exported",
+      reason: "deploy-control Capsule is destroyed during projection list",
+    });
+    return (
+      (await input.store.findAppCapsule(input.installation.capsuleId)) ??
+      input.installation
+    );
+  } catch {
+    return input.installation;
+  }
 }
 
 export async function handleGetAppCapsule(input: {

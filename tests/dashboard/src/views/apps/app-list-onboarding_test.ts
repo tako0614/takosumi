@@ -23,7 +23,7 @@ describe("AppListView app launcher", () => {
     expect(appListSource).toContain("ensureAccessibleWorkspaceSelection");
     expect(appListSource).toContain("clearWorkspaceProjectionCaches");
     expect(appListSource).toContain('href="/new"');
-    expect(appListSource).toContain('t("apps.start.optionCatalog")');
+    expect(appListSource).toContain('t("apps.start.optionStore")');
     expect(appListSource).not.toContain('href="/new?mode=link"');
     expect(appListSource).not.toContain('t("apps.start.add")');
   });

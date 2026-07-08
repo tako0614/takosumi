@@ -827,7 +827,7 @@ function storeMetadataFromStoreListing(listing: TcsListing): StoreMetadata {
     name: nonEmptyStoreText(listing.name) ?? fallbackName,
     description: nonEmptyStoreText(listing.description) ?? fallbackName,
     ...(listing.iconUrl ? { iconUrl: listing.iconUrl } : {}),
-    inputs: listing.inputs.map((input) => ({
+    inputs: (listing.inputs ?? []).map((input) => ({
       name: input.name,
       ...(input.type ? { type: input.type } : {}),
       ...(input.format ? { format: input.format } : {}),
@@ -873,7 +873,7 @@ function outputAllowlistFromStoreListing(
   listing: TcsListing,
 ): StoreOutputAllowlist | undefined {
   const out: Record<string, StoreOutputAllowlist[string]> = {};
-  for (const output of listing.outputAllowlist) {
+  for (const output of listing.outputAllowlist ?? []) {
     if (!isSafeInstallVariableName(output.key)) continue;
     if (!isSafeInstallVariableName(output.from)) continue;
     out[output.key] = {
@@ -1529,7 +1529,7 @@ function Inner() {
     const store = storeMetadataForRun();
     const variable = store ? storeServiceNameVariable(store) : undefined;
     return variable
-      ? storeListingForCurrentSource()?.inputs.find(
+      ? storeListingForCurrentSource()?.inputs?.find(
           (input) => input.name === variable,
         )?.defaultValue
       : undefined;
@@ -1654,7 +1654,7 @@ function Inner() {
       storeMetadataFromStoreListing(listing),
     );
     const variables: Record<string, JsonValue> = {};
-    for (const field of listing.inputs) {
+    for (const field of listing.inputs ?? []) {
       const defaultValue = field.defaultValue?.trim();
       if (!defaultValue) continue;
       if (!storeVariablePath(field.name)) continue;
@@ -1675,7 +1675,7 @@ function Inner() {
     const listing = storeListingForCurrentSource();
     if (!listing) return new Set<string>();
     return new Set(
-      listing.inputs
+      (listing.inputs ?? [])
         .map((field) => storeVariablePath(field.name)?.[0])
         .filter((name): name is string => name !== undefined),
     );
@@ -3183,7 +3183,6 @@ function Inner() {
             </header>
             <StoreBrowser
               locale={locale()}
-              onInstall={pickStoreListing}
               onConfigure={pickStoreListing}
               showSourceControls={true}
               showSortControl={false}

@@ -4,7 +4,7 @@
  * Other sites may link `https://app.takosumi.com/install?...` to open the
  * dashboard's add flow with the source pre-filled. The worker does nothing
  * special with `/install` (it is a plain SPA path); the SPA router forwards
- * the query to `/new`, and this parser seeds the Git form. Two link forms:
+ * the query to `/new`, and this parser pre-fills the Git form. Two link forms:
  *
  *   /install?git=<https url>&ref=<ref>&path=<module path>
  *   /install?source=git::<https url>//<module path>?ref=<ref>
@@ -14,7 +14,7 @@
  * link, the compatibility check ("中身を確認") must pass, and the install
  * button is a separate explicit step. Real source-URL policy is enforced
  * server-side when the Source is registered / compatibility-checked; the
- * https-only guard here just refuses to seed the form with junk
+ * https-only guard here just refuses to pre-fill the form with junk
  * (non-https, embedded credentials, unparsable URLs).
  */
 

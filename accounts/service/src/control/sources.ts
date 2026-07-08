@@ -75,10 +75,7 @@ import type {
   ProviderResolution,
   PublicProviderResolution,
 } from "takosumi-contract/provider-resolution";
-import type {
-  OutputShare,
-  OutputShareEntry,
-} from "takosumi-contract/outputs";
+import type { OutputShare, OutputShareEntry } from "takosumi-contract/outputs";
 import type { PublicDeployment } from "takosumi-contract/deployments";
 import type {
   BackupRecord,
@@ -171,7 +168,7 @@ import {
 import {
   DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
   defaultCapsuleOutputAllowlist,
-} from "../../../../core/domains/capsules/official_seed.ts";
+} from "../../../../core/domains/capsules/install_config_bootstrap.ts";
 import { stableJsonDigest } from "../../../../core/adapters/source/digest.ts";
 import { decodeCursor, pageSorted } from "takosumi-contract/pagination";
 import { appendLedgerEvent } from "../installation-ledger-events.ts";
@@ -276,8 +273,8 @@ export async function handleSources(
         );
       }
       const capsuleId = stringValue(body.capsuleId);
-      // Curated catalog deep-link path: when no Capsule exists yet, gate
-      // the pre-install check against the catalog's bounded InstallConfig so a
+      // Curated store deep-link path: when no Capsule exists yet, gate
+      // the pre-install check against the store's bounded InstallConfig so a
       // vetted first-party module is judged by its own minimal allowlist
       // (the instance-wide default allowlist is never widened — see
       // CreateSourceCompatibilityCheckRequest.installConfigId).
@@ -343,11 +340,8 @@ export async function handleCompatibilityReports(
     const reportWorkspaceId = report.sourceId
       ? sourceWorkspaceId((await operations.getSource(report.sourceId)).source)
       : report.capsuleId
-        ? (
-            await operations.installations.getCapsule(
-              report.capsuleId,
-            )
-          ).workspaceId
+        ? (await operations.installations.getCapsule(report.capsuleId))
+            .workspaceId
         : undefined;
     if (!reportWorkspaceId) {
       return errorJson("not_found", "compatibility report not found", 404);
@@ -422,7 +416,10 @@ async function createSource(
   const authConnectionId = stringValue(body.authConnectionId);
   if (authConnectionId) {
     const connection = await operations.getConnection(authConnectionId);
-    if (connection.scope !== "space" || connection.workspaceId !== workspaceId) {
+    if (
+      connection.scope !== "space" ||
+      connection.workspaceId !== workspaceId
+    ) {
       const connectionWorkspaceId = connection.workspaceId;
       if (connectionWorkspaceId) {
         const connectionAuth = await requireWorkspaceAccess({

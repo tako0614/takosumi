@@ -14,3 +14,4 @@ node_modules/
 .gitignore_addition.txt
 .env.smoke
 tmp/
+app-docs/.vitepress/dist/

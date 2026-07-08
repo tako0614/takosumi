@@ -223,15 +223,15 @@ export interface AppSurface {
   readonly url?: string;
 }
 
-export function appSurfaceFromInstallConfigCatalog(
+export function appSurfaceFromInstallConfigStore(
   config: InstallConfig | undefined,
   language: "ja" | "en",
 ): AppSurface | undefined {
-  const catalog = config?.catalog;
-  if (!catalog || catalog.surface !== "service") return undefined;
+  const store = config?.store;
+  if (!store || store.surface !== "service") return undefined;
   return {
-    name: catalog.name[language] ?? catalog.suggestedName ?? config.name,
-    image: urlValue(catalog.iconUrl),
+    name: store.name[language] ?? store.suggestedName ?? config.name,
+    image: urlValue(store.iconUrl),
   };
 }
 

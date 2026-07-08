@@ -30,7 +30,7 @@ process.env.TAKOSUMI_DEV_MODE = "1";
 
 function stubQueryClient(): PostgresQueryClient {
   return {
-    // The service graph material resolver only touches the store lazily at
+    // The runtime projection material resolver only touches the store lazily at
     // resolve time; these tests never trigger a resolve, so a throwing query
     // surfaces an accidental DB dependency rather than silently passing.
     queryObject: () => {
@@ -47,7 +47,7 @@ function testConfig(): NodeAccountsServerConfig {
     databaseUrl: "postgres://unused",
     clients: undefined,
     platformAccess: { status: "closed" },
-    serviceGraphMaterialResolver: undefined,
+    runtimeProjectionMaterialResolver: undefined,
     passkeys: undefined,
     upstreamOAuth: undefined,
     stableOidc: undefined,

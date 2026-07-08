@@ -1104,7 +1104,7 @@ function installationSchemas(): Record<string, Record<string, unknown>> {
           },
         },
         policy: { type: "object", additionalProperties: true },
-        catalog: {
+        store: {
           type: "object",
           required: [
             "order",
@@ -1122,7 +1122,7 @@ function installationSchemas(): Record<string, Record<string, unknown>> {
             templateVersion: { type: "string" },
             source: {
               type: "object",
-              required: ["git", "ref", "path"],
+              required: ["git", "path"],
               properties: {
                 git: { type: "string" },
                 ref: { type: "string" },
@@ -1145,16 +1145,23 @@ function installationSchemas(): Record<string, Record<string, unknown>> {
                 required: ["name", "label"],
                 properties: {
                   name: { type: "string" },
-                  type: { enum: ["string", "number", "boolean"] },
-                  required: { type: "boolean" },
-                  defaultValue: {
+                  type: { enum: ["string", "number", "boolean", "json"] },
+                  format: {
                     enum: [
-                      "service-name",
-                      "service-name-with-space",
-                      "main",
-                      "us-east-1",
+                      "text",
+                      "url",
+                      "hostname",
+                      "subdomain",
+                      "password",
+                      "token",
+                      "email",
+                      "sha256",
                     ],
                   },
+                  required: { type: "boolean" },
+                  advanced: { type: "boolean" },
+                  secret: { type: "boolean" },
+                  defaultValue: { type: "string" },
                   label: { $ref: "#/components/schemas/LocalizedText" },
                   helper: { $ref: "#/components/schemas/LocalizedText" },
                   placeholder: { type: "string" },

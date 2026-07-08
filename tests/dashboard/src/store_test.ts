@@ -1,36 +1,32 @@
 import { describe, expect, test } from "bun:test";
-import { officialInstallConfigs } from "../../../core/domains/capsules/official_seed.ts";
+import {
+  NONSELECTABLE_REPOSITORY_STORE_INSTALL_CONFIG_IDS,
+  builtInInstallConfigs,
+} from "../../../core/domains/capsules/install_config_bootstrap.ts";
 import { defaultTemplateRegistry } from "../../../core/domains/templates/mod.ts";
 
 describe("dashboard store", () => {
   const storeEntries = () =>
-    officialInstallConfigs()
+    builtInInstallConfigs()
       .filter((config) => config.store)
       .map((config) => ({
         installConfigId: config.id,
         ...config.store!,
       }));
 
-  test("curated install entries announce repositories without owning release refs", () => {
+  test("built-in store entries announce repositories without owning release refs", () => {
     for (const entry of storeEntries()) {
       expect(entry.source?.git).toMatch(/^https:\/\/github\.com\//);
       expect(entry.source?.path).toBeTruthy();
-      if (!entry.templateId) expect(entry.source?.ref).toBeUndefined();
+      expect(entry.source).not.toHaveProperty("ref");
     }
   });
 
-  test("product distributions are not generic Takosumi template cards", () => {
-    const builtInConfigs = officialInstallConfigs();
-    const productConfigs = builtInConfigs.filter((config) =>
-      ["cfg-store-yurucommu", "cfg-store-takos"].includes(config.id),
-    );
-    expect(productConfigs.map((config) => config.sourceKind)).toEqual([
-      "generic_capsule",
-      "generic_capsule",
-    ]);
-    expect(
-      productConfigs.every((config) => config.templateBinding === undefined),
-    ).toBe(true);
+  test("product distributions are not seeded as generic Takosumi template cards", () => {
+    const builtInConfigs = builtInInstallConfigs();
+    for (const id of NONSELECTABLE_REPOSITORY_STORE_INSTALL_CONFIG_IDS) {
+      expect(builtInConfigs.find((config) => config.id === id)).toBeUndefined();
+    }
   });
 
   test("the internal web app template is browser-openable after apply", () => {
@@ -63,14 +59,7 @@ describe("dashboard store", () => {
       services
         .sort((a, b) => a.order - b.order)
         .map((entry) => entry.templateId ?? entry.installConfigId),
-    ).toEqual([
-      "cloudflare-hello-worker",
-      "cfg-store-yurucommu",
-      "cfg-store-takos",
-      "cfg-store-takos-office",
-      "cfg-store-takos-storage",
-      "cfg-store-takos-git",
-    ]);
+    ).toEqual(["cloudflare-hello-worker"]);
     expect(buildingBlocks).toEqual([]);
     expect(entries.some((entry) => entry.surface === "example")).toBe(false);
   });
@@ -84,7 +73,7 @@ describe("dashboard store", () => {
       "cloudflare_r2_bucket",
       "cloudflare_d1_database",
     ]);
-    const builtInConfigs = officialInstallConfigs();
+    const builtInConfigs = builtInInstallConfigs();
     for (const entry of storeEntries().filter(
       (storeEntry) => storeEntry.surface === "service",
     )) {
@@ -106,12 +95,11 @@ describe("dashboard store", () => {
   });
 
   test("store view entries resolve to built-in template configs", () => {
-    const builtInConfigs = officialInstallConfigs();
+    const builtInConfigs = builtInInstallConfigs();
     for (const entry of storeEntries()) {
       const config = builtInConfigs.find(
         (builtIn) => builtIn.id === entry.installConfigId,
       );
-      if (!config?.templateBinding) continue;
       expect(config, entry.templateId).toBeDefined();
       expect(config?.sourceKind).toBe("first_party_capsule");
       expect(config?.templateBinding, entry.templateId).toBeDefined();
@@ -135,16 +123,5 @@ describe("dashboard store", () => {
         }
       }
     }
-  });
-
-  test("curated service store metadata declares product icons", () => {
-    const icons = new Map(
-      storeEntries().map((entry) => [entry.installConfigId, entry.iconUrl]),
-    );
-    expect(icons.get("cfg-store-yurucommu")).toContain("yurucommu.svg");
-    expect(icons.get("cfg-store-takos")).toContain("takos.svg");
-    expect(icons.get("cfg-store-takos-office")).toContain("office.svg");
-    expect(icons.get("cfg-store-takos-storage")).toContain("storage.svg");
-    expect(icons.get("cfg-store-takos-git")).toContain("git.svg");
   });
 });

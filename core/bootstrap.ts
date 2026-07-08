@@ -93,9 +93,9 @@ import {
   type ServiceDataBackupRunner,
 } from "./domains/backups/mod.ts";
 import {
-  type OfficialCatalogSource,
-  seedOfficialInstallConfigs,
-} from "./domains/capsules/official_seed.ts";
+  type BuiltInStoreSource,
+  bootstrapInstallConfigs,
+} from "./domains/capsules/install_config_bootstrap.ts";
 import type {
   CreateSourceRequest,
   CreateSourceResponse,
@@ -406,11 +406,11 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
     readonly name: string;
   }) => boolean | Promise<boolean>;
   /**
-   * Operator-selected public Git source for first-party catalog cards. The
+   * Operator-selected public Git source for first-party store listings. The
    * default tracks the public development mirror, while hosted deployments can
-   * point at an official release mirror without changing OSS source.
+   * point at an built-in release mirror without changing OSS source.
    */
-  readonly officialCatalogSource?: OfficialCatalogSource;
+  readonly builtInStoreSource?: BuiltInStoreSource;
   /** OpenTofu executor. The reference Cloudflare distribution injects a
    * Cloudflare Container runner; when omitted, PlanRun/ApplyRun records remain
    * queued in the ledger for an external runner to pick up.
@@ -1018,9 +1018,9 @@ export async function createTakosumiService(
   // Seed the required shared InstallConfigs before the service is exposed. The
   // generic Capsule default powers the standard Git URL install flow, so a seed
   // failure is a boot/readiness failure rather than a deferred dashboard error.
-  await seedOfficialInstallConfigs(sharedOpenTofuStore, {
-    ...(options.officialCatalogSource
-      ? { officialCatalogSource: options.officialCatalogSource }
+  await bootstrapInstallConfigs(sharedOpenTofuStore, {
+    ...(options.builtInStoreSource
+      ? { builtInStoreSource: options.builtInStoreSource }
       : {}),
   });
   opentofuController = new OpenTofuDeploymentController({

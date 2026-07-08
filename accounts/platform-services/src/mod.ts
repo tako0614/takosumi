@@ -6,5 +6,5 @@
  * Takosumi offers them as ordinary platform service paths, and this
  * package exports resolvers an operator can attach to the Takosumi service.
  */
-export * from "./bundled/service-graph-material-resolver.ts";
+export * from "./bundled/runtime-projection-material-resolver.ts";
 export * from "./opentofu-output-resolver.ts";

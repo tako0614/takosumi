@@ -1,9 +1,8 @@
 /**
  * Shared, layout-agnostic TCS store browser. Built in the dashboard so the takos
- * product can reuse it via the `@takosumi/dashboard/*` alias. It owns browsing
- * (search / filter / sort / multi-server aggregation / detail) but NOT installing
- * — each host injects `onInstall` (quick install) and `onConfigure` (full flow),
- * so the same UI drives the control-plane install and the takos app install.
+ * product can reuse it via the `@takosumi/dashboard/*` alias. It owns repository
+ * discovery (search / sort / multi-server aggregation / detail) but NOT
+ * installing; each host injects the single add flow it wants to open.
  */
 import {
   createEffect,
@@ -28,13 +27,7 @@ import {
   removeTcsServer,
 } from "../../lib/tcs-servers.ts";
 import type { TcsListing, TcsSort } from "../../lib/tcs-client.ts";
-import { tcsCategoryLabel, tcsProviderLabel } from "./store-labels.ts";
 import "./StoreBrowser.css";
-
-type Status = {
-  state: "idle" | "installing" | "done" | "error";
-  message?: string;
-};
 
 const STR = {
   tagline: {
@@ -42,7 +35,6 @@ const STR = {
     en: "Find services to add",
   },
   search: { ja: "サービスを検索…", en: "Search services…" },
-  all: { ja: "すべて", en: "All" },
   sortUpdated: { ja: "更新順", en: "Recently updated" },
   sortName: { ja: "名前順", en: "Name" },
   storeFilter: { ja: "表示ストア", en: "Store" },
@@ -60,12 +52,8 @@ const STR = {
   remove: { ja: "削除", en: "Remove" },
   unreachable: { ja: "接続不可", en: "unreachable" },
   alsoOn: { ja: "他にもあり", en: "also elsewhere" },
-  install: { ja: "インストール", en: "Install" },
-  installing: { ja: "インストール中…", en: "Installing…" },
-  installed: { ja: "開始しました", en: "Started" },
-  configure: { ja: "インストール", en: "Install" },
+  install: { ja: "追加", en: "Add" },
   close: { ja: "閉じる", en: "Close" },
-  summary: { ja: "概要", en: "Overview" },
   source: { ja: "取得元の詳細", en: "Source details" },
   technicalDetails: {
     ja: "取得元",
@@ -91,9 +79,8 @@ function listingSearchText(listing: TcsListing, locale: TcsLocale): string {
     pick(listing.description, locale),
     listing.suggestedName,
     listing.provider,
-    tcsProviderLabel(listing.provider),
     listing.category,
-    tcsCategoryLabel(listing.category, locale),
+    ...(listing.badges ?? []),
     listing.source.git,
   ]
     .join(" ")
@@ -139,9 +126,7 @@ const EMPTY: TcsAggregateState = {
 
 export interface StoreBrowserProps {
   readonly locale: TcsLocale;
-  readonly onInstall: (listing: TcsListing) => Promise<void> | void;
   readonly onConfigure: (listing: TcsListing) => void;
-  readonly canQuickInstall?: (listing: TcsListing) => boolean;
   readonly showSourceControls?: boolean;
   readonly showSortControl?: boolean;
   readonly loadRemoteOnMount?: boolean;
@@ -151,7 +136,6 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
   const [sort, setSort] = createSignal<TcsSort>("updated");
   const [searchInput, setSearchInput] = createSignal("");
   const [activeQuery, setActiveQuery] = createSignal("");
-  const [fCategory, setFCategory] = createSignal("");
   const [activeStore, setActiveStore] = createSignal("");
   const [agg, setAgg] = createSignal<TcsAggregateState>(EMPTY);
   const [selected, setSelected] = createSignal<AggregatedTcsListing | null>(
@@ -159,9 +143,6 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
   );
   const [showServers, setShowServers] = createSignal(false);
   const [serverDraft, setServerDraft] = createSignal("");
-  const [installState, setInstallState] = createSignal<Record<string, Status>>(
-    {},
-  );
   const showSourceControls = () => props.showSourceControls ?? true;
   const showSortControl = () => props.showSortControl ?? true;
 
@@ -227,22 +208,6 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
     void rebuild();
   };
 
-  async function handleInstall(listing: TcsListing) {
-    setInstallState((p) => ({ ...p, [listing.id]: { state: "installing" } }));
-    try {
-      await props.onInstall(listing);
-      setInstallState((p) => ({ ...p, [listing.id]: { state: "done" } }));
-    } catch (err) {
-      setInstallState((p) => ({
-        ...p,
-        [listing.id]: {
-          state: "error",
-          message: String((err as Error)?.message ?? err),
-        },
-      }));
-    }
-  }
-
   // Store nodes are the single source of installable listings; the dashboard
   // no longer hardcodes a built-in template list.
   const allItems = createMemo(() =>
@@ -250,12 +215,6 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
   );
 
   const storeChoices = createMemo(() => agg().status.map((st) => st.base));
-
-  const categories = createMemo(() => {
-    const set = new Set<string>();
-    for (const i of allItems()) set.add(i.category);
-    return [...set].sort();
-  });
 
   const listingForActiveStore = (
     listing: AggregatedTcsListing,
@@ -284,44 +243,20 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
           (!activeQuery() ||
             listingSearchText(l, props.locale).includes(
               activeQuery().toLowerCase(),
-            )) &&
-          (!fCategory() || l.category === fCategory()),
+            )),
       )
       .map((listing) => listingForActiveStore(listing)),
   );
 
   const installButton = (listing: TcsListing) => {
-    const st = () => installState()[listing.id]?.state ?? "idle";
-    const canQuickInstall = props.canQuickInstall?.(listing) ?? false;
     return (
-      <Show
-        when={canQuickInstall}
-        fallback={
-          <button
-            type="button"
-            class="tcs-btn tcs-primary"
-            onClick={() => props.onConfigure(listing)}
-          >
-            {s("configure", props.locale)} →
-          </button>
-        }
+      <button
+        type="button"
+        class="tcs-btn tcs-primary"
+        onClick={() => props.onConfigure(listing)}
       >
-        <button
-          type="button"
-          class="tcs-btn tcs-primary"
-          disabled={st() === "installing" || st() === "done"}
-          onClick={() => handleInstall(listing)}
-        >
-          {st() === "installing"
-            ? s("installing", props.locale)
-            : st() === "done"
-              ? s("installed", props.locale) + " ✓"
-              : s("install", props.locale)}
-        </button>
-        <Show when={st() === "error"}>
-          <span class="tcs-err">{installState()[listing.id]?.message}</span>
-        </Show>
-      </Show>
+        {s("install", props.locale)} →
+      </button>
     );
   };
 
@@ -422,29 +357,6 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
         </div>
       </Show>
 
-      <div class="tcs-filters">
-        <button
-          type="button"
-          class="tcs-chip"
-          classList={{ active: !fCategory() }}
-          onClick={() => setFCategory("")}
-        >
-          {s("all", props.locale)}
-        </button>
-        <For each={categories()}>
-          {(c) => (
-            <button
-              type="button"
-              class="tcs-chip"
-              classList={{ active: fCategory() === c }}
-              onClick={() => setFCategory(fCategory() === c ? "" : c)}
-            >
-              {tcsCategoryLabel(c, props.locale)}
-            </button>
-          )}
-        </For>
-      </div>
-
       <Show
         when={displayed().length > 0}
         fallback={
@@ -470,16 +382,13 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
                     </button>
                   </div>
                 </div>
-                <div class="tcs-card-meta">
-                  <span class="tcs-tag">
-                    {tcsProviderLabel(listing.provider)}
-                  </span>
-                  <Show when={listing.seenOn.length > 1}>
+                <Show when={listing.seenOn.length > 1}>
+                  <div class="tcs-card-meta">
                     <span class="tcs-tag tcs-muted">
                       +{listing.seenOn.length - 1} {s("alsoOn", props.locale)}
                     </span>
-                  </Show>
-                </div>
+                  </div>
+                </Show>
                 <div class="tcs-card-actions">{installButton(listing)}</div>
               </div>
             )}
@@ -523,17 +432,6 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
                 {pick(listing().description, props.locale)}
               </p>
               <div class="tcs-detail-actions">{installButton(listing())}</div>
-              <section>
-                <h5>{s("summary", props.locale)}</h5>
-                <div class="tcs-card-meta">
-                  <span class="tcs-tag">
-                    {tcsProviderLabel(listing().provider)}
-                  </span>
-                  <span class="tcs-tag">
-                    {tcsCategoryLabel(listing().category, props.locale)}
-                  </span>
-                </div>
-              </section>
               <details class="tcs-advanced">
                 <summary>{s("technicalDetails", props.locale)}</summary>
                 <section>

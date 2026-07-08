@@ -7,7 +7,7 @@
 この runbook は Takosumi platform worker の運用正本です。対象は
 `app.takosumi.com` で動く accounts plane、control plane、dashboard SPA、
 Queue、CoordinationObject、OpenTofuRunOwnerObject、OpenTofuRunnerObject、
-Runner Container、D1/R2 ledger です。Takos product runtime / bundled app
+Runner Container、D1/R2 ledger です。Takos product runtime / installable app
 runtime の incident は各 product docs が所有します。
 
 ## Scope

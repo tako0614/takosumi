@@ -6,22 +6,22 @@
 
 この runbook は **Takosumi operated environment** の patch management 正本です。
 operator が production / staging で deploy するのは単一 Cloudflare Worker
-(Takosumi platform worker) です。Takos product worker や bundled apps の
+(Takosumi platform worker) です。Takos product worker や installable apps の
 patch gate はそれぞれの product docs が所有します。
 
 ## Scope
 
-| Area                            | Owner                                                      | Patch path                                                            |
-| ------------------------------- | ---------------------------------------------------------- | --------------------------------------------------------------------- |
-| Platform worker source          | `takosumi/worker` / `takosumi/core`                        | Takosumi service checks + platform deploy                             |
-| Dashboard SPA                   | `takosumi/dashboard`                                       | dashboard typecheck / build                                           |
-| Runner image                    | `takosumi/runner/Dockerfile`                               | image rebuild + Cloudflare Container smoke                            |
+| Area                                     | Owner                                                               | Patch path                                                                  |
+| ---------------------------------------- | ------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| Platform worker source                   | `takosumi/worker` / `takosumi/core`                                 | Takosumi service checks + platform deploy                                   |
+| Dashboard SPA                            | `takosumi/dashboard`                                                | dashboard typecheck / build                                                 |
+| Runner image                             | `takosumi/runner/Dockerfile`                                        | image rebuild + Cloudflare Container smoke                                  |
 | CredentialRecipe / provider policy packs | `takosumi/docs/internal/core-spec.md`, schema/store/policy packages | CredentialRecipe/provider allowlist tests + custom provider policy evidence |
-| Custom runner policy            | `takosumi/runner`, operator boundary policy                | custom runner smoke + egress policy evidence                          |
-| Provider mirror/cache policy    | runner tofu CLI config / provider mirror                   | provider install attestation tests                                    |
-| OpenTofu modules                | `takosumi/opentofu-modules`                                | module tests / fixture plan where available                           |
-| Bun/npm dependencies            | each Takosumi package root                                 | `bun outdated`, `bun update`, checks                                  |
-| Operator realized config        | `takosumi-private/platform/wrangler.toml`                  | private repo review; no secrets committed                             |
+| Custom runner policy                     | `takosumi/runner`, operator boundary policy                         | custom runner smoke + egress policy evidence                                |
+| Provider mirror/cache policy             | runner tofu CLI config / provider mirror                            | provider install attestation tests                                          |
+| OpenTofu modules                         | `takosumi/opentofu-modules`                                         | module tests / fixture plan where available                                 |
+| Bun/npm dependencies                     | each Takosumi package root                                          | `bun outdated`, `bun update`, checks                                        |
+| Operator realized config                 | `takosumi-private/platform/wrangler.toml`                           | private repo review; no secrets committed                                   |
 
 private deploy credentials and rotation evidence live outside public repos in
 the operator vault / approved run log. Public docs may mention secret classes
@@ -59,7 +59,7 @@ Before staging promotion:
 cd takosumi
 bun run check
 bun test
-cd dashboard && bun run build
+bun run check:dashboard
 ```
 
 `bun run check` is the package-level gate: it includes the root typecheck,

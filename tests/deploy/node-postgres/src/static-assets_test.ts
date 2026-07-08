@@ -72,7 +72,7 @@ describe("createStaticAssetResponder", () => {
         "/v1/auth/upstream/callback",
         "/oauth/authorize",
         "/.well-known/openid-configuration",
-        "/internal/service-graph/materials/resolve",
+        "/internal/runtime-projection/materials/resolve",
       ];
       for (const path of apiPaths) {
         expect(await serve(get(path))).toBeUndefined();

@@ -1,7 +1,7 @@
 /**
  * Apps home (`/`) — the Workspace app launcher. Services appear when they
  * declare app surfaces through well-known OpenTofu outputs, or while pending
- * when their install config has catalog service metadata. A service may declare
+ * when their install config has store service metadata. A service may declare
  * several launchable surfaces (e.g. a blog's public site + its admin screen),
  * each shown as its own tile. Tapping a tile opens that surface's URL, or the
  * service screen when it has none. The full service list (all Capsules, → the
@@ -53,7 +53,7 @@ import {
 import {
   type AppSurface,
   appSurfacesFromOutputs,
-  appSurfaceFromInstallConfigCatalog,
+  appSurfaceFromInstallConfigStore,
   isUrlString,
   isVisibleServiceCapsule,
   needsAttention,
@@ -209,7 +209,7 @@ function Inner() {
   );
 
   // Map each Capsule to a type-specific icon via its install config's
-  // catalog kind (site / storage / worker) — the fallback when a surface
+  // store kind (site / storage / worker) — the fallback when a surface
   // declares no image or icon of its own.
   const installConfigs = createMemo(() =>
     mergeById(overview()?.installConfigs ?? [], fullInstallConfigs() ?? []),
@@ -222,7 +222,7 @@ function Inner() {
     return map;
   });
   const kindForCapsule = (inst: Capsule): string | undefined =>
-    configById().get(inst.installConfigId)?.catalog?.kind;
+    configById().get(inst.installConfigId)?.store?.kind;
 
   // Declared app surfaces per service. The current StateVersion rows are loaded
   // through one Workspace projection request instead of N `getDeployment` reads.
@@ -247,7 +247,7 @@ function Inner() {
     return map;
   });
   const fallbackSurfaceForCapsule = (inst: Capsule): AppSurface | undefined => {
-    return appSurfaceFromInstallConfigCatalog(
+    return appSurfaceFromInstallConfigStore(
       configById().get(inst.installConfigId),
       locale(),
     );
@@ -262,7 +262,7 @@ function Inner() {
       if (!surfaces) {
         const fallback = fallbackSurfaceForCapsule(inst);
         if (fallback) {
-          tiles.push({ inst, surface: fallback, key: `${inst.id}:catalog` });
+          tiles.push({ inst, surface: fallback, key: `${inst.id}:store` });
         }
         continue;
       }
@@ -576,7 +576,7 @@ function WorkspaceStartPanel() {
       </div>
       <a href="/new" class="av-start-action">
         <Sparkles size={18} aria-hidden="true" />
-        <span>{t("apps.start.optionCatalog")}</span>
+        <span>{t("apps.start.optionStore")}</span>
       </a>
     </section>
   );

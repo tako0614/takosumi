@@ -22,14 +22,6 @@ function listing(extra: Partial<TcsListing> = {}): TcsListing {
     name: text("Web app"),
     description: text("Deploy a web app"),
     badge: text("Web app"),
-    inputs: [
-      {
-        name: "project_name",
-        label: text("Project"),
-        defaultValue: "service-name-with-space",
-      },
-    ],
-    outputAllowlist: [],
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
     ...extra,
@@ -70,7 +62,7 @@ describe("store link handoff", () => {
     expect(params.has("var.project_name")).toBe(false);
   });
 
-  test("listing setup defaults stay out of the store handoff URL", () => {
+  test("store handoff never carries setup defaults", () => {
     const query = buildNewQuery(
       listing({
         inputs: [

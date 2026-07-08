@@ -5,17 +5,17 @@
  * When a CONSUMER installation runs, for each scoped-token capability it consumes
  * this: reads the consumer's LATEST OutputSnapshot service bindings, finds the
  * PRODUCER installation in the same workspace that publishes that capability
- * (pinned to the official InstallConfig; fail-closed on ambiguity), decrypts the
- * producer's sealed signing key, mints a `takstor_` scoped token bounded to the
- * consumer's own prefix + verbs, and returns the `TF_VAR_*` env to inject.
+ * (fail-closed on ambiguity), decrypts the producer's sealed signing key,
+ * mints a `takstor_` scoped token bounded to the consumer's own prefix + verbs,
+ * and returns the `TF_VAR_*` env to inject.
  *
  * The consumer's `consume` is an OpenTofu OUTPUT, so it is read from the
  * consumer's previous OutputSnapshot; a grant activates on the run AFTER the
  * consume is first declared (the binding is optional/inert until injected).
  *
  * PRODUCER TRUST: installable Capsules are arbitrary Git, so producer selection
- * is PINNED to the official InstallConfig; a lone non-official exporter is
- * accepted (self-host), but any ambiguity fails CLOSED.
+ * is based on the exported publication/capability surface and workspace
+ * uniqueness. A lone exporter is accepted; multiple exporters fail CLOSED.
  *
  * FAIL-OPEN: never blocks a consumer apply — a decrypt failure, another app's
  * malformed output, or a store error yields "no grant". The returned env rides
@@ -43,8 +43,6 @@ interface GrantSpec {
   readonly publication: string;
   /** Standard capability that also matches a consumer binding. */
   readonly capability: string;
-  /** Only an installation from this official InstallConfig is a trusted producer. */
-  readonly officialInstallConfigId: string;
   /** The producer's sealed OpenTofu output holding the HMAC signing key. */
   readonly signingKeyOutput: string;
   /** Token audience (the consuming service verifies it). */
@@ -52,18 +50,26 @@ interface GrantSpec {
   /** `provider` label recorded in the mint evidence. */
   readonly evidenceProvider: string;
   /** Key/repo prefix the minted token is confined to. */
-  readonly prefix: (workspaceId: string, consumerInstallationId: string) => string;
+  readonly prefix: (
+    workspaceId: string,
+    consumerInstallationId: string,
+  ) => string;
   /** Verbs granted, derived from the consumer binding. */
-  readonly verbs: (binding: ProjectedServiceBinding) => readonly StorageTokenVerb[];
+  readonly verbs: (
+    binding: ProjectedServiceBinding,
+  ) => readonly StorageTokenVerb[];
   /** TF_VAR env the grant injects into the consumer run. */
-  readonly env: (grant: { url?: string; token: string; prefix: string }) => Record<string, string>;
+  readonly env: (grant: {
+    url?: string;
+    token: string;
+    prefix: string;
+  }) => Record<string, string>;
 }
 
 const GRANT_SPECS: readonly GrantSpec[] = [
   {
     publication: "takos.storage.object",
     capability: "storage.object",
-    officialInstallConfigId: "cfg-catalog-takos-storage",
     signingKeyOutput: "takos_storage_signing_key",
     audience: "takos.storage.object",
     evidenceProvider: "takos.storage",
@@ -78,7 +84,6 @@ const GRANT_SPECS: readonly GrantSpec[] = [
   {
     publication: "takos.git.hosting",
     capability: "source.git.smart_http",
-    officialInstallConfigId: "cfg-catalog-takos-git",
     signingKeyOutput: "takos_git_signing_key",
     audience: "takos.git.hosting",
     evidenceProvider: "takos.git",
@@ -144,9 +149,12 @@ export class StorageGrantBroker {
     if (!workspaceId || !consumerInstallationId) return undefined;
     // Prefixes are `/`-joined; a `/` in either id would blur scope boundaries.
     // Ids are server-generated (space_<hex> / inst_<hex>); guard defensively.
-    if (workspaceId.includes("/") || consumerInstallationId.includes("/")) return undefined;
+    if (workspaceId.includes("/") || consumerInstallationId.includes("/"))
+      return undefined;
 
-    const consumerBindings = await this.#consumerBindings(consumerInstallationId);
+    const consumerBindings = await this.#consumerBindings(
+      consumerInstallationId,
+    );
     if (consumerBindings.length === 0) return undefined;
 
     let env: Record<string, string> | undefined;
@@ -177,10 +185,16 @@ export class StorageGrantBroker {
     phase: "plan" | "apply" | "destroy",
     auditRunId: string,
   ): Promise<Record<string, string> | undefined> {
-    const binding = consumerBindings.find((candidate) => bindingMatches(candidate, spec));
+    const binding = consumerBindings.find((candidate) =>
+      bindingMatches(candidate, spec),
+    );
     if (!binding) return undefined;
 
-    const producer = await this.#findProducer(spec, ctx.workspaceId, ctx.consumerInstallationId);
+    const producer = await this.#findProducer(
+      spec,
+      ctx.workspaceId,
+      ctx.consumerInstallationId,
+    );
     if (!producer) return undefined;
 
     if (!this.#sensitiveOutputResolver) return undefined;
@@ -191,7 +205,11 @@ export class StorageGrantBroker {
       toSpaceId: ctx.workspaceId,
       producerInstallationId: producer.installationId,
     });
-    if (!signingKey || typeof signingKey.value !== "string" || signingKey.value.length === 0) {
+    if (
+      !signingKey ||
+      typeof signingKey.value !== "string" ||
+      signingKey.value.length === 0
+    ) {
       this.#skip("producer_signing_key_unresolved", {
         publication: spec.publication,
         producerInstallationId: producer.installationId,
@@ -230,7 +248,9 @@ export class StorageGrantBroker {
   async #consumerBindings(
     consumerInstallationId: string,
   ): Promise<readonly ProjectedServiceBinding[]> {
-    const output = await this.#store.getLatestOutputSnapshot(consumerInstallationId);
+    const output = await this.#store.getLatestOutputSnapshot(
+      consumerInstallationId,
+    );
     if (!output) return [];
     try {
       return projectServicesFromOutputs(
@@ -248,7 +268,7 @@ export class StorageGrantBroker {
     consumerInstallationId: string,
   ): Promise<ResolvedProducer | undefined> {
     const installations = await this.#store.listInstallations(workspaceId);
-    const exporters: Array<ResolvedProducer & { official: boolean }> = [];
+    const exporters: ResolvedProducer[] = [];
     for (const installation of installations) {
       if (installation.id === consumerInstallationId) continue;
       const output = await this.#store.getLatestOutputSnapshot(installation.id);
@@ -262,27 +282,25 @@ export class StorageGrantBroker {
       } catch {
         continue;
       }
-      const exp = serviceExports.find((exported) => exported.name === spec.publication);
+      const exp = serviceExports.find(
+        (exported) => exported.name === spec.publication,
+      );
       if (!exp) continue;
       exporters.push({
         installationId: installation.id,
         output,
         export: exp,
-        official: installation.installConfigId === spec.officialInstallConfigId,
       });
     }
     if (exporters.length === 0) return undefined;
-    const official = exporters.filter((candidate) => candidate.official);
-    const candidates = official.length > 0 ? official : exporters;
-    if (candidates.length !== 1) {
+    if (exporters.length !== 1) {
       this.#skip("ambiguous_producer", {
         publication: spec.publication,
         exporterCount: exporters.length,
-        officialCount: official.length,
       });
       return undefined;
     }
-    return candidates[0];
+    return exporters[0];
   }
 
   async #recordMintEvidence(
@@ -326,17 +344,25 @@ export class StorageGrantBroker {
   }
 }
 
-function bindingMatches(binding: ProjectedServiceBinding, spec: GrantSpec): boolean {
+function bindingMatches(
+  binding: ProjectedServiceBinding,
+  spec: GrantSpec,
+): boolean {
   return (
     binding.selector.name === spec.publication ||
     binding.selector.serviceExportId === spec.publication ||
-    (binding.selector.capabilities as readonly string[]).includes(spec.capability)
+    (binding.selector.capabilities as readonly string[]).includes(
+      spec.capability,
+    )
   );
 }
 
-function firstEndpointUrl(exportValue: ProjectedServiceExport): string | undefined {
+function firstEndpointUrl(
+  exportValue: ProjectedServiceExport,
+): string | undefined {
   for (const endpoint of exportValue.endpoints ?? []) {
-    if (typeof endpoint.url === "string" && endpoint.url.length > 0) return endpoint.url;
+    if (typeof endpoint.url === "string" && endpoint.url.length > 0)
+      return endpoint.url;
   }
   return undefined;
 }

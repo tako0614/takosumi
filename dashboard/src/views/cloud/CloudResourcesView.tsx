@@ -1,13 +1,8 @@
 /**
- * Cloud screen (`/cloud`) — Takosumi Cloud only. Two management surfaces:
- *   - Cloud API keys (create / list / revoke)
- *   - managed cloud resources (KV / Object Storage / Database / Queue /
- *     Workflow / Worker): list, copy identifiers, and DELETE through the Cloud
- *     import endpoint.
- * Plus compact endpoint reference cards (AI gateway, OpenTofu import path).
- *
- * Usage / billing intentionally lives on the Billing (支払い) tab, not here, so
- * this screen stays focused on keys + resources.
+ * Cloud resources (`/cloud`) — Takosumi Cloud only. This screen treats managed
+ * resource families as peers: current-month usage/cost first, then detailed
+ * inventory operations. Cloud API keys live on the dedicated Workspace settings
+ * keys tab; endpoint reference material stays in docs.
  */
 import "../../styles/wave-c.css";
 import {
@@ -24,7 +19,6 @@ import {
 import type { JSX } from "solid-js";
 import {
   Activity,
-  BrainCircuit,
   CheckCircle2,
   Cloud,
   Copy,
@@ -48,21 +42,39 @@ import {
   type ProviderCompatCloudflareWorkersInventory,
   type CloudRequestContext,
   type CloudResourceResult,
+  type CloudResourceUsageDisplayRow,
+  type CloudResourceUsageQuantity,
+  type CloudResourceUsageSnapshot,
   type CloudResourcesSnapshot,
   activeCloudApiTokens,
   createCloudApiKey,
   deleteCloudflareResource,
+  friendlyResourceFamilyName,
+  getCloudApiKeysSnapshot,
+  getCloudResourceUsageSnapshot,
   getProviderCompatCloudflareWorkersInventory,
   getCloudResourcesSnapshot,
+  mergeCloudResourceUsageRows,
   revokeCloudApiKey,
 } from "../../lib/cloud-resources.ts";
-import { formatDateTime, t } from "../../i18n/index.ts";
+import {
+  formatDateTime,
+  locale,
+  type MessageKey,
+  t,
+} from "../../i18n/index.ts";
+import {
+  formatBillingNumber,
+  formatUsdMicros,
+} from "../../lib/billing-format.ts";
 import {
   Badge,
   Button,
   Card,
   CardHeader,
   CardSection,
+  type Column,
+  DataTable,
   EmptyState,
   FormField,
   Input,
@@ -74,6 +86,23 @@ import {
 import type { TakosumiAccountsPatMetadata } from "@takosjp/takosumi-accounts-contract";
 
 const RESOURCE_PREVIEW_LIMIT = 5;
+
+const RESOURCE_FAMILY_LABEL_KEYS: Readonly<Record<string, MessageKey>> = {
+  "cloudflare.kv": "cloudResources.inventory.kv",
+  "cloudflare.r2": "cloudResources.inventory.r2",
+  "cloudflare.d1": "cloudResources.inventory.d1",
+  "cloudflare.queues": "cloudResources.inventory.queues",
+  "cloudflare.queue": "cloudResources.inventory.queues",
+  "cloudflare.workflows": "cloudResources.inventory.workflows",
+  "cloudflare.workflow": "cloudResources.inventory.workflows",
+  "cloudflare.workers": "cloudResources.inventory.workers",
+  "cloudflare.worker_script": "cloudResources.inventory.workers",
+  "cloudflare.workers_script": "cloudResources.inventory.workers",
+  "takosumi.edge_worker": "cloudResources.inventory.workers",
+  "takosumi.object_store": "cloudResources.inventory.r2",
+  "takosumi.queue": "cloudResources.inventory.queues",
+  "takosumi.database": "cloudResources.inventory.d1",
+};
 
 interface CloudRefreshState {
   readonly refresh: () => void;
@@ -131,14 +160,26 @@ export function CloudResourcesPanel(props: {
         ? { route: compatRoute, context: cloudContext() }
         : undefined;
     },
-    ({ route, context }) => getProviderCompatCloudflareWorkersInventory(route, context),
+    ({ route, context }) =>
+      getProviderCompatCloudflareWorkersInventory(route, context),
+  );
+  const [usage, { refetch: refetchUsage }] = createResource(
+    () => {
+      const context = cloudContext();
+      return isTakosumiCloudRuntime() && context.workspaceId
+        ? context
+        : undefined;
+    },
+    (context) => getCloudResourceUsageSnapshot(context),
   );
   const [copied, setCopied] = createSignal<string | null>(null);
   const refreshAll = () => {
     void refetchSnapshot();
     void refetchInventory();
+    void refetchUsage();
   };
-  const refreshDisabled = () => !isTakosumiCloudRuntime() || snapshot.loading;
+  const refreshDisabled = () =>
+    !isTakosumiCloudRuntime() || snapshot.loading || usage.loading;
 
   createEffect(() => {
     props.onRefreshState?.({
@@ -193,12 +234,74 @@ export function CloudResourcesPanel(props: {
                 inventory={inventory()}
                 inventoryLoading={inventory.loading}
                 inventoryError={inventory.error}
+                usage={usage()}
+                usageLoading={usage.loading}
+                usageError={usage.error}
                 context={cloudContext()}
                 copied={copied()}
                 copyText={copyText}
-                refetchSnapshot={() => void refetchSnapshot()}
                 refetchInventory={() => void refetchInventory()}
               />
+            )}
+          </Match>
+        </Switch>
+      </Show>
+    </>
+  );
+}
+
+export function CloudApiKeysPanel(props: { readonly showHeader?: boolean }) {
+  const [keys, { refetch }] = createResource(
+    () => (isTakosumiCloudRuntime() ? "cloud-api-keys" : undefined),
+    getCloudApiKeysSnapshot,
+  );
+  const [copied, setCopied] = createSignal<string | null>(null);
+  const tokens = createMemo(() => {
+    const result = keys();
+    return result?.ok ? activeCloudApiTokens(result.data) : [];
+  });
+  const copyText = async (key: string, value: string) => {
+    await navigator.clipboard.writeText(value);
+    setCopied(key);
+    window.setTimeout(() => {
+      setCopied((current) => (current === key ? null : current));
+    }, 1600);
+  };
+
+  return (
+    <>
+      <Show when={props.showHeader}>
+        <CloudApiKeysHeader />
+      </Show>
+
+      <Show
+        when={isTakosumiCloudRuntime()}
+        fallback={
+          <EmptyState
+            icon={<KeyRound size={24} />}
+            title={t("cloudResources.unavailable.title")}
+            message={t("cloudResources.unavailable.body")}
+          />
+        }
+      >
+        <Switch>
+          <Match when={keys.loading}>
+            <CloudResourcesLoading />
+          </Match>
+          <Match when={keys()}>
+            {(loaded) => (
+              <div class="av-cloud-stack">
+                <Show when={copied()}>
+                  <Toast tone="success">{t("cloudResources.copied")}</Toast>
+                </Show>
+                <ApiKeysCard
+                  tokens={tokens()}
+                  copied={copied()}
+                  copyText={copyText}
+                  refetch={() => void refetch()}
+                  result={loaded()}
+                />
+              </div>
             )}
           </Match>
         </Switch>
@@ -216,15 +319,33 @@ function CloudResourcesHeader(props: {
       title={t("cloudResources.title")}
       subtitle={t("cloudResources.subtitle")}
       actions={
-        <Button
-          variant="secondary"
-          icon={<RefreshCw size={16} />}
-          onClick={props.refresh}
-          disabled={props.disabled}
-        >
-          {t("common.refresh")}
-        </Button>
+        <>
+          <Button
+            variant="secondary"
+            icon={<KeyRound size={16} />}
+            href="/advanced/workspace/keys"
+          >
+            {t("workspaceSettings.tab.keys")}
+          </Button>
+          <Button
+            variant="secondary"
+            icon={<RefreshCw size={16} />}
+            onClick={props.refresh}
+            disabled={props.disabled}
+          >
+            {t("common.refresh")}
+          </Button>
+        </>
       }
+    />
+  );
+}
+
+function CloudApiKeysHeader(): JSX.Element {
+  return (
+    <PageHeader
+      title={t("cloudResources.keys.title")}
+      subtitle={t("cloudResources.keys.subtitle")}
     />
   );
 }
@@ -244,61 +365,44 @@ function CloudResourceBody(props: {
   readonly inventory: ProviderCompatCloudflareWorkersInventory | undefined;
   readonly inventoryLoading: boolean;
   readonly inventoryError: unknown;
+  readonly usage: CloudResourceUsageSnapshot | undefined;
+  readonly usageLoading: boolean;
+  readonly usageError: unknown;
   readonly context: CloudRequestContext;
   readonly copied: string | null;
   readonly copyText: (key: string, value: string) => Promise<void>;
-  readonly refetchSnapshot: () => void;
   readonly refetchInventory: () => void;
 }) {
-  const aiBaseUrl = createMemo(() =>
-    endpointUrl(props.snapshot.catalog.serviceUrl, props.snapshot.aiRoute),
+  const rows = createMemo(() =>
+    mergeCloudResourceUsageRows(props.usage, props.inventory),
   );
-  const compatBaseUrl = createMemo(() =>
-    endpointUrl(props.snapshot.catalog.serviceUrl, props.snapshot.compatRoute),
+  const periodLabel = createMemo(() =>
+    props.usage
+      ? formatUsageMonth(props.usage.period.startIso)
+      : t("cloudResources.usage.currentMonth"),
   );
-  const s3BaseUrl = createMemo(() =>
-    endpointUrl(props.snapshot.catalog.serviceUrl, props.snapshot.s3Route),
+  const totalUsdMicros = createMemo(
+    () => props.usage?.totalUsdMicros ?? sumUsdMicros(rows()),
   );
-  const aiReady = createMemo(
-    () =>
-      props.snapshot.aiRoute?.configured === true &&
-      props.snapshot.aiStatus.ok &&
-      props.snapshot.aiModels.ok,
-  );
+  const usageEventCount = createMemo(() => props.usage?.eventCount ?? 0);
   const compatReady = createMemo(
     () =>
       props.snapshot.compatRoute?.configured === true &&
       props.snapshot.compatToken.ok &&
       props.snapshot.compatToken.data.success === true,
   );
-  const s3Ready = createMemo(
-    () =>
-      props.snapshot.s3Route?.configured === true &&
-      props.snapshot.s3Status.ok &&
-      props.snapshot.s3Status.data.configured === true,
-  );
-  const providers = createMemo(() =>
-    props.snapshot.aiStatus.ok
-      ? props.snapshot.aiStatus.data.summary.providers
-      : [],
-  );
-  const models = createMemo(() =>
-    props.snapshot.aiModels.ok ? props.snapshot.aiModels.data.data : [],
-  );
-  const defaultModel = createMemo(() =>
-    props.snapshot.aiStatus.ok
-      ? props.snapshot.aiStatus.data.defaultModel
-      : undefined,
-  );
   const tokenStatus = createMemo(() =>
     props.snapshot.compatToken.ok
       ? (props.snapshot.compatToken.data.result?.status ?? "active")
       : undefined,
   );
-  const tokens = createMemo(() =>
-    props.snapshot.accountTokens.ok
-      ? activeCloudApiTokens(props.snapshot.accountTokens.data)
-      : [],
+  const compatCapabilities = createMemo(() =>
+    props.snapshot.compatRoute?.capabilities?.length
+      ? props.snapshot.compatRoute.capabilities
+      : ["compat.cloudflare.workers.v1"],
+  );
+  const selectedAccount = createMemo(
+    () => props.inventory?.selectedAccountId ?? "—",
   );
 
   return (
@@ -307,12 +411,97 @@ function CloudResourceBody(props: {
         <Toast tone="success">{t("cloudResources.copied")}</Toast>
       </Show>
 
-      <ApiKeysCard
-        tokens={tokens()}
-        copied={props.copied}
-        copyText={props.copyText}
-        refetch={props.refetchSnapshot}
-        result={props.snapshot.accountTokens}
+      <div class="av-cloud-grid">
+        <Card class="av-cloud-card">
+          <CardHeader
+            title={
+              <IconTitle
+                icon={<Activity size={18} />}
+                label={t("cloudResources.usage.title")}
+              />
+            }
+            subtitle={t("cloudResources.usage.subtitle", {
+              period: periodLabel(),
+            })}
+            actions={
+              props.usageLoading ? (
+                <Badge tone="neutral">{t("common.loading")}</Badge>
+              ) : undefined
+            }
+          />
+          <KVList
+            items={[
+              {
+                label: t("cloudResources.usage.totalCost"),
+                value: formatUsdMicros(totalUsdMicros()),
+              },
+              {
+                label: t("cloudResources.usage.resourceTypes"),
+                value: String(rows().length),
+              },
+              {
+                label: t("cloudResources.usage.events"),
+                value: formatBillingNumber(usageEventCount()),
+              },
+            ]}
+          />
+          <Show when={props.usageError}>
+            {(error) => (
+              <Toast tone="error">
+                {t("cloudResources.usage.error", {
+                  message: errorMessage(error()),
+                })}
+              </Toast>
+            )}
+          </Show>
+        </Card>
+
+        <Card class="av-cloud-card">
+          <CardHeader
+            title={
+              <IconTitle
+                icon={<ShieldCheck size={18} />}
+                label={t("cloudResources.management.title")}
+              />
+            }
+            subtitle={t("cloudResources.management.subtitle")}
+            actions={
+              <ReadyBadge
+                ready={compatReady() && props.inventory !== undefined}
+              />
+            }
+          />
+          <KVList
+            items={[
+              {
+                label: t("cloudResources.management.profile"),
+                value: "compat.cloudflare.workers.v1",
+              },
+              {
+                label: t("cloudResources.management.auth"),
+                value: tokenStatus() ?? "—",
+              },
+              {
+                label: t("cloudResources.management.account"),
+                value: selectedAccount(),
+              },
+            ]}
+          />
+          <CardSection>
+            <ChipBlock
+              title={t("cloudResources.management.capabilities")}
+              values={compatCapabilities()}
+            />
+          </CardSection>
+          <ResultNotice result={props.snapshot.compatToken} />
+        </Card>
+      </div>
+
+      <UsageByResourceCard
+        rows={rows()}
+        loading={props.usageLoading || props.inventoryLoading}
+        usageError={props.usageError}
+        inventoryError={props.inventoryError}
       />
 
       <ResourcesCard
@@ -325,132 +514,120 @@ function CloudResourceBody(props: {
         copyText={props.copyText}
         refetch={props.refetchInventory}
       />
-
-      <div class="av-cloud-grid">
-        <Card class="av-cloud-card">
-          <CardHeader
-            title={
-              <IconTitle
-                icon={<BrainCircuit size={18} />}
-                label={t("cloudResources.ai.title")}
-              />
-            }
-            subtitle={t("cloudResources.ai.subtitle")}
-            actions={<ReadyBadge ready={aiReady()} />}
-          />
-          <EndpointRow
-            label={t("cloudResources.baseUrl")}
-            value={aiBaseUrl()}
-            copyKey="ai-base-url"
-            copied={props.copied}
-            copyText={props.copyText}
-          />
-          <KVList
-            items={[
-              {
-                label: t("cloudResources.ai.defaultModel"),
-                value: defaultModel() ?? "—",
-              },
-              {
-                label: t("cloudResources.ai.models"),
-                value: String(models().length),
-              },
-              {
-                label: t("cloudResources.ai.providers"),
-                value: providers().join(", ") || "—",
-              },
-            ]}
-          />
-          <CardSection>
-            <ChipBlock
-              title={t("cloudResources.ai.modelDetails")}
-              values={models().map((model) => model.id)}
-            />
-          </CardSection>
-          <ResultNotice result={props.snapshot.aiStatus} />
-        </Card>
-
-        <Card class="av-cloud-card">
-          <CardHeader
-            title={
-              <IconTitle
-                icon={<ShieldCheck size={18} />}
-                label={t("cloudResources.compat.title")}
-              />
-            }
-            subtitle={t("cloudResources.compat.subtitle")}
-            actions={<ReadyBadge ready={compatReady()} />}
-          />
-          <EndpointRow
-            label={t("cloudResources.baseUrl")}
-            value={compatBaseUrl()}
-            copyKey="compat-base-url"
-            copied={props.copied}
-            copyText={props.copyText}
-          />
-          <KVList
-            items={[
-              {
-                label: t("cloudResources.compat.token"),
-                value: tokenStatus() ?? "—",
-              },
-              {
-                label: t("cloudResources.compat.account"),
-                value: props.inventory?.selectedAccountId ?? "—",
-              },
-            ]}
-          />
-          <ResultNotice result={props.snapshot.compatToken} />
-        </Card>
-
-        <Card class="av-cloud-card">
-          <CardHeader
-            title={
-              <IconTitle
-                icon={<HardDrive size={18} />}
-                label={t("cloudResources.s3.title")}
-              />
-            }
-            subtitle={t("cloudResources.s3.subtitle")}
-            actions={<ReadyBadge ready={s3Ready()} />}
-          />
-          <EndpointRow
-            label={t("cloudResources.baseUrl")}
-            value={s3BaseUrl()}
-            copyKey="s3-base-url"
-            copied={props.copied}
-            copyText={props.copyText}
-          />
-          <KVList
-            items={[
-              {
-                label: t("cloudResources.s3.protocol"),
-                value: "S3-compatible",
-              },
-              {
-                label: t("cloudResources.s3.capability"),
-                value: props.snapshot.s3Route?.capabilities?.join(", ") || "—",
-              },
-              {
-                label: t("cloudResources.s3.buckets"),
-                value: props.snapshot.s3Status.ok
-                  ? String(props.snapshot.s3Status.data.bucketCount)
-                  : "—",
-              },
-              {
-                label: t("cloudResources.s3.configuredBuckets"),
-                value: props.snapshot.s3Status.ok
-                  ? String(
-                      props.snapshot.s3Status.data.configuredBucketCount ?? 0,
-                    )
-                  : "—",
-              },
-            ]}
-          />
-          <ResultNotice result={props.snapshot.s3Status} />
-        </Card>
-      </div>
     </div>
+  );
+}
+
+function UsageByResourceCard(props: {
+  readonly rows: readonly CloudResourceUsageDisplayRow[];
+  readonly loading: boolean;
+  readonly usageError: unknown;
+  readonly inventoryError: unknown;
+}): JSX.Element {
+  const columns = createMemo<readonly Column<CloudResourceUsageDisplayRow>[]>(
+    () => [
+      {
+        header: t("cloudResources.usage.resourceType"),
+        cell: (row) => (
+          <div class="av-cloud-usage-main">
+            <span class="av-cloud-token-name">
+              {resourceFamilyLabel(row.key)}
+            </span>
+            <span class="muted">{row.key}</span>
+          </div>
+        ),
+      },
+      {
+        header: t("cloudResources.usage.resourceCount"),
+        align: "right",
+        cell: (row) => resourceCountLabel(row),
+      },
+      {
+        header: t("cloudResources.usage.quantity"),
+        cell: (row) => formatUsageQuantities(row.quantities),
+      },
+      {
+        header: t("cloudResources.usage.estimatedCost"),
+        align: "right",
+        cell: (row) => formatUsdMicros(row.usdMicros),
+      },
+      {
+        header: t("cloudResources.usage.lastUsed"),
+        cell: (row) =>
+          row.lastUsedAt
+            ? formatDateTime(row.lastUsedAt)
+            : t("cloudResources.usage.noUsage"),
+      },
+      {
+        header: t("cloudResources.usage.management"),
+        align: "right",
+        cell: (row) =>
+          row.inventoryKind ? (
+            <Badge tone="info">
+              {t("cloudResources.usage.manageAvailable")}
+            </Badge>
+          ) : (
+            <Badge tone="neutral">{t("cloudResources.usage.usageOnly")}</Badge>
+          ),
+      },
+    ],
+  );
+
+  const blockingError = createMemo(() =>
+    props.usageError && props.rows.length === 0 ? props.usageError : undefined,
+  );
+
+  return (
+    <Card class="av-cloud-card">
+      <CardHeader
+        title={
+          <IconTitle
+            icon={<Cloud size={18} />}
+            label={t("cloudResources.usage.tableTitle")}
+          />
+        }
+        subtitle={t("cloudResources.usage.tableSubtitle")}
+      />
+      <DataTable
+        columns={columns()}
+        rows={props.rows}
+        rowKey={(row) => row.key}
+        loading={props.loading && props.rows.length === 0}
+        error={
+          blockingError() ? (
+            <Toast tone="error">
+              {t("cloudResources.usage.error", {
+                message: errorMessage(blockingError()),
+              })}
+            </Toast>
+          ) : undefined
+        }
+        empty={<span class="muted">{t("cloudResources.usage.empty")}</span>}
+        skeletonRows={4}
+      />
+      <Show when={props.usageError && props.rows.length > 0}>
+        {(error) => (
+          <CardSection>
+            <Toast tone="error">
+              {t("cloudResources.usage.error", {
+                message: errorMessage(error()),
+              })}
+            </Toast>
+          </CardSection>
+        )}
+      </Show>
+      <Show when={props.inventoryError && props.rows.length > 0}>
+        {(error) => (
+          <CardSection>
+            <Toast tone="error">
+              {t("cloudResources.inventory.error", {
+                message: errorMessage(error()),
+              })}
+            </Toast>
+          </CardSection>
+        )}
+      </Show>
+    </Card>
   );
 }
 
@@ -542,7 +719,8 @@ function ApiKeysCard(props: {
       <Show when={createdToken()}>
         {(token) => (
           <CardSection>
-            <EndpointRow
+            <p class="muted">{t("cloudResources.keys.createdNotice")}</p>
+            <CopyValueRow
               label={t("cloudResources.keys.created")}
               value={token()}
               copyKey="created-token"
@@ -558,6 +736,7 @@ function ApiKeysCard(props: {
       <ResultNotice result={props.result} />
       <Show when={props.tokens.length > 0}>
         <CardSection>
+          <p class="muted">{t("cloudResources.keys.secretNotice")}</p>
           <div class="av-cloud-token-list">
             <For each={props.tokens}>
               {(token) => (
@@ -931,6 +1110,73 @@ function mapResult<T, U>(
   return result.ok ? { ok: true, data: result.data.map(fn) } : result;
 }
 
+function resourceFamilyLabel(key: string): string {
+  const labelKey = RESOURCE_FAMILY_LABEL_KEYS[key];
+  return labelKey ? t(labelKey) : friendlyResourceFamilyName(key);
+}
+
+function resourceCountLabel(row: CloudResourceUsageDisplayRow): JSX.Element {
+  if (row.resourceCount !== undefined) return String(row.resourceCount);
+  if (row.inventoryError) {
+    return (
+      <Badge tone="warn">{t("cloudResources.usage.checkInventory")}</Badge>
+    );
+  }
+  return "—";
+}
+
+function formatUsageQuantities(
+  quantities: readonly CloudResourceUsageQuantity[],
+): string {
+  if (quantities.length === 0) return t("cloudResources.usage.noUsage");
+  return quantities
+    .map(
+      (quantity) =>
+        `${formatBillingNumber(quantity.quantity)} ${usageKindUnitLabel(
+          quantity.kind,
+        )}`,
+    )
+    .join(", ");
+}
+
+function usageKindUnitLabel(kind: string): string {
+  switch (kind) {
+    case "runner_minute":
+      return t("cloudResources.usage.unit.runnerMinute");
+    case "artifact_storage_gb_hour":
+    case "backup_storage_gb_hour":
+    case "gateway_storage_gb_hour":
+      return t("cloudResources.usage.unit.gbHour");
+    case "egress_gb":
+      return t("cloudResources.usage.unit.gb");
+    case "gateway_compute":
+      return t("cloudResources.usage.unit.compute");
+    case "ai_request":
+      return t("cloudResources.usage.unit.aiRequest");
+    case "ai_input_token":
+      return t("cloudResources.usage.unit.inputToken");
+    case "ai_output_token":
+      return t("cloudResources.usage.unit.outputToken");
+    case "operation":
+      return t("cloudResources.usage.unit.operation");
+    default:
+      return friendlyResourceFamilyName(kind).toLowerCase();
+  }
+}
+
+function formatUsageMonth(startIso: string): string {
+  const date = new Date(startIso);
+  return new Intl.DateTimeFormat(locale() === "ja" ? "ja-JP" : "en-US", {
+    year: "numeric",
+    month: "long",
+    timeZone: "UTC",
+  }).format(date);
+}
+
+function sumUsdMicros(rows: readonly CloudResourceUsageDisplayRow[]): number {
+  return rows.reduce((total, row) => total + row.usdMicros, 0);
+}
+
 function emptyProviderCompatCloudflareWorkersInventory(
   error: string,
 ): ProviderCompatCloudflareWorkersInventory {
@@ -969,7 +1215,7 @@ function ReadyBadge(props: { readonly ready: boolean }): JSX.Element {
   );
 }
 
-function EndpointRow(props: {
+function CopyValueRow(props: {
   readonly label: string;
   readonly value: string;
   readonly copyKey: string;
@@ -977,9 +1223,9 @@ function EndpointRow(props: {
   readonly copyText: (key: string, value: string) => Promise<void>;
 }): JSX.Element {
   return (
-    <div class="av-cloud-endpoint">
-      <span class="av-cloud-endpoint-label">{props.label}</span>
-      <code class="wc-code av-cloud-endpoint-value">{props.value}</code>
+    <div class="av-cloud-copy-row">
+      <span class="av-cloud-copy-label">{props.label}</span>
+      <code class="wc-code av-cloud-copy-value">{props.value}</code>
       <Button
         variant={props.copied === props.copyKey ? "primary" : "secondary"}
         size="sm"
@@ -1033,24 +1279,6 @@ function ResultNotice<T>(props: {
       </CardSection>
     </Show>
   );
-}
-
-function endpointUrl(
-  serviceUrl: string | undefined,
-  route:
-    | {
-        readonly basePath: `/${string}`;
-      }
-    | undefined,
-): string {
-  if (!route) return "—";
-  const base =
-    serviceUrl || (typeof location !== "undefined" ? location.origin : "");
-  try {
-    return new URL(route.basePath, base).toString();
-  } catch {
-    return route.basePath;
-  }
 }
 
 function errorMessage(error: unknown): string {

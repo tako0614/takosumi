@@ -37,7 +37,10 @@ import {
 } from "./deploy_control_shared.ts";
 import { OpenTofuControllerError } from "../domains/deploy-control/errors.ts";
 import { normalizeVariablePathRecord } from "../domains/deploy-control/validation.ts";
-import { defaultCapsuleOutputAllowlist } from "../domains/capsules/official_seed.ts";
+import {
+  defaultCapsuleOutputAllowlist,
+  isNonselectableRepositoryStoreInstallConfigId,
+} from "../domains/capsules/install_config_bootstrap.ts";
 import { pageSorted } from "takosumi-contract/pagination";
 import {
   TAKOSUMI_API_CAPSULE_STATE_VERSIONS_ROUTE,
@@ -718,12 +721,12 @@ export function mountDeployControlInstallationRoutes(
         if (page.kind === "invalid") return page.response;
         const view = parseInstallConfigListView(c.req.query("view"));
         if (view.kind === "invalid") return view.response;
-        // Without a spaceId only built-in shared configs (spaceId-less configs)
-        // are returned; with one, built-ins plus that Space's own configs. The
-        // official + scoped union is a small set, so it is materialized, merge-
+        // Without a spaceId only shared configs (spaceId-less configs) are
+        // returned; with one, shared configs plus that Space's own configs. The
+        // shared + scoped union is a small set, so it is materialized, merge-
         // sorted by (createdAt, id), and bounded with the in-memory keyset pager
         // (a keyset across a UNION query would be unsound).
-        const official = (await installations!.listInstallConfigs()).filter(
+        const sharedConfigs = (await installations!.listInstallConfigs()).filter(
           (config) =>
             config.spaceId === undefined && isSelectableInstallConfig(config),
         );
@@ -735,8 +738,8 @@ export function mountDeployControlInstallationRoutes(
               );
         const merged = (
           view.view === "store"
-            ? official.filter(isStoreInstallConfig)
-            : [...official, ...scoped]
+            ? sharedConfigs.filter(isStoreInstallConfig)
+            : [...sharedConfigs, ...scoped]
         ).sort(
           (a, b) =>
             a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id),
@@ -905,6 +908,7 @@ async function createScopedInstallConfigForInstallation(input: {
 }
 
 function isSelectableInstallConfig(config: InstallConfig): boolean {
+  if (isNonselectableRepositoryStoreInstallConfigId(config.id)) return false;
   if (config.internal?.reason === "per_install_overrides") return false;
   if (config.spaceId !== undefined && /^icfg_[0-9a-f]{16}$/iu.test(config.id)) {
     return false;

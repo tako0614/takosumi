@@ -144,8 +144,9 @@ repo.
    ```bash
    cd takosumi
    bun run provider:assets
-   cd dashboard && bun install && bun run build
-   cd ../../
+   (cd dashboard && bun install && bun run build)
+   bun run app-docs:build
+   cd ..
    bunx wrangler@latest deploy --dry-run --config takosumi-private/platform/wrangler.staging.toml
    ```
 
@@ -226,8 +227,10 @@ repo.
 9. Deploy production closed:
 
    ```bash
-   cd takosumi/dashboard && bun run build
-   cd ../..
+   cd takosumi
+   (cd dashboard && bun run build)
+   bun run app-docs:build
+   cd ..
    bunx wrangler@latest deploy --dry-run --config takosumi-private/platform/wrangler.toml
    bunx wrangler@latest deploy --config takosumi-private/platform/wrangler.toml
    ```

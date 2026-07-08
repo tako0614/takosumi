@@ -252,7 +252,7 @@ describe("/new Provider Connections return context", () => {
     );
   });
 
-  test("/new uses a managed provider connection without fixing the default app.takos.jp URL client-side", () => {
+  test("/new uses a managed provider connection without fixing the preselected app.takos.jp URL client-side", () => {
     expect(newAppViewSource).toContain("selectedManagedProviderConnection");
     expect(newAppViewSource).toContain("managedProviderVariableDefaults");
     expect(newAppViewSource).toContain("managedStoreProviderForCurrentSource");

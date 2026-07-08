@@ -160,7 +160,7 @@ function App() {
 
       {/* Old paths → new homes. /install is the external install link
           (client-handled): it forwards its query to /new, where
-          lib/install-link.ts seeds the Git form — pre-fill only, the visitor
+          lib/install-link.ts pre-fills the Git form — pre-fill only, the visitor
           always confirms before anything installs. The Cloudflare OAuth
           callback's /connections keeps its result query too. */}
       <Route

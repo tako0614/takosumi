@@ -213,6 +213,8 @@ class LocalOpenTofuRunner implements OpenTofuRunner {
       ...(job.credentials ? { credentials: job.credentials } : {}),
       activation: {
         applyRunId: job.applyRunId,
+        ...(job.workspaceId ? { workspaceId: job.workspaceId } : {}),
+        ...(job.workspaceId ? { spaceId: job.workspaceId } : {}),
         installationId: job.installationId,
         deploymentId: job.deploymentId,
       },

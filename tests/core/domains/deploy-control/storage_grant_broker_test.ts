@@ -54,7 +54,6 @@ const CONSUMER_OUTPUTS = {
   },
 };
 
-const OFFICIAL_INSTALL_CONFIG_ID = "cfg-store-takos-storage";
 const IMPOSTOR_ID = "inst_cccccccccccccccc";
 const IMPOSTOR_KEY = "attacker-controlled-signing-key-99";
 const IMPOSTOR_OUTPUTS = {
@@ -135,7 +134,6 @@ function fullState(overrides: Partial<FakeStoreState> = {}): FakeStoreState {
       {
         id: PRODUCER_ID,
         workspaceId: WORKSPACE_ID,
-        installConfigId: OFFICIAL_INSTALL_CONFIG_ID,
       },
       { id: CONSUMER_ID, workspaceId: WORKSPACE_ID },
     ],
@@ -256,13 +254,13 @@ describe("StorageGrantBroker", () => {
     expect(env).toBeUndefined();
   });
 
-  test("prefers the official producer over a same-workspace impostor", async () => {
+  test("fails closed instead of trusting nonselectable store ids when producers are ambiguous", async () => {
     const state = fullState({
       installations: [
         {
           id: PRODUCER_ID,
           workspaceId: WORKSPACE_ID,
-          installConfigId: OFFICIAL_INSTALL_CONFIG_ID,
+          installConfigId: "cfg-store-takos-storage",
         },
         { id: IMPOSTOR_ID, workspaceId: WORKSPACE_ID },
         { id: CONSUMER_ID, workspaceId: WORKSPACE_ID },
@@ -281,25 +279,8 @@ describe("StorageGrantBroker", () => {
       }),
     ).mintStorageGrantEnv(makePlanRun(), "apply", "run_audit_pin");
 
-    expect(env).toBeDefined();
-    // Endpoint + signing key come from the OFFICIAL producer, never the impostor.
-    expect(env!.TF_VAR_takos_object_api_url).toBe("https://storage.example/o");
-    const token = env!.TF_VAR_takos_object_access_token!;
-    const asOfficial = await verifyStorageAccessToken(
-      SIGNING_KEY,
-      token,
-      Math.floor(NOW_MS / 1000) + 60,
-    );
-    expect(asOfficial.ok).toBe(true);
-    const asImpostor = await verifyStorageAccessToken(
-      IMPOSTOR_KEY,
-      token,
-      Math.floor(NOW_MS / 1000) + 60,
-    );
-    expect(asImpostor.ok).toBe(false);
-    expect(
-      state.mintEvents[0]!.providerCredentialEvidence![0]!.providerEnvId,
-    ).toBe(PRODUCER_ID);
+    expect(env).toBeUndefined();
+    expect(state.mintEvents).toHaveLength(0);
   });
 
   test("fails closed when multiple non-official producers are ambiguous", async () => {
@@ -348,7 +329,6 @@ describe("StorageGrantBroker", () => {
         {
           id: GIT_PRODUCER_ID,
           workspaceId: WORKSPACE_ID,
-          installConfigId: "cfg-store-takos-git",
         },
         { id: CONSUMER_ID, workspaceId: WORKSPACE_ID },
       ],

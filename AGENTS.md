@@ -67,7 +67,7 @@ Agent / AgentPool / Principal / Role / RoleBinding / ServiceAccount. `Space` is
 valid as a `takosumi.dev/v1alpha1` namespace/policy scope; it is not the old
 pre-v1 Space / Installation ledger model. The old Installation /
 OutputSnapshot / StateSnapshot / Deployment / Provider Catalog / `own_key` /
-`takos_provided` / Gateway / Service Graph names are retired; do not reintroduce
+`takos_provided` / Gateway / Runtime Projection names are retired; do not reintroduce
 them as current product nouns.
 
 - `Workspace`: user/team boundary for projects, provider connections, secrets, state isolation, and audit.
@@ -203,7 +203,8 @@ takosumi/
 │   ├── node-postgres/         Postgres substrate for the local-substrate cloud profile
 │   ├── local-substrate/       local dev hostname stack
 │   └── observability/
-├── docs/
+├── docs/               software / Operator docs for takosumi.com/docs
+├── app-docs/           hosted Takosumi Cloud docs for app.takosumi.com/docs
 ├── website/
 ├── fixtures/
 └── scripts/

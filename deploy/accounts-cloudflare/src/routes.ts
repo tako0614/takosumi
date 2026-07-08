@@ -26,7 +26,7 @@ export function isWorkerLocalPath(pathname: string): boolean {
 //     platform-worker-owned and is intentionally excluded here. (`/install` is
 //     a plain SPA route — the external install link is client-handled.)
 //   - "/internal" — the in-process / container-callback seam (covers the
-//     unified `/internal/v1` seam and the service-graph-material-resolver callback).
+//     unified `/internal/v1` seam and the runtime-projection-material-resolver callback).
 //
 // This set must cover EVERY non-`/dashboard` path the accounts handler routes,
 // or the SPA fallback would shadow it with index.html.

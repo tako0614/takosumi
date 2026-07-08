@@ -14,9 +14,10 @@ projects OpenTofu outputs as Outputs.
 Takosumi handlers are consumed **in-process** through `tsconfig` aliases by the host worker. That is a composition
 mechanism, not two different products. There is no retired split account/deploy-control host topology, and no
 npm-published service package. One hosted operator runs one Cloudflare worker serving the platform under
-`app.takosumi.com`; `takosumi.com` is the landing/docs site only.
+`app.takosumi.com`; `takosumi.com` is the landing/software-docs site only.
 
-Docs: <https://takosumi.com/docs/>
+Software docs: <https://takosumi.com/docs/>
+Hosted Cloud docs: <https://app.takosumi.com/docs/>
 
 ## In-process entry points
 
@@ -115,9 +116,14 @@ bun run check
 bun test
 bun run test:scripts
 bun run docs:build
+bun run app-docs:build
 bun run website:build
 ```
 
 ## Docs and website
 
-`docs/` is the VitePress docs site served under `/docs/`. `website/` is the landing page. `bun run website:build` produces one Cloudflare Pages artifact containing the landing page and `/docs/`.
+`docs/` is the VitePress software docs site served from `takosumi.com/docs/`.
+`app-docs/` is the hosted Cloud docs site embedded into `dashboard/dist/docs/`
+for `app.takosumi.com/docs/`. `website/` is the landing page. `bun run
+website:build` produces one Cloudflare Pages artifact containing the landing
+page and software `/docs/`.

@@ -2,7 +2,7 @@
  * Control-plane Store tab. Wraps the shared StoreBrowser with the decentralized
  * Takosumi store(s); every add action is handed to the full /new flow where
  * compatibility, provider connections, and variables are reviewed. There is no
- * built-in template catalog here — discovery lives in the store.
+ * built-in template list here — discovery lives in the store.
  */
 import { onMount } from "solid-js";
 import { useNavigate } from "@solidjs/router";
@@ -57,7 +57,6 @@ function Inner() {
         </header>
         <StoreBrowser
           locale={locale()}
-          onInstall={onConfigure}
           onConfigure={onConfigure}
         />
       </div>

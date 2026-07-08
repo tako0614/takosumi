@@ -1,18 +1,20 @@
 # CLI
 
 Takosumi CLI は、画面でできる操作を自動化したい場合の補助です。通常は
-dashboard の `/install?git=...` / `/new` からサービスを選び、接続するクラウドを選んで
-plan / apply します。
+dashboard の `/install?git=...` / `/new` からサービスを選び、接続する provider を選んで
+plan / apply します。CLI は任意の Takosumi endpoint に向けられます。
 
 ```bash
-export TAKOSUMI_DEPLOY_CONTROL_URL=https://app.takosumi.com
+export TAKOSUMI_DEPLOY_CONTROL_URL=https://takosumi.example.com
 export TAKOSUMI_DEPLOY_CONTROL_TOKEN=<bearer>
 
-open 'https://app.takosumi.com/install?git=https://github.com/example/photo-blog.git&path=deploy/opentofu&ref=main'
+open "$TAKOSUMI_DEPLOY_CONTROL_URL/install?git=https://github.com/example/photo-blog.git&path=deploy/opentofu&ref=main"
 
 takosumi status <run-id>
 takosumi logs   <run-id>
 ```
+
+Takosumi Cloud を使う場合の hosted endpoint は `https://app.takosumi.com` です。
 
 CLI は OpenTofu を直接実行しません。通常の作成フローは dashboard の Git URL install で
 Source / Capsule / Run を作り、Run の source identity として Git commit / ref / path を固定します。実行は runner sandbox で行い、
@@ -25,7 +27,7 @@ Provider credential 値は file から読み、表示しません。
 
 ```bash
 takosumi connections set-cloudflare-token \
-  --api-token-file /operator/vault/cloudflare-api-token
+  --api-token-file <path-to-cloudflare-token-file>
 
 takosumi connections list
 takosumi connections test conn_...

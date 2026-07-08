@@ -12,7 +12,7 @@ import {
   type PasskeyHttpOptions,
   type SharedCellWarmPoolSlot,
   type UpstreamOAuthOptions,
-  type ServiceGraphMaterialResolverHttpOptions,
+  type RuntimeProjectionMaterialResolverHttpOptions,
   exportDownloadUrl,
 } from "@takosjp/takosumi-accounts-service";
 import type { CapsuleExportArchiveDataFile } from "../../accounts/service/src/export-archive.ts";
@@ -106,10 +106,10 @@ export interface HttpMaterializeWorkerConfig {
   token?: string;
 }
 
-export interface ServiceGraphMaterialResolverConfig extends ServiceGraphMaterialResolverHttpOptions {
+export interface RuntimeProjectionMaterialResolverConfig extends RuntimeProjectionMaterialResolverHttpOptions {
   source:
-    | "--service-graph-material-resolver-token"
-    | "TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_MATERIAL_RESOLVER_TOKEN";
+    | "--runtime-projection-material-resolver-token"
+    | "TAKOSUMI_ACCOUNTS_RUNTIME_PROJECTION_MATERIAL_RESOLVER_TOKEN";
 }
 
 export interface PlatformReadinessAccessConfig extends PlatformAccessPolicy {
@@ -430,12 +430,12 @@ export async function buildHttpMaterializeWorkerConfig(
   };
 }
 
-export async function buildServiceGraphMaterialResolverConfig(
+export async function buildRuntimeProjectionMaterialResolverConfig(
   options: Record<string, string | boolean>,
-): Promise<ServiceGraphMaterialResolverConfig | undefined> {
-  if (options.serviceGraphMaterialResolverToken === true) {
+): Promise<RuntimeProjectionMaterialResolverConfig | undefined> {
+  if (options.runtimeProjectionMaterialResolverToken === true) {
     throw new TypeError(
-      "--service-graph-material-resolver-token requires a value",
+      "--runtime-projection-material-resolver-token requires a value",
     );
   }
   if (options.billingPortalUrl === true) {
@@ -443,32 +443,32 @@ export async function buildServiceGraphMaterialResolverConfig(
   }
   const cliToken = optionalStringOption(
     options,
-    "serviceGraphMaterialResolverToken",
+    "runtimeProjectionMaterialResolverToken",
   );
   const envToken = await optionalEnvString(
-    "TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_MATERIAL_RESOLVER_TOKEN",
+    "TAKOSUMI_ACCOUNTS_RUNTIME_PROJECTION_MATERIAL_RESOLVER_TOKEN",
   );
   const billingPortalUrl =
     optionalStringOption(options, "billingPortalUrl") ??
     (await optionalEnvString("TAKOSUMI_ACCOUNTS_BILLING_PORTAL_URL"));
   if (cliToken && envToken) {
     throw new TypeError(
-      "Use either --service-graph-material-resolver-token or TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_MATERIAL_RESOLVER_TOKEN, not both",
+      "Use either --runtime-projection-material-resolver-token or TAKOSUMI_ACCOUNTS_RUNTIME_PROJECTION_MATERIAL_RESOLVER_TOKEN, not both",
     );
   }
   const token = cliToken ?? envToken;
   if (!token) {
     if (billingPortalUrl) {
       throw new TypeError(
-        "--billing-portal-url requires --service-graph-material-resolver-token or TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_MATERIAL_RESOLVER_TOKEN",
+        "--billing-portal-url requires --runtime-projection-material-resolver-token or TAKOSUMI_ACCOUNTS_RUNTIME_PROJECTION_MATERIAL_RESOLVER_TOKEN",
       );
     }
     return undefined;
   }
   return {
     source: cliToken
-      ? "--service-graph-material-resolver-token"
-      : "TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_MATERIAL_RESOLVER_TOKEN",
+      ? "--runtime-projection-material-resolver-token"
+      : "TAKOSUMI_ACCOUNTS_RUNTIME_PROJECTION_MATERIAL_RESOLVER_TOKEN",
     token,
     ...(billingPortalUrl
       ? {

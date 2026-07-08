@@ -1,8 +1,8 @@
 # 公開 Docs Contract
 
-このページは `takosumi.com/docs` で公開する docs の契約です。公開 docs は、
-ユーザー、self-host operator、Takosumi Cloud の利用者が外部 contract として
-依存できる情報だけを扱います。
+このページは `takosumi.com/docs` で公開する software docs の契約です。公開 docs は、
+ユーザーと self-host / operator が外部 contract として依存できる情報だけを扱います。
+あなたが運営する hosted Cloud service の docs は `app.takosumi.com/docs` に分けます。
 
 ## 公開 docs に含める情報
 
@@ -13,10 +13,25 @@
 - API endpoint、request / response shape、認証、error shape
 - Resource Shape、Compatibility API、ProviderConnection、CredentialRecipe、ProviderBinding の公開仕様
 - supported / preview / planned / unsupported の compatibility matrix
-- Takosumi Cloud の公開価格、無料枠、usage billing、spend guard の fail-closed 動作
+- Takosumi Cloud docs への外部 pointer
 - secret を再表示しない、logs に出さない、Run sandbox にだけ注入する、といった security contract
 
 公開 contract として必要な情報を、非公開メモを読まないと分からない状態にはしません。
+
+## Software docs / hosted Cloud docs の分離
+
+公開 docs は site 自体を分けます。`takosumi.com/docs` は software / Operator docs、
+`app.takosumi.com/docs` は hosted Cloud service docs です。
+
+| Surface                                     | 主語                                 | 書くこと                                                                                                                                    | 書かないこと                                                                                |
+| ------------------------------------------- | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| Software docs (`takosumi.com/docs`)         | Takosumi OSS / Takosumi for Operator | portable API、OpenTofu Stack flow、Resource Shape flow、ProviderConnection、Run ledger、self-host / operator endpoint でも成立する behavior | `app.takosumi.com` 固有の価格、official managed resource の usage、Cloud API key の日常操作 |
+| Hosted Cloud docs (`app.takosumi.com/docs`) | Takosumi Cloud                       | official hosted service、managed resources、Cloud endpoint family、pricing、spend guard、Cloud API key、usage                               | Takosumi core の必須 behavior のような書き方、任意 endpoint でも必ず存在するような書き方    |
+| Operator docs / runbooks                    | operator                             | deploy、secret rotation、evidence、private operational procedure                                                                            | public contract の肩代わり                                                                  |
+
+Software docs で Cloud を出す場合は、definition と pointer に留めます。Cloud docs で
+Software model を出す場合は、Cloud が同じ Takosumi model の hosted deployment である
+ことを説明する範囲に留めます。
 
 ## 公開ページは self-contained にする
 
@@ -28,7 +43,7 @@
 | product / edition boundary  | Takosumi、Takosumi for Operator、Takosumi Cloud の外部定義       | 設計候補、迷った案、未確定ロードマップ              |
 | API / compatibility surface | endpoint、capability、認証、error、supported/preview/unsupported | handler wiring、closed repo path、private route     |
 | Resource Shape              | schema、lifecycle、state/import/drift の外部挙動                 | adapter 実装詳細、private target inventory          |
-| Cloud pricing / billing     | customer price、無料枠、spend guard、auto charge 挙動      | price id、原価表、margin guard、reconciliation 手順 |
+| Cloud pricing / billing     | customer price、無料枠、spend guard、auto charge 挙動            | price id、原価表、margin guard、reconciliation 手順 |
 | security / secret handling  | secret 非再表示、log redaction、run-scoped injection             | secret file path、vault path、operator token        |
 
 公開 docs から `docs/internal/` や `docs/operations/` へ直接リンクして、仕様説明を
@@ -81,7 +96,8 @@ API / pricing / legal reference
 
 ## Pricing の分離
 
-公開 pricing page に載せるもの:
+公開 pricing page は `app.takosumi.com/docs` の hosted Cloud docs に置きます。
+載せるもの:
 
 ```text
 customer pays
@@ -92,7 +108,7 @@ auto charge behavior
 refund / cancellation surface
 ```
 
-公開 docs に載せないもの:
+公開 software docs / hosted Cloud docs に載せないもの:
 
 ```text
 payment provider price id

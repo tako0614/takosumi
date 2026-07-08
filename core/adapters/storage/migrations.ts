@@ -6,12 +6,11 @@ type StorageDomain =
   | "registry"
   | "audit"
   | "service-endpoints"
-  // `service-graph` and `custom-domain` tag retired product surfaces, but they are NOT
-  // dead union members: immutable, already-applied migration-ledger rows still carry them
-  // (e.g. `custom_domain_reservations` create v16, and the `service_graph.records.rename_aside`
-  // v55 retirement migration that renames tables aside to `*_retired` with a `down`). Migration
-  // history is frozen and append-only, so these tags must stay even though no new code emits them.
-  | "service-graph"
+  // `runtime-projection` and `custom-domain` tag retired product surfaces, but they are NOT
+  // dead union members: immutable, already-applied migration-ledger rows still carry them.
+  // Migration history is frozen and append-only, so these tags must stay even though no
+  // new code emits those product surfaces.
+  | "runtime-projection"
   | "custom-domain"
   | "internal-auth";
 
@@ -2089,7 +2088,7 @@ drop table if exists takosumi_backups;`,
       version: 40,
       domain: "deploy",
       description:
-        "Create additive Capsule compatibility, billing, credential mint audit, and security finding ledgers for the OpenTofu Module Capsule DAG model. Billing is mode-selectable by operator/self-host configuration: disabled, showback, or enforce.",
+        "Create additive Capsule compatibility, billing, credential mint audit, and security finding ledgers for the OpenTofu Module Capsule DAG model. OSS billing configuration is disabled or showback; the legacy enforce enum value is persisted only for Cloud-injected enforcement ports.",
       sql: `create table if not exists takosumi_capsule_compatibility_reports (
   id                 text   primary key,
   source_id          text,
@@ -2479,9 +2478,9 @@ alter table takosumi_runs drop column if exists status;`,
     {
       id: "service_graph.records.create",
       version: 47,
-      domain: "service-graph",
+      domain: "runtime-projection",
       description:
-        "Create first-class Service Graph record tables for ServiceExport, ServiceBinding, and ServiceGrant. Runtime service publication and authority are stored as Takosumi-owned rows instead of being hidden inside a generic snapshot blob.",
+        "Create first-class Runtime Projection record tables for ServiceExport, ServiceBinding, and ServiceGrant. Runtime service publication and authority are stored as Takosumi-owned rows instead of being hidden inside a generic snapshot blob.",
       sql: `create table if not exists service_graph_exports (
   id                       text  primary key,
   space_id                 text  not null,
@@ -3014,7 +3013,7 @@ alter table takosumi_plans
       version: 54,
       domain: "deploy",
       description:
-        "Create the Takosumi Cloud billing auto-recharge attempt ledger. The table enforces one attempt per idempotency key and lets the worker count pending, pending_unknown, and succeeded attempts against a monthly USD micros cap before it creates an off-session Stripe PaymentIntent. It stores Stripe object ids and status metadata only, never card data or secrets.",
+        "Create the Takosumi Cloud billing auto-recharge attempt ledger. The table enforces one attempt per idempotency key and lets the Cloud-injected enforcement port count pending, pending_unknown, and succeeded attempts against a monthly USD micros cap before its Stripe adapter creates an off-session PaymentIntent. OSS core stores object ids and status metadata only, never card data or secrets, and never calls Stripe directly.",
       sql: `create table if not exists takosumi_billing_auto_recharge_attempts (
   id                       text   primary key,
   space_id                 text   not null,
@@ -3049,9 +3048,9 @@ drop table if exists takosumi_billing_auto_recharge_attempts;`,
     {
       id: "service_graph.records.rename_aside",
       version: 55,
-      domain: "service-graph",
+      domain: "runtime-projection",
       description:
-        "Retire the OSS Service Graph ledger (deploy decision D3): the ServiceExport / ServiceBinding / ServiceGrant records are no longer part of the OSS noun model and are projected from Capsule Outputs instead. The tables are renamed aside to `*_retired` (recoverable) rather than dropped, and are no longer created or read. `down` restores the original names.",
+        "Retire the OSS Runtime Projection ledger (deploy decision D3): the ServiceExport / ServiceBinding / ServiceGrant records are no longer part of the OSS noun model and are projected from Capsule Outputs instead. The tables are renamed aside to `*_retired` (recoverable) rather than dropped, and are no longer created or read. `down` restores the original names.",
       sql: `alter table if exists service_graph_exports rename to service_graph_exports_retired;
 alter table if exists service_graph_bindings rename to service_graph_bindings_retired;
 alter table if exists service_graph_grants rename to service_graph_grants_retired;`,
@@ -3528,5 +3527,18 @@ create unique index if not exists takosumi_capsules_space_name_environment_activ
       down: `drop index if exists takosumi_capsules_space_name_environment_active_unique;
 create unique index if not exists takosumi_capsules_space_name_environment_unique
   on takosumi_capsules (space_id, name, environment);`,
+    },
+    {
+      id: "runtime_projection.service_graph_retired_tables.drop",
+      version: 66,
+      domain: "runtime-projection",
+      description:
+        "Drop the retired Service Graph tables after the OSS runtime projection model moved fully to Capsule Outputs. Historical migration rows remain in the immutable migration ledger for checksum validation, but no live or retained table shape is kept.",
+      sql: `drop table if exists service_graph_grants_retired;
+drop table if exists service_graph_bindings_retired;
+drop table if exists service_graph_exports_retired;
+drop table if exists service_graph_grants;
+drop table if exists service_graph_bindings;
+drop table if exists service_graph_exports;`,
     },
   ]);

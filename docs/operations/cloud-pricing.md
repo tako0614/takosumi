@@ -2,8 +2,8 @@
 
 このページは Takosumi Cloud の Cloud-only resource / AI Gateway の価格運用メモです。
 Takosumi OSS / Takosumi for Operator の機能範囲ではありません。ユーザー向けに公開する
-価格、無料枠、credit exhaustion の契約は公開 docs の
-[`../cloud/pricing.md`](../cloud/pricing.md) を正本にします。この operations 文書は、
+価格、無料枠、credit exhaustion の契約は hosted Cloud docs の
+[`../../app-docs/pricing.md`](../../app-docs/pricing.md) を正本にします。この operations 文書は、
 その公開価格を runtime price book、Stripe price、margin guard、readiness evidence に
 反映するための operator-only 手順と検証条件を扱います。
 
@@ -34,7 +34,7 @@ evidence を更新します。
 
 ```text
 public pricing source of truth:
-  takosumi/docs/cloud/pricing.md
+  takosumi/app-docs/pricing.md
 
 runtime plan catalog:
   TAKOSUMI_BILLING_PLANS

@@ -24,8 +24,6 @@ function listing(extra: Partial<TcsListing> = {}): TcsListing {
     name: text("Example"),
     description: text("Example"),
     badge: text("Installable"),
-    inputs: [],
-    outputAllowlist: [],
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
     ...extra,

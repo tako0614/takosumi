@@ -66,7 +66,7 @@ function Inner() {
   const kindByConfigId = createMemo(() => {
     const map = new Map<string, string>();
     for (const config of installConfigs() ?? []) {
-      const kind = config.catalog?.kind;
+      const kind = config.store?.kind;
       if (kind) map.set(config.id, kind);
     }
     return map;

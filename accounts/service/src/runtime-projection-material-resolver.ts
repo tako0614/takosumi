@@ -11,8 +11,8 @@ import { isRecord } from "./http-helpers.ts";
 import { isAllowedOidcRedirectUri } from "./installation-routes-internal.ts";
 import type { AccountsStore, OidcClientRecord } from "./store.ts";
 
-export const TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_MATERIAL_RESOLVE_PATH =
-  "/internal/service-graph/materials/resolve";
+export const TAKOSUMI_ACCOUNTS_RUNTIME_PROJECTION_MATERIAL_RESOLVE_PATH =
+  "/internal/runtime-projection/materials/resolve";
 
 export {
   TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_BILLING_USAGE,
@@ -21,15 +21,15 @@ export {
   TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_IDENTITY_OIDC,
 } from "@takosjp/takosumi-accounts-contract";
 
-export type ServiceGraphMaterialSecret = Readonly<{
+export type RuntimeProjectionMaterialSecret = Readonly<{
   readonly secretRef: string;
 }>;
 
-export type ServiceGraphMaterial = Readonly<
-  Record<string, JsonValue | ServiceGraphMaterialSecret>
+export type RuntimeProjectionMaterial = Readonly<
+  Record<string, JsonValue | RuntimeProjectionMaterialSecret>
 >;
 
-export interface ServiceGraphMaterialResolveContext {
+export interface RuntimeProjectionMaterialResolveContext {
   readonly capsuleId?: string;
   /** Compatibility alias while the accounts ledger still stores installation ids. */
   readonly installationId?: string;
@@ -61,52 +61,52 @@ export interface ServiceGraphMaterialResolveContext {
   readonly many?: boolean;
 }
 
-export interface ServiceGraphMaterialResolver {
+export interface RuntimeProjectionMaterialResolver {
   resolve(
-    context: ServiceGraphMaterialResolveContext,
+    context: RuntimeProjectionMaterialResolveContext,
   ):
-    | ServiceGraphMaterial
-    | readonly ServiceGraphMaterial[]
+    | RuntimeProjectionMaterial
+    | readonly RuntimeProjectionMaterial[]
     | undefined
     | Promise<
-        ServiceGraphMaterial | readonly ServiceGraphMaterial[] | undefined
+        RuntimeProjectionMaterial | readonly RuntimeProjectionMaterial[] | undefined
       >;
 }
 
-export interface TakosumiServiceGraphMaterialResolverOptions {
+export interface TakosumiRuntimeProjectionMaterialResolverOptions {
   readonly store: AccountsStore;
   readonly issuer: string;
   readonly internalUrl?:
     | string
     | ((
-        context: ServiceGraphMaterialResolveContext,
+        context: RuntimeProjectionMaterialResolveContext,
       ) => string | undefined | Promise<string | undefined>);
   readonly now?: () => number;
   readonly allowDeployControlCapsules?: boolean;
   readonly billingPortalUrl?:
     | string
     | ((
-        context: ServiceGraphMaterialResolveContext,
+        context: RuntimeProjectionMaterialResolveContext,
       ) => string | undefined | Promise<string | undefined>);
 }
 
-export function createTakosumiServiceGraphMaterialResolver(
-  options: TakosumiServiceGraphMaterialResolverOptions,
-): ServiceGraphMaterialResolver {
+export function createTakosumiRuntimeProjectionMaterialResolver(
+  options: TakosumiRuntimeProjectionMaterialResolverOptions,
+): RuntimeProjectionMaterialResolver {
   return {
     resolve: (context) =>
-      resolveTakosumiServiceGraphMaterial({
+      resolveTakosumiRuntimeProjectionMaterial({
         ...options,
         context,
       }),
   };
 }
 
-export async function resolveTakosumiServiceGraphMaterial(
-  input: TakosumiServiceGraphMaterialResolverOptions & {
-    readonly context: ServiceGraphMaterialResolveContext;
+export async function resolveTakosumiRuntimeProjectionMaterial(
+  input: TakosumiRuntimeProjectionMaterialResolverOptions & {
+    readonly context: RuntimeProjectionMaterialResolveContext;
   },
-): Promise<ServiceGraphMaterial | readonly ServiceGraphMaterial[] | undefined> {
+): Promise<RuntimeProjectionMaterial | readonly RuntimeProjectionMaterial[] | undefined> {
   switch (input.context.sourceRef) {
     case TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_IDENTITY_OIDC:
       return await resolveOidcPlatformService(input);
@@ -120,10 +120,10 @@ export async function resolveTakosumiServiceGraphMaterial(
 }
 
 async function resolveDiscoveredPlatformServices(
-  input: TakosumiServiceGraphMaterialResolverOptions & {
-    readonly context: ServiceGraphMaterialResolveContext;
+  input: TakosumiRuntimeProjectionMaterialResolverOptions & {
+    readonly context: RuntimeProjectionMaterialResolveContext;
   },
-): Promise<readonly ServiceGraphMaterial[]> {
+): Promise<readonly RuntimeProjectionMaterial[]> {
   if (Object.keys(input.context.labels ?? {}).length > 0) return [];
   const kind = input.context.kind;
   if (kind === TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_IDENTITY_OIDC) {
@@ -151,18 +151,16 @@ async function resolveDiscoveredPlatformServices(
 }
 
 async function resolveOidcPlatformService(
-  input: TakosumiServiceGraphMaterialResolverOptions & {
-    readonly context: ServiceGraphMaterialResolveContext;
+  input: TakosumiRuntimeProjectionMaterialResolverOptions & {
+    readonly context: RuntimeProjectionMaterialResolveContext;
   },
-): Promise<ServiceGraphMaterial> {
+): Promise<RuntimeProjectionMaterial> {
   if (input.allowDeployControlCapsules) {
     await ensureDeployControlCapsuleProjection(input);
   }
   const issuerUrl = normalizeIssuer(input.issuer);
   const capsuleId = contextCapsuleId(input.context);
-  const existing = await input.store.findOidcClientForCapsule(
-    capsuleId,
-  );
+  const existing = await input.store.findOidcClientForCapsule(capsuleId);
   const client = existing
     ? await reconcileOidcClient({
         ...input,
@@ -197,8 +195,8 @@ async function resolveOidcPlatformService(
 }
 
 async function reconcileOidcClient(
-  input: TakosumiServiceGraphMaterialResolverOptions & {
-    readonly context: ServiceGraphMaterialResolveContext;
+  input: TakosumiRuntimeProjectionMaterialResolverOptions & {
+    readonly context: RuntimeProjectionMaterialResolveContext;
     readonly existing: OidcClientRecord;
     readonly issuerUrl: string;
   },
@@ -224,8 +222,8 @@ async function reconcileOidcClient(
 }
 
 async function oidcInternalUrlMaterial(
-  input: TakosumiServiceGraphMaterialResolverOptions & {
-    readonly context: ServiceGraphMaterialResolveContext;
+  input: TakosumiRuntimeProjectionMaterialResolverOptions & {
+    readonly context: RuntimeProjectionMaterialResolveContext;
   },
 ): Promise<{ readonly internalUrl?: string }> {
   if (typeof input.internalUrl === "function") {
@@ -238,8 +236,8 @@ async function oidcInternalUrlMaterial(
 }
 
 async function createOidcClient(
-  input: TakosumiServiceGraphMaterialResolverOptions & {
-    readonly context: ServiceGraphMaterialResolveContext;
+  input: TakosumiRuntimeProjectionMaterialResolverOptions & {
+    readonly context: RuntimeProjectionMaterialResolveContext;
     readonly issuerUrl: string;
   },
 ) {
@@ -264,8 +262,8 @@ async function createOidcClient(
 }
 
 async function ensureDeployControlCapsuleProjection(
-  input: TakosumiServiceGraphMaterialResolverOptions & {
-    readonly context: ServiceGraphMaterialResolveContext;
+  input: TakosumiRuntimeProjectionMaterialResolverOptions & {
+    readonly context: RuntimeProjectionMaterialResolveContext;
   },
 ): Promise<void> {
   const existing = await input.store.findAppCapsule(
@@ -327,16 +325,15 @@ async function ensureDeployControlCapsuleProjection(
 }
 
 async function resolveBillingPlatformService(
-  input: TakosumiServiceGraphMaterialResolverOptions & {
-    readonly context: ServiceGraphMaterialResolveContext;
+  input: TakosumiRuntimeProjectionMaterialResolverOptions & {
+    readonly context: RuntimeProjectionMaterialResolveContext;
   },
-): Promise<ServiceGraphMaterial | undefined> {
+): Promise<RuntimeProjectionMaterial | undefined> {
   const issuer = normalizeIssuer(input.issuer);
   const capsuleId = contextCapsuleId(input.context);
-  const installation = await input.store.findAppCapsule(
-    capsuleId,
-  );
-  const workspaceId = installation?.workspaceId ?? contextWorkspaceId(input.context);
+  const installation = await input.store.findAppCapsule(capsuleId);
+  const workspaceId =
+    installation?.workspaceId ?? contextWorkspaceId(input.context);
   if (!workspaceId) return undefined;
   const space = await input.store.findWorkspace(workspaceId);
   const accountId = installation?.accountId ?? space?.accountId;
@@ -356,9 +353,7 @@ async function resolveBillingPlatformService(
     capability: TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_BILLING_USAGE,
     ...(portalUrl ? { portalUrl } : {}),
     usageReportEndpoint: new URL(
-      takosumiAccountsCapsuleBillingUsageReportsPath(
-        capsuleId,
-      ),
+      takosumiAccountsCapsuleBillingUsageReportsPath(capsuleId),
       issuer,
     ).toString(),
     billingSubjectRef: billingAccount
@@ -370,8 +365,8 @@ async function resolveBillingPlatformService(
 }
 
 async function billingPortalUrl(
-  input: TakosumiServiceGraphMaterialResolverOptions & {
-    readonly context: ServiceGraphMaterialResolveContext;
+  input: TakosumiRuntimeProjectionMaterialResolverOptions & {
+    readonly context: RuntimeProjectionMaterialResolveContext;
   },
 ): Promise<string | undefined> {
   if (typeof input.billingPortalUrl === "function") {
@@ -384,7 +379,7 @@ async function billingPortalUrl(
 }
 
 function redirectUrisFromContext(
-  context: ServiceGraphMaterialResolveContext,
+  context: RuntimeProjectionMaterialResolveContext,
   issuerUrl: string,
 ): readonly string[] {
   const spec = context.component?.spec;
@@ -415,16 +410,18 @@ function redirectUrisFromContext(
   ];
 }
 
-function contextCapsuleId(context: ServiceGraphMaterialResolveContext): string {
+function contextCapsuleId(context: RuntimeProjectionMaterialResolveContext): string {
   const capsuleId = context.capsuleId ?? context.installationId;
   if (!capsuleId) {
-    throw new TypeError("Service Graph material context requires capsuleId");
+    throw new TypeError(
+      "runtime projection material context requires capsuleId",
+    );
   }
   return capsuleId;
 }
 
 function contextWorkspaceId(
-  context: ServiceGraphMaterialResolveContext,
+  context: RuntimeProjectionMaterialResolveContext,
 ): string | undefined {
   return context.workspaceId ?? context.spaceId;
 }
@@ -434,7 +431,7 @@ function isIssuerRelativePath(path: string): boolean {
 }
 
 function allowedScopesFromContext(
-  context: ServiceGraphMaterialResolveContext,
+  context: RuntimeProjectionMaterialResolveContext,
 ): readonly string[] {
   const scopes = context.component?.spec
     ? (stringArray(context.component.spec.oidcScopes) ??
@@ -479,7 +476,7 @@ function sameStrings(
 }
 
 function contextDeclaresOidcClientShape(
-  context: ServiceGraphMaterialResolveContext,
+  context: RuntimeProjectionMaterialResolveContext,
 ): boolean {
   const spec = context.component?.spec;
   if (!spec) return false;
@@ -503,9 +500,9 @@ type JsonValue =
   | readonly JsonValue[]
   | { readonly [key: string]: JsonValue };
 
-export function isServiceGraphMaterialResolveContext(
+export function isRuntimeProjectionMaterialResolveContext(
   value: unknown,
-): value is ServiceGraphMaterialResolveContext {
+): value is RuntimeProjectionMaterialResolveContext {
   if (
     !isRecord(value) ||
     (typeof value.capsuleId !== "string" &&

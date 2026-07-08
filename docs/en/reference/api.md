@@ -103,9 +103,10 @@ API clients use a session cookie or bearer token depending on the endpoint.
 Authorization: Bearer <token>
 ```
 
-Cloud API keys are Takosumi Accounts personal access tokens. Endpoints with
-their own standard signing model, such as S3-compatible storage, use that
-protocol's signature instead.
+Each Takosumi endpoint publishes the session / bearer token model enabled by
+its operator through capabilities. Takosumi Cloud API keys are Takosumi
+Accounts personal access tokens. Endpoints with their own standard signing
+model, such as S3-compatible storage, use that protocol's signature instead.
 
 ## OpenTofu Stack API
 
@@ -317,7 +318,7 @@ surface for new work. Keep the Takosumi shape only where it still adds import
 continuity, migration, managed-target placement, policy, or metering value.
 
 Takosumi Cloud-specific endpoint examples live in
-[Cloud endpoints](./cloud-endpoints.md).
+[Cloud endpoints](https://app.takosumi.com/docs/en/endpoints).
 
 ## Error Shape
 

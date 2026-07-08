@@ -162,10 +162,10 @@ import {
 } from "./control-routes.ts";
 import { maybeEnsurePersonalWorkspaceForSession } from "./control-personal-space.ts";
 import {
-  isServiceGraphMaterialResolveContext,
-  resolveTakosumiServiceGraphMaterial,
-  TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_MATERIAL_RESOLVE_PATH,
-} from "./service-graph-material-resolver.ts";
+  isRuntimeProjectionMaterialResolveContext,
+  resolveTakosumiRuntimeProjectionMaterial,
+  TAKOSUMI_ACCOUNTS_RUNTIME_PROJECTION_MATERIAL_RESOLVE_PATH,
+} from "./runtime-projection-material-resolver.ts";
 import {
   platformAccessBlocked,
   type PlatformAccessPolicy,
@@ -251,7 +251,7 @@ export type {
 export * from "./runtime.ts";
 export * from "./export-bundle.ts";
 export * from "./export-download-url.ts";
-export * from "./service-graph-material-resolver.ts";
+export * from "./runtime-projection-material-resolver.ts";
 export * from "./postgres-store.ts";
 export * from "./d1-store.ts";
 export {
@@ -295,7 +295,7 @@ export interface AccountsHandlerOptions {
   exportWorker?: AppCapsuleExportWorker;
   platformAccess?: PlatformAccessPolicy;
   loginEmailAllowlist?: LoginEmailAllowlist;
-  serviceGraphMaterialResolver?: ServiceGraphMaterialResolverHttpOptions;
+  runtimeProjectionMaterialResolver?: RuntimeProjectionMaterialResolverHttpOptions;
   /**
    * Operator-only token that lets the dedicated-materialize readiness drill
    * request materialization while hosted platform access is still closed. This
@@ -342,7 +342,7 @@ export interface EphemeralAccountsHandlerOptions {
   exportWorker?: AppCapsuleExportWorker;
   platformAccess?: PlatformAccessPolicy;
   loginEmailAllowlist?: LoginEmailAllowlist;
-  serviceGraphMaterialResolver?: ServiceGraphMaterialResolverHttpOptions;
+  runtimeProjectionMaterialResolver?: RuntimeProjectionMaterialResolverHttpOptions;
   privacyOperationsToken?: string;
   exportDownloadSigningSecret?: string | Uint8Array;
   /**
@@ -365,7 +365,7 @@ export interface EphemeralAccountsHandlerOptions {
   allowEphemeralKeyOnHttpsIssuer?: boolean;
 }
 
-export interface ServiceGraphMaterialResolverHttpOptions {
+export interface RuntimeProjectionMaterialResolverHttpOptions {
   readonly token: string;
   readonly billingPortalUrl?: string;
   readonly internalUrl?: string;
@@ -599,7 +599,7 @@ export async function createEphemeralAccountsHandler(
       status: "closed",
     },
     loginEmailAllowlist: options.loginEmailAllowlist,
-    serviceGraphMaterialResolver: options.serviceGraphMaterialResolver,
+    runtimeProjectionMaterialResolver: options.runtimeProjectionMaterialResolver,
     privacyOperationsToken: options.privacyOperationsToken,
     exportDownloadSigningSecret: options.exportDownloadSigningSecret,
     launchTokens: {
@@ -735,32 +735,32 @@ export function createAccountsHandler(
     }
 
     if (
-      url.pathname === TAKOSUMI_ACCOUNTS_SERVICE_GRAPH_MATERIAL_RESOLVE_PATH
+      url.pathname === TAKOSUMI_ACCOUNTS_RUNTIME_PROJECTION_MATERIAL_RESOLVE_PATH
     ) {
       if (request.method !== "POST") return methodNotAllowed("POST");
-      if (!options.serviceGraphMaterialResolver) {
+      if (!options.runtimeProjectionMaterialResolver) {
         return errorJson("not_found", "not found", 404);
       }
-      const authBlocked = requireServiceGraphMaterialResolverAccess({
+      const authBlocked = requireRuntimeProjectionMaterialResolverAccess({
         request,
-        token: options.serviceGraphMaterialResolver.token,
+        token: options.runtimeProjectionMaterialResolver.token,
       });
       if (authBlocked) return authBlocked;
       const body = await readJsonObject(request);
-      if (!isServiceGraphMaterialResolveContext(body)) {
+      if (!isRuntimeProjectionMaterialResolveContext(body)) {
         return errorJson(
           "invalid_request",
           "request body must contain capsuleId plus sourceRef or kind",
           400,
         );
       }
-      const material = await resolveTakosumiServiceGraphMaterial({
+      const material = await resolveTakosumiRuntimeProjectionMaterial({
         store,
         issuer,
-        internalUrl: options.serviceGraphMaterialResolver.internalUrl,
-        billingPortalUrl: options.serviceGraphMaterialResolver.billingPortalUrl,
+        internalUrl: options.runtimeProjectionMaterialResolver.internalUrl,
+        billingPortalUrl: options.runtimeProjectionMaterialResolver.billingPortalUrl,
         allowDeployControlCapsules:
-          options.serviceGraphMaterialResolver.allowDeployControlCapsules,
+          options.runtimeProjectionMaterialResolver.allowDeployControlCapsules,
         context: body,
       });
       if (Array.isArray(material)) {
@@ -1148,7 +1148,12 @@ export function createAccountsHandler(
         });
       }
       if (request.method === "GET") {
-        return await handleListAppCapsules({ request, url, store });
+        return await handleListAppCapsules({
+          request,
+          url,
+          store,
+          deployControl: options.deployControl,
+        });
       }
       return methodNotAllowed("GET, POST");
     }
@@ -1766,7 +1771,7 @@ function passkeysNotConfigured(): Response {
   );
 }
 
-function requireServiceGraphMaterialResolverAccess(input: {
+function requireRuntimeProjectionMaterialResolverAccess(input: {
   request: Request;
   token: string;
 }): Response | undefined {
@@ -1780,7 +1785,7 @@ function requireServiceGraphMaterialResolverAccess(input: {
   }
   return errorJson(
     "unauthorized",
-    "service graph material resolver token is required",
+    "runtime projection material resolver token is required",
     401,
     undefined,
     { "www-authenticate": "Bearer" },

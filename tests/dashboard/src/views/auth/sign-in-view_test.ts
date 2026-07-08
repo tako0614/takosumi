@@ -114,6 +114,15 @@ describe("SignInView disabled OAuth guidance", () => {
     expect(signInViewSource).toContain('select("google")');
   });
 
+  test("uses document navigation when returning to the server-owned OIDC authorize route", () => {
+    expect(signInViewSource).toContain(
+      "function requiresDocumentNavigation(returnTo: string): boolean",
+    );
+    expect(signInViewSource).toContain('returnTo.startsWith("/oauth/")');
+    expect(signInViewSource).toContain("location.assign(returnTo);");
+    expect(signInViewSource).toContain("nav(returnTo, { replace: true });");
+  });
+
   test("accepts legacy return_to links while normalizing onto the sign-in screen", () => {
     expect(signInViewSource).toContain("return_to?: string");
     expect(signInViewSource).toContain("params.return || params.return_to");

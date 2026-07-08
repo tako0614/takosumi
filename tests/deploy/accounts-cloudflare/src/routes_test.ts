@@ -24,7 +24,7 @@ describe("isAccountsApiPath", () => {
       "/v1/auth/passkeys/register/options",
       "/v1/capsule-projections",
       "/v1/capsule-projections/plan-runs",
-      "/internal/service-graph/materials/resolve",
+      "/internal/runtime-projection/materials/resolve",
     ];
     for (const path of apiPaths) {
       expect(isAccountsApiPath(path)).toBe(true);

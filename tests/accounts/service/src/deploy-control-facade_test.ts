@@ -5,6 +5,7 @@ import type {
   CreateApplyRunRequest,
   CreatePlanRunRequest,
   GetCapsuleResponse,
+  InstallConfig,
   ListDeploymentsResponse,
   PlanRun,
   PlanRunResponse,
@@ -12,6 +13,7 @@ import type {
 import {
   type DeployControlOperations,
   requestDeploymentApply,
+  requestDeploymentPlanRun,
   requestCapsuleApply,
   requestCapsulePlanRun,
 } from "../../../../accounts/service/src/mod.ts";
@@ -61,9 +63,7 @@ function operationsStub(
     createApplyRun: reject(
       "createApplyRun",
     ) as DeployControlOperations["createApplyRun"],
-    getCapsule: reject(
-      "getCapsule",
-    ) as DeployControlOperations["getCapsule"],
+    getCapsule: reject("getCapsule") as DeployControlOperations["getCapsule"],
     listDeployments: reject(
       "listDeployments",
     ) as DeployControlOperations["listDeployments"],
@@ -138,6 +138,101 @@ test("requestCapsulePlanRun preserves provider env binding digest in expected gu
   expect(payload.expected?.resolvedProviderEnvBindingsDigest).toEqual(
     "sha256:provider-env-bindings",
   );
+});
+
+test("requestDeploymentPlanRun carries existing install config variables and providers", async () => {
+  let createPlanRunArg: CreatePlanRunRequest | undefined;
+  const installConfig: InstallConfig = {
+    id: "cfg_yurucommu",
+    workspaceId: "space_1",
+    name: "yurucommu",
+    installType: "app_source",
+    trustLevel: "space",
+    variableMapping: {
+      project_name: "yurucommu",
+      worker_bundle_url: "https://example.test/old-worker.js",
+      worker_bundle_sha256: "oldsha",
+    },
+    outputAllowlist: {},
+    policy: {
+      allowedProviders: [
+        "registry.opentofu.org/cloudflare/cloudflare",
+        "registry.opentofu.org/hashicorp/random",
+      ],
+    },
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+  };
+  const operations = operationsStub({
+    getCapsule: (id) =>
+      Promise.resolve<GetCapsuleResponse>({
+        installation: {
+          id,
+          workspaceId: "space_1",
+          name: "yurucommu",
+          slug: "yurucommu",
+          sourceId: "src_yurucommu",
+          installType: "app_source",
+          installConfigId: installConfig.id,
+          environment: "prod",
+          currentStateGeneration: 1,
+          status: "active",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        },
+      } as unknown as GetCapsuleResponse),
+    installations: {
+      getInstallConfig: (id) => {
+        expect(id).toEqual("cfg_yurucommu");
+        return Promise.resolve(installConfig);
+      },
+    },
+    createPlanRun: (request) => {
+      createPlanRunArg = request;
+      return Promise.resolve<PlanRunResponse>({
+        planRun: planRun({
+          id: "plan_update",
+          workspaceId: "space_1",
+          capsuleId: "inst_yurucommu",
+          installationId: "inst_yurucommu",
+          operation: "update",
+          requiredProviders: request.requiredProviders ?? [],
+        }),
+      });
+    },
+  });
+
+  const result = await requestDeploymentPlanRun({
+    deployControl: {
+      operations,
+    },
+    capsuleId: "inst_yurucommu",
+    body: {
+      source: {
+        kind: "git",
+        url: "https://github.com/tako0614/yurucommu.git",
+        ref: "main",
+      },
+      variables: {
+        worker_bundle_url: "https://example.test/new-worker.js",
+        worker_bundle_sha256: "newsha",
+      },
+    },
+  });
+
+  expect(result.status).toEqual(201);
+  expect(createPlanRunArg?.operation).toEqual("update");
+  expect(createPlanRunArg?.workspaceId).toEqual("space_1");
+  expect(createPlanRunArg?.capsuleId).toEqual("inst_yurucommu");
+  expect(createPlanRunArg?.variables).toEqual({
+    project_name: "yurucommu",
+    worker_bundle_url: "https://example.test/new-worker.js",
+    worker_bundle_sha256: "newsha",
+  });
+  expect(createPlanRunArg?.requiredProviders).toEqual([
+    "registry.opentofu.org/cloudflare/cloudflare",
+    "registry.opentofu.org/hashicorp/random",
+  ]);
 });
 
 test("requestCapsuleApply reads the reviewed PlanRun and applies in-process", async () => {

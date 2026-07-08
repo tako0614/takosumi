@@ -1,29 +1,30 @@
 import { type DefaultTheme, defineConfig } from "vitepress";
 
 const jaNav: DefaultTheme.NavItem[] = [
-  { text: "概要", link: "/" },
-  { text: "Cloud", link: "/cloud/" },
+  { text: "Software", link: "/" },
   { text: "Quickstart", link: "/getting-started/quickstart" },
-  { text: "仕組み", link: "/reference/model" },
+  { text: "Reference", link: "/reference/model" },
+  { text: "Hosted Cloud", link: "https://app.takosumi.com/docs/" },
   { text: "Legal", link: "/legal/terms-of-service" },
 ];
 
 const enNav: DefaultTheme.NavItem[] = [
-  { text: "Overview", link: "/en/" },
-  { text: "Cloud", link: "/en/cloud/" },
+  { text: "Software", link: "/en/" },
   { text: "Quickstart", link: "/en/getting-started/quickstart" },
-  { text: "How it works", link: "/en/reference/model" },
+  { text: "Reference", link: "/en/reference/model" },
+  { text: "Hosted Cloud", link: "https://app.takosumi.com/docs/en/" },
 ];
 
 const jaSidebar: DefaultTheme.SidebarMulti = {
   "/": [
     {
-      text: "Start",
+      text: "Software",
       items: [
-        { text: "概要", link: "/" },
-        { text: "Takosumi Cloud", link: "/cloud/" },
-        { text: "Cloud pricing", link: "/cloud/pricing" },
-        { text: "Quickstart", link: "/getting-started/quickstart" },
+        { text: "Takosumi software", link: "/" },
+        {
+          text: "Quickstart",
+          link: "/getting-started/quickstart",
+        },
       ],
     },
     {
@@ -31,10 +32,6 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
       items: [
         { text: "Model", link: "/reference/model" },
         { text: "API", link: "/reference/api" },
-        { text: "Docs contract", link: "/reference/docs-contract" },
-        { text: "App Handoff", link: "/reference/app-handoff" },
-        { text: "Cloud resources", link: "/reference/cloud-resources" },
-        { text: "Cloud endpoints", link: "/reference/cloud-endpoints" },
         { text: "Deploy Control API", link: "/reference/deploy-control-api" },
         {
           text: "Execution boundaries",
@@ -42,6 +39,13 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
         },
         { text: "Operator", link: "/reference/operator" },
         { text: "CLI", link: "/reference/cli" },
+        { text: "App Handoff", link: "/reference/app-handoff" },
+        { text: "Docs contract", link: "/reference/docs-contract" },
+      ],
+    },
+    {
+      text: "Legal",
+      items: [
         { text: "Terms", link: "/legal/terms-of-service" },
         { text: "Privacy", link: "/legal/privacy-policy" },
         { text: "DPA", link: "/legal/data-processing-agreement" },
@@ -53,12 +57,13 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
 const enSidebar: DefaultTheme.SidebarMulti = {
   "/en/": [
     {
-      text: "Start",
+      text: "Software",
       items: [
-        { text: "Overview", link: "/en/" },
-        { text: "Takosumi Cloud", link: "/en/cloud/" },
-        { text: "Cloud pricing", link: "/en/cloud/pricing" },
-        { text: "Quickstart", link: "/en/getting-started/quickstart" },
+        { text: "Takosumi software", link: "/en/" },
+        {
+          text: "Quickstart",
+          link: "/en/getting-started/quickstart",
+        },
       ],
     },
     {
@@ -66,10 +71,6 @@ const enSidebar: DefaultTheme.SidebarMulti = {
       items: [
         { text: "Model", link: "/en/reference/model" },
         { text: "API", link: "/en/reference/api" },
-        { text: "Docs contract", link: "/en/reference/docs-contract" },
-        { text: "App Handoff", link: "/en/reference/app-handoff" },
-        { text: "Cloud resources", link: "/en/reference/cloud-resources" },
-        { text: "Cloud endpoints", link: "/en/reference/cloud-endpoints" },
         {
           text: "Deploy Control API",
           link: "/en/reference/deploy-control-api",
@@ -80,6 +81,8 @@ const enSidebar: DefaultTheme.SidebarMulti = {
         },
         { text: "Operator", link: "/en/reference/operator" },
         { text: "CLI", link: "/en/reference/cli" },
+        { text: "App Handoff", link: "/en/reference/app-handoff" },
+        { text: "Docs contract", link: "/en/reference/docs-contract" },
       ],
     },
   ],

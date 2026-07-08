@@ -5,6 +5,10 @@ Git-based OpenTofu control plane, managed targets, Cloud-operated managed
 service backends, billing / usage metering, and operator support as an
 official operation.
 
+These docs cover the hosted Takosumi Cloud service served from
+`app.takosumi.com`. Portable Takosumi software and Takosumi for Operator docs
+live separately at [takosumi.com/docs](https://takosumi.com/docs/en/).
+
 Takosumi Cloud covers more than one service form. Add an app or service from Git,
 attach the resources it needs as bindings, and keep deploys and updates
 recorded through OpenTofu/Terraform. Edge JS runtime, Object Storage, KV,
@@ -41,10 +45,9 @@ Edge JS apps run as `EdgeWorker` resources. Takosumi Cloud can implement them
 with Cloudflare Workers for Platforms and a Takosumi-managed dispatch layer.
 This is one Cloud resource, separate from ContainerService, Object Storage, KV,
 Database, Queue, and AI.
-Cloud-only fetch handlers are mounted by `takosumi-cloud/platform/worker.ts`
-through the OSS platform `cloud_extensions` seam. The AI Gateway,
-Cloudflare Workers-compatible profile, S3-compatible endpoint, and Cloud usage
-endpoint are not deployed as separate Workers.
+The AI Gateway, Cloudflare Workers-compatible profile, S3-compatible endpoint,
+and Cloud usage endpoint are handled through the Cloud extension boundary on
+the same hosted Cloud origin.
 
 Every Cloud managed resource entrypoint uses the same managed operation
 pipeline before a backend API is called. Whether the request comes from a
@@ -220,6 +223,6 @@ provider "cloudflare" {
 
 Details:
 
-- [Takosumi Cloud resources](../reference/cloud-resources.md)
-- [Takosumi Cloud endpoints](../reference/cloud-endpoints.md)
+- [Takosumi Cloud resources](./resources.md)
+- [Takosumi Cloud endpoints](./endpoints.md)
 - [Takosumi Cloud pricing](./pricing.md)
