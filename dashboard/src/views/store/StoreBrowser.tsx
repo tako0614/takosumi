@@ -66,22 +66,14 @@ const STR = {
   configure: { ja: "インストール", en: "Install" },
   close: { ja: "閉じる", en: "Close" },
   summary: { ja: "概要", en: "Overview" },
-  settings: { ja: "追加時の設定", en: "Setup" },
   source: { ja: "取得元の詳細", en: "Source details" },
   technicalDetails: {
-    ja: "取得元と設定名",
-    en: "Source and setting names",
+    ja: "取得元",
+    en: "Source",
   },
   sourceLocation: { ja: "取得元", en: "Source" },
   folder: { ja: "フォルダ", en: "Folder" },
-  inputs: { ja: "設定項目", en: "Settings" },
-  noInputs: {
-    ja: "追加時に入力する項目はありません",
-    en: "No setup fields are needed",
-  },
-  required: { ja: "必須", en: "required" },
   openRepo: { ja: "リポジトリ", en: "Repository" },
-  inputId: { ja: "内部名", en: "Input ID" },
 } as const;
 
 function s(key: keyof typeof STR, locale: TcsLocale): string {
@@ -542,40 +534,6 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
                   </span>
                 </div>
               </section>
-              <section>
-                <h5>{s("settings", props.locale)}</h5>
-                <Show
-                  when={listing().inputs.length > 0}
-                  fallback={
-                    <p class="tcs-muted tcs-compact">
-                      {s("noInputs", props.locale)}
-                    </p>
-                  }
-                >
-                  <ul class="tcs-bare">
-                    <For each={listing().inputs}>
-                      {(input) => (
-                        <li>
-                          <span>{pick(input.label, props.locale)}</span>
-                          <Show when={input.required}>
-                            <span class="tcs-tag tcs-muted">
-                              {s("required", props.locale)}
-                            </span>
-                          </Show>
-                          <Show when={input.helper}>
-                            {(helper) => (
-                              <span class="tcs-muted">
-                                {" "}
-                                {pick(helper(), props.locale)}
-                              </span>
-                            )}
-                          </Show>
-                        </li>
-                      )}
-                    </For>
-                  </ul>
-                </Show>
-              </section>
               <details class="tcs-advanced">
                 <summary>{s("technicalDetails", props.locale)}</summary>
                 <section>
@@ -603,25 +561,6 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
                     {s("openRepo", props.locale)} ↗
                   </a>
                 </section>
-                <Show when={listing().inputs.length > 0}>
-                  <section>
-                    <h5>{s("inputs", props.locale)}</h5>
-                    <ul class="tcs-bare">
-                      <For each={listing().inputs}>
-                        {(input) => (
-                          <li>
-                            <span class="tcs-mono">{input.name}</span>
-                            <span class="tcs-muted">
-                              {" "}
-                              {s("inputId", props.locale)} ·{" "}
-                              {pick(input.label, props.locale)}
-                            </span>
-                          </li>
-                        )}
-                      </For>
-                    </ul>
-                  </section>
-                </Show>
               </details>
             </aside>
           </div>

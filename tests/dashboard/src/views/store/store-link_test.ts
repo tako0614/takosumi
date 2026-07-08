@@ -9,9 +9,11 @@ function listing(extra: Partial<TcsListing> = {}): TcsListing {
     id: "installable-worker",
     source: {
       git: "https://github.com/tako0614/takosumi-template.git",
+      // Runtime compatibility: older external store nodes may still include a
+      // ref-like property, but Store handoff must not make it authoritative.
       ref: "0123456789abcdef0123456789abcdef01234567",
       path: "modules/worker",
-    },
+    } as unknown as TcsListing["source"],
     kind: "worker",
     surface: "service",
     provider: "cloudflare",
@@ -50,7 +52,7 @@ describe("store link handoff", () => {
     );
     expect(params.has("ref")).toBe(false);
     expect(params.get("path")).toBe("modules/worker");
-    expect(params.get("var.project_name")).toBe("service-name-with-space");
+    expect(params.has("var.project_name")).toBe(false);
   });
 
   test("external TCS listings still hand off as explicit Git sources", () => {
@@ -65,10 +67,10 @@ describe("store link handoff", () => {
     );
     expect(params.has("ref")).toBe(false);
     expect(params.get("path")).toBe("modules/worker");
-    expect(params.get("var.project_name")).toBe("service-name-with-space");
+    expect(params.has("var.project_name")).toBe(false);
   });
 
-  test("typed listing defaults are handed off as JSON variables", () => {
+  test("listing setup defaults stay out of the store handoff URL", () => {
     const query = buildNewQuery(
       listing({
         inputs: [
@@ -95,11 +97,9 @@ describe("store link handoff", () => {
       }),
     );
     const params = new URLSearchParams(query);
-    expect(params.get("varjson.enable_cloudflare_resources")).toBe("true");
-    expect(params.get("varjson.replicas")).toBe("2");
-    expect(params.get("varjson.release_container_images")).toBe(
-      '{"runtime":"registry.cloudflare.com/acc/takos-worker-runtime:0.10.0-abcdef","executor":"registry.cloudflare.com/acc/takos-agent-executor:0.10.0-abcdef"}',
-    );
+    expect(params.has("varjson.enable_cloudflare_resources")).toBe(false);
+    expect(params.has("varjson.replicas")).toBe(false);
+    expect(params.has("varjson.release_container_images")).toBe(false);
     expect(params.has("var.enable_cloudflare_resources")).toBe(false);
   });
 });
