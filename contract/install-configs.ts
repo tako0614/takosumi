@@ -161,28 +161,56 @@ export interface InstallConfigCatalogText {
   readonly en: string;
 }
 
+export type InstallConfigCatalogInputFormat =
+  | "text"
+  | "url"
+  | "hostname"
+  | "subdomain"
+  | "password"
+  | "token"
+  | "email"
+  | "sha256";
+
+export type InstallConfigInstallProjection =
+  | {
+      readonly kind: "service_name";
+      readonly variable: string;
+    }
+  | {
+      readonly kind: "public_endpoint";
+      readonly variables: {
+        readonly subdomain?: string;
+        readonly url?: string;
+        readonly routePattern?: string;
+      };
+      readonly baseDomain?: string;
+    }
+  | {
+      readonly kind: "initial_secret";
+      readonly variable: string;
+      readonly secretKind?: "password" | "password_or_hash" | "token";
+      readonly optional?: boolean;
+    }
+  | {
+      readonly kind: "oidc_client";
+      readonly variables: {
+        readonly issuerUrl?: string;
+        readonly accountsUrl?: string;
+        readonly clientId?: string;
+        readonly redirectUri?: string;
+      };
+      readonly callbackPath?: string;
+    }
+  | {
+      readonly kind: "artifact";
+      readonly variables: {
+        readonly url?: string;
+        readonly sha256?: string;
+      };
+    };
+
 export interface InstallConfigInstallExperience {
-  readonly serviceName?: {
-    readonly variable: string;
-  };
-  readonly publicEndpoint?: {
-    readonly subdomainVariable?: string;
-    readonly urlVariable?: string;
-    readonly routePatternVariable?: string;
-    readonly baseDomain?: string;
-  };
-  readonly initialSecret?: {
-    readonly variable: string;
-    readonly kind?: "password" | "password_or_hash" | "token";
-    readonly optional?: boolean;
-  };
-  readonly takosumiAccountsOidc?: {
-    readonly issuerUrlVariable?: string;
-    readonly accountsUrlVariable?: string;
-    readonly clientIdVariable?: string;
-    readonly redirectUriVariable?: string;
-    readonly callbackPath?: string;
-  };
+  readonly projections?: readonly InstallConfigInstallProjection[];
 }
 
 export interface InstallConfigCatalogSource {
@@ -194,6 +222,7 @@ export interface InstallConfigCatalogSource {
 export interface InstallConfigCatalogInput {
   readonly name: string;
   readonly type?: "string" | "number" | "boolean" | "json";
+  readonly format?: InstallConfigCatalogInputFormat;
   readonly required?: boolean;
   readonly advanced?: boolean;
   readonly secret?: boolean;

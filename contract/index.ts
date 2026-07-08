@@ -8,6 +8,7 @@ export * from "./capabilities.ts";
 export * from "./app-handoff.ts";
 export * from "./mobile.ts";
 export * from "./notification-pushers.ts";
+export * from "./install-experience.ts";
 export * from "./resource-shape.ts";
 export * from "./target.ts";
 export * from "./resolution.ts";
@@ -19,6 +20,7 @@ export type { Project, PublicProject } from "./projects.ts";
 export type {
   BackupConfig,
   InstallConfigCatalogDefault,
+  InstallConfigCatalogInputFormat,
   InstallConfigCatalogInput,
   InstallConfigCatalogKind,
   InstallConfigCatalogMetadata,
@@ -26,6 +28,7 @@ export type {
   InstallConfigCatalogSurface,
   InstallConfigCatalogText,
   InstallConfigInstallExperience,
+  InstallConfigInstallProjection,
   InstallBuildConfig,
   InstallPrebuiltArtifactConfig,
   NormalizationConfig,

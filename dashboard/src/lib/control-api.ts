@@ -465,6 +465,15 @@ export interface InstallConfig {
     readonly inputs: readonly {
       readonly name: string;
       readonly type?: "string" | "number" | "boolean" | "json";
+      readonly format?:
+        | "text"
+        | "url"
+        | "hostname"
+        | "subdomain"
+        | "password"
+        | "token"
+        | "email"
+        | "sha256";
       readonly required?: boolean;
       readonly advanced?: boolean;
       readonly secret?: boolean;
@@ -474,27 +483,44 @@ export interface InstallConfig {
       readonly placeholder?: string;
     }[];
     readonly installExperience?: {
-      readonly serviceName?: {
-        readonly variable: string;
-      };
-      readonly publicEndpoint?: {
-        readonly subdomainVariable?: string;
-        readonly urlVariable?: string;
-        readonly routePatternVariable?: string;
-        readonly baseDomain?: string;
-      };
-      readonly initialSecret?: {
-        readonly variable: string;
-        readonly kind?: "password" | "password_or_hash" | "token";
-        readonly optional?: boolean;
-      };
-      readonly takosumiAccountsOidc?: {
-        readonly issuerUrlVariable?: string;
-        readonly accountsUrlVariable?: string;
-        readonly clientIdVariable?: string;
-        readonly redirectUriVariable?: string;
-        readonly callbackPath?: string;
-      };
+      readonly projections?: readonly (
+        | {
+            readonly kind: "service_name";
+            readonly variable: string;
+          }
+        | {
+            readonly kind: "public_endpoint";
+            readonly variables: {
+              readonly subdomain?: string;
+              readonly url?: string;
+              readonly routePattern?: string;
+            };
+            readonly baseDomain?: string;
+          }
+        | {
+            readonly kind: "initial_secret";
+            readonly variable: string;
+            readonly secretKind?: "password" | "password_or_hash" | "token";
+            readonly optional?: boolean;
+          }
+        | {
+            readonly kind: "oidc_client";
+            readonly variables: {
+              readonly issuerUrl?: string;
+              readonly accountsUrl?: string;
+              readonly clientId?: string;
+              readonly redirectUri?: string;
+            };
+            readonly callbackPath?: string;
+          }
+        | {
+            readonly kind: "artifact";
+            readonly variables: {
+              readonly url?: string;
+              readonly sha256?: string;
+            };
+          }
+      )[];
     };
   };
   readonly createdAt: string;

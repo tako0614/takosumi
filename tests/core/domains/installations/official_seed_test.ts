@@ -147,23 +147,39 @@ test("hostable official configs expose public catalog metadata for the dashboard
     true,
   );
   expect(yurucommu?.catalog?.installExperience).toEqual({
-    serviceName: { variable: "project_name" },
-    publicEndpoint: {
-      subdomainVariable: "worker_name",
-      urlVariable: "app_url",
-      routePatternVariable: "cloudflare_route_pattern",
-      baseDomain: "app.takos.jp",
-    },
-    initialSecret: {
-      variable: "auth_password_hash",
-      kind: "password_or_hash",
-      optional: true,
-    },
-    takosumiAccountsOidc: {
-      issuerUrlVariable: "takosumi_accounts_issuer_url",
-      clientIdVariable: "takosumi_accounts_client_id",
-      callbackPath: "/api/auth/callback/takos",
-    },
+    projections: [
+      { kind: "service_name", variable: "project_name" },
+      {
+        kind: "public_endpoint",
+        variables: {
+          subdomain: "worker_name",
+          url: "app_url",
+          routePattern: "cloudflare_route_pattern",
+        },
+        baseDomain: "app.takos.jp",
+      },
+      {
+        kind: "initial_secret",
+        variable: "auth_password_hash",
+        secretKind: "password_or_hash",
+        optional: true,
+      },
+      {
+        kind: "oidc_client",
+        variables: {
+          issuerUrl: "takosumi_accounts_issuer_url",
+          clientId: "takosumi_accounts_client_id",
+        },
+        callbackPath: "/api/auth/callback/takos",
+      },
+      {
+        kind: "artifact",
+        variables: {
+          url: "worker_bundle_url",
+          sha256: "worker_bundle_sha256",
+        },
+      },
+    ],
   });
   expect(yurucommu?.outputAllowlist.takosumi_release).toEqual({
     from: "takosumi_release",
@@ -173,19 +189,27 @@ test("hostable official configs expose public catalog metadata for the dashboard
   expect(takos?.catalog?.source.path).toBe("deploy/opentofu");
   expect(takos?.modulePath).toBe("deploy/opentofu");
   expect(takos?.catalog?.installExperience).toEqual({
-    serviceName: { variable: "project_name" },
-    publicEndpoint: {
-      subdomainVariable: "worker_name",
-      urlVariable: "app_url",
-      baseDomain: "app.takos.jp",
-    },
-    takosumiAccountsOidc: {
-      issuerUrlVariable: "takosumi_accounts_issuer_url",
-      accountsUrlVariable: "takosumi_accounts_url",
-      clientIdVariable: "takosumi_accounts_client_id",
-      redirectUriVariable: "takosumi_accounts_redirect_uri",
-      callbackPath: "/auth/oidc/callback",
-    },
+    projections: [
+      { kind: "service_name", variable: "project_name" },
+      {
+        kind: "public_endpoint",
+        variables: {
+          subdomain: "worker_name",
+          url: "app_url",
+        },
+        baseDomain: "app.takos.jp",
+      },
+      {
+        kind: "oidc_client",
+        variables: {
+          issuerUrl: "takosumi_accounts_issuer_url",
+          accountsUrl: "takosumi_accounts_url",
+          clientId: "takosumi_accounts_client_id",
+          redirectUri: "takosumi_accounts_redirect_uri",
+        },
+        callbackPath: "/auth/oidc/callback",
+      },
+    ],
   });
   expect(takos?.outputAllowlist.takosumi_release).toEqual({
     from: "takosumi_release",

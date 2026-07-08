@@ -452,7 +452,8 @@ describe("/new flow guidance", () => {
 
   test("service setup defaults managed domains without app-specific branches", () => {
     expect(newAppViewSource).toContain("serviceIdSeed");
-    expect(newAppViewSource).toContain("publicEndpoint?.subdomainVariable");
+    expect(newAppViewSource).toContain("catalogPublicEndpoint(entry)");
+    expect(newAppViewSource).toContain('field.format === "subdomain"');
     expect(newAppViewSource).toContain("canSuggestPublicHostname");
     expect(newAppViewSource).toContain("catalogPublicEndpointSubdomainField");
     expect(newAppViewSource).toContain("hostIsManagedBaseDomainSubdomain");
