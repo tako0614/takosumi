@@ -116,6 +116,10 @@ test("hostable official configs expose public catalog metadata for the dashboard
     (config) => config.id === "cfg-catalog-yurucommu",
   );
   const takos = configs.find((config) => config.id === "cfg-catalog-takos");
+  const yurucommuInput = (name: string) =>
+    yurucommu?.catalog?.inputs.find((input) => input.name === name);
+  const takosInput = (name: string) =>
+    takos?.catalog?.inputs.find((input) => input.name === name);
   expect(yurucommu?.sourceKind).toBe("generic_capsule");
   expect(yurucommu?.catalog?.source.ref).toBe(
     "17d0b16fa6ffaa1d31efaa5dd9719a7875ec45f4",
@@ -123,35 +127,31 @@ test("hostable official configs expose public catalog metadata for the dashboard
   expect(yurucommu?.catalog?.source.path).toBe(".");
   expect(yurucommu?.modulePath).toBeUndefined();
   expect(
-    yurucommu?.catalog?.inputs.find(
-      (input) => input.name === "worker_bundle_url",
-    ),
+    yurucommuInput("worker_bundle_url"),
   ).toMatchObject({
     advanced: true,
     defaultValue:
       "https://github.com/tako0614/yurucommu/releases/download/v2.0.3/takos-worker-4f184e34c3ddf25c4be6a6c5ade5381173cef04e7fe8068b849ae88bd84c35cc.js",
   });
   expect(
-    yurucommu?.catalog?.inputs.find(
-      (input) => input.name === "worker_bundle_sha256",
-    ),
+    yurucommuInput("worker_bundle_sha256"),
   ).toMatchObject({
     advanced: true,
     defaultValue:
       "4f184e34c3ddf25c4be6a6c5ade5381173cef04e7fe8068b849ae88bd84c35cc",
   });
   expect(
-    yurucommu?.catalog?.inputs.find(
-      (input) => input.name === "worker_bundle_url",
-    )?.defaultValue,
+    yurucommuInput("worker_bundle_url")?.defaultValue,
   ).toBe(
     "https://github.com/tako0614/yurucommu/releases/download/v2.0.3/takos-worker-4f184e34c3ddf25c4be6a6c5ade5381173cef04e7fe8068b849ae88bd84c35cc.js",
   );
   expect(
-    yurucommu?.catalog?.inputs.find(
-      (input) => input.name === "worker_bundle_sha256",
-    )?.defaultValue,
+    yurucommuInput("worker_bundle_sha256")?.defaultValue,
   ).toBe("4f184e34c3ddf25c4be6a6c5ade5381173cef04e7fe8068b849ae88bd84c35cc");
+  expect(yurucommuInput("enable_cloudflare_resources")?.advanced).toBe(true);
+  expect(yurucommuInput("enable_cloudflare_worker_script")?.advanced).toBe(
+    true,
+  );
   expect(yurucommu?.catalog?.installExperience).toEqual({
     serviceName: { variable: "project_name" },
     publicEndpoint: {
@@ -200,11 +200,7 @@ test("hostable official configs expose public catalog metadata for the dashboard
   const releaseImagesDefault = takos?.catalog?.inputs.find(
     (input) => input.name === "release_container_images",
   )?.defaultValue;
-  expect(
-    takos?.catalog?.inputs.find(
-      (input) => input.name === "release_container_images",
-    )?.advanced,
-  ).toBe(true);
+  expect(takosInput("release_container_images")?.advanced).toBe(true);
   expect(releaseImagesDefault).toContain("0.10.0-3cfcc10f7ad1");
   expect(releaseImagesDefault).not.toContain("0.10.0-bfdd9f8bb79c");
 });
