@@ -177,11 +177,8 @@ function rowsFromRuns(
 }
 
 function titleForRow(row: RunHistoryRow): string {
-  if (row.status === "failed" && row.errorCode) {
-    return t("runList.failedWithCode", {
-      operation: operationLabel(row.operation),
-      code: row.errorCode,
-    });
+  if (row.status === "failed") {
+    return t("runList.failed", { operation: operationLabel(row.operation) });
   }
   if (row.operation === "apply") return t("runList.applied");
   if (row.operation === "destroy_apply") return t("runList.destroyed");

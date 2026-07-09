@@ -47,7 +47,7 @@ export const ja = {
   "store.title": "ストア",
   "store.subtitle": "ストアから追加できるアプリやサービスを探します。",
   "store.badge.oneTap": "すぐ使える",
-  "store.noWorkspace": "先に Workspace を選択してください。",
+  "store.noWorkspace": "先にワークスペースを選択してください。",
   "nav.cloudResources": "クラウド",
   "nav.runs": "アクティビティ",
   "nav.connections": "接続済みアカウント",
@@ -175,7 +175,7 @@ export const ja = {
   // `active` = 直近の apply が成功し state generation が前進した状態。readiness
   // 検証ではない（health probe は別）ので「稼働中」とは言わず実態どおりにする。
   "status.capsule.active": "デプロイ済み",
-  "status.capsule.stale": "再デプロイが必要",
+  "status.capsule.stale": "更新があります",
   "status.capsule.error": "エラー",
   "status.capsule.disabled": "無効",
   "status.capsule.destroyed": "削除済み",
@@ -262,7 +262,7 @@ export const ja = {
   "apps.empty.kicker": "まだアプリがありません",
   "apps.empty.title": "開けるアプリがありません",
   "apps.empty.body":
-    "アプリ画面を宣言したサービスがまだありません。サービス一覧から状態を確認できます。",
+    "追加したアプリはここに並びます。まずはストアから選んで追加してください。",
   "apps.empty.viewServices": "サービス一覧を見る",
 
   // --- Service list (/services) --------------------------------------------
@@ -406,6 +406,19 @@ export const ja = {
   "run.summary.applySucceeded": "デプロイが完了しました。",
   "run.summary.failed": "{operation}に失敗しました。",
   "run.summary.failedHint": "下の診断とログで原因を確認できます。",
+  "runError.sourceSyncFailed":
+    "アプリの内容を取得できませんでした。リンクとバージョンを確認して、もう一度お試しください。",
+  "runError.sourceRefNotFound":
+    "指定されたバージョンが見つかりませんでした。バージョンを確認して、もう一度お試しください。",
+  "runError.stateGenerationMismatch":
+    "別の変更が先に実行されました。もう一度変更を確認してからデプロイしてください。",
+  "runError.planFailed":
+    "変更内容の確認に失敗しました。詳細を確認して、もう一度お試しください。",
+  "runError.applyFailed":
+    "デプロイに失敗しました。詳細を確認して、もう一度お試しください。",
+  "runError.runFailed": "実行に失敗しました。もう一度お試しください。",
+  "runError.backupFailed":
+    "復元ポイントの作成に失敗しました。もう一度お試しください。",
   "run.summary.creditsRequired": "クレジットが必要です。",
   "run.summary.creditsRequiredHint":
     "アカウントにクレジットを追加してから、もう一度デプロイしてください。",
@@ -415,13 +428,13 @@ export const ja = {
     "この実行を作成した後に接続状態が変わった可能性があります。もう一度変更を確認してからデプロイしてください。",
   "run.summary.connectionSetupRequired": "接続済みアカウントの設定が必要です。",
   "run.summary.connectionSetupHint":
-    "必要な provider connection を選ぶか設定を完了してから、もう一度デプロイしてください。",
+    "必要なアカウント接続を選ぶか、接続の設定を済ませてから、もう一度デプロイしてください。",
   "run.summary.connectionChanged": "接続済みアカウントを確認し直してください。",
   "run.summary.connectionChangedHint":
     "この実行を確認した後に接続済みアカウントが変わっています。現在の変更を確認し直してからデプロイしてください。",
   "run.summary.credentialServiceIssue": "アクセス準備を完了できませんでした。",
   "run.summary.credentialServiceHint":
-    "一時的な provider アクセスを準備できませんでした。もう一度試し、続く場合はサポートに連絡してください。",
+    "接続済みアカウントへのアクセス準備に失敗しました。もう一度試し、続く場合はサポートに連絡してください。",
   "run.summary.blocked": "ポリシーにより実行が止まっています。",
   "run.summary.driftDone": "ズレの確認が完了しました。",
   "run.summary.fallback": "実行の状態: {status}",
@@ -519,23 +532,23 @@ export const ja = {
   "run.diagnostics.connectionVerificationDetail":
     "現在の接続状態で確認し直すため、もう一度変更を確認してください。",
   "run.diagnostics.connectionSetupRequired":
-    "この実行には provider connection の設定が必要です。",
+    "この実行には接続済みアカウントの設定が必要です。",
   "run.diagnostics.connectionSetupShort":
-    "このデプロイに必要な provider アクセスが設定されていません。",
+    "このデプロイに必要なアカウント接続が設定されていません。",
   "run.diagnostics.connectionSetupDetail":
-    "接続画面で必要な provider connection を選んでから、もう一度デプロイしてください。",
+    "接続画面で必要なアカウントを選んでから、もう一度デプロイしてください。",
   "run.diagnostics.connectionChanged":
-    "確認後に provider connection が変更されています。",
+    "確認したあとに接続済みアカウントが変更されています。",
   "run.diagnostics.connectionChangedShort":
-    "確認済みの provider connection が現在の状態と一致しません。",
+    "確認済みのアカウント接続が現在の状態と一致しません。",
   "run.diagnostics.connectionChangedDetail":
     "現在の接続状態で使うため、もう一度変更を確認してください。",
   "run.diagnostics.credentialServiceIssue":
-    "この実行用の一時 provider アクセスを準備できませんでした。",
+    "この実行用の一時アクセスを準備できませんでした。",
   "run.diagnostics.credentialServiceShort":
-    "一時 provider アクセスを準備できませんでした。",
+    "一時アクセスを準備できませんでした。",
   "run.diagnostics.credentialServiceDetail":
-    "もう一度試してください。続く場合は、Takosumi 側の credential service を確認する必要があります。",
+    "もう一度試してください。続く場合はサポートに連絡してください。",
   "run.audit.title": "活動記録",
   "run.audit.empty": "活動記録はありません。",
   "run.audit.detail": "記録の詳細",
@@ -549,7 +562,7 @@ export const ja = {
     "サービスを追加して変更を確認すると、ここに履歴が並びます。",
   "runList.applied": "デプロイ",
   "runList.destroyed": "削除",
-  "runList.failedWithCode": "{operation}に失敗しました（{code}）",
+  "runList.failed": "{operation}に失敗しました",
 
   // --- add flow (/new) -------------------------------------------------------
   "new.title": "サービスを追加",
@@ -728,7 +741,7 @@ export const ja = {
   "new.error.syncPending":
     "ソースの取得がまだ完了していません。少し待ってから「再試行」してください。",
   "new.error.sourceRefNotFound":
-    "指定されたバージョン「{ref}」が見つかりません。GitHub の branch、tag、commit を確認してください。",
+    "指定されたバージョン「{ref}」が見つかりません。リンク先にこのバージョンがあるか確認してください。",
   "new.error.sourceFetchFailed":
     "アプリの内容を取得できませんでした。リンク、バージョン、フォルダ、または非公開リンクの接続を確認してください。詳細: {message}",
   "new.error.sourceFetchFailedUnknown": "原因を取得できませんでした。",
@@ -1032,8 +1045,8 @@ export const ja = {
   "notif.event.failedDetail": "エラー: {code}",
   "notif.event.failedHint": "詳細は実行ログを確認してください",
   "notif.event.drift": "サービスの実状態が保存済みの記録とズレています",
-  "notif.event.driftDetail": "再デプロイが必要かもしれません",
-  "notif.event.stale": "依存先の更新で再デプロイが必要になりました",
+  "notif.event.driftDetail": "実際の状態が設定とずれている可能性があります",
+  "notif.event.stale": "依存先が更新されたため、このサービスに更新があります",
   "notif.event.staleDetail": "更新元: {producer}",
   "notif.event.connCreated": "接続済みアカウント「{provider}」を追加しました",
   "notif.event.connCreatedGeneric": "接続済みアカウントを追加しました",
