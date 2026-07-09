@@ -779,6 +779,8 @@ test("requested scalar Cloudflare Capsule inputs can be filled from provider sco
         cloudflare_api_base_url: null,
         cloudflare_workers_subdomain: null,
         workersSubdomain: null,
+        enable_cloudflare_resources: null,
+        enable_cloudflare_worker_script: null,
         cloudflare: {
           api_base_url: null,
           workers_subdomain: null,
@@ -833,6 +835,8 @@ test("requested scalar Cloudflare Capsule inputs can be filled from provider sco
   );
   expect(mainTf).toContain('cloudflare_workers_subdomain = "team-workers"');
   expect(mainTf).toContain('workersSubdomain = "team-workers"');
+  expect(mainTf).toContain("enable_cloudflare_resources = true");
+  expect(mainTf).toContain("enable_cloudflare_worker_script = true");
   expect(mainTf).toContain(
     'cloudflare = jsondecode("{\\"account_id\\":\\"acct_scope_123\\",\\"api_base_url\\":\\"https://app.takosumi.com/compat/cloudflare/client/v4\\",\\"workers_subdomain\\":\\"team-workers\\"}")',
   );
@@ -850,6 +854,8 @@ test("managed Cloudflare Capsule inputs derive app.takos.jp launch defaults serv
       variableMapping: {
         cloudflare_route_zone_id: null,
         cloudflare_route_pattern: null,
+        enable_cloudflare_resources: null,
+        enable_cloudflare_worker_script: null,
         cloudflare: {
           account_id: null,
           api_base_url: null,
@@ -921,6 +927,8 @@ test("managed Cloudflare Capsule inputs derive app.takos.jp launch defaults serv
   expect(mainTf).toContain(
     'cloudflare_route_pattern = "yuru-managed-app-fixture.app.takos.jp/*"',
   );
+  expect(mainTf).toContain("enable_cloudflare_resources = true");
+  expect(mainTf).toContain("enable_cloudflare_worker_script = true");
   expect(mainTf).toContain(
     'cloudflare = jsondecode("{\\"account_id\\":\\"ts_acc_takosumi_cloud\\",\\"api_base_url\\":\\"https://app.takosumi.com/compat/cloudflare/client/v4\\"}")',
   );
