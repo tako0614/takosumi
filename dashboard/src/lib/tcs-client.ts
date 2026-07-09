@@ -107,11 +107,11 @@ export interface TcsListing {
   readonly description: TcsLocalizedText;
   readonly badge: TcsLocalizedText;
   readonly iconUrl?: string;
-  /** Hydrated from repo `.well-known/tcs.json`; store listings do not own setup. */
+  /** Deprecated stale-store field. Repo-owned Store listings must not use it. */
   readonly inputs?: readonly TcsListingInput[];
-  /** Hydrated from repo `.well-known/tcs.json`; store listings do not own setup. */
+  /** Deprecated stale-store field. Repo-owned Store listings must not use it. */
   readonly installExperience?: TcsInstallExperience;
-  /** Hydrated from repo `.well-known/tcs.json`; store listings do not own setup. */
+  /** Deprecated stale-store field. Repo-owned Store listings must not use it. */
   readonly outputAllowlist?: readonly TcsListingOutput[];
   readonly publisher?: {
     readonly handle: string;
@@ -136,9 +136,6 @@ export interface TcsRepoMetadata {
   readonly description?: TcsLocalizedText;
   readonly badge?: TcsLocalizedText;
   readonly iconUrl?: string;
-  readonly inputs?: readonly TcsListingInput[];
-  readonly installExperience?: TcsInstallExperience;
-  readonly outputAllowlist?: readonly TcsListingOutput[];
 }
 
 export type TcsSort = "updated" | "created" | "name";
@@ -351,15 +348,6 @@ function repoMetadataFromJson(json: unknown): TcsRepoMetadata | undefined {
       : {}),
     ...(localized(json.badge) ? { badge: localized(json.badge) } : {}),
     ...(text(json.iconUrl) ? { iconUrl: text(json.iconUrl) } : {}),
-    ...(Array.isArray(json.inputs)
-      ? { inputs: json.inputs as readonly TcsListingInput[] }
-      : {}),
-    ...(isRecord(json.installExperience)
-      ? { installExperience: json.installExperience as TcsInstallExperience }
-      : {}),
-    ...(Array.isArray(json.outputAllowlist)
-      ? { outputAllowlist: json.outputAllowlist as readonly TcsListingOutput[] }
-      : {}),
   };
 }
 
@@ -423,13 +411,6 @@ export function mergeTcsListingRepoMetadata(
     ...(metadata.badge ? { badge: metadata.badge } : {}),
     ...(metadata.iconUrl
       ? { iconUrl: repoAssetUrl(source, metadata.iconUrl) ?? metadata.iconUrl }
-      : {}),
-    ...(metadata.inputs ? { inputs: metadata.inputs } : {}),
-    ...(metadata.installExperience
-      ? { installExperience: metadata.installExperience }
-      : {}),
-    ...(metadata.outputAllowlist
-      ? { outputAllowlist: metadata.outputAllowlist }
       : {}),
   };
 }

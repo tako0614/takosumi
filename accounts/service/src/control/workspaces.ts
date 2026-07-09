@@ -1334,21 +1334,28 @@ async function hydrateRepoOwnedStoreConfig(
   input: RepoOwnedStoreHydrationInput,
 ): Promise<RepoOwnedStoreHydrationResult> {
   if (!input.storeMetadata?.source) return input;
+  const { inputs: _inputs, installExperience: _installExperience, ...baseStore } =
+    input.storeMetadata;
+  const scrubbedStoreMetadata =
+    installConfigStoreValue({
+      ...baseStore,
+      inputs: [],
+    }) ?? input.storeMetadata;
   const metadata = await fetchRepoOwnedTcsMetadata({
     git: input.source.url,
     ref: sourceDefaultRef(input.source),
   });
-  if (!metadata) return input;
+  if (!metadata) {
+    return {
+      storeMetadata: scrubbedStoreMetadata,
+      outputAllowlist: undefined,
+      modulePath: input.modulePath,
+    };
+  }
 
   const modulePath =
     input.modulePath ?? modulePathValue(metadata.modulePath) ?? undefined;
   const storePatch: Record<string, unknown> = {};
-  if (metadata.inputs !== undefined) {
-    storePatch.inputs = metadata.inputs;
-  }
-  if (metadata.installExperience !== undefined) {
-    storePatch.installExperience = metadata.installExperience;
-  }
   storePatch.source = {
     ...input.storeMetadata.source,
     git: input.source.url,
@@ -1359,16 +1366,14 @@ async function hydrateRepoOwnedStoreConfig(
           : modulePath
         : input.storeMetadata.source.path || ".",
   };
-  const repoOutputAllowlist = repoOutputAllowlistValue(
-    metadata.outputAllowlist,
-  );
   const mergedStore = installConfigStoreValue({
-    ...input.storeMetadata,
+    ...baseStore,
     ...storePatch,
+    inputs: [],
   });
   return {
     storeMetadata: mergedStore ?? input.storeMetadata,
-    outputAllowlist: repoOutputAllowlist ?? input.outputAllowlist,
+    outputAllowlist: undefined,
     modulePath,
   };
 }
@@ -1434,24 +1439,6 @@ function repoMetadataRecord(value: unknown): Record<string, unknown> | undefined
     typeof value.schemaVersion === "string" ? value.schemaVersion.trim() : "";
   if (schemaVersion && schemaVersion !== "tcs.repo/v1") return undefined;
   return value;
-}
-
-function repoOutputAllowlistValue(
-  value: unknown,
-): InstallConfig["outputAllowlist"] | undefined {
-  if (!Array.isArray(value)) return undefined;
-  const record: Record<string, unknown> = {};
-  for (const item of value) {
-    if (!isPlainJsonObject(item)) return undefined;
-    const key = stringValue(item.key);
-    if (!key) return undefined;
-    record[key] = {
-      from: item.from,
-      type: item.type,
-      ...(item.required !== undefined ? { required: item.required } : {}),
-    };
-  }
-  return outputAllowlistValue(record);
 }
 
 function storeDefaultVariableMapping(

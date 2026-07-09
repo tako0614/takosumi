@@ -3699,7 +3699,12 @@ test("POST /api/v1/workspaces/:id/capsules stores per-install vars in a scoped I
   expect(config.internal).toEqual({ reason: "per_install_overrides" });
   expect(config.variableMapping).toEqual({ project_name: "takos-space-a" });
   expect(config.outputAllowlist).toEqual({
+    launch_url: { from: "launch_url", type: "url" },
     url: { from: "url", type: "url" },
+    public_url: { from: "public_url", type: "url" },
+    api_url: { from: "api_url", type: "url" },
+    app_deployment: { from: "app_deployment", type: "json" },
+    service_exports: { from: "service_exports", type: "json" },
     worker_name: { from: "worker_name", type: "string" },
   });
   const createCall = operations.calls.createCapsule?.[0] as {
@@ -3801,7 +3806,7 @@ test("POST /api/v1/workspaces/:id/capsules stores runnerId and outputAllowlist i
   expect(createCall.installConfigId).toEqual(config.id);
 });
 
-test("POST /api/v1/workspaces/:id/capsules carries store metadata into the scoped InstallConfig", async () => {
+test("POST /api/v1/workspaces/:id/capsules carries Store presentation metadata without Store-owned setup", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
@@ -3884,10 +3889,6 @@ test("POST /api/v1/workspaces/:id/capsules carries store metadata into the scope
             ],
           },
         },
-        outputAllowlist: {
-          url: { from: "url", type: "url" },
-          app_deployment: { from: "app_deployment", type: "json" },
-        },
       },
     },
   );
@@ -3907,21 +3908,8 @@ test("POST /api/v1/workspaces/:id/capsules carries store metadata into the scope
       templateId?: string;
       source?: { git?: string; ref?: string; path?: string };
       iconUrl?: string;
-      inputs?: Array<{
-        name: string;
-        type?: string;
-        format?: string;
-        advanced?: boolean;
-        secret?: boolean;
-        defaultValue?: string;
-      }>;
-      installExperience?: {
-        projections?: Array<{
-          kind: string;
-          baseDomain?: string;
-          callbackPath?: string;
-        }>;
-      };
+      inputs?: Array<{ name: string }>;
+      installExperience?: unknown;
     };
     outputAllowlist: Record<string, unknown>;
   };
@@ -3933,26 +3921,17 @@ test("POST /api/v1/workspaces/:id/capsules carries store metadata into the scope
     git: "https://github.com/tako0614/yurucommu.git",
     path: ".",
   });
-  expect(config.store?.inputs?.map((input) => input.type)).toEqual([
-    "string",
-    "json",
-  ]);
+  expect(config.store?.inputs).toEqual([]);
   expect(config.store?.iconUrl).toEqual("https://example.test/icon.svg");
-  expect(config.store?.inputs?.[0]?.advanced).toEqual(true);
-  expect(config.store?.inputs?.[1]?.secret).toEqual(true);
-  expect(
-    config.store?.installExperience?.projections?.find(
-      (projection) => projection.kind === "public_endpoint",
-    )?.baseDomain,
-  ).toEqual("app.takos.jp");
-  expect(
-    config.store?.installExperience?.projections?.find(
-      (projection) => projection.kind === "oidc_client",
-    )?.callbackPath,
-  ).toEqual("/auth/oidc/callback");
+  expect(config.store?.installExperience).toBeUndefined();
   expect(config.outputAllowlist).toEqual({
+    launch_url: { from: "launch_url", type: "url" },
     url: { from: "url", type: "url" },
+    public_url: { from: "public_url", type: "url" },
+    api_url: { from: "api_url", type: "url" },
     app_deployment: { from: "app_deployment", type: "json" },
+    service_exports: { from: "service_exports", type: "json" },
+    worker_name: { from: "worker_name", type: "string" },
   });
   const createCall = operations.calls.createCapsule?.[0] as {
     installConfigId: string;
@@ -3960,7 +3939,7 @@ test("POST /api/v1/workspaces/:id/capsules carries store metadata into the scope
   expect(createCall.installConfigId).toEqual(config.id);
 });
 
-test("POST /api/v1/workspaces/:id/capsules hydrates thin Store listings from repo-owned TCS metadata", async () => {
+test("POST /api/v1/workspaces/:id/capsules hydrates thin Store listings from repo-owned presentation metadata", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const calls: string[] = [];
@@ -3975,38 +3954,7 @@ test("POST /api/v1/workspaces/:id/capsules hydrates thin Store listings from rep
           JSON.stringify({
             schemaVersion: "tcs.repo/v1",
             modulePath: ".",
-            inputs: [
-              {
-                name: "project_name",
-                type: "string",
-                defaultValue: "service-name-with-space",
-                label: { ja: "Service name", en: "Service name" },
-              },
-              {
-                name: "worker_name",
-                type: "string",
-                defaultValue: "service-name-with-space",
-                label: { ja: "Public subdomain", en: "Public subdomain" },
-              },
-            ],
-            installExperience: {
-              projections: [
-                { kind: "service_name", variable: "project_name" },
-                {
-                  kind: "public_endpoint",
-                  variables: {
-                    subdomain: "worker_name",
-                    url: "app_url",
-                    routePattern: "cloudflare_route_pattern",
-                  },
-                  baseDomain: "app.takos.jp",
-                },
-              ],
-            },
-            outputAllowlist: [
-              { key: "url", from: "url", type: "url" },
-              { key: "api_url", from: "api_url", type: "url" },
-            ],
+            name: { ja: "Takos Git", en: "Takos Git" },
           }),
         ),
       }),
@@ -4079,30 +4027,25 @@ test("POST /api/v1/workspaces/:id/capsules hydrates thin Store listings from rep
     store?: {
       source?: { git?: string; path?: string };
       inputs?: Array<{ name: string }>;
-      installExperience?: { projections?: Array<{ kind: string }> };
+      installExperience?: unknown;
     };
     outputAllowlist: Record<string, unknown>;
   };
-  expect(config.store?.inputs?.map((input) => input.name)).toEqual([
-    "project_name",
-    "worker_name",
-  ]);
+  expect(config.store?.inputs).toEqual([]);
   expect(config.store?.source).toEqual({
     git: "https://github.com/tako0614/takos-git.git",
     path: ".",
   });
-  expect(
-    config.store?.installExperience?.projections?.some(
-      (projection) => projection.kind === "public_endpoint",
-    ),
-  ).toEqual(true);
-  expect(config.variableMapping).toEqual({
-    project_name: "git-a",
-    worker_name: "git-a",
-  });
+  expect(config.store?.installExperience).toBeUndefined();
+  expect(config.variableMapping).toEqual({});
   expect(config.outputAllowlist).toEqual({
+    launch_url: { from: "launch_url", type: "url" },
     url: { from: "url", type: "url" },
+    public_url: { from: "public_url", type: "url" },
     api_url: { from: "api_url", type: "url" },
+    app_deployment: { from: "app_deployment", type: "json" },
+    service_exports: { from: "service_exports", type: "json" },
+    worker_name: { from: "worker_name", type: "string" },
   });
 });
 
@@ -4167,7 +4110,7 @@ test("POST /api/v1/workspaces/:id/capsules rejects retired install experience fi
   expect(operations.calls.createCapsule).toBeUndefined();
 });
 
-test("POST /api/v1/workspaces/:id/capsules accepts large store default values for OpenTofu inputs", async () => {
+test("POST /api/v1/workspaces/:id/capsules ignores Store-owned OpenTofu input defaults", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
@@ -4237,11 +4180,7 @@ test("POST /api/v1/workspaces/:id/capsules accepts large store default values fo
       inputs?: Array<{ name: string; defaultValue?: string }>;
     };
   };
-  expect(
-    config.store?.inputs?.find(
-      (input) => input.name === "release_container_images",
-    )?.defaultValue,
-  ).toEqual(defaultValue);
+  expect(config.store?.inputs).toEqual([]);
 });
 
 test("POST /api/v1/workspaces/:id/capsules auto-provisions Takosumi Accounts OIDC for yurucommu", async () => {

@@ -29,7 +29,12 @@ test("builtInInstallConfigs returns the generic Capsule default + first-party te
   expect(generic?.templateBinding).toBeUndefined();
   expect(generic?.trustLevel).toBe("trusted");
   expect(generic?.outputAllowlist).toEqual({
+    launch_url: { from: "launch_url", type: "url" },
     url: { from: "url", type: "url" },
+    public_url: { from: "public_url", type: "url" },
+    api_url: { from: "api_url", type: "url" },
+    app_deployment: { from: "app_deployment", type: "json" },
+    service_exports: { from: "service_exports", type: "json" },
     worker_name: { from: "worker_name", type: "string" },
   });
   for (const config of configs) {

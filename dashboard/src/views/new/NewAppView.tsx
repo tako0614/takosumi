@@ -151,9 +151,6 @@ interface EnvVariableRow {
 }
 
 type StoreMetadata = NonNullable<InstallConfig["store"]>;
-type StoreOutputAllowlist = NonNullable<
-  Parameters<typeof createCapsule>[0]["outputAllowlist"]
->;
 
 const DEFAULT_STORE_BADGE = {
   ja: "追加候補",
@@ -827,23 +824,7 @@ function storeMetadataFromStoreListing(listing: TcsListing): StoreMetadata {
     name: nonEmptyStoreText(listing.name) ?? fallbackName,
     description: nonEmptyStoreText(listing.description) ?? fallbackName,
     ...(listing.iconUrl ? { iconUrl: listing.iconUrl } : {}),
-    inputs: (listing.inputs ?? []).map((input) => ({
-      name: input.name,
-      ...(input.type ? { type: input.type } : {}),
-      ...(input.format ? { format: input.format } : {}),
-      ...(input.required !== undefined ? { required: input.required } : {}),
-      ...(input.advanced !== undefined ? { advanced: input.advanced } : {}),
-      ...(input.secret !== undefined ? { secret: input.secret } : {}),
-      ...(input.defaultValue !== undefined
-        ? { defaultValue: input.defaultValue }
-        : {}),
-      label: input.label,
-      ...(input.helper ? { helper: input.helper } : {}),
-      ...(input.placeholder ? { placeholder: input.placeholder } : {}),
-    })),
-    ...(listing.installExperience
-      ? { installExperience: listing.installExperience }
-      : {}),
+    inputs: [],
   };
 }
 
@@ -867,22 +848,6 @@ function storeEntryFromStoreListing(
       path: listing.source.path || ".",
     },
   };
-}
-
-function outputAllowlistFromStoreListing(
-  listing: TcsListing,
-): StoreOutputAllowlist | undefined {
-  const out: Record<string, StoreOutputAllowlist[string]> = {};
-  for (const output of listing.outputAllowlist ?? []) {
-    if (!isSafeInstallVariableName(output.key)) continue;
-    if (!isSafeInstallVariableName(output.from)) continue;
-    out[output.key] = {
-      from: output.from,
-      type: output.type,
-      ...(output.required !== undefined ? { required: output.required } : {}),
-    };
-  }
-  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 function sourceIdFromControlError(error: ControlApiError | undefined): string {
@@ -1517,14 +1482,38 @@ function Inner() {
   const installExperienceForCurrentSource = () =>
     selectedServiceEntry()?.installExperience ??
     storeMetadataForRun()?.installExperience;
-  const storeOutputAllowlistForRun = () => {
-    const listing = storeListingForCurrentSource();
-    return listing ? outputAllowlistFromStoreListing(listing) : undefined;
-  };
+  const rootModuleVariableSet = () =>
+    new Set(compatibility()?.rootModuleVariables ?? []);
+  const rootModuleHasVariable = (name: string) =>
+    rootModuleVariableSet().has(name);
+  const firstRootModuleVariable = (
+    names: readonly string[],
+  ): string | undefined => names.find(rootModuleHasVariable);
+  const standardServiceNameVariables = () =>
+    [
+      "project_name",
+      "public_subdomain",
+      "worker_name",
+      "app_name",
+    ].filter(rootModuleHasVariable);
+  const standardServiceNameVariable = () =>
+    firstRootModuleVariable([
+      "project_name",
+      "public_subdomain",
+      "worker_name",
+      "app_name",
+    ]);
+  const standardPublicSubdomainVariable = () =>
+    firstRootModuleVariable(["public_subdomain", "worker_name"]);
+  const standardPublicUrlVariable = () =>
+    firstRootModuleVariable(["public_url", "app_url"]);
+  const standardRoutePatternVariable = () =>
+    firstRootModuleVariable(["cloudflare_route_pattern"]);
   const serviceNameVariableForCurrentSource = () =>
     selectedServiceEntry()
       ? storeServiceNameVariable(selectedServiceEntry()!)
-      : storeServiceNameVariable(storeMetadataForRun() ?? {});
+      : (storeServiceNameVariable(storeMetadataForRun() ?? {}) ??
+        standardServiceNameVariable());
   const storeServiceNameDefault = () => {
     const store = storeMetadataForRun();
     const variable = store ? storeServiceNameVariable(store) : undefined;
@@ -1548,13 +1537,22 @@ function Inner() {
   const supportsServiceNameInput = () =>
     prefilledServiceName() !== undefined ||
     serviceNameHintIsGenerated(storeServiceNameDefault()) ||
-    serviceNameHintIsGenerated(storeConfigServiceNameDefault());
+    serviceNameHintIsGenerated(storeConfigServiceNameDefault()) ||
+    standardServiceNameVariables().length > 0;
   const defaultProjectName = () => {
     const base = slugInputValue(name() || capsuleNameFromUrl(sourceGitUrl()));
     return slugInputValue(`${base}-${serviceIdSeed()}`);
   };
   const serviceNameInputValue = () =>
     slugInputValue(resourcePrefix() || defaultProjectName());
+  const standardManagedHost = () => {
+    const subdomain = serviceNameInputValue();
+    return subdomain ? `${subdomain}.app.takos.jp` : "";
+  };
+  const standardManagedUrl = () => {
+    const host = standardManagedHost();
+    return host ? `https://${host}` : "";
+  };
   const useSuggestedServiceName = () => {
     const entry = selectedServiceEntry();
     const publicEndpointField = entry
@@ -1645,46 +1643,65 @@ function Inner() {
     variables.env = { ...existing, ...env };
     return variables;
   };
+  const standardCapsuleVariableDefaults = (
+    current: Readonly<Record<string, JsonValue>>,
+  ): Record<string, JsonValue> => {
+    const variables = rootModuleVariableSet();
+    if (variables.size === 0) return {};
+    const defaults: Record<string, JsonValue> = {};
+    const setDefault = (name: string, value: JsonValue | undefined) => {
+      if (!variables.has(name)) return;
+      if (current[name] !== undefined) return;
+      if (value === undefined || value === "") return;
+      defaults[name] = value;
+    };
+    const serviceName = serviceNameInputValue();
+    for (const name of standardServiceNameVariables()) {
+      setDefault(name, serviceName);
+    }
+    const managedHost = standardManagedHost();
+    const managedUrl = standardManagedUrl();
+    setDefault("public_subdomain", serviceName);
+    setDefault("worker_name", serviceName);
+    setDefault("public_url", managedUrl);
+    setDefault("app_url", managedUrl);
+    setDefault(
+      "cloudflare_route_pattern",
+      managedHost ? `${managedHost}/*` : undefined,
+    );
+    const accountsOrigin = location.origin;
+    setDefault("takosumi_accounts_url", accountsOrigin);
+    setDefault("takosumi_accounts_issuer_url", accountsOrigin);
+    setDefault(
+      "takosumi_accounts_redirect_uri",
+      managedUrl ? `${managedUrl}/auth/oidc/callback` : undefined,
+    );
+    return defaults;
+  };
   const storeListingDefaultVariables = (): Readonly<
     Record<string, JsonValue>
-  > => {
-    const listing = storeListingForCurrentSource();
-    if (!listing) return {};
-    const serviceNameVariable = storeServiceNameVariable(
-      storeMetadataFromStoreListing(listing),
-    );
-    const variables: Record<string, JsonValue> = {};
-    for (const field of listing.inputs ?? []) {
-      const defaultValue = field.defaultValue?.trim();
-      if (!defaultValue) continue;
-      if (!storeVariablePath(field.name)) continue;
-      if (
-        field.name === serviceNameVariable &&
-        serviceNameHintIsGenerated(defaultValue)
-      ) {
-        continue;
-      }
-      const value = storeInputJsonValue(field, defaultValue);
-      if (value !== undefined) {
-        setStoreJsonVariable(variables, field.name, value);
-      }
-    }
-    return variables;
-  };
-  const storeListingVariableNames = () => {
-    const listing = storeListingForCurrentSource();
-    if (!listing) return new Set<string>();
-    return new Set(
-      (listing.inputs ?? [])
-        .map((field) => storeVariablePath(field.name)?.[0])
-        .filter((name): name is string => name !== undefined),
-    );
-  };
+  > => ({});
+  const storeListingVariableNames = () => new Set<string>();
+  const standardVariableNames = () =>
+    new Set([
+      ...standardServiceNameVariables(),
+      ...[
+        standardPublicSubdomainVariable(),
+        standardPublicUrlVariable(),
+        standardRoutePatternVariable(),
+        "takosumi_accounts_url",
+        "takosumi_accounts_issuer_url",
+        "takosumi_accounts_redirect_uri",
+      ].filter((name): name is string =>
+        Boolean(name && rootModuleHasVariable(name)),
+      ),
+    ]);
   const inputVariableError = (): string | null => {
     const seen = new Set<string>();
     const storeNames = new Set([
       ...selectedStoreVariableNames(),
       ...storeListingVariableNames(),
+      ...standardVariableNames(),
     ]);
     const serviceNameVariable = serviceNameVariableForCurrentSource();
     for (const row of inputVariables()) {
@@ -1746,6 +1763,7 @@ function Inner() {
     if (serviceNameVariable && supportsServiceNameInput()) {
       variables[serviceNameVariable] = serviceNameInputValue();
     }
+    Object.assign(variables, standardCapsuleVariableDefaults(variables));
     Object.assign(variables, selectedStoreReturnVariables());
     Object.assign(variables, normalizedInputVariables());
     mergeEnvVariables(variables, normalizedEnvVariables());
@@ -1763,6 +1781,7 @@ function Inner() {
     if (serviceNameVariable && supportsServiceNameInput()) {
       variables[serviceNameVariable] = serviceNameInputValue();
     }
+    Object.assign(variables, standardCapsuleVariableDefaults(variables));
     mergeEnvVariables(variables, normalizedEnvVariables());
     Object.assign(variables, managedProviderVariableDefaults(variables));
     return Object.keys(variables).length > 0 ? variables : undefined;
@@ -2692,7 +2711,6 @@ function Inner() {
       compatibilityReportId: compatibility()?.reportId,
       vars: installVariables(),
       store: storeMetadataForRun(),
-      outputAllowlist: storeOutputAllowlistForRun(),
       sourceId: createdSourceId(),
       capsuleId: createdCapsuleId(),
       syncDone: stepSync() === "done",
@@ -2786,9 +2804,6 @@ function Inner() {
             : {}),
           ...(flowInput.vars ? { vars: flowInput.vars } : {}),
           ...(flowInput.store ? { store: flowInput.store } : {}),
-          ...(flowInput.outputAllowlist
-            ? { outputAllowlist: flowInput.outputAllowlist }
-            : {}),
         });
         throwIfStaleFlow(flow);
         clearCapsuleListCache(workspace);
