@@ -183,6 +183,7 @@ import {
   releaseActivationCommands,
   releaseActivationCommandsFromOutputRecord,
   releaseActivationCommandsFromPublicOutputs,
+  releaseActivationDescriptorForWorkspace,
   releaseActivationOutputs,
   RUN_HEARTBEAT_STALE_MS,
   RUN_RENEWAL_INTERVAL_MS,
@@ -666,7 +667,7 @@ function workspaceOutputsWithReleaseDescriptor(
   workspaceOutputs: Readonly<Record<string, JsonValue>>,
   outputs: OpenTofuApplyResult["outputs"],
 ): Readonly<Record<string, JsonValue>> {
-  const descriptor = releaseActivationOutputs(outputs).takosumi_release;
+  const descriptor = releaseActivationDescriptorForWorkspace(outputs);
   if (descriptor === undefined) return workspaceOutputs;
   return {
     ...workspaceOutputs,

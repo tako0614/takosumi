@@ -4415,6 +4415,114 @@ test("release activator receives neutral post-apply commands as opaque argv", as
   });
 });
 
+test("output snapshot keeps sanitized release descriptor while public outputs hide it", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner(
+    {},
+    {
+      takosumi_release: {
+        sensitive: false,
+        value: {
+          post_apply: [
+            {
+              id: "takos-worker-release",
+              executor: "operator",
+              command: ["bun", "run", "takosumi:release"],
+              working_directory: ".",
+              timeout_seconds: 900,
+              env: {
+                APP_RELEASE_TARGET: "runtime",
+                CLOUDFLARE_API_TOKEN: "sk-should-not-leak",
+                DATABASE_URL: "postgres://user:pass@db.example/app",
+              },
+            },
+          ],
+          pre_destroy: [
+            {
+              id: "takos-worker-remove",
+              executor: "operator",
+              command: ["bun", "run", "takosumi:release", "--", "--destroy"],
+              working_directory: ".",
+              env: {
+                RELEASE_PUBLIC_VALUE: "ok",
+                API_KEY: "should-not-leak",
+              },
+            },
+          ],
+        },
+      },
+      launch_url: { sensitive: false, value: "https://takos.example" },
+      public_url: { sensitive: false, value: "https://takos.example" },
+    },
+  );
+  await seedRunnableInstallationModel(store, { environment: "preview" });
+  const activations: ReleaseActivationInput[] = [];
+  const controller = controllerWith(store, runner, {
+    activity: activityRecorderFor(store),
+    releaseActivator: {
+      activate: (input) => {
+        activations.push(input);
+        return Promise.resolve({ status: "succeeded" });
+      },
+    },
+  });
+
+  const { planRun } = await controller.createInstallationPlan("inst_fixture");
+  const { applyRun, deployment } = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+
+  expect(applyRun.status).toBe("succeeded");
+  expect(activations).toHaveLength(1);
+  expect(activations[0]?.commands).toEqual([
+    {
+      id: "takos-worker-release",
+      phase: "post_apply",
+      executor: "operator",
+      command: ["bun", "run", "takosumi:release"],
+      workingDirectory: ".",
+      timeoutSeconds: 900,
+      env: { APP_RELEASE_TARGET: "runtime" },
+    },
+  ]);
+  expect(deployment?.outputsPublic).not.toHaveProperty("takosumi_release");
+
+  const outputSnapshot = await store.getOutputSnapshot(
+    deployment!.outputSnapshotId,
+  );
+  expect(outputSnapshot?.workspaceOutputs.takosumi_release).toEqual({
+    post_apply: [
+      {
+        id: "takos-worker-release",
+        command: ["bun", "run", "takosumi:release"],
+        executor: "operator",
+        working_directory: ".",
+        timeout_seconds: 900,
+        env: { APP_RELEASE_TARGET: "runtime" },
+      },
+    ],
+    pre_destroy: [
+      {
+        id: "takos-worker-remove",
+        command: ["bun", "run", "takosumi:release", "--", "--destroy"],
+        executor: "operator",
+        working_directory: ".",
+        env: { RELEASE_PUBLIC_VALUE: "ok" },
+      },
+    ],
+  });
+  expect(JSON.stringify(outputSnapshot?.workspaceOutputs)).not.toContain(
+    "CLOUDFLARE_API_TOKEN",
+  );
+  expect(JSON.stringify(outputSnapshot?.workspaceOutputs)).not.toContain(
+    "DATABASE_URL",
+  );
+  expect(JSON.stringify(outputSnapshot?.workspaceOutputs)).not.toContain(
+    "should-not-leak",
+  );
+});
+
 test("post-apply release commands fall back to OutputSnapshot workspace outputs", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   const originalCommit = store.commitAppliedDeployment.bind(store);

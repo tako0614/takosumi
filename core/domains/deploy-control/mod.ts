@@ -2230,6 +2230,22 @@ export function releaseActivationOutputs(
   return safeOutputs;
 }
 
+export function releaseActivationDescriptorForWorkspace(
+  outputs: OpenTofuOutputEnvelope | readonly DeploymentOutput[] | undefined,
+): JsonValue | undefined {
+  const postApply = releaseActivationCommandsForPhase(outputs, "post_apply");
+  const preDestroy = releaseActivationCommandsForPhase(outputs, "pre_destroy");
+  if (postApply.length === 0 && preDestroy.length === 0) return undefined;
+  const descriptor: Record<string, JsonValue> = {};
+  if (postApply.length > 0) {
+    descriptor.post_apply = postApply.map(releaseCommandDescriptorRow);
+  }
+  if (preDestroy.length > 0) {
+    descriptor.pre_destroy = preDestroy.map(releaseCommandDescriptorRow);
+  }
+  return descriptor;
+}
+
 export function jsonRecordFromPublicOutputs(
   outputs: Readonly<Record<string, unknown>>,
 ): Readonly<Record<string, JsonValue>> {
@@ -2245,12 +2261,19 @@ export function jsonRecordFromPublicOutputs(
 export function releaseActivationCommands(
   outputs: OpenTofuOutputEnvelope | readonly DeploymentOutput[] | undefined,
 ): readonly ReleaseActivationCommand[] {
+  return releaseActivationCommandsForPhase(outputs, "post_apply");
+}
+
+function releaseActivationCommandsForPhase(
+  outputs: OpenTofuOutputEnvelope | readonly DeploymentOutput[] | undefined,
+  phase: ReleaseActivationCommand["phase"],
+): readonly ReleaseActivationCommand[] {
   if (!outputs) return [];
   const commands: ReleaseActivationCommand[] = [];
   const visit = (name: string, value: JsonValue, sensitive?: boolean): void => {
     if (sensitive === true) return;
     if (name === "takosumi_release") {
-      commands.push(...parseReleaseCommandDescriptor(value, "post_apply"));
+      commands.push(...parseReleaseCommandDescriptor(value, phase));
     }
   };
   if (Array.isArray(outputs)) {
@@ -2263,6 +2286,20 @@ export function releaseActivationCommands(
     }
   }
   return commands.slice(0, 20);
+}
+
+function releaseCommandDescriptorRow(
+  command: ReleaseActivationCommand,
+): JsonValue {
+  const row: Record<string, JsonValue> = {
+    id: command.id,
+    command: [...command.command],
+  };
+  if (command.executor) row.executor = command.executor;
+  if (command.workingDirectory) row.working_directory = command.workingDirectory;
+  if (command.timeoutSeconds) row.timeout_seconds = command.timeoutSeconds;
+  if (command.env) row.env = { ...command.env };
+  return row;
 }
 
 export function releaseActivationCommandsFromPublicOutputs(
