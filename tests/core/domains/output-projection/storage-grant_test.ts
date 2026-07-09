@@ -3,8 +3,8 @@ import { describe, expect, test } from "bun:test";
 import { verifyStorageAccessToken } from "../../../../core/shared/storage_access_tokens.ts";
 import { projectServicesFromOutputs } from "../../../../core/domains/output-projection/service-projection.ts";
 import {
-  issueStorageWorkspaceGrants,
-  planStorageWorkspaceGrants,
+  issueStorageObjectGrants,
+  planStorageObjectGrants,
 } from "../../../../core/domains/output-projection/storage-grant.ts";
 
 const SIGNING_KEY = "producer-signing-key-0011223344";
@@ -70,9 +70,9 @@ const CONTEXT = {
   consumerInstallationId: "inst_0011223344556677",
 };
 
-describe("storage workspace grant resolution", () => {
+describe("storage.object grant resolution", () => {
   test("plans a grant confined to the consumer's own prefix with write verbs", () => {
-    const plans = planStorageWorkspaceGrants(
+    const plans = planStorageObjectGrants(
       consumerBindings(),
       producerExport(),
       CONTEXT,
@@ -87,7 +87,7 @@ describe("storage workspace grant resolution", () => {
   });
 
   test("issues an injectable env map with a verifiable token", async () => {
-    const grants = await issueStorageWorkspaceGrants(
+    const grants = await issueStorageObjectGrants(
       consumerBindings(),
       { export: producerExport(), signingKey: SIGNING_KEY },
       CONTEXT,
@@ -119,10 +119,10 @@ describe("storage workspace grant resolution", () => {
     }
   });
 
-  test("ignores producers that are not the workspace storage publication", () => {
+  test("ignores producers that are not the storage.object publication", () => {
     const otherExport = { ...producerExport(), name: "some.other.service" };
     expect(
-      planStorageWorkspaceGrants(consumerBindings(), otherExport, CONTEXT),
+      planStorageObjectGrants(consumerBindings(), otherExport, CONTEXT),
     ).toHaveLength(0);
   });
 });

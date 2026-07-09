@@ -67,14 +67,6 @@ export const TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_AI_GATEWAY =
   "takosumi.ai.gateway";
 export const TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_PROVIDER_COMPAT_CLOUDFLARE_WORKERS =
   "takosumi.provider_compat.cloudflare_workers";
-export const TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOS_MCP_REGISTRY =
-  "takos.mcp.registry";
-export const TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOS_STORAGE_WORKSPACE =
-  "takos.storage.workspace";
-export const TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOS_GIT_SMART_HTTP =
-  "takos.git.smart_http";
-export const TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_TAKOS_AGENT_RUNTIME =
-  "takos.agent.runtime";
 
 export const TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_IDENTITY_OIDC =
   "identity.oidc";
