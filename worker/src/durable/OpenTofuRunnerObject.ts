@@ -11,6 +11,7 @@ const DEFAULT_PLAN_ARTIFACT_BUCKET = "takos-artifacts";
 const PLAN_ARTIFACT_CONTENT_TYPE = "application/vnd.opentofu.plan";
 const STATE_ARTIFACT_CONTENT_TYPE = "application/json";
 const SOURCE_ARCHIVE_CONTENT_TYPE = "application/zstd";
+const DEFAULT_PLAN_JSON_ARTIFACT_MAX_BYTES = 2 * 1024 * 1024;
 // At-rest content type for AES-GCM ciphertext blobs (state/plan .enc objects).
 const ENCRYPTED_ARTIFACT_CONTENT_TYPE = "application/octet-stream";
 const RUNNER_REQUEST_HEADER_ALLOWLIST = new Set(["content-type"]);
@@ -1086,6 +1087,24 @@ export class OpenTofuRunnerObject extends OpenTofuRunnerContainerBase<Cloudflare
         `container plan-json artifact fetch failed: ${response.status}`,
       );
     }
+    const maxBytes = planJsonArtifactMaxBytes(this.env);
+    const contentLength = response.headers.get("content-length");
+    const sizeBytes = contentLength ? Number(contentLength) : NaN;
+    if (!Number.isSafeInteger(sizeBytes) || sizeBytes > maxBytes) {
+      if (response.body) {
+        try {
+          await response.body.cancel();
+        } catch {
+          // Best-effort cancellation only; the artifact is optional review data.
+        }
+      }
+      console.warn("skipping oversized OpenTofu plan JSON artifact", {
+        runId,
+        sizeBytes: Number.isSafeInteger(sizeBytes) ? sizeBytes : undefined,
+        maxBytes,
+      });
+      return;
+    }
     const bytes = new Uint8Array(await response.arrayBuffer());
     const digest = await digestBytes(bytes);
     const sealed = await this.#stateCrypto().seal(zstdCompressRaw(bytes));
@@ -1351,6 +1370,13 @@ function planJsonArtifactUrl(baseUrl: URL, runId: string): string {
   url.pathname = `/runs/${encodeURIComponent(runId)}/artifacts/tfplan-json`;
   url.search = "";
   return url.toString();
+}
+
+function planJsonArtifactMaxBytes(env: CloudflareWorkerEnv): number {
+  const parsed = Number(env.TAKOSUMI_PLAN_JSON_ARTIFACT_MAX_BYTES);
+  return Number.isSafeInteger(parsed) && parsed > 0
+    ? parsed
+    : DEFAULT_PLAN_JSON_ARTIFACT_MAX_BYTES;
 }
 
 // ===========================================================================

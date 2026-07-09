@@ -45,6 +45,7 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
   readonly TAKOSUMI_RUNNER_CAPACITY_RETRY_BASE_MS?: string;
   readonly TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR?: string;
   readonly TAKOSUMI_SOURCE_ARCHIVE_ZSTD_LEVEL?: string;
+  readonly TAKOSUMI_PLAN_JSON_ARTIFACT_MAX_BYTES?: string;
   /**
    * Maximum auto-sync Sources a scheduled cron tick may enqueue. This is an
    * operator load-shedding knob for runner-backed source_sync runs.
