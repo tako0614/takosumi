@@ -44,7 +44,7 @@ export const en: Record<keyof typeof ja, string> = {
   "store.title": "Store",
   "store.subtitle": "Find apps and services to add from the store.",
   "store.badge.oneTap": "Ready to use",
-  "store.noWorkspace": "Select a Workspace first.",
+  "store.noWorkspace": "Select a workspace first.",
   "nav.cloudResources": "Cloud",
   "nav.runs": "Activity",
   "nav.connections": "Connected accounts",
@@ -173,7 +173,7 @@ export const en: Record<keyof typeof ja, string> = {
   // `active` = the last apply succeeded and the state generation advanced; it
   // is NOT a verified-reachable signal, so say "Deployed", not "Running".
   "status.capsule.active": "Deployed",
-  "status.capsule.stale": "Redeploy needed",
+  "status.capsule.stale": "Update available",
   "status.capsule.error": "Error",
   "status.capsule.disabled": "Disabled",
   "status.capsule.destroyed": "Deleted",
@@ -260,7 +260,7 @@ export const en: Record<keyof typeof ja, string> = {
   "apps.empty.kicker": "No apps yet",
   "apps.empty.title": "Nothing to open yet",
   "apps.empty.body":
-    "None of your services declare an app screen yet. Check their status in the service list.",
+    "Apps you add will appear here. Start by picking one from the store.",
   "apps.empty.viewServices": "View all services",
 
   // --- Service list (/services) --------------------------------------------
@@ -404,6 +404,19 @@ export const en: Record<keyof typeof ja, string> = {
   "run.summary.applying": "Deploying…",
   "run.summary.applySucceeded": "Deploy complete.",
   "run.summary.failed": "{operation} failed.",
+  "runError.sourceSyncFailed":
+    "The app contents could not be fetched. Check the link and version, then try again.",
+  "runError.sourceRefNotFound":
+    "The selected version was not found. Check the version, then try again.",
+  "runError.stateGenerationMismatch":
+    "Another change ran first. Review the changes again before deploying.",
+  "runError.planFailed":
+    "The change review failed. Check the details, then try again.",
+  "runError.applyFailed":
+    "The deploy failed. Check the details, then try again.",
+  "runError.runFailed": "The run failed. Please try again.",
+  "runError.backupFailed":
+    "The restore point could not be created. Please try again.",
   "run.summary.failedHint":
     "Check the diagnostics and logs below for the cause.",
   "run.summary.creditsRequired": "Credits are required.",
@@ -415,13 +428,13 @@ export const en: Record<keyof typeof ja, string> = {
     "The connected account may have changed since this run was created. Review the changes again, then deploy.",
   "run.summary.connectionSetupRequired": "Connected account setup is needed.",
   "run.summary.connectionSetupHint":
-    "Choose or finish setting up the provider connection, then run the deploy again.",
+    "Choose or finish setting up the account connection, then run the deploy again.",
   "run.summary.connectionChanged": "Review the connected account again.",
   "run.summary.connectionChangedHint":
     "The connected account changed after this run was reviewed. Review the current changes again before deploying.",
   "run.summary.credentialServiceIssue": "Access preparation did not finish.",
   "run.summary.credentialServiceHint":
-    "Takosumi could not prepare temporary provider access. Try again, or contact support if it continues.",
+    "Takosumi could not prepare access to the connected account. Try again, or contact support if it continues.",
   "run.summary.blocked": "Blocked by policy.",
   "run.summary.driftDone": "Drift check complete.",
   "run.summary.fallback": "Status: {status}",
@@ -518,23 +531,23 @@ export const en: Record<keyof typeof ja, string> = {
   "run.diagnostics.connectionVerificationDetail":
     "Review the changes again so Takosumi can use the current connected account state.",
   "run.diagnostics.connectionSetupRequired":
-    "This run needs a provider connection before Takosumi can deploy it.",
+    "This run needs a connected account before Takosumi can deploy it.",
   "run.diagnostics.connectionSetupShort":
-    "Provider access is not configured for this deploy.",
+    "An account connection is not configured for this deploy.",
   "run.diagnostics.connectionSetupDetail":
-    "Open connections, choose the required provider connection, then run the deploy again.",
+    "Open connections, choose the required account, then run the deploy again.",
   "run.diagnostics.connectionChanged":
-    "The provider connection changed after this run was reviewed.",
+    "The connected account changed after this run was reviewed.",
   "run.diagnostics.connectionChangedShort":
-    "The reviewed provider connection is no longer current.",
+    "The reviewed account connection is no longer current.",
   "run.diagnostics.connectionChangedDetail":
     "Create a new review so the deploy uses the current connected account state.",
   "run.diagnostics.credentialServiceIssue":
-    "Takosumi could not prepare temporary provider access for this run.",
+    "Takosumi could not prepare temporary access for this run.",
   "run.diagnostics.credentialServiceShort":
-    "Temporary provider access could not be prepared.",
+    "Temporary access could not be prepared.",
   "run.diagnostics.credentialServiceDetail":
-    "Try again. If this keeps happening, contact support because the platform credential service may need attention.",
+    "Try again. If this keeps happening, contact support.",
   "run.audit.title": "Activity record",
   "run.audit.empty": "No activity records.",
   "run.audit.detail": "Record detail",
@@ -548,7 +561,7 @@ export const en: Record<keyof typeof ja, string> = {
     "After you add a service and review a change, update history appears here.",
   "runList.applied": "Deploy",
   "runList.destroyed": "Delete",
-  "runList.failedWithCode": "{operation} failed ({code})",
+  "runList.failed": "{operation} failed",
 
   // --- add flow (/new) -------------------------------------------------------
   "new.title": "Add service",
@@ -728,7 +741,7 @@ export const en: Record<keyof typeof ja, string> = {
   "new.error.syncPending":
     "The source has not finished syncing. Wait a moment, then retry.",
   "new.error.sourceRefNotFound":
-    "The selected version “{ref}” was not found. Check the GitHub branch, tag, or commit.",
+    "The selected version “{ref}” was not found. Check that the link offers this version.",
   "new.error.sourceFetchFailed":
     "The app contents could not be fetched. Check the link, version, folder, or private link access. Details: {message}",
   "new.error.sourceFetchFailedUnknown": "No detailed cause was returned.",
@@ -1024,8 +1037,8 @@ export const en: Record<keyof typeof ja, string> = {
   "notif.event.failedDetail": "Error: {code}",
   "notif.event.failedHint": "Check the run logs for details",
   "notif.event.drift": "A service's real state differs from the saved record",
-  "notif.event.driftDetail": "A redeploy may be needed",
-  "notif.event.stale": "A dependency update requires a redeploy",
+  "notif.event.driftDetail": "The live state may have drifted from its settings",
+  "notif.event.stale": "A dependency changed — an update is available for this service",
   "notif.event.staleDetail": "Updated by: {producer}",
   "notif.event.connCreated": "Added connected account “{provider}”",
   "notif.event.connCreatedGeneric": "Added connected account",

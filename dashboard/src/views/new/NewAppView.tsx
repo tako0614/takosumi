@@ -1594,14 +1594,14 @@ function Inner() {
       if (!row.connectionId.trim()) {
         if (rowCanUseManagedProviderFallback(row)) continue;
         return t("new.providers.errorConnection", {
-          provider: row.provider,
+          provider: providerLabel(row.provider),
         });
       }
       if (
         !candidates.some((connection) => connection.id === row.connectionId)
       ) {
         return t("new.providers.errorConnection", {
-          provider: row.provider,
+          provider: providerLabel(row.provider),
         });
       }
     }

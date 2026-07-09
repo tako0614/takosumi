@@ -78,6 +78,7 @@ import {
   runTone,
 } from "../../lib/labels.ts";
 import { clearCapsuleListCache } from "../../lib/capsule-list.ts";
+import { runFailureHint } from "../../lib/run-errors.ts";
 import { clearCurrentStateVersionCache } from "../../lib/current-state-versions.ts";
 import { clearDashboardOverviewCache } from "../../lib/dashboard-overview.ts";
 import {
@@ -1208,7 +1209,7 @@ function Inner() {
         return {
           kind: "error",
           text: t("run.summary.failed", { operation: operationLabel(r.type) }),
-          sub: r.errorCode ?? t("run.summary.failedHint"),
+          sub: runFailureHint(r.errorCode),
         };
       }
       return {
@@ -1275,7 +1276,7 @@ function Inner() {
             text: t("run.summary.failed", {
               operation: operationLabel(r.type),
             }),
-            sub: r.errorCode ?? t("run.summary.failedHint"),
+            sub: runFailureHint(r.errorCode),
           };
         default:
           return {
@@ -1447,7 +1448,10 @@ function Inner() {
                 !
               </span>
               <h2>{t("install.errorTitle")}</h2>
-              <p>{t("install.errorSub")}</p>
+              {/* One plain sentence with the next action — the summary layer
+                  already classifies credits / account-access / known failure
+                  codes. The console stays behind 詳細を見る. */}
+              <p>{summary()?.sub ?? summary()?.text ?? t("install.errorSub")}</p>
               <div class="av-install-actions">
                 <button
                   type="button"
