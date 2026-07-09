@@ -82,6 +82,28 @@ describe("tcs aggregate", () => {
     expect(s.done).toBe(true);
   });
 
+  test("drops deprecated setup fields before exposing merged listings", () => {
+    const merged = mergeTcsListingBatches(
+      [],
+      [
+        {
+          base: "https://store.takosumi.com",
+          isDefault: true,
+          items: [
+            L("x", {
+              git: "https://github.com/o/x.git",
+              path: ".",
+            }),
+          ],
+        },
+      ],
+    );
+
+    expect(merged[0]?.inputs).toBeUndefined();
+    expect(merged[0]?.installExperience).toBeUndefined();
+    expect(merged[0]?.outputAllowlist).toBeUndefined();
+  });
+
   test("prefers the default store when the same Git source appears on multiple stores", () => {
     const sharedSource = {
       git: "https://github.com/o/shared.git",

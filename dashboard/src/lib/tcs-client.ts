@@ -213,7 +213,7 @@ export async function fetchTcsListingsPage(
   if (res.status === 501)
     throw new TcsNotSupportedError("search not supported");
   if (!res.ok) throw new Error(`listings ${res.status}`);
-  return (await res.json()) as TcsListingsPage;
+  return sanitizeTcsListingsPage((await res.json()) as TcsListingsPage);
 }
 
 export async function fetchTcsListing(
@@ -227,7 +227,24 @@ export async function fetchTcsListing(
   );
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`listing ${res.status}`);
-  return (await res.json()) as TcsListing;
+  return sanitizeTcsListing((await res.json()) as TcsListing);
+}
+
+export function sanitizeTcsListing(listing: TcsListing): TcsListing {
+  const {
+    inputs: _inputs,
+    installExperience: _installExperience,
+    outputAllowlist: _outputAllowlist,
+    ...rest
+  } = listing;
+  return rest;
+}
+
+function sanitizeTcsListingsPage(page: TcsListingsPage): TcsListingsPage {
+  return {
+    ...page,
+    items: page.items.map(sanitizeTcsListing),
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
