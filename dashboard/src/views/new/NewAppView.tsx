@@ -2119,6 +2119,10 @@ function Inner() {
             : {}),
           ...(flowInput.vars ? { vars: flowInput.vars } : {}),
           ...(flowInput.store ? { store: flowInput.store } : {}),
+          // Store installs opt into auto-update by default (app feel): new
+          // source versions re-plan and auto-apply when clean. Link/Git
+          // installs stay manual.
+          ...(flowInput.store ? { autoUpdate: true } : {}),
         });
         throwIfStaleFlow(flow);
         clearCapsuleListCache(workspace);

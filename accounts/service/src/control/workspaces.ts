@@ -1192,6 +1192,7 @@ async function createCapsule(
       400,
     );
   }
+  const autoUpdate = body.autoUpdate === true;
   const vars = normalizedVarsValue(body.vars);
   if (body.vars !== undefined && vars === undefined) {
     return errorJson(
@@ -1303,6 +1304,7 @@ async function createCapsule(
     environment,
     sourceId,
     installConfigId: resolvedInstallConfigId,
+    ...(autoUpdate ? { autoUpdate: true } : {}),
   });
   if (resolvedInstallConfig && issuer) {
     await ensureTakosumiAccountsOidcForCapsule({

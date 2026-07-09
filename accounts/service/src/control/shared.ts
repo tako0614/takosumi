@@ -148,12 +148,18 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 type PublicCapsuleInput = PublicCapsule &
-  Partial<Pick<Capsule, "installType" | "currentOutputId">>;
+  Partial<
+    Pick<
+      Capsule,
+      "installType" | "currentOutputId" | "autoUpdateAttemptSourceSnapshotId"
+    >
+  >;
 
 export function publicCapsule(installation: PublicCapsuleInput): PublicCapsule {
   const {
     installType: _installType,
     currentOutputId: _currentOutputId,
+    autoUpdateAttemptSourceSnapshotId: _autoUpdateAttempt,
     ...publicRecord
   } = installation;
   const currentStateVersionId =

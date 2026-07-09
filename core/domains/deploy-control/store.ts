@@ -295,6 +295,8 @@ export type InstallationPatch = Partial<
     | "compatibilityReportId"
     | "compatibilityStatus"
     | "status"
+    | "autoUpdate"
+    | "autoUpdateAttemptSourceSnapshotId"
     | "updatedAt"
   >
 >;

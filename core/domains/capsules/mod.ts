@@ -59,6 +59,8 @@ export interface CreateCapsuleRequest {
    */
   readonly sourceId?: string;
   readonly installConfigId: string;
+  /** Auto-update opt-in (see {@link Capsule.autoUpdate}). Defaults to off. */
+  readonly autoUpdate?: boolean;
 }
 
 export interface CapsulesServiceDependencies {
@@ -186,6 +188,7 @@ export class CapsulesService {
       environment: request.environment,
       currentStateGeneration: 0,
       status: "pending",
+      ...(request.autoUpdate === true ? { autoUpdate: true } : {}),
       createdAt: nowIso,
       updatedAt: nowIso,
     };
@@ -244,6 +247,29 @@ export class CapsulesService {
     if (!updated) {
       throw new OpenTofuControllerError("not_found", `capsule ${id} not found`);
     }
+    return updated;
+  }
+
+  /** Toggles the auto-update opt-in (see {@link Capsule.autoUpdate}). */
+  async setCapsuleAutoUpdate(id: string, enabled: boolean): Promise<Capsule> {
+    await this.#requireCapsule(id);
+    const updated = await this.#store.patchInstallation(id, {
+      autoUpdate: enabled,
+      updatedAt: this.#now().toISOString(),
+    });
+    if (!updated) {
+      throw new OpenTofuControllerError("not_found", `capsule ${id} not found`);
+    }
+    await this.#activity.record({
+      workspaceId: updated.workspaceId,
+      spaceId: updated.workspaceId,
+      action: enabled
+        ? "capsule.auto_update_enabled"
+        : "capsule.auto_update_disabled",
+      targetType: "capsule",
+      targetId: updated.id,
+      metadata: { name: updated.name, environment: updated.environment },
+    });
     return updated;
   }
 

@@ -28,6 +28,7 @@ import {
   Archive,
   ArrowLeft,
   ExternalLink,
+  RefreshCw,
   RotateCcw,
   Settings2,
   Trash2,
@@ -62,6 +63,7 @@ import {
   planCapsule,
   patchInstallConfig,
   putCapsuleProviderConnectionSet,
+  setCapsuleAutoUpdate,
 } from "../../lib/control-api.ts";
 import { createAction } from "../account/lib/action.tsx";
 import {
@@ -104,6 +106,7 @@ import {
   StatusBadge,
   Tabs,
   Textarea,
+  Toast,
 } from "../../components/ui/index.ts";
 import type { JsonValue } from "takosumi-contract";
 import { clearCapsuleListCache } from "../../lib/capsule-list.ts";
@@ -256,6 +259,17 @@ function Inner() {
     const runId = extractRunId(envelope);
     if (runId) navigate(`/runs/${runId}`);
   });
+  // 1-tap update: same plan run, but the run screen shows the App-Store-style
+  // progress and auto-continues a clean plan to apply (?auto=update).
+  const update = createAction(async () => {
+    const envelope = await planCapsule(capsuleId());
+    const runId = extractRunId(envelope);
+    if (runId) navigate(`/runs/${runId}?auto=update`);
+  });
+  const autoUpdateToggle = createAction(async () => {
+    await setCapsuleAutoUpdate(capsuleId(), capsule()?.autoUpdate !== true);
+    await refetchCapsule();
+  });
   const destroyPlan = createAction(async () => {
     const workspace = capsule()?.workspaceId;
     const envelope = await deleteCapsule(capsuleId());
@@ -347,6 +361,18 @@ function Inner() {
                     <Button variant="ghost" href="/">
                       {t("app.backToList")}
                     </Button>
+                    <Show when={effectiveCapsuleStatus(inst()) === "stale"}>
+                      <Button
+                        variant="primary"
+                        type="button"
+                        busy={update.busy()}
+                        disabled={update.busy()}
+                        onClick={() => void update.run()}
+                        icon={<RefreshCw size={16} />}
+                      >
+                        {t("app.updateNow")}
+                      </Button>
+                    </Show>
                     <Show when={launchUrl()}>
                       {(url) => (
                         <Button
@@ -417,6 +443,32 @@ function Inner() {
                     />
                   </Match>
                   <Match when={tab() === "settings"}>
+                    <Card>
+                      <CardHeader
+                        title={t("app.autoUpdate.title")}
+                        subtitle={t("app.autoUpdate.body")}
+                        actions={
+                          <Button
+                            variant={
+                              inst().autoUpdate === true
+                                ? "secondary"
+                                : "primary"
+                            }
+                            type="button"
+                            busy={autoUpdateToggle.busy()}
+                            disabled={autoUpdateToggle.busy()}
+                            onClick={() => void autoUpdateToggle.run()}
+                          >
+                            {inst().autoUpdate === true
+                              ? t("app.autoUpdate.disable")
+                              : t("app.autoUpdate.enable")}
+                          </Button>
+                        }
+                      />
+                      <Show when={autoUpdateToggle.error()}>
+                        {(message) => <Toast tone="error">{message()}</Toast>}
+                      </Show>
+                    </Card>
                     <SettingsTab
                       source={source()}
                       installConfig={installConfig()}
