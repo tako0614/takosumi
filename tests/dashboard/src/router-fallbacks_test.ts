@@ -87,8 +87,12 @@ describe("dashboard router fallbacks (FATAL FIX 3)", () => {
     expect(source).toContain(
       '<Route path="/connections" component={ConnectionsView} />',
     );
+    // Billing lives in the settings hub; the old /billing URL keeps bouncing.
     expect(source).toContain(
-      '<Route path="/billing" component={BillingView} />',
+      '<Route path="/settings/billing" component={BillingView} />',
+    );
+    expect(source).toMatch(
+      /<Route\s+path="\/billing"\s+component=\{\(\)\s*=>\s*<RedirectWithQuery\s+to="\/settings\/billing"\s*\/>\}\s*\/>/,
     );
     expect(source).toContain(
       '<Route path="/advanced/workspace" component={AdvancedWorkspaceView} />',

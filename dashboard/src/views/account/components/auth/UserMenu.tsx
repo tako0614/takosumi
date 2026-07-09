@@ -84,7 +84,7 @@ export default function UserMenu() {
           <div class="user-menu-divider" />
           <a
             class="user-menu-item"
-            href="/account"
+            href="/settings/account"
             onClick={() => setOpen(false)}
           >
             <UserCircle2 size={16} /> {t("nav.account")}

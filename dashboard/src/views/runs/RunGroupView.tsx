@@ -9,7 +9,6 @@ import "../../styles/wave-b.css";
 import { createMemo, createResource, For, Match, Show, Switch } from "solid-js";
 import { useParams } from "@solidjs/router";
 import { Layers } from "lucide-solid";
-import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import {
   approveRunGroup,
@@ -47,7 +46,7 @@ function Inner() {
   });
 
   return (
-    <AppShell>
+    <>
       <PageHeader
         title={t("runGroup.title")}
         subtitle={t("runGroup.subtitle")}
@@ -161,7 +160,7 @@ function Inner() {
           }}
         </Match>
       </Switch>
-    </AppShell>
+    </>
   );
 }
 

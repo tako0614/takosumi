@@ -13,6 +13,10 @@ const read = (rel: string) =>
   );
 
 const appShellSource = read("views/account/components/shell/AppShell.tsx");
+const shellLayoutSource = read(
+  "views/account/components/shell/ShellLayout.tsx",
+);
+const navSource = read("views/account/components/shell/nav.ts");
 const sidebarSource = read("views/account/components/shell/Sidebar.tsx");
 const mobileTabsSource = read("views/account/components/shell/MobileTabs.tsx");
 const topBarSource = read("views/account/components/shell/TopBar.tsx");
@@ -23,6 +27,7 @@ const workspaceSettingsSource = read(
   "views/workspace/WorkspaceSettingsView.tsx",
 );
 const userMenuSource = read("views/account/components/auth/UserMenu.tsx");
+const indexSource = read("index.tsx");
 const shellCssSource = read("styles/shell.css");
 
 describe("dashboard shell navigation layout", () => {
@@ -40,57 +45,100 @@ describe("dashboard shell navigation layout", () => {
     );
   });
 
-  test("sidebar leads with app-first surfaces and keeps hosting management lower", () => {
-    expect(sidebarSource).toContain('labelKey: "nav.apps"');
-    expect(sidebarSource).toContain('href: "/new"');
-    expect(sidebarSource).toContain('labelKey: "nav.add"');
-    expect(sidebarSource).toContain('href: "/runs"');
-    expect(sidebarSource).toContain('labelKey: "nav.runs"');
-    expect(sidebarSource).toContain('href: "/account"');
-    expect(sidebarSource).toContain('labelKey: "nav.account"');
-    expect(sidebarSource).not.toContain('href: "/store"');
-    expect(sidebarSource).not.toContain('labelKey: "nav.store"');
-    expect(sidebarSource).toContain("const MANAGE");
-    expect(sidebarSource).toContain("sidebar-nav-manage");
-    // Apps (/) stays the launcher; the full Services list remains secondary.
-    expect(sidebarSource).toContain('href: "/services"');
-    expect(sidebarSource).toContain('labelKey: "nav.services"');
-    expect(sidebarSource).not.toContain('href: "/connections"');
-    expect(sidebarSource).not.toContain('labelKey: "nav.connections"');
-    expect(sidebarSource).toContain('href: "/advanced/workspace"');
-    expect(sidebarSource).toContain('labelKey: "nav.workspaceSettings"');
-    // Cloud/Billing stay off the primary shell and are reached from settings.
-    expect(sidebarSource).toContain("isTakosumiCloudRuntime");
-    expect(sidebarSource).not.toContain('href="/billing"');
-    expect(sidebarSource).not.toContain('href="/cloud"');
-    // The workspace switcher moved out of the profile menu into the sidebar.
-    expect(sidebarSource).toContain("WorkspaceSwitcher");
-    expect(sidebarSource.indexOf('class="sidebar-workspace"')).toBeLessThan(
-      sidebarSource.indexOf('class="sidebar-nav"'),
-    );
-    // Notifications are still an attention affordance, not a sidebar item.
-    expect(sidebarSource).not.toContain('href: "/notifications"');
+  test("the chrome is a route-level layout, not a per-view wrapper", () => {
+    // ShellLayout = AuthGuard + AppShell, mounted once in the route table.
+    expect(shellLayoutSource).toContain("AuthGuard");
+    expect(shellLayoutSource).toContain("<AppShell>{props.children}</AppShell>");
+    expect(indexSource).toContain("<Route component={ShellLayout}>");
+    // No view may re-wrap itself in the chrome (the layout owns it).
+    const viewsThatMustNotWrap = [
+      "views/apps/AppListView.tsx",
+      "views/store/StoreView.tsx",
+      "views/new/NewAppView.tsx",
+      "views/runs/RunView.tsx",
+      "views/workspace/WorkspaceSettingsView.tsx",
+      "views/settings/SettingsView.tsx",
+      "views/settings/ManageView.tsx",
+    ];
+    for (const rel of viewsThatMustNotWrap) {
+      expect(read(rel)).not.toContain("AppShell");
+    }
   });
 
-  test("mobile bottom bar is the app-first launcher/add/settings trio, icon-only", () => {
-    expect(mobileTabsSource).toContain('href: "/"');
-    expect(mobileTabsSource).toContain('href: "/new"');
-    expect(mobileTabsSource).toContain('href: "/advanced/workspace"');
-    // Account + activity moved to the top-bar profile avatar; hosting internals
-    // stay out of the bottom bar entirely.
-    expect(mobileTabsSource).not.toContain('href: "/account"');
-    expect(mobileTabsSource).not.toContain('href: "/runs"');
-    expect(mobileTabsSource).not.toContain('href: "/store"');
-    expect(mobileTabsSource).not.toContain('href: "/services"');
-    expect(mobileTabsSource).not.toContain('href: "/connections"');
-    // Icons carry the meaning; the two-character labels are gone (the
-    // accessible name stays as aria-label on each link).
+  test("nav.ts is the single source of truth: home / store / settings everywhere", () => {
+    // The consumer trio, in order.
+    const primary = navSource.slice(
+      navSource.indexOf("PRIMARY_NAV"),
+      navSource.indexOf("ManageDestination"),
+    );
+    expect(primary).toContain('href: "/", labelKey: "nav.home"');
+    expect(primary).toContain('href: "/store", labelKey: "nav.store"');
+    expect(primary).toContain('href: "/settings", labelKey: "nav.settings"');
+    // Deploy-console destinations stay OUT of the primary nav.
+    for (const banned of ['"/new"', '"/runs"', '"/account"', '"/services"']) {
+      expect(primary).not.toContain(`href: ${banned}`);
+    }
+    // Sidebar and mobile tabs render the shared model — no hard-coded hrefs.
+    expect(sidebarSource).toContain("PRIMARY_NAV");
+    expect(sidebarSource).not.toContain('href: "/');
+    expect(mobileTabsSource).toContain("PRIMARY_NAV");
+    expect(mobileTabsSource).not.toContain('href: "/');
+    // TopBar titles derive from the same module.
+    expect(topBarSource).toContain('import { SECTION_TITLES } from "./nav.ts"');
+    expect(topBarSource).not.toContain("const SECTION_TITLES");
+  });
+
+  test("hosting management is relocated, not removed: /settings/manage catalogs every surface", () => {
+    // 機能は消さず移設 — every old console destination stays reachable.
+    for (const href of [
+      '"/services"',
+      '"/connections"',
+      '"/cloud"',
+      '"/runs"',
+      '"/graph"',
+      '"/activity"',
+      '"/advanced/workspace"',
+    ]) {
+      expect(navSource).toContain(`href: ${href}`);
+    }
+    // …and their routes stay alive in the route table.
+    for (const route of [
+      '<Route path="/services" component={ServiceListView} />',
+      '<Route path="/connections" component={ConnectionsView} />',
+      '<Route path="/cloud" component={CloudResourcesView} />',
+      '<Route path="/runs" component={RunsListView} />',
+      '<Route path="/graph" component={GraphView} />',
+      '<Route path="/activity" component={ActivityView} />',
+      '<Route path="/advanced/workspace" component={AdvancedWorkspaceView} />',
+    ]) {
+      expect(indexSource).toContain(route);
+    }
+    // The settings hub links to the catalog.
+    expect(read("views/settings/SettingsView.tsx")).toContain(
+      '"/settings/manage"',
+    );
+    expect(read("views/settings/ManageView.tsx")).toContain(
+      "MANAGE_DESTINATIONS",
+    );
+  });
+
+  test("the store is a first-class tab (no /store → /new bounce)", () => {
+    expect(indexSource).toContain('<Route path="/store" component={StoreView} />');
+    expect(indexSource).not.toContain(
+      '<Route path="/store" component={() => <RedirectWithQuery to="/new" />} />',
+    );
+    // /new stays alive as the install-execution flow (external /install links).
+    expect(indexSource).toContain('<Route path="/new" component={NewAppView} />');
+    expect(indexSource).toContain('path="/install"');
+  });
+
+  test("mobile bottom bar mirrors the sidebar trio, icon-only", () => {
+    expect(mobileTabsSource).toContain("<tab.icon size={24} />");
     expect(mobileTabsSource).not.toContain("mobile-tab-label");
-    expect(mobileTabsSource).toContain("aria-label={tab.label()}");
+    expect(mobileTabsSource).toContain("aria-label={t(tab.labelKey)}");
     expect(shellCssSource).toContain(
       "grid-template-columns: repeat(auto-fit, minmax(56px, 1fr));",
     );
-    // The redundant mobile top-bar "+ add" is gone (the bottom bar owns add).
     expect(shellCssSource).not.toContain(".topbar-icon-btn.topbar-add");
   });
 
@@ -105,9 +153,9 @@ describe("dashboard shell navigation layout", () => {
     expect(topBarSource).not.toContain("topbar-brand");
   });
 
-  test("profile menu keeps account + history; connections/settings/billing/switcher moved to the sidebar", () => {
+  test("profile menu keeps account + history shortcuts under the settings IA", () => {
     expect(userMenuSource).toContain('href="/runs"');
-    expect(userMenuSource).toContain('href="/account"');
+    expect(userMenuSource).toContain('href="/settings/account"');
     expect(userMenuSource).toContain("dashboardDocsHref");
     expect(userMenuSource).not.toContain("WorkspaceSwitcher");
     expect(userMenuSource).not.toContain('href="/connections"');
@@ -120,14 +168,18 @@ describe("dashboard shell navigation layout", () => {
     expect(spaceSwitcherSource).toContain("topbar-workspace-settings");
     expect(spaceSwitcherSource).not.toContain("disabled={");
     expect(spaceSwitcherSource).not.toContain("createSpace");
-    // Management vocabulary parity. Keys are flat with dots, so assert direct
-    // access — toHaveProperty would treat "a.b" as a nested path.
+    // Vocabulary parity. Keys are flat with dots, so assert direct access —
+    // toHaveProperty would treat "a.b" as a nested path.
+    expect(en["nav.settings"]).toBe("Settings");
+    expect(ja["nav.settings"]).toBe("設定");
+    expect(en["nav.home"]).toBe("Home");
+    expect(ja["nav.home"]).toBe("ホーム");
     expect(en["nav.connections"]).toBeTruthy();
     expect(ja["nav.connections"]).toBeTruthy();
     expect(en["nav.primary"]).toBeTruthy();
     expect(ja["nav.primary"]).toBeTruthy();
-    expect(en["nav.workspaceSettings"]).toBeTruthy();
-    expect(ja["nav.workspaceSettings"]).toBeTruthy();
+    expect(en["settings.manage.title"]).toBeTruthy();
+    expect(ja["settings.manage.title"]).toBeTruthy();
     expect(en["workspace.settings"]).toBe("Workspace settings");
     expect(ja["workspace.settings"]).toBe("ワークスペース設定");
     expect(en["workspace.change"]).toBe("Switch");

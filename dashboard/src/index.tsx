@@ -40,7 +40,15 @@ const LegalView = lazy(() => import("./views/legal/LegalView.tsx"));
 const NotFoundView = lazy(() => import("./views/NotFoundView.tsx"));
 
 // --- Normal hosted-service surface --------------------------------------------
+// Every authenticated screen nests under ShellLayout (AuthGuard + AppShell) —
+// views no longer wrap themselves in the chrome.
+const ShellLayout = lazy(
+  () => import("./views/account/components/shell/ShellLayout.tsx"),
+);
 const AppListView = lazy(() => import("./views/apps/AppListView.tsx"));
+const StoreView = lazy(() => import("./views/store/StoreView.tsx"));
+const SettingsView = lazy(() => import("./views/settings/SettingsView.tsx"));
+const ManageView = lazy(() => import("./views/settings/ManageView.tsx"));
 const ServiceListView = lazy(() => import("./views/apps/ServiceListView.tsx"));
 const AppDetailView = lazy(() => import("./views/apps/AppDetailView.tsx"));
 const NewAppView = lazy(() => import("./views/new/NewAppView.tsx"));
@@ -146,22 +154,34 @@ function App() {
         component={() => <RedirectWithQuery to="/sign-in" />}
       />
 
-      {/* Normal hosted-service surface (AuthGuard-gated inside each view). */}
-      <Route path="/" component={AppListView} />
-      <Route path="/services" component={ServiceListView} />
-      <Route path="/new" component={NewAppView} />
-      <Route path="/store" component={() => <RedirectWithQuery to="/new" />} />
-      <Route path="/cloud" component={CloudResourcesView} />
-      <Route path="/connections" component={ConnectionsView} />
-      <Route path="/billing" component={BillingView} />
-      <Route path="/services/:id" component={AppDetailView} />
-      <Route path="/services/:id/:tab" component={AppDetailView} />
-      <Route path="/runs" component={RunsListView} />
-      <Route path="/runs/:id" component={RunView} />
-      <Route path="/run-groups/:id" component={RunGroupView} />
-      <Route path="/graph" component={GraphView} />
-      <Route path="/activity" component={ActivityView} />
-      <Route path="/notifications" component={NotificationsView} />
+      {/* Normal hosted-service surface — ShellLayout owns AuthGuard + chrome.
+          Primary tabs: / (launcher), /store (discovery), /settings (hub).
+          Hosting management stays fully reachable via /settings/manage. */}
+      <Route component={ShellLayout}>
+        <Route path="/" component={AppListView} />
+        <Route path="/store" component={StoreView} />
+        <Route path="/settings" component={SettingsView} />
+        <Route path="/settings/account" component={AccountView} />
+        <Route path="/settings/billing" component={BillingView} />
+        <Route path="/settings/manage" component={ManageView} />
+        <Route path="/services" component={ServiceListView} />
+        <Route path="/new" component={NewAppView} />
+        <Route path="/cloud" component={CloudResourcesView} />
+        <Route path="/connections" component={ConnectionsView} />
+        <Route path="/services/:id" component={AppDetailView} />
+        <Route path="/services/:id/:tab" component={AppDetailView} />
+        <Route path="/runs" component={RunsListView} />
+        <Route path="/runs/:id" component={RunView} />
+        <Route path="/run-groups/:id" component={RunGroupView} />
+        <Route path="/graph" component={GraphView} />
+        <Route path="/activity" component={ActivityView} />
+        <Route path="/notifications" component={NotificationsView} />
+        <Route path="/advanced/workspace" component={AdvancedWorkspaceView} />
+        <Route
+          path="/advanced/workspace/:tab"
+          component={AdvancedWorkspaceView}
+        />
+      </Route>
       <Route
         path="/workspace/settings"
         component={() => <RedirectWithQuery to="/advanced/workspace" />}
@@ -172,12 +192,14 @@ function App() {
           <RedirectWithQuery to={`/advanced/workspace/${props.params.tab}`} />
         )}
       />
-      <Route path="/advanced/workspace" component={AdvancedWorkspaceView} />
       <Route
-        path="/advanced/workspace/:tab"
-        component={AdvancedWorkspaceView}
+        path="/account"
+        component={() => <RedirectWithQuery to="/settings/account" />}
       />
-      <Route path="/account" component={AccountView} />
+      <Route
+        path="/billing"
+        component={() => <RedirectWithQuery to="/settings/billing" />}
+      />
 
       {/* Old paths → new homes. /install is the external install link
           (client-handled): it forwards its query to /new, where
@@ -233,15 +255,15 @@ function App() {
       />
       <Route
         path="/account/billing"
-        component={() => <Navigate href="/billing" />}
+        component={() => <Navigate href="/settings/billing" />}
       />
       <Route
         path="/account/profile"
-        component={() => <Navigate href="/account" />}
+        component={() => <Navigate href="/settings/account" />}
       />
       <Route
         path="/account/sessions"
-        component={() => <Navigate href="/account" />}
+        component={() => <Navigate href="/settings/account" />}
       />
       <Route
         path="/space/settings"

@@ -4,7 +4,7 @@
  * nav live in the sidebar; this bar names where you are (important on mobile,
  * where the sidebar is hidden) and carries the global notifications / account
  * affordances (the profile avatar opens account, activity, and preferences).
- * Adding an app is owned by the sidebar (desktop) and the bottom bar (mobile).
+ * Adding an app is owned by the store tab (shared nav model in `nav.ts`).
  * The bell badge counts services needing attention in the current Workspace.
  */
 import { A, useLocation } from "@solidjs/router";
@@ -12,30 +12,14 @@ import { createMemo, createSignal, onCleanup, Show } from "solid-js";
 import { Bell } from "lucide-solid";
 import UserMenu from "../auth/UserMenu.tsx";
 import WorkspaceSwitcher from "./WorkspaceSwitcher.tsx";
+import { SECTION_TITLES } from "./nav.ts";
 import { currentWorkspaceId } from "../../../../lib/workspace-state.ts";
 import { peekCapsulesCached } from "../../../../lib/capsule-list.ts";
 import {
   isVisibleServiceCapsule,
   needsAttention,
 } from "../../../../lib/capsules-ui.ts";
-import { type MessageKey, t } from "../../../../i18n/index.ts";
-
-/** Section title shown in the top bar, by route. Detail routes show the
- * section they belong to (the item's own name stays in the page header). */
-const SECTION_TITLES: ReadonlyArray<readonly [RegExp, MessageKey]> = [
-  [/^\/$/, "nav.apps"],
-  [/^\/services(\/|$)/, "nav.services"],
-  [/^\/new(\/|$)/, "nav.add"],
-  [/^\/cloud(\/|$)/, "nav.cloudResources"],
-  [/^\/connections(\/|$)/, "nav.connections"],
-  [/^\/advanced\/workspace(\/|$)/, "nav.workspaceSettings"],
-  [/^\/billing(\/|$)/, "nav.billing"],
-  [/^\/runs(\/|$)/, "nav.runs"],
-  [/^\/run-groups(\/|$)/, "nav.runs"],
-  [/^\/notifications(\/|$)/, "nav.notifications"],
-  [/^\/activity(\/|$)/, "nav.activity"],
-  [/^\/account(\/|$)/, "nav.account"],
-];
+import { t } from "../../../../i18n/index.ts";
 
 export default function TopBar() {
   const loc = useLocation();

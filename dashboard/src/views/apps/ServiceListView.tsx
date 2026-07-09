@@ -16,7 +16,6 @@ import {
   Trash2,
 } from "lucide-solid";
 import type { JSX } from "solid-js";
-import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import { currentWorkspaceId } from "../../lib/workspace-state.ts";
 import { getDashboardOverviewCached } from "../../lib/dashboard-overview.ts";
@@ -77,7 +76,7 @@ function Inner() {
     `/services/${encodeURIComponent(inst.id)}/danger`;
 
   return (
-    <AppShell>
+    <>
       {/* Title lives in the top bar; this slim toolbar carries the page's
           context line + the add action. */}
       <div class="av-list-toolbar">
@@ -152,7 +151,7 @@ function Inner() {
           </Match>
         </Switch>
       </Show>
-    </AppShell>
+    </>
   );
 }
 

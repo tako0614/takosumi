@@ -34,11 +34,13 @@ export const en: Record<keyof typeof ja, string> = {
   "common.empty": "No data.",
 
   // --- nav / shell ----------------------------------------------------------
-  "nav.home": "Apps",
+  "nav.home": "Home",
   "nav.apps": "Apps",
   "nav.services": "Services",
   "nav.add": "Add",
   "nav.store": "Store",
+  "nav.settings": "Settings",
+  "nav.graph": "Dependencies",
   "store.title": "Store",
   "store.subtitle": "Find apps and services to add from the store.",
   "store.noWorkspace": "Select a Workspace first.",
@@ -66,6 +68,34 @@ export const en: Record<keyof typeof ja, string> = {
   "theme.system": "System",
   "theme.light": "Light",
   "theme.dark": "Dark",
+
+  // --- settings hub -----------------------------------------------------------
+  "settings.title": "Settings",
+  "settings.subtitle":
+    "Account, billing, notifications, and the detailed management tools.",
+  "settings.section.general": "General",
+  "settings.section.advanced": "Advanced",
+  "settings.account.title": "Account",
+  "settings.account.desc": "Profile and sign-in details",
+  "settings.billing.title": "Plan & billing",
+  "settings.billing.desc": "Plan, usage, and invoices",
+  "settings.notifications.title": "Notifications",
+  "settings.notifications.desc": "Updates and items needing attention",
+  "settings.workspace.title": "Workspace",
+  "settings.workspace.desc": "Name, members, and sharing",
+  "settings.manage.entry": "Management tools",
+  "settings.manage.entryDesc":
+    "Detailed screens for service internals, connections, and run history",
+  "settings.manage.title": "Management tools",
+  "settings.manage.subtitle":
+    "Screens that work directly with hosting internals. Everyday use never requires them.",
+  "settings.manage.services": "Every service and its status",
+  "settings.manage.connections": "Cloud account connections and keys",
+  "settings.manage.cloud": "Cloud resource inventory and usage",
+  "settings.manage.runs": "Deploy and change execution records",
+  "settings.manage.graph": "Dependencies between services",
+  "settings.manage.activity": "Who changed what, and when",
+  "settings.manage.workspace": "Members, keys, backups, shares, policy",
 
   // --- workspace switcher -------------------------------------------------------
   "workspace.label": "Workspace",
