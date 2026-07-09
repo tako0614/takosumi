@@ -763,6 +763,8 @@ export const ja = {
     "サービスの追加に失敗しました。内容を確認して、もう一度お試しください。",
   "new.error.genericWithDetails":
     "サービスの追加に失敗しました。詳細: {message}",
+  "new.error.connectionRequired":
+    "このアプリの公開にはクラウドアカウントの接続が必要です。接続を設定してから、もう一度お試しください。",
   "new.error.appHostnameUnavailable":
     "この公開URL名は既に使われています。別の名前にして、もう一度お試しください。",
   "new.hostnameConflict.title": "別の公開URL名にしてください",

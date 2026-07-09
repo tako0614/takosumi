@@ -1462,7 +1462,11 @@ function Inner() {
     return (
       managedProvider !== undefined &&
       providerTail(managedProvider) === providerTail(row.provider) &&
-      providerTail(row.provider) === "cloudflare"
+      providerTail(row.provider) === "cloudflare" &&
+      // The fallback is real only when an operator-managed connection is
+      // actually listed (Cloud). A self-host without one must show the
+      // friendly connection callout instead of failing server-side.
+      managedProviderConnectionForRow(row) !== undefined
     );
   };
   const hasManagedCloudflareProviderFallback = () =>
@@ -2997,7 +3001,10 @@ function Inner() {
                             </Badge>
                           </div>
                           <p class="wb-compat-summary">
-                            {compatibilitySummaryDisplay(result())}
+                            {result().level === "ready" ||
+                            result().level === "auto_capsulized"
+                              ? t("new.compat.readyBrief")
+                              : compatibilitySummaryDisplay(result())}
                           </p>
                           <Show when={result().level === "needs_patch"}>
                             <p class="wb-note">{t("new.compat.patchHelp")}</p>
