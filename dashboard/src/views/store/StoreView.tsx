@@ -76,6 +76,7 @@ function Inner() {
         locale={locale()}
         onConfigure={onConfigure}
         listingBadge={listingBadge}
+        showSourceControls={false}
       />
     </div>
   );

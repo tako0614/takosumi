@@ -763,6 +763,8 @@ export const en: Record<keyof typeof ja, string> = {
     "The service could not be added. Check the details and try again.",
   "new.error.genericWithDetails":
     "The service could not be added. Details: {message}",
+  "new.error.connectionRequired":
+    "Publishing this app needs a connected cloud account. Set up the connection, then try again.",
   "new.error.appHostnameUnavailable":
     "That public URL name is already in use. Choose another name and try again.",
   "new.hostnameConflict.title": "Choose another public URL name",

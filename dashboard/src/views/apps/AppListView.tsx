@@ -285,7 +285,7 @@ function Inner() {
     });
     setCurrentWorkspaceId(workspace.id);
     window.dispatchEvent(new Event("takosumi:workspaces-changed"));
-    navigate("/new");
+    navigate("/store");
     return workspace;
   });
 
@@ -440,7 +440,7 @@ function AppLauncher(props: {
           )}
         </For>
         <li>
-          <a class="av-tile av-tile-add" href="/new">
+          <a class="av-tile av-tile-add" href="/store">
             <span class="av-tile-icon" aria-hidden="true">
               <Plus />
             </span>
@@ -578,7 +578,7 @@ function WorkspaceStartPanel() {
         <h2 class="av-start-title">{t("apps.start.titleEmpty")}</h2>
         <p class="av-start-sub">{t("apps.start.bodyEmpty")}</p>
       </div>
-      <a href="/new" class="av-start-action">
+      <a href="/store" class="av-start-action">
         <Sparkles size={18} aria-hidden="true" />
         <span>{t("apps.start.optionStore")}</span>
       </a>
@@ -596,7 +596,7 @@ function AppsEmptyPanel() {
         <p class="av-start-sub">{t("apps.empty.body")}</p>
       </div>
       <div class="av-start-actions">
-        <a href="/new" class="av-start-action">
+        <a href="/store" class="av-start-action">
           <Sparkles size={18} aria-hidden="true" />
           <span>{t("apps.add")}</span>
         </a>
