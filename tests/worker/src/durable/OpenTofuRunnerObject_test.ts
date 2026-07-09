@@ -99,6 +99,115 @@ test("OpenTofu runner Durable Object promotes runner-local plan artifact to R2",
   assert.notDeepEqual(encrypted, PLAN_BYTES);
 });
 
+test("OpenTofu runner Durable Object retries transient R2 put errors", async () => {
+  const r2 = new FlakyR2Bucket({
+    failKey: "opentofu-plan-runs/plan_retry/tfplan.enc",
+    failTimes: 2,
+    message:
+      "put: Please look at https://www.cloudflarestatus.com for issues or contact customer support. (10043)",
+  });
+  const runner = runnerWithContainer(r2, {
+    async containerFetch(request) {
+      const path = new URL(request.url).pathname;
+      if (request.method === "POST" && path === "/runs/plan_retry") {
+        return Response.json({
+          status: "succeeded",
+          exitCode: 0,
+          planDigest: PLAN_DIGEST,
+          planArtifact: {
+            kind: "runner-local",
+            ref: "runner-local://plan_retry/tfplan",
+            digest: PLAN_DIGEST,
+            contentType: "application/vnd.opentofu.plan",
+          },
+        });
+      }
+      if (
+        request.method === "GET" &&
+        path === "/runs/plan_retry/artifacts/tfplan"
+      ) {
+        return new Response(PLAN_BYTES, {
+          headers: { "content-type": "application/vnd.opentofu.plan" },
+        });
+      }
+      if (
+        request.method === "GET" &&
+        path === "/runs/plan_retry/artifacts/tfplan-json"
+      ) {
+        return Response.json({ error: "not found" }, { status: 404 });
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  });
+
+  const response = await runner.fetch(
+    new Request("https://runner/runs/plan_retry", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "takosumi.opentofu-run@v1",
+        action: "plan",
+        runId: "plan_retry",
+        request: {},
+      }),
+    }),
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(r2.putAttempts("opentofu-plan-runs/plan_retry/tfplan.enc"), 3);
+  assert.ok(r2.body("opentofu-plan-runs/plan_retry/tfplan.enc"));
+});
+
+test("OpenTofu runner Durable Object returns contextual R2 put failures", async () => {
+  const r2 = new FailingR2Bucket("permission denied");
+  const runner = runnerWithContainer(r2, {
+    async containerFetch(request) {
+      const path = new URL(request.url).pathname;
+      if (request.method === "POST" && path === "/runs/plan_r2_denied") {
+        return Response.json({
+          status: "succeeded",
+          exitCode: 0,
+          planDigest: PLAN_DIGEST,
+          planArtifact: {
+            kind: "runner-local",
+            ref: "runner-local://plan_r2_denied/tfplan",
+            digest: PLAN_DIGEST,
+            contentType: "application/vnd.opentofu.plan",
+          },
+        });
+      }
+      if (
+        request.method === "GET" &&
+        path === "/runs/plan_r2_denied/artifacts/tfplan"
+      ) {
+        return new Response(PLAN_BYTES, {
+          headers: { "content-type": "application/vnd.opentofu.plan" },
+        });
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  });
+
+  const response = await runner.fetch(
+    new Request("https://runner/runs/plan_r2_denied", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "takosumi.opentofu-run@v1",
+        action: "plan",
+        runId: "plan_r2_denied",
+        request: {},
+      }),
+    }),
+  );
+
+  assert.equal(response.status, 500);
+  const body = (await response.json()) as Record<string, unknown>;
+  assert.equal(body.error, "OpenTofu runner artifact relay failed");
+  assert.match(String(body.detail), /plan artifact R2 put failed/);
+  assert.match(String(body.detail), /permission denied/);
+});
+
 test("OpenTofu runner Durable Object skips oversized plan JSON artifacts", async () => {
   const calls: string[] = [];
   const r2 = new FakeR2Bucket();
@@ -1074,6 +1183,47 @@ class FakeR2Bucket implements R2Bucket {
 
   body(key: string): Uint8Array | undefined {
     return this.#objects.get(key)?.bytes;
+  }
+}
+
+class FlakyR2Bucket extends FakeR2Bucket {
+  readonly #attempts = new Map<string, number>();
+
+  constructor(
+    readonly options: {
+      readonly failKey: string;
+      readonly failTimes: number;
+      readonly message: string;
+    },
+  ) {
+    super();
+  }
+
+  override async put(
+    key: string,
+    value: ReadableStream | ArrayBuffer | ArrayBufferView | string | null,
+    options?: R2PutOptions,
+  ): Promise<R2Object> {
+    const attempts = (this.#attempts.get(key) ?? 0) + 1;
+    this.#attempts.set(key, attempts);
+    if (key === this.options.failKey && attempts <= this.options.failTimes) {
+      throw new Error(this.options.message);
+    }
+    return await super.put(key, value, options);
+  }
+
+  putAttempts(key: string): number {
+    return this.#attempts.get(key) ?? 0;
+  }
+}
+
+class FailingR2Bucket extends FakeR2Bucket {
+  constructor(readonly message: string) {
+    super();
+  }
+
+  override put(): Promise<R2Object> {
+    return Promise.reject(new Error(this.message));
   }
 }
 
