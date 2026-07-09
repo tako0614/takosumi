@@ -22,43 +22,20 @@ import type {
 import { createMobileHostRouteUrl, openMobileHostRoute } from "./url.ts";
 import { mobileErrorMessage } from "./error.ts";
 import { copyMobileText } from "./shell.ts";
+import type {
+  MobileShellHostAction,
+  MobileShellHostActionContext,
+} from "./host-actions.ts";
+export {
+  defineMobileHostActions,
+  type MobileShellHostAction,
+  type MobileShellHostActionContext,
+  type MobileShellNativeIntent,
+} from "./host-actions.ts";
 
 export interface MobileShellMetric<Home> {
   readonly label: string;
   readonly value: (home: Home | undefined) => number | undefined;
-}
-
-export type MobileShellNativeIntent = "open" | "call";
-
-export interface MobileShellHostActionContext<Home> {
-  readonly session: MobileSession;
-  readonly home: Home | undefined;
-}
-
-export interface MobileShellHostAction<Home = unknown> {
-  readonly label: string;
-  readonly description: string;
-  readonly path:
-    | string
-    | ((context: MobileShellHostActionContext<Home>) => string | undefined);
-  readonly nativeIntent?: MobileShellNativeIntent;
-}
-
-export function defineMobileHostActions<Home>(
-  actions: readonly MobileShellHostAction<Home>[],
-): readonly MobileShellHostAction<Home>[] {
-  for (const action of actions) {
-    if (!action.label.trim()) {
-      throw new Error("Host action label is required.");
-    }
-    if (!action.description.trim()) {
-      throw new Error(`Host action description is required: ${action.label}`);
-    }
-    if (typeof action.path === "string") {
-      validateHostActionPath(action.path, action.label);
-    }
-  }
-  return actions;
 }
 
 export interface MobileShellHomeExtraContext<Home> {
@@ -480,12 +457,6 @@ function resolveHostActionPath<Home>(
   context: MobileShellHostActionContext<Home>,
 ): string | undefined {
   return typeof action.path === "function" ? action.path(context) : action.path;
-}
-
-function validateHostActionPath(path: string, label: string): void {
-  if (!path.startsWith("/") || path.startsWith("//")) {
-    throw new Error(`Host action path must be same-origin: ${label}`);
-  }
 }
 
 function resolvePushNotificationPath(
