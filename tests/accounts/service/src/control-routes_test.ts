@@ -4183,7 +4183,7 @@ test("POST /api/v1/workspaces/:id/capsules ignores Store-owned OpenTofu input de
   expect(config.store?.inputs).toEqual([]);
 });
 
-test("POST /api/v1/workspaces/:id/capsules auto-provisions Takosumi Accounts OIDC for yurucommu", async () => {
+test("POST /api/v1/workspaces/:id/capsules auto-provisions Takosumi Accounts OIDC from standard variables", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
@@ -4193,33 +4193,15 @@ test("POST /api/v1/workspaces/:id/capsules auto-provisions Takosumi Accounts OID
     {
       cookie,
       body: {
-        name: "yurucommu",
+        name: "generic-oidc-app",
         environment: "production",
         sourceId: "src_x",
         installConfigId: "cfg_x",
         vars: {
-          project_name: "yurucommu-space-a",
+          project_name: "generic-oidc-app",
           app_url: "https://community.example.test",
-        },
-        store: {
-          templateId: "yurucommu",
-          source: {
-            git: "https://github.com/tako0614/yurucommu.git",
-            ref: "1fe727f1843c0c4a91fece16cbc73950225e078d",
-            path: ".",
-          },
-          order: 1000,
-          surface: "service",
-          kind: "worker",
-          provider: "cloudflare",
-          suggestedName: "yurucommu",
-          badge: { ja: "追加候補", en: "Installable" },
-          name: { ja: "yurucommu", en: "yurucommu" },
-          description: {
-            ja: "コミュニティを公開",
-            en: "Host a community",
-          },
-          inputs: [],
+          takosumi_accounts_issuer_url: "",
+          takosumi_accounts_client_id: "",
         },
       },
     },
@@ -4242,7 +4224,7 @@ test("POST /api/v1/workspaces/:id/capsules auto-provisions Takosumi Accounts OID
   const config = operations.calls.putInstallConfig?.[0] as {
     variableMapping: Record<string, unknown>;
   };
-  expect(config.variableMapping.project_name).toEqual("yurucommu-space-a");
+  expect(config.variableMapping.project_name).toEqual("generic-oidc-app");
   expect(config.variableMapping.app_url).toEqual(
     "https://community.example.test",
   );
@@ -4252,7 +4234,7 @@ test("POST /api/v1/workspaces/:id/capsules auto-provisions Takosumi Accounts OID
   );
 });
 
-test("POST /api/v1/workspaces/:id/capsules auto-provisions Takosumi Accounts OIDC for takos", async () => {
+test("POST /api/v1/workspaces/:id/capsules auto-provisions Takosumi Accounts OIDC from install metadata", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
@@ -4262,53 +4244,43 @@ test("POST /api/v1/workspaces/:id/capsules auto-provisions Takosumi Accounts OID
     {
       cookie,
       body: {
-        name: "takos",
+        name: "metadata-oidc-app",
         environment: "production",
         sourceId: "src_x",
         installConfigId: "cfg_x",
         vars: {
-          project_name: "takos-space-a",
-          app_url: "https://takos.example.test",
+          service_url: "https://workspace.example.test",
         },
         store: {
-          templateId: "takos",
-          source: {
-            git: "https://github.com/tako0614/takos.git",
-            ref: "main",
-            path: "deploy/opentofu",
-          },
           order: 110,
           surface: "service",
           kind: "worker",
-          provider: "cloudflare",
-          suggestedName: "takos",
+          provider: "generic",
+          suggestedName: "metadata-oidc-app",
           badge: { ja: "追加候補", en: "Installable" },
-          name: { ja: "Takos", en: "Takos" },
+          name: { ja: "OIDC App", en: "OIDC App" },
           description: {
-            ja: "AI ワークスペースを公開",
-            en: "Host an AI workspace",
+            ja: "OIDC 対応アプリ",
+            en: "An OIDC-enabled app",
           },
           inputs: [],
           installExperience: {
             projections: [
-              { kind: "service_name", variable: "project_name" },
               {
                 kind: "public_endpoint",
                 variables: {
-                  subdomain: "worker_name",
-                  url: "app_url",
+                  url: "service_url",
                 },
-                baseDomain: "app.takos.jp",
               },
               {
                 kind: "oidc_client",
                 variables: {
-                  issuerUrl: "takosumi_accounts_issuer_url",
-                  accountsUrl: "takosumi_accounts_url",
-                  clientId: "takosumi_accounts_client_id",
-                  redirectUri: "takosumi_accounts_redirect_uri",
+                  issuerUrl: "oidc_issuer_url",
+                  accountsUrl: "oidc_accounts_url",
+                  clientId: "oidc_client_id",
+                  redirectUri: "oidc_redirect_uri",
                 },
-                callbackPath: "/auth/oidc/callback",
+                callbackPath: "/oauth/callback",
               },
             ],
           },
@@ -4328,57 +4300,69 @@ test("POST /api/v1/workspaces/:id/capsules auto-provisions Takosumi Accounts OID
   const oidcClient = await store.findOidcClientForCapsule("inst_new");
   expect(oidcClient?.issuerUrl).toEqual(ORIGIN);
   expect(oidcClient?.redirectUris).toEqual([
-    "https://takos.example.test/auth/oidc/callback",
+    "https://workspace.example.test/oauth/callback",
   ]);
   expect(oidcClient?.tokenEndpointAuthMethod).toEqual("none");
   const config = operations.calls.putInstallConfig?.[0] as {
     variableMapping: Record<string, unknown>;
   };
-  expect(config.variableMapping.takosumi_accounts_issuer_url).toEqual(ORIGIN);
-  expect(config.variableMapping.takosumi_accounts_url).toEqual(ORIGIN);
-  expect(config.variableMapping.takosumi_accounts_client_id).toEqual(
-    oidcClient?.clientId,
-  );
-  expect(config.variableMapping.takosumi_accounts_redirect_uri).toEqual(
-    "https://takos.example.test/auth/oidc/callback",
+  expect(config.variableMapping.oidc_issuer_url).toEqual(ORIGIN);
+  expect(config.variableMapping.oidc_accounts_url).toEqual(ORIGIN);
+  expect(config.variableMapping.oidc_client_id).toEqual(oidcClient?.clientId);
+  expect(config.variableMapping.oidc_redirect_uri).toEqual(
+    "https://workspace.example.test/oauth/callback",
   );
 });
 
-test("POST /api/v1/workspaces/:id/capsules derives Takosumi Accounts OIDC from the public subdomain variable", async () => {
+test("POST /api/v1/workspaces/:id/capsules derives the OIDC redirect from public endpoint metadata", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
-  const operations = fakeOperations({
-    getSource: async (id) => ({
-      source: {
-        id,
-        workspaceId: "space_a",
-        spaceId: "space_a",
-        name: "yurucommu",
-        url: "https://github.com/tako0614/yurucommu.git",
-        defaultRef: "master",
-        defaultPath: ".",
-        status: "active",
-        autoSync: false,
-        createdAt: "2026-01-01T00:00:00Z",
-        updatedAt: "2026-01-01T00:00:00Z",
-      } as unknown as Awaited<
-        ReturnType<ControlPlaneOperations["getSource"]>
-      >["source"],
-    }),
-  });
+  const operations = fakeOperations();
   const { request: req, url } = request(
     "POST",
     "/api/v1/workspaces/space_a/capsules",
     {
       cookie,
       body: {
-        name: "community",
+        name: "public-endpoint-oidc-app",
         environment: "production",
-        sourceId: "src_yurucommu",
+        sourceId: "src_x",
         installConfigId: "cfg_x",
         vars: {
-          project_name: "community",
-          worker_name: "community-a",
+          public_host_label: "community-a",
+        },
+        store: {
+          order: 120,
+          surface: "service",
+          kind: "worker",
+          provider: "generic",
+          suggestedName: "public-endpoint-oidc-app",
+          badge: { ja: "追加候補", en: "Installable" },
+          name: { ja: "Public OIDC App", en: "Public OIDC App" },
+          description: {
+            ja: "公開 OIDC アプリ",
+            en: "A public OIDC-enabled app",
+          },
+          inputs: [],
+          installExperience: {
+            projections: [
+              {
+                kind: "public_endpoint",
+                variables: { subdomain: "public_host_label" },
+                baseDomain: "apps.example.test",
+              },
+              {
+                kind: "oidc_client",
+                variables: {
+                  issuerUrl: "oidc_issuer_url",
+                  accountsUrl: "oidc_accounts_url",
+                  clientId: "oidc_client_id",
+                  redirectUri: "oidc_redirect_uri",
+                },
+                callbackPath: "/session/callback",
+              },
+            ],
+          },
         },
       },
     },
@@ -4394,15 +4378,16 @@ test("POST /api/v1/workspaces/:id/capsules derives Takosumi Accounts OIDC from t
   expect(response?.status).toEqual(201);
   const oidcClient = await store.findOidcClientForCapsule("inst_new");
   expect(oidcClient?.redirectUris).toEqual([
-    "https://community-a.app.takos.jp/api/auth/callback/takos",
+    "https://community-a.apps.example.test/session/callback",
   ]);
   const config = operations.calls.putInstallConfig?.at(-1) as {
     variableMapping: Record<string, unknown>;
   };
-  expect(config.variableMapping.worker_name).toEqual("community-a");
-  expect(config.variableMapping.takosumi_accounts_issuer_url).toEqual(ORIGIN);
-  expect(config.variableMapping.takosumi_accounts_client_id).toEqual(
-    oidcClient?.clientId,
+  expect(config.variableMapping.public_host_label).toEqual("community-a");
+  expect(config.variableMapping.oidc_issuer_url).toEqual(ORIGIN);
+  expect(config.variableMapping.oidc_client_id).toEqual(oidcClient?.clientId);
+  expect(config.variableMapping.oidc_redirect_uri).toEqual(
+    "https://community-a.apps.example.test/session/callback",
   );
 });
 
@@ -4439,6 +4424,80 @@ test("POST /api/v1/workspaces/:id/capsules stores modulePath in a scoped Install
   expect(config.id.startsWith("icfg_")).toEqual(true);
   expect(config.internal).toEqual({ reason: "per_install_overrides" });
   expect(config.modulePath).toEqual("deploy/opentofu");
+});
+
+test("POST /api/v1/workspaces/:id/capsules stores an explicit source build recipe", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const sourceBuild = {
+    commands: [
+      { argv: ["bun", "install", "--frozen-lockfile"] },
+      { argv: ["bun", "run", "build"], workingDirectory: "web" },
+    ],
+    outputs: ["web/dist/index.js"],
+  };
+  const { request: req, url } = request(
+    "POST",
+    "/api/v1/workspaces/space_a/capsules",
+    {
+      cookie,
+      body: {
+        name: "source-build-app",
+        environment: "production",
+        sourceId: "src_x",
+        installConfigId: "cfg_x",
+        sourceBuild,
+      },
+    },
+  );
+
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+
+  expect(response?.status).toEqual(201);
+  const config = operations.calls.putInstallConfig?.[0] as {
+    sourceBuild?: unknown;
+  };
+  expect(config.sourceBuild).toEqual(sourceBuild);
+});
+
+test("POST /api/v1/workspaces/:id/capsules rejects an unsafe source build path", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const { request: req, url } = request(
+    "POST",
+    "/api/v1/workspaces/space_a/capsules",
+    {
+      cookie,
+      body: {
+        name: "source-build-app",
+        environment: "production",
+        sourceId: "src_x",
+        installConfigId: "cfg_x",
+        sourceBuild: {
+          commands: [{ argv: ["bun", "run", "build"] }],
+          outputs: ["../outside.js"],
+        },
+      },
+    },
+  );
+
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+
+  expect(response?.status).toEqual(400);
+  expect(operations.calls.putInstallConfig).toBeUndefined();
+  expect(operations.calls.createCapsule).toBeUndefined();
 });
 
 test("POST /api/v1/workspaces/:id/capsules inherits store modulePath when vars create a scoped InstallConfig", async () => {
@@ -5043,7 +5102,7 @@ test("POST /api/v1/capsules/:id/plan returns 201", async () => {
   expect(operations.calls.getRunCost).toContain("plan_1");
 });
 
-test("POST /api/v1/capsules/:id/plan backfills Takosumi Accounts OIDC for existing yurucommu Capsules", async () => {
+test("POST /api/v1/capsules/:id/plan backfills Takosumi Accounts OIDC from standard variables", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
@@ -5051,36 +5110,20 @@ test("POST /api/v1/capsules/:id/plan backfills Takosumi Accounts OIDC for existi
     operations.calls.getInstallConfig = [id];
     return {
       id,
-      name: "legacy-yurucommu-config",
+      name: "standard-oidc-config",
       sourceKind: "generic_capsule",
       installType: "opentofu_module",
       trustLevel: "trusted",
       variableMapping: {
-        project_name: "yurucommu",
-        app_url: "https://yurucommu.app.takos.jp",
+        project_name: "existing-oidc-app",
+        app_url: "https://existing.example.test",
+        takosumi_accounts_issuer_url: "",
+        takosumi_accounts_client_id: "",
       },
       outputAllowlist: {},
       policy: {},
       createdAt: "2026-01-01T00:00:00Z",
       updatedAt: "2026-01-01T00:00:00Z",
-    };
-  };
-  operations.getSource = async (id) => {
-    operations.calls.getSource = [id];
-    return {
-      source: {
-        id,
-        workspaceId: "space_a",
-        spaceId: "space_a",
-        name: "yurucommu",
-        url: "https://github.com/tako0614/yurucommu.git",
-        defaultRef: "master",
-        defaultPath: ".",
-        status: "active",
-        autoSync: false,
-        createdAt: "2026-01-01T00:00:00Z",
-        updatedAt: "2026-01-01T00:00:00Z",
-      },
     };
   };
   const { request: req, url } = request(
@@ -5100,14 +5143,14 @@ test("POST /api/v1/capsules/:id/plan backfills Takosumi Accounts OIDC for existi
   const oidcClient = await store.findOidcClientForCapsule("inst_1");
   expect(oidcClient?.issuerUrl).toEqual(ORIGIN);
   expect(oidcClient?.redirectUris).toEqual([
-    "https://yurucommu.app.takos.jp/api/auth/callback/takos",
+    "https://existing.example.test/api/auth/callback/takos",
   ]);
   expect(oidcClient?.tokenEndpointAuthMethod).toEqual("none");
   const config = operations.calls.putInstallConfig?.[0] as {
     variableMapping: Record<string, unknown>;
   };
   expect(config.variableMapping.app_url).toEqual(
-    "https://yurucommu.app.takos.jp",
+    "https://existing.example.test",
   );
   expect(config.variableMapping.takosumi_accounts_issuer_url).toEqual(ORIGIN);
   expect(config.variableMapping.takosumi_accounts_client_id).toEqual(
@@ -5119,7 +5162,7 @@ test("POST /api/v1/capsules/:id/plan backfills Takosumi Accounts OIDC for existi
   });
 });
 
-test("POST /api/v1/capsules/:id/plan backfills Takosumi Accounts OIDC for existing takos Capsules", async () => {
+test("POST /api/v1/capsules/:id/plan backfills Takosumi Accounts OIDC from install metadata", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
@@ -5127,36 +5170,49 @@ test("POST /api/v1/capsules/:id/plan backfills Takosumi Accounts OIDC for existi
     operations.calls.getInstallConfig = [id];
     return {
       id,
-      name: "legacy-takos-config",
+      name: "metadata-oidc-config",
       sourceKind: "generic_capsule",
       installType: "opentofu_module",
       trustLevel: "trusted",
       variableMapping: {
-        project_name: "takos",
-        app_url: "https://takos.app.takos.jp",
+        service_url: "https://backfill.example.test",
       },
       outputAllowlist: {},
       policy: {},
+      store: {
+        order: 120,
+        surface: "service",
+        kind: "worker",
+        provider: "generic",
+        suggestedName: "metadata-oidc-app",
+        badge: { ja: "追加候補", en: "Installable" },
+        name: { ja: "OIDC App", en: "OIDC App" },
+        description: {
+          ja: "OIDC 対応アプリ",
+          en: "An OIDC-enabled app",
+        },
+        inputs: [],
+        installExperience: {
+          projections: [
+            {
+              kind: "public_endpoint",
+              variables: { url: "service_url" },
+            },
+            {
+              kind: "oidc_client",
+              variables: {
+                issuerUrl: "oidc_issuer_url",
+                accountsUrl: "oidc_accounts_url",
+                clientId: "oidc_client_id",
+                redirectUri: "oidc_redirect_uri",
+              },
+              callbackPath: "/oauth/callback",
+            },
+          ],
+        },
+      },
       createdAt: "2026-01-01T00:00:00Z",
       updatedAt: "2026-01-01T00:00:00Z",
-    };
-  };
-  operations.getSource = async (id) => {
-    operations.calls.getSource = [id];
-    return {
-      source: {
-        id,
-        workspaceId: "space_a",
-        spaceId: "space_a",
-        name: "takos",
-        url: "https://github.com/tako0614/takos.git",
-        defaultRef: "main",
-        defaultPath: "deploy/opentofu",
-        status: "active",
-        autoSync: false,
-        createdAt: "2026-01-01T00:00:00Z",
-        updatedAt: "2026-01-01T00:00:00Z",
-      },
     };
   };
   const { request: req, url } = request(
@@ -5176,19 +5232,17 @@ test("POST /api/v1/capsules/:id/plan backfills Takosumi Accounts OIDC for existi
   const oidcClient = await store.findOidcClientForCapsule("inst_1");
   expect(oidcClient?.issuerUrl).toEqual(ORIGIN);
   expect(oidcClient?.redirectUris).toEqual([
-    "https://takos.app.takos.jp/auth/oidc/callback",
+    "https://backfill.example.test/oauth/callback",
   ]);
   expect(oidcClient?.tokenEndpointAuthMethod).toEqual("none");
   const config = operations.calls.putInstallConfig?.[0] as {
     variableMapping: Record<string, unknown>;
   };
-  expect(config.variableMapping.takosumi_accounts_issuer_url).toEqual(ORIGIN);
-  expect(config.variableMapping.takosumi_accounts_url).toEqual(ORIGIN);
-  expect(config.variableMapping.takosumi_accounts_client_id).toEqual(
-    oidcClient?.clientId,
-  );
-  expect(config.variableMapping.takosumi_accounts_redirect_uri).toEqual(
-    "https://takos.app.takos.jp/auth/oidc/callback",
+  expect(config.variableMapping.oidc_issuer_url).toEqual(ORIGIN);
+  expect(config.variableMapping.oidc_accounts_url).toEqual(ORIGIN);
+  expect(config.variableMapping.oidc_client_id).toEqual(oidcClient?.clientId);
+  expect(config.variableMapping.oidc_redirect_uri).toEqual(
+    "https://backfill.example.test/oauth/callback",
   );
   expect(operations.calls.createCapsulePlan?.[0]).toEqual({
     capsuleId: "inst_1",

@@ -330,6 +330,7 @@ export function runEnvironmentFailedRun<R extends PlanRun | ApplyRun>(
 export interface RunTemplateDispatch {
   readonly generatedRoot?: DispatchGeneratedRoot;
   readonly outputAllowlist?: InstallConfig["outputAllowlist"];
+  readonly sourceBuild?: InstallConfig["sourceBuild"];
 }
 
 /**
@@ -836,11 +837,13 @@ export interface GenericRootPlanContext {
   readonly providerEnvBindings: readonly RootInstallationProviderEnvBinding[];
   readonly outputAllowlist: InstallConfig["outputAllowlist"];
   readonly moduleFiles?: readonly OpenTofuCapsuleSourceFile[];
+  readonly sourceBuild?: InstallConfig["sourceBuild"];
 }
 
 export interface GenericRootDispatchContext {
   readonly generatedRoot: DispatchGeneratedRoot;
   readonly outputAllowlist: InstallConfig["outputAllowlist"];
+  readonly sourceBuild?: InstallConfig["sourceBuild"];
   /**
    * Credential delivery expected by this generated root. Omitted means the
    * normal root-variable OpenTofu path.
@@ -1588,17 +1591,19 @@ export class OpenTofuDeploymentController {
         sourceSnapshotId: input.snapshot.id,
         error,
       });
-      await this.#activity.record({
-        workspaceId: input.capsule.workspaceId ?? input.capsule.spaceId ?? "",
-        spaceId: input.capsule.workspaceId ?? input.capsule.spaceId ?? "",
-        action: "installation.auto_update_failed",
-        targetType: "installation",
-        targetId: input.capsule.id,
-        metadata: {
-          sourceSnapshotId: input.snapshot.id,
-          message: error instanceof Error ? error.message : String(error),
-        },
-      }).catch(() => {});
+      await this.#activity
+        .record({
+          workspaceId: input.capsule.workspaceId ?? input.capsule.spaceId ?? "",
+          spaceId: input.capsule.workspaceId ?? input.capsule.spaceId ?? "",
+          action: "installation.auto_update_failed",
+          targetType: "installation",
+          targetId: input.capsule.id,
+          metadata: {
+            sourceSnapshotId: input.snapshot.id,
+            message: error instanceof Error ? error.message : String(error),
+          },
+        })
+        .catch(() => {});
     }
   }
 
@@ -2185,6 +2190,7 @@ export function templateDispatchFromInputs(
     | {
         readonly generatedRoot?: DispatchGeneratedRoot;
         readonly outputAllowlist?: InstallConfig["outputAllowlist"];
+        readonly sourceBuild?: InstallConfig["sourceBuild"];
       }
     | undefined,
 ): RunTemplateDispatch {
@@ -2194,6 +2200,7 @@ export function templateDispatchFromInputs(
     ...(inputs.outputAllowlist
       ? { outputAllowlist: inputs.outputAllowlist }
       : {}),
+    ...(inputs.sourceBuild ? { sourceBuild: inputs.sourceBuild } : {}),
   };
 }
 
@@ -2364,7 +2371,8 @@ function releaseCommandDescriptorRow(
     command: [...command.command],
   };
   if (command.executor) row.executor = command.executor;
-  if (command.workingDirectory) row.working_directory = command.workingDirectory;
+  if (command.workingDirectory)
+    row.working_directory = command.workingDirectory;
   if (command.timeoutSeconds) row.timeout_seconds = command.timeoutSeconds;
   if (command.env) row.env = { ...command.env };
   return row;

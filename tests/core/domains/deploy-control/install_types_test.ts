@@ -474,62 +474,6 @@ test("provider-using installation fails closed when the connection vault is abse
   expect(runner.planJobs).toHaveLength(0);
 });
 
-test("app_source install ignores legacy InstallConfig.build dispatch", async () => {
-  const { runner, controller } = await installTypeFixture({
-    installConfig: {
-      installType: "app_source",
-      templateBinding: {
-        templateId: "cloudflare-worker-service",
-        templateVersion: "1.0.0",
-      },
-      variableMapping: { appName: "my-app", accountId: "acct_123" },
-      build: {
-        enabled: true,
-        commands: ["bun install", "bun run bundle"],
-        artifactPath: "build/worker.js",
-      },
-      policy: {},
-    },
-    connections: [connection("conn_cf", "cloudflare")],
-    providerEnvBindings: [
-      {
-        provider: "cloudflare",
-        alias: "main",
-        envId: "conn_cf",
-      },
-    ],
-    outputs: {
-      worker_name: { sensitive: false, value: "my-app" },
-      url: { sensitive: false, value: "https://my-app.workers.dev" },
-    },
-  });
-
-  const { planRun } = await controller.createInstallationPlan("inst_fixture");
-  expect(planRun.status).toEqual("succeeded");
-
-  expect(runner.planJobs[0]!.build).toBeUndefined();
-  expect(runner.planJobs[0]!.credentials).toEqual({
-    TF_VAR_cloudflare_main_api_token: "fixture-provider-token",
-  });
-});
-
-test("opentofu_module install ignores legacy InstallConfig.prebuiltArtifact dispatch", async () => {
-  const { runner, controller } = await installTypeFixture({
-    installConfig: {
-      installType: "opentofu_module",
-      variableMapping: {},
-      prebuiltArtifact: { path: "dist/worker.js" },
-      policy: {},
-    },
-    requiredProviders: [],
-  });
-
-  const { planRun } = await controller.createInstallationPlan("inst_fixture");
-  expect(planRun.status).toEqual("succeeded");
-  expect(runner.planJobs[0]!.prebuiltArtifact).toBeUndefined();
-  expect(runner.planJobs[0]!.build).toBeUndefined();
-});
-
 test("app_source does not fall back to template build dispatch", async () => {
   const { runner, controller } = await installTypeFixture({
     installConfig: {

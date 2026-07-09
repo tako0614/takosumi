@@ -139,24 +139,33 @@ in the Source / Run flow. Switching Store nodes changes the read source for
 listings and presentation metadata, not the Capsule execution model.
 
 Takosumi can reuse SourceSnapshots, provider mirrors, provider plugin caches,
-runner capacity controls, and clear progress phases. It must not decide what a
-deployable app artifact is. Worker bundles, container images, release URLs,
-object keys, digests, and build pipelines belong to the app repo, CI/release
-pipeline, registry, provider, or ordinary OpenTofu/Terraform module variables.
+runner capacity controls, package caches, and clear progress phases. The default
+fast path is a Git CI/release artifact consumed and SHA-256-verified by the
+repository's OpenTofu module. A Capsule can instead opt into `sourceBuild` with
+explicit argv commands and expected relative outputs. That phase receives no
+provider credentials and cannot select or create infrastructure; the Git module
+still owns the OpenTofu plan.
+
+`sourceBuild` is service-side Capsule configuration, not Store metadata and not
+an executable field in `.well-known/tcs.json`. Takosumi does not infer commands
+from `package.json`, and it does not silently fall back from a missing release
+artifact to a build. Expensive OCI/container image builds should remain in the
+app repository's CI and registry.
 
 Release/update automation is Git-native: a Source tracks a branch, tag, or
 commit ref; source sync resolves that ref to an immutable commit and archive; a
 Capsule that is active on an older commit becomes `stale`; Workspace update
-plans the change. Takosumi does not fetch arbitrary app artifacts outside the
-OpenTofu module. If the module consumes a prebuilt container/image/bundle, it
-does so through ordinary OpenTofu variables, providers, or data sources.
+plans the change. If the module consumes a prebuilt container/image/bundle, it
+does so through ordinary OpenTofu variables, providers, or data sources. An
+explicit source build runs against that same pinned snapshot before each
+plan/apply/destroy materialization.
 
 The reference runner keeps successful plan containers warm for
 `TAKOSUMI_RUNNER_KEEPALIVE_SECONDS` seconds (default `0`; official Cloud uses
 `120` so apply / destroy apply can return to the plan runner object while it is
 warm) and shuts down non-plan runs after success plus all failed runs
 immediately. Operators can also pass `TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR`,
-`TAKOSUMI_SOURCE_ARCHIVE_ZSTD_LEVEL`, and runner capacity retry knobs as
+`TAKOSUMI_SOURCE_BUILD_CACHE_DIR`, `TAKOSUMI_SOURCE_ARCHIVE_ZSTD_LEVEL`, and runner capacity retry knobs as
 non-secret speed settings. This is not a cross-run source-sync cache.
 
 ## Resource Shape Resolution

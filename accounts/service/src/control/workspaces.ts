@@ -165,6 +165,7 @@ import {
   parseCapsuleProviderConnectionBindings,
   parseLimit,
   spaceTypeValue,
+  sourceBuildValue,
   stringRecord,
   stringRecordValue,
 } from "./parse.ts";
@@ -1171,10 +1172,18 @@ async function createCapsule(
   const outputAllowlist = outputAllowlistValue(body.outputAllowlist);
   const storeMetadata = installConfigStoreValue(body.store);
   const modulePath = modulePathValue(body.modulePath);
+  const sourceBuild = sourceBuildValue(body.sourceBuild);
   if (body.modulePath !== undefined && modulePath === undefined) {
     return errorJson(
       "invalid_request",
       "modulePath must be a safe relative OpenTofu module path.",
+      400,
+    );
+  }
+  if (body.sourceBuild !== undefined && sourceBuild === undefined) {
+    return errorJson(
+      "invalid_request",
+      "sourceBuild must contain argv commands and relative output paths.",
       400,
     );
   }
@@ -1269,7 +1278,8 @@ async function createCapsule(
     runnerProfileId ||
     resolvedOutputAllowlist !== undefined ||
     resolvedStoreMetadata !== undefined ||
-    resolvedModulePath !== undefined
+    resolvedModulePath !== undefined ||
+    sourceBuild !== undefined
   ) {
     const now = new Date().toISOString();
     const { modulePath: _baseModulePath, ...baseConfigWithoutModulePath } =
@@ -1290,6 +1300,7 @@ async function createCapsule(
       ...(resolvedStoreMetadata ? { store: resolvedStoreMetadata } : {}),
       ...(runnerProfileId ? { runnerId: runnerProfileId } : {}),
       ...(resolvedModulePath ? { modulePath: resolvedModulePath } : {}),
+      ...(sourceBuild ? { sourceBuild } : {}),
       outputAllowlist:
         resolvedOutputAllowlist ?? scopedCloneOutputAllowlist(baseConfig),
       createdAt: now,
@@ -1313,7 +1324,6 @@ async function createCapsule(
       issuer,
       capsule: installation,
       installConfig: resolvedInstallConfig,
-      sourceGitUrl: source.url,
     });
   }
   return jsonStatus({ capsule: publicCapsule(installation) }, 201);
@@ -1336,8 +1346,11 @@ async function hydrateRepoOwnedStoreConfig(
   input: RepoOwnedStoreHydrationInput,
 ): Promise<RepoOwnedStoreHydrationResult> {
   if (!input.storeMetadata?.source) return input;
-  const { inputs: _inputs, installExperience: _installExperience, ...baseStore } =
-    input.storeMetadata;
+  const {
+    inputs: _inputs,
+    installExperience: _installExperience,
+    ...baseStore
+  } = input.storeMetadata;
   const scrubbedStoreMetadata =
     installConfigStoreValue({
       ...baseStore,
@@ -1357,7 +1370,12 @@ async function hydrateRepoOwnedStoreConfig(
 
   const modulePath =
     input.modulePath ?? modulePathValue(metadata.modulePath) ?? undefined;
-  const storePatch: Record<string, unknown> = {};
+  const storePatch: Record<string, unknown> = {
+    inputs: Array.isArray(metadata.inputs) ? metadata.inputs : [],
+    ...(metadata.installExperience !== undefined
+      ? { installExperience: metadata.installExperience }
+      : {}),
+  };
   storePatch.source = {
     ...input.storeMetadata.source,
     git: input.source.url,
@@ -1371,7 +1389,6 @@ async function hydrateRepoOwnedStoreConfig(
   const mergedStore = installConfigStoreValue({
     ...baseStore,
     ...storePatch,
-    inputs: [],
   });
   return {
     storeMetadata: mergedStore ?? input.storeMetadata,
@@ -1435,7 +1452,9 @@ function githubRepoParts(
   }
 }
 
-function repoMetadataRecord(value: unknown): Record<string, unknown> | undefined {
+function repoMetadataRecord(
+  value: unknown,
+): Record<string, unknown> | undefined {
   if (!isPlainJsonObject(value)) return undefined;
   const schemaVersion =
     typeof value.schemaVersion === "string" ? value.schemaVersion.trim() : "";

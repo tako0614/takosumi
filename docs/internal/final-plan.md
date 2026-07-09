@@ -203,10 +203,13 @@ its `cloudflare_workers_script`, bindings, queue consumers, routes, and durable
 backing resources in the app repository's `.tf` when those provider resources
 are adequate. Takosumi should not replace that with a hidden release API.
 
-Application build and artifact creation happen before apply in the app repo,
-CI/release pipeline, or an explicitly declared OpenTofu step. Takosumi can run
-the resulting OpenTofu plan and inject credentials, but it does not secretly
-decide where the artifact comes from.
+Application build and artifact creation normally happen in the app repository's
+CI/release pipeline or inside an explicitly declared OpenTofu path. For projects
+that need build-on-install, a Capsule may carry an explicit service-side
+`sourceBuild` recipe. Takosumi runs its argv commands against the pinned Git
+SourceSnapshot without provider credentials, checks declared relative outputs,
+and then runs the repository's OpenTofu module. Takosumi never infers commands or
+secretly decides which build/artifact path to use.
 
 Store listings announce installable Git repositories. A listing is only the
 Git pointer plus lightweight discovery/display metadata such as name,
@@ -334,15 +337,22 @@ The preferred fast path is a Git CI or release pipeline that publishes a
 versioned, publicly fetchable artifact plus a SHA-256 digest. The OpenTofu
 module consumes that URL and digest as normal input variables and verifies the
 digest during plan/apply. Takosumi may store or pass those values as Capsule
-configuration, but it does not fetch, build, rewrite, or select application
-artifacts outside the declared OpenTofu module.
+configuration, but it does not rewrite or select application artifacts outside
+the declared OpenTofu module.
 
-Hosted/operator materializers should fail closed when the required CI-produced
-artifact input is absent. A self-hosted runner may still build from the reviewed
-Git source snapshot when the app's OpenTofu module explicitly chooses that
-path, but Takosumi Cloud should not spend first-install time or operator
-capacity creating container artifacts that belong to the app's Git CI/release
-pipeline.
+The alternative is explicit `sourceBuild`, not an implicit fallback. It is
+service-side Capsule configuration, never Store-owned or auto-executed from
+`.well-known/tcs.json`. Each command is an argv array, each working directory and
+expected output must remain inside the checkout after symlink resolution, and
+the build phase receives no provider credential. The same recipe is replayed
+before plan/apply/destroy so a stateless runner can reconstruct the reviewed
+module tree. Dependency lockfiles and deterministic builds are therefore
+required. Operators may disable this lane or set runner resource/network limits.
+
+Hosted/operator installs should prefer CI-produced artifacts, especially for
+OCI images and other expensive builds. Source build exists for ordinary
+JavaScript/static/native preparation and self-host use; it is not a hidden
+container-build service and does not replace app-owned release automation.
 
 App-owned post-apply hooks are allowed only as a narrow compatibility bridge for
 provider gaps or app initialization that is not a cloud resource itself, such as
@@ -600,6 +610,8 @@ Important rules:
 ```text
 Takosumi does not build the JavaScript bundle by default.
 The Git/OpenTofu module decides where the artifact comes from.
+An explicit sourceBuild recipe may prepare the pinned Git checkout before tofu.
+sourceBuild is argv-only, credential-free, output-checked, and policy-controlled.
 When the provider is executed outside the Takosumi runner, use artifact_url +
 artifact_sha256 so the generated OpenTofu module fetches and verifies the
 declared CI/release artifact.

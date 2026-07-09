@@ -111,7 +111,9 @@ test("runner caps raw plan JSON artifacts to keep review-only payloads out of th
     });
     const missing = await handlePlanJsonArtifactRequest(
       "plan_json_cap",
-      new Request("https://runner.internal/runs/plan_json_cap/artifacts/tfplan-json"),
+      new Request(
+        "https://runner.internal/runs/plan_json_cap/artifacts/tfplan-json",
+      ),
     );
     expect(missing.status).toBe(404);
 
@@ -120,7 +122,9 @@ test("runner caps raw plan JSON artifacts to keep review-only payloads out of th
     expect(written.written).toBe(true);
     const response = await handlePlanJsonArtifactRequest(
       "plan_json_cap",
-      new Request("https://runner.internal/runs/plan_json_cap/artifacts/tfplan-json"),
+      new Request(
+        "https://runner.internal/runs/plan_json_cap/artifacts/tfplan-json",
+      ),
     );
     expect(response.status).toBe(200);
     expect(await response.text()).toBe(smallPlanJson);
@@ -417,6 +421,75 @@ test("runner redacts apply stdout and stderr on success", async () => {
     expect(text).not.toContain("apply-auth-secret");
     expect(text).toContain("[redacted]");
   });
+});
+
+test("runner prepares a pinned Source with sourceBuild before plan and apply", async () => {
+  const fixture = await createFakeTofuFixture();
+  const runId = "source_build_plan_apply";
+  const workspace = workspaceForRun(runId);
+  const sourceBuild = {
+    commands: [
+      {
+        argv: [
+          process.execPath,
+          "-e",
+          `import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+const count = existsSync("build-count.txt") ? Number(readFileSync("build-count.txt", "utf8")) : 0;
+mkdirSync("dist", { recursive: true });
+writeFileSync("build-count.txt", String(count + 1));
+writeFileSync("dist/worker.js", "export default { fetch() { return new Response('ok') } }");`,
+        ],
+      },
+    ],
+    outputs: ["dist/worker.js"],
+  };
+  await rm(workspace.root, { recursive: true, force: true });
+  try {
+    await withFakeTofu(fixture.binDir, async () => {
+      const plan = await handleRunnerRequest(
+        runRequest(runId, "plan", {
+          generatedRoot: minimalGeneratedRoot(),
+          sourceBuild,
+          planRun: {
+            source: { kind: "local", path: fixture.sourceDir },
+            operation: "create",
+            requiredProviders: [],
+          },
+        }),
+      );
+      expect(plan.status).toBe(200);
+      const planPayload = (await plan.json()) as {
+        planArtifact: { digest: string };
+        stdout?: string;
+      };
+      expect(planPayload.stdout).toContain("source build 1/1");
+      expect(
+        await readFile(
+          join(workspace.templateModuleDir, "dist/worker.js"),
+          "utf8",
+        ),
+      ).toContain("export default");
+
+      const apply = await handleRunnerRequest(
+        runRequest(runId, "apply", {
+          generatedRoot: minimalGeneratedRoot(),
+          sourceBuild,
+          planRun: {
+            source: { kind: "local", path: fixture.sourceDir },
+            operation: "create",
+            requiredProviders: [],
+          },
+          planArtifact: planPayload.planArtifact,
+        }),
+      );
+      expect(apply.status).toBe(200);
+      expect(
+        await readFile(join(workspace.sourceRoot, "build-count.txt"), "utf8"),
+      ).toBe("2");
+    });
+  } finally {
+    await rm(workspace.root, { recursive: true, force: true });
+  }
 });
 
 test("runner redacts plan/apply failure payloads", async () => {

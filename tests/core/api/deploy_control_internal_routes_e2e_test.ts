@@ -941,6 +941,28 @@ test("installation PATCH safely updates status only (§30)", async () => {
 
 test("installation DELETE creates a destroy-plan run instead of deleting state (§30 / §23)", async () => {
   const { app, installationId } = await seedInstallationViaRoutes(fakeRunner());
+  const planRes = await app.request(
+    `/internal/v1/capsules/${installationId}/plan`,
+    { method: "POST", headers: headers() },
+  );
+  expect(planRes.status).toEqual(201);
+  const initialPlanRun = ((await planRes.json()) as { run: Run }).run;
+  const internalPlan = await readInternalPlanRun(app, initialPlanRun.id);
+  const approveRes = await app.request(
+    `/internal/v1/runs/${initialPlanRun.id}/approve`,
+    { method: "POST", headers: headers() },
+  );
+  expect(approveRes.status).toEqual(200);
+  const applyRes = await app.request("/internal/v1/apply-runs", {
+    method: "POST",
+    headers: headers({ "content-type": "application/json" }),
+    body: JSON.stringify({
+      planRunId: internalPlan.planRun.id,
+      expected: applyExpectedGuardFromPlanRun(internalPlan.planRun),
+    }),
+  });
+  expect(applyRes.status).toEqual(201);
+
   const del = await app.request(`/internal/v1/capsules/${installationId}`, {
     method: "DELETE",
     headers: headers(),

@@ -126,8 +126,6 @@ function publicInstallConfig(config: InstallConfig): PublicInstallConfig {
     sourceKind: _sourceKind,
     runnerId: _runnerId,
     internal: _internal,
-    build: _build,
-    prebuiltArtifact: _prebuiltArtifact,
     ...publicRecord
   } = config;
   const store = config.store;
@@ -726,7 +724,9 @@ export function mountDeployControlInstallationRoutes(
         // shared + scoped union is a small set, so it is materialized, merge-
         // sorted by (createdAt, id), and bounded with the in-memory keyset pager
         // (a keyset across a UNION query would be unsound).
-        const sharedConfigs = (await installations!.listInstallConfigs()).filter(
+        const sharedConfigs = (
+          await installations!.listInstallConfigs()
+        ).filter(
           (config) =>
             config.spaceId === undefined && isSelectableInstallConfig(config),
         );

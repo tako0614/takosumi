@@ -322,15 +322,24 @@ function providerInputDefaultsFromResolved(
     const connection = entry.connection;
     if (!connection) continue;
     if (sameProviderFamily(entry.provider, "cloudflare")) {
-      inputs.enable_cloudflare_resources = true;
-      inputs.enable_cloudflare_worker_script = true;
       const accountId = nonEmptyString(connection.scopeHints?.accountId);
+      const managedBaseUrl = managedProviderBaseUrl(connection);
+      // Enable Cloudflare resources only when the module can actually receive
+      // an account (a scoped connection, or the managed proxy which injects
+      // it). Modules validate `cloudflare_account_id is required when
+      // enable_cloudflare_resources is true`, so blindly enabling for a
+      // generic BYO-env connection without scope hints guarantees a failed
+      // plan — those installs keep the module's own defaults.
+      if (accountId || managedBaseUrl) {
+        inputs.enable_cloudflare_resources = true;
+        inputs.enable_cloudflare_worker_script = true;
+      }
       if (accountId) {
         inputs.cloudflare_account_id = accountId;
         inputs.account_id = accountId;
         mergeObjectInput(inputs, "cloudflare", { account_id: accountId });
       }
-      const providerBaseUrl = managedProviderBaseUrl(connection);
+      const providerBaseUrl = managedBaseUrl;
       if (providerBaseUrl) {
         inputs.cloudflare_api_base_url = providerBaseUrl;
         mergeObjectInput(inputs, "cloudflare", {

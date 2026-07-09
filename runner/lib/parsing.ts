@@ -11,6 +11,7 @@ import type {
   OpenTofuModuleSource,
   GeneratedRoot,
   GeneratedRootModuleFile,
+  SourceBuildConfig,
 } from "./types.ts";
 import {
   isRecord,
@@ -130,6 +131,87 @@ export function parseGeneratedRootModuleFiles(
   });
 }
 
+export function parseSourceBuild(
+  request: unknown,
+): SourceBuildConfig | undefined {
+  const value = recordField(request, "sourceBuild");
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) {
+    throw new Error("sourceBuild must be an object");
+  }
+  const commandsValue = recordField(value, "commands");
+  const outputsValue = recordField(value, "outputs");
+  if (
+    !Array.isArray(commandsValue) ||
+    commandsValue.length === 0 ||
+    commandsValue.length > 8
+  ) {
+    throw new Error("sourceBuild.commands must contain 1-8 commands");
+  }
+  if (
+    !Array.isArray(outputsValue) ||
+    outputsValue.length === 0 ||
+    outputsValue.length > 16
+  ) {
+    throw new Error("sourceBuild.outputs must contain 1-16 paths");
+  }
+
+  const commands = commandsValue.map((entry, index) => {
+    if (!isRecord(entry)) {
+      throw new Error(`sourceBuild.commands[${index}] must be an object`);
+    }
+    const argv = recordField(entry, "argv");
+    if (!Array.isArray(argv) || argv.length === 0 || argv.length > 32) {
+      throw new Error(
+        `sourceBuild.commands[${index}].argv must contain 1-32 arguments`,
+      );
+    }
+    if (
+      argv.some(
+        (argument) =>
+          typeof argument !== "string" ||
+          argument.length === 0 ||
+          argument.length > 4096 ||
+          argument.includes("\0"),
+      )
+    ) {
+      throw new Error(
+        `sourceBuild.commands[${index}].argv contains an invalid argument`,
+      );
+    }
+    const workingDirectory = recordField(entry, "workingDirectory");
+    if (workingDirectory !== undefined) {
+      if (typeof workingDirectory !== "string") {
+        throw new Error(
+          `sourceBuild.commands[${index}].workingDirectory must be a string`,
+        );
+      }
+      assertSafeRelativePath(
+        workingDirectory,
+        `sourceBuild.commands[${index}].workingDirectory`,
+      );
+    }
+    return {
+      argv: argv as string[],
+      ...(typeof workingDirectory === "string" ? { workingDirectory } : {}),
+    };
+  });
+
+  const outputs = outputsValue.map((output, index) => {
+    if (typeof output !== "string") {
+      throw new Error(`sourceBuild.outputs[${index}] must be a string`);
+    }
+    assertSafeRelativePath(output, `sourceBuild.outputs[${index}]`);
+    if (/^\.[\\/]*$/u.test(output)) {
+      throw new Error(
+        `sourceBuild.outputs[${index}] must name a produced path`,
+      );
+    }
+    return output;
+  });
+  return { commands, outputs };
+}
+
 export function assertNoLegacyArtifactDispatch(request: unknown): void {
   if (recordField(request, "build") !== undefined) {
     throw new Error(
@@ -182,7 +264,9 @@ export function positiveIntegerLimitFromProfile(
     : undefined;
 }
 
-export function parsePlanArtifact(request: unknown): { readonly digest: string } {
+export function parsePlanArtifact(request: unknown): {
+  readonly digest: string;
+} {
   const artifact = recordField(request, "planArtifact");
   if (!isRecord(artifact)) throw new Error("planArtifact is required");
   return { digest: requiredStringField(artifact, "digest") };

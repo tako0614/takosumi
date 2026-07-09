@@ -28,8 +28,10 @@ export {
 } from "./lib/policy.ts";
 export {
   parseGeneratedRoot,
+  parseSourceBuild,
   assertNoLegacyArtifactDispatch,
 } from "./lib/parsing.ts";
+export { runSourceBuild } from "./lib/source_build.ts";
 export { commandContextFromRequest, buildPhaseEnv } from "./lib/credentials.ts";
 export {
   assertRunnerPolicyForRequest,

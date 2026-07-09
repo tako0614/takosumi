@@ -16,9 +16,7 @@ import type {
   ApplyRun,
   Connection,
   Deployment,
-  DispatchBuildSpec,
   DispatchGeneratedRoot,
-  DispatchPrebuiltArtifactSpec,
   InstallConfig,
   Installation,
   PlanRun,
@@ -35,7 +33,10 @@ import type {
 } from "takosumi-contract/sources";
 import type { Workspace as Space } from "takosumi-contract/workspaces";
 import type { InstallationProviderEnvBindingSet } from "takosumi-contract/connections";
-import type { OutputAllowlistEntry } from "takosumi-contract/install-configs";
+import type {
+  OutputAllowlistEntry,
+  SourceBuildConfig,
+} from "takosumi-contract/install-configs";
 import type {
   Dependency,
   DependencySnapshot,
@@ -115,10 +116,7 @@ export interface PlanRunInputs {
    */
   readonly generatedRoot?: DispatchGeneratedRoot;
   readonly outputAllowlist?: Readonly<Record<string, OutputAllowlistEntry>>;
-  /** @deprecated Legacy Takosumi-owned build dispatch for stored rows only. */
-  readonly build?: DispatchBuildSpec;
-  /** @deprecated Legacy Takosumi-owned artifact path dispatch for stored rows only. */
-  readonly prebuiltArtifact?: DispatchPrebuiltArtifactSpec;
+  readonly sourceBuild?: SourceBuildConfig;
   /**
    * At-rest seal of the SENSITIVE-bearing sidecar payload (spec §11 / §18). A
    * sensitive `published_output` value injected into a plan flows into

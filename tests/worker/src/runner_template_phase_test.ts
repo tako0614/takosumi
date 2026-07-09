@@ -3,6 +3,7 @@ import {
   assertNoLegacyArtifactDispatch,
   buildPhaseEnv,
   parseGeneratedRoot,
+  parseSourceBuild,
   resourceChangesFromPlanJson,
 } from "../../../runner/entrypoint.ts";
 import { PROVIDER_CREDENTIAL_ENV_RULES } from "takosumi-contract/provider-env-rules";
@@ -95,6 +96,59 @@ test("parseGeneratedRoot validates filenames and content", () => {
       },
     }),
   ).toThrow();
+});
+
+test("parseSourceBuild accepts argv commands and rejects unsafe paths", () => {
+  expect(parseSourceBuild({})).toBeUndefined();
+  expect(
+    parseSourceBuild({
+      sourceBuild: {
+        commands: [
+          { argv: ["bun", "install", "--frozen-lockfile"] },
+          { argv: ["bun", "run", "build"], workingDirectory: "web" },
+        ],
+        outputs: ["web/dist/index.js"],
+      },
+    }),
+  ).toEqual({
+    commands: [
+      { argv: ["bun", "install", "--frozen-lockfile"] },
+      { argv: ["bun", "run", "build"], workingDirectory: "web" },
+    ],
+    outputs: ["web/dist/index.js"],
+  });
+  expect(() =>
+    parseSourceBuild({
+      sourceBuild: {
+        commands: [{ argv: ["bun", "run", "build"], workingDirectory: ".." }],
+        outputs: ["dist/index.js"],
+      },
+    }),
+  ).toThrow(/must not escape/);
+  expect(() =>
+    parseSourceBuild({
+      sourceBuild: {
+        commands: [{ argv: ["bun", "run", "build"] }],
+        outputs: ["../dist/index.js"],
+      },
+    }),
+  ).toThrow(/must not escape/);
+  expect(() =>
+    parseSourceBuild({
+      sourceBuild: {
+        commands: [{ argv: [] }],
+        outputs: ["dist/index.js"],
+      },
+    }),
+  ).toThrow(/1-32 arguments/);
+  expect(() =>
+    parseSourceBuild({
+      sourceBuild: {
+        commands: [{ argv: ["bun", "run", "build"] }],
+        outputs: ["."],
+      },
+    }),
+  ).toThrow(/must name a produced path/);
 });
 
 test("runner rejects retired app build and prebuilt artifact dispatch", () => {
