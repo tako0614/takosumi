@@ -1334,15 +1334,8 @@ async function hydrateRepoOwnedStoreConfig(
   input: RepoOwnedStoreHydrationInput,
 ): Promise<RepoOwnedStoreHydrationResult> {
   if (!input.storeMetadata?.source) return input;
-  if (
-    input.storeMetadata.inputs.length > 0 &&
-    input.storeMetadata.installExperience &&
-    input.outputAllowlist !== undefined
-  ) {
-    return input;
-  }
   const metadata = await fetchRepoOwnedTcsMetadata({
-    git: input.storeMetadata.source.git || input.source.url,
+    git: input.source.url,
     ref: sourceDefaultRef(input.source),
   });
   if (!metadata) return input;
@@ -1350,30 +1343,32 @@ async function hydrateRepoOwnedStoreConfig(
   const modulePath =
     input.modulePath ?? modulePathValue(metadata.modulePath) ?? undefined;
   const storePatch: Record<string, unknown> = {};
-  if (input.storeMetadata.inputs.length === 0 && metadata.inputs !== undefined) {
+  if (metadata.inputs !== undefined) {
     storePatch.inputs = metadata.inputs;
   }
-  if (
-    input.storeMetadata.installExperience === undefined &&
-    metadata.installExperience !== undefined
-  ) {
+  if (metadata.installExperience !== undefined) {
     storePatch.installExperience = metadata.installExperience;
   }
-  if (modulePath !== undefined) {
-    storePatch.source = {
-      ...input.storeMetadata.source,
-      path: modulePath === "" ? "." : modulePath,
-    };
-  }
+  storePatch.source = {
+    ...input.storeMetadata.source,
+    git: input.source.url,
+    path:
+      modulePath !== undefined
+        ? modulePath === ""
+          ? "."
+          : modulePath
+        : input.storeMetadata.source.path || ".",
+  };
+  const repoOutputAllowlist = repoOutputAllowlistValue(
+    metadata.outputAllowlist,
+  );
   const mergedStore = installConfigStoreValue({
     ...input.storeMetadata,
     ...storePatch,
   });
   return {
     storeMetadata: mergedStore ?? input.storeMetadata,
-    outputAllowlist:
-      input.outputAllowlist ??
-      repoOutputAllowlistValue(metadata.outputAllowlist),
+    outputAllowlist: repoOutputAllowlist ?? input.outputAllowlist,
     modulePath,
   };
 }
