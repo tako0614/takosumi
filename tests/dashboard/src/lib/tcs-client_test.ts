@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import {
+  fetchTcsListing,
+  fetchTcsListingsPage,
   hydrateTcsListingWithRepoMetadata,
   type TcsListing,
 } from "../../../../dashboard/src/lib/tcs-client.ts";
@@ -35,6 +37,58 @@ afterEach(() => {
 });
 
 describe("TCS repo metadata", () => {
+  test("strips deprecated setup fields from listing reads", async () => {
+    const staleListing = listing({
+      inputs: [
+        {
+          name: "worker_bundle_url",
+          label: text("Worker bundle"),
+        },
+      ],
+      installExperience: {
+        projections: [
+          {
+            kind: "artifact",
+            variables: {
+              url: "worker_bundle_url",
+              sha256: "worker_bundle_sha256",
+            },
+          },
+        ],
+      },
+      outputAllowlist: [
+        { key: "url", from: "url", type: "url" },
+      ],
+    });
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/tcs/v1/listings/tako%2Fexample")) {
+        return new Response(JSON.stringify(staleListing), {
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return new Response(
+        JSON.stringify({
+          items: [staleListing],
+        }),
+        { headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+
+    const page = await fetchTcsListingsPage("https://store.example.test");
+    const single = await fetchTcsListing(
+      "https://store.example.test",
+      "tako/example",
+    );
+
+    expect(page.items[0]?.inputs).toBeUndefined();
+    expect(page.items[0]?.installExperience).toBeUndefined();
+    expect(page.items[0]?.outputAllowlist).toBeUndefined();
+    expect(single?.inputs).toBeUndefined();
+    expect(single?.installExperience).toBeUndefined();
+    expect(single?.outputAllowlist).toBeUndefined();
+  });
+
   test("hydrates presentation metadata from the repository without owning setup", async () => {
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       expect(String(input)).toBe(
