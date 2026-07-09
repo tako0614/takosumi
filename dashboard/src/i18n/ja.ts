@@ -37,11 +37,13 @@ export const ja = {
   "common.empty": "データがありません",
 
   // --- nav / shell ----------------------------------------------------------
-  "nav.home": "アプリ",
+  "nav.home": "ホーム",
   "nav.apps": "アプリ",
   "nav.services": "サービス",
   "nav.add": "追加",
   "nav.store": "ストア",
+  "nav.settings": "設定",
+  "nav.graph": "依存関係",
   "store.title": "ストア",
   "store.subtitle": "ストアから追加できるアプリやサービスを探します。",
   "store.noWorkspace": "先に Workspace を選択してください。",
@@ -69,6 +71,33 @@ export const ja = {
   "theme.system": "自動",
   "theme.light": "ライト",
   "theme.dark": "ダーク",
+
+  // --- settings hub -----------------------------------------------------------
+  "settings.title": "設定",
+  "settings.subtitle": "アカウント、支払い、通知、詳しい管理画面はここからです。",
+  "settings.section.general": "全般",
+  "settings.section.advanced": "詳しい管理",
+  "settings.account.title": "アカウント",
+  "settings.account.desc": "プロフィールとサインイン情報",
+  "settings.billing.title": "プランと支払い",
+  "settings.billing.desc": "プラン、使用量、請求の確認",
+  "settings.notifications.title": "通知",
+  "settings.notifications.desc": "お知らせと要対応の確認",
+  "settings.workspace.title": "ワークスペース",
+  "settings.workspace.desc": "名前、メンバー、共有の設定",
+  "settings.manage.entry": "管理ツール",
+  "settings.manage.entryDesc":
+    "サービスの内部、接続、実行履歴などの詳しい管理画面",
+  "settings.manage.title": "管理ツール",
+  "settings.manage.subtitle":
+    "ホスティングの内部を直接あつかう画面です。ふだんの利用では開く必要はありません。",
+  "settings.manage.services": "すべてのサービスと状態の一覧",
+  "settings.manage.connections": "クラウドアカウントの接続とカギの管理",
+  "settings.manage.cloud": "クラウドリソースの内訳と使用量",
+  "settings.manage.runs": "デプロイと変更の実行記録",
+  "settings.manage.graph": "サービス間の依存関係の表示",
+  "settings.manage.activity": "だれが何を変更したかの操作履歴",
+  "settings.manage.workspace": "メンバー、キー、バックアップ、共有、ポリシー",
 
   // --- workspace switcher -------------------------------------------------------
   "workspace.label": "ワークスペース",

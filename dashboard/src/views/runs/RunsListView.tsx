@@ -5,7 +5,6 @@
 import "../../styles/app-views.css";
 import { createMemo, createResource, For, Match, Show, Switch } from "solid-js";
 import { Activity } from "lucide-solid";
-import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import { currentWorkspaceId } from "../../lib/workspace-state.ts";
 import { listCapsulesCached } from "../../lib/capsule-list.ts";
@@ -62,7 +61,7 @@ function Inner() {
   );
 
   return (
-    <AppShell>
+    <>
       <PageHeader title={t("runList.title")} subtitle={t("runList.subtitle")} />
       <Show
         when={workspaceId()}
@@ -116,7 +115,7 @@ function Inner() {
           </Match>
         </Switch>
       </Show>
-    </AppShell>
+    </>
   );
 }
 

@@ -19,7 +19,6 @@ import {
 } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import { Plus, Settings2, Sparkles } from "lucide-solid";
-import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import {
   currentWorkspaceId,
@@ -289,7 +288,7 @@ function Inner() {
     navigate(`/services/${encodeURIComponent(inst.id)}`);
 
   return (
-    <AppShell>
+    <>
       <Show
         when={workspaceId()}
         fallback={
@@ -332,7 +331,7 @@ function Inner() {
           </Match>
         </Switch>
       </Show>
-    </AppShell>
+    </>
   );
 }
 

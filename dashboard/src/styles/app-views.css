@@ -1716,3 +1716,65 @@ button.tg-tab {
   text-align: center;
   gap: var(--tg-s-3);
 }
+
+/* ===== settings hub (/settings) + management catalog (/settings/manage) ===== */
+.settings-view {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: var(--tg-s-5) var(--tg-s-5) var(--tg-s-8);
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-6);
+}
+.settings-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-3);
+}
+.settings-group-title {
+  margin: 0;
+  font-size: var(--tg-fs-sm);
+  font-weight: 600;
+  color: var(--tg-fg-muted);
+}
+.settings-links {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-3);
+}
+.settings-link {
+  display: flex;
+  align-items: center;
+  gap: var(--tg-s-4);
+  padding: var(--tg-s-4) var(--tg-s-5);
+  text-decoration: none;
+  color: var(--tg-fg);
+}
+.settings-link-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--tg-r-md);
+  background: var(--tg-bg-subtle);
+  color: var(--tg-fg-muted);
+}
+.settings-link-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.settings-link-title {
+  font-weight: 600;
+}
+.settings-link-desc {
+  font-size: var(--tg-fs-sm);
+  color: var(--tg-fg-muted);
+}
+.settings-link-chev {
+  margin-left: auto;
+  flex: none;
+  color: var(--tg-fg-muted);
+}

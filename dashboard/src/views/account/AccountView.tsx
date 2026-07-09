@@ -9,7 +9,6 @@ import "../../styles/wave-b.css";
 import { createSignal, Show } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import { LogOut, User } from "lucide-solid";
-import AppShell from "./components/shell/AppShell.tsx";
 import Page from "./components/auth/Page.tsx";
 import { clearSession, type SessionRecord } from "./lib/session.ts";
 import { formatDateTime, locale, setLocale, t } from "../../i18n/index.ts";
@@ -54,7 +53,7 @@ function Inner(props: { readonly session: SessionRecord }) {
   };
 
   return (
-    <AppShell>
+    <>
       <PageHeader title={t("account.title")} subtitle={t("account.subtitle")} />
 
       <div class="wc-stack">
@@ -208,6 +207,6 @@ function Inner(props: { readonly session: SessionRecord }) {
           </CardSection>
         </Card>
       </div>
-    </AppShell>
+    </>
   );
 }
