@@ -47,6 +47,16 @@ describe("dashboard router fallbacks (FATAL FIX 3)", () => {
     expect(paths).toContain("*");
   });
 
+  test("server-owned OIDC routes force document navigation before NotFound", () => {
+    const paths = routePaths(source);
+    expect(paths).toContain("/oauth");
+    expect(paths).toContain("/oauth/*path");
+    expect(paths.indexOf("/oauth")).toBeLessThan(paths.indexOf("*"));
+    expect(paths.indexOf("/oauth/*path")).toBeLessThan(paths.indexOf("*"));
+    expect(source).toContain("function ServerOwnedRouteReload()");
+    expect(source).toContain("window.location.replace(href);");
+  });
+
   test("the catch-all is the LAST route so it never shadows a real route", () => {
     const paths = routePaths(source);
     expect(paths.indexOf("*")).toBe(paths.length - 1);
