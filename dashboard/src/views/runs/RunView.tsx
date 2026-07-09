@@ -1298,6 +1298,27 @@ function Inner() {
     if (r.type === "drift_check" && r.status === "succeeded") {
       return { kind: "ok", text: t("run.summary.driftDone") };
     }
+    // Read-only preparation runs (追加前の確認 / 内容の取得) get a plain
+    // sentence instead of the mechanical status fallback.
+    if (r.type === "compatibility_check" || r.type === "source_sync") {
+      const doneKey =
+        r.type === "compatibility_check"
+          ? "run.summary.compatDone"
+          : "run.summary.syncDone";
+      const runningKey =
+        r.type === "compatibility_check"
+          ? "run.summary.compatRunning"
+          : "run.summary.syncRunning";
+      if (r.status === "succeeded") return { kind: "ok", text: t(doneKey) };
+      if (r.status === "failed") {
+        return {
+          kind: "error",
+          text: t("run.summary.failed", { operation: operationLabel(r.type) }),
+          sub: runFailureHint(r.errorCode),
+        };
+      }
+      return { kind: "progress", text: t(runningKey) };
+    }
     return {
       kind: "progress",
       text: t("run.summary.fallback", { status: runStatusLabel(r.status) }),
@@ -1811,7 +1832,16 @@ function Inner() {
                   </Show>
                 </Card>
 
-                {/* ===== changes (counts always, lists folded) ===== */}
+                {/* ===== changes (counts always, lists folded). Read-only
+                    preparation runs (確認 / 取得) never change resources —
+                    an all-zero strip there is noise, so it renders only for
+                    plan/apply-family runs. ===== */}
+                <Show
+                  when={
+                    run.latest?.type !== "compatibility_check" &&
+                    run.latest?.type !== "source_sync"
+                  }
+                >
                 <Card>
                   <CardHeader title={t("run.changes.title")} />
                   <div class="wa-change-strip">
@@ -1872,6 +1902,7 @@ function Inner() {
                     </details>
                   </Show>
                 </Card>
+                </Show>
 
                 {/* ===== change detail — surfaced by default, not buried ===== */}
                 <Show when={planResources().some(isActionablePlanResource)}>
