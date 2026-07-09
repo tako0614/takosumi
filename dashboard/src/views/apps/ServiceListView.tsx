@@ -81,7 +81,7 @@ function Inner() {
           context line + the add action. */}
       <div class="av-list-toolbar">
         <span class="av-list-toolbar-sub">{t("services.subtitle")}</span>
-        <Button variant="primary" href="/new" icon={<Plus size={16} />}>
+        <Button variant="primary" href="/store" icon={<Plus size={16} />}>
           {t("apps.add")}
         </Button>
       </div>
@@ -162,7 +162,7 @@ function ServicesEmpty() {
         <h2 class="av-start-title">{t("services.empty.title")}</h2>
         <p class="av-start-sub">{t("services.empty.body")}</p>
       </div>
-      <a href="/new" class="av-start-action">
+      <a href="/store" class="av-start-action">
         <Plus size={18} aria-hidden="true" />
         <span>{t("apps.add")}</span>
       </a>

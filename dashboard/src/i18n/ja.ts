@@ -570,7 +570,8 @@ export const ja = {
   // --- run history --------------------------------------------------------------
   "runList.title": "アクティビティ",
   "runList.subtitle": "最近の確認・承認・デプロイを新しい順に表示します。",
-  "runList.open": "確認",
+  "runList.open": "詳細",
+  "runList.review": "確認する",
   "runList.empty.title": "まだ更新履歴はありません",
   "runList.empty.message":
     "サービスを追加して変更を確認すると、ここに履歴が並びます。",
