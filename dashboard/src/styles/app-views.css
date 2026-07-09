@@ -1315,52 +1315,6 @@
   font-size: var(--tg-fs-sm);
   line-height: 1.5;
 }
-.av-add-guide {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--tg-s-2);
-  margin: 0;
-  padding: var(--tg-s-3);
-  list-style: none;
-  border: 1px solid var(--tg-line);
-  border-radius: var(--tg-r-md);
-  background: var(--tg-bg-subtle);
-}
-.av-add-guide li {
-  display: grid;
-  justify-items: center;
-  align-items: center;
-  gap: var(--tg-s-2);
-  color: var(--tg-fg-muted);
-  font-size: var(--tg-fs-sm);
-  font-weight: 650;
-  text-align: center;
-}
-.av-add-guide span {
-  display: inline-grid;
-  place-items: center;
-  width: 22px;
-  height: 22px;
-  border: 1px solid var(--tg-line);
-  border-radius: var(--tg-r-full);
-  background: var(--tg-bg-elev);
-  color: var(--tg-fg-muted);
-  font-size: var(--tg-fs-xs);
-}
-.av-add-guide .is-done,
-.av-add-guide .is-current {
-  color: var(--tg-fg);
-}
-.av-add-guide .is-done span {
-  border-color: color-mix(in srgb, var(--tg-success) 42%, var(--tg-line));
-  background: color-mix(in srgb, var(--tg-success) 13%, var(--tg-bg-elev));
-  color: var(--tg-success);
-}
-.av-add-guide .is-current span {
-  border-color: var(--tg-accent);
-  background: var(--tg-accent);
-  color: var(--tg-accent-fg);
-}
 .av-add-flow-body {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(260px, 320px);
@@ -1625,24 +1579,6 @@ button.tg-tab {
   .av-add-flow-icon {
     width: 40px;
     height: 40px;
-  }
-
-  .av-add-guide {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: var(--tg-s-1);
-    padding: var(--tg-s-2);
-  }
-
-  .av-add-guide li {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: var(--tg-s-1);
-    font-size: var(--tg-fs-xs);
-  }
-
-  .av-add-guide span {
-    width: 20px;
-    height: 20px;
   }
 
   .av-add-flow-header .tg-btn {

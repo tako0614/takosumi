@@ -108,6 +108,7 @@ import {
   clearCapsuleListCache,
   listCapsulesCached,
 } from "../../lib/capsule-list.ts";
+import { CREDENTIAL_FREE_PROVIDER_TAILS } from "../../lib/install-readiness.ts";
 import { clearCurrentStateVersionCache } from "../../lib/current-state-versions.ts";
 import { clearDashboardOverviewCache } from "../../lib/dashboard-overview.ts";
 import { listInstallConfigsCached } from "../../lib/install-config-list.ts";
@@ -155,24 +156,6 @@ const DEFAULT_STORE_BADGE = {
   ja: "追加候補",
   en: "Installable",
 } satisfies StoreMetadata["badge"];
-
-// Well-known credential-free OpenTofu providers (by short name / tail) that are
-// NOT a credential boundary, so an install must not force a Provider Connection
-// for them. `isCredentialFreeUtilityProvider` already covers the canonical
-// http / random / tls; this set adds the other common credential-free providers
-// and also matches bare local-name declarations (e.g. `null`, `local`).
-const CREDENTIAL_FREE_PROVIDER_TAILS = new Set([
-  "http",
-  "random",
-  "tls",
-  "null",
-  "local",
-  "time",
-  "external",
-  "archive",
-  "cloudinit",
-  "template",
-]);
 
 function StoreIcon(props: { readonly entry: StoreEntry }) {
   if (props.entry.iconUrl) {
@@ -967,6 +950,11 @@ function Inner() {
   const initialSearch = typeof location === "undefined" ? "" : location.search;
   const appHandoff = appHandoffFromSearch(initialSearch);
   const initialTcsHandoff = parseInitialTcsHandoff(initialSearch);
+  // ストア[入手]: `?auto=1` asks this flow to start the single install action
+  // itself once prerequisites settle (workspace, install config, store
+  // hydration). Blockers still stop it — auto never bypasses a review.
+  const autoInstallRequested =
+    new URLSearchParams(initialSearch).get("auto") === "1";
   const initialInstallPrefill =
     typeof location === "undefined"
       ? undefined
@@ -2447,6 +2435,9 @@ function Inner() {
   };
 
   let initialTcsHandoffApplied = false;
+  const [tcsHandoffSettled, setTcsHandoffSettled] = createSignal(
+    !initialTcsHandoff,
+  );
   createEffect(() => {
     if (initialTcsHandoffApplied || !initialTcsHandoff) return;
     initialTcsHandoffApplied = true;
@@ -2467,6 +2458,8 @@ function Inner() {
       } catch {
         // The Git/ref/path query remains enough to install as a plain Capsule;
         // a failed store rehydrate must not block direct install links.
+      } finally {
+        setTcsHandoffSettled(true);
       }
     })();
   });
@@ -2507,16 +2500,6 @@ function Inner() {
     Boolean(selectedServiceEntry()) && Boolean(sourceGitUrl());
   const hasChosenSource = () =>
     activeTab() === "git" || usingSelectedService() || Boolean(sourceGitUrl());
-  const addGuideStage = (): "select" | "configure" | "review" => {
-    if (busy() || existingCapsule() || canContinue()) return "review";
-    return hasChosenSource() ? "configure" : "select";
-  };
-  const addGuideClass = (stage: "select" | "configure" | "review"): string => {
-    const order = { select: 0, configure: 1, review: 2 } as const;
-    const current = addGuideStage();
-    if (stage === current) return "is-current";
-    return order[stage] < order[current] ? "is-done" : "";
-  };
   const sourceSummaryTitle = () =>
     sourceGitUrl() ? name().trim() || capsuleNameFromUrl(sourceGitUrl()) : "";
   const retryAfterSyncWait = () => {
@@ -2548,6 +2531,20 @@ function Inner() {
     if (!canContinue()) return;
     await runFlow();
   };
+
+  // ストア[入手] auto-start: fire the single install action once, as soon as
+  // the workspace / install config / store hydration settle. Validation errors
+  // and blockers fall back to the visible form — auto never skips a review.
+  let autoInstallAttempted = false;
+  createEffect(() => {
+    if (!autoInstallRequested || autoInstallAttempted) return;
+    if (!workspaceId()) return;
+    if (!tcsHandoffSettled()) return;
+    if (!sourceGitUrl()) return;
+    if (!selectedInstallConfigId()) return;
+    autoInstallAttempted = true;
+    void submitInstall();
+  });
   const findExistingCapsule = async (
     workspace: string,
     capsuleName: string,
@@ -3271,20 +3268,6 @@ function Inner() {
                   </p>
                 </div>
               </div>
-              <ol class="av-add-guide" aria-label={t("new.flow.aria")}>
-                <li class={addGuideClass("select")}>
-                  <span>1</span>
-                  {t("new.flow.stepSelect")}
-                </li>
-                <li class={addGuideClass("configure")}>
-                  <span>2</span>
-                  {t("new.flow.stepConfigure")}
-                </li>
-                <li class={addGuideClass("review")}>
-                  <span>3</span>
-                  {t("new.flow.stepReview")}
-                </li>
-              </ol>
             </div>
             <div class="av-add-flow-body">
               <form

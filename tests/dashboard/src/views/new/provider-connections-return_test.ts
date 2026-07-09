@@ -180,10 +180,12 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).toContain('"new.appHandoff.return"');
     expect(en["new.appHandoff.title"]).toContain("{app}");
     expect(ja["new.appHandoff.title"]).toContain("{app}");
-    expect(en["new.appHandoff.body"]).toContain("OpenTofu");
-    expect(ja["new.appHandoff.body"]).toContain("OpenTofu");
-    expect(en["new.appHandoff.kicker"]).toBe("App Handoff");
-    expect(ja["new.appHandoff.kicker"]).toBe("App Handoff");
+    // Consumer copy: the callout must not name OpenTofu / internal services.
+    expect(en["new.appHandoff.body"]).not.toContain("OpenTofu");
+    expect(ja["new.appHandoff.body"]).not.toContain("OpenTofu");
+    expect(ja["new.appHandoff.body"]).not.toContain("Host Center");
+    expect(ja["new.appHandoff.kicker"]).toBe("アプリからのリクエスト");
+    expect(en["new.appHandoff.kicker"]).toBe("Requested by an app");
   });
 
   test("/runs can return successful App Handoff deploys back to the client", () => {

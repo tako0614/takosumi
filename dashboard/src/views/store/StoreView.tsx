@@ -1,10 +1,12 @@
 /**
- * Control-plane Store tab. Wraps the shared StoreBrowser with the decentralized
- * Takosumi store(s); every add action is handed to the full /new flow where
- * compatibility, provider connections, and variables are reviewed. There is no
- * built-in template list here — discovery lives in the store.
+ * ストア — the primary discovery tab. Wraps the shared StoreBrowser with the
+ * decentralized Takosumi store(s). [入手] hands the listing to the one install
+ * flow (`/new?…&auto=1`), which auto-starts when nothing needs the user's
+ * input; listings that install with zero typing carry a readiness badge
+ * derived from the listing + the workspace's provider connections
+ * (lib/install-readiness.ts).
  */
-import { onMount } from "solid-js";
+import { createMemo, createResource, onMount } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import Page from "../account/components/auth/Page.tsx";
 import { locale, t } from "../../i18n/index.ts";
@@ -14,6 +16,11 @@ import {
   setCurrentWorkspaceId,
 } from "../../lib/workspace-state.ts";
 import { listWorkspacesCached } from "../../lib/workspace-list.ts";
+import { listProviderConnections } from "../../lib/control-api.ts";
+import {
+  deriveInstallReadiness,
+  installReadinessContext,
+} from "../../lib/install-readiness.ts";
 import { StoreBrowser } from "./StoreBrowser.tsx";
 import { buildNewQuery } from "./store-link.ts";
 import type { TcsListing } from "../../lib/tcs-client.ts";
@@ -35,31 +42,42 @@ function Inner() {
     }
   });
 
+  const [providerConnections] = createResource(
+    () => currentWorkspaceId() || null,
+    (workspaceId) => listProviderConnections(workspaceId).catch(() => []),
+  );
+  const readinessContext = createMemo(() =>
+    installReadinessContext(providerConnections() ?? []),
+  );
+  const listingBadge = (listing: TcsListing): string | undefined =>
+    deriveInstallReadiness(listing, readinessContext()) === "oneTap"
+      ? t("store.badge.oneTap")
+      : undefined;
+
   const onConfigure = (listing: TcsListing) => {
-    navigate(`/new?${buildNewQuery(listing)}`);
+    navigate(`/new?${buildNewQuery(listing)}&auto=1`);
   };
 
   return (
-    <>
-      <div
-        style={{
-          "max-width": "1080px",
-          margin: "0 auto",
-          padding: "20px 24px 72px",
-        }}
-      >
-        <header style={{ "margin-bottom": "18px" }}>
-          <h1 style={{ margin: "0 0 4px" }}>{t("store.title")}</h1>
-          <p style={{ margin: "0", color: "var(--tg-text-muted, #9aa0ad)" }}>
-            {t("store.subtitle")}
-          </p>
-        </header>
-        <StoreBrowser
-          locale={locale()}
-          onConfigure={onConfigure}
-        />
-      </div>
-    </>
+    <div
+      style={{
+        "max-width": "1080px",
+        margin: "0 auto",
+        padding: "20px 24px 72px",
+      }}
+    >
+      <header style={{ "margin-bottom": "18px" }}>
+        <h1 style={{ margin: "0 0 4px" }}>{t("store.title")}</h1>
+        <p style={{ margin: "0", color: "var(--tg-text-muted, #9aa0ad)" }}>
+          {t("store.subtitle")}
+        </p>
+      </header>
+      <StoreBrowser
+        locale={locale()}
+        onConfigure={onConfigure}
+        listingBadge={listingBadge}
+      />
+    </div>
   );
 }
 
