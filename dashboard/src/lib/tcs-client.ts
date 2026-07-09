@@ -237,7 +237,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
-function repoMetadataUrl(source: TcsListingSource): string | undefined {
+function githubRepoParts(
+  source: TcsListingSource,
+):
+  | { readonly owner: string; readonly repo: string; readonly ref: string }
+  | undefined {
   try {
     const url = new URL(source.git);
     if (url.protocol !== "https:" || url.hostname !== "github.com") {
@@ -251,13 +255,24 @@ function repoMetadataUrl(source: TcsListingSource): string | undefined {
     if (parts.length < 2) return undefined;
     const ref = (source.resolvedCommit ?? source.ref ?? "main").trim();
     if (!ref) return undefined;
-    const owner = encodeURIComponent(parts[0]);
-    const repo = encodeURIComponent(parts[1]);
-    const encodedRef = encodeURIComponent(ref);
-    return `https://raw.githubusercontent.com/${owner}/${repo}/${encodedRef}/.well-known/tcs.json`;
+    return { owner: parts[0], repo: parts[1], ref };
   } catch {
     return undefined;
   }
+}
+
+function repoMetadataRawUrl(source: TcsListingSource): string | undefined {
+  const parts = githubRepoParts(source);
+  if (!parts) return undefined;
+  return `https://raw.githubusercontent.com/${encodeURIComponent(parts.owner)}/${encodeURIComponent(parts.repo)}/${encodeURIComponent(parts.ref)}/.well-known/tcs.json`;
+}
+
+function repoMetadataContentsApiUrl(
+  source: TcsListingSource,
+): string | undefined {
+  const parts = githubRepoParts(source);
+  if (!parts) return undefined;
+  return `https://api.github.com/repos/${encodeURIComponent(parts.owner)}/${encodeURIComponent(parts.repo)}/contents/.well-known%2Ftcs.json?ref=${encodeURIComponent(parts.ref)}`;
 }
 
 function repoAssetUrl(
@@ -348,19 +363,40 @@ function repoMetadataFromJson(json: unknown): TcsRepoMetadata | undefined {
   };
 }
 
+async function readGithubContentsJsonResponse(
+  res: Response,
+): Promise<unknown | null> {
+  const body = (await res.json()) as unknown;
+  if (!isRecord(body)) return null;
+  const content = typeof body.content === "string" ? body.content : undefined;
+  if (!content) return null;
+  const binary = atob(content.replace(/\s+/gu, ""));
+  const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+  return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+}
+
 export async function fetchTcsRepoMetadata(
   source: TcsListingSource,
   signal?: AbortSignal,
 ): Promise<TcsRepoMetadata | null> {
-  const url = repoMetadataUrl(source);
-  if (!url) return null;
-  const res = await fetch(url, {
+  const rawUrl = repoMetadataRawUrl(source);
+  if (!rawUrl) return null;
+  const raw = await fetch(rawUrl, {
     headers: { accept: "application/json" },
     signal,
   });
-  if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`repo metadata ${res.status}`);
-  return repoMetadataFromJson(await res.json()) ?? null;
+  if (raw.status === 404) return null;
+  if (raw.ok) return repoMetadataFromJson(await raw.json()) ?? null;
+
+  const apiUrl = repoMetadataContentsApiUrl(source);
+  if (!apiUrl) throw new Error(`repo metadata ${raw.status}`);
+  const api = await fetch(apiUrl, {
+    headers: { accept: "application/vnd.github+json" },
+    signal,
+  });
+  if (api.status === 404) return null;
+  if (!api.ok) throw new Error(`repo metadata ${raw.status}/${api.status}`);
+  return repoMetadataFromJson(await readGithubContentsJsonResponse(api)) ?? null;
 }
 
 export function mergeTcsListingRepoMetadata(
