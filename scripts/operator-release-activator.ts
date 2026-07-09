@@ -33,6 +33,7 @@ interface ReleaseActivationPayload {
     readonly id?: string;
   };
   readonly sourceSnapshot: {
+    readonly archiveBucket?: string;
     readonly archiveObjectKey: string;
     readonly archiveDigest: string;
   };
@@ -74,6 +75,7 @@ interface RunReleaseOptions {
   readonly operatorEnv?: Readonly<Record<string, string | undefined>>;
   readonly commandEnv?: Readonly<Record<string, string | undefined>>;
   readonly commandEnvAllowlist?: readonly string[];
+  readonly sourceBucketAllowlist?: readonly string[];
 }
 
 interface ServeOptions extends RunReleaseOptions {
@@ -221,6 +223,11 @@ export function parsePayload(raw: unknown): ReleaseActivationPayload {
     sourceSnapshot.archiveDigest,
     "sourceSnapshot.archiveDigest",
   );
+  const archiveBucket =
+    typeof sourceSnapshot.archiveBucket === "string"
+      ? sourceSnapshot.archiveBucket.trim()
+      : "";
+  if (archiveBucket) assertSafeSourceBucketName(archiveBucket);
   assertSafeArchiveObjectKey(archiveObjectKey);
   assertSha256Digest(archiveDigest, "sourceSnapshot.archiveDigest");
   const commands = parseCommands(value.commands);
@@ -241,7 +248,11 @@ export function parsePayload(raw: unknown): ReleaseActivationPayload {
     ...(isRecord(value.deployment)
       ? { deployment: pickDeployment(value.deployment) }
       : {}),
-    sourceSnapshot: { archiveObjectKey, archiveDigest },
+    sourceSnapshot: {
+      ...(archiveBucket ? { archiveBucket } : {}),
+      archiveObjectKey,
+      archiveDigest,
+    },
     ...(isRecord(value.nonSensitiveOutputs)
       ? { nonSensitiveOutputs: value.nonSensitiveOutputs }
       : {}),
@@ -374,12 +385,14 @@ async function downloadArchiveWithWrangler(
   archivePath: string,
   options: RunReleaseOptions,
 ): Promise<void> {
-  const bucket = options.sourceBucket?.trim();
+  const payloadBucket = payload.sourceSnapshot.archiveBucket?.trim();
+  const bucket = payloadBucket || options.sourceBucket?.trim();
   if (!bucket) {
     throw new Error(
       "source bucket is required to fetch release source archive",
     );
   }
+  assertSourceBucketAllowed(bucket, options);
   await mkdir(dirname(archivePath), { recursive: true });
   const runtimeRoot = join(dirname(archivePath), "tool-runtime");
   await prepareRuntimeRoot(runtimeRoot);
@@ -399,6 +412,23 @@ async function downloadArchiveWithWrangler(
     throw new Error(
       `wrangler r2 object get failed (${result.status ?? "unknown"}): ${result.stderr}`,
     );
+  }
+}
+
+function assertSourceBucketAllowed(
+  bucket: string,
+  options: RunReleaseOptions,
+): void {
+  const allowed = new Set(
+    [
+      ...(options.sourceBucket ? [options.sourceBucket] : []),
+      ...(options.sourceBucketAllowlist ?? []),
+    ]
+      .map((value) => value.trim())
+      .filter(Boolean),
+  );
+  if (allowed.size > 0 && !allowed.has(bucket)) {
+    throw new Error(`source bucket ${bucket} is not allowed`);
   }
 }
 
@@ -704,6 +734,15 @@ function assertSafeArchiveObjectKey(key: string): void {
   assertSafeRelativePath(key);
 }
 
+function assertSafeSourceBucketName(bucket: string): void {
+  if (
+    !/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/u.test(bucket) ||
+    bucket.includes("..")
+  ) {
+    throw new Error("sourceSnapshot.archiveBucket is invalid");
+  }
+}
+
 function assertSha256Digest(value: string, label: string): void {
   if (!/^sha256:[0-9a-f]{64}$/u.test(value)) {
     throw new Error(`${label} must be sha256:<hex>`);
@@ -787,6 +826,10 @@ function optionsFromCli(values: Map<string, string>, flags: Set<string>) {
     commandEnvAllowlist: parseCommandEnvAllowlist(
       values.get("command-env-allowlist") ??
         process.env.TAKOSUMI_RELEASE_COMMAND_ENV_ALLOWLIST,
+    ),
+    sourceBucketAllowlist: parseCommandEnvAllowlist(
+      values.get("source-bucket-allowlist") ??
+        process.env.TAKOSUMI_RELEASE_SOURCE_BUCKET_ALLOWLIST,
     ),
   };
 }
@@ -1017,6 +1060,12 @@ async function runReleaseActivationChild(
 function runModeArgs(options: RunReleaseOptions): string[] {
   const args: string[] = [];
   if (options.sourceBucket) args.push("--source-bucket", options.sourceBucket);
+  if (options.sourceBucketAllowlist && options.sourceBucketAllowlist.length > 0) {
+    args.push(
+      "--source-bucket-allowlist",
+      options.sourceBucketAllowlist.join(","),
+    );
+  }
   if (options.wranglerConfig) {
     args.push("--wrangler-config", options.wranglerConfig);
   }

@@ -19,6 +19,7 @@ const ALLOWED_STATUSES = [
 export interface WebhookReleaseActivatorOptions {
   readonly url: string;
   readonly token: string;
+  readonly sourceArchiveBucket?: string;
   readonly fetcher?: typeof fetch;
   readonly allowInsecure?: boolean;
   readonly pollIntervalMs?: number;
@@ -69,10 +70,15 @@ export function createWebhookReleaseActivator(
           "content-type": "application/json",
         },
         body: JSON.stringify(
-          releaseActivationWebhookPayload({
-            ...input,
-            commands: operatorCommands,
-          }),
+          releaseActivationWebhookPayload(
+            {
+              ...input,
+              commands: operatorCommands,
+            },
+            {
+              sourceArchiveBucket: options.sourceArchiveBucket,
+            },
+          ),
         ),
       });
       if (!response.ok) {
@@ -213,6 +219,7 @@ export function releaseActivatorFromEnv(
   return createWebhookReleaseActivator({
     url,
     token,
+    sourceArchiveBucket: stringEnv(env.TAKOSUMI_RELEASE_SOURCE_BUCKET),
     allowInsecure: releaseActivatorInsecureAllowed(env, runtimeEnv),
   });
 }
@@ -266,9 +273,13 @@ function releaseActivatorInsecureAllowed(
   );
 }
 
-function releaseActivationWebhookPayload(input: ReleaseActivationInput) {
+function releaseActivationWebhookPayload(
+  input: ReleaseActivationInput,
+  options: { readonly sourceArchiveBucket?: string } = {},
+) {
   const credentialEnv = releaseActivationCredentialEnv(input.credentials);
   const workspaceId = releaseActivationWorkspaceId(input);
+  const sourceArchiveBucket = options.sourceArchiveBucket?.trim();
   return {
     kind: RELEASE_ACTIVATOR_KIND,
     planRunId: input.planRun.id,
@@ -299,6 +310,9 @@ function releaseActivationWebhookPayload(input: ReleaseActivationInput) {
           sourceSnapshot: {
             id: input.sourceSnapshot.id,
             origin: input.sourceSnapshot.origin,
+            ...(sourceArchiveBucket
+              ? { archiveBucket: sourceArchiveBucket }
+              : {}),
             archiveObjectKey: input.sourceSnapshot.archiveObjectKey,
             archiveDigest: input.sourceSnapshot.archiveDigest,
             resolvedCommit: input.sourceSnapshot.resolvedCommit,

@@ -1304,19 +1304,16 @@ export async function runPlatformControlPlaneSmoke(
           "run did not reach a terminal state and cancel did not confirm terminal ownership";
       }
     }
-    if (
-      options.verificationMode === "cloudflare-worker" &&
-      installationId &&
-      applyRunId &&
-      !destroyApplyRunId
-    ) {
+    if (installationId && applyRunId && !destroyApplyRunId) {
       beginStep("destroy");
+      const verifyCloudflareWorkerGone =
+        shouldVerifyCloudflareDeployment(options);
       try {
         const destroyResult = await destroySmokeInstallation(options, {
           installationId,
           reason:
             "Layer-2 platform-control-plane smoke cleanup after verification failure",
-          verifyCloudflareWorkerGone: false,
+          verifyCloudflareWorkerGone,
         });
         destroyPlanRunId = destroyResult.destroyPlanRun.id;
         destroyApplyRunId = destroyResult.destroyApplyRun.id;
@@ -1329,8 +1326,9 @@ export async function runPlatformControlPlaneSmoke(
         completeStep("destroy");
         failureCleanup = {
           attempted: true,
-          cloudflareWorkerGone:
-            await assertCloudflareWorkerGoneForCleanup(options),
+          cloudflareWorkerGone: verifyCloudflareWorkerGone
+            ? await assertCloudflareWorkerGoneForCleanup(options)
+            : false,
           installationMarkedError: false,
           destroyAttempted: true,
           destroyPlanRunId,

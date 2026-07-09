@@ -583,6 +583,58 @@ test("operator release activator rejects reserved operator env allowlist entries
   }
 });
 
+test("operator release activator accepts a safe source archive bucket hint", async () => {
+  const payload = validPayload();
+  (payload.sourceSnapshot as Record<string, unknown>).archiveBucket =
+    "takosumi-source-staging";
+
+  const parsed = parsePayload(payload);
+
+  expect(parsed.sourceSnapshot.archiveBucket).toBe("takosumi-source-staging");
+});
+
+test("operator release activator rejects unsafe source archive bucket hints", () => {
+  const payload = validPayload();
+  (payload.sourceSnapshot as Record<string, unknown>).archiveBucket =
+    "../takosumi-source";
+
+  expect(() => parsePayload(payload)).toThrow(
+    "sourceSnapshot.archiveBucket is invalid",
+  );
+});
+
+test("operator release activator passes the source archive bucket hint to downloads", async () => {
+  const tempDir = await mkdtemp(join(tmpdir(), "takosumi-release-bucket-"));
+  try {
+    const sourceDir = join(tempDir, "src");
+    const archivePath = join(tempDir, "source.tar.zst");
+    await mkdir(sourceDir, { recursive: true });
+    await writeFile(join(sourceDir, "app.txt"), "plain source\n");
+    createArchive(sourceDir, archivePath);
+    const digest = await sha256File(archivePath);
+    const payload = validPayload();
+    (payload.sourceSnapshot as Record<string, unknown>).archiveBucket =
+      "takosumi-source-staging";
+    (payload.sourceSnapshot as Record<string, unknown>).archiveDigest = digest;
+    let observedBucket = "";
+
+    await runReleaseActivation(payload, {
+      downloadArchive: async (activationPayload, targetPath) => {
+        observedBucket =
+          activationPayload.sourceSnapshot.archiveBucket ?? "missing";
+        await writeFile(targetPath, await readFile(archivePath));
+      },
+      sourceBucket: "takosumi-source",
+      sourceBucketAllowlist: ["takosumi-source-staging"],
+      workRoot: join(tempDir, "work"),
+    });
+
+    expect(observedBucket).toBe("takosumi-source-staging");
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+});
+
 function validPayload(
   command: {
     readonly command?: readonly string[];
