@@ -42,7 +42,7 @@ export interface ProviderCredentialMintEvidence {
     | "aws_sts_assume_role"
     | "cloudflare_api_token_vending"
     | "takosumi_managed_provider_token"
-    | "takosumi_storage_scoped_token"
+    | "takosumi_service_scoped_token"
     | "static_secret";
   readonly secretValueStored?: false;
 }

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import type { PlanRun } from "@takosumi/internal/deploy-control-api";
 import type { CredentialMintEvent } from "takosumi-contract/security";
-import { StorageGrantBroker } from "../../../../core/domains/deploy-control/storage_grant_broker.ts";
+import { ServiceGrantBroker } from "../../../../core/domains/deploy-control/service_grant_broker.ts";
 import type { OpenTofuDeploymentStore } from "../../../../core/domains/deploy-control/store.ts";
 import type { SensitiveOutputResolver } from "../../../../core/domains/output-shares/mod.ts";
 import { verifyStorageAccessToken } from "../../../../core/shared/storage_access_tokens.ts";
@@ -165,7 +165,7 @@ function keyedResolver(
 }
 
 function brokerWith(state: FakeStoreState, resolver: SensitiveOutputResolver) {
-  return new StorageGrantBroker({
+  return new ServiceGrantBroker({
     store: makeStore(state),
     newId: (prefix) => `${prefix}_test`,
     now: () => NOW_MS,
@@ -173,10 +173,10 @@ function brokerWith(state: FakeStoreState, resolver: SensitiveOutputResolver) {
   });
 }
 
-describe("StorageGrantBroker", () => {
+describe("ServiceGrantBroker", () => {
   test("mints a scoped token + TF_VAR env and records evidence", async () => {
     const state = fullState();
-    const env = await broker(state, SIGNING_KEY).mintStorageGrantEnv(
+    const env = await broker(state, SIGNING_KEY).mintServiceGrantEnv(
       makePlanRun(),
       "apply",
       "run_audit_1",
@@ -202,17 +202,17 @@ describe("StorageGrantBroker", () => {
 
     expect(state.mintEvents).toHaveLength(1);
     const evidence = state.mintEvents[0]!.providerCredentialEvidence![0]!;
-    expect(evidence.issuer).toBe("takosumi_storage_scoped_token");
+    expect(evidence.issuer).toBe("takosumi_service_scoped_token");
     expect(evidence.temporary).toBe(true);
     expect(evidence.secretValueStored).toBe(false);
     expect(state.mintEvents[0]!.capsuleId).toBe(CONSUMER_ID);
   });
 
-  test("skips when the consumer declares no storage consume", async () => {
+  test("skips when the consumer declares no scoped service consume", async () => {
     const state = fullState({
       outputs: { [PRODUCER_ID]: PRODUCER_OUTPUTS, [CONSUMER_ID]: {} },
     });
-    const env = await broker(state, SIGNING_KEY).mintStorageGrantEnv(
+    const env = await broker(state, SIGNING_KEY).mintServiceGrantEnv(
       makePlanRun(),
       "apply",
       "run_audit_2",
@@ -226,7 +226,7 @@ describe("StorageGrantBroker", () => {
       installations: [{ id: CONSUMER_ID, workspaceId: WORKSPACE_ID }],
       outputs: { [CONSUMER_ID]: CONSUMER_OUTPUTS },
     });
-    const env = await broker(state, SIGNING_KEY).mintStorageGrantEnv(
+    const env = await broker(state, SIGNING_KEY).mintServiceGrantEnv(
       makePlanRun(),
       "apply",
       "run_audit_3",
@@ -236,7 +236,7 @@ describe("StorageGrantBroker", () => {
 
   test("skips when the signing key can't be resolved", async () => {
     const state = fullState();
-    const env = await broker(state, undefined).mintStorageGrantEnv(
+    const env = await broker(state, undefined).mintServiceGrantEnv(
       makePlanRun(),
       "apply",
       "run_audit_4",
@@ -246,7 +246,7 @@ describe("StorageGrantBroker", () => {
 
   test("does not mint on destroy", async () => {
     const state = fullState();
-    const env = await broker(state, SIGNING_KEY).mintStorageGrantEnv(
+    const env = await broker(state, SIGNING_KEY).mintServiceGrantEnv(
       makePlanRun(),
       "destroy",
       "run_audit_5",
@@ -277,7 +277,7 @@ describe("StorageGrantBroker", () => {
         [PRODUCER_ID]: SIGNING_KEY,
         [IMPOSTOR_ID]: IMPOSTOR_KEY,
       }),
-    ).mintStorageGrantEnv(makePlanRun(), "apply", "run_audit_pin");
+    ).mintServiceGrantEnv(makePlanRun(), "apply", "run_audit_pin");
 
     expect(env).toBeUndefined();
     expect(state.mintEvents).toHaveLength(0);
@@ -302,7 +302,7 @@ describe("StorageGrantBroker", () => {
         [PRODUCER_ID]: SIGNING_KEY,
         [IMPOSTOR_ID]: IMPOSTOR_KEY,
       }),
-    ).mintStorageGrantEnv(makePlanRun(), "apply", "run_audit_ambig");
+    ).mintServiceGrantEnv(makePlanRun(), "apply", "run_audit_ambig");
     expect(env).toBeUndefined();
     expect(state.mintEvents).toHaveLength(0);
   });
@@ -314,7 +314,7 @@ describe("StorageGrantBroker", () => {
         throw new Error("decrypt boom");
       },
     };
-    const env = await brokerWith(state, throwing).mintStorageGrantEnv(
+    const env = await brokerWith(state, throwing).mintServiceGrantEnv(
       makePlanRun(),
       "apply",
       "run_audit_throw",
@@ -365,7 +365,7 @@ describe("StorageGrantBroker", () => {
       },
       mintEvents: [],
     };
-    const env = await broker(state, SIGNING_KEY).mintStorageGrantEnv(
+    const env = await broker(state, SIGNING_KEY).mintServiceGrantEnv(
       makePlanRun(),
       "apply",
       "run_git",

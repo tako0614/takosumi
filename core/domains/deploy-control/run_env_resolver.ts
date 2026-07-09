@@ -31,13 +31,13 @@ type RunCredentialMintPort = Pick<
 >;
 
 /**
- * Optional bind-time storage-grant mint. Returns the `TF_VAR_*` env to inject
- * for a consumer's `takos.storage.workspace` consume, or `undefined` when the
- * run does not consume workspace storage. Merged into the dispatch-only
- * credential env (never persisted).
+ * Optional bind-time service-grant mint. Returns the `TF_VAR_*` env to inject
+ * for a consumer's scoped service consume (for example `storage.object` or
+ * `source.git.smart_http`), or `undefined` when the run has no scoped service
+ * consume. Merged into the dispatch-only credential env (never persisted).
  */
-export interface StorageGrantMintPort {
-  mintStorageGrantEnv(
+export interface ServiceGrantMintPort {
+  mintServiceGrantEnv(
     planRun: PlanRun,
     phase: "plan" | "apply" | "destroy",
     auditRunId: string,
@@ -49,8 +49,8 @@ export interface RunEnvResolverDependencies {
   readonly resolveRunInstallationProviderEnvBindings: (
     planRun: PlanRun,
   ) => Promise<readonly ResolvedInstallationProviderEnvBinding[] | undefined>;
-  /** Optional bind-time storage-grant issuer (absent on builds without it). */
-  readonly storageGrant?: StorageGrantMintPort;
+  /** Optional bind-time service-grant issuer (absent on builds without it). */
+  readonly serviceGrant?: ServiceGrantMintPort;
 }
 
 export interface ResolveRunEnvironmentInput {
@@ -82,13 +82,13 @@ export class RunEnvResolver {
   readonly #resolveRunInstallationProviderEnvBindings: (
     planRun: PlanRun,
   ) => Promise<readonly ResolvedInstallationProviderEnvBinding[] | undefined>;
-  readonly #storageGrant?: StorageGrantMintPort;
+  readonly #serviceGrant?: ServiceGrantMintPort;
 
   constructor(dependencies: RunEnvResolverDependencies) {
     this.#credentials = dependencies.credentials;
     this.#resolveRunInstallationProviderEnvBindings =
       dependencies.resolveRunInstallationProviderEnvBindings;
-    this.#storageGrant = dependencies.storageGrant;
+    this.#serviceGrant = dependencies.serviceGrant;
   }
 
   async resolveRunEnvironment(
@@ -122,14 +122,14 @@ export class RunEnvResolver {
             input.phase,
             input.auditRunId,
           );
-    // Bind-time storage grant: for the OpenTofu run (not release commands), mint
-    // a scoped storage token for any `takos.storage.workspace` consume and merge
-    // its TF_VAR_* env into the dispatch-only credential channel.
-    const withStorage =
-      this.#storageGrant && input.credentialContext !== "release_command"
-        ? mergeStorageEnvIntoCredentials(
+    // Bind-time service grant: for the OpenTofu run (not release commands), mint
+    // scoped tokens for standard service consumes and merge their TF_VAR_* env
+    // into the dispatch-only credential channel.
+    const withServiceGrants =
+      this.#serviceGrant && input.credentialContext !== "release_command"
+        ? mergeServiceGrantEnvIntoCredentials(
             credentials,
-            await this.#storageGrant.mintStorageGrantEnv(
+            await this.#serviceGrant.mintServiceGrantEnv(
               input.planRun,
               input.phase,
               input.auditRunId,
@@ -139,7 +139,7 @@ export class RunEnvResolver {
     return await this.#buildRunEnvironmentEvidence(
       input,
       providerResolutions,
-      withStorage,
+      withServiceGrants,
     );
   }
 
@@ -235,16 +235,17 @@ function releaseCommandCredentialPhase(
   );
 }
 
-function mergeStorageEnvIntoCredentials(
+function mergeServiceGrantEnvIntoCredentials(
   credentials: RunCredentials | undefined,
-  storageEnv: Record<string, string> | undefined,
+  serviceGrantEnv: Record<string, string> | undefined,
 ): RunCredentials | undefined {
-  if (!storageEnv || Object.keys(storageEnv).length === 0) return credentials;
-  if (!credentials) return { ...storageEnv };
+  if (!serviceGrantEnv || Object.keys(serviceGrantEnv).length === 0)
+    return credentials;
+  if (!credentials) return { ...serviceGrantEnv };
   if (isStructuredRunCredentials(credentials)) {
-    return { ...credentials, env: { ...credentials.env, ...storageEnv } };
+    return { ...credentials, env: { ...credentials.env, ...serviceGrantEnv } };
   }
-  return { ...credentials, ...storageEnv };
+  return { ...credentials, ...serviceGrantEnv };
 }
 
 function credentialEnvNamesFromRunCredentials(
