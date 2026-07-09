@@ -88,6 +88,13 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
    */
   readonly TAKOSUMI_RELEASE_ACTIVATOR_URL?: string;
   readonly TAKOSUMI_RELEASE_ACTIVATOR_TOKEN?: string;
+  /**
+   * Non-secret R2 bucket name that stores source snapshots for this operator
+   * environment. Release activation runs outside the Worker binding context, so
+   * the webhook payload carries this as a bucket hint for the operator
+   * materializer.
+   */
+  readonly TAKOSUMI_RELEASE_SOURCE_BUCKET?: string;
   readonly TAKOSUMI_PRODUCTION_HARDENING_GATE?: string;
   readonly TAKOSUMI_ACCOUNTS_PLATFORM_ACCESS?: string;
   readonly TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_REF?: string;

@@ -168,6 +168,7 @@ TAKOSUMI_ENABLED_RUNNER_PROFILES = "cloudflare-default,generic-opentofu-provider
 # materializer that owns app publication (for example Worker/assets/container
 # promotion). It does not implement provider-specific publication in OSS.
 # TAKOSUMI_RELEASE_ACTIVATOR_URL = "https://materializer.example.com/activate"
+# TAKOSUMI_RELEASE_SOURCE_BUCKET = "takosumi-source"
 # When the release activator URL is configured, platform readiness access also
 # requires these commit-pinned refs/digests from
 # `takosumi.release-activation-evidence@v1`:
