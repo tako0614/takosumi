@@ -35,7 +35,7 @@ afterEach(() => {
 });
 
 describe("TCS repo metadata", () => {
-  test("hydrates setup metadata from the repository instead of requiring the store listing to carry it", async () => {
+  test("hydrates presentation metadata from the repository without owning setup", async () => {
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       expect(String(input)).toBe(
         "https://raw.githubusercontent.com/tako0614/example/0123456789abcdef0123456789abcdef01234567/.well-known/tcs.json",
@@ -46,17 +46,7 @@ describe("TCS repo metadata", () => {
           modulePath: "deploy/opentofu",
           suggestedName: "repo-example",
           iconUrl: "public/icon.svg",
-          inputs: [
-            {
-              name: "project_name",
-              label: text("Service name"),
-              defaultValue: "service-name-with-space",
-            },
-          ],
-          installExperience: {
-            projections: [{ kind: "service_name", variable: "project_name" }],
-          },
-          outputAllowlist: [{ key: "url", from: "url", type: "url" }],
+          name: text("Repo Example"),
         }),
         { headers: { "content-type": "application/json" } },
       );
@@ -66,16 +56,10 @@ describe("TCS repo metadata", () => {
 
     expect(hydrated.source.path).toBe("deploy/opentofu");
     expect(hydrated.suggestedName).toBe("repo-example");
-    expect(hydrated.inputs.map((input) => input.name)).toEqual([
-      "project_name",
-    ]);
-    expect(hydrated.installExperience?.projections?.[0]).toEqual({
-      kind: "service_name",
-      variable: "project_name",
-    });
-    expect(hydrated.outputAllowlist).toEqual([
-      { key: "url", from: "url", type: "url" },
-    ]);
+    expect(hydrated.name.en).toBe("Repo Example");
+    expect(hydrated.inputs).toBeUndefined();
+    expect(hydrated.installExperience).toBeUndefined();
+    expect(hydrated.outputAllowlist).toBeUndefined();
     expect(hydrated.iconUrl).toBe(
       "https://raw.githubusercontent.com/tako0614/example/0123456789abcdef0123456789abcdef01234567/public/icon.svg",
     );
@@ -104,14 +88,8 @@ describe("TCS repo metadata", () => {
           content: btoa(
             JSON.stringify({
               schemaVersion: "tcs.repo/v1",
-              inputs: [
-                {
-                  name: "project_name",
-                  label: text("Service name"),
-                  defaultValue: "service-name-with-space",
-                },
-              ],
-              outputAllowlist: [{ key: "api_url", from: "api_url", type: "url" }],
+              modulePath: "infra",
+              description: text("Repo description"),
             }),
           ),
         }),
@@ -124,11 +102,9 @@ describe("TCS repo metadata", () => {
     expect(calls[0]).toBe(
       "https://raw.githubusercontent.com/tako0614/example/0123456789abcdef0123456789abcdef01234567/.well-known/tcs.json",
     );
-    expect(hydrated.inputs.map((input) => input.name)).toEqual([
-      "project_name",
-    ]);
-    expect(hydrated.outputAllowlist).toEqual([
-      { key: "api_url", from: "api_url", type: "url" },
-    ]);
+    expect(hydrated.source.path).toBe("infra");
+    expect(hydrated.description.en).toBe("Repo description");
+    expect(hydrated.inputs).toBeUndefined();
+    expect(hydrated.outputAllowlist).toBeUndefined();
   });
 });

@@ -167,6 +167,8 @@ function installOidcClientExperience(
       ...configured,
     };
   }
+  const standard = standardOidcExperienceFromVariables(config.variableMapping);
+  if (standard) return standard;
   if (
     store?.templateId === "takos" ||
     isTakosGitUrl(store?.source?.git) ||
@@ -182,6 +184,58 @@ function installOidcClientExperience(
     return DEFAULT_TAKOSUMI_ACCOUNTS_OIDC;
   }
   return undefined;
+}
+
+function standardOidcExperienceFromVariables(
+  variables: InstallConfig["variableMapping"],
+): ResolvedTakosumiAccountsOidcExperience | undefined {
+  if (
+    !Object.prototype.hasOwnProperty.call(
+      variables,
+      "takosumi_accounts_issuer_url",
+    ) &&
+    !Object.prototype.hasOwnProperty.call(
+      variables,
+      "takosumi_accounts_client_id",
+    ) &&
+    !Object.prototype.hasOwnProperty.call(
+      variables,
+      "takosumi_accounts_redirect_uri",
+    )
+  ) {
+    return undefined;
+  }
+  const redirectUri = stringInstallVariable(
+    variables.takosumi_accounts_redirect_uri,
+  );
+  const callbackPath = redirectUri
+    ? callbackPathFromRedirectUri(redirectUri)
+    : undefined;
+  return {
+    ...DEFAULT_TAKOSUMI_ACCOUNTS_OIDC,
+    ...(Object.prototype.hasOwnProperty.call(
+      variables,
+      "takosumi_accounts_url",
+    )
+      ? { accountsUrlVariable: "takosumi_accounts_url" }
+      : {}),
+    ...(Object.prototype.hasOwnProperty.call(
+      variables,
+      "takosumi_accounts_redirect_uri",
+    )
+      ? { redirectUriVariable: "takosumi_accounts_redirect_uri" }
+      : {}),
+    ...(callbackPath ? { callbackPath } : {}),
+  };
+}
+
+function callbackPathFromRedirectUri(value: string): string | undefined {
+  try {
+    const url = new URL(value);
+    return url.pathname && url.pathname !== "/" ? url.pathname : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 async function getCapsuleSourceGitUrl(
@@ -230,6 +284,7 @@ function appOriginFromInstallVariables(
 ): string | undefined {
   for (const variableName of uniqueStrings([
     publicEndpoint?.urlVariable,
+    "public_url",
     "app_url",
   ])) {
     const appUrl = stringInstallVariable(variables[variableName]);
@@ -244,6 +299,7 @@ function appOriginFromInstallVariables(
   const baseDomain = publicEndpointBaseDomain(publicEndpoint?.baseDomain);
   for (const variableName of uniqueStrings([
     publicEndpoint?.subdomainVariable,
+    "public_subdomain",
     "worker_name",
     "project_name",
   ])) {

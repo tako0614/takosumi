@@ -235,7 +235,12 @@ export function defaultCapsuleOutputAllowlist(): Readonly<
     // Plain Git URL installs are generic OpenTofu/Terraform Capsules. If a
     // module emits the common app-launch outputs, surface them without requiring
     // every arbitrary module to define them.
+    launch_url: { from: "launch_url", type: "url" },
     url: { from: "url", type: "url" },
+    public_url: { from: "public_url", type: "url" },
+    api_url: { from: "api_url", type: "url" },
+    app_deployment: { from: "app_deployment", type: "json" },
+    service_exports: { from: "service_exports", type: "json" },
     worker_name: { from: "worker_name", type: "string" },
   };
 }
