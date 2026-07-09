@@ -88,4 +88,47 @@ describe("TCS repo metadata", () => {
     const base = listing();
     await expect(hydrateTcsListingWithRepoMetadata(base)).resolves.toBe(base);
   });
+
+  test("falls back to the GitHub Contents API when raw metadata is rate limited", async () => {
+    const calls: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      calls.push(String(input));
+      if (calls.length === 1) {
+        return new Response("rate limited", { status: 429 });
+      }
+      expect(String(input)).toBe(
+        "https://api.github.com/repos/tako0614/example/contents/.well-known%2Ftcs.json?ref=0123456789abcdef0123456789abcdef01234567",
+      );
+      return new Response(
+        JSON.stringify({
+          content: btoa(
+            JSON.stringify({
+              schemaVersion: "tcs.repo/v1",
+              inputs: [
+                {
+                  name: "project_name",
+                  label: text("Service name"),
+                  defaultValue: "service-name-with-space",
+                },
+              ],
+              outputAllowlist: [{ key: "api_url", from: "api_url", type: "url" }],
+            }),
+          ),
+        }),
+        { headers: { "content-type": "application/json" } },
+      );
+    }) as typeof fetch;
+
+    const hydrated = await hydrateTcsListingWithRepoMetadata(listing());
+
+    expect(calls[0]).toBe(
+      "https://raw.githubusercontent.com/tako0614/example/0123456789abcdef0123456789abcdef01234567/.well-known/tcs.json",
+    );
+    expect(hydrated.inputs.map((input) => input.name)).toEqual([
+      "project_name",
+    ]);
+    expect(hydrated.outputAllowlist).toEqual([
+      { key: "api_url", from: "api_url", type: "url" },
+    ]);
+  });
 });

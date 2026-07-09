@@ -1244,8 +1244,17 @@ async function createCapsule(
       400,
     );
   }
+  const hydratedRepoConfig = await hydrateRepoOwnedStoreConfig({
+    source,
+    storeMetadata,
+    outputAllowlist,
+    modulePath,
+  });
+  const resolvedStoreMetadata = hydratedRepoConfig.storeMetadata;
+  const resolvedOutputAllowlist = hydratedRepoConfig.outputAllowlist;
+  const resolvedModulePath = hydratedRepoConfig.modulePath;
   const storeDefaultVars = storeDefaultVariableMapping(
-    storeMetadata ?? baseConfig.store,
+    resolvedStoreMetadata ?? baseConfig.store,
     {
       capsuleName: name,
       workspaceId,
@@ -1257,15 +1266,15 @@ async function createCapsule(
     hasVars ||
     hasStoreDefaultVars ||
     runnerProfileId ||
-    outputAllowlist !== undefined ||
-    storeMetadata !== undefined ||
-    modulePath !== undefined
+    resolvedOutputAllowlist !== undefined ||
+    resolvedStoreMetadata !== undefined ||
+    resolvedModulePath !== undefined
   ) {
     const now = new Date().toISOString();
     const { modulePath: _baseModulePath, ...baseConfigWithoutModulePath } =
       baseConfig;
     const configBase =
-      modulePath === "" ? baseConfigWithoutModulePath : baseConfig;
+      resolvedModulePath === "" ? baseConfigWithoutModulePath : baseConfig;
     const config = await operations.installations.putInstallConfig({
       ...configBase,
       id: `icfg_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`,
@@ -1277,11 +1286,11 @@ async function createCapsule(
         storeDefaultVars,
         vars ?? {},
       ),
-      ...(storeMetadata ? { store: storeMetadata } : {}),
+      ...(resolvedStoreMetadata ? { store: resolvedStoreMetadata } : {}),
       ...(runnerProfileId ? { runnerId: runnerProfileId } : {}),
-      ...(modulePath ? { modulePath } : {}),
+      ...(resolvedModulePath ? { modulePath: resolvedModulePath } : {}),
       outputAllowlist:
-        outputAllowlist ?? scopedCloneOutputAllowlist(baseConfig),
+        resolvedOutputAllowlist ?? scopedCloneOutputAllowlist(baseConfig),
       createdAt: now,
       updatedAt: now,
     });
@@ -1306,6 +1315,148 @@ async function createCapsule(
     });
   }
   return jsonStatus({ capsule: publicCapsule(installation) }, 201);
+}
+
+interface RepoOwnedStoreHydrationInput {
+  readonly source: Source;
+  readonly storeMetadata: InstallConfig["store"] | undefined;
+  readonly outputAllowlist: InstallConfig["outputAllowlist"] | undefined;
+  readonly modulePath: string | undefined;
+}
+
+interface RepoOwnedStoreHydrationResult {
+  readonly storeMetadata: InstallConfig["store"] | undefined;
+  readonly outputAllowlist: InstallConfig["outputAllowlist"] | undefined;
+  readonly modulePath: string | undefined;
+}
+
+async function hydrateRepoOwnedStoreConfig(
+  input: RepoOwnedStoreHydrationInput,
+): Promise<RepoOwnedStoreHydrationResult> {
+  if (!input.storeMetadata?.source) return input;
+  if (
+    input.storeMetadata.inputs.length > 0 &&
+    input.storeMetadata.installExperience &&
+    input.outputAllowlist !== undefined
+  ) {
+    return input;
+  }
+  const metadata = await fetchRepoOwnedTcsMetadata({
+    git: input.storeMetadata.source.git || input.source.url,
+    ref: sourceDefaultRef(input.source),
+  });
+  if (!metadata) return input;
+
+  const modulePath =
+    input.modulePath ?? modulePathValue(metadata.modulePath) ?? undefined;
+  const storePatch: Record<string, unknown> = {};
+  if (input.storeMetadata.inputs.length === 0 && metadata.inputs !== undefined) {
+    storePatch.inputs = metadata.inputs;
+  }
+  if (
+    input.storeMetadata.installExperience === undefined &&
+    metadata.installExperience !== undefined
+  ) {
+    storePatch.installExperience = metadata.installExperience;
+  }
+  if (modulePath !== undefined) {
+    storePatch.source = {
+      ...input.storeMetadata.source,
+      path: modulePath === "" ? "." : modulePath,
+    };
+  }
+  const mergedStore = installConfigStoreValue({
+    ...input.storeMetadata,
+    ...storePatch,
+  });
+  return {
+    storeMetadata: mergedStore ?? input.storeMetadata,
+    outputAllowlist:
+      input.outputAllowlist ??
+      repoOutputAllowlistValue(metadata.outputAllowlist),
+    modulePath,
+  };
+}
+
+function sourceDefaultRef(source: Source): string {
+  return source.defaultRef?.trim() || "main";
+}
+
+async function fetchRepoOwnedTcsMetadata(input: {
+  readonly git: string;
+  readonly ref: string;
+}): Promise<Record<string, unknown> | undefined> {
+  const repo = githubRepoParts(input.git);
+  if (!repo) return undefined;
+  const ref = input.ref.trim() || "main";
+  try {
+    const raw = await fetch(
+      `https://raw.githubusercontent.com/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.repo)}/${encodeURIComponent(ref)}/.well-known/tcs.json`,
+      { headers: { accept: "application/json" } },
+    );
+    if (raw.status === 404) return undefined;
+    if (raw.ok) return repoMetadataRecord(await raw.json());
+
+    const api = await fetch(
+      `https://api.github.com/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.repo)}/contents/.well-known%2Ftcs.json?ref=${encodeURIComponent(ref)}`,
+      { headers: { accept: "application/vnd.github+json" } },
+    );
+    if (api.status === 404 || !api.ok) return undefined;
+    const body = await api.json();
+    if (!isPlainJsonObject(body) || typeof body.content !== "string") {
+      return undefined;
+    }
+    const binary = atob(body.content.replace(/\s+/gu, ""));
+    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+    return repoMetadataRecord(JSON.parse(new TextDecoder().decode(bytes)));
+  } catch {
+    return undefined;
+  }
+}
+
+function githubRepoParts(
+  git: string,
+): { readonly owner: string; readonly repo: string } | undefined {
+  try {
+    const url = new URL(git);
+    if (url.protocol !== "https:" || url.hostname !== "github.com") {
+      return undefined;
+    }
+    const parts = url.pathname
+      .replace(/\/+$/u, "")
+      .replace(/\.git$/iu, "")
+      .split("/")
+      .filter(Boolean);
+    return parts.length >= 2 ? { owner: parts[0], repo: parts[1] } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function repoMetadataRecord(value: unknown): Record<string, unknown> | undefined {
+  if (!isPlainJsonObject(value)) return undefined;
+  const schemaVersion =
+    typeof value.schemaVersion === "string" ? value.schemaVersion.trim() : "";
+  if (schemaVersion && schemaVersion !== "tcs.repo/v1") return undefined;
+  return value;
+}
+
+function repoOutputAllowlistValue(
+  value: unknown,
+): InstallConfig["outputAllowlist"] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const record: Record<string, unknown> = {};
+  for (const item of value) {
+    if (!isPlainJsonObject(item)) return undefined;
+    const key = stringValue(item.key);
+    if (!key) return undefined;
+    record[key] = {
+      from: item.from,
+      type: item.type,
+      ...(item.required !== undefined ? { required: item.required } : {}),
+    };
+  }
+  return outputAllowlistValue(record);
 }
 
 function storeDefaultVariableMapping(

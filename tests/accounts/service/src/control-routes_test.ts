@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 
 import {
   type ControlPlaneOperations,
@@ -18,6 +18,11 @@ import { OpenTofuControllerError } from "../../../../core/domains/deploy-control
 // --- Test harness ----------------------------------------------------------
 
 const ORIGIN = "https://app.takosumi.test";
+const originalFetch = globalThis.fetch;
+
+afterEach(() => {
+  globalThis.fetch = originalFetch;
+});
 
 test("controllerErrorResponse hides public hostname reservation owner details", async () => {
   const response = controllerErrorResponse(
@@ -3953,6 +3958,147 @@ test("POST /api/v1/workspaces/:id/capsules carries store metadata into the scope
     installConfigId: string;
   };
   expect(createCall.installConfigId).toEqual(config.id);
+});
+
+test("POST /api/v1/workspaces/:id/capsules hydrates thin Store listings from repo-owned TCS metadata", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const calls: string[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    calls.push(String(input));
+    if (calls.length === 1) {
+      return new Response("rate limited", { status: 429 });
+    }
+    return new Response(
+      JSON.stringify({
+        content: btoa(
+          JSON.stringify({
+            schemaVersion: "tcs.repo/v1",
+            modulePath: ".",
+            inputs: [
+              {
+                name: "project_name",
+                type: "string",
+                defaultValue: "service-name-with-space",
+                label: { ja: "Service name", en: "Service name" },
+              },
+              {
+                name: "worker_name",
+                type: "string",
+                defaultValue: "service-name-with-space",
+                label: { ja: "Public subdomain", en: "Public subdomain" },
+              },
+            ],
+            installExperience: {
+              projections: [
+                { kind: "service_name", variable: "project_name" },
+                {
+                  kind: "public_endpoint",
+                  variables: {
+                    subdomain: "worker_name",
+                    url: "app_url",
+                    routePattern: "cloudflare_route_pattern",
+                  },
+                  baseDomain: "app.takos.jp",
+                },
+              ],
+            },
+            outputAllowlist: [
+              { key: "url", from: "url", type: "url" },
+              { key: "api_url", from: "api_url", type: "url" },
+            ],
+          }),
+        ),
+      }),
+      { headers: { "content-type": "application/json" } },
+    );
+  }) as typeof fetch;
+  const operations = fakeOperations({
+    getSource: async (id) => ({
+      source: {
+        id,
+        workspaceId: "space_a",
+        name: "takos-git",
+        url: "https://github.com/tako0614/takos-git.git",
+        defaultRef: "cd0a7522b2b88ae7ed2b3419aff7c91b10819bb7",
+        defaultPath: ".",
+        status: "active",
+        autoSync: false,
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:00Z",
+      } as unknown as Awaited<
+        ReturnType<ControlPlaneOperations["getSource"]>
+      >["source"],
+    }),
+  });
+  const { request: req, url } = request(
+    "POST",
+    "/api/v1/workspaces/space_a/capsules",
+    {
+      cookie,
+      body: {
+        name: "git",
+        environment: "production",
+        sourceId: "src_git",
+        installConfigId: "cfg_x",
+        store: {
+          source: {
+            git: "https://github.com/tako0614/takos-git.git",
+            path: ".",
+          },
+          order: 1000,
+          surface: "service",
+          kind: "storage",
+          provider: "cloudflare",
+          suggestedName: "git",
+          badge: { ja: "追加候補", en: "Installable" },
+          name: { ja: "Takos Git", en: "Takos Git" },
+          description: {
+            ja: "Git Smart HTTP で使えるリポジトリサービスを公開します。",
+            en: "Deploys a repository service over Git Smart HTTP.",
+          },
+        },
+      },
+    },
+  );
+
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+
+  expect(response?.status).toEqual(201);
+  expect(calls).toEqual([
+    "https://raw.githubusercontent.com/tako0614/takos-git/cd0a7522b2b88ae7ed2b3419aff7c91b10819bb7/.well-known/tcs.json",
+    "https://api.github.com/repos/tako0614/takos-git/contents/.well-known%2Ftcs.json?ref=cd0a7522b2b88ae7ed2b3419aff7c91b10819bb7",
+  ]);
+  const config = operations.calls.putInstallConfig?.[0] as {
+    variableMapping: Record<string, unknown>;
+    store?: {
+      inputs?: Array<{ name: string }>;
+      installExperience?: { projections?: Array<{ kind: string }> };
+    };
+    outputAllowlist: Record<string, unknown>;
+  };
+  expect(config.store?.inputs?.map((input) => input.name)).toEqual([
+    "project_name",
+    "worker_name",
+  ]);
+  expect(
+    config.store?.installExperience?.projections?.some(
+      (projection) => projection.kind === "public_endpoint",
+    ),
+  ).toEqual(true);
+  expect(config.variableMapping).toEqual({
+    project_name: "git-a",
+    worker_name: "git-a",
+  });
+  expect(config.outputAllowlist).toEqual({
+    url: { from: "url", type: "url" },
+    api_url: { from: "api_url", type: "url" },
+  });
 });
 
 test("POST /api/v1/workspaces/:id/capsules rejects retired install experience fields", async () => {
