@@ -86,6 +86,9 @@ export const ja = {
   "settings.notifications.desc": "お知らせと要対応の確認",
   "settings.workspace.title": "ワークスペース",
   "settings.workspace.desc": "名前、メンバー、共有の設定",
+  "settings.billingSummary.noPlan": "プラン未加入",
+  "settings.billingSummary.manage": "管理する",
+  "settings.billingSummary.fix": "支払いを確認する",
   "settings.manage.entry": "管理ツール",
   "settings.manage.entryDesc":
     "サービスの内部、接続、実行履歴などの詳しい管理画面",

@@ -1714,3 +1714,22 @@ button.tg-tab {
   flex: none;
   color: var(--tg-fg-muted);
 }
+
+/* ===== settings hub billing summary strip ===== */
+.settings-billing-summary {
+  padding: var(--tg-s-4) var(--tg-s-5);
+}
+.settings-billing-row {
+  display: flex;
+  align-items: center;
+  gap: var(--tg-s-4);
+}
+.settings-billing-row .settings-link-text {
+  flex: 1;
+  min-width: 0;
+}
+.settings-billing-row .settings-link-title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--tg-s-2);
+}

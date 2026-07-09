@@ -1,14 +1,27 @@
 /**
- * 設定 hub — the third primary tab. Everyday items (account, plan & billing,
- * notifications) lead; the hosting-management catalog is one clearly-labeled
- * entry at the bottom (`/settings/manage`). Nothing was removed from the old
- * console IA — advanced surfaces are relocated behind that entry.
+ * 設定 hub — the third primary tab. The plan & billing state leads (a live
+ * summary strip with the current plan, payment status, and balance — billing
+ * is a first-class consumer surface, not a buried tab), then the everyday
+ * items (account, billing detail, notifications), then the hosting-management
+ * catalog behind one clearly-labeled entry (`/settings/manage`). Nothing was
+ * removed from the old console IA — advanced surfaces are relocated.
  */
 import { A } from "@solidjs/router";
-import { Bell, ChevronRight, CreditCard, UserCircle2, Wrench } from "lucide-solid";
-import type { JSX } from "solid-js";
+import {
+  Bell,
+  ChevronRight,
+  CreditCard,
+  UserCircle2,
+  Wrench,
+} from "lucide-solid";
+import { createMemo, createResource, Show, type JSX } from "solid-js";
 import Page from "../account/components/auth/Page.tsx";
 import PageHeader from "../../components/ui/PageHeader.tsx";
+import { Badge, Button, Card } from "../../components/ui/index.ts";
+import { currentWorkspaceId } from "../../lib/workspace-state.ts";
+import { getWorkspaceBilling } from "../../lib/control-api.ts";
+import { formatUsdMicros } from "../../lib/billing-format.ts";
+import { isTakosumiCloudRuntime } from "../../lib/deployment-brand.ts";
 import { t } from "../../i18n/index.ts";
 import type { MessageKey } from "../../i18n/index.ts";
 
@@ -55,6 +68,71 @@ function LinkRow(props: { readonly link: SettingsLink }): JSX.Element {
   );
 }
 
+/** Live plan & payment strip. Hidden on self-host with billing disabled and
+ * no subscription — there is nothing to pay there. */
+function BillingSummary(): JSX.Element {
+  const [billing] = createResource(
+    () => currentWorkspaceId() || undefined,
+    getWorkspaceBilling,
+  );
+  const subscription = () => billing()?.subscription;
+  const planName = () => billing()?.plan?.name;
+  const balance = () => billing()?.balance;
+  const availableUsdMicros = () => balance()?.availableUsdMicros ?? 0;
+  const pastDue = () => subscription()?.status === "past_due";
+  const visible = createMemo(
+    () =>
+      billing() !== undefined &&
+      (isTakosumiCloudRuntime() ||
+        (billing()?.settings?.mode ?? "disabled") !== "disabled" ||
+        subscription() !== undefined),
+  );
+  const statusLabel = () => {
+    const status = subscription()?.status;
+    if (!status) return t("billing.balance.ready");
+    const key = `billing.subscription.status.${status}` as MessageKey;
+    return t(key) === key ? status : t(key);
+  };
+  return (
+    <Show when={visible()}>
+      <Card class="settings-billing-summary">
+        <div class="settings-billing-row">
+          <span class="settings-link-icon" aria-hidden="true">
+            <CreditCard size={20} />
+          </span>
+          <div class="settings-link-text">
+            <span class="settings-link-title">
+              {planName() ?? t("settings.billingSummary.noPlan")}
+              <Show when={subscription()}>
+                <Badge tone={pastDue() ? "danger" : "ok"}>
+                  {statusLabel()}
+                </Badge>
+              </Show>
+            </span>
+            <span class="settings-link-desc">
+              <Show
+                when={availableUsdMicros() > 0}
+                fallback={t("settings.billing.desc")}
+              >
+                {t("billing.balance.availableUsd")}:{" "}
+                {formatUsdMicros(availableUsdMicros())}
+              </Show>
+            </span>
+          </div>
+          <Button
+            variant={pastDue() ? "primary" : "secondary"}
+            href="/settings/billing"
+          >
+            {pastDue()
+              ? t("settings.billingSummary.fix")
+              : t("settings.billingSummary.manage")}
+          </Button>
+        </div>
+      </Card>
+    </Show>
+  );
+}
+
 function Inner(): JSX.Element {
   return (
     <div class="settings-view">
@@ -62,6 +140,7 @@ function Inner(): JSX.Element {
         title={t("settings.title")}
         subtitle={t("settings.subtitle")}
       />
+      <BillingSummary />
       <section
         class="settings-group"
         aria-label={t("settings.section.general")}

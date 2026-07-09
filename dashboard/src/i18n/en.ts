@@ -84,6 +84,9 @@ export const en: Record<keyof typeof ja, string> = {
   "settings.notifications.desc": "Updates and items needing attention",
   "settings.workspace.title": "Workspace",
   "settings.workspace.desc": "Name, members, and sharing",
+  "settings.billingSummary.noPlan": "No plan yet",
+  "settings.billingSummary.manage": "Manage",
+  "settings.billingSummary.fix": "Review payment",
   "settings.manage.entry": "Management tools",
   "settings.manage.entryDesc":
     "Detailed screens for service internals, connections, and run history",
