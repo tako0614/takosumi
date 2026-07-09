@@ -884,6 +884,12 @@ export interface PlanRunInternalContext {
    */
   readonly driftCheck?: true;
   /**
+   * Server-side auto-continue (auto-update pipeline): stamped onto the PlanRun
+   * so the queue consumer creates the apply run itself when the completed plan
+   * is CLEAN (`succeeded`). See {@link PlanRun.autoApplyRequested}.
+   */
+  readonly autoApplyRequested?: true;
+  /**
    * Dependency pins resolved by the Capsule planning path before the PlanRun
    * row exists. `createPlanRun` persists them immediately after creating the run
    * row and before queue dispatch, so runner dispatch can restore remote_state
@@ -941,6 +947,12 @@ export interface CreateInstallationPlanInternal {
    * the queued plan consumer. Not exposed on public plan routes.
    */
   readonly deferCompatibilityReport?: true;
+  /**
+   * Server-side auto-continue (auto-update pipeline): the queue consumer
+   * creates the apply run itself when the completed plan is CLEAN
+   * (`succeeded`). See {@link PlanRun.autoApplyRequested}.
+   */
+  readonly autoApplyRequested?: true;
   /**
    * Marks the resulting plan as a §19 `drift_check` (Phase 8). Set only by
    * {@link OpenTofuDeploymentController.createInstallationDriftCheck}; threaded
@@ -1087,6 +1099,8 @@ export class OpenTofuDeploymentController {
       requireVault: () => this.#requireVault(),
       shouldProcessRun: (status, heartbeatAt) =>
         this.#runEngine.shouldProcessRun(status, heartbeatAt),
+      onCapsuleStaleForNewSnapshot: (input) =>
+        this.#maybeAutoUpdateStaleCapsule(input),
     });
     this.#billing = new BillingService({
       store: this.#store,
@@ -1532,6 +1546,60 @@ export class OpenTofuDeploymentController {
       );
     }
     return this.#vault;
+  }
+
+  /**
+   * Auto-update pipeline (consumer "app feel"): a Capsule that opted in
+   * (`autoUpdate`) and just went `stale` because its Source resolved a new
+   * snapshot gets an update plan run created here, flagged
+   * `autoApplyRequested` so the queue consumer applies it when CLEAN. One
+   * automatic attempt per snapshot (`autoUpdateAttemptSourceSnapshotId`
+   * marker) — a failed attempt is not retry-looped; the Capsule stays 更新が
+   * あります and the next new snapshot (or a manual update) retries. Failures
+   * are recorded as Activity and never fail the source sync.
+   */
+  async #maybeAutoUpdateStaleCapsule(input: {
+    readonly capsule: Capsule;
+    readonly snapshot: SourceSnapshot;
+  }): Promise<void> {
+    try {
+      // Re-read: the stale patch just rewrote the row, and the opt-in /
+      // attempt marker must be judged against the current record.
+      const capsule = await this.#store.getInstallation(input.capsule.id);
+      if (!capsule || capsule.autoUpdate !== true) return;
+      if (capsule.autoUpdateAttemptSourceSnapshotId === input.snapshot.id) {
+        return;
+      }
+      await this.#store.patchInstallation(capsule.id, {
+        autoUpdateAttemptSourceSnapshotId: input.snapshot.id,
+        updatedAt: new Date(this.#now()).toISOString(),
+      });
+      await this.createInstallationPlan(
+        capsule.id,
+        { actor: "system:auto-update" },
+        {
+          autoApplyRequested: true,
+          sourceSnapshotId: input.snapshot.id,
+        },
+      );
+    } catch (error) {
+      log.warn("service.deploy_control.auto_update_enqueue_failed", {
+        capsuleId: input.capsule.id,
+        sourceSnapshotId: input.snapshot.id,
+        error,
+      });
+      await this.#activity.record({
+        workspaceId: input.capsule.workspaceId ?? input.capsule.spaceId ?? "",
+        spaceId: input.capsule.workspaceId ?? input.capsule.spaceId ?? "",
+        action: "installation.auto_update_failed",
+        targetType: "installation",
+        targetId: input.capsule.id,
+        metadata: {
+          sourceSnapshotId: input.snapshot.id,
+          message: error instanceof Error ? error.message : String(error),
+        },
+      }).catch(() => {});
+    }
   }
 
   // --- Sources (Core Specification §6) --------------------------------------

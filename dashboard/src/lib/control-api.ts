@@ -458,6 +458,12 @@ export interface Capsule {
    * dashboard renders correctly against both.
    */
   readonly freshness?: "fresh" | "stale";
+  /**
+   * Auto-update opt-in: a stale-from-source-update Capsule re-plans and
+   * auto-applies server-side when the plan is clean. Destructive updates
+   * always stop and wait for the user.
+   */
+  readonly autoUpdate?: boolean;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -1370,6 +1376,7 @@ export async function createCapsule(input: {
   readonly vars?: Readonly<Record<string, ContractJsonValue>>;
   readonly outputAllowlist?: Readonly<Record<string, OutputAllowlistEntry>>;
   readonly store?: NonNullable<InstallConfig["store"]>;
+  readonly autoUpdate?: boolean;
 }): Promise<Capsule> {
   const body = await controlFetch<{
     capsule: Capsule;
@@ -1390,8 +1397,21 @@ export async function createCapsule(input: {
         ? { outputAllowlist: input.outputAllowlist }
         : {}),
       ...(input.store ? { store: input.store } : {}),
+      ...(input.autoUpdate === true ? { autoUpdate: true } : {}),
     },
   });
+  return body.capsule;
+}
+
+/** Toggles the Capsule's auto-update opt-in (PATCH /capsules/:id). */
+export async function setCapsuleAutoUpdate(
+  capsuleId: string,
+  enabled: boolean,
+): Promise<Capsule> {
+  const body = await controlFetch<{ capsule: Capsule }>(
+    `${BASE}/capsules/${encodeURIComponent(capsuleId)}`,
+    { method: "PATCH", body: { autoUpdate: enabled } },
+  );
   return body.capsule;
 }
 

@@ -807,12 +807,20 @@ function Inner() {
   // this screen shows a clean App-Store-style install progress instead of the
   // technical run console. withAuto() preserves the flag across the plan→apply
   // hop and any re-plan so the whole install reads as one flow.
-  const autoInstall =
-    typeof location !== "undefined" &&
-    new URLSearchParams(location.search).get("auto") === "install";
+  // ?auto=install (store install) and ?auto=update (1-tap update from the app
+  // detail) share the same App-Store-style progress screen; update mode only
+  // swaps the copy (更新中/更新しました instead of 追加中/追加しました).
+  const autoMode =
+    typeof location !== "undefined"
+      ? new URLSearchParams(location.search).get("auto")
+      : null;
+  const autoUpdateMode = autoMode === "update";
+  const autoInstall = autoMode === "install" || autoUpdateMode;
   const withAuto = (path: string) =>
     autoInstall
-      ? path + (path.includes("?") ? "&" : "?") + "auto=install"
+      ? path +
+        (path.includes("?") ? "&" : "?") +
+        (autoUpdateMode ? "auto=update" : "auto=install")
       : path;
   const [forceConsole, setForceConsole] = createSignal(false);
 
@@ -1403,11 +1411,17 @@ function Inner() {
                 ✓
               </span>
               <h2>
-                {name
-                  ? t("install.doneTitle", { name })
-                  : t("install.doneTitleGeneric")}
+                {autoUpdateMode
+                  ? name
+                    ? t("update.doneTitle", { name })
+                    : t("update.doneTitleGeneric")
+                  : name
+                    ? t("install.doneTitle", { name })
+                    : t("install.doneTitleGeneric")}
               </h2>
-              <p>{t("install.doneSub")}</p>
+              <p>
+                {autoUpdateMode ? t("update.doneSub") : t("install.doneSub")}
+              </p>
               <div class="av-install-actions">
                 <Show when={completedRunLaunchUrl()}>
                   {(url) => (
@@ -1447,7 +1461,11 @@ function Inner() {
               >
                 !
               </span>
-              <h2>{t("install.errorTitle")}</h2>
+              <h2>
+                {autoUpdateMode
+                  ? t("update.errorTitle")
+                  : t("install.errorTitle")}
+              </h2>
               {/* One plain sentence with the next action — the summary layer
                   already classifies credits / account-access / known failure
                   codes. The console stays behind 詳細を見る. */}
@@ -1497,7 +1515,12 @@ function Inner() {
                   {name ? name.slice(0, 2).toUpperCase() : "··"}
                 </span>
                 <div class="av-install-head-text">
-                  <h2>{name ?? t("install.installingGeneric")}</h2>
+                  <h2>
+                    {name ??
+                      (autoUpdateMode
+                        ? t("update.installingGeneric")
+                        : t("install.installingGeneric"))}
+                  </h2>
                   <p class="muted">{t("install.wait")}</p>
                 </div>
               </div>

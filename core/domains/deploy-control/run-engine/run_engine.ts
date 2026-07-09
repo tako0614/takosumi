@@ -185,6 +185,7 @@ import {
   releaseActivationCommandsFromPublicOutputs,
   releaseActivationDescriptorForWorkspace,
   releaseActivationOutputs,
+  applyExpectedGuardFromPlanRun,
   RUN_HEARTBEAT_STALE_MS,
   RUN_RENEWAL_INTERVAL_MS,
   runEnvironmentFailedRun,
@@ -1007,6 +1008,9 @@ export class RunEngine {
       installationContext,
       ...(internal.runGroupId ? { runGroupId: internal.runGroupId } : {}),
       ...(internal.driftCheck ? { driftCheck: true as const } : {}),
+      ...(internal.autoApplyRequested
+        ? { autoApplyRequested: true as const }
+        : {}),
       ...(providerCredentialDelivery ? { providerCredentialDelivery } : {}),
       ...(templatePlan
         ? {
@@ -1426,6 +1430,9 @@ export class RunEngine {
           : {}),
         ...(internal.runGroupId ? { runGroupId: internal.runGroupId } : {}),
         ...(internal.driftCheck ? { driftCheck: true as const } : {}),
+        ...(internal.autoApplyRequested
+          ? { autoApplyRequested: true as const }
+          : {}),
       }),
     );
     return response;
@@ -3555,6 +3562,45 @@ export class RunEngine {
   }
 
   /**
+   * Server-side auto-continue for the auto-update pipeline (and any plan
+   * created with `autoApplyRequested`): a CLEAN completed plan — `succeeded`,
+   * which an approval-parked (destructive), policy-blocked, or drift-check
+   * plan never reaches — applies itself so no client has to press deploy.
+   * `createApplyRun` re-verifies every apply precondition (policy pass, plan
+   * artifact, apply-once, destroy approval), so this path adds no bypass. A
+   * failure records an Activity event and leaves the succeeded plan for manual
+   * continuation; it never fails the plan itself.
+   */
+  async #maybeAutoApplyCompletedPlan(planRun: PlanRun): Promise<void> {
+    if (planRun.autoApplyRequested !== true) return;
+    if (planRun.driftCheck === true) return;
+    if (planRun.status !== "succeeded") return;
+    if (planRun.operation === "destroy") return;
+    if (planRun.requiresApproval === true) return;
+    if (planRun.appliedApplyRunId) return;
+    try {
+      await this.createApplyRun(
+        {
+          planRunId: planRun.id,
+          expected: applyExpectedGuardFromPlanRun(planRun),
+        },
+        { actor: "system:auto-update" },
+      );
+    } catch (error) {
+      await this.#recordActivity({
+        workspaceId: planRun.workspaceId ?? planRun.spaceId,
+        action: "installation.auto_update_apply_failed",
+        targetType: "installation",
+        targetId: planRun.installationId ?? planRun.id,
+        metadata: {
+          planRunId: planRun.id,
+          message: error instanceof Error ? error.message : String(error),
+        },
+      });
+    }
+  }
+
+  /**
    * Fire-and-forget Activity emission (spec §27 / §34). Wraps the recorder so a
    * failed audit write (or a recorder that throws) never propagates into the run
    * path. The {@link ActivityService} already swallows store errors; this is the
@@ -4761,6 +4807,7 @@ export class RunEngine {
           result.planResourceChanges ?? [],
         );
       }
+      await this.#maybeAutoApplyCompletedPlan(updated);
       return updated;
     } catch (error) {
       if (isRetryableRunnerInfrastructureError(error)) {

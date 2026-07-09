@@ -97,12 +97,30 @@ export interface Capsule {
   readonly compatibilityReportId?: string;
   readonly compatibilityStatus?: CapsuleCompatibilityLevel;
   readonly status: CapsuleStatus;
+  /**
+   * Auto-update opt-in. When the tracked Source resolves a new snapshot and
+   * marks this Capsule `stale`, the control plane creates the update plan run
+   * itself and auto-applies it only when the plan is CLEAN (succeeded — an
+   * approval-parked, destructive, or policy-blocked plan never is). Destructive
+   * updates always stop as 更新があります and wait for the user.
+   */
+  readonly autoUpdate?: boolean;
+  /**
+   * Auto-update backoff marker: the SourceSnapshot id of the last automatic
+   * attempt. One automatic attempt per snapshot — a failed auto-update retries
+   * only on the next new snapshot (or a manual update). Internal; projected out
+   * of public reads.
+   */
+  readonly autoUpdateAttemptSourceSnapshotId?: string;
   readonly createdAt: string;
   readonly updatedAt: string;
 }
 
 /** Public Capsule projection returned by `/api` and dashboard session routes. */
-export type PublicCapsule = Omit<Capsule, "installType" | "currentOutputId">;
+export type PublicCapsule = Omit<
+  Capsule,
+  "installType" | "currentOutputId" | "autoUpdateAttemptSourceSnapshotId"
+>;
 
 // ---------------------------------------------------------------------------
 // Capsule compatibility report

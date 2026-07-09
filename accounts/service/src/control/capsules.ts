@@ -364,21 +364,36 @@ async function patchCapsule(
   const body = await readJsonObject(request);
   if (!body) return errorJson("invalid_request", "invalid request", 400);
   const status = stringValue(body.status) as Capsule["status"] | undefined;
-  if (!status) {
-    return errorJson("invalid_request", "status is required", 400);
+  const autoUpdate =
+    typeof body.autoUpdate === "boolean" ? body.autoUpdate : undefined;
+  if (!status && autoUpdate === undefined) {
+    return errorJson(
+      "invalid_request",
+      "status or autoUpdate is required",
+      400,
+    );
   }
-  if (!API_PATCHABLE_INSTALLATION_STATUSES.has(status)) {
+  if (status && !API_PATCHABLE_INSTALLATION_STATUSES.has(status)) {
     return errorJson(
       "invalid_request",
       "status may only be patched to active, stale, or error; destroy states must use the destroy flow",
       400,
     );
   }
-  const installation = await operations.installations.patchCapsuleStatus(
-    capsuleId,
-    status,
-  );
-  return json({ capsule: publicCapsule(installation) });
+  let installation: Capsule | undefined;
+  if (autoUpdate !== undefined) {
+    installation = await operations.installations.setCapsuleAutoUpdate(
+      capsuleId,
+      autoUpdate,
+    );
+  }
+  if (status) {
+    installation = await operations.installations.patchCapsuleStatus(
+      capsuleId,
+      status,
+    );
+  }
+  return json({ capsule: publicCapsule(installation!) });
 }
 
 async function deleteCapsule(
