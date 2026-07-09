@@ -594,6 +594,33 @@ test("installation plan dispatch carries sourceArchive + stateScope at the curre
   expect(run.baseStateGeneration).toEqual(0);
 });
 
+test("explicit source build is sealed with the plan and replayed for apply", async () => {
+  const sourceBuild = {
+    commands: [
+      { argv: ["bun", "install", "--frozen-lockfile"] },
+      {
+        argv: ["bun", "run", "build"],
+        workingDirectory: "web",
+      },
+    ],
+    outputs: ["web/dist/index.js"],
+  } as const;
+  const { runner, controller } = await seededController({
+    installConfig: { sourceBuild },
+  });
+
+  const { planRun } = await controller.createInstallationPlan("inst_fixture");
+  expect(planRun.status).toEqual("succeeded");
+  expect(runner.planJobs[0]?.sourceBuild).toEqual(sourceBuild);
+
+  const { applyRun } = await controller.createApplyRun({
+    planRunId: planRun.id,
+    expected: applyExpectedGuardFromPlanRun(planRun),
+  });
+  expect(applyRun.status).toEqual("succeeded");
+  expect(runner.applyJobs[0]?.sourceBuild).toEqual(sourceBuild);
+});
+
 test("installation plan does not wait for runner profile seed persistence", async () => {
   const store = new HangingRunnerProfileSeedStore();
   const runner = recordingRunner();
@@ -919,13 +946,13 @@ test("managed Cloudflare Capsule inputs derive app.takos.jp launch defaults serv
 
   expect(planRun.status).toEqual("succeeded");
   const mainTf = runner.planJobs[0]!.generatedRoot!.files["main.tf"]!;
-  expect(mainTf).toContain('worker_name = "yuru-managed-app-fixture"');
+  expect(mainTf).toContain('worker_name = "space-test-yuru-managed-app"');
   expect(mainTf).toContain(
-    'app_url = "https://yuru-managed-app-fixture.app.takos.jp"',
+    'app_url = "https://space-test-yuru-managed-app.app.takos.jp"',
   );
   expect(mainTf).toContain('cloudflare_route_zone_id = "zone_takosumi_cloud"');
   expect(mainTf).toContain(
-    'cloudflare_route_pattern = "yuru-managed-app-fixture.app.takos.jp/*"',
+    'cloudflare_route_pattern = "space-test-yuru-managed-app.app.takos.jp/*"',
   );
   expect(mainTf).toContain("enable_cloudflare_resources = true");
   expect(mainTf).toContain("enable_cloudflare_worker_script = true");
@@ -1010,10 +1037,12 @@ test("managed Cloudflare Capsule explicit worker_name drives app.takos.jp URL de
 
   expect(planRun.status).toEqual("succeeded");
   const mainTf = runner.planJobs[0]!.generatedRoot!.files["main.tf"]!;
-  expect(mainTf).toContain('worker_name = "custom-yuru"');
-  expect(mainTf).toContain('app_url = "https://custom-yuru.app.takos.jp"');
+  expect(mainTf).toContain('worker_name = "space-test-custom-yuru"');
   expect(mainTf).toContain(
-    'cloudflare_route_pattern = "custom-yuru.app.takos.jp/*"',
+    'app_url = "https://space-test-custom-yuru.app.takos.jp"',
+  );
+  expect(mainTf).toContain(
+    'cloudflare_route_pattern = "space-test-custom-yuru.app.takos.jp/*"',
   );
 });
 
@@ -1090,12 +1119,12 @@ test("managed Cloudflare public endpoint defaults follow store metadata variable
 
   expect(planRun.status).toEqual("succeeded");
   const mainTf = runner.planJobs[0]!.generatedRoot!.files["main.tf"]!;
-  expect(mainTf).toContain('public_name = "mapped-public-app-fixture"');
+  expect(mainTf).toContain('public_name = "space-test-mapped-public-app"');
   expect(mainTf).toContain(
-    'public_url = "https://mapped-public-app-fixture.app.takos.jp"',
+    'public_url = "https://space-test-mapped-public-app.app.takos.jp"',
   );
   expect(mainTf).toContain(
-    'route_pattern = "mapped-public-app-fixture.app.takos.jp/*"',
+    'route_pattern = "space-test-mapped-public-app.app.takos.jp/*"',
   );
   expect(mainTf).not.toContain("cloudflare_route_zone_id =");
   expect(mainTf).not.toContain("worker_name =");
@@ -1178,15 +1207,17 @@ test("managed Cloudflare Capsule honors operator managed public base domain", as
 
   expect(planRun.status).toEqual("succeeded");
   const mainTf = runner.planJobs[0]!.generatedRoot!.files["main.tf"]!;
-  expect(mainTf).toContain('worker_name = "custom-yuru"');
-  expect(mainTf).toContain('app_url = "https://custom-yuru.apps.example.org"');
+  expect(mainTf).toContain('worker_name = "space-test-custom-yuru"');
   expect(mainTf).toContain(
-    'cloudflare_route_pattern = "custom-yuru.apps.example.org/*"',
+    'app_url = "https://space-test-custom-yuru.apps.example.org"',
+  );
+  expect(mainTf).toContain(
+    'cloudflare_route_pattern = "space-test-custom-yuru.apps.example.org/*"',
   );
   expect(mainTf).toContain('cloudflare_route_zone_id = "zone_operator_apps"');
 });
 
-test("managed Cloudflare Capsule passes custom public app_url without Takosumi hostname claim", async () => {
+test("managed Cloudflare Capsule passes a custom public app_url to provider ownership verification", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   const runner = recordingRunner();
   const seeded = await seedInstallationModel(store, {
@@ -1263,7 +1294,7 @@ test("managed Cloudflare Capsule passes custom public app_url without Takosumi h
   ).resolves.toBeUndefined();
 });
 
-test("managed Cloudflare Capsule allows managed-base app_url and route pattern without custom-domain quota", async () => {
+test("managed Cloudflare Capsule canonicalizes an explicit managed-base URL into its Workspace namespace", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   const runner = recordingRunner();
   const seeded = await seedInstallationModel(store, {
@@ -1335,15 +1366,17 @@ test("managed Cloudflare Capsule allows managed-base app_url and route pattern w
 
   expect(planRun.status).toEqual("succeeded");
   await expect(
-    store.getPublicHostReservation("community.apps.example.org"),
+    store.getPublicHostReservation(
+      "space-test-managed-public-host-app.apps.example.org",
+    ),
   ).resolves.toMatchObject({
-    hostname: "community.apps.example.org",
+    hostname: "space-test-managed-public-host-app.apps.example.org",
     installationId: seeded.installation.id,
     status: "reserved",
   });
 });
 
-test("managed Cloudflare app.takos.jp host is globally claimed across Workspaces", async () => {
+test("managed Cloudflare app.takos.jp slugs are namespaced by Workspace handle", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   const runner = recordingRunner();
   const first = await seedInstallationModel(store, {
@@ -1482,9 +1515,16 @@ test("managed Cloudflare app.takos.jp host is globally claimed across Workspaces
     updatedAt: "2026-06-06T00:00:00.000Z",
   });
 
+  const secondPlan = await controller.createInstallationPlan(
+    second.installation.id,
+  );
+  expect(secondPlan.planRun.status).toBe("succeeded");
   await expect(
-    controller.createInstallationPlan(second.installation.id),
-  ).rejects.toThrow("app_hostname_unavailable: already exists");
+    store.getPublicHostReservation("space-first-shared-app.app.takos.jp"),
+  ).resolves.toMatchObject({ installationId: first.installation.id });
+  await expect(
+    store.getPublicHostReservation("space-second-shared-app.app.takos.jp"),
+  ).resolves.toMatchObject({ installationId: second.installation.id });
 });
 
 test("managed Cloudflare app.takos.jp host claim prefers active Capsule over stale historical output", async () => {
@@ -1551,7 +1591,7 @@ test("managed Cloudflare app.takos.jp host claim prefers active Capsule over sta
   });
 
   const challenger = await seedInstallationModel(store, {
-    spaceId: "space_challenger",
+    spaceId: "shared",
     sourceId: "src_challenger",
     snapshotId: "snap_challenger",
     installConfigId: "cfg_challenger",
@@ -1560,7 +1600,7 @@ test("managed Cloudflare app.takos.jp host claim prefers active Capsule over sta
     environment: "preview",
     installConfig: {
       variableMapping: {
-        worker_name: "shared-app",
+        worker_name: "app",
         app_url: null,
         cloudflare: {
           account_id: null,
@@ -1806,7 +1846,7 @@ test("Deployment read projection hides app.takos.jp URLs owned by another Capsul
   });
 });
 
-test("managed Cloudflare app.takos.jp host is atomically reserved by successful plans", async () => {
+test("managed Cloudflare app.takos.jp host is atomically reserved within a Workspace", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   const runner = recordingRunner();
   const first = await seedInstallationModel(store, {
@@ -1882,12 +1922,12 @@ test("managed Cloudflare app.takos.jp host is atomically reserved by successful 
   expect(firstPlan.planRun.status).toEqual("succeeded");
 
   const second = await seedInstallationModel(store, {
-    spaceId: "space_second",
+    spaceId: "space_first",
     sourceId: "src_second",
     snapshotId: "snap_second",
     installConfigId: "cfg_second",
     installationId: "inst_second",
-    name: "Reserved App",
+    name: "Reserved App Two",
     environment: "preview",
     installConfig: {
       variableMapping: {
@@ -2102,7 +2142,7 @@ test("managed Cloudflare host claim skips corrupt historical Capsules", async ()
 
   expect(planRun.status).toEqual("succeeded");
   expect(runner.planJobs[0]?.generatedRoot?.files["main.tf"]).toContain(
-    'app_url = "https://fresh-app.app.takos.jp"',
+    'app_url = "https://space-fresh-fresh-app.app.takos.jp"',
   );
 });
 
@@ -2391,8 +2431,6 @@ test("standard Git Capsule variables stay ordinary OpenTofu inputs", async () =>
   expect(mainTf).toContain('image_ref = "registry.example.com/app@sha256:abc"');
   expect(mainTf).toContain('release_tag = "v1.2.3"');
   expect(mainTf).toContain('version = "1.2.3"');
-  expect(planJob.build).toBeUndefined();
-  expect(planJob.prebuiltArtifact).toBeUndefined();
 });
 
 test("app_url stays an ordinary OpenTofu input without publicEndpoint mapping", async () => {

@@ -385,7 +385,9 @@ function repoInput(value: unknown): TcsListingInput | undefined {
       : {}),
     label,
     ...(helper ? { helper } : {}),
-    ...(text(value.placeholder) ? { placeholder: text(value.placeholder) } : {}),
+    ...(text(value.placeholder)
+      ? { placeholder: text(value.placeholder) }
+      : {}),
   };
 }
 
@@ -404,9 +406,13 @@ function optionalProjectionVariable(value: unknown): string | undefined {
     : undefined;
 }
 
-function repoInstallExperience(value: unknown): TcsInstallExperience | undefined {
+function repoInstallExperience(
+  value: unknown,
+): TcsInstallExperience | undefined {
   if (!isRecord(value) || !Array.isArray(value.projections)) return undefined;
-  const projections: NonNullable<TcsInstallExperience["projections"]> = [];
+  const projections: Array<
+    NonNullable<TcsInstallExperience["projections"]>[number]
+  > = [];
   for (const rawProjection of value.projections) {
     if (!isRecord(rawProjection)) return undefined;
     const kind = text(rawProjection.kind);
@@ -454,11 +460,10 @@ function repoInstallExperience(value: unknown): TcsInstallExperience | undefined
         variable,
         ...(secretKind
           ? {
-              secretKind:
-                secretKind as Extract<
-                  NonNullable<TcsInstallExperience["projections"]>[number],
-                  { kind: "initial_secret" }
-                >["secretKind"],
+              secretKind: secretKind as Extract<
+                NonNullable<TcsInstallExperience["projections"]>[number],
+                { kind: "initial_secret" }
+              >["secretKind"],
             }
           : {}),
         ...(rawProjection.optional === true ? { optional: true } : {}),
@@ -470,7 +475,9 @@ function repoInstallExperience(value: unknown): TcsInstallExperience | undefined
       const variables = Object.fromEntries(
         Object.entries(rawProjection.variables)
           .map(([key, raw]) => [key, optionalProjectionVariable(raw)] as const)
-          .filter((entry): entry is readonly [string, string] => Boolean(entry[1])),
+          .filter((entry): entry is readonly [string, string] =>
+            Boolean(entry[1]),
+          ),
       );
       if (Object.keys(variables).length === 0) return undefined;
       if (kind === "oidc_client") {
@@ -555,7 +562,9 @@ export async function fetchTcsRepoMetadata(
   });
   if (api.status === 404) return null;
   if (!api.ok) throw new Error(`repo metadata ${raw.status}/${api.status}`);
-  return repoMetadataFromJson(await readGithubContentsJsonResponse(api)) ?? null;
+  return (
+    repoMetadataFromJson(await readGithubContentsJsonResponse(api)) ?? null
+  );
 }
 
 export function mergeTcsListingRepoMetadata(

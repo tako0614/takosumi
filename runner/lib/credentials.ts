@@ -22,9 +22,7 @@ import type {
   SourceCredentials,
   PreparedProviderCredentialFiles,
 } from "./types.ts";
-import {
-  BASE_COMMAND_ENV_NAMES,
-} from "./constants.ts";
+import { BASE_COMMAND_ENV_NAMES } from "./constants.ts";
 import {
   isRecord,
   recordField,
@@ -36,9 +34,7 @@ import {
   assertSafeCredentialFileName,
   assertSafeCredentialFileMode,
 } from "./policy.ts";
-import {
-  parseSourceCredentials,
-} from "./source_sync.ts";
+import { parseSourceCredentials } from "./source_sync.ts";
 import {
   parseRequiredProviders,
   maxRunSecondsFromProfile,
@@ -100,7 +96,9 @@ export function commandContextFromRequest(
  * ambient process env, so built-in provider names such as CLOUDFLARE_API_TOKEN
  * can still be used by explicit generic-env ProviderConnections.
  */
-export function credentialsFromRequest(request: unknown): Record<string, string> {
+export function credentialsFromRequest(
+  request: unknown,
+): Record<string, string> {
   const credentials = recordField(request, "credentials");
   if (!isRecord(credentials)) return {};
   const rawEnv = recordField(credentials, "env");
@@ -176,7 +174,9 @@ export function redactionValuesFromRequest(request: unknown): string[] {
   ];
 }
 
-export function redactionValuesFromRequestCredentials(request: unknown): string[] {
+export function redactionValuesFromRequestCredentials(
+  request: unknown,
+): string[] {
   return [
     ...Object.values(credentialsFromRequest(request)),
     ...providerCredentialFilesFromRequest(request).map((file) => file.content),
@@ -260,10 +260,9 @@ export function allKnownCredentialEnvNames(): ReadonlySet<string> {
 }
 
 /**
- * Builds the env for the legacy first-party BUILD phase. That compatibility
- * phase may run user-supplied commands against the source checkout and MUST
- * NOT see any cloud credential. Standard Git OpenTofu Capsules should put app
- * build/release work in their own repo or CI, not in Takosumi dispatch.
+ * Builds the env for credential-free source preparation and compatibility
+ * checks. User-approved source-build commands run against a reviewed checkout
+ * and MUST NOT see any provider credential.
  */
 export function buildPhaseEnv(): Record<string, string> {
   const env = baseCommandEnv();

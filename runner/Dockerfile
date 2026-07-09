@@ -100,6 +100,7 @@ RUN chmod 0755 ./runner/start.sh
 ENV PORT=8080
 ENV TOFU_WORK_DIR=/workspace
 ENV TAKOSUMI_OPENTOFU_PLUGIN_CACHE_DIR=/tmp/takosumi-provider-cache
+ENV TAKOSUMI_SOURCE_BUILD_CACHE_DIR=/tmp/takosumi-source-build-cache
 ENV TAKOSUMI_RUNNER_START_SERVER=1
 
 EXPOSE 8080

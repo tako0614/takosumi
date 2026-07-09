@@ -314,8 +314,9 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).not.toContain('setDefault("app_url"');
     expect(newAppViewSource).toContain("managedBaseDomain");
     expect(newAppViewSource).toContain(
-      "const managedAppHost = currentSubdomain",
+      "const managedAppLabel = currentSubdomain",
     );
+    expect(newAppViewSource).toContain("managedServiceLabel(workspaceHandle()");
     expect(newAppViewSource).toContain("routePatternFromAppUrl");
     expect(newAppViewSource).toContain("const currentSubdomain =");
     expect(newAppViewSource).toContain("const currentAppUrl =");

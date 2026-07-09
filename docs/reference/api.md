@@ -154,6 +154,26 @@ GET    /v1/audit-events
 Run は `plan` / `apply` / `destroy` / `refresh` / `output` の operation を持つ単一
 ledger entry です。Plan / Apply / Destroy を別 ledger entity にはしません。
 
+Git checkout からビルドする Capsule は、作成時に任意の `sourceBuild` を指定できます。
+これは Store metadata ではなく、ユーザーが明示的に承認する Capsule 設定です。
+
+```json
+{
+  "sourceBuild": {
+    "commands": [
+      { "argv": ["bun", "install", "--frozen-lockfile"] },
+      { "argv": ["bun", "run", "build"], "workingDirectory": "web" }
+    ],
+    "outputs": ["web/dist/index.js"]
+  }
+}
+```
+
+command は shell 文字列ではなく argv 配列です。working directory と output は
+Git checkout 内の相対 path に限り、provider credential は build phase に渡しません。
+指定しない場合は通常どおり、OpenTofu module が release artifact URL / digest、provider、
+data source などから成果物を解決します。
+
 Run には次を保存します。
 
 ```text

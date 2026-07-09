@@ -6,12 +6,7 @@
 // behavior change; see runner/entrypoint.ts for the re-exported public surface.
 
 export type OpenTofuRunAction =
-  | "plan"
-  | "apply"
-  | "destroy"
-  | "compatibility_check"
-  | "backup"
-  | "release";
+  "plan" | "apply" | "destroy" | "compatibility_check" | "backup" | "release";
 export type OpenTofuOperation = "create" | "update" | "destroy";
 export type JsonRecord = Record<string, unknown>;
 export type RunRequest = {
@@ -68,6 +63,16 @@ export interface GeneratedRoot {
 export interface GeneratedRootModuleFile {
   readonly path: string;
   readonly text: string;
+}
+
+export interface SourceBuildCommand {
+  readonly argv: readonly string[];
+  readonly workingDirectory?: string;
+}
+
+export interface SourceBuildConfig {
+  readonly commands: readonly SourceBuildCommand[];
+  readonly outputs: readonly string[];
 }
 
 export interface BackupSpec {

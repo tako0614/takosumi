@@ -89,7 +89,7 @@ describe("TCS repo metadata", () => {
     expect(single?.outputAllowlist).toBeUndefined();
   });
 
-  test("hydrates presentation metadata from the repository without owning setup", async () => {
+  test("hydrates optional install UX metadata from the repository", async () => {
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       expect(String(input)).toBe(
         "https://raw.githubusercontent.com/tako0614/example/0123456789abcdef0123456789abcdef01234567/.well-known/tcs.json",
@@ -101,6 +101,23 @@ describe("TCS repo metadata", () => {
           suggestedName: "repo-example",
           iconUrl: "public/icon.svg",
           name: text("Repo Example"),
+          inputs: [
+            {
+              name: "public_subdomain",
+              format: "subdomain",
+              required: true,
+              label: text("Public slug"),
+            },
+          ],
+          installExperience: {
+            projections: [
+              {
+                kind: "public_endpoint",
+                variables: { subdomain: "public_subdomain" },
+                baseDomain: "app.takos.jp",
+              },
+            ],
+          },
         }),
         { headers: { "content-type": "application/json" } },
       );
@@ -111,8 +128,12 @@ describe("TCS repo metadata", () => {
     expect(hydrated.source.path).toBe("deploy/opentofu");
     expect(hydrated.suggestedName).toBe("repo-example");
     expect(hydrated.name.en).toBe("Repo Example");
-    expect(hydrated.inputs).toBeUndefined();
-    expect(hydrated.installExperience).toBeUndefined();
+    expect(hydrated.inputs?.[0]?.name).toBe("public_subdomain");
+    expect(hydrated.installExperience?.projections?.[0]).toEqual({
+      kind: "public_endpoint",
+      variables: { subdomain: "public_subdomain" },
+      baseDomain: "app.takos.jp",
+    });
     expect(hydrated.outputAllowlist).toBeUndefined();
     expect(hydrated.iconUrl).toBe(
       "https://raw.githubusercontent.com/tako0614/example/0123456789abcdef0123456789abcdef01234567/public/icon.svg",

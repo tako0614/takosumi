@@ -112,6 +112,7 @@ import { CREDENTIAL_FREE_PROVIDER_TAILS } from "../../lib/install-readiness.ts";
 import { clearCurrentStateVersionCache } from "../../lib/current-state-versions.ts";
 import { clearDashboardOverviewCache } from "../../lib/dashboard-overview.ts";
 import { listInstallConfigsCached } from "../../lib/install-config-list.ts";
+import { listWorkspacesCached } from "../../lib/workspace-list.ts";
 import {
   Badge,
   Button,
@@ -159,7 +160,7 @@ import {
   normalizeSourcePath,
   slugInputValue,
   uniqueServiceIdCandidate,
-  workspaceSuffix,
+  managedServiceLabel,
   publicEndpointHost,
   hostIsManagedBaseDomainSubdomain,
   isManagedSubdomainLabel,
@@ -217,11 +218,9 @@ function StoreIcon(props: { readonly entry: StoreEntry }) {
   }
 }
 
-
 export default function NewAppView() {
   return <Page title={t("new.title")}>{() => <Inner />}</Page>;
 }
-
 
 function NoWorkspaceStartPanel(props: {
   readonly busy: boolean;
@@ -252,7 +251,6 @@ function NoWorkspaceStartPanel(props: {
     </section>
   );
 }
-
 
 function Inner() {
   const navigate = useNavigate();
@@ -318,9 +316,6 @@ function Inner() {
       capsuleNameFromUrl(initialInstallPrefill.git))
     : "";
   const [name, setName] = createSignal(initialName);
-  const [serviceIdSeed] = createSignal(
-    Math.random().toString(36).slice(2, 6) || "next",
-  );
   const [resourcePrefix, setResourcePrefix] = createSignal("");
   const [resourcePrefixTouched, setResourcePrefixTouched] = createSignal(false);
   const [inputVariables, setInputVariables] = createSignal<
@@ -341,6 +336,17 @@ function Inner() {
 
   const workspaceId = () =>
     currentWorkspaceId() ? currentWorkspaceId() : null;
+  const [workspaceList] = createResource(
+    () => workspaceId() ?? undefined,
+    (selectedWorkspaceId) => listWorkspacesCached({ selectedWorkspaceId }),
+  );
+  const workspaceHandle = () => {
+    const current = workspaceId();
+    const handle = workspaceList()?.find(
+      (workspace) => workspace.id === current,
+    )?.handle;
+    return handle || "workspace";
+  };
   const shouldLoadInstallConfigs = () => {
     const id = workspaceId();
     if (!id) return null;
@@ -485,7 +491,12 @@ function Inner() {
     const key = storeInputKey(entry.id, field.name);
     return (
       storeInputValues()[key] ??
-      storeDefaultInputValue(entry, field, workspaceId(), defaultProjectName())
+      storeDefaultInputValue(
+        entry,
+        field,
+        workspaceHandle(),
+        defaultProjectName(),
+      )
     );
   };
   const storeInputBooleanChecked = (
@@ -520,7 +531,8 @@ function Inner() {
       if (field.name === endpoint?.subdomainVariable) {
         const label = value.trim().toLowerCase();
         if (isManagedSubdomainLabel(label)) {
-          const host = `${label}.${baseDomain}`;
+          const managedLabel = managedServiceLabel(workspaceHandle(), label);
+          const host = `${managedLabel}.${baseDomain}`;
           setUntouched(endpoint.urlVariable, `https://${host}`);
           setUntouched(endpoint.routePatternVariable, `${host}/*`);
         }
@@ -840,12 +852,15 @@ function Inner() {
     standardServiceNameVariables().length > 0;
   const defaultProjectName = () => {
     const base = slugInputValue(name() || capsuleNameFromUrl(sourceGitUrl()));
-    return slugInputValue(`${base}-${serviceIdSeed()}`);
+    return base;
   };
   const serviceNameInputValue = () =>
     slugInputValue(resourcePrefix() || defaultProjectName());
   const standardManagedHost = () => {
-    const subdomain = serviceNameInputValue();
+    const subdomain = managedServiceLabel(
+      workspaceHandle(),
+      serviceNameInputValue(),
+    );
     return subdomain ? `${subdomain}.app.takos.jp` : "";
   };
   const standardManagedUrl = () => {
@@ -958,30 +973,10 @@ function Inner() {
     for (const name of standardServiceNameVariables()) {
       setDefault(name, serviceName);
     }
-    const managedHost = standardManagedHost();
-    const managedUrl = standardManagedUrl();
     const publicSubdomainVariable = standardPublicSubdomainVariable();
-    const publicUrlVariable = standardPublicUrlVariable();
-    const routePatternVariable = standardRoutePatternVariable();
     if (publicSubdomainVariable) {
       setDefault(publicSubdomainVariable, serviceName);
     }
-    if (publicUrlVariable) {
-      setDefault(publicUrlVariable, managedUrl);
-    }
-    if (routePatternVariable) {
-      setDefault(
-        routePatternVariable,
-        managedHost ? `${managedHost}/*` : undefined,
-      );
-    }
-    const accountsOrigin = location.origin;
-    setDefault("takosumi_accounts_url", accountsOrigin);
-    setDefault("takosumi_accounts_issuer_url", accountsOrigin);
-    setDefault(
-      "takosumi_accounts_redirect_uri",
-      managedUrl ? `${managedUrl}/auth/oidc/callback` : undefined,
-    );
     return defaults;
   };
   const storeListingDefaultVariables = (): Readonly<
@@ -1139,8 +1134,19 @@ function Inner() {
       !connection ||
       sameProviderFamily(connection.providerSource, "cloudflare")
     ) {
-      setDefault("enable_cloudflare_resources", true);
-      setDefault("enable_cloudflare_worker_script", true);
+      // Enable Cloudflare resources only when an account id is actually
+      // known (a scoped connection, or the operator-managed fallback whose
+      // proxy injects it). A generic BYO-env connection without scope hints
+      // must leave the module's own defaults alone — modules validate
+      // `cloudflare_account_id is required when enable_cloudflare_resources
+      // is true`, so blindly enabling guarantees a failed plan.
+      const cloudflareAccountKnown =
+        Boolean(connection?.scopeHints?.accountId) ||
+        (!connection && hasManagedCloudflareProviderFallback());
+      if (cloudflareAccountKnown) {
+        setDefault("enable_cloudflare_resources", true);
+        setDefault("enable_cloudflare_worker_script", true);
+      }
       setDefault("cloudflare_account_id", connection?.scopeHints?.accountId);
       setDefault("account_id", connection?.scopeHints?.accountId);
       setDefault("cloudflare_route_zone_id", connection?.scopeHints?.zoneId);
@@ -1158,8 +1164,11 @@ function Inner() {
           urlVariable && typeof current[urlVariable] === "string"
             ? current[urlVariable].trim()
             : "";
-        const managedAppHost = currentSubdomain
-          ? `${currentSubdomain}.${publicBaseDomain}`
+        const managedAppLabel = currentSubdomain
+          ? managedServiceLabel(workspaceHandle(), currentSubdomain)
+          : "";
+        const managedAppHost = managedAppLabel
+          ? `${managedAppLabel}.${publicBaseDomain}`
           : "";
         const managedAppUrl =
           currentAppUrl || (managedAppHost ? `https://${managedAppHost}` : "");
@@ -1757,9 +1766,8 @@ function Inner() {
   };
 
   let initialTcsHandoffApplied = false;
-  const [tcsHandoffSettled, setTcsHandoffSettled] = createSignal(
-    !initialTcsHandoff,
-  );
+  const [tcsHandoffSettled, setTcsHandoffSettled] =
+    createSignal(!initialTcsHandoff);
   createEffect(() => {
     if (initialTcsHandoffApplied || !initialTcsHandoff) return;
     initialTcsHandoffApplied = true;

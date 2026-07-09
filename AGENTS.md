@@ -132,8 +132,11 @@ Policy evaluates OpenTofu plan JSON in layers (workspace/project policy / capsul
 provider connection policy / lockfile and mirror policy / module source policy / data-source allowlist / resource-type
 allowlist / scope boundary / action policy / dependency policy / output policy / quota). The runner is the security
 sandbox for source checkout, generated-root materialization, OpenTofu execution, state capture, output capture, and
-cleanup. App builds and release artifact publication belong in the app repo, CI/release pipeline, or OpenTofu module
-inputs, not in Takosumi runner dispatch semantics.
+cleanup. CI/release artifacts consumed and SHA-256-verified by the OpenTofu module are the default fast path. A Capsule
+may instead opt into the structured `sourceBuild` runner contract: argv-only commands run against the pinned
+SourceSnapshot without provider credentials and must produce declared relative paths before the OpenTofu child module
+is materialized. Takosumi never infers build commands or turns repository metadata into executable authority; resource
+creation remains owned by OpenTofu.
 
 Do not hard-code Cloud-only edition branches into core. Add framework-level code behind capabilities and keep official
 managed capacity, closed native-resource internals, and enforced billing in Operator/Cloud integration points.

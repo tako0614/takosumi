@@ -1,8 +1,6 @@
 // runner/lib/plan_apply.ts
 //
 // Plan / apply / destroy / compatibility-check pipelines + generated-root workspace.
-// The build/prebuilt-artifact hooks below are legacy first-party compatibility,
-// not the standard Git OpenTofu Capsule path.
 //
 // Pure code-motion out of runner/entrypoint.ts (P3 god-file split). No
 // behavior change; see runner/entrypoint.ts for the re-exported public surface.
@@ -24,6 +22,7 @@ import type {
   GeneratedRoot,
   CommandContext,
   PlanResponseOptions,
+  SourceBuildConfig,
 } from "./types.ts";
 import {
   CAPSULE_COMPATIBILITY_MAX_FILES,
@@ -67,6 +66,7 @@ import {
   parseOperation,
   parseSource,
   parseGeneratedRoot,
+  parseSourceBuild,
   assertNoLegacyArtifactDispatch,
   parseRunnerProfile,
   parseRequiredProviders,
@@ -86,6 +86,7 @@ import {
   summaryFromPlanJson,
   resourceChangesFromPlanJson,
 } from "./providers.ts";
+import { runSourceBuild } from "./source_build.ts";
 
 export async function runPlan(
   runId: string,
@@ -110,16 +111,28 @@ export async function runGeneratedRootPlan(
   const operation = parseOperation(request);
   assertNoLegacyArtifactDispatch(request);
   const source = parseSource(request);
+  const sourceBuild = parseSourceBuild(request);
   const runnerProfile = parseRunnerProfile(request);
   const commandContext = commandContextFromRequest(request, runnerProfile);
 
   const workspace = await prepareGeneratedRootWorkspace(runId);
   let sourceCommit: string | undefined;
+  let buildLog: string | undefined;
 
   if (generatedRoot.moduleFiles) {
+    if (sourceBuild) {
+      throw new Error(
+        "sourceBuild requires a Git, prepared, or local Source module",
+      );
+    }
     await materializeGeneratedRootFromFiles(workspace, generatedRoot);
   } else {
     await ensureSourceAvailable(source, workspace.sourceRoot, commandContext);
+    buildLog = await runSourceBuild(sourceBuild, workspace.sourceRoot, {
+      ...(commandContext.timeoutMs
+        ? { timeoutMs: commandContext.timeoutMs }
+        : {}),
+    });
     const moduleDir = resolveModulePath(
       workspace.sourceRoot,
       source.modulePath,
@@ -176,6 +189,7 @@ export async function runGeneratedRootPlan(
                 parseProviderInstallationPolicy(request),
             }
           : {}),
+        ...(buildLog ? { buildLog } : {}),
         extra: {
           ...(sourceCommit ? { sourceCommit } : {}),
         },
@@ -331,6 +345,7 @@ export async function runReviewedPlanApply(
   request: unknown,
 ): Promise<JsonRecord> {
   const generatedRoot = parseGeneratedRoot(request);
+  const sourceBuild = parseSourceBuild(request);
   const runnerProfile = parseRunnerProfile(request);
   const commandContext = commandContextFromRequest(request, runnerProfile);
   const workspace = workspaceForRun(runId);
@@ -346,6 +361,7 @@ export async function runReviewedPlanApply(
     parseSource(request),
     commandContext,
     generatedRoot,
+    sourceBuild,
   );
   const timer = new RunnerPhaseTimer();
   const preparedCredentials = await prepareProviderCredentialFiles(
@@ -439,13 +455,22 @@ export async function restoreGeneratedRootApplyWorkspace(
   source: OpenTofuModuleSource,
   context: CommandContext,
   generatedRoot: GeneratedRoot,
+  sourceBuild?: SourceBuildConfig,
 ): Promise<string> {
   const workspace = workspaceForRun(runId);
   await mkdir(workspace.root, { recursive: true });
   if (generatedRoot.moduleFiles) {
+    if (sourceBuild) {
+      throw new Error(
+        "sourceBuild requires a Git, prepared, or local Source module",
+      );
+    }
     await materializeGeneratedRootFromFiles(workspace, generatedRoot);
   } else {
     await ensureSourceAvailable(source, workspace.sourceRoot, context);
+    await runSourceBuild(sourceBuild, workspace.sourceRoot, {
+      ...(context.timeoutMs ? { timeoutMs: context.timeoutMs } : {}),
+    });
     const moduleDir = resolveModulePath(
       workspace.sourceRoot,
       source.modulePath,

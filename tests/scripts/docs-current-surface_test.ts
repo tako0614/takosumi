@@ -6,7 +6,6 @@ const ROOT = new URL("../../", import.meta.url);
 
 const REQUIRED_PUBLIC_DOCS = [
   "docs/index.md",
-  "docs/cloud/index.md",
   "docs/getting-started/quickstart.md",
   "docs/reference/api.md",
   "docs/reference/model.md",
@@ -15,7 +14,6 @@ const REQUIRED_PUBLIC_DOCS = [
   "docs/reference/operator.md",
   "docs/reference/cli.md",
   "docs/en/index.md",
-  "docs/en/cloud/index.md",
   "docs/en/getting-started/quickstart.md",
   "docs/en/reference/api.md",
   "docs/en/reference/model.md",
@@ -23,6 +21,14 @@ const REQUIRED_PUBLIC_DOCS = [
   "docs/en/reference/operator-execution-boundaries.md",
   "docs/en/reference/operator.md",
   "docs/en/reference/cli.md",
+  "app-docs/index.md",
+  "app-docs/resources.md",
+  "app-docs/endpoints.md",
+  "app-docs/pricing.md",
+  "app-docs/en/index.md",
+  "app-docs/en/resources.md",
+  "app-docs/en/endpoints.md",
+  "app-docs/en/pricing.md",
 ] as const;
 
 const REQUIRED_INTERNAL_DOCS = [
@@ -139,15 +145,20 @@ test("Takosumi public docs are rebuilt around the current public surface", async
     assert.equal(hit, false, `retired docs term: ${term}`);
   }
 
-  assert.match(docs, /OpenTofu control plane|OpenTofu\/Terraform control plane/);
+  assert.match(
+    docs,
+    /OpenTofu control plane|OpenTofu\/Terraform control plane/,
+  );
   assert.match(docs, /plain OpenTofu stacks as-is/);
   assert.match(docs, /Same manifest, different connection/);
   assert.match(docs, /Compatibility API framework/);
   assert.match(docs, /versioned subset|versioned capabilities/);
-  assert.match(docs, /official managed capacity/);
-  assert.match(docs, /cloud_extensions/);
-  assert.match(docs, /takosumi-cloud\/platform\/worker\.ts/);
-  assert.match(docs, /not deployed as separate Workers/);
+  assert.match(docs, /official\s+managed (?:capacity|target)/i);
+  assert.match(docs, /same hosted Cloud origin|同じ hosted Cloud origin/);
+  assert.match(
+    docs,
+    /shared Cloud extension (?:layer|boundary)|Cloud extension 共通層/,
+  );
   for (const concept of FINAL_PUBLIC_CONCEPTS) {
     assert.match(docs, new RegExp(`\\b${concept}\\b`), `missing ${concept}`);
   }
@@ -172,7 +183,9 @@ test("Takosumi internal authority docs stay outside the public docs surface", as
   assert.match(internalReadme, /intentionally excluded/);
   assert.match(internalReadme, /development authority documents/);
 
-  const finalPlan = await readText(new URL("docs/internal/final-plan.md", ROOT));
+  const finalPlan = await readText(
+    new URL("docs/internal/final-plan.md", ROOT),
+  );
   assert.match(finalPlan, /authoritative Takosumi product direction/);
   assert.match(
     finalPlan,
@@ -224,7 +237,11 @@ test("core spec names the final OSS model and excludes official managed capacity
   const coreSpec = await readText(new URL("docs/internal/core-spec.md", ROOT));
 
   for (const concept of FINAL_PUBLIC_CONCEPTS) {
-    assert.match(coreSpec, new RegExp(`\\b${concept}\\b`), `missing ${concept}`);
+    assert.match(
+      coreSpec,
+      new RegExp(`\\b${concept}\\b`),
+      `missing ${concept}`,
+    );
   }
   assert.match(coreSpec, /Provider Connection/);
   assert.match(coreSpec, /CredentialRecipe/);
@@ -256,11 +273,13 @@ test("workspace packages stay private source modules", async () => {
 
 async function readPublicDocs(): Promise<string> {
   const chunks: string[] = [];
-  for await (const file of walk(new URL("docs/", ROOT))) {
-    if (!file.pathname.endsWith(".md")) continue;
-    if (file.pathname.includes("/docs/internal/")) continue;
-    if (file.pathname.includes("/docs/operations/")) continue;
-    chunks.push(await readText(file));
+  for (const root of [new URL("docs/", ROOT), new URL("app-docs/", ROOT)]) {
+    for await (const file of walk(root)) {
+      if (!file.pathname.endsWith(".md")) continue;
+      if (file.pathname.includes("/docs/internal/")) continue;
+      if (file.pathname.includes("/docs/operations/")) continue;
+      chunks.push(await readText(file));
+    }
   }
   return chunks.join("\n");
 }

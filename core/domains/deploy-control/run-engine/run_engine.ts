@@ -131,6 +131,7 @@ import {
 import {
   managedPublicBaseDomainFromInstallConfig,
   managedPublicHostFromLabel,
+  managedPublicLabelForWorkspace,
   normalizeManagedPublicBaseDomains,
   publicHostPolicyKind,
 } from "../managed_public_domains.ts";
@@ -404,8 +405,7 @@ function genericCapsuleOutputAllowlist(
     outputDeclarations.map((output) => [output.name, output]),
   );
   const outputNames =
-    rootModuleOutputs ??
-    outputDeclarations.map((output) => output.name);
+    rootModuleOutputs ?? outputDeclarations.map((output) => output.name);
   if (outputNames.length === 0) return configured;
   const allowlist: Record<string, OutputAllowlistEntry> = { ...configured };
   for (const name of outputNames) {
@@ -428,7 +428,7 @@ function looksSensitiveOutputName(name: string): boolean {
   );
 }
 
-const MANAGED_WORKER_NAME_RE = /^[a-z][a-z0-9-]{1,50}[a-z0-9]$/u;
+const MANAGED_WORKER_NAME_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u;
 const PUBLIC_URL_OUTPUT_KEYS = [
   "url",
   "launch_url",
@@ -548,6 +548,7 @@ function finalizeManagedCloudflarePublicHostVariables(input: {
   readonly installation: Installation;
   readonly installConfig: InstallConfig;
   readonly declaredInputs: DeclaredGenericCapsuleInputs;
+  readonly workspaceHandle: string;
   readonly endpointVariables: ReadonlySet<string>;
   readonly providerInputDefaults: Readonly<Record<string, JsonValue>>;
   readonly variables: Readonly<Record<string, JsonValue>>;
@@ -575,22 +576,47 @@ function finalizeManagedCloudflarePublicHostVariables(input: {
     input.declaredInputs.names.has(name) ||
     (!input.declaredInputs.known && input.endpointVariables.has(name));
   const out: Record<string, JsonValue> = { ...input.variables };
-  let publicLabel = nonEmptyStringValue(out[subdomainVariable]);
+  let requestedSlug = nonEmptyStringValue(out[subdomainVariable]);
+  const requestedSlugWasExplicit =
+    nonEmptyStringValue(input.explicit[subdomainVariable]) !== undefined;
   if (
-    !publicLabel &&
+    !requestedSlug &&
     !nonEmptyStringValue(input.explicit[subdomainVariable]) &&
     canSet(subdomainVariable)
   ) {
-    publicLabel = workerNameFromCapsule(input.installation);
-    if (publicLabel) out[subdomainVariable] = publicLabel;
+    requestedSlug = workerNameFromCapsule(input.installation);
   }
-  if (!publicLabel || !validManagedWorkerName(publicLabel)) {
+  if (!requestedSlug) {
     return out;
   }
+  if (!requestedSlugWasExplicit) {
+    const maxSlugLength = Math.max(1, 62 - input.workspaceHandle.length);
+    requestedSlug = requestedSlug.slice(0, maxSlugLength).replace(/-+$/gu, "");
+  }
+  const publicLabel = managedPublicLabelForWorkspace(
+    input.workspaceHandle,
+    requestedSlug,
+  );
+  if (!publicLabel || !validManagedWorkerName(publicLabel)) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "public hostname slug is invalid or too long for this Workspace handle",
+      { reason: "invalid_app_hostname" },
+    );
+  }
+  out[subdomainVariable] = publicLabel;
   const host = `${publicLabel}.${baseDomain}`;
+  const explicitUrlHost = urlVariable
+    ? hostFromHttpsUrlValue(input.explicit[urlVariable])
+    : undefined;
+  const explicitUrlUsesManagedBase =
+    explicitUrlHost !== undefined &&
+    publicHostPolicyKindForBase(explicitUrlHost, baseDomain) ===
+      "managed_default_hostname";
   if (
     urlVariable &&
-    !nonEmptyStringValue(input.explicit[urlVariable]) &&
+    (!nonEmptyStringValue(input.explicit[urlVariable]) ||
+      explicitUrlUsesManagedBase) &&
     canSet(urlVariable)
   ) {
     out[urlVariable] = `https://${host}`;
@@ -598,11 +624,24 @@ function finalizeManagedCloudflarePublicHostVariables(input: {
   if (
     routePatternVariable &&
     canSet(routePatternVariable) &&
-    !nonEmptyStringValue(input.explicit[routePatternVariable])
+    (!nonEmptyStringValue(input.explicit[routePatternVariable]) ||
+      publicHostPolicyKindForBase(
+        hostFromRoutePatternValue(input.explicit[routePatternVariable]) ?? "",
+        baseDomain,
+      ) === "managed_default_hostname")
   ) {
     out[routePatternVariable] = `${host}/*`;
   }
   return out;
+}
+
+function publicHostPolicyKindForBase(
+  host: string,
+  baseDomain: string,
+): "managed_default_hostname" | "custom_domain" {
+  return host.endsWith(`.${baseDomain}`)
+    ? "managed_default_hostname"
+    : "custom_domain";
 }
 
 function workerNameFromCapsule(installation: Installation): string | undefined {
@@ -616,23 +655,11 @@ function workerNameFromCapsule(installation: Installation): string | undefined {
     .replace(/^-+/g, "")
     .replace(/-+$/g, "")
     .replace(/-{2,}/g, "-");
-  const suffix = managedWorkerNameSuffix(installation.id);
-  const maxBaseLength = Math.max(1, 52 - suffix.length - 1);
-  const normalized = `${base.slice(0, maxBaseLength).replace(/-+$/g, "")}-${suffix}`;
-  return validManagedWorkerName(normalized) ? normalized : undefined;
+  return base || undefined;
 }
 
 function publicHostUnavailableMessage(): string {
   return "app_hostname_unavailable: already exists";
-}
-
-function managedWorkerNameSuffix(installationId: string): string {
-  const stripped = installationId.replace(/^inst[_-]?/u, "");
-  const normalized = stripped
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "")
-    .slice(0, 8);
-  return normalized || "capsule";
 }
 
 function installationHasClaimablePublicState(
@@ -960,14 +987,7 @@ export class RunEngine {
       operation !== "destroy" &&
       internal.driftCheck !== true
     ) {
-      const installConfig = await this.#store.getInstallConfig(
-        installation.installConfigId,
-      );
-      await this.#reservePublicHostsForPlan(installation, variables, now, {
-        managedBaseDomains: [
-          managedPublicBaseDomainFromInstallConfig(installConfig),
-        ],
-      });
+      await this.#reservePublicHostsForPlan(installation, variables, now);
     }
     const planRunId = this.#newId("plan");
     const sourceSnapshotId =
@@ -1100,10 +1120,12 @@ export class RunEngine {
     const generatedRoot =
       templatePlan?.generatedRoot ?? genericRootDispatch?.generatedRoot;
     const outputAllowlist = genericRootDispatch?.outputAllowlist;
+    const sourceBuild = genericRootDispatch?.sourceBuild;
     if (
       Object.keys(variables).length > 0 ||
       generatedRoot !== undefined ||
-      outputAllowlist !== undefined
+      outputAllowlist !== undefined ||
+      sourceBuild !== undefined
     ) {
       // A sensitive dependency-injected value flows into `variables` AND (for a
       // generic Capsule) is baked as a literal into the generated root's
@@ -1119,6 +1141,7 @@ export class RunEngine {
           variables,
           ...(generatedRoot ? { generatedRoot } : {}),
           ...(outputAllowlist ? { outputAllowlist } : {}),
+          ...(sourceBuild ? { sourceBuild } : {}),
         },
         sealSidecar,
       );
@@ -2037,11 +2060,21 @@ export class RunEngine {
     const explicitVariables = normalizeVariables(
       input.installConfig.variableMapping,
     );
+    const workspace = await this.#store.getSpace(
+      input.installation.workspaceId ?? input.installation.spaceId,
+    );
+    if (!workspace) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "Workspace for Capsule public hostname resolution was not found",
+      );
+    }
     const variables = finalizeManagedCloudflarePublicHostVariables({
       explicit: explicitVariables,
       installation: input.installation,
       installConfig: input.installConfig,
       declaredInputs,
+      workspaceHandle: workspace.handle,
       endpointVariables: publicEndpointVariableNames(input.installConfig),
       providerInputDefaults: installTypePlan.providerInputDefaults,
       variables: normalizeVariables(
@@ -2073,6 +2106,9 @@ export class RunEngine {
       genericRootPlan: {
         providerEnvBindings: installTypePlan.providerEnvBindings,
         outputAllowlist,
+        ...(input.installConfig.sourceBuild
+          ? { sourceBuild: input.installConfig.sourceBuild }
+          : {}),
         ...(input.compatibilityReport?.level === "auto_capsulized" &&
         moduleFiles &&
         moduleFiles.length > 0
@@ -2086,13 +2122,7 @@ export class RunEngine {
     installation: Installation,
     variables: Readonly<Record<string, JsonValue>>,
     now: number,
-    options: {
-      readonly managedBaseDomains?: readonly string[];
-    } = {},
   ): Promise<void> {
-    const managedBaseDomains = normalizeManagedPublicBaseDomains(
-      options.managedBaseDomains,
-    );
     const installConfig = await this.#store.getInstallConfig(
       installation.installConfigId,
     );
@@ -2100,6 +2130,13 @@ export class RunEngine {
       variables,
       installConfig,
     );
+    const managedBaseDomains = normalizeManagedPublicBaseDomains([
+      managedPublicBaseDomainFromInstallConfig(installConfig),
+    ]);
+    // The Core can claim an operator-owned managed namespace immediately.
+    // User-owned custom domains remain ordinary provider inputs until the
+    // selected adapter proves ownership; reserving them before proof would let
+    // an untrusted Capsule squat on somebody else's hostname.
     const claimableHosts = requestedHosts.filter(
       (host) =>
         publicHostPolicyKind(host, managedBaseDomains) ===
@@ -2264,6 +2301,7 @@ export class RunEngine {
         ...(moduleFiles && moduleFiles.length > 0 ? { moduleFiles } : {}),
       },
       outputAllowlist: context.outputAllowlist,
+      ...(context.sourceBuild ? { sourceBuild: context.sourceBuild } : {}),
     };
   }
 
@@ -2303,6 +2341,9 @@ export class RunEngine {
       {
         providerEnvBindings: providerEnvBindingsFromResolved(resolved),
         outputAllowlist: installConfig.outputAllowlist,
+        ...(installConfig.sourceBuild
+          ? { sourceBuild: installConfig.sourceBuild }
+          : {}),
       },
       compatibilityReport,
       sourceSnapshot,
@@ -3324,6 +3365,9 @@ export class RunEngine {
       ...(inputs.outputAllowlist
         ? { outputAllowlist: inputs.outputAllowlist as unknown as JsonValue }
         : {}),
+      ...(inputs.sourceBuild
+        ? { sourceBuild: inputs.sourceBuild as unknown as JsonValue }
+        : {}),
     };
     const sealed = await this.#dependencyValueSealer.seal(payload);
     // Cleartext sealable fields are dropped; only `planRunId` + `sealed` persist.
@@ -3363,11 +3407,14 @@ export class RunEngine {
       DispatchGeneratedRoot | undefined;
     const outputAllowlist = payload.outputAllowlist as unknown as
       Readonly<Record<string, OutputAllowlistEntry>> | undefined;
+    const sourceBuild = payload.sourceBuild as unknown as
+      InstallConfig["sourceBuild"] | undefined;
     return {
       planRunId,
       variables,
       ...(generatedRoot ? { generatedRoot } : {}),
       ...(outputAllowlist ? { outputAllowlist } : {}),
+      ...(sourceBuild ? { sourceBuild } : {}),
     };
   }
 
@@ -4743,6 +4790,9 @@ export class RunEngine {
             ...(dispatch.generatedRoot
               ? { generatedRoot: dispatch.generatedRoot }
               : {}),
+            ...(dispatch.sourceBuild
+              ? { sourceBuild: dispatch.sourceBuild }
+              : {}),
             // M2 env dispatch (state scope + source archive). Absent without env ctx.
             ...(envDispatch.stateScope
               ? { stateScope: envDispatch.stateScope }
@@ -5747,6 +5797,7 @@ export class RunEngine {
       ...(dispatch.generatedRoot
         ? { generatedRoot: dispatch.generatedRoot }
         : {}),
+      ...(dispatch.sourceBuild ? { sourceBuild: dispatch.sourceBuild } : {}),
       // M2 env dispatch (state scope at base+1 + source archive).
       ...(envDispatch.stateScope ? { stateScope: envDispatch.stateScope } : {}),
       ...(envDispatch.sourceArchive
@@ -6489,6 +6540,9 @@ export class RunEngine {
             // Generated-root dispatch: destroy tofu in the reviewed root.
             ...(dispatch.generatedRoot
               ? { generatedRoot: dispatch.generatedRoot }
+              : {}),
+            ...(dispatch.sourceBuild
+              ? { sourceBuild: dispatch.sourceBuild }
               : {}),
             // M2 env dispatch (state scope at base+1 + source archive).
             ...(envDispatch.stateScope

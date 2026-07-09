@@ -350,8 +350,6 @@ export function publicInstallConfig(
     sourceKind: _sourceKind,
     runnerId: _runnerId,
     internal: _internal,
-    build: _build,
-    prebuiltArtifact: _prebuiltArtifact,
     ...publicRecord
   } = config;
   const store = config.store;

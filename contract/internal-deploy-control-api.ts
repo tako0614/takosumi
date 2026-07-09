@@ -126,10 +126,7 @@ export interface RunnerResourceLimits {
 
 export interface RunnerNetworkPolicy {
   readonly mode:
-    | "default-deny"
-    | "egress-allowlist"
-    | "operator-managed"
-    | string;
+    "default-deny" | "egress-allowlist" | "operator-managed" | string;
   /**
    * Exact egress hosts when the runner profile owns an allowlist. Omitted for
    * operator-managed generic profiles where provider API egress is decided by
@@ -153,10 +150,7 @@ export interface CloudflareContainerExecution {
 export interface RunnerSecretExposurePolicy {
   readonly providerCredentials: "runner-only" | "operator-managed" | string;
   readonly tenantWorkerOperatorSecrets:
-    | "forbidden"
-    | "tenant-scoped-references-only"
-    | "operator-managed"
-    | string;
+    "forbidden" | "tenant-scoped-references-only" | "operator-managed" | string;
   readonly redactLogs?: boolean;
   readonly blockSensitiveOutputs?: boolean;
 }
@@ -533,15 +527,15 @@ export interface ApplyExpectedGuard {
 // DTO set consumed by accounts-plane and operator helper paths.
 export type {
   CapsuleProviderEnvBindingSet,
-  InstallBuildConfig,
   InstallConfig,
-  InstallPrebuiltArtifactConfig,
   Capsule,
   CapsuleStatus,
   InstallType,
   OutputAllowlistEntry,
   OutputValueType,
   PolicyConfig,
+  SourceBuildCommand,
+  SourceBuildConfig,
   TrustLevel,
 } from "./install-configs.ts";
 export type {
@@ -715,32 +709,6 @@ export interface DispatchGeneratedRoot {
     readonly path: string;
     readonly text: string;
   }[];
-}
-
-/**
- * Legacy optional build metadata kept for stored rows. New generated-root
- * dispatch does not thread this payload to the runner.
- *
- * @deprecated New app installs should run the Git-hosted OpenTofu/Terraform
- * module directly. App builds and container/image publishing belong in the app
- * repo or CI/release pipeline, not in Takosumi dispatch semantics.
- */
-export interface DispatchBuildSpec {
-  readonly runtime: "bun";
-  readonly commands: readonly string[];
-  readonly artifactPath: string;
-}
-
-/**
- * Legacy prepared path metadata kept for stored rows. New generated-root
- * dispatch does not thread this path to the runner.
- *
- * @deprecated New generic Capsule installs should not use a Takosumi-owned
- * app release artifact path. The OpenTofu/Terraform module should receive any
- * app-specific values as ordinary variables.
- */
-export interface DispatchPrebuiltArtifactSpec {
-  readonly path: string;
 }
 
 /**

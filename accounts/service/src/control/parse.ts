@@ -62,6 +62,7 @@ import type {
   PolicyConfig,
   PublicInstallConfig,
   PublicCapsule,
+  SourceBuildConfig,
 } from "takosumi-contract/install-configs";
 import type {
   Dependency,
@@ -590,6 +591,63 @@ export function modulePathValue(value: unknown): string | undefined {
     return undefined;
   }
   return normalized;
+}
+
+export function sourceBuildValue(
+  value: unknown,
+): SourceBuildConfig | undefined {
+  if (!isPlainJsonObject(value)) return undefined;
+  if (
+    !Array.isArray(value.commands) ||
+    value.commands.length === 0 ||
+    value.commands.length > 8 ||
+    !Array.isArray(value.outputs) ||
+    value.outputs.length === 0 ||
+    value.outputs.length > 16
+  ) {
+    return undefined;
+  }
+  const commands: SourceBuildConfig["commands"][number][] = [];
+  for (const commandValue of value.commands) {
+    if (!isPlainJsonObject(commandValue) || !Array.isArray(commandValue.argv)) {
+      return undefined;
+    }
+    const argv = commandValue.argv;
+    if (
+      argv.length === 0 ||
+      argv.length > 32 ||
+      argv.some(
+        (argument) =>
+          typeof argument !== "string" ||
+          argument.length === 0 ||
+          argument.length > 4096 ||
+          argument.includes("\0"),
+      )
+    ) {
+      return undefined;
+    }
+    const workingDirectory =
+      commandValue.workingDirectory === undefined
+        ? undefined
+        : modulePathValue(commandValue.workingDirectory);
+    if (
+      commandValue.workingDirectory !== undefined &&
+      workingDirectory === undefined
+    ) {
+      return undefined;
+    }
+    commands.push({
+      argv: [...argv] as string[],
+      ...(workingDirectory ? { workingDirectory } : {}),
+    });
+  }
+  const outputs: string[] = [];
+  for (const output of value.outputs) {
+    const normalized = modulePathValue(output);
+    if (!normalized) return undefined;
+    outputs.push(normalized);
+  }
+  return { commands, outputs };
 }
 
 export function isJsonValue(value: unknown): value is JsonValue {
