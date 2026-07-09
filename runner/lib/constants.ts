@@ -42,6 +42,11 @@ export const BASE_COMMAND_ENV_NAMES = [
 // Default cap for the produced source archive when the runner profile does not
 // pin `resourceLimits.maxSourceArchiveBytes`. Source repos are small modules.
 export const DEFAULT_SOURCE_ARCHIVE_MAX_BYTES = 50 * 1024 * 1024;
+// Raw `tofu show -json tfplan` can embed large provider payloads such as
+// Worker scripts. The runner still derives the small summary/resource list from
+// it, but the optional raw artifact is capped so the Durable Object relay does
+// not buffer huge review-only JSON.
+export const DEFAULT_PLAN_JSON_ARTIFACT_MAX_BYTES = 2 * 1024 * 1024;
 export const RUNNER_REDACTED_VALUE = "[redacted]";
 export const RUNNER_SECRET_WORD =
   "(?:secret|token|password|passwd|pwd|credential|credentials|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|refresh[_-]?token|session[_-]?token|auth[_-]?token|bearer[_-]?token|connection[_-]?string|database[_-]?url|dsn)";
