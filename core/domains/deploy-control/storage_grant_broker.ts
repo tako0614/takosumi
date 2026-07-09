@@ -70,7 +70,7 @@ const GRANT_SPECS: readonly GrantSpec[] = [
   {
     publication: "storage.object",
     capability: "storage.object",
-    signingKeyOutput: "storage_token_signing_key",
+    signingKeyOutput: "service_grant_signing_key",
     audience: "storage.object",
     evidenceProvider: "storage.object",
     prefix: (ws, inst) => `${ws}/${inst}/`,
@@ -84,7 +84,7 @@ const GRANT_SPECS: readonly GrantSpec[] = [
   {
     publication: "source.git.smart_http",
     capability: "source.git.smart_http",
-    signingKeyOutput: "git_token_signing_key",
+    signingKeyOutput: "service_grant_signing_key",
     audience: "source.git.smart_http",
     evidenceProvider: "source.git.smart_http",
     // The consumer's repos live under its own installation id namespace.
