@@ -489,6 +489,37 @@ test("generateGenericCapsuleRoot wraps arbitrary capsule inputs and outputs", ()
   expect(files["outputs.tf"]).not.toContain('output "app_deployment"');
 });
 
+test("generateGenericCapsuleRoot marks sensitive output allowlist entries", () => {
+  const { files } = generateGenericCapsuleRoot({
+    requiredProviders: [],
+    inputs: {},
+    outputAllowlist: {
+      takos_storage_signing_key: {
+        from: "takos_storage_signing_key",
+        type: "json",
+        sensitive: true,
+      },
+      launch_url: { from: "launch_url", type: "url" },
+    },
+  });
+
+  expect(files["outputs.tf"]).toContain(
+    [
+      'output "takos_storage_signing_key" {',
+      "  value = try(module.app.takos_storage_signing_key, \"\")",
+      "  sensitive = true",
+      "}",
+    ].join("\n"),
+  );
+  expect(files["outputs.tf"]).toContain(
+    [
+      'output "launch_url" {',
+      "  value = try(module.app.launch_url, \"\")",
+      "}",
+    ].join("\n"),
+  );
+});
+
 test("generateGenericCapsuleRoot omits empty required_providers for provider-free capsules", () => {
   const { files } = generateGenericCapsuleRoot({
     requiredProviders: [],

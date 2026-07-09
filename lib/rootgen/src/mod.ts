@@ -473,9 +473,12 @@ function renderGenericOutputsTf(
       name === "takosumi_release"
         ? `try(module.app.${spec.from}, null)`
         : `try(module.app.${spec.from}, "")`;
-    return [`output ${hclString(name)} {`, `  value = ${valueExpr}`, "}"].join(
-      "\n",
-    );
+    return [
+      `output ${hclString(name)} {`,
+      `  value = ${valueExpr}`,
+      ...(spec.sensitive === true ? ["  sensitive = true"] : []),
+      "}",
+    ].join("\n");
   });
   for (const name of GENERIC_CONTROL_OUTPUTS) {
     if (name in outputAllowlist) continue;

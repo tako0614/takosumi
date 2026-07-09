@@ -75,7 +75,7 @@ import type { ActivityRecorder } from "../../activity/mod.ts";
 import type { RecordActivityInput } from "../../activity/mod.ts";
 import type { SourcesService } from "../../sources/mod.ts";
 import {
-  collectRootModuleOutputNames,
+  collectRootModuleOutputDeclarations,
   collectRootModuleVariableNames,
 } from "../../sources/capsule_compatibility.ts";
 import type { TemplateRegistry } from "../../templates/mod.ts";
@@ -395,16 +395,35 @@ function genericCapsuleOutputAllowlist(
   moduleFiles: readonly OpenTofuCapsuleSourceFile[] | undefined,
   rootModuleOutputs: readonly string[] | undefined,
 ): InstallConfig["outputAllowlist"] {
+  const outputDeclarations = moduleFiles
+    ? collectRootModuleOutputDeclarations(moduleFiles)
+    : [];
+  const outputDeclarationByName = new Map(
+    outputDeclarations.map((output) => [output.name, output]),
+  );
   const outputNames =
     rootModuleOutputs ??
-    (moduleFiles ? collectRootModuleOutputNames(moduleFiles) : []);
+    outputDeclarations.map((output) => output.name);
   if (outputNames.length === 0) return configured;
   const allowlist: Record<string, OutputAllowlistEntry> = { ...configured };
   for (const name of outputNames) {
     if (Object.prototype.hasOwnProperty.call(allowlist, name)) continue;
-    allowlist[name] = { from: name, type: "json" };
+    const sensitive =
+      outputDeclarationByName.get(name)?.sensitive === true ||
+      looksSensitiveOutputName(name);
+    allowlist[name] = {
+      from: name,
+      type: "json",
+      ...(sensitive ? { sensitive: true } : {}),
+    };
   }
   return allowlist;
+}
+
+function looksSensitiveOutputName(name: string): boolean {
+  return /(^|[_-])(token|secret|password|credential|auth|bearer|session|cookie)([_-]|$)|(^|[_-])(api[_-]?key|private[_-]?key|signing[_-]?key)([_-]|$)/iu.test(
+    name,
+  );
 }
 
 const MANAGED_WORKER_NAME_RE = /^[a-z][a-z0-9-]{1,50}[a-z0-9]$/u;
