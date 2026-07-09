@@ -286,6 +286,12 @@ export async function handleCapsules(
       });
       return jsonStatus({ backup } satisfies CreateBackupResponse, 201);
     }
+    if (leaf === "usage-summary" && segments.length === 3) {
+      if (method !== "GET") return methodNotAllowed("GET");
+      return json({
+        summary: await operations.getCapsuleUsageSummary(capsuleId),
+      });
+    }
     if (leaf === "deployments" && segments.length === 3) {
       if (method !== "GET") return methodNotAllowed("GET");
       return await listCapsuleDeployments(operations, capsuleId, url);

@@ -1733,3 +1733,10 @@ button.tg-tab {
   align-items: center;
   gap: var(--tg-s-2);
 }
+
+/* ===== per-app showback amount (service overview) ===== */
+.wa-usage-amount {
+  font-size: var(--tg-fs-lg);
+  font-weight: 700;
+  color: var(--tg-fg);
+}

@@ -87,6 +87,7 @@ import type {
 } from "takosumi-contract/backups";
 import type {
   BillingSettings,
+  CapsuleUsageSummary,
   CreditBalance,
   CreditReservation,
   UsageEvent,
@@ -318,6 +319,7 @@ export interface ControlPlaneOperations {
       readonly balance?: CreditBalance;
     };
   }>;
+  getCapsuleUsageSummary(capsuleId: string): Promise<CapsuleUsageSummary>;
   listWorkspaceUsage(
     workspaceId: string,
     params?: PageParams,
