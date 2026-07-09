@@ -336,24 +336,7 @@ export class CapsulesService {
         "opentofu_root is a legacy direct-root compatibility type; new InstallConfigs must use an OpenTofu Capsule install type",
       );
     }
-    if (config.build?.enabled && config.prebuiltArtifact) {
-      throw new OpenTofuControllerError(
-        "invalid_argument",
-        "InstallConfig build and prebuiltArtifact are mutually exclusive",
-      );
-    }
-    if (hasLegacyArtifactConfig(config)) {
-      throw new OpenTofuControllerError(
-        "invalid_argument",
-        "build/prebuiltArtifact are legacy artifact compatibility fields; new InstallConfigs must use Git-hosted OpenTofu modules with ordinary variables instead",
-      );
-    }
-    if (config.prebuiltArtifact) {
-      assertSafeInstallConfigPath(
-        config.prebuiltArtifact.path,
-        "prebuiltArtifact.path",
-      );
-    }
+    if (config.sourceBuild) validateSourceBuild(config.sourceBuild);
     const configWorkspaceId = config.workspaceId ?? config.spaceId;
     if (configWorkspaceId !== undefined) {
       const workspace = await this.#store.getSpace(configWorkspaceId);
@@ -395,10 +378,7 @@ export class CapsulesService {
     );
     if (workspaceId !== undefined) return stored;
     const byId = new Map<string, InstallConfig>(
-      this.#sharedFallbackInstallConfigs().map((config) => [
-        config.id,
-        config,
-      ]),
+      this.#sharedFallbackInstallConfigs().map((config) => [config.id, config]),
     );
     for (const config of stored) byId.set(config.id, config);
     return [...byId.values()];
@@ -550,8 +530,57 @@ function assertSafeInstallConfigPath(value: string, field: string): void {
   }
 }
 
-function hasLegacyArtifactConfig(config: InstallConfig): boolean {
-  return config.build !== undefined || config.prebuiltArtifact !== undefined;
+function validateSourceBuild(
+  sourceBuild: NonNullable<InstallConfig["sourceBuild"]>,
+): void {
+  if (sourceBuild.commands.length === 0 || sourceBuild.commands.length > 8) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "sourceBuild.commands must contain 1-8 commands",
+    );
+  }
+  if (sourceBuild.outputs.length === 0 || sourceBuild.outputs.length > 16) {
+    throw new OpenTofuControllerError(
+      "invalid_argument",
+      "sourceBuild.outputs must contain 1-16 paths",
+    );
+  }
+  for (const [index, command] of sourceBuild.commands.entries()) {
+    if (command.argv.length === 0 || command.argv.length > 32) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        `sourceBuild.commands[${index}].argv must contain 1-32 arguments`,
+      );
+    }
+    for (const argument of command.argv) {
+      if (
+        typeof argument !== "string" ||
+        argument.length === 0 ||
+        argument.length > 4096 ||
+        argument.includes("\0")
+      ) {
+        throw new OpenTofuControllerError(
+          "invalid_argument",
+          `sourceBuild.commands[${index}].argv contains an invalid argument`,
+        );
+      }
+    }
+    if (command.workingDirectory) {
+      assertSafeInstallConfigPath(
+        command.workingDirectory,
+        `sourceBuild.commands[${index}].workingDirectory`,
+      );
+    }
+  }
+  for (const [index, output] of sourceBuild.outputs.entries()) {
+    assertSafeInstallConfigPath(output, `sourceBuild.outputs[${index}]`);
+    if (/^\.[\\/]*$/u.test(output)) {
+      throw new OpenTofuControllerError(
+        "invalid_argument",
+        `sourceBuild.outputs[${index}] must name a produced path`,
+      );
+    }
+  }
 }
 
 function isSelectableInstallConfig(config: InstallConfig): boolean {

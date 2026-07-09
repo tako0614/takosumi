@@ -364,13 +364,15 @@ function uniqueServiceIdCandidate(value: string): string {
   return `${base}-${suffix}`;
 }
 
-function workspaceSuffix(value: string | null): string {
-  return (value ?? "")
-    .replace(/^workspace_/u, "")
-    .replace(/[^a-z0-9-]+/giu, "-")
-    .replace(/^-+|-+$/gu, "")
-    .slice(0, 6)
-    .toLowerCase();
+function managedServiceLabel(
+  workspaceHandle: string,
+  serviceSlug: string,
+): string {
+  const workspace = slugInputValue(workspaceHandle);
+  const service = slugInputValue(serviceSlug);
+  if (service.startsWith(`${workspace}-`)) return service.slice(0, 63);
+  const maxServiceLength = Math.max(1, 62 - workspace.length);
+  return `${workspace}-${service.slice(0, maxServiceLength).replace(/-+$/u, "")}`;
 }
 
 function publicEndpointHost(url: string): string | undefined {
@@ -461,16 +463,18 @@ const DEFAULT_CAPSULE_INSTALL_CONFIG_ID = "cfg-default-opentofu-capsule";
 function storeDefaultInputValue(
   entry: StoreEntry,
   field: StoreInputField,
-  workspaceId: string | null,
+  workspaceHandle: string,
   serviceSlug?: string,
 ): string {
   const base = slugInputValue(entry.suggestedName);
-  const suffix = workspaceSuffix(workspaceId);
-  const scopedServiceSlug =
-    serviceSlug || (suffix ? `${base}-${suffix}` : base);
+  const requestedServiceSlug = serviceSlug || base;
+  const scopedServiceSlug = managedServiceLabel(
+    workspaceHandle,
+    requestedServiceSlug,
+  );
   const publicEndpoint = storePublicEndpoint(entry);
   if (field.name === publicEndpoint?.subdomainVariable) {
-    return scopedServiceSlug;
+    return requestedServiceSlug;
   }
   if (field.name === publicEndpoint?.urlVariable && publicEndpoint.baseDomain) {
     return `https://${scopedServiceSlug}.${publicEndpoint.baseDomain}`;
@@ -843,7 +847,7 @@ export {
   normalizeSourcePath,
   slugInputValue,
   uniqueServiceIdCandidate,
-  workspaceSuffix,
+  managedServiceLabel,
   publicEndpointHost,
   hostIsManagedBaseDomainSubdomain,
   isManagedSubdomainLabel,

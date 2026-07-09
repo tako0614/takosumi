@@ -5,7 +5,6 @@ import {
   type OidcClientProjection,
   type PublicEndpointProjection,
 } from "takosumi-contract";
-import type { Source } from "takosumi-contract/sources";
 import {
   TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_IDENTITY_OIDC,
   normalizeIssuer,
@@ -30,27 +29,14 @@ const DEFAULT_TAKOSUMI_ACCOUNTS_OIDC: ResolvedTakosumiAccountsOidcExperience = {
   callbackPath: "/api/auth/callback/takos",
 };
 
-const TAKOS_DISTRIBUTION_ACCOUNTS_OIDC: ResolvedTakosumiAccountsOidcExperience =
-  {
-    issuerUrlVariable: "takosumi_accounts_issuer_url",
-    accountsUrlVariable: "takosumi_accounts_url",
-    clientIdVariable: "takosumi_accounts_client_id",
-    redirectUriVariable: "takosumi_accounts_redirect_uri",
-    callbackPath: "/auth/oidc/callback",
-  };
-
 export async function ensureTakosumiAccountsOidcForCapsule(input: {
   readonly operations: ControlPlaneOperations;
   readonly store: AccountsStore;
   readonly issuer: string;
   readonly capsule: Capsule;
   readonly installConfig: InstallConfig;
-  readonly sourceGitUrl?: string;
 }): Promise<void> {
-  const oidcExperience = installOidcClientExperience(
-    input.installConfig,
-    input.sourceGitUrl,
-  );
+  const oidcExperience = installOidcClientExperience(input.installConfig);
   if (!oidcExperience) {
     return;
   }
@@ -141,23 +127,17 @@ export async function ensureTakosumiAccountsOidcForExistingCapsule(input: {
   const installConfig = await input.operations.installations.getInstallConfig(
     input.capsule.installConfigId,
   );
-  const sourceGitUrl = await getCapsuleSourceGitUrl(
-    input.operations,
-    input.capsule,
-  );
   await ensureTakosumiAccountsOidcForCapsule({
     operations: input.operations,
     store: input.store,
     issuer: input.issuer,
     capsule: input.capsule,
     installConfig,
-    sourceGitUrl,
   });
 }
 
 function installOidcClientExperience(
   config: InstallConfig,
-  sourceGitUrl?: string,
 ): ResolvedTakosumiAccountsOidcExperience | undefined {
   const store = config.store;
   const configured = installExperienceOidcClient(store?.installExperience);
@@ -168,22 +148,7 @@ function installOidcClientExperience(
     };
   }
   const standard = standardOidcExperienceFromVariables(config.variableMapping);
-  if (standard) return standard;
-  if (
-    store?.templateId === "takos" ||
-    isTakosGitUrl(store?.source?.git) ||
-    isTakosGitUrl(sourceGitUrl)
-  ) {
-    return TAKOS_DISTRIBUTION_ACCOUNTS_OIDC;
-  }
-  if (
-    store?.templateId === "yurucommu" ||
-    isYurucommuGitUrl(store?.source?.git) ||
-    isYurucommuGitUrl(sourceGitUrl)
-  ) {
-    return DEFAULT_TAKOSUMI_ACCOUNTS_OIDC;
-  }
-  return undefined;
+  return standard;
 }
 
 function standardOidcExperienceFromVariables(
@@ -213,10 +178,7 @@ function standardOidcExperienceFromVariables(
     : undefined;
   return {
     ...DEFAULT_TAKOSUMI_ACCOUNTS_OIDC,
-    ...(Object.prototype.hasOwnProperty.call(
-      variables,
-      "takosumi_accounts_url",
-    )
+    ...(Object.prototype.hasOwnProperty.call(variables, "takosumi_accounts_url")
       ? { accountsUrlVariable: "takosumi_accounts_url" }
       : {}),
     ...(Object.prototype.hasOwnProperty.call(
@@ -236,33 +198,6 @@ function callbackPathFromRedirectUri(value: string): string | undefined {
   } catch {
     return undefined;
   }
-}
-
-async function getCapsuleSourceGitUrl(
-  operations: ControlPlaneOperations,
-  capsule: Capsule,
-): Promise<string | undefined> {
-  if (!capsule.sourceId) return undefined;
-  try {
-    const { source } = await operations.getSource(capsule.sourceId);
-    return sourceGitUrl(source);
-  } catch {
-    return undefined;
-  }
-}
-
-function sourceGitUrl(source: Source): string | undefined {
-  return stringInstallVariable(source.url);
-}
-
-function isYurucommuGitUrl(value: unknown): boolean {
-  const git = stringInstallVariable(value)?.toLowerCase() ?? "";
-  return /(^|[:/])tako0614\/yurucommu(?:\.git)?$/u.test(git);
-}
-
-function isTakosGitUrl(value: unknown): boolean {
-  const git = stringInstallVariable(value)?.toLowerCase() ?? "";
-  return /(^|[:/])tako0614\/takos(?:\.git)?$/u.test(git);
 }
 
 function mappedOidcClientId(

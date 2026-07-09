@@ -283,8 +283,11 @@ pipeline, registry, provider, or OpenTofu module inputs.
 
 For hosted/operator materializers, prebuilt app/container artifacts should be
 required whenever the activation environment would otherwise build containers or
-bundles on operator capacity. Runner-local source builds remain a compatibility
-path only when explicitly selected by the OpenTofu module.
+expensive bundles on operator capacity. A Capsule may explicitly configure
+`sourceBuild` for build-on-install. The runner executes argv arrays against the
+pinned SourceSnapshot without provider credentials, verifies declared output
+paths, then materializes the same Git-hosted OpenTofu module. It never infers
+commands from package files, Store listings, or `.well-known/tcs.json`.
 
 ## Provider Connections
 

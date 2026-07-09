@@ -45,6 +45,34 @@ export function managedPublicHostFromLabel(
   return `${label}.${normalizedBase}`;
 }
 
+/**
+ * Builds the shared managed-host label for one Workspace. The caller supplies
+ * an arbitrary app slug; the globally unique Workspace handle is always the
+ * namespace prefix. Passing an already-prefixed label is idempotent so retries
+ * and edits do not grow the hostname.
+ */
+export function managedPublicLabelForWorkspace(
+  workspaceHandle: unknown,
+  requestedSlug: unknown,
+): string | undefined {
+  const workspace = normalizeManagedPublicLabel(workspaceHandle);
+  const requested = normalizeManagedPublicLabel(requestedSlug);
+  if (!workspace || !requested) return undefined;
+  const label = requested.startsWith(`${workspace}-`)
+    ? requested
+    : `${workspace}-${requested}`;
+  return isManagedPublicHostLabel(label) ? label : undefined;
+}
+
+export function managedPublicHostForWorkspace(
+  workspaceHandle: unknown,
+  requestedSlug: unknown,
+  baseDomain = DEFAULT_MANAGED_PUBLIC_BASE_DOMAIN,
+): string | undefined {
+  const label = managedPublicLabelForWorkspace(workspaceHandle, requestedSlug);
+  return label ? managedPublicHostFromLabel(label, baseDomain) : undefined;
+}
+
 export function isManagedPublicHost(
   host: string,
   baseDomain = DEFAULT_MANAGED_PUBLIC_BASE_DOMAIN,
@@ -85,4 +113,10 @@ export function normalizeManagedPublicBaseDomains(
 
 function isManagedPublicHostLabel(value: string): boolean {
   return /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(value);
+}
+
+function normalizeManagedPublicLabel(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().toLowerCase();
+  return isManagedPublicHostLabel(normalized) ? normalized : undefined;
 }

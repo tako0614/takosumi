@@ -501,7 +501,8 @@ describe("/new flow guidance", () => {
   });
 
   test("service setup defaults managed domains without app-specific branches", () => {
-    expect(newAppViewSource).toContain("serviceIdSeed");
+    expect(newAppViewSource).toContain("serviceNameInputValue");
+    expect(newAppViewSource).toContain("managedServiceLabel");
     expect(newAppViewSource).toContain("standardManagedHost");
     expect(newAppViewSource).toContain("standardManagedUrl");
     expect(newAppViewSource).toContain("standardPublicSubdomainVariable");

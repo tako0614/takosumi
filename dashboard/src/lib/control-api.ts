@@ -35,6 +35,7 @@ import type {
   RunCostInfo as ContractRunCostInfo,
   RunLogsResponse as ContractRunLogsResponse,
   Source as ContractSource,
+  SourceBuildConfig,
   SourceSnapshot as ContractSourceSnapshot,
   Workspace as ContractWorkspace,
   UsageEvent as ContractUsageEvent,
@@ -497,6 +498,7 @@ export interface InstallConfig {
   readonly sourceKind: "generic_capsule" | "first_party_capsule";
   readonly trustLevel: TrustLevel;
   readonly modulePath?: string;
+  readonly sourceBuild?: SourceBuildConfig;
   readonly variableMapping: Readonly<Record<string, unknown>>;
   readonly outputAllowlist: Readonly<Record<string, OutputAllowlistEntry>>;
   readonly store?: {
@@ -1373,6 +1375,7 @@ export async function createCapsule(input: {
   readonly sourceId: string;
   readonly installConfigId: string;
   readonly modulePath?: string;
+  readonly sourceBuild?: SourceBuildConfig;
   readonly vars?: Readonly<Record<string, ContractJsonValue>>;
   readonly outputAllowlist?: Readonly<Record<string, OutputAllowlistEntry>>;
   readonly store?: NonNullable<InstallConfig["store"]>;
@@ -1390,6 +1393,7 @@ export async function createCapsule(input: {
       ...(input.modulePath && input.modulePath !== "."
         ? { modulePath: input.modulePath }
         : {}),
+      ...(input.sourceBuild ? { sourceBuild: input.sourceBuild } : {}),
       ...(input.vars && Object.keys(input.vars).length > 0
         ? { vars: input.vars }
         : {}),

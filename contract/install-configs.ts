@@ -53,29 +53,22 @@ export interface OutputAllowlistEntry {
   readonly sensitive?: boolean;
 }
 
-/**
- * Stored app-source build metadata for old rows. New Capsules should keep
- * build/download decisions inside their Git-hosted OpenTofu/Terraform module or
- * app CI/release flow; Takosumi passes ordinary Capsule inputs.
- *
- * @deprecated Internal migration read only.
- */
-export interface InstallBuildConfig {
-  readonly enabled: boolean;
+/** One explicit source-build command executed without provider credentials. */
+export interface SourceBuildCommand {
+  readonly argv: readonly string[];
+  /** Relative to the checked-out Git Source root. Defaults to the Source root. */
   readonly workingDirectory?: string;
-  readonly commands: readonly string[];
-  readonly artifactPath?: string;
 }
 
 /**
- * Stored service-side metadata for rows that already knew a prepared file path
- * inside the SourceSnapshot. New generated-root dispatch does not expose this
- * path to the runner.
- *
- * @deprecated Internal migration read only.
+ * Optional user-approved source preparation for a plain OpenTofu Capsule.
+ * Commands run in the isolated runner before every plan/apply/destroy and must
+ * produce the declared relative paths before OpenTofu reads the child module.
+ * Resource creation remains owned by the Git-hosted OpenTofu module.
  */
-export interface InstallPrebuiltArtifactConfig {
-  readonly path: string;
+export interface SourceBuildConfig {
+  readonly commands: readonly SourceBuildCommand[];
+  readonly outputs: readonly string[];
 }
 
 /**
@@ -276,8 +269,7 @@ export interface InstallConfig {
   /** Path inside the SourceSnapshot that contains the OpenTofu Capsule. */
   readonly modulePath?: string;
   readonly normalization?: NormalizationConfig;
-  readonly build?: InstallBuildConfig;
-  readonly prebuiltArtifact?: InstallPrebuiltArtifactConfig;
+  readonly sourceBuild?: SourceBuildConfig;
   /**
    * Service-side runner preference for this Capsule. This is operator policy
    * selected at install/deploy time, not repo metadata.
@@ -309,13 +301,7 @@ export interface InstallConfig {
 /** Public InstallConfig projection returned by `/api` and dashboard session routes. */
 export type PublicInstallConfig = Omit<
   InstallConfig,
-  | "installType"
-  | "templateBinding"
-  | "sourceKind"
-  | "runnerId"
-  | "internal"
-  | "build"
-  | "prebuiltArtifact"
+  "installType" | "templateBinding" | "sourceKind" | "runnerId" | "internal"
 > & {
   readonly sourceKind: PublicInstallConfigSourceKind;
   readonly store?: InstallConfigStoreMetadata;

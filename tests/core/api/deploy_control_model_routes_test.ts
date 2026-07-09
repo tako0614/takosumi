@@ -231,7 +231,12 @@ test("model e2e: create Installation with vars clones a Space-scoped InstallConf
     cloudflare: {},
   });
   expect(config.outputAllowlist).toEqual({
+    launch_url: { from: "launch_url", type: "url" },
     url: { from: "url", type: "url" },
+    public_url: { from: "public_url", type: "url" },
+    api_url: { from: "api_url", type: "url" },
+    app_deployment: { from: "app_deployment", type: "json" },
+    service_exports: { from: "service_exports", type: "json" },
     worker_name: { from: "worker_name", type: "string" },
   });
 });
@@ -295,7 +300,11 @@ test("model e2e: create Installation with runnerId and outputAllowlist stores a 
         installConfigId,
         runnerId: "generic-opentofu-provider",
         outputAllowlist: {
-          app_deployment: { from: "app_deployment", type: "json", required: true },
+          app_deployment: {
+            from: "app_deployment",
+            type: "json",
+            required: true,
+          },
         },
       }),
     },
