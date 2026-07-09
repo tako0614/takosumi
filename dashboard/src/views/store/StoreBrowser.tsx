@@ -52,7 +52,7 @@ const STR = {
   remove: { ja: "削除", en: "Remove" },
   unreachable: { ja: "接続不可", en: "unreachable" },
   alsoOn: { ja: "他にもあり", en: "also elsewhere" },
-  install: { ja: "追加", en: "Add" },
+  install: { ja: "入手", en: "Get" },
   close: { ja: "閉じる", en: "Close" },
   source: { ja: "取得元の詳細", en: "Source details" },
   technicalDetails: {
@@ -130,6 +130,9 @@ export interface StoreBrowserProps {
   readonly showSourceControls?: boolean;
   readonly showSortControl?: boolean;
   readonly loadRemoteOnMount?: boolean;
+  /** Optional per-listing badge (e.g. "すぐ使える" install readiness) injected
+   * by the host — the browser stays layout- and workspace-agnostic. */
+  readonly listingBadge?: (listing: TcsListing) => string | undefined;
 }
 
 export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
@@ -255,8 +258,17 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
         class="tcs-btn tcs-primary"
         onClick={() => props.onConfigure(listing)}
       >
-        {s("install", props.locale)} →
+        {s("install", props.locale)}
       </button>
+    );
+  };
+
+  const listingBadge = (listing: TcsListing) => {
+    const label = props.listingBadge?.(listing);
+    return (
+      <Show when={label}>
+        {(text) => <span class="tcs-tag tcs-ready-badge">{text()}</span>}
+      </Show>
     );
   };
 
@@ -382,11 +394,18 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
                     </button>
                   </div>
                 </div>
-                <Show when={listing.seenOn.length > 1}>
+                <Show
+                  when={
+                    listing.seenOn.length > 1 || props.listingBadge?.(listing)
+                  }
+                >
                   <div class="tcs-card-meta">
-                    <span class="tcs-tag tcs-muted">
-                      +{listing.seenOn.length - 1} {s("alsoOn", props.locale)}
-                    </span>
+                    {listingBadge(listing)}
+                    <Show when={listing.seenOn.length > 1}>
+                      <span class="tcs-tag tcs-muted">
+                        +{listing.seenOn.length - 1} {s("alsoOn", props.locale)}
+                      </span>
+                    </Show>
                   </div>
                 </Show>
                 <div class="tcs-card-actions">{installButton(listing)}</div>
@@ -431,7 +450,10 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
               <p class="tcs-muted">
                 {pick(listing().description, props.locale)}
               </p>
-              <div class="tcs-detail-actions">{installButton(listing())}</div>
+              <div class="tcs-detail-actions">
+                {installButton(listing())}
+                {listingBadge(listing())}
+              </div>
               <details class="tcs-advanced">
                 <summary>{s("technicalDetails", props.locale)}</summary>
                 <section>

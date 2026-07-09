@@ -190,19 +190,22 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain('createSignal<"store" | "git">(');
   });
 
-  test("starts the add guide on source selection before a link or service is chosen", () => {
+  test("the wizard chrome is gone; store [入手] auto-starts the single install action", () => {
+    // No 選択→設定→確認 step rail — installing feels like an app store, not a
+    // deploy console. The flow still stops on real blockers.
     expect(newAppViewSource).toContain("const hasChosenSource = () =>");
+    expect(newAppViewSource).not.toContain("addGuideStage");
+    expect(newAppViewSource).not.toContain("addGuideClass");
+    expect(newAppViewSource).not.toContain("av-add-guide");
+    expect(appViewsCssSource).not.toContain(".av-add-guide");
+    // ?auto=1 (appended by the store's 入手 button) fires submitInstall once
+    // prerequisites settle; validation errors fall back to the visible form.
     expect(newAppViewSource).toContain(
-      'const addGuideStage = (): "select" | "configure" | "review" =>',
+      'new URLSearchParams(initialSearch).get("auto") === "1"',
     );
-    expect(newAppViewSource).toContain(
-      'return hasChosenSource() ? "configure" : "select"',
-    );
-    expect(newAppViewSource).toContain('class={addGuideClass("select")}');
-    expect(newAppViewSource).toContain('class={addGuideClass("configure")}');
-    expect(newAppViewSource).toContain('class={addGuideClass("review")}');
-    expect(newAppViewSource).not.toContain('<li class="is-done">');
-    expect(newAppViewSource).not.toContain('<li class="is-current">');
+    expect(newAppViewSource).toContain("autoInstallAttempted = true;");
+    expect(newAppViewSource).toContain("void submitInstall();");
+    expect(newAppViewSource).toContain("tcsHandoffSettled()");
   });
 
   test("treats pasted install links as active prefill state, not raw git input", () => {
