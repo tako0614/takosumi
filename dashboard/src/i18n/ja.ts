@@ -222,7 +222,7 @@ export const ja = {
   "apps.title": "アプリ",
   "apps.subtitle": "追加したアプリをここから開けます。",
   "apps.add": "サービスを追加",
-  "apps.addShort": "足す",
+  "apps.addShort": "追加",
   "apps.sectionYours": "あなたのアプリ",
   "apps.manage": "管理",
   "apps.sectionBrowse": "さがす",
@@ -1076,6 +1076,11 @@ export const ja = {
   "notif.event.shareApproved": "値の共有を承認しました",
   "notif.event.shareRevoked": "値の共有を取り消しました",
   "notif.event.groupCreated": "まとめての更新を開始しました",
+  "notif.event.autoUpdateOn": "自動更新をオンにしました",
+  "notif.event.autoUpdateOff": "自動更新をオフにしました",
+  "notif.event.autoUpdateFailed": "自動更新を完了できませんでした",
+  "notif.event.autoUpdateFailedDetail":
+    "サービス画面から更新内容を確認してください",
   "notif.event.recorded": "記録された操作",
 
   // --- activity -------------------------------------------------------------------
