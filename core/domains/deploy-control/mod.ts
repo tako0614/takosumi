@@ -71,6 +71,7 @@ import type {
   BillingMode,
   BillingPlan,
   BillingSettings,
+  CapsuleUsageSummary,
   CreditBalance,
   CreditReservation,
   InvoiceUsageReconciliation,
@@ -1270,6 +1271,10 @@ export class OpenTofuDeploymentController {
     };
   }> {
     return await this.#usage.getSpaceBilling(spaceId);
+  }
+
+  getCapsuleUsageSummary(capsuleId: string): Promise<CapsuleUsageSummary> {
+    return this.#usage.getCapsuleUsageSummary(capsuleId);
   }
 
   async listSpaceUsage(

@@ -154,6 +154,7 @@ import type { Run } from "takosumi-contract/runs";
 import type { Dependency } from "takosumi-contract/dependencies";
 import type {
   BillingSettings,
+  CapsuleUsageSummary,
   CreditBalance,
   CreditReservation,
   InvoiceUsageReconciliation,
@@ -626,6 +627,7 @@ export interface TakosumiOperations {
     readonly usageEvents: readonly UsageEvent[];
     readonly nextCursor?: string;
   }>;
+  getCapsuleUsageSummary(capsuleId: string): Promise<CapsuleUsageSummary>;
   recordMeteredUsage(
     spaceId: string,
     input: RecordMeteredUsageInput,
@@ -1283,6 +1285,8 @@ export async function createTakosumiService(
       opentofuController.getSpaceBilling(spaceId),
     listWorkspaceUsage: (spaceId, params) =>
       opentofuController.listSpaceUsage(spaceId, params),
+    getCapsuleUsageSummary: (capsuleId) =>
+      opentofuController.getCapsuleUsageSummary(capsuleId),
     recordMeteredUsage: (spaceId, input) =>
       opentofuController.recordMeteredUsage(spaceId, input),
     reconcileInvoiceUsage: (spaceId, input) =>

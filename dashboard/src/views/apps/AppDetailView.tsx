@@ -60,11 +60,13 @@ import {
   listDeployments,
   listProviderConnections,
   listSources,
+  getCapsuleUsageSummary,
   planCapsule,
   patchInstallConfig,
   putCapsuleProviderConnectionSet,
   setCapsuleAutoUpdate,
 } from "../../lib/control-api.ts";
+import { formatUsdMicros } from "../../lib/billing-format.ts";
 import { createAction } from "../account/lib/action.tsx";
 import {
   deploymentStatusLabel,
@@ -270,6 +272,11 @@ function Inner() {
     await setCapsuleAutoUpdate(capsuleId(), capsule()?.autoUpdate !== true);
     await refetchCapsule();
   });
+  // Per-app showback: rendered only when usage was actually recorded, so
+  // self-host with billing disabled never shows an empty money card.
+  const [usageSummary] = createResource(capsuleId, (id) =>
+    getCapsuleUsageSummary(id).catch(() => undefined),
+  );
   const destroyPlan = createAction(async () => {
     const workspace = capsule()?.workspaceId;
     const envelope = await deleteCapsule(capsuleId());
@@ -417,6 +424,21 @@ function Inner() {
                       producers={producers()}
                       consumers={consumers()}
                     />
+                    <Show
+                      when={(usageSummary()?.eventCount ?? 0) > 0}
+                    >
+                      <Card>
+                        <CardHeader
+                          title={t("app.usage.title")}
+                          subtitle={t("app.usage.body")}
+                          actions={
+                            <span class="wa-usage-amount">
+                              {formatUsdMicros(usageSummary()!.usdMicros)}
+                            </span>
+                          }
+                        />
+                      </Card>
+                    </Show>
                   </Match>
                   <Match when={tab() === "deploys"}>
                     <DeploysTab
