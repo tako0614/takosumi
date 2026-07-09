@@ -5,7 +5,7 @@ import {
   createMobileReturnUri,
   type MobileProductAdapter,
 } from "../../../mobile-kit/src/index.ts";
-import { defineMobileHostActions } from "../../../mobile-kit/src/solid.ts";
+import { defineMobileHostActions } from "../../../mobile-kit/src/host-actions.ts";
 
 const adapter: MobileProductAdapter = {
   product: "takos",
