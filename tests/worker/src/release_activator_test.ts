@@ -13,6 +13,7 @@ test("webhook release activator posts minimal non-secret apply evidence", async 
   const activator = createWebhookReleaseActivator({
     url: "https://materializer.example.test/activate",
     token: "release-token",
+    sourceArchiveBucket: "takosumi-source-staging",
     fetcher: async (input, init) => {
       capturedRequest = new Request(input, init);
       return Response.json({
@@ -67,6 +68,7 @@ test("webhook release activator posts minimal non-secret apply evidence", async 
     sourceSnapshot: {
       id: "snap_1",
       origin: "git",
+      archiveBucket: "takosumi-source-staging",
       archiveObjectKey:
         "spaces/space_1/sources/src_1/snapshots/snap_1/source.tar.zst",
       archiveDigest: `sha256:${"a".repeat(64)}`,
