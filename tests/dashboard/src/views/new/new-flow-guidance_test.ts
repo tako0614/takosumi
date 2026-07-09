@@ -218,6 +218,18 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain("tcsHandoffSettled()");
   });
 
+  test("required store inputs (domain / password / initial setup) are never folded away", () => {
+    // .well-known/tcs.json required inputs must render on the visible sheet
+    // even when marked secret/advanced — only OPTIONAL extras fold into
+    // 詳細設定. Raw generic API phrases must not surface as 詳細 either.
+    expect(newAppViewSource).toContain(
+      "(!field.required && (field.advanced === true || field.secret === true))",
+    );
+    expect(newAppViewSource).toContain(
+      '/^(internal error|invalid request|not found)$/iu',
+    );
+  });
+
   test("treats pasted install links as active prefill state, not raw git input", () => {
     expect(newAppViewSource).toContain("activeInstallPrefill");
     expect(newAppViewSource).toContain("setActiveInstallPrefill(next)");

@@ -47,6 +47,7 @@ import type {
   PublicCapsuleCompatibilityReportResponse,
 } from "takosumi-contract/capsules";
 import type { ListProvidersResponse } from "takosumi-contract/providers";
+import { consoleErrorRedacted } from "../redacted-log.ts";
 import type { Workspace, WorkspaceType } from "takosumi-contract/workspaces";
 import type {
   CapsuleProviderEnvBindingSet,
@@ -356,6 +357,10 @@ export function controllerErrorResponse(error: unknown): Response {
       publicError.details,
     );
   }
+  // A non-controller error is a real defect: the public body stays an opaque
+  // internal_error, but the operator log must carry the (redacted) cause —
+  // otherwise 500s are undiagnosable.
+  consoleErrorRedacted("control.internal_error", error);
   return errorJson("internal_error", "internal error", 500);
 }
 

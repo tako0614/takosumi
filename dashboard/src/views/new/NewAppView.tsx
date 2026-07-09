@@ -1245,9 +1245,12 @@ function Inner() {
     field: StoreInputField,
   ) => storeInputHasImplicitValue(entry, field);
   const isAdvancedStoreInput = (entry: StoreEntry, field: StoreInputField) =>
-    field.advanced === true ||
-    field.secret === true ||
-    storeInputHasImplicitValue(entry, field);
+    storeInputHasImplicitValue(entry, field) ||
+    // 必須の初期設定（ドメイン・パスワード等、.well-known/tcs.json が
+    // required 宣言した入力）は絶対に畳まない: secret でも main のシートに
+    // 表示する（password フィールドとして描画される）。折りたたみは任意
+    // 項目だけ。
+    (!field.required && (field.advanced === true || field.secret === true));
   const visibleStoreInputs = (entry: StoreEntry) =>
     entry.inputs.filter(
       (field) =>
