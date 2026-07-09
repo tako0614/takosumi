@@ -569,7 +569,8 @@ export const en: Record<keyof typeof ja, string> = {
   // --- run history --------------------------------------------------------------
   "runList.title": "Activity",
   "runList.subtitle": "Recent reviews, approvals, and deploys, newest first.",
-  "runList.open": "Review",
+  "runList.open": "Details",
+  "runList.review": "Review",
   "runList.empty.title": "No updates yet",
   "runList.empty.message":
     "After you add a service and review a change, update history appears here.",
