@@ -257,6 +257,12 @@ function safeControlApiErrorMessage(
   }
   const message = apiError?.message.replace(/\s+/gu, " ").trim();
   if (!message) return undefined;
+  // Generic API bucket phrases ("internal error", "invalid request") explain
+  // nothing — showing them as 詳細 reads as a raw leak. Fall back to the
+  // plain generic sentence instead.
+  if (/^(internal error|invalid request|not found)$/iu.test(message)) {
+    return undefined;
+  }
   if (/\balready claimed by Capsule\b.*\bWorkspace\b/iu.test(message)) {
     return undefined;
   }
