@@ -15,8 +15,9 @@ const DEFAULT_PLAN_JSON_ARTIFACT_MAX_BYTES = 2 * 1024 * 1024;
 // At-rest content type for AES-GCM ciphertext blobs (state/plan .enc objects).
 const ENCRYPTED_ARTIFACT_CONTENT_TYPE = "application/octet-stream";
 const RUNNER_REQUEST_HEADER_ALLOWLIST = new Set(["content-type"]);
-const R2_PUT_RETRY_ATTEMPTS = 4;
-const R2_PUT_RETRY_BASE_MS = 250;
+const R2_PUT_RETRY_ATTEMPTS = 8;
+const R2_PUT_RETRY_BASE_MS = 500;
+const R2_PUT_RETRY_MAX_MS = 10_000;
 
 /**
  * Optional dispatch payload field locating the R2_STATE object for this run.
@@ -1251,7 +1252,11 @@ async function putR2ObjectWithRetry(
     } catch (error) {
       lastError = error;
       if (attempt >= R2_PUT_RETRY_ATTEMPTS || !isRetryableR2PutError(error)) {
-        throw error;
+        throw new Error(
+          `${context} R2 put failed after ${attempt} attempt${
+            attempt === 1 ? "" : "s"
+          }: ${redactedErrorMessage(error, "r2 put failed")}`,
+        );
       }
       console.warn("OpenTofu runner R2 put failed; retrying", {
         context,
@@ -1260,7 +1265,12 @@ async function putR2ObjectWithRetry(
         maxAttempts: R2_PUT_RETRY_ATTEMPTS,
         error: redactedErrorMessage(error, "r2 put failed"),
       });
-      await sleep(R2_PUT_RETRY_BASE_MS * 2 ** (attempt - 1));
+      await sleep(
+        Math.min(
+          R2_PUT_RETRY_MAX_MS,
+          R2_PUT_RETRY_BASE_MS * 2 ** (attempt - 1),
+        ),
+      );
     }
   }
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
