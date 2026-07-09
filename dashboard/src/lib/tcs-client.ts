@@ -136,6 +136,10 @@ export interface TcsRepoMetadata {
   readonly description?: TcsLocalizedText;
   readonly badge?: TcsLocalizedText;
   readonly iconUrl?: string;
+  /** Optional install-form schema owned by the Git repository, not the Store. */
+  readonly inputs?: readonly TcsListingInput[];
+  /** Optional projections that connect generic form fields to OpenTofu inputs. */
+  readonly installExperience?: TcsInstallExperience;
 }
 
 export type TcsSort = "updated" | "created" | "name";
@@ -341,6 +345,152 @@ function stringArray(value: unknown): readonly string[] | undefined {
   return value.filter((item): item is string => typeof item === "string");
 }
 
+function repoInput(value: unknown): TcsListingInput | undefined {
+  if (!isRecord(value)) return undefined;
+  const name = text(value.name);
+  const label = localized(value.label);
+  if (!name || !label || !/^[A-Za-z_][A-Za-z0-9_.]*$/u.test(name)) {
+    return undefined;
+  }
+  const type = text(value.type);
+  if (type && !["string", "number", "boolean", "json"].includes(type)) {
+    return undefined;
+  }
+  const format = text(value.format);
+  if (
+    format &&
+    ![
+      "text",
+      "url",
+      "hostname",
+      "subdomain",
+      "password",
+      "token",
+      "email",
+      "sha256",
+    ].includes(format)
+  ) {
+    return undefined;
+  }
+  const helper = localized(value.helper);
+  return {
+    name,
+    ...(type ? { type: type as TcsListingInput["type"] } : {}),
+    ...(format ? { format: format as TcsListingInput["format"] } : {}),
+    ...(value.required === true ? { required: true } : {}),
+    ...(value.advanced === true ? { advanced: true } : {}),
+    ...(value.secret === true ? { secret: true } : {}),
+    ...(text(value.defaultValue)
+      ? { defaultValue: text(value.defaultValue) }
+      : {}),
+    label,
+    ...(helper ? { helper } : {}),
+    ...(text(value.placeholder) ? { placeholder: text(value.placeholder) } : {}),
+  };
+}
+
+function repoInputs(value: unknown): readonly TcsListingInput[] | undefined {
+  if (!Array.isArray(value) || value.length > 64) return undefined;
+  const parsed = value.map(repoInput);
+  return parsed.every((input): input is TcsListingInput => input !== undefined)
+    ? parsed
+    : undefined;
+}
+
+function optionalProjectionVariable(value: unknown): string | undefined {
+  const variable = text(value);
+  return variable && /^[A-Za-z_][A-Za-z0-9_.]*$/u.test(variable)
+    ? variable
+    : undefined;
+}
+
+function repoInstallExperience(value: unknown): TcsInstallExperience | undefined {
+  if (!isRecord(value) || !Array.isArray(value.projections)) return undefined;
+  const projections: NonNullable<TcsInstallExperience["projections"]> = [];
+  for (const rawProjection of value.projections) {
+    if (!isRecord(rawProjection)) return undefined;
+    const kind = text(rawProjection.kind);
+    if (kind === "service_name") {
+      const variable = optionalProjectionVariable(rawProjection.variable);
+      if (!variable) return undefined;
+      projections.push({ kind, variable });
+      continue;
+    }
+    if (kind === "public_endpoint") {
+      if (!isRecord(rawProjection.variables)) return undefined;
+      const subdomain = optionalProjectionVariable(
+        rawProjection.variables.subdomain,
+      );
+      const url = optionalProjectionVariable(rawProjection.variables.url);
+      const routePattern = optionalProjectionVariable(
+        rawProjection.variables.routePattern,
+      );
+      if (!subdomain && !url && !routePattern) return undefined;
+      projections.push({
+        kind,
+        variables: {
+          ...(subdomain ? { subdomain } : {}),
+          ...(url ? { url } : {}),
+          ...(routePattern ? { routePattern } : {}),
+        },
+        ...(text(rawProjection.baseDomain)
+          ? { baseDomain: text(rawProjection.baseDomain) }
+          : {}),
+      });
+      continue;
+    }
+    if (kind === "initial_secret") {
+      const variable = optionalProjectionVariable(rawProjection.variable);
+      const secretKind = text(rawProjection.secretKind);
+      if (
+        !variable ||
+        (secretKind &&
+          !["password", "password_or_hash", "token"].includes(secretKind))
+      ) {
+        return undefined;
+      }
+      projections.push({
+        kind,
+        variable,
+        ...(secretKind
+          ? {
+              secretKind:
+                secretKind as Extract<
+                  NonNullable<TcsInstallExperience["projections"]>[number],
+                  { kind: "initial_secret" }
+                >["secretKind"],
+            }
+          : {}),
+        ...(rawProjection.optional === true ? { optional: true } : {}),
+      });
+      continue;
+    }
+    if (kind === "oidc_client" || kind === "artifact") {
+      if (!isRecord(rawProjection.variables)) return undefined;
+      const variables = Object.fromEntries(
+        Object.entries(rawProjection.variables)
+          .map(([key, raw]) => [key, optionalProjectionVariable(raw)] as const)
+          .filter((entry): entry is readonly [string, string] => Boolean(entry[1])),
+      );
+      if (Object.keys(variables).length === 0) return undefined;
+      if (kind === "oidc_client") {
+        projections.push({
+          kind,
+          variables,
+          ...(text(rawProjection.callbackPath)
+            ? { callbackPath: text(rawProjection.callbackPath) }
+            : {}),
+        });
+      } else {
+        projections.push({ kind, variables });
+      }
+      continue;
+    }
+    return undefined;
+  }
+  return { projections };
+}
+
 function repoMetadataFromJson(json: unknown): TcsRepoMetadata | undefined {
   if (!isRecord(json)) return undefined;
   const schemaVersion = text(json.schemaVersion);
@@ -365,6 +515,10 @@ function repoMetadataFromJson(json: unknown): TcsRepoMetadata | undefined {
       : {}),
     ...(localized(json.badge) ? { badge: localized(json.badge) } : {}),
     ...(text(json.iconUrl) ? { iconUrl: text(json.iconUrl) } : {}),
+    ...(repoInputs(json.inputs) ? { inputs: repoInputs(json.inputs) } : {}),
+    ...(repoInstallExperience(json.installExperience)
+      ? { installExperience: repoInstallExperience(json.installExperience) }
+      : {}),
   };
 }
 
@@ -428,6 +582,10 @@ export function mergeTcsListingRepoMetadata(
     ...(metadata.badge ? { badge: metadata.badge } : {}),
     ...(metadata.iconUrl
       ? { iconUrl: repoAssetUrl(source, metadata.iconUrl) ?? metadata.iconUrl }
+      : {}),
+    ...(metadata.inputs ? { inputs: metadata.inputs } : {}),
+    ...(metadata.installExperience
+      ? { installExperience: metadata.installExperience }
       : {}),
   };
 }

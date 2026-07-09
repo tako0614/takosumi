@@ -58,12 +58,26 @@ function describeEvent(event: ActivityEvent): {
 } {
   const m = event.metadata ?? {};
   switch (event.action) {
-    case "installation.created": {
+    case "installation.created":
+    case "capsule.created": {
       const name = metaString(m, "name") ?? "—";
       const env = metaString(m, "environment");
       return {
         title: t("notif.event.installCreated", { name }),
         detail: env ? t("notif.event.installCreatedEnv", { env }) : undefined,
+      };
+    }
+    case "capsule.auto_update_enabled": {
+      return { title: t("notif.event.autoUpdateOn") };
+    }
+    case "capsule.auto_update_disabled": {
+      return { title: t("notif.event.autoUpdateOff") };
+    }
+    case "installation.auto_update_failed":
+    case "installation.auto_update_apply_failed": {
+      return {
+        title: t("notif.event.autoUpdateFailed"),
+        detail: t("notif.event.autoUpdateFailedDetail"),
       };
     }
     case "run.plan_created": {

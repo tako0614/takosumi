@@ -1067,6 +1067,11 @@ export const en: Record<keyof typeof ja, string> = {
   "notif.event.shareApproved": "Approved shared values",
   "notif.event.shareRevoked": "Revoked shared values",
   "notif.event.groupCreated": "Started a grouped update",
+  "notif.event.autoUpdateOn": "Automatic updates turned on",
+  "notif.event.autoUpdateOff": "Automatic updates turned off",
+  "notif.event.autoUpdateFailed": "An automatic update could not finish",
+  "notif.event.autoUpdateFailedDetail":
+    "Review the update from the service screen",
   "notif.event.recorded": "Recorded activity",
 
   // --- activity -------------------------------------------------------------------
