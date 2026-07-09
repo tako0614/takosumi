@@ -44,6 +44,13 @@ export interface OutputAllowlistEntry {
   readonly from: string;
   readonly type: OutputValueType;
   readonly required?: boolean;
+  /**
+   * Re-export this child-module output from the Takosumi-generated root as a
+   * sensitive OpenTofu output. Sensitive outputs stay available in the raw
+   * encrypted runner artifact for credential issuers, but never enter public
+   * Output/Deployment projections.
+   */
+  readonly sensitive?: boolean;
 }
 
 /**

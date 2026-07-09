@@ -46,6 +46,25 @@ test("output allowlist projection drops optional nested JSON secret material", (
   ).toEqual([]);
 });
 
+test("output allowlist projection never publishes entries marked sensitive by config", () => {
+  const outputs = {
+    takos_storage_signing_key: {
+      sensitive: false,
+      value: "raw-signing-key",
+    },
+  };
+  const allowlist = {
+    takos_storage_signing_key: {
+      from: "takos_storage_signing_key",
+      type: "string",
+      sensitive: true,
+    },
+  } as const;
+
+  expect(projectOutputAllowlistSpaceOutputs(allowlist, outputs)).toEqual({});
+  expect(projectOutputAllowlistPublicOutputs(allowlist, outputs)).toEqual([]);
+});
+
 test("output allowlist projection fails closed for required nested JSON secret material", () => {
   const outputs = {
     config: {
