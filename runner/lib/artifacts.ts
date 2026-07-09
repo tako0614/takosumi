@@ -11,6 +11,7 @@ import type {
 } from "./types.ts";
 import {
   RUN_ROOT,
+  DEFAULT_PLAN_JSON_ARTIFACT_MAX_BYTES,
 } from "./constants.ts";
 import {
   isRecord,
@@ -22,15 +23,36 @@ import {
 // DO/relay can promote it. The DO already promotes the tfplan binary; the
 // plan-JSON sits beside it under the run root and is surfaced via the
 // /artifacts/tfplan-json route below.
+export interface PlanJsonArtifactWriteResult {
+  readonly written: boolean;
+  readonly sizeBytes: number;
+  readonly maxBytes: number;
+}
+
 export async function writePlanJsonArtifact(
   workspace: RunWorkspace,
   planJson: string,
-): Promise<void> {
-  await writeFile(planJsonPath(workspace), planJson);
+): Promise<PlanJsonArtifactWriteResult> {
+  const bytes = new TextEncoder().encode(planJson);
+  const maxBytes = planJsonArtifactMaxBytes();
+  if (bytes.byteLength > maxBytes) {
+    return { written: false, sizeBytes: bytes.byteLength, maxBytes };
+  }
+  await mkdir(workspace.root, { recursive: true });
+  await writeFile(planJsonPath(workspace), bytes);
+  return { written: true, sizeBytes: bytes.byteLength, maxBytes };
 }
 
 export function planJsonPath(workspace: RunWorkspace): string {
   return join(workspace.root, "tfplan.json");
+}
+
+function planJsonArtifactMaxBytes(): number {
+  const raw = Bun.env.TAKOSUMI_PLAN_JSON_ARTIFACT_MAX_BYTES;
+  const parsed = typeof raw === "string" ? Number(raw) : NaN;
+  return Number.isSafeInteger(parsed) && parsed > 0
+    ? parsed
+    : DEFAULT_PLAN_JSON_ARTIFACT_MAX_BYTES;
 }
 
 export async function handlePlanJsonArtifactRequest(
