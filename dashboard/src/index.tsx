@@ -1,5 +1,5 @@
 /* @refresh reload */
-import { lazy } from "solid-js";
+import { lazy, onMount } from "solid-js";
 import { render } from "solid-js/web";
 import {
   Navigate,
@@ -74,6 +74,25 @@ function AdvancedWorkspaceView() {
 
 // --- redirects ---------------------------------------------------------------
 
+/**
+ * These paths are owned by the Accounts/OIDC server handler, not the dashboard
+ * SPA. If a stale tab or cached shell routes them through Solid, force a real
+ * document navigation so the worker can return the proper 302/JSON response.
+ */
+function ServerOwnedRouteReload() {
+  onMount(() => {
+    const key = "takosumi.dashboard.server-route-reload@v1";
+    const href = window.location.href;
+    if (sessionStorage.getItem(key) === href) {
+      sessionStorage.removeItem(key);
+      return;
+    }
+    sessionStorage.setItem(key, href);
+    window.location.replace(href);
+  });
+  return null;
+}
+
 /** Redirect preserving the query string (the external install link's
  * `/install?git=…` prefill and the Cloudflare OAuth callback's
  * `/connections?connected=1` both carry load-bearing params). */
@@ -112,6 +131,8 @@ function App() {
       {/* Public — no session required. */}
       <Route path="/sign-in" component={SignInView} />
       <Route path="/sign-in/callback" component={SignInCallbackView} />
+      <Route path="/oauth" component={ServerOwnedRouteReload} />
+      <Route path="/oauth/*path" component={ServerOwnedRouteReload} />
       <Route path="/legal/:page" component={LegalView} />
       <Route path="/support" component={() => <LegalView page="support" />} />
       {/* Legacy external aliases. Current website CTAs avoid open signup, but
