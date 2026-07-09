@@ -37,7 +37,6 @@ import {
   installExperiencePublicEndpoint,
   installExperienceServiceNameVariable,
 } from "takosumi-contract";
-import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import {
   type BackupRecord,
@@ -306,7 +305,7 @@ function Inner() {
   };
 
   return (
-    <AppShell>
+    <>
       <Switch>
         <Match when={capsule.loading}>
           <Card>
@@ -467,7 +466,7 @@ function Inner() {
           )}
         </Match>
       </Switch>
-    </AppShell>
+    </>
   );
 }
 

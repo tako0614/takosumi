@@ -7,7 +7,6 @@
 import "../../styles/wave-b.css";
 import { createMemo, createResource, For, Match, Show, Switch } from "solid-js";
 import { Network } from "lucide-solid";
-import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import { currentWorkspaceId } from "../../lib/workspace-state.ts";
 import {
@@ -67,7 +66,7 @@ function Inner() {
   });
 
   return (
-    <AppShell>
+    <>
       <PageHeader
         title={t("graph.title")}
         subtitle={t("graph.subtitle")}
@@ -161,6 +160,6 @@ function Inner() {
           </Match>
         </Switch>
       </Show>
-    </AppShell>
+    </>
   );
 }

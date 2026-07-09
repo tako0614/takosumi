@@ -11,7 +11,6 @@ import "../../styles/wave-c.css";
 import { createMemo, createResource, For, Match, Show, Switch } from "solid-js";
 import { A } from "@solidjs/router";
 import { AlertTriangle, Bell } from "lucide-solid";
-import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import {
   type ActivityEvent,
@@ -237,7 +236,7 @@ export default function NotificationsView() {
           (feed() ?? []).filter((e) => isFailureAction(e.event.action)).length;
 
         return (
-          <AppShell>
+          <>
             <PageHeader
               title={t("notif.title")}
               subtitle={t("notif.subtitle")}
@@ -287,7 +286,7 @@ export default function NotificationsView() {
                 )}
               </Match>
             </Switch>
-          </AppShell>
+          </>
         );
       }}
     </Page>

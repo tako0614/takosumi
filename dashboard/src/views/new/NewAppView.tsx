@@ -45,7 +45,6 @@ import {
   type JsonValue,
 } from "takosumi-contract";
 import { isCredentialFreeUtilityProvider } from "takosumi-contract/provider-env-rules";
-import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import {
   currentWorkspaceId,
@@ -3136,7 +3135,7 @@ function Inner() {
       : sourceHostLabel(sourceGitUrl());
 
   return (
-    <AppShell>
+    <>
       <Show
         when={workspaceId()}
         fallback={
@@ -3999,6 +3998,6 @@ function Inner() {
           </section>
         </Show>
       </Show>
-    </AppShell>
+    </>
   );
 }

@@ -29,7 +29,6 @@ import {
 } from "solid-js";
 import { useNavigate, useParams } from "@solidjs/router";
 import { Activity, ExternalLink } from "lucide-solid";
-import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import {
   approveRun,
@@ -1527,11 +1526,11 @@ function Inner() {
   };
 
   return (
-    <AppShell>
+    <>
       <Show when={autoInstall && !forceConsole()} fallback={installConsole()}>
         {installScreen()}
       </Show>
-    </AppShell>
+    </>
   );
 
   function installConsole() {

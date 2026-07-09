@@ -7,7 +7,6 @@ import "../../styles/wave-a.css";
 import "../../styles/wave-b.css";
 import { createResource, For, Match, Show, Switch } from "solid-js";
 import { ScrollText } from "lucide-solid";
-import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import { currentWorkspaceId } from "../../lib/workspace-state.ts";
 import {
@@ -159,7 +158,7 @@ function Inner() {
   );
 
   return (
-    <AppShell>
+    <>
       <PageHeader
         title={t("activity.title")}
         subtitle={t("activity.subtitle")}
@@ -214,6 +213,6 @@ function Inner() {
           </Match>
         </Switch>
       </Show>
-    </AppShell>
+    </>
   );
 }

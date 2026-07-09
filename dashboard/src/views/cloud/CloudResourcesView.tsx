@@ -29,7 +29,6 @@ import {
   ShieldCheck,
   Trash2,
 } from "lucide-solid";
-import AppShell from "../account/components/shell/AppShell.tsx";
 import AuthGuard from "../account/components/auth/AuthGuard.tsx";
 import {
   dashboardProductName,
@@ -124,7 +123,7 @@ export default function CloudResourcesView() {
     createSignal<CloudRefreshState>(IDLE_REFRESH_STATE);
 
   return (
-    <AppShell>
+    <>
       <CloudResourcesHeader
         refresh={() => refreshState().refresh()}
         disabled={refreshState().disabled}
@@ -137,7 +136,7 @@ export default function CloudResourcesView() {
           />
         )}
       </AuthGuard>
-    </AppShell>
+    </>
   );
 }
 

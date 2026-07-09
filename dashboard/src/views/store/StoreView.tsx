@@ -6,7 +6,6 @@
  */
 import { onMount } from "solid-js";
 import { useNavigate } from "@solidjs/router";
-import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import { locale, t } from "../../i18n/index.ts";
 import {
@@ -41,7 +40,7 @@ function Inner() {
   };
 
   return (
-    <AppShell>
+    <>
       <div
         style={{
           "max-width": "1080px",
@@ -60,7 +59,7 @@ function Inner() {
           onConfigure={onConfigure}
         />
       </div>
-    </AppShell>
+    </>
   );
 }
 

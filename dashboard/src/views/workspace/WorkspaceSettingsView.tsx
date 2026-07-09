@@ -8,7 +8,6 @@ import "../../styles/wave-a.css";
 import { lazy, Match, Show, Switch } from "solid-js";
 import { Settings2 } from "lucide-solid";
 import { useParams } from "@solidjs/router";
-import AppShell from "../account/components/shell/AppShell.tsx";
 import Page from "../account/components/auth/Page.tsx";
 import type { SessionRecord } from "../account/lib/session.ts";
 import { currentWorkspaceId } from "../../lib/workspace-state.ts";
@@ -117,7 +116,7 @@ function Inner(props: {
   ];
 
   return (
-    <AppShell>
+    <>
       <PageHeader
         title={pageTitle(props.standaloneTab)}
         subtitle={pageSubtitle(props.standaloneTab)}
@@ -168,7 +167,7 @@ function Inner(props: {
           </div>
         )}
       </Show>
-    </AppShell>
+    </>
   );
 }
 
