@@ -307,6 +307,8 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).toContain("routePatternFromAppUrl");
     expect(newAppViewSource).toContain("const currentSubdomain =");
     expect(newAppViewSource).toContain("const currentAppUrl =");
+    expect(newAppViewSource).toContain('"enable_cloudflare_resources"');
+    expect(newAppViewSource).toContain('"enable_cloudflare_worker_script"');
     expect(newAppViewSource).toContain('"cloudflare_route_zone_id"');
     expect(newAppViewSource).toContain('"enable_workers_dev_subdomain"');
     expect(newAppViewSource).toContain("connection?.scopeHints?.zoneId");
