@@ -1814,6 +1814,8 @@ function Inner() {
       !connection ||
       sameProviderFamily(connection.providerSource, "cloudflare")
     ) {
+      setDefault("enable_cloudflare_resources", true);
+      setDefault("enable_cloudflare_worker_script", true);
       setDefault("cloudflare_account_id", connection?.scopeHints?.accountId);
       setDefault("account_id", connection?.scopeHints?.accountId);
       setDefault("cloudflare_route_zone_id", connection?.scopeHints?.zoneId);

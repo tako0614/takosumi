@@ -322,6 +322,8 @@ function providerInputDefaultsFromResolved(
     const connection = entry.connection;
     if (!connection) continue;
     if (sameProviderFamily(entry.provider, "cloudflare")) {
+      inputs.enable_cloudflare_resources = true;
+      inputs.enable_cloudflare_worker_script = true;
       const accountId = nonEmptyString(connection.scopeHints?.accountId);
       if (accountId) {
         inputs.cloudflare_account_id = accountId;
