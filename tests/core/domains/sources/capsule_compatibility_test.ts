@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 
 import {
   analyzeOpenTofuCapsuleFiles,
+  collectRootModuleOutputDeclarations,
   normalizedCapsuleArtifactBody,
   normalizedModuleObjectKey,
 } from "../../../../core/domains/sources/capsule_compatibility.ts";
@@ -21,6 +22,38 @@ const snapshot: SourceSnapshot = {
   fetchedByRunId: "ssr_test",
   fetchedAt: "2026-06-07T00:00:00.000Z",
 };
+
+test("collectRootModuleOutputDeclarations preserves sensitive output flags", () => {
+  expect(
+    collectRootModuleOutputDeclarations([
+      {
+        path: "outputs.tf",
+        text: `
+output "launch_url" {
+  value = local.launch_url
+}
+
+output "takos_storage_signing_key" {
+  value     = local.signing_key
+  sensitive = true
+}
+`,
+      },
+      {
+        path: "modules/child/outputs.tf",
+        text: `
+output "ignored_child_output" {
+  value     = "child"
+  sensitive = true
+}
+`,
+      },
+    ]),
+  ).toEqual([
+    { name: "launch_url", sensitive: false },
+    { name: "takos_storage_signing_key", sensitive: true },
+  ]);
+});
 
 test("analyzes a reusable OpenTofu module as ready", () => {
   const result = analyzeOpenTofuCapsuleFiles({

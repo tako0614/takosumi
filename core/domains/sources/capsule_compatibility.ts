@@ -780,6 +780,29 @@ export function collectRootModuleOutputNames(
   return collectRootModuleNamedBlocks(files, "output");
 }
 
+export interface RootModuleOutputDeclaration {
+  readonly name: string;
+  readonly sensitive: boolean;
+}
+
+export function collectRootModuleOutputDeclarations(
+  files: readonly CapsuleSourceFile[],
+): readonly RootModuleOutputDeclaration[] {
+  const byName = new Map<string, RootModuleOutputDeclaration>();
+  for (const file of files) {
+    if (!isRootModuleTfFile(file.path)) continue;
+    for (const block of matchNamedBlocks(file.text, "output")) {
+      byName.set(block.name, {
+        name: block.name,
+        sensitive: /^\s*sensitive\s*=\s*true\s*$/imu.test(block.body),
+      });
+    }
+  }
+  return Array.from(byName.values()).sort((a, b) =>
+    a.name.localeCompare(b.name),
+  );
+}
+
 function collectRootModuleNamedBlocks(
   files: readonly CapsuleSourceFile[],
   blockType: "variable" | "output",

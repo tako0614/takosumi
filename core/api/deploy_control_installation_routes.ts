@@ -468,7 +468,7 @@ export function mountDeployControlInstallationRoutes(
         if (rawOutputAllowlist !== undefined && outputAllowlist === undefined) {
           throw new OpenTofuControllerError(
             "invalid_argument",
-            "outputAllowlist must be an object of { from, type, required? } entries",
+            "outputAllowlist must be an object of { from, type, required?, sensitive? } entries",
           );
         }
         const modulePath =
@@ -980,6 +980,9 @@ function outputAllowlistValue(
       type,
       ...(typeof record.required === "boolean"
         ? { required: record.required }
+        : {}),
+      ...(typeof record.sensitive === "boolean"
+        ? { sensitive: record.sensitive }
         : {}),
     };
   }

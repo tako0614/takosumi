@@ -141,6 +141,9 @@ export function projectOutputAllowlistSpaceOutputs(
   const byName = outputs ? outputValuesByName(outputs) : new Map();
   const result: Record<string, JsonValue> = {};
   for (const [projectedName, spec] of Object.entries(outputAllowlist)) {
+    if (spec.sensitive === true) {
+      continue;
+    }
     const entry = byName.get(spec.from);
     if (!entry) {
       if (spec.required) {
