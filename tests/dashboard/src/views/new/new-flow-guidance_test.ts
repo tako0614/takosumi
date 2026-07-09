@@ -6,10 +6,20 @@ import { en } from "../../../../../dashboard/src/i18n/en.ts";
 import { ja } from "../../../../../dashboard/src/i18n/ja.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const newAppViewSource = readFileSync(
-  resolve(here, "../../../../../dashboard/src/views/new/NewAppView.tsx"),
-  "utf8",
-);
+// The /new flow spans the view (state machine + render) and its pure helper
+// module — string pins check the combined install-flow source.
+const newAppViewSource =
+  readFileSync(
+    resolve(here, "../../../../../dashboard/src/views/new/NewAppView.tsx"),
+    "utf8",
+  ) +
+  readFileSync(
+    resolve(
+      here,
+      "../../../../../dashboard/src/views/new/install-helpers.ts",
+    ),
+    "utf8",
+  );
 const appViewsCssSource = readFileSync(
   resolve(here, "../../../../../dashboard/src/styles/app-views.css"),
   "utf8",
