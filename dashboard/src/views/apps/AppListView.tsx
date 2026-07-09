@@ -467,13 +467,29 @@ function AppTileView(props: {
   const surface = () => props.tile.surface;
   const attention = () => needsAttention(props.tile.inst);
   const name = () => surface().name ?? props.tile.inst.name;
-  const imageSrc = () =>
-    surface().image ??
-    (surface().icon && isUrlString(surface().icon)
-      ? surface().icon
-      : undefined);
-  const emojiIcon = () =>
-    surface().icon && !isUrlString(surface().icon) ? surface().icon : undefined;
+  const imageSrc = () => {
+    if (surface().image) return surface().image;
+    const icon = surface().icon;
+    if (!icon) return undefined;
+    if (isUrlString(icon)) return icon;
+    // A path-style icon (e.g. "/icons/app.svg") resolves against the app's
+    // own origin when the surface has a URL.
+    if (/[./]/.test(icon) && surface().url) {
+      try {
+        return new URL(icon, surface().url).href;
+      } catch {
+        return undefined;
+      }
+    }
+    return undefined;
+  };
+  const emojiIcon = () => {
+    const icon = surface().icon;
+    // Only a short glyph is an emoji — a path-ish value must never render as
+    // tile text (it would paint "/icons/app.svg" across the face).
+    if (!icon || isUrlString(icon) || /[./]/.test(icon)) return undefined;
+    return icon;
+  };
   // First-party apps that declare no icon fall back to a curated mark (Takos
   // logo / representative emoji) before the initials monogram, so official
   // services never read as plain letters.
