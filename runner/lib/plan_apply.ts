@@ -250,7 +250,9 @@ export async function initPlanAndBuildResponse(
   const planJson = await timer.measure("tofu_plan_json", () =>
     readOpenTofuPlanJson(moduleDir, workspace, commandContext),
   );
-  if (planJson) await writePlanJsonArtifact(workspace, planJson);
+  const planJsonArtifact = planJson
+    ? await writePlanJsonArtifact(workspace, planJson)
+    : undefined;
   const providerLockDigest = await digestFileIfExists(
     join(moduleDir, ".terraform.lock.hcl"),
   );
@@ -282,6 +284,19 @@ export async function initPlanAndBuildResponse(
       ...(planJson ? { summary: summaryFromPlanJson(planJson) } : {}),
       ...(planJson
         ? { planResourceChanges: resourceChangesFromPlanJson(planJson) }
+        : {}),
+      ...(planJsonArtifact
+        ? {
+            planJsonArtifact: {
+              kind: "runner-local",
+              written: planJsonArtifact.written,
+              sizeBytes: planJsonArtifact.sizeBytes,
+              maxBytes: planJsonArtifact.maxBytes,
+              ...(planJsonArtifact.written
+                ? { ref: `runner-local://${runId}/tfplan-json` }
+                : { skippedReason: "size_limit_exceeded" }),
+            },
+          }
         : {}),
       ...(providerLockDigest ? { providerLockDigest } : {}),
       ...(options.extra ?? {}),

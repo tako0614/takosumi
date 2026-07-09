@@ -3,6 +3,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  rm,
   stat,
   writeFile,
 } from "node:fs/promises";
@@ -10,6 +11,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "bun:test";
 import { handleRunnerRequest } from "../../../runner/entrypoint.ts";
+import {
+  handlePlanJsonArtifactRequest,
+  writePlanJsonArtifact,
+  workspaceForRun,
+} from "../../../runner/lib/artifacts.ts";
 
 test("runner redacts plan stdout and stderr on success", async () => {
   const fixture = await createFakeTofuFixture();
@@ -88,6 +94,44 @@ test("runner allows provider-free generated roots under an allowed-provider prof
     expect(response.status).toBe(200);
     expect(payload.requiredProviders).toEqual([]);
   });
+});
+
+test("runner caps raw plan JSON artifacts to keep review-only payloads out of the relay", async () => {
+  const workspace = workspaceForRun("plan_json_cap");
+  const previousLimit = Bun.env.TAKOSUMI_PLAN_JSON_ARTIFACT_MAX_BYTES;
+  Bun.env.TAKOSUMI_PLAN_JSON_ARTIFACT_MAX_BYTES = "32";
+  await rm(workspace.root, { recursive: true, force: true });
+  try {
+    const largePlanJson = JSON.stringify({ payload: "x".repeat(128) });
+    const skipped = await writePlanJsonArtifact(workspace, largePlanJson);
+    expect(skipped).toEqual({
+      written: false,
+      sizeBytes: new TextEncoder().encode(largePlanJson).byteLength,
+      maxBytes: 32,
+    });
+    const missing = await handlePlanJsonArtifactRequest(
+      "plan_json_cap",
+      new Request("https://runner.internal/runs/plan_json_cap/artifacts/tfplan-json"),
+    );
+    expect(missing.status).toBe(404);
+
+    const smallPlanJson = '{"resource_changes":[]}';
+    const written = await writePlanJsonArtifact(workspace, smallPlanJson);
+    expect(written.written).toBe(true);
+    const response = await handlePlanJsonArtifactRequest(
+      "plan_json_cap",
+      new Request("https://runner.internal/runs/plan_json_cap/artifacts/tfplan-json"),
+    );
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe(smallPlanJson);
+  } finally {
+    if (previousLimit === undefined) {
+      delete Bun.env.TAKOSUMI_PLAN_JSON_ARTIFACT_MAX_BYTES;
+    } else {
+      Bun.env.TAKOSUMI_PLAN_JSON_ARTIFACT_MAX_BYTES = previousLimit;
+    }
+    await rm(workspace.root, { recursive: true, force: true });
+  }
 });
 
 test("runner rejects provider-using generated roots that omit requiredProviders", async () => {
