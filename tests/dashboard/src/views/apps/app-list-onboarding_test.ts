@@ -22,7 +22,8 @@ describe("AppListView app launcher", () => {
     expect(appListSource).toContain("if (chosen !== current)");
     expect(appListSource).toContain("ensureAccessibleWorkspaceSelection");
     expect(appListSource).toContain("clearWorkspaceProjectionCaches");
-    expect(appListSource).toContain('href="/new"');
+    expect(appListSource).toContain('href="/store"');
+    expect(appListSource).not.toContain('href="/new"');
     expect(appListSource).toContain('t("apps.start.optionStore")');
     expect(appListSource).not.toContain('href="/new?mode=link"');
     expect(appListSource).not.toContain('t("apps.start.add")');
@@ -108,7 +109,8 @@ describe("AppListView app launcher", () => {
     // No declared app → point at the full service list (and add).
     expect(appListSource).toContain("function AppsEmptyPanel");
     expect(appListSource).toContain('href="/services"');
-    expect(appListSource).toContain('href="/new"');
+    expect(appListSource).toContain('href="/store"');
+    expect(appListSource).not.toContain('href="/new"');
     expect(appListSource).toContain('t("apps.add")');
     expect(appListSource).toContain('t("apps.empty.viewServices")');
   });
