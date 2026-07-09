@@ -33,7 +33,7 @@ output "launch_url" {
   value = local.launch_url
 }
 
-output "takos_storage_signing_key" {
+output "storage_token_signing_key" {
   value     = local.signing_key
   sensitive = true
 }
@@ -51,7 +51,7 @@ output "ignored_child_output" {
     ]),
   ).toEqual([
     { name: "launch_url", sensitive: false },
-    { name: "takos_storage_signing_key", sensitive: true },
+    { name: "storage_token_signing_key", sensitive: true },
   ]);
 });
 

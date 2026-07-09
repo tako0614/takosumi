@@ -39,7 +39,7 @@ export type StorageAccessTokenVerifyResult =
     };
 
 export const STORAGE_ACCESS_TOKEN_PREFIX = "takstor_";
-export const STORAGE_ACCESS_TOKEN_AUDIENCE = "takos.storage.object";
+export const STORAGE_ACCESS_TOKEN_AUDIENCE = "storage.object";
 
 const MIN_TTL_SECONDS = 60;
 const MAX_TTL_SECONDS = 3600;
@@ -55,7 +55,7 @@ export interface MintStorageAccessTokenInput {
   readonly now?: () => number;
   /**
    * Token audience — the consuming service's publication name. Defaults to the
-   * object-store audience; the git service passes `takos.git.hosting`. The wire
+   * object-store audience; the git service passes `source.git.smart_http`. The wire
    * format is identical, so one minter serves every scoped-token service.
    */
   readonly audience?: string;
@@ -139,7 +139,7 @@ export async function verifyStorageAccessToken(
   return { ok: true, payload };
 }
 
-/** Maps `takos.storage.object` grant scopes (`files:read` / `files:write`) to token verbs. */
+/** Maps `storage.object` grant scopes (`files:read` / `files:write`) to token verbs. */
 export function storageVerbsFromScopes(
   scopes: readonly string[],
 ): readonly StorageTokenVerb[] {
