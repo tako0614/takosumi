@@ -48,14 +48,14 @@ test("output allowlist projection drops optional nested JSON secret material", (
 
 test("output allowlist projection never publishes entries marked sensitive by config", () => {
   const outputs = {
-    storage_token_signing_key: {
+    service_grant_signing_key: {
       sensitive: false,
       value: "raw-signing-key",
     },
   };
   const allowlist = {
-    storage_token_signing_key: {
-      from: "storage_token_signing_key",
+    service_grant_signing_key: {
+      from: "service_grant_signing_key",
       type: "string",
       sensitive: true,
     },
