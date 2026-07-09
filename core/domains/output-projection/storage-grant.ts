@@ -1,5 +1,5 @@
 /**
- * Storage workspace grant resolution.
+ * Storage object grant resolution.
  *
  * The bind-time issuer behind a `storage.object` consume. Given a
  * consumer Capsule's projected service bindings (from {@link projectServicesFromOutputs}
@@ -72,7 +72,7 @@ export interface StorageProducer {
  * Pure: resolve the grant plans a consumer's bindings request against a
  * `storage.object` producer export. Does not mint.
  */
-export function planStorageWorkspaceGrants(
+export function planStorageObjectGrants(
   consumerBindings: readonly ProjectedServiceBinding[],
   producerExport: ProjectedServiceExport,
   context: StorageGrantContext,
@@ -116,13 +116,13 @@ export function planStorageWorkspaceGrants(
  * Resolve + mint. Returns one issued grant per matching consumer binding, each
  * carrying the env map the caller injects into the consumer run.
  */
-export async function issueStorageWorkspaceGrants(
+export async function issueStorageObjectGrants(
   consumerBindings: readonly ProjectedServiceBinding[],
   producer: StorageProducer,
   context: StorageGrantContext,
   options: { readonly now?: () => number } = {},
 ): Promise<readonly IssuedStorageGrant[]> {
-  const plans = planStorageWorkspaceGrants(
+  const plans = planStorageObjectGrants(
     consumerBindings,
     producer.export,
     context,

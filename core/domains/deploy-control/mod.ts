@@ -235,7 +235,7 @@ import {
 } from "./provider_policy.ts";
 import { DriftService } from "./drift_service.ts";
 import { RunCredentialBroker } from "./run_credential_broker.ts";
-import { StorageGrantBroker } from "./storage_grant_broker.ts";
+import { ServiceGrantBroker } from "./service_grant_broker.ts";
 import {
   RunEnvironmentResolutionError,
   RunEnvResolver,
@@ -1129,7 +1129,7 @@ export class OpenTofuDeploymentController {
       credentials: this.#credentials,
       resolveRunInstallationProviderEnvBindings: (planRun) =>
         this.#runEngine.resolveRunInstallationProviderEnvBindings(planRun),
-      storageGrant: new StorageGrantBroker({
+      serviceGrant: new ServiceGrantBroker({
         store: this.#store,
         newId: this.#newId,
         now: this.#now,

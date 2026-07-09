@@ -109,7 +109,7 @@ interface ResolvedProducer {
   readonly export: ProjectedServiceExport;
 }
 
-export interface StorageGrantBrokerDependencies {
+export interface ServiceGrantBrokerDependencies {
   readonly store: OpenTofuDeploymentStore;
   readonly newId: (prefix: string) => string;
   readonly now: () => number;
@@ -117,14 +117,14 @@ export interface StorageGrantBrokerDependencies {
   readonly onSkip?: (reason: string, detail: Record<string, unknown>) => void;
 }
 
-export class StorageGrantBroker {
+export class ServiceGrantBroker {
   readonly #store: OpenTofuDeploymentStore;
   readonly #newId: (prefix: string) => string;
   readonly #now: () => number;
   readonly #sensitiveOutputResolver?: SensitiveOutputResolver;
   readonly #onSkip?: (reason: string, detail: Record<string, unknown>) => void;
 
-  constructor(dependencies: StorageGrantBrokerDependencies) {
+  constructor(dependencies: ServiceGrantBrokerDependencies) {
     this.#store = dependencies.store;
     this.#newId = dependencies.newId;
     this.#now = dependencies.now;
@@ -137,7 +137,7 @@ export class StorageGrantBroker {
    * consumer run consumes, or `undefined` when it consumes none / nothing
    * resolves. Never throws (fail-open).
    */
-  async mintStorageGrantEnv(
+  async mintServiceGrantEnv(
     planRun: PlanRun,
     phase: "plan" | "apply" | "destroy",
     auditRunId: string,
@@ -332,7 +332,7 @@ export class StorageGrantBroker {
           ttlEnforced: true,
           expiresAt: input.expiresAt,
           secretValueStored: false,
-          issuer: "takosumi_storage_scoped_token",
+          issuer: "takosumi_service_scoped_token",
         },
       ],
       createdAt: new Date(this.#now()).toISOString(),
