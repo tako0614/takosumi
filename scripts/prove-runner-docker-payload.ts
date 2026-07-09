@@ -46,6 +46,13 @@ function generatedRoot(): unknown {
   };
 }
 
+function proofSource(): unknown {
+  return {
+    kind: "local",
+    path: "/takosumi-runner-proof/generated-root",
+  };
+}
+
 function planEnvelope(runId: string): unknown {
   return {
     kind: ENVELOPE_KIND,
@@ -54,7 +61,7 @@ function planEnvelope(runId: string): unknown {
     requestedAt: new Date().toISOString(),
     request: {
       generatedRoot: generatedRoot(),
-      planRun: { operation: "create" },
+      planRun: { operation: "create", source: proofSource() },
     },
   };
 }
@@ -71,6 +78,7 @@ function applyEnvelope(runId: string, planDigest: string): unknown {
       // the runner verifies the still-warm /work/<runId>/tfplan against this
       // digest and runs `tofu apply tfplan` against the restored generated root.
       planArtifact: { kind: "runner-local", digest: planDigest },
+      planRun: { operation: "create", source: proofSource() },
     },
   };
 }

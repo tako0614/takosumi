@@ -1490,12 +1490,9 @@ function Inner() {
     names: readonly string[],
   ): string | undefined => names.find(rootModuleHasVariable);
   const standardServiceNameVariables = () =>
-    [
-      "project_name",
-      "public_subdomain",
-      "worker_name",
-      "app_name",
-    ].filter(rootModuleHasVariable);
+    ["project_name", "public_subdomain", "worker_name", "app_name"].filter(
+      rootModuleHasVariable,
+    );
   const standardServiceNameVariable = () =>
     firstRootModuleVariable([
       "project_name",
@@ -1661,14 +1658,21 @@ function Inner() {
     }
     const managedHost = standardManagedHost();
     const managedUrl = standardManagedUrl();
-    setDefault("public_subdomain", serviceName);
-    setDefault("worker_name", serviceName);
-    setDefault("public_url", managedUrl);
-    setDefault("app_url", managedUrl);
-    setDefault(
-      "cloudflare_route_pattern",
-      managedHost ? `${managedHost}/*` : undefined,
-    );
+    const publicSubdomainVariable = standardPublicSubdomainVariable();
+    const publicUrlVariable = standardPublicUrlVariable();
+    const routePatternVariable = standardRoutePatternVariable();
+    if (publicSubdomainVariable) {
+      setDefault(publicSubdomainVariable, serviceName);
+    }
+    if (publicUrlVariable) {
+      setDefault(publicUrlVariable, managedUrl);
+    }
+    if (routePatternVariable) {
+      setDefault(
+        routePatternVariable,
+        managedHost ? `${managedHost}/*` : undefined,
+      );
+    }
     const accountsOrigin = location.origin;
     setDefault("takosumi_accounts_url", accountsOrigin);
     setDefault("takosumi_accounts_issuer_url", accountsOrigin);
