@@ -1,7 +1,7 @@
 /**
  * Storage workspace grant resolution.
  *
- * The bind-time issuer behind a `takos.storage.object` consume. Given a
+ * The bind-time issuer behind a `storage.object` consume. Given a
  * consumer Capsule's projected service bindings (from {@link projectServicesFromOutputs}
  * on the consumer's outputs) and the producer `takos-storage` export + its
  * signing key, this resolves what scoped token(s) to mint and which env vars to
@@ -26,9 +26,9 @@ import type {
 
 export const STORAGE_OBJECT_PUBLICATION = STORAGE_ACCESS_TOKEN_AUDIENCE;
 
-const DEFAULT_URL_ENV = "TAKOS_OBJECT_API_URL";
-const DEFAULT_TOKEN_ENV = "TAKOS_OBJECT_ACCESS_TOKEN";
-const DEFAULT_PREFIX_ENV = "TAKOS_OBJECT_KEY_PREFIX";
+const DEFAULT_URL_ENV = "OBJECT_STORAGE_API_URL";
+const DEFAULT_TOKEN_ENV = "OBJECT_STORAGE_ACCESS_TOKEN";
+const DEFAULT_PREFIX_ENV = "OBJECT_STORAGE_KEY_PREFIX";
 
 export interface StorageGrantPlan {
   /** Publication being satisfied — always {@link STORAGE_OBJECT_PUBLICATION}. */
@@ -70,7 +70,7 @@ export interface StorageProducer {
 
 /**
  * Pure: resolve the grant plans a consumer's bindings request against a
- * `takos.storage.object` producer export. Does not mint.
+ * `storage.object` producer export. Does not mint.
  */
 export function planStorageWorkspaceGrants(
   consumerBindings: readonly ProjectedServiceBinding[],

@@ -16,7 +16,7 @@ const NOW_MS = 1_700_000_000_000;
 const PRODUCER_OUTPUTS = {
   service_exports: [
     {
-      name: "takos.storage.object",
+      name: "storage.object",
       capabilities: ["storage.object", "protocol.http.api"],
       endpoints: [
         {
@@ -39,12 +39,12 @@ const CONSUMER_OUTPUTS = {
         kind: "worker",
         consume: [
           {
-            publication: "takos.storage.object",
+            publication: "storage.object",
             request: { scopes: ["files:read", "files:write"] },
             inject: {
               env: {
-                url: "TAKOS_OBJECT_API_URL",
-                token: "TAKOS_OBJECT_ACCESS_TOKEN",
+                url: "OBJECT_STORAGE_API_URL",
+                token: "OBJECT_STORAGE_ACCESS_TOKEN",
               },
             },
           },
@@ -59,7 +59,7 @@ const IMPOSTOR_KEY = "attacker-controlled-signing-key-99";
 const IMPOSTOR_OUTPUTS = {
   service_exports: [
     {
-      name: "takos.storage.object",
+      name: "storage.object",
       capabilities: ["storage.object", "protocol.http.api"],
       endpoints: [
         {
@@ -182,12 +182,12 @@ describe("StorageGrantBroker", () => {
       "run_audit_1",
     );
     expect(env).toBeDefined();
-    expect(env!.TF_VAR_takos_object_api_url).toBe("https://storage.example/o");
-    expect(env!.TF_VAR_takos_object_key_prefix).toBe(
+    expect(env!.TF_VAR_object_storage_api_url).toBe("https://storage.example/o");
+    expect(env!.TF_VAR_object_storage_key_prefix).toBe(
       `${WORKSPACE_ID}/${CONSUMER_ID}/`,
     );
 
-    const token = env!.TF_VAR_takos_object_access_token!;
+    const token = env!.TF_VAR_object_storage_access_token!;
     const verified = await verifyStorageAccessToken(
       SIGNING_KEY,
       token,
@@ -322,7 +322,7 @@ describe("StorageGrantBroker", () => {
     expect(env).toBeUndefined();
   });
 
-  test("mints a read-only clone grant for a takos.git.hosting consumer", async () => {
+  test("mints a read-only clone grant for a source.git.smart_http consumer", async () => {
     const GIT_PRODUCER_ID = "inst_dddddddddddddddd";
     const state: FakeStoreState = {
       installations: [
@@ -336,7 +336,7 @@ describe("StorageGrantBroker", () => {
         [GIT_PRODUCER_ID]: {
           service_exports: [
             {
-              name: "takos.git.hosting",
+              name: "source.git.smart_http",
               capabilities: ["source.git.smart_http", "protocol.http.api"],
               endpoints: [
                 {
@@ -356,7 +356,7 @@ describe("StorageGrantBroker", () => {
               web: {
                 kind: "worker",
                 consume: [
-                  { publication: "takos.git.hosting", request: { scopes: [] } },
+                  { publication: "source.git.smart_http", request: { scopes: [] } },
                 ],
               },
             },
@@ -371,15 +371,15 @@ describe("StorageGrantBroker", () => {
       "run_git",
     );
     expect(env).toBeDefined();
-    expect(env!.TF_VAR_takos_git_http_url).toBe("https://git.example/git");
-    expect(env!.TF_VAR_takos_git_repo_prefix).toBe(CONSUMER_ID);
+    expect(env!.TF_VAR_git_http_url).toBe("https://git.example/git");
+    expect(env!.TF_VAR_git_repo_prefix).toBe(CONSUMER_ID);
 
-    const payload = decodeTokenPayload(env!.TF_VAR_takos_git_access_token!);
-    expect(payload.aud).toBe("takos.git.hosting");
+    const payload = decodeTokenPayload(env!.TF_VAR_git_access_token!);
+    expect(payload.aud).toBe("source.git.smart_http");
     expect(payload.pfx).toBe(CONSUMER_ID);
     expect(payload.cap).toEqual(["r"]);
     expect(state.mintEvents[0]!.providerCredentialEvidence![0]!.provider).toBe(
-      "takos.git",
+      "source.git.smart_http",
     );
   });
 });
