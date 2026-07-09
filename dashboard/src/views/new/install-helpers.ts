@@ -270,6 +270,11 @@ function addFlowErrorMessage(apiError: ControlApiError | undefined): string {
   if (apiError?.isDuplicateService) {
     return t("new.error.alreadyExistsGeneric");
   }
+  // The controller's "provider connection is required for providers: …" is an
+  // internal sentence — a general user gets the friendly connection ask.
+  if (/provider connection is required/iu.test(apiError?.message ?? "")) {
+    return t("new.error.connectionRequired");
+  }
   const message = safeControlApiErrorMessage(apiError);
   return message
     ? t("new.error.genericWithDetails", { message })
