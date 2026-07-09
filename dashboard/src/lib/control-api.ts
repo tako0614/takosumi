@@ -1170,6 +1170,22 @@ export async function listWorkspaceUsagePage(
   };
 }
 
+/** Per-app showback aggregate (sum of the Capsule's recorded usage). */
+export interface CapsuleUsageSummary {
+  readonly capsuleId: string;
+  readonly usdMicros: number;
+  readonly eventCount: number;
+}
+
+export async function getCapsuleUsageSummary(
+  capsuleId: string,
+): Promise<CapsuleUsageSummary> {
+  const body = await controlFetch<{ summary: CapsuleUsageSummary }>(
+    `${BASE}/capsules/${encodeURIComponent(capsuleId)}/usage-summary`,
+  );
+  return body.summary;
+}
+
 export async function listWorkspaceCreditReservations(
   workspaceId: string,
 ): Promise<readonly CreditReservation[]> {

@@ -387,6 +387,8 @@ export const ja = {
   "app.settings.removeCta": "削除オプションを開く",
   "app.settings.openCta": "設定を開く",
   "app.settings.supportDetails": "参照情報",
+  "app.usage.title": "概算費用（累計）",
+  "app.usage.body": "このアプリの記録済み使用量の合計です。",
   "app.updateNow": "更新する",
   "app.autoUpdate.title": "自動更新",
   "app.autoUpdate.body":

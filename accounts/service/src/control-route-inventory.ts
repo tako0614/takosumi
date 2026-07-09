@@ -191,6 +191,12 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
       auth: "account-session",
     },
     {
+      method: "GET",
+      path: "/api/v1/capsules/{capsuleId}/usage-summary",
+      summary: "Read the Capsule's showback usage aggregate",
+      auth: "account-session",
+    },
+    {
       method: "POST",
       path: "/api/v1/capsules/{capsuleId}/destroy-plan",
       summary: "Create a Capsule destroy plan Run",

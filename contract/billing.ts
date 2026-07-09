@@ -286,6 +286,18 @@ export function usageResourceMetadataLeaksInternalWorkersBackend(
   );
 }
 
+/**
+ * Per-Capsule showback aggregate: the sum of this Capsule's recorded usage
+ * events. A read-only projection for the dashboard's per-app estimated-cost
+ * line; with billing mode `disabled` there are simply no events and the sum
+ * is zero.
+ */
+export interface CapsuleUsageSummary {
+  readonly capsuleId: string;
+  readonly usdMicros: number;
+  readonly eventCount: number;
+}
+
 export interface UsageEvent {
   readonly id: string;
   readonly workspaceId: string;

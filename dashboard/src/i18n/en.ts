@@ -386,6 +386,8 @@ export const en: Record<keyof typeof ja, string> = {
   "app.settings.removeCta": "Open delete options",
   "app.settings.openCta": "Open settings",
   "app.settings.supportDetails": "Reference info",
+  "app.usage.title": "Estimated cost (total)",
+  "app.usage.body": "The sum of this app's recorded usage.",
   "app.updateNow": "Update",
   "app.autoUpdate.title": "Automatic updates",
   "app.autoUpdate.body":

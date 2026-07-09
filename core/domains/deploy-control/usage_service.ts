@@ -28,6 +28,7 @@
 
 import type {
   BillingAccount,
+  CapsuleUsageSummary,
   BillingPlan,
   BillingSettings,
   CreditBalance,
@@ -178,6 +179,36 @@ export class UsageReportingService {
       usageEvents: items,
       ...(nextCursor !== undefined ? { nextCursor } : {}),
     };
+  }
+
+  /**
+   * Per-Capsule showback aggregate (see {@link CapsuleUsageSummary}). Reads
+   * the owner billing subject's usage ledger and sums the events attributed
+   * to this Capsule; USD micros come through {@link usageEventUsdMicros} so
+   * legacy credit-denominated rows count too.
+   */
+  async getCapsuleUsageSummary(
+    capsuleId: string,
+  ): Promise<CapsuleUsageSummary> {
+    requireNonEmptyString(capsuleId, "capsuleId");
+    const capsule = await this.#store.getInstallation(capsuleId);
+    if (!capsule) {
+      throw new OpenTofuControllerError(
+        "not_found",
+        `capsule ${capsuleId} not found`,
+      );
+    }
+    const spaceId = capsule.workspaceId ?? capsule.spaceId ?? "";
+    const { billingSubjectId } = await this.#billingSubjectForSpace(spaceId);
+    const events = await this.#store.listUsageEvents(billingSubjectId);
+    let usdMicros = 0;
+    let eventCount = 0;
+    for (const event of events) {
+      if ((event.capsuleId ?? event.installationId) !== capsuleId) continue;
+      usdMicros += usageEventUsdMicros(event);
+      eventCount += 1;
+    }
+    return { capsuleId, usdMicros, eventCount };
   }
 
   async recordMeteredUsage(
