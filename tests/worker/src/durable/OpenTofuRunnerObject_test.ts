@@ -99,6 +99,75 @@ test("OpenTofu runner Durable Object promotes runner-local plan artifact to R2",
   assert.notDeepEqual(encrypted, PLAN_BYTES);
 });
 
+test("OpenTofu runner Durable Object skips oversized plan JSON artifacts", async () => {
+  const calls: string[] = [];
+  const r2 = new FakeR2Bucket();
+  const runner = runnerWithContainer(r2, {
+    async containerFetch(request) {
+      calls.push(`${request.method} ${new URL(request.url).pathname}`);
+      const path = new URL(request.url).pathname;
+      if (request.method === "POST" && path === "/runs/plan_large_json") {
+        return Response.json({
+          status: "succeeded",
+          exitCode: 0,
+          planDigest: PLAN_DIGEST,
+          planArtifact: {
+            kind: "runner-local",
+            ref: "runner-local://plan_large_json/tfplan",
+            digest: PLAN_DIGEST,
+            contentType: "application/vnd.opentofu.plan",
+          },
+        });
+      }
+      if (
+        request.method === "GET" &&
+        path === "/runs/plan_large_json/artifacts/tfplan"
+      ) {
+        return new Response(PLAN_BYTES, {
+          headers: { "content-type": "application/vnd.opentofu.plan" },
+        });
+      }
+      if (
+        request.method === "GET" &&
+        path === "/runs/plan_large_json/artifacts/tfplan-json"
+      ) {
+        return new Response("{}", {
+          headers: {
+            "content-type": "application/json",
+            "content-length": String(2 * 1024 * 1024 + 1),
+          },
+        });
+      }
+      return Response.json({ error: "unexpected" }, { status: 500 });
+    },
+  });
+
+  const response = await runner.fetch(
+    new Request("https://runner/runs/plan_large_json", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        kind: "takosumi.opentofu-run@v1",
+        action: "plan",
+        runId: "plan_large_json",
+        request: {},
+      }),
+    }),
+  );
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(calls, [
+    "POST /runs/plan_large_json",
+    "GET /runs/plan_large_json/artifacts/tfplan",
+    "GET /runs/plan_large_json/artifacts/tfplan-json",
+  ]);
+  assert.ok(r2.body("opentofu-plan-runs/plan_large_json/tfplan.enc"));
+  assert.equal(
+    r2.body("opentofu-plan-runs/plan_large_json/tfplan.json.enc"),
+    undefined,
+  );
+});
+
 test("OpenTofu runner Durable Object strips caller credentials before container dispatch", async () => {
   const capturedHeaders: Headers[] = [];
   const r2 = new FakeR2Bucket();
