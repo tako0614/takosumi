@@ -259,10 +259,15 @@ function Inner() {
     for (const inst of visibleCapsules()) {
       const surfaces = map.get(inst.id);
       if (!surfaces) {
+        // Every installed service gets a tile — one concept, not アプリ vs
+        // サービス. Without a declared surface the tile has no launch URL, so
+        // tapping it opens the service screen instead of an app window.
         const fallback = fallbackSurfaceForCapsule(inst);
-        if (fallback) {
-          tiles.push({ inst, surface: fallback, key: `${inst.id}:store` });
-        }
+        tiles.push({
+          inst,
+          surface: fallback ?? { name: inst.name },
+          key: `${inst.id}:store`,
+        });
         continue;
       }
       surfaces.forEach((surface, i) =>
