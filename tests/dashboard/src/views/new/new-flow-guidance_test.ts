@@ -226,8 +226,8 @@ describe("/new flow guidance", () => {
   test("known Git sources keep app store metadata even when ref differs", () => {
     expect(newAppViewSource).toContain("storeListingForCurrentSource");
     expect(newAppViewSource).toContain("storeListingMatchesCurrentSource");
-    // Install metadata comes from repo-owned metadata hydrated onto the picked
-    // store listing, not a hardcoded local store.
+    // Presentation metadata comes from repo-owned metadata hydrated onto the
+    // picked store listing, not a hardcoded local store.
     expect(newAppViewSource).toContain("selectedStoreListing()");
     expect(newAppViewSource).toContain("hydrateTcsListingWithRepoMetadata");
     expect(newAppViewSource).toContain("hydrateStoreListing");
@@ -243,8 +243,8 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain(
       "const listing = storeListingForCurrentSource()",
     );
-    expect(newAppViewSource).toContain("listing.installExperience");
-    expect(newAppViewSource).toContain(
+    expect(newAppViewSource).toContain("storeMetadataFromStoreListing");
+    expect(newAppViewSource).not.toContain(
       "{ installExperience: listing.installExperience }",
     );
     expect(newAppViewSource).not.toContain(
@@ -266,12 +266,17 @@ describe("/new flow guidance", () => {
     );
   });
 
-  test("known Git sources carry store default variables into the Capsule run", () => {
-    expect(newAppViewSource).toContain("storeListingDefaultVariables");
-    expect(newAppViewSource).toContain("storeServiceNameDefault");
-    expect(newAppViewSource).toContain("storeServiceNameVariable");
+  test("known Git sources derive setup defaults from root module variables", () => {
+    expect(newAppViewSource).toContain("standardCapsuleVariableDefaults");
+    expect(newAppViewSource).toContain("rootModuleVariables");
+    expect(newAppViewSource).toContain("standardServiceNameVariable");
+    expect(newAppViewSource).toContain("standardPublicSubdomainVariable");
+    expect(newAppViewSource).toContain("standardPublicUrlVariable");
     expect(newAppViewSource).toContain(
       "serviceNameHintIsGenerated(storeServiceNameDefault())",
+    );
+    expect(newAppViewSource).toContain(
+      "Object.assign(variables, standardCapsuleVariableDefaults(variables))",
     );
     expect(newAppViewSource).toContain(
       "...storeListingDefaultVariables(),\n      ...(currentInstallPrefill()?.vars ?? {})",
@@ -344,7 +349,7 @@ describe("/new flow guidance", () => {
   test("/new sources installable apps from the store, not a hardcoded store", () => {
     // The dashboard-local installable-app-listings.ts is retired; discovery is
     // served by the takosumi-store node(s); the picked listing is hydrated from
-    // repo-owned metadata for setup inputs and installExperience.
+    // repo-owned presentation metadata.
     expect(newAppViewSource).not.toContain("installable-app-listings");
     expect(newAppViewSource).not.toContain("installableAppStoreListings");
     expect(newAppViewSource).not.toContain("localStoreListings");
@@ -472,11 +477,11 @@ describe("/new flow guidance", () => {
 
   test("service setup defaults managed domains without app-specific branches", () => {
     expect(newAppViewSource).toContain("serviceIdSeed");
-    expect(newAppViewSource).toContain("storePublicEndpoint(entry)");
-    expect(newAppViewSource).toContain('field.format === "subdomain"');
-    expect(newAppViewSource).toContain(
-      "...(input.format ? { format: input.format } : {})",
-    );
+    expect(newAppViewSource).toContain("standardManagedHost");
+    expect(newAppViewSource).toContain("standardManagedUrl");
+    expect(newAppViewSource).toContain("standardPublicSubdomainVariable");
+    expect(newAppViewSource).toContain("standardPublicUrlVariable");
+    expect(newAppViewSource).toContain("standardRoutePatternVariable");
     expect(newAppViewSource).toContain("canSuggestPublicHostname");
     expect(newAppViewSource).toContain("storePublicEndpointSubdomainField");
     expect(newAppViewSource).toContain("hostIsManagedBaseDomainSubdomain");
