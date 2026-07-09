@@ -252,6 +252,14 @@ export interface PlanRun {
   readonly compatibilityReportId?: string;
   readonly summary?: PlanRunSummary;
   /**
+   * Server-side auto-continue requested at creation (the auto-update
+   * pipeline). When the plan completes CLEAN (`succeeded` — approval-parked or
+   * policy-blocked plans never do), the queue consumer creates the apply run
+   * itself instead of waiting for a client. Never set on destroy or
+   * drift-check runs.
+   */
+  readonly autoApplyRequested?: boolean;
+  /**
    * Value-free resource/action projection from the runner's plan JSON. This is
    * persisted for policy, billing, audit, and public review; raw resource
    * values stay only in the encrypted plan JSON artifact.

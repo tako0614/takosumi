@@ -216,11 +216,13 @@ export interface ControlPlaneOperations {
       readonly environment: string;
       readonly sourceId: string;
       readonly installConfigId: string;
+      readonly autoUpdate?: boolean;
     }): Promise<Capsule>;
     putInstallConfig(config: InstallConfig): Promise<InstallConfig>;
     getInstallConfig(id: string): Promise<InstallConfig>;
     listInstallConfigs(workspaceId?: string): Promise<readonly InstallConfig[]>;
     patchCapsuleStatus(id: string, status: Capsule["status"]): Promise<Capsule>;
+    setCapsuleAutoUpdate(id: string, enabled: boolean): Promise<Capsule>;
     abandonUnappliedCapsule?(
       id: string,
       reason: string,

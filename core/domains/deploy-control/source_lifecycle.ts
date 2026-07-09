@@ -23,6 +23,7 @@
  */
 
 import type { RunStatus } from "@takosumi/internal/deploy-control-api";
+import type { Capsule as Installation } from "takosumi-contract/capsules";
 import type {
   MintResponse,
   SourceSnapshot,
@@ -58,6 +59,16 @@ export interface SourceLifecycleServiceDependencies {
     status: RunStatus,
     heartbeatAt: number | undefined,
   ) => boolean;
+  /**
+   * Invoked after a Capsule is marked `stale` because its Source resolved a
+   * new snapshot. The controller wires this to the auto-update pipeline
+   * (create an update plan that auto-applies when clean). Failures are the
+   * callee's to swallow — a broken hook must never fail the source sync.
+   */
+  readonly onCapsuleStaleForNewSnapshot?: (input: {
+    readonly capsule: Installation;
+    readonly snapshot: SourceSnapshot;
+  }) => Promise<void>;
 }
 
 /**
@@ -76,6 +87,10 @@ export class SourceLifecycleService {
     status: RunStatus,
     heartbeatAt: number | undefined,
   ) => boolean;
+  readonly #onCapsuleStaleForNewSnapshot?: (input: {
+    readonly capsule: Installation;
+    readonly snapshot: SourceSnapshot;
+  }) => Promise<void>;
 
   constructor(dependencies: SourceLifecycleServiceDependencies) {
     this.#store = dependencies.store;
@@ -86,6 +101,8 @@ export class SourceLifecycleService {
     this.#runner = dependencies.runner;
     this.#requireVault = dependencies.requireVault;
     this.#shouldProcessRun = dependencies.shouldProcessRun;
+    this.#onCapsuleStaleForNewSnapshot =
+      dependencies.onCapsuleStaleForNewSnapshot;
   }
 
   /**
@@ -355,6 +372,12 @@ export class SourceLifecycleService {
           path: input.running.path,
         },
         createdAt: input.finishedAtIso,
+      });
+      // Auto-update hook: the controller decides (autoUpdate opt-in +
+      // one-attempt-per-snapshot backoff) and enqueues the update plan.
+      await this.#onCapsuleStaleForNewSnapshot?.({
+        capsule,
+        snapshot: input.snapshot,
       });
     }
   }
