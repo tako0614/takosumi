@@ -123,7 +123,7 @@ cd takosumi
 bun run operator:release-activator -- serve \
   --source-bucket "$TAKOSUMI_RELEASE_SOURCE_BUCKET" \
   --wrangler-config "$TAKOSUMI_RELEASE_WRANGLER_CONFIG" \
-  --command-env-allowlist CLOUDFLARE_API_TOKEN,CLOUDFLARE_ACCOUNT_ID,CLOUDFLARE_CONTAINERS_API_TOKEN
+  --command-env-allowlist CLOUDFLARE_API_TOKEN,CLOUDFLARE_ACCOUNT_ID,TAKOSUMI_CLOUDFLARE_ACCOUNT_ID,CLOUDFLARE_CONTAINERS_API_TOKEN
 ```
 
 It fetches the SourceSnapshot archive from R2, verifies the recorded digest,
