@@ -113,7 +113,12 @@ export default function ConnectionsTab(props: { readonly workspaceId: string }) 
   };
 
   const afterConnectionCreated = async (connection: Connection) => {
-    setLastCreatedConnectionName(connection.displayName ?? connection.id);
+    // Never show a raw conn_… id in the toast — fall back to the provider name.
+    setLastCreatedConnectionName(
+      connection.displayName ||
+        providerDescriptor(connection.provider)?.label ||
+        connection.provider,
+    );
     setLastCreatedConnectionId(connection.id);
     setLastCreatedVerifiedHint(false);
     clearForm();
