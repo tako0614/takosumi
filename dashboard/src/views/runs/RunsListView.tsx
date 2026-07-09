@@ -96,7 +96,7 @@ function Inner() {
                     title={t("runList.empty.title")}
                     message={t("runList.empty.message")}
                     action={
-                      <Button variant="primary" href="/new">
+                      <Button variant="primary" href="/store">
                         {t("apps.add")}
                       </Button>
                     }
@@ -141,7 +141,9 @@ function RunHistoryRowView(props: { readonly row: RunHistoryRow }) {
         size="sm"
         href={`/runs/${encodeURIComponent(props.row.runId)}`}
       >
-        {t("runList.open")}
+        {props.row.status === "waiting_approval"
+          ? t("runList.review")
+          : t("runList.open")}
       </Button>
     </li>
   );
