@@ -166,12 +166,7 @@ function Inner() {
   const activityWorkspaceId = () => {
     const id = workspaceId();
     if (!id) return null;
-    if (tab() === "deploys") return id;
-    const outputs = currentDeployment()?.outputsPublic;
-    return outputs &&
-      Object.prototype.hasOwnProperty.call(outputs, "takosumi_release")
-      ? id
-      : null;
+    return tab() === "deploys" || currentDeployment() ? id : null;
   };
   const [activity] = createResource(activityWorkspaceId, (id) =>
     listActivity(id, 100),

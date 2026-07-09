@@ -4043,7 +4043,7 @@ test("POST /api/v1/workspaces/:id/capsules hydrates thin Store listings from rep
         installConfigId: "cfg_x",
         store: {
           source: {
-            git: "https://github.com/tako0614/takos-git.git",
+            git: "https://github.com/example/stale-listing.git",
             path: ".",
           },
           order: 1000,
@@ -4077,6 +4077,7 @@ test("POST /api/v1/workspaces/:id/capsules hydrates thin Store listings from rep
   const config = operations.calls.putInstallConfig?.[0] as {
     variableMapping: Record<string, unknown>;
     store?: {
+      source?: { git?: string; path?: string };
       inputs?: Array<{ name: string }>;
       installExperience?: { projections?: Array<{ kind: string }> };
     };
@@ -4086,6 +4087,10 @@ test("POST /api/v1/workspaces/:id/capsules hydrates thin Store listings from rep
     "project_name",
     "worker_name",
   ]);
+  expect(config.store?.source).toEqual({
+    git: "https://github.com/tako0614/takos-git.git",
+    path: ".",
+  });
   expect(
     config.store?.installExperience?.projections?.some(
       (projection) => projection.kind === "public_endpoint",
