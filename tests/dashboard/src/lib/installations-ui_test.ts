@@ -222,6 +222,13 @@ describe("release activation launch gating", () => {
       },
     },
   };
+  const hiddenReleaseDeployment = {
+    ...deployment,
+    outputsPublic: {
+      app_name: "Yurucommu",
+      launch_url: "https://yuru.test/",
+    },
+  };
 
   function activity(
     action: string,
@@ -264,6 +271,37 @@ describe("release activation launch gating", () => {
     expect(launchUrlFromDeployment(deployment, events, "cap_1")).toBe(
       "https://yuru.test/",
     );
+  });
+
+  test("uses release activity when takosumi_release is hidden from public outputs", () => {
+    const events = [activity("release_activation.pending")];
+    expect(
+      releaseActivationStatusForDeployment(
+        hiddenReleaseDeployment,
+        events,
+        "cap_1",
+      ),
+    ).toBe("pending");
+    expect(
+      isDeploymentPubliclyOpenable(hiddenReleaseDeployment, events, "cap_1"),
+    ).toBe(false);
+    expect(
+      launchUrlFromDeployment(hiddenReleaseDeployment, events, "cap_1"),
+    ).toBeUndefined();
+  });
+
+  test("opens hidden-release deployments after matching release activity succeeds", () => {
+    const events = [activity("release_activation.succeeded")];
+    expect(
+      releaseActivationStatusForDeployment(
+        hiddenReleaseDeployment,
+        events,
+        "cap_1",
+      ),
+    ).toBe("succeeded");
+    expect(
+      launchUrlFromDeployment(hiddenReleaseDeployment, events, "cap_1"),
+    ).toBe("https://yuru.test/");
   });
 
   test("keeps launcher tiles on the service screen while activation is pending", () => {
