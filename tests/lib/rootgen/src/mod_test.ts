@@ -494,8 +494,8 @@ test("generateGenericCapsuleRoot marks sensitive output allowlist entries", () =
     requiredProviders: [],
     inputs: {},
     outputAllowlist: {
-      storage_token_signing_key: {
-        from: "storage_token_signing_key",
+      service_grant_signing_key: {
+        from: "service_grant_signing_key",
         type: "json",
         sensitive: true,
       },
@@ -505,8 +505,8 @@ test("generateGenericCapsuleRoot marks sensitive output allowlist entries", () =
 
   expect(files["outputs.tf"]).toContain(
     [
-      'output "storage_token_signing_key" {',
-      "  value = try(module.app.storage_token_signing_key, \"\")",
+      'output "service_grant_signing_key" {',
+      "  value = try(module.app.service_grant_signing_key, \"\")",
       "  sensitive = true",
       "}",
     ].join("\n"),

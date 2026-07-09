@@ -33,7 +33,7 @@ output "launch_url" {
   value = local.launch_url
 }
 
-output "storage_token_signing_key" {
+output "service_grant_signing_key" {
   value     = local.signing_key
   sensitive = true
 }
@@ -51,7 +51,7 @@ output "ignored_child_output" {
     ]),
   ).toEqual([
     { name: "launch_url", sensitive: false },
-    { name: "storage_token_signing_key", sensitive: true },
+    { name: "service_grant_signing_key", sensitive: true },
   ]);
 });
 
