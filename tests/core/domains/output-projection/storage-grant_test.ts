@@ -9,11 +9,11 @@ import {
 
 const SIGNING_KEY = "producer-signing-key-0011223344";
 
-// The takos-storage producer's service_exports output.
+// The storage producer's service_exports output.
 const PRODUCER_OUTPUTS = {
   service_exports: [
     {
-      name: "takos.storage.object",
+      name: "storage.object",
       capabilities: ["storage.object", "protocol.http.api"],
       endpoints: [
         {
@@ -28,7 +28,7 @@ const PRODUCER_OUTPUTS = {
   ],
 };
 
-// A takos-office-shaped consumer that consumes the workspace storage.
+// A consumer that consumes object storage.
 const CONSUMER_OUTPUTS = {
   app_deployment: {
     name: "takos-office",
@@ -37,12 +37,12 @@ const CONSUMER_OUTPUTS = {
         kind: "worker",
         consume: [
           {
-            publication: "takos.storage.object",
+            publication: "storage.object",
             request: { scopes: ["files:read", "files:write"] },
             inject: {
               env: {
-                url: "TAKOS_OBJECT_API_URL",
-                token: "TAKOS_OBJECT_ACCESS_TOKEN",
+                url: "OBJECT_STORAGE_API_URL",
+                token: "OBJECT_STORAGE_ACCESS_TOKEN",
               },
             },
           },
@@ -82,8 +82,8 @@ describe("storage workspace grant resolution", () => {
     expect(plan.apiUrl).toBe("https://storage.example/o");
     expect(plan.prefix).toBe("space_00112233aabbccdd/inst_0011223344556677/");
     expect(plan.verbs).toEqual(["r", "l", "w", "d"]);
-    expect(plan.urlEnvVar).toBe("TAKOS_OBJECT_API_URL");
-    expect(plan.tokenEnvVar).toBe("TAKOS_OBJECT_ACCESS_TOKEN");
+    expect(plan.urlEnvVar).toBe("OBJECT_STORAGE_API_URL");
+    expect(plan.tokenEnvVar).toBe("OBJECT_STORAGE_ACCESS_TOKEN");
   });
 
   test("issues an injectable env map with a verifiable token", async () => {
@@ -95,14 +95,14 @@ describe("storage workspace grant resolution", () => {
     );
     expect(grants).toHaveLength(1);
     const grant = grants[0]!;
-    expect(grant.injectEnv.TAKOS_OBJECT_API_URL).toBe(
+    expect(grant.injectEnv.OBJECT_STORAGE_API_URL).toBe(
       "https://storage.example/o",
     );
-    expect(grant.injectEnv.TAKOS_OBJECT_KEY_PREFIX).toBe(
+    expect(grant.injectEnv.OBJECT_STORAGE_KEY_PREFIX).toBe(
       "space_00112233aabbccdd/inst_0011223344556677/",
     );
 
-    const token = grant.injectEnv.TAKOS_OBJECT_ACCESS_TOKEN!;
+    const token = grant.injectEnv.OBJECT_STORAGE_ACCESS_TOKEN!;
     // The producer Worker verifies with the same key + format.
     const verified = await verifyStorageAccessToken(
       SIGNING_KEY,

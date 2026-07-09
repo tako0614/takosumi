@@ -1,6 +1,6 @@
 /**
- * Scoped-token grant broker — the bind-time issuer behind a `takos.storage.object`
- * (object store) or `takos.git.hosting` (git) consume.
+ * Scoped-token grant broker — the bind-time issuer behind a `storage.object`
+ * (object store) or `source.git.smart_http` (git) consume.
  *
  * When a CONSUMER installation runs, for each scoped-token capability it consumes
  * this: reads the consumer's LATEST OutputSnapshot service bindings, finds the
@@ -68,33 +68,33 @@ interface GrantSpec {
 
 const GRANT_SPECS: readonly GrantSpec[] = [
   {
-    publication: "takos.storage.object",
+    publication: "storage.object",
     capability: "storage.object",
-    signingKeyOutput: "takos_storage_signing_key",
-    audience: "takos.storage.object",
-    evidenceProvider: "takos.storage",
+    signingKeyOutput: "storage_token_signing_key",
+    audience: "storage.object",
+    evidenceProvider: "storage.object",
     prefix: (ws, inst) => `${ws}/${inst}/`,
     verbs: (binding) => storageVerbsFromScopes(binding.grantRequest.scopes),
     env: (grant) => ({
-      TF_VAR_takos_object_access_token: grant.token,
-      TF_VAR_takos_object_key_prefix: grant.prefix,
-      ...(grant.url ? { TF_VAR_takos_object_api_url: grant.url } : {}),
+      TF_VAR_object_storage_access_token: grant.token,
+      TF_VAR_object_storage_key_prefix: grant.prefix,
+      ...(grant.url ? { TF_VAR_object_storage_api_url: grant.url } : {}),
     }),
   },
   {
-    publication: "takos.git.hosting",
+    publication: "source.git.smart_http",
     capability: "source.git.smart_http",
-    signingKeyOutput: "takos_git_signing_key",
-    audience: "takos.git.hosting",
-    evidenceProvider: "takos.git",
+    signingKeyOutput: "git_token_signing_key",
+    audience: "source.git.smart_http",
+    evidenceProvider: "source.git.smart_http",
     // The consumer's repos live under its own installation id namespace.
     prefix: (_ws, inst) => inst,
     // Read-only clone/fetch for P1 (push is deferred).
     verbs: () => ["r"],
     env: (grant) => ({
-      TF_VAR_takos_git_access_token: grant.token,
-      TF_VAR_takos_git_repo_prefix: grant.prefix,
-      ...(grant.url ? { TF_VAR_takos_git_http_url: grant.url } : {}),
+      TF_VAR_git_access_token: grant.token,
+      TF_VAR_git_repo_prefix: grant.prefix,
+      ...(grant.url ? { TF_VAR_git_http_url: grant.url } : {}),
     }),
   },
 ];

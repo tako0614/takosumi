@@ -494,8 +494,8 @@ test("generateGenericCapsuleRoot marks sensitive output allowlist entries", () =
     requiredProviders: [],
     inputs: {},
     outputAllowlist: {
-      takos_storage_signing_key: {
-        from: "takos_storage_signing_key",
+      storage_token_signing_key: {
+        from: "storage_token_signing_key",
         type: "json",
         sensitive: true,
       },
@@ -505,8 +505,8 @@ test("generateGenericCapsuleRoot marks sensitive output allowlist entries", () =
 
   expect(files["outputs.tf"]).toContain(
     [
-      'output "takos_storage_signing_key" {',
-      "  value = try(module.app.takos_storage_signing_key, \"\")",
+      'output "storage_token_signing_key" {',
+      "  value = try(module.app.storage_token_signing_key, \"\")",
       "  sensitive = true",
       "}",
     ].join("\n"),
