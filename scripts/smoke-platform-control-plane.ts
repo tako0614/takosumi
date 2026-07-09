@@ -197,6 +197,7 @@ export interface PlatformControlPlaneSmokeOptions {
   readonly deployTimeoutSeconds: number;
   readonly pollIntervalMs: number;
   readonly dryRun: boolean;
+  readonly noDefaultVars: boolean;
   readonly json: boolean;
   readonly outFile?: string;
   readonly requireReleaseActivation?: ReleaseActivationRequirement;
@@ -289,6 +290,7 @@ interface CliArgs {
   readonly help?: boolean;
   readonly selfTest?: boolean;
   readonly dryRun?: boolean;
+  readonly noDefaultVars?: boolean;
   readonly json?: boolean;
   readonly outFile?: string;
   readonly keepConnection?: boolean;
@@ -725,7 +727,8 @@ export async function resolveOptions(
     fallback: {},
   });
   const defaultVars =
-    providerlessOpenTofuSmoke && Object.keys(explicitVars).length > 0
+    args.noDefaultVars === true ||
+    (providerlessOpenTofuSmoke && Object.keys(explicitVars).length > 0)
       ? {}
       : defaultSmokeVars({
           accountId: cloudflareAccountId.value,
@@ -830,6 +833,7 @@ export async function resolveOptions(
       2_000,
     ),
     dryRun: args.dryRun === true,
+    noDefaultVars: args.noDefaultVars === true,
     json: args.json === true,
     ...(args.outFile ? { outFile: resolve(args.outFile) } : {}),
     ...(requireReleaseActivation ? { requireReleaseActivation } : {}),
@@ -4445,6 +4449,38 @@ async function runSelfTest(): Promise<void> {
   ) {
     throw new Error("Takos module defaults did not set cloudflare object");
   }
+  const customModuleOptions = await resolveOptions(
+    {
+      dryRun: true,
+      url: "https://app-staging.takosumi.com",
+      workspace: "space_selftest",
+      cloudflareAccountIdFile: "/private/cloudflare-account-id",
+      cloudflareWorkersSubdomainFile: "/private/cloudflare-workers-subdomain",
+      appName: "custom-module-selftest",
+      ensureSpace: true,
+      sessionTokenFile: "/private/account-session-token",
+      cloudflareApiTokenFile: "/private/cloudflare-token",
+      sourceGitUrl: "https://github.com/example/custom.git",
+      sourcePath: ".",
+      varsJson:
+        '{"enable_cloudflare_resources":true,"cloudflare_account_id":"acc_selftest","project_name":"custom-module-selftest"}',
+      noDefaultVars: true,
+      verificationMode: "opentofu",
+    },
+    {},
+  );
+  if (
+    "target" in customModuleOptions.vars ||
+    "cloudflare" in customModuleOptions.vars
+  ) {
+    throw new Error("no-default-vars self-test leaked smoke defaults");
+  }
+  if (
+    customModuleOptions.vars.project_name !== "custom-module-selftest" ||
+    customModuleOptions.vars.enable_cloudflare_resources !== true
+  ) {
+    throw new Error("no-default-vars self-test lost explicit vars");
+  }
   const gitOptions = await resolveOptions(
     {
       dryRun: true,
@@ -4783,6 +4819,7 @@ Options:
   --verification-mode <cloudflare-worker|opentofu> default cloudflare-worker; opentofu verifies plan/apply/destroy without public Worker checks
   --vars-json <json>                              OpenTofu variable object passed to the generated root
   --vars-json-file <path>                         read OpenTofu variable object from a JSON file
+  --no-default-vars                               do not merge smoke default variables into --vars-json
   --output-allowlist-json <json>                  output projection object; default url + worker_name for the hello-worker smoke
   --output-allowlist-json-file <path>             read output projection object from a JSON file
   --public-url-checks-json <json>                 optional array of {output,path,expectedStatus,bodyIncludes[]} checks against allowlisted public URL outputs
