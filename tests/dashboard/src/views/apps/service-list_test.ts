@@ -37,6 +37,9 @@ describe("ServiceListView (/services)", () => {
     expect(serviceListSource).toContain('class="av-service-row-delete"');
     expect(serviceListSource).toContain('t("common.delete")');
     expect(serviceListSource).toContain('t("app.danger.destroyTitle")');
+    // Rows repeat the same visible "削除"; the accessible name carries the
+    // service so the links are distinguishable to AT.
+    expect(serviceListSource).toContain('t("services.deleteAria"');
   });
 
   test("is wired to /services, distinct from the Apps home and the detail", () => {

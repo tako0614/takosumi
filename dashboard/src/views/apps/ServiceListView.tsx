@@ -94,6 +94,9 @@ function Inner() {
 
   return (
     <>
+      {/* Title lives in the top bar (outside the page outline), so give the
+          document outline a heading root without repeating it visually. */}
+      <h1 class="sr-only">{t("services.title")}</h1>
       {/* Title lives in the top bar; this slim toolbar carries the page's
           context line + the add action. */}
       <div class="av-list-toolbar">
@@ -163,6 +166,11 @@ function Inner() {
                           class="av-service-row-delete"
                           href={deleteHref(inst)}
                           title={t("app.danger.destroyTitle")}
+                          // Every row repeats the same visible "削除"; the
+                          // accessible name says which service it deletes.
+                          aria-label={t("services.deleteAria", {
+                            name: inst.name,
+                          })}
                         >
                           <Trash2 size={15} aria-hidden="true" />
                           <span>{t("common.delete")}</span>

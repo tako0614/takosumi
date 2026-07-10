@@ -96,7 +96,9 @@ export default function Button(props: Props): JSX.Element {
       <Dynamic
         component="a"
         {...(rest as Record<string, unknown>)}
-        href={local.href}
+        // A disabled/busy link-button must not activate: an anchor without
+        // href is neither focusable nor followable, so drop it entirely.
+        href={local.disabled || local.busy ? undefined : local.href}
         class={cls()}
         aria-disabled={local.disabled || local.busy ? "true" : undefined}
       >

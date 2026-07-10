@@ -5,6 +5,7 @@ import {
   useConfirmDialogActions,
   useConfirmDialogState,
 } from "../lib/confirm-dialog.ts";
+import { inertBackground } from "../lib/modal-inert.ts";
 
 /**
  * Self-contained confirm-dialog renderer for the Takosumi dashboard SPA.
@@ -20,15 +21,18 @@ import {
 export function ConfirmDialogRenderer() {
   const state = useConfirmDialogState();
   const { handleConfirm, handleCancel } = useConfirmDialogActions();
+  let overlayRef: HTMLDivElement | undefined;
   let cardRef: HTMLDivElement | undefined;
   let cancelRef: HTMLButtonElement | undefined;
 
-  // aria-modal contract: while open, focus moves INTO the dialog (so Escape
-  // and Tab actually reach it), Tab cycles inside, Escape cancels, and focus
-  // returns to the previously-focused element on close.
+  // aria-modal contract: while open, the backgrounded app is inert, focus
+  // moves INTO the dialog (so Escape and Tab actually reach it), Tab cycles
+  // inside, Escape cancels, and focus returns to the previously-focused
+  // element on close.
   createEffect(() => {
     if (!state().isOpen) return;
     const previous = document.activeElement as HTMLElement | null;
+    const restoreInert = overlayRef ? inertBackground(overlayRef) : undefined;
     queueMicrotask(() => cancelRef?.focus());
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -55,6 +59,8 @@ export function ConfirmDialogRenderer() {
     document.addEventListener("keydown", onKeyDown);
     onCleanup(() => {
       document.removeEventListener("keydown", onKeyDown);
+      // Restore before refocusing: an inert element refuses focus.
+      restoreInert?.();
       previous?.focus?.();
     });
   });
@@ -66,6 +72,7 @@ export function ConfirmDialogRenderer() {
         role="dialog"
         aria-modal="true"
         aria-label={state().title}
+        ref={overlayRef}
         onClick={(e) => {
           if (e.target === e.currentTarget) handleCancel();
         }}

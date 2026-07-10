@@ -13,7 +13,7 @@ import Button from "../components/ui/Button.tsx";
 export default function NotFoundView() {
   onMount(() => setDocumentTitle(t("notFound.title")));
   return (
-    <div class="auth-page">
+    <main class="auth-page">
       <div class="sign-in-panel notfound-panel">
         <Compass size={40} aria-hidden="true" />
         <h1 class="sign-in-title">{t("notFound.title")}</h1>
@@ -22,6 +22,6 @@ export default function NotFoundView() {
           {t("notFound.goHome")}
         </Button>
       </div>
-    </div>
+    </main>
   );
 }

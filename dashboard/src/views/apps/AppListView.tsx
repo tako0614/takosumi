@@ -426,7 +426,8 @@ function AppLauncher(props: {
   return (
     <>
       <div class="av-section-head">
-        <h2>{t("apps.sectionYours")}</h2>
+        {/* Top heading of the launcher page — h1, the page has no other. */}
+        <h1>{t("apps.sectionYours")}</h1>
         <span class="av-section-head-count">{props.tiles.length}</span>
       </div>
       <ul class="av-launcher">
@@ -603,4 +604,3 @@ function WorkspaceStartPanel() {
     </section>
   );
 }
-

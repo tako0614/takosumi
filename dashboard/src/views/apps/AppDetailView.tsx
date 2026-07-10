@@ -431,9 +431,7 @@ function Inner() {
                       producers={producers()}
                       consumers={consumers()}
                     />
-                    <Show
-                      when={(usageSummary()?.eventCount ?? 0) > 0}
-                    >
+                    <Show when={(usageSummary()?.eventCount ?? 0) > 0}>
                       <Card>
                         <CardHeader
                           title={t("app.usage.title")}
@@ -695,7 +693,8 @@ function DependencyList(props: {
 }) {
   return (
     <div>
-      <h4>{props.title}</h4>
+      {/* h2, not h4: the page h1 is the only heading above this one. */}
+      <h2>{props.title}</h2>
       <Show
         when={props.rows.length > 0}
         fallback={<p class="muted">{t("common.none")}</p>}

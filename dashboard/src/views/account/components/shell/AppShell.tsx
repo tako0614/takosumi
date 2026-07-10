@@ -1,4 +1,5 @@
-import type { JSX } from "solid-js";
+import { createEffect, type JSX, on } from "solid-js";
+import { useLocation } from "@solidjs/router";
 import Sidebar from "./Sidebar.tsx";
 import TopBar from "./TopBar.tsx";
 import MobileTabs from "./MobileTabs.tsx";
@@ -24,6 +25,18 @@ interface Props {
  * the sidebar restores the wayfinding the chromeless shell had removed.
  */
 export default function AppShell(props: Props) {
+  const location = useLocation();
+  let mainRef: HTMLElement | undefined;
+  // On SPA navigation, move focus to the content well so keyboard/AT users
+  // land on the new page instead of staying on the old nav control.
+  // `defer` skips the first run so initial load doesn't steal focus.
+  createEffect(
+    on(
+      () => location.pathname,
+      () => mainRef?.focus(),
+      { defer: true },
+    ),
+  );
   return (
     <div class="app-shell">
       <a href="#main" class="skip-link">
@@ -32,7 +45,7 @@ export default function AppShell(props: Props) {
       <Sidebar />
       <div class="app-shell-main">
         <TopBar />
-        <main class="app-shell-content" id="main" tabindex="-1">
+        <main class="app-shell-content" id="main" tabindex="-1" ref={mainRef}>
           {props.children}
         </main>
       </div>

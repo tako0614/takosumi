@@ -755,7 +755,8 @@ function PlanResourceReview(props: {
         <div class="wa-plan-resources-head">
           <div>
             <p class="wa-section-kicker">{t("run.resources.kicker")}</p>
-            <h3>{t("run.resources.title")}</h3>
+            {/* h2, not h3: the page h1 is the only heading above this one. */}
+            <h2>{t("run.resources.title")}</h2>
           </div>
           <Badge tone="muted">
             {t("run.resources.count", { n: actionable().length })}
@@ -1241,9 +1242,7 @@ function Inner() {
   // A queued/running run (or a parked review) can still be stopped.
   const cancellable = () => {
     const s = run.latest?.status;
-    return (
-      s === "queued" || s === "running" || s === "waiting_approval"
-    );
+    return s === "queued" || s === "running" || s === "waiting_approval";
   };
 
   const costInfo = () => cost.latest;
@@ -1610,13 +1609,41 @@ function Inner() {
           ? t("install.step.deploy")
           : t("install.step.done");
 
+  // One-line mirror of the install phase for the scoped live region below.
+  const installLiveText = () => {
+    const st = installState();
+    if (st.phase === "done") {
+      return autoUpdateMode
+        ? t("update.doneTitleGeneric")
+        : t("install.doneTitleGeneric");
+    }
+    if (st.phase === "error") {
+      return autoUpdateMode ? t("update.errorTitle") : t("install.errorTitle");
+    }
+    if (st.phase === "gate") return t("install.gateTitle");
+    return installStepLabel(
+      INSTALL_STEPS[Math.min(installActiveIndex(), INSTALL_STEPS.length - 1)],
+    );
+  };
+
+  const installPercent = () =>
+    Math.min(
+      100,
+      Math.round(((installActiveIndex() + 0.5) / INSTALL_STEPS.length) * 100),
+    );
+
   /** Clean App-Store-style install screen (progress → done → open/return),
    * shown instead of the technical run console while ?auto=install is set. */
   const installScreen = () => {
     const st = installState();
     const name = appName();
     return (
-      <div class="av-install" role="status" aria-live="polite">
+      <div class="av-install">
+        {/* Live region scoped to the one-line status only — putting it on
+            the whole screen re-announces every heading and button. */}
+        <p class="sr-only" role="status" aria-live="polite">
+          {installLiveText()}
+        </p>
         <Switch>
           <Match when={st.phase === "done"}>
             <div class="av-install-card av-install-done">
@@ -1741,17 +1768,17 @@ function Inner() {
                   </p>
                 </div>
               </div>
-              <div class="av-install-bar" aria-hidden="true">
+              <div
+                class="av-install-bar"
+                role="progressbar"
+                aria-label={t("install.progressAria")}
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={installPercent()}
+              >
                 <i
-                  style={{
-                    width: `${Math.min(
-                      100,
-                      Math.round(
-                        ((installActiveIndex() + 0.5) / INSTALL_STEPS.length) *
-                          100,
-                      ),
-                    )}%`,
-                  }}
+                  style={{ width: `${installPercent()}%` }}
+                  aria-hidden="true"
                 />
               </div>
               <p class="av-install-phase">
@@ -2082,66 +2109,66 @@ function Inner() {
                     run.latest?.type !== "source_sync"
                   }
                 >
-                <Card>
-                  <CardHeader title={t("run.changes.title")} />
-                  <div class="wa-change-strip">
-                    <span class="wa-change-stat wa-change-create">
-                      {t("run.changes.create")}{" "}
-                      <strong>{changeCounts().create}</strong>
-                    </span>
-                    <span class="wa-change-stat wa-change-update">
-                      {t("run.changes.update")}{" "}
-                      <strong>{changeCounts().update}</strong>
-                    </span>
-                    <span class="wa-change-stat wa-change-delete">
-                      {t("run.changes.delete")}{" "}
-                      <strong>{changeCounts().delete}</strong>
-                    </span>
-                  </div>
-                  <Show when={changes().length > 0}>
-                    <details class="wb-disclosure">
-                      <summary>{t("common.details")}</summary>
-                      <div class="wa-change-grid">
-                        <For each={["create", "update", "delete"] as const}>
-                          {(action) => (
-                            <div class="wa-change-col">
-                              <h4>
-                                {t(
-                                  `run.changes.${action}` as Parameters<
-                                    typeof t
-                                  >[0],
-                                )}
-                              </h4>
-                              <Show
-                                when={
-                                  changes().filter((c) => c.action === action)
-                                    .length > 0
-                                }
-                                fallback={
-                                  <p class="muted">{t("common.none")}</p>
-                                }
-                              >
-                                <ul>
-                                  <For
-                                    each={changes().filter(
-                                      (c) => c.action === action,
-                                    )}
-                                  >
-                                    {(item) => (
-                                      <li>
-                                        <code>{item.label}</code>
-                                      </li>
-                                    )}
-                                  </For>
-                                </ul>
-                              </Show>
-                            </div>
-                          )}
-                        </For>
-                      </div>
-                    </details>
-                  </Show>
-                </Card>
+                  <Card>
+                    <CardHeader title={t("run.changes.title")} />
+                    <div class="wa-change-strip">
+                      <span class="wa-change-stat wa-change-create">
+                        {t("run.changes.create")}{" "}
+                        <strong>{changeCounts().create}</strong>
+                      </span>
+                      <span class="wa-change-stat wa-change-update">
+                        {t("run.changes.update")}{" "}
+                        <strong>{changeCounts().update}</strong>
+                      </span>
+                      <span class="wa-change-stat wa-change-delete">
+                        {t("run.changes.delete")}{" "}
+                        <strong>{changeCounts().delete}</strong>
+                      </span>
+                    </div>
+                    <Show when={changes().length > 0}>
+                      <details class="wb-disclosure">
+                        <summary>{t("common.details")}</summary>
+                        <div class="wa-change-grid">
+                          <For each={["create", "update", "delete"] as const}>
+                            {(action) => (
+                              <div class="wa-change-col">
+                                <h4>
+                                  {t(
+                                    `run.changes.${action}` as Parameters<
+                                      typeof t
+                                    >[0],
+                                  )}
+                                </h4>
+                                <Show
+                                  when={
+                                    changes().filter((c) => c.action === action)
+                                      .length > 0
+                                  }
+                                  fallback={
+                                    <p class="muted">{t("common.none")}</p>
+                                  }
+                                >
+                                  <ul>
+                                    <For
+                                      each={changes().filter(
+                                        (c) => c.action === action,
+                                      )}
+                                    >
+                                      {(item) => (
+                                        <li>
+                                          <code>{item.label}</code>
+                                        </li>
+                                      )}
+                                    </For>
+                                  </ul>
+                                </Show>
+                              </div>
+                            )}
+                          </For>
+                        </div>
+                      </details>
+                    </Show>
+                  </Card>
                 </Show>
 
                 {/* ===== change detail — surfaced by default, not buried ===== */}

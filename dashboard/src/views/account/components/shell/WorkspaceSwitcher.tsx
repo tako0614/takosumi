@@ -94,7 +94,7 @@ export default function WorkspaceSwitcher(props: Props = {}) {
       void refetch();
     };
     window.addEventListener("takosumi:workspaces-changed", refreshWorkspaces);
-    // Dismiss the popover on an outside click or Escape.
+    // Dismiss the popover on an outside click, Escape, or focus moving out.
     const onPointerDown = (event: MouseEvent) => {
       if (!switcherOpen()) return;
       if (rootRef && !rootRef.contains(event.target as Node)) {
@@ -107,8 +107,15 @@ export default function WorkspaceSwitcher(props: Props = {}) {
         triggerRef?.focus();
       }
     };
+    const onFocusIn = (event: FocusEvent) => {
+      if (!switcherOpen()) return;
+      if (rootRef && !rootRef.contains(event.target as Node)) {
+        setSwitcherOpen(false);
+      }
+    };
     window.addEventListener("pointerdown", onPointerDown);
     window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("focusin", onFocusIn);
     onCleanup(() => {
       window.removeEventListener(
         "takosumi:workspaces-changed",
@@ -116,12 +123,16 @@ export default function WorkspaceSwitcher(props: Props = {}) {
       );
       window.removeEventListener("pointerdown", onPointerDown);
       window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("focusin", onFocusIn);
     });
   }
 
   const choose = (id: string) => {
     setCurrentWorkspaceId(id);
     setSwitcherOpen(false);
+    // Closing removes the focused menu item from the DOM; without this,
+    // focus falls back to <body>.
+    triggerRef?.focus();
   };
 
   // role="menu" keyboard model: move focus into the menu on open (landing on
@@ -162,6 +173,12 @@ export default function WorkspaceSwitcher(props: Props = {}) {
     } else if (event.key === "End") {
       event.preventDefault();
       items[items.length - 1]?.focus();
+    } else if (event.key === "Tab") {
+      // Menus close on Tab. Refocus the trigger first (without
+      // preventDefault) so the default Tab continues from it instead of
+      // from the removed menu item.
+      setSwitcherOpen(false);
+      triggerRef?.focus();
     }
   };
 
@@ -191,6 +208,11 @@ export default function WorkspaceSwitcher(props: Props = {}) {
             <button
               type="button"
               class="topbar-workspace-current"
+              // Names the compact (topbar) variant, whose visible text is
+              // only the avatar letter; also states the control's purpose.
+              aria-label={t("workspace.switcherAria", {
+                name: selectedWorkspaceName(),
+              })}
               aria-haspopup="menu"
               aria-expanded={switcherOpen()}
               aria-controls={switcherId()}
@@ -212,10 +234,14 @@ export default function WorkspaceSwitcher(props: Props = {}) {
                 class="topbar-workspace-menu"
                 id={switcherId()}
                 role="menu"
+                aria-labelledby={`${switcherId()}-label`}
                 ref={menuRef}
                 onKeyDown={onMenuKeyDown}
               >
-                <div class="topbar-workspace-menu-head">
+                <div
+                  class="topbar-workspace-menu-head"
+                  id={`${switcherId()}-label`}
+                >
                   {t("workspace.label")}
                 </div>
                 <ul class="topbar-workspace-menu-list" role="none">

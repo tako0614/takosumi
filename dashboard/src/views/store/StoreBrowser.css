@@ -224,7 +224,7 @@
   cursor: pointer;
   min-width: 0;
 }
-.tcs-card-open h3 {
+.tcs-card-open h2 {
   margin: 0 0 4px;
   font-size: 1.02rem;
   overflow-wrap: anywhere;
@@ -327,8 +327,10 @@
   gap: 12px;
   min-width: 0;
 }
-.tcs-detail header h3 {
+.tcs-detail header h2 {
   margin: 6px 0 0;
+  /* Retagged h3 → h2 for heading order; keep the old h3 size. */
+  font-size: 1.17em;
   overflow-wrap: anywhere;
 }
 .tcs-detail section {
@@ -336,7 +338,7 @@
   border-top: 1px solid var(--c-border);
   padding-top: 14px;
 }
-.tcs-detail h5 {
+.tcs-detail section h3 {
   margin: 0 0 8px;
   color: var(--c-muted);
   font-size: 0.86rem;
