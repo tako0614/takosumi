@@ -11,6 +11,10 @@ import {
 } from "@takosjp/takosumi-accounts-contract";
 import type { ControlPlaneOperations } from "../control-operations.ts";
 import type { AccountsStore, OidcClientRecord } from "../store.ts";
+import {
+  isManagedPublicHost,
+  managedPublicHostForWorkspace,
+} from "../../../../core/domains/deploy-control/managed_public_domains.ts";
 
 type InstallExperience = NonNullable<
   InstallConfig["store"]
@@ -40,11 +44,15 @@ export async function ensureTakosumiAccountsOidcForCapsule(input: {
   if (!oidcExperience) {
     return;
   }
+  const workspace = await input.operations.spaces.getWorkspace(
+    input.capsule.workspaceId,
+  );
   const redirectOrigin = appOriginFromInstallVariables(
     input.installConfig.variableMapping,
     installExperiencePublicEndpoint(
       input.installConfig.store?.installExperience,
     ),
+    workspace.handle,
   );
   if (!redirectOrigin) return;
 
@@ -216,7 +224,15 @@ function normalizedCallbackPath(value: string | undefined): string {
 function appOriginFromInstallVariables(
   variables: InstallConfig["variableMapping"],
   publicEndpoint?: PublicEndpointProjection,
+  workspaceHandle?: string,
 ): string | undefined {
+  const baseDomain = publicEndpointBaseDomain(publicEndpoint?.baseDomain);
+  const requestedSlug = firstMappedString(variables, [
+    publicEndpoint?.subdomainVariable,
+    "public_subdomain",
+    "worker_name",
+    "project_name",
+  ]);
   for (const variableName of uniqueStrings([
     publicEndpoint?.urlVariable,
     "public_url",
@@ -226,22 +242,35 @@ function appOriginFromInstallVariables(
     if (!appUrl) continue;
     try {
       const url = new URL(appUrl);
-      if (url.protocol === "https:" && url.hostname) return url.origin;
+      if (url.protocol !== "https:" || !url.hostname) continue;
+      if (isManagedPublicHost(url.hostname, baseDomain)) {
+        const managedHost = managedPublicHostForWorkspace(
+          workspaceHandle,
+          url.hostname.slice(0, -(baseDomain.length + 1)),
+          baseDomain,
+        );
+        if (managedHost) return `https://${managedHost}`;
+      }
+      return url.origin;
     } catch {
       continue;
     }
   }
-  const baseDomain = publicEndpointBaseDomain(publicEndpoint?.baseDomain);
-  for (const variableName of uniqueStrings([
-    publicEndpoint?.subdomainVariable,
-    "public_subdomain",
-    "worker_name",
-    "project_name",
-  ])) {
-    const subdomain = stringInstallVariable(variables[variableName]);
-    if (subdomain && publicAppSubdomainIsValid(subdomain)) {
-      return `https://${subdomain.toLowerCase()}.${baseDomain}`;
-    }
+  const managedHost = managedPublicHostForWorkspace(
+    workspaceHandle,
+    requestedSlug,
+    baseDomain,
+  );
+  return managedHost ? `https://${managedHost}` : undefined;
+}
+
+function firstMappedString(
+  variables: InstallConfig["variableMapping"],
+  names: readonly (string | undefined)[],
+): string | undefined {
+  for (const name of uniqueStrings(names)) {
+    const value = stringInstallVariable(variables[name]);
+    if (value) return value;
   }
   return undefined;
 }
@@ -254,10 +283,6 @@ function publicEndpointBaseDomain(value: unknown): string {
     )
     ? baseDomain
     : "app.takos.jp";
-}
-
-function publicAppSubdomainIsValid(value: string): boolean {
-  return /^[a-z][a-z0-9-]{1,50}[a-z0-9]$/u.test(value.toLowerCase());
 }
 
 function uniqueStrings(

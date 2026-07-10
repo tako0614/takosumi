@@ -4374,7 +4374,7 @@ test("POST /api/v1/workspaces/:id/capsules derives the OIDC redirect from public
   expect(response?.status).toEqual(201);
   const oidcClient = await store.findOidcClientForCapsule("inst_new");
   expect(oidcClient?.redirectUris).toEqual([
-    "https://community-a.apps.example.test/session/callback",
+    "https://shota-community-a.apps.example.test/session/callback",
   ]);
   const config = operations.calls.putInstallConfig?.at(-1) as {
     variableMapping: Record<string, unknown>;
@@ -4383,7 +4383,7 @@ test("POST /api/v1/workspaces/:id/capsules derives the OIDC redirect from public
   expect(config.variableMapping.oidc_issuer_url).toEqual(ORIGIN);
   expect(config.variableMapping.oidc_client_id).toEqual(oidcClient?.clientId);
   expect(config.variableMapping.oidc_redirect_uri).toEqual(
-    "https://community-a.apps.example.test/session/callback",
+    "https://shota-community-a.apps.example.test/session/callback",
   );
 });
 
@@ -5322,7 +5322,7 @@ test("POST /api/v1/capsules/:id/plan reconciles existing Takosumi Accounts OIDC 
   const oidcClient = await store.findOidcClientForCapsule("inst_1");
   expect(oidcClient?.clientId).toEqual("toc_existing_takos");
   expect(oidcClient?.redirectUris).toEqual([
-    "https://takos-new.app.takos.jp/auth/oidc/callback",
+    "https://shota-takos-new.app.takos.jp/auth/oidc/callback",
   ]);
   expect(oidcClient?.allowedScopes).toEqual(["openid", "profile", "email"]);
   const config = operations.calls.putInstallConfig?.[0] as {
@@ -5332,7 +5332,7 @@ test("POST /api/v1/capsules/:id/plan reconciles existing Takosumi Accounts OIDC 
     "toc_existing_takos",
   );
   expect(config.variableMapping.takosumi_accounts_redirect_uri).toEqual(
-    "https://takos-new.app.takos.jp/auth/oidc/callback",
+    "https://shota-takos-new.app.takos.jp/auth/oidc/callback",
   );
   expect(operations.calls.createCapsulePlan?.[0]).toEqual({
     capsuleId: "inst_1",
