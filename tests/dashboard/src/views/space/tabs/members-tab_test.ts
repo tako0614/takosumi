@@ -59,8 +59,12 @@ describe("MembersTab access-control surface", () => {
   test("the spaceId comes from the settings container, never from a body", () => {
     // The tab receives the globally-selected Space via props; mutations pass it
     // as the path segment plus the member's accountId only.
-    expect(source).toMatch(/setMemberRole\(props\.workspaceId, member\.accountId/);
-    expect(source).toMatch(/removeMember\(props\.workspaceId, member\.accountId\)/);
+    expect(source).toMatch(
+      /setMemberRole\(props\.workspaceId, member\.accountId/,
+    );
+    expect(source).toMatch(
+      /removeMember\(props\.workspaceId, member\.accountId\)/,
+    );
   });
 
   test("invites by verified email, not by handle/account subject", () => {
@@ -71,6 +75,22 @@ describe("MembersTab access-control surface", () => {
     expect(source).toContain('t("members.invite.email")');
     expect(source).not.toContain("Email invites are not supported");
     expect(source).not.toContain("inviteAccount");
+  });
+
+  test("role changes are confirmed and the select reverts on cancel/failure", () => {
+    // A native <select> shows the NEW role the instant the user picks it, so
+    // both the cancel path and the server-failure path must reset it to the
+    // source-of-truth role or the UI displays a role that was never applied.
+    expect(source).toContain('t("members.roleChangeConfirmTitle")');
+    expect(source).toContain('t("members.roleChangeConfirmMessage"');
+    expect(source).toContain("selectEl: HTMLSelectElement");
+    expect(source).toContain("selectEl.value = currentRole;");
+    // Cancel reverts…
+    expect(source).toMatch(/if \(!ok\) \{\s*revert\(\);\s*return;\s*\}/);
+    // …and a failed setMemberRole reverts before surfacing the error.
+    expect(source).toMatch(/catch \(err\) \{\s*revert\(\);\s*throw err;\s*\}/);
+    // The onChange handler passes the select element for the rollback.
+    expect(source).toContain("e.currentTarget,");
   });
 
   test("labels go through the locale dictionary (no hardcoded copy)", () => {

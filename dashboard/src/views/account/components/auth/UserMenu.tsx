@@ -18,7 +18,14 @@ import {
   themePreference,
   type ThemePreference,
 } from "../../../../lib/theme.ts";
-import { dashboardDocsHref } from "../../../../lib/deployment-brand.ts";
+import { isTakosEmbeddedRuntime } from "../../../../lib/deployment-brand.ts";
+
+// The Takos embedded shell keeps its external docs site; the standalone
+// dashboard links same-origin `/docs/` (the platform worker serves docs on the
+// same origin), so a self-hosted or local deployment never points at the
+// operator's hosted host.
+const docsHref = (): string =>
+  isTakosEmbeddedRuntime() ? "https://docs.takos.jp" : "/docs/";
 
 const THEME_LABEL_KEY: Record<ThemePreference, MessageKey> = {
   system: "theme.system",
@@ -120,7 +127,7 @@ export default function UserMenu() {
           </a>
           <a
             class="user-menu-item"
-            href={dashboardDocsHref()}
+            href={docsHref()}
             target="_blank"
             rel="external noopener"
             onClick={() => setOpen(false)}

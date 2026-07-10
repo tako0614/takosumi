@@ -88,7 +88,9 @@ function providerConnectionProviderLabel(
   );
 }
 
-export default function ConnectionsTab(props: { readonly workspaceId: string }) {
+export default function ConnectionsTab(props: {
+  readonly workspaceId: string;
+}) {
   const { confirm } = useConfirmDialog();
   const workspaceId = () => props.workspaceId;
 
@@ -355,21 +357,45 @@ export default function ConnectionsTab(props: { readonly workspaceId: string }) 
     await runTest(connection.id);
   });
 
-  // Per-connection test / remove.
-  const [testBusyId, setTestBusyId] = createSignal<string | null>(null);
-  const [testError, setTestError] = createSignal<string | null>(null);
+  // Per-connection test / remove. Busy and error state are tracked PER
+  // connection id — a single shared signal would let concurrent tests clear
+  // each other's spinner and show whichever error finished last.
+  const [testBusyIds, setTestBusyIds] = createSignal<ReadonlySet<string>>(
+    new Set(),
+  );
+  const [testErrors, setTestErrors] = createSignal<
+    Readonly<Record<string, string>>
+  >({});
+  const testBusy = (id: string) => testBusyIds().has(id);
+  const testError = (id: string) => testErrors()[id] ?? null;
+  const setTestBusy = (id: string, busy: boolean) => {
+    setTestBusyIds((prev) => {
+      const next = new Set(prev);
+      if (busy) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  };
+  const setTestError = (id: string, message: string | null) => {
+    setTestErrors((prev) => {
+      const next = { ...prev };
+      if (message === null) delete next[id];
+      else next[id] = message;
+      return next;
+    });
+  };
 
   const runTest = async (id: string) => {
-    setTestBusyId(id);
-    setTestError(null);
+    setTestBusy(id, true);
+    setTestError(id, null);
     try {
       const result = (await testConnection(id)) as
-        | { readonly status?: string; readonly detail?: string }
-        | undefined;
+        { readonly status?: string; readonly detail?: string } | undefined;
       await refreshConnections();
       if (result?.status && result.status !== "verified") {
         setLastCreatedVerifiedHint(false);
         setTestError(
+          id,
           result.detail ??
             t("conn.test.notReady", {
               status: result.status,
@@ -379,9 +405,9 @@ export default function ConnectionsTab(props: { readonly workspaceId: string }) 
         setLastCreatedVerifiedHint(true);
       }
     } catch (e) {
-      setTestError(e instanceof Error ? e.message : String(e));
+      setTestError(id, e instanceof Error ? e.message : String(e));
     } finally {
-      setTestBusyId(null);
+      setTestBusy(id, false);
     }
   };
 
@@ -453,11 +479,9 @@ export default function ConnectionsTab(props: { readonly workspaceId: string }) 
                 size="sm"
                 type="button"
                 onClick={() => void runTest(connection.id)}
-                busy={testBusyId() === connection.id}
+                busy={testBusy(connection.id)}
               >
-                {testBusyId() === connection.id
-                  ? t("conn.testing")
-                  : t("conn.test")}
+                {testBusy(connection.id) ? t("conn.testing") : t("conn.test")}
               </Button>
               <Button
                 variant="danger"
@@ -470,6 +494,9 @@ export default function ConnectionsTab(props: { readonly workspaceId: string }) 
                 {t("common.delete")}
               </Button>
             </div>
+            <Show when={testError(connection.id)}>
+              {(m) => <Toast tone="error">{m()}</Toast>}
+            </Show>
           </li>
         )}
       </For>
@@ -508,10 +535,10 @@ export default function ConnectionsTab(props: { readonly workspaceId: string }) 
                       <Button
                         variant="secondary"
                         type="button"
-                        busy={testBusyId() === id()}
+                        busy={testBusy(id())}
                         onClick={() => void runTest(id())}
                       >
-                        {testBusyId() === id()
+                        {testBusy(id())
                           ? t("conn.testing")
                           : t("conn.saved.testCta")}
                       </Button>
@@ -556,10 +583,10 @@ export default function ConnectionsTab(props: { readonly workspaceId: string }) 
                         variant="secondary"
                         size="sm"
                         type="button"
-                        busy={testBusyId() === id()}
+                        busy={testBusy(id())}
                         onClick={() => void runTest(id())}
                       >
-                        {testBusyId() === id()
+                        {testBusy(id())
                           ? t("conn.testing")
                           : t("conn.saved.testCta")}
                       </Button>
@@ -600,9 +627,6 @@ export default function ConnectionsTab(props: { readonly workspaceId: string }) 
             </div>
           </Show>
           <ActionError error={remove.error} />
-          <Show when={testError()}>
-            {(m) => <Toast tone="error">{m()}</Toast>}
-          </Show>
           {providerConnectionList()}
         </div>
       </Show>

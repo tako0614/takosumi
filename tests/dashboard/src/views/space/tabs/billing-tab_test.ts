@@ -129,8 +129,8 @@ test("BillingTab shows Cloud account USD balance instead of only a disabled stat
   expect(source).toContain("billing.mode.cloudCredits");
   expect(source).toContain("balanceAvailableUsdMicros(balance()) > 0");
   expect(source).toContain('label: t("billing.balance.availableUsd")');
-  expect(source).toContain(
-    "value: formatUsdMicros(\n                          balanceAvailableUsdMicros(balance()),",
+  expect(source).toMatch(
+    /value: formatUsdMicros\(\s*balanceAvailableUsdMicros\(balance\(\)\),/,
   );
   expect(source).toContain('label: t("billing.balance.status")');
   expect(source).not.toContain(
@@ -142,6 +142,44 @@ test("BillingTab shows Cloud account USD balance instead of only a disabled stat
     "shared across your account",
   );
   expect(ja["billing.mode.cloudCredits"]).toContain("アカウント全体");
+});
+
+test("BillingTab hides the capacity row while billing is disabled", () => {
+  const source = readFileSync(sourcePath, "utf8");
+
+  // Under `disabled` a "$0.00 available capacity" row reads as alarming
+  // nonsense — capacity is only rendered for showback/enforce modes.
+  expect(source).toContain("const quotaMeaningful = createMemo");
+  expect(source).toMatch(
+    /currentMode === "showback" \|\| currentMode === "enforce"/,
+  );
+  expect(source).toContain("cloudBilling() || quotaMeaningful()");
+  expect(source).toContain('t("billing.quota.disabledHint")');
+  expect(en["billing.quota.disabledHint"]).toContain("disabled");
+  expect(ja["billing.quota.disabledHint"]).toContain("課金が無効");
+});
+
+test("/settings/billing titles itself like its settings-hub entry", () => {
+  const settingsViewSource = readFileSync(
+    resolve(
+      import.meta.dir,
+      "../../../../../../dashboard/src/views/workspace/WorkspaceSettingsView.tsx",
+    ),
+    "utf8",
+  );
+  const source = readFileSync(sourcePath, "utf8");
+
+  // The hub links to /settings/billing as プランと支払い / "Plan & billing"; the
+  // destination page must not retitle itself 使用量 / 上限 (that wording stays as
+  // the section heading inside and as the workspace-settings tab label).
+  expect(settingsViewSource).toContain('return t("settings.billing.title");');
+  expect(settingsViewSource).not.toContain('? t("billing.title")');
+  expect(source).toContain('t("billing.usageQuotaTitle")');
+  expect(en["settings.billing.title"]).toBe("Plan & billing");
+  expect(ja["settings.billing.title"]).toBe("プランと支払い");
+  // The workspace-settings tab label stays usage/quota on self-host.
+  expect(settingsViewSource).toContain('t("workspaceSettings.tab.usageQuota")');
+  expect(ja["workspaceSettings.tab.usageQuota"]).toBe("使用量 / 上限");
 });
 
 test("BillingTab surfaces subscription status and invoice history", () => {
