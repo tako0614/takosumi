@@ -36,7 +36,7 @@ export function CardHeader(props: CardHeaderProps): JSX.Element {
         </Show>
       </div>
       <Show when={props.actions}>
-        <div>{props.actions}</div>
+        <div class="tg-card-header-actions">{props.actions}</div>
       </Show>
     </div>
   );

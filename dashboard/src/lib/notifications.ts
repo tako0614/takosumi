@@ -38,14 +38,16 @@ export function isFailureAction(action: string): boolean {
 export async function loadNotificationFeed(
   workspaces: readonly Workspace[],
 ): Promise<readonly FeedEntry[]> {
-  const perWorkspace = await Promise.all(
+  // allSettled, not all: one workspace whose activity fetch rejects must not
+  // blank the entire merged feed — the reachable workspaces still show.
+  const perWorkspace = await Promise.allSettled(
     workspaces.map(async (workspace): Promise<readonly FeedEntry[]> => {
       const events = await listActivity(workspace.id, NOTIF_PER_SPACE_LIMIT);
       return events.map((event) => ({ event, workspaceHandle: workspace.handle }));
     }),
   );
   return perWorkspace
-    .flat()
+    .flatMap((result) => (result.status === "fulfilled" ? result.value : []))
     .sort(
       (a, b) => Date.parse(b.event.createdAt) - Date.parse(a.event.createdAt),
     )

@@ -183,9 +183,19 @@
   justify-content: space-between;
   gap: var(--tg-s-3);
   margin-bottom: var(--tg-s-3);
+  /* On narrow screens a too-wide action drops to its own row instead of being
+     crushed by the min-width:0 title block (which would break a spaceless CJK
+     button label between every character). */
+  flex-wrap: wrap;
 }
 .tg-card-header-text {
   min-width: 0;
+}
+.tg-card-header-actions {
+  /* Never shrink below the button's intrinsic width — wrap the whole slot down
+     a row first. */
+  flex: none;
+  margin-left: auto;
 }
 .tg-card-title {
   font-family: var(--tg-font-display);
