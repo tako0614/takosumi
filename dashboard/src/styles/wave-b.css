@@ -72,6 +72,9 @@
   font-family: var(--tg-font-mono);
   font-size: var(--tg-fs-xs);
   color: var(--tg-fg-muted);
+  /* Long output names / ids wrap instead of being clipped. */
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 
 /* ===== Graph: layered DAG board ===== */

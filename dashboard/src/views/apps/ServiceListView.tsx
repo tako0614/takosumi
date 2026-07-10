@@ -55,8 +55,9 @@ function Inner() {
   const navigate = useNavigate();
   const workspaceId = () => currentWorkspaceId() || undefined;
 
-  const [overview] = createResource(workspaceId, (id) =>
-    getDashboardOverviewCached(id),
+  const [overview, { refetch: refetchOverview }] = createResource(
+    workspaceId,
+    (id) => getDashboardOverviewCached(id),
   );
   // The overview projection caps the capsule list (nextCapsuleCursor); the
   // full service list must show every service, so fetch the rest when capped.
@@ -116,6 +117,14 @@ function Inner() {
               {t("common.fetchFailed", {
                 message: (overview.error as ControlApiError).message,
               })}
+              <Button
+                variant="secondary"
+                size="sm"
+                type="button"
+                onClick={() => void refetchOverview()}
+              >
+                {t("common.retry")}
+              </Button>
             </Toast>
           </Match>
           <Match when={overview()}>

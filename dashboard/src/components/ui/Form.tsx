@@ -6,13 +6,19 @@ interface FieldProps {
   error?: JSX.Element;
   required?: boolean;
   class?: string;
+  /**
+   * Wrapper element. Default "label" implicitly associates the label with the
+   * single control it wraps. Use "group" when the control is itself a <label>
+   * (e.g. Checkbox) — wrapping that in another <label> is invalid nested markup.
+   */
+  as?: "label" | "group";
   children: JSX.Element;
 }
 
 /** Field wrapper: label (+required marker) + control + hint/error. */
 export function FormField(props: FieldProps): JSX.Element {
-  return (
-    <label class={`tg-field ${props.class ?? ""}`}>
+  const body = (
+    <>
       <Show when={props.label}>
         <span class="tg-field-label">
           {props.label}
@@ -32,7 +38,14 @@ export function FormField(props: FieldProps): JSX.Element {
           {props.error}
         </span>
       </Show>
-    </label>
+    </>
+  );
+  return props.as === "group" ? (
+    <div class={`tg-field ${props.class ?? ""}`} role="group">
+      {body}
+    </div>
+  ) : (
+    <label class={`tg-field ${props.class ?? ""}`}>{body}</label>
   );
 }
 

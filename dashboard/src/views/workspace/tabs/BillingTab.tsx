@@ -676,5 +676,17 @@ function invoiceAmount(invoice: StripeBillingInvoice): string {
   if (invoice.totalUsdMicros !== undefined) {
     return formatUsdMicros(invoice.totalUsdMicros);
   }
-  return `${formatBillingNumber(invoice.totalMinor / 100)} ${invoice.currency}`;
+  // totalMinor is in the currency's minor unit. The divisor is NOT always 100:
+  // zero-decimal currencies (JPY, KRW, …) use 1, three-decimal (BHD, …) 1000.
+  // Let Intl derive the fraction digits and format the symbol.
+  try {
+    const fmt = new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency: invoice.currency.toUpperCase(),
+    });
+    const digits = fmt.resolvedOptions().maximumFractionDigits ?? 2;
+    return fmt.format(invoice.totalMinor / 10 ** digits);
+  } catch {
+    return `${formatBillingNumber(invoice.totalMinor / 100)} ${invoice.currency}`;
+  }
 }
