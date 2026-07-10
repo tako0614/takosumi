@@ -487,7 +487,35 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
               : null;
           onMount(() => queueMicrotask(() => drawerRef?.focus()));
           const onKeyDown = (e: KeyboardEvent) => {
-            if (e.key === "Escape") setSelected(null);
+            if (e.key === "Escape") {
+              setSelected(null);
+              return;
+            }
+            // Trap Tab inside the modal drawer: an aria-modal dialog must not
+            // let focus escape to the page behind it. Only currently-visible
+            // controls count (collapsed <details> contents stay excluded).
+            if (e.key === "Tab" && drawerRef) {
+              const focusables = Array.from(
+                drawerRef.querySelectorAll<HTMLElement>(
+                  'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])',
+                ),
+              ).filter((el) => el.offsetParent !== null);
+              const active = document.activeElement as HTMLElement | null;
+              if (focusables.length === 0) {
+                e.preventDefault();
+                drawerRef.focus();
+                return;
+              }
+              const first = focusables[0];
+              const last = focusables[focusables.length - 1];
+              if (e.shiftKey && (active === first || active === drawerRef)) {
+                e.preventDefault();
+                last.focus();
+              } else if (!e.shiftKey && active === last) {
+                e.preventDefault();
+                first.focus();
+              }
+            }
           };
           if (typeof document !== "undefined") {
             document.addEventListener("keydown", onKeyDown);

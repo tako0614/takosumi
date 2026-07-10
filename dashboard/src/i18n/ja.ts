@@ -677,6 +677,7 @@ export const ja = {
     "アプリが公開してよい実行時の環境変数を求める場合だけ使います。秘密の値は接続済みアカウントから渡してください。",
   "new.env.name": "環境変数名",
   "new.env.value": "値",
+  "new.env.valuePlaceholder": "値",
   "new.env.add": "環境変数を追加",
   "new.env.remove": "削除",
   "new.env.errorNameRequired":
@@ -691,6 +692,8 @@ export const ja = {
     "上にない表示用の入力をアプリから求められた場合だけ使います。",
   "new.vars.inputName": "設定名",
   "new.vars.inputValue": "値",
+  "new.vars.namePlaceholder": "設定名",
+  "new.vars.valuePlaceholder": "値",
   "new.vars.addInput": "入力を追加",
   "new.vars.removeInput": "削除",
   "new.vars.errorNameRequired":
@@ -809,6 +812,7 @@ export const ja = {
 
   // --- workspace settings ---------------------------------------------------------
   "workspaceSettings.title": "設定",
+  "workspaceSettings.tabsLabel": "設定セクション",
   "workspaceSettings.subtitle":
     "チーム名、メンバー、接続、使用量を確認します。",
   "workspaceSettings.tab.general": "一般",

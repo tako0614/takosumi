@@ -116,6 +116,7 @@ export default function UserMenu() {
               type="button"
               class="user-menu-lang-btn"
               classList={{ active: locale() === "ja" }}
+              aria-pressed={locale() === "ja"}
               onClick={() => setLocale("ja")}
             >
               日本語
@@ -124,6 +125,7 @@ export default function UserMenu() {
               type="button"
               class="user-menu-lang-btn"
               classList={{ active: locale() === "en" }}
+              aria-pressed={locale() === "en"}
               onClick={() => setLocale("en")}
             >
               English
@@ -140,6 +142,7 @@ export default function UserMenu() {
                 type="button"
                 class="user-menu-lang-btn"
                 classList={{ active: themePreference() === theme }}
+                aria-pressed={themePreference() === theme}
                 onClick={() => setThemePreference(theme)}
               >
                 {t(THEME_LABEL_KEY[theme])}
