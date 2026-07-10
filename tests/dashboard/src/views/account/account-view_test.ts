@@ -42,4 +42,13 @@ describe("AccountView", () => {
     expect(en["account.session.otherNote"]).not.toContain("coming soon");
     expect(ja["account.session.otherNote"]).not.toContain("準備中");
   });
+
+  test("missing profile data reads as 未設定 / Not set, not a bare dash", () => {
+    expect(source).toContain('t("account.profile.notSet")');
+    // Neither sign-in-info row may fall back to the broken-looking "—".
+    expect(source).not.toContain('props.session.displayName ?? "—"');
+    expect(source).not.toContain('props.session.email ?? "—"');
+    expect(en["account.profile.notSet"]).toBe("Not set");
+    expect(ja["account.profile.notSet"]).toBe("未設定");
+  });
 });

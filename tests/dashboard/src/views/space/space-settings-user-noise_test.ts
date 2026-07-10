@@ -39,6 +39,13 @@ describe("Workspace settings user-facing noise", () => {
     expect(ja["workspaceSettings.subtitle"]).not.toContain("共有");
   });
 
+  test("settings copy says ワークスペース, not チーム (the product noun)", () => {
+    expect(ja["workspaceSettings.subtitle"]).toContain("ワークスペース名");
+    expect(ja["workspaceSettings.subtitle"]).not.toContain("チーム");
+    expect(en["workspaceSettings.subtitle"]).toContain("workspace name");
+    expect(en["workspaceSettings.subtitle"]).not.toContain("team");
+  });
+
   test("does not expose policy JSON editing on the general settings form", () => {
     expect(generalTabSource).toContain(
       "updateWorkspace(current.id, { displayName })",
@@ -78,9 +85,7 @@ describe("Workspace settings user-facing noise", () => {
     expect(en["conn.empty.title"]).toBe(
       "Connect any provider with your own key",
     );
-    expect(ja["conn.empty.title"]).toBe(
-      "自分のカギで任意の provider を接続",
-    );
+    expect(ja["conn.empty.title"]).toBe("自分のカギで任意の provider を接続");
     expect(en["conn.empty.message"]).toContain("any provider runs");
     expect(ja["conn.empty.message"]).toContain("どの provider でも");
   });

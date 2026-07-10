@@ -832,7 +832,7 @@ export const ja = {
   "workspaceSettings.title": "設定",
   "workspaceSettings.tabsLabel": "設定セクション",
   "workspaceSettings.subtitle":
-    "チーム名、メンバー、接続、使用量を確認します。",
+    "ワークスペース名、メンバー、接続、使用量を確認します。",
   "workspaceSettings.tab.general": "一般",
   "workspaceSettings.tab.members": "メンバー",
   "workspaceSettings.tab.connections": "接続",
@@ -889,6 +889,9 @@ export const ja = {
   "members.col.actions": "操作",
   "members.you": "あなた",
   "members.changeRole": "役割を変更",
+  "members.roleChangeConfirmTitle": "役割の変更",
+  "members.roleChangeConfirmMessage":
+    "{name} の役割を「{role}」に変更しますか？",
   "members.lastOwnerDemote":
     "最後のオーナーは降格できません。先に別のオーナーを指名してください。",
   "members.lastOwnerRemove":
@@ -1084,6 +1087,9 @@ export const ja = {
   "shares.col.status": "状態",
   "shares.approve": "承認",
   "shares.revoke": "取り消し",
+  "shares.revokeConfirmTitle": "共有の取り消し",
+  "shares.revokeConfirmMessage":
+    "{target} への共有を取り消しますか？共有先のワークスペースはこの値を使えなくなります。",
   "shares.status.active": "有効",
   "shares.status.pending": "承認待ち",
   "shares.status.revoked": "取り消し済み",
@@ -1175,6 +1181,7 @@ export const ja = {
   "account.profile.subject": "サインイン参照 ID",
   "account.profile.displayName": "表示名",
   "account.profile.email": "メール",
+  "account.profile.notSet": "未設定",
   "account.profile.provider": "サインイン方法",
   "account.profile.expires": "セッション期限",
   "account.session.title": "現在のセッション",
@@ -1213,6 +1220,8 @@ export const ja = {
   "cloudResources.sessionExpired":
     "セッションが切れました。再度ログインしてください。",
   "cloudResources.copied": "コピーしました。",
+  "cloudResources.copyFailed":
+    "コピーできませんでした。クリップボードへのアクセスが許可されていない可能性があります。値を選択して手動でコピーしてください。",
   "cloudResources.status.ready": "利用可能",
   "cloudResources.status.check": "確認が必要",
   "cloudResources.keys.title": "外部APIキー",
@@ -1313,6 +1322,7 @@ export const ja = {
   "billing.quota.title": "上限",
   "billing.quota.available": "利用可能な容量",
   "billing.quota.reserved": "反映待ちの使用量",
+  "billing.quota.disabledHint": "課金が無効のため、容量の上限はありません。",
   "billing.pendingUse.title": "反映待ちの使用量",
   "billing.subscription.title": "サブスクリプション",
   "billing.subscription.subtitle": "現在のプラン状態と次回請求を確認します。",

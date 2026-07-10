@@ -187,7 +187,11 @@ describe("dashboard shell navigation layout", () => {
   test("profile menu keeps account + history shortcuts under the settings IA", () => {
     expect(userMenuSource).toContain('href="/runs"');
     expect(userMenuSource).toContain('href="/settings/account"');
-    expect(userMenuSource).toContain("dashboardDocsHref");
+    // Docs link must stay host-relative on the standalone dashboard so a
+    // self-hosted deployment never points at app.takosumi.com.
+    expect(userMenuSource).toContain("docsHref");
+    expect(userMenuSource).toContain('"/docs/"');
+    expect(userMenuSource).not.toContain("app.takosumi.com");
     expect(userMenuSource).not.toContain("WorkspaceSwitcher");
     expect(userMenuSource).not.toContain('href="/connections"');
     expect(userMenuSource).not.toContain('href="/advanced/workspace"');

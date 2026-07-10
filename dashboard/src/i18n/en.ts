@@ -830,7 +830,7 @@ export const en: Record<keyof typeof ja, string> = {
   "workspaceSettings.title": "Settings",
   "workspaceSettings.tabsLabel": "Settings sections",
   "workspaceSettings.subtitle":
-    "Review team name, members, connected accounts, and usage.",
+    "Review the workspace name, members, connected accounts, and usage.",
   "workspaceSettings.tab.general": "General",
   "workspaceSettings.tab.members": "Members",
   "workspaceSettings.tab.connections": "Connections",
@@ -885,6 +885,8 @@ export const en: Record<keyof typeof ja, string> = {
   "members.col.actions": "Actions",
   "members.you": "you",
   "members.changeRole": "Change role",
+  "members.roleChangeConfirmTitle": "Change role",
+  "members.roleChangeConfirmMessage": "Change the role of {name} to “{role}”?",
   "members.lastOwnerDemote":
     "The last owner cannot be demoted. Appoint another owner first.",
   "members.lastOwnerRemove":
@@ -1075,6 +1077,9 @@ export const en: Record<keyof typeof ja, string> = {
   "shares.col.status": "Status",
   "shares.approve": "Approve",
   "shares.revoke": "Revoke",
+  "shares.revokeConfirmTitle": "Revoke share",
+  "shares.revokeConfirmMessage":
+    "Revoke the share to {target}? The receiving workspace loses access to these values.",
   "shares.status.active": "Active",
   "shares.status.pending": "Pending approval",
   "shares.status.revoked": "Revoked",
@@ -1165,6 +1170,7 @@ export const en: Record<keyof typeof ja, string> = {
   "account.profile.subject": "Sign-in reference",
   "account.profile.displayName": "Display name",
   "account.profile.email": "Email",
+  "account.profile.notSet": "Not set",
   "account.profile.provider": "Sign-in method",
   "account.profile.expires": "Session expires",
   "account.session.title": "Current session",
@@ -1202,6 +1208,8 @@ export const en: Record<keyof typeof ja, string> = {
   "cloudResources.notConfigured": "Not configured",
   "cloudResources.sessionExpired": "Session expired. Sign in again.",
   "cloudResources.copied": "Copied.",
+  "cloudResources.copyFailed":
+    "Copy failed. Clipboard access may be blocked — select the value and copy it manually.",
   "cloudResources.status.ready": "Ready",
   "cloudResources.status.check": "Needs check",
   "cloudResources.keys.title": "External API keys",
@@ -1302,6 +1310,8 @@ export const en: Record<keyof typeof ja, string> = {
   "billing.quota.title": "Quota",
   "billing.quota.available": "Available capacity",
   "billing.quota.reserved": "Pending use",
+  "billing.quota.disabledHint":
+    "Billing is disabled, so there is no capacity limit.",
   "billing.pendingUse.title": "Pending use",
   "billing.subscription.title": "Subscription",
   "billing.subscription.subtitle":

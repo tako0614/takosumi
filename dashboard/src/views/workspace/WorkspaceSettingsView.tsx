@@ -124,8 +124,13 @@ function Inner(props: {
       {/* Backups/Shares are reached from the /settings/manage catalog, not the
           everyday settings tab strip (a deliberate de-noising). Hide the strip
           on those routes so it doesn't render with no active tab highlighted. */}
-      <Show when={!props.standaloneTab && tab() !== "backups" && tab() !== "shares"}>
-        <Tabs items={tabItems()} aria-label={t("workspaceSettings.tabsLabel")} />
+      <Show
+        when={!props.standaloneTab && tab() !== "backups" && tab() !== "shares"}
+      >
+        <Tabs
+          items={tabItems()}
+          aria-label={t("workspaceSettings.tabsLabel")}
+        />
       </Show>
 
       <Show
@@ -179,9 +184,11 @@ function pageTitle(tab: StandaloneTabId | undefined): string {
     case "connections":
       return t("conn.providerConnections.title");
     case "billing":
-      return isTakosumiCloudRuntime()
-        ? t("billing.title")
-        : t("billing.usageQuotaTitle");
+      // The settings hub links here as プランと支払い / "Plan & billing" — the
+      // destination must title itself the same, or the click reads as a wrong
+      // turn. The usage/quota wording stays as the section heading inside
+      // (and as the workspace-settings tab label, where it IS usage/quota).
+      return t("settings.billing.title");
     default:
       return t("workspaceSettings.title");
   }

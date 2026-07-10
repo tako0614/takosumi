@@ -25,6 +25,7 @@ import {
   revokeOutputShare,
 } from "../../../lib/control-api.ts";
 import { createAction } from "../../account/lib/action.tsx";
+import { useConfirmDialog } from "../../../lib/confirm-dialog.ts";
 import { type MessageKey, t } from "../../../i18n/index.ts";
 import {
   Badge,
@@ -67,6 +68,7 @@ function shareStatusLabel(status: string): string {
 }
 
 export default function SharesTab(props: { readonly workspaceId: string }) {
+  const { confirm } = useConfirmDialog();
   const workspaceId = () => props.workspaceId;
   const [shares, { refetch }] = createResource(workspaceId, listOutputShares);
   const [workspaces] = createResource(listWorkspaces);
@@ -149,6 +151,23 @@ export default function SharesTab(props: { readonly workspaceId: string }) {
     }
   });
 
+  // Revoking cuts off a consumer Workspace immediately — confirm before the
+  // one-click danger action, naming the share's target (same pattern as the
+  // Connections tab delete confirm).
+  const confirmRevoke = async (share: OutputShare) => {
+    const to = share.toWorkspaceId ?? share.toSpaceId;
+    const ok = await confirm({
+      title: t("shares.revokeConfirmTitle"),
+      message: t("shares.revokeConfirmMessage", {
+        target: workspaceName().get(to) ?? to,
+      }),
+      confirmText: t("shares.revoke"),
+      danger: true,
+    });
+    if (!ok) return;
+    void revoke.run(share.id);
+  };
+
   const updateOutput = (
     id: string,
     patch: Partial<Omit<OutputDraft, "id">>,
@@ -188,7 +207,8 @@ export default function SharesTab(props: { readonly workspaceId: string }) {
     {
       header: t("shares.col.capsule"),
       cell: (share) => {
-        const producer = share.producerCapsuleId ?? share.producerInstallationId;
+        const producer =
+          share.producerCapsuleId ?? share.producerInstallationId;
         return capsuleName().get(producer) ?? producer;
       },
     },
@@ -254,7 +274,7 @@ export default function SharesTab(props: { readonly workspaceId: string }) {
               size="sm"
               busy={revoke.busy() && revokingId() === share.id}
               disabled={revoke.busy()}
-              onClick={() => void revoke.run(share.id)}
+              onClick={() => void confirmRevoke(share)}
             >
               {t("shares.revoke")}
             </Button>
@@ -291,7 +311,9 @@ export default function SharesTab(props: { readonly workspaceId: string }) {
                       {t("shares.create.selectPlaceholder")}
                     </option>
                     <For
-                      each={(workspaces() ?? []).filter((s) => s.id !== workspaceId())}
+                      each={(workspaces() ?? []).filter(
+                        (s) => s.id !== workspaceId(),
+                      )}
                     >
                       {(workspace) => (
                         <option value={workspace.id}>

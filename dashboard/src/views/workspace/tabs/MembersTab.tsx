@@ -109,7 +109,8 @@ export default function MembersTab(props: {
     ).length;
 
   const [inviteEmail, setInviteEmail] = createSignal("");
-  const [inviteRole, setInviteRole] = createSignal<ControlWorkspaceRole>("member");
+  const [inviteRole, setInviteRole] =
+    createSignal<ControlWorkspaceRole>("member");
   const invite = createAction(async () => {
     const email = inviteEmail().trim();
     if (!email) throw new Error(t("members.invite.emailRequired"));
@@ -122,9 +123,38 @@ export default function MembersTab(props: {
     await refetch();
   });
 
+  // Role changes are confirmed and revert the <select> on cancel/failure: the
+  // native select already shows the NEW role the moment the user picks it, so
+  // without an explicit reset a cancelled or failed change would keep
+  // displaying a role that was never applied.
   const changeRole = createAction(
-    async (member: PublicWorkspaceMember, role: ControlWorkspaceRole) => {
-      await setMemberRole(props.workspaceId, member.accountId, role);
+    async (
+      member: PublicWorkspaceMember,
+      role: ControlWorkspaceRole,
+      selectEl: HTMLSelectElement,
+    ) => {
+      const currentRole = member.roles[0] ?? "member";
+      const revert = () => {
+        selectEl.value = currentRole;
+      };
+      const ok = await confirm({
+        title: t("members.roleChangeConfirmTitle"),
+        message: t("members.roleChangeConfirmMessage", {
+          name: member.accountId,
+          role: t(ROLE_KEY[role]),
+        }),
+        confirmText: t("members.changeRole"),
+      });
+      if (!ok) {
+        revert();
+        return;
+      }
+      try {
+        await setMemberRole(props.workspaceId, member.accountId, role);
+      } catch (err) {
+        revert();
+        throw err;
+      }
       await refetch();
     },
   );
@@ -196,6 +226,7 @@ export default function MembersTab(props: {
                       void changeRole.run(
                         member,
                         e.currentTarget.value as ControlWorkspaceRole,
+                        e.currentTarget,
                       )
                     }
                     title={
