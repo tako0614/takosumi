@@ -211,6 +211,8 @@ describe("/new flow guidance", () => {
       'new URLSearchParams(initialSearch).get("auto") === "1"',
     );
     expect(newAppViewSource).toContain("autoInstallAttempted = true;");
+    expect(newAppViewSource).toContain('url.searchParams.delete("auto")');
+    expect(newAppViewSource).toContain("window.history.replaceState(");
     expect(newAppViewSource).toContain("void submitInstall();");
     expect(newAppViewSource).toContain("tcsHandoffSettled()");
   });
