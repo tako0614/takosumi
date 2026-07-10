@@ -91,6 +91,10 @@ const RESOURCE_SHAPE_ADAPTER_PLUGIN_HANDLERS_ENV =
 const CLOUD_MANAGED_CLOUDFLARE_COMPAT_CONNECTION_ID =
   "conn_operator_takosumi_cloud_cloudflare_compat";
 const CLOUD_MANAGED_CLOUDFLARE_COMPAT_PROFILE = "compat.cloudflare.workers.v1";
+const cloudManagedProviderConnectionSeedByEnv = new WeakMap<
+  CloudflareWorkerEnv,
+  Promise<void>
+>();
 
 export async function createWorkerServiceApp(
   env: CloudflareWorkerEnv,
@@ -142,7 +146,7 @@ export async function createWorkerServiceApp(
   const allowOperatorBackedProviderEnvs = envFlag(
     env.TAKOSUMI_ALLOW_OPERATOR_BACKED_PROVIDER_ENVS,
   );
-  await seedCloudManagedProviderConnections({
+  await ensureCloudManagedProviderConnections({
     env,
     store: opentofuDeploymentStore,
     secretCrypto,
@@ -592,6 +596,26 @@ async function seedCloudManagedProviderConnections(input: {
     verifiedAt: connection.verifiedAt ?? nowIso,
     updatedAt: nowIso,
   });
+}
+
+async function ensureCloudManagedProviderConnections(input: {
+  readonly env: CloudflareWorkerEnv;
+  readonly store: OpenTofuDeploymentStore;
+  readonly secretCrypto: SecretBoundaryCrypto;
+  readonly providerBaseUrlAllowlist: readonly string[];
+  readonly allowOperatorBackedProviderEnvs: boolean;
+}): Promise<void> {
+  let seed = cloudManagedProviderConnectionSeedByEnv.get(input.env);
+  if (!seed) {
+    seed = seedCloudManagedProviderConnections(input);
+    cloudManagedProviderConnectionSeedByEnv.set(input.env, seed);
+  }
+  try {
+    await seed;
+  } catch (error) {
+    cloudManagedProviderConnectionSeedByEnv.delete(input.env);
+    throw error;
+  }
 }
 
 function stringEnvValue(value: unknown): string | undefined {
