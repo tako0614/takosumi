@@ -97,6 +97,11 @@ export const TAKOSUMI_ACCOUNTS_SERVICE_CAPABILITY_AUTOMATION_TOOL_PROVIDER =
 
 export const TAKOSUMI_ACCOUNTS_PAT_SCOPES = ["read", "write", "admin"] as const;
 
+export const TAKOSUMI_ACCOUNTS_CAPSULE_OAUTH_SCOPES = [
+  "capsules:read",
+  "capsules:write",
+] as const;
+
 export type TakosumiAccountsPatScope =
   (typeof TAKOSUMI_ACCOUNTS_PAT_SCOPES)[number];
 
@@ -472,7 +477,13 @@ export function buildOidcDiscoveryDocument(
     request_uri_parameter_supported: false,
     claims_parameter_supported: false,
     service_documentation: "https://takosumi.com/docs/identity",
-    scopes_supported: ["openid", "profile", "email", "offline_access"],
+    scopes_supported: [
+      "openid",
+      "profile",
+      "email",
+      "offline_access",
+      ...TAKOSUMI_ACCOUNTS_CAPSULE_OAUTH_SCOPES,
+    ],
     claims_supported: ["sub", "iss", "aud", "exp", "iat", "email", "name"],
   };
 }

@@ -72,6 +72,7 @@ export interface TcsInstallExperience {
           readonly redirectUri?: string;
         };
         readonly callbackPath?: string;
+        readonly scopes?: readonly string[];
       }
     | {
         readonly kind: "artifact";
@@ -481,12 +482,26 @@ function repoInstallExperience(
       );
       if (Object.keys(variables).length === 0) return undefined;
       if (kind === "oidc_client") {
+        const scopes = stringArray(rawProjection.scopes)
+          ?.map((scope) => scope.trim())
+          .filter(Boolean);
+        if (
+          rawProjection.scopes !== undefined &&
+          (!scopes ||
+            scopes.length === 0 ||
+            scopes.some(
+              (scope) => !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(scope),
+            ))
+        ) {
+          return undefined;
+        }
         projections.push({
           kind,
           variables,
           ...(text(rawProjection.callbackPath)
             ? { callbackPath: text(rawProjection.callbackPath) }
             : {}),
+          ...(scopes ? { scopes: [...new Set(scopes)] } : {}),
         });
       } else {
         projections.push({ kind, variables });

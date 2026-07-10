@@ -9,6 +9,7 @@ import {
   resolveOptions,
   shouldMarkPendingSmokeInstallationError,
   smokeSourceCompatibilityCheckBody,
+  smokeSourceInstallationCreateBody,
 } from "../../scripts/smoke-platform-control-plane.ts";
 
 test("platform smoke binds compatibility checks to the current Capsule", () => {
@@ -24,6 +25,57 @@ test("platform smoke binds compatibility checks to the current Capsule", () => {
     modulePath: "deploy/opentofu",
   });
   expect(body).not.toHaveProperty("installationId");
+});
+
+test("platform smoke can reproduce Store-backed managed Provider resolution", async () => {
+  const storeMetadata = {
+    source: {
+      git: "https://github.com/tako0614/takos.git",
+      path: "deploy/opentofu",
+    },
+    order: 1_000,
+    surface: "service",
+    kind: "worker",
+    provider: "cloudflare",
+    suggestedName: "takos",
+    badge: { ja: "追加候補", en: "Installable" },
+    name: { ja: "Takos", en: "Takos" },
+    description: {
+      ja: "AI workspace distribution を公開します。",
+      en: "Deploys the Takos AI workspace distribution.",
+    },
+    inputs: [],
+  } as const;
+  const options = await resolveOptions(
+    {
+      dryRun: true,
+      url: "https://app.takosumi.com",
+      workspace: "space_test",
+      cloudflareConnectionMode: "none",
+      verificationMode: "opentofu",
+      sourceGitUrl: "https://github.com/tako0614/takos.git",
+      modulePath: "deploy/opentofu",
+      storeMetadataJson: JSON.stringify(storeMetadata),
+    },
+    { TAKOSUMI_ACCOUNT_SESSION_TOKEN: "session-token" },
+  );
+
+  expect(
+    smokeSourceInstallationCreateBody(options, {
+      sourceId: "src_test",
+      installConfigId: "cfg_generic",
+    }),
+  ).toMatchObject({
+    sourceId: "src_test",
+    installConfigId: "cfg_generic",
+    modulePath: "deploy/opentofu",
+    store: storeMetadata,
+  });
+  const result = dryRunResult(options);
+  expect(result.inputs.storeMetadataDigest).toMatch(/^sha256:[0-9a-f]{64}$/u);
+  expect(JSON.stringify(result)).not.toContain(
+    "AI workspace distribution を公開します。",
+  );
 });
 
 test("platform control-plane smoke dry-run is redacted and complete", async () => {

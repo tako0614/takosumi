@@ -192,6 +192,7 @@ export interface PlatformControlPlaneSmokeOptions {
   readonly sourcePath?: string;
   readonly modulePath?: string;
   readonly installConfigId?: string;
+  readonly storeMetadata?: Readonly<Record<string, JsonSmokeValue>>;
   readonly sourceName?: string;
   readonly timeoutSeconds: number;
   readonly deployTimeoutSeconds: number;
@@ -283,6 +284,7 @@ export interface PlatformControlPlaneSmokeResult {
     readonly sourcePath?: string;
     readonly modulePath?: string;
     readonly installConfigId?: string;
+    readonly storeMetadataDigest?: string;
   };
 }
 
@@ -321,6 +323,8 @@ interface CliArgs {
   readonly sourcePath?: string;
   readonly modulePath?: string;
   readonly installConfigId?: string;
+  readonly storeMetadataJson?: string;
+  readonly storeMetadataJsonFile?: string;
   readonly sourceName?: string;
   readonly verificationMode?: string;
   readonly varsJson?: string;
@@ -710,6 +714,13 @@ export async function resolveOptions(
   const modulePath = args.modulePath ?? env.TAKOSUMI_SMOKE_MODULE_PATH;
   const installConfigId =
     args.installConfigId ?? env.TAKOSUMI_SMOKE_INSTALL_CONFIG_ID;
+  const storeMetadata = await readJsonRecordInput({
+    inline: args.storeMetadataJson ?? env.TAKOSUMI_SMOKE_STORE_METADATA_JSON,
+    file:
+      args.storeMetadataJsonFile ?? env.TAKOSUMI_SMOKE_STORE_METADATA_JSON_FILE,
+    label: "store metadata",
+    fallback: {},
+  });
   const sourceName =
     args.sourceName ?? env.TAKOSUMI_SMOKE_SOURCE_NAME ?? undefined;
   const sourceMode = "git" as const;
@@ -816,6 +827,7 @@ export async function resolveOptions(
     ...(sourceGitUrl ? { sourcePath } : {}),
     ...(modulePath ? { modulePath } : {}),
     ...(installConfigId ? { installConfigId } : {}),
+    ...(Object.keys(storeMetadata).length > 0 ? { storeMetadata } : {}),
     ...(sourceGitUrl && sourceName ? { sourceName } : {}),
     timeoutSeconds: parsePositiveInteger(
       args.timeoutSeconds,
@@ -1576,9 +1588,7 @@ async function resolveSpaceId(
     path: `${API_PREFIX}/workspaces?includeArchived=true`,
   });
   const listedWorkspaces = response.workspaces ?? response.spaces ?? [];
-  const match = listedWorkspaces.find(
-    (space) => space.handle === normalized,
-  );
+  const match = listedWorkspaces.find((space) => space.handle === normalized);
   if (match?.id) {
     if (typeof match.archivedAt === "string" && match.archivedAt.length > 0) {
       await requestJson({
@@ -2042,24 +2052,44 @@ async function createSourceInstallation(
     path: `${API_PREFIX}/workspaces/${encodeURIComponent(
       input.spaceId,
     )}/capsules`,
-    body: {
-      name: options.appName,
-      environment: options.environment,
-      sourceId: input.sourceId,
-      installConfigId: input.installConfigId,
-      ...(options.modulePath ? { modulePath: options.modulePath } : {}),
-      ...(options.runnerProfileId
-        ? { runnerProfileId: options.runnerProfileId }
-        : {}),
-      outputAllowlist: options.outputAllowlist,
-      vars: options.vars,
-    },
+    body: smokeSourceInstallationCreateBody(options, input),
   });
   const created = createdCapsuleFromCreateResponse(response);
   const id = created.id;
   return {
     id,
     ...(created.name ? { name: created.name } : {}),
+  };
+}
+
+export function smokeSourceInstallationCreateBody(
+  options: Pick<
+    PlatformControlPlaneSmokeOptions,
+    | "appName"
+    | "environment"
+    | "modulePath"
+    | "runnerProfileId"
+    | "outputAllowlist"
+    | "vars"
+    | "storeMetadata"
+  >,
+  input: {
+    readonly sourceId: string;
+    readonly installConfigId: string;
+  },
+): Readonly<Record<string, unknown>> {
+  return {
+    name: options.appName,
+    environment: options.environment,
+    sourceId: input.sourceId,
+    installConfigId: input.installConfigId,
+    ...(options.modulePath ? { modulePath: options.modulePath } : {}),
+    ...(options.runnerProfileId
+      ? { runnerProfileId: options.runnerProfileId }
+      : {}),
+    outputAllowlist: options.outputAllowlist,
+    vars: options.vars,
+    ...(options.storeMetadata ? { store: options.storeMetadata } : {}),
   };
 }
 
@@ -3601,8 +3631,7 @@ function dryRunReleaseActivationStatus(
 }
 
 type DefaultSmokeVariableStyle =
-  | "legacy_cloudflare_worker_sample"
-  | "portable_cloudflare_module";
+  "legacy_cloudflare_worker_sample" | "portable_cloudflare_module";
 
 function defaultSmokeVariableStyle(input: {
   readonly sourceGitUrl?: string;
@@ -3621,7 +3650,9 @@ function defaultSmokeVariableStyle(input: {
   const modulePath = input.modulePath?.trim() ?? "";
   const moduleKey = `${sourcePath}/${modulePath}`;
   if (
-    moduleKey.includes("providers/cloudflare/modules/cloudflare-hello-worker") ||
+    moduleKey.includes(
+      "providers/cloudflare/modules/cloudflare-hello-worker",
+    ) ||
     moduleKey.includes("providers/cloudflare/modules/cloudflare-worker-service")
   ) {
     return "legacy_cloudflare_worker_sample";
@@ -3966,6 +3997,7 @@ function publicInputSummary(options: PlatformControlPlaneSmokeOptions): {
   readonly sourceGitUrlDigest?: string;
   readonly sourceRef?: string;
   readonly sourcePath?: string;
+  readonly storeMetadataDigest?: string;
 } {
   return {
     accountSessionTokenSource: options.accountSessionTokenSource,
@@ -3995,6 +4027,9 @@ function publicInputSummary(options: PlatformControlPlaneSmokeOptions): {
           ...(options.modulePath ? { modulePath: options.modulePath } : {}),
           ...(options.installConfigId
             ? { installConfigId: options.installConfigId }
+            : {}),
+          ...(options.storeMetadata
+            ? { storeMetadataDigest: digestJson(options.storeMetadata) }
             : {}),
         }
       : {}),
@@ -4654,9 +4689,7 @@ async function runSelfTest(): Promise<void> {
     ) {
       return new Response(
         JSON.stringify({
-          workspaces: [
-            { id: "space_existing", handle: "existing-workspace" },
-          ],
+          workspaces: [{ id: "space_existing", handle: "existing-workspace" }],
         }),
         { status: 200, headers: { "content-type": "application/json" } },
       );
@@ -4829,6 +4862,8 @@ Options:
   --source-path <path>                            Source archive path inside the Git repo, default .
   --module-path <path>                            OpenTofu Capsule module path inside the SourceSnapshot archive
   --install-config-id <id>                        install config to use for the Capsule, default selectable generic Capsule
+  --store-metadata-json <json>                    repository/store presentation metadata copied into Capsule creation
+  --store-metadata-json-file <path>               read repository/store presentation metadata from JSON
   --source-name <name>                            Source display name, default <app-name>-source
   --verification-mode <cloudflare-worker|opentofu> default cloudflare-worker; opentofu verifies plan/apply/destroy without public Worker checks
   --vars-json <json>                              OpenTofu variable object passed to the generated root
