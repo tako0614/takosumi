@@ -646,7 +646,7 @@ export const en: Record<keyof typeof ja, string> = {
   "new.sourceAccess.tokenPlaceholder": "Read-only token",
   "new.sourceAccess.saveToken": "Save access",
   "new.sourceAccess.tokenBody":
-    "The token is stored as write-only source access and is used only while checking this workspace's source.",
+    "It is stored securely and cannot be read back, and is used only to check this workspace's source.",
   "new.sourceAccess.errorTokenRequired": "Enter an access token.",
   "new.sourceAccess.errorSaveToken":
     "Save the private link token before checking.",
@@ -658,6 +658,7 @@ export const en: Record<keyof typeof ja, string> = {
   "new.sourceAccess.defaultDisplayName": "{name} source access",
   "new.name": "Service name",
   "new.vars.projectName": "Service ID",
+  "new.hostPreview": "Public URL: {host}",
   "new.advanced.title": "Advanced settings",
   "new.env.title": "Environment variables",
   "new.env.body":
@@ -821,6 +822,10 @@ export const en: Record<keyof typeof ja, string> = {
   "workspaceSettings.general.archiveConfirm":
     "This workspace will be hidden from the normal switcher. You can still inspect it through the admin API.",
   "workspaceSettings.general.archived": "Workspace archived.",
+  "workspaceSettings.general.notFound":
+    "This workspace was not found. Switch workspaces, or restore one below.",
+  "workspaceSettings.general.archivedTitle": "Archived workspaces",
+  "workspaceSettings.general.unarchive": "Restore",
   "workspaceSettings.general.archiveLastError":
     "You cannot archive the last workspace.",
   "workspaceSettings.general.nameRequired": "Enter a display name.",
