@@ -145,9 +145,6 @@ export interface StoreBrowserProps {
   readonly showSourceControls?: boolean;
   readonly showSortControl?: boolean;
   readonly loadRemoteOnMount?: boolean;
-  /** Optional per-listing badge (e.g. "すぐ使える" install readiness) injected
-   * by the host — the browser stays layout- and workspace-agnostic. */
-  readonly listingBadge?: (listing: TcsListing) => string | undefined;
 }
 
 export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
@@ -282,14 +279,6 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
     );
   };
 
-  const listingBadge = (listing: TcsListing) => {
-    const label = props.listingBadge?.(listing);
-    return (
-      <Show when={label}>
-        {(text) => <span class="tcs-tag tcs-ready-badge">{text()}</span>}
-      </Show>
-    );
-  };
 
   return (
     <div class="tcs-root">
@@ -442,18 +431,11 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
                     </button>
                   </div>
                 </div>
-                <Show
-                  when={
-                    listing.seenOn.length > 1 || props.listingBadge?.(listing)
-                  }
-                >
+                <Show when={listing.seenOn.length > 1}>
                   <div class="tcs-card-meta">
-                    {listingBadge(listing)}
-                    <Show when={listing.seenOn.length > 1}>
-                      <span class="tcs-tag tcs-muted">
-                        +{listing.seenOn.length - 1} {s("alsoOn", props.locale)}
-                      </span>
-                    </Show>
+                    <span class="tcs-tag tcs-muted">
+                      +{listing.seenOn.length - 1} {s("alsoOn", props.locale)}
+                    </span>
                   </div>
                 </Show>
                 <div class="tcs-card-actions">{installButton(listing)}</div>
@@ -557,7 +539,6 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
               </p>
               <div class="tcs-detail-actions">
                 {installButton(listing())}
-                {listingBadge(listing())}
               </div>
               <details class="tcs-advanced">
                 <summary>{s("technicalDetails", props.locale)}</summary>

@@ -2,11 +2,11 @@
  * ストア — the primary discovery tab. Wraps the shared StoreBrowser with the
  * decentralized Takosumi store(s). [追加] hands the listing to the one install
  * flow (`/new?…&auto=1`), which auto-starts when nothing needs the user's
- * input; listings that install with zero typing carry a readiness badge
- * derived from the listing + the workspace's provider connections
- * (lib/install-readiness.ts).
+ * input. Whether an app is one-tap installable is decided by the install flow
+ * against the real (store-owned) repo metadata — the store feed strips a
+ * listing's input schema, so the browser makes no client-side readiness claim.
  */
-import { createMemo, createResource, onMount } from "solid-js";
+import { onMount } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import Page from "../account/components/auth/Page.tsx";
 import PageHeader from "../../components/ui/PageHeader.tsx";
@@ -17,11 +17,6 @@ import {
   setCurrentWorkspaceId,
 } from "../../lib/workspace-state.ts";
 import { listWorkspacesCached } from "../../lib/workspace-list.ts";
-import { listProviderConnections } from "../../lib/control-api.ts";
-import {
-  deriveInstallReadiness,
-  installReadinessContext,
-} from "../../lib/install-readiness.ts";
 import { StoreBrowser } from "./StoreBrowser.tsx";
 import { buildNewQuery } from "./store-link.ts";
 import type { TcsListing } from "../../lib/tcs-client.ts";
@@ -43,18 +38,6 @@ function Inner() {
     }
   });
 
-  const [providerConnections] = createResource(
-    () => currentWorkspaceId() || null,
-    (workspaceId) => listProviderConnections(workspaceId).catch(() => []),
-  );
-  const readinessContext = createMemo(() =>
-    installReadinessContext(providerConnections() ?? []),
-  );
-  const listingBadge = (listing: TcsListing): string | undefined =>
-    deriveInstallReadiness(listing, readinessContext()) === "oneTap"
-      ? t("store.badge.oneTap")
-      : undefined;
-
   const onConfigure = (listing: TcsListing) => {
     navigate(`/new?${buildNewQuery(listing)}&auto=1`);
   };
@@ -65,7 +48,6 @@ function Inner() {
       <StoreBrowser
         locale={locale()}
         onConfigure={onConfigure}
-        listingBadge={listingBadge}
         showSourceControls={false}
       />
     </div>
