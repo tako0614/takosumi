@@ -3,6 +3,7 @@ import {
   appSurfacesFromDeployment,
   appSurfaceFromInstallConfigStore,
   appSurfacesFromOutputs,
+  deploymentReadinessAfterApply,
   effectiveCapsuleStatus,
   isDeploymentPubliclyOpenable,
   launchUrlFromDeployment,
@@ -76,6 +77,45 @@ describe("appSurfacesFromOutputs", () => {
       name: "yurucommu",
       image: "https://example.test/yurucommu.svg",
     });
+  });
+
+  test("derives the launch URL from install inputs when the module declares no URL output", () => {
+    // An app whose OpenTofu module forgot to output its URL is still openable:
+    // the public host is reconstructed from the public_endpoint projection +
+    // the value we set at install (variableMapping).
+    const surface = appSurfaceFromInstallConfigStore(
+      {
+        id: "cfg_app",
+        name: "app",
+        sourceKind: "first_party_capsule",
+        trustLevel: "official",
+        variableMapping: { public_subdomain: "photo-blog" },
+        store: {
+          order: 1,
+          surface: "service",
+          kind: "worker",
+          provider: "cloudflare",
+          suggestedName: "app",
+          badge: { ja: "追加候補", en: "Installable" },
+          name: { ja: "App", en: "App" },
+          description: { ja: "アプリ", en: "App" },
+          inputs: [],
+          installExperience: {
+            projections: [
+              {
+                kind: "public_endpoint",
+                variables: { subdomain: "public_subdomain" },
+                baseDomain: "app.takos.jp",
+              },
+            ],
+          },
+        },
+        createdAt: "2026-07-05T00:00:00.000Z",
+        updatedAt: "2026-07-05T00:00:00.000Z",
+      } as never,
+      "ja",
+    );
+    expect(surface?.url).toBe("https://photo-blog.app.takos.jp");
   });
 
   test("store building blocks do not declare launcher app surfaces", () => {
@@ -253,8 +293,14 @@ describe("release activation launch gating", () => {
   }
 
   test("requires activation success before a takosumi_release URL opens", () => {
+    expect(deploymentReadinessAfterApply(undefined, [], "cap_1")).toBe(
+      "settling",
+    );
     expect(releaseActivationStatusForDeployment(deployment, [], "cap_1")).toBe(
       "pending",
+    );
+    expect(deploymentReadinessAfterApply(deployment, [], "cap_1")).toBe(
+      "activation_pending",
     );
     expect(isDeploymentPubliclyOpenable(deployment, [], "cap_1")).toBe(false);
     expect(launchUrlFromDeployment(deployment, [], "cap_1")).toBeUndefined();
@@ -265,12 +311,48 @@ describe("release activation launch gating", () => {
     expect(
       releaseActivationStatusForDeployment(deployment, events, "cap_1"),
     ).toBe("succeeded");
+    expect(deploymentReadinessAfterApply(deployment, events, "cap_1")).toBe(
+      "ready",
+    );
     expect(isDeploymentPubliclyOpenable(deployment, events, "cap_1")).toBe(
       true,
     );
     expect(launchUrlFromDeployment(deployment, events, "cap_1")).toBe(
       "https://yuru.test/",
     );
+  });
+
+  test("marks matching release activation failure as a failed deployment completion", () => {
+    const events = [activity("release_activation.failed")];
+    expect(
+      releaseActivationStatusForDeployment(deployment, events, "cap_1"),
+    ).toBe("failed");
+    expect(deploymentReadinessAfterApply(deployment, events, "cap_1")).toBe(
+      "activation_failed",
+    );
+    expect(isDeploymentPubliclyOpenable(deployment, events, "cap_1")).toBe(
+      false,
+    );
+  });
+
+  test("does not reuse a previous apply's activation success", () => {
+    const current = activity("release_activation.succeeded");
+    const previous = {
+      ...current,
+      targetId: "dep_previous",
+      runId: "apply_previous",
+      metadata: {
+        ...current.metadata,
+        deploymentId: "dep_previous",
+        applyRunId: "apply_previous",
+      },
+    };
+    expect(
+      releaseActivationStatusForDeployment(deployment, [previous], "cap_1"),
+    ).toBe("pending");
+    expect(
+      deploymentReadinessAfterApply(deployment, [previous], "cap_1"),
+    ).toBe("activation_pending");
   });
 
   test("uses release activity when takosumi_release is hidden from public outputs", () => {
@@ -335,6 +417,7 @@ describe("release activation launch gating", () => {
     expect(releaseActivationStatusForDeployment(direct, [], "cap_1")).toBe(
       "not_required",
     );
+    expect(deploymentReadinessAfterApply(direct, [], "cap_1")).toBe("ready");
     expect(launchUrlFromDeployment(direct, [], "cap_1")).toBe(
       "https://hello.test/",
     );

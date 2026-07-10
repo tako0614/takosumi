@@ -2,6 +2,7 @@
  * Shared Capsule-presentation helpers (list + detail).
  */
 import { type MessageKey, t } from "../i18n/index.ts";
+import { installExperiencePublicEndpoint } from "takosumi-contract";
 import type { ActivityEvent, InstallConfig } from "./control-api.ts";
 
 export const PENDING_NEEDS_ATTENTION_AFTER_MS = 30 * 60 * 1000;
@@ -98,8 +99,11 @@ export function launchUrlFromOutputs(
   return undefined;
 }
 
-type ReleaseActivationStatus =
+export type ReleaseActivationStatus =
   "not_required" | "pending" | "succeeded" | "failed";
+
+export type DeploymentReadiness =
+  "settling" | "activation_pending" | "ready" | "activation_failed";
 
 interface LaunchableDeployment {
   readonly id: string;
@@ -140,10 +144,14 @@ function releaseActivationEventMatchesDeployment(
   const eventCapsuleId =
     activityString(metadata.capsuleId) ??
     activityString(metadata.installationId);
-  return (
+  const matchesDeploymentIdentity =
     event.runId === deployment.applyRunId ||
     applyRunId === deployment.applyRunId ||
-    deploymentId === deployment.id ||
+    deploymentId === deployment.id;
+  if (event.runId || applyRunId || deploymentId) {
+    return matchesDeploymentIdentity;
+  }
+  return (
     (capsuleId !== undefined && eventCapsuleId === capsuleId) ||
     (deployment.installationId !== undefined &&
       eventCapsuleId === deployment.installationId)
@@ -179,6 +187,28 @@ export function releaseActivationStatusForDeployment(
   )
     ? "pending"
     : "not_required";
+}
+
+/**
+ * User-facing readiness after OpenTofu apply. A missing Deployment is still
+ * settling, while Capsules with release activation stay non-ready until the
+ * matching activity reaches `release_activation.succeeded`.
+ */
+export function deploymentReadinessAfterApply(
+  deployment: LaunchableDeployment | undefined,
+  events: readonly ActivityEvent[] = [],
+  capsuleId?: string,
+): DeploymentReadiness {
+  if (!deployment) return "settling";
+  switch (releaseActivationStatusForDeployment(deployment, events, capsuleId)) {
+    case "pending":
+      return "activation_pending";
+    case "failed":
+      return "activation_failed";
+    case "not_required":
+    case "succeeded":
+      return "ready";
+  }
 }
 
 export function isDeploymentPubliclyOpenable(
@@ -232,7 +262,53 @@ export function appSurfaceFromInstallConfigStore(
   return {
     name: store.name[language] ?? store.suggestedName ?? config.name,
     image: urlValue(store.iconUrl),
+    // Even when the OpenTofu module declares no URL output, the public host
+    // is knowable: the store install experience's public_endpoint projection
+    // named the variable(s), and we set that value at install (it survives in
+    // the install config's variableMapping). Derive it so an app whose module
+    // just forgot to output its URL is still openable from the tile.
+    ...(publicUrlFromInstallConfig(config)
+      ? { url: publicUrlFromInstallConfig(config) }
+      : {}),
   };
+}
+
+/**
+ * Reconstruct the intended public URL of a store-installed Capsule from its
+ * install inputs, for the case where the deployed module declares no URL
+ * output. Reads the `public_endpoint` install-experience projection to learn
+ * which variables carry the URL / subdomain, then reads the value we set at
+ * install from the config's `variableMapping`. Returns undefined for services
+ * that declared no public endpoint (a storage / building-block Capsule).
+ */
+export function publicUrlFromInstallConfig(
+  config: InstallConfig | undefined,
+): string | undefined {
+  const vars = config?.variableMapping ?? {};
+  const readVar = (name: string | undefined): string | undefined => {
+    if (!name) return undefined;
+    const value = vars[name];
+    return typeof value === "string" && value.trim() ? value.trim() : undefined;
+  };
+  // Best: the store app declared a public_endpoint — use its named url
+  // variable, or subdomain + its declared base domain (unambiguous).
+  const endpoint = installExperiencePublicEndpoint(
+    config?.store?.installExperience,
+  );
+  if (endpoint) {
+    const explicitUrl = readVar(endpoint.urlVariable);
+    if (explicitUrl && isUrlString(explicitUrl)) return explicitUrl;
+    const subdomain = readVar(endpoint.subdomainVariable);
+    const baseDomain = endpoint.baseDomain?.trim().replace(/^\*\.|\.$/gu, "");
+    if (subdomain && baseDomain) return `https://${subdomain}.${baseDomain}`;
+  }
+  // Fallback: a full https URL was set under a standard variable name, even
+  // without a projection. Only a complete URL — never guess a base domain.
+  for (const key of ["public_url", "app_url"]) {
+    const value = readVar(key);
+    if (value && isUrlString(value)) return value;
+  }
+  return undefined;
 }
 
 function nonEmptyString(value: unknown): string | undefined {
