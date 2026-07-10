@@ -1310,6 +1310,9 @@ export const ja = {
   "billing.subscription.plan": "プラン",
   "billing.subscription.status": "状態",
   "billing.subscription.nextBilling": "次回請求",
+  "billing.subscription.endsOn": "終了日",
+  "billing.subscription.status.cancelAtPeriodEnd": "解約予定",
+  "billing.subscription.cancelNotice": "このサブスクリプションは現在の請求期間の終了時に解約されます。継続するにはプランを再開してください。",
   "billing.subscription.manage": "サブスク管理・解約",
   "billing.subscription.manageHint":
     "Stripe の管理画面で支払い方法、請求書、プラン変更、解約を操作できます。",

@@ -214,6 +214,29 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
     }
   };
 
+  // The Stripe customer portal is the recovery path (update card, resume/cancel
+  // a subscription). It must be reachable whenever billing is configured — not
+  // only when a current subscription exists — else a past_due/canceled account
+  // with no active sub has no way in.
+  const portalAction = () => (
+    <Show when={canOpenPortal()}>
+      <div class="wc-form-actions">
+        <Button
+          variant="secondary"
+          type="button"
+          busy={portalBusy()}
+          onClick={() => void openPortal()}
+          icon={<ExternalLink size={16} />}
+        >
+          {portalBusy()
+            ? t("billing.portalOpening")
+            : t("billing.subscription.manage")}
+        </Button>
+      </div>
+      <p class="muted">{t("billing.subscription.manageHint")}</p>
+    </Show>
+  );
+
   const usageColumns = createMemo<readonly Column<UsageEvent>[]>(() => {
     const columns: Column<UsageEvent>[] = [
       {
@@ -411,37 +434,32 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
                       },
                       {
                         label: t("billing.subscription.status"),
-                        value: subscriptionStatusLabel(subscription().status),
+                        value: subscription().cancelAtPeriodEnd
+                          ? t("billing.subscription.status.cancelAtPeriodEnd")
+                          : subscriptionStatusLabel(subscription().status),
                       },
                       {
-                        label: t("billing.subscription.nextBilling"),
+                        label: subscription().cancelAtPeriodEnd
+                          ? t("billing.subscription.endsOn")
+                          : t("billing.subscription.nextBilling"),
                         value: subscription().currentPeriodEnd
                           ? formatDateTime(subscription().currentPeriodEnd!)
                           : "-",
                       },
                     ]}
                   />
-                  <Show when={canOpenPortal()}>
-                    <div class="wc-form-actions">
-                      <Button
-                        variant="secondary"
-                        type="button"
-                        busy={portalBusy()}
-                        onClick={() => void openPortal()}
-                        icon={<ExternalLink size={16} />}
-                      >
-                        {portalBusy()
-                          ? t("billing.portalOpening")
-                          : t("billing.subscription.manage")}
-                      </Button>
-                    </div>
-                    <p class="muted">{t("billing.subscription.manageHint")}</p>
+                  <Show when={subscription().cancelAtPeriodEnd}>
+                    <Toast tone="neutral">
+                      {t("billing.subscription.cancelNotice")}
+                    </Toast>
                   </Show>
+                  {portalAction()}
                 </div>
               )}
             </Match>
             <Match when={!currentSubscription()}>
               <p class="muted">{t("billing.subscription.empty")}</p>
+              {portalAction()}
             </Match>
           </Switch>
         </Card>
@@ -632,6 +650,8 @@ interface SubscriptionView {
   readonly plan: string;
   readonly status: string;
   readonly currentPeriodEnd?: string;
+  /** Pending cancellation: still active, but will not renew at period end. */
+  readonly cancelAtPeriodEnd?: boolean;
 }
 
 function subscriptionView(
@@ -646,6 +666,7 @@ function subscriptionView(
         stripeSubscription.status ??
         workspaceBilling?.subscription?.status ??
         "-",
+      cancelAtPeriodEnd: stripeSubscription.cancelAtPeriodEnd === true,
       ...(stripeSubscription.currentPeriodEnd
         ? { currentPeriodEnd: stripeSubscription.currentPeriodEnd }
         : workspaceBilling?.subscription?.currentPeriodEnd
