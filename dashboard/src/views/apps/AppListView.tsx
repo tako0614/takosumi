@@ -166,8 +166,9 @@ function Inner() {
     }
   });
 
-  const [overview] = createResource(workspaceId, (id) =>
-    getDashboardOverviewCached(id, { capsuleLimit: 500 }),
+  const [overview, { refetch: refetchOverview }] = createResource(
+    workspaceId,
+    (id) => getDashboardOverviewCached(id, { capsuleLimit: 500 }),
   );
   createEffect(() => {
     const error = overview.error as ControlApiError | undefined;
@@ -313,6 +314,14 @@ function Inner() {
               {t("common.fetchFailed", {
                 message: (overview.error as ControlApiError).message,
               })}
+              <Button
+                variant="secondary"
+                size="sm"
+                type="button"
+                onClick={() => void refetchOverview()}
+              >
+                {t("common.retry")}
+              </Button>
             </Toast>
           </Match>
           <Match when={overview()}>

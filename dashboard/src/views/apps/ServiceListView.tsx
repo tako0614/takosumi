@@ -19,6 +19,7 @@ import type { JSX } from "solid-js";
 import Page from "../account/components/auth/Page.tsx";
 import { currentWorkspaceId } from "../../lib/workspace-state.ts";
 import { getDashboardOverviewCached } from "../../lib/dashboard-overview.ts";
+import { listCapsulesCached } from "../../lib/capsule-list.ts";
 import { type ControlApiError, type Capsule } from "../../lib/control-api.ts";
 import {
   effectiveCapsuleStatus,
@@ -57,7 +58,22 @@ function Inner() {
   const [overview] = createResource(workspaceId, (id) =>
     getDashboardOverviewCached(id),
   );
-  const capsules = createMemo(() => overview()?.capsules ?? []);
+  // The overview projection caps the capsule list (nextCapsuleCursor); the
+  // full service list must show every service, so fetch the rest when capped.
+  const fullListWorkspaceId = createMemo(() =>
+    overview()?.nextCapsuleCursor ? workspaceId() : undefined,
+  );
+  const [fullCapsules] = createResource(fullListWorkspaceId, (id) =>
+    listCapsulesCached(id, { includeDestroyed: false }),
+  );
+  const capsules = createMemo(() => {
+    const base = overview()?.capsules ?? [];
+    const extra = fullCapsules() ?? [];
+    if (extra.length === 0) return base;
+    const byId = new Map<string, Capsule>();
+    for (const c of [...base, ...extra]) if (!byId.has(c.id)) byId.set(c.id, c);
+    return [...byId.values()];
+  });
   const visible = createMemo(() =>
     (capsules() ?? []).filter(isVisibleServiceCapsule),
   );

@@ -165,10 +165,10 @@ export default function WorkspaceSwitcher(props: Props = {}) {
                 <div class="topbar-workspace-menu-head">
                   {t("workspace.label")}
                 </div>
-                <ul class="topbar-workspace-menu-list">
+                <ul class="topbar-workspace-menu-list" role="none">
                   <For each={loadedWorkspaces()}>
                     {(workspace) => (
-                      <li>
+                      <li role="none">
                         <button
                           type="button"
                           role="menuitemradio"
@@ -199,6 +199,7 @@ export default function WorkspaceSwitcher(props: Props = {}) {
                 <A
                   href="/advanced/workspace"
                   class="topbar-workspace-settings"
+                  role="menuitem"
                   onClick={() => setSwitcherOpen(false)}
                 >
                   <Settings size={15} />

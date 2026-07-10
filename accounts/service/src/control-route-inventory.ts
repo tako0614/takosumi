@@ -257,6 +257,12 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
       auth: "account-session",
     },
     {
+      method: "PATCH",
+      path: "/api/v1/capsule-configs/{capsuleConfigId}",
+      summary: "Update a Capsule creation config",
+      auth: "account-session",
+    },
+    {
       method: "GET",
       path: "/api/v1/providers",
       summary: "List provider connection recipes and policy metadata",
