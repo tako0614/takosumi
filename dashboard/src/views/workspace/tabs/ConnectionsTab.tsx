@@ -131,11 +131,13 @@ export default function ConnectionsTab(props: {
     ? installReturnPathFromContext(installReturn)
     : undefined;
   // ----- register form state -----------------------------------------------
-  // Default to the bring-your-own-key path: connecting ANY provider with the
-  // user's own credential is the first-class flow (no allowlist, no approval, no
-  // billing). The curated presets below are optional setup shortcuts.
+  // Default to the GUIDED presets (Cloudflare pre-scoped token link, AWS, GCP,
+  // Hetzner, R2): they are the polished path most users need. The raw
+  // bring-your-own-key env editor stays fully supported — any provider, no
+  // allowlist / approval / billing — but as the quiet advanced path behind
+  // openByokEditor below.
   const [provider, setProvider] = createSignal<string>(
-    GENERIC_ENV_PROVIDER_OPTION,
+    PROVIDERS[0]?.provider ?? GENERIC_ENV_PROVIDER_OPTION,
   );
   const [displayName, setDisplayName] = createSignal("");
   // Secret material lives ONLY for the lifetime of the form; cleared on submit.
@@ -209,6 +211,16 @@ export default function ConnectionsTab(props: {
     setHelperCloudflareAccountId("");
     setHelperCloudflareWorkersSubdomain("");
     setDisplayName("");
+    setGenericEnvProvider("");
+    setEnvPairs([{ name: "", value: "" }]);
+  };
+
+  // Quiet advanced path: switch the add flow to the raw BYOK env editor.
+  // Dropping any half-entered secret values mirrors the provider switcher.
+  const openByokEditor = () => {
+    setProvider(GENERIC_ENV_PROVIDER_OPTION);
+    setValues({});
+    setHelperToken("");
     setGenericEnvProvider("");
     setEnvPairs([{ name: "", value: "" }]);
   };
@@ -363,8 +375,12 @@ export default function ConnectionsTab(props: {
   const [testBusyIds, setTestBusyIds] = createSignal<ReadonlySet<string>>(
     new Set(),
   );
+  interface TestFailure {
+    readonly message: string;
+    readonly detail?: string;
+  }
   const [testErrors, setTestErrors] = createSignal<
-    Readonly<Record<string, string>>
+    Readonly<Record<string, TestFailure>>
   >({});
   const testBusy = (id: string) => testBusyIds().has(id);
   const testError = (id: string) => testErrors()[id] ?? null;
@@ -376,11 +392,11 @@ export default function ConnectionsTab(props: {
       return next;
     });
   };
-  const setTestError = (id: string, message: string | null) => {
+  const setTestError = (id: string, failure: TestFailure | null) => {
     setTestErrors((prev) => {
       const next = { ...prev };
-      if (message === null) delete next[id];
-      else next[id] = message;
+      if (failure === null) delete next[id];
+      else next[id] = failure;
       return next;
     });
   };
@@ -392,33 +408,50 @@ export default function ConnectionsTab(props: {
       const result = (await testConnection(id)) as
         { readonly status?: string; readonly detail?: string } | undefined;
       await refreshConnections();
+      // The verified hint belongs to the LAST-CREATED connection only: testing
+      // some other row must not flip lastCreatedReady() (and with it the
+      // install-return offer) for a connection that was never verified.
+      const isLastCreated = lastCreatedConnectionId() === id;
       if (result?.status && result.status !== "verified") {
-        setLastCreatedVerifiedHint(false);
-        setTestError(
-          id,
-          result.detail ??
-            t("conn.test.notReady", {
-              status: result.status,
-            }),
-        );
+        if (isLastCreated) setLastCreatedVerifiedHint(false);
+        // The primary sentence stays localized (the backend enum is mapped
+        // through providerConnectionStatusLabel); the raw server detail is
+        // supplementary reference text, never the headline.
+        setTestError(id, {
+          message: t("conn.test.notReady", {
+            status: providerConnectionStatusLabel(result.status),
+          }),
+          detail: result.detail,
+        });
       } else if (result?.status === "verified") {
-        setLastCreatedVerifiedHint(true);
+        if (isLastCreated) setLastCreatedVerifiedHint(true);
       }
     } catch (e) {
-      setTestError(id, e instanceof Error ? e.message : String(e));
+      setTestError(id, {
+        message: e instanceof Error ? e.message : String(e),
+      });
     } finally {
       setTestBusy(id, false);
     }
   };
 
+  // Which connection is being revoked — remove is one shared action, so
+  // without this every row's delete button would look busy during a single
+  // revoke (same per-row idiom as SharesTab/BackupsTab).
+  const [removingId, setRemovingId] = createSignal<string | null>(null);
   const remove = createAction(async (id: string) => {
-    await revokeConnection(id);
-    if (lastCreatedConnectionId() === id) {
-      setLastCreatedConnectionId(null);
-      setLastCreatedConnectionName(null);
-      setLastCreatedVerifiedHint(false);
+    setRemovingId(id);
+    try {
+      await revokeConnection(id);
+      if (lastCreatedConnectionId() === id) {
+        setLastCreatedConnectionId(null);
+        setLastCreatedConnectionName(null);
+        setLastCreatedVerifiedHint(false);
+      }
+      await refreshConnections();
+    } finally {
+      setRemovingId(null);
     }
-    await refreshConnections();
   });
 
   const providerConnectionForConnectionId = (connectionId: string | null) =>
@@ -488,6 +521,7 @@ export default function ConnectionsTab(props: {
                 size="sm"
                 type="button"
                 onClick={() => void confirmRemoveProviderConnection(connection)}
+                busy={remove.busy() && removingId() === connection.id}
                 disabled={remove.busy()}
                 icon={<Trash size={14} />}
               >
@@ -495,7 +529,16 @@ export default function ConnectionsTab(props: {
               </Button>
             </div>
             <Show when={testError(connection.id)}>
-              {(m) => <Toast tone="error">{m()}</Toast>}
+              {(failure) => (
+                <Toast tone="error">
+                  {failure().message}
+                  <Show when={failure().detail}>
+                    {(detail) => (
+                      <span class="wc-conn-test-detail">{detail()}</span>
+                    )}
+                  </Show>
+                </Toast>
+              )}
             </Show>
           </li>
         )}
@@ -682,28 +725,10 @@ export default function ConnectionsTab(props: {
           />
           <div class="wc-form">
             <Show when={!isGenericEnvProvider()}>
-              {/* Presets are optional setup shortcuts; the first-class path is
-                  bringing your own key for any provider (button returns there). */}
-              <div class="wc-preset-intro">
-                <p class="muted">{t("conn.presets.body")}</p>
-                <div class="wc-form-actions">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    type="button"
-                    onClick={() => {
-                      setProvider(GENERIC_ENV_PROVIDER_OPTION);
-                      setValues({});
-                      setHelperToken("");
-                      setGenericEnvProvider("");
-                      setEnvPairs([{ name: "", value: "" }]);
-                    }}
-                  >
-                    {t("conn.byok.backToByok")}
-                  </Button>
-                </div>
-              </div>
-              <FormField label={t("conn.presets.provider")}>
+              {/* Guided presets are the default surface: pick a provider and
+                  follow its pre-scoped token flow. The raw BYOK env editor is
+                  the advanced path behind the quiet control at the bottom. */}
+              <FormField label={t("conn.add.provider")}>
                 <Select
                   id="connection-provider"
                   name="provider"
@@ -948,11 +973,12 @@ export default function ConnectionsTab(props: {
                 </Show>
               }
             >
-              {/* First-class bring-your-own-key editor: any OpenTofu provider,
-                  no allowlist / approval / billing. */}
+              {/* Advanced bring-your-own-key editor: any OpenTofu provider,
+                  no allowlist / approval / billing. h2 keeps the heading
+                  hierarchy flat under the page h1, like sibling sections. */}
               <div class="wc-guided">
                 <div class="wc-byok-intro">
-                  <h4 class="wc-byok-title">{t("conn.byok.title")}</h4>
+                  <h2 class="wc-byok-title">{t("conn.byok.title")}</h2>
                   <p class="muted">{t("conn.byok.body")}</p>
                   <p class="wc-byok-note">{t("conn.byok.noBillingNote")}</p>
                 </div>
@@ -1061,6 +1087,21 @@ export default function ConnectionsTab(props: {
                   </div>
                   <ActionError error={createGenericEnvProvider.error} />
                 </form>
+              </div>
+            </Show>
+
+            <Show when={!isGenericEnvProvider()}>
+              {/* Quiet advanced entry: providers without a preset connect via
+                  the raw BYOK env editor. */}
+              <div class="wc-form-actions">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  type="button"
+                  onClick={openByokEditor}
+                >
+                  {t("conn.add.genericEnvOption")}
+                </Button>
               </div>
             </Show>
           </div>

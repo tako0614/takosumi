@@ -5,8 +5,12 @@
  * wording in the active locale. Unknown operations render as neutral copy in
  * primary UI; raw backend values belong in folded support/debug details.
  *
- * Vocabulary contract: Capsule / 追加 / 変更を確認 / デプロイ / デプロイ済み
- * (Capsule / Add / Review changes / Deploy / Deployed) — see i18n/ja.ts.
+ * Vocabulary contract (see i18n/ja.ts): the user-facing noun for a Capsule is
+ * サービス / service on the add-flow (/new), service detail, store, runs, and
+ * workspace surfaces; the home launcher and the install celebration call the
+ * same thing アプリ / app. Never mix the two nouns within one panel. Verbs:
+ * 追加 / 変更を確認 / デプロイ / デプロイ済み (Add / Review changes / Deploy /
+ * Deployed).
  */
 import { type MessageKey, t } from "../i18n/index.ts";
 import type { Tone } from "../components/ui/Badge.tsx";

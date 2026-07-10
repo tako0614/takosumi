@@ -694,7 +694,69 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain('t("new.flow.back")');
     expect(newAppViewSource).toContain("onClick={returnToDiscovery}");
     expect(ja["new.flow.back"]).toBe("選び直す");
-    expect(en["new.flow.back"]).toBe("Choose a different app");
+    expect(en["new.flow.back"]).toBe("Choose a different service");
+  });
+
+  test("選び直す and a successful store pick move focus instead of dropping it on <body>", () => {
+    expect(newAppViewSource).toContain("let discoveryHeading:");
+    expect(newAppViewSource).toContain("let chosenFlowSection:");
+    expect(newAppViewSource).toContain(
+      "queueMicrotask(() => discoveryHeading?.focus());",
+    );
+    expect(newAppViewSource).toContain(
+      "queueMicrotask(() => chosenFlowSection?.focus());",
+    );
+    expect(newAppViewSource).toMatch(
+      /<h2 ref=\{discoveryHeading\} tabindex=\{-1\}>/u,
+    );
+    expect(newAppViewSource).toContain("ref={chosenFlowSection}");
+  });
+
+  test("the pick-busy live region mounts empty and fills a microtask later; the spinner is decorative", () => {
+    // The Toast microtask pattern: a live region only announces text changing
+    // INSIDE an already-mounted region, so the panel mounts empty first. The
+    // Spinner carries its own role=status and is aria-hidden within it.
+    expect(newAppViewSource).toContain("function StorePickBusyStatus");
+    expect(newAppViewSource).toContain(
+      "onMount(() => queueMicrotask(() => setAnnounce(true)));",
+    );
+    expect(newAppViewSource).toMatch(
+      /aria-hidden="true"[\s\S]{0,80}<Spinner size=\{16\} \/>/u,
+    );
+    // The compact-row layout is real (the grid base stacked spinner + text).
+    expect(appViewsCssSource).toMatch(/\.av-pick-status \{\s*display: flex;/u);
+    expect(appViewsCssSource).toMatch(
+      /\.av-pick-error \{\s*justify-items: start;/u,
+    );
+  });
+
+  test("a >8s check does not leave the stale slow-flag set for the next pick", () => {
+    // abortActiveFlow resets it (covers input edits and 選び直す via
+    // resetCompatibility); both flow finally-blocks reset it on completion.
+    const abortBlock = newAppViewSource.slice(
+      newAppViewSource.indexOf("const abortActiveFlow = () => {"),
+      newAppViewSource.indexOf("const finishAbortableFlow"),
+    );
+    expect(abortBlock).toContain("setSourceSyncSlow(false);");
+    expect(
+      newAppViewSource.match(/setSourceSyncSlow\(false\);/gu)?.length ?? 0,
+    ).toBeGreaterThanOrEqual(4);
+  });
+
+  test("editing during an install cannot abort the flow; retries reuse the created Source", () => {
+    // Inputs wired to resetCompatibility are disabled while the install runs…
+    expect(
+      newAppViewSource.match(/disabled=\{busy\(\)\}/gu)?.length ?? 0,
+    ).toBeGreaterThanOrEqual(15);
+    // …and the registered Source survives edits that do not change its
+    // coordinates (URL / ref / auth), so retries stop accumulating Sources.
+    expect(newAppViewSource).toContain(
+      "const recordCreatedSource = (sourceId: string) => {",
+    );
+    expect(newAppViewSource).toContain(
+      "createdSourceIdentity !== sourceIdentitySnapshot()",
+    );
+    expect(newAppViewSource).toContain("recordCreatedSource(result.sourceId)");
   });
 
   test("install failures expose a support request id and demote the stale check card", () => {

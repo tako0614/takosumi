@@ -39,4 +39,22 @@ describe("SharesTab revoke confirmation", () => {
     expect(ja["shares.revokeConfirmTitle"]).toBe("共有の取り消し");
     expect(en["shares.revokeConfirmTitle"]).toBe("Revoke share");
   });
+
+  test("approve/revoke failures surface beside the table, not in the collapsed create form", () => {
+    // The approve/revoke buttons live in the table; their errors rendered
+    // inside the collapsed create <details>, so a failed revoke looked like a
+    // silent no-op. They must render in the list section next to the table.
+    const listSection = source.slice(source.indexOf('t("shares.list.title")'));
+    expect(listSection).toContain("approve.error()");
+    expect(listSection).toContain("revoke.error()");
+    const createForm = source.slice(
+      source.indexOf('t("shares.create.title")'),
+      source.indexOf('t("shares.list.title")'),
+    );
+    expect(createForm).not.toContain("approve.error()");
+    expect(createForm).not.toContain("revoke.error()");
+    // Create-form errors stay with the form.
+    expect(createForm).toContain("create.error()");
+    expect(createForm).toContain("formError()");
+  });
 });

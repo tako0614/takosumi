@@ -82,6 +82,18 @@ describe("StoreBrowser install UI", () => {
     expect(storeViewSource).toContain("<StoreBrowser");
   });
 
+  test("the invalid-server alert is associated with the URL input", () => {
+    expect(storeBrowserSource).toContain(
+      "const serverErrorId = createUniqueId()",
+    );
+    expect(storeBrowserSource).toContain(
+      "aria-describedby={serverError() ? serverErrorId : undefined}",
+    );
+    expect(storeBrowserSource).toContain(
+      '<p class="tcs-err" role="alert" id={serverErrorId}>',
+    );
+  });
+
   test("keeps install readiness out of the discovery feed", () => {
     expect(storeViewSource).toContain("repository-owned metadata");
     expect(storeViewSource).toContain("nothing about build or deploy duration");

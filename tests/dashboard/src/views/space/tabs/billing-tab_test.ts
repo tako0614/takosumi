@@ -182,6 +182,26 @@ test("/settings/billing titles itself like its settings-hub entry", () => {
   expect(ja["workspaceSettings.tab.usageQuota"]).toBe("使用量 / 上限");
 });
 
+test("BillingTab never fails silently on session expiry or a missing redirect URL", () => {
+  const source = readFileSync(sourcePath, "utf8");
+
+  // `if (!session) return;` made checkout/portal buttons do nothing after
+  // session expiry — both paths must surface a localized error instead.
+  expect(source).not.toMatch(/if \(!session\) return;/);
+  expect(source).toContain('setCheckoutError(t("billing.sessionExpired"));');
+  expect(source).toContain('setPortalError(t("billing.sessionExpired"));');
+  // The raw English stub "no url" must never reach a user-visible toast.
+  expect(source).not.toContain('"no url"');
+  expect(source).toContain('setCheckoutError(t("billing.checkout.noUrl"));');
+  expect(source).toContain('setPortalError(t("billing.portal.noUrl"));');
+  expect(en["billing.sessionExpired"]).toContain("session");
+  expect(ja["billing.sessionExpired"]).toContain("セッション");
+  expect(en["billing.checkout.noUrl"]).toContain("URL");
+  expect(ja["billing.checkout.noUrl"]).toContain("URL");
+  expect(en["billing.portal.noUrl"]).toContain("URL");
+  expect(ja["billing.portal.noUrl"]).toContain("URL");
+});
+
 test("BillingTab surfaces subscription status and invoice history", () => {
   const source = readFileSync(sourcePath, "utf8");
 

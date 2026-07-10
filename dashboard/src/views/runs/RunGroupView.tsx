@@ -25,11 +25,17 @@ import {
   type ControlApiError,
   getRunGroup,
   type Run,
+  type RunGroupWithRuns,
 } from "../../lib/control-api.ts";
 import { createAction } from "../account/lib/action.tsx";
-import { clearCapsuleListCache } from "../../lib/capsule-list.ts";
+import {
+  clearCapsuleListCache,
+  listCapsulesCached,
+} from "../../lib/capsule-list.ts";
 import { clearCurrentStateVersionCache } from "../../lib/current-state-versions.ts";
 import { clearDashboardOverviewCache } from "../../lib/dashboard-overview.ts";
+import { clearInstallConfigListCache } from "../../lib/install-config-list.ts";
+import { runCapsuleId } from "../../lib/run-approval.ts";
 import { operationLabel, runStatusLabel, runTone } from "../../lib/labels.ts";
 import { isTerminalRunStatus } from "../../lib/run-logs.ts";
 import { t } from "../../i18n/index.ts";
@@ -51,26 +57,35 @@ function Inner() {
   const groupId = () => params.id ?? "";
 
   const [group, { refetch }] = createResource(groupId, getRunGroup);
+  // Last GOOD payload: an errored resource throws on read, and one transient
+  // poll failure must neither blank the member list nor stop the poll — keep
+  // rendering this snapshot and surface a quiet inline notice instead. The
+  // EmptyState below is reserved for a failed INITIAL load.
+  const [snapshot, setSnapshot] = createSignal<RunGroupWithRuns | undefined>();
+  createEffect(() => {
+    if (group.error) return;
+    const latest = group.latest;
+    if (latest) setSnapshot(latest);
+  });
   const clearLauncherCaches = (workspaceId: string | undefined): void => {
     if (!workspaceId) return;
     clearCapsuleListCache(workspaceId);
     clearCurrentStateVersionCache(workspaceId);
     clearDashboardOverviewCache(workspaceId);
+    clearInstallConfigListCache(workspaceId);
   };
 
   const anyWaiting = createMemo(() =>
-    (group()?.runs ?? []).some((r) => r.status === "waiting_approval"),
+    (snapshot()?.runs ?? []).some((r) => r.status === "waiting_approval"),
   );
 
   // A grouped update executes over minutes — a single static read would never
   // show members progressing to デプロイ済み. Mirror RunView's fallback poll:
   // refetch every ~5s while any member run is non-terminal, pause on a hidden
-  // tab (refetch on return), stop once every member has settled.
+  // tab (refetch on return), stop once every member has settled. Reads the
+  // snapshot, so a transient refetch error keeps the poll alive.
   const anyMemberActive = createMemo(() => {
-    // An errored resource throws on read — a failed fetch simply stops the
-    // poll (the error state renders below; the refresh button restarts it).
-    if (group.error) return false;
-    const current = group.latest;
+    const current = snapshot();
     if (!current) return false;
     return current.runs.some((r) => !isTerminalRunStatus(r.status));
   });
@@ -97,12 +112,52 @@ function Inner() {
     onCleanup(() => clearTimeout(timer));
   });
 
+  // Member service names (best-effort): the Run payload carries only the
+  // Capsule id, so resolve names from the cached Workspace capsule list —
+  // rows and their links must be distinguishable per service, not five
+  // identical サービスを開く/変更内容を開く.
+  const [capsules] = createResource(
+    () => snapshot()?.runGroup.workspaceId ?? null,
+    (id) => listCapsulesCached(id, { includeDestroyed: true }),
+  );
+  const capsuleNames = createMemo(() => {
+    const map = new Map<string, string>();
+    for (const capsule of capsules.error ? [] : (capsules.latest ?? [])) {
+      map.set(capsule.id, capsule.name);
+    }
+    return map;
+  });
+
+  // AT-visible progress: member statuses flip silently in the list — mirror
+  // the count into one polite live line ("5 件中 3 件が完了").
+  const doneCount = createMemo(
+    () =>
+      (snapshot()?.runs ?? []).filter((r) => isTerminalRunStatus(r.status))
+        .length,
+  );
+  const totalCount = createMemo(() => snapshot()?.runs.length ?? 0);
+
+  // The manual 更新 button must go busy ONLY for a user-initiated refresh —
+  // tying it to group.loading made it flicker (and evict focus) on every 5s
+  // poll refetch.
+  const [manualRefreshing, setManualRefreshing] = createSignal(false);
+  const manualRefresh = async (): Promise<void> => {
+    setManualRefreshing(true);
+    try {
+      await refetch();
+    } catch {
+      // Rendered via group.error / the inline refresh notice.
+    } finally {
+      setManualRefreshing(false);
+    }
+  };
+
   const approveAll = createAction(async () => {
     await approveRunGroup(groupId());
     await refetch();
     // The grouped apply changes multiple capsules — mirror RunView and drop
     // the launcher projections so the home tiles reflect it without a reload.
-    clearLauncherCaches(group()?.runGroup.workspaceId);
+    clearLauncherCaches(snapshot()?.runGroup.workspaceId);
   });
 
   return (
@@ -115,8 +170,8 @@ function Inner() {
             <Button
               variant="secondary"
               type="button"
-              busy={group.loading}
-              onClick={() => void refetch()}
+              busy={manualRefreshing()}
+              onClick={() => void manualRefresh()}
             >
               {t("common.refresh")}
             </Button>
@@ -128,24 +183,52 @@ function Inner() {
       />
 
       <Switch>
-        <Match when={group.loading && !group.error && !group.latest}>
+        <Match when={!snapshot() && group.loading && !group.error}>
           <Card>
             <Skeleton variant="block" />
           </Card>
         </Match>
-        <Match when={group.error}>
+        {/* Initial load failed — nothing to render yet. A refetch error while
+            a snapshot exists falls through to the content match below. */}
+        <Match when={group.error && !snapshot()}>
           <EmptyState
             icon={<Layers size={28} />}
             title={t("runGroup.title")}
             message={t("common.fetchFailed", {
               message: (group.error as ControlApiError).message,
             })}
+            action={
+              <Button
+                variant="secondary"
+                size="sm"
+                type="button"
+                onClick={() => void manualRefresh()}
+              >
+                {t("common.retry")}
+              </Button>
+            }
           />
         </Match>
-        <Match when={group()}>
+        <Match when={snapshot()}>
           {(g) => {
             return (
               <div class="wa-stack">
+                {/* One polite line so member-status transitions are not
+                    silent to assistive tech (the visible badges swap with no
+                    announcement). */}
+                <Show when={totalCount() > 0}>
+                  <p class="sr-only" role="status" aria-live="polite">
+                    {t("runGroup.progressStatus", {
+                      done: doneCount(),
+                      total: totalCount(),
+                    })}
+                  </p>
+                </Show>
+                <Show when={group.error}>
+                  <p class="wa-notice" role="alert">
+                    {t("runGroup.refreshFailed")}
+                  </p>
+                </Show>
                 <Card>
                   <CardHeader
                     title={
@@ -220,7 +303,14 @@ function Inner() {
                   >
                     <ul class="wa-run-group-list">
                       <For each={g().runs}>
-                        {(run) => <RunGroupMemberRow run={run} />}
+                        {(run) => (
+                          <RunGroupMemberRow
+                            run={run}
+                            serviceName={capsuleNames().get(
+                              runCapsuleId(run) ?? "",
+                            )}
+                          />
+                        )}
                       </For>
                     </ul>
                   </Show>
@@ -234,21 +324,33 @@ function Inner() {
   );
 }
 
-function RunGroupMemberRow(props: { readonly run: Run }) {
+function RunGroupMemberRow(props: {
+  readonly run: Run;
+  readonly serviceName?: string | undefined;
+}) {
   const run = () => props.run;
+  const name = () => props.serviceName;
   return (
     <li class="wa-run-group-row">
       <div class="wa-run-group-main">
         <Show
-          when={run().capsuleId}
+          when={runCapsuleId(run())}
           fallback={<span class="muted">{t("common.unknown")}</span>}
         >
           {(id) => (
+            /* The resolved service NAME is the visible link text — five rows
+               of identical サービスを開く are indistinguishable both visually
+               and to a screen reader; the aria-label keeps the action verb. */
             <a
               class="wa-run-group-service"
               href={`/services/${encodeURIComponent(id())}`}
+              aria-label={
+                name()
+                  ? t("runGroup.openServiceAria", { name: name()! })
+                  : undefined
+              }
             >
-              {t("runGroup.openService")}
+              {name() ?? t("runGroup.openService")}
             </a>
           )}
         </Show>
@@ -259,7 +361,13 @@ function RunGroupMemberRow(props: { readonly run: Run }) {
         label={runStatusLabel}
         tone={runTone}
       />
-      <a class="wa-run-group-review" href={`/runs/${run().id}`}>
+      <a
+        class="wa-run-group-review"
+        href={`/runs/${run().id}`}
+        aria-label={
+          name() ? t("runGroup.openRunAria", { name: name()! }) : undefined
+        }
+      >
         {t("runGroup.openRun")}
       </a>
     </li>

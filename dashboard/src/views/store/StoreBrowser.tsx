@@ -8,6 +8,7 @@ import {
   createEffect,
   createMemo,
   createSignal,
+  createUniqueId,
   For,
   onCleanup,
   onMount,
@@ -41,7 +42,7 @@ const STR = {
   sortName: { ja: "名前順", en: "Name" },
   storeFilter: { ja: "表示ストア", en: "Store" },
   allStores: { ja: "すべてのストア", en: "All stores" },
-  loadMore: { ja: "もっと読み込む", en: "Load more" },
+  loadMore: { ja: "さらに読み込む", en: "Load more" },
   none: { ja: "該当するサービスがありません", en: "No matching services" },
   noneUnfetched: {
     ja: "読み込み済みの範囲には該当がありません。続きを読み込むか、Enter でストア全体を検索できます。",
@@ -70,15 +71,16 @@ const STR = {
   },
   defaultStore: { ja: "既定のストア", en: "Default store" },
   remove: { ja: "削除", en: "Remove" },
-  unreachable: { ja: "接続不可", en: "unreachable" },
-  reachable: { ja: "接続済み", en: "connected" },
+  unreachable: { ja: "接続不可", en: "Unreachable" },
+  reachable: { ja: "接続済み", en: "Connected" },
   alsoOn: { ja: "他にもあり", en: "also elsewhere" },
   install: { ja: "追加", en: "Add" },
   installAria: { ja: "追加: {name}", en: "Add {name}" },
   loadingAnnounce: { ja: "読み込み中…", en: "Loading…" },
   resultsAnnounce: {
     ja: "{n} 件のサービスが見つかりました",
-    en: "{n} services found",
+    // Count-neutral: the STR table has no plural support.
+    en: "Services found: {n}",
   },
   close: { ja: "閉じる", en: "Close" },
   source: { ja: "取得元の詳細", en: "Source details" },
@@ -179,6 +181,8 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
   const [showServers, setShowServers] = createSignal(false);
   const [serverDraft, setServerDraft] = createSignal("");
   const [serverError, setServerError] = createSignal(false);
+  // Associates the invalid-server alert text with the URL input for AT.
+  const serverErrorId = createUniqueId();
   const showSourceControls = () => props.showSourceControls ?? true;
   const showSortControl = () => props.showSortControl ?? true;
 
@@ -427,13 +431,14 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
               placeholder={s("serverPlaceholder", props.locale)}
               aria-label={s("serverPlaceholder", props.locale)}
               aria-invalid={serverError() ? "true" : undefined}
+              aria-describedby={serverError() ? serverErrorId : undefined}
             />
             <button type="submit" class="tcs-btn tcs-sm">
               {s("addServer", props.locale)}
             </button>
           </form>
           <Show when={serverError()}>
-            <p class="tcs-err" role="alert">
+            <p class="tcs-err" role="alert" id={serverErrorId}>
               {s("invalidServer", props.locale)}
             </p>
           </Show>

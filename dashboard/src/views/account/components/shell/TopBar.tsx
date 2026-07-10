@@ -7,8 +7,10 @@
  * Adding an app is owned by the store tab (shared nav model in `nav.ts`).
  * The bell badge shows the SAME 要対応 count as /notifications: both derive
  * from the shared cross-Workspace feed snapshot in lib/notifications.ts
- * (refreshed on navigation, TTL-throttled), so the numbers can never disagree
- * and the badge persists on views that fetch nothing else.
+ * (refreshed on navigation, TTL-throttled), scoped to the CURRENT Workspace,
+ * so the numbers can never disagree, the badge persists on views that fetch
+ * nothing else, and a Workspace switch never leaves the previous Workspace's
+ * count on the bell.
  */
 import { A, useLocation } from "@solidjs/router";
 import { createEffect, createMemo, Show } from "solid-js";
@@ -21,6 +23,7 @@ import {
   notificationFeed,
   refreshNotificationFeed,
 } from "../../../../lib/notifications.ts";
+import { currentWorkspaceId } from "../../../../lib/workspace-state.ts";
 import { t } from "../../../../i18n/index.ts";
 
 export default function TopBar() {
@@ -37,7 +40,9 @@ export default function TopBar() {
     void loc.pathname;
     void refreshNotificationFeed().catch(() => {});
   });
-  const badge = createMemo(() => attentionCount(notificationFeed()));
+  const badge = createMemo(() =>
+    attentionCount(notificationFeed(), currentWorkspaceId() || undefined),
+  );
 
   return (
     <header class="topbar">

@@ -27,6 +27,7 @@ import {
   type RunStatus,
   type Source,
 } from "../../lib/control-api.ts";
+import { awaitsDeployApproval, runCapsuleId } from "../../lib/run-approval.ts";
 import { operationLabel, runStatusLabel, runTone } from "../../lib/labels.ts";
 import { formatDateTime, t } from "../../i18n/index.ts";
 import {
@@ -36,7 +37,6 @@ import {
   PageHeader,
   Skeleton,
   StatusBadge,
-  Toast,
 } from "../../components/ui/index.ts";
 
 const RUN_LIST_PAGE_SIZE = 200;
@@ -67,8 +67,9 @@ function Inner() {
     const id = workspaceId();
     return id ? ([id, limit()] as const) : null;
   };
-  const [runs, { mutate: mutateRuns }] = createResource(runsKey, ([id, max]) =>
-    listRuns(id, max),
+  const [runs, { mutate: mutateRuns, refetch: refetchRuns }] = createResource(
+    runsKey,
+    ([id, max]) => listRuns(id, max),
   );
   // Load-more keeps the current rows on screen (reads `.latest`), but a
   // Workspace switch must not flash the previous Workspace's history — reset
@@ -140,12 +141,27 @@ function Inner() {
               <Skeleton variant="row" count={6} />
             </Card>
           </Match>
-          <Match when={runs.error || capsules.error}>
-            <Toast tone="error">
-              {t("common.fetchFailed", {
-                message: errorMessage(runs.error ?? capsules.error),
+          {/* Only a failed RUN read blanks the history — the secondary
+              capsule-name lookup failing merely drops the names (rows already
+              tolerate an absent name), with a quiet notice below. */}
+          <Match when={runs.error}>
+            <EmptyState
+              icon={<Activity size={28} />}
+              title={t("runList.title")}
+              message={t("common.fetchFailed", {
+                message: errorMessage(runs.error),
               })}
-            </Toast>
+              action={
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  type="button"
+                  onClick={() => void refetchRuns()}
+                >
+                  {t("common.retry")}
+                </Button>
+              }
+            />
           </Match>
           <Match when={rows()}>
             {(list) => (
@@ -165,6 +181,9 @@ function Inner() {
                 }
               >
                 <Card>
+                  <Show when={capsules.error}>
+                    <p class="muted">{t("runList.namesUnavailable")}</p>
+                  </Show>
                   <ul class="av-run-history">
                     <For each={list()}>
                       {(row) => <RunHistoryRowView row={row} />}
@@ -248,42 +267,10 @@ function RunHistoryRowView(props: { readonly row: RunHistoryRow }) {
   );
 }
 
-/** The wire Run keeps the legacy `installationId` alias next to `capsuleId`
- * (backup runs record only the alias) — read both so those rows still name
- * their service. */
-function runCapsuleId(run: Run): string | undefined {
-  return (
-    run.capsuleId ??
-    (run as Run & { readonly installationId?: string }).installationId
-  );
-}
-
-/**
- * True when a succeeded review run (plan / destroy_plan) is still waiting on
- * the user's deploy approval: policy passed, and no apply / destroy_apply for
- * the same Capsule has been created at/after it (mirrors the condition under
- * which RunView renders the デプロイを実行 CTA). Presented as 承認待ち so the
- * list agrees with the notification wording instead of claiming 成功.
- */
-function awaitsDeployApproval(run: Run, runs: readonly Run[]): boolean {
-  if (run.type !== "plan" && run.type !== "destroy_plan") return false;
-  if (run.status !== "succeeded") return false;
-  if (run.policyStatus !== "pass") return false;
-  const planCapsuleId = runCapsuleId(run);
-  if (!planCapsuleId) return false;
-  const planCreatedAt = Date.parse(run.createdAt);
-  return !runs.some((candidate) => {
-    if (candidate.type !== "apply" && candidate.type !== "destroy_apply") {
-      return false;
-    }
-    if (runCapsuleId(candidate) !== planCapsuleId) return false;
-    if (Number.isNaN(planCreatedAt)) return true;
-    const candidateCreatedAt = Date.parse(candidate.createdAt);
-    return Number.isNaN(candidateCreatedAt)
-      ? true
-      : candidateCreatedAt >= planCreatedAt;
-  });
-}
+// The 承認待ち presentation (a succeeded review run whose deploy approval no
+// apply attempt has consumed) derives from the SHARED predicate in
+// lib/run-approval.ts — the same one RunView's badge + deploy CTA use — so the
+// list and the run screen can never disagree about an open approval.
 
 function rowsFromRuns(
   runs: readonly Run[],

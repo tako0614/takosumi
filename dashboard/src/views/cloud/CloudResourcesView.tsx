@@ -668,6 +668,9 @@ function ApiKeysCard(props: {
   const [busy, setBusy] = createSignal(false);
   const [revokeBusy, setRevokeBusy] = createSignal<string | null>(null);
   const [createdToken, setCreatedToken] = createSignal<string | null>(null);
+  // Which key the once-only token above belongs to: revoking a DIFFERENT key
+  // must not destroy the just-created key's single display of its secret.
+  const [createdTokenId, setCreatedTokenId] = createSignal<string | null>(null);
   const [error, setError] = createSignal<string | null>(null);
 
   const createKey = async () => {
@@ -681,6 +684,7 @@ function ApiKeysCard(props: {
     try {
       const response = await createCloudApiKey({ name: keyName });
       setCreatedToken(response.token);
+      setCreatedTokenId(response.token_record.id);
       props.refetch();
     } catch (err) {
       setError(errorMessage(err));
@@ -702,7 +706,10 @@ function ApiKeysCard(props: {
     setError(null);
     try {
       await revokeCloudApiKey(tokenId);
-      setCreatedToken(null);
+      if (createdTokenId() === tokenId) {
+        setCreatedToken(null);
+        setCreatedTokenId(null);
+      }
       props.refetch();
     } catch (err) {
       setError(errorMessage(err));

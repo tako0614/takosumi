@@ -6100,6 +6100,16 @@ export class RunEngine {
       }
       return;
     }
+    if (commands.length > 0) {
+      await this.#recordReleaseActivationActivity({
+        ...input,
+        status: "pending",
+        kind: "takosumi.release-commands@v1",
+        message: "post-apply release commands are running",
+        commandCount: commands.length,
+        outputCount: Object.keys(nonSensitiveOutputs).length,
+      });
+    }
     try {
       const credentials = await this.#releaseCredentialsForCommands({
         planRun: input.planRun,

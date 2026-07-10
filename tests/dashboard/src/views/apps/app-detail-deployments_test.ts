@@ -17,6 +17,13 @@ const source = readFileSync(
   ),
   "utf8",
 );
+// The config-editor row model (seeding + dirty-only save patch) lives in the
+// shared lib so its write semantics are unit-testable
+// (tests/dashboard/src/lib/config-variables_test.ts).
+const capsulesUiSource = readFileSync(
+  new URL("../../../../../dashboard/src/lib/capsules-ui.ts", import.meta.url),
+  "utf8",
+);
 
 describe("Installation detail deployment surface", () => {
   test("renders the outputs and deploy-history sections via the dictionary", () => {
@@ -90,7 +97,7 @@ describe("Installation detail deployment surface", () => {
     );
   });
 
-  test("the header 削除 button navigates to the danger tab; only the danger tab confirms", () => {
+  test("delete is confirmed once — at destroy-apply, not with an upfront modal", () => {
     // Header: a link into the plan-first danger flow, not a duplicate modal.
     expect(source).toContain(
       "href={`/services/${encodeURIComponent(capsuleId())}/danger`}",
@@ -98,11 +105,16 @@ describe("Installation detail deployment surface", () => {
     expect(source).toContain(
       'inst().status !== "destroyed" && tab() !== "danger"',
     );
-    // Exactly one confirm entry point remains (the danger tab CTA).
-    expect(source.match(/void confirmDestroy\(\)/g)).toHaveLength(1);
-    // The destroy confirm names the service like every other destructive confirm.
+    // The danger-tab CTA creates the destroy PLAN directly — no confirm modal.
+    // Creating a plan removes nothing; the single confirmation lives on the run
+    // screen at destroy-apply (RunView's destructive-confirm block), where the
+    // plan (what will be removed) is visible.
+    expect(source).toContain("onClick={() => void destroyPlan.run()}");
+    expect(source).not.toContain("confirmDestroy");
+    expect(source).not.toContain("useConfirmDialog");
+    // The danger tab still names the service in its warning header.
     expect(source).toContain(
-      't("app.danger.destroyBody", { name: serviceLabel() })',
+      't("app.danger.destroyBody", {\n                          name: serviceLabel(),\n                        })',
     );
     expect(ja["app.danger.destroyBody"]).toContain("{name}");
     expect(en["app.danger.destroyBody"]).toContain("{name}");
@@ -135,15 +147,70 @@ describe("Installation detail deployment surface", () => {
     expect(source).toContain('t("app.config.oidc")');
     expect(source).toContain('t("app.config.advanced")');
     expect(source).toContain('t("app.config.addVariable")');
-    expect(source).toContain("SYSTEM_CONFIG_VARIABLES");
+    // The row model lives in the shared lib; the view consumes it.
+    expect(source).toContain("configRowsFromInstallConfig");
+    expect(source).toContain("buildConfigVariablePatch");
+    expect(capsulesUiSource).toContain("SYSTEM_CONFIG_VARIABLES");
+    expect(capsulesUiSource).toContain("takosumi_accounts_issuer_url");
+    expect(capsulesUiSource).toContain("removeVariables");
     expect(source).toContain("takosumi_accounts_issuer_url");
     expect(source).toContain("takosumi_accounts_client_id");
-    expect(source).toContain("removeVariables");
     expect(source).toContain("ConfigVariableInput");
     expect(source).toContain("VariableRows");
     expect(source).toContain('type={props.row.secret ? "password" : "text"}');
     expect(source.indexOf('t("app.config.title")')).toBeLessThan(
       source.indexOf('t("app.bindings.title")'),
+    );
+  });
+
+  test("config saves are DIRTY-ONLY; a no-edit save writes nothing", () => {
+    // Untouched rows must never be written: writing them pins listing
+    // defaults as explicit values and overrides the module's HCL defaults
+    // ("" / false / null) on the next deploy. Behavior is unit-tested in
+    // tests/dashboard/src/lib/config-variables_test.ts; this pins the wiring.
+    expect(capsulesUiSource).toContain("if (!row.dirty) continue;");
+    // User edits (and only user edits) mark a row dirty, cancelling any
+    // pending リセット.
+    expect(source).toContain(
+      "{ ...row, ...patch, dirty: true, resetToDefault: false }",
+    );
+    expect(source).toContain("onChange={editVariable}");
+  });
+
+  test("リセット restores the default-presented row (visible + marked 既定値) and stays undoable", () => {
+    // A store-row reset no longer removes the row until save+refetch: it
+    // presents the default and, when the value pre-existed in the mapping,
+    // marks remove-on-save (undoable via 元に戻す before save).
+    expect(source).toContain("resetToDefault: row.hasExistingValue");
+    expect(source).toContain('t("app.config.undoReset")');
+    expect(source).toContain(
+      't("app.config.undoResetAria", { name: row().name })',
+    );
+    expect(source).toContain('t("app.config.resetPendingHint")');
+    expect(source).toContain('t("app.config.defaultBadge")');
+    expect(capsulesUiSource).toContain("row.storeField && row.resetToDefault");
+    for (const key of [
+      "app.config.undoReset",
+      "app.config.undoResetAria",
+      "app.config.resetPendingHint",
+      "app.config.defaultBadge",
+    ] as const) {
+      expect(ja[key]).toBeTruthy();
+      expect(en[key]).toBeTruthy();
+    }
+  });
+
+  test("saved-notes are per-form and cleared when a later save fails", () => {
+    // One shared savedKind signal meant saving one form hid the other's
+    // still-true pending-deploy note, and a failed save kept the stale note.
+    expect(source).not.toContain("savedKind");
+    expect(source).toContain("setConfigSavedNote(false);");
+    expect(source).toContain("setProfileSavedNote(false);");
+    expect(source).toContain("<Show when={configSavedNote()}>");
+    expect(source).toContain("<Show when={profileSavedNote()}>");
+    // Cleared at the START of the save action so a throw leaves it cleared.
+    expect(source.indexOf("setConfigSavedNote(false);")).toBeLessThan(
+      source.indexOf("await patchInstallConfig"),
     );
   });
 
@@ -208,10 +275,36 @@ describe("Installation detail deployment surface", () => {
   });
 
   test("http(s) outputs (launch_url) are surfaced as a prominent link", () => {
-    // The well-known output-key labels live in lib/installations-ui.ts; the
+    // The well-known output-key labels live in lib/capsules-ui.ts; the
     // view renders url-shaped values through the OutputValue link button.
     expect(source).toContain("outputLabel");
     expect(source).toMatch(/href=\{props\.value as string\}/);
+  });
+
+  test("公開リンク rows are legible: distinguishing labels, one primary button, inline URL", () => {
+    // (a) colliding friendly labels (公開アドレス ×2 on Takos Office) get
+    // distinguishing labels derived in publicLinkRowLabels (unit-tested in
+    // tests/dashboard/src/lib/installations-ui_test.ts).
+    expect(source).toContain("publicLinkRowLabels");
+    // (b) only the first link keeps the filled style; the rest are secondary.
+    expect(source).toContain("primary={index === 0}");
+    expect(source).toContain(
+      'variant={props.primary ? "primary" : "secondary"}',
+    );
+    // (c) the per-row ▶アドレス disclosure (which repeated the row label) is
+    // replaced by the URL inline as muted mono text.
+    expect(source).toContain('class="av-output-url-text"');
+    expect(source).not.toMatch(
+      /<summary>\{t\("app\.output\.url"\)\}<\/summary>/,
+    );
+  });
+
+  test("micro-cost amounts below one cent read as < $0.01 with the exact value in title", () => {
+    expect(source).toContain("function UsageAmount");
+    expect(source).toContain('t("app.usage.subCent")');
+    expect(source).toMatch(/title=\{subCent\(\) \? formatUsdMicros/);
+    expect(ja["app.usage.subCent"]).toContain("$0.01");
+    expect(en["app.usage.subCent"]).toContain("$0.01");
   });
 
   test("does not offer stale open links for deleted services", () => {

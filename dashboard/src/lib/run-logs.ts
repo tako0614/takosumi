@@ -97,6 +97,26 @@ export function changeCountsForRun(
   };
 }
 
+/** True when the Run carries an authoritative backend change summary.
+ * `run.summary` is OPTIONAL on the wire — when it is absent the counts from
+ * {@link changeCountsForRun} are merely log-derived best effort, and an empty
+ * log parse means "unknown", never "0 changes". Callers gating destructive
+ * behaviour on the counts must check this first. */
+export function runHasChangeSummary(run: Run | undefined): boolean {
+  return hasPlanSummary(run?.summary);
+}
+
+/** True when {@link changeCountsForRun} would return REAL counts for this run
+ * (backend summary present, or the logs recorded at least one change item)
+ * rather than an all-zero "nothing detected" fallback. */
+export function changeCountsKnownForRun(
+  run: Run | undefined,
+  auditEvents: readonly AuditEventRecord[],
+): boolean {
+  if (runHasChangeSummary(run)) return true;
+  return changesFromLogs(auditEvents).length > 0;
+}
+
 function hasPlanSummary(
   summary: Run["summary"] | undefined,
 ): summary is NonNullable<Run["summary"]> {

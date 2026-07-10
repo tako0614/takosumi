@@ -99,4 +99,35 @@ describe("MembersTab access-control surface", () => {
     expect(source).toContain('t("members.invite.cta")');
     expect(source).toContain("t(ROLE_KEY[");
   });
+
+  test("invite defaults to the least-privileged role, ordered least→most", () => {
+    // The safe default is BOTH the signal value and the first DOM option, so
+    // even a select whose value assignment races option rendering falls back
+    // to viewer — never owner.
+    expect(source).toContain('createSignal<ControlWorkspaceRole>("viewer")');
+    expect(source).toContain('setInviteRole("viewer");');
+    expect(source).toMatch(
+      /INVITE_ROLE_ORDER: readonly ControlWorkspaceRole\[\] = \[\s*"viewer",\s*"member",\s*"admin",\s*"owner",\s*\]/,
+    );
+    expect(source).toContain("<For each={INVITE_ROLE_ORDER}>");
+    expect(source).not.toContain('createSignal<ControlWorkspaceRole>("owner")');
+  });
+
+  test("member cell truncates raw subjects, keeping the full id on title", () => {
+    expect(source).toContain("function shortSubject(accountId: string)");
+    expect(source).toContain("{shortSubject(member.accountId)}");
+    expect(source).toContain("title={member.accountId}");
+    expect(source).not.toContain(
+      '<code class="wb-mono">{member.accountId}</code>',
+    );
+  });
+
+  test("remove is busy per member row, not for the whole roster", () => {
+    expect(source).toContain("const [removingSubject, setRemovingSubject]");
+    expect(source).toContain("setRemovingSubject(member.accountId);");
+    expect(source).toMatch(/finally \{\s*setRemovingSubject\(null\);\s*\}/);
+    expect(source).toContain(
+      "remove.busy() && removingSubject() === member.accountId",
+    );
+  });
 });

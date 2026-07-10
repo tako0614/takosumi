@@ -23,10 +23,7 @@ const newAppViewSource =
     "utf8",
   ) +
   readFileSync(
-    resolve(
-      here,
-      "../../../../../dashboard/src/views/new/install-helpers.ts",
-    ),
+    resolve(here, "../../../../../dashboard/src/views/new/install-helpers.ts"),
     "utf8",
   );
 const connectionsTabSource = readFileSync(
@@ -396,8 +393,10 @@ describe("/new Provider Connections return context", () => {
     );
     expect(en["new.hostnameConflict.body"]).not.toContain("workspace");
     expect(ja["new.hostnameConflict.body"]).not.toContain("ワークスペース");
-    expect(en["new.error.alreadyExists"]).not.toContain("workspace");
-    expect(ja["new.error.alreadyExists"]).not.toContain("ワークスペース");
+    expect(en["new.error.alreadyExistsGeneric"]).not.toContain("workspace");
+    expect(ja["new.error.alreadyExistsGeneric"]).not.toContain(
+      "ワークスペース",
+    );
     expect(newAppViewSource).toContain("force: options.force");
     expect(newAppViewSource).toContain("{ force: true }");
     expect(newAppViewSource).toContain('"new.error.nameReserved"');
@@ -425,9 +424,11 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).toContain(
       "authConnectionId: sourceAuthConnectionIdForRun()",
     );
+    // 3 run-input sites + the Source-identity snapshot (edit-during-install
+    // fix: retries reuse the created Source when the coordinates match).
     expect(
       newAppViewSource.match(/sourceAuthConnectionIdForRun\(\)/g) ?? [],
-    ).toHaveLength(3);
+    ).toHaveLength(4);
     expect(controlApiSource).toContain(
       "export async function createSourceHttpsTokenConnection",
     );
@@ -629,7 +630,12 @@ describe("/new Provider Connections return context", () => {
     expect(connectionsTabSource).toContain('"conn.byok.body"');
     expect(connectionsTabSource).toContain('"conn.byok.noBillingNote"');
     expect(connectionsTabSource).toContain('"conn.byok.usePreset"');
-    expect(connectionsTabSource).toContain('"conn.byok.backToByok"');
+    // Guided presets are the default surface; the raw BYOK editor sits behind
+    // the quiet advanced control.
+    expect(connectionsTabSource).toContain('"conn.add.genericEnvOption"');
+    expect(connectionsTabSource).toContain(
+      "PROVIDERS[0]?.provider ?? GENERIC_ENV_PROVIDER_OPTION",
+    );
     expect(connectionsTabSource).toContain(
       'placeholder={t("conn.genericEnv.providerPlaceholder")}',
     );
@@ -647,7 +653,6 @@ describe("/new Provider Connections return context", () => {
     expect(connectionsTabSource).not.toContain(
       "const value = pair.value.trim();",
     );
-    expect(en["conn.genericEnv.option"]).toBe("Set up other connection");
     expect(en["conn.genericEnv.providerName"]).toBe("Provider source");
     expect(en["conn.genericEnv.providerPlaceholder"]).toBe(
       "snowflake-labs/snowflake",
@@ -659,7 +664,6 @@ describe("/new Provider Connections return context", () => {
       "reserved for the runner",
     );
     expect(en["conn.genericEnv.duplicateName"]).toContain("already added");
-    expect(ja["conn.genericEnv.option"]).toBe("その他の接続を設定");
     expect(ja["conn.genericEnv.envName"]).toBe("env 名");
     expect(ja["conn.genericEnv.reservedName"]).toContain("予約名");
     expect(connectionsTabSource).not.toContain('placeholder="private-api"');

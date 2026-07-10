@@ -80,11 +80,15 @@ import {
   runTone,
 } from "../../lib/labels.ts";
 import {
+  buildConfigVariablePatch,
   capsuleDisplayName,
+  type ConfigVariableRow,
+  configRowsFromInstallConfig,
   effectiveCapsuleStatus,
   isDeploymentPubliclyOpenable,
   isUrlString,
   launchUrlFromDeployment,
+  publicLinkRowLabels,
   releaseActivationStatusForDeployment,
   outputLabel,
 } from "../../lib/capsules-ui.ts";
@@ -94,7 +98,6 @@ import {
   setDocumentTitle,
   t,
 } from "../../i18n/index.ts";
-import { useConfirmDialog } from "../../lib/confirm-dialog.ts";
 import {
   Badge,
   Button,
@@ -113,7 +116,6 @@ import {
   Textarea,
   Toast,
 } from "../../components/ui/index.ts";
-import type { JsonValue } from "takosumi-contract";
 import { clearCapsuleListCache } from "../../lib/capsule-list.ts";
 import { clearCurrentStateVersionCache } from "../../lib/current-state-versions.ts";
 import { clearDashboardOverviewCache } from "../../lib/dashboard-overview.ts";
@@ -127,7 +129,6 @@ export default function AppDetailView() {
 function Inner() {
   const params = useParams();
   const navigate = useNavigate();
-  const { confirm } = useConfirmDialog();
   const capsuleId = () => params.id ?? "";
   const tab = (): TabId => {
     const raw = params.tab;
@@ -313,16 +314,6 @@ function Inner() {
   });
 
   const serviceLabel = () => displayName() ?? capsule()?.name ?? "";
-  const confirmDestroy = async () => {
-    const ok = await confirm({
-      title: t("app.danger.destroyTitle"),
-      message: t("app.danger.destroyBody", { name: serviceLabel() }),
-      confirmText: t("app.danger.destroyCta"),
-      danger: true,
-    });
-    if (!ok) return;
-    void destroyPlan.run();
-  };
 
   const tabItems = () => {
     const base = `/services/${encodeURIComponent(capsuleId())}`;
@@ -483,9 +474,7 @@ function Inner() {
                           title={t("app.usage.title")}
                           subtitle={t("app.usage.body")}
                           actions={
-                            <span class="wa-usage-amount">
-                              {formatUsdMicros(usageSummary()!.usdMicros)}
-                            </span>
+                            <UsageAmount micros={usageSummary()!.usdMicros} />
                           }
                         />
                       </Card>
@@ -582,7 +571,7 @@ function Inner() {
                           type="button"
                           disabled={destroyPlan.busy()}
                           busy={destroyPlan.busy()}
-                          onClick={() => void confirmDestroy()}
+                          onClick={() => void destroyPlan.run()}
                         >
                           {t("app.danger.destroyCta")}
                         </Button>
@@ -607,6 +596,24 @@ function Inner() {
 }
 
 // === overview ================================================================
+
+/**
+ * Per-app showback amount. Raw micro amounts below one cent ($0.000823)
+ * read like display bugs — collapse them to a "< $0.01" note and keep the
+ * exact value reachable via the title attribute.
+ */
+function UsageAmount(props: { readonly micros: number }): JSX.Element {
+  const ONE_CENT_MICROS = 10_000;
+  const subCent = () => props.micros > 0 && props.micros < ONE_CENT_MICROS;
+  return (
+    <span
+      class="wa-usage-amount"
+      title={subCent() ? formatUsdMicros(props.micros) : undefined}
+    >
+      {subCent() ? t("app.usage.subCent") : formatUsdMicros(props.micros)}
+    </span>
+  );
+}
 
 interface DependencyRow {
   readonly id: string;
@@ -659,6 +666,11 @@ function OverviewTab(props: {
   readonly producers: readonly DependencyRow[];
   readonly consumers: readonly DependencyRow[];
 }) {
+  // Distinguishing labels: several well-known link keys share one friendly
+  // label, which rendered near-identical 公開アドレス rows on live services.
+  const linkLabels = createMemo(() =>
+    publicLinkRowLabels(props.publicLinkOutputs),
+  );
   return (
     <>
       <Card>
@@ -697,10 +709,16 @@ function OverviewTab(props: {
           </Match>
           <Match when={props.publicLinkOutputs.length > 0}>
             <KVList
-              items={props.publicLinkOutputs.map(([name, value]) => ({
-                label: outputLabel(name),
+              items={props.publicLinkOutputs.map(([name, value], index) => ({
+                label: linkLabels()[index] ?? outputLabel(name),
                 value: (
-                  <OutputValue value={value} openable={props.serviceOpenable} />
+                  <OutputValue
+                    value={value}
+                    openable={props.serviceOpenable}
+                    // Only the first/primary link keeps the filled style; a
+                    // column of identical filled buttons reads as noise.
+                    primary={index === 0}
+                  />
                 ),
               }))}
             />
@@ -770,13 +788,15 @@ function DependencyList(props: {
 function OutputValue(props: {
   readonly value: unknown;
   readonly openable?: boolean;
+  /** Only the first/primary link row keeps the filled button style. */
+  readonly primary?: boolean;
 }): JSX.Element {
   return (
     <Switch fallback={<code>{stringifyOutput(props.value)}</code>}>
       <Match when={isUrlString(props.value) && props.openable !== false}>
         <span class="wa-output-url">
           <Button
-            variant="primary"
+            variant={props.primary ? "primary" : "secondary"}
             size="sm"
             href={props.value as string}
             target="_blank"
@@ -784,10 +804,9 @@ function OutputValue(props: {
           >
             {t("app.output.openPublicLink")}
           </Button>
-          <details class="wb-inline-details">
-            <summary>{t("app.output.url")}</summary>
-            <code>{props.value as string}</code>
-          </details>
+          {/* Inline muted URL: the old ▶アドレス disclosure repeated the row
+              label and hid the one value the card exists to show. */}
+          <code class="av-output-url-text">{props.value as string}</code>
         </span>
       </Match>
       <Match when={isUrlString(props.value)}>
@@ -1181,83 +1200,10 @@ function buildProviderConnections(
   return { connections };
 }
 
-type ConfigVariableType = "string" | "number" | "boolean" | "json";
-
-interface ConfigVariableRow {
-  id: string;
-  originalName?: string;
-  name: string;
-  label: string;
-  helper?: string;
-  placeholder?: string;
-  value: string;
-  type: ConfigVariableType;
-  required: boolean;
-  secret: boolean;
-  advanced: boolean;
-  storeField: boolean;
-  hasExistingValue: boolean;
-  deleted?: boolean;
-}
-
-const SYSTEM_CONFIG_VARIABLES = new Set([
-  "takosumi_accounts_url",
-  "takosumi_accounts_issuer_url",
-  "takosumi_accounts_client_id",
-  "takosumi_accounts_redirect_uri",
-]);
-
-function configRowsFromInstallConfig(
-  config: InstallConfig | undefined,
-): readonly ConfigVariableRow[] {
-  if (!config) return [];
-  const variables = config.variableMapping ?? {};
-  const rows: ConfigVariableRow[] = [];
-  const seen = new Set<string>();
-  for (const input of config.store?.inputs ?? []) {
-    if (SYSTEM_CONFIG_VARIABLES.has(input.name)) continue;
-    const type = input.type ?? "string";
-    const value = variables[input.name] ?? input.defaultValue ?? "";
-    rows.push({
-      id: `store:${input.name}`,
-      originalName: input.name,
-      name: input.name,
-      label: localizedText(input.label) ?? input.name,
-      helper: localizedText(input.helper),
-      placeholder: input.placeholder,
-      value: input.secret ? "" : configValueToText(value, type),
-      type,
-      required: input.required === true,
-      secret: input.secret === true || variableNameLooksSecret(input.name),
-      advanced: input.advanced === true,
-      storeField: true,
-      hasExistingValue: Object.prototype.hasOwnProperty.call(
-        variables,
-        input.name,
-      ),
-    });
-    seen.add(input.name);
-  }
-  for (const [name, value] of Object.entries(variables)) {
-    if (SYSTEM_CONFIG_VARIABLES.has(name) || seen.has(name)) continue;
-    const type = inferConfigVariableType(value);
-    const secret = variableNameLooksSecret(name);
-    rows.push({
-      id: `custom:${name}`,
-      originalName: name,
-      name,
-      label: name,
-      value: secret ? "" : configValueToText(value, type),
-      type,
-      required: false,
-      secret,
-      advanced: true,
-      storeField: false,
-      hasExistingValue: true,
-    });
-  }
-  return rows;
-}
+// Config-row seeding + the dirty-only save patch live in
+// lib/capsules-ui.ts (configRowsFromInstallConfig / buildConfigVariablePatch)
+// so the write semantics are unit-testable. SYSTEM_CONFIG_VARIABLES
+// (takosumi_accounts_issuer_url and friends) are filtered there too.
 
 function primaryConfigVariableNames(
   config: InstallConfig | undefined,
@@ -1274,36 +1220,6 @@ function primaryConfigVariableNames(
       "project_name",
     ].filter((name): name is string => Boolean(name)),
   );
-}
-
-function localizedText(
-  text: { readonly ja: string; readonly en: string } | undefined,
-): string | undefined {
-  if (!text) return undefined;
-  return locale() === "ja" ? text.ja : text.en;
-}
-
-function variableNameLooksSecret(name: string): boolean {
-  return /(^|[_-])(password|passwd|token|secret|api[_-]?key|private[_-]?key)([_-]|$)/iu.test(
-    name,
-  );
-}
-
-function inferConfigVariableType(value: unknown): ConfigVariableType {
-  if (typeof value === "boolean") return "boolean";
-  if (typeof value === "number") return "number";
-  if (value !== null && typeof value === "object") return "json";
-  return "string";
-}
-
-function configValueToText(value: unknown, type: ConfigVariableType): string {
-  if (value === null || value === undefined) return "";
-  if (type === "json") {
-    return typeof value === "string" ? value : JSON.stringify(value, null, 2);
-  }
-  if (type === "boolean")
-    return value === true || value === "true" ? "true" : "false";
-  return typeof value === "string" ? value : String(value);
 }
 
 function configSummaryItems(config: InstallConfig | undefined) {
@@ -1359,71 +1275,15 @@ function newCustomConfigRow(index: number): ConfigVariableRow {
     advanced: true,
     storeField: false,
     hasExistingValue: false,
+    defaultText: "",
+    savedValue: "",
+    dirty: false,
+    resetToDefault: false,
   };
 }
 
 function configControlId(row: ConfigVariableRow, suffix: string): string {
   return `app-config-${suffix}-${row.id.replace(/[^a-z0-9_-]+/giu, "-")}`;
-}
-
-function buildConfigVariablePatch(rows: readonly ConfigVariableRow[]):
-  | {
-      readonly variableMapping: Readonly<Record<string, JsonValue>>;
-      readonly removeVariables: readonly string[];
-    }
-  | { readonly error: string } {
-  const variableMapping: Record<string, JsonValue> = {};
-  const removeVariables = new Set<string>();
-  const seen = new Set<string>();
-  for (const row of rows) {
-    const originalName = row.originalName?.trim();
-    if (row.deleted) {
-      if (originalName) removeVariables.add(originalName);
-      continue;
-    }
-    const name = row.name.trim();
-    if (!name) {
-      if (!row.value.trim()) continue;
-      return { error: t("app.config.errorNameRequired") };
-    }
-    if (/\s/u.test(name)) {
-      return { error: t("app.config.errorNameInvalid", { name }) };
-    }
-    if (seen.has(name)) {
-      return { error: t("app.config.errorNameDuplicate", { name }) };
-    }
-    seen.add(name);
-    if (originalName && originalName !== name)
-      removeVariables.add(originalName);
-    if (row.secret && row.value.trim() === "") continue;
-    const parsed = parseConfigVariableValue(row);
-    if ("error" in parsed) return parsed;
-    variableMapping[name] = parsed.value;
-  }
-  return { variableMapping, removeVariables: [...removeVariables] };
-}
-
-function parseConfigVariableValue(
-  row: ConfigVariableRow,
-): { readonly value: JsonValue } | { readonly error: string } {
-  const raw = row.value.trim();
-  if (row.type === "boolean") return { value: raw === "true" };
-  if (row.type === "number") {
-    const value = Number(raw);
-    if (!Number.isFinite(value)) {
-      return { error: t("app.config.errorNumber", { name: row.name }) };
-    }
-    return { value };
-  }
-  if (row.type === "json") {
-    if (!raw) return { value: null };
-    try {
-      return { value: JSON.parse(raw) as JsonValue };
-    } catch {
-      return { error: t("app.config.errorJson", { name: row.name }) };
-    }
-  }
-  return { value: row.value };
 }
 
 function SettingsTab(props: {
@@ -1449,9 +1309,11 @@ function SettingsTab(props: {
   const [variableRows, setVariableRows] = createSignal<ConfigVariableRow[]>([]);
   const [formError, setFormError] = createSignal<string | null>(null);
   const [configError, setConfigError] = createSignal<string | null>(null);
-  const [savedKind, setSavedKind] = createSignal<"config" | "profile" | null>(
-    null,
-  );
+  // One saved-note signal PER form: a shared signal meant saving one form hid
+  // the other's still-true pending-deploy note, and a later FAILED save left
+  // the stale success note above the new error.
+  const [configSavedNote, setConfigSavedNote] = createSignal(false);
+  const [profileSavedNote, setProfileSavedNote] = createSignal(false);
 
   createEffect(() => {
     const providerConnections = props.providerConnections;
@@ -1460,14 +1322,16 @@ function SettingsTab(props: {
   });
 
   // Seed ONLY from the install config. configRowsFromInstallConfig localizes
-  // labels (reads locale()), so a plain effect would also track locale and, on
+  // labels (takes locale()), so a plain effect would also track locale and, on
   // a language switch, re-seed the rows — silently discarding the user's
   // unsaved edits. `on` pins the dependency to installConfig alone.
   createEffect(
     on(
       () => props.installConfig,
       (installConfig) => {
-        setVariableRows([...configRowsFromInstallConfig(installConfig)]);
+        setVariableRows([
+          ...configRowsFromInstallConfig(installConfig, locale()),
+        ]);
       },
     ),
   );
@@ -1479,11 +1343,41 @@ function SettingsTab(props: {
     setRows((prev) =>
       prev.map((row, i) => (i === index ? { ...row, ...patch } : row)),
     );
-  const updateVariable = (id: string, patch: Partial<ConfigVariableRow>) =>
+  // User edits mark the row dirty — buildConfigVariablePatch writes ONLY dirty
+  // rows, so a no-edit save can never pin listing defaults / "" / false / null
+  // over the module's own HCL defaults. Editing also cancels a pending リセット.
+  const editVariable = (id: string, patch: Partial<ConfigVariableRow>) =>
     setVariableRows((prev) =>
-      prev.map((row) => (row.id === id ? { ...row, ...patch } : row)),
+      prev.map((row) =>
+        row.id === id
+          ? { ...row, ...patch, dirty: true, resetToDefault: false }
+          : row,
+      ),
     );
-  const removeVariable = (id: string) => updateVariable(id, { deleted: true });
+  // Store rows: リセット presents the default (visible, marked 既定値) and —
+  // when the value pre-existed in the mapping — marks remove-on-save, which
+  // stays undoable (元に戻す) until saved. Free-form rows are simply removed.
+  const removeVariable = (id: string) =>
+    setVariableRows((prev) =>
+      prev.map((row) => {
+        if (row.id !== id) return row;
+        if (!row.storeField) return { ...row, deleted: true };
+        if (row.resetToDefault) {
+          return {
+            ...row,
+            resetToDefault: false,
+            dirty: false,
+            value: row.savedValue,
+          };
+        }
+        return {
+          ...row,
+          value: row.defaultText,
+          dirty: false,
+          resetToDefault: row.hasExistingValue,
+        };
+      }),
+    );
 
   const primaryNames = createMemo(() =>
     primaryConfigVariableNames(props.installConfig),
@@ -1507,6 +1401,9 @@ function SettingsTab(props: {
 
   const saveProfile = createAction(async () => {
     setFormError(null);
+    // Clear at the start so a save that FAILS never leaves the previous
+    // attempt's success note above the fresh error.
+    setProfileSavedNote(false);
     const providerConnections = buildProviderConnections(rows(), {
       providerConnections: props.availableProviderConnections,
     });
@@ -1519,10 +1416,11 @@ function SettingsTab(props: {
       providerConnections.connections,
     );
     await props.onSaved("profile");
-    setSavedKind("profile");
+    setProfileSavedNote(true);
   });
   const saveVariables = createAction(async () => {
     setConfigError(null);
+    setConfigSavedNote(false);
     if (!props.installConfig) {
       setConfigError(t("app.config.notReady"));
       return;
@@ -1534,7 +1432,7 @@ function SettingsTab(props: {
     }
     await patchInstallConfig(props.installConfig.id, patch);
     await props.onSaved("config");
-    setSavedKind("config");
+    setConfigSavedNote(true);
   });
 
   return (
@@ -1570,7 +1468,7 @@ function SettingsTab(props: {
                 >
                   <VariableRows
                     rows={primaryVariableRows()}
-                    onChange={updateVariable}
+                    onChange={editVariable}
                     onRemove={removeVariable}
                   />
                 </Show>
@@ -1578,7 +1476,7 @@ function SettingsTab(props: {
                   <summary>{t("app.config.advanced")}</summary>
                   <VariableRows
                     rows={advancedVariableRows()}
-                    onChange={updateVariable}
+                    onChange={editVariable}
                     onRemove={removeVariable}
                   />
                   <div class="wa-form-actions">
@@ -1623,7 +1521,7 @@ function SettingsTab(props: {
                     </p>
                   )}
                 </Show>
-                <Show when={savedKind() === "config"}>
+                <Show when={configSavedNote()}>
                   <div class="wa-saved-note" role="status">
                     <span>{t("app.config.savedNeedsDeploy")}</span>
                     <Button
@@ -1803,8 +1701,9 @@ function SettingsTab(props: {
               </Show>
               {/* Provider-binding changes, like config edits, only take effect
                   on the next deploy — confirm the save and offer the deploy
-                  link (the "profile" savedKind was previously never rendered). */}
-              <Show when={savedKind() === "profile"}>
+                  link. Separate per-form signal: saving the config form must
+                  not hide this note (and vice versa). */}
+              <Show when={profileSavedNote()}>
                 <div class="wa-saved-note" role="status">
                   <span>{t("app.config.savedNeedsDeploy")}</span>
                   <Button
@@ -1872,6 +1771,31 @@ function SettingsTab(props: {
   );
 }
 
+/** True when a store row currently presents the module default (nothing will
+ * be written for it on save). */
+function rowPresentsDefault(row: ConfigVariableRow): boolean {
+  return (
+    row.storeField &&
+    !row.dirty &&
+    (row.resetToDefault || !row.hasExistingValue)
+  );
+}
+
+function variableRowHint(row: ConfigVariableRow): string | undefined {
+  if (row.resetToDefault) return t("app.config.resetPendingHint");
+  if (row.secret && row.hasExistingValue && row.value.trim() === "") {
+    return t("app.config.secretHint");
+  }
+  if (rowPresentsDefault(row)) {
+    // Mark default-presenting rows as 既定値 so an untouched field is legibly
+    // "the module's default", not an explicit value pinned by this screen.
+    return row.helper
+      ? `${row.helper} — ${t("app.config.defaultBadge")}`
+      : t("app.config.defaultBadge");
+  }
+  return row.helper;
+}
+
 function VariableRows(props: {
   readonly rows: readonly ConfigVariableRow[];
   readonly onChange: (id: string, patch: Partial<ConfigVariableRow>) => void;
@@ -1914,13 +1838,7 @@ function VariableRows(props: {
               // value field's label so the editor reads プロジェクト名, not
               // the raw project_name key.
               label={row().storeField ? row().label : t("app.config.value")}
-              hint={
-                row().secret &&
-                row().hasExistingValue &&
-                row().value.trim() === ""
-                  ? t("app.config.secretHint")
-                  : row().helper
-              }
+              hint={variableRowHint(row())}
               required={row().required}
               // A boolean row renders a self-labeling Checkbox (its own
               // <label>); wrap it in a group, not another <label>.
@@ -1934,7 +1852,9 @@ function VariableRows(props: {
               type="button"
               aria-label={
                 row().storeField
-                  ? t("app.config.resetAria", { name: row().name })
+                  ? row().resetToDefault
+                    ? t("app.config.undoResetAria", { name: row().name })
+                    : t("app.config.resetAria", { name: row().name })
                   : t("app.config.removeAria", {
                       name: row().name || t("app.config.customName"),
                     })
@@ -1942,7 +1862,9 @@ function VariableRows(props: {
               onClick={() => props.onRemove(row().id)}
             >
               {row().storeField
-                ? t("app.config.reset")
+                ? row().resetToDefault
+                  ? t("app.config.undoReset")
+                  : t("app.config.reset")
                 : t("app.config.remove")}
             </Button>
           </div>

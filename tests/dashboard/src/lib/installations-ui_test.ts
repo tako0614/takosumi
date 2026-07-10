@@ -8,7 +8,9 @@ import {
   isDeploymentPubliclyOpenable,
   launchUrlFromDeployment,
   needsAttention,
+  outputLabel,
   pendingNeedsAttention,
+  publicLinkRowLabels,
   releaseActivationStatusForDeployment,
 } from "../../../../dashboard/src/lib/capsules-ui.ts";
 import type { ActivityEvent } from "../../../../dashboard/src/lib/control-api.ts";
@@ -248,6 +250,46 @@ describe("appSurfacesFromOutputs", () => {
   });
 });
 
+describe("publicLinkRowLabels", () => {
+  test("keeps friendly labels while they are unique", () => {
+    const entries: [string, unknown][] = [
+      ["launch_url", "https://a.test/"],
+      ["endpoint", "https://b.test/"],
+    ];
+    expect(publicLinkRowLabels(entries)).toEqual([
+      outputLabel("launch_url"),
+      outputLabel("endpoint"),
+    ]);
+  });
+
+  test("colliding friendly labels fall back to the humanized raw key", () => {
+    // launch_url and app_url map to the SAME friendly label key in every
+    // locale (公開アドレス ×N was the live Takos Office defect); url stays
+    // distinct and keeps its friendly label.
+    const entries: [string, unknown][] = [
+      ["launch_url", "https://a.test/"],
+      ["url", "https://b.test/"],
+      ["app_url", "https://c.test/"],
+    ];
+    const labels = publicLinkRowLabels(entries);
+    expect(labels[0]).toBe("Launch URL");
+    expect(labels[1]).toBe(outputLabel("url"));
+    expect(labels[2]).toBe("App URL");
+    expect(new Set(labels).size).toBe(3);
+  });
+
+  test("keys that also humanize identically get host+path disambiguation", () => {
+    const entries: [string, unknown][] = [
+      ["site_url", "https://a.test/"],
+      ["siteUrl", "https://b.test/admin"],
+    ];
+    expect(publicLinkRowLabels(entries)).toEqual([
+      "Site URL (a.test)",
+      "Site URL (b.test/admin)",
+    ]);
+  });
+});
+
 describe("release activation launch gating", () => {
   const deployment = {
     id: "dep_1",
@@ -350,9 +392,9 @@ describe("release activation launch gating", () => {
     expect(
       releaseActivationStatusForDeployment(deployment, [previous], "cap_1"),
     ).toBe("pending");
-    expect(
-      deploymentReadinessAfterApply(deployment, [previous], "cap_1"),
-    ).toBe("activation_pending");
+    expect(deploymentReadinessAfterApply(deployment, [previous], "cap_1")).toBe(
+      "activation_pending",
+    );
   });
 
   test("uses release activity when takosumi_release is hidden from public outputs", () => {

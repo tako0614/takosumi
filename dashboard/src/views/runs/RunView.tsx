@@ -45,7 +45,7 @@ import {
   listProviderConnections,
   listRuns,
   openRunStream,
-  planCapsule,
+  planCapsuleUpdate,
   type ProviderConnection,
   type ProviderResolution,
   type Run,
@@ -58,11 +58,18 @@ import { isTakosumiCloudRuntime } from "../../lib/deployment-brand.ts";
 import { createAction } from "../account/lib/action.tsx";
 import {
   changeCountsForRun,
+  changeCountsKnownForRun,
   changesFromLogs,
   connectionNamesFromLogs,
   inputNamesFromLogs,
   isTerminalRunStatus,
+  runHasChangeSummary,
 } from "../../lib/run-logs.ts";
+import {
+  awaitsDeployApproval,
+  isDeployApprovalCandidate,
+  isReviewRun,
+} from "../../lib/run-approval.ts";
 import {
   deploymentReadinessAfterApply,
   launchUrlFromDeployment,
@@ -87,6 +94,7 @@ import { useConfirmDialog } from "../../lib/confirm-dialog.ts";
 import { runFailureHint } from "../../lib/run-errors.ts";
 import { clearCurrentStateVersionCache } from "../../lib/current-state-versions.ts";
 import { clearDashboardOverviewCache } from "../../lib/dashboard-overview.ts";
+import { clearInstallConfigListCache } from "../../lib/install-config-list.ts";
 import {
   formatDateTime,
   locale,
@@ -109,6 +117,10 @@ import {
 
 const APPLY_REQUEST_TIMEOUT_MS = 45_000;
 const RELEASE_ACTIVATION_POLL_MS = 3_000;
+/** Newest-slice size of the Workspace Run ledger fetched to decide whether a
+ * succeeded review run's deploy approval was already consumed by a later
+ * apply (matches the run history's first page). */
+const SIBLING_RUNS_LIMIT = 200;
 
 export default function RunView() {
   return <Page>{() => <Inner />}</Page>;
@@ -938,6 +950,7 @@ function Inner() {
     clearCapsuleListCache(workspaceId);
     clearCurrentStateVersionCache(workspaceId);
     clearDashboardOverviewCache(workspaceId);
+    clearInstallConfigListCache(workspaceId);
   };
 
   createEffect(() => {
@@ -1054,6 +1067,14 @@ function Inner() {
   const changeCounts = createMemo(() =>
     changeCountsForRun(run.latest, logs()?.auditEvents ?? []),
   );
+  // `run.summary` is optional on the wire — when the backend recorded neither
+  // a summary nor log-parsable change items, changeCounts() is an all-zero
+  // FALLBACK, not a fact. The destructive gate and the completed-run changes
+  // card must both distinguish "0 changes" from "unknown".
+  const changeCountsKnown = createMemo(() => {
+    if (run.error) return false;
+    return changeCountsKnownForRun(run.latest, logs()?.auditEvents ?? []);
+  });
   const connections = createMemo(() =>
     connectionNamesFromLogs(logs()?.auditEvents ?? []),
   );
@@ -1102,25 +1123,61 @@ function Inner() {
   const [applied, setApplied] = createSignal(false);
   const [needsConfirm, setNeedsConfirm] = createSignal(false);
 
-  const isReviewRun = (r: Run): boolean =>
-    r.type === "plan" || r.type === "destroy_plan";
-  const isDeployableRun = (r: Run): boolean =>
-    isReviewRun(r) &&
-    r.status === "succeeded" &&
-    r.policyStatus === "pass" &&
-    !applied();
+  // Whether this plan's deploy approval is still OPEN is not a run-local
+  // fact: any apply / destroy_apply created for the same Capsule at/after the
+  // plan consumes it (the run history's semantics, shared via
+  // lib/run-approval.ts). The Run payload carries no applied-by linkage, so
+  // read the newest slice of the Workspace Run ledger whenever this run COULD
+  // await a deploy — an already-applied plan opened from history must not
+  // present 承認待ち + an active デプロイを実行 CTA again.
+  const [siblingRuns] = createResource(
+    () => {
+      if (run.error) return null;
+      const r = run.latest;
+      if (!r || !isDeployApprovalCandidate(r)) return null;
+      // Key by run id so navigating plan → apply → back re-reads the ledger.
+      return [r.workspaceId, r.id] as const;
+    },
+    ([workspaceId]) => listRuns(workspaceId, SIBLING_RUNS_LIMIT),
+  );
+  const isDeployableRun = (r: Run): boolean => {
+    if (!isDeployApprovalCandidate(r) || applied()) return false;
+    // Ledger read failed: fall back to run-local facts rather than
+    // permanently hiding the deploy button on a transient error — the backend
+    // re-verifies the plan digest and base state generation on apply anyway.
+    if (siblingRuns.error) return true;
+    const siblings = siblingRuns.latest;
+    // Still loading: stay conservative — don't claim an open approval yet.
+    if (siblings === undefined) return false;
+    return awaitsDeployApproval(r, siblings);
+  };
+  // True once the sibling ledger POSITIVELY shows this plan's approval was
+  // consumed by a later apply attempt (never true while the ledger read is
+  // still loading or failed) — drives the settled "already deployed" summary
+  // line instead of a contradictory "ready to deploy" with no button.
+  const deployApprovalConsumed = (r: Run): boolean => {
+    if (!isDeployApprovalCandidate(r) || applied()) return false;
+    if (siblingRuns.error) return false;
+    const siblings = siblingRuns.latest;
+    if (siblings === undefined) return false;
+    return !awaitsDeployApproval(r, siblings);
+  };
   // Header badge status: while this screen still renders the デプロイを実行
   // CTA for a succeeded review run, the run is waiting on that approval —
   // present 承認待ち (warn) instead of a contradictory 成功, matching the
   // notification wording. Reuses the exact deploy-CTA condition.
   const displayStatus = (r: Run): Run["status"] =>
     isDeployableRun(r) ? "waiting_approval" : r.status;
+  // Fail-closed: when the counts are unknowable (no backend summary, nothing
+  // parsed from the logs) a plan with deletes would read as 0 — require the
+  // explicit destructive confirmation instead of silently applying.
   const requiresDestructiveConfirmation = (r: Run): boolean =>
     isDeployableRun(r) &&
     (needsConfirm() ||
       r.type === "destroy_plan" ||
       r.requiresApproval === true ||
-      changeCounts().delete > 0);
+      changeCounts().delete > 0 ||
+      !changeCountsKnown());
 
   const deploy = createAction(async (confirmDestructive?: boolean) => {
     let envelope: unknown;
@@ -1211,6 +1268,12 @@ function Inner() {
     if (!autoInstall || autoContinued() || applied() || deploy.busy() || !r) {
       return;
     }
+    // Destructive-gate inputs must be SETTLED before auto-continuing: with no
+    // run.summary the gate reads log-derived counts, and right after the SSE
+    // terminal flip those logs are still being refetched — evaluating against
+    // the stale fetch would read a plan with deletes as 0 and auto-apply it.
+    // logs.loading is reactive, so this effect re-runs once the fetch lands.
+    if (!runHasChangeSummary(r) && logs.loading) return;
     if (autoAppliedAlready()) {
       // We already auto-applied this plan earlier this session and navigated on
       // to the apply run. Landing back here (browser Back) must not strand the
@@ -1240,7 +1303,11 @@ function Inner() {
   const retryPlan = createAction(async () => {
     const instId = run.latest?.capsuleId;
     if (!instId) return;
-    const envelope = await planCapsule(instId);
+    // planCapsuleUpdate, not plain planCapsule: retrying after a repo-side
+    // fix must sync the Source and pin the NEW snapshot (sync → snapshot →
+    // compatibility → plan), or the retry would re-plan the same broken
+    // contents forever. Non-Git capsules fall through to a plain plan inside.
+    const envelope = await planCapsuleUpdate(instId);
     const newRunId = extractRunId(envelope);
     if (newRunId) {
       navigate(
@@ -1453,6 +1520,12 @@ function Inner() {
         case "succeeded": {
           if (r.policyStatus !== "pass") {
             return { kind: "danger", text: t("run.summary.blocked") };
+          }
+          // The sibling ledger says a later apply already consumed this
+          // plan's approval (e.g. opened from history) — settle the summary
+          // instead of claiming the deploy is still waiting to be run.
+          if (deployApprovalConsumed(r)) {
+            return { kind: "ok", text: t("run.summary.alreadyApplied") };
           }
           const counts = changeCounts();
           const sub = t("run.summary.readyChanges", {
@@ -1881,7 +1954,12 @@ function Inner() {
         />
 
         <Switch>
-          <Match when={run.loading}>
+          {/* Initial load ONLY — every 3s fallback poll / visibility refetch /
+              approve refetch also flips run.loading, and unmounting the whole
+              console for a skeleton on each of those would flicker and evict
+              focus. Keep rendering `.latest` during refetches (mirrors
+              RunGroupView). */}
+          <Match when={run.loading && !run.error && !run.latest}>
             <Card>
               <Skeleton variant="block" />
             </Card>
@@ -2168,21 +2246,48 @@ function Inner() {
                   }
                 >
                   <Card>
-                    <CardHeader title={t("run.changes.title")} />
-                    <div class="wa-change-strip">
-                      <span class="wa-change-stat wa-change-create">
-                        {t("run.changes.create")}{" "}
-                        <strong>{changeCounts().create}</strong>
-                      </span>
-                      <span class="wa-change-stat wa-change-update">
-                        {t("run.changes.update")}{" "}
-                        <strong>{changeCounts().update}</strong>
-                      </span>
-                      <span class="wa-change-stat wa-change-delete">
-                        {t("run.changes.delete")}{" "}
-                        <strong>{changeCounts().delete}</strong>
-                      </span>
-                    </div>
+                    {/* Past tense once an apply-family run has settled — the
+                        changes HAPPENED; a review run keeps the future tense
+                        (its changes are still a proposal). */}
+                    <CardHeader
+                      title={t(
+                        (r().type === "apply" ||
+                          r().type === "destroy_apply") &&
+                          isTerminalRunStatus(r().status)
+                          ? "run.changes.titleDone"
+                          : "run.changes.title",
+                      )}
+                    />
+                    {/* Honest zero: a settled run with neither a backend
+                        summary nor log-derived items must say "no record",
+                        never 作成0/変更0/削除0 (live-verified false zeros on a
+                        real apply). While the log refetch is in flight the
+                        strip stays (the record may still arrive). */}
+                    <Show
+                      when={
+                        changeCountsKnown() ||
+                        !isTerminalRunStatus(r().status) ||
+                        logs.loading
+                      }
+                      fallback={
+                        <p class="muted">{t("run.changes.noRecord")}</p>
+                      }
+                    >
+                      <div class="wa-change-strip">
+                        <span class="wa-change-stat wa-change-create">
+                          {t("run.changes.create")}{" "}
+                          <strong>{changeCounts().create}</strong>
+                        </span>
+                        <span class="wa-change-stat wa-change-update">
+                          {t("run.changes.update")}{" "}
+                          <strong>{changeCounts().update}</strong>
+                        </span>
+                        <span class="wa-change-stat wa-change-delete">
+                          {t("run.changes.delete")}{" "}
+                          <strong>{changeCounts().delete}</strong>
+                        </span>
+                      </div>
+                    </Show>
                     <Show when={changes().length > 0}>
                       <details class="wb-disclosure">
                         <summary>{t("common.details")}</summary>

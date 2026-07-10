@@ -41,6 +41,7 @@ import {
   Input,
   Select,
   Textarea,
+  Toast,
 } from "../../../components/ui/index.ts";
 
 type OutputDraft = {
@@ -447,20 +448,6 @@ export default function SharesTab(props: { readonly workspaceId: string }) {
                   </p>
                 )}
               </Show>
-              <Show when={approve.error()}>
-                {(m) => (
-                  <p class="wb-error" role="alert">
-                    {m()}
-                  </p>
-                )}
-              </Show>
-              <Show when={revoke.error()}>
-                {(m) => (
-                  <p class="wb-error" role="alert">
-                    {m()}
-                  </p>
-                )}
-              </Show>
             </form>
           </CardSection>
         </Card>
@@ -468,6 +455,16 @@ export default function SharesTab(props: { readonly workspaceId: string }) {
 
       <section class="wb-stack-tight">
         <h2 class="tg-card-title">{t("shares.list.title")}</h2>
+        {/* Approve/revoke run from the TABLE rows, so their failures must
+            surface here beside the table — not inside the collapsed create
+            <details> above, where a failed confirm-gated revoke would look
+            like a silent no-op. */}
+        <Show when={approve.error()}>
+          {(m) => <Toast tone="error">{m()}</Toast>}
+        </Show>
+        <Show when={revoke.error()}>
+          {(m) => <Toast tone="error">{m()}</Toast>}
+        </Show>
         <Switch>
           <Match when={shares.error}>
             <EmptyState
