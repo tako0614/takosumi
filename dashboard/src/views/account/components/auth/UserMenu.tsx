@@ -82,7 +82,7 @@ export default function UserMenu() {
         <div class="user-menu-pop" role="group" aria-label={t("shell.userMenu")}>
           <div class="user-menu-id">
             <div class="user-menu-name">{label()}</div>
-            <Show when={session()?.email && session()?.displayName}>
+            <Show when={session()?.displayName && session()?.email}>
               {(email) => <div class="user-menu-sub">{email()}</div>}
             </Show>
           </div>
