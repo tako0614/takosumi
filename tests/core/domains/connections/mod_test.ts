@@ -8,6 +8,7 @@ import { seedInstallationModel } from "../../../helpers/deploy-control/model_fix
 import {
   ConnectionsService,
   mintableConnectionIds,
+  resolvedProviderEnvBindingsDigest,
 } from "../../../../core/domains/connections/mod.ts";
 
 const NOW = "2026-06-06T00:00:00.000Z";
@@ -147,6 +148,56 @@ test("Cloud mode resolves a pending public managed operator connection", async (
   expect(mintableConnectionIds(resolved)).toEqual([
     "conn_operator_compat_pending",
   ]);
+});
+
+test("binding digest ignores verification progress but detects connection replacement", async () => {
+  const { store, model } = await setup();
+  const managed = connection({
+    id: "conn_operator_compat",
+    status: "pending",
+    scopeHints: {
+      managedProvider: true,
+      managedProviderProfile: "compat.cloudflare.workers.v1",
+      providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      accountId: "ts_acc_takosumi_cloud",
+    },
+  });
+  await store.putConnection(managed);
+  await store.putInstallationProviderEnvBindingSet({
+    id: "dp_operator_digest",
+    spaceId: model.space.id,
+    installationId: model.installation.id,
+    environment: model.installation.environment,
+    bindings: [{ provider: CLOUDFLARE, connectionId: managed.id }],
+    createdAt: NOW,
+    updatedAt: NOW,
+  });
+  const cloudService = new ConnectionsService({
+    store,
+    allowOperatorBackedProviderEnvs: true,
+  });
+  const pending = await cloudService.resolveProviderEnvBindings(
+    model.installation,
+  );
+  const pendingDigest = await resolvedProviderEnvBindingsDigest(pending);
+
+  await store.putConnection({
+    ...managed,
+    status: "verified",
+    verifiedAt: NOW,
+  });
+  const verified = await cloudService.resolveProviderEnvBindings(
+    model.installation,
+  );
+  expect(await resolvedProviderEnvBindingsDigest(verified)).toBe(pendingDigest);
+
+  const replacement = verified.map((entry) => ({
+    ...entry,
+    connection: { ...entry.connection, id: "conn_operator_replacement" },
+  }));
+  expect(await resolvedProviderEnvBindingsDigest(replacement)).not.toBe(
+    pendingDigest,
+  );
 });
 
 test("provider connection listing exposes only public managed operator connections in Cloud mode", async () => {

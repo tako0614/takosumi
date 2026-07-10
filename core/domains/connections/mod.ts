@@ -18,7 +18,6 @@ import type {
   ProviderBindings,
   ProviderConnectionMaterialization,
 } from "takosumi-contract/connections";
-import { publicProviderConnectionStatus } from "takosumi-contract/connections";
 import { sameProviderFamily } from "takosumi-contract/provider-env-rules";
 import { stableJsonDigest } from "../../adapters/source/digest.ts";
 import { OpenTofuControllerError } from "../deploy-control/errors.ts";
@@ -97,8 +96,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /**
  * Stable digest over a run's resolved Provider Connection bindings. The field
  * projection is kept byte-identical to the pre-collapse `ProviderEnv` projection
- * (`envId`/`connectionId` are the connection id; `status` is the public read
- * view) so the plan→apply TOCTOU pin is unchanged.
+ * (`envId`/`connectionId` are the connection id). Mutable verification status
+ * is deliberately excluded: a pending-to-verified transition does not change
+ * which credential binding the plan reviewed, while revocation still fails in
+ * binding resolution before credential minting.
  */
 export async function resolvedProviderEnvBindingsDigest(
   resolved: readonly ResolvedInstallationProviderEnvBinding[] | undefined,
@@ -109,7 +110,6 @@ export async function resolvedProviderEnvBindingsDigest(
       alias: entry.alias ?? null,
       envId: entry.connection.id,
       materialization: entry.connection.materialization,
-      status: publicProviderConnectionStatus(entry.connection.status),
       connectionId: entry.connection.id,
       envNames: [...entry.connection.envNames].sort(),
     }))
