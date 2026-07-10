@@ -278,6 +278,24 @@ const TERMINAL_RUN_STATUSES = new Set([
   "expired",
 ]);
 
+/** Stable value key for a run's plan change summary. The projection rebuilds
+ * the summary object on every read, so an identity compare would flag a change
+ * on every poll tick (spamming SSE frames for any non-terminal run that has a
+ * plan summary, e.g. waiting_approval); compare the counts instead. */
+function runSummaryKey(
+  summary:
+    | {
+        readonly add?: number;
+        readonly change?: number;
+        readonly destroy?: number;
+      }
+    | undefined,
+): string {
+  return summary
+    ? `${summary.add ?? 0}:${summary.change ?? 0}:${summary.destroy ?? 0}`
+    : "";
+}
+
 /** SSE stream of a run's status. Reads the in-process controller projection and
  * emits the run only when it changes; keeps the connection warm with comments;
  * closes on a terminal status or after a safety cap (the client reconnects). */
@@ -335,7 +353,7 @@ function runStatusStream(
           if (
             current.status !== last.status ||
             current.heartbeatAt !== last.heartbeatAt ||
-            current.summary !== last.summary
+            runSummaryKey(current.summary) !== runSummaryKey(last.summary)
           ) {
             send({ run: current });
             last = current;

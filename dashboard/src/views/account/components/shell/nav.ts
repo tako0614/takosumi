@@ -10,6 +10,7 @@
  * rename cannot desync the chrome.
  */
 import {
+  Archive,
   Clock3,
   History,
   LayoutGrid,
@@ -17,6 +18,7 @@ import {
   Network,
   Server,
   Settings,
+  Share2,
   SlidersHorizontal,
   Store,
 } from "lucide-solid";
@@ -87,6 +89,18 @@ export const MANAGE_DESTINATIONS: readonly ManageDestination[] = [
     labelKey: "nav.workspaceSettings",
     descriptionKey: "settings.manage.workspace",
     icon: SlidersHorizontal,
+  },
+  {
+    href: "/advanced/workspace/backups",
+    labelKey: "workspaceSettings.tab.backups",
+    descriptionKey: "settings.manage.backups",
+    icon: Archive,
+  },
+  {
+    href: "/advanced/workspace/shares",
+    labelKey: "workspaceSettings.tab.shares",
+    descriptionKey: "settings.manage.shares",
+    icon: Share2,
   },
 ] as const;
 

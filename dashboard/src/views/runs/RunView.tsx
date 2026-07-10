@@ -63,7 +63,11 @@ import {
   inputNamesFromLogs,
   isTerminalRunStatus,
 } from "../../lib/run-logs.ts";
-import { launchUrlFromDeployment } from "../../lib/capsules-ui.ts";
+import {
+  deploymentReadinessAfterApply,
+  launchUrlFromDeployment,
+  type DeploymentReadiness,
+} from "../../lib/capsules-ui.ts";
 import {
   appendAppHandoff,
   createAppHandoffConnectHref,
@@ -103,6 +107,7 @@ import {
 } from "../../components/ui/index.ts";
 
 const APPLY_REQUEST_TIMEOUT_MS = 45_000;
+const RELEASE_ACTIVATION_POLL_MS = 3_000;
 
 export default function RunView() {
   return <Page>{() => <Inner />}</Page>;
@@ -842,10 +847,10 @@ function Inner() {
     () => run.latest?.workspaceId ?? null,
     listProviderConnections,
   );
-  // Activity only feeds the post-deploy launch-URL resolution, so fetch it
-  // only for a succeeded apply/destroy-apply run — not on every plan / prep /
-  // failed run screen (100 rows each).
-  const [activity] = createResource(
+  // Activity feeds post-apply readiness and launch-URL resolution, so fetch it
+  // only for a succeeded apply/destroy-apply run, then poll only while release
+  // activation remains unsettled.
+  const [activity, { refetch: refetchActivity }] = createResource(
     () => {
       const r = run.latest;
       if (!r?.workspaceId) return null;
@@ -868,25 +873,46 @@ function Inner() {
     }
     return `${id}:${r.id}`;
   });
-  const [deployments] = createResource(appliedRunDeploymentKey, async (key) => {
-    const [id] = key.split(":");
-    try {
-      return await listDeployments(id);
-    } catch {
-      return [];
+  const [deployments, { refetch: refetchDeployments }] = createResource(
+    appliedRunDeploymentKey,
+    async (key) => {
+      const [id] = key.split(":");
+      try {
+        return await listDeployments(id);
+      } catch {
+        return [];
+      }
+    },
+  );
+  const completedRunDeployment = createMemo(() => {
+    const r = run.latest;
+    if (!r || r.type !== "apply" || r.status !== "succeeded") {
+      return undefined;
     }
+    return (deployments() ?? []).find(
+      (row) => row.applyRunId === r.id && row.status !== "destroyed",
+    );
+  });
+  const completedRunReadiness = createMemo((): DeploymentReadiness => {
+    const r = run.latest;
+    if (!r || r.type !== "apply" || r.status !== "succeeded") {
+      return "settling";
+    }
+    if (deployments.loading || activity.loading || activity.error) {
+      return "settling";
+    }
+    return deploymentReadinessAfterApply(
+      completedRunDeployment(),
+      activity() ?? [],
+      capsuleId() ?? undefined,
+    );
   });
   const completedRunLaunchUrl = createMemo(() => {
     const r = run.latest;
     if (!r || r.type !== "apply" || r.status !== "succeeded") return undefined;
-    const rows = deployments() ?? [];
-    const deployment =
-      rows.find(
-        (row) => row.applyRunId === r.id && row.status !== "destroyed",
-      ) ?? rows.find((row) => row.status === "active");
-    if (activity.loading) return undefined;
+    if (completedRunReadiness() !== "ready") return undefined;
     return launchUrlFromDeployment(
-      deployment,
+      completedRunDeployment(),
       activity() ?? [],
       capsuleId() ?? undefined,
     );
@@ -984,6 +1010,24 @@ function Inner() {
       void refetchRun();
       void refetchLogs();
     }, 3000);
+    onCleanup(() => clearTimeout(timer));
+  });
+
+  createEffect(() => {
+    const current = run.latest;
+    if (
+      !current ||
+      current.type !== "apply" ||
+      current.status !== "succeeded" ||
+      !pageVisible()
+    ) {
+      return;
+    }
+    const readiness = completedRunReadiness();
+    if (readiness === "ready" || readiness === "activation_failed") return;
+    const timer = setTimeout(() => {
+      void Promise.all([refetchDeployments(), refetchActivity()]);
+    }, RELEASE_ACTIVATION_POLL_MS);
     onCleanup(() => clearTimeout(timer));
   });
 
@@ -1131,17 +1175,33 @@ function Inner() {
     setAutoContinued(false);
     setForceConsole(false);
   });
+  // Once-per-plan-run guard that survives a re-mount: Back / revisit of an
+  // ?auto=install plan URL must NOT silently re-fire the auto-apply.
+  const autoAppliedKey = () => `takosumi.auto-applied@${runId()}`;
+  const autoAppliedAlready = () => {
+    try {
+      return sessionStorage.getItem(autoAppliedKey()) === "1";
+    } catch {
+      return false;
+    }
+  };
   createEffect(() => {
     const r = run.latest;
     if (!autoInstall || autoContinued() || applied() || deploy.busy() || !r) {
       return;
     }
+    if (autoAppliedAlready()) return;
     if (isDeployableRun(r) && !requiresDestructiveConfirmation(r)) {
       // Never auto-apply past the billing/cost gate the manual deploy button
       // enforces — wait for the check, and stop on a blocked estimate (the
       // install screen shows the gate card instead).
       if (cost.loading || costBlocked()) return;
       setAutoContinued(true);
+      try {
+        sessionStorage.setItem(autoAppliedKey(), "1");
+      } catch {
+        /* private mode: fall back to the in-instance guard */
+      }
       void deploy.run(false);
     }
   });
@@ -1198,7 +1258,16 @@ function Inner() {
     const r = run.latest;
     if (!r) return { phase: "progress", step: "fetch" };
     if (r.status === "failed") return { phase: "error" };
-    if (r.type === "apply" || r.type === "destroy_apply") {
+    if (r.type === "apply") {
+      if (r.status !== "succeeded") {
+        return { phase: "progress", step: "deploy" };
+      }
+      const readiness = completedRunReadiness();
+      if (readiness === "activation_failed") return { phase: "error" };
+      if (readiness === "ready") return { phase: "done" };
+      return { phase: "progress", step: "done" };
+    }
+    if (r.type === "destroy_apply") {
       return r.status === "succeeded"
         ? { phase: "done" }
         : { phase: "progress", step: "deploy" };
@@ -1243,6 +1312,25 @@ function Inner() {
         return { kind: "progress", text: t("run.summary.applying") };
       }
       if (r.status === "succeeded") {
+        if (r.type === "apply") {
+          const readiness = completedRunReadiness();
+          if (readiness === "settling") {
+            return { kind: "progress", text: t("run.summary.finishing") };
+          }
+          if (readiness === "activation_pending") {
+            return {
+              kind: "progress",
+              text: t("run.summary.activationPending"),
+            };
+          }
+          if (readiness === "activation_failed") {
+            return {
+              kind: "error",
+              text: t("run.summary.activationFailed"),
+              sub: t("app.outputs.activationFailed"),
+            };
+          }
+        }
         return { kind: "ok", text: t("run.summary.applySucceeded") };
       }
       if (r.status === "failed") {
@@ -1595,7 +1683,11 @@ function Inner() {
                         ? t("update.installingGeneric")
                         : t("install.installingGeneric"))}
                   </h2>
-                  <p class="muted">{t("install.wait")}</p>
+                  <p class="muted">
+                    {completedRunReadiness() === "activation_pending"
+                      ? t("install.activationPending")
+                      : t("install.wait")}
+                  </p>
                 </div>
               </div>
               <div class="av-install-bar" aria-hidden="true">
@@ -1683,8 +1775,13 @@ function Inner() {
           <Match when={run.error}>
             <EmptyState
               icon={<Activity size={28} />}
-              title={t("common.unknown")}
+              title={t("run.notFoundTitle")}
               message={(run.error as ControlApiError).message}
+              action={
+                <Button variant="secondary" href="/runs">
+                  {t("nav.runs")}
+                </Button>
+              }
             />
           </Match>
           <Match when={run()}>

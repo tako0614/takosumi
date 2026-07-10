@@ -162,7 +162,9 @@
   --tg-bg-hi: #e9e9ec;
   --tg-fg: #18181b;
   --tg-fg-muted: #6e6e77;
-  --tg-fg-subtle: #a0a0a9;
+  /* #a0a0a9 failed WCAG AA (~2.3:1) on white/subtle for table headers, KV
+     labels and muted badges; darkened to clear 4.5:1. */
+  --tg-fg-subtle: #6b6b74;
   --tg-line: #e6e6e9;
   --tg-line-strong: #d6d6db;
   --tg-code-bg: #f1f1f3;
