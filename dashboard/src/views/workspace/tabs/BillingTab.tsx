@@ -130,10 +130,21 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
     const currentMode = mode() ?? "disabled";
     // Only an enforcing mode actually blocks apply on a depleted balance;
     // showback/disabled never gate, so "setup required" would be misleading.
-    if (currentMode === "enforce" && balanceAvailableUsdMicros(balance()) <= 0) {
+    if (
+      currentMode === "enforce" &&
+      balanceAvailableUsdMicros(balance()) <= 0
+    ) {
       return t("billing.balance.actionRequired");
     }
     return t("billing.balance.ready");
+  });
+  // Self-host quota: the capacity figure only means something when the
+  // operator meters (showback) or gates (enforce) usage. Under `disabled`,
+  // a "$0.00 available capacity" row reads as alarming nonsense, so it is
+  // not rendered at all — the card subtitle already says billing is off.
+  const quotaMeaningful = createMemo(() => {
+    const currentMode = mode();
+    return currentMode === "showback" || currentMode === "enforce";
   });
 
   // One-time checkout-result banner (the Stripe redirect lands back here with
@@ -335,7 +346,7 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
           title={
             cloudBilling()
               ? t("billing.balance.title")
-              : t("billing.quota.title")
+              : t("billing.usageQuotaTitle")
           }
           subtitle={billingSubtitle()}
         />
@@ -351,31 +362,36 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
             )}
           </Match>
           <Match when={billing()}>
-            <KVList
-              items={
-                cloudBilling()
-                  ? [
-                      {
-                        label: t("billing.balance.availableUsd"),
-                        value: formatUsdMicros(
-                          balanceAvailableUsdMicros(balance()),
-                        ),
-                      },
-                      {
-                        label: t("billing.balance.status"),
-                        value: cloudSpendStatus(),
-                      },
-                    ]
-                  : [
-                      {
-                        label: t("billing.quota.available"),
-                        value: formatUsdMicros(
-                          balanceAvailableUsdMicros(balance()),
-                        ),
-                      },
-                    ]
-              }
-            />
+            <Show
+              when={cloudBilling() || quotaMeaningful()}
+              fallback={<p class="muted">{t("billing.quota.disabledHint")}</p>}
+            >
+              <KVList
+                items={
+                  cloudBilling()
+                    ? [
+                        {
+                          label: t("billing.balance.availableUsd"),
+                          value: formatUsdMicros(
+                            balanceAvailableUsdMicros(balance()),
+                          ),
+                        },
+                        {
+                          label: t("billing.balance.status"),
+                          value: cloudSpendStatus(),
+                        },
+                      ]
+                    : [
+                        {
+                          label: t("billing.quota.available"),
+                          value: formatUsdMicros(
+                            balanceAvailableUsdMicros(balance()),
+                          ),
+                        },
+                      ]
+                }
+              />
+            </Show>
             <Show when={balanceReservedUsdMicros(balance()) > 0}>
               <details class="wb-disclosure av-billing-ledger">
                 <summary>{t("billing.pendingUse.title")}</summary>

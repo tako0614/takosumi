@@ -172,6 +172,7 @@ export function CloudResourcesPanel(props: {
     (context) => getCloudResourceUsageSnapshot(context),
   );
   const [copied, setCopied] = createSignal<string | null>(null);
+  const [copyFailed, setCopyFailed] = createSignal(false);
   const refreshAll = () => {
     void refetchSnapshot();
     void refetchInventory();
@@ -189,7 +190,17 @@ export function CloudResourcesPanel(props: {
   onCleanup(() => props.onRefreshState?.(IDLE_REFRESH_STATE));
 
   const copyText = async (key: string, value: string) => {
-    await navigator.clipboard.writeText(value);
+    // Clipboard write can be rejected (permissions / insecure context). This
+    // is the copy path for once-only values, so a silent unhandledrejection
+    // is not acceptable — surface a visible, announced error instead.
+    try {
+      await navigator.clipboard.writeText(value);
+    } catch {
+      setCopied(null);
+      setCopyFailed(true);
+      return;
+    }
+    setCopyFailed(false);
     setCopied(key);
     window.setTimeout(() => {
       setCopied((current) => (current === key ? null : current));
@@ -238,6 +249,7 @@ export function CloudResourcesPanel(props: {
                 usageError={usage.error}
                 context={cloudContext()}
                 copied={copied()}
+                copyFailed={copyFailed()}
                 copyText={copyText}
                 refetchInventory={() => void refetchInventory()}
               />
@@ -255,12 +267,22 @@ export function CloudApiKeysPanel(props: { readonly showHeader?: boolean }) {
     getCloudApiKeysSnapshot,
   );
   const [copied, setCopied] = createSignal<string | null>(null);
+  const [copyFailed, setCopyFailed] = createSignal(false);
   const tokens = createMemo(() => {
     const result = keys();
     return result?.ok ? activeCloudApiTokens(result.data) : [];
   });
   const copyText = async (key: string, value: string) => {
-    await navigator.clipboard.writeText(value);
+    // The created API-key token is shown exactly once; a rejected clipboard
+    // write must surface an announced error, not an unhandledrejection.
+    try {
+      await navigator.clipboard.writeText(value);
+    } catch {
+      setCopied(null);
+      setCopyFailed(true);
+      return;
+    }
+    setCopyFailed(false);
     setCopied(key);
     window.setTimeout(() => {
       setCopied((current) => (current === key ? null : current));
@@ -292,6 +314,9 @@ export function CloudApiKeysPanel(props: { readonly showHeader?: boolean }) {
               <div class="av-cloud-stack">
                 <Show when={copied()}>
                   <Toast tone="success">{t("cloudResources.copied")}</Toast>
+                </Show>
+                <Show when={copyFailed()}>
+                  <Toast tone="error">{t("cloudResources.copyFailed")}</Toast>
                 </Show>
                 <ApiKeysCard
                   tokens={tokens()}
@@ -369,6 +394,7 @@ function CloudResourceBody(props: {
   readonly usageError: unknown;
   readonly context: CloudRequestContext;
   readonly copied: string | null;
+  readonly copyFailed: boolean;
   readonly copyText: (key: string, value: string) => Promise<void>;
   readonly refetchInventory: () => void;
 }) {
@@ -408,6 +434,9 @@ function CloudResourceBody(props: {
     <div class="av-cloud-stack">
       <Show when={props.copied}>
         <Toast tone="success">{t("cloudResources.copied")}</Toast>
+      </Show>
+      <Show when={props.copyFailed}>
+        <Toast tone="error">{t("cloudResources.copyFailed")}</Toast>
       </Show>
 
       <div class="av-cloud-grid">

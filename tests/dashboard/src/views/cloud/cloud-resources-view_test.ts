@@ -72,6 +72,31 @@ describe("Cloud resources view", () => {
     );
   });
 
+  test("surfaces clipboard failures instead of an unhandledrejection", () => {
+    // navigator.clipboard.writeText can reject (permissions / insecure
+    // context) — and this is the copy path for the once-only API-key token.
+    expect(cloudResourcesViewSource).toMatch(
+      /try \{\s*await navigator\.clipboard\.writeText\(value\);\s*\} catch \{/,
+    );
+    expect(cloudResourcesViewSource).not.toMatch(
+      /await navigator\.clipboard\.writeText\(value\);\s*setCopied\(key\);/,
+    );
+    expect(cloudResourcesViewSource).toContain(
+      "const [copyFailed, setCopyFailed]",
+    );
+    expect(cloudResourcesViewSource).toContain("setCopyFailed(true);");
+    // Both copy surfaces render the announced error toast.
+    expect(cloudResourcesViewSource).toContain(
+      '<Toast tone="error">{t("cloudResources.copyFailed")}</Toast>',
+    );
+    expect(cloudResourcesViewSource).toContain(
+      "<Show when={props.copyFailed}>",
+    );
+    expect(cloudResourcesViewSource).toContain("<Show when={copyFailed()}>");
+    expect(en["cloudResources.copyFailed"]).toContain("Copy failed");
+    expect(ja["cloudResources.copyFailed"]).toContain("コピーできませんでした");
+  });
+
   test("loads resources and API keys as separate surfaces", () => {
     expect(cloudResourcesViewSource).toContain(
       "export function CloudResourcesPanel",

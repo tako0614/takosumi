@@ -69,11 +69,17 @@ function Inner(props: { readonly session: SessionRecord }) {
             items={[
               {
                 label: t("account.profile.displayName"),
-                value: props.session.displayName ?? "—",
+                // A bare "—" reads as broken when the session simply has no
+                // profile data yet — say 未設定 / "Not set" instead.
+                value: props.session.displayName ?? (
+                  <span class="muted">{t("account.profile.notSet")}</span>
+                ),
               },
               {
                 label: t("account.profile.email"),
-                value: props.session.email ?? "—",
+                value: props.session.email ?? (
+                  <span class="muted">{t("account.profile.notSet")}</span>
+                ),
               },
             ]}
           />

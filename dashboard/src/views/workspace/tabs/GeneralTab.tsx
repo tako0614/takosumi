@@ -12,6 +12,7 @@ import {
   Match,
   Show,
   Switch,
+  untrack,
 } from "solid-js";
 import {
   listWorkspaces,
@@ -35,8 +36,8 @@ import {
 export default function GeneralTab(props: { readonly workspaceId: string }) {
   const { confirm } = useConfirmDialog();
   const [workspaces, { refetch }] = createResource(listWorkspaces);
-  const [archivedList, { refetch: refetchArchived }] = createResource(
-    () => listWorkspacesIncludingArchived().catch(() => []),
+  const [archivedList, { refetch: refetchArchived }] = createResource(() =>
+    listWorkspacesIncludingArchived().catch(() => []),
   );
   const archivedWorkspaces = createMemo(() =>
     (archivedList() ?? []).filter((w) => Boolean(w.archivedAt)),
@@ -50,9 +51,21 @@ export default function GeneralTab(props: { readonly workspaceId: string }) {
   const [saveError, setSaveError] = createSignal<string | null>(null);
   const [saveMessage, setSaveMessage] = createSignal<string | null>(null);
 
+  // Seed the draft from the workspace, but only while the user has no unsaved
+  // edit: workspace() also refetches on unarchive/background refresh, and an
+  // unconditional re-seed would silently discard in-progress typing. `untrack`
+  // keeps keystrokes from re-running the effect.
+  let seededDisplayName: string | null = null;
   createEffect(() => {
     const current = workspace();
     if (!current) return;
+    const draft = untrack(displayNameDraft);
+    const clean =
+      seededDisplayName === null ||
+      draft === seededDisplayName ||
+      draft === current.displayName;
+    if (!clean) return;
+    seededDisplayName = current.displayName;
     setDisplayNameDraft(current.displayName);
     setSaveError(null);
     setSaveMessage(null);
@@ -148,73 +161,77 @@ export default function GeneralTab(props: { readonly workspaceId: string }) {
         }
       >
         <Match when={workspace()}>
-        {(current) => (
-          <>
-            <KVList
-              items={[
-                {
-                  label: t("workspaceSettings.general.handle"),
-                  value: <code>@{current().handle}</code>,
-                },
-                {
-                  label: t("workspaceSettings.general.updated"),
-                  value: formatDateTime(current().updatedAt),
-                },
-              ]}
-            />
-            <CardSection>
-              <form class="wc-form" onSubmit={save}>
-                <FormField label={t("workspaceSettings.general.displayName")}>
-                  <Input
-                    value={displayNameDraft()}
-                    onInput={(e) => setDisplayNameDraft(e.currentTarget.value)}
-                  />
-                </FormField>
-                <details class="wb-disclosure wc-advanced-settings">
-                  <summary>
-                    {t("workspaceSettings.general.advancedDetails")}
-                  </summary>
-                  <KVList
-                    items={[
-                      {
-                        label: t("workspaceSettings.general.type"),
-                        value: <code>{current().type}</code>,
-                      },
-                      {
-                        label: t("workspaceSettings.general.owner"),
-                        value: <code>{current().ownerUserId}</code>,
-                      },
-                    ]}
-                  />
+          {(current) => (
+            <>
+              <KVList
+                items={[
+                  {
+                    label: t("workspaceSettings.general.handle"),
+                    value: <code>@{current().handle}</code>,
+                  },
+                  {
+                    label: t("workspaceSettings.general.updated"),
+                    value: formatDateTime(current().updatedAt),
+                  },
+                ]}
+              />
+              <CardSection>
+                <form class="wc-form" onSubmit={save}>
+                  <FormField label={t("workspaceSettings.general.displayName")}>
+                    <Input
+                      value={displayNameDraft()}
+                      onInput={(e) =>
+                        setDisplayNameDraft(e.currentTarget.value)
+                      }
+                    />
+                  </FormField>
+                  <details class="wb-disclosure wc-advanced-settings">
+                    <summary>
+                      {t("workspaceSettings.general.advancedDetails")}
+                    </summary>
+                    <KVList
+                      items={[
+                        {
+                          label: t("workspaceSettings.general.type"),
+                          value: <code>{current().type}</code>,
+                        },
+                        {
+                          label: t("workspaceSettings.general.owner"),
+                          value: <code>{current().ownerUserId}</code>,
+                        },
+                      ]}
+                    />
+                    <div class="wc-form-actions">
+                      <Button
+                        variant="danger"
+                        type="button"
+                        busy={archiving()}
+                        disabled={
+                          archiving() || (workspaces() ?? []).length <= 1
+                        }
+                        onClick={archive}
+                      >
+                        {archiving()
+                          ? t("common.saving")
+                          : t("workspaceSettings.general.archive")}
+                      </Button>
+                    </div>
+                  </details>
                   <div class="wc-form-actions">
-                    <Button
-                      variant="danger"
-                      type="button"
-                      busy={archiving()}
-                      disabled={archiving() || (workspaces() ?? []).length <= 1}
-                      onClick={archive}
-                    >
-                      {archiving()
-                        ? t("common.saving")
-                        : t("workspaceSettings.general.archive")}
+                    <Button variant="primary" type="submit" busy={saving()}>
+                      {saving() ? t("common.saving") : t("common.save")}
                     </Button>
                   </div>
-                </details>
-                <div class="wc-form-actions">
-                  <Button variant="primary" type="submit" busy={saving()}>
-                    {saving() ? t("common.saving") : t("common.save")}
-                  </Button>
-                </div>
-                <Show when={saveError()}>
-                  {(message) => <Toast tone="error">{message()}</Toast>}
-                </Show>
-                <Show when={saveMessage()}>
-                  {(message) => <Toast tone="success">{message()}</Toast>}
-                </Show>
-              </form>
-            </CardSection>
-          </>
-        )}
+                  <Show when={saveError()}>
+                    {(message) => <Toast tone="error">{message()}</Toast>}
+                  </Show>
+                  <Show when={saveMessage()}>
+                    {(message) => <Toast tone="success">{message()}</Toast>}
+                  </Show>
+                </form>
+              </CardSection>
+            </>
+          )}
         </Match>
       </Switch>
       <Show when={archivedWorkspaces().length > 0}>
