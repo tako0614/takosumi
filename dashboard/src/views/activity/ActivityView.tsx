@@ -19,6 +19,7 @@ import { formatDateTime, t } from "../../i18n/index.ts";
 import PageHeader from "../../components/ui/PageHeader.tsx";
 import { Card } from "../../components/ui/Card.tsx";
 import EmptyState from "../../components/ui/EmptyState.tsx";
+import Button from "../../components/ui/Button.tsx";
 import Skeleton from "../../components/ui/Skeleton.tsx";
 
 const ACTIVITY_LIMIT = 100;
@@ -154,7 +155,7 @@ function ActivityRow(props: { event: ActivityEvent }) {
 
 function Inner() {
   const workspaceId = () => (currentWorkspaceId() ? currentWorkspaceId() : null);
-  const [events] = createResource(workspaceId, (id) =>
+  const [events, { refetch: refetchEvents }] = createResource(workspaceId, (id) =>
     listActivity(id, ACTIVITY_LIMIT),
   );
 
@@ -188,6 +189,16 @@ function Inner() {
               message={t("common.fetchFailed", {
                 message: (events.error as ControlApiError).message,
               })}
+              action={
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  type="button"
+                  onClick={() => void refetchEvents()}
+                >
+                  {t("common.retry")}
+                </Button>
+              }
             />
           </Match>
           <Match when={events()}>

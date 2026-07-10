@@ -8,7 +8,7 @@
  * schema and makes no client-side readiness or speed claim.
  */
 import { onMount } from "solid-js";
-import { useNavigate } from "@solidjs/router";
+import { A, useNavigate } from "@solidjs/router";
 import Page from "../account/components/auth/Page.tsx";
 import PageHeader from "../../components/ui/PageHeader.tsx";
 import { locale, t } from "../../i18n/index.ts";
@@ -51,6 +51,12 @@ function Inner() {
         onConfigure={onConfigure}
         showSourceControls={false}
       />
+      {/* The only in-app path to the manual Git-URL install + custom
+          store-server management (blank /new). Without this, those surfaces are
+          reachable only via external /install links. */}
+      <p class="store-manual-entry">
+        <A href="/new">{t("store.manualEntry")}</A>
+      </p>
     </div>
   );
 }

@@ -409,6 +409,19 @@
     padding: var(--tg-s-4) var(--tg-s-3) var(--tg-s-7);
   }
 }
+.store-manual-entry {
+  margin-top: var(--tg-s-5);
+  text-align: center;
+  font-size: var(--tg-fs-sm);
+  color: var(--tg-fg-muted);
+}
+.store-manual-entry a {
+  color: var(--tg-fg-muted);
+  text-decoration: underline;
+}
+.store-manual-entry a:hover {
+  color: var(--tg-fg);
+}
 
 /* Skeleton tiles while the store loads (matches .tcs-card footprint). */
 .tcs-card-skeleton {
