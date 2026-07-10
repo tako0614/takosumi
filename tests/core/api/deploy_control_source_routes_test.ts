@@ -409,7 +409,12 @@ output "attachments_bucket" {
     },
   );
   expect(checked.status).toBe(201);
-  expect(sourceFileReadOptions).toEqual([{ modulePath: "deploy/opentofu" }]);
+  expect(sourceFileReadOptions).toEqual([
+    {
+      modulePath: "deploy/opentofu",
+      runId: "ccr_route0000000002",
+    },
+  ]);
   const checkedBody = await checked.json();
   expect(checkedBody.report).toMatchObject({
     level: "ready",
@@ -431,7 +436,11 @@ output "attachments_bucket" {
     },
   );
   expect(rootChecked.status).toBe(201);
-  expect(sourceFileReadOptions).toEqual([undefined]);
+  expect(sourceFileReadOptions).toEqual([
+    {
+      runId: "ccr_route0000000004",
+    },
+  ]);
 });
 
 test("PATCH /internal/v1/sources updates fields", async () => {
