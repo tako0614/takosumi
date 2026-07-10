@@ -61,6 +61,26 @@ const REFRESH_TOKEN_TTL_MS = readTtlMsEnv(
   30 * 24 * 60 * 60 * 1000,
 );
 
+async function observeSlowOidcRefreshStage<T>(
+  stage: string,
+  operation: () => T | Promise<T>,
+): Promise<T> {
+  const timer = setTimeout(() => {
+    console.warn(
+      JSON.stringify({
+        event: "oidc_refresh_stage_slow",
+        stage,
+        thresholdMs: 2_000,
+      }),
+    );
+  }, 2_000);
+  try {
+    return await operation();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
  * Generate an opaque access token. 32 bytes of entropy, prefixed `takat_`.
  * The previous `dev-${randomUUID()}` prefix was misleading: it shipped in
@@ -543,13 +563,17 @@ async function handleRefreshToken(input: {
   // child token) but the caller is presenting the old token, that indicates
   // either a replay attack or a leaked token. Revoke the entire chain — all
   // refresh tokens and any access tokens minted through it — and reject.
-  const child = await input.store.getRefreshChainChild(refreshToken);
+  const child = await observeSlowOidcRefreshStage("reuse_check", () =>
+    input.store.getRefreshChainChild(refreshToken),
+  );
   if (child !== undefined) {
     await input.store.revokeRefreshChain(refreshToken);
     return json({ error: "invalid_grant" }, 400);
   }
 
-  const record = await input.store.findRefreshToken(refreshToken);
+  const record = await observeSlowOidcRefreshStage("token_load", () =>
+    input.store.findRefreshToken(refreshToken),
+  );
   if (!record || record.expiresAt < Date.now()) {
     if (record) await input.store.deleteToken(refreshToken);
     return json({ error: "invalid_grant" }, 400);
@@ -560,7 +584,11 @@ async function handleRefreshToken(input: {
   // refresh-chain root has been recorded revoked. A freshly issued or rotated
   // valid token's root is never in `revoked_refresh_roots`, so this never
   // rejects a legitimate grant.
-  if (await input.store.isRefreshRootRevoked(refreshToken)) {
+  if (
+    await observeSlowOidcRefreshStage("revocation_check", () =>
+      input.store.isRefreshRootRevoked(refreshToken),
+    )
+  ) {
     await input.store.deleteToken(refreshToken);
     return json({ error: "invalid_grant" }, 400);
   }
@@ -568,15 +596,22 @@ async function handleRefreshToken(input: {
   if (credentials.clientId && credentials.clientId !== record.clientId) {
     return json({ error: "invalid_grant" }, 400);
   }
-  const client = await resolveOidcClient({
-    clientId: record.clientId,
-    clients: input.clients,
-    store: input.store,
-  });
+  const client = await observeSlowOidcRefreshStage("client_lookup", () =>
+    resolveOidcClient({
+      clientId: record.clientId,
+      clients: input.clients,
+      store: input.store,
+    }),
+  );
   if (input.clients.size > 0 && !client) {
     return json({ error: "invalid_grant" }, 400);
   }
-  if (client && !(await validateOidcClientSecret(client, credentials.secret))) {
+  if (
+    client &&
+    !(await observeSlowOidcRefreshStage("client_auth", () =>
+      validateOidcClientSecret(client, credentials.secret),
+    ))
+  ) {
     return json({ error: "invalid_client" }, 401);
   }
 
@@ -596,43 +631,46 @@ async function handleRefreshToken(input: {
   // link insert first turns the parent token into a single-winner claim:
   // the loser gets `false` and is treated as reuse — revoke the chain and
   // reject — rather than minting a second family.
-  const linked = await input.store.addRefreshChainLink(
-    refreshToken,
-    newRefreshToken,
+  const linked = await observeSlowOidcRefreshStage("rotation_claim", () =>
+    input.store.addRefreshChainLink(refreshToken, newRefreshToken),
   );
   if (!linked) {
     await input.store.revokeRefreshChain(refreshToken);
     return json({ error: "invalid_grant" }, 400);
   }
 
-  await input.store.saveRefreshToken(newRefreshToken, {
-    clientId: record.clientId,
-    scope: record.scope,
-    subject: record.subject,
-    takosumiSubject: record.takosumiSubject,
-    capsuleId: record.capsuleId,
-    appId: record.appId,
-    workspaceId: record.workspaceId,
-    role: record.role,
-    expiresAt: Date.now() + REFRESH_TOKEN_TTL_MS,
+  await observeSlowOidcRefreshStage("rotation_write", async () => {
+    await input.store.saveRefreshToken(newRefreshToken, {
+      clientId: record.clientId,
+      scope: record.scope,
+      subject: record.subject,
+      takosumiSubject: record.takosumiSubject,
+      capsuleId: record.capsuleId,
+      appId: record.appId,
+      workspaceId: record.workspaceId,
+      role: record.role,
+      expiresAt: Date.now() + REFRESH_TOKEN_TTL_MS,
+    });
+    await input.store.deleteToken(refreshToken);
   });
-  await input.store.deleteToken(refreshToken);
 
-  return await issueTokenResponse({
-    issuer: input.issuer,
-    store: input.store,
-    flow: input.flow,
-    clientId: record.clientId,
-    scope: record.scope,
-    subject: record.subject,
-    takosumiSubject: record.takosumiSubject,
-    capsuleId: record.capsuleId,
-    appId: record.appId,
-    workspaceId: record.workspaceId,
-    role: record.role,
-    refreshToken: newRefreshToken,
-    chainRefreshToken: newRefreshToken,
-  });
+  return await observeSlowOidcRefreshStage("token_issue", () =>
+    issueTokenResponse({
+      issuer: input.issuer,
+      store: input.store,
+      flow: input.flow,
+      clientId: record.clientId,
+      scope: record.scope,
+      subject: record.subject,
+      takosumiSubject: record.takosumiSubject,
+      capsuleId: record.capsuleId,
+      appId: record.appId,
+      workspaceId: record.workspaceId,
+      role: record.role,
+      refreshToken: newRefreshToken,
+      chainRefreshToken: newRefreshToken,
+    }),
+  );
 }
 
 async function cascadeRevokeAuthorizationCode(
