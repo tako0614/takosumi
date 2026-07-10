@@ -83,6 +83,20 @@ export class ControlApiError extends Error {
     return typeof reason === "string" ? reason : undefined;
   }
 
+  /**
+   * Correlation id from the control error envelope (`error.requestId`),
+   * suitable for a "quote this id to support" line. Never a message text.
+   */
+  get requestId(): string | undefined {
+    if (!isRecord(this.body)) return undefined;
+    const payload = this.body.error;
+    if (!isRecord(payload)) return undefined;
+    const requestId = payload.requestId;
+    return typeof requestId === "string" && requestId.trim().length > 0
+      ? requestId
+      : undefined;
+  }
+
   /** True when creating a service hit the Workspace/name/environment guard. */
   get isDuplicateService(): boolean {
     return (

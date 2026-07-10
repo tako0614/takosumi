@@ -639,6 +639,8 @@ export const ja = {
     "まず内容を確認します。デプロイは承認後に実行されます。",
   "new.flow.selected": "選択中",
   "new.flow.manual": "手動追加",
+  "new.flow.back": "選び直す",
+  "new.pick.checking": "選択したサービスを確認しています…",
   "new.summary.aria": "追加内容",
   "new.summary.provider": "ホスト先",
   "new.storeInput.title": "サービス設定",
@@ -696,6 +698,10 @@ export const ja = {
   "new.vars.projectName": "サービスID",
   "new.hostPreview": "公開URL: {host}",
   "new.advanced.title": "詳細設定",
+  "new.advanced.customUrlHint": "既定の公開URLの代わりに使う完全なURLです。",
+  "new.advanced.routePatternHint":
+    "上級者向け: ルートパターンを直接指定します。",
+  "new.advanced.serviceIdHint": "内部名です。URLの既定値になります。",
   "new.env.title": "環境変数",
   "new.env.body":
     "アプリが公開してよい実行時の環境変数を求める場合だけ使います。秘密の値は接続済みアカウントから渡してください。",
@@ -819,6 +825,8 @@ export const ja = {
     "サービスの追加に失敗しました。内容を確認して、もう一度お試しください。",
   "new.error.genericWithDetails":
     "サービスの追加に失敗しました。詳細: {message}",
+  "new.error.requestId":
+    "問題が続く場合はこのIDを添えて問い合わせてください: {id}",
   "new.error.invalidHostname":
     "この公開名は長すぎるか、使えない文字を含んでいます。もう少し短い名前にして、もう一度お試しください。",
   "new.error.connectionRequired":

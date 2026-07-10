@@ -31,6 +31,7 @@ import {
 } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import {
+  ArrowLeft,
   Cloud,
   Download,
   Globe2,
@@ -89,6 +90,7 @@ import {
   listConnections,
   planCapsule,
   putCapsuleProviderConnectionSet,
+  revokeConnection,
   syncSource,
   testConnection,
   waitForLatestSourceSnapshot,
@@ -121,6 +123,7 @@ import {
   FormField,
   Input,
   Select,
+  Spinner,
   Toast,
   type Tone,
 } from "../../components/ui/index.ts";
@@ -317,6 +320,13 @@ function Inner() {
     createSignal<TcsListing | null>(null);
   const [storeMetadataUnavailable, setStoreMetadataUnavailable] =
     createSignal(false);
+  // Store-card pick hydration: visible busy state while the picked listing's
+  // repo-owned install metadata is fetched, and the last failed pick so the
+  // discovery section can offer a one-tap retry.
+  const [storePickBusy, setStorePickBusy] = createSignal(false);
+  const [failedStorePick, setFailedStorePick] = createSignal<TcsListing | null>(
+    null,
+  );
   const [storeInputValues, setStoreInputValues] = createSignal<
     Readonly<Record<string, string>>
   >({});
@@ -697,6 +707,13 @@ function Inner() {
   const [stepInstall, setStepInstall] = createSignal<StepState>("idle");
   const [stepPlan, setStepPlan] = createSignal<StepState>("idle");
   const [error, setError] = createSignal<string | null>(null);
+  // Correlation id (`error.requestId`) of the install failure behind the
+  // current error() — rendered as a muted "quote this id to support" line.
+  const [errorRequestId, setErrorRequestId] = createSignal<string | null>(null);
+  // After an install submit fails, the pre-submit 確認結果 card still says
+  // "このまま追加できます" right above the failure alert. Demote it: hide the
+  // stale check display until the user re-runs the check (もう一度確認 stays).
+  const [staleCheckResult, setStaleCheckResult] = createSignal(false);
   const [syncRequired, setSyncRequired] = createSignal(false);
   const [sourceSyncSlow, setSourceSyncSlow] = createSignal(false);
   const [sourceSyncRunStatus, setSourceSyncRunStatus] =
@@ -928,6 +945,51 @@ function Inner() {
       supportsServiceNameInput() ||
       (entry && storePublicEndpointSubdomainField(entry)),
     );
+  };
+  // Same managed-host computation as the advanced サービスID preview, shown
+  // under the MAIN public-name (subdomain) field so the resulting URL is
+  // visible without opening 詳細設定.
+  const storeFieldHostPreview = (
+    entry: StoreEntry,
+    field: StoreInputField,
+  ): string => {
+    const endpoint = storePublicEndpoint(entry);
+    if (!endpoint?.subdomainVariable) return "";
+    if (field.name !== endpoint.subdomainVariable) return "";
+    const label = storeInputValue(entry, field).trim().toLowerCase();
+    if (!label || !isManagedSubdomainLabel(label)) return "";
+    const managedLabel = managedServiceLabel(workspaceHandle(), label);
+    const baseDomain = managedBaseDomain(endpoint.baseDomain);
+    return managedLabel && baseDomain ? `${managedLabel}.${baseDomain}` : "";
+  };
+  // One-line explanations for the advanced 独自URL / route pattern fields when
+  // the listing itself ships no helper text.
+  const advancedStoreFieldHint = (
+    entry: StoreEntry,
+    field: StoreInputField,
+  ): string | undefined => {
+    const helper = field.helper?.[locale()];
+    if (helper) return helper;
+    const endpoint = storePublicEndpoint(entry);
+    if (endpoint?.urlVariable && field.name === endpoint.urlVariable) {
+      return t("new.advanced.customUrlHint");
+    }
+    if (
+      endpoint?.routePatternVariable &&
+      field.name === endpoint.routePatternVariable
+    ) {
+      return t("new.advanced.routePatternHint");
+    }
+    return undefined;
+  };
+  // Live service-name validation: the submit-time `^[a-z0-9-]+$` rule surfaces
+  // inline while typing instead of only after pressing add.
+  const serviceNameFieldError = (): string | null => {
+    const value = name().trim();
+    if (!value) return null;
+    return INSTALLATION_NAME_PATTERN.test(value)
+      ? null
+      : t("new.error.nameInvalid");
   };
   const updateInputVariable = (
     index: number,
@@ -1390,7 +1452,15 @@ function Inner() {
         username: sourceTokenUsername().trim() || "git",
         token,
       });
-      await testConnection(connection.id);
+      try {
+        await testConnection(connection.id);
+      } catch (verifyError) {
+        // The connection row was created but its token failed verification —
+        // best-effort revoke so retries don't accumulate dead
+        // source_git_https_token connections.
+        await revokeConnection(connection.id).catch(() => {});
+        throw verifyError;
+      }
       await loadConnections({ force: true });
       setSourceAuthConnectionId(connection.id);
       setSourceAccessMode("existing");
@@ -1702,6 +1772,8 @@ function Inner() {
     setExistingCapsule(null);
     setAppHostnameConflict(false);
     setError(null);
+    setErrorRequestId(null);
+    setStaleCheckResult(false);
   };
   const applyInstallPrefillInput = (
     next: InstallPrefill,
@@ -1764,25 +1836,33 @@ function Inner() {
   const hydrateStoreListing = async (
     listing: TcsListing,
     signal?: AbortSignal,
-  ): Promise<TcsListing> => {
-    const hydrated = await hydrateRequiredTcsListingWithRepoMetadata(
-      listing,
-      signal,
-    );
-    setStoreMetadataUnavailable(false);
-    return hydrated;
-  };
+  ): Promise<TcsListing> =>
+    await hydrateRequiredTcsListingWithRepoMetadata(listing, signal);
 
+  // Guard out-of-order picks: tapping card A then quickly card B must not let
+  // A's slower metadata response overwrite B's form (same reqToken pattern as
+  // StoreBrowser.rebuild()). Stale resolutions are dropped silently.
+  let storePickToken = 0;
   const pickStoreListing = (listing: TcsListing) => {
     void (async () => {
+      const token = ++storePickToken;
+      setFailedStorePick(null);
+      setStoreMetadataUnavailable(false);
+      setError(null);
+      setStorePickBusy(true);
       let hydratedListing: TcsListing;
       try {
         hydratedListing = await hydrateStoreListing(listing);
       } catch {
+        if (token !== storePickToken) return;
+        setStorePickBusy(false);
         setStoreMetadataUnavailable(true);
+        setFailedStorePick(listing);
         setError(t("new.error.configLoadFailed"));
         return;
       }
+      if (token !== storePickToken) return;
+      setStorePickBusy(false);
       void loadConnections();
       const prefill = parseInstallPrefill(`?${buildNewQuery(hydratedListing)}`);
       if (prefill) {
@@ -1832,6 +1912,44 @@ function Inner() {
     resetCompatibility();
   };
 
+  // Back to the picker: clear the chosen source/store state so the discovery
+  // section mounts again. Guarded while an install is in flight — an
+  // accidental tap must not silently drop a running install (the control is
+  // also disabled then).
+  const returnToDiscovery = () => {
+    if (busy()) return;
+    storePickToken += 1;
+    setStorePickBusy(false);
+    setFailedStorePick(null);
+    setActiveInstallPrefill(null);
+    setSelectedStoreListing(null);
+    setStoreInputValues({});
+    setStoreInputTouched({});
+    setGitUrl("");
+    setLinkDraft("");
+    setRef("");
+    setPinnedFullRef(null);
+    setPath(".");
+    setName("");
+    setResourcePrefix("");
+    setResourcePrefixTouched(false);
+    setInputVariables([]);
+    setEnvVariables([]);
+    setInstallConfigId(defaultGitInstallConfig()?.id ?? "");
+    setSourceAccessMode("public");
+    setSourceAuthConnectionId("");
+    setSourceToken("");
+    setSourceTokenError(null);
+    setStoreMetadataUnavailable(false);
+    setStepSource("idle");
+    setStepSync("idle");
+    setStepInstall("idle");
+    setStepPlan("idle");
+    setSyncRequired(false);
+    setActiveTab("store");
+    resetCompatibility();
+  };
+
   let initialTcsHandoffApplied = false;
   const [tcsHandoffSettled, setTcsHandoffSettled] =
     createSignal(!initialTcsHandoff);
@@ -1849,6 +1967,7 @@ function Inner() {
           ...listing,
           primaryServer: initialTcsHandoff.base,
         });
+        setStoreMetadataUnavailable(false);
         setSelectedStoreListing(hydratedListing);
         setActiveTab("store");
         void loadConnections();
@@ -1996,6 +2115,8 @@ function Inner() {
     }
     setCheckingCompatibility(true);
     setError(null);
+    setErrorRequestId(null);
+    setStaleCheckResult(false);
     setSyncRequired(false);
     setStepSource("running");
     setStepSync("running");
@@ -2117,6 +2238,8 @@ function Inner() {
     }
     setBusy(true);
     setError(null);
+    setErrorRequestId(null);
+    setStaleCheckResult(false);
     setExistingCapsule(null);
     setSyncRequired(false);
     setSourceSyncRunStatus(null);
@@ -2275,6 +2398,11 @@ function Inner() {
       }
       const apiError = err instanceof ControlApiError ? err : undefined;
       setAppHostnameConflict(false);
+      // The pre-submit check result predates this failure — stop asserting
+      // "このまま追加できます" above the failure alert, and keep the failure's
+      // correlation id for the support line under the alert.
+      setStaleCheckResult(true);
+      setErrorRequestId(apiError?.requestId ?? null);
       if (apiError?.isSourceSyncRequired) {
         setSyncRequired(true);
         setStepSync("error");
@@ -2293,7 +2421,9 @@ function Inner() {
           "production",
           { force: true },
         ).catch(() => null);
-        throwIfStaleFlow(flow);
+        // Non-throwing staleness check: throwing here would escape the catch
+        // block and surface as an unhandled rejection.
+        if (!isCurrentFlow(flow)) return;
         if (existing) {
           setStepInstall(INSTALLATION_DONE);
           setExistingCapsule(existing);
@@ -2635,12 +2765,47 @@ function Inner() {
                 </div>
               </div>
             </header>
-            <StoreBrowser
-              locale={locale()}
-              onConfigure={pickStoreListing}
-              showSourceControls={true}
-              showSortControl={false}
-            />
+            <Show when={storePickBusy()}>
+              <div
+                class="wb-status-panel av-pick-status"
+                role="status"
+                aria-live="polite"
+              >
+                <Spinner size={16} />
+                <strong>{t("new.pick.checking")}</strong>
+              </div>
+            </Show>
+            <Show when={!storePickBusy() && error()}>
+              {(message) => (
+                <div class="wb-action-callout av-pick-error" role="alert">
+                  <strong>{message()}</strong>
+                  <Show when={failedStorePick()}>
+                    {(listing) => (
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        type="button"
+                        onClick={() => pickStoreListing(listing())}
+                      >
+                        {t("common.retry")}
+                      </Button>
+                    )}
+                  </Show>
+                </div>
+              )}
+            </Show>
+            <div
+              class="av-store-pick-scope"
+              classList={{ "is-picking": storePickBusy() }}
+              aria-busy={storePickBusy()}
+            >
+              <StoreBrowser
+                locale={locale()}
+                onConfigure={pickStoreListing}
+                showSourceControls={true}
+                showSortControl={false}
+              />
+            </div>
             <div class="av-manual-entry">
               <p class="av-manual-entry-lead">
                 {t("new.discovery.manualLead")}
@@ -2675,6 +2840,18 @@ function Inner() {
 
         <Show when={hasChosenSource()}>
           <section class="av-add-flow" aria-label={t("new.title")}>
+            <div class="av-add-flow-back">
+              <Button
+                variant="ghost"
+                size="sm"
+                type="button"
+                icon={<ArrowLeft size={16} />}
+                disabled={busy()}
+                onClick={returnToDiscovery}
+              >
+                {t("new.flow.back")}
+              </Button>
+            </div>
             <div class="av-add-flow-header">
               <div class="av-add-flow-selected">
                 <div class="av-add-flow-icon" aria-hidden="true">
@@ -2726,11 +2903,16 @@ function Inner() {
                         <p>{t("new.storeInput.subtitle")}</p>
                       </div>
                       <div class="av-service-setup-grid">
-                        <FormField label={t("new.name")}>
+                        <FormField
+                          label={t("new.name")}
+                          error={serviceNameFieldError()}
+                        >
                           <Input
                             id="new-capsule-name"
                             name="name"
                             type="text"
+                            invalid={serviceNameFieldError() !== null}
+                            maxlength={96}
                             value={name()}
                             onInput={(e) => {
                               setName(e.currentTarget.value);
@@ -2755,28 +2937,47 @@ function Inner() {
                               <Show
                                 when={field.type === "boolean"}
                                 fallback={
-                                  <Input
-                                    id={`store-input-${entry().id}-${field.name}`}
-                                    name={`storeInput:${field.name}`}
-                                    type={field.secret ? "password" : "text"}
-                                    invalid={
-                                      appHostnameConflict() &&
-                                      isStorePublicEndpointField(entry(), field)
-                                    }
-                                    value={storeInputValue(entry(), field)}
-                                    onInput={(e) =>
-                                      updateStoreInputValue(
+                                  <>
+                                    <Input
+                                      id={`store-input-${entry().id}-${field.name}`}
+                                      name={`storeInput:${field.name}`}
+                                      type={field.secret ? "password" : "text"}
+                                      invalid={
+                                        appHostnameConflict() &&
+                                        isStorePublicEndpointField(
+                                          entry(),
+                                          field,
+                                        )
+                                      }
+                                      value={storeInputValue(entry(), field)}
+                                      onInput={(e) =>
+                                        updateStoreInputValue(
+                                          entry(),
+                                          field,
+                                          e.currentTarget.value,
+                                        )
+                                      }
+                                      placeholder={field.placeholder ?? ""}
+                                      autocomplete={
+                                        field.secret ? "new-password" : "off"
+                                      }
+                                      spellcheck={false}
+                                    />
+                                    <Show
+                                      when={storeFieldHostPreview(
                                         entry(),
                                         field,
-                                        e.currentTarget.value,
-                                      )
-                                    }
-                                    placeholder={field.placeholder ?? ""}
-                                    autocomplete={
-                                      field.secret ? "new-password" : "off"
-                                    }
-                                    spellcheck={false}
-                                  />
+                                      )}
+                                    >
+                                      {(host) => (
+                                        <p class="wb-note">
+                                          {t("new.hostPreview", {
+                                            host: host(),
+                                          })}
+                                        </p>
+                                      )}
+                                    </Show>
+                                  </>
                                 }
                               >
                                 <Checkbox
@@ -2807,11 +3008,16 @@ function Inner() {
                 </Show>
 
                 <Show when={!selectedServiceEntry()}>
-                  <FormField label={t("new.name")}>
+                  <FormField
+                    label={t("new.name")}
+                    error={serviceNameFieldError()}
+                  >
                     <Input
                       id="new-capsule-name"
                       name="name"
                       type="text"
+                      invalid={serviceNameFieldError() !== null}
+                      maxlength={96}
                       value={name()}
                       onInput={(e) => {
                         setName(e.currentTarget.value);
@@ -2850,7 +3056,7 @@ function Inner() {
                                     ? undefined
                                     : field.label[locale()]
                                 }
-                                hint={field.helper?.[locale()]}
+                                hint={advancedStoreFieldHint(entry(), field)}
                                 required={field.required}
                               >
                                 <Show
@@ -2910,7 +3116,10 @@ function Inner() {
                     )}
                   </Show>
                   <Show when={supportsServiceNameInput()}>
-                    <FormField label={t("new.vars.projectName")}>
+                    <FormField
+                      label={t("new.vars.projectName")}
+                      hint={t("new.advanced.serviceIdHint")}
+                    >
                       <Input
                         ref={serviceNameInput}
                         id="new-project-name"
@@ -3113,7 +3322,7 @@ function Inner() {
                   </div>
                 </Show>
 
-                <Show when={compatibility()}>
+                <Show when={!staleCheckResult() && compatibility()}>
                   {(result) => (
                     <>
                       {shouldShowCompatibilityPanel(result()) ? (
@@ -3335,6 +3544,13 @@ function Inner() {
                   {(m) => (
                     <p class="wb-error" role="alert">
                       {m()}
+                      <Show when={errorRequestId()}>
+                        {(id) => (
+                          <span class="wb-error-request">
+                            {t("new.error.requestId", { id: id() })}
+                          </span>
+                        )}
+                      </Show>
                     </p>
                   )}
                 </Show>

@@ -1834,3 +1834,40 @@ button.tg-tab {
   font-size: var(--tg-fs-sm);
   color: var(--tg-fg);
 }
+
+/* ===== /new install-flow UX (discovery pick feedback + dedupe) ===== */
+/* Store-card pick: busy panel while the picked listing's install metadata is
+   fetched (role=status; the cards below are inert meanwhile). */
+.av-pick-status {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--tg-s-2);
+}
+.av-pick-error {
+  align-items: flex-start;
+}
+.av-store-pick-scope.is-picking {
+  pointer-events: none;
+  opacity: 0.6;
+}
+/* Quiet "choose a different app" control above the chosen-source flow. */
+.av-add-flow-back {
+  display: flex;
+  justify-content: flex-start;
+}
+/* Muted support-id line appended to the install failure alert. */
+.wb-error-request {
+  display: block;
+  margin-top: var(--tg-s-1);
+  font-size: var(--tg-fs-xs);
+  color: var(--tg-fg-muted);
+  overflow-wrap: anywhere;
+}
+/* The chosen listing renders in both the top banner and the right-rail 追加内容
+   card. Wide screens keep the rail summary and hide the top duplicate; the
+   narrow layout (≤720px) hides the rail card instead (see the mobile block). */
+@media (min-width: 721px) {
+  .av-add-flow-header {
+    display: none;
+  }
+}
