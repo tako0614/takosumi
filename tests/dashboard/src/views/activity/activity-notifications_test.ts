@@ -78,17 +78,69 @@ describe("History and notifications", () => {
     expect(ja["notif.event.recorded"]).toBe("記録された操作");
   });
 
-  test("topbar badge counts current Workspace services needing attention", () => {
-    expect(topBarSource).toContain("currentWorkspaceId");
-    expect(topBarSource).toContain("peekCapsulesCached(workspaceId");
-    expect(topBarSource).toContain("includeDestroyed: false");
-    expect(topBarSource).toContain("isVisibleServiceCapsule(inst)");
-    expect(topBarSource).toContain("needsAttention(inst)");
-    expect(topBarSource).not.toContain("loadNotificationFeed");
-    expect(topBarSource).not.toContain("listSpaces");
+  test("topbar badge and /notifications derive the SAME 要対応 count from the SAME feed", () => {
+    // One derivation, owned by lib/notifications.ts: the shared cross-Workspace
+    // feed snapshot + attentionCount. The badge previously counted capsule
+    // statuses from a 5s-TTL cache — it disagreed with the page and vanished
+    // on views that fetch nothing.
+    expect(notificationsLibSource).toContain("export function attentionCount");
+    expect(notificationsLibSource).toContain(
+      "export async function refreshNotificationFeed",
+    );
+    expect(notificationsLibSource).toContain(
+      "isFailureAction(entry.event.action)",
+    );
+    // TopBar: refresh on navigation (TTL-throttled, no polling loop), count via
+    // the shared derivation.
+    expect(topBarSource).toContain("refreshNotificationFeed()");
+    expect(topBarSource).toContain("attentionCount(notificationFeed())");
+    expect(topBarSource).toContain("loc.pathname");
+    expect(topBarSource).not.toContain("peekCapsulesCached");
+    expect(topBarSource).not.toContain("setInterval");
+    // NotificationsView: same feed (forced fresh), same count.
+    expect(notificationsSource).toContain(
+      "refreshNotificationFeed({ force: true })",
+    );
+    expect(notificationsSource).toContain("attentionCount(feed())");
+    expect(notificationsSource).not.toMatch(
+      /filter\(\(e\) => isFailureAction\(e\.event\.action\)\)\.length/,
+    );
     expect(notificationsLibSource).not.toContain(
       "const spaces = await listSpaces()",
     );
     expect(notificationsLibSource).not.toContain("tg_notif_seen_at");
+  });
+
+  test("run/service notification lines name the service when the payload allows", () => {
+    // The recorded Capsule id (metadata installationId / capsuleId or the
+    // event target) resolves to its name — never an invented value.
+    expect(notificationsSource).toContain("function eventCapsuleId(");
+    expect(notificationsSource).toContain('metaString(m, "installationId")');
+    expect(notificationsSource).toContain("loadCapsuleNameIndex");
+    expect(notificationsSource).toContain("serviceNameFor(entry.event)");
+    expect(notificationsSource).toContain('t("notif.event.planReadyNamed"');
+    expect(notificationsSource).toContain('t("notif.event.failedNamed"');
+    for (const key of [
+      "notif.event.planReadyNamed",
+      "notif.event.approvedNamed",
+      "notif.event.appliedNamed",
+      "notif.event.destroyedNamed",
+      "notif.event.failedNamed",
+      "notif.event.driftNamed",
+      "notif.event.staleNamed",
+      "notif.event.autoUpdateFailedNamed",
+    ] as const) {
+      expect(ja[key]).toContain("{name}");
+      expect(en[key]).toContain("{name}");
+    }
+  });
+
+  test("activity trail paging is honest: load more + end-of-list note", () => {
+    expect(activitySource).toContain("ACTIVITY_PAGE_SIZE");
+    expect(activitySource).toContain("ACTIVITY_MAX_LIMIT");
+    expect(activitySource).toContain('t("common.loadMore")');
+    expect(activitySource).toContain(
+      't("common.showingRecent", { n: list().length })',
+    );
   });
 });

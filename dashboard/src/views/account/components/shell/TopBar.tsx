@@ -5,20 +5,22 @@
  * where the sidebar is hidden) and carries the global notifications / account
  * affordances (the profile avatar opens account, activity, and preferences).
  * Adding an app is owned by the store tab (shared nav model in `nav.ts`).
- * The bell badge counts services needing attention in the current Workspace.
+ * The bell badge shows the SAME 要対応 count as /notifications: both derive
+ * from the shared cross-Workspace feed snapshot in lib/notifications.ts
+ * (refreshed on navigation, TTL-throttled), so the numbers can never disagree
+ * and the badge persists on views that fetch nothing else.
  */
 import { A, useLocation } from "@solidjs/router";
-import { createMemo, createSignal, onCleanup, Show } from "solid-js";
+import { createEffect, createMemo, Show } from "solid-js";
 import { Bell } from "lucide-solid";
 import UserMenu from "../auth/UserMenu.tsx";
 import WorkspaceSwitcher from "./WorkspaceSwitcher.tsx";
 import { SECTION_TITLES } from "./nav.ts";
-import { currentWorkspaceId } from "../../../../lib/workspace-state.ts";
-import { peekCapsulesCached } from "../../../../lib/capsule-list.ts";
 import {
-  isVisibleServiceCapsule,
-  needsAttention,
-} from "../../../../lib/capsules-ui.ts";
+  attentionCount,
+  notificationFeed,
+  refreshNotificationFeed,
+} from "../../../../lib/notifications.ts";
 import { t } from "../../../../i18n/index.ts";
 
 export default function TopBar() {
@@ -28,28 +30,14 @@ export default function TopBar() {
     return hit ? t(hit[1]) : "";
   };
 
-  const [cacheVersion, setCacheVersion] = createSignal(0);
-  if (typeof window !== "undefined") {
-    const onCacheChanged = () => setCacheVersion((version) => version + 1);
-    window.addEventListener("takosumi:capsules-cache-changed", onCacheChanged);
-    onCleanup(() =>
-      window.removeEventListener(
-        "takosumi:capsules-cache-changed",
-        onCacheChanged,
-      ),
-    );
-  }
-  const badge = createMemo(() => {
-    cacheVersion();
-    const workspaceId = currentWorkspaceId();
-    const list = workspaceId
-      ? peekCapsulesCached(workspaceId, { includeDestroyed: false })
-      : undefined;
-    if (!list) return 0;
-    return list.filter(
-      (inst) => isVisibleServiceCapsule(inst) && needsAttention(inst),
-    ).length;
+  // Refresh the shared feed snapshot on every navigation (TTL-throttled in
+  // lib/notifications.ts — no polling loop). Errors are non-fatal for the
+  // chrome: the badge simply keeps its last known count.
+  createEffect(() => {
+    void loc.pathname;
+    void refreshNotificationFeed().catch(() => {});
   });
+  const badge = createMemo(() => attentionCount(notificationFeed()));
 
   return (
     <header class="topbar">

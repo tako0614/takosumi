@@ -32,6 +32,8 @@ export const en: Record<keyof typeof ja, string> = {
   "common.hoursAgo": "{n}h ago",
   "common.daysAgo": "{n}d ago",
   "common.empty": "No data.",
+  "common.loadMore": "Load more",
+  "common.showingRecent": "Showing the most recent {n} entries",
 
   // --- nav / shell ----------------------------------------------------------
   "nav.home": "Home",
@@ -219,6 +221,10 @@ export const en: Record<keyof typeof ja, string> = {
   "op.compatibility_check": "Pre-add check",
   "op.backup": "Backup",
   "op.restore": "Restore",
+  // Internal plan-operation nouns recorded on Activity metadata
+  // (create/update/destroy) — mapped so feeds never fall back to "Operation".
+  "op.create": "Add",
+  "op.update": "Update",
   "op.generic": "Operation",
 
   // --- Service list (home) --------------------------------------------------
@@ -428,6 +434,8 @@ export const en: Record<keyof typeof ja, string> = {
   "run.title.destroy": "Delete",
   "run.title.other": "Operation",
   "run.notFoundTitle": "This run was not found",
+  "run.notFoundMessage": "It may have been deleted, or the link may be wrong.",
+  "run.loadFailedTitle": "Couldn't load this run",
   "run.summary.planning": "Reviewing the changes…",
   "run.summary.queued": "Waiting to run…",
   "run.summary.waitingApproval":
@@ -504,6 +512,13 @@ export const en: Record<keyof typeof ja, string> = {
   "run.destructiveConfirm": "Proceed, accepting the destructive changes",
   "run.stop": "Cancel",
   "run.cancel": "Cancel this run",
+  "run.cancelConfirm.title": "Cancel this run?",
+  "run.cancelConfirm.message":
+    "This stops the {operation} for “{name}” before it finishes.",
+  "run.cancelConfirm.messageGeneric":
+    "This stops the {operation} before it finishes.",
+  "run.cancelConfirm.cta": "Cancel run",
+  "run.cancelConfirm.keep": "Keep running",
   "run.cost.required": "Estimated cost: ~{n}",
   "run.cost.balance": "Available capacity: {n}",
   "run.cost.shortfall":
@@ -1117,20 +1132,29 @@ export const en: Record<keyof typeof ja, string> = {
   "notif.event.installCreated": "Added service “{name}”",
   "notif.event.installCreatedEnv": "Environment: {env}",
   "notif.event.planReady": "{operation} is ready",
+  "notif.event.planReadyNamed": "{operation} for “{name}” is ready",
   "notif.event.planReadyDetail": "Review the contents and approve",
   "notif.event.planBlockedDetail": "Approval is blocked by policy",
   "notif.event.approved": "Approved {operation}",
+  "notif.event.approvedNamed": "Approved {operation} for “{name}”",
   "notif.event.applied": "Deployed service changes",
+  "notif.event.appliedNamed": "Deployed changes to “{name}”",
   "notif.event.appliedDetail": "Public values updated: {n}",
   "notif.event.destroyed": "Deleted a service",
+  "notif.event.destroyedNamed": "Deleted “{name}”",
   "notif.event.failed": "{operation} failed",
+  "notif.event.failedNamed": "{operation} for “{name}” failed",
   "notif.event.failedDetail": "Error: {code}",
   "notif.event.failedHint": "Check the run logs for details",
   "notif.event.drift": "A service's real state differs from the saved record",
+  "notif.event.driftNamed":
+    "The real state of “{name}” differs from the saved record",
   "notif.event.driftDetail":
     "The live state may have drifted from its settings",
   "notif.event.stale":
     "A dependency changed — an update is available for this service",
+  "notif.event.staleNamed":
+    "A dependency changed — an update is available for “{name}”",
   "notif.event.staleDetail": "Updated by: {producer}",
   "notif.event.connCreated": "Added connected account “{provider}”",
   "notif.event.connCreatedGeneric": "Added connected account",
@@ -1146,6 +1170,8 @@ export const en: Record<keyof typeof ja, string> = {
   "notif.event.autoUpdateOn": "Automatic updates turned on",
   "notif.event.autoUpdateOff": "Automatic updates turned off",
   "notif.event.autoUpdateFailed": "An automatic update could not finish",
+  "notif.event.autoUpdateFailedNamed":
+    "An automatic update for “{name}” could not finish",
   "notif.event.autoUpdateFailedDetail":
     "Review the update from the service screen",
   "notif.event.recorded": "Recorded activity",

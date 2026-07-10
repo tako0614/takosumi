@@ -6,7 +6,17 @@
  */
 import "../../styles/wave-a.css";
 import "../../styles/wave-b.css";
-import { createMemo, createResource, For, Match, Show, Switch } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createResource,
+  createSignal,
+  For,
+  Match,
+  onCleanup,
+  Show,
+  Switch,
+} from "solid-js";
 import { useParams } from "@solidjs/router";
 import { Layers } from "lucide-solid";
 import Page from "../account/components/auth/Page.tsx";
@@ -21,6 +31,7 @@ import { clearCapsuleListCache } from "../../lib/capsule-list.ts";
 import { clearCurrentStateVersionCache } from "../../lib/current-state-versions.ts";
 import { clearDashboardOverviewCache } from "../../lib/dashboard-overview.ts";
 import { operationLabel, runStatusLabel, runTone } from "../../lib/labels.ts";
+import { isTerminalRunStatus } from "../../lib/run-logs.ts";
 import { t } from "../../i18n/index.ts";
 import PageHeader from "../../components/ui/PageHeader.tsx";
 import Button from "../../components/ui/Button.tsx";
@@ -28,6 +39,8 @@ import { Card, CardHeader } from "../../components/ui/Card.tsx";
 import { Badge, StatusBadge } from "../../components/ui/Badge.tsx";
 import EmptyState from "../../components/ui/EmptyState.tsx";
 import Skeleton from "../../components/ui/Skeleton.tsx";
+
+const RUN_GROUP_POLL_MS = 5_000;
 
 export default function RunGroupView() {
   return <Page title={t("runGroup.title")}>{() => <Inner />}</Page>;
@@ -49,6 +62,41 @@ function Inner() {
     (group()?.runs ?? []).some((r) => r.status === "waiting_approval"),
   );
 
+  // A grouped update executes over minutes — a single static read would never
+  // show members progressing to デプロイ済み. Mirror RunView's fallback poll:
+  // refetch every ~5s while any member run is non-terminal, pause on a hidden
+  // tab (refetch on return), stop once every member has settled.
+  const anyMemberActive = createMemo(() => {
+    // An errored resource throws on read — a failed fetch simply stops the
+    // poll (the error state renders below; the refresh button restarts it).
+    if (group.error) return false;
+    const current = group.latest;
+    if (!current) return false;
+    return current.runs.some((r) => !isTerminalRunStatus(r.status));
+  });
+  const [pageVisible, setPageVisible] = createSignal(
+    typeof document === "undefined" || document.visibilityState !== "hidden",
+  );
+  if (typeof document !== "undefined") {
+    const onVisibility = () => {
+      const visible = document.visibilityState !== "hidden";
+      setPageVisible(visible);
+      if (visible && anyMemberActive()) void refetch();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    onCleanup(() =>
+      document.removeEventListener("visibilitychange", onVisibility),
+    );
+  }
+  createEffect(() => {
+    // Re-arm after every settle so the poll chains (state flips
+    // ready → refreshing → ready on each cycle and never throws).
+    void group.state;
+    if (!pageVisible() || !anyMemberActive()) return;
+    const timer = setTimeout(() => void refetch(), RUN_GROUP_POLL_MS);
+    onCleanup(() => clearTimeout(timer));
+  });
+
   const approveAll = createAction(async () => {
     await approveRunGroup(groupId());
     await refetch();
@@ -63,14 +111,24 @@ function Inner() {
         title={t("runGroup.title")}
         subtitle={t("runGroup.subtitle")}
         actions={
-          <Button variant="ghost" href="/">
-            {t("app.backToList")}
-          </Button>
+          <>
+            <Button
+              variant="secondary"
+              type="button"
+              busy={group.loading}
+              onClick={() => void refetch()}
+            >
+              {t("common.refresh")}
+            </Button>
+            <Button variant="ghost" href="/">
+              {t("app.backToList")}
+            </Button>
+          </>
         }
       />
 
       <Switch>
-        <Match when={group.loading}>
+        <Match when={group.loading && !group.error && !group.latest}>
           <Card>
             <Skeleton variant="block" />
           </Card>
