@@ -374,76 +374,78 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
         </Show>
       </Card>
 
-      <Card>
-        <CardHeader
-          title={t("billing.subscription.title")}
-          subtitle={t("billing.subscription.subtitle")}
-        />
-        <Switch>
-          <Match when={billing.loading || stripeBilling.loading}>
-            <p class="muted">{t("billing.subscription.loading")}</p>
-          </Match>
-          <Match when={billing.error}>
-            {(error) => (
-              <Toast tone="error">
-                {t("billing.error", { message: errorMessage(error()) })}
-              </Toast>
-            )}
-          </Match>
-          <Match when={stripeBilling.error}>
-            {(error) => (
-              <Toast tone="error">
-                {t("billing.subscription.error", {
-                  message: errorMessage(error()),
-                })}
-              </Toast>
-            )}
-          </Match>
-          <Match when={currentSubscription()}>
-            {(subscription) => (
-              <div class="wc-stack-sm">
-                <KVList
-                  items={[
-                    {
-                      label: t("billing.subscription.plan"),
-                      value: subscription().plan,
-                    },
-                    {
-                      label: t("billing.subscription.status"),
-                      value: subscriptionStatusLabel(subscription().status),
-                    },
-                    {
-                      label: t("billing.subscription.nextBilling"),
-                      value: subscription().currentPeriodEnd
-                        ? formatDateTime(subscription().currentPeriodEnd!)
-                        : "-",
-                    },
-                  ]}
-                />
-                <Show when={canOpenPortal()}>
-                  <div class="wc-form-actions">
-                    <Button
-                      variant="secondary"
-                      type="button"
-                      busy={portalBusy()}
-                      onClick={() => void openPortal()}
-                      icon={<ExternalLink size={16} />}
-                    >
-                      {portalBusy()
-                        ? t("billing.portalOpening")
-                        : t("billing.subscription.manage")}
-                    </Button>
-                  </div>
-                  <p class="muted">{t("billing.subscription.manageHint")}</p>
-                </Show>
-              </div>
-            )}
-          </Match>
-          <Match when={!currentSubscription()}>
-            <p class="muted">{t("billing.subscription.empty")}</p>
-          </Match>
-        </Switch>
-      </Card>
+      <Show when={cloudBilling()}>
+        <Card>
+          <CardHeader
+            title={t("billing.subscription.title")}
+            subtitle={t("billing.subscription.subtitle")}
+          />
+          <Switch>
+            <Match when={billing.loading || stripeBilling.loading}>
+              <p class="muted">{t("billing.subscription.loading")}</p>
+            </Match>
+            <Match when={billing.error}>
+              {(error) => (
+                <Toast tone="error">
+                  {t("billing.error", { message: errorMessage(error()) })}
+                </Toast>
+              )}
+            </Match>
+            <Match when={stripeBilling.error}>
+              {(error) => (
+                <Toast tone="error">
+                  {t("billing.subscription.error", {
+                    message: errorMessage(error()),
+                  })}
+                </Toast>
+              )}
+            </Match>
+            <Match when={currentSubscription()}>
+              {(subscription) => (
+                <div class="wc-stack-sm">
+                  <KVList
+                    items={[
+                      {
+                        label: t("billing.subscription.plan"),
+                        value: subscription().plan,
+                      },
+                      {
+                        label: t("billing.subscription.status"),
+                        value: subscriptionStatusLabel(subscription().status),
+                      },
+                      {
+                        label: t("billing.subscription.nextBilling"),
+                        value: subscription().currentPeriodEnd
+                          ? formatDateTime(subscription().currentPeriodEnd!)
+                          : "-",
+                      },
+                    ]}
+                  />
+                  <Show when={canOpenPortal()}>
+                    <div class="wc-form-actions">
+                      <Button
+                        variant="secondary"
+                        type="button"
+                        busy={portalBusy()}
+                        onClick={() => void openPortal()}
+                        icon={<ExternalLink size={16} />}
+                      >
+                        {portalBusy()
+                          ? t("billing.portalOpening")
+                          : t("billing.subscription.manage")}
+                      </Button>
+                    </div>
+                    <p class="muted">{t("billing.subscription.manageHint")}</p>
+                  </Show>
+                </div>
+              )}
+            </Match>
+            <Match when={!currentSubscription()}>
+              <p class="muted">{t("billing.subscription.empty")}</p>
+            </Match>
+          </Switch>
+        </Card>
+      </Show>
 
       <Show when={cloudBilling()}>
         <Card>
