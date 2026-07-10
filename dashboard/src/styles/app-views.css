@@ -1134,8 +1134,8 @@
   background: color-mix(in srgb, var(--tg-accent) 10%, transparent);
 }
 .av-run-summary-ok {
-  border-color: color-mix(in srgb, var(--tg-ok, #3dba6f) 55%, transparent);
-  background: color-mix(in srgb, var(--tg-ok, #3dba6f) 10%, transparent);
+  border-color: color-mix(in srgb, var(--tg-success) 55%, transparent);
+  background: color-mix(in srgb, var(--tg-success) 10%, transparent);
 }
 .av-run-summary-danger {
   border-color: color-mix(in srgb, var(--tg-danger) 55%, transparent);
@@ -1484,7 +1484,7 @@
 }
 .av-service-setup-head h3 {
   margin: 0;
-  font-size: var(--tg-fs-md);
+  font-size: var(--tg-fs-lg);
   letter-spacing: 0;
 }
 .av-service-setup-head p {

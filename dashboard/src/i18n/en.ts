@@ -520,6 +520,7 @@ export const en: Record<keyof typeof ja, string> = {
   "run.details.debug": "Identifiers",
   "run.inputs.title": "Values from connected services",
   "run.inputs.empty": "No values were received from connected services.",
+  "run.connections.setupCta": "Set up the connection",
   "run.connections.title": "Connected accounts",
   "run.connections.reviewTitle": "Connected account review needed",
   "run.connections.reviewBody":
@@ -770,6 +771,8 @@ export const en: Record<keyof typeof ja, string> = {
     "The service could not be added. Check the details and try again.",
   "new.error.genericWithDetails":
     "The service could not be added. Details: {message}",
+  "new.error.invalidHostname":
+    "This public name is too long or has characters that cannot be used. Try a shorter name.",
   "new.error.connectionRequired":
     "Publishing this app needs a connected cloud account. Set up the connection, then try again.",
   "new.error.appHostnameUnavailable":

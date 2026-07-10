@@ -9,6 +9,7 @@ import {
   createMemo,
   createSignal,
   For,
+  onCleanup,
   onMount,
   Show,
   type Component,
@@ -41,6 +42,12 @@ const STR = {
   allStores: { ja: "すべてのストア", en: "All stores" },
   loadMore: { ja: "もっと読み込む", en: "Load more" },
   none: { ja: "該当するサービスがありません", en: "No matching services" },
+  loadFailed: {
+    ja: "ストアに接続できませんでした。",
+    en: "The store could not be reached.",
+  },
+  retry: { ja: "再試行", en: "Retry" },
+  sortLabel: { ja: "並び順", en: "Sort" },
   servers: { ja: "ストア取得元", en: "Store sources" },
   serversAdvanced: { ja: "詳細", en: "Advanced" },
   addServer: { ja: "追加", en: "Add" },
@@ -196,8 +203,12 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
     void rebuild();
   };
   const onLoadMore = async () => {
+    // Same request token as rebuild(): a stale load-more result must not
+    // clobber a newer search/sort/server rebuild.
+    const token = ++reqToken;
     setAgg((p) => ({ ...p, loading: true }));
-    setAgg(await loadMoreTcs(agg()));
+    const next = await loadMoreTcs(agg());
+    if (token === reqToken) setAgg(next);
   };
   const onAddServer = (e: Event) => {
     e.preventDefault();
@@ -288,6 +299,7 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
           <select
             name="storeSort"
             class="tcs-sort"
+            aria-label={s("sortLabel", props.locale)}
             value={sort()}
             onChange={(e) => onSort(e.currentTarget.value as TcsSort)}
           >
@@ -315,6 +327,7 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
           <button
             type="button"
             class="tcs-btn"
+            aria-expanded={showServers()}
             onClick={() => setShowServers((v) => !v)}
           >
             {s("serversAdvanced", props.locale)}: {s("servers", props.locale)} (
@@ -372,9 +385,29 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
       <Show
         when={displayed().length > 0}
         fallback={
-          <p class="tcs-empty">
-            {agg().loading ? "…" : s("none", props.locale)}
-          </p>
+          <Show
+            when={
+              !agg().loading &&
+              agg().status.length > 0 &&
+              agg().status.every((st) => !st.ok)
+            }
+            fallback={
+              <p class="tcs-empty">
+                {agg().loading ? "…" : s("none", props.locale)}
+              </p>
+            }
+          >
+            <div class="tcs-empty">
+              <p class="tcs-err">{s("loadFailed", props.locale)}</p>
+              <button
+                type="button"
+                class="tcs-btn"
+                onClick={() => void rebuild()}
+              >
+                {s("retry", props.locale)}
+              </button>
+            </div>
+          </Show>
         }
       >
         <div class="tcs-grid">
@@ -429,9 +462,38 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
       </Show>
 
       <Show when={selected()}>
-        {(listing) => (
+        {(listing) => {
+          // Dialog semantics for the detail drawer: focus moves in on open
+          // (so Escape reaches it), Escape closes, focus restores on close.
+          let drawerRef: HTMLElement | undefined;
+          const previous =
+            typeof document !== "undefined"
+              ? (document.activeElement as HTMLElement | null)
+              : null;
+          onMount(() => queueMicrotask(() => drawerRef?.focus()));
+          const onKeyDown = (e: KeyboardEvent) => {
+            if (e.key === "Escape") setSelected(null);
+          };
+          if (typeof document !== "undefined") {
+            document.addEventListener("keydown", onKeyDown);
+          }
+          onCleanup(() => {
+            if (typeof document !== "undefined") {
+              document.removeEventListener("keydown", onKeyDown);
+            }
+            previous?.focus?.();
+          });
+          return (
           <div class="tcs-overlay" onClick={() => setSelected(null)}>
-            <aside class="tcs-detail" onClick={(e) => e.stopPropagation()}>
+            <aside
+              class="tcs-detail"
+              role="dialog"
+              aria-modal="true"
+              aria-label={pick(listing().name, props.locale)}
+              tabindex="-1"
+              ref={drawerRef}
+              onClick={(e) => e.stopPropagation()}
+            >
               <header>
                 <div class="tcs-detail-title">
                   {listingIcon(listing(), props.locale)}
@@ -484,7 +546,8 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
               </details>
             </aside>
           </div>
-        )}
+          );
+        }}
       </Show>
     </div>
   );
