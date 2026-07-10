@@ -253,7 +253,7 @@ export const en: Record<keyof typeof ja, string> = {
   "apps.attention": "{n} items need attention",
   "apps.attentionView": "View notifications",
   "apps.needsAttention": "Needs attention",
-  "apps.openApp": "Open service",
+  "apps.openApp": "Open app",
   "apps.noOpenLink": "Nothing to open yet",
   "apps.viewDetails": "Details",
   "apps.updated": "Updated: {date}",
@@ -760,6 +760,8 @@ export const en: Record<keyof typeof ja, string> = {
     "Use lowercase letters, numbers, and hyphens only for the service name.",
   "new.error.configMissing": "Add configuration is not available yet.",
   "new.error.configLoading": "Loading add configuration.",
+  "new.error.configLoadFailed":
+    "The add settings could not be loaded. Check your connection and retry.",
   "new.error.syncPending":
     "The source has not finished syncing. Wait a moment, then retry.",
   "new.error.sourceRefNotFound":

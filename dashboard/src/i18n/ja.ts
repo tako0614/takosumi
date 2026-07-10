@@ -255,7 +255,7 @@ export const ja = {
   "apps.attention": "要対応が {n} 件あります",
   "apps.attentionView": "通知を確認",
   "apps.needsAttention": "要対応",
-  "apps.openApp": "サービスを開く",
+  "apps.openApp": "アプリを開く",
   "apps.noOpenLink": "まだ開く画面がありません",
   "apps.viewDetails": "詳細",
   "apps.updated": "更新: {date}",
@@ -760,6 +760,8 @@ export const ja = {
     "サービス名は半角小文字・数字・ハイフンだけで入力してください。",
   "new.error.configMissing": "追加設定がまだ利用できません。",
   "new.error.configLoading": "追加設定を読み込み中です。",
+  "new.error.configLoadFailed":
+    "追加設定を読み込めませんでした。通信状態を確認して再試行してください。",
   "new.error.syncPending":
     "ソースの取得がまだ完了していません。少し待ってから「再試行」してください。",
   "new.error.sourceRefNotFound":

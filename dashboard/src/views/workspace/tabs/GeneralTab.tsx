@@ -58,6 +58,9 @@ export default function GeneralTab(props: { readonly workspaceId: string }) {
     try {
       await updateWorkspace(current.id, { displayName });
       await refetch();
+      // The sidebar/topbar WorkspaceSwitcher listens for this — without it
+      // the renamed workspace keeps its old name until a full reload.
+      window.dispatchEvent(new Event("takosumi:workspaces-changed"));
       setSaveMessage(t("workspaceSettings.general.saved"));
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : String(err));

@@ -106,13 +106,10 @@ describe("AppListView app launcher", () => {
     expect(appListSource).toContain('class="av-tile-image"');
     expect(appListSource).toContain('class="av-tile-emoji"');
     expect(appListSource).toContain("av-tile-icon-image");
-    // No declared app → point at the full service list (and add).
-    expect(appListSource).toContain("function AppsEmptyPanel");
-    expect(appListSource).toContain('href="/services"');
+    // Every visible capsule gets a tile, so the tiles-but-empty panel is gone.
+    expect(appListSource).not.toContain("AppsEmptyPanel");
     expect(appListSource).toContain('href="/store"');
     expect(appListSource).not.toContain('href="/new"');
-    expect(appListSource).toContain('t("apps.add")');
-    expect(appListSource).toContain('t("apps.empty.viewServices")');
   });
 
   test("keeps empty app copy action-oriented and non-procedural in both locales", () => {

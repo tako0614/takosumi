@@ -357,8 +357,9 @@ function Inner() {
     }
     return null;
   };
-  const [installConfigs] = createResource(shouldLoadInstallConfigs, (id) =>
-    listInstallConfigsCached(id),
+  const [installConfigs, { refetch: refetchInstallConfigs }] = createResource(
+    shouldLoadInstallConfigs,
+    (id) => listInstallConfigsCached(id),
   );
   const [connections, setConnections] = createSignal<
     readonly Connection[] | null
@@ -857,17 +858,6 @@ function Inner() {
   };
   const serviceNameInputValue = () =>
     slugInputValue(resourcePrefix() || defaultProjectName());
-  const standardManagedHost = () => {
-    const subdomain = managedServiceLabel(
-      workspaceHandle(),
-      serviceNameInputValue(),
-    );
-    return subdomain ? `${subdomain}.app.takos.jp` : "";
-  };
-  const standardManagedUrl = () => {
-    const host = standardManagedHost();
-    return host ? `https://${host}` : "";
-  };
   const useSuggestedServiceName = () => {
     const entry = selectedServiceEntry();
     const publicEndpointField = entry
@@ -3171,6 +3161,20 @@ function Inner() {
                   </section>
                 </Show>
 
+                <Show when={installConfigs.error}>
+                  <div class="wb-action-callout" role="alert">
+                    <strong>{t("new.error.configLoadFailed")}</strong>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      type="button"
+                      onClick={() => void refetchInstallConfigs()}
+                    >
+                      {t("common.retry")}
+                    </Button>
+                  </div>
+                </Show>
+
                 <div class="wb-form-actions">
                   <Button
                     variant="primary"
@@ -3283,7 +3287,11 @@ function Inner() {
                   <p>{addSummaryDescription()}</p>
                   <dl class="av-add-summary-meta">
                     <div>
-                      <dt>{t("new.summary.provider")}</dt>
+                      <dt>
+                        {usingSelectedService()
+                          ? t("new.summary.provider")
+                          : t("new.deeplink.source")}
+                      </dt>
                       <dd>{addSummaryProvider()}</dd>
                     </div>
                     <Show when={!usingSelectedService()}>

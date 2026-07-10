@@ -489,7 +489,9 @@ function storeDefaultInputValue(
     return requestedServiceSlug;
   }
   if (field.name === publicEndpoint?.urlVariable && publicEndpoint.baseDomain) {
-    return `https://${scopedServiceSlug}.${publicEndpoint.baseDomain}`;
+    return scopedServiceSlug
+      ? `https://${scopedServiceSlug}.${publicEndpoint.baseDomain}`
+      : "";
   }
   switch (field.defaultValue) {
     case "service-name":
