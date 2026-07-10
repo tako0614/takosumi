@@ -258,11 +258,6 @@
   font-size: 0.73rem;
   color: var(--c-muted);
 }
-.tcs-ready-badge {
-  color: var(--c-ok, #3fb950);
-  background: color-mix(in srgb, var(--c-ok, #3fb950) 12%, transparent);
-  font-weight: 600;
-}
 .tcs-muted {
   color: var(--c-muted);
 }

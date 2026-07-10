@@ -110,7 +110,6 @@ import {
   clearCapsuleListCache,
   listCapsulesCached,
 } from "../../lib/capsule-list.ts";
-import { CREDENTIAL_FREE_PROVIDER_TAILS } from "../../lib/install-readiness.ts";
 import { clearCurrentStateVersionCache } from "../../lib/current-state-versions.ts";
 import { clearDashboardOverviewCache } from "../../lib/dashboard-overview.ts";
 import { listInstallConfigsCached } from "../../lib/install-config-list.ts";
@@ -205,6 +204,26 @@ import {
   parseInitialTcsHandoff,
   initialAddTab,
 } from "./install-helpers.ts";
+
+/**
+ * Well-known credential-free OpenTofu provider tails (short name / local name)
+ * that are NOT a credential boundary, so an install must not force a Provider
+ * Connection for them. `isCredentialFreeUtilityProvider` already covers the
+ * canonical http / random / tls; this set adds the other common credential-free
+ * providers and matches bare local-name declarations (e.g. `null`, `local`).
+ */
+const CREDENTIAL_FREE_PROVIDER_TAILS: ReadonlySet<string> = new Set([
+  "http",
+  "random",
+  "tls",
+  "null",
+  "local",
+  "time",
+  "external",
+  "archive",
+  "cloudinit",
+  "template",
+]);
 
 function StoreIcon(props: { readonly entry: StoreEntry }) {
   if (props.entry.iconUrl) {
