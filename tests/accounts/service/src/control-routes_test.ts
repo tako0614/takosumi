@@ -4321,6 +4321,14 @@ test("POST /api/v1/workspaces/:id/capsules auto-provisions Takosumi Accounts OID
                   redirectUri: "oidc_redirect_uri",
                 },
                 callbackPath: "/oauth/callback",
+                scopes: [
+                  "openid",
+                  "profile",
+                  "email",
+                  "offline_access",
+                  "capsules:read",
+                  "capsules:write",
+                ],
               },
             ],
           },
@@ -4343,6 +4351,14 @@ test("POST /api/v1/workspaces/:id/capsules auto-provisions Takosumi Accounts OID
     "https://workspace.example.test/oauth/callback",
   ]);
   expect(oidcClient?.tokenEndpointAuthMethod).toEqual("none");
+  expect(oidcClient?.allowedScopes).toEqual([
+    "openid",
+    "profile",
+    "email",
+    "offline_access",
+    "capsules:read",
+    "capsules:write",
+  ]);
   const config = operations.calls.putInstallConfig?.[0] as {
     variableMapping: Record<string, unknown>;
   };

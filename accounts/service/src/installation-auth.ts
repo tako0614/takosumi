@@ -21,7 +21,14 @@ import {
 export async function requireAppCapsuleCreateWriteAccess(input: {
   request: Request;
   store: AccountsStore;
-}): Promise<Response | { readonly auth: AccountsBearerSubject }> {
+}): Promise<
+  | Response
+  | {
+      readonly auth: AccountsBearerSubject;
+      readonly accountId: string;
+      readonly workspaceId: string;
+    }
+> {
   const body = await readJsonObject(input.request);
   if (!body) {
     return errorJson("invalid_request", "request body is required", 400);
@@ -32,10 +39,10 @@ export async function requireAppCapsuleCreateWriteAccess(input: {
     stringValue(body.spaceId) ??
     stringValue(body.space_id);
   const createdBySubject = takosumiSubjectValue(body.createdBySubject);
-  if (!accountId || !workspaceId) {
+  if (!workspaceId) {
     return errorJson(
       "missing_field",
-      "accountId and workspaceId are required to authorize Capsule create",
+      "workspaceId is required to authorize Capsule create",
       400,
     );
   }
@@ -124,10 +131,17 @@ export async function requireAppCapsuleAccountAccess(input: {
 async function requireAccountCreateWriteAccess(input: {
   request: Request;
   store: AccountsStore;
-  accountId: string;
+  accountId?: string;
   workspaceId: string;
   createdBySubject?: TakosumiSubject;
-}): Promise<Response | { readonly auth: AccountsBearerSubject }> {
+}): Promise<
+  | Response
+  | {
+      readonly auth: AccountsBearerSubject;
+      readonly accountId: string;
+      readonly workspaceId: string;
+    }
+> {
   const bearer = await requireAccountsBearer({
     request: input.request,
     store: input.store,
@@ -147,7 +161,15 @@ async function requireAccountCreateWriteAccess(input: {
   if (!bearerWorkspaceAllows(bearer.auth, input.workspaceId)) {
     return errorJson("account_not_found", "account not found", 404);
   }
-  const account = await input.store.findLedgerAccount(input.accountId);
+  const workspace = await input.store.findWorkspace(input.workspaceId);
+  if (workspace && input.accountId && workspace.accountId !== input.accountId) {
+    return errorJson("account_not_found", "account not found", 404);
+  }
+  const accountId = workspace?.accountId ?? input.accountId;
+  if (!accountId) {
+    return errorJson("account_not_found", "account not found", 404);
+  }
+  const account = await input.store.findLedgerAccount(accountId);
   if (
     account &&
     !(await subjectCanAccessAccount(
@@ -158,5 +180,9 @@ async function requireAccountCreateWriteAccess(input: {
   ) {
     return errorJson("account_not_found", "account not found", 404);
   }
-  return { auth: bearer.auth };
+  return {
+    auth: bearer.auth,
+    accountId,
+    workspaceId: input.workspaceId,
+  };
 }

@@ -57,6 +57,12 @@ consent / token endpoint は Takosumi accounts plane が所有しますが、gen
 third-party login / consent product として前面に出すのは、client registry、
 account session binding、consent UX、revocation policy が揃ってからにします。
 
+Capsule consumer が `capsules:read` / `capsules:write` を使う場合、access token と
+refresh token は発行先consumerのsecret storeに暗号化保存し、単一Workspace bindingと
+一緒に扱います。refresh token rotation時は新tokenが返れば置換し、省略された場合は
+現在のrefresh tokenを継続します。invalid/revoked responseでは両tokenを破棄し、ユーザーに
+OIDC authorizationを再実行させます。共有operator tokenへ暗黙fallbackしません。
+
 ProviderConnection / Capsule integration secret の rotation contract:
 
 - source Git token、events webhook、showback usage report、operator extension token

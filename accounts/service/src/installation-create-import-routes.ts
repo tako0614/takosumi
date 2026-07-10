@@ -89,6 +89,8 @@ export async function handleCreateAppCapsule(input: {
   bindingMaterializer?: ServiceBindingMaterializer;
   sharedCellRuntime?: SharedCellRuntimeAllocator;
   authenticatedSubject?: TakosumiSubject;
+  authorizedAccountId?: string;
+  authorizedWorkspaceId?: string;
 }): Promise<Response> {
   const body = await readJsonObject(input.request);
   if (!body) return errorJson("invalid_request", "invalid request", 400);
@@ -104,8 +106,9 @@ export async function handleCreateAppCapsule(input: {
   const expected = isRecord(body.expected) ? body.expected : undefined;
   const now = Date.now();
   const requestedCapsuleId = stringValue(body.capsuleId);
-  const accountId = stringValue(body.accountId);
-  const workspaceId = stringValue(body.workspaceId);
+  const accountId = input.authorizedAccountId ?? stringValue(body.accountId);
+  const workspaceId =
+    input.authorizedWorkspaceId ?? stringValue(body.workspaceId);
   let appId = stringValue(body.appId);
   let sourceGitUrl = stringValue(source.gitUrl) ?? stringValue(source.url);
   let sourceRef = stringValue(source.ref);
