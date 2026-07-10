@@ -83,6 +83,7 @@ import {
   runTone,
 } from "../../lib/labels.ts";
 import { clearCapsuleListCache } from "../../lib/capsule-list.ts";
+import { useConfirmDialog } from "../../lib/confirm-dialog.ts";
 import { runFailureHint } from "../../lib/run-errors.ts";
 import { clearCurrentStateVersionCache } from "../../lib/current-state-versions.ts";
 import { clearDashboardOverviewCache } from "../../lib/dashboard-overview.ts";
@@ -148,6 +149,16 @@ function costShortfallUsdMicros(cost: RunCostInfo): number | undefined {
 
 function isRequestTimeout(error: unknown): boolean {
   return error instanceof ControlApiError && error.code === "request_timeout";
+}
+
+/** True when the run fetch failed because the run genuinely does not exist —
+ * anything else (network, 5xx, auth hiccup) is a transient load error and must
+ * NOT render the "not found" empty state. */
+function isRunNotFound(error: unknown): boolean {
+  return (
+    error instanceof ControlApiError &&
+    (error.status === 404 || error.code === "not_found")
+  );
 }
 
 function latestApplyRunForPlan(
@@ -1098,6 +1109,12 @@ function Inner() {
     r.status === "succeeded" &&
     r.policyStatus === "pass" &&
     !applied();
+  // Header badge status: while this screen still renders the デプロイを実行
+  // CTA for a succeeded review run, the run is waiting on that approval —
+  // present 承認待ち (warn) instead of a contradictory 成功, matching the
+  // notification wording. Reuses the exact deploy-CTA condition.
+  const displayStatus = (r: Run): Run["status"] =>
+    isDeployableRun(r) ? "waiting_approval" : r.status;
   const requiresDestructiveConfirmation = (r: Run): boolean =>
     isDeployableRun(r) &&
     (needsConfirm() ||
@@ -1239,6 +1256,25 @@ function Inner() {
     await cancelRun(runId());
     await refetchRun();
   });
+  // Cancelling a queued/running apply must never be one stray click — name
+  // the run (service + operation) in an explicit ConfirmDialog first.
+  const { confirm } = useConfirmDialog();
+  const confirmCancel = async (): Promise<void> => {
+    const r = run.latest;
+    const operation = operationLabel(r?.type);
+    const name = appName();
+    const ok = await confirm({
+      title: t("run.cancelConfirm.title"),
+      message: name
+        ? t("run.cancelConfirm.message", { name, operation })
+        : t("run.cancelConfirm.messageGeneric", { operation }),
+      confirmText: t("run.cancelConfirm.cta"),
+      cancelText: t("run.cancelConfirm.keep"),
+      danger: true,
+    });
+    if (!ok) return;
+    await cancel.run();
+  };
   // A queued/running run (or a parked review) can still be stopped.
   const cancellable = () => {
     const s = run.latest?.status;
@@ -1814,7 +1850,7 @@ function Inner() {
               <Show when={run.latest}>
                 {(r) => (
                   <StatusBadge
-                    status={r().status}
+                    status={displayStatus(r())}
                     label={runStatusLabel}
                     tone={runTone}
                   />
@@ -1851,16 +1887,38 @@ function Inner() {
             </Card>
           </Match>
           <Match when={run.error}>
-            <EmptyState
-              icon={<Activity size={28} />}
-              title={t("run.notFoundTitle")}
-              message={(run.error as ControlApiError).message}
-              action={
-                <Button variant="secondary" href="/runs">
-                  {t("nav.runs")}
-                </Button>
+            <Show
+              when={isRunNotFound(run.error)}
+              fallback={
+                <EmptyState
+                  icon={<Activity size={28} />}
+                  title={t("run.loadFailedTitle")}
+                  message={t("common.fetchFailed", {
+                    message: (run.error as ControlApiError).message,
+                  })}
+                  action={
+                    <Button
+                      variant="secondary"
+                      type="button"
+                      onClick={() => void refetchRun()}
+                    >
+                      {t("common.retry")}
+                    </Button>
+                  }
+                />
               }
-            />
+            >
+              <EmptyState
+                icon={<Activity size={28} />}
+                title={t("run.notFoundTitle")}
+                message={t("run.notFoundMessage")}
+                action={
+                  <Button variant="secondary" href="/runs">
+                    {t("nav.runs")}
+                  </Button>
+                }
+              />
+            </Show>
           </Match>
           <Match when={run()}>
             {(r) => (
@@ -1981,7 +2039,7 @@ function Inner() {
                         variant="ghost"
                         type="button"
                         busy={cancel.busy()}
-                        onClick={() => void cancel.run()}
+                        onClick={() => void confirmCancel()}
                       >
                         {t("run.cancel")}
                       </Button>

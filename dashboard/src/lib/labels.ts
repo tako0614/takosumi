@@ -110,6 +110,12 @@ const OPERATION: Record<string, MessageKey> = {
   compatibility_check: "op.compatibility_check",
   backup: "op.backup",
   restore: "op.restore",
+  // Activity metadata records the INTERNAL plan operation (create / update /
+  // destroy), not the §19 RunType — map those too so feed lines ("〜の準備が
+  // できました" / "〜に失敗しました") never degrade to the generic 操作 noun.
+  create: "op.create",
+  update: "op.update",
+  destroy: "op.destroy_apply",
 };
 export function operationLabel(operation: string | undefined): string {
   if (!operation) return t("op.generic");
