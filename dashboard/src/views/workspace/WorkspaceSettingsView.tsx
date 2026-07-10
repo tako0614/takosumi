@@ -121,7 +121,10 @@ function Inner(props: {
         title={pageTitle(props.standaloneTab)}
         subtitle={pageSubtitle(props.standaloneTab)}
       />
-      <Show when={!props.standaloneTab}>
+      {/* Backups/Shares are reached from the /settings/manage catalog, not the
+          everyday settings tab strip (a deliberate de-noising). Hide the strip
+          on those routes so it doesn't render with no active tab highlighted. */}
+      <Show when={!props.standaloneTab && tab() !== "backups" && tab() !== "shares"}>
         <Tabs items={tabItems()} aria-label={t("workspaceSettings.tabsLabel")} />
       </Show>
 

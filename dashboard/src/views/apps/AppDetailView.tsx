@@ -21,6 +21,7 @@ import {
   Index,
   type JSX,
   Match,
+  on,
   Show,
   Switch,
 } from "solid-js";
@@ -1397,9 +1398,18 @@ function SettingsTab(props: {
     setRows(providerConnections.map(providerConnectionToRow));
   });
 
-  createEffect(() => {
-    setVariableRows([...configRowsFromInstallConfig(props.installConfig)]);
-  });
+  // Seed ONLY from the install config. configRowsFromInstallConfig localizes
+  // labels (reads locale()), so a plain effect would also track locale and, on
+  // a language switch, re-seed the rows — silently discarding the user's
+  // unsaved edits. `on` pins the dependency to installConfig alone.
+  createEffect(
+    on(
+      () => props.installConfig,
+      (installConfig) => {
+        setVariableRows([...configRowsFromInstallConfig(installConfig)]);
+      },
+    ),
+  );
 
   const update = (
     index: number,

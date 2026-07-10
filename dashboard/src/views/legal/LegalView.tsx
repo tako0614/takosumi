@@ -439,6 +439,7 @@ export default function LegalView(props: Props) {
               <button
                 type="button"
                 classList={{ active: locale() === "ja" }}
+                aria-pressed={locale() === "ja"}
                 onClick={() => setLocale("ja")}
               >
                 JA
@@ -446,6 +447,7 @@ export default function LegalView(props: Props) {
               <button
                 type="button"
                 classList={{ active: locale() === "en" }}
+                aria-pressed={locale() === "en"}
                 onClick={() => setLocale("en")}
               >
                 EN

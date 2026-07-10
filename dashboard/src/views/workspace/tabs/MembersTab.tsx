@@ -30,7 +30,7 @@ import {
 import type { SessionRecord } from "../../account/lib/session.ts";
 import { createAction } from "../../account/lib/action.tsx";
 import { useConfirmDialog } from "../../../lib/confirm-dialog.ts";
-import { type MessageKey, t } from "../../../i18n/index.ts";
+import { locale, type MessageKey, t } from "../../../i18n/index.ts";
 import {
   Badge,
   Button,
@@ -75,7 +75,9 @@ function statusTone(
 
 function rolesLabel(roles: readonly ControlWorkspaceRole[]): string {
   if (roles.length === 0) return "—";
-  return roles.map((r) => t(ROLE_KEY[r])).join("・");
+  // "・" is the JA list interpunct; EN reads better with a comma.
+  const separator = locale() === "ja" ? "・" : ", ";
+  return roles.map((r) => t(ROLE_KEY[r])).join(separator);
 }
 
 export default function MembersTab(props: {
