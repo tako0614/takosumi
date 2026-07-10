@@ -489,8 +489,12 @@ function storeDefaultInputValue(
     return requestedServiceSlug;
   }
   if (field.name === publicEndpoint?.urlVariable && publicEndpoint.baseDomain) {
+    // Normalize the base domain (strip a wildcard `*.` / trailing `.`) exactly
+    // like every other consumer — otherwise a listing declaring
+    // `*.app.takos.jp` yields `https://slug.*.app.takos.jp`, which fails URL
+    // validation and blocks the install.
     return scopedServiceSlug
-      ? `https://${scopedServiceSlug}.${publicEndpoint.baseDomain}`
+      ? `https://${scopedServiceSlug}.${managedBaseDomain(publicEndpoint.baseDomain)}`
       : "";
   }
   switch (field.defaultValue) {

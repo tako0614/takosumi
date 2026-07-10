@@ -432,6 +432,8 @@ export const en: Record<keyof typeof ja, string> = {
   "run.summary.activationFailed":
     "App activation failed after the infrastructure deploy completed.",
   "run.summary.applySucceeded": "Deploy complete.",
+  "run.summary.removing": "Removing…",
+  "run.summary.removed": "Removal complete.",
   "run.summary.failed": "{operation} failed.",
   "runError.sourceSyncFailed":
     "The app contents could not be fetched. Check the link and version, then try again.",

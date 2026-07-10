@@ -173,6 +173,7 @@ function Inner(props: { readonly session: SessionRecord }) {
                 <div class="wc-form-actions tg-segmented">
                   <Button
                     variant={locale() === "ja" ? "primary" : "secondary"}
+                    aria-pressed={locale() === "ja"}
                     type="button"
                     onClick={() => setLocale("ja")}
                   >
@@ -180,6 +181,7 @@ function Inner(props: { readonly session: SessionRecord }) {
                   </Button>
                   <Button
                     variant={locale() === "en" ? "primary" : "secondary"}
+                    aria-pressed={locale() === "en"}
                     type="button"
                     onClick={() => setLocale("en")}
                   >
@@ -195,6 +197,7 @@ function Inner(props: { readonly session: SessionRecord }) {
                       variant={
                         themePreference() === theme ? "primary" : "secondary"
                       }
+                      aria-pressed={themePreference() === theme}
                       type="button"
                       onClick={() => setThemePreference(theme)}
                     >
