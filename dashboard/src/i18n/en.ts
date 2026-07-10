@@ -43,7 +43,6 @@ export const en: Record<keyof typeof ja, string> = {
   "nav.graph": "Dependencies",
   "store.title": "Store",
   "store.subtitle": "Find apps and services to add from the store.",
-  "store.badge.oneTap": "Ready to use",
   "store.noWorkspace": "Select a workspace first.",
   "nav.cloudResources": "Cloud",
   "nav.runs": "Activity",
