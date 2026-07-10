@@ -8,6 +8,7 @@ import {
   createResource,
   createSignal,
   For,
+  Index,
   Match,
   Show,
   Switch,
@@ -124,14 +125,28 @@ export default function SharesTab(props: { readonly workspaceId: string }) {
     await refetch();
   });
 
+  // Which share row is in flight — approve/revoke are one shared action each,
+  // so without this every row's button would spin during a single action.
+  const [approvingId, setApprovingId] = createSignal<string | null>(null);
+  const [revokingId, setRevokingId] = createSignal<string | null>(null);
   const approve = createAction(async (id: string) => {
-    await approveOutputShare(id);
-    await refetch();
+    setApprovingId(id);
+    try {
+      await approveOutputShare(id);
+      await refetch();
+    } finally {
+      setApprovingId(null);
+    }
   });
 
   const revoke = createAction(async (id: string) => {
-    await revokeOutputShare(id);
-    await refetch();
+    setRevokingId(id);
+    try {
+      await revokeOutputShare(id);
+      await refetch();
+    } finally {
+      setRevokingId(null);
+    }
   });
 
   const updateOutput = (
@@ -226,7 +241,7 @@ export default function SharesTab(props: { readonly workspaceId: string }) {
             <Button
               variant="primary"
               size="sm"
-              busy={approve.busy()}
+              busy={approve.busy() && approvingId() === share.id}
               disabled={approve.busy()}
               onClick={() => void approve.run(share.id)}
             >
@@ -237,7 +252,7 @@ export default function SharesTab(props: { readonly workspaceId: string }) {
             <Button
               variant="danger"
               size="sm"
-              busy={revoke.busy()}
+              busy={revoke.busy() && revokingId() === share.id}
               disabled={revoke.busy()}
               onClick={() => void revoke.run(share.id)}
             >
@@ -309,14 +324,17 @@ export default function SharesTab(props: { readonly workspaceId: string }) {
 
               <FormField label={t("shares.create.outputs")}>
                 <div class="wb-output-editor">
-                  <For each={outputs()}>
+                  {/* Index (not For): updateOutput replaces the row object each
+                      keystroke; For keys by reference and would recreate the
+                      focused <input>, dropping the caret. */}
+                  <Index each={outputs()}>
                     {(output) => (
                       <div class="wb-output-row">
                         <Input
                           type="text"
-                          value={output.name}
+                          value={output().name}
                           onInput={(e) =>
-                            updateOutput(output.id, {
+                            updateOutput(output().id, {
                               name: e.currentTarget.value,
                             })
                           }
@@ -327,9 +345,9 @@ export default function SharesTab(props: { readonly workspaceId: string }) {
                         />
                         <Input
                           type="text"
-                          value={output.alias}
+                          value={output().alias}
                           onInput={(e) =>
-                            updateOutput(output.id, {
+                            updateOutput(output().id, {
                               alias: e.currentTarget.value,
                             })
                           }
@@ -340,9 +358,9 @@ export default function SharesTab(props: { readonly workspaceId: string }) {
                         />
                         <Checkbox
                           label={t("shares.create.sensitiveValue")}
-                          checked={output.sensitive}
+                          checked={output().sensitive}
                           onChange={(e) =>
-                            updateOutput(output.id, {
+                            updateOutput(output().id, {
                               sensitive: e.currentTarget.checked,
                             })
                           }
@@ -351,13 +369,13 @@ export default function SharesTab(props: { readonly workspaceId: string }) {
                           variant="secondary"
                           size="sm"
                           type="button"
-                          onClick={() => removeOutput(output.id)}
+                          onClick={() => removeOutput(output().id)}
                         >
                           {t("shares.create.removeOutput")}
                         </Button>
                       </div>
                     )}
-                  </For>
+                  </Index>
                 </div>
                 <Button
                   variant="ghost"
