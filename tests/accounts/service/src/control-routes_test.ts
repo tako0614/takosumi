@@ -3945,9 +3945,6 @@ test("POST /api/v1/workspaces/:id/capsules hydrates thin Store listings from rep
   const calls: string[] = [];
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     calls.push(String(input));
-    if (calls.length === 1) {
-      return new Response("rate limited", { status: 429 });
-    }
     return new Response(
       JSON.stringify({
         content: btoa(
@@ -4019,7 +4016,6 @@ test("POST /api/v1/workspaces/:id/capsules hydrates thin Store listings from rep
 
   expect(response?.status).toEqual(201);
   expect(calls).toEqual([
-    "https://raw.githubusercontent.com/tako0614/takos-git/cd0a7522b2b88ae7ed2b3419aff7c91b10819bb7/.well-known/tcs.json",
     "https://api.github.com/repos/tako0614/takos-git/contents/.well-known%2Ftcs.json?ref=cd0a7522b2b88ae7ed2b3419aff7c91b10819bb7",
   ]);
   const config = operations.calls.putInstallConfig?.[0] as {
