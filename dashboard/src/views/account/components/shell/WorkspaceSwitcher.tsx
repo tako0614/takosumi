@@ -86,6 +86,8 @@ export default function WorkspaceSwitcher(props: Props = {}) {
   });
 
   let rootRef: HTMLDivElement | undefined;
+  let triggerRef: HTMLButtonElement | undefined;
+  let menuRef: HTMLDivElement | undefined;
   if (typeof window !== "undefined") {
     const refreshWorkspaces = () => {
       clearWorkspaceListCache();
@@ -100,7 +102,10 @@ export default function WorkspaceSwitcher(props: Props = {}) {
       }
     };
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setSwitcherOpen(false);
+      if (event.key === "Escape" && switcherOpen()) {
+        setSwitcherOpen(false);
+        triggerRef?.focus();
+      }
     };
     window.addEventListener("pointerdown", onPointerDown);
     window.addEventListener("keydown", onKeyDown);
@@ -117,6 +122,47 @@ export default function WorkspaceSwitcher(props: Props = {}) {
   const choose = (id: string) => {
     setCurrentWorkspaceId(id);
     setSwitcherOpen(false);
+  };
+
+  // role="menu" keyboard model: move focus into the menu on open (landing on
+  // the checked workspace), then arrows / Home / End rove between items.
+  const menuItems = (): HTMLElement[] =>
+    menuRef
+      ? Array.from(
+          menuRef.querySelectorAll<HTMLElement>(
+            '[role="menuitemradio"], [role="menuitem"]',
+          ),
+        )
+      : [];
+
+  createEffect(() => {
+    if (!switcherOpen()) return;
+    queueMicrotask(() => {
+      const items = menuItems();
+      const current = items.find(
+        (el) => el.getAttribute("aria-checked") === "true",
+      );
+      (current ?? items[0])?.focus();
+    });
+  });
+
+  const onMenuKeyDown = (event: KeyboardEvent) => {
+    const items = menuItems();
+    if (items.length === 0) return;
+    const idx = items.indexOf(document.activeElement as HTMLElement);
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      items[(idx + 1 + items.length) % items.length]?.focus();
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      items[(idx - 1 + items.length) % items.length]?.focus();
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      items[0]?.focus();
+    } else if (event.key === "End") {
+      event.preventDefault();
+      items[items.length - 1]?.focus();
+    }
   };
 
   return (
@@ -148,6 +194,7 @@ export default function WorkspaceSwitcher(props: Props = {}) {
               aria-haspopup="menu"
               aria-expanded={switcherOpen()}
               aria-controls={switcherId()}
+              ref={triggerRef}
               onClick={() => setSwitcherOpen((open) => !open)}
             >
               <span class="topbar-workspace-avatar" aria-hidden="true">
@@ -161,7 +208,13 @@ export default function WorkspaceSwitcher(props: Props = {}) {
               </Show>
             </button>
             <Show when={switcherOpen()}>
-              <div class="topbar-workspace-menu" id={switcherId()} role="menu">
+              <div
+                class="topbar-workspace-menu"
+                id={switcherId()}
+                role="menu"
+                ref={menuRef}
+                onKeyDown={onMenuKeyDown}
+              >
                 <div class="topbar-workspace-menu-head">
                   {t("workspace.label")}
                 </div>

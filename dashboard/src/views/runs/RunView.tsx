@@ -1461,6 +1461,19 @@ function Inner() {
     };
   });
 
+  // Consumer install/update error card copy — one friendly sentence, never the
+  // raw control-plane text. A failed deploy action carries a raw ControlApiError
+  // message (untranslated, with internal IDs); classify known access issues,
+  // else the generic hint. The raw text stays in the folded expert console.
+  const installErrorText = (): string => {
+    const raw = deploy.error();
+    if (raw) {
+      const issue = accessIssueFromText(raw);
+      return issue ? accessIssueSummary(issue).sub : t("install.errorSub");
+    }
+    return summary()?.sub ?? summary()?.text ?? t("install.errorSub");
+  };
+
   const supportDetailItems = (r: Run): readonly KVItem[] => {
     const out: KVItem[] = [
       { label: t("run.details.type"), value: operationLabel(r.type) },
@@ -1626,12 +1639,7 @@ function Inner() {
               {/* One plain sentence with the next action — the summary layer
                   already classifies credits / account-access / known failure
                   codes. The console stays behind 詳細を見る. */}
-              <p>
-                {deploy.error() ??
-                  summary()?.sub ??
-                  summary()?.text ??
-                  t("install.errorSub")}
-              </p>
+              <p>{installErrorText()}</p>
               <div class="av-install-actions">
                 <button
                   type="button"
@@ -2006,6 +2014,13 @@ function Inner() {
                     )}
                   </Show>
                   <Show when={retryPlan.error()}>
+                    {(m) => (
+                      <p class="wa-error" role="alert">
+                        {m()}
+                      </p>
+                    )}
+                  </Show>
+                  <Show when={cancel.error()}>
                     {(m) => (
                       <p class="wa-error" role="alert">
                         {m()}

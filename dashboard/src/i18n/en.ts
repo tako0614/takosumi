@@ -675,6 +675,7 @@ export const en: Record<keyof typeof ja, string> = {
     "Use this only for runtime environment variables the app can store in plain text. Pass private values through connected accounts.",
   "new.env.name": "Variable name",
   "new.env.value": "Value",
+  "new.env.valuePlaceholder": "value",
   "new.env.add": "Add environment variable",
   "new.env.remove": "Remove",
   "new.env.errorNameRequired":
@@ -690,6 +691,8 @@ export const en: Record<keyof typeof ja, string> = {
     "Add extra visible inputs only when the app asks for something not shown above.",
   "new.vars.inputName": "Setting name",
   "new.vars.inputValue": "Value",
+  "new.vars.namePlaceholder": "setting",
+  "new.vars.valuePlaceholder": "value",
   "new.vars.addInput": "Add input",
   "new.vars.removeInput": "Remove",
   "new.vars.errorNameRequired":
@@ -809,6 +812,7 @@ export const en: Record<keyof typeof ja, string> = {
 
   // --- workspace settings ---------------------------------------------------------
   "workspaceSettings.title": "Settings",
+  "workspaceSettings.tabsLabel": "Settings sections",
   "workspaceSettings.subtitle":
     "Review team name, members, connected accounts, and usage.",
   "workspaceSettings.tab.general": "General",

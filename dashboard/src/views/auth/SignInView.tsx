@@ -315,6 +315,7 @@ function ThemeSwitcher() {
           class="auth-theme-btn"
           classList={{ active: themePreference() === theme }}
           aria-label={t(THEME_LABEL_KEY[theme])}
+          aria-pressed={themePreference() === theme}
           title={t(THEME_LABEL_KEY[theme])}
           onClick={() => setThemePreference(theme)}
         >
