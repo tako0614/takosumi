@@ -898,9 +898,12 @@ function Inner() {
     if (!r || r.type !== "apply" || r.status !== "succeeded") {
       return "settling";
     }
-    if (deployments.loading || activity.loading || activity.error) {
+    if (deployments.loading || activity.loading) {
       return "settling";
     }
+    // A failed activity fetch must NOT strand readiness in "settling" forever
+    // (activity never retries). Fall back to computing readiness from the
+    // deployment alone — no activation event available reads as not-required.
     return deploymentReadinessAfterApply(
       completedRunDeployment(),
       activity() ?? [],
@@ -1267,7 +1270,15 @@ function Inner() {
     if (run.error || deploy.error()) return { phase: "error" };
     const r = run.latest;
     if (!r) return { phase: "progress", step: "fetch" };
-    if (r.status === "failed") return { phase: "error" };
+    // Terminal non-success states (failed / cancelled / expired) must not spin
+    // forever — polling has stopped, nothing will advance the screen.
+    if (
+      r.status === "failed" ||
+      r.status === "cancelled" ||
+      r.status === "expired"
+    ) {
+      return { phase: "error" };
+    }
     if (r.type === "apply") {
       if (r.status !== "succeeded") {
         return { phase: "progress", step: "deploy" };
@@ -1316,6 +1327,19 @@ function Inner() {
   const summary = createMemo((): Summary | null => {
     const r = run.latest;
     if (!r) return null;
+    // Terminal, non-failure statuses: render a settled line (no spinner). A
+    // cancelled/expired run has stopped polling, so a "progress" fallback would
+    // spin forever and contradict the terminal badge in the header.
+    if (r.status === "cancelled") {
+      return { kind: "danger", text: t("run.summary.cancelled") };
+    }
+    if (r.status === "expired") {
+      return {
+        kind: "error",
+        text: t("run.summary.expired"),
+        sub: t("run.summary.expiredHint"),
+      };
+    }
     const name = appName();
     if (r.type === "apply" || r.type === "destroy_apply") {
       if (r.status === "queued" || r.status === "running") {
