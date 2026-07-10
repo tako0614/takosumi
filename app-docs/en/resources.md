@@ -120,6 +120,25 @@ References:
 - [How Workers for Platforms works](https://developers.cloudflare.com/cloudflare-for-platforms/workers-for-platforms/how-workers-for-platforms-works/)
 - [Dynamic Workflows](https://developers.cloudflare.com/dynamic-workers/usage/dynamic-workflows/)
 
+## Delete And Cleanup
+
+Deletes of Takosumi Cloud managed resources are idempotent. A resource whose
+backend is already absent is treated as deleted, so the same destroy can be
+retried safely. Cleanup and destroy remain available after credits are
+exhausted.
+
+For resources such as Object Storage whose cleanup time depends on data volume,
+the delete is accepted before a background cleanup removes data in bounded
+batches. An accepted resource is removed from active inventory and its data
+plane immediately, while its name remains unavailable until cleanup completes.
+Deletion is irreversible and stored data cannot be recovered.
+
+BYOC resources created through a user-owned ProviderConnection follow the
+underlying provider's delete and retention policies. If that provider rejects a
+delete because of a retention lock or dependent resource, Takosumi records the
+Run as failed instead of claiming success and allows a retry after the cause is
+fixed.
+
 ## Domains And Routes
 
 Public HTTP resources can receive a Takosumi-managed default URL. Users can
