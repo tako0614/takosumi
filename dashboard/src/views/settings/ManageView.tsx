@@ -6,13 +6,21 @@
  */
 import { A } from "@solidjs/router";
 import { ChevronRight } from "lucide-solid";
-import { For, type JSX } from "solid-js";
+import { createMemo, For, type JSX } from "solid-js";
 import Page from "../account/components/auth/Page.tsx";
 import PageHeader from "../../components/ui/PageHeader.tsx";
 import { MANAGE_DESTINATIONS } from "../account/components/shell/nav.ts";
+import { isTakosumiCloudRuntime } from "../../lib/deployment-brand.ts";
 import { t } from "../../i18n/index.ts";
 
 function Inner(): JSX.Element {
+  // Cloud-only entries would land on an "unavailable" dead-end off-Cloud —
+  // hide them, matching the runtime-gated Cloud tabs in workspace settings.
+  const destinations = createMemo(() =>
+    MANAGE_DESTINATIONS.filter(
+      (dest) => !dest.cloudOnly || isTakosumiCloudRuntime(),
+    ),
+  );
   return (
     <div class="settings-view">
       <PageHeader
@@ -21,7 +29,7 @@ function Inner(): JSX.Element {
         subtitle={t("settings.manage.subtitle")}
       />
       <div class="settings-links">
-        <For each={MANAGE_DESTINATIONS}>
+        <For each={destinations()}>
           {(dest) => (
             <A href={dest.href} class="settings-link tg-card tg-card-hover">
               <span class="settings-link-icon" aria-hidden="true">

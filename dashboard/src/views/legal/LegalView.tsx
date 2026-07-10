@@ -5,6 +5,7 @@ import {
   locale,
   setDocumentTitle,
   setLocale,
+  t,
   type Locale,
 } from "../../i18n/index.ts";
 import { dashboardProductName } from "../../lib/deployment-brand.ts";
@@ -434,7 +435,7 @@ export default function LegalView(props: Props) {
             <span>{dashboardProductName()}</span>
           </A>
           <div class="legal-actions">
-            <div class="legal-lang" role="group" aria-label="Language">
+            <div class="legal-lang" role="group" aria-label={t("legal.langLabel")}>
               <button
                 type="button"
                 classList={{ active: locale() === "ja" }}
@@ -451,12 +452,12 @@ export default function LegalView(props: Props) {
               </button>
             </div>
             <A class="legal-sign-in" href="/sign-in">
-              Sign in
+              {t("auth.signIn")}
             </A>
           </div>
         </header>
 
-        <nav class="legal-nav" aria-label="Takosumi Cloud policies">
+        <nav class="legal-nav" aria-label={t("legal.policiesNav")}>
           <For each={ORDER}>
             {(key) => (
               <A

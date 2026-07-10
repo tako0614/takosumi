@@ -4,7 +4,7 @@
  */
 import "../../../styles/wave-b.css";
 import { useNavigate } from "@solidjs/router";
-import { createResource, Match, Show, Switch } from "solid-js";
+import { createResource, createSignal, Match, Show, Switch } from "solid-js";
 import { Archive, RotateCcw } from "lucide-solid";
 import {
   type BackupRecord,
@@ -36,18 +36,26 @@ export default function BackupsTab(props: { readonly workspaceId: string }) {
     await createWorkspaceBackup(props.workspaceId);
     await refetch();
   });
+  // Which row is restoring — the action's own busy() is one shared signal, so
+  // without this every row's button would spin during a single restore.
+  const [restoringId, setRestoringId] = createSignal<string | null>(null);
   const restore = createAction(async (record: BackupRecord) => {
     const target = record.restoreTarget;
     if (!target) {
       throw new Error(t("backups.restoreUnavailable"));
     }
-    const run = await createBackupRestore(props.workspaceId, record.id, {
-      capsuleId: target.capsuleId,
-      environment: target.environment,
-      stateGeneration: target.stateGeneration,
-      expectedBackupDigest: record.digest,
-    });
-    navigate(`/runs/${run.id}`);
+    setRestoringId(record.id);
+    try {
+      const run = await createBackupRestore(props.workspaceId, record.id, {
+        capsuleId: target.capsuleId,
+        environment: target.environment,
+        stateGeneration: target.stateGeneration,
+        expectedBackupDigest: record.digest,
+      });
+      navigate(`/runs/${run.id}`);
+    } finally {
+      setRestoringId(null);
+    }
   });
 
   const columns: readonly Column<BackupRecord>[] = [
@@ -87,7 +95,7 @@ export default function BackupsTab(props: { readonly workspaceId: string }) {
           variant="secondary"
           size="sm"
           icon={<RotateCcw size={14} />}
-          busy={restore.busy()}
+          busy={restore.busy() && restoringId() === backup.id}
           disabled={restore.busy() || !backup.restoreTarget}
           onClick={() => void restore.run(backup)}
           title={
