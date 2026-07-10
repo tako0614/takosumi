@@ -2,9 +2,10 @@
  * ストア — the primary discovery tab. Wraps the shared StoreBrowser with the
  * decentralized Takosumi store(s). [追加] hands the listing to the one install
  * flow (`/new?…&auto=1`), which auto-starts when nothing needs the user's
- * input. Whether an app is one-tap installable is decided by the install flow
- * against the real (store-owned) repo metadata — the store feed strips a
- * listing's input schema, so the browser makes no client-side readiness claim.
+ * input. Whether installation can start without user configuration is decided
+ * by the install flow against the real repository-owned metadata. This says
+ * nothing about build or deploy duration: the Store feed strips the input
+ * schema and makes no client-side readiness or speed claim.
  */
 import { onMount } from "solid-js";
 import { useNavigate } from "@solidjs/router";
