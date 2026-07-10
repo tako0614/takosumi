@@ -277,6 +277,8 @@ export const en: Record<keyof typeof ja, string> = {
   "apps.empty.body":
     "Apps you add will appear here. Start by picking one from the store.",
   "apps.empty.viewServices": "View all services",
+  "apps.listIncomplete":
+    "Some apps could not be loaded, so this screen may be missing apps.",
 
   // --- Service list (/services) --------------------------------------------
   "services.title": "Services",
@@ -284,6 +286,8 @@ export const en: Record<keyof typeof ja, string> = {
   "services.empty.title": "No services yet",
   "services.empty.body": "Services you add will appear here.",
   "services.deleteAria": "Delete {name}",
+  "services.listIncomplete":
+    "Some services could not be loaded, so this list may be incomplete.",
 
   // --- Service detail ------------------------------------------------------
   "app.capsuleSub": "Service",
@@ -385,6 +389,8 @@ export const en: Record<keyof typeof ja, string> = {
     "Already saved. Enter a new value only to change it.",
   "app.config.reset": "Reset",
   "app.config.remove": "Remove",
+  "app.config.resetAria": "Clear setting {name}",
+  "app.config.removeAria": "Remove setting {name}",
   "app.config.customName": "CUSTOM_ENV",
   "app.config.errorNameRequired": "Enter a setting name.",
   "app.config.errorNameInvalid": "{name} cannot contain spaces.",
@@ -409,8 +415,12 @@ export const en: Record<keyof typeof ja, string> = {
   "app.autoUpdate.disable": "Turn off automatic updates",
   "app.danger.destroyTitle": "Delete this service",
   "app.danger.destroyBody":
-    "Deletion first creates a delete review so you can inspect what will be removed, then you run it. Once run, the resources are removed and cannot be restored.",
+    "Deleting {name} first creates a delete review so you can inspect what will be removed, then you run it. Once run, the resources are removed and cannot be restored.",
   "app.danger.destroyCta": "Review deletion",
+  "app.setupIncomplete.body":
+    "Setup didn't finish. Retry from the update review, or delete this service and start over.",
+  "app.setupIncomplete.review": "Open updates",
+  "app.setupIncomplete.delete": "Delete options",
 
   // --- run view --------------------------------------------------------------
   "run.title.plan": "Review changes",
@@ -1162,6 +1172,9 @@ export const en: Record<keyof typeof ja, string> = {
   "graph.dependsOn": "Uses {names}",
   "graph.empty.title": "No services",
   "graph.empty.message": "This workspace has no services yet.",
+  "graph.noEdges.title": "No dependencies yet",
+  "graph.noEdges.message":
+    "Connections appear here once a service uses values from another service.",
 
   // --- account ---------------------------------------------------------------------
   "account.title": "Account",

@@ -80,6 +80,7 @@ import {
   runTone,
 } from "../../lib/labels.ts";
 import {
+  capsuleDisplayName,
   effectiveCapsuleStatus,
   isDeploymentPubliclyOpenable,
   isUrlString,
@@ -152,12 +153,20 @@ function Inner() {
     settingsCapsuleId,
     getCapsuleProviderConnectionSet,
   );
-  const settingsInstallConfigId = () =>
-    tab() === "settings" ? (capsule()?.installConfigId ?? null) : null;
+  // Fetched on every tab (not just settings): the header shows the store
+  // display name, which lives on the install config's store metadata.
+  const installConfigId = () => capsule()?.installConfigId ?? null;
   const [installConfig, { refetch: refetchInstallConfig }] = createResource(
-    settingsInstallConfigId,
+    installConfigId,
     getInstallConfig,
   );
+  // Same source as the launcher tile name (store metadata) so the home screen
+  // and the detail header agree on what the app is called. A failed install
+  // config read must not break the header — fall back to the instance name.
+  const displayName = createMemo(() => {
+    if (installConfig.error) return undefined;
+    return capsuleDisplayName(installConfig(), locale());
+  });
   const [sources] = createResource(settingsWorkspaceId, listSources);
   const [deployments] = createResource(deploysCapsuleId, listDeployments);
   const [currentStateVersion] = createResource(
@@ -191,7 +200,7 @@ function Inner() {
   createEffect(() => {
     const inst = capsule();
     if (inst) {
-      setDocumentTitle(inst.name);
+      setDocumentTitle(displayName() ?? inst.name);
       return;
     }
     if (capsule.error) {
@@ -303,10 +312,11 @@ function Inner() {
     if (runId) navigate(`/runs/${runId}`);
   });
 
+  const serviceLabel = () => displayName() ?? capsule()?.name ?? "";
   const confirmDestroy = async () => {
     const ok = await confirm({
       title: t("app.danger.destroyTitle"),
-      message: t("app.danger.destroyBody"),
+      message: t("app.danger.destroyBody", { name: serviceLabel() }),
       confirmText: t("app.danger.destroyCta"),
       danger: true,
     });
@@ -357,7 +367,13 @@ function Inner() {
                 eyebrow={t("app.capsuleSub")}
                 title={
                   <span class="wa-title-row">
-                    {inst().name}
+                    {displayName() ?? inst().name}
+                    {/* Store display name leads (matching the launcher tile);
+                        the instance name stays visible as a muted secondary
+                        only when the two differ. */}
+                    <Show when={displayName() && displayName() !== inst().name}>
+                      <span class="av-title-instance">{inst().name}</span>
+                    </Show>
                     <StatusBadge
                       status={effectiveCapsuleStatus(inst())}
                       label={capsuleStatusLabel}
@@ -395,13 +411,14 @@ function Inner() {
                         </Button>
                       )}
                     </Show>
-                    <Show when={inst().status !== "destroyed"}>
+                    {/* One delete flow: the header button routes to the 削除
+                        tab (plan-first) instead of opening a duplicate modal. */}
+                    <Show
+                      when={inst().status !== "destroyed" && tab() !== "danger"}
+                    >
                       <Button
                         variant="danger"
-                        type="button"
-                        disabled={destroyPlan.busy()}
-                        busy={destroyPlan.busy()}
-                        onClick={() => void confirmDestroy()}
+                        href={`/services/${encodeURIComponent(capsuleId())}/danger`}
                         icon={<Trash2 size={16} />}
                       >
                         {t("common.delete")}
@@ -415,6 +432,34 @@ function Inner() {
                 {(message) => <Toast tone="error">{message()}</Toast>}
               </Show>
 
+              {/* A service that never successfully applied (no StateVersion)
+                  is stuck mid-setup — say so and offer the two ways out. */}
+              <Show
+                when={inst().status !== "destroyed" && !currentStateVersionId()}
+              >
+                <div class="av-setup-incomplete" role="status">
+                  <p class="av-setup-incomplete-text">
+                    {t("app.setupIncomplete.body")}
+                  </p>
+                  <div class="av-actions">
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      href={`/services/${encodeURIComponent(capsuleId())}/deploys`}
+                    >
+                      {t("app.setupIncomplete.review")}
+                    </Button>
+                    <Button
+                      variant="danger"
+                      size="sm"
+                      href={`/services/${encodeURIComponent(capsuleId())}/danger`}
+                    >
+                      {t("app.setupIncomplete.delete")}
+                    </Button>
+                  </div>
+                </div>
+              </Show>
+
               <Tabs items={tabItems()} aria-label={t("app.capsuleSub")} />
 
               <div class="wa-stack">
@@ -424,6 +469,7 @@ function Inner() {
                       publicLinkOutputs={publicLinkOutputs()}
                       otherPublicOutputs={otherPublicOutputs()}
                       hasDeployment={currentDeployment() !== undefined}
+                      destroyed={inst().status === "destroyed"}
                       serviceOpenable={serviceOpenable()}
                       releaseActivationStatus={releaseActivationStatus()}
                       outputsLoading={currentStateVersion.loading}
@@ -504,7 +550,6 @@ function Inner() {
                       providerConnections={profile()?.bindings}
                       availableProviderConnections={providerConnections() ?? []}
                       capsuleId={capsuleId()}
-                      dangerHref={`/services/${encodeURIComponent(capsuleId())}/danger`}
                       deploysHref={`/services/${encodeURIComponent(capsuleId())}/deploys`}
                       onSaved={(scope) =>
                         // Refetch ONLY the saved form's resource (+capsule for
@@ -527,7 +572,9 @@ function Inner() {
                     <Card>
                       <CardHeader
                         title={t("app.danger.destroyTitle")}
-                        subtitle={t("app.danger.destroyBody")}
+                        subtitle={t("app.danger.destroyBody", {
+                          name: serviceLabel(),
+                        })}
                       />
                       <div class="wa-form-actions">
                         <Button
@@ -603,6 +650,7 @@ function OverviewTab(props: {
   readonly publicLinkOutputs: readonly [string, unknown][];
   readonly otherPublicOutputs: readonly [string, unknown][];
   readonly hasDeployment: boolean;
+  readonly destroyed: boolean;
   readonly serviceOpenable: boolean;
   readonly releaseActivationStatus:
     "not_required" | "pending" | "succeeded" | "failed";
@@ -614,16 +662,21 @@ function OverviewTab(props: {
   return (
     <>
       <Card>
+        {/* Mutually exclusive copy, driven by the actual service state:
+            destroyed → records-only; never deployed → the generic subtitle
+            (the body says links appear after a deploy); otherwise the normal
+            activation-aware subtitle. A preparing service must never read as
+            deleted. */}
         <CardHeader
           title={t("app.outputs.title")}
           subtitle={
-            props.releaseActivationStatus === "pending"
-              ? t("app.outputs.activationPending")
-              : props.releaseActivationStatus === "failed"
-                ? t("app.outputs.activationFailed")
-                : props.serviceOpenable
-                  ? t("app.outputs.subtitle")
-                  : t("app.outputs.deletedSubtitle")
+            props.destroyed
+              ? t("app.outputs.deletedSubtitle")
+              : props.releaseActivationStatus === "pending"
+                ? t("app.outputs.activationPending")
+                : props.releaseActivationStatus === "failed"
+                  ? t("app.outputs.activationFailed")
+                  : t("app.outputs.subtitle")
           }
         />
         <Switch>
@@ -637,7 +690,7 @@ function OverviewTab(props: {
           </Match>
           <Match when={props.publicLinkOutputs.length === 0}>
             <p class="muted">
-              {props.hasDeployment
+              {props.hasDeployment || props.destroyed
                 ? t("app.outputs.none")
                 : t("app.outputs.empty")}
             </p>
@@ -1277,10 +1330,12 @@ function configSummaryItems(config: InstallConfig | undefined) {
     ...(subdomain
       ? [{ label: t("app.config.subdomain"), value: <code>{subdomain}</code> }]
       : []),
-    {
-      label: t("app.config.oidc"),
-      value: oidcReady ? t("app.config.oidcOn") : t("app.config.oidcOff"),
-    },
+    // 自動ログイン comes from the store listing's oidc_client projection, not
+    // from anything the user can set on this screen — so an unset value is
+    // omitted rather than rendered as a dead 未設定 row.
+    ...(oidcReady
+      ? [{ label: t("app.config.oidc"), value: t("app.config.oidcOn") }]
+      : []),
     {
       label: t("app.config.updatedAt"),
       value: formatDateTime(config.updatedAt),
@@ -1387,7 +1442,6 @@ function SettingsTab(props: {
   readonly providerConnections: CapsuleProviderConnectionBindings | undefined;
   readonly availableProviderConnections: readonly ProviderConnection[];
   readonly capsuleId: string;
-  readonly dangerHref: string;
   readonly deploysHref: string;
   readonly onSaved: (scope: "profile" | "config") => void | Promise<void>;
 }) {
@@ -1437,15 +1491,15 @@ function SettingsTab(props: {
   const visibleVariableRows = createMemo(() =>
     variableRows().filter((row) => !row.deleted),
   );
+  // Primary rows are ONLY listing-declared inputs (labelled, key read-only);
+  // free-form key+value rows always stay under the その他の設定値 disclosure.
+  const isPrimaryVariableRow = (row: ConfigVariableRow) =>
+    row.storeField && (!row.advanced || primaryNames().has(row.name));
   const primaryVariableRows = createMemo(() =>
-    visibleVariableRows().filter(
-      (row) => !row.advanced || primaryNames().has(row.name),
-    ),
+    visibleVariableRows().filter(isPrimaryVariableRow),
   );
   const advancedVariableRows = createMemo(() =>
-    visibleVariableRows().filter(
-      (row) => row.advanced && !primaryNames().has(row.name),
-    ),
+    visibleVariableRows().filter((row) => !isPrimaryVariableRow(row)),
   );
   const configSummary = createMemo(() =>
     configSummaryItems(props.installConfig),
@@ -1811,18 +1865,9 @@ function SettingsTab(props: {
           </details>
         </Card>
       </details>
-
-      <Card>
-        <CardHeader
-          title={t("app.settings.removeTitle")}
-          subtitle={t("app.settings.removeBody")}
-          actions={
-            <Button variant="danger" href={props.dangerHref}>
-              {t("app.settings.removeCta")}
-            </Button>
-          }
-        />
-      </Card>
+      {/* No bottom delete section here: deletion lives on the 削除 tab (one
+          plan-first flow), which the tab strip and header button already
+          point at. */}
     </>
   );
 }
@@ -1840,22 +1885,35 @@ function VariableRows(props: {
       <Index each={props.rows}>
         {(row) => (
           <div class="wb-variable-row">
-            <FormField
-              label={row().storeField ? row().label : t("app.config.name")}
+            {/* A listing-declared variable's KEY is fixed by the store input —
+                show it as muted mono text, not an editable textbox. Only
+                free-form variables keep an editable name field. */}
+            <Show
+              when={!row().storeField}
+              fallback={
+                <div class="tg-field">
+                  <span class="tg-field-label">{t("app.config.name")}</span>
+                  <code class="av-config-key">{row().name}</code>
+                </div>
+              }
             >
-              <Input
-                id={configControlId(row(), "name")}
-                name={`configName:${row().id}`}
-                value={row().name}
-                disabled={row().storeField}
-                placeholder={t("app.config.customName")}
-                onInput={(e) =>
-                  props.onChange(row().id, { name: e.currentTarget.value })
-                }
-              />
-            </FormField>
+              <FormField label={t("app.config.name")}>
+                <Input
+                  id={configControlId(row(), "name")}
+                  name={`configName:${row().id}`}
+                  value={row().name}
+                  placeholder={t("app.config.customName")}
+                  onInput={(e) =>
+                    props.onChange(row().id, { name: e.currentTarget.value })
+                  }
+                />
+              </FormField>
+            </Show>
             <FormField
-              label={row().storeField ? t("app.config.value") : row().label}
+              // A store input carries a localized human label — use it as the
+              // value field's label so the editor reads プロジェクト名, not
+              // the raw project_name key.
+              label={row().storeField ? row().label : t("app.config.value")}
               hint={
                 row().secret &&
                 row().hasExistingValue &&
@@ -1874,6 +1932,13 @@ function VariableRows(props: {
               variant="ghost"
               size="sm"
               type="button"
+              aria-label={
+                row().storeField
+                  ? t("app.config.resetAria", { name: row().name })
+                  : t("app.config.removeAria", {
+                      name: row().name || t("app.config.customName"),
+                    })
+              }
               onClick={() => props.onRemove(row().id)}
             >
               {row().storeField

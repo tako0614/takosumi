@@ -14,7 +14,7 @@ import {
   getWorkspaceGraph,
   type GraphNode,
 } from "../../lib/control-api.ts";
-import { layerGraph } from "./graph-layering.ts";
+import { filterGraphForDependencyView, layerGraph } from "./graph-layering.ts";
 import { capsuleStatusLabel, capsuleTone } from "../../lib/labels.ts";
 import { t } from "../../i18n/index.ts";
 import {
@@ -58,15 +58,19 @@ function NodeBox(props: {
 }
 
 function Inner() {
-  const workspaceId = () => (currentWorkspaceId() ? currentWorkspaceId() : null);
+  const workspaceId = () =>
+    currentWorkspaceId() ? currentWorkspaceId() : null;
   const [graph, { refetch: refetchGraph }] = createResource(
     workspaceId,
     getWorkspaceGraph,
   );
+  // Destroyed services are excluded unless they still sit on a dependency
+  // edge — a flat card wall of 削除済み rows is noise in a dependencies view.
   const layered = createMemo(() => {
     const g = graph();
-    return g ? layerGraph(g) : undefined;
+    return g ? layerGraph(filterGraphForDependencyView(g)) : undefined;
   });
+  const hasEdges = createMemo(() => (graph()?.edges.length ?? 0) > 0);
 
   return (
     <>
@@ -125,19 +129,54 @@ function Inner() {
                   />
                 }
               >
-                <section class="wb-graph">
-                  <For each={g().layers}>
-                    {(layer, i) => (
-                      <div class="wb-graph-layer">
+                {/* The page promises dependency EDGES; with none recorded, an
+                    honest empty note replaces a flat card grid that would
+                    imply relationships which don't exist. */}
+                <Show
+                  when={hasEdges()}
+                  fallback={
+                    <EmptyState
+                      icon={<Network size={28} />}
+                      title={t("graph.noEdges.title")}
+                      message={t("graph.noEdges.message")}
+                    />
+                  }
+                >
+                  <section class="wb-graph">
+                    <For each={g().layers}>
+                      {(layer, i) => (
+                        <div class="wb-graph-layer">
+                          <div class="wb-graph-layer-label">
+                            {t("graph.layer", { n: i() + 1 })}
+                            <span
+                              class="wb-graph-layer-rule"
+                              aria-hidden="true"
+                            />
+                          </div>
+                          <div class="wb-graph-nodes">
+                            <For each={layer}>
+                              {(node) => (
+                                <NodeBox
+                                  node={node}
+                                  producers={g().producersByConsumer}
+                                />
+                              )}
+                            </For>
+                          </div>
+                        </div>
+                      )}
+                    </For>
+                    <Show when={g().cyclic.length > 0}>
+                      <div class="wb-graph-layer wb-graph-cyclic">
                         <div class="wb-graph-layer-label">
-                          {t("graph.layer", { n: i() + 1 })}
+                          {t("graph.cycle")}
                           <span
                             class="wb-graph-layer-rule"
                             aria-hidden="true"
                           />
                         </div>
                         <div class="wb-graph-nodes">
-                          <For each={layer}>
+                          <For each={g().cyclic}>
                             {(node) => (
                               <NodeBox
                                 node={node}
@@ -147,27 +186,9 @@ function Inner() {
                           </For>
                         </div>
                       </div>
-                    )}
-                  </For>
-                  <Show when={g().cyclic.length > 0}>
-                    <div class="wb-graph-layer wb-graph-cyclic">
-                      <div class="wb-graph-layer-label">
-                        {t("graph.cycle")}
-                        <span class="wb-graph-layer-rule" aria-hidden="true" />
-                      </div>
-                      <div class="wb-graph-nodes">
-                        <For each={g().cyclic}>
-                          {(node) => (
-                            <NodeBox
-                              node={node}
-                              producers={g().producersByConsumer}
-                            />
-                          )}
-                        </For>
-                      </div>
-                    </div>
-                  </Show>
-                </section>
+                    </Show>
+                  </section>
+                </Show>
               </Show>
             )}
           </Match>

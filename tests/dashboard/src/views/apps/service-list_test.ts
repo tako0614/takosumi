@@ -28,6 +28,13 @@ describe("ServiceListView (/services)", () => {
     expect(serviceListSource).toContain("relativeTime");
   });
 
+  test("a failed supplemental full-list fetch is surfaced, not silent truncation", () => {
+    expect(serviceListSource).toContain("fullCapsules.error");
+    expect(serviceListSource).toContain("refetchFullCapsules");
+    expect(serviceListSource).toContain('t("services.listIncomplete")');
+    expect(serviceListSource).toContain('t("common.retry")');
+  });
+
   test("offers deletion review directly from the service list", () => {
     expect(serviceListSource).toContain("function ServiceListView");
     expect(serviceListSource).toContain("const deleteHref = (inst: Capsule)");

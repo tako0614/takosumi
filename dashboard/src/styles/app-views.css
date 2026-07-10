@@ -1782,3 +1782,55 @@ button.tg-tab {
   justify-content: space-between;
   gap: var(--tg-s-3);
 }
+
+/* Launcher tile status caption for a service that never deployed (準備中 /
+ * エラー) — the tile is a button to the service screen, not a live app link. */
+.av-tile-state {
+  max-width: 100%;
+  font-size: var(--tg-fs-xs);
+  line-height: 1.3;
+  color: var(--tg-fg-subtle);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Detail header: instance name as a muted secondary next to the store display
+ * name (only rendered when the two differ). */
+.av-title-instance {
+  font-family: var(--tg-font-mono);
+  font-size: var(--tg-fs-sm);
+  font-weight: 400;
+  letter-spacing: 0;
+  color: var(--tg-fg-subtle);
+}
+
+/* Settings 設定値 editor: a listing-declared variable's key is read-only —
+ * muted mono text standing in for the editable name textbox. */
+.av-config-key {
+  display: inline-flex;
+  align-items: center;
+  min-height: 38px;
+  font-family: var(--tg-font-mono);
+  font-size: var(--tg-fs-sm);
+  color: var(--tg-fg-muted);
+  overflow-wrap: anywhere;
+}
+
+/* Never-successfully-applied guidance strip on the service detail. */
+.av-setup-incomplete {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--tg-s-3);
+  flex-wrap: wrap;
+  padding: var(--tg-s-3) var(--tg-s-4);
+  border-radius: var(--tg-r-md);
+  border: 1px solid color-mix(in srgb, var(--tg-warn) 42%, var(--tg-line));
+  background: color-mix(in srgb, var(--tg-warn) 8%, transparent);
+}
+.av-setup-incomplete-text {
+  margin: 0;
+  font-size: var(--tg-fs-sm);
+  color: var(--tg-fg);
+}

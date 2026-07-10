@@ -17,18 +17,37 @@ export interface LayeredGraph {
   readonly producersByConsumer: ReadonlyMap<string, readonly string[]>;
 }
 
+/**
+ * Node filter for the dependencies view: destroyed Capsules are noise in a
+ * "who uses whose values" screen, so they are dropped — unless they still
+ * participate in a dependency edge (a live service still points at them, which
+ * is exactly what this view must surface).
+ */
+export function filterGraphForDependencyView(
+  graph: WorkspaceGraph,
+): WorkspaceGraph {
+  const inEdge = new Set<string>();
+  for (const edge of graph.edges) {
+    inEdge.add(edge.producerCapsuleId);
+    inEdge.add(edge.consumerCapsuleId);
+  }
+  return {
+    ...graph,
+    nodes: graph.nodes.filter(
+      (node) => node.status !== "destroyed" || inEdge.has(node.capsuleId),
+    ),
+  };
+}
+
 export function layerGraph(graph: WorkspaceGraph): LayeredGraph {
   const nodeById = new Map(graph.nodes.map((n) => [n.capsuleId, n]));
   const producers = new Map<string, Set<string>>();
   const producersByConsumer = new Map<string, string[]>();
   for (const node of graph.nodes) producers.set(node.capsuleId, new Set());
   for (const edge of graph.edges) {
-    producers
-      .get(edge.consumerCapsuleId)
-      ?.add(edge.producerCapsuleId);
+    producers.get(edge.consumerCapsuleId)?.add(edge.producerCapsuleId);
     const producerName =
-      nodeById.get(edge.producerCapsuleId)?.name ??
-      edge.producerCapsuleId;
+      nodeById.get(edge.producerCapsuleId)?.name ?? edge.producerCapsuleId;
     const list = producersByConsumer.get(edge.consumerCapsuleId) ?? [];
     // Multiple output→input wirings between the same pair are one dependency in
     // the caption — don't list the same producer name more than once.

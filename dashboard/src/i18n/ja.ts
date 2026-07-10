@@ -280,6 +280,8 @@ export const ja = {
   "apps.empty.body":
     "追加したアプリはここに並びます。まずはストアから選んで追加してください。",
   "apps.empty.viewServices": "サービス一覧を見る",
+  "apps.listIncomplete":
+    "一部のアプリを読み込めませんでした。表示されていないアプリがあるかもしれません。",
 
   // --- Service list (/services) --------------------------------------------
   "services.title": "サービス",
@@ -287,6 +289,8 @@ export const ja = {
   "services.empty.title": "まだサービスがありません",
   "services.empty.body": "サービスを追加するとここに表示されます。",
   "services.deleteAria": "削除: {name}",
+  "services.listIncomplete":
+    "一部のサービスを読み込めませんでした。表示されていないサービスがあるかもしれません。",
 
   // --- Service detail ------------------------------------------------------
   "app.capsuleSub": "サービス",
@@ -387,6 +391,8 @@ export const ja = {
     "保存済みです。変更する場合だけ新しい値を入力します。",
   "app.config.reset": "リセット",
   "app.config.remove": "削除",
+  "app.config.resetAria": "設定値 {name} をクリア",
+  "app.config.removeAria": "設定値 {name} を削除",
   "app.config.customName": "CUSTOM_ENV",
   "app.config.errorNameRequired": "設定名を入力してください。",
   "app.config.errorNameInvalid": "{name} に空白は使えません。",
@@ -412,8 +418,12 @@ export const ja = {
   "app.autoUpdate.disable": "自動更新をオフにする",
   "app.danger.destroyTitle": "サービスを削除",
   "app.danger.destroyBody":
-    "削除はまず変更内容（削除プラン）を確認し、そのうえで実行します。実行するとリソースは取り除かれ、元に戻せません。",
+    "{name} の削除は、まず変更内容（削除プラン）を確認し、そのうえで実行します。実行するとリソースは取り除かれ、元に戻せません。",
   "app.danger.destroyCta": "削除プランを確認",
+  "app.setupIncomplete.body":
+    "追加が完了していません。変更の確認からやり直すか、削除してやり直せます。",
+  "app.setupIncomplete.review": "更新タブへ",
+  "app.setupIncomplete.delete": "削除オプション",
 
   // --- run view --------------------------------------------------------------
   "run.title.plan": "変更の確認",
@@ -1173,6 +1183,9 @@ export const ja = {
   "graph.dependsOn": "{names} を利用",
   "graph.empty.title": "サービスがありません",
   "graph.empty.message": "このワークスペースにはまだサービスがありません。",
+  "graph.noEdges.title": "依存関係はまだありません",
+  "graph.noEdges.message":
+    "サービスが他のサービスの値を使うようになると、ここにつながりが表示されます。",
 
   // --- account ---------------------------------------------------------------------
   "account.title": "アカウント",
