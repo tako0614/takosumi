@@ -114,6 +114,18 @@ describe("SignInView disabled OAuth guidance", () => {
     expect(signInViewSource).toContain('select("google")');
   });
 
+  test("auto-start cannot become an inescapable OAuth-failure loop", () => {
+    // A prior auto-start this session that never signed us in must not re-fire
+    // (session-scoped breaker), and the callback retry link suppresses it too.
+    expect(signInViewSource).toContain("autoStartAlreadyAttempted()");
+    expect(signInViewSource).toContain("markAutoStartAttempted()");
+    expect(signInViewSource).toContain("clearAutoStartAttempt()");
+    expect(signInViewSource).toContain('"/sign-in?manual=1"');
+    expect(signInViewSource).toContain(
+      "`/sign-in?return=${encodeURIComponent(returnTo)}&manual=1`",
+    );
+  });
+
   test("uses document navigation when returning to the server-owned OIDC authorize route", () => {
     expect(signInViewSource).toContain(
       "function requiresDocumentNavigation(returnTo: string): boolean",
