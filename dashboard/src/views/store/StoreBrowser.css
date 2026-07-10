@@ -11,7 +11,7 @@
   --c-accent-fg: var(--tg-accent-fg, #ffffff);
   --c-official: #f4c152;
   --c-err: var(--tg-danger, #c82323);
-  --c-ok: var(--tg-ok, #3fb950);
+  --c-ok: var(--tg-success, #3fb950);
   color: var(--c-fg);
 }
 
@@ -300,7 +300,8 @@
   background: rgba(0, 0, 0, 0.55);
   display: flex;
   justify-content: flex-end;
-  z-index: 50;
+  /* Modal layer: must cover the sticky top bar (--tg-z-header: 100). */
+  z-index: var(--tg-z-overlay, 1000);
 }
 .tcs-detail {
   width: min(460px, 100%);

@@ -25,6 +25,7 @@ import {
   createResource,
   createSignal,
   For,
+  Index,
   onCleanup,
   Show,
 } from "solid-js";
@@ -340,12 +341,12 @@ function Inner() {
     () => workspaceId() ?? undefined,
     (selectedWorkspaceId) => listWorkspacesCached({ selectedWorkspaceId }),
   );
-  const workspaceHandle = () => {
+  const workspaceHandle = (): string | undefined => {
     const current = workspaceId();
-    const handle = workspaceList()?.find(
-      (workspace) => workspace.id === current,
-    )?.handle;
-    return handle || "workspace";
+    return (
+      workspaceList()?.find((workspace) => workspace.id === current)?.handle ||
+      undefined
+    );
   };
   const shouldLoadInstallConfigs = () => {
     const id = workspaceId();
@@ -1596,12 +1597,19 @@ function Inner() {
         }));
       });
 
+  // Keyed by row identity (provider + alias), NOT by position: the chooser
+  // renders the FILTERED providerRowsRequiringChoice() list, so a positional
+  // index would write through to a hidden managed/auto-selected row.
   const updateProviderRow = (
-    index: number,
+    target: ProviderConnectionRow,
     patch: Partial<ProviderConnectionRow>,
   ) =>
     setProviderRows((rows) =>
-      rows.map((row, i) => (i === index ? { ...row, ...patch } : row)),
+      rows.map((row) =>
+        row.provider === target.provider && row.alias === target.alias
+          ? { ...row, ...patch }
+          : row,
+      ),
     );
 
   const providerConnectionError = (): string | null => {
@@ -2833,17 +2841,20 @@ function Inner() {
                     <h3 class="tg-card-title">{t("new.env.title")}</h3>
                     <p class="wb-note">{t("new.env.body")}</p>
                     <div class="wb-variable-list">
-                      <For each={envVariables()}>
+                      {/* <Index>: rows are replaced per keystroke, so <For>
+                          (reference-keyed) would recreate the focused input on
+                          every character. */}
+                      <Index each={envVariables()}>
                         {(row, index) => (
                           <div class="wb-variable-row">
                             <FormField label={t("new.env.name")}>
                               <Input
-                                id={`new-env-name-${index()}`}
-                                name={`envName:${index()}`}
+                                id={`new-env-name-${index}`}
+                                name={`envName:${index}`}
                                 type="text"
-                                value={row.name}
+                                value={row().name}
                                 onInput={(e) =>
-                                  updateEnvVariable(index(), {
+                                  updateEnvVariable(index, {
                                     name: e.currentTarget.value,
                                   })
                                 }
@@ -2855,12 +2866,12 @@ function Inner() {
                             </FormField>
                             <FormField label={t("new.env.value")}>
                               <Input
-                                id={`new-env-value-${index()}`}
-                                name={`envValue:${index()}`}
+                                id={`new-env-value-${index}`}
+                                name={`envValue:${index}`}
                                 type="text"
-                                value={row.value}
+                                value={row().value}
                                 onInput={(e) =>
-                                  updateEnvVariable(index(), {
+                                  updateEnvVariable(index, {
                                     value: e.currentTarget.value,
                                   })
                                 }
@@ -2873,13 +2884,13 @@ function Inner() {
                               type="button"
                               variant="ghost"
                               icon={<Trash size={16} />}
-                              onClick={() => removeEnvVariable(index())}
+                              onClick={() => removeEnvVariable(index)}
                             >
                               {t("new.env.remove")}
                             </Button>
                           </div>
                         )}
-                      </For>
+                      </Index>
                     </div>
                     <div class="wb-form-actions">
                       <Button
@@ -2903,17 +2914,19 @@ function Inner() {
                     <h3 class="tg-card-title">{t("new.vars.inputsTitle")}</h3>
                     <p class="wb-note">{t("new.vars.inputsBody")}</p>
                     <div class="wb-variable-list">
-                      <For each={inputVariables()}>
+                      {/* <Index> for the same per-keystroke focus reason as
+                          the env editor above. */}
+                      <Index each={inputVariables()}>
                         {(row, index) => (
                           <div class="wb-variable-row">
                             <FormField label={t("new.vars.inputName")}>
                               <Input
-                                id={`new-var-name-${index()}`}
-                                name={`varName:${index()}`}
+                                id={`new-var-name-${index}`}
+                                name={`varName:${index}`}
                                 type="text"
-                                value={row.name}
+                                value={row().name}
                                 onInput={(e) =>
-                                  updateInputVariable(index(), {
+                                  updateInputVariable(index, {
                                     name: e.currentTarget.value,
                                   })
                                 }
@@ -2924,12 +2937,12 @@ function Inner() {
                             </FormField>
                             <FormField label={t("new.vars.inputValue")}>
                               <Input
-                                id={`new-var-value-${index()}`}
-                                name={`varValue:${index()}`}
+                                id={`new-var-value-${index}`}
+                                name={`varValue:${index}`}
                                 type="text"
-                                value={row.value}
+                                value={row().value}
                                 onInput={(e) =>
-                                  updateInputVariable(index(), {
+                                  updateInputVariable(index, {
                                     value: e.currentTarget.value,
                                   })
                                 }
@@ -2942,13 +2955,13 @@ function Inner() {
                               type="button"
                               variant="ghost"
                               icon={<Trash size={16} />}
-                              onClick={() => removeInputVariable(index())}
+                              onClick={() => removeInputVariable(index)}
                             >
                               {t("new.vars.removeInput")}
                             </Button>
                           </div>
                         )}
-                      </For>
+                      </Index>
                     </div>
                     <div class="wb-form-actions">
                       <Button
@@ -3103,7 +3116,7 @@ function Inner() {
                                 aria-label={`${providerLabel(row.provider)} ${row.alias ? t("new.providers.alias", { alias: row.alias }) : ""} ${t("new.providers.selectConnection")}`.trim()}
                                 value={row.connectionId}
                                 onChange={(e) =>
-                                  updateProviderRow(index(), {
+                                  updateProviderRow(row, {
                                     connectionId: e.currentTarget.value,
                                   })
                                 }

@@ -1105,12 +1105,31 @@ function Inner() {
   // on a plan console. Any gate (approval / destructive / policy / delete)
   // falls through to the explicit review + action button below.
   const [autoContinued, setAutoContinued] = createSignal(false);
+  // Per-run UI state must reset when this SAME component instance navigates
+  // between runs (deploy → apply run, retry → fresh plan): stale `applied`
+  // would fake a デプロイしました summary on a never-applied plan and hide the
+  // deploy button; stale autoContinued/forceConsole break the ?auto=install
+  // re-plan loop.
+  let lastRunId = runId();
+  createEffect(() => {
+    const id = runId();
+    if (id === lastRunId) return;
+    lastRunId = id;
+    setApplied(false);
+    setNeedsConfirm(false);
+    setAutoContinued(false);
+    setForceConsole(false);
+  });
   createEffect(() => {
     const r = run.latest;
     if (!autoInstall || autoContinued() || applied() || deploy.busy() || !r) {
       return;
     }
     if (isDeployableRun(r) && !requiresDestructiveConfirmation(r)) {
+      // Never auto-apply past the billing/cost gate the manual deploy button
+      // enforces — wait for the check, and stop on a blocked estimate (the
+      // install screen shows the gate card instead).
+      if (cost.loading || costBlocked()) return;
       setAutoContinued(true);
       void deploy.run(false);
     }
@@ -1150,6 +1169,9 @@ function Inner() {
     | { readonly phase: "error" }
     | { readonly phase: "done" };
   const installState = createMemo((): InstallState => {
+    // A dead run fetch or a failed apply-run creation must surface as an
+    // error, not an eternal spinner.
+    if (run.error || deploy.error()) return { phase: "error" };
     const r = run.latest;
     if (!r) return { phase: "progress", step: "fetch" };
     if (r.status === "failed") return { phase: "error" };
@@ -1161,8 +1183,11 @@ function Inner() {
     // review (plan) run
     if (r.status === "waiting_approval") return { phase: "gate" };
     if (r.status === "succeeded") {
-      // Clean plan auto-continues to apply; a gate stops for explicit review.
-      return r.policyStatus === "pass" && !requiresDestructiveConfirmation(r)
+      // Clean plan auto-continues to apply; a gate (approval / destructive /
+      // blocked cost estimate) stops for explicit review.
+      return r.policyStatus === "pass" &&
+        !requiresDestructiveConfirmation(r) &&
+        !costBlocked()
         ? { phase: "progress", step: "deploy" }
         : { phase: "gate" };
     }
@@ -1424,7 +1449,7 @@ function Inner() {
     const st = installState();
     const name = appName();
     return (
-      <div class="av-install">
+      <div class="av-install" role="status" aria-live="polite">
         <Switch>
           <Match when={st.phase === "done"}>
             <div class="av-install-card av-install-done">
@@ -1490,7 +1515,12 @@ function Inner() {
               {/* One plain sentence with the next action — the summary layer
                   already classifies credits / account-access / known failure
                   codes. The console stays behind 詳細を見る. */}
-              <p>{summary()?.sub ?? summary()?.text ?? t("install.errorSub")}</p>
+              <p>
+                {deploy.error() ??
+                  summary()?.sub ??
+                  summary()?.text ??
+                  t("install.errorSub")}
+              </p>
               <div class="av-install-actions">
                 <button
                   type="button"
@@ -1641,7 +1671,11 @@ function Inner() {
                 <Card>
                   <Show when={summary()}>
                     {(s) => (
-                      <div class={`av-run-summary av-run-summary-${s().kind}`}>
+                      <div
+                        class={`av-run-summary av-run-summary-${s().kind}`}
+                        role="status"
+                        aria-live="polite"
+                      >
                         <Show when={s().kind === "progress"}>
                           <span class="av-run-spinner" aria-hidden="true" />
                         </Show>
@@ -1649,6 +1683,23 @@ function Inner() {
                           <p class="av-run-summary-line">{s().text}</p>
                           <Show when={s().sub}>
                             {(sub) => <p class="av-run-summary-sub">{sub()}</p>}
+                          </Show>
+                          {/* A connection problem gets a direct path to the
+                              connections screen — the hint alone strands the
+                              user on this page. */}
+                          <Show
+                            when={
+                              runAccessIssue() === "connection_setup" ||
+                              runAccessIssue() === "connection_verification"
+                            }
+                          >
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              href="/connections"
+                            >
+                              {t("run.connections.setupCta")}
+                            </Button>
                           </Show>
                         </div>
                       </div>
