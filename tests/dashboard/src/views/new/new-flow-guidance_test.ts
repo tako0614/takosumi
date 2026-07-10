@@ -272,9 +272,6 @@ describe("/new flow guidance", () => {
     );
     expect(newAppViewSource).toContain("storeMetadataFromStoreListing");
     expect(newAppViewSource).not.toContain(
-      "{ installExperience: listing.installExperience }",
-    );
-    expect(newAppViewSource).not.toContain(
       "const listing = activeStoreListing();\n    return listing ? storeMetadataFromStoreListing",
     );
   });
@@ -287,6 +284,10 @@ describe("/new flow guidance", () => {
     );
     expect(newAppViewSource).toContain(
       "name: nonEmptyStoreText(listing.name) ?? fallbackName",
+    );
+    expect(newAppViewSource).toContain("inputs: listing.inputs ?? []");
+    expect(newAppViewSource).toContain(
+      "{ installExperience: listing.installExperience }",
     );
     expect(newAppViewSource).toContain(
       "description: nonEmptyStoreText(listing.description) ?? fallbackName",

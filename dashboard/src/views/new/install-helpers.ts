@@ -725,7 +725,10 @@ function storeMetadataFromStoreListing(listing: TcsListing): StoreMetadata {
     name: nonEmptyStoreText(listing.name) ?? fallbackName,
     description: nonEmptyStoreText(listing.description) ?? fallbackName,
     ...(listing.iconUrl ? { iconUrl: listing.iconUrl } : {}),
-    inputs: [],
+    inputs: listing.inputs ?? [],
+    ...(listing.installExperience
+      ? { installExperience: listing.installExperience }
+      : {}),
   };
 }
 
