@@ -97,8 +97,13 @@ test("compatibility_check runs inside source.modulePath when provided", async ()
   const previousPath = Bun.env.PATH;
   try {
     await mkdir(moduleRoot, { recursive: true });
+    await mkdir(join(sourceRoot, ".well-known"), { recursive: true });
     await writeFile(join(sourceRoot, "root.tf"), "terraform {}\n");
     await writeFile(join(moduleRoot, "main.tf"), "terraform {}\n");
+    await writeFile(
+      join(sourceRoot, ".well-known", "tcs.json"),
+      '{"schemaVersion":"tcs.repo/v1","inputs":[]}\n',
+    );
     const tofuPath = join(fakeBin, "tofu");
     await writeFile(
       tofuPath,
@@ -159,6 +164,10 @@ esac
         text: 'provider "registry.opentofu.org/cloudflare/cloudflare" {}\n',
       },
       { path: "main.tf", text: "terraform {}\n" },
+      {
+        path: ".well-known/tcs.json",
+        text: '{"schemaVersion":"tcs.repo/v1","inputs":[]}\n',
+      },
     ]);
   } finally {
     if (previousPath === undefined) delete Bun.env.PATH;

@@ -224,10 +224,7 @@ export interface ControlPlaneOperations {
     listInstallConfigs(workspaceId?: string): Promise<readonly InstallConfig[]>;
     patchCapsuleStatus(id: string, status: Capsule["status"]): Promise<Capsule>;
     setCapsuleAutoUpdate(id: string, enabled: boolean): Promise<Capsule>;
-    abandonUnappliedCapsule?(
-      id: string,
-      reason: string,
-    ): Promise<Capsule>;
+    abandonUnappliedCapsule?(id: string, reason: string): Promise<Capsule>;
     putCapsuleProviderEnvBindingSet(
       profile: CapsuleProviderEnvBindingSet,
     ): Promise<CapsuleProviderEnvBindingSet>;
@@ -311,6 +308,10 @@ export interface ControlPlaneOperations {
     readonly path?: string;
   }): Promise<SourceSnapshot>;
   getSourceSnapshot(id: string): Promise<SourceSnapshot>;
+  readSourceSnapshotFiles(
+    id: string,
+    options?: { readonly modulePath?: string },
+  ): Promise<readonly { readonly path: string; readonly text: string }[]>;
   deployUpload(request: InternalDeployRequest): Promise<DeployResponse>;
   // --- Billing (§28) ---
   getWorkspaceBilling(workspaceId: string): Promise<{

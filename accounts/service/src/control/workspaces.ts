@@ -1254,12 +1254,25 @@ async function createCapsule(
       400,
     );
   }
-  const hydratedRepoConfig = await hydrateRepoOwnedStoreConfig({
+  const repoMetadataSnapshot = await latestSourceSnapshotForSource(
+    operations,
     source,
+  );
+  const hydratedRepoConfig = await hydrateRepoOwnedStoreConfig({
+    operations,
+    source,
+    sourceSnapshot: repoMetadataSnapshot,
     storeMetadata,
     outputAllowlist,
     modulePath,
   });
+  if (hydratedRepoConfig.metadataUnavailable) {
+    return errorJson(
+      "repo_metadata_unavailable",
+      "Repository install metadata could not be loaded. Retry after the Git Source has synced.",
+      409,
+    );
+  }
   const resolvedStoreMetadata = hydratedRepoConfig.storeMetadata;
   const resolvedOutputAllowlist = hydratedRepoConfig.outputAllowlist;
   const resolvedModulePath = hydratedRepoConfig.modulePath;
@@ -1330,7 +1343,9 @@ async function createCapsule(
 }
 
 interface RepoOwnedStoreHydrationInput {
+  readonly operations: ControlPlaneOperations;
   readonly source: Source;
+  readonly sourceSnapshot: SourceSnapshot | undefined;
   readonly storeMetadata: InstallConfig["store"] | undefined;
   readonly outputAllowlist: InstallConfig["outputAllowlist"] | undefined;
   readonly modulePath: string | undefined;
@@ -1340,6 +1355,7 @@ interface RepoOwnedStoreHydrationResult {
   readonly storeMetadata: InstallConfig["store"] | undefined;
   readonly outputAllowlist: InstallConfig["outputAllowlist"] | undefined;
   readonly modulePath: string | undefined;
+  readonly metadataUnavailable?: boolean;
 }
 
 async function hydrateRepoOwnedStoreConfig(
@@ -1356,15 +1372,21 @@ async function hydrateRepoOwnedStoreConfig(
       ...baseStore,
       inputs: [],
     }) ?? input.storeMetadata;
-  const metadata = await fetchRepoOwnedTcsMetadata({
-    git: input.source.url,
-    ref: sourceDefaultRef(input.source),
+  const inspectionModulePath =
+    input.modulePath ??
+    modulePathValue(input.storeMetadata.source?.path) ??
+    undefined;
+  const metadata = await readRepoOwnedTcsMetadata({
+    operations: input.operations,
+    sourceSnapshot: input.sourceSnapshot,
+    modulePath: inspectionModulePath,
   });
   if (!metadata) {
     return {
       storeMetadata: scrubbedStoreMetadata,
       outputAllowlist: undefined,
       modulePath: input.modulePath,
+      metadataUnavailable: true,
     };
   }
 
@@ -1397,62 +1419,42 @@ async function hydrateRepoOwnedStoreConfig(
   };
 }
 
-function sourceDefaultRef(source: Source): string {
-  return source.defaultRef?.trim() || "main";
-}
-
-async function fetchRepoOwnedTcsMetadata(input: {
-  readonly git: string;
-  readonly ref: string;
-}): Promise<Record<string, unknown> | undefined> {
-  const repo = githubRepoParts(input.git);
-  if (!repo) return undefined;
-  const ref = input.ref.trim() || "main";
+async function latestSourceSnapshotForSource(
+  operations: ControlPlaneOperations,
+  source: Source,
+): Promise<SourceSnapshot | undefined> {
   try {
-    const api = await fetch(
-      `https://api.github.com/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.repo)}/contents/.well-known%2Ftcs.json?ref=${encodeURIComponent(ref)}`,
-      { headers: { accept: "application/vnd.github+json" } },
-    );
-    if (api.status === 404) return undefined;
-    if (api.ok) {
-      const body = await api.json();
-      if (isPlainJsonObject(body) && typeof body.content === "string") {
-        const binary = atob(body.content.replace(/\s+/gu, ""));
-        const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
-        const metadata = repoMetadataRecord(
-          JSON.parse(new TextDecoder().decode(bytes)),
-        );
-        if (metadata) return metadata;
-      }
-    }
-
-    // The raw CDN can briefly serve stale branch content after a push, so it
-    // is a fallback for API rate limits/outages rather than the primary read.
-    const raw = await fetch(
-      `https://raw.githubusercontent.com/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.repo)}/${encodeURIComponent(ref)}/.well-known/tcs.json`,
-      { headers: { accept: "application/json" } },
-    );
-    if (raw.status === 404 || !raw.ok) return undefined;
-    return repoMetadataRecord(await raw.json());
+    const { snapshots } = await operations.listSourceSnapshots(source.id);
+    return [...snapshots]
+      .filter(
+        (snapshot): snapshot is SourceSnapshot =>
+          snapshot.origin === "git" &&
+          snapshot.sourceId === source.id &&
+          Boolean(snapshot.resolvedCommit.trim()),
+      )
+      .sort((left, right) => right.fetchedAt.localeCompare(left.fetchedAt))[0];
   } catch {
     return undefined;
   }
 }
 
-function githubRepoParts(
-  git: string,
-): { readonly owner: string; readonly repo: string } | undefined {
+async function readRepoOwnedTcsMetadata(input: {
+  readonly operations: ControlPlaneOperations;
+  readonly sourceSnapshot: SourceSnapshot | undefined;
+  readonly modulePath?: string;
+}): Promise<Record<string, unknown> | undefined> {
+  if (!input.sourceSnapshot) return undefined;
   try {
-    const url = new URL(git);
-    if (url.protocol !== "https:" || url.hostname !== "github.com") {
-      return undefined;
-    }
-    const parts = url.pathname
-      .replace(/\/+$/u, "")
-      .replace(/\.git$/iu, "")
-      .split("/")
-      .filter(Boolean);
-    return parts.length >= 2 ? { owner: parts[0], repo: parts[1] } : undefined;
+    const files = await input.operations.readSourceSnapshotFiles(
+      input.sourceSnapshot.id,
+      input.modulePath ? { modulePath: input.modulePath } : undefined,
+    );
+    const metadataFile = files.find(
+      (file) => file.path === ".well-known/tcs.json",
+    );
+    return metadataFile
+      ? repoMetadataRecord(JSON.parse(metadataFile.text))
+      : undefined;
   } catch {
     return undefined;
   }

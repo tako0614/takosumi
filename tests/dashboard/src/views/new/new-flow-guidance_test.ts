@@ -14,10 +14,7 @@ const newAppViewSource =
     "utf8",
   ) +
   readFileSync(
-    resolve(
-      here,
-      "../../../../../dashboard/src/views/new/install-helpers.ts",
-    ),
+    resolve(here, "../../../../../dashboard/src/views/new/install-helpers.ts"),
     "utf8",
   );
 const appViewsCssSource = readFileSync(
@@ -226,7 +223,7 @@ describe("/new flow guidance", () => {
       "(!field.required && (field.advanced === true || field.secret === true))",
     );
     expect(newAppViewSource).toContain(
-      '/^(internal error|invalid request|not found)$/iu',
+      "/^(internal error|invalid request|not found)$/iu",
     );
   });
 
@@ -254,7 +251,9 @@ describe("/new flow guidance", () => {
     // Presentation metadata comes from repo-owned metadata hydrated onto the
     // picked store listing, not a hardcoded local store.
     expect(newAppViewSource).toContain("selectedStoreListing()");
-    expect(newAppViewSource).toContain("hydrateTcsListingWithRepoMetadata");
+    expect(newAppViewSource).toContain(
+      "hydrateRequiredTcsListingWithRepoMetadata",
+    );
     expect(newAppViewSource).toContain("hydrateStoreListing");
     expect(newAppViewSource).not.toContain("localStoreListings");
     expect(newAppViewSource).toContain("sameGitUrl");
@@ -382,7 +381,9 @@ describe("/new flow guidance", () => {
     // loadRemoteOnMount={false} that would leave it dependent on a local list).
     expect(newAppViewSource).not.toContain("loadRemoteOnMount={false}");
     expect(newAppViewSource).toContain("selectedStoreListing");
-    expect(newAppViewSource).toContain("hydrateTcsListingWithRepoMetadata");
+    expect(newAppViewSource).toContain(
+      "hydrateRequiredTcsListingWithRepoMetadata",
+    );
   });
 
   test("/new uses active Capsule list reads instead of loading destroyed history", () => {
@@ -450,7 +451,9 @@ describe("/new flow guidance", () => {
   test("store handoffs use listing metadata and generic Capsule config only", () => {
     expect(newAppViewSource).not.toContain("STORE_VIEW");
     expect(newAppViewSource).not.toContain("const [templateConfigs]");
-    expect(newAppViewSource).toContain("const [installConfigs, { refetch: refetchInstallConfigs }]");
+    expect(newAppViewSource).toContain(
+      "const [installConfigs, { refetch: refetchInstallConfigs }]",
+    );
     expect(newAppViewSource).toContain("listInstallConfigsCached(id)");
     expect(newAppViewSource).toContain("const installConfigList");
     expect(newAppViewSource).toContain("installConfigList().find");

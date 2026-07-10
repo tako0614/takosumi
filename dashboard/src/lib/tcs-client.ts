@@ -613,6 +613,20 @@ export async function hydrateTcsListingWithRepoMetadata(
   );
 }
 
+/** Store installs require repository-owned presentation metadata. A thin Store
+ * listing is only a discovery pointer and must never silently become an empty
+ * install form when the repository metadata fetch fails. */
+export async function hydrateRequiredTcsListingWithRepoMetadata(
+  listing: TcsListing,
+  signal?: AbortSignal,
+): Promise<TcsListing> {
+  const metadata = await fetchTcsRepoMetadata(listing.source, signal);
+  if (!metadata) {
+    throw new Error("repository install metadata is unavailable");
+  }
+  return mergeTcsListingRepoMetadata(listing, metadata);
+}
+
 /** Normalized identity tuple used for cross-server de-duplication. */
 export function tcsListingIdentity(source: TcsListingSource): string {
   let host = "";

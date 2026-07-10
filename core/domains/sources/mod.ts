@@ -54,6 +54,7 @@ import { canonicalProviderAddress } from "@takosumi/providers";
 
 const DEFAULT_REF = "main";
 const DEFAULT_PATH = ".";
+const REPOSITORY_INSTALL_METADATA_PATH = ".well-known/tcs.json";
 const NORMALIZED_CAPSULE_ARTIFACT_BUCKET = "takos-artifacts";
 const SOURCE_SYNC_REQUEUE_STALE_MS = 10 * 60 * 1000;
 
@@ -521,7 +522,13 @@ export class SourcesService {
         snapshot,
         modulePath ? { modulePath } : undefined,
       );
-      return { analysis: await analyze(files) };
+      return {
+        analysis: await analyze(
+          files.filter(
+            (file) => file.path !== REPOSITORY_INSTALL_METADATA_PATH,
+          ),
+        ),
+      };
     } catch (error) {
       return {
         analysis: compatibilityCheckFailureAnalysis(snapshot, error),

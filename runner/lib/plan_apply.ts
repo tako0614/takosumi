@@ -586,7 +586,10 @@ export async function runCompatibilityCheck(
       timer,
     );
   }
-  const files = await readCapsuleCompatibilityFiles(moduleRoot);
+  const files = await readCapsuleCompatibilityFiles(
+    moduleRoot,
+    workspace.sourceRoot,
+  );
   const providerLockDigest = await digestFileIfExists(
     join(moduleRoot, ".terraform.lock.hcl"),
   );
@@ -612,8 +615,10 @@ export function compatibilityModulePath(request: unknown): string | undefined {
 
 export async function readCapsuleCompatibilityFiles(
   sourceRoot: string,
+  repositoryRoot = sourceRoot,
 ): Promise<readonly { readonly path: string; readonly text: string }[]> {
   const root = await realpath(sourceRoot);
+  const repository = await realpath(repositoryRoot);
   const out: { path: string; text: string }[] = [];
   let totalBytes = 0;
 
@@ -667,5 +672,50 @@ export async function readCapsuleCompatibilityFiles(
   }
 
   await walk("");
+
+  // Store listings are discovery pointers only. The repository-owned install
+  // presentation contract lives at this well-known path and must be read from
+  // the same immutable SourceSnapshot as the OpenTofu module. Keep it separate
+  // from executable authority: compatibility analysis ignores non-.tf files,
+  // while the control plane may consume this bounded JSON document to render
+  // generic setup inputs.
+  const metadataRelativePath = ".well-known/tcs.json";
+  const metadataPath = resolve(repository, metadataRelativePath);
+  try {
+    const resolvedMetadataPath = await realpath(metadataPath);
+    assertPathInsideRoot(
+      repository,
+      resolvedMetadataPath,
+      "repository install metadata",
+    );
+    const info = await stat(resolvedMetadataPath);
+    if (!info.isFile()) return out;
+    if (info.size > CAPSULE_COMPATIBILITY_MAX_FILE_BYTES) {
+      throw new Error(
+        `repository install metadata ${metadataRelativePath} exceeds ${CAPSULE_COMPATIBILITY_MAX_FILE_BYTES} bytes`,
+      );
+    }
+    if (out.length >= CAPSULE_COMPATIBILITY_MAX_FILES) {
+      throw new Error(
+        `compatibility source files exceed ${CAPSULE_COMPATIBILITY_MAX_FILES} files`,
+      );
+    }
+    totalBytes += info.size;
+    if (totalBytes > CAPSULE_COMPATIBILITY_MAX_TOTAL_BYTES) {
+      throw new Error(
+        `compatibility source files exceed ${CAPSULE_COMPATIBILITY_MAX_TOTAL_BYTES} bytes`,
+      );
+    }
+    out.push({
+      path: metadataRelativePath,
+      text: await readFile(resolvedMetadataPath, "utf8"),
+    });
+  } catch (error) {
+    const code =
+      typeof error === "object" && error !== null && "code" in error
+        ? String((error as { readonly code?: unknown }).code)
+        : "";
+    if (code !== "ENOENT") throw error;
+  }
   return out;
 }
