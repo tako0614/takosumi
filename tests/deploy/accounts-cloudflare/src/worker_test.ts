@@ -194,7 +194,53 @@ test("Cloudflare Accounts Worker handles account-plane routes directly", async (
     env,
   );
   assert.equal(unknown.status, 404);
-  assert.equal(d1.execCount, 2);
+  // The identity and control handlers share the same D1 binding but initialize
+  // independent route compositions once per isolate.
+  assert.equal(d1.execCount, 4);
+});
+
+test("OIDC and runtime-token routes do not initialize deploy control", async () => {
+  const d1 = new MemoryD1Database();
+  let deployControlBuilds = 0;
+  let controlPlaneBuilds = 0;
+  const worker = createCloudflareWorker({
+    deployControlOperations: async () => {
+      deployControlBuilds += 1;
+      return undefined;
+    },
+    controlPlaneOperations: async () => {
+      controlPlaneBuilds += 1;
+      return undefined;
+    },
+  });
+  const env = createEnv(d1);
+
+  const userInfo = await worker.fetch(
+    new Request("https://accounts.example/oauth/userinfo", {
+      headers: { authorization: "Bearer invalid" },
+    }),
+    env,
+  );
+  assert.equal(userInfo.status, 401);
+
+  const rotateToken = await worker.fetch(
+    new Request(
+      "https://accounts.example/v1/capsule-projections/inst_1/services/takosumi.ai.gateway/rotate-token",
+      { method: "POST" },
+    ),
+    env,
+  );
+  assert.equal(rotateToken.status, 401);
+  assert.equal(deployControlBuilds, 0);
+  assert.equal(controlPlaneBuilds, 0);
+
+  const controlRoute = await worker.fetch(
+    new Request("https://accounts.example/api/v1/not-real"),
+    env,
+  );
+  assert.equal(controlRoute.status, 401);
+  assert.equal(deployControlBuilds, 1);
+  assert.equal(controlPlaneBuilds, 1);
 });
 
 test("Cloudflare Accounts Worker parses env clients without a sidecar container", async () => {

@@ -212,6 +212,10 @@ export interface R2ObjectBody {
 }
 
 const handlers = new WeakMap<CloudflareWorkerEnv, Promise<AccountsHandler>>();
+const identityHandlers = new WeakMap<
+  CloudflareWorkerEnv,
+  Promise<AccountsHandler>
+>();
 const r2ExportDownloadPrefix = "/__takosumi/exports/";
 const defaultExportDownloadTtlMs = 24 * 60 * 60 * 1000;
 
@@ -285,7 +289,11 @@ export function createCloudflareWorker(
         });
       }
       try {
-        const handler = await cachedAccountsHandler(env, options);
+        const handler = await cachedAccountsHandler(
+          env,
+          options,
+          usesIdentityOnlyAccountsHandler(url.pathname),
+        );
         return await handler(request);
       } catch (error) {
         return Response.json(
@@ -384,13 +392,29 @@ function isOfficialTakosumiCloudIssuer(issuer: string): boolean {
 async function cachedAccountsHandler(
   env: CloudflareWorkerEnv,
   options: CreateCloudflareWorkerOptions,
+  identityOnly = false,
 ): Promise<AccountsHandler> {
-  let handler = handlers.get(env);
+  const cache = identityOnly ? identityHandlers : handlers;
+  let handler = cache.get(env);
   if (!handler) {
-    handler = buildAccountsHandler(env, options);
-    handlers.set(env, handler);
+    handler = buildAccountsHandler(env, options, identityOnly);
+    cache.set(env, handler);
   }
   return await handler;
+}
+
+function usesIdentityOnlyAccountsHandler(pathname: string): boolean {
+  if (
+    pathname === "/oauth" ||
+    pathname.startsWith("/oauth/") ||
+    pathname === "/.well-known" ||
+    pathname.startsWith("/.well-known/")
+  ) {
+    return true;
+  }
+  return /^\/v1\/capsule-projections\/[^/]+\/services\/[^/]+\/rotate-token\/?$/u.test(
+    pathname,
+  );
 }
 
 // D1 schema version expected by the deployed code. The baseline
@@ -407,6 +431,7 @@ const EXPECTED_D1_SCHEMA_VERSION = 0;
 async function buildAccountsHandler(
   env: CloudflareWorkerEnv,
   options: CreateCloudflareWorkerOptions,
+  identityOnly = false,
 ): Promise<AccountsHandler> {
   if (!env.TAKOSUMI_ACCOUNTS_DB) {
     throw new TypeError("TAKOSUMI_ACCOUNTS_DB D1 binding is required");
@@ -430,8 +455,12 @@ async function buildAccountsHandler(
   }
   const issuer = issuerEnv;
   const clients = parseClients(env);
-  const deployControlOperations = await options.deployControlOperations?.(env);
-  const controlPlaneOperations = await options.controlPlaneOperations?.(env);
+  const deployControlOperations = identityOnly
+    ? undefined
+    : await options.deployControlOperations?.(env);
+  const controlPlaneOperations = identityOnly
+    ? undefined
+    : await options.controlPlaneOperations?.(env);
   const commonOptions = {
     issuer,
     clients,
@@ -786,10 +815,9 @@ function parseRuntimeServiceTokens(
   env: CloudflareWorkerEnv,
   clients: readonly OidcClientRegistration[] | undefined,
 ): RuntimeServiceTokenOptions | undefined {
-  const enabled =
-    enabledEnvFlag(
-      env.TAKOSUMI_ACCOUNTS_CLIENT_RUNTIME_SERVICE_TOKEN_INTROSPECTION,
-    );
+  const enabled = enabledEnvFlag(
+    env.TAKOSUMI_ACCOUNTS_CLIENT_RUNTIME_SERVICE_TOKEN_INTROSPECTION,
+  );
   if (!enabled) return undefined;
   const clientId =
     optionalString(env.TAKOSUMI_ACCOUNTS_RUNTIME_SERVICE_TOKEN_CLIENT_ID) ??
