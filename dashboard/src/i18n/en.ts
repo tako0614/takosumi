@@ -465,7 +465,7 @@ export const en: Record<keyof typeof ja, string> = {
     "Takosumi could not prepare access to the connected account. Try again, or contact support if it continues.",
   "run.summary.blocked": "Blocked by policy.",
   "run.summary.driftDone": "Drift check complete.",
-  "run.summary.compatDone": "The pre-install check finished.",
+  "run.summary.compatDone": "The pre-add check finished.",
   "run.summary.compatRunning": "Checking the contents…",
   "run.summary.syncDone": "The contents were fetched.",
   "run.summary.syncRunning": "Fetching the contents…",

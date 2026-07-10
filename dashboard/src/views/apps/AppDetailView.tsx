@@ -1615,6 +1615,9 @@ function SettingsTab(props: {
                         </div>
                         <div class="wa-binding-controls">
                           <Select
+                            aria-label={`${boundProviderLabel(row())} ${t(
+                              "app.bindings.selectConnection",
+                            )}`}
                             value={row().connectionId}
                             onChange={(e) =>
                               update(index, {
