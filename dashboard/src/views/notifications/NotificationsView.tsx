@@ -7,6 +7,7 @@
  * recorded as public-safe Activity metadata (names, ids, counts, compact error
  * CODES) — no invented prices, formulas, or messages.
  */
+import "../../styles/wave-b.css";
 import "../../styles/wave-c.css";
 import { createMemo, createResource, For, Match, Show, Switch } from "solid-js";
 import { A } from "@solidjs/router";

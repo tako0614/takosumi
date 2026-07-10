@@ -65,7 +65,7 @@ const COPY: Record<Locale, Record<PageKey, PageCopy>> = {
   ja: {
     "terms-of-service": {
       title: "Takosumi Cloud 利用規約",
-      eyebrow: "Cloud service terms",
+      eyebrow: "利用規約",
       lead: "Takosumi Cloud は、公式にホストされた Takosumi for Operator です。Git と OpenTofu を使ったデプロイ、公式 managed targets、使用量、上限、請求機能を提供します。",
       updated: "最終更新: 2026-07-03",
       sections: [
@@ -114,7 +114,7 @@ const COPY: Record<Locale, Record<PageKey, PageCopy>> = {
     },
     "privacy-policy": {
       title: "Takosumi Cloud プライバシーポリシー",
-      eyebrow: "Privacy",
+      eyebrow: "プライバシー",
       lead: "Takosumi Cloud のアカウント、ワークスペース、デプロイ、請求、サポートに必要な情報の扱いを説明します。",
       updated: "最終更新: 2026-07-03",
       sections: [
@@ -151,7 +151,7 @@ const COPY: Record<Locale, Record<PageKey, PageCopy>> = {
     },
     "refund-policy": {
       title: "返金ポリシー",
-      eyebrow: "Refund policy",
+      eyebrow: "返金ポリシー",
       lead: "Takosumi Cloud はデジタルサービスです。完了した managed resource usage や開始済みのサービス期間は原則として返金対象外ですが、明確な請求エラーなどは確認します。",
       updated: "最終更新: 2026-07-03",
       sections: [
@@ -181,7 +181,7 @@ const COPY: Record<Locale, Record<PageKey, PageCopy>> = {
     },
     "cancellation-policy": {
       title: "キャンセルポリシー",
-      eyebrow: "Cancellation policy",
+      eyebrow: "キャンセルポリシー",
       lead: "月額プランや有料機能はいつでも停止できます。停止後は次回更新が止まり、支払い状態や利用上限により有料実行が実行前に止まります。",
       updated: "最終更新: 2026-07-03",
       sections: [
@@ -211,7 +211,7 @@ const COPY: Record<Locale, Record<PageKey, PageCopy>> = {
     },
     support: {
       title: "Takosumi Cloud サポート",
-      eyebrow: "Support",
+      eyebrow: "サポート",
       lead: "アカウント、ログイン、請求、デプロイ、Cloud リソース、使用量の問い合わせを受け付けます。",
       updated: "連絡先",
       sections: [

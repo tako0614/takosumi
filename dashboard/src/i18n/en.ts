@@ -48,7 +48,7 @@ export const en: Record<keyof typeof ja, string> = {
   "nav.runs": "Activity",
   "nav.connections": "Connected accounts",
   "nav.billing": "Billing",
-  "nav.activity": "Activity",
+  "nav.activity": "History",
   "nav.primary": "Primary",
   "nav.manage": "Manage",
   "nav.accountSection": "Account",

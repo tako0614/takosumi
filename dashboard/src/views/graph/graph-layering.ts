@@ -30,7 +30,9 @@ export function layerGraph(graph: WorkspaceGraph): LayeredGraph {
       nodeById.get(edge.producerCapsuleId)?.name ??
       edge.producerCapsuleId;
     const list = producersByConsumer.get(edge.consumerCapsuleId) ?? [];
-    list.push(producerName);
+    // Multiple output→input wirings between the same pair are one dependency in
+    // the caption — don't list the same producer name more than once.
+    if (!list.includes(producerName)) list.push(producerName);
     producersByConsumer.set(edge.consumerCapsuleId, list);
   }
 
