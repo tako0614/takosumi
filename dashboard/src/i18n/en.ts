@@ -127,7 +127,7 @@ export const en: Record<keyof typeof ja, string> = {
   "auth.signInCloud": "Takosumi Cloud",
   "auth.signInSubCloud": "Sign in with your Google account.",
   "auth.signInCloudPreview":
-    "Until GA, access is limited to invited Google accounts.",
+    "Only invited Google accounts can sign in for now.",
   "auth.continueWith": "Continue with {provider}",
   "auth.notConfigured": "Currently unavailable",
   "auth.providerChecking": "Checking availability",
@@ -657,7 +657,7 @@ export const en: Record<keyof typeof ja, string> = {
   "new.advanced.title": "Advanced settings",
   "new.env.title": "Environment variables",
   "new.env.body":
-    "Use this only for runtime environment variables the app can store in plain text. Pass private values through connected accounts or Secrets.",
+    "Use this only for runtime environment variables the app can store in plain text. Pass private values through connected accounts.",
   "new.env.name": "Variable name",
   "new.env.value": "Value",
   "new.env.add": "Add environment variable",
@@ -665,7 +665,7 @@ export const en: Record<keyof typeof ja, string> = {
   "new.env.errorNameRequired":
     "Enter an environment variable name or remove the empty row.",
   "new.env.errorUnsafeName":
-    "“{name}” cannot be passed as a plain environment variable. Use connected accounts or Secrets for private values.",
+    "“{name}” cannot be passed as a plain environment variable. Use connected accounts for private values.",
   "new.env.errorUnsafeValue":
     "The value for “{name}” is too long or contains an unsupported character.",
   "new.env.errorDuplicate":

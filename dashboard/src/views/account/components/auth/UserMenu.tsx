@@ -37,8 +37,15 @@ export default function UserMenu() {
       if (!containerRef) return;
       if (!containerRef.contains(e.target as Node)) setOpen(false);
     };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
     document.addEventListener("click", onDocClick);
-    onCleanup(() => document.removeEventListener("click", onDocClick));
+    document.addEventListener("keydown", onKeyDown);
+    onCleanup(() => {
+      document.removeEventListener("click", onDocClick);
+      document.removeEventListener("keydown", onKeyDown);
+    });
   });
 
   const initial = () => {
@@ -65,13 +72,14 @@ export default function UserMenu() {
         type="button"
         class="topbar-user"
         aria-label={t("shell.userMenu")}
+        aria-haspopup="true"
         aria-expanded={open()}
         onClick={() => setOpen(!open())}
       >
         <span class="topbar-avatar">{initial()}</span>
       </button>
       <Show when={open()}>
-        <div class="user-menu-pop" role="menu">
+        <div class="user-menu-pop" role="group" aria-label={t("shell.userMenu")}>
           <div class="user-menu-id">
             <div class="user-menu-name">{label()}</div>
             <Show when={session()?.email && session()?.displayName}>

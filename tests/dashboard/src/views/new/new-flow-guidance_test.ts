@@ -595,9 +595,12 @@ describe("/new flow guidance", () => {
     expect(en["new.env.title"]).toBe("Environment variables");
     expect(ja["new.env.title"]).toBe("環境変数");
     expect(en["new.env.body"].toLowerCase()).toContain("plain text");
-    expect(ja["new.env.body"]).toContain("秘密値");
-    expect(en["new.env.errorUnsafeName"]).toContain("Secrets");
-    expect(ja["new.env.errorUnsafeName"]).toContain("Secret");
+    expect(ja["new.env.body"]).toContain("秘密の値");
+    // No untranslated "Secret" noun on the consumer surface: route private
+    // values through connected accounts.
+    expect(en["new.env.errorUnsafeName"]).not.toContain("Secrets");
+    expect(ja["new.env.errorUnsafeName"]).not.toContain("Secret");
+    expect(ja["new.env.errorUnsafeName"]).toContain("接続済みアカウント");
   });
 
   test("keeps external connection UI hidden unless there is something to choose", () => {

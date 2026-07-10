@@ -17,7 +17,9 @@ function label(
 ): string {
   if (!status) return t("common.unknown");
   const key = map[status];
-  return key ? t(key) : status;
+  // An unmapped backend enum must read neutrally in a primary badge, not leak
+  // the raw snake_case token to the consumer.
+  return key ? t(key) : t("common.unknown");
 }
 
 /** Capsule lifecycle status: pending/active/stale/error/disabled/destroyed. */
