@@ -294,6 +294,7 @@ export const en: Record<keyof typeof ja, string> = {
   "app.outputs.activationFailed":
     "App activation failed. Check recent updates for details.",
   "app.outputs.empty": "Links appear after a deploy.",
+  "app.outputs.loadError": "The public links could not be loaded. Reopen this page shortly.",
   "app.outputs.none": "This service has no public link.",
   "app.outputs.valuesTitle": "Other values",
   "app.output.launchUrl": "Public address",
@@ -388,6 +389,8 @@ export const en: Record<keyof typeof ja, string> = {
   "app.settings.supportDetails": "Reference info",
   "app.usage.title": "Estimated cost (total)",
   "app.usage.body": "The sum of this app's recorded usage.",
+  "app.config.savedNeedsDeploy": "Saved. Deploy to apply the change.",
+  "app.config.deployChanges": "Deploy changes",
   "app.updateNow": "Update",
   "app.autoUpdate.title": "Automatic updates",
   "app.autoUpdate.body":
@@ -470,6 +473,7 @@ export const en: Record<keyof typeof ja, string> = {
     "This change replaces or deletes existing resources. Running it may lose data.",
   "run.destructiveConfirm": "Proceed, accepting the destructive changes",
   "run.stop": "Cancel",
+  "run.cancel": "Cancel this run",
   "run.cost.required": "Estimated cost: ~{n}",
   "run.cost.balance": "Available capacity: {n}",
   "run.cost.shortfall":

@@ -392,9 +392,16 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
               agg().status.every((st) => !st.ok)
             }
             fallback={
-              <p class="tcs-empty">
-                {agg().loading ? "…" : s("none", props.locale)}
-              </p>
+              <Show
+                when={agg().loading}
+                fallback={<p class="tcs-empty">{s("none", props.locale)}</p>}
+              >
+                <div class="tcs-grid" aria-hidden="true">
+                  <For each={[0, 1, 2, 3, 4, 5]}>
+                    {() => <div class="tcs-card tcs-card-skeleton" />}
+                  </For>
+                </div>
+              </Show>
             }
           >
             <div class="tcs-empty">
