@@ -1908,6 +1908,12 @@ function Inner() {
    * panels can explain it — otherwise continue straight through to create + plan.
    */
   const submitInstall = async () => {
+    // validate() exempts connection-scoped required inputs only when the
+    // workspace connections are loaded (storeScopeHintValue reads connections()).
+    // Auto-install fires before any user interaction loaded them, so ensure
+    // they're settled first — otherwise a valid one-tap install is wrongly
+    // blocked as "missing required input".
+    await loadConnections().catch(() => []);
     const validationError = validate();
     if (validationError) {
       setError(validationError);

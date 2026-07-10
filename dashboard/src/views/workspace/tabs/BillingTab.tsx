@@ -128,10 +128,11 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
   );
   const cloudSpendStatus = createMemo(() => {
     const currentMode = mode() ?? "disabled";
-    if (balanceAvailableUsdMicros(balance()) <= 0) {
+    // Only an enforcing mode actually blocks apply on a depleted balance;
+    // showback/disabled never gate, so "setup required" would be misleading.
+    if (currentMode === "enforce" && balanceAvailableUsdMicros(balance()) <= 0) {
       return t("billing.balance.actionRequired");
     }
-    if (currentMode === "disabled") return t("billing.balance.ready");
     return t("billing.balance.ready");
   });
 
@@ -414,14 +415,12 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
                 </Toast>
               )}
             </Match>
-            <Match when={stripeBilling.error}>
-              {(error) => (
-                <Toast tone="error">
-                  {t("billing.subscription.error", {
-                    message: errorMessage(error()),
-                  })}
-                </Toast>
-              )}
+            <Match when={stripeBilling.error && !currentSubscription()}>
+              <Toast tone="error">
+                {t("billing.subscription.error", {
+                  message: errorMessage(stripeBilling.error),
+                })}
+              </Toast>
             </Match>
             <Match when={currentSubscription()}>
               {(subscription) => (
