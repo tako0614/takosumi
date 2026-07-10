@@ -6,7 +6,8 @@
   --c-border: var(--tg-line, #d9dee7);
   --c-fg: var(--tg-fg, #111827);
   --c-muted: var(--tg-fg-muted, #667085);
-  --c-accent: var(--tg-accent, #5b8cff);
+  /* Filled buttons pair --c-accent with white text; use the AA emphasis fill. */
+  --c-accent: var(--tg-accent-emphasis, var(--tg-accent, #5b8cff));
   --c-accent2: var(--tg-info, #2563eb);
   --c-accent-fg: var(--tg-accent-fg, #ffffff);
   --c-official: #f4c152;
@@ -287,7 +288,8 @@
   margin-top: 20px;
 }
 .tcs-link {
-  color: var(--c-accent);
+  /* Text red, not the emphasis fill: keeps AA contrast on the dark ground. */
+  color: var(--tg-accent, var(--c-accent));
   text-decoration: none;
   font-size: 0.86rem;
 }

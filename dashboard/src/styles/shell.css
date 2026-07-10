@@ -359,7 +359,7 @@
   height: 16px;
   padding: 0 4px;
   border-radius: var(--tg-r-full);
-  background: var(--tg-danger);
+  background: var(--tg-danger-emphasis);
   color: var(--tg-danger-fg);
   font-size: 10px;
   font-weight: 700;
@@ -481,6 +481,8 @@
   font-size: var(--tg-fs-xs);
   color: var(--tg-fg-subtle);
   margin-right: auto;
+  flex: none;
+  white-space: nowrap;
 }
 .user-menu-lang-btn {
   border: 1px solid var(--tg-line);
@@ -491,6 +493,9 @@
   padding: 2px 8px;
   cursor: pointer;
   font-family: var(--tg-font-body);
+  /* Short CJK labels (ライト / ダーク) must not wrap into vertical strips. */
+  flex: none;
+  white-space: nowrap;
 }
 .user-menu-lang-btn.active {
   color: var(--tg-fg);
