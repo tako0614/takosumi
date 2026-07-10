@@ -366,6 +366,7 @@ export class SourcesService {
     request: CreateSourceCompatibilityCheckRequest = {},
   ): Promise<CapsuleCompatibilityReportResponse> {
     const stored = await this.#requireSource(sourceId);
+    const capsuleId = request.capsuleId ?? request.installationId;
     const snapshot = await this.#resolveCompatibilitySnapshot(
       sourceId,
       request.sourceSnapshotId,
@@ -375,13 +376,8 @@ export class SourcesService {
     // pre-install check against bounded policy/module-path hints; Store
     // listings themselves are discovery/presentation metadata, not execution
     // authority.
-    const context = request.installationId
-      ? {
-          policy: await this.#compatibilityPolicyForInstallation(
-            stored,
-            request.installationId,
-          ),
-        }
+    const context = capsuleId
+      ? await this.#compatibilityContextForInstallation(stored, capsuleId)
       : await this.#compatibilityContextForInstallConfig(
           stored.spaceId,
           request.installConfigId,
@@ -390,9 +386,7 @@ export class SourcesService {
       snapshot,
       spaceId: stored.spaceId,
       sourceId,
-      ...(request.installationId
-        ? { installationId: request.installationId }
-        : {}),
+      ...(capsuleId ? { installationId: capsuleId } : {}),
       ...((request.modulePath ?? context.modulePath)
         ? { modulePath: request.modulePath ?? context.modulePath }
         : {}),
@@ -627,7 +621,7 @@ export class SourcesService {
 
   /**
    * Capsule Gate policy for a no-Source snapshot. Same merge of Space
-   * policy + InstallConfig policy as {@link #compatibilityPolicyForInstallation}
+   * policy + InstallConfig policy as {@link #compatibilityContextForInstallation}
    * but without the Source-id match (upload/artifact installations have no
    * Source).
    */
@@ -656,11 +650,14 @@ export class SourcesService {
     return mergePolicyConfigs(space?.policy, config?.policy);
   }
 
-  async #compatibilityPolicyForInstallation(
+  async #compatibilityContextForInstallation(
     source: StoredSource,
     installationId: string | undefined,
-  ): Promise<PolicyConfig | undefined> {
-    if (!installationId) return undefined;
+  ): Promise<{
+    readonly policy?: PolicyConfig;
+    readonly modulePath?: string;
+  }> {
+    if (!installationId) return {};
     const installation = await this.#store.getInstallation(installationId);
     if (!installation) {
       throw new OpenTofuControllerError(
@@ -684,7 +681,10 @@ export class SourcesService {
       this.#store.getSpace(installation.spaceId),
       this.#store.getInstallConfig(installation.installConfigId),
     ]);
-    return mergePolicyConfigs(space?.policy, config?.policy);
+    return {
+      policy: mergePolicyConfigs(space?.policy, config?.policy),
+      ...(config?.modulePath ? { modulePath: config.modulePath } : {}),
+    };
   }
 
   /**
@@ -692,7 +692,7 @@ export class SourcesService {
    * carries a service-side `installConfigId` but no Capsule yet. The
    * InstallConfig's bounded policy is merged with
    * the Space policy as a ceiling, exactly as {@link
-   * #compatibilityPolicyForInstallation} does for an existing Installation. The
+   * #compatibilityContextForInstallation} does for an existing Installation. The
    * instance-wide default allowlist is never touched: the analyzer UNIONs this
    * bounded policy with the default, so the extra allowance is scoped to this
    * single vetted config and the SAME policy is enforced again at plan/apply.

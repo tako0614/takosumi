@@ -525,11 +525,14 @@ output "public_url" {
 });
 
 test("createCompatibilityCheck applies Installation policy to Gate severity", async () => {
+  const observedOptions: unknown[] = [];
   const { store, service } = makeService({
-    readCapsuleSourceFiles: async () => [
-      {
-        path: "main.tf",
-        text: `
+    readCapsuleSourceFiles: async (_snapshot, options) => {
+      observedOptions.push(options);
+      return [
+        {
+          path: "main.tf",
+          text: `
 terraform {
   required_providers {
     custom = {
@@ -554,8 +557,9 @@ output "public_url" {
   value = "https://example.com"
 }
 `,
-      },
-    ],
+        },
+      ];
+    },
   });
   await store.putSpace({
     id: "space_1",
@@ -589,6 +593,7 @@ output "public_url" {
     id: "cfg_policy",
     name: "policy",
     trustLevel: "space",
+    modulePath: "deploy/opentofu",
     normalization: {
       allowBackendRewrite: true,
       allowProviderLift: true,
@@ -621,9 +626,15 @@ output "public_url" {
 
   const { report } = await service.createCompatibilityCheck(source.id, {
     sourceSnapshotId: run.snapshotId,
-    installationId: "inst_policy",
+    capsuleId: "inst_policy",
   });
 
+  expect(observedOptions).toEqual([
+    {
+      modulePath: "deploy/opentofu",
+      runId: "ccr_test00000004",
+    },
+  ]);
   expect(report.level).toBe("ready");
   expect(report.findings).toEqual([]);
   expect(report.providers[0]).toMatchObject({ allowed: true });
