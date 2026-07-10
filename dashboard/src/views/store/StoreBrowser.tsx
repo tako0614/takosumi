@@ -59,7 +59,7 @@ const STR = {
   remove: { ja: "削除", en: "Remove" },
   unreachable: { ja: "接続不可", en: "unreachable" },
   alsoOn: { ja: "他にもあり", en: "also elsewhere" },
-  install: { ja: "入手", en: "Get" },
+  install: { ja: "追加", en: "Add" },
   close: { ja: "閉じる", en: "Close" },
   source: { ja: "取得元の詳細", en: "Source details" },
   technicalDetails: {

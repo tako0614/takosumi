@@ -102,7 +102,7 @@ import { StoreBrowser } from "../store/StoreBrowser.tsx";
 import { buildNewQuery } from "../store/store-link.ts";
 import {
   fetchTcsListing,
-  hydrateTcsListingWithRepoMetadata,
+  hydrateRequiredTcsListingWithRepoMetadata,
   type TcsListing,
 } from "../../lib/tcs-client.ts";
 import {
@@ -264,7 +264,7 @@ function Inner() {
   const initialSearch = typeof location === "undefined" ? "" : location.search;
   const appHandoff = appHandoffFromSearch(initialSearch);
   const initialTcsHandoff = parseInitialTcsHandoff(initialSearch);
-  // ストア[入手]: `?auto=1` asks this flow to start the single install action
+  // ストア[追加]: `?auto=1` asks this flow to start the single install action
   // itself once prerequisites settle (workspace, install config, store
   // hydration). Blockers still stop it — auto never bypasses a review.
   const autoInstallRequested =
@@ -288,6 +288,8 @@ function Inner() {
   );
   const [selectedStoreListing, setSelectedStoreListing] =
     createSignal<TcsListing | null>(null);
+  const [storeMetadataUnavailable, setStoreMetadataUnavailable] =
+    createSignal(false);
   const [storeInputValues, setStoreInputValues] = createSignal<
     Readonly<Record<string, string>>
   >({});
@@ -645,6 +647,7 @@ function Inner() {
   };
   const clearSelectedStoreEntry = () => {
     const hadStoreListing = Boolean(selectedStoreListing());
+    setStoreMetadataUnavailable(false);
     if (!hadStoreListing) return;
     setSelectedStoreListing(null);
     setStoreInputValues({});
@@ -735,6 +738,7 @@ function Inner() {
     }
     if (installConfigLoading()) return t("new.error.configLoading");
     if (!selectedInstallConfigId()) return t("new.error.configMissing");
+    if (storeMetadataUnavailable()) return t("new.error.configLoadFailed");
     const sourceCredentialError = sourceAccessError();
     if (sourceCredentialError) return sourceCredentialError;
     const storeError = storeInputError();
@@ -978,6 +982,15 @@ function Inner() {
     const publicSubdomainVariable = standardPublicSubdomainVariable();
     if (publicSubdomainVariable) {
       setDefault(publicSubdomainVariable, serviceName);
+    }
+    const managedHost = managedHostPreview();
+    const publicUrlVariable = standardPublicUrlVariable();
+    if (managedHost && publicUrlVariable) {
+      setDefault(publicUrlVariable, `https://${managedHost}`);
+    }
+    const routePatternVariable = standardRoutePatternVariable();
+    if (managedHost && routePatternVariable) {
+      setDefault(routePatternVariable, `${managedHost}/*`);
     }
     return defaults;
   };
@@ -1715,16 +1728,24 @@ function Inner() {
     listing: TcsListing,
     signal?: AbortSignal,
   ): Promise<TcsListing> => {
-    try {
-      return await hydrateTcsListingWithRepoMetadata(listing, signal);
-    } catch {
-      return listing;
-    }
+    const hydrated = await hydrateRequiredTcsListingWithRepoMetadata(
+      listing,
+      signal,
+    );
+    setStoreMetadataUnavailable(false);
+    return hydrated;
   };
 
   const pickStoreListing = (listing: TcsListing) => {
     void (async () => {
-      const hydratedListing = await hydrateStoreListing(listing);
+      let hydratedListing: TcsListing;
+      try {
+        hydratedListing = await hydrateStoreListing(listing);
+      } catch {
+        setStoreMetadataUnavailable(true);
+        setError(t("new.error.configLoadFailed"));
+        return;
+      }
       void loadConnections();
       const prefill = parseInstallPrefill(`?${buildNewQuery(hydratedListing)}`);
       if (prefill) {
@@ -1795,8 +1816,8 @@ function Inner() {
         setActiveTab("store");
         void loadConnections();
       } catch {
-        // The Git/ref/path query remains enough to install as a plain Capsule;
-        // a failed store rehydrate must not block direct install links.
+        setStoreMetadataUnavailable(true);
+        setError(t("new.error.configLoadFailed"));
       } finally {
         setTcsHandoffSettled(true);
       }
@@ -1871,7 +1892,7 @@ function Inner() {
     await runFlow();
   };
 
-  // ストア[入手] auto-start: fire the single install action once, as soon as
+  // ストア[追加] auto-start: fire the single install action once, as soon as
   // the workspace / install config / store hydration settle. Validation errors
   // and blockers fall back to the visible form — auto never skips a review.
   let autoInstallAttempted = false;
