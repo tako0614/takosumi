@@ -59,7 +59,10 @@ function NodeBox(props: {
 
 function Inner() {
   const workspaceId = () => (currentWorkspaceId() ? currentWorkspaceId() : null);
-  const [graph] = createResource(workspaceId, getWorkspaceGraph);
+  const [graph, { refetch: refetchGraph }] = createResource(
+    workspaceId,
+    getWorkspaceGraph,
+  );
   const layered = createMemo(() => {
     const g = graph();
     return g ? layerGraph(g) : undefined;
@@ -98,6 +101,16 @@ function Inner() {
               message={t("common.fetchFailed", {
                 message: (graph.error as ControlApiError).message,
               })}
+              action={
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  type="button"
+                  onClick={() => void refetchGraph()}
+                >
+                  {t("common.retry")}
+                </Button>
+              }
             />
           </Match>
           <Match when={layered()}>

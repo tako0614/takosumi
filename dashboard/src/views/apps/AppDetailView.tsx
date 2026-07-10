@@ -508,10 +508,18 @@ function Inner() {
                       capsuleId={capsuleId()}
                       dangerHref={`/services/${encodeURIComponent(capsuleId())}/danger`}
                       deploysHref={`/services/${encodeURIComponent(capsuleId())}/deploys`}
-                      onSaved={() =>
+                      onSaved={(scope) =>
+                        // Refetch ONLY the saved form's resource (+capsule for
+                        // display). Refetching the sibling's resource would flip
+                        // its reference and re-seed its editor, discarding the
+                        // user's unsaved edits there.
                         void Promise.all([
-                          refetchProfile(),
-                          refetchInstallConfig(),
+                          scope === "profile"
+                            ? refetchProfile()
+                            : Promise.resolve(),
+                          scope === "config"
+                            ? refetchInstallConfig()
+                            : Promise.resolve(),
                           refetchCapsule(),
                         ])
                       }
@@ -1382,7 +1390,7 @@ function SettingsTab(props: {
   readonly capsuleId: string;
   readonly dangerHref: string;
   readonly deploysHref: string;
-  readonly onSaved: () => void | Promise<void>;
+  readonly onSaved: (scope: "profile" | "config") => void | Promise<void>;
 }) {
   const [rows, setRows] = createSignal<CapsuleProviderConnectionRow[]>([]);
   const [variableRows, setVariableRows] = createSignal<ConfigVariableRow[]>([]);
@@ -1457,7 +1465,7 @@ function SettingsTab(props: {
       props.capsuleId,
       providerConnections.connections,
     );
-    await props.onSaved();
+    await props.onSaved("profile");
     setSavedKind("profile");
   });
   const saveVariables = createAction(async () => {
@@ -1472,7 +1480,7 @@ function SettingsTab(props: {
       return;
     }
     await patchInstallConfig(props.installConfig.id, patch);
-    await props.onSaved();
+    await props.onSaved("config");
     setSavedKind("config");
   });
 

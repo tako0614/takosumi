@@ -43,6 +43,7 @@ export const en: Record<keyof typeof ja, string> = {
   "nav.graph": "Dependencies",
   "store.title": "Store",
   "store.subtitle": "Find apps and services to add from the store.",
+  "store.manualEntry": "Not here? Add from a Git URL / custom source",
   "store.noWorkspace": "Select a workspace first.",
   "nav.cloudResources": "Cloud",
   "nav.runs": "Activity",

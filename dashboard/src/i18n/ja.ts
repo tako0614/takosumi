@@ -46,6 +46,7 @@ export const ja = {
   "nav.graph": "依存関係",
   "store.title": "ストア",
   "store.subtitle": "ストアから追加できるアプリやサービスを探します。",
+  "store.manualEntry": "お探しのものがない？ Git URL / カスタムソースから追加",
   "store.noWorkspace": "先にワークスペースを選択してください。",
   "nav.cloudResources": "クラウド",
   "nav.runs": "アクティビティ",
