@@ -1409,25 +1409,31 @@ async function fetchRepoOwnedTcsMetadata(input: {
   if (!repo) return undefined;
   const ref = input.ref.trim() || "main";
   try {
-    const raw = await fetch(
-      `https://raw.githubusercontent.com/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.repo)}/${encodeURIComponent(ref)}/.well-known/tcs.json`,
-      { headers: { accept: "application/json" } },
-    );
-    if (raw.status === 404) return undefined;
-    if (raw.ok) return repoMetadataRecord(await raw.json());
-
     const api = await fetch(
       `https://api.github.com/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.repo)}/contents/.well-known%2Ftcs.json?ref=${encodeURIComponent(ref)}`,
       { headers: { accept: "application/vnd.github+json" } },
     );
-    if (api.status === 404 || !api.ok) return undefined;
-    const body = await api.json();
-    if (!isPlainJsonObject(body) || typeof body.content !== "string") {
-      return undefined;
+    if (api.status === 404) return undefined;
+    if (api.ok) {
+      const body = await api.json();
+      if (isPlainJsonObject(body) && typeof body.content === "string") {
+        const binary = atob(body.content.replace(/\s+/gu, ""));
+        const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+        const metadata = repoMetadataRecord(
+          JSON.parse(new TextDecoder().decode(bytes)),
+        );
+        if (metadata) return metadata;
+      }
     }
-    const binary = atob(body.content.replace(/\s+/gu, ""));
-    const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
-    return repoMetadataRecord(JSON.parse(new TextDecoder().decode(bytes)));
+
+    // The raw CDN can briefly serve stale branch content after a push, so it
+    // is a fallback for API rate limits/outages rather than the primary read.
+    const raw = await fetch(
+      `https://raw.githubusercontent.com/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.repo)}/${encodeURIComponent(ref)}/.well-known/tcs.json`,
+      { headers: { accept: "application/json" } },
+    );
+    if (raw.status === 404 || !raw.ok) return undefined;
+    return repoMetadataRecord(await raw.json());
   } catch {
     return undefined;
   }
