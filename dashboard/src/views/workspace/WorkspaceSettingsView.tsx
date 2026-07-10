@@ -122,7 +122,7 @@ function Inner(props: {
         subtitle={pageSubtitle(props.standaloneTab)}
       />
       <Show when={!props.standaloneTab}>
-        <Tabs items={tabItems()} aria-label="Workspace settings sections" />
+        <Tabs items={tabItems()} aria-label={t("workspaceSettings.tabsLabel")} />
       </Show>
 
       <Show
