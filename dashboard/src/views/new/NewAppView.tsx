@@ -2912,7 +2912,7 @@ function Inner() {
                                     value: e.currentTarget.value,
                                   })
                                 }
-                                placeholder="value"
+                                placeholder={t("new.env.valuePlaceholder")}
                                 autocomplete="off"
                                 spellcheck={false}
                               />
@@ -2967,7 +2967,7 @@ function Inner() {
                                     name: e.currentTarget.value,
                                   })
                                 }
-                                placeholder="setting"
+                                placeholder={t("new.vars.namePlaceholder")}
                                 autocomplete="off"
                                 spellcheck={false}
                               />
@@ -2983,7 +2983,7 @@ function Inner() {
                                     value: e.currentTarget.value,
                                   })
                                 }
-                                placeholder="value"
+                                placeholder={t("new.vars.valuePlaceholder")}
                                 autocomplete="off"
                                 spellcheck={false}
                               />
