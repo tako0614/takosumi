@@ -35,6 +35,8 @@ export const ja = {
   "common.hoursAgo": "{n}時間前",
   "common.daysAgo": "{n}日前",
   "common.empty": "データがありません",
+  "common.loadMore": "さらに読み込む",
+  "common.showingRecent": "直近 {n} 件を表示しています",
 
   // --- nav / shell ----------------------------------------------------------
   "nav.home": "ホーム",
@@ -222,6 +224,10 @@ export const ja = {
   "op.compatibility_check": "追加前の確認",
   "op.backup": "バックアップ",
   "op.restore": "復元",
+  // Internal plan-operation nouns recorded on Activity metadata
+  // (create/update/destroy) — mapped so feeds never fall back to 操作.
+  "op.create": "追加",
+  "op.update": "変更",
   "op.generic": "操作",
 
   // --- Service list (home) --------------------------------------------------
@@ -431,6 +437,9 @@ export const ja = {
   "run.title.destroy": "削除",
   "run.title.other": "実行",
   "run.notFoundTitle": "この実行は見つかりませんでした",
+  "run.notFoundMessage":
+    "この実行は削除されたか、URL が正しくない可能性があります。",
+  "run.loadFailedTitle": "実行を読み込めませんでした",
   "run.summary.planning": "変更内容を確認しています…",
   "run.summary.queued": "実行を待っています…",
   "run.summary.waitingApproval":
@@ -506,6 +515,11 @@ export const ja = {
   "run.destructiveConfirm": "破壊的な変更を承知のうえで実行",
   "run.stop": "やめる",
   "run.cancel": "この実行をキャンセル",
+  "run.cancelConfirm.title": "実行をキャンセルしますか？",
+  "run.cancelConfirm.message": "「{name}」の{operation}を途中で終了します。",
+  "run.cancelConfirm.messageGeneric": "この{operation}を途中で終了します。",
+  "run.cancelConfirm.cta": "実行をキャンセル",
+  "run.cancelConfirm.keep": "実行を続ける",
   "run.cost.required": "見積もり金額: 約 {n}",
   "run.cost.balance": "利用可能枠: {n}",
   "run.cost.shortfall":
@@ -1128,18 +1142,26 @@ export const ja = {
   "notif.event.installCreated": "サービス「{name}」を追加しました",
   "notif.event.installCreatedEnv": "環境: {env}",
   "notif.event.planReady": "{operation}の準備ができました",
+  "notif.event.planReadyNamed": "「{name}」の{operation}の準備ができました",
   "notif.event.planReadyDetail": "内容を確認して承認できます",
   "notif.event.planBlockedDetail": "ポリシーにより承認が止まっています",
   "notif.event.approved": "{operation}を承認しました",
+  "notif.event.approvedNamed": "「{name}」の{operation}を承認しました",
   "notif.event.applied": "サービスの変更をデプロイしました",
+  "notif.event.appliedNamed": "「{name}」の変更をデプロイしました",
   "notif.event.appliedDetail": "公開値 {n} 件を更新",
   "notif.event.destroyed": "サービスを削除しました",
+  "notif.event.destroyedNamed": "「{name}」を削除しました",
   "notif.event.failed": "{operation}に失敗しました",
+  "notif.event.failedNamed": "「{name}」の{operation}に失敗しました",
   "notif.event.failedDetail": "エラー: {code}",
   "notif.event.failedHint": "詳細は実行ログを確認してください",
   "notif.event.drift": "サービスの実状態が保存済みの記録とズレています",
+  "notif.event.driftNamed": "「{name}」の実状態が保存済みの記録とズレています",
   "notif.event.driftDetail": "実際の状態が設定とずれている可能性があります",
   "notif.event.stale": "依存先が更新されたため、このサービスに更新があります",
+  "notif.event.staleNamed":
+    "依存先が更新されたため、「{name}」に更新があります",
   "notif.event.staleDetail": "更新元: {producer}",
   "notif.event.connCreated": "接続済みアカウント「{provider}」を追加しました",
   "notif.event.connCreatedGeneric": "接続済みアカウントを追加しました",
@@ -1156,6 +1178,8 @@ export const ja = {
   "notif.event.autoUpdateOn": "自動更新をオンにしました",
   "notif.event.autoUpdateOff": "自動更新をオフにしました",
   "notif.event.autoUpdateFailed": "自動更新を完了できませんでした",
+  "notif.event.autoUpdateFailedNamed":
+    "「{name}」の自動更新を完了できませんでした",
   "notif.event.autoUpdateFailedDetail":
     "サービス画面から更新内容を確認してください",
   "notif.event.recorded": "記録された操作",

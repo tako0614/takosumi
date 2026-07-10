@@ -9,20 +9,18 @@
  */
 import "../../styles/wave-b.css";
 import "../../styles/wave-c.css";
-import { createMemo, createResource, For, Match, Show, Switch } from "solid-js";
+import { createResource, For, Match, Show, Switch } from "solid-js";
 import { A } from "@solidjs/router";
 import { AlertTriangle, Bell } from "lucide-solid";
 import Page from "../account/components/auth/Page.tsx";
+import type { ActivityEvent, ControlApiError } from "../../lib/control-api.ts";
 import {
-  type ActivityEvent,
-  type ControlApiError,
-  listWorkspaces,
-} from "../../lib/control-api.ts";
-import {
+  attentionCount,
   type FeedEntry,
   isFailureAction,
-  loadNotificationFeed,
+  refreshNotificationFeed,
 } from "../../lib/notifications.ts";
+import { listCapsulesCached } from "../../lib/capsule-list.ts";
 import { runFailureHint } from "../../lib/run-errors.ts";
 import { operationLabel } from "../../lib/labels.ts";
 import { relativeTime, t } from "../../i18n/index.ts";
@@ -53,12 +51,19 @@ function metaNumber(
 /**
  * One plain-language sentence per event, from recorded metadata only. Unknown
  * actions use neutral copy; raw backend verbs stay in the activity debug layer.
+ * `serviceName` (resolved from the recorded Capsule id — still backend data,
+ * never invented) upgrades run/service lines to their named variants so the
+ * reader knows WHICH service each line is about.
  */
-function describeEvent(event: ActivityEvent): {
+function describeEvent(
+  event: ActivityEvent,
+  serviceName?: string,
+): {
   readonly title: string;
   readonly detail?: string;
 } {
   const m = event.metadata ?? {};
+  const name = serviceName;
   switch (event.action) {
     case "installation.created":
     case "capsule.created": {
@@ -78,15 +83,18 @@ function describeEvent(event: ActivityEvent): {
     case "installation.auto_update_failed":
     case "installation.auto_update_apply_failed": {
       return {
-        title: t("notif.event.autoUpdateFailed"),
+        title: name
+          ? t("notif.event.autoUpdateFailedNamed", { name })
+          : t("notif.event.autoUpdateFailed"),
         detail: t("notif.event.autoUpdateFailedDetail"),
       };
     }
     case "run.plan_created": {
+      const operation = operationLabel(metaString(m, "operation"));
       return {
-        title: t("notif.event.planReady", {
-          operation: operationLabel(metaString(m, "operation")),
-        }),
+        title: name
+          ? t("notif.event.planReadyNamed", { name, operation })
+          : t("notif.event.planReady", { operation }),
         detail:
           metaString(m, "policyStatus") === "blocked"
             ? t("notif.event.planBlockedDetail")
@@ -94,16 +102,19 @@ function describeEvent(event: ActivityEvent): {
       };
     }
     case "run.approved": {
+      const operation = operationLabel(metaString(m, "operation"));
       return {
-        title: t("notif.event.approved", {
-          operation: operationLabel(metaString(m, "operation")),
-        }),
+        title: name
+          ? t("notif.event.approvedNamed", { name, operation })
+          : t("notif.event.approved", { operation }),
       };
     }
     case "run.applied": {
       const outputs = metaNumber(m, "outputCount");
       return {
-        title: t("notif.event.applied"),
+        title: name
+          ? t("notif.event.appliedNamed", { name })
+          : t("notif.event.applied"),
         detail:
           outputs !== undefined
             ? t("notif.event.appliedDetail", { n: outputs })
@@ -111,13 +122,18 @@ function describeEvent(event: ActivityEvent): {
       };
     }
     case "run.destroyed": {
-      return { title: t("notif.event.destroyed") };
+      return {
+        title: name
+          ? t("notif.event.destroyedNamed", { name })
+          : t("notif.event.destroyed"),
+      };
     }
     case "run.failed": {
+      const operation = operationLabel(metaString(m, "phase"));
       return {
-        title: t("notif.event.failed", {
-          operation: operationLabel(metaString(m, "phase")),
-        }),
+        title: name
+          ? t("notif.event.failedNamed", { name, operation })
+          : t("notif.event.failed", { operation }),
         // Friendly sentence, never the raw snake_case token (that stays in
         // the run screen's folded expert details).
         detail: runFailureHint(metaString(m, "errorCode")),
@@ -125,14 +141,18 @@ function describeEvent(event: ActivityEvent): {
     }
     case "installation.drift_detected": {
       return {
-        title: t("notif.event.drift"),
+        title: name
+          ? t("notif.event.driftNamed", { name })
+          : t("notif.event.drift"),
         detail: t("notif.event.driftDetail"),
       };
     }
     case "installation.stale": {
       const producer = metaString(m, "producerInstallationName");
       return {
-        title: t("notif.event.stale"),
+        title: name
+          ? t("notif.event.staleNamed", { name })
+          : t("notif.event.stale"),
         detail: producer
           ? t("notif.event.staleDetail", { producer })
           : undefined,
@@ -195,9 +215,52 @@ function eventHref(event: ActivityEvent): string | undefined {
   return undefined;
 }
 
-function NotificationRow(props: { entry: FeedEntry }) {
+/** Capsule id an event is about: run events record it as metadata
+ * (installationId / capsuleId); service events carry it as the target. */
+function eventCapsuleId(event: ActivityEvent): string | undefined {
+  const m = event.metadata ?? {};
+  const fromMeta =
+    metaString(m, "installationId") ?? metaString(m, "capsuleId");
+  if (fromMeta) return fromMeta;
+  if (event.targetType === "installation" || event.targetType === "capsule") {
+    return event.targetId;
+  }
+  return undefined;
+}
+
+/** workspaceId → (capsuleId → name), resolved best-effort per feed load. */
+type CapsuleNameIndex = ReadonlyMap<string, ReadonlyMap<string, string>>;
+
+async function loadCapsuleNameIndex(
+  entries: readonly FeedEntry[],
+): Promise<CapsuleNameIndex> {
+  const workspaceIds = [
+    ...new Set(entries.map((entry) => entry.event.workspaceId)),
+  ];
+  const results = await Promise.allSettled(
+    workspaceIds.map(
+      async (id) =>
+        [id, await listCapsulesCached(id, { includeDestroyed: true })] as const,
+    ),
+  );
+  const index = new Map<string, ReadonlyMap<string, string>>();
+  for (const result of results) {
+    if (result.status !== "fulfilled") continue;
+    const [id, capsules] = result.value;
+    index.set(
+      id,
+      new Map(capsules.map((capsule) => [capsule.id, capsule.name])),
+    );
+  }
+  return index;
+}
+
+function NotificationRow(props: {
+  entry: FeedEntry;
+  serviceName?: string | undefined;
+}) {
   const failure = () => isFailureAction(props.entry.event.action);
-  const description = () => describeEvent(props.entry.event);
+  const description = () => describeEvent(props.entry.event, props.serviceName);
   const href = () => eventHref(props.entry.event);
   return (
     <li class={`wc-notif-row${failure() ? " wc-notif-row-failure" : ""}`}>
@@ -236,19 +299,26 @@ export default function NotificationsView() {
   return (
     <Page title={t("notif.title")}>
       {() => {
-        const [workspaces] = createResource(listWorkspaces);
-        const [feed] = createResource(
-          () => workspaces(),
-          (list) => loadNotificationFeed(list),
+        // Same feed snapshot the TopBar badge reads (force = the page always
+        // shows fresh events); the 要対応 banner below counts through the
+        // SAME attentionCount derivation, so the two can never disagree.
+        const [feed] = createResource(() =>
+          refreshNotificationFeed({ force: true }),
         );
-        const loading = () => workspaces.loading || feed.loading;
-        const error = createMemo(
-          () =>
-            (workspaces.error as ControlApiError | undefined) ??
-            (feed.error as ControlApiError | undefined),
+        // Service names for the recorded Capsule ids — best-effort, cached;
+        // lines render unnamed until (unless) the lookup resolves.
+        const [capsuleNames] = createResource(
+          () => (feed.error ? undefined : feed()),
+          (entries) => loadCapsuleNameIndex(entries),
         );
-        const failureCount = () =>
-          (feed() ?? []).filter((e) => isFailureAction(e.event.action)).length;
+        const serviceNameFor = (event: ActivityEvent): string | undefined => {
+          const capsuleId = eventCapsuleId(event);
+          if (!capsuleId) return undefined;
+          return capsuleNames()?.get(event.workspaceId)?.get(capsuleId);
+        };
+        const loading = () => feed.loading;
+        const error = () => feed.error as ControlApiError | undefined;
+        const failureCount = () => attentionCount(feed());
 
         return (
           <>
@@ -287,7 +357,12 @@ export default function NotificationsView() {
                       </Show>
                       <ul class="wc-notif-list">
                         <For each={list()}>
-                          {(entry) => <NotificationRow entry={entry} />}
+                          {(entry) => (
+                            <NotificationRow
+                              entry={entry}
+                              serviceName={serviceNameFor(entry.event)}
+                            />
+                          )}
                         </For>
                       </ul>
                       <details class="wb-disclosure wc-notif-support">

@@ -33,4 +33,24 @@ describe("RunGroupView", () => {
     expect(ja["runGroup.approveAll"]).not.toContain("実行");
     expect(ja["runGroup.members"]).not.toContain("実行");
   });
+
+  test("keeps a running grouped update live: poll while non-terminal + manual refresh", () => {
+    // A grouped update executes over minutes; a single static createResource
+    // read would never show members progressing. Mirror RunView's fallback
+    // poll: ~5s while any member run is non-terminal, visibility-aware.
+    expect(source).toContain("RUN_GROUP_POLL_MS");
+    expect(source).toContain("isTerminalRunStatus");
+    expect(source).toContain("anyMemberActive");
+    expect(source).toContain("visibilitychange");
+    expect(source).toContain(
+      "setTimeout(() => void refetch(), RUN_GROUP_POLL_MS)",
+    );
+    // Manual refresh affordance in the header.
+    expect(source).toContain('t("common.refresh")');
+    expect(source).toContain("onClick={() => void refetch()}");
+    // Poll re-render must not flash the skeleton over live rows.
+    expect(source).toContain(
+      "<Match when={group.loading && !group.error && !group.latest}>",
+    );
+  });
 });

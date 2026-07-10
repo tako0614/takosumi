@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { setLocale, t } from "../../../../dashboard/src/i18n/index.ts";
 import {
+  operationLabel,
   providerConnectionStatusLabel,
   providerConnectionTone,
 } from "../../../../dashboard/src/lib/labels.ts";
@@ -43,5 +44,27 @@ describe("provider connection labels", () => {
       t("status.providerConnection.needs_setup"),
     );
     expect(providerConnectionTone("needs_setup")).toBe("warn");
+  });
+});
+
+describe("run operation labels", () => {
+  test("maps internal Activity operations (create/update/destroy) — never 操作", () => {
+    setLocale("ja");
+    // Activity metadata records the INTERNAL plan operation, not the §19
+    // RunType; feeds interpolate it into 「{operation}の準備ができました」etc.
+    expect(operationLabel("create")).toBe(t("op.create"));
+    expect(operationLabel("update")).toBe(t("op.update"));
+    expect(operationLabel("destroy")).toBe(t("op.destroy_apply"));
+    expect(operationLabel("create")).not.toBe(t("op.generic"));
+    expect(operationLabel("update")).not.toBe(t("op.generic"));
+    expect(operationLabel("destroy")).not.toBe(t("op.generic"));
+    // §19 run types stay mapped.
+    expect(operationLabel("plan")).toBe(t("op.plan"));
+    expect(operationLabel("compatibility_check")).toBe(
+      t("op.compatibility_check"),
+    );
+    expect(operationLabel("source_sync")).toBe(t("op.source_sync"));
+    // Unknown tokens still degrade to the neutral noun, not raw snake_case.
+    expect(operationLabel("mystery_op")).toBe(t("op.generic"));
   });
 });

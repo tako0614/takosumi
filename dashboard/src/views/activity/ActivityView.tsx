@@ -5,7 +5,16 @@
  */
 import "../../styles/wave-a.css";
 import "../../styles/wave-b.css";
-import { createResource, For, Match, Show, Switch } from "solid-js";
+import {
+  createEffect,
+  createResource,
+  createSignal,
+  For,
+  Match,
+  on,
+  Show,
+  Switch,
+} from "solid-js";
 import { ScrollText } from "lucide-solid";
 import Page from "../account/components/auth/Page.tsx";
 import { currentWorkspaceId } from "../../lib/workspace-state.ts";
@@ -22,7 +31,9 @@ import EmptyState from "../../components/ui/EmptyState.tsx";
 import Button from "../../components/ui/Button.tsx";
 import Skeleton from "../../components/ui/Skeleton.tsx";
 
-const ACTIVITY_LIMIT = 100;
+const ACTIVITY_PAGE_SIZE = 100;
+/** Backend clamp (contract ACTIVITY_MAX_LIMIT) — asking for more is a 400. */
+const ACTIVITY_MAX_LIMIT = 500;
 
 export default function ActivityView() {
   return <Page title={t("activity.title")}>{() => <Inner />}</Page>;
@@ -154,10 +165,32 @@ function ActivityRow(props: { event: ActivityEvent }) {
 }
 
 function Inner() {
-  const workspaceId = () => (currentWorkspaceId() ? currentWorkspaceId() : null);
-  const [events, { refetch: refetchEvents }] = createResource(workspaceId, (id) =>
-    listActivity(id, ACTIVITY_LIMIT),
+  const workspaceId = () =>
+    currentWorkspaceId() ? currentWorkspaceId() : null;
+  const [limit, setLimit] = createSignal(ACTIVITY_PAGE_SIZE);
+  const eventsKey = () => {
+    const id = workspaceId();
+    return id ? ([id, limit()] as const) : null;
+  };
+  const [events, { refetch: refetchEvents, mutate: mutateEvents }] =
+    createResource(eventsKey, ([id, max]) => listActivity(id, max));
+  // Load-more keeps the current rows on screen (reads `.latest`), but a
+  // Workspace switch must not flash the previous Workspace's trail.
+  createEffect(
+    on(
+      workspaceId,
+      () => {
+        setLimit(ACTIVITY_PAGE_SIZE);
+        mutateEvents(undefined);
+      },
+      { defer: true },
+    ),
   );
+  const rows = () => (events.error ? [] : (events.latest ?? []));
+  const canLoadMore = () =>
+    rows().length >= limit() && limit() < ACTIVITY_MAX_LIMIT;
+  const atListCap = () =>
+    limit() >= ACTIVITY_MAX_LIMIT && rows().length >= ACTIVITY_MAX_LIMIT;
 
   return (
     <>
@@ -177,7 +210,7 @@ function Inner() {
         }
       >
         <Switch>
-          <Match when={events.loading}>
+          <Match when={events.loading && !events.error && !events.latest}>
             <Card>
               <Skeleton variant="row" count={5} />
             </Card>
@@ -201,7 +234,7 @@ function Inner() {
               }
             />
           </Match>
-          <Match when={events()}>
+          <Match when={rows()}>
             {(list) => (
               <Show
                 when={list().length > 0}
@@ -219,6 +252,31 @@ function Inner() {
                       {(event) => <ActivityRow event={event} />}
                     </For>
                   </ul>
+                  <Show when={canLoadMore()}>
+                    <div style={{ "margin-top": "var(--tg-s-3)" }}>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        type="button"
+                        busy={events.loading}
+                        onClick={() =>
+                          setLimit((current) =>
+                            Math.min(
+                              current + ACTIVITY_PAGE_SIZE,
+                              ACTIVITY_MAX_LIMIT,
+                            ),
+                          )
+                        }
+                      >
+                        {t("common.loadMore")}
+                      </Button>
+                    </div>
+                  </Show>
+                  <Show when={atListCap()}>
+                    <p class="muted">
+                      {t("common.showingRecent", { n: list().length })}
+                    </p>
+                  </Show>
                 </Card>
               </Show>
             )}

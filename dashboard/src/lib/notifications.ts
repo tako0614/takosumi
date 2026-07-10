@@ -2,14 +2,23 @@
  * Shared notification-feed primitives.
  *
  * The friendly notifications page reads the Activity trail for every Workspace
- * the visitor belongs to, merged newest-first. The TopBar bell badge stays
- * scoped to the current Workspace's service state and lives in TopBar.
+ * the visitor belongs to, merged newest-first. The same merged feed backs the
+ * TopBar bell badge: one module-level snapshot (refreshed on navigation with a
+ * short TTL) so the badge count and the page's 要対応 banner are always the
+ * SAME filter over the SAME data, and the badge survives views that fetch
+ * nothing else.
  *
  * Honesty contract (inherited from the original feed): only values the backend
  * already recorded as public-safe Activity metadata are surfaced — no invented
  * prices, formulas, or messages.
  */
-import { type ActivityEvent, listActivity, type Workspace } from "./control-api.ts";
+import { createSignal } from "solid-js";
+import {
+  type ActivityEvent,
+  listActivity,
+  listWorkspaces,
+  type Workspace,
+} from "./control-api.ts";
 
 /** Max events fetched per Workspace and rendered in the merged feed. */
 export const NOTIF_PER_SPACE_LIMIT = 50;
@@ -43,7 +52,10 @@ export async function loadNotificationFeed(
   const perWorkspace = await Promise.allSettled(
     workspaces.map(async (workspace): Promise<readonly FeedEntry[]> => {
       const events = await listActivity(workspace.id, NOTIF_PER_SPACE_LIMIT);
-      return events.map((event) => ({ event, workspaceHandle: workspace.handle }));
+      return events.map((event) => ({
+        event,
+        workspaceHandle: workspace.handle,
+      }));
     }),
   );
   return perWorkspace
@@ -52,4 +64,59 @@ export async function loadNotificationFeed(
       (a, b) => Date.parse(b.event.createdAt) - Date.parse(a.event.createdAt),
     )
     .slice(0, NOTIF_FEED_LIMIT);
+}
+
+// --- shared feed snapshot (TopBar badge + /notifications banner) -------------
+
+/** Navigation-driven refresh throttle — no polling loop, just "don't refetch
+ * the whole cross-Workspace trail on every route change". */
+const NOTIF_FEED_TTL_MS = 30_000;
+
+const [sharedFeed, setSharedFeed] = createSignal<
+  readonly FeedEntry[] | undefined
+>(undefined);
+let sharedFeedFetchedAt = 0;
+let sharedFeedInflight: Promise<readonly FeedEntry[]> | undefined;
+
+/** Reactive last-loaded cross-Workspace feed (`undefined` before first load). */
+export const notificationFeed = sharedFeed;
+
+/** The single 要対応 derivation: failures over a feed. Both the TopBar bell
+ * badge and the /notifications banner MUST count through this. */
+export function attentionCount(
+  entries: readonly FeedEntry[] | undefined,
+): number {
+  return (entries ?? []).filter((entry) => isFailureAction(entry.event.action))
+    .length;
+}
+
+/**
+ * Loads (or re-loads) the shared feed snapshot. TTL-throttled unless `force`;
+ * concurrent callers share one in-flight request. Rejects only when the
+ * Workspace list itself is unreachable (per-Workspace activity failures are
+ * already absorbed by {@link loadNotificationFeed}).
+ */
+export async function refreshNotificationFeed(
+  options: { readonly force?: boolean } = {},
+): Promise<readonly FeedEntry[]> {
+  const current = sharedFeed();
+  if (
+    !options.force &&
+    current !== undefined &&
+    Date.now() - sharedFeedFetchedAt < NOTIF_FEED_TTL_MS
+  ) {
+    return current;
+  }
+  if (sharedFeedInflight) return sharedFeedInflight;
+  const request = (async () => {
+    const workspaces = await listWorkspaces();
+    const entries = await loadNotificationFeed(workspaces);
+    sharedFeedFetchedAt = Date.now();
+    setSharedFeed(entries);
+    return entries;
+  })().finally(() => {
+    if (sharedFeedInflight === request) sharedFeedInflight = undefined;
+  });
+  sharedFeedInflight = request;
+  return request;
 }
