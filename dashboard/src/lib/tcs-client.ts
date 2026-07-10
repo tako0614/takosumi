@@ -545,26 +545,30 @@ export async function fetchTcsRepoMetadata(
   source: TcsListingSource,
   signal?: AbortSignal,
 ): Promise<TcsRepoMetadata | null> {
-  const rawUrl = repoMetadataRawUrl(source);
-  if (!rawUrl) return null;
-  const raw = await fetch(rawUrl, {
-    headers: { accept: "application/json" },
-    signal,
-  });
-  if (raw.status === 404) return null;
-  if (raw.ok) return repoMetadataFromJson(await raw.json()) ?? null;
-
   const apiUrl = repoMetadataContentsApiUrl(source);
-  if (!apiUrl) throw new Error(`repo metadata ${raw.status}`);
+  const rawUrl = repoMetadataRawUrl(source);
+  if (!apiUrl || !rawUrl) return null;
   const api = await fetch(apiUrl, {
     headers: { accept: "application/vnd.github+json" },
     signal,
   });
   if (api.status === 404) return null;
-  if (!api.ok) throw new Error(`repo metadata ${raw.status}/${api.status}`);
-  return (
-    repoMetadataFromJson(await readGithubContentsJsonResponse(api)) ?? null
-  );
+  if (api.ok) {
+    const metadata = repoMetadataFromJson(
+      await readGithubContentsJsonResponse(api),
+    );
+    if (metadata) return metadata;
+  }
+
+  // A branch name on raw.githubusercontent.com can lag a just-pushed ref.
+  // Prefer the Contents API and use raw only when the API is unavailable.
+  const raw = await fetch(rawUrl, {
+    headers: { accept: "application/json" },
+    signal,
+  });
+  if (raw.status === 404) return null;
+  if (!raw.ok) throw new Error(`repo metadata ${api.status}/${raw.status}`);
+  return repoMetadataFromJson(await raw.json()) ?? null;
 }
 
 export function mergeTcsListingRepoMetadata(
