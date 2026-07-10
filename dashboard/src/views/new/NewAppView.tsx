@@ -41,6 +41,7 @@ import {
   Trash,
 } from "lucide-solid";
 import {
+  installExperienceInitialSecret,
   installExperiencePublicEndpoint,
   installExperienceServiceNameVariable,
   type JsonValue,
@@ -1268,13 +1269,20 @@ function Inner() {
     entry: StoreEntry,
     field: StoreInputField,
   ) => storeInputHasImplicitValue(entry, field);
+  const isInitialSecretStoreInput = (
+    entry: StoreEntry,
+    field: StoreInputField,
+  ) =>
+    installExperienceInitialSecret(entry.installExperience)?.variable ===
+    field.name;
   const isAdvancedStoreInput = (entry: StoreEntry, field: StoreInputField) =>
     storeInputHasImplicitValue(entry, field) ||
-    // 必須の初期設定（ドメイン・パスワード等、.well-known/tcs.json が
-    // required 宣言した入力）は絶対に畳まない: secret でも main のシートに
-    // 表示する（password フィールドとして描画される）。折りたたみは任意
-    // 項目だけ。
-    (!field.required && (field.advanced === true || field.secret === true));
+    // `initial_secret` is part of the install contract, so keep it beside
+    // other initial settings even when it is optional. Unprojected optional
+    // secrets remain available under advanced settings.
+    (!field.required &&
+      !isInitialSecretStoreInput(entry, field) &&
+      (field.advanced === true || field.secret === true));
   const visibleStoreInputs = (entry: StoreEntry) =>
     entry.inputs.filter(
       (field) =>
