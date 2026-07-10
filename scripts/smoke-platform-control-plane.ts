@@ -1830,7 +1830,7 @@ async function deployGitSourceCapsule(
   const compatibility = await createSmokeSourceCompatibilityCheck(options, {
     sourceId: source.id,
     sourceSnapshotId,
-    installationId: installation.id,
+    capsuleId: installation.id,
   });
   if (input.providerConnectionId) {
     await putInstallationProviderConnections(options, {
@@ -1866,7 +1866,7 @@ async function createSmokeSourceCompatibilityCheck(
   input: {
     readonly sourceId: string;
     readonly sourceSnapshotId: string;
-    readonly installationId: string;
+    readonly capsuleId: string;
   },
 ): Promise<{
   readonly report: {
@@ -1888,11 +1888,11 @@ async function createSmokeSourceCompatibilityCheck(
     path: `${API_PREFIX}/sources/${encodeURIComponent(
       input.sourceId,
     )}/compatibility-check`,
-    body: {
+    body: smokeSourceCompatibilityCheckBody({
       sourceSnapshotId: input.sourceSnapshotId,
-      installationId: input.installationId,
-      ...(options.modulePath ? { modulePath: options.modulePath } : {}),
-    },
+      capsuleId: input.capsuleId,
+      modulePath: options.modulePath,
+    }),
   });
   const reportId = response.report?.id;
   if (!reportId) {
@@ -1906,6 +1906,22 @@ async function createSmokeSourceCompatibilityCheck(
       ...(response.report?.level ? { level: response.report.level } : {}),
     },
     ...(response.run ? { run: response.run } : {}),
+  };
+}
+
+export function smokeSourceCompatibilityCheckBody(input: {
+  readonly sourceSnapshotId: string;
+  readonly capsuleId: string;
+  readonly modulePath?: string;
+}): {
+  readonly sourceSnapshotId: string;
+  readonly capsuleId: string;
+  readonly modulePath?: string;
+} {
+  return {
+    sourceSnapshotId: input.sourceSnapshotId,
+    capsuleId: input.capsuleId,
+    ...(input.modulePath ? { modulePath: input.modulePath } : {}),
   };
 }
 
