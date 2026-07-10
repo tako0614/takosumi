@@ -85,6 +85,11 @@
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: var(--tg-s-5);
 }
+/* Retagged h4 → h2 for heading order; keep the old h4 UA size. */
+.wa-dep-columns h2 {
+  margin: 1.33em 0;
+  font-size: 1em;
+}
 .wa-dep-list {
   list-style: none;
   margin: var(--tg-s-2) 0 0;
@@ -171,7 +176,7 @@
   gap: var(--tg-s-3);
   margin-bottom: var(--tg-s-3);
 }
-.wa-plan-resources-head h3 {
+.wa-plan-resources-head h2 {
   margin: 0;
   font-size: var(--tg-fs-lg);
 }
@@ -224,8 +229,10 @@
   display: grid;
   /* Three tracks for the three rendered cells (provider / connection / status).
      A fourth track left a persistent empty column. */
-  grid-template-columns:
-    minmax(180px, 1.4fr) minmax(180px, 1fr) minmax(120px, 0.8fr);
+  grid-template-columns: minmax(180px, 1.4fr) minmax(180px, 1fr) minmax(
+      120px,
+      0.8fr
+    );
   gap: var(--tg-s-3);
   align-items: center;
   padding: var(--tg-s-3);

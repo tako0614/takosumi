@@ -41,6 +41,7 @@ export default function DataTable<T>(props: Props<T>): JSX.Element {
             <For each={props.columns}>
               {(col) => (
                 <th
+                  scope="col"
                   class={col.class}
                   style={col.align === "right" ? "text-align:right" : undefined}
                 >

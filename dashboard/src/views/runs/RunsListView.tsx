@@ -45,7 +45,9 @@ export default function RunsListView() {
 
 function Inner() {
   const workspaceId = () => currentWorkspaceId() || null;
-  const [runs] = createResource(workspaceId, (id) => listRuns(id, RUN_LIST_LIMIT));
+  const [runs] = createResource(workspaceId, (id) =>
+    listRuns(id, RUN_LIST_LIMIT),
+  );
   // Include destroyed capsules so a run row for a since-deleted service still
   // shows which service it was.
   const [capsules] = createResource(workspaceId, (id) =>
@@ -142,6 +144,14 @@ function RunHistoryRowView(props: { readonly row: RunHistoryRow }) {
         variant="secondary"
         size="sm"
         href={`/runs/${encodeURIComponent(props.row.runId)}`}
+        // Every row repeats the same visible "詳細"/"確認する"; the
+        // accessible name says which run it opens.
+        aria-label={t(
+          props.row.status === "waiting_approval"
+            ? "runList.reviewAria"
+            : "runList.openAria",
+          { title: rowAriaTitle(props.row) },
+        )}
       >
         {props.row.status === "waiting_approval"
           ? t("runList.review")
@@ -169,8 +179,7 @@ function rowsFromRuns(
         ...(capsuleId ? { capsuleId } : {}),
         ...(capsuleId
           ? {
-              serviceName:
-                names.get(capsuleId) ?? fallbackNames.get(capsuleId),
+              serviceName: names.get(capsuleId) ?? fallbackNames.get(capsuleId),
             }
           : {}),
         createdAt: run.createdAt,
@@ -178,6 +187,11 @@ function rowsFromRuns(
       };
     })
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+function rowAriaTitle(row: RunHistoryRow): string {
+  const title = titleForRow(row);
+  return row.serviceName ? `${title} — ${row.serviceName}` : title;
 }
 
 function titleForRow(row: RunHistoryRow): string {

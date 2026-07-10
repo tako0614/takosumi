@@ -36,6 +36,11 @@ describe("RunsListView", () => {
     expect(source).toContain(
       "href={`/runs/${encodeURIComponent(props.row.runId)}`}",
     );
+    // Rows repeat the same visible "詳細"/"確認する"; the accessible name
+    // carries the run title (+ service) so the buttons are distinguishable.
+    expect(source).toContain('"runList.openAria"');
+    expect(source).toContain('"runList.reviewAria"');
+    expect(source).toContain("rowAriaTitle");
     expect(source).not.toContain("listActivity");
     expect(source).not.toContain("const SAMPLE");
     expect(source).not.toContain("Math.random");

@@ -1,4 +1,11 @@
-import { type JSX, Show, splitProps } from "solid-js";
+import {
+  children as resolveChildren,
+  createEffect,
+  createUniqueId,
+  type JSX,
+  Show,
+  splitProps,
+} from "solid-js";
 
 interface FieldProps {
   label?: JSX.Element;
@@ -17,6 +24,34 @@ interface FieldProps {
 
 /** Field wrapper: label (+required marker) + control + hint/error. */
 export function FormField(props: FieldProps): JSX.Element {
+  const errorId = createUniqueId();
+  // The control arrives as already-rendered caller JSX, so required/error
+  // semantics are applied to the resolved DOM node instead of via props (the
+  // visual `*` marker and error span alone expose nothing to AT).
+  const resolved = resolveChildren(() => props.children);
+  const control = (): HTMLElement | null => {
+    for (const node of resolved.toArray()) {
+      if (!(node instanceof HTMLElement)) continue;
+      if (node.matches("input, select, textarea")) return node;
+      const nested = node.querySelector("input, select, textarea");
+      if (nested) return nested as HTMLElement;
+    }
+    return null;
+  };
+  createEffect(() => {
+    const el = control();
+    if (!el) return;
+    if (props.required) el.setAttribute("aria-required", "true");
+    else el.removeAttribute("aria-required");
+  });
+  createEffect(() => {
+    const el = control();
+    if (!el) return;
+    if (props.error) el.setAttribute("aria-describedby", errorId);
+    else if (el.getAttribute("aria-describedby") === errorId) {
+      el.removeAttribute("aria-describedby");
+    }
+  });
   const body = (
     <>
       <Show when={props.label}>
@@ -29,12 +64,12 @@ export function FormField(props: FieldProps): JSX.Element {
           </Show>
         </span>
       </Show>
-      {props.children}
+      {resolved()}
       <Show when={props.hint && !props.error}>
         <span class="tg-field-hint">{props.hint}</span>
       </Show>
       <Show when={props.error}>
-        <span class="tg-field-error" role="alert">
+        <span class="tg-field-error" id={errorId} role="alert">
           {props.error}
         </span>
       </Show>
@@ -59,6 +94,7 @@ export function Input(props: InputProps): JSX.Element {
     <input
       {...rest}
       class={`tg-input ${local.invalid ? "tg-input-invalid" : ""} ${local.class ?? ""}`}
+      aria-invalid={local.invalid ? "true" : undefined}
     />
   );
 }
@@ -73,6 +109,7 @@ export function Select(props: SelectProps): JSX.Element {
     <select
       {...rest}
       class={`tg-select ${local.invalid ? "tg-select-invalid" : ""} ${local.class ?? ""}`}
+      aria-invalid={local.invalid ? "true" : undefined}
     >
       {local.children}
     </select>
@@ -89,6 +126,7 @@ export function Textarea(props: TextareaProps): JSX.Element {
     <textarea
       {...rest}
       class={`tg-textarea ${local.invalid ? "tg-textarea-invalid" : ""} ${local.class ?? ""}`}
+      aria-invalid={local.invalid ? "true" : undefined}
     />
   );
 }
