@@ -206,6 +206,13 @@ function Inner() {
 }
 
 function RunHistoryRowView(props: { readonly row: RunHistoryRow }) {
+  // Rows repeat the same visible 詳細/確認する; the accessible name carries
+  // the run title (+ service) so the buttons are distinguishable out of
+  // context.
+  const rowAriaTitle = () =>
+    props.row.serviceName
+      ? `${titleForRow(props.row)} — ${props.row.serviceName}`
+      : titleForRow(props.row);
   return (
     <li class="av-run-history-row">
       <div class="av-run-history-main">
@@ -226,13 +233,11 @@ function RunHistoryRowView(props: { readonly row: RunHistoryRow }) {
         variant="secondary"
         size="sm"
         href={`/runs/${encodeURIComponent(props.row.runId)}`}
-        // Every row repeats the same visible "詳細"/"確認する"; the
-        // accessible name says which run it opens.
         aria-label={t(
-          props.row.status === "waiting_approval"
+          props.row.displayStatus === "waiting_approval"
             ? "runList.reviewAria"
             : "runList.openAria",
-          { title: rowAriaTitle(props.row) },
+          { title: rowAriaTitle() },
         )}
       >
         {props.row.displayStatus === "waiting_approval"
