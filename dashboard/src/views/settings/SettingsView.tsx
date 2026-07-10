@@ -79,7 +79,21 @@ function BillingSummary(): JSX.Element {
   const planName = () => billing()?.plan?.name;
   const balance = () => billing()?.balance;
   const availableUsdMicros = () => balance()?.availableUsdMicros ?? 0;
-  const pastDue = () => subscription()?.status === "past_due";
+  // Any non-healthy subscription status needs attention + the recovery CTA —
+  // not just past_due. A canceled/unpaid/incomplete sub must not read as a
+  // healthy green badge.
+  const NEEDS_ATTENTION_STATUSES: ReadonlySet<string> = new Set([
+    "past_due",
+    "unpaid",
+    "canceled",
+    "cancelled",
+    "incomplete",
+    "incomplete_expired",
+  ]);
+  const needsAttention = () => {
+    const status = subscription()?.status;
+    return status !== undefined && NEEDS_ATTENTION_STATUSES.has(status);
+  };
   const visible = createMemo(
     () =>
       billing() !== undefined &&
@@ -104,7 +118,7 @@ function BillingSummary(): JSX.Element {
             <span class="settings-link-title">
               {planName() ?? t("settings.billingSummary.noPlan")}
               <Show when={subscription()}>
-                <Badge tone={pastDue() ? "danger" : "ok"}>
+                <Badge tone={needsAttention() ? "danger" : "ok"}>
                   {statusLabel()}
                 </Badge>
               </Show>
@@ -120,10 +134,10 @@ function BillingSummary(): JSX.Element {
             </span>
           </div>
           <Button
-            variant={pastDue() ? "primary" : "secondary"}
+            variant={needsAttention() ? "primary" : "secondary"}
             href="/settings/billing"
           >
-            {pastDue()
+            {needsAttention()
               ? t("settings.billingSummary.fix")
               : t("settings.billingSummary.manage")}
           </Button>
