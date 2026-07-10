@@ -97,7 +97,7 @@ describe("Installation detail deployment surface", () => {
     expect(source).not.toContain("alias (optional)");
     expect(source).toContain('t("app.bindings.technicalTarget")');
     expect(source).toContain('t("app.bindings.providerPlaceholder")');
-    expect(source).toContain("selected={connection.id === row.connectionId}");
+    expect(source).toContain("connection.id === row().connectionId");
     expect(source).not.toContain(
       'placeholder="registry.opentofu.org/cloudflare/cloudflare"',
     );

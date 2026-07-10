@@ -18,6 +18,7 @@ import {
   createResource,
   createSignal,
   For,
+  Index,
   type JSX,
   Match,
   Show,
@@ -408,6 +409,10 @@ function Inner() {
                   </div>
                 }
               />
+
+              <Show when={update.error() ?? destroyPlan.error()}>
+                {(message) => <Toast tone="error">{message()}</Toast>}
+              </Show>
 
               <Tabs items={tabItems()} aria-label="Service sections" />
 
@@ -1567,35 +1572,43 @@ function SettingsTab(props: {
               }}
             >
               <div class="wa-binding-grid">
-                <For each={rows()}>
+                {/* <Index>: `update` replaces the row object per keystroke,
+                    so reference-keyed <For> would recreate the focused input
+                    on every character. */}
+                <Index each={rows()}>
                   {(row, index) => {
                     const readyConnections = () =>
                       readyProviderConnectionsForProvider(
-                        row.provider,
+                        row().provider,
                         props.availableProviderConnections,
                       );
                     return (
                       <div class="wa-binding-row">
                         <div class="wa-binding-head">
-                          <strong>{boundProviderLabel(row)}</strong>
+                          <strong>{boundProviderLabel(row())}</strong>
                         </div>
                         <div class="wa-binding-controls">
                           <Select
-                            value={row.connectionId}
+                            value={row().connectionId}
                             onChange={(e) =>
-                              update(index(), {
+                              update(index, {
                                 connectionId: e.currentTarget.value,
                               })
                             }
                           >
-                            <option value="" selected={row.connectionId === ""}>
+                            <option
+                              value=""
+                              selected={row().connectionId === ""}
+                            >
                               {t("app.bindings.selectConnection")}
                             </option>
                             <For each={readyConnections()}>
                               {(connection) => (
                                 <option
                                   value={connection.id}
-                                  selected={connection.id === row.connectionId}
+                                  selected={
+                                    connection.id === row().connectionId
+                                  }
                                 >
                                   {providerConnectionLabel(connection)}
                                 </option>
@@ -1608,7 +1621,7 @@ function SettingsTab(props: {
                             type="button"
                             onClick={() =>
                               setRows((prev) =>
-                                prev.filter((_, i) => i !== index()),
+                                prev.filter((_, i) => i !== index),
                               )
                             }
                           >
@@ -1619,9 +1632,9 @@ function SettingsTab(props: {
                           <summary>{t("app.bindings.technicalTarget")}</summary>
                           <div class="wa-binding-head">
                             <Input
-                              value={row.provider}
+                              value={row().provider}
                               onInput={(e) =>
-                                update(index(), {
+                                update(index, {
                                   provider: e.currentTarget.value,
                                   connectionId: "",
                                 })
@@ -1631,9 +1644,9 @@ function SettingsTab(props: {
                               )}
                             />
                             <Input
-                              value={row.alias}
+                              value={row().alias}
                               onInput={(e) =>
-                                update(index(), {
+                                update(index, {
                                   alias: e.currentTarget.value,
                                 })
                               }
@@ -1644,7 +1657,7 @@ function SettingsTab(props: {
                       </div>
                     );
                   }}
-                </For>
+                </Index>
               </div>
               <div class="wa-form-actions">
                 <Button
@@ -1750,47 +1763,54 @@ function VariableRows(props: {
   readonly onChange: (id: string, patch: Partial<ConfigVariableRow>) => void;
   readonly onRemove: (id: string) => void;
 }) {
+  // <Index>: onChange replaces the edited row object per keystroke, so a
+  // reference-keyed <For> would dispose and recreate the focused input on
+  // every character (rows keep a stable position; identity is row().id).
   return (
     <div class="wb-variable-list">
-      <For each={props.rows}>
+      <Index each={props.rows}>
         {(row) => (
           <div class="wb-variable-row">
             <FormField
-              label={row.storeField ? row.label : t("app.config.name")}
+              label={row().storeField ? row().label : t("app.config.name")}
             >
               <Input
-                id={configControlId(row, "name")}
-                name={`configName:${row.id}`}
-                value={row.name}
-                disabled={row.storeField}
+                id={configControlId(row(), "name")}
+                name={`configName:${row().id}`}
+                value={row().name}
+                disabled={row().storeField}
                 placeholder={t("app.config.customName")}
                 onInput={(e) =>
-                  props.onChange(row.id, { name: e.currentTarget.value })
+                  props.onChange(row().id, { name: e.currentTarget.value })
                 }
               />
             </FormField>
             <FormField
-              label={row.storeField ? t("app.config.value") : row.label}
+              label={row().storeField ? t("app.config.value") : row().label}
               hint={
-                row.secret && row.hasExistingValue && row.value.trim() === ""
+                row().secret &&
+                row().hasExistingValue &&
+                row().value.trim() === ""
                   ? t("app.config.secretHint")
-                  : row.helper
+                  : row().helper
               }
-              required={row.required}
+              required={row().required}
             >
-              <ConfigVariableInput row={row} onChange={props.onChange} />
+              <ConfigVariableInput row={row()} onChange={props.onChange} />
             </FormField>
             <Button
               variant="ghost"
               size="sm"
               type="button"
-              onClick={() => props.onRemove(row.id)}
+              onClick={() => props.onRemove(row().id)}
             >
-              {row.storeField ? t("app.config.reset") : t("app.config.remove")}
+              {row().storeField
+                ? t("app.config.reset")
+                : t("app.config.remove")}
             </Button>
           </div>
         )}
-      </For>
+      </Index>
     </div>
   );
 }

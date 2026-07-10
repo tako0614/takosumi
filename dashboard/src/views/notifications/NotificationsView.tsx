@@ -22,6 +22,7 @@ import {
   isFailureAction,
   loadNotificationFeed,
 } from "../../lib/notifications.ts";
+import { runFailureHint } from "../../lib/run-errors.ts";
 import { operationLabel } from "../../lib/labels.ts";
 import { relativeTime, t } from "../../i18n/index.ts";
 import {
@@ -112,14 +113,13 @@ function describeEvent(event: ActivityEvent): {
       return { title: t("notif.event.destroyed") };
     }
     case "run.failed": {
-      const code = metaString(m, "errorCode");
       return {
         title: t("notif.event.failed", {
           operation: operationLabel(metaString(m, "phase")),
         }),
-        detail: code
-          ? t("notif.event.failedDetail", { code })
-          : t("notif.event.failedHint"),
+        // Friendly sentence, never the raw snake_case token (that stays in
+        // the run screen's folded expert details).
+        detail: runFailureHint(metaString(m, "errorCode")),
       };
     }
     case "installation.drift_detected": {

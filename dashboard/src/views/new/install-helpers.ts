@@ -281,6 +281,15 @@ function addFlowErrorMessage(apiError: ControlApiError | undefined): string {
   if (/provider connection is required/iu.test(apiError?.message ?? "")) {
     return t("new.error.connectionRequired");
   }
+  // Scoped managed hosts: the slug + workspace handle exceeded the hostname
+  // budget — ask for a shorter name instead of the raw English sentence.
+  if (
+    /invalid_app_hostname|public hostname slug is invalid/iu.test(
+      apiError?.message ?? "",
+    )
+  ) {
+    return t("new.error.invalidHostname");
+  }
   const message = safeControlApiErrorMessage(apiError);
   return message
     ? t("new.error.genericWithDetails", { message })
@@ -365,9 +374,12 @@ function uniqueServiceIdCandidate(value: string): string {
 }
 
 function managedServiceLabel(
-  workspaceHandle: string,
+  workspaceHandle: string | undefined,
   serviceSlug: string,
 ): string {
+  // Handle not loaded yet → no label: a preview or submitted host must never
+  // bake a placeholder prefix that differs from the server's real handle.
+  if (!workspaceHandle) return "";
   const workspace = slugInputValue(workspaceHandle);
   const service = slugInputValue(serviceSlug);
   if (service.startsWith(`${workspace}-`)) return service.slice(0, 63);
@@ -463,7 +475,7 @@ const DEFAULT_CAPSULE_INSTALL_CONFIG_ID = "cfg-default-opentofu-capsule";
 function storeDefaultInputValue(
   entry: StoreEntry,
   field: StoreInputField,
-  workspaceHandle: string,
+  workspaceHandle: string | undefined,
   serviceSlug?: string,
 ): string {
   const base = slugInputValue(entry.suggestedName);

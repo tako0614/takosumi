@@ -563,8 +563,8 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain("shouldOpenServiceAdvanced() ||");
     expect(newAppViewSource).toContain("hasMissingAdvancedStoreInputs()");
     expect(newAppViewSource).toContain('t("new.vars.inputsTitle")');
-    expect(newAppViewSource).toContain("name={`varName:${index()}`}");
-    expect(newAppViewSource).toContain("name={`varValue:${index()}`}");
+    expect(newAppViewSource).toContain("name={`varName:${index}`}");
+    expect(newAppViewSource).toContain("name={`varValue:${index}`}");
     expect(newAppViewSource).toContain("inputVariableError");
     expect(en["new.vars.errorStoreReserved"]).toContain("Service setup");
     expect(ja["new.vars.errorStoreReserved"]).toContain("サービス設定");
@@ -582,8 +582,8 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain("mergeEnvVariables");
     expect(newAppViewSource).toContain("envVariables().length > 0");
     expect(newAppViewSource).toContain('t("new.env.title")');
-    expect(newAppViewSource).toContain("name={`envName:${index()}`}");
-    expect(newAppViewSource).toContain("name={`envValue:${index()}`}");
+    expect(newAppViewSource).toContain("name={`envName:${index}`}");
+    expect(newAppViewSource).toContain("name={`envValue:${index}`}");
     expect(newAppViewSource).toContain(
       "setEnvVariables(envVariableRowsFromPrefill(next.vars))",
     );

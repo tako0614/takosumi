@@ -522,6 +522,7 @@ export const ja = {
   "run.details.debug": "識別情報",
   "run.inputs.title": "連携サービスからの値",
   "run.inputs.empty": "連携サービスから受け取った値はありません。",
+  "run.connections.setupCta": "接続を設定する",
   "run.connections.title": "接続済みアカウント",
   "run.connections.reviewTitle": "接続済みアカウントの確認が必要です",
   "run.connections.reviewBody":
@@ -770,6 +771,8 @@ export const ja = {
     "サービスの追加に失敗しました。内容を確認して、もう一度お試しください。",
   "new.error.genericWithDetails":
     "サービスの追加に失敗しました。詳細: {message}",
+  "new.error.invalidHostname":
+    "この公開名は長すぎるか、使えない文字を含んでいます。もう少し短い名前にして、もう一度お試しください。",
   "new.error.connectionRequired":
     "このアプリの公開にはクラウドアカウントの接続が必要です。接続を設定してから、もう一度お試しください。",
   "new.error.appHostnameUnavailable":

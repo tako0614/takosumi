@@ -1,5 +1,6 @@
-import { Show } from "solid-js";
+import { createEffect, onCleanup, Show } from "solid-js";
 import { Icons } from "../lib/Icons.tsx";
+import { t } from "../i18n/index.ts";
 import {
   useConfirmDialogActions,
   useConfirmDialogState,
@@ -19,6 +20,44 @@ import {
 export function ConfirmDialogRenderer() {
   const state = useConfirmDialogState();
   const { handleConfirm, handleCancel } = useConfirmDialogActions();
+  let cardRef: HTMLDivElement | undefined;
+  let cancelRef: HTMLButtonElement | undefined;
+
+  // aria-modal contract: while open, focus moves INTO the dialog (so Escape
+  // and Tab actually reach it), Tab cycles inside, Escape cancels, and focus
+  // returns to the previously-focused element on close.
+  createEffect(() => {
+    if (!state().isOpen) return;
+    const previous = document.activeElement as HTMLElement | null;
+    queueMicrotask(() => cancelRef?.focus());
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        handleCancel();
+        return;
+      }
+      if (e.key === "Tab" && cardRef) {
+        const focusables = Array.from(
+          cardRef.querySelectorAll<HTMLElement>("button"),
+        );
+        if (focusables.length === 0) return;
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    onCleanup(() => {
+      document.removeEventListener("keydown", onKeyDown);
+      previous?.focus?.();
+    });
+  });
 
   return (
     <Show when={state().isOpen}>
@@ -30,11 +69,8 @@ export function ConfirmDialogRenderer() {
         onClick={(e) => {
           if (e.target === e.currentTarget) handleCancel();
         }}
-        onKeyDown={(e) => {
-          if (e.key === "Escape") handleCancel();
-        }}
       >
-        <div class="tg-confirm-card">
+        <div class="tg-confirm-card" ref={cardRef}>
           <div
             class="tg-confirm-icon"
             classList={{ danger: Boolean(state().danger) }}
@@ -49,9 +85,10 @@ export function ConfirmDialogRenderer() {
             <button
               type="button"
               class="btn btn-secondary"
+              ref={cancelRef}
               onClick={() => handleCancel()}
             >
-              {state().cancelText || "キャンセル"}
+              {state().cancelText || t("common.cancel")}
             </button>
             <button
               type="button"
