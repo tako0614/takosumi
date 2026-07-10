@@ -26,7 +26,11 @@ export function isFailureAction(action: string): boolean {
   return (
     action === "run.failed" ||
     action === "installation.drift_detected" ||
-    action === "connection.revoked"
+    action === "connection.revoked" ||
+    // Auto-update failures carry failure-toned copy in describeEvent; keep the
+    // icon/styling in step so they don't render with the neutral Bell.
+    action === "installation.auto_update_failed" ||
+    action === "installation.auto_update_apply_failed"
   );
 }
 
