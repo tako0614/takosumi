@@ -1747,3 +1747,17 @@ button.tg-tab {
   font-weight: 700;
   color: var(--tg-fg);
 }
+
+/* Config-save success note (app settings tab). */
+.wa-saved-note {
+  display: flex;
+  align-items: center;
+  gap: var(--tg-s-3);
+  flex-wrap: wrap;
+  margin-top: var(--tg-s-3);
+  padding: var(--tg-s-3);
+  border-radius: var(--tg-r-md);
+  border: 1px solid color-mix(in srgb, var(--tg-success) 42%, var(--tg-line));
+  background: color-mix(in srgb, var(--tg-success) 10%, transparent);
+  font-size: var(--tg-fs-sm);
+}

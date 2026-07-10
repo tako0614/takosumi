@@ -426,6 +426,7 @@ function Inner() {
                       serviceOpenable={serviceOpenable()}
                       releaseActivationStatus={releaseActivationStatus()}
                       outputsLoading={currentStateVersion.loading}
+                      outputsError={Boolean(currentStateVersion.error)}
                       producers={producers()}
                       consumers={consumers()}
                     />
@@ -504,6 +505,7 @@ function Inner() {
                       availableProviderConnections={providerConnections() ?? []}
                       capsuleId={capsuleId()}
                       dangerHref={`/services/${encodeURIComponent(capsuleId())}/danger`}
+                      deploysHref={`/services/${encodeURIComponent(capsuleId())}/deploys`}
                       onSaved={() =>
                         void Promise.all([
                           refetchProfile(),
@@ -597,6 +599,7 @@ function OverviewTab(props: {
   readonly releaseActivationStatus:
     "not_required" | "pending" | "succeeded" | "failed";
   readonly outputsLoading: boolean;
+  readonly outputsError: boolean;
   readonly producers: readonly DependencyRow[];
   readonly consumers: readonly DependencyRow[];
 }) {
@@ -618,6 +621,11 @@ function OverviewTab(props: {
         <Switch>
           <Match when={props.outputsLoading}>
             <p class="muted">{t("common.loading")}</p>
+          </Match>
+          <Match when={props.outputsError}>
+            <p class="wa-error" role="alert">
+              {t("app.outputs.loadError")}
+            </p>
           </Match>
           <Match when={props.publicLinkOutputs.length === 0}>
             <p class="muted">
@@ -1370,12 +1378,16 @@ function SettingsTab(props: {
   readonly availableProviderConnections: readonly ProviderConnection[];
   readonly capsuleId: string;
   readonly dangerHref: string;
+  readonly deploysHref: string;
   readonly onSaved: () => void | Promise<void>;
 }) {
   const [rows, setRows] = createSignal<CapsuleProviderConnectionRow[]>([]);
   const [variableRows, setVariableRows] = createSignal<ConfigVariableRow[]>([]);
   const [formError, setFormError] = createSignal<string | null>(null);
   const [configError, setConfigError] = createSignal<string | null>(null);
+  const [savedKind, setSavedKind] = createSignal<"config" | "profile" | null>(
+    null,
+  );
 
   createEffect(() => {
     const providerConnections = props.providerConnections;
@@ -1434,6 +1446,7 @@ function SettingsTab(props: {
       providerConnections.connections,
     );
     await props.onSaved();
+    setSavedKind("profile");
   });
   const saveVariables = createAction(async () => {
     setConfigError(null);
@@ -1448,6 +1461,7 @@ function SettingsTab(props: {
     }
     await patchInstallConfig(props.installConfig.id, patch);
     await props.onSaved();
+    setSavedKind("config");
   });
 
   return (
@@ -1535,6 +1549,18 @@ function SettingsTab(props: {
                       {m()}
                     </p>
                   )}
+                </Show>
+                <Show when={savedKind() === "config"}>
+                  <div class="wa-saved-note" role="status">
+                    <span>{t("app.config.savedNeedsDeploy")}</span>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      href={props.deploysHref}
+                    >
+                      {t("app.config.deployChanges")}
+                    </Button>
+                  </div>
                 </Show>
               </form>
             </Match>

@@ -2125,6 +2125,18 @@ export async function createApplyRun(
   }
 }
 
+/**
+ * Requests cancellation of a queued/running Run (`POST /api/v1/runs/:id/cancel`).
+ * The backend moves the run to a terminal `cancelled` state when it is still
+ * cancellable; already-terminal runs return their current state.
+ */
+export async function cancelRun(runId: string): Promise<{ readonly run: Run }> {
+  return await controlFetch<{ run: Run }>(
+    `${BASE}/runs/${encodeURIComponent(runId)}/cancel`,
+    { method: "POST" },
+  );
+}
+
 // --- Deployments -----------------------------------------------------------
 
 /**
