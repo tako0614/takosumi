@@ -9,6 +9,7 @@
 import { createMemo, createResource, onMount } from "solid-js";
 import { useNavigate } from "@solidjs/router";
 import Page from "../account/components/auth/Page.tsx";
+import PageHeader from "../../components/ui/PageHeader.tsx";
 import { locale, t } from "../../i18n/index.ts";
 import {
   currentWorkspaceId,
@@ -59,19 +60,8 @@ function Inner() {
   };
 
   return (
-    <div
-      style={{
-        "max-width": "1080px",
-        margin: "0 auto",
-        padding: "20px 24px 72px",
-      }}
-    >
-      <header style={{ "margin-bottom": "18px" }}>
-        <h1 style={{ margin: "0 0 4px" }}>{t("store.title")}</h1>
-        <p style={{ margin: "0", color: "var(--tg-text-muted, #9aa0ad)" }}>
-          {t("store.subtitle")}
-        </p>
-      </header>
+    <div class="store-view">
+      <PageHeader title={t("store.title")} subtitle={t("store.subtitle")} />
       <StoreBrowser
         locale={locale()}
         onConfigure={onConfigure}

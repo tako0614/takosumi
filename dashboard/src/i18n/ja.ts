@@ -296,6 +296,7 @@ export const ja = {
   "app.outputs.activationFailed":
     "公開処理に失敗しました。最近の更新から詳細を確認できます。",
   "app.outputs.empty": "デプロイ後に表示されます。",
+  "app.outputs.loadError": "公開リンクを読み込めませんでした。時間をおいて開き直してください。",
   "app.outputs.none": "このサービスには公開リンクがありません。",
   "app.outputs.valuesTitle": "その他の値",
   "app.output.launchUrl": "公開アドレス",
@@ -389,6 +390,8 @@ export const ja = {
   "app.settings.supportDetails": "参照情報",
   "app.usage.title": "概算費用（累計）",
   "app.usage.body": "このアプリの記録済み使用量の合計です。",
+  "app.config.savedNeedsDeploy": "保存しました。変更を反映するにはデプロイしてください。",
+  "app.config.deployChanges": "変更をデプロイ",
   "app.updateNow": "更新する",
   "app.autoUpdate.title": "自動更新",
   "app.autoUpdate.body":
@@ -470,6 +473,7 @@ export const ja = {
     "この変更には既存リソースの置き換え・削除が含まれます。実行するとデータが失われる場合があります。",
   "run.destructiveConfirm": "破壊的な変更を承知のうえで実行",
   "run.stop": "やめる",
+  "run.cancel": "この実行をキャンセル",
   "run.cost.required": "見積もり金額: 約 {n}",
   "run.cost.balance": "利用可能枠: {n}",
   "run.cost.shortfall":

@@ -46,8 +46,10 @@ export default function RunsListView() {
 function Inner() {
   const workspaceId = () => currentWorkspaceId() || null;
   const [runs] = createResource(workspaceId, (id) => listRuns(id, RUN_LIST_LIMIT));
+  // Include destroyed capsules so a run row for a since-deleted service still
+  // shows which service it was.
   const [capsules] = createResource(workspaceId, (id) =>
-    listCapsulesCached(id, { includeDestroyed: false }),
+    listCapsulesCached(id, { includeDestroyed: true }),
   );
   const capsuleNames = createMemo(() => {
     const map = new Map<string, string>();

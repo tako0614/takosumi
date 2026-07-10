@@ -33,6 +33,7 @@ import Page from "../account/components/auth/Page.tsx";
 import {
   approveRun,
   ControlApiError,
+  cancelRun,
   createApplyRun,
   extractRunId,
   getCapsule,
@@ -841,8 +842,18 @@ function Inner() {
     () => run.latest?.workspaceId ?? null,
     listProviderConnections,
   );
+  // Activity only feeds the post-deploy launch-URL resolution, so fetch it
+  // only for a succeeded apply/destroy-apply run — not on every plan / prep /
+  // failed run screen (100 rows each).
   const [activity] = createResource(
-    () => run.latest?.workspaceId ?? null,
+    () => {
+      const r = run.latest;
+      if (!r?.workspaceId) return null;
+      const isCompletedApply =
+        (r.type === "apply" || r.type === "destroy_apply") &&
+        r.status === "succeeded";
+      return isCompletedApply ? r.workspaceId : null;
+    },
     (id) => listActivity(id, 100),
   );
   // The owning app, for the plain-language summary sentence + back link.
@@ -1149,6 +1160,18 @@ function Inner() {
       );
     }
   });
+
+  const cancel = createAction(async () => {
+    await cancelRun(runId());
+    await refetchRun();
+  });
+  // A queued/running run (or a parked review) can still be stopped.
+  const cancellable = () => {
+    const s = run.latest?.status;
+    return (
+      s === "queued" || s === "running" || s === "waiting_approval"
+    );
+  };
 
   const costInfo = () => cost.latest;
   const costBlocked = () => costInfo()?.blocked === true;
@@ -1775,6 +1798,17 @@ function Inner() {
                         onClick={() => void retryPlan.run()}
                       >
                         {t("run.retryPlan")}
+                      </Button>
+                    </Show>
+
+                    <Show when={cancellable()}>
+                      <Button
+                        variant="ghost"
+                        type="button"
+                        busy={cancel.busy()}
+                        onClick={() => void cancel.run()}
+                      >
+                        {t("run.cancel")}
                       </Button>
                     </Show>
 
