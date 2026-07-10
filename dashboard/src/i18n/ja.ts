@@ -127,6 +127,8 @@ export const ja = {
 
   // --- auth -----------------------------------------------------------------
   "auth.signIn": "サインイン",
+  "legal.langLabel": "言語",
+  "legal.policiesNav": "Takosumi Cloud のポリシー",
   "auth.signInSub": "Google アカウントで続けます。",
   "auth.signInCloud": "Takosumi Cloud",
   "auth.signInSubCloud": "Google アカウントでサインインします。",
@@ -993,7 +995,7 @@ export const ja = {
   "conn.genericEnv.providerRequired": "Provider source を入力してください。",
   "conn.genericEnv.nameRequired": "値のある行には環境変数名が必要です。",
   "conn.genericEnv.invalidName":
-    "SNOWFLAKE_PASSWORD のような大文字の env 名を使ってください。",
+    "“{name}” は使えません。SNOWFLAKE_PASSWORD のような大文字の env 名を使ってください。",
   "conn.genericEnv.reservedName":
     "“{name}” は runner が使う予約名です。provider 固有の env 名を使ってください。",
   "conn.genericEnv.duplicateName": "“{name}” はすでに追加されています。",

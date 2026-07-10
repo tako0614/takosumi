@@ -41,6 +41,12 @@ export const PRIMARY_NAV: readonly ShellNavItem[] = [
 
 export type ManageDestination = ShellNavItem & {
   readonly descriptionKey: MessageKey;
+  /**
+   * Cloud-only surfaces (e.g. managed Cloud resources) render an "unavailable"
+   * dead-end on self-host / Takos-embedded runtimes. Gate them out of the
+   * catalog there, mirroring the runtime-gated Cloud tabs in workspace settings.
+   */
+  readonly cloudOnly?: boolean;
 };
 
 /**
@@ -65,6 +71,7 @@ export const MANAGE_DESTINATIONS: readonly ManageDestination[] = [
     labelKey: "nav.cloudResources",
     descriptionKey: "settings.manage.cloud",
     icon: Network,
+    cloudOnly: true,
   },
   {
     href: "/runs",
