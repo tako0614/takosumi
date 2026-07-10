@@ -27,6 +27,7 @@ import {
   For,
   Index,
   onCleanup,
+  onMount,
   Show,
 } from "solid-js";
 import { useNavigate } from "@solidjs/router";
@@ -228,6 +229,33 @@ const CREDENTIAL_FREE_PROVIDER_TAILS: ReadonlySet<string> = new Set([
   "template",
 ]);
 
+/**
+ * Pick-busy live region. Mounted EMPTY and filled a microtask later (the
+ * Toast pattern in components/ui/Toast.tsx): live regions only announce text
+ * that changes inside an already-mounted region, and this panel used to mount
+ * together with its content — most screen readers never announced it. The
+ * Spinner is aria-hidden within this panel: it carries its own role=status,
+ * which would nest a second live region inside this one.
+ */
+function StorePickBusyStatus() {
+  const [announce, setAnnounce] = createSignal(false);
+  onMount(() => queueMicrotask(() => setAnnounce(true)));
+  return (
+    <div
+      class="wb-status-panel av-pick-status"
+      role="status"
+      aria-live="polite"
+    >
+      <Show when={announce()}>
+        <span aria-hidden="true" style="display:inline-flex">
+          <Spinner size={16} />
+        </span>
+        <strong>{t("new.pick.checking")}</strong>
+      </Show>
+    </div>
+  );
+}
+
 function StoreIcon(props: { readonly entry: StoreEntry }) {
   if (props.entry.iconUrl) {
     return <img src={props.entry.iconUrl} alt="" loading="lazy" />;
@@ -373,6 +401,12 @@ function Inner() {
     [],
   );
   let serviceNameInput: HTMLInputElement | undefined;
+  // Focus targets: 選び直す moves focus back to the discovery heading, and a
+  // successful store pick moves it to the mounted chosen-flow section —
+  // otherwise focus falls to <body> when the previously-focused control
+  // unmounts, stranding keyboard and screen-reader users.
+  let discoveryHeading: HTMLHeadingElement | undefined;
+  let chosenFlowSection: HTMLElement | undefined;
 
   const workspaceId = () =>
     currentWorkspaceId() ? currentWorkspaceId() : null;
@@ -759,6 +793,9 @@ function Inner() {
     activeFlowAbort = undefined;
     activeFlowId += 1;
     clearSourceSyncSlowTimer();
+    // Clear the sticky slow flag too: left set, the next pick would render
+    // the 技術的な詳細 step list (all idle) before any check even starts.
+    setSourceSyncSlow(false);
     setCheckingCompatibility(false);
     setBusy(false);
     setSourceSyncRunStatus(null);
@@ -1763,11 +1800,33 @@ function Inner() {
         connectionId: row.connectionId,
       }));
 
+  // Identity of the Source that createdSourceId points at. Editing the name
+  // or a store input must not discard the registered Source — only a change
+  // to the source coordinates themselves (URL / ref / auth) invalidates it,
+  // so retries reuse the Source instead of accumulating one duplicate per
+  // keystroke.
+  let createdSourceIdentity: string | null = null;
+  const sourceIdentitySnapshot = () =>
+    JSON.stringify([
+      sourceGitUrl(),
+      sourceRef(),
+      sourceAuthConnectionIdForRun() ?? "",
+    ]);
+  const recordCreatedSource = (sourceId: string) => {
+    setCreatedSourceId(sourceId);
+    createdSourceIdentity = sourceIdentitySnapshot();
+  };
   const resetCompatibility = () => {
     abortActiveFlow();
     setCompatibility(null);
     setProviderRows([]);
-    setCreatedSourceId(null);
+    if (
+      createdSourceId() !== null &&
+      createdSourceIdentity !== sourceIdentitySnapshot()
+    ) {
+      setCreatedSourceId(null);
+      createdSourceIdentity = null;
+    }
     setCreatedCapsuleId(null);
     setExistingCapsule(null);
     setAppHostnameConflict(false);
@@ -1864,6 +1923,10 @@ function Inner() {
       if (token !== storePickToken) return;
       setStorePickBusy(false);
       void loadConnections();
+      // Focus lands on the freshly-mounted chosen-flow section: the tapped
+      // store card unmounts with the discovery section, and focus must not
+      // fall to <body>.
+      queueMicrotask(() => chosenFlowSection?.focus());
       const prefill = parseInstallPrefill(`?${buildNewQuery(hydratedListing)}`);
       if (prefill) {
         applyInstallPrefillInput(prefill, { storeListing: hydratedListing });
@@ -1948,6 +2011,9 @@ function Inner() {
     setSyncRequired(false);
     setActiveTab("store");
     resetCompatibility();
+    // The clicked 選び直す button unmounts with the flow section — move focus
+    // to the discovery heading instead of letting it fall to <body>.
+    queueMicrotask(() => discoveryHeading?.focus());
   };
 
   let initialTcsHandoffApplied = false;
@@ -2139,7 +2205,7 @@ function Inner() {
         installConfigId: selectedInstallConfigId(),
         signal: flow.controller.signal,
         onSourceCreated: (sourceId) => {
-          if (isCurrentFlow(flow)) setCreatedSourceId(sourceId);
+          if (isCurrentFlow(flow)) recordCreatedSource(sourceId);
         },
         onSourceSyncProgress: (progress) => {
           if (!isCurrentFlow(flow)) return;
@@ -2166,7 +2232,7 @@ function Inner() {
           installConfigId: selectedInstallConfigId(),
           signal: flow.controller.signal,
           onSourceCreated: (sourceId) => {
-            if (isCurrentFlow(flow)) setCreatedSourceId(sourceId);
+            if (isCurrentFlow(flow)) recordCreatedSource(sourceId);
           },
           onSourceSyncProgress: (progress) => {
             if (!isCurrentFlow(flow)) return;
@@ -2181,7 +2247,7 @@ function Inner() {
         throwIfStaleFlow(flow);
       }
       if (result.sourceId) {
-        setCreatedSourceId(result.sourceId);
+        recordCreatedSource(result.sourceId);
       }
       setStepSource("done");
       setStepSync("done");
@@ -2193,7 +2259,7 @@ function Inner() {
       setAppHostnameConflict(false);
       if (apiError?.isSourceSyncRequired) {
         const sourceId = sourceIdFromControlError(apiError);
-        if (sourceId) setCreatedSourceId(sourceId);
+        if (sourceId) recordCreatedSource(sourceId);
         setStepSource("done");
         setStepSync("error");
         setSyncRequired(true);
@@ -2219,6 +2285,9 @@ function Inner() {
       if (isCurrentFlow(flow)) {
         finishAbortableFlow(flow);
         clearSourceSyncSlowTimer();
+        // A finished (>8s) check must not leave the slow flag set: the next
+        // pick would render the technical step list before any check starts.
+        setSourceSyncSlow(false);
         setCheckingCompatibility(false);
       }
     }
@@ -2277,7 +2346,7 @@ function Inner() {
         });
         throwIfStaleFlow(flow);
         sourceId = result.source.id;
-        setCreatedSourceId(sourceId);
+        recordCreatedSource(sourceId);
         setStepSource("done");
       } else {
         setStepSource("done");
@@ -2447,6 +2516,7 @@ function Inner() {
       }
       if (currentFlow || activeFlowAbort === undefined) {
         clearSourceSyncSlowTimer();
+        setSourceSyncSlow(false);
         setBusy(false);
       }
     }
@@ -2487,6 +2557,7 @@ function Inner() {
         name="gitUrl"
         type="text"
         value={gitUrl()}
+        disabled={busy()}
         onInput={(e) => {
           clearSelectedStoreEntry();
           const parsed = parseInstallPrefillFromInput(e.currentTarget.value);
@@ -2517,6 +2588,7 @@ function Inner() {
           id="new-source-access-mode"
           name="sourceAccessMode"
           value={sourceAccessMode()}
+          disabled={busy()}
           onChange={(e) => {
             setSourceAccessMode(e.currentTarget.value as SourceAccessMode);
             setSourceTokenError(null);
@@ -2535,6 +2607,7 @@ function Inner() {
             id="new-source-auth-connection"
             name="sourceAuthConnection"
             value={sourceAuthConnectionId()}
+            disabled={busy()}
             onChange={(e) => {
               setSourceAuthConnectionId(e.currentTarget.value);
               resetCompatibility();
@@ -2568,6 +2641,7 @@ function Inner() {
               name="sourceTokenUsername"
               type="text"
               value={sourceTokenUsername()}
+              disabled={busy()}
               onInput={(e) => setSourceTokenUsername(e.currentTarget.value)}
               placeholder="your-username"
               autocomplete="username"
@@ -2580,6 +2654,7 @@ function Inner() {
               name="sourceAccessToken"
               type="password"
               value={sourceToken()}
+              disabled={busy()}
               onInput={(e) => {
                 setSourceToken(e.currentTarget.value);
                 setSourceTokenError(null);
@@ -2595,7 +2670,7 @@ function Inner() {
             type="button"
             variant="secondary"
             busy={savingSourceToken()}
-            disabled={savingSourceToken()}
+            disabled={savingSourceToken() || busy()}
             onClick={() => void saveSourceTokenConnection()}
           >
             {t("new.sourceAccess.saveToken")}
@@ -2623,6 +2698,7 @@ function Inner() {
             name="ref"
             type="text"
             value={ref()}
+            disabled={busy()}
             onInput={(e) => {
               clearSelectedStoreEntry();
               setPinnedFullRef(null);
@@ -2640,6 +2716,7 @@ function Inner() {
             name="path"
             type="text"
             value={path()}
+            disabled={busy()}
             onInput={(e) => {
               clearSelectedStoreEntry();
               setPath(e.currentTarget.value);
@@ -2760,20 +2837,16 @@ function Inner() {
                   <Search size={22} />
                 </span>
                 <div>
-                  <h2>{t("new.discovery.title")}</h2>
+                  {/* tabindex=-1: programmatic focus target for 選び直す. */}
+                  <h2 ref={discoveryHeading} tabindex={-1}>
+                    {t("new.discovery.title")}
+                  </h2>
                   <p>{t("new.discovery.subtitle")}</p>
                 </div>
               </div>
             </header>
             <Show when={storePickBusy()}>
-              <div
-                class="wb-status-panel av-pick-status"
-                role="status"
-                aria-live="polite"
-              >
-                <Spinner size={16} />
-                <strong>{t("new.pick.checking")}</strong>
-              </div>
+              <StorePickBusyStatus />
             </Show>
             <Show when={!storePickBusy() && error()}>
               {(message) => (
@@ -2839,7 +2912,14 @@ function Inner() {
         </Show>
 
         <Show when={hasChosenSource()}>
-          <section class="av-add-flow" aria-label={t("new.title")}>
+          {/* tabindex=-1: programmatic focus target after a store pick (the
+              heading inside is display:none on wide screens). */}
+          <section
+            class="av-add-flow"
+            aria-label={t("new.title")}
+            ref={chosenFlowSection}
+            tabindex={-1}
+          >
             <div class="av-add-flow-back">
               <Button
                 variant="ghost"
@@ -2914,6 +2994,7 @@ function Inner() {
                             invalid={serviceNameFieldError() !== null}
                             maxlength={96}
                             value={name()}
+                            disabled={busy()}
                             onInput={(e) => {
                               setName(e.currentTarget.value);
                               resetCompatibility();
@@ -2949,6 +3030,7 @@ function Inner() {
                                           field,
                                         )
                                       }
+                                      disabled={busy()}
                                       value={storeInputValue(entry(), field)}
                                       onInput={(e) =>
                                         updateStoreInputValue(
@@ -2984,6 +3066,7 @@ function Inner() {
                                   id={`store-input-${entry().id}-${field.name}`}
                                   name={`storeInput:${field.name}`}
                                   label={field.label[locale()]}
+                                  disabled={busy()}
                                   checked={storeInputBooleanChecked(
                                     entry(),
                                     field,
@@ -3019,6 +3102,7 @@ function Inner() {
                       invalid={serviceNameFieldError() !== null}
                       maxlength={96}
                       value={name()}
+                      disabled={busy()}
                       onInput={(e) => {
                         setName(e.currentTarget.value);
                         resetCompatibility();
@@ -3073,6 +3157,7 @@ function Inner() {
                                           field,
                                         )
                                       }
+                                      disabled={busy()}
                                       value={storeInputValue(entry(), field)}
                                       onInput={(e) =>
                                         updateStoreInputValue(
@@ -3093,6 +3178,7 @@ function Inner() {
                                     id={`store-input-advanced-${entry().id}-${field.name}`}
                                     name={`storeInputAdvanced:${field.name}`}
                                     label={field.label[locale()]}
+                                    disabled={busy()}
                                     checked={storeInputBooleanChecked(
                                       entry(),
                                       field,
@@ -3129,6 +3215,7 @@ function Inner() {
                         }
                         type="text"
                         invalid={appHostnameConflict()}
+                        disabled={busy()}
                         value={serviceNameInputValue()}
                         onInput={(e) => {
                           setResourcePrefixTouched(true);
@@ -3163,6 +3250,7 @@ function Inner() {
                                 id={`new-env-name-${index}`}
                                 name={`envName:${index}`}
                                 type="text"
+                                disabled={busy()}
                                 value={row().name}
                                 onInput={(e) =>
                                   updateEnvVariable(index, {
@@ -3180,6 +3268,7 @@ function Inner() {
                                 id={`new-env-value-${index}`}
                                 name={`envValue:${index}`}
                                 type="text"
+                                disabled={busy()}
                                 value={row().value}
                                 onInput={(e) =>
                                   updateEnvVariable(index, {
@@ -3195,6 +3284,7 @@ function Inner() {
                               type="button"
                               variant="ghost"
                               icon={<Trash size={16} />}
+                              disabled={busy()}
                               onClick={() => removeEnvVariable(index)}
                             >
                               {t("new.env.remove")}
@@ -3208,6 +3298,7 @@ function Inner() {
                         type="button"
                         variant="secondary"
                         icon={<Plus size={16} />}
+                        disabled={busy()}
                         onClick={addEnvVariable}
                       >
                         {t("new.env.add")}
@@ -3235,6 +3326,7 @@ function Inner() {
                                 id={`new-var-name-${index}`}
                                 name={`varName:${index}`}
                                 type="text"
+                                disabled={busy()}
                                 value={row().name}
                                 onInput={(e) =>
                                   updateInputVariable(index, {
@@ -3251,6 +3343,7 @@ function Inner() {
                                 id={`new-var-value-${index}`}
                                 name={`varValue:${index}`}
                                 type="text"
+                                disabled={busy()}
                                 value={row().value}
                                 onInput={(e) =>
                                   updateInputVariable(index, {
@@ -3266,6 +3359,7 @@ function Inner() {
                               type="button"
                               variant="ghost"
                               icon={<Trash size={16} />}
+                              disabled={busy()}
                               onClick={() => removeInputVariable(index)}
                             >
                               {t("new.vars.removeInput")}
@@ -3279,6 +3373,7 @@ function Inner() {
                         type="button"
                         variant="secondary"
                         icon={<Plus size={16} />}
+                        disabled={busy()}
                         onClick={addInputVariable}
                       >
                         {t("new.vars.addInput")}

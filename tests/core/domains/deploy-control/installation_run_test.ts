@@ -4501,7 +4501,16 @@ test("release activator receives neutral post-apply commands as opaque argv", as
   expect(JSON.stringify(activations[0])).not.toContain("sk-should-not-leak");
   expect(JSON.stringify(activations[0])).not.toContain("postgres://");
 
-  const activity = (await store.listActivityEvents("space_test")).find(
+  const activities = await store.listActivityEvents("space_test");
+  const pendingActivity = activities.find(
+    (event) => event.action === "release_activation.pending",
+  );
+  expect(pendingActivity?.metadata).toMatchObject({
+    activationKind: "takosumi.release-commands@v1",
+    commandCount: 1,
+    message: "post-apply release commands are running",
+  });
+  const activity = activities.find(
     (event) => event.action === "release_activation.succeeded",
   );
   expect(activity?.metadata).toMatchObject({

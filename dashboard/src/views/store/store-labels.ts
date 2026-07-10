@@ -1,7 +1,9 @@
 import type { TcsLocale } from "../../lib/tcs-aggregate.ts";
 
 const CATEGORY_LABELS: Record<string, { ja: string; en: string }> = {
-  service: { ja: "アプリ", en: "Apps" },
+  // The store is a サービス surface (see i18n/ja.ts vocabulary contract) —
+  // the generic category chip must not switch nouns mid-panel.
+  service: { ja: "サービス", en: "Services" },
   building_block: { ja: "基盤", en: "Building blocks" },
   example: { ja: "サンプル", en: "Examples" },
   personal: { ja: "パーソナル", en: "Personal" },

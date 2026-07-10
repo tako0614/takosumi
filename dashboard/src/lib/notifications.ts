@@ -82,12 +82,20 @@ let sharedFeedInflight: Promise<readonly FeedEntry[]> | undefined;
 export const notificationFeed = sharedFeed;
 
 /** The single 要対応 derivation: failures over a feed. Both the TopBar bell
- * badge and the /notifications banner MUST count through this. */
+ * badge and the /notifications banner MUST count through this. The count is
+ * scoped to the CURRENT Workspace when `workspaceId` is given — the feed
+ * itself stays cross-Workspace (the page labels other Workspaces' entries),
+ * but the badge must not keep showing the previous Workspace's failures after
+ * a switch. An empty/absent `workspaceId` counts every Workspace. */
 export function attentionCount(
   entries: readonly FeedEntry[] | undefined,
+  workspaceId?: string,
 ): number {
-  return (entries ?? []).filter((entry) => isFailureAction(entry.event.action))
-    .length;
+  return (entries ?? []).filter(
+    (entry) =>
+      isFailureAction(entry.event.action) &&
+      (!workspaceId || entry.event.workspaceId === workspaceId),
+  ).length;
 }
 
 /**

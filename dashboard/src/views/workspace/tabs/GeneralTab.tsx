@@ -19,7 +19,6 @@ import {
   listWorkspacesIncludingArchived,
   updateWorkspace,
 } from "../../../lib/control-api.ts";
-import { setCurrentWorkspaceId } from "../../../lib/workspace-state.ts";
 import { useConfirmDialog } from "../../../lib/confirm-dialog.ts";
 import { formatDateTime, t } from "../../../i18n/index.ts";
 import {
@@ -32,6 +31,13 @@ import {
   KVList,
   Toast,
 } from "../../../components/ui/index.ts";
+
+// Archiving the SELECTED workspace makes the global switcher reconcile the
+// selection onto another workspace, which re-keys (remounts) this tab — so the
+// "archived" success state must outlive the component instance. Module scope
+// keeps the notice visible on the remounted tab, right above the archived
+// list that carries the 復元 (unarchive) affordance.
+const [archiveNotice, setArchiveNotice] = createSignal<string | null>(null);
 
 export default function GeneralTab(props: { readonly workspaceId: string }) {
   const { confirm } = useConfirmDialog();
@@ -116,12 +122,16 @@ export default function GeneralTab(props: { readonly workspaceId: string }) {
     setSaveMessage(null);
     try {
       await updateWorkspace(current.id, { archived: true });
-      setCurrentWorkspaceId("");
+      // Do NOT clear the workspace selection here: that unmounts this tab
+      // before any success state renders and strands the user on a bare
+      // "select a workspace" screen. Name the archived workspace instead and
+      // let the switcher reconcile the selection; the archived list below
+      // keeps the 復元 (unarchive) affordance one click away.
+      setArchiveNotice(current.displayName || `@${current.handle}`);
       await Promise.all([refetch(), refetchArchived()]);
       if (typeof window !== "undefined") {
         window.dispatchEvent(new Event("takosumi:workspaces-changed"));
       }
-      setSaveMessage(t("workspaceSettings.general.archived"));
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -129,21 +139,41 @@ export default function GeneralTab(props: { readonly workspaceId: string }) {
     }
   };
 
+  // Which archived workspace is being restored — per-row busy so a double
+  // click cannot fire duplicate PATCHes and other rows stay untouched (same
+  // per-row idiom as SharesTab/BackupsTab).
+  const [unarchivingId, setUnarchivingId] = createSignal<string | null>(null);
   const unarchive = async (id: string) => {
+    if (unarchivingId()) return;
+    setUnarchivingId(id);
     try {
       await updateWorkspace(id, { archived: false });
+      setArchiveNotice(null);
       await Promise.all([refetch(), refetchArchived()]);
       if (typeof window !== "undefined") {
         window.dispatchEvent(new Event("takosumi:workspaces-changed"));
       }
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setUnarchivingId(null);
     }
   };
 
   return (
     <Card>
       <CardHeader title={t("workspaceSettings.tab.general")} />
+      {/* Rendered outside the workspace() Switch so it survives both the
+          brief "not found" window after archiving and the remount that
+          follows the switcher's reselection. */}
+      <Show when={archiveNotice()}>
+        {(name) => (
+          <Toast tone="success">
+            {t("workspaceSettings.general.archivedNamed", { name: name() })}{" "}
+            {t("workspaceSettings.general.archivedHint")}
+          </Toast>
+        )}
+      </Show>
       <Switch
         fallback={
           <p class="muted">
@@ -248,6 +278,8 @@ export default function GeneralTab(props: { readonly workspaceId: string }) {
                     variant="secondary"
                     size="sm"
                     type="button"
+                    busy={unarchivingId() === w.id}
+                    disabled={unarchivingId() !== null}
                     onClick={() => void unarchive(w.id)}
                   >
                     {t("workspaceSettings.general.unarchive")}

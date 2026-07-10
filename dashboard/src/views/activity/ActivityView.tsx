@@ -129,6 +129,16 @@ function ActivityRow(props: { event: ActivityEvent }) {
         <span class="wa-activity-action">{activityTitle(props.event)}</span>
       </div>
       <div class="wa-activity-rowmeta">
+        {/* The page promises だれが何を変更したか — surface the recorded
+            actor on the row itself (the account subject the backend logged;
+            never invented), not only inside the debug disclosure. */}
+        <Show when={props.event.actorId}>
+          {(actor) => (
+            <span class="muted">
+              {t("activity.actorLine", { actor: actor() })}
+            </span>
+          )}
+        </Show>
         <time datetime={props.event.createdAt}>
           {formatDateTime(props.event.createdAt)}
         </time>

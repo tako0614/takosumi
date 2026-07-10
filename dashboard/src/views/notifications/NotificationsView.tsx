@@ -18,8 +18,10 @@ import {
   attentionCount,
   type FeedEntry,
   isFailureAction,
+  notificationFeed,
   refreshNotificationFeed,
 } from "../../lib/notifications.ts";
+import { currentWorkspaceId } from "../../lib/workspace-state.ts";
 import { listCapsulesCached } from "../../lib/capsule-list.ts";
 import { runFailureHint } from "../../lib/run-errors.ts";
 import { operationLabel } from "../../lib/labels.ts";
@@ -262,6 +264,13 @@ function NotificationRow(props: {
   const failure = () => isFailureAction(props.entry.event.action);
   const description = () => describeEvent(props.entry.event, props.serviceName);
   const href = () => eventHref(props.entry.event);
+  // The feed stays cross-Workspace, but the bell badge / 要対応 banner count
+  // only the CURRENT Workspace — call out entries that belong to another
+  // Workspace so their exclusion from the count is legible.
+  const otherWorkspace = () => {
+    const current = currentWorkspaceId();
+    return Boolean(current && props.entry.event.workspaceId !== current);
+  };
   return (
     <li class={`wc-notif-row${failure() ? " wc-notif-row-failure" : ""}`}>
       <span class="wc-notif-icon" aria-hidden="true">
@@ -282,7 +291,16 @@ function NotificationRow(props: {
           {(detail) => <p class="wc-notif-detail">{detail()}</p>}
         </Show>
         <p class="wc-notif-foot">
-          <span>@{props.entry.workspaceHandle}</span>
+          <Show
+            when={otherWorkspace()}
+            fallback={<span>@{props.entry.workspaceHandle}</span>}
+          >
+            <span>
+              {t("notif.otherWorkspace", {
+                handle: props.entry.workspaceHandle,
+              })}
+            </span>
+          </Show>
           <Show when={props.entry.event.createdAt}>
             <span aria-hidden="true">·</span>
             <time datetime={props.entry.event.createdAt}>
@@ -299,16 +317,20 @@ export default function NotificationsView() {
   return (
     <Page title={t("notif.title")}>
       {() => {
-        // Same feed snapshot the TopBar badge reads (force = the page always
-        // shows fresh events); the 要対応 banner below counts through the
-        // SAME attentionCount derivation, so the two can never disagree.
-        const [feed] = createResource(() =>
+        // Same feed snapshot the TopBar badge reads. The page revalidates in
+        // the BACKGROUND (force refresh) but renders the existing shared
+        // snapshot immediately — a bell click must not full-skeleton over
+        // entries the badge already counted. The 要対応 banner below counts
+        // through the SAME attentionCount derivation (scoped to the current
+        // Workspace, exactly like the badge), so the two can never disagree.
+        const [refreshed] = createResource(() =>
           refreshNotificationFeed({ force: true }),
         );
+        const feed = () => notificationFeed();
         // Service names for the recorded Capsule ids — best-effort, cached;
         // lines render unnamed until (unless) the lookup resolves.
         const [capsuleNames] = createResource(
-          () => (feed.error ? undefined : feed()),
+          () => feed(),
           (entries) => loadCapsuleNameIndex(entries),
         );
         const serviceNameFor = (event: ActivityEvent): string | undefined => {
@@ -316,9 +338,16 @@ export default function NotificationsView() {
           if (!capsuleId) return undefined;
           return capsuleNames()?.get(event.workspaceId)?.get(capsuleId);
         };
-        const loading = () => feed.loading;
-        const error = () => feed.error as ControlApiError | undefined;
-        const failureCount = () => attentionCount(feed());
+        // Skeleton / error only before the FIRST snapshot exists; afterwards a
+        // failed background refresh silently keeps the last-known entries
+        // (mirrors the TopBar badge's behaviour).
+        const loading = () => feed() === undefined && refreshed.loading;
+        const error = () =>
+          feed() === undefined
+            ? (refreshed.error as ControlApiError | undefined)
+            : undefined;
+        const failureCount = () =>
+          attentionCount(feed(), currentWorkspaceId() || undefined);
 
         return (
           <>

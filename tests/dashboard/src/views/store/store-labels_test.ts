@@ -9,7 +9,7 @@ describe("Store labels", () => {
   test("renders TCS internal category keys as user-facing labels", () => {
     expect(tcsCategoryLabel("building_block", "ja")).toBe("基盤");
     expect(tcsCategoryLabel("example", "ja")).toBe("サンプル");
-    expect(tcsCategoryLabel("service", "ja")).toBe("アプリ");
+    expect(tcsCategoryLabel("service", "ja")).toBe("サービス");
     expect(tcsCategoryLabel("productivity", "ja")).toBe("仕事・文書");
     expect(tcsCategoryLabel("templates", "ja")).toBe("テンプレート");
     expect(tcsCategoryLabel("workspace", "ja")).toBe("ワークスペース");

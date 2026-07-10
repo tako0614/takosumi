@@ -40,4 +40,53 @@ describe("ConnectionsTab per-connection test state", () => {
     expect(source).toContain("<Show when={testError(connection.id)}>");
     expect(source).toContain("busy={testBusy(connection.id)}");
   });
+
+  test("the verified hint only follows the last-created connection", () => {
+    // Testing some OTHER row must not corrupt lastCreatedReady() / the
+    // install-return offer for a connection that was never verified.
+    expect(source).toContain(
+      "const isLastCreated = lastCreatedConnectionId() === id;",
+    );
+    expect(source).toContain(
+      "if (isLastCreated) setLastCreatedVerifiedHint(false);",
+    );
+    expect(source).toContain(
+      "if (isLastCreated) setLastCreatedVerifiedHint(true);",
+    );
+    // No unconditional hint writes remain inside runTest.
+    const runTestBody = source.slice(
+      source.indexOf("const runTest = async"),
+      source.indexOf("const remove = createAction"),
+    );
+    expect(runTestBody).not.toMatch(/^\s*setLastCreatedVerifiedHint\(/m);
+  });
+
+  test("remove is busy per connection row, not for the whole list", () => {
+    expect(source).toContain("const [removingId, setRemovingId]");
+    expect(source).toContain("setRemovingId(id);");
+    expect(source).toMatch(/finally \{\s*setRemovingId\(null\);\s*\}/);
+    expect(source).toContain(
+      "busy={remove.busy() && removingId() === connection.id}",
+    );
+  });
+});
+
+describe("ConnectionsTab guided-first add flow", () => {
+  test("guided presets are the default surface; BYOK is the advanced path", () => {
+    expect(source).toContain(
+      "PROVIDERS[0]?.provider ?? GENERIC_ENV_PROVIDER_OPTION",
+    );
+    // The quiet advanced entry into the raw env editor.
+    expect(source).toContain("const openByokEditor = ()");
+    expect(source).toContain('t("conn.add.genericEnvOption")');
+    // The old inverted IA (BYOK-first with a preset-shortcut intro) is gone.
+    expect(source).not.toContain("wc-preset-intro");
+    expect(source).not.toContain('t("conn.presets.body")');
+    expect(source).not.toContain('t("conn.byok.backToByok")');
+  });
+
+  test("the BYOK panel heading sits at h2 under the page h1", () => {
+    expect(source).toContain('<h2 class="wc-byok-title">');
+    expect(source).not.toContain("<h4");
+  });
 });

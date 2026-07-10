@@ -196,11 +196,18 @@ describe("dashboard shell navigation layout", () => {
     expect(userMenuSource).not.toContain('href="/connections"');
     expect(userMenuSource).not.toContain('href="/advanced/workspace"');
     expect(userMenuSource).not.toContain('href="/billing"');
-    // Switcher stays read/select only (no inline workspace creation), but
-    // remains visibly current even when there is only one workspace.
+    // The switcher remains visibly current even when there is only one
+    // workspace, and offers a minimal inline create form (name only — the
+    // handle is generated like the /new flow's first-workspace path).
     expect(spaceSwitcherSource).toContain("loadedWorkspaces().length > 0");
     expect(spaceSwitcherSource).toContain('href="/advanced/workspace"');
     expect(spaceSwitcherSource).toContain("topbar-workspace-settings");
+    expect(spaceSwitcherSource).toContain('t("workspace.start.create")');
+    expect(spaceSwitcherSource).toContain("createWorkspace({");
+    expect(spaceSwitcherSource).toContain("newWorkspaceHandle()");
+    expect(spaceSwitcherSource).toContain(
+      'window.dispatchEvent(new Event("takosumi:workspaces-changed"))',
+    );
     expect(spaceSwitcherSource).not.toContain("disabled={");
     expect(spaceSwitcherSource).not.toContain("createSpace");
     // Vocabulary parity. Keys are flat with dots, so assert direct access —
@@ -217,8 +224,6 @@ describe("dashboard shell navigation layout", () => {
     expect(ja["settings.manage.title"]).toBeTruthy();
     expect(en["workspace.settings"]).toBe("Workspace settings");
     expect(ja["workspace.settings"]).toBe("ワークスペース設定");
-    expect(en["workspace.change"]).toBe("Switch");
-    expect(ja["workspace.change"]).toBe("切り替え");
     expect(en["workspaceSettings.title"]).toBe("Settings");
     expect(ja["workspaceSettings.title"]).toBe("設定");
   });

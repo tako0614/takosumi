@@ -236,4 +236,22 @@ describe("Cloud resources view", () => {
     expect(appViewsCssSource).toContain(".av-cloud-res-more");
     expect(appViewsCssSource).toContain(".av-cloud-res-group-head .tg-btn");
   });
+
+  test("revoking another key does not destroy the once-only created-token display", () => {
+    // The created token is shown exactly once; clearing it must be gated on
+    // the revoked id matching the key it belongs to.
+    expect(cloudResourcesViewSource).toContain(
+      "const [createdTokenId, setCreatedTokenId]",
+    );
+    expect(cloudResourcesViewSource).toContain(
+      "setCreatedTokenId(response.token_record.id);",
+    );
+    expect(cloudResourcesViewSource).toMatch(
+      /if \(createdTokenId\(\) === tokenId\) \{\s*setCreatedToken\(null\);\s*setCreatedTokenId\(null\);\s*\}/,
+    );
+    // No unconditional clear remains in the revoke path.
+    expect(cloudResourcesViewSource).not.toMatch(
+      /revokeCloudApiKey\(tokenId\);\s*setCreatedToken\(null\);/,
+    );
+  });
 });

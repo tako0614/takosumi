@@ -24,7 +24,11 @@ describe("provider connection labels", () => {
     expect(providerConnectionStatusLabel("revoked")).toBe(
       t("status.connection.revoked"),
     );
-    expect(providerConnectionStatusLabel("revoked")).not.toContain("無効");
+    // State-label honesty: a revoked connection record is NOT deleted — the
+    // badge must not claim 削除. It reads 無効化済み, matching the
+    // notification copy （〜が無効になりました）.
+    expect(providerConnectionStatusLabel("revoked")).not.toContain("削除");
+    expect(providerConnectionStatusLabel("revoked")).toContain("無効化");
     expect(providerConnectionTone("revoked")).toBe("muted");
 
     expect(providerConnectionStatusLabel("error")).toBe(
