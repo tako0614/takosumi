@@ -200,6 +200,7 @@ export type InstallConfigInstallProjection =
         readonly redirectUri?: string;
       };
       readonly callbackPath?: string;
+      readonly scopes?: readonly string[];
     }
   | {
       readonly kind: "artifact";

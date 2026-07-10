@@ -25,6 +25,7 @@ interface ResolvedTakosumiAccountsOidcExperience {
   readonly callbackPath: string;
   readonly accountsUrlVariable?: string;
   readonly redirectUriVariable?: string;
+  readonly scopes?: readonly string[];
 }
 
 const DEFAULT_TAKOSUMI_ACCOUNTS_OIDC: ResolvedTakosumiAccountsOidcExperience = {
@@ -73,7 +74,7 @@ export async function ensureTakosumiAccountsOidcForCapsule(input: {
         capsuleId: input.capsule.id,
         issuerUrl,
         redirectUris,
-        allowedScopes: ["openid", "profile", "email"],
+        allowedScopes: oidcAllowedScopes(oidcExperience.scopes),
         tokenEndpointAuthMethod: "none",
         updatedAt: now,
       }
@@ -87,7 +88,7 @@ export async function ensureTakosumiAccountsOidcForCapsule(input: {
         namespacePath: TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_IDENTITY_OIDC,
         issuerUrl,
         redirectUris,
-        allowedScopes: ["openid", "profile", "email"],
+        allowedScopes: oidcAllowedScopes(oidcExperience.scopes),
         subjectMode: "pairwise",
         tokenEndpointAuthMethod: "none",
         clientSecretHash: undefined,
@@ -111,6 +112,17 @@ export async function ensureTakosumiAccountsOidcForCapsule(input: {
     variableMapping,
     updatedAt: new Date(now).toISOString(),
   });
+}
+
+function oidcAllowedScopes(scopes: readonly string[] | undefined): string[] {
+  const configured = scopes?.map((scope) => scope.trim()).filter(Boolean) ?? [];
+  const normalized = [...new Set(configured)];
+  return normalized.includes("openid")
+    ? normalized
+    : [
+        "openid",
+        ...(normalized.length > 0 ? normalized : ["profile", "email"]),
+      ];
 }
 
 async function oidcClientForCapsuleOrMappedClientId(

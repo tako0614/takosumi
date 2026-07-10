@@ -570,6 +570,7 @@ export interface InstallConfig {
               readonly redirectUri?: string;
             };
             readonly callbackPath?: string;
+            readonly scopes?: readonly string[];
           }
         | {
             readonly kind: "artifact";
