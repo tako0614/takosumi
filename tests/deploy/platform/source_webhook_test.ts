@@ -42,6 +42,7 @@ import {
   planStaleCapsuleUpdates,
   repairStaleOpenTofuRuns,
   scheduledSourcePollBatch,
+  schedulePlatformSideEffect,
   summarizePrometheusMetrics,
   verifyPlatformCloudExtensionPersonalAccessToken,
   verifyPlatformCloudExtensionServiceAccessToken,
@@ -935,6 +936,24 @@ test("platform OIDC metric classifier covers issuer and upstream auth paths", ()
   expect(oidcMetricRoute("/v1/auth/upstream/google/callback")).toBe(
     "/v1/auth/upstream/*",
   );
+});
+
+test("platform side effects leave the response path through waitUntil", async () => {
+  let resolveTask!: () => void;
+  const task = new Promise<void>((resolve) => {
+    resolveTask = resolve;
+  });
+  let scheduled: Promise<unknown> | undefined;
+
+  await schedulePlatformSideEffect(task, {
+    waitUntil(promise) {
+      scheduled = promise;
+    },
+  });
+
+  expect(scheduled).toBe(task);
+  resolveTask();
+  await scheduled;
 });
 
 test("platform assets are served with immutable cache headers", async () => {
