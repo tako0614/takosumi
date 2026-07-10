@@ -85,7 +85,11 @@ export function ActionError(props: {
 }): JSX.Element {
   return (
     <Show when={props.error()}>
-      {(m) => <p class="sign-in-error">{m()}</p>}
+      {(m) => (
+        <p class="sign-in-error" role="alert">
+          {m()}
+        </p>
+      )}
     </Show>
   );
 }

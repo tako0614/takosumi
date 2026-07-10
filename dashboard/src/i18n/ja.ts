@@ -658,7 +658,7 @@ export const ja = {
   "new.sourceAccess.noConnections":
     "このワークスペースには、検証済みの取得元アクセスがまだありません。",
   "new.sourceAccess.username": "ユーザー名",
-  "new.sourceAccess.accessToken": "Access token",
+  "new.sourceAccess.accessToken": "アクセストークン",
   "new.sourceAccess.tokenPlaceholder": "読み取り専用 token",
   "new.sourceAccess.saveToken": "アクセス情報を保存",
   "new.sourceAccess.tokenBody":
