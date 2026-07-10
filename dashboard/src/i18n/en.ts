@@ -316,6 +316,7 @@ export const en: Record<keyof typeof ja, string> = {
   "app.source.refPath": "Version / folder",
   "app.source.status": "Fetch status",
   "app.source.loading": "Loading source info.",
+  "app.source.unavailable": "Source info is unavailable.",
   "app.source.supportBody":
     "Source and reference details. Usually no change is needed.",
   "app.info.title": "Reference info",
@@ -1351,7 +1352,7 @@ export const en: Record<keyof typeof ja, string> = {
   "billing.invoices.open": "Open",
   "billing.usage.title": "Usage",
   "billing.usage.openHint": "Open usage history to load recent entries.",
-  "billing.usage.moreAvailable": "More usage entries are available.",
+  "billing.usage.moreAvailable": "Showing the most recent usage entries.",
   "billing.usage.loading": "Loading usage...",
   "billing.usage.error": "Could not load usage: {message}",
   "billing.usage.empty": "No usage yet.",
