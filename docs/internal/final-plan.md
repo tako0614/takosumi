@@ -261,7 +261,15 @@ comments as the metadata schema.
         "issuerUrl": "takosumi_accounts_issuer_url",
         "clientId": "takosumi_accounts_client_id"
       },
-      "callbackPath": "/api/auth/callback/takos"
+      "callbackPath": "/api/auth/callback/takos",
+      "scopes": [
+        "openid",
+        "profile",
+        "email",
+        "offline_access",
+        "capsules:read",
+        "capsules:write"
+      ]
     },
     {
       "kind": "artifact",

@@ -144,6 +144,11 @@ works without it. The file may describe `modulePath`, icon, visible inputs,
 `installExperience`, and output display hints, but it must not own `git`,
 `source`, `ref`, `commit`, `resolvedCommit`, or `installConfigId`.
 
+`installExperience` の `oidc_client` projection は、public OIDC client metadata
+(issuer、client id、redirect URI) に加えて必要な OAuth scope を宣言できます。
+`openid` は必須で、scope は重複のない non-empty token に限ります。client secret、access
+token、refresh token は repository metadata、OpenTofu variables、state、Output に投影しません。
+
 Takosumi can reuse SourceSnapshots, provider mirrors, provider plugin caches,
 runner capacity controls, package caches, and clear progress phases. The default
 fast path is a Git CI/release artifact consumed and SHA-256-verified by the

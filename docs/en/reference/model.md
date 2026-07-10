@@ -138,6 +138,13 @@ release authority: branch, tag, commit, SourceSnapshot, and update policy stay
 in the Source / Run flow. Switching Store nodes changes the read source for
 listings and presentation metadata, not the Capsule execution model.
 
+Repositories may optionally publish `.well-known/tcs.json` presentation
+metadata. Its `installExperience` `oidc_client` projection may declare public
+OIDC client metadata and required OAuth scopes. `openid` is required and scopes
+must be unique, non-empty tokens. Client secrets, access tokens, and refresh
+tokens are never projected through repository metadata, OpenTofu variables,
+state, or Outputs.
+
 Takosumi can reuse SourceSnapshots, provider mirrors, provider plugin caches,
 runner capacity controls, package caches, and clear progress phases. The default
 fast path is a Git CI/release artifact consumed and SHA-256-verified by the
