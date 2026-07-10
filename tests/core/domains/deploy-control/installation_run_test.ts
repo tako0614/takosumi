@@ -3073,7 +3073,12 @@ output "attachments_bucket" {
   const installation = await store.getInstallation("inst_fixture");
   expect(installation?.compatibilityReportId).toBe("caprep_compat_auto");
   expect(installation?.compatibilityStatus).toBe("ready");
-  expect(sourceFileReadOptions).toEqual([{ modulePath: "deploy/opentofu" }]);
+  expect(sourceFileReadOptions).toEqual([
+    {
+      modulePath: "deploy/opentofu",
+      runId: "ccr_compat_auto",
+    },
+  ]);
   expect(runner.planJobs).toHaveLength(1);
 });
 
@@ -3326,6 +3331,57 @@ test("installation plan ignores a stale cached CompatibilityReport when a matchi
   const installation = await store.getInstallation("inst_fixture");
   expect(installation?.compatibilityReportId).toBe("caprep_current_preflight");
   expect(runner.planJobs).toHaveLength(1);
+});
+
+test("failed compatibility analysis does not replace the Capsule current report", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  const seeded = await seedRunnableInstallationModel(store, {
+    environment: "preview",
+  });
+  await store.putCapsuleCompatibilityReport({
+    id: "caprep_previous",
+    sourceId: seeded.source.id,
+    installationId: seeded.installation.id,
+    sourceSnapshotId: "snap_previous",
+    level: "ready",
+    findings: [],
+    providers: [],
+    resources: [],
+    dataSources: [],
+    provisioners: [],
+    createdAt: "2026-06-06T00:00:00.000Z",
+  });
+  await store.putInstallation({
+    ...seeded.installation,
+    compatibilityReportId: "caprep_previous",
+    compatibilityStatus: "ready",
+  });
+  const sourcesService = new SourcesService({
+    store,
+    now: () => new Date("2026-06-07T00:00:00.000Z"),
+    newId: (prefix) => `${prefix}_failed_check`,
+    readCapsuleSourceFiles: () => {
+      throw new Error("compatibility runner unavailable");
+    },
+  });
+  const controller = new OpenTofuDeploymentController({
+    store,
+    runner,
+    sourcesService,
+    vault: fakeProviderVault() as never,
+    now: sequenceNow(1),
+    newId: deterministicIds(),
+  });
+
+  await expect(
+    controller.createInstallationPlan(seeded.installation.id),
+  ).rejects.toThrow();
+
+  const installation = await store.getInstallation(seeded.installation.id);
+  expect(installation?.compatibilityReportId).toBe("caprep_previous");
+  expect(installation?.compatibilityStatus).toBe("ready");
+  expect(runner.planJobs).toHaveLength(0);
 });
 
 test("installation plan dispatches normalized module files for auto-capsulized CompatibilityReport", async () => {

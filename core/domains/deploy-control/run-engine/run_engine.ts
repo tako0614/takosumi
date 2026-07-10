@@ -1685,12 +1685,12 @@ export class RunEngine {
             ...(modulePath ? { modulePath } : {}),
           },
         );
+    this.#assertCompatibilityReportRunnable(report, policy);
     await this.#store.patchInstallation(installation.id, {
       compatibilityReportId: report.id,
       compatibilityStatus: report.level,
       updatedAt: new Date(this.#now()).toISOString(),
     });
-    this.#assertCompatibilityReportRunnable(report, policy);
     return report;
   }
 
