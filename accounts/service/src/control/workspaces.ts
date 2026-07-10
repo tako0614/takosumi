@@ -1331,13 +1331,28 @@ async function createCapsule(
     ...(autoUpdate ? { autoUpdate: true } : {}),
   });
   if (resolvedInstallConfig && issuer) {
-    await ensureTakosumiAccountsOidcForCapsule({
-      operations,
-      store,
-      issuer,
-      capsule: installation,
-      installConfig: resolvedInstallConfig,
-    });
+    try {
+      await ensureTakosumiAccountsOidcForCapsule({
+        operations,
+        store,
+        issuer,
+        capsule: installation,
+        installConfig: resolvedInstallConfig,
+      });
+    } catch (error) {
+      // Compensate: never leave a half-created capsule behind when the OIDC
+      // client provisioning fails — the caller sees the error, and without
+      // this the workspace keeps a ghost capsule that was never installable.
+      try {
+        await operations.installations.abandonUnappliedCapsule?.(
+          installation.id,
+          "takosumi accounts oidc provisioning failed during create",
+        );
+      } catch {
+        // Best-effort; surface the original failure.
+      }
+      throw error;
+    }
   }
   return jsonStatus({ capsule: publicCapsule(installation) }, 201);
 }
