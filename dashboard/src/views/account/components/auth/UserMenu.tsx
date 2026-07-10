@@ -7,6 +7,7 @@ import { useNavigate } from "@solidjs/router";
 import { Clock3, HelpCircle, LogOut, UserCircle2 } from "lucide-solid";
 import {
   clearSession,
+  onSessionChange,
   readSession,
   type SessionRecord,
 } from "../../lib/session.ts";
@@ -30,19 +31,33 @@ export default function UserMenu() {
   const [session, setSession] = createSignal<SessionRecord | null>(null);
   const nav = useNavigate();
   let containerRef: HTMLDivElement | undefined;
+  let triggerRef: HTMLButtonElement | undefined;
 
   onMount(() => {
+    // The first readSession() often returns null while /session/me is still
+    // inflight; subscribe so displayName/email fill in once it resolves.
     setSession(readSession());
+    const unsubscribe = onSessionChange(setSession);
     const onDocClick = (e: MouseEvent) => {
       if (!containerRef) return;
-      if (!containerRef.contains(e.target as Node)) setOpen(false);
+      if (containerRef.contains(e.target as Node)) return;
+      if (!open()) return;
+      // Check before closing: removing the popup drops focus to <body> when
+      // the click landed on a non-focusable surface.
+      const focusWasInside = containerRef.contains(document.activeElement);
+      setOpen(false);
+      if (focusWasInside) triggerRef?.focus();
     };
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
+      if (e.key === "Escape" && open()) {
+        setOpen(false);
+        triggerRef?.focus();
+      }
     };
     document.addEventListener("click", onDocClick);
     document.addEventListener("keydown", onKeyDown);
     onCleanup(() => {
+      unsubscribe();
       document.removeEventListener("click", onDocClick);
       document.removeEventListener("keydown", onKeyDown);
     });
@@ -72,14 +87,20 @@ export default function UserMenu() {
         type="button"
         class="topbar-user"
         aria-label={t("shell.userMenu")}
-        aria-haspopup="true"
+        // No haspopup hint: the popup is a role="group" of links/controls,
+        // not a role="menu"; aria-expanded alone matches the real semantics.
         aria-expanded={open()}
+        ref={triggerRef}
         onClick={() => setOpen(!open())}
       >
         <span class="topbar-avatar">{initial()}</span>
       </button>
       <Show when={open()}>
-        <div class="user-menu-pop" role="group" aria-label={t("shell.userMenu")}>
+        <div
+          class="user-menu-pop"
+          role="group"
+          aria-label={t("shell.userMenu")}
+        >
           <div class="user-menu-id">
             <div class="user-menu-name">{label()}</div>
             <Show when={session()?.displayName && session()?.email}>

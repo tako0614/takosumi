@@ -564,7 +564,7 @@
   gap: var(--tg-s-3);
   margin: var(--tg-s-1) var(--tg-s-1) var(--tg-s-4);
 }
-.av-section-head h2 {
+.av-section-head h1 {
   margin: 0;
   font-family: var(--tg-font-display);
   font-size: var(--tg-fs-lg);

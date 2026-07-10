@@ -897,7 +897,10 @@ function Inner() {
       installExperienceForCurrentSource(),
     );
     const baseDomain = managedBaseDomain(endpoint?.baseDomain);
-    const label = managedServiceLabel(workspaceHandle(), serviceNameInputValue());
+    const label = managedServiceLabel(
+      workspaceHandle(),
+      serviceNameInputValue(),
+    );
     return label && baseDomain ? `${label}.${baseDomain}` : "";
   };
   const useSuggestedServiceName = () => {
@@ -2321,6 +2324,16 @@ function Inner() {
 
   const stepIcon = (s: StepState): string =>
     s === "done" ? "✓" : s === "error" ? "✕" : s === "running" ? "…" : "·";
+  // Text twin of the glyph — "✓"/"·" read as nothing useful (or nonsense) in
+  // a screen reader, so the glyph is aria-hidden and this announces instead.
+  const stepStateLabel = (s: StepState): string =>
+    s === "done"
+      ? t("new.step.state.done")
+      : s === "error"
+        ? t("new.step.state.failed")
+        : s === "running"
+          ? t("new.step.state.running")
+          : t("new.step.state.pending");
   const stepClass = (s: StepState): string =>
     s === "running"
       ? "is-active"
@@ -3411,23 +3424,39 @@ function Inner() {
                     <summary>{t("new.step.technical")}</summary>
                     <ol class="wb-steps">
                       <li class={`wb-step ${stepClass(stepSource())}`}>
-                        <span class="wb-step-icon">
+                        <span class="wb-step-icon" aria-hidden="true">
                           {stepIcon(stepSource())}
+                        </span>
+                        <span class="sr-only">
+                          {stepStateLabel(stepSource())}
                         </span>
                         {t("new.step.register")}
                       </li>
                       <li class={`wb-step ${stepClass(stepSync())}`}>
-                        <span class="wb-step-icon">{stepIcon(stepSync())}</span>
+                        <span class="wb-step-icon" aria-hidden="true">
+                          {stepIcon(stepSync())}
+                        </span>
+                        <span class="sr-only">
+                          {stepStateLabel(stepSync())}
+                        </span>
                         {t("new.step.sync")}
                       </li>
                       <li class={`wb-step ${stepClass(stepInstall())}`}>
-                        <span class="wb-step-icon">
+                        <span class="wb-step-icon" aria-hidden="true">
                           {stepIcon(stepInstall())}
+                        </span>
+                        <span class="sr-only">
+                          {stepStateLabel(stepInstall())}
                         </span>
                         {t("new.step.create")}
                       </li>
                       <li class={`wb-step ${stepClass(stepPlan())}`}>
-                        <span class="wb-step-icon">{stepIcon(stepPlan())}</span>
+                        <span class="wb-step-icon" aria-hidden="true">
+                          {stepIcon(stepPlan())}
+                        </span>
+                        <span class="sr-only">
+                          {stepStateLabel(stepPlan())}
+                        </span>
                         {t("new.step.plan")}
                       </li>
                     </ol>

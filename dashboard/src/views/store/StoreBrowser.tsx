@@ -28,6 +28,7 @@ import {
   removeTcsServer,
 } from "../../lib/tcs-servers.ts";
 import type { TcsListing, TcsSort } from "../../lib/tcs-client.ts";
+import { inertBackground } from "../../lib/modal-inert.ts";
 import "./StoreBrowser.css";
 
 const STR = {
@@ -58,8 +59,15 @@ const STR = {
   defaultStore: { ja: "既定のストア", en: "Default store" },
   remove: { ja: "削除", en: "Remove" },
   unreachable: { ja: "接続不可", en: "unreachable" },
+  reachable: { ja: "接続済み", en: "connected" },
   alsoOn: { ja: "他にもあり", en: "also elsewhere" },
   install: { ja: "追加", en: "Add" },
+  installAria: { ja: "追加: {name}", en: "Add {name}" },
+  loadingAnnounce: { ja: "読み込み中…", en: "Loading…" },
+  resultsAnnounce: {
+    ja: "{n} 件のサービスが見つかりました",
+    en: "{n} services found",
+  },
   close: { ja: "閉じる", en: "Close" },
   source: { ja: "取得元の詳細", en: "Source details" },
   technicalDetails: {
@@ -272,13 +280,18 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
       <button
         type="button"
         class="tcs-btn tcs-primary"
+        // Every card repeats the same visible "追加"/"Add"; the accessible
+        // name carries the listing so the buttons are distinguishable.
+        aria-label={s("installAria", props.locale).replace(
+          "{name}",
+          pick(listing.name, props.locale),
+        )}
         onClick={() => props.onConfigure(listing)}
       >
         {s("install", props.locale)}
       </button>
     );
   };
-
 
   return (
     <div class="tcs-root">
@@ -334,6 +347,19 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
         </Show>
       </div>
 
+      {/* Persistently-mounted polite live region: search / sort / load
+          outcomes are otherwise conveyed only by the grid repainting. */}
+      <p class="sr-only" role="status" aria-live="polite">
+        {agg().loading
+          ? s("loadingAnnounce", props.locale)
+          : displayed().length === 0
+            ? s("none", props.locale)
+            : s("resultsAnnounce", props.locale).replace(
+                "{n}",
+                String(displayed().length),
+              )}
+      </p>
+
       <Show when={showSourceControls() && showServers()}>
         <div class="tcs-servers">
           <ul>
@@ -343,7 +369,13 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
                   <span
                     class="tcs-dot"
                     classList={{ ok: st.ok, bad: !st.ok }}
+                    aria-hidden="true"
                   />
+                  {/* The green dot is color-only; mirror the ok state as
+                      text (the bad state already shows "unreachable"). */}
+                  <Show when={st.ok}>
+                    <span class="sr-only">{s("reachable", props.locale)}</span>
+                  </Show>
                   <span class="tcs-mono">
                     {st.isDefault ? s("defaultStore", props.locale) : st.base}
                   </span>
@@ -428,7 +460,7 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
                       class="tcs-card-open"
                       onClick={() => setSelected(listing)}
                     >
-                      <h3>{pick(listing.name, props.locale)}</h3>
+                      <h2>{pick(listing.name, props.locale)}</h2>
                       <p>{pick(listing.description, props.locale)}</p>
                     </button>
                   </div>
@@ -462,14 +494,20 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
 
       <Show when={selected()}>
         {(listing) => {
-          // Dialog semantics for the detail drawer: focus moves in on open
-          // (so Escape reaches it), Escape closes, focus restores on close.
+          // Dialog semantics for the detail drawer: the backgrounded app is
+          // inert while open, focus moves in on open (so Escape reaches it),
+          // Escape closes, focus restores on close.
+          let overlayRef: HTMLDivElement | undefined;
           let drawerRef: HTMLElement | undefined;
+          let restoreInert: (() => void) | undefined;
           const previous =
             typeof document !== "undefined"
               ? (document.activeElement as HTMLElement | null)
               : null;
-          onMount(() => queueMicrotask(() => drawerRef?.focus()));
+          onMount(() => {
+            if (overlayRef) restoreInert = inertBackground(overlayRef);
+            queueMicrotask(() => drawerRef?.focus());
+          });
           const onKeyDown = (e: KeyboardEvent) => {
             if (e.key === "Escape") {
               setSelected(null);
@@ -508,81 +546,87 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
             if (typeof document !== "undefined") {
               document.removeEventListener("keydown", onKeyDown);
             }
+            // Restore before refocusing: an inert element refuses focus.
+            restoreInert?.();
             previous?.focus?.();
           });
           return (
-          <div class="tcs-overlay" onClick={() => setSelected(null)}>
-            <aside
-              class="tcs-detail"
-              role="dialog"
-              aria-modal="true"
-              aria-label={pick(listing().name, props.locale)}
-              tabindex="-1"
-              ref={drawerRef}
-              onClick={(e) => e.stopPropagation()}
+            <div
+              class="tcs-overlay"
+              ref={overlayRef}
+              onClick={() => setSelected(null)}
             >
-              <header>
-                <div class="tcs-detail-title">
-                  {listingIcon(listing(), props.locale)}
-                  <div>
-                    <h3>{pick(listing().name, props.locale)}</h3>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  class="tcs-btn tcs-sm"
-                  onClick={() => setSelected(null)}
-                >
-                  {s("close", props.locale)}
-                </button>
-              </header>
-              <p class="tcs-muted">
-                {pick(listing().description, props.locale)}
-              </p>
-              <div class="tcs-detail-actions">
-                {installButton(listing())}
-              </div>
-              <details class="tcs-advanced">
-                <summary>{s("technicalDetails", props.locale)}</summary>
-                <section>
-                  <h5>{s("source", props.locale)}</h5>
-                  <dl class="tcs-detail-list">
+              <aside
+                class="tcs-detail"
+                role="dialog"
+                aria-modal="true"
+                aria-label={pick(listing().name, props.locale)}
+                tabindex="-1"
+                ref={drawerRef}
+                onClick={(e) => e.stopPropagation()}
+              >
+                <header>
+                  <div class="tcs-detail-title">
+                    {listingIcon(listing(), props.locale)}
                     <div>
-                      <dt>{s("sourceLocation", props.locale)}</dt>
-                      <dd class="tcs-mono tcs-break">{listing().source.git}</dd>
+                      <h2>{pick(listing().name, props.locale)}</h2>
                     </div>
-                    <Show when={listing().source.path}>
-                      {(path) => (
-                        <div>
-                          <dt>{s("folder", props.locale)}</dt>
-                          <dd class="tcs-mono tcs-break">{path()}</dd>
-                        </div>
+                  </div>
+                  <button
+                    type="button"
+                    class="tcs-btn tcs-sm"
+                    onClick={() => setSelected(null)}
+                  >
+                    {s("close", props.locale)}
+                  </button>
+                </header>
+                <p class="tcs-muted">
+                  {pick(listing().description, props.locale)}
+                </p>
+                <div class="tcs-detail-actions">{installButton(listing())}</div>
+                <details class="tcs-advanced">
+                  <summary>{s("technicalDetails", props.locale)}</summary>
+                  <section>
+                    <h3>{s("source", props.locale)}</h3>
+                    <dl class="tcs-detail-list">
+                      <div>
+                        <dt>{s("sourceLocation", props.locale)}</dt>
+                        <dd class="tcs-mono tcs-break">
+                          {listing().source.git}
+                        </dd>
+                      </div>
+                      <Show when={listing().source.path}>
+                        {(path) => (
+                          <div>
+                            <dt>{s("folder", props.locale)}</dt>
+                            <dd class="tcs-mono tcs-break">{path()}</dd>
+                          </div>
+                        )}
+                      </Show>
+                    </dl>
+                    <Show
+                      when={repoUrl(listing().source.git)}
+                      fallback={
+                        <span class="tcs-mono tcs-break">
+                          {listing().source.git}
+                        </span>
+                      }
+                    >
+                      {(href) => (
+                        <a
+                          class="tcs-link"
+                          href={href()}
+                          target="_blank"
+                          rel="noreferrer noopener"
+                        >
+                          {s("openRepo", props.locale)} ↗
+                        </a>
                       )}
                     </Show>
-                  </dl>
-                  <Show
-                    when={repoUrl(listing().source.git)}
-                    fallback={
-                      <span class="tcs-mono tcs-break">
-                        {listing().source.git}
-                      </span>
-                    }
-                  >
-                    {(href) => (
-                      <a
-                        class="tcs-link"
-                        href={href()}
-                        target="_blank"
-                        rel="noreferrer noopener"
-                      >
-                        {s("openRepo", props.locale)} ↗
-                      </a>
-                    )}
-                  </Show>
-                </section>
-              </details>
-            </aside>
-          </div>
+                  </section>
+                </details>
+              </aside>
+            </div>
           );
         }}
       </Show>

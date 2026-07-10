@@ -48,7 +48,9 @@ describe("dashboard shell navigation layout", () => {
   test("the chrome is a route-level layout, not a per-view wrapper", () => {
     // ShellLayout = AuthGuard + AppShell, mounted once in the route table.
     expect(shellLayoutSource).toContain("AuthGuard");
-    expect(shellLayoutSource).toContain("<AppShell>{props.children}</AppShell>");
+    expect(shellLayoutSource).toContain(
+      "<AppShell>{props.children}</AppShell>",
+    );
     expect(indexSource).toContain("<Route component={ShellLayout}>");
     // No view may re-wrap itself in the chrome (the layout owns it).
     const viewsThatMustNotWrap = [
@@ -148,12 +150,16 @@ describe("dashboard shell navigation layout", () => {
   });
 
   test("the store is a first-class tab (no /store → /new bounce)", () => {
-    expect(indexSource).toContain('<Route path="/store" component={StoreView} />');
+    expect(indexSource).toContain(
+      '<Route path="/store" component={StoreView} />',
+    );
     expect(indexSource).not.toContain(
       '<Route path="/store" component={() => <RedirectWithQuery to="/new" />} />',
     );
     // /new stays alive as the install-execution flow (external /install links).
-    expect(indexSource).toContain('<Route path="/new" component={NewAppView} />');
+    expect(indexSource).toContain(
+      '<Route path="/new" component={NewAppView} />',
+    );
     expect(indexSource).toContain('path="/install"');
   });
 
@@ -229,6 +235,16 @@ describe("dashboard shell navigation layout", () => {
     );
     expect(spaceSwitcherSource).not.toContain("topbar-workspace-select");
     expect(spaceSwitcherSource).toContain("setSwitcherOpen(false)");
+    // a11y contract: the menu is named, and the trigger names the current
+    // workspace (the compact/topbar variant shows only the avatar letter).
+    expect(spaceSwitcherSource).toContain(
+      "aria-labelledby={`${switcherId()}-label`}",
+    );
+    expect(spaceSwitcherSource).toContain('t("workspace.switcherAria"');
+    // Popup is a role="group" of links/controls, not a menu — the trigger
+    // must not claim aria-haspopup.
+    expect(userMenuSource).not.toContain("aria-haspopup");
+    expect(userMenuSource).toContain("onSessionChange");
     expect(workspaceSettingsSource).toContain("when={workspaceId()}");
     expect(workspaceSettingsSource).toContain("keyed");
     expect(workspaceSettingsSource).toContain(

@@ -24,14 +24,16 @@ describe("StoreBrowser install UI", () => {
     expect(storeBrowserSource).toContain('class="tcs-card-top"');
     expect(storeBrowserSource).toContain('class="tcs-card-main"');
     expect(storeBrowserSource).toContain('class="tcs-detail-title"');
+    // Card titles are h2: the page h1 (store title) is the only heading
+    // above them, so h3 would skip a level.
     expect(storeBrowserSource).toContain(
-      "<h3>{pick(listing.name, props.locale)}</h3>",
+      "<h2>{pick(listing.name, props.locale)}</h2>",
     );
     expect(storeBrowserSource).not.toContain(
-      "<h4>{pick(listing.name, props.locale)}</h4>",
+      "<h3>{pick(listing.name, props.locale)}</h3>",
     );
-    expect(storeBrowserCss).toContain(".tcs-card-open h3");
-    expect(storeBrowserCss).not.toContain(".tcs-card-open h4");
+    expect(storeBrowserCss).toContain(".tcs-card-open h2");
+    expect(storeBrowserCss).not.toContain(".tcs-card-open h3");
     // Face is the repo's declared icon (full-bleed) with a monogram fallback —
     // not a per-kind glyph. Kind is not a browse facet anymore.
     expect(storeBrowserSource).toContain("function monogramInitials");
@@ -44,9 +46,7 @@ describe("StoreBrowser install UI", () => {
     expect(storeBrowserSource).not.toContain("tcs-badge");
     expect(storeBrowserSource).not.toContain("showKindFilters");
     expect(storeBrowserSource).not.toContain("localListings");
-    expect(storeBrowserSource).toContain(
-      'install: { ja: "追加", en: "Add" }',
-    );
+    expect(storeBrowserSource).toContain('install: { ja: "追加", en: "Add" }');
     expect(storeBrowserSource).toContain('name="storeSource"');
     expect(storeBrowserSource).toContain("l.seenOn.includes(activeStore())");
     expect(storeBrowserSource).toContain("listingForActiveStore");

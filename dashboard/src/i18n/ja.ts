@@ -75,7 +75,8 @@ export const ja = {
 
   // --- settings hub -----------------------------------------------------------
   "settings.title": "設定",
-  "settings.subtitle": "アカウント、支払い、通知、詳しい管理画面はここからです。",
+  "settings.subtitle":
+    "アカウント、支払い、通知、詳しい管理画面はここからです。",
   "settings.section.general": "全般",
   "settings.section.advanced": "詳しい管理",
   "settings.account.title": "アカウント",
@@ -116,6 +117,7 @@ export const ja = {
   "workspace.count": "{n} 件",
   "workspace.change": "切り替え",
   "workspace.settings": "ワークスペース設定",
+  "workspace.switcherAria": "ワークスペースを切り替え（現在: {name}）",
   "workspace.defaultName": "自分のワークスペース",
   "workspace.start.aria": "ワークスペースの開始",
   "workspace.start.kicker": "ワークスペースがありません",
@@ -236,6 +238,7 @@ export const ja = {
   "install.installing": "{name} を追加中…",
   "install.installingGeneric": "追加中…",
   "install.wait": "そのままお待ちください",
+  "install.progressAria": "インストールの進行状況",
   "install.step.fetch": "コードを取得",
   "install.step.check": "互換性を確認",
   "install.step.deploy": "デプロイ",
@@ -283,6 +286,7 @@ export const ja = {
   "services.subtitle": "すべてのサービスと状態。選ぶと詳細へ。",
   "services.empty.title": "まだサービスがありません",
   "services.empty.body": "サービスを追加するとここに表示されます。",
+  "services.deleteAria": "削除: {name}",
 
   // --- Service detail ------------------------------------------------------
   "app.capsuleSub": "サービス",
@@ -301,7 +305,8 @@ export const ja = {
   "app.outputs.activationFailed":
     "公開処理に失敗しました。最近の更新から詳細を確認できます。",
   "app.outputs.empty": "デプロイ後に表示されます。",
-  "app.outputs.loadError": "公開リンクを読み込めませんでした。時間をおいて開き直してください。",
+  "app.outputs.loadError":
+    "公開リンクを読み込めませんでした。時間をおいて開き直してください。",
   "app.outputs.none": "このサービスには公開リンクがありません。",
   "app.outputs.valuesTitle": "その他の値",
   "app.output.launchUrl": "公開アドレス",
@@ -396,7 +401,8 @@ export const ja = {
   "app.settings.supportDetails": "参照情報",
   "app.usage.title": "概算費用（累計）",
   "app.usage.body": "このアプリの記録済み使用量の合計です。",
-  "app.config.savedNeedsDeploy": "保存しました。変更を反映するにはデプロイしてください。",
+  "app.config.savedNeedsDeploy":
+    "保存しました。変更を反映するにはデプロイしてください。",
   "app.config.deployChanges": "変更をデプロイ",
   "app.updateNow": "更新する",
   "app.autoUpdate.title": "自動更新",
@@ -599,6 +605,8 @@ export const ja = {
   "runList.subtitle": "最近の確認・承認・デプロイを新しい順に表示します。",
   "runList.open": "詳細",
   "runList.review": "確認する",
+  "runList.openAria": "詳細を開く: {title}",
+  "runList.reviewAria": "確認する: {title}",
   "runList.empty.title": "まだ更新履歴はありません",
   "runList.empty.message":
     "サービスを追加して変更を確認すると、ここに履歴が並びます。",
@@ -777,6 +785,10 @@ export const ja = {
   "new.step.sync": "内容を取得",
   "new.step.create": "サービスを作成",
   "new.step.plan": "変更を確認",
+  "new.step.state.done": "完了",
+  "new.step.state.failed": "失敗",
+  "new.step.state.running": "実行中",
+  "new.step.state.pending": "未実行",
   "new.error.workspaceRequired": "ワークスペースを選択してください。",
   "new.error.urlRequired": "インストールリンクを入力してください。",
   "new.error.nameRequired": "名前を入力してください。",
@@ -1313,7 +1325,8 @@ export const ja = {
   "billing.subscription.nextBilling": "次回請求",
   "billing.subscription.endsOn": "終了日",
   "billing.subscription.status.cancelAtPeriodEnd": "解約予定",
-  "billing.subscription.cancelNotice": "このサブスクリプションは現在の請求期間の終了時に解約されます。継続するにはプランを再開してください。",
+  "billing.subscription.cancelNotice":
+    "このサブスクリプションは現在の請求期間の終了時に解約されます。継続するにはプランを再開してください。",
   "billing.subscription.manage": "サブスク管理・解約",
   "billing.subscription.manageHint":
     "Stripe の管理画面で支払い方法、請求書、プラン変更、解約を操作できます。",

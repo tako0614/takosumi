@@ -114,6 +114,7 @@ export const en: Record<keyof typeof ja, string> = {
   "workspace.count": "{n} workspaces",
   "workspace.change": "Switch",
   "workspace.settings": "Workspace settings",
+  "workspace.switcherAria": "Switch workspace (current: {name})",
   "workspace.defaultName": "My workspace",
   "workspace.start.aria": "Start workspace",
   "workspace.start.kicker": "No workspace yet",
@@ -234,6 +235,7 @@ export const en: Record<keyof typeof ja, string> = {
   "install.installing": "Adding {name}…",
   "install.installingGeneric": "Adding…",
   "install.wait": "This only takes a moment",
+  "install.progressAria": "Install progress",
   "install.step.fetch": "Fetch code",
   "install.step.check": "Check compatibility",
   "install.step.deploy": "Deploy",
@@ -281,6 +283,7 @@ export const en: Record<keyof typeof ja, string> = {
   "services.subtitle": "Every service and its status. Open one for details.",
   "services.empty.title": "No services yet",
   "services.empty.body": "Services you add will appear here.",
+  "services.deleteAria": "Delete {name}",
 
   // --- Service detail ------------------------------------------------------
   "app.capsuleSub": "Service",
@@ -299,7 +302,8 @@ export const en: Record<keyof typeof ja, string> = {
   "app.outputs.activationFailed":
     "App activation failed. Check recent updates for details.",
   "app.outputs.empty": "Links appear after a deploy.",
-  "app.outputs.loadError": "The public links could not be loaded. Reopen this page shortly.",
+  "app.outputs.loadError":
+    "The public links could not be loaded. Reopen this page shortly.",
   "app.outputs.none": "This service has no public link.",
   "app.outputs.valuesTitle": "Other values",
   "app.output.launchUrl": "Public address",
@@ -598,6 +602,8 @@ export const en: Record<keyof typeof ja, string> = {
   "runList.subtitle": "Recent reviews, approvals, and deploys, newest first.",
   "runList.open": "Details",
   "runList.review": "Review",
+  "runList.openAria": "Open details: {title}",
+  "runList.reviewAria": "Review: {title}",
   "runList.empty.title": "No updates yet",
   "runList.empty.message":
     "After you add a service and review a change, update history appears here.",
@@ -777,6 +783,10 @@ export const en: Record<keyof typeof ja, string> = {
   "new.step.sync": "Fetch content",
   "new.step.create": "Create service",
   "new.step.plan": "Review changes",
+  "new.step.state.done": "Done",
+  "new.step.state.failed": "Failed",
+  "new.step.state.running": "In progress",
+  "new.step.state.pending": "Not started",
   "new.error.workspaceRequired": "Select a workspace.",
   "new.error.urlRequired": "Enter an install link.",
   "new.error.nameRequired": "Enter a name.",
@@ -1094,8 +1104,10 @@ export const en: Record<keyof typeof ja, string> = {
   "notif.event.failedDetail": "Error: {code}",
   "notif.event.failedHint": "Check the run logs for details",
   "notif.event.drift": "A service's real state differs from the saved record",
-  "notif.event.driftDetail": "The live state may have drifted from its settings",
-  "notif.event.stale": "A dependency changed — an update is available for this service",
+  "notif.event.driftDetail":
+    "The live state may have drifted from its settings",
+  "notif.event.stale":
+    "A dependency changed — an update is available for this service",
   "notif.event.staleDetail": "Updated by: {producer}",
   "notif.event.connCreated": "Added connected account “{provider}”",
   "notif.event.connCreatedGeneric": "Added connected account",
@@ -1302,7 +1314,8 @@ export const en: Record<keyof typeof ja, string> = {
   "billing.subscription.nextBilling": "Next billing",
   "billing.subscription.endsOn": "Ends on",
   "billing.subscription.status.cancelAtPeriodEnd": "Cancels at period end",
-  "billing.subscription.cancelNotice": "This subscription will be canceled at the end of the current billing period. Resume the plan to keep it active.",
+  "billing.subscription.cancelNotice":
+    "This subscription will be canceled at the end of the current billing period. Resume the plan to keep it active.",
   "billing.subscription.manage": "Manage or cancel subscription",
   "billing.subscription.manageHint":
     "Open Stripe to manage payment methods, invoices, plan changes, and cancellation.",
