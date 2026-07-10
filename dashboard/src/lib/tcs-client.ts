@@ -107,11 +107,11 @@ export interface TcsListing {
   readonly description: TcsLocalizedText;
   readonly badge: TcsLocalizedText;
   readonly iconUrl?: string;
-  /** Deprecated stale-store field. Repo-owned Store listings must not use it. */
+  /** Repo-owned install schema, attached only after repository hydration. */
   readonly inputs?: readonly TcsListingInput[];
-  /** Deprecated stale-store field. Repo-owned Store listings must not use it. */
+  /** Repo-owned projections, attached only after repository hydration. */
   readonly installExperience?: TcsInstallExperience;
-  /** Deprecated stale-store field. Repo-owned Store listings must not use it. */
+  /** Legacy Store payload field; raw Store responses strip it. */
   readonly outputAllowlist?: readonly TcsListingOutput[];
   readonly publisher?: {
     readonly handle: string;
