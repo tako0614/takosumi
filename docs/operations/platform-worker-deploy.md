@@ -174,6 +174,7 @@ staging / production の vault を先に作るだけなら `--local-only` を併
 - accounts OIDC signing keypair
 - optional public-only previous OIDC signing JWKS during key rotation overlap
 - pairwise subject / launch / export signing secrets
+- managed agent container start token (`TAKOSUMI_MANAGED_AGENT_START_TOKEN`)
 - internal accounts/control-plane bearer or handshake token, when the realized
   platform build enables bearer-gated internal control routes
 - upstream OAuth provider secrets, after provider registration

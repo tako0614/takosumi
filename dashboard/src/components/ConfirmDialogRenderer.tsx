@@ -72,6 +72,9 @@ export function ConfirmDialogRenderer() {
         role="dialog"
         aria-modal="true"
         aria-label={state().title}
+        // The message body is what the user is actually confirming — wire it
+        // as the accessible description so SR users hear it with the title.
+        aria-describedby="tg-confirm-message"
         ref={overlayRef}
         onClick={(e) => {
           if (e.target === e.currentTarget) handleCancel();
@@ -87,7 +90,9 @@ export function ConfirmDialogRenderer() {
             />
           </div>
           <h3 class="tg-confirm-title">{state().title}</h3>
-          <p class="tg-confirm-message">{state().message}</p>
+          <p class="tg-confirm-message" id="tg-confirm-message">
+            {state().message}
+          </p>
           <div class="tg-confirm-actions">
             <button
               type="button"

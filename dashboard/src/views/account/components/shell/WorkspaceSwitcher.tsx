@@ -11,7 +11,7 @@
  * on the current-workspace chip opens a list with the active one checked.
  */
 import { A } from "@solidjs/router";
-import { Check, ChevronsUpDown, Settings } from "lucide-solid";
+import { Check, ChevronsUpDown, Plus, Settings } from "lucide-solid";
 import {
   createEffect,
   createMemo,
@@ -23,6 +23,7 @@ import {
 } from "solid-js";
 import {
   type ControlApiError,
+  createWorkspace,
   type Workspace,
 } from "../../../../lib/control-api.ts";
 import {
@@ -34,7 +35,9 @@ import {
   selectAvailableWorkspaceId,
   setCurrentWorkspaceId,
 } from "../../../../lib/workspace-state.ts";
+import { createAction } from "../../lib/action.tsx";
 import { t } from "../../../../i18n/index.ts";
+import { Button } from "../../../../components/ui/index.ts";
 
 interface Props {
   readonly compact?: boolean;
@@ -43,6 +46,17 @@ interface Props {
 function workspaceInitial(name: string): string {
   const trimmed = name.trim();
   return (trimmed[0] ?? "?").toUpperCase();
+}
+
+/**
+ * Fresh unique handle for a workspace created from the switcher (same
+ * time+random recipe as the /new and launcher first-workspace flows); the
+ * user-facing identity is the display name they typed.
+ */
+function newWorkspaceHandle(): string {
+  const time = Date.now().toString(36).slice(-6);
+  const random = Math.random().toString(36).slice(2, 8) || "new";
+  return `workspace-${time}-${random}`.slice(0, 39);
 }
 
 export default function WorkspaceSwitcher(props: Props = {}) {
@@ -135,6 +149,39 @@ export default function WorkspaceSwitcher(props: Props = {}) {
     triggerRef?.focus();
   };
 
+  // ----- inline workspace creation ------------------------------------------
+  // A minimal name-only form inside the menu popover: the handle is generated
+  // (same as the /new flow) and everything else is editable later in settings.
+  const [createOpen, setCreateOpen] = createSignal(false);
+  const [createName, setCreateName] = createSignal("");
+  let createInputRef: HTMLInputElement | undefined;
+  const create = createAction(async () => {
+    const displayName = createName().trim();
+    if (!displayName) throw new Error(t("workspace.create.nameRequired"));
+    const workspace = await createWorkspace({
+      handle: newWorkspaceHandle(),
+      displayName,
+      type: "personal",
+    });
+    clearWorkspaceListCache();
+    setCurrentWorkspaceId(workspace.id);
+    window.dispatchEvent(new Event("takosumi:workspaces-changed"));
+    setCreateName("");
+    setCreateOpen(false);
+    setSwitcherOpen(false);
+    triggerRef?.focus();
+    return workspace;
+  });
+
+  // Re-opening the popover starts back at the workspace list, not a stale
+  // half-open create form.
+  createEffect(() => {
+    if (!switcherOpen()) setCreateOpen(false);
+  });
+  createEffect(() => {
+    if (createOpen()) queueMicrotask(() => createInputRef?.focus());
+  });
+
   // role="menu" keyboard model: move focus into the menu on open (landing on
   // the checked workspace), then arrows / Home / End rove between items.
   const menuItems = (): HTMLElement[] =>
@@ -158,6 +205,10 @@ export default function WorkspaceSwitcher(props: Props = {}) {
   });
 
   const onMenuKeyDown = (event: KeyboardEvent) => {
+    // Inside the create form, arrows/Home/End edit the input's caret and Tab
+    // moves between its controls — the menu roving model must stand down.
+    const target = event.target as HTMLElement | null;
+    if (target?.closest(".topbar-workspace-create")) return;
     const items = menuItems();
     if (items.length === 0) return;
     const idx = items.indexOf(document.activeElement as HTMLElement);
@@ -275,6 +326,87 @@ export default function WorkspaceSwitcher(props: Props = {}) {
                     )}
                   </For>
                 </ul>
+                <Show
+                  when={createOpen()}
+                  fallback={
+                    <button
+                      type="button"
+                      role="menuitem"
+                      class="topbar-workspace-settings"
+                      onClick={() => setCreateOpen(true)}
+                    >
+                      <Plus size={15} />
+                      <span>{t("workspace.start.create")}</span>
+                    </button>
+                  }
+                >
+                  <form
+                    class="topbar-workspace-create"
+                    style={{
+                      display: "flex",
+                      "flex-direction": "column",
+                      gap: "8px",
+                      padding: "8px",
+                    }}
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      void create.run();
+                    }}
+                  >
+                    <label
+                      class="tg-field-label"
+                      for={`${switcherId()}-create-name`}
+                    >
+                      {t("workspace.create.nameLabel")}
+                    </label>
+                    <input
+                      id={`${switcherId()}-create-name`}
+                      class="tg-input"
+                      type="text"
+                      value={createName()}
+                      onInput={(event) =>
+                        setCreateName(event.currentTarget.value)
+                      }
+                      placeholder={t("workspace.create.namePlaceholder")}
+                      autocomplete="off"
+                      spellcheck={false}
+                      ref={createInputRef}
+                    />
+                    <div style={{ display: "flex", gap: "8px" }}>
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        type="submit"
+                        busy={create.busy()}
+                      >
+                        {create.busy()
+                          ? t("common.creating")
+                          : t("common.create")}
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        type="button"
+                        onClick={() => {
+                          setCreateOpen(false);
+                          setCreateName("");
+                          create.clearError();
+                        }}
+                      >
+                        {t("common.cancel")}
+                      </Button>
+                    </div>
+                    <Show when={create.error()}>
+                      {(message) => (
+                        <p class="topbar-workspace-error" role="alert">
+                          {t("workspace.create.failed", {
+                            message: message(),
+                          })}
+                        </p>
+                      )}
+                    </Show>
+                  </form>
+                </Show>
                 <A
                   href="/advanced/workspace"
                   class="topbar-workspace-settings"

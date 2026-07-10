@@ -14,6 +14,10 @@ const routerSource = readFileSync(
   resolve(here, "../../../../../dashboard/src/index.tsx"),
   "utf8",
 );
+const approvalLibSource = readFileSync(
+  resolve(here, "../../../../../dashboard/src/lib/run-approval.ts"),
+  "utf8",
+);
 
 describe("RunsListView", () => {
   test("wires /runs as a real history page instead of a 404", () => {
@@ -55,28 +59,47 @@ describe("RunsListView", () => {
 
   test("presents a succeeded review run still waiting on its deploy as 承認待ち", () => {
     // The row must NOT claim 成功 while RunView would still render the deploy
-    // CTA for it — same condition, same wording as the notifications.
-    expect(source).toContain("awaitsDeployApproval");
-    expect(source).toContain('run.policyStatus !== "pass"');
+    // CTA for it — ONE shared predicate (lib/run-approval.ts) drives both.
+    expect(source).toContain(
+      'import { awaitsDeployApproval, runCapsuleId } from "../../lib/run-approval.ts";',
+    );
     expect(source).toMatch(
       /displayStatus:\s*awaitsDeployApproval\(run, runs\)/,
     );
     expect(source).toContain('? "waiting_approval"');
     expect(source).toContain("status={props.row.displayStatus}");
     expect(source).toContain('props.row.displayStatus === "waiting_approval"');
+    // The semantics live in the shared lib now: policy must have passed, and
     // destroy_apply counts as the corresponding apply of a destroy_plan.
-    expect(source).toContain(
+    expect(approvalLibSource).toContain('run.policyStatus === "pass"');
+    expect(approvalLibSource).toContain(
       'candidate.type !== "apply" && candidate.type !== "destroy_apply"',
     );
+    // No local re-implementation left behind.
+    expect(source).not.toContain("function awaitsDeployApproval(");
   });
 
   test("names the service on every row the payload allows", () => {
-    // Backup runs record only the legacy installationId alias.
+    // Backup runs record only the legacy installationId alias (read in the
+    // shared lib's runCapsuleId).
     expect(source).toContain("runCapsuleId");
-    expect(source).toContain("installationId");
+    expect(approvalLibSource).toContain("installationId");
     // Preparation runs (追加前の確認) carry a sourceId — resolve the Source name.
     expect(source).toContain("listSources");
     expect(source).toContain("sourceNames.get(run.sourceId)");
+  });
+
+  test("only a failed RUN read blanks the history; capsule names degrade quietly", () => {
+    // The secondary capsule-name fetch failing must not wipe rows that
+    // already tolerate an absent name — quiet notice + names off.
+    expect(source).toContain("<Match when={runs.error}>");
+    expect(source).not.toContain("runs.error || capsules.error");
+    expect(source).toContain('t("runList.namesUnavailable")');
+    // The error state offers a retry (mirrors ActivityView).
+    expect(source).toContain("refetchRuns");
+    expect(source).toContain('t("common.retry")');
+    expect(ja["runList.namesUnavailable"].length).toBeGreaterThan(0);
+    expect(en["runList.namesUnavailable"].length).toBeGreaterThan(0);
   });
 
   test("makes the 200-row cap honest: load more, then an explicit end note", () => {

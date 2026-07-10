@@ -1753,6 +1753,15 @@ button.tg-tab {
   color: var(--tg-fg);
 }
 
+/* Public-link row: the URL renders inline as muted mono text (the old
+   disclosure's ▶アドレス summary duplicated the row label). */
+.av-output-url-text {
+  font-size: var(--tg-fs-xs);
+  color: var(--tg-fg-muted);
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
 /* Config-save success note (app settings tab). */
 .wa-saved-note {
   display: flex;
@@ -1834,17 +1843,29 @@ button.tg-tab {
   font-size: var(--tg-fs-sm);
   color: var(--tg-fg);
 }
+/* Outline buttons inside the warn-8% strip keep their outline treatment but
+   get a solid elevated fill: the danger outline's red text measured 4.33:1 on
+   the tint (light, over --tg-bg); on the solid fill it measures 5.09:1 light /
+   5.44:1 dark. */
+.av-setup-incomplete .tg-btn {
+  background: var(--tg-bg-elev);
+}
 
 /* ===== /new install-flow UX (discovery pick feedback + dedupe) ===== */
 /* Store-card pick: busy panel while the picked listing's install metadata is
-   fetched (role=status; the cards below are inert meanwhile). */
+   fetched (role=status; the cards below are inert meanwhile). The
+   .wb-status-panel base is display:grid — switch to flex so the spinner and
+   text form one compact row instead of stacking. */
 .av-pick-status {
+  display: flex;
   flex-direction: row;
   align-items: center;
   gap: var(--tg-s-2);
 }
+/* Grid base (.wb-action-callout): start-align items so the retry button
+   keeps its intrinsic width instead of stretching full-width. */
 .av-pick-error {
-  align-items: flex-start;
+  justify-items: start;
 }
 .av-store-pick-scope.is-picking {
   pointer-events: none;
@@ -1855,12 +1876,16 @@ button.tg-tab {
   display: flex;
   justify-content: flex-start;
 }
-/* Muted support-id line appended to the install failure alert. */
+/* Muted support-id line appended to the install failure alert. Solid mix,
+   not plain --tg-fg-muted: on the .wb-error danger-10% tint muted measured
+   4.34:1 (light, over --tg-bg-elev) / 4.06:1 (over --tg-bg). The mix is
+   #595960 light / #b6b6bb dark — ≥5.59:1 light and ≥7.55:1 dark on the tint
+   over any app surface. */
 .wb-error-request {
   display: block;
   margin-top: var(--tg-s-1);
   font-size: var(--tg-fs-xs);
-  color: var(--tg-fg-muted);
+  color: color-mix(in srgb, var(--tg-fg) 25%, var(--tg-fg-muted));
   overflow-wrap: anywhere;
 }
 /* The chosen listing renders in both the top banner and the right-rail 追加内容

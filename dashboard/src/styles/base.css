@@ -39,8 +39,11 @@ a:hover {
   color: var(--tg-accent);
 }
 
+/* --tg-accent + white measured 3.57:1 dark / 4.44:1 light; the emphasis fill
+   is the token minted for white-on-accent surfaces (4.66:1 dark / 5.00:1
+   light). */
 ::selection {
-  background: var(--tg-accent);
+  background: var(--tg-accent-emphasis);
   color: var(--tg-accent-fg);
 }
 

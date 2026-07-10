@@ -2,7 +2,9 @@ import { describe, expect, test } from "bun:test";
 
 import {
   changeCountsForRun,
+  changeCountsKnownForRun,
   changesFromLogs,
+  runHasChangeSummary,
 } from "../../../../dashboard/src/lib/run-logs.ts";
 import type { Run } from "../../../../dashboard/src/lib/control-api.ts";
 
@@ -51,5 +53,42 @@ describe("run log change extraction", () => {
       update: 1,
       delete: 1,
     });
+  });
+
+  test("distinguishes UNKNOWN counts from an honest zero (summary optional)", () => {
+    // run.summary is optional on the wire: with neither a summary nor
+    // log-parsable items the all-zero counts are a fallback, not a fact —
+    // destructive gating and the completed-run card must treat it as unknown.
+    expect(runHasChangeSummary(BASE_RUN)).toBe(false);
+    expect(changeCountsKnownForRun(BASE_RUN, [])).toBe(false);
+    expect(changeCountsForRun(BASE_RUN, [])).toEqual({
+      create: 0,
+      update: 0,
+      delete: 0,
+    });
+
+    // A backend summary — even an all-zero one — makes the counts REAL.
+    const zeroSummary = {
+      ...BASE_RUN,
+      summary: { add: 0, change: 0, destroy: 0 },
+    };
+    expect(runHasChangeSummary(zeroSummary)).toBe(true);
+    expect(changeCountsKnownForRun(zeroSummary, [])).toBe(true);
+
+    // So do log-derived change items.
+    const events = [
+      {
+        id: "evt_1",
+        type: "plan.completed",
+        at: 1,
+        data: {
+          resourceChanges: [
+            { action: "delete", address: "cloudflare_queue.jobs" },
+          ],
+        },
+      },
+    ];
+    expect(runHasChangeSummary(BASE_RUN)).toBe(false);
+    expect(changeCountsKnownForRun(BASE_RUN, events)).toBe(true);
   });
 });

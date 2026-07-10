@@ -7,6 +7,8 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { en } from "../../../../../../dashboard/src/i18n/en.ts";
+import { ja } from "../../../../../../dashboard/src/i18n/ja.ts";
 
 const source = readFileSync(
   resolve(
@@ -34,5 +36,41 @@ describe("GeneralTab display-name draft seeding", () => {
     expect(effect.indexOf("if (!clean) return;")).toBeLessThan(
       effect.indexOf("setDisplayNameDraft(current.displayName);"),
     );
+  });
+});
+
+describe("GeneralTab archive lifecycle", () => {
+  test("archiving keeps the user on the tab instead of clearing the selection", () => {
+    // setCurrentWorkspaceId("") unmounted the tab before any success state
+    // rendered and stranded the user on a bare "select a workspace" screen
+    // with no unarchive affordance.
+    expect(source).not.toContain('setCurrentWorkspaceId("")');
+    expect(source).not.toContain("workspace-state.ts");
+    // The success state survives the switcher-driven remount (module scope)
+    // and names the archived workspace, next to the 復元 list.
+    expect(source).toMatch(
+      /^const \[archiveNotice, setArchiveNotice\] = createSignal/m,
+    );
+    expect(source).toContain(
+      "setArchiveNotice(current.displayName || `@${current.handle}`);",
+    );
+    expect(source).toContain(
+      't("workspaceSettings.general.archivedNamed", { name: name() })',
+    );
+    expect(source).toContain('t("workspaceSettings.general.archivedHint")');
+    // The archive confirm stays.
+    expect(source).toContain('t("workspaceSettings.general.archiveConfirm")');
+    expect(en["workspaceSettings.general.archivedNamed"]).toContain("{name}");
+    expect(ja["workspaceSettings.general.archivedNamed"]).toContain("{name}");
+    expect(ja["workspaceSettings.general.archivedHint"]).toContain("復元");
+  });
+
+  test("unarchive is busy per row and guards double submits", () => {
+    expect(source).toContain("const [unarchivingId, setUnarchivingId]");
+    expect(source).toContain("if (unarchivingId()) return;");
+    expect(source).toContain("setUnarchivingId(id);");
+    expect(source).toMatch(/finally \{\s*setUnarchivingId\(null\);\s*\}/);
+    expect(source).toContain("busy={unarchivingId() === w.id}");
+    expect(source).toContain("disabled={unarchivingId() !== null}");
   });
 });

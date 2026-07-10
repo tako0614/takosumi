@@ -7,24 +7,18 @@ import type { ja } from "./ja.ts";
  */
 export const en: Record<keyof typeof ja, string> = {
   // --- common -------------------------------------------------------------
-  "common.appName": "Takosumi",
   "common.loading": "Loading...",
   "common.retry": "Retry",
   "common.refresh": "Refresh",
+  "common.create": "Create",
+  "common.creating": "Creating...",
   "common.cancel": "Cancel",
-  "common.close": "Close",
   "common.save": "Save",
   "common.saving": "Saving...",
   "common.delete": "Delete",
-  "common.create": "Create",
-  "common.creating": "Creating...",
-  "common.open": "Open",
-  "common.back": "Back",
   "common.none": "None",
   "common.unknown": "Unknown",
   "common.details": "Details",
-  "common.advanced": "Advanced settings",
-  "common.actions": "Actions",
   "common.fetchFailed": "Failed to load — {message}",
   "common.copy": "Copy",
   "common.justNow": "just now",
@@ -33,31 +27,27 @@ export const en: Record<keyof typeof ja, string> = {
   "common.daysAgo": "{n}d ago",
   "common.empty": "No data.",
   "common.loadMore": "Load more",
-  "common.showingRecent": "Showing the most recent {n} entries",
+  "common.showingRecent": "Showing the latest {n}",
 
   // --- nav / shell ----------------------------------------------------------
   "nav.home": "Home",
-  "nav.apps": "Apps",
   "nav.services": "Services",
   "nav.add": "Add",
   "nav.store": "Store",
   "nav.settings": "Settings",
   "nav.graph": "Dependencies",
   "store.title": "Store",
-  "store.subtitle": "Find apps and services to add from the store.",
-  "store.manualEntry": "Not here? Add from a Git URL / custom source",
-  "store.noWorkspace": "Select a workspace first.",
+  "store.subtitle": "Find services to add from the store.",
+  "store.manualEntry":
+    "Can't find what you need? Add from a Git URL / your own source",
   "nav.cloudResources": "Cloud",
   "nav.runs": "Activity",
   "nav.connections": "Connected accounts",
   "nav.billing": "Billing",
   "nav.activity": "History",
   "nav.primary": "Primary",
-  "nav.manage": "Manage",
-  "nav.accountSection": "Account",
   "nav.notifications": "Notifications",
   "nav.workspaceSettings": "Settings",
-  "nav.workspaceSettingsShort": "Settings",
   "nav.account": "Account",
   "nav.docs": "Docs",
   "nav.backToTakos": "Back to Takos",
@@ -67,7 +57,7 @@ export const en: Record<keyof typeof ja, string> = {
   "shell.signOut": "Sign out",
   "shell.language": "Language",
   "shell.theme": "Appearance",
-  "shell.notificationsAria": "Notifications ({n} need attention)",
+  "shell.notificationsAria": "Notifications ({n} needing attention)",
   "theme.system": "System",
   "theme.light": "Light",
   "theme.dark": "Dark",
@@ -84,8 +74,6 @@ export const en: Record<keyof typeof ja, string> = {
   "settings.billing.desc": "Plan, usage, and invoices",
   "settings.notifications.title": "Notifications",
   "settings.notifications.desc": "Updates and items needing attention",
-  "settings.workspace.title": "Workspace",
-  "settings.workspace.desc": "Name, members, and sharing",
   "settings.billingSummary.noPlan": "No plan yet",
   "settings.billingSummary.manage": "Manage",
   "settings.billingSummary.fix": "Review payment",
@@ -113,8 +101,6 @@ export const en: Record<keyof typeof ja, string> = {
   "workspace.selectMessage":
     "Pick a workspace from the switcher in the sidebar.",
   "workspace.loading": "Loading workspaces...",
-  "workspace.count": "{n} workspaces",
-  "workspace.change": "Switch",
   "workspace.settings": "Workspace settings",
   "workspace.switcherAria": "Switch workspace (current: {name})",
   "workspace.defaultName": "My workspace",
@@ -125,6 +111,10 @@ export const en: Record<keyof typeof ja, string> = {
     "Takosumi keeps your services, deploy history, and settings inside a workspace.",
   "workspace.start.create": "Create workspace",
   "workspace.start.creating": "Creating workspace...",
+  "workspace.create.nameLabel": "Workspace name",
+  "workspace.create.namePlaceholder": "New workspace",
+  "workspace.create.nameRequired": "Enter a workspace name.",
+  "workspace.create.failed": "Could not create the workspace — {message}",
 
   // --- auth -----------------------------------------------------------------
   "auth.signIn": "Sign in",
@@ -136,11 +126,9 @@ export const en: Record<keyof typeof ja, string> = {
   "auth.signInCloudPreview":
     "Only invited Google accounts can sign in for now.",
   "auth.continueWith": "Continue with {provider}",
-  "auth.notConfigured": "Currently unavailable",
   "auth.providerChecking": "Checking availability",
   "auth.providerUnavailable": "Currently unavailable",
   "auth.providerRetryNeeded": "Could not check availability",
-  "auth.googleAccount": "Google Account",
   "auth.noProvidersTitle": "Sign-in is temporarily unavailable",
   "auth.noProvidersMessage":
     "No sign-in method is available right now. Please retry in a moment or contact support if this continues.",
@@ -165,8 +153,6 @@ export const en: Record<keyof typeof ja, string> = {
   "auth.processing": "Signing you in...",
   "auth.failed": "Sign-in failed",
   "auth.backToSignIn": "Back to sign-in",
-  "auth.incompleteCallback":
-    "The sign-in response could not be used. Please try signing in again.",
   "auth.retryableCallbackFailure":
     "Sign-in could not finish from this browser tab. Please try again.",
   "auth.retryableCallbackFailureWithDetail":
@@ -203,7 +189,7 @@ export const en: Record<keyof typeof ja, string> = {
   "status.deployment.destroyed": "Destroyed",
   "status.connection.pending": "Unverified",
   "status.connection.verified": "Verified",
-  "status.connection.revoked": "Removed",
+  "status.connection.revoked": "Revoked",
   "status.connection.expired": "Expired",
   "status.connection.error": "Error",
   "status.providerConnection.ready": "Ready",
@@ -229,16 +215,10 @@ export const en: Record<keyof typeof ja, string> = {
 
   // --- Service list (home) --------------------------------------------------
   "apps.title": "Apps",
-  "apps.subtitle": "Open the apps you have added.",
   "apps.add": "Add service",
   "apps.addShort": "Add",
   "apps.sectionYours": "Your apps",
   "apps.manage": "Manage",
-  "apps.sectionBrowse": "Browse",
-  "apps.browseSub": "Suggested",
-  "apps.browseAll": "Open store",
-  "apps.addToLibrary": "Add to library",
-  "install.installing": "Adding {name}…",
   "install.installingGeneric": "Adding…",
   "install.wait": "This only takes a moment",
   "install.progressAria": "Install progress",
@@ -263,26 +243,14 @@ export const en: Record<keyof typeof ja, string> = {
   "update.doneTitleGeneric": "Updated",
   "update.doneSub": "You're on the latest version.",
   "update.errorTitle": "The update failed",
-  "apps.attention": "{n} items need attention",
-  "apps.attentionView": "View notifications",
   "apps.needsAttention": "Needs attention",
   "apps.openApp": "Open app",
-  "apps.noOpenLink": "Nothing to open yet",
-  "apps.viewDetails": "Details",
-  "apps.updated": "Updated: {date}",
   "apps.reviewChanges": "Review changes",
-  "apps.start.aria": "First service",
-  "apps.start.kicker": "No services yet",
+  "apps.start.aria": "First app",
+  "apps.start.kicker": "No apps yet",
   "apps.start.titleEmpty": "Add your first app",
   "apps.start.bodyEmpty": "Choose an app or paste an install link.",
-  "apps.start.optionStore": "Add service",
-  "apps.start.optionStoreSub": "Choose an app or add from a link.",
-  "apps.empty.aria": "No apps",
-  "apps.empty.kicker": "No apps yet",
-  "apps.empty.title": "Nothing to open yet",
-  "apps.empty.body":
-    "Apps you add will appear here. Start by picking one from the store.",
-  "apps.empty.viewServices": "View all services",
+  "apps.start.optionStore": "Add an app",
   "apps.listIncomplete":
     "Some apps could not be loaded, so this screen may be missing apps.",
 
@@ -329,22 +297,14 @@ export const en: Record<keyof typeof ja, string> = {
   "app.source.name": "Name",
   "app.source.url": "Source URL",
   "app.source.refPath": "Version / folder",
-  "app.source.status": "Fetch status",
   "app.source.loading": "Loading source info.",
   "app.source.unavailable": "Source info is unavailable.",
   "app.source.supportBody":
     "Source and reference details. Usually no change is needed.",
-  "app.info.title": "Reference info",
-  "app.info.id": "ID",
-  "app.info.generation": "Restore point",
-  "app.info.deployment": "Current state",
-  "app.info.installConfig": "Install settings",
   "app.deploys.title": "Update history",
   "app.deploys.reviewTitle": "Update service",
   "app.deploys.reviewSubtitle":
     "Check available changes before deploying them.",
-  "app.deploys.subtitle":
-    "Past deployed states. Pick an older one to review a change that restores it.",
   "app.deploys.empty": "No deploys yet.",
   "app.deploys.restoreMenu": "More",
   "app.deploys.restore": "Restore this state",
@@ -354,11 +314,7 @@ export const en: Record<keyof typeof ja, string> = {
   "app.deploys.backup": "Create backup",
   "app.deploys.backupCreated": "Backup created.",
   "app.deploys.backupSupportRef": "Backup ID",
-  "app.recentRuns.title": "Recent checks",
-  "app.recentRuns.empty": "No recent checks.",
-  "app.recentRuns.open": "Details",
   "app.recentActivity.title": "Recent updates",
-  "app.recentActivity.empty": "No recent updates.",
   "app.recentActivity.open": "Details",
   "app.recentActivity.releaseActivation": "App activation",
   "app.bindings.title": "Connected accounts",
@@ -377,12 +333,11 @@ export const en: Record<keyof typeof ja, string> = {
     "Select a ready connected account for {provider}.",
   "app.config.title": "Settings",
   "app.config.subtitle":
-    "Change the public name, URL, first sign-in value, and app variables. Saved values apply on the next deploy review.",
+    "Change the public name, URL, first sign-in value, and service variables. Saved values apply on the next deploy review.",
   "app.config.publicUrl": "Public URL",
   "app.config.subdomain": "Public subdomain",
   "app.config.oidc": "Automatic sign-in",
   "app.config.oidcOn": "Enabled",
-  "app.config.oidcOff": "Not configured",
   "app.config.updatedAt": "Updated",
   "app.config.empty": "There are no editable settings.",
   "app.config.notReady": "Settings are not available yet.",
@@ -395,22 +350,23 @@ export const en: Record<keyof typeof ja, string> = {
     "Already saved. Enter a new value only to change it.",
   "app.config.reset": "Reset",
   "app.config.remove": "Remove",
+  "app.config.undoReset": "Undo",
   "app.config.resetAria": "Clear setting {name}",
   "app.config.removeAria": "Remove setting {name}",
+  "app.config.undoResetAria": "Undo resetting {name}",
+  "app.config.defaultBadge": "Default value",
+  "app.config.resetPendingHint": "Reverts to the default when you save.",
   "app.config.customName": "CUSTOM_ENV",
   "app.config.errorNameRequired": "Enter a setting name.",
   "app.config.errorNameInvalid": "{name} cannot contain spaces.",
   "app.config.errorNameDuplicate": "{name} is duplicated.",
   "app.config.errorNumber": "{name} must be a number.",
   "app.config.errorJson": "{name} must be valid JSON.",
-  "app.settings.removeTitle": "Need to remove this service?",
-  "app.settings.removeBody":
-    "Deletion is available from a separate review screen so you can inspect what will be removed first.",
-  "app.settings.removeCta": "Open delete options",
   "app.settings.openCta": "Open settings",
   "app.settings.supportDetails": "Reference info",
   "app.usage.title": "Estimated cost (total)",
-  "app.usage.body": "The sum of this app's recorded usage.",
+  "app.usage.body": "The sum of this service's recorded usage.",
+  "app.usage.subCent": "< $0.01",
   "app.config.savedNeedsDeploy": "Saved. Deploy to apply the change.",
   "app.config.deployChanges": "Deploy changes",
   "app.updateNow": "Update",
@@ -449,6 +405,8 @@ export const en: Record<keyof typeof ja, string> = {
   "run.summary.destroyReadyGeneric":
     "This service is ready to be deleted. This cannot be undone once run.",
   "run.summary.applied": "Deploy started. It will take a moment to settle.",
+  "run.summary.alreadyApplied":
+    "This change's deploy has already been run. See Activity for the result.",
   "run.summary.applying": "Deploying…",
   "run.summary.finishing": "Finishing the deployment…",
   "run.summary.activationPending": "Finishing app activation…",
@@ -459,7 +417,7 @@ export const en: Record<keyof typeof ja, string> = {
   "run.summary.removed": "Removal complete.",
   "run.summary.failed": "{operation} failed.",
   "runError.sourceSyncFailed":
-    "The app contents could not be fetched. Check the link and version, then try again.",
+    "The service contents could not be fetched. Check the link and version, then try again.",
   "runError.sourceRefNotFound":
     "The selected version was not found. Check the version, then try again.",
   "runError.stateGenerationMismatch":
@@ -492,8 +450,8 @@ export const en: Record<keyof typeof ja, string> = {
   "run.summary.blocked": "Blocked by policy.",
   "run.summary.driftDone": "Drift check complete.",
   "run.summary.cancelled": "This run was cancelled.",
-  "run.summary.expired": "This plan has expired.",
-  "run.summary.expiredHint": "Run the check again to continue.",
+  "run.summary.expired": "This review has expired.",
+  "run.summary.expiredHint": "Review the changes again, then deploy.",
   "run.summary.compatDone": "The pre-add check finished.",
   "run.summary.compatRunning": "Checking the contents…",
   "run.summary.syncDone": "The contents were fetched.",
@@ -524,23 +482,21 @@ export const en: Record<keyof typeof ja, string> = {
   "run.cost.shortfall":
     "This cannot run because of your usage limit or payment state.",
   "run.cost.blocked": "This cannot run due to payment state or limits.",
-  "run.cost.capacityNeeded": "Capacity needed: ~{n}",
-  "run.cost.capacity": "Available capacity: {n}",
-  "run.cost.capacityShortfall":
-    "This workspace is short by about {n} capacity units, so this cannot run.",
   "run.cost.capacityBlocked": "This workspace cannot run this action.",
   "run.cost.billingCta": "Open billing",
   "run.cost.operatorHelp":
     "An owner can review this workspace's usage and limits to enable it.",
   "run.cost.quotaCta": "Review usage / quota",
   "run.changes.title": "What will change",
+  "run.changes.titleDone": "What changed",
+  "run.changes.noRecord": "No record of the changes is available",
   "run.changes.create": "Create",
   "run.changes.update": "Update",
   "run.changes.delete": "Delete",
   "run.resources.kicker": "Review",
   "run.resources.title": "Planned changes",
   "run.resources.count": "Changes: {n}",
-  "run.resources.more": "{n} more changes are included.",
+  "run.resources.more": "Additional changes: {n}",
   "run.resources.actionCreate": "Create",
   "run.resources.actionUpdate": "Update",
   "run.resources.actionDelete": "Delete",
@@ -554,7 +510,7 @@ export const en: Record<keyof typeof ja, string> = {
   "run.scope.awsAccount": "AWS account {id}",
   "run.scope.awsRegion": "AWS {region}",
   "run.details.title": "Reference info",
-  "run.details.runId": "Execution ID",
+  "run.details.runId": "Run ID",
   "run.details.type": "Type",
   "run.details.policy": "Safety check",
   "run.details.capsule": "Service",
@@ -582,7 +538,6 @@ export const en: Record<keyof typeof ja, string> = {
   "run.connections.statusBlocked": "Blocked by policy",
   "run.connections.empty": "No connected account review info.",
   "run.diagnostics.title": "Diagnostics",
-  "run.diagnostics.empty": "No diagnostics.",
   "run.diag.severity.error": "Error",
   "run.diag.severity.warning": "Warning",
   "run.diag.severity.info": "Info",
@@ -635,6 +590,8 @@ export const en: Record<keyof typeof ja, string> = {
   "runList.applied": "Deploy",
   "runList.destroyed": "Delete",
   "runList.failed": "{operation} failed",
+  "runList.namesUnavailable":
+    "Couldn't load service names — showing updates without them.",
 
   // --- add flow (/new) -------------------------------------------------------
   "new.title": "Add service",
@@ -650,7 +607,7 @@ export const en: Record<keyof typeof ja, string> = {
   "new.selection.subtitle": "Check it first. Deploy happens after review.",
   "new.flow.selected": "Selected",
   "new.flow.manual": "Manual add",
-  "new.flow.back": "Choose a different app",
+  "new.flow.back": "Choose a different service",
   "new.pick.checking": "Checking the selected service…",
   "new.summary.aria": "Add summary",
   "new.summary.provider": "Runs on",
@@ -664,8 +621,6 @@ export const en: Record<keyof typeof ja, string> = {
     "Use a single {baseDomain} label for {label}. Lowercase letters, numbers, and hyphens are supported.",
   "new.storeInput.errorCustomDomain":
     "Use an https:// URL for {label}. {baseDomain} names must use one label; custom domains require ownership verification before deploy.",
-  "new.deeplink.summary":
-    "A link filled in “{capsule}”. Review it before adding.",
   "new.deeplink.aria": "Service from link",
   "new.deeplink.kicker": "Added from link",
   "new.deeplink.title": "Add {capsule}",
@@ -715,7 +670,7 @@ export const en: Record<keyof typeof ja, string> = {
   "new.advanced.serviceIdHint": "Internal name. Also the default for the URL.",
   "new.env.title": "Environment variables",
   "new.env.body":
-    "Use this only for runtime environment variables the app can store in plain text. Pass private values through connected accounts.",
+    "Use this only for runtime environment variables the service can store in plain text. Pass private values through connected accounts.",
   "new.env.name": "Variable name",
   "new.env.value": "Value",
   "new.env.valuePlaceholder": "value",
@@ -731,7 +686,7 @@ export const en: Record<keyof typeof ja, string> = {
     "Environment variable “{name}” is listed more than once.",
   "new.vars.inputsTitle": "Other settings",
   "new.vars.inputsBody":
-    "Add extra visible inputs only when the app asks for something not shown above.",
+    "Add extra visible inputs only when the service asks for something not shown above.",
   "new.vars.inputName": "Setting name",
   "new.vars.inputValue": "Value",
   "new.vars.namePlaceholder": "setting",
@@ -757,7 +712,6 @@ export const en: Record<keyof typeof ja, string> = {
   "new.appHandoff.kicker": "Requested by an app",
   "new.appHandoff.app": "App",
   "new.appHandoff.return": "Return target",
-  "new.compat.check": "Start adding",
   "new.installCta": "Add service",
   "new.installing": "Adding...",
   "new.compat.recheck": "Check again",
@@ -778,7 +732,7 @@ export const en: Record<keyof typeof ja, string> = {
   "new.compat.diagnostic.technicalNote":
     "Detailed check result. Open it only when action is needed.",
   "new.compat.patchHelp":
-    "Review the items above. Some issues require app changes, while others can be resolved by setting up the required connected account.",
+    "Review the items above. Some issues require changes to the service itself, while others can be resolved by setting up the required connected account.",
   "new.compat.summary.providerCredentials":
     "Remove {provider} private values from the source before adding this.",
   "new.compat.summary.reviewRequired":
@@ -793,7 +747,6 @@ export const en: Record<keyof typeof ja, string> = {
     "Pinned connection target information is included. After private values are removed, the pinned targets will be reviewed during add.",
   "new.compat.issue.reviewRequired.message":
     "An item needs review before this can be added.",
-  "new.proceed": "Review and add",
   "new.proceedHint": "Use “Add service” first.",
   "new.existing.title": "This service is already added",
   "new.existing.body":
@@ -832,7 +785,7 @@ export const en: Record<keyof typeof ja, string> = {
   "new.error.sourceRefNotFound":
     "The selected version “{ref}” was not found. Check that the link offers this version.",
   "new.error.sourceFetchFailed":
-    "The app contents could not be fetched. Check the link, version, folder, or private link access. Details: {message}",
+    "The service contents could not be fetched. Check the link, version, folder, or private link access. Details: {message}",
   "new.error.sourceFetchFailedUnknown": "No detailed cause was returned.",
   "new.error.generic":
     "The service could not be added. Check the details and try again.",
@@ -843,15 +796,13 @@ export const en: Record<keyof typeof ja, string> = {
   "new.error.invalidHostname":
     "This public name is too long or has characters that cannot be used. Try a shorter name.",
   "new.error.connectionRequired":
-    "Publishing this app needs a connected cloud account. Set up the connection, then try again.",
+    "Publishing this service needs a connected cloud account. Set up the connection, then try again.",
   "new.error.appHostnameUnavailable":
     "That public URL name is already in use. Choose another name and try again.",
   "new.hostnameConflict.title": "Choose another public URL name",
   "new.hostnameConflict.body":
     "Use a different name for the public URL, then add the service again.",
   "new.hostnameConflict.suggest": "Use suggested name",
-  "new.error.alreadyExists":
-    "“{name}” is already added. Open it from the service list.",
   "new.error.alreadyExistsGeneric":
     "This service is already added. Open the existing service instead of creating another one.",
   "new.error.nameReserved":
@@ -879,12 +830,14 @@ export const en: Record<keyof typeof ja, string> = {
   "workspaceSettings.general.owner": "Owner",
   "workspaceSettings.general.updated": "Updated",
   "workspaceSettings.general.advancedDetails": "Advanced details",
-  "workspaceSettings.general.policyAdvanced": "Policy JSON (advanced)",
   "workspaceSettings.general.saved": "Settings saved.",
   "workspaceSettings.general.archive": "Archive workspace",
   "workspaceSettings.general.archiveConfirm":
     "This workspace will be hidden from the normal switcher. You can still inspect it through the admin API.",
   "workspaceSettings.general.archived": "Workspace archived.",
+  "workspaceSettings.general.archivedNamed": "Archived “{name}”.",
+  "workspaceSettings.general.archivedHint":
+    "You can restore it from the archived list below, or move to another workspace with the workspace switcher.",
   "workspaceSettings.general.notFound":
     "This workspace was not found. Switch workspaces, or restore one below.",
   "workspaceSettings.general.archivedTitle": "Archived workspaces",
@@ -892,8 +845,6 @@ export const en: Record<keyof typeof ja, string> = {
   "workspaceSettings.general.archiveLastError":
     "You cannot archive the last workspace.",
   "workspaceSettings.general.nameRequired": "Enter a display name.",
-  "workspaceSettings.general.policyObject": "Policy JSON must be an object.",
-  "workspaceSettings.general.policyInvalid": "Policy JSON is not valid JSON.",
 
   // --- members ---------------------------------------------------------------
   "members.role.owner": "Owner",
@@ -902,9 +853,7 @@ export const en: Record<keyof typeof ja, string> = {
   "members.role.viewer": "Viewer",
   "members.status.active": "Active",
   "members.status.invited": "Invited",
-  "members.status.suspended": "Removed",
-  "members.subtitle":
-    "Members of this workspace and their roles. Inviting, role changes, and removal are owner/admin only.",
+  "members.status.suspended": "Suspended",
   "members.invite.title": "Invite a member",
   "members.invite.subtitle":
     "Enter the email for someone who has already signed in.",
@@ -932,11 +881,8 @@ export const en: Record<keyof typeof ja, string> = {
 
   // --- connections -------------------------------------------------------------
   "conn.subtitle":
-    "Save your own keys (cloud tokens and access keys). With your key, any provider runs — no allowlist, no approval.",
+    "Save your own keys (cloud tokens and access keys). With your key, any provider runs — no restrictions, no approval needed.",
   "conn.providerConnections.title": "Connected accounts",
-  "conn.providerConnections.provider": "Connection",
-  "conn.providerConnections.name": "Name",
-  "conn.providerConnections.status": "Status",
   "conn.expiresAt": "Expires: {date}",
   "conn.oauth.connected": "Connected to Cloudflare.",
   "conn.oauth.failed": "Connection failed. Please try again.",
@@ -949,11 +895,11 @@ export const en: Record<keyof typeof ja, string> = {
     "Saved {name}. Verify the connection before returning to add the service.",
   "conn.saved.testCta": "Verify connection",
   "conn.saved.returnCta": "Back to add",
+  "conn.add.provider": "Connection",
+  "conn.add.genericEnvOption": "Other connection (advanced)",
   "conn.add.title": "Connect account",
   "conn.add.open": "Connect account",
   "conn.add.close": "Close",
-  "conn.add.provider": "Connection",
-  "conn.add.genericEnvOption": "Other connection (advanced)",
   "conn.add.optionalSettings": "Name this connection",
   "conn.add.displayName": "Connection name",
   "conn.add.displayNamePlaceholder": "Optional label",
@@ -1010,32 +956,25 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.provider.s3.guide.step3":
     "Paste the access key and endpoint URL into the fields below.",
   "conn.guided.openProvider": "Open {provider} access page",
-  "conn.guided.oauth": "Connect automatically with {provider}",
   "conn.guided.stepsSummary": "Use an access token instead",
   "conn.guided.instructions": "Show steps",
   "conn.guided.pasteLabel": "Access token",
   "conn.guided.pastePlaceholder": "Paste the token here",
   "conn.guided.connect": "Save connection",
   "conn.guided.connecting": "Connecting...",
-  "conn.custom.back": "Back to common connections",
   "conn.byok.title": "Connect any provider with your own key",
   "conn.byok.body":
-    "Just enter a provider source and the environment variables (keys) it uses. No allowlist, no approval — any OpenTofu / Terraform provider runs.",
+    "Just enter where the provider comes from (its source) and the environment variables (keys) it uses. No restrictions, no approval — any OpenTofu / Terraform provider runs.",
   "conn.byok.noBillingNote":
-    "Connections that use your own key are never billed by Takosumi. Only Takosumi-provided managed resources are billed.",
+    "Connections that use your own key are never billed by Takosumi. Only resources Takosumi provides are billed.",
   "conn.byok.usePreset": "Use a guided preset instead",
   "conn.byok.backToByok": "Connect any provider with your own key",
   "conn.presets.body":
     "Presets are optional setup shortcuts (not the list of supported providers). For a provider not listed, use “bring your own key”.",
   "conn.presets.provider": "Preset (optional shortcut)",
   "conn.advanced.summary": "Enter access values",
-  "conn.advanced.register": "Save access values",
   "conn.register": "Save connection",
   "conn.registering": "Saving...",
-  "conn.genericEnv.summary": "Other connection",
-  "conn.genericEnv.body":
-    "For a provider not listed above, enter the provider source and the env values it needs.",
-  "conn.genericEnv.option": "Set up other connection",
   "conn.genericEnv.providerName": "Provider source",
   "conn.genericEnv.providerPlaceholder": "snowflake-labs/snowflake",
   "conn.genericEnv.envName": "Env name",
@@ -1056,7 +995,7 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.error.fieldRequired": "{field} is required.",
   "conn.empty.title": "Connect any provider with your own key",
   "conn.empty.message":
-    "Enter your own key (a cloud token or key) and any provider runs — no allowlist, no approval, no billing.",
+    "Enter your own key (a cloud token or key) and any provider runs — no restrictions, no approval, no billing.",
   "conn.test": "Check access",
   "conn.testing": "Checking...",
   "conn.test.notReady": "The account is not ready yet (status: {status}).",
@@ -1071,19 +1010,11 @@ export const en: Record<keyof typeof ja, string> = {
   "backups.col.createdAt": "Created",
   "backups.col.contents": "Contents",
   "backups.col.actions": "Actions",
-  "backups.col.artifact": "Settings backup",
   "backups.restorePoint": "Restore point",
-  "backups.restoreGeneration": "State generation {generation}",
+  "backups.restoreGeneration": "Backup point {generation}",
   "backups.restore": "Prepare restore",
   "backups.restoreUnavailable":
     "Create a backup from a service before restoring it.",
-  "backups.col.serviceData": "Service data",
-  "backups.col.source": "Source",
-  "backups.col.run": "Execution",
-  "backups.manual": "manual",
-  "backups.detail.id": "Backup ID",
-  "backups.serviceDataSummary":
-    "service data {exported} / unsupported {unsupported} / missing {missing}",
   "backups.empty.title": "No backups yet",
   "backups.empty.message": "Create this workspace's first backup.",
 
@@ -1125,7 +1056,7 @@ export const en: Record<keyof typeof ja, string> = {
     "Adds, deploys, approvals, failures — what happened most recently.",
   "notif.empty.title": "No notifications yet",
   "notif.empty.message": "Events appear here when you add or deploy services.",
-  "notif.attention": "{n} events need attention.",
+  "notif.attention": "Events needing attention: {n}",
   "notif.badge.attention": "Attention",
   "notif.supportSummary": "Reference info",
   "notif.viewRaw": "Open history →",
@@ -1144,8 +1075,6 @@ export const en: Record<keyof typeof ja, string> = {
   "notif.event.destroyedNamed": "Deleted “{name}”",
   "notif.event.failed": "{operation} failed",
   "notif.event.failedNamed": "{operation} for “{name}” failed",
-  "notif.event.failedDetail": "Error: {code}",
-  "notif.event.failedHint": "Check the run logs for details",
   "notif.event.drift": "A service's real state differs from the saved record",
   "notif.event.driftNamed":
     "The real state of “{name}” differs from the saved record",
@@ -1175,6 +1104,7 @@ export const en: Record<keyof typeof ja, string> = {
   "notif.event.autoUpdateFailedDetail":
     "Review the update from the service screen",
   "notif.event.recorded": "Recorded activity",
+  "notif.otherWorkspace": "Other workspace @{handle}",
 
   // --- activity -------------------------------------------------------------------
   "activity.title": "Activity history",
@@ -1183,6 +1113,7 @@ export const en: Record<keyof typeof ja, string> = {
   "activity.detailsBody": "Use these details when you need an event reference.",
   "activity.debug": "Reference ID",
   "activity.recorded": "Recorded activity",
+  "activity.actorLine": "By {actor}",
   "activity.empty.title": "No activity yet",
   "activity.empty.message": "Operations in this workspace are recorded here.",
 
@@ -1194,9 +1125,13 @@ export const en: Record<keyof typeof ja, string> = {
   "runGroup.members": "Services in this update",
   "runGroup.membersEmpty": "No services in this update.",
   "runGroup.openService": "Open service",
+  "runGroup.openServiceAria": "Open service “{name}”",
   "runGroup.openRun": "Review change",
-  "runGroup.change": "Change",
+  "runGroup.openRunAria": "Review change for “{name}”",
   "runGroup.groupId": "Update ID",
+  "runGroup.progressStatus": "{done} of {total} complete",
+  "runGroup.refreshFailed":
+    "Couldn't fetch the latest status — showing the last loaded state.",
 
   // --- graph ---------------------------------------------------------------------
   "graph.title": "Dependencies",
@@ -1220,7 +1155,6 @@ export const en: Record<keyof typeof ja, string> = {
   "account.profile.notSet": "Not set",
   "account.profile.provider": "Sign-in method",
   "account.profile.expires": "Session expires",
-  "account.session.title": "Current session",
   "account.session.id": "Session reference",
   "account.session.userAgent": "Browser",
   "account.session.details": "Session details",
@@ -1230,9 +1164,7 @@ export const en: Record<keyof typeof ja, string> = {
   "account.session.otherNote":
     "Only this browser's session can be signed out here.",
   "account.language.title": "Language",
-  "account.language.body": "Choose the dashboard display language.",
   "account.theme.title": "Appearance",
-  "account.theme.body": "Choose light, dark, or your device setting.",
   "account.preferences.title": "Display settings",
   "account.preferences.body": "Change language and appearance.",
 
@@ -1252,8 +1184,6 @@ export const en: Record<keyof typeof ja, string> = {
     "Delete “{name}”. This cannot be undone.",
   "cloudResources.resources.deleted": "Deleted “{name}”.",
   "cloudResources.resources.copyId": "Copy ID",
-  "cloudResources.notConfigured": "Not configured",
-  "cloudResources.sessionExpired": "Session expired. Sign in again.",
   "cloudResources.copied": "Copied.",
   "cloudResources.copyFailed":
     "Copy failed. Clipboard access may be blocked — select the value and copy it manually.",
@@ -1262,7 +1192,7 @@ export const en: Record<keyof typeof ja, string> = {
   "cloudResources.keys.title": "External API keys",
   "cloudResources.keys.subtitle":
     "Create and review keys for apps that call the Takosumi Cloud API.",
-  "cloudResources.keys.scope": "read / write",
+  "cloudResources.keys.scope": "Read / write",
   "cloudResources.keys.defaultName": "Takosumi Cloud external API key",
   "cloudResources.keys.name": "Key name",
   "cloudResources.keys.nameRequired": "Enter a key name.",
@@ -1299,7 +1229,7 @@ export const en: Record<keyof typeof ja, string> = {
   "cloudResources.usage.noUsage": "No usage this month",
   "cloudResources.usage.empty": "No cloud resource usage this month.",
   "cloudResources.usage.error": "Could not load usage: {message}",
-  "cloudResources.usage.unit.runnerMinute": "runner min",
+  "cloudResources.usage.unit.runnerMinute": "runner minutes",
   "cloudResources.usage.unit.gbHour": "GB-hours",
   "cloudResources.usage.unit.gb": "GB",
   "cloudResources.usage.unit.compute": "compute units",
@@ -1324,18 +1254,16 @@ export const en: Record<keyof typeof ja, string> = {
   "cloudResources.inventory.queues": "Queues",
   "cloudResources.inventory.workflows": "Workflows",
   "cloudResources.inventory.workers": "Edge apps",
-  "cloudResources.inventory.names": "Names",
   "cloudResources.inventory.showAll": "Show all {count}",
   "cloudResources.inventory.showLess": "Collapse",
   "cloudResources.inventory.remaining": "Show {count} more",
 
   // --- billing -------------------------------------------------------------------
-  "billing.title": "Billing",
   "billing.subtitle":
     "Review plans, usage, and payment settings for your account.",
   "billing.usageQuotaTitle": "Usage / quota",
   "billing.usageQuotaSubtitle":
-    "Review account credits, source Workspace attribution, and usage.",
+    "Review your credits, which workspace used them, and usage.",
   "billing.mode.disabled": "Billing is disabled for this account.",
   "billing.mode.checkoutOpen":
     "Choose a plan to start using Takosumi Cloud resources. Paid operations are checked against limits and payment state before execution.",
@@ -1348,13 +1276,11 @@ export const en: Record<keyof typeof ja, string> = {
   "billing.error": "Could not load billing status: {message}",
   "billing.error.unknown": "Unknown error",
   "billing.balance.title": "Usage status",
-  "billing.balance.available": "Status",
   "billing.balance.availableUsd": "Available balance",
   "billing.balance.status": "Status",
   "billing.balance.ready": "Ready",
   "billing.balance.actionRequired": "Plan or payment setup required",
   "billing.balance.reserved": "Pending use",
-  "billing.quota.title": "Quota",
   "billing.quota.available": "Available capacity",
   "billing.quota.reserved": "Pending use",
   "billing.quota.disabledHint":
@@ -1372,7 +1298,7 @@ export const en: Record<keyof typeof ja, string> = {
   "billing.subscription.endsOn": "Ends on",
   "billing.subscription.status.cancelAtPeriodEnd": "Cancels at period end",
   "billing.subscription.cancelNotice":
-    "This subscription will be canceled at the end of the current billing period. Resume the plan to keep it active.",
+    "This subscription will be cancelled at the end of the current billing period. Resume the plan to keep it active.",
   "billing.subscription.manage": "Manage or cancel subscription",
   "billing.subscription.manageHint":
     "Open Stripe to manage payment methods, invoices, plan changes, and cancellation.",
@@ -1382,8 +1308,8 @@ export const en: Record<keyof typeof ja, string> = {
   "billing.subscription.status.unpaid": "Unpaid",
   "billing.subscription.status.incomplete": "Incomplete",
   "billing.subscription.status.incomplete_expired": "Incomplete",
-  "billing.subscription.status.canceled": "Canceled",
-  "billing.subscription.status.cancelled": "Canceled",
+  "billing.subscription.status.canceled": "Cancelled",
+  "billing.subscription.status.cancelled": "Cancelled",
   "billing.subscription.status.paused": "Paused",
   "billing.subscription.status.disputed": "Disputed",
   "billing.plans.title": "Plans",
@@ -1392,22 +1318,21 @@ export const en: Record<keyof typeof ja, string> = {
   "billing.plans.none": "No plans are offered right now.",
   "billing.plans.nonRefundable":
     "Review the amount and contents before checkout. Used services and completed usage are generally not refundable. Card statements generally show TAKOSUMI.",
-  "billing.plans.disabled":
-    "Purchases are not available for this workspace right now. Plans will appear here when checkout is open.",
   "billing.plans.subscribe": "Choose this plan",
-  "billing.plans.perMonth": "{n} per month",
   "billing.policies.aria": "Billing policies",
   "billing.policies.refund": "Refunds",
   "billing.policies.cancellation": "Cancellation",
   "billing.policies.terms": "Terms",
   "billing.policies.privacy": "Privacy",
   "billing.policies.support": "Support",
-  "billing.portal": "Manage payment and invoices",
-  "billing.portalUnavailable":
-    "Payment management is unavailable while billing is disabled or no plans are open.",
   "billing.portalOpening": "Opening...",
   "billing.checkout.starting": "Redirecting to checkout...",
   "billing.checkout.failed": "Could not start checkout — {message}",
+  "billing.checkout.noUrl":
+    "Could not get the checkout page URL. Please try again in a moment.",
+  "billing.portal.noUrl":
+    "Could not get the billing portal URL. Please try again in a moment.",
+  "billing.sessionExpired": "Your session has expired. Please sign in again.",
   "billing.checkout.success":
     "Plan checkout complete. It may take a moment to update.",
   "billing.checkout.cancelled": "Checkout cancelled.",
@@ -1441,9 +1366,4 @@ export const en: Record<keyof typeof ja, string> = {
   "billing.usage.credits": "USD",
   "billing.usage.created": "Created",
   "billing.ledger.title": "Usage history",
-  "billing.reservations.title": "Balance reservations",
-  "billing.reservations.loading": "Loading usage reservations...",
-  "billing.reservations.error": "Could not load usage reservations: {message}",
-  "billing.reservations.empty": "No reservations yet.",
-  "billing.reservations.expires": "Expires",
 };

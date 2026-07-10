@@ -168,6 +168,19 @@
   margin-top: 3px;
   color: var(--tg-fg-subtle);
 }
+/* Raw server detail under a connection-test failure toast: supplementary
+   muted mono reference text — the localized sentence stays the headline.
+   Solid mix, not plain --tg-fg-muted: the toast's danger-10% tint leaves
+   muted at 4.34:1 (light); this mix measures ≥5.59:1 light / ≥7.55:1 dark on
+   the tint over any app surface. */
+.wc-conn-test-detail {
+  display: block;
+  margin-top: 3px;
+  font-family: var(--tg-font-mono);
+  font-size: var(--tg-fs-xs);
+  color: color-mix(in srgb, var(--tg-fg) 25%, var(--tg-fg-muted));
+  overflow-wrap: anywhere;
+}
 
 /* ===== Notifications feed ===== */
 .wc-notif-list {

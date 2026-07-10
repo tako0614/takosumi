@@ -175,7 +175,11 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
 
   const startCheckout = async (plan: PublicBillingPlan) => {
     const session = readSession();
-    if (!session) return;
+    if (!session) {
+      // An expired session must not degrade to a button that does nothing.
+      setCheckoutError(t("billing.sessionExpired"));
+      return;
+    }
     setCheckoutBusyId(plan.id);
     setCheckoutError(null);
     try {
@@ -187,7 +191,7 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
       if (result.url) {
         location.assign(result.url);
       } else {
-        setCheckoutError(t("billing.checkout.failed", { message: "no url" }));
+        setCheckoutError(t("billing.checkout.noUrl"));
       }
     } catch (err) {
       setCheckoutError(
@@ -205,7 +209,11 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
 
   const openPortal = async () => {
     const session = readSession();
-    if (!session) return;
+    if (!session) {
+      // Same as checkout: session expiry gets a visible, localized error.
+      setPortalError(t("billing.sessionExpired"));
+      return;
+    }
     setPortalBusy(true);
     setPortalError(null);
     try {
@@ -213,7 +221,7 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
       if (result.url) {
         location.assign(result.url);
       } else {
-        setPortalError(t("billing.checkout.failed", { message: "no url" }));
+        setPortalError(t("billing.portal.noUrl"));
       }
     } catch (err) {
       setPortalError(

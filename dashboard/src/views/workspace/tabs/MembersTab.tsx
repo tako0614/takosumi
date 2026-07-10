@@ -59,6 +59,16 @@ const ROLE_ORDER: readonly ControlWorkspaceRole[] = [
   "viewer",
 ];
 
+// Invite options run least→most privileged: the safe default (viewer) is both
+// the signal default and the FIRST option, so granting owner is always an
+// explicit, deliberate pick — never what an untouched form submits.
+const INVITE_ROLE_ORDER: readonly ControlWorkspaceRole[] = [
+  "viewer",
+  "member",
+  "admin",
+  "owner",
+];
+
 const STATUS_KEY: Record<PublicWorkspaceMember["status"], MessageKey> = {
   active: "members.status.active",
   invited: "members.status.invited",
@@ -71,6 +81,11 @@ function statusTone(
   if (status === "active") return "ok";
   if (status === "invited") return "info";
   return "muted";
+}
+
+/** First ~10 chars of an opaque account subject, with an ellipsis marker. */
+function shortSubject(accountId: string): string {
+  return accountId.length > 11 ? `${accountId.slice(0, 10)}…` : accountId;
 }
 
 function rolesLabel(roles: readonly ControlWorkspaceRole[]): string {
@@ -110,7 +125,7 @@ export default function MembersTab(props: {
 
   const [inviteEmail, setInviteEmail] = createSignal("");
   const [inviteRole, setInviteRole] =
-    createSignal<ControlWorkspaceRole>("member");
+    createSignal<ControlWorkspaceRole>("viewer");
   const invite = createAction(async () => {
     const email = inviteEmail().trim();
     if (!email) throw new Error(t("members.invite.emailRequired"));
@@ -119,7 +134,7 @@ export default function MembersTab(props: {
       role: inviteRole(),
     });
     setInviteEmail("");
-    setInviteRole("member");
+    setInviteRole("viewer");
     await refetch();
   });
 
@@ -159,6 +174,12 @@ export default function MembersTab(props: {
     },
   );
 
+  // Which member is being removed — remove is one shared action, so without
+  // this every row's button would go busy during a single removal (same
+  // per-row idiom as SharesTab/BackupsTab).
+  const [removingSubject, setRemovingSubject] = createSignal<string | null>(
+    null,
+  );
   const remove = createAction(async (member: PublicWorkspaceMember) => {
     const ok = await confirm({
       title: t("members.remove"),
@@ -167,8 +188,13 @@ export default function MembersTab(props: {
       danger: true,
     });
     if (!ok) return;
-    await removeMember(props.workspaceId, member.accountId);
-    await refetch();
+    setRemovingSubject(member.accountId);
+    try {
+      await removeMember(props.workspaceId, member.accountId);
+      await refetch();
+    } finally {
+      setRemovingSubject(null);
+    }
   });
 
   const isLastOwner = (member: PublicWorkspaceMember) =>
@@ -182,7 +208,12 @@ export default function MembersTab(props: {
         header: t("members.col.member"),
         cell: (member) => (
           <>
-            <code class="wb-mono">{member.accountId}</code>
+            {/* `tsub_…` subjects are opaque machine ids — show a short prefix
+                so the roster stays scannable; the full id lives in the title
+                attribute for hover/copy inspection. */}
+            <code class="wb-mono" title={member.accountId}>
+              {shortSubject(member.accountId)}
+            </code>
             <Show when={member.accountId === callerSubject()}>
               <Badge tone="info" class="wb-you-tag">
                 {t("members.you")}
@@ -246,6 +277,7 @@ export default function MembersTab(props: {
                   variant="danger"
                   size="sm"
                   icon={<Trash2 size={14} />}
+                  busy={remove.busy() && removingSubject() === member.accountId}
                   disabled={remove.busy() || isLastOwner(member)}
                   title={
                     isLastOwner(member)
@@ -298,7 +330,7 @@ export default function MembersTab(props: {
                     setInviteRole(e.currentTarget.value as ControlWorkspaceRole)
                   }
                 >
-                  <For each={ROLE_ORDER}>
+                  <For each={INVITE_ROLE_ORDER}>
                     {(role) => (
                       // owner ロールの付与は owner のみ。admin は選べない。
                       <Show when={role !== "owner" || callerIsOwner()}>

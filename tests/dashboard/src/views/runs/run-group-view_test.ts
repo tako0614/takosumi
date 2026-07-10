@@ -45,12 +45,61 @@ describe("RunGroupView", () => {
     expect(source).toContain(
       "setTimeout(() => void refetch(), RUN_GROUP_POLL_MS)",
     );
-    // Manual refresh affordance in the header.
+    // Manual refresh affordance in the header — busy ONLY for a user click,
+    // never on the 5s poll refetch (that flickered and evicted focus).
     expect(source).toContain('t("common.refresh")');
-    expect(source).toContain("onClick={() => void refetch()}");
+    expect(source).toContain("onClick={() => void manualRefresh()}");
+    expect(source).toContain("busy={manualRefreshing()}");
+    expect(source).not.toContain("busy={group.loading}");
     // Poll re-render must not flash the skeleton over live rows.
     expect(source).toContain(
-      "<Match when={group.loading && !group.error && !group.latest}>",
+      "<Match when={!snapshot() && group.loading && !group.error}>",
     );
+  });
+
+  test("survives a transient poll failure: keep last payload, keep polling", () => {
+    // One failed 5s refetch used to swap the member list for an EmptyState
+    // and permanently stop the poll (an errored resource read returns false
+    // from anyMemberActive). Keep rendering the last good snapshot with a
+    // quiet inline notice; the EmptyState is reserved for a failed INITIAL
+    // load (which now offers a retry).
+    expect(source).toContain("const [snapshot, setSnapshot] = createSignal");
+    expect(source).toContain("<Match when={group.error && !snapshot()}>");
+    expect(source).toContain("<Match when={snapshot()}>");
+    expect(source).toContain('t("runGroup.refreshFailed")');
+    expect(source).toContain('t("common.retry")');
+    // The poll gate reads the snapshot, not the (throwing) errored resource.
+    expect(source).toMatch(
+      /anyMemberActive = createMemo\(\(\) => \{\s*\n\s*const current = snapshot\(\);/,
+    );
+    expect(ja["runGroup.refreshFailed"].length).toBeGreaterThan(0);
+    expect(en["runGroup.refreshFailed"].length).toBeGreaterThan(0);
+  });
+
+  test("member rows are distinguishable: visible service name + named links", () => {
+    // Five identical サービスを開く/変更内容を開く rows are unusable out of
+    // context — resolve capsule names (best-effort, cached) and carry them in
+    // the visible text + aria-labels.
+    expect(source).toContain("listCapsulesCached");
+    expect(source).toContain("capsuleNames()");
+    expect(source).toContain(
+      't("runGroup.openServiceAria", { name: name()! })',
+    );
+    expect(source).toContain('t("runGroup.openRunAria", { name: name()! })');
+    expect(source).toContain('{name() ?? t("runGroup.openService")}');
+    expect(ja["runGroup.openServiceAria"]).toContain("{name}");
+    expect(en["runGroup.openServiceAria"]).toContain("{name}");
+    expect(ja["runGroup.openRunAria"]).toContain("{name}");
+    expect(en["runGroup.openRunAria"]).toContain("{name}");
+  });
+
+  test('announces member progress politely ("3/5 完了") for assistive tech', () => {
+    expect(source).toContain('aria-live="polite"');
+    expect(source).toContain('role="status"');
+    expect(source).toContain('t("runGroup.progressStatus"');
+    expect(ja["runGroup.progressStatus"]).toContain("{done}");
+    expect(ja["runGroup.progressStatus"]).toContain("{total}");
+    expect(en["runGroup.progressStatus"]).toContain("{done}");
+    expect(en["runGroup.progressStatus"]).toContain("{total}");
   });
 });

@@ -5,29 +5,26 @@
  * placeholders are interpolated by `t()`.
  *
  * Vocabulary contract (the unified verb set — do not reintroduce 公開/反映):
- *   物 = サービス
+ *   Noun (surface split): the user-facing noun is サービス on the add-flow
+ *   (/new), service detail, store, runs, and workspace surfaces; the home
+ *   launcher and the install celebration call the same thing アプリ. Never
+ *   mix the two nouns within one panel.
  *   追加 (install) → 変更を確認 (plan) → デプロイ (apply) → デプロイ済み (active)
  */
 export const ja = {
   // --- common -------------------------------------------------------------
-  "common.appName": "Takosumi",
   "common.loading": "読み込み中...",
   "common.retry": "再試行",
   "common.refresh": "更新",
+  "common.create": "作成",
+  "common.creating": "作成中...",
   "common.cancel": "キャンセル",
-  "common.close": "閉じる",
   "common.save": "保存",
   "common.saving": "保存中...",
   "common.delete": "削除",
-  "common.create": "作成",
-  "common.creating": "作成中...",
-  "common.open": "開く",
-  "common.back": "戻る",
   "common.none": "なし",
   "common.unknown": "不明",
   "common.details": "詳細",
-  "common.advanced": "詳細設定",
-  "common.actions": "操作",
   "common.fetchFailed": "取得に失敗しました — {message}",
   "common.copy": "コピー",
   "common.justNow": "たった今",
@@ -40,27 +37,23 @@ export const ja = {
 
   // --- nav / shell ----------------------------------------------------------
   "nav.home": "ホーム",
-  "nav.apps": "アプリ",
   "nav.services": "サービス",
   "nav.add": "追加",
   "nav.store": "ストア",
   "nav.settings": "設定",
   "nav.graph": "依存関係",
   "store.title": "ストア",
-  "store.subtitle": "ストアから追加できるアプリやサービスを探します。",
-  "store.manualEntry": "お探しのものがない？ Git URL / カスタムソースから追加",
-  "store.noWorkspace": "先にワークスペースを選択してください。",
+  "store.subtitle": "ストアから追加できるサービスを探します。",
+  "store.manualEntry":
+    "お探しのものがありませんか？ Git URL / 独自の取得元から追加",
   "nav.cloudResources": "クラウド",
   "nav.runs": "アクティビティ",
   "nav.connections": "接続済みアカウント",
   "nav.billing": "お支払い",
   "nav.activity": "操作履歴",
   "nav.primary": "主な操作",
-  "nav.manage": "管理",
-  "nav.accountSection": "アカウント",
   "nav.notifications": "通知",
   "nav.workspaceSettings": "設定",
-  "nav.workspaceSettingsShort": "設定",
   "nav.account": "アカウント",
   "nav.docs": "ドキュメント",
   "nav.backToTakos": "Takos に戻る",
@@ -87,8 +80,6 @@ export const ja = {
   "settings.billing.desc": "プラン、使用量、請求の確認",
   "settings.notifications.title": "通知",
   "settings.notifications.desc": "お知らせと要対応の確認",
-  "settings.workspace.title": "ワークスペース",
-  "settings.workspace.desc": "名前、メンバー、共有の設定",
   "settings.billingSummary.noPlan": "プラン未加入",
   "settings.billingSummary.manage": "管理する",
   "settings.billingSummary.fix": "支払いを確認する",
@@ -116,8 +107,6 @@ export const ja = {
   "workspace.selectMessage":
     "サイドバーのワークスペース選択からワークスペースを選ぶと表示されます。",
   "workspace.loading": "ワークスペースを読み込み中...",
-  "workspace.count": "{n} 件",
-  "workspace.change": "切り替え",
   "workspace.settings": "ワークスペース設定",
   "workspace.switcherAria": "ワークスペースを切り替え（現在: {name}）",
   "workspace.defaultName": "自分のワークスペース",
@@ -128,6 +117,10 @@ export const ja = {
     "サービス、デプロイ履歴、設定はワークスペースにまとめて保存されます。",
   "workspace.start.create": "ワークスペースを作成",
   "workspace.start.creating": "作成中...",
+  "workspace.create.nameLabel": "ワークスペース名",
+  "workspace.create.namePlaceholder": "新しいワークスペース",
+  "workspace.create.nameRequired": "ワークスペース名を入力してください。",
+  "workspace.create.failed": "ワークスペースを作成できませんでした — {message}",
 
   // --- auth -----------------------------------------------------------------
   "auth.signIn": "サインイン",
@@ -139,11 +132,9 @@ export const ja = {
   "auth.signInCloudPreview":
     "現在は招待されたGoogleアカウントのみ利用できます。",
   "auth.continueWith": "{provider} で続ける",
-  "auth.notConfigured": "現在利用できません",
   "auth.providerChecking": "利用可否を確認中です",
   "auth.providerUnavailable": "現在利用できません",
   "auth.providerRetryNeeded": "確認できませんでした",
-  "auth.googleAccount": "Google アカウント",
   "auth.noProvidersTitle": "現在サインインできません",
   "auth.noProvidersMessage":
     "現在利用できるサインイン方法がありません。しばらくしてから再試行してください。続く場合はサポートに連絡してください。",
@@ -168,8 +159,6 @@ export const ja = {
   "auth.processing": "サインイン処理中...",
   "auth.failed": "サインインに失敗しました",
   "auth.backToSignIn": "サインインへ戻る",
-  "auth.incompleteCallback":
-    "サインインの戻り値を利用できませんでした。もう一度サインインしてください。",
   "auth.retryableCallbackFailure":
     "このブラウザタブからサインインを完了できませんでした。もう一度サインインしてください。",
   "auth.retryableCallbackFailureWithDetail":
@@ -206,7 +195,7 @@ export const ja = {
   "status.deployment.destroyed": "削除済み",
   "status.connection.pending": "未確認",
   "status.connection.verified": "確認済み",
-  "status.connection.revoked": "削除済み",
+  "status.connection.revoked": "無効化済み",
   "status.connection.expired": "期限切れ",
   "status.connection.error": "エラー",
   "status.providerConnection.ready": "利用できます",
@@ -232,19 +221,13 @@ export const ja = {
 
   // --- Service list (home) --------------------------------------------------
   "apps.title": "アプリ",
-  "apps.subtitle": "追加したアプリをここから開けます。",
   "apps.add": "サービスを追加",
   "apps.addShort": "追加",
   "apps.sectionYours": "あなたのアプリ",
   "apps.manage": "管理",
-  "apps.sectionBrowse": "さがす",
-  "apps.browseSub": "おすすめ",
-  "apps.browseAll": "ストアを開く",
-  "apps.addToLibrary": "ライブラリに足す",
-  "install.installing": "{name} を追加中…",
   "install.installingGeneric": "追加中…",
   "install.wait": "そのままお待ちください",
-  "install.progressAria": "インストールの進行状況",
+  "install.progressAria": "追加の進行状況",
   "install.step.fetch": "コードを取得",
   "install.step.check": "互換性を確認",
   "install.step.deploy": "デプロイ",
@@ -266,26 +249,14 @@ export const ja = {
   "update.doneTitleGeneric": "更新しました",
   "update.doneSub": "最新の状態になりました。",
   "update.errorTitle": "更新できませんでした",
-  "apps.attention": "要対応が {n} 件あります",
-  "apps.attentionView": "通知を確認",
   "apps.needsAttention": "要対応",
   "apps.openApp": "アプリを開く",
-  "apps.noOpenLink": "まだ開く画面がありません",
-  "apps.viewDetails": "詳細",
-  "apps.updated": "更新: {date}",
   "apps.reviewChanges": "変更を確認",
-  "apps.start.aria": "最初のサービス",
-  "apps.start.kicker": "まだサービスがありません",
-  "apps.start.titleEmpty": "最初のアプリを追加しよう",
+  "apps.start.aria": "最初のアプリ",
+  "apps.start.kicker": "まだアプリがありません",
+  "apps.start.titleEmpty": "最初のアプリを追加しましょう",
   "apps.start.bodyEmpty": "アプリを選ぶか、リンクを貼って追加します。",
   "apps.start.optionStore": "追加する",
-  "apps.start.optionStoreSub": "アプリ候補やリンクから追加できます。",
-  "apps.empty.aria": "アプリがありません",
-  "apps.empty.kicker": "まだアプリがありません",
-  "apps.empty.title": "開けるアプリがありません",
-  "apps.empty.body":
-    "追加したアプリはここに並びます。まずはストアから選んで追加してください。",
-  "apps.empty.viewServices": "サービス一覧を見る",
   "apps.listIncomplete":
     "一部のアプリを読み込めませんでした。表示されていないアプリがあるかもしれません。",
 
@@ -332,21 +303,13 @@ export const ja = {
   "app.source.name": "名前",
   "app.source.url": "取得元 URL",
   "app.source.refPath": "バージョン / フォルダ",
-  "app.source.status": "取得状態",
   "app.source.loading": "取得元情報を読み込み中です。",
   "app.source.unavailable": "取得元の情報は利用できません。",
   "app.source.supportBody": "取得元と参照情報です。通常は変更しません。",
-  "app.info.title": "参照情報",
-  "app.info.id": "ID",
-  "app.info.generation": "復元ポイント",
-  "app.info.deployment": "現在の状態",
-  "app.info.installConfig": "追加設定",
   "app.deploys.title": "更新履歴",
   "app.deploys.reviewTitle": "サービスを更新",
   "app.deploys.reviewSubtitle":
     "変更がある場合は内容を確認してからデプロイできます。",
-  "app.deploys.subtitle":
-    "これまでにデプロイされた状態の記録です。過去の状態を選ぶと、その内容に戻す変更を確認できます。",
   "app.deploys.empty": "まだデプロイ履歴はありません。",
   "app.deploys.restoreMenu": "その他",
   "app.deploys.restore": "この状態に戻す",
@@ -356,11 +319,7 @@ export const ja = {
   "app.deploys.backup": "バックアップを作成",
   "app.deploys.backupCreated": "バックアップを作成しました。",
   "app.deploys.backupSupportRef": "バックアップ ID",
-  "app.recentRuns.title": "最近の確認",
-  "app.recentRuns.empty": "最近の確認はありません。",
-  "app.recentRuns.open": "詳細",
   "app.recentActivity.title": "最近の更新",
-  "app.recentActivity.empty": "最近の更新はありません。",
   "app.recentActivity.open": "詳細",
   "app.recentActivity.releaseActivation": "アプリ公開",
   "app.bindings.title": "接続済みアカウント",
@@ -379,12 +338,11 @@ export const ja = {
     "{provider} の利用可能な接続済みアカウントを選択してください。",
   "app.config.title": "設定値",
   "app.config.subtitle":
-    "公開名、URL、初期ログイン、アプリが使う値を変更できます。保存後、次のデプロイ確認に反映されます。",
+    "公開名、URL、初期ログイン、サービスが使う値を変更できます。保存後、次のデプロイ確認に反映されます。",
   "app.config.publicUrl": "公開URL",
   "app.config.subdomain": "公開サブドメイン",
   "app.config.oidc": "自動ログイン",
   "app.config.oidcOn": "有効",
-  "app.config.oidcOff": "未設定",
   "app.config.updatedAt": "最終更新",
   "app.config.empty": "編集できる設定値はありません。",
   "app.config.notReady": "設定値を読み込めませんでした。",
@@ -397,22 +355,23 @@ export const ja = {
     "保存済みです。変更する場合だけ新しい値を入力します。",
   "app.config.reset": "リセット",
   "app.config.remove": "削除",
+  "app.config.undoReset": "元に戻す",
   "app.config.resetAria": "設定値 {name} をクリア",
   "app.config.removeAria": "設定値 {name} を削除",
+  "app.config.undoResetAria": "設定値 {name} のリセットを取り消す",
+  "app.config.defaultBadge": "既定値",
+  "app.config.resetPendingHint": "保存すると既定値に戻ります。",
   "app.config.customName": "CUSTOM_ENV",
   "app.config.errorNameRequired": "設定名を入力してください。",
   "app.config.errorNameInvalid": "{name} に空白は使えません。",
   "app.config.errorNameDuplicate": "{name} が重複しています。",
   "app.config.errorNumber": "{name} は数値で入力してください。",
   "app.config.errorJson": "{name} は JSON として入力してください。",
-  "app.settings.removeTitle": "このサービスを削除しますか？",
-  "app.settings.removeBody":
-    "削除は別の確認画面から行います。何が取り除かれるかを確認してから実行できます。",
-  "app.settings.removeCta": "削除オプションを開く",
   "app.settings.openCta": "設定を開く",
   "app.settings.supportDetails": "参照情報",
   "app.usage.title": "概算費用（累計）",
-  "app.usage.body": "このアプリの記録済み使用量の合計です。",
+  "app.usage.body": "このサービスの記録済み使用量の合計です。",
+  "app.usage.subCent": "$0.01 未満",
   "app.config.savedNeedsDeploy":
     "保存しました。変更を反映するにはデプロイしてください。",
   "app.config.deployChanges": "変更をデプロイ",
@@ -424,8 +383,8 @@ export const ja = {
   "app.autoUpdate.disable": "自動更新をオフにする",
   "app.danger.destroyTitle": "サービスを削除",
   "app.danger.destroyBody":
-    "{name} の削除は、まず変更内容（削除プラン）を確認し、そのうえで実行します。実行するとリソースは取り除かれ、元に戻せません。",
-  "app.danger.destroyCta": "削除プランを確認",
+    "{name} を削除するには、まず削除の確認で内容を確かめ、そのうえで実行します。実行するとリソースは取り除かれ、元に戻せません。",
+  "app.danger.destroyCta": "削除の確認を開く",
   "app.setupIncomplete.body":
     "追加が完了していません。変更の確認からやり直すか、削除してやり直せます。",
   "app.setupIncomplete.review": "更新タブへ",
@@ -453,6 +412,8 @@ export const ja = {
     "このサービスを削除する準備ができました。実行すると元に戻せません。",
   "run.summary.applied":
     "デプロイを開始しました。反映までしばらくお待ちください。",
+  "run.summary.alreadyApplied":
+    "この変更のデプロイは実行済みです。結果はアクティビティから確認できます。",
   "run.summary.applying": "デプロイを実行しています…",
   "run.summary.finishing": "デプロイを仕上げています…",
   "run.summary.activationPending": "アプリの公開処理を仕上げています…",
@@ -464,7 +425,7 @@ export const ja = {
   "run.summary.failed": "{operation}に失敗しました。",
   "run.summary.failedHint": "下の診断とログで原因を確認できます。",
   "runError.sourceSyncFailed":
-    "アプリの内容を取得できませんでした。リンクとバージョンを確認して、もう一度お試しください。",
+    "サービスの内容を取得できませんでした。リンクとバージョンを確認して、もう一度お試しください。",
   "runError.sourceRefNotFound":
     "指定されたバージョンが見つかりませんでした。バージョンを確認して、もう一度お試しください。",
   "runError.stateGenerationMismatch":
@@ -495,8 +456,8 @@ export const ja = {
   "run.summary.blocked": "ポリシーにより実行が止まっています。",
   "run.summary.driftDone": "ズレの確認が完了しました。",
   "run.summary.cancelled": "この操作は取り消されました。",
-  "run.summary.expired": "このプランは期限切れです。",
-  "run.summary.expiredHint": "もう一度内容を確認してください。",
+  "run.summary.expired": "この変更の確認は期限切れです。",
+  "run.summary.expiredHint": "もう一度変更を確認してからデプロイしてください。",
   "run.summary.compatDone": "追加前の確認が完了しました。",
   "run.summary.compatRunning": "内容を確認しています…",
   "run.summary.syncDone": "内容の取得が完了しました。",
@@ -513,7 +474,7 @@ export const ja = {
   "run.destructiveWarning":
     "この変更には既存リソースの置き換え・削除が含まれます。実行するとデータが失われる場合があります。",
   "run.destructiveConfirm": "破壊的な変更を承知のうえで実行",
-  "run.stop": "やめる",
+  "run.stop": "中止する",
   "run.cancel": "この実行をキャンセル",
   "run.cancelConfirm.title": "実行をキャンセルしますか？",
   "run.cancelConfirm.message": "「{name}」の{operation}を途中で終了します。",
@@ -526,10 +487,6 @@ export const ja = {
     "利用上限または支払い状態により、このまま実行できません。",
   "run.cost.blocked":
     "支払い状態または上限の都合により、このまま実行できません。",
-  "run.cost.capacityNeeded": "必要な容量: 約 {n}",
-  "run.cost.capacity": "利用可能な容量: {n}",
-  "run.cost.capacityShortfall":
-    "利用可能な容量が約 {n} 不足しているため、このまま実行できません。",
   "run.cost.capacityBlocked":
     "このワークスペースではこの操作を実行できません。",
   "run.cost.billingCta": "お支払いを開く",
@@ -537,6 +494,8 @@ export const ja = {
     "オーナーがワークスペースの使用量・上限を見直すと、この操作を実行できます。",
   "run.cost.quotaCta": "使用量 / 上限を確認",
   "run.changes.title": "変更される内容",
+  "run.changes.titleDone": "変更された内容",
+  "run.changes.noRecord": "変更内容の記録はありません",
   "run.changes.create": "作成",
   "run.changes.update": "変更",
   "run.changes.delete": "削除",
@@ -585,7 +544,6 @@ export const ja = {
   "run.connections.statusBlocked": "ポリシーで停止",
   "run.connections.empty": "接続済みアカウントの確認情報はありません。",
   "run.diagnostics.title": "診断",
-  "run.diagnostics.empty": "診断はありません。",
   "run.diag.severity.error": "エラー",
   "run.diag.severity.warning": "警告",
   "run.diag.severity.info": "情報",
@@ -637,6 +595,8 @@ export const ja = {
   "runList.applied": "デプロイ",
   "runList.destroyed": "削除",
   "runList.failed": "{operation}に失敗しました",
+  "runList.namesUnavailable":
+    "サービス名を取得できませんでした。名前なしで表示しています。",
 
   // --- add flow (/new) -------------------------------------------------------
   "new.title": "サービスを追加",
@@ -666,8 +626,6 @@ export const ja = {
     "{label} は {baseDomain} の前に付く1段の名前を入力してください。英小文字・数字・ハイフンが使えます。",
   "new.storeInput.errorCustomDomain":
     "{label} は https:// のURLを使ってください。{baseDomain} は1段の名前だけ使えます。独自ドメインはデプロイ前に所有確認が必要です。",
-  "new.deeplink.summary":
-    "リンクから「{capsule}」の内容が入力されています。確認してから追加してください。",
   "new.deeplink.aria": "リンクから追加するサービス",
   "new.deeplink.kicker": "リンクから追加",
   "new.deeplink.title": "{capsule} を追加します",
@@ -687,20 +645,20 @@ export const ja = {
   "new.sourceAccess.mode": "アクセス方法",
   "new.sourceAccess.public": "公開リンク",
   "new.sourceAccess.existing": "保存済みのアクセスを使う",
-  "new.sourceAccess.token": "アクセス token を保存する",
+  "new.sourceAccess.token": "アクセストークンを保存する",
   "new.sourceAccess.connection": "保存済みのアクセス",
   "new.sourceAccess.selectConnection": "保存済みのアクセスを選択",
   "new.sourceAccess.noConnections":
     "このワークスペースには、検証済みの取得元アクセスがまだありません。",
   "new.sourceAccess.username": "ユーザー名",
   "new.sourceAccess.accessToken": "アクセストークン",
-  "new.sourceAccess.tokenPlaceholder": "読み取り専用 token",
+  "new.sourceAccess.tokenPlaceholder": "読み取り専用トークン",
   "new.sourceAccess.saveToken": "アクセス情報を保存",
   "new.sourceAccess.tokenBody":
     "保存後は表示できない形で安全に保管され、このワークスペースの取得元確認にだけ使われます。",
-  "new.sourceAccess.errorTokenRequired": "Access token を入力してください。",
+  "new.sourceAccess.errorTokenRequired": "アクセストークンを入力してください。",
   "new.sourceAccess.errorSaveToken":
-    "確認する前に、非公開リンクの token を保存してください。",
+    "確認する前に、非公開リンクのトークンを保存してください。",
   "new.sourceAccess.errorSelectConnection":
     "検証済みの取得元アクセスを選択してください。",
   "new.sourceAccess.errorConnectionUnavailable":
@@ -718,7 +676,7 @@ export const ja = {
   "new.advanced.serviceIdHint": "内部名です。URLの既定値になります。",
   "new.env.title": "環境変数",
   "new.env.body":
-    "アプリが公開してよい実行時の環境変数を求める場合だけ使います。秘密の値は接続済みアカウントから渡してください。",
+    "サービスが公開してよい実行時の環境変数を求める場合だけ使います。秘密の値は接続済みアカウントから渡してください。",
   "new.env.name": "環境変数名",
   "new.env.value": "値",
   "new.env.valuePlaceholder": "値",
@@ -733,7 +691,7 @@ export const ja = {
   "new.env.errorDuplicate": "環境変数「{name}」が重複しています。",
   "new.vars.inputsTitle": "その他の設定",
   "new.vars.inputsBody":
-    "上にない表示用の入力をアプリから求められた場合だけ使います。",
+    "上にない表示用の入力をサービスから求められた場合だけ使います。",
   "new.vars.inputName": "設定名",
   "new.vars.inputValue": "値",
   "new.vars.namePlaceholder": "設定名",
@@ -753,14 +711,13 @@ export const ja = {
   "new.vars.errorDuplicate": "「{name}」が重複しています。",
   "new.deeplink.invalidTitle": "このインストールリンクは利用できません",
   "new.deeplink.invalidBody":
-    "安全な HTTPS リンクではないか、ブラウザで開けない情報が含まれています。アプリ候補から選ぶか、別のリンクを貼り付けてください。",
+    "安全な HTTPS リンクではないか、ブラウザで開けない情報が含まれています。サービス候補から選ぶか、別のリンクを貼り付けてください。",
   "new.appHandoff.title": "{app} に接続するサービスを追加します",
   "new.appHandoff.body":
     "この画面で追加が完了すると、接続先の情報が自動的にアプリへ戻ります。",
   "new.appHandoff.kicker": "アプリからのリクエスト",
   "new.appHandoff.app": "アプリ",
   "new.appHandoff.return": "戻り先",
-  "new.compat.check": "追加を始める",
   "new.installCta": "サービスを追加",
   "new.installing": "追加中...",
   "new.compat.recheck": "もう一度確認",
@@ -780,7 +737,7 @@ export const ja = {
   "new.compat.diagnostic.technicalNote":
     "詳しい確認結果です。対応が必要な場合だけ確認してください。",
   "new.compat.patchHelp":
-    "表示された内容を確認してください。アプリ側の修正が必要な場合と、接続済みアカウントの設定で進められる場合があります。",
+    "表示された内容を確認してください。サービス側の修正が必要な場合と、接続済みアカウントの設定で進められる場合があります。",
   "new.compat.summary.providerCredentials":
     "{provider} の非公開値を取得元から外す必要があります。",
   "new.compat.summary.reviewRequired":
@@ -795,7 +752,6 @@ export const ja = {
     "利用する接続先の固定情報が含まれています。非公開値を外したあと、追加時に固定内容を確認します。",
   "new.compat.issue.reviewRequired.message":
     "追加前に確認が必要な項目があります。",
-  "new.proceed": "追加内容を確認する",
   "new.proceedHint": "先に「サービスを追加」を押してください。",
   "new.existing.title": "このサービスは既に追加されています",
   "new.existing.body":
@@ -833,7 +789,7 @@ export const ja = {
   "new.error.sourceRefNotFound":
     "指定されたバージョン「{ref}」が見つかりません。リンク先にこのバージョンがあるか確認してください。",
   "new.error.sourceFetchFailed":
-    "アプリの内容を取得できませんでした。リンク、バージョン、フォルダ、または非公開リンクの接続を確認してください。詳細: {message}",
+    "サービスの内容を取得できませんでした。リンク、バージョン、フォルダ、または非公開リンクの接続を確認してください。詳細: {message}",
   "new.error.sourceFetchFailedUnknown": "原因を取得できませんでした。",
   "new.error.generic":
     "サービスの追加に失敗しました。内容を確認して、もう一度お試しください。",
@@ -844,15 +800,13 @@ export const ja = {
   "new.error.invalidHostname":
     "この公開名は長すぎるか、使えない文字を含んでいます。もう少し短い名前にして、もう一度お試しください。",
   "new.error.connectionRequired":
-    "このアプリの公開にはクラウドアカウントの接続が必要です。接続を設定してから、もう一度お試しください。",
+    "このサービスの公開にはクラウドアカウントの接続が必要です。接続を設定してから、もう一度お試しください。",
   "new.error.appHostnameUnavailable":
     "この公開URL名は既に使われています。別の名前にして、もう一度お試しください。",
   "new.hostnameConflict.title": "別の公開URL名にしてください",
   "new.hostnameConflict.body":
     "公開URLに使う名前を変えてから、もう一度追加してください。",
   "new.hostnameConflict.suggest": "候補名を使う",
-  "new.error.alreadyExists":
-    "「{name}」は既に追加されています。一覧から既存サービスを開いてください。",
   "new.error.alreadyExistsGeneric":
     "このサービスは既に追加されています。一覧から既存サービスを開いてください。",
   "new.error.nameReserved":
@@ -880,12 +834,14 @@ export const ja = {
   "workspaceSettings.general.owner": "オーナー",
   "workspaceSettings.general.updated": "更新日時",
   "workspaceSettings.general.advancedDetails": "詳細情報",
-  "workspaceSettings.general.policyAdvanced": "ポリシー JSON（詳細）",
   "workspaceSettings.general.saved": "設定を保存しました。",
   "workspaceSettings.general.archive": "ワークスペースをアーカイブ",
   "workspaceSettings.general.archiveConfirm":
     "このワークスペースを通常の一覧から外します。あとから管理用APIで確認できます。",
   "workspaceSettings.general.archived": "ワークスペースをアーカイブしました。",
+  "workspaceSettings.general.archivedNamed": "「{name}」をアーカイブしました。",
+  "workspaceSettings.general.archivedHint":
+    "復元は下のアーカイブ済み一覧から、別のワークスペースへの移動はワークスペース切り替えからできます。",
   "workspaceSettings.general.notFound":
     "このワークスペースは見つかりませんでした。切り替えるか、下のアーカイブ済みから復元してください。",
   "workspaceSettings.general.archivedTitle": "アーカイブ済みのワークスペース",
@@ -893,10 +849,6 @@ export const ja = {
   "workspaceSettings.general.archiveLastError":
     "最後のワークスペースはアーカイブできません。",
   "workspaceSettings.general.nameRequired": "表示名を入力してください。",
-  "workspaceSettings.general.policyObject":
-    "ポリシー JSON は object にしてください。",
-  "workspaceSettings.general.policyInvalid":
-    "ポリシー JSON が正しい JSON ではありません。",
 
   // --- members ---------------------------------------------------------------
   "members.role.owner": "オーナー",
@@ -905,9 +857,7 @@ export const ja = {
   "members.role.viewer": "閲覧のみ",
   "members.status.active": "有効",
   "members.status.invited": "招待中",
-  "members.status.suspended": "削除済み",
-  "members.subtitle":
-    "このワークスペースのメンバーと役割を管理します。招待・役割の変更・削除はオーナーまたは管理者のみ行えます。",
+  "members.status.suspended": "停止中",
   "members.invite.title": "メンバーを招待",
   "members.invite.subtitle":
     "一度ログイン済みの相手のメールアドレスを入力してください。",
@@ -936,11 +886,8 @@ export const ja = {
 
   // --- connections -------------------------------------------------------------
   "conn.subtitle":
-    "自分のカギ（クラウドのトークンやアクセスキー）を保存します。カギを入れれば、allowlist なし・承認なしで任意の provider を動かせます。",
+    "自分のカギ（クラウドのトークンやアクセスキー）を保存します。カギを入れれば、制限や承認なしで任意のプロバイダーを動かせます。",
   "conn.providerConnections.title": "接続済みアカウント",
-  "conn.providerConnections.provider": "接続先",
-  "conn.providerConnections.name": "名前",
-  "conn.providerConnections.status": "状態",
   "conn.expiresAt": "期限: {date}",
   "conn.oauth.connected": "Cloudflare に接続しました。",
   "conn.oauth.failed": "接続に失敗しました。もう一度お試しください。",
@@ -953,17 +900,17 @@ export const ja = {
     "{name} を保存しました。サービス追加に戻る前に、接続確認を完了してください。",
   "conn.saved.testCta": "接続を確認",
   "conn.saved.returnCta": "追加に戻る",
+  "conn.add.provider": "接続先",
+  "conn.add.genericEnvOption": "その他の接続（詳細）",
   "conn.add.title": "アカウントを接続",
   "conn.add.open": "アカウントを接続",
   "conn.add.close": "閉じる",
-  "conn.add.provider": "接続先",
-  "conn.add.genericEnvOption": "その他の接続（詳細）",
   "conn.add.optionalSettings": "この接続に名前をつける",
   "conn.add.displayName": "接続名",
   "conn.add.displayNamePlaceholder": "任意の名前",
   "conn.provider.cloudflare.label": "Cloudflare",
   "conn.provider.cloudflare.helper.stepOpen":
-    "自動連携を使えない場合だけ、下のボタンから Cloudflare の token 画面を開きます。",
+    "自動連携を使えない場合だけ、下のボタンから Cloudflare のトークン画面を開きます。",
   "conn.provider.cloudflare.helper.stepCreate":
     "Cloudflare の画面で「概要に進む」→「トークンを作成」を押します（権限はあらかじめ選ばれています）。",
   "conn.provider.cloudflare.helper.stepPaste":
@@ -1016,53 +963,47 @@ export const ja = {
   "conn.provider.s3.guide.step3":
     "アクセスキーとエンドポイント URL を下の欄に貼り付けます。",
   "conn.guided.openProvider": "{provider} のアクセス設定を開く",
-  "conn.guided.oauth": "{provider} で自動接続",
   "conn.guided.stepsSummary": "アクセストークンで接続",
   "conn.guided.instructions": "手順を表示",
   "conn.guided.pasteLabel": "アクセストークン",
   "conn.guided.pastePlaceholder": "ここにトークンを貼り付け",
   "conn.guided.connect": "接続を保存",
   "conn.guided.connecting": "接続中...",
-  "conn.custom.back": "よく使う接続に戻る",
-  "conn.byok.title": "自分のカギで任意の provider を接続",
+  "conn.byok.title": "自分のカギで任意のプロバイダーを接続",
   "conn.byok.body":
-    "Provider source と、その provider が使う環境変数（カギ）を入れるだけ。allowlist も承認もなく、どの OpenTofu / Terraform provider でも動きます。",
+    "プロバイダーの取得元 (source) と、そのプロバイダーが使う環境変数（カギ）を入れるだけ。制限や承認なしで、どの OpenTofu / Terraform プロバイダーでも動きます。",
   "conn.byok.noBillingNote":
-    "自分のカギを使う接続に Takosumi の課金はありません。課金対象は Takosumi 提供の managed リソースだけです。",
+    "自分のカギを使う接続に Takosumi の課金はありません。課金対象になるのは Takosumi が提供するリソースだけです。",
   "conn.byok.usePreset": "代わりにガイド付きプリセットを使う",
-  "conn.byok.backToByok": "自分のカギで任意の provider を接続する",
+  "conn.byok.backToByok": "自分のカギで任意のプロバイダーを接続する",
   "conn.presets.body":
-    "プリセットは設定を楽にするショートカットです（対応 provider の一覧ではありません）。一覧に無い provider は「自分のカギで接続」を使ってください。",
+    "プリセットは設定を楽にするショートカットです（対応プロバイダーの一覧ではありません）。一覧に無いプロバイダーは「自分のカギで接続」を使ってください。",
   "conn.presets.provider": "プリセット（任意のショートカット）",
   "conn.advanced.summary": "アクセス情報を入力",
-  "conn.advanced.register": "アクセス情報を保存",
   "conn.register": "接続を保存",
   "conn.registering": "保存中...",
-  "conn.genericEnv.summary": "その他の接続",
-  "conn.genericEnv.body":
-    "一覧にない接続先だけ、Provider source と必要な環境変数を指定します。",
-  "conn.genericEnv.option": "その他の接続を設定",
-  "conn.genericEnv.providerName": "Provider source",
+  "conn.genericEnv.providerName": "プロバイダーの取得元 (source)",
   "conn.genericEnv.providerPlaceholder": "snowflake-labs/snowflake",
   "conn.genericEnv.envName": "env 名",
   "conn.genericEnv.envNamePlaceholder": "SNOWFLAKE_PASSWORD",
   "conn.genericEnv.value": "値",
   "conn.genericEnv.valuePlaceholder": "値を貼り付け",
   "conn.genericEnv.addRow": "値を追加",
-  "conn.genericEnv.providerRequired": "Provider source を入力してください。",
+  "conn.genericEnv.providerRequired":
+    "プロバイダーの取得元 (source) を入力してください。",
   "conn.genericEnv.nameRequired": "値のある行には環境変数名が必要です。",
   "conn.genericEnv.invalidName":
-    "“{name}” は使えません。SNOWFLAKE_PASSWORD のような大文字の env 名を使ってください。",
+    "「{name}」は使えません。SNOWFLAKE_PASSWORD のような大文字の env 名を使ってください。",
   "conn.genericEnv.reservedName":
-    "“{name}” は runner が使う予約名です。provider 固有の env 名を使ってください。",
-  "conn.genericEnv.duplicateName": "“{name}” はすでに追加されています。",
+    "「{name}」は runner が使う予約名です。provider 固有の env 名を使ってください。",
+  "conn.genericEnv.duplicateName": "「{name}」はすでに追加されています。",
   "conn.genericEnv.oneRequired": "環境変数を 1 つ以上入力してください。",
   "conn.error.invalidProvider": "接続先が不正です。",
   "conn.error.tokenRequired": "トークンを貼り付けてください。",
   "conn.error.fieldRequired": "{field} は必須です。",
-  "conn.empty.title": "自分のカギで任意の provider を接続",
+  "conn.empty.title": "自分のカギで任意のプロバイダーを接続",
   "conn.empty.message":
-    "自分のカギ（クラウドのトークンやキー）を入れれば、allowlist なし・承認なし・課金なしで、どの provider でも動かせます。",
+    "自分のカギ（クラウドのトークンやキー）を入れれば、制限や承認、課金なしで、どのプロバイダーでも動かせます。",
   "conn.test": "アクセス確認",
   "conn.testing": "確認中...",
   "conn.test.notReady":
@@ -1078,19 +1019,11 @@ export const ja = {
   "backups.col.createdAt": "作成日時",
   "backups.col.contents": "内容",
   "backups.col.actions": "操作",
-  "backups.col.artifact": "設定バックアップ",
   "backups.restorePoint": "復元ポイント",
-  "backups.restoreGeneration": "状態世代 {generation}",
+  "backups.restoreGeneration": "バックアップ時点 {generation}",
   "backups.restore": "復元を準備",
   "backups.restoreUnavailable":
     "復元するには、サービスからバックアップを作成してください。",
-  "backups.col.serviceData": "サービスデータ",
-  "backups.col.source": "作成元",
-  "backups.col.run": "実行",
-  "backups.manual": "手動",
-  "backups.detail.id": "バックアップ ID",
-  "backups.serviceDataSummary":
-    "サービスデータ {exported} 件 / 未対応 {unsupported} 件 / 不足 {missing} 件",
   "backups.empty.title": "まだバックアップがありません",
   "backups.empty.message":
     "このワークスペースの最初のバックアップを作成できます。",
@@ -1154,8 +1087,6 @@ export const ja = {
   "notif.event.destroyedNamed": "「{name}」を削除しました",
   "notif.event.failed": "{operation}に失敗しました",
   "notif.event.failedNamed": "「{name}」の{operation}に失敗しました",
-  "notif.event.failedDetail": "エラー: {code}",
-  "notif.event.failedHint": "詳細は実行ログを確認してください",
   "notif.event.drift": "サービスの実状態が保存済みの記録とズレています",
   "notif.event.driftNamed": "「{name}」の実状態が保存済みの記録とズレています",
   "notif.event.driftDetail": "実際の状態が設定とずれている可能性があります",
@@ -1183,6 +1114,7 @@ export const ja = {
   "notif.event.autoUpdateFailedDetail":
     "サービス画面から更新内容を確認してください",
   "notif.event.recorded": "記録された操作",
+  "notif.otherWorkspace": "別のワークスペース @{handle}",
 
   // --- activity -------------------------------------------------------------------
   "activity.title": "操作履歴",
@@ -1191,6 +1123,7 @@ export const ja = {
   "activity.detailsBody": "イベントを確認するときに使う参照情報です。",
   "activity.debug": "参照 ID",
   "activity.recorded": "記録された操作",
+  "activity.actorLine": "実行者: {actor}",
   "activity.empty.title": "まだ記録はありません",
   "activity.empty.message":
     "このワークスペースで操作が行われると、ここに記録されます。",
@@ -1202,9 +1135,13 @@ export const ja = {
   "runGroup.members": "この更新に含まれるサービス",
   "runGroup.membersEmpty": "この更新に含まれるサービスはありません。",
   "runGroup.openService": "サービスを開く",
+  "runGroup.openServiceAria": "サービス「{name}」を開く",
   "runGroup.openRun": "変更内容を開く",
-  "runGroup.change": "変更",
+  "runGroup.openRunAria": "「{name}」の変更内容を開く",
   "runGroup.groupId": "更新 ID",
+  "runGroup.progressStatus": "{total} 件中 {done} 件が完了",
+  "runGroup.refreshFailed":
+    "最新の状態を取得できませんでした。最後に取得した内容を表示しています。",
 
   // --- graph ---------------------------------------------------------------------
   "graph.title": "依存関係",
@@ -1229,7 +1166,6 @@ export const ja = {
   "account.profile.notSet": "未設定",
   "account.profile.provider": "サインイン方法",
   "account.profile.expires": "セッション期限",
-  "account.session.title": "現在のセッション",
   "account.session.id": "セッション参照 ID",
   "account.session.userAgent": "ブラウザ",
   "account.session.details": "セッション詳細",
@@ -1239,9 +1175,7 @@ export const ja = {
   "account.session.otherNote":
     "ここでサインアウトできるのは、このブラウザのセッションのみです。",
   "account.language.title": "言語",
-  "account.language.body": "ダッシュボードの表示言語を選びます。",
   "account.theme.title": "表示",
-  "account.theme.body": "ライト / ダーク / 端末設定に合わせた表示を選べます。",
   "account.preferences.title": "表示設定",
   "account.preferences.body": "言語と見た目を変更できます。",
 
@@ -1261,9 +1195,6 @@ export const ja = {
     "「{name}」を削除します。元に戻せません。",
   "cloudResources.resources.deleted": "「{name}」を削除しました。",
   "cloudResources.resources.copyId": "IDをコピー",
-  "cloudResources.notConfigured": "未設定",
-  "cloudResources.sessionExpired":
-    "セッションが切れました。再度ログインしてください。",
   "cloudResources.copied": "コピーしました。",
   "cloudResources.copyFailed":
     "コピーできませんでした。クリップボードへのアクセスが許可されていない可能性があります。値を選択して手動でコピーしてください。",
@@ -1296,7 +1227,7 @@ export const ja = {
   "cloudResources.usage.events": "使用イベント",
   "cloudResources.usage.tableTitle": "種類別の使用量",
   "cloudResources.usage.tableSubtitle":
-    "報告された resource family を同じ基準でまとめ、管理面があるものはリソース数も表示します。",
+    "報告されたリソース種別を同じ基準でまとめ、管理面があるものはリソース数も表示します。",
   "cloudResources.usage.resourceType": "種類",
   "cloudResources.usage.resourceCount": "リソース数",
   "cloudResources.usage.quantity": "使用量",
@@ -1309,21 +1240,21 @@ export const ja = {
   "cloudResources.usage.noUsage": "今月の使用なし",
   "cloudResources.usage.empty": "今月のクラウドリソース使用量はありません。",
   "cloudResources.usage.error": "使用量を読み込めませんでした: {message}",
-  "cloudResources.usage.unit.runnerMinute": "runner分",
+  "cloudResources.usage.unit.runnerMinute": "実行時間（分）",
   "cloudResources.usage.unit.gbHour": "GB時間",
   "cloudResources.usage.unit.gb": "GB",
-  "cloudResources.usage.unit.compute": "compute unit",
+  "cloudResources.usage.unit.compute": "コンピュート単位",
   "cloudResources.usage.unit.aiRequest": "AIリクエスト",
-  "cloudResources.usage.unit.inputToken": "入力token",
-  "cloudResources.usage.unit.outputToken": "出力token",
+  "cloudResources.usage.unit.inputToken": "入力トークン",
+  "cloudResources.usage.unit.outputToken": "出力トークン",
   "cloudResources.usage.unit.operation": "操作",
   "cloudResources.management.title": "管理状態",
   "cloudResources.management.subtitle":
-    "このワークスペースで使うリソース管理 profile の状態です。",
-  "cloudResources.management.profile": "管理profile",
+    "このワークスペースで使うリソース管理プロファイルの状態です。",
+  "cloudResources.management.profile": "管理プロファイル",
   "cloudResources.management.auth": "認証状態",
   "cloudResources.management.account": "アカウント",
-  "cloudResources.management.capabilities": "Capability",
+  "cloudResources.management.capabilities": "機能",
   "cloudResources.inventory.title": "リソース一覧",
   "cloudResources.inventory.subtitle":
     "利用可能な管理面から見えるリソースを確認・削除します。",
@@ -1335,13 +1266,11 @@ export const ja = {
   "cloudResources.inventory.queues": "キュー",
   "cloudResources.inventory.workflows": "ワークフロー",
   "cloudResources.inventory.workers": "Edgeアプリ",
-  "cloudResources.inventory.names": "名前",
   "cloudResources.inventory.showAll": "{count} 件すべて表示",
   "cloudResources.inventory.showLess": "折りたたむ",
   "cloudResources.inventory.remaining": "ほか {count} 件を表示",
 
   // --- billing -------------------------------------------------------------------
-  "billing.title": "お支払い",
   "billing.subtitle": "アカウントのプラン、使用量、支払い設定を確認します。",
   "billing.usageQuotaTitle": "使用量 / 上限",
   "billing.usageQuotaSubtitle":
@@ -1358,13 +1287,11 @@ export const ja = {
   "billing.error": "課金状態を読み込めませんでした: {message}",
   "billing.error.unknown": "不明なエラー",
   "billing.balance.title": "使用状況",
-  "billing.balance.available": "利用状態",
   "billing.balance.availableUsd": "利用可能な残高",
   "billing.balance.status": "状態",
   "billing.balance.ready": "利用できます",
   "billing.balance.actionRequired": "プランまたは支払い設定が必要です",
   "billing.balance.reserved": "反映待ちの使用量",
-  "billing.quota.title": "上限",
   "billing.quota.available": "利用可能な容量",
   "billing.quota.reserved": "反映待ちの使用量",
   "billing.quota.disabledHint": "課金が無効のため、容量の上限はありません。",
@@ -1401,22 +1328,22 @@ export const ja = {
   "billing.plans.none": "現在、プランは提供されていません。",
   "billing.plans.nonRefundable":
     "購入前に金額と内容を確認できます。利用済みのサービスや完了した使用量は原則返金対象外です。カード明細には原則として TAKOSUMI と表示されます。",
-  "billing.plans.disabled":
-    "現在、このワークスペースでは購入できません。購入が必要になった場合は、この画面にプランが表示されます。",
   "billing.plans.subscribe": "このプランにする",
-  "billing.plans.perMonth": "毎月 {n}",
   "billing.policies.aria": "請求ポリシー",
   "billing.policies.refund": "返金",
   "billing.policies.cancellation": "キャンセル",
   "billing.policies.terms": "利用規約",
   "billing.policies.privacy": "プライバシー",
   "billing.policies.support": "サポート",
-  "billing.portal": "支払い方法と請求を管理",
-  "billing.portalUnavailable":
-    "課金が無効、または受付中のプランがないため、支払い管理は利用できません。",
   "billing.portalOpening": "開いています...",
   "billing.checkout.starting": "チェックアウトへ移動中...",
   "billing.checkout.failed": "チェックアウトを開始できませんでした — {message}",
+  "billing.checkout.noUrl":
+    "決済ページの URL を取得できませんでした。しばらくしてからもう一度お試しください。",
+  "billing.portal.noUrl":
+    "支払い管理ページの URL を取得できませんでした。しばらくしてからもう一度お試しください。",
+  "billing.sessionExpired":
+    "セッションの有効期限が切れました。再度サインインしてください。",
   "billing.checkout.success":
     "プランの手続きが完了しました。反映まで少しかかる場合があります。",
   "billing.checkout.cancelled": "購入をキャンセルしました。",
@@ -1450,9 +1377,4 @@ export const ja = {
   "billing.usage.credits": "USD",
   "billing.usage.created": "日時",
   "billing.ledger.title": "使用履歴",
-  "billing.reservations.title": "使用量予約",
-  "billing.reservations.loading": "使用量予約を読み込み中です...",
-  "billing.reservations.error": "使用量予約を読み込めませんでした: {message}",
-  "billing.reservations.empty": "予約はまだありません。",
-  "billing.reservations.expires": "期限",
 } as const;

@@ -117,10 +117,6 @@ describe("AppListView app launcher", () => {
     expect(ja).not.toHaveProperty("apps.start.add");
     expect(en).not.toHaveProperty("apps.staleReason");
     expect(ja).not.toHaveProperty("apps.staleReason");
-    expect(en["apps.subtitle"]).not.toContain("manage");
-    expect(ja["apps.subtitle"]).not.toContain("管理");
-    expect(en["apps.empty.viewServices"]).toBeTruthy();
-    expect(ja["apps.empty.viewServices"]).toBeTruthy();
   });
 
   test("keeps the launcher responsive on mobile", () => {
