@@ -1725,6 +1725,21 @@ function SettingsTab(props: {
                   </p>
                 )}
               </Show>
+              {/* Provider-binding changes, like config edits, only take effect
+                  on the next deploy — confirm the save and offer the deploy
+                  link (the "profile" savedKind was previously never rendered). */}
+              <Show when={savedKind() === "profile"}>
+                <div class="wa-saved-note" role="status">
+                  <span>{t("app.config.savedNeedsDeploy")}</span>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    href={props.deploysHref}
+                  >
+                    {t("app.config.deployChanges")}
+                  </Button>
+                </div>
+              </Show>
             </form>
           </details>
         </Card>

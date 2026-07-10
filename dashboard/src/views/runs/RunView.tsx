@@ -1190,7 +1190,17 @@ function Inner() {
     if (!autoInstall || autoContinued() || applied() || deploy.busy() || !r) {
       return;
     }
-    if (autoAppliedAlready()) return;
+    if (autoAppliedAlready()) {
+      // We already auto-applied this plan earlier this session and navigated on
+      // to the apply run. Landing back here (browser Back) must not strand the
+      // user on a never-advancing "追加中…" spinner — the guard blocks a re-apply
+      // but the install screen would still render progress/deploy. Drop to the
+      // real run console (deploy button + links) so the screen is actionable.
+      if (isDeployableRun(r) && !requiresDestructiveConfirmation(r)) {
+        setForceConsole(true);
+      }
+      return;
+    }
     if (isDeployableRun(r) && !requiresDestructiveConfirmation(r)) {
       // Never auto-apply past the billing/cost gate the manual deploy button
       // enforces — wait for the check, and stop on a blocked estimate (the

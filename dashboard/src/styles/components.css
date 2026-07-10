@@ -618,9 +618,10 @@
   vertical-align: middle;
 }
 .tg-table thead th {
-  position: sticky;
-  top: 0;
-  z-index: 1;
+  /* No position: sticky here — the .tg-table-wrap scroll ancestor has no
+     height cap, so overflow-y never scrolls and a sticky header would just
+     ride off with the page. If a sticky header is wanted, give .tg-table-wrap
+     a max-height first so it becomes a real vertical scrollport. */
   background: var(--tg-bg-subtle);
   color: var(--tg-fg-subtle);
   font-size: var(--tg-fs-xs);
