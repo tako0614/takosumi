@@ -450,7 +450,7 @@ describe("/new flow guidance", () => {
   test("store handoffs use listing metadata and generic Capsule config only", () => {
     expect(newAppViewSource).not.toContain("STORE_VIEW");
     expect(newAppViewSource).not.toContain("const [templateConfigs]");
-    expect(newAppViewSource).toContain("const [installConfigs]");
+    expect(newAppViewSource).toContain("const [installConfigs, { refetch: refetchInstallConfigs }]");
     expect(newAppViewSource).toContain("listInstallConfigsCached(id)");
     expect(newAppViewSource).toContain("const installConfigList");
     expect(newAppViewSource).toContain("installConfigList().find");
@@ -503,8 +503,10 @@ describe("/new flow guidance", () => {
   test("service setup defaults managed domains without app-specific branches", () => {
     expect(newAppViewSource).toContain("serviceNameInputValue");
     expect(newAppViewSource).toContain("managedServiceLabel");
-    expect(newAppViewSource).toContain("standardManagedHost");
-    expect(newAppViewSource).toContain("standardManagedUrl");
+    // Managed-host derivation lives server-side (9f2912c9); the old client
+    // helpers hardcoding app.takos.jp are gone for good.
+    expect(newAppViewSource).not.toContain("standardManagedHost");
+    expect(newAppViewSource).not.toContain("standardManagedUrl");
     expect(newAppViewSource).toContain("standardPublicSubdomainVariable");
     expect(newAppViewSource).toContain("standardPublicUrlVariable");
     expect(newAppViewSource).toContain("standardRoutePatternVariable");

@@ -1,4 +1,5 @@
 import { Loader2 } from "lucide-solid";
+import { t } from "../../i18n/index.ts";
 import type { JSX } from "solid-js";
 
 interface Props {
@@ -14,7 +15,7 @@ export default function Spinner(props: Props): JSX.Element {
     <span
       class={`tg-spinner ${props.class ?? ""}`}
       role="status"
-      aria-label={props.label ?? "読み込み中"}
+      aria-label={props.label ?? t("common.loading")}
     >
       <Loader2 size={props.size ?? 18} />
     </span>

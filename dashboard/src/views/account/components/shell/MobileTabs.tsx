@@ -12,7 +12,7 @@ import { t } from "../../../../i18n/index.ts";
 export default function MobileTabs() {
   const loc = useLocation();
   return (
-    <nav class="mobile-tabs" aria-label="Mobile primary">
+    <nav class="mobile-tabs" aria-label={t("nav.primary")}>
       <For each={PRIMARY_NAV}>
         {(tab) => (
           <A
