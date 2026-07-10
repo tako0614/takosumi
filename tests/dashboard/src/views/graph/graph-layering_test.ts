@@ -3,9 +3,13 @@
  * Pure logic only (no DOM / SolidJS), runnable under `bun test`.
  */
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { en } from "../../../../../dashboard/src/i18n/en.ts";
 import { ja } from "../../../../../dashboard/src/i18n/ja.ts";
-import { layerGraph } from "../../../../../dashboard/src/views/graph/graph-layering.ts";
+import {
+  filterGraphForDependencyView,
+  layerGraph,
+} from "../../../../../dashboard/src/views/graph/graph-layering.ts";
 import { extractRunId } from "../../../../../dashboard/src/lib/control-api.ts";
 import type {
   GraphEdge,
@@ -14,12 +18,16 @@ import type {
   WorkspaceGraph,
 } from "../../../../../dashboard/src/lib/control-api.ts";
 
-function node(id: string, name = id): GraphNode {
+function node(
+  id: string,
+  name = id,
+  status: CapsuleStatus = "active",
+): GraphNode {
   return {
     capsuleId: id,
     name,
     environment: "production",
-    status: "active" as CapsuleStatus,
+    status,
   };
 }
 
@@ -94,6 +102,65 @@ describe("layerGraph", () => {
     const result = layerGraph(graph);
     expect(result.layers).toEqual([]);
     expect(ids(result.cyclic)).toEqual(["x", "y"]);
+  });
+});
+
+describe("filterGraphForDependencyView", () => {
+  test("drops destroyed nodes that sit on no dependency edge", () => {
+    const graph: WorkspaceGraph = {
+      nodes: [node("live"), node("gone", "gone", "destroyed")],
+      edges: [],
+    };
+    const result = filterGraphForDependencyView(graph);
+    expect(ids(result.nodes)).toEqual(["live"]);
+  });
+
+  test("keeps a destroyed node while a live service still depends on it", () => {
+    const graph: WorkspaceGraph = {
+      nodes: [node("gone", "gone", "destroyed"), node("consumer")],
+      edges: [edge("gone", "consumer")],
+    };
+    const result = filterGraphForDependencyView(graph);
+    expect(ids(result.nodes)).toEqual(["consumer", "gone"]);
+    expect(result.edges).toEqual(graph.edges);
+  });
+
+  test("keeps every non-destroyed node regardless of edges", () => {
+    const graph: WorkspaceGraph = {
+      nodes: [node("a"), node("b", "b", "pending"), node("c", "c", "error")],
+      edges: [],
+    };
+    expect(ids(filterGraphForDependencyView(graph).nodes)).toEqual([
+      "a",
+      "b",
+      "c",
+    ]);
+  });
+});
+
+describe("GraphView dependency honesty", () => {
+  const graphViewSource = readFileSync(
+    new URL(
+      "../../../../../dashboard/src/views/graph/GraphView.tsx",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+
+  test("filters destroyed nodes and shows an explicit note when no edges exist", () => {
+    expect(graphViewSource).toContain("filterGraphForDependencyView");
+    expect(graphViewSource).toContain("hasEdges");
+    expect(graphViewSource).toContain('t("graph.noEdges.title")');
+    expect(graphViewSource).toContain('t("graph.noEdges.message")');
+    // The per-card "depends on" caption stays.
+    expect(graphViewSource).toContain('t("graph.dependsOn"');
+  });
+
+  test("no-edges copy exists in both locales", () => {
+    expect(ja["graph.noEdges.title"]).toBeTruthy();
+    expect(en["graph.noEdges.title"]).toBeTruthy();
+    expect(ja["graph.noEdges.message"]).toBeTruthy();
+    expect(en["graph.noEdges.message"]).toBeTruthy();
   });
 });
 

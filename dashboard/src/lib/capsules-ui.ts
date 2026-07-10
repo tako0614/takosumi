@@ -253,6 +253,21 @@ export interface AppSurface {
   readonly url?: string;
 }
 
+/**
+ * User-facing display name from the install config's store metadata (the name
+ * the store listing advertised, e.g. "Takos Storage"), as opposed to the
+ * instance name the user typed (e.g. "storage4"). The launcher tile and the
+ * detail header derive the same value from here.
+ */
+export function capsuleDisplayName(
+  config: InstallConfig | undefined,
+  language: "ja" | "en",
+): string | undefined {
+  const store = config?.store;
+  if (!store) return undefined;
+  return store.name[language] ?? store.suggestedName;
+}
+
 export function appSurfaceFromInstallConfigStore(
   config: InstallConfig | undefined,
   language: "ja" | "en",
@@ -260,7 +275,7 @@ export function appSurfaceFromInstallConfigStore(
   const store = config?.store;
   if (!store || store.surface !== "service") return undefined;
   return {
-    name: store.name[language] ?? store.suggestedName ?? config.name,
+    name: capsuleDisplayName(config, language) ?? config.name,
     image: urlValue(store.iconUrl),
     // Even when the OpenTofu module declares no URL output, the public host
     // is knowable: the store install experience's public_endpoint projection
