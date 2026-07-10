@@ -283,7 +283,9 @@ export function SignInPanel() {
       </Show>
       <Show when={isTakosumiCloudRuntime()}>
         <p class="sign-in-terms">
-          {t("auth.termsPrefix")}{" "}
+          {/* No hardcoded space between fragments: JA joins without one and
+              the EN values carry their own spacing. */}
+          {t("auth.termsPrefix")}
           <a href="/legal/terms-of-service" class="link">
             {t("auth.termsOfService")}
           </a>
