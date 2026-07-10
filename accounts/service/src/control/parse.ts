@@ -524,12 +524,14 @@ function installExperienceProjectionsValue(
         record.callbackPath === undefined
           ? undefined
           : storePathValue(record.callbackPath);
+      const scopes = oidcProjectionScopes(record.scopes);
       if (
         issuerUrl === false ||
         accountsUrl === false ||
         clientId === false ||
         redirectUri === false ||
-        (record.callbackPath !== undefined && callbackPath === undefined)
+        (record.callbackPath !== undefined && callbackPath === undefined) ||
+        (record.scopes !== undefined && scopes === undefined)
       ) {
         return undefined;
       }
@@ -542,6 +544,7 @@ function installExperienceProjectionsValue(
           ...(redirectUri ? { redirectUri } : {}),
         },
         ...(callbackPath ? { callbackPath } : {}),
+        ...(scopes ? { scopes } : {}),
       });
       continue;
     }
@@ -569,6 +572,20 @@ function installExperienceProjectionsValue(
     return undefined;
   }
   return projections;
+}
+
+function oidcProjectionScopes(value: unknown): readonly string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length === 0) return undefined;
+  const scopes = value.map((scope) =>
+    typeof scope === "string" ? scope.trim() : "",
+  );
+  if (
+    scopes.some((scope) => !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(scope))
+  ) {
+    return undefined;
+  }
+  return [...new Set(scopes)];
 }
 
 export function modulePathValue(value: unknown): string | undefined {

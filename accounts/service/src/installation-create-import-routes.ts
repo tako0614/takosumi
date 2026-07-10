@@ -7,6 +7,7 @@
 import {
   takosumiAccountsCapsuleEventsPath,
   takosumiAccountsCapsulePath,
+  type TakosumiSubject,
 } from "@takosjp/takosumi-accounts-contract";
 import {
   type ServiceBindingMaterialKind,
@@ -87,6 +88,7 @@ export async function handleCreateAppCapsule(input: {
   launchTokens?: LaunchTokenOptions;
   bindingMaterializer?: ServiceBindingMaterializer;
   sharedCellRuntime?: SharedCellRuntimeAllocator;
+  authenticatedSubject?: TakosumiSubject;
 }): Promise<Response> {
   const body = await readJsonObject(input.request);
   if (!body) return errorJson("invalid_request", "invalid request", 400);
@@ -127,7 +129,8 @@ export async function handleCreateAppCapsule(input: {
   const billingAccountId = stringValue(
     body.billingAccountId ?? body.billing_account_id,
   );
-  const createdBySubject = takosumiSubjectValue(body.createdBySubject);
+  const createdBySubject =
+    input.authenticatedSubject ?? takosumiSubjectValue(body.createdBySubject);
   if (!accountId || !workspaceId || !mode || !createdBySubject) {
     return errorJson(
       "invalid_request",
@@ -353,11 +356,7 @@ export async function handleCreateAppCapsule(input: {
   const existingLedgerAccount = await input.store.findLedgerAccount(accountId);
   if (existingLedgerAccount) {
     if (existingLedgerAccount.legalOwnerSubject !== createdBySubject) {
-      return errorJson(
-        "account_claim_conflict",
-        "already exists",
-        409,
-      );
+      return errorJson("account_claim_conflict", "already exists", 409);
     }
   } else {
     await input.store.saveLedgerAccount({
@@ -373,11 +372,7 @@ export async function handleCreateAppCapsule(input: {
       !confirmedLedgerAccount ||
       confirmedLedgerAccount.legalOwnerSubject !== createdBySubject
     ) {
-      return errorJson(
-        "account_claim_conflict",
-        "already exists",
-        409,
-      );
+      return errorJson("account_claim_conflict", "already exists", 409);
     }
   }
   if (!existingWorkspace) {
@@ -396,11 +391,7 @@ export async function handleCreateAppCapsule(input: {
     // another account.
     const confirmedWorkspace = await input.store.findWorkspace(workspaceId);
     if (!confirmedWorkspace || confirmedWorkspace.accountId !== accountId) {
-      return errorJson(
-        "space_claim_conflict",
-        "already exists",
-        409,
-      );
+      return errorJson("space_claim_conflict", "already exists", 409);
     }
   }
 

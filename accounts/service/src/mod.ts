@@ -599,7 +599,8 @@ export async function createEphemeralAccountsHandler(
       status: "closed",
     },
     loginEmailAllowlist: options.loginEmailAllowlist,
-    runtimeProjectionMaterialResolver: options.runtimeProjectionMaterialResolver,
+    runtimeProjectionMaterialResolver:
+      options.runtimeProjectionMaterialResolver,
     privacyOperationsToken: options.privacyOperationsToken,
     exportDownloadSigningSecret: options.exportDownloadSigningSecret,
     launchTokens: {
@@ -735,7 +736,8 @@ export function createAccountsHandler(
     }
 
     if (
-      url.pathname === TAKOSUMI_ACCOUNTS_RUNTIME_PROJECTION_MATERIAL_RESOLVE_PATH
+      url.pathname ===
+      TAKOSUMI_ACCOUNTS_RUNTIME_PROJECTION_MATERIAL_RESOLVE_PATH
     ) {
       if (request.method !== "POST") return methodNotAllowed("POST");
       if (!options.runtimeProjectionMaterialResolver) {
@@ -758,7 +760,8 @@ export function createAccountsHandler(
         store,
         issuer,
         internalUrl: options.runtimeProjectionMaterialResolver.internalUrl,
-        billingPortalUrl: options.runtimeProjectionMaterialResolver.billingPortalUrl,
+        billingPortalUrl:
+          options.runtimeProjectionMaterialResolver.billingPortalUrl,
         allowDeployControlCapsules:
           options.runtimeProjectionMaterialResolver.allowDeployControlCapsules,
         context: body,
@@ -1132,11 +1135,11 @@ export function createAccountsHandler(
       if (request.method === "POST") {
         const limited = installationsLimiter.consume(request);
         if (limited) return limited;
-        const authBlocked = await requireAppCapsuleCreateWriteAccess({
+        const createAccess = await requireAppCapsuleCreateWriteAccess({
           request: request.clone(),
           store,
         });
-        if (authBlocked) return authBlocked;
+        if (createAccess instanceof Response) return createAccess;
         return await handleCreateAppCapsule({
           request,
           store,
@@ -1145,6 +1148,7 @@ export function createAccountsHandler(
           launchTokens: options.launchTokens,
           bindingMaterializer: options.bindingMaterializer,
           sharedCellRuntime: options.sharedCellRuntime,
+          authenticatedSubject: createAccess.auth.subject,
         });
       }
       if (request.method === "GET") {

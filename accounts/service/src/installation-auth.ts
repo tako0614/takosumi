@@ -1,6 +1,8 @@
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 import {
   type AccountsBearerRequiredScope,
+  type AccountsBearerSubject,
+  bearerWorkspaceAllows,
   requireAccountsBearer,
 } from "./account-session.ts";
 import {
@@ -19,22 +21,21 @@ import {
 export async function requireAppCapsuleCreateWriteAccess(input: {
   request: Request;
   store: AccountsStore;
-}): Promise<Response | undefined> {
+}): Promise<Response | { readonly auth: AccountsBearerSubject }> {
   const body = await readJsonObject(input.request);
   if (!body) {
     return errorJson("invalid_request", "request body is required", 400);
   }
   const accountId = stringValue(body.accountId);
+  const workspaceId =
+    stringValue(body.workspaceId) ??
+    stringValue(body.spaceId) ??
+    stringValue(body.space_id);
   const createdBySubject = takosumiSubjectValue(body.createdBySubject);
-  // Previously this returned `undefined` (auth skipped) when the body lacked
-  // accountId / createdBySubject, which let unauthenticated callers bypass the
-  // ownership check by simply omitting those fields. Always require an
-  // authenticated session and require the body to declare both fields so the
-  // session subject can be matched against them.
-  if (!accountId || !createdBySubject) {
+  if (!accountId || !workspaceId) {
     return errorJson(
       "missing_field",
-      "accountId and createdBySubject are required to authorize installation create",
+      "accountId and workspaceId are required to authorize Capsule create",
       400,
     );
   }
@@ -42,6 +43,7 @@ export async function requireAppCapsuleCreateWriteAccess(input: {
     request: input.request,
     store: input.store,
     accountId,
+    workspaceId,
     createdBySubject,
   });
 }
@@ -64,6 +66,9 @@ export async function requireCapsulePlanRunWriteAccess(input: {
     stringValue(body.space);
   if (!workspaceId) {
     return errorJson("invalid_request", "workspaceId is required", 400);
+  }
+  if (!bearerWorkspaceAllows(bearer.auth, workspaceId)) {
+    return errorJson("space_not_found", "space not found", 404);
   }
   const space = await input.store.findWorkspace(workspaceId);
   // A not-yet-created space is allowed for any write-scoped subject: this is the
@@ -98,11 +103,12 @@ export async function requireAppCapsuleAccountAccess(input: {
     scope: input.scope,
   });
   if (!bearer.ok) return bearer.response;
-  const installation = await input.store.findAppCapsule(
-    input.capsuleId,
-  );
+  const installation = await input.store.findAppCapsule(input.capsuleId);
   if (!installation)
     return errorJson("installation_not_found", "installation not found", 404);
+  if (!bearerWorkspaceAllows(bearer.auth, installation.workspaceId)) {
+    return errorJson("installation_not_found", "installation not found", 404);
+  }
   if (
     !(await subjectCanAccessCapsule(
       input.store,
@@ -119,19 +125,26 @@ async function requireAccountCreateWriteAccess(input: {
   request: Request;
   store: AccountsStore;
   accountId: string;
-  createdBySubject: TakosumiSubject;
-}): Promise<Response | undefined> {
+  workspaceId: string;
+  createdBySubject?: TakosumiSubject;
+}): Promise<Response | { readonly auth: AccountsBearerSubject }> {
   const bearer = await requireAccountsBearer({
     request: input.request,
     store: input.store,
     scope: "write",
   });
   if (!bearer.ok) return bearer.response;
-  if (bearer.auth.subject !== input.createdBySubject) {
+  if (
+    input.createdBySubject &&
+    bearer.auth.subject !== input.createdBySubject
+  ) {
     // Body's createdBySubject must match the authenticated session.
     // We respond with `account_not_found` (rather than the stricter 403) to
     // preserve the existing non-disclosure shape; combined with the upstream
     // session enforcement, mismatched callers cannot proceed regardless.
+    return errorJson("account_not_found", "account not found", 404);
+  }
+  if (!bearerWorkspaceAllows(bearer.auth, input.workspaceId)) {
     return errorJson("account_not_found", "account not found", 404);
   }
   const account = await input.store.findLedgerAccount(input.accountId);
@@ -145,5 +158,5 @@ async function requireAccountCreateWriteAccess(input: {
   ) {
     return errorJson("account_not_found", "account not found", 404);
   }
-  return undefined;
+  return { auth: bearer.auth };
 }

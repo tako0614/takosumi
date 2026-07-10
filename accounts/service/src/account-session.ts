@@ -2,6 +2,7 @@ import type {
   TakosumiAccountsPatScope,
   TakosumiSubject,
 } from "@takosjp/takosumi-accounts-contract";
+import { TAKOSUMI_ACCOUNTS_CAPSULE_OAUTH_SCOPES } from "@takosjp/takosumi-accounts-contract";
 import type { AccountsStore } from "./store.ts";
 import {
   errorJson,
@@ -19,7 +20,9 @@ export type AccountsBearerRequiredScope = "read" | "write" | "admin";
 
 export type AccountsBearerSubject = {
   readonly subject: TakosumiSubject;
-  readonly credential: "session" | "personal-access-token";
+  readonly credential:
+    "session" | "personal-access-token" | "oauth-access-token";
+  readonly workspaceId?: string;
 };
 
 export async function requireAccountSession(input: {
@@ -278,6 +281,37 @@ export async function requireAccountsBearer(input: {
       auth: { subject: session.subject, credential: "session" },
     };
   }
+  if (token.startsWith("takat_")) {
+    const record = await input.store.findAccessToken(token);
+    if (!record || record.expiresAt < Date.now() || !record.takosumiSubject) {
+      if (record?.expiresAt !== undefined && record.expiresAt < Date.now()) {
+        await input.store.deleteToken(token);
+      }
+      return { ok: false, response: bearerChallenge("invalid_token") };
+    }
+    if (!oauthAccessTokenHasScope(record.scope, input.scope)) {
+      return {
+        ok: false,
+        response: errorJson(
+          "insufficient_scope",
+          "insufficient scope",
+          403,
+          undefined,
+          {
+            "www-authenticate": `Bearer error="insufficient_scope", scope="${oauthScopeForRequiredAccess(input.scope)}"`,
+          },
+        ),
+      };
+    }
+    return {
+      ok: true,
+      auth: {
+        subject: record.takosumiSubject,
+        credential: "oauth-access-token",
+        ...(record.workspaceId ? { workspaceId: record.workspaceId } : {}),
+      },
+    };
+  }
   if (!token.startsWith("takpat_")) {
     return { ok: false, response: bearerChallenge("invalid_token") };
   }
@@ -305,8 +339,32 @@ export async function requireAccountsBearer(input: {
     auth: {
       subject: record.subject,
       credential: "personal-access-token",
+      ...(record.workspaceId ? { workspaceId: record.workspaceId } : {}),
     },
   };
+}
+
+function oauthScopeForRequiredAccess(
+  required: AccountsBearerRequiredScope,
+): (typeof TAKOSUMI_ACCOUNTS_CAPSULE_OAUTH_SCOPES)[number] {
+  return required === "read" ? "capsules:read" : "capsules:write";
+}
+
+function oauthAccessTokenHasScope(
+  scope: string,
+  required: AccountsBearerRequiredScope,
+): boolean {
+  if (required === "admin") return false;
+  const scopes = new Set(scope.split(/\s+/u).filter(Boolean));
+  if (scopes.has("capsules:write")) return true;
+  return required === "read" && scopes.has("capsules:read");
+}
+
+export function bearerWorkspaceAllows(
+  auth: AccountsBearerSubject,
+  workspaceId: string,
+): boolean {
+  return !auth.workspaceId || auth.workspaceId === workspaceId;
 }
 
 function personalAccessTokenHasScope(

@@ -23,6 +23,7 @@ export interface OidcClientProjection {
   readonly clientIdVariable?: string;
   readonly redirectUriVariable?: string;
   readonly callbackPath?: string;
+  readonly scopes?: readonly string[];
 }
 
 export interface ArtifactProjection {
@@ -88,6 +89,7 @@ export function installExperienceOidcClient(
       clientIdVariable: projection.variables.clientId,
       redirectUriVariable: projection.variables.redirectUri,
       callbackPath: projection.callbackPath,
+      scopes: projection.scopes,
     };
   }
   return undefined;
