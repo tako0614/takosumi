@@ -101,6 +101,8 @@
 }
 .tcs-servers li .tcs-mono {
   flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .tcs-dot {
   width: 8px;

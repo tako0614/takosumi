@@ -120,6 +120,9 @@ export default function GeneralTab(props: { readonly workspaceId: string }) {
     try {
       await updateWorkspace(id, { archived: false });
       await Promise.all([refetch(), refetchArchived()]);
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new Event("takosumi:workspaces-changed"));
+      }
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : String(err));
     }

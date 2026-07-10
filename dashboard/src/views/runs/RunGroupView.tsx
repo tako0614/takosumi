@@ -17,6 +17,9 @@ import {
   type Run,
 } from "../../lib/control-api.ts";
 import { createAction } from "../account/lib/action.tsx";
+import { clearCapsuleListCache } from "../../lib/capsule-list.ts";
+import { clearCurrentStateVersionCache } from "../../lib/current-state-versions.ts";
+import { clearDashboardOverviewCache } from "../../lib/dashboard-overview.ts";
 import { operationLabel, runStatusLabel, runTone } from "../../lib/labels.ts";
 import { t } from "../../i18n/index.ts";
 import PageHeader from "../../components/ui/PageHeader.tsx";
@@ -35,6 +38,12 @@ function Inner() {
   const groupId = () => params.id ?? "";
 
   const [group, { refetch }] = createResource(groupId, getRunGroup);
+  const clearLauncherCaches = (workspaceId: string | undefined): void => {
+    if (!workspaceId) return;
+    clearCapsuleListCache(workspaceId);
+    clearCurrentStateVersionCache(workspaceId);
+    clearDashboardOverviewCache(workspaceId);
+  };
 
   const anyWaiting = createMemo(() =>
     (group()?.runs ?? []).some((r) => r.status === "waiting_approval"),
@@ -43,6 +52,9 @@ function Inner() {
   const approveAll = createAction(async () => {
     await approveRunGroup(groupId());
     await refetch();
+    // The grouped apply changes multiple capsules — mirror RunView and drop
+    // the launcher projections so the home tiles reflect it without a reload.
+    clearLauncherCaches(group()?.runGroup.workspaceId);
   });
 
   return (

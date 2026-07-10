@@ -100,6 +100,8 @@ export const en: Record<keyof typeof ja, string> = {
   "settings.manage.graph": "Dependencies between services",
   "settings.manage.activity": "Who changed what, and when",
   "settings.manage.workspace": "Members, keys, backups, shares, policy",
+  "settings.manage.backups": "Create and restore restore points",
+  "settings.manage.shares": "Manage values shared between services",
 
   // --- workspace switcher -------------------------------------------------------
   "workspace.label": "Workspace",
@@ -237,6 +239,7 @@ export const en: Record<keyof typeof ja, string> = {
   "install.doneTitle": "Added {name}",
   "install.doneTitleGeneric": "Added",
   "install.doneSub": "Deployed and ready to use.",
+  "install.activationPending": "Finishing app activation…",
   "install.open": "Open app",
   "install.toApps": "Go to apps",
   "install.gateTitle": "Needs your review",
@@ -407,6 +410,7 @@ export const en: Record<keyof typeof ja, string> = {
   "run.title.apply": "Deploy",
   "run.title.destroy": "Delete",
   "run.title.other": "Operation",
+  "run.notFoundTitle": "This run was not found",
   "run.summary.planning": "Reviewing the changes…",
   "run.summary.queued": "Waiting to run…",
   "run.summary.waitingApproval":
@@ -421,6 +425,10 @@ export const en: Record<keyof typeof ja, string> = {
     "This service is ready to be deleted. This cannot be undone once run.",
   "run.summary.applied": "Deploy started. It will take a moment to settle.",
   "run.summary.applying": "Deploying…",
+  "run.summary.finishing": "Finishing the deployment…",
+  "run.summary.activationPending": "Finishing app activation…",
+  "run.summary.activationFailed":
+    "App activation failed after the infrastructure deploy completed.",
   "run.summary.applySucceeded": "Deploy complete.",
   "run.summary.failed": "{operation} failed.",
   "runError.sourceSyncFailed":
@@ -494,7 +502,7 @@ export const en: Record<keyof typeof ja, string> = {
   "run.changes.delete": "Delete",
   "run.resources.kicker": "Review",
   "run.resources.title": "Planned changes",
-  "run.resources.count": "{n} changes",
+  "run.resources.count": "Changes: {n}",
   "run.resources.more": "{n} more changes are included.",
   "run.resources.actionCreate": "Create",
   "run.resources.actionUpdate": "Update",
@@ -1068,7 +1076,7 @@ export const en: Record<keyof typeof ja, string> = {
   "notif.event.planBlockedDetail": "Approval is blocked by policy",
   "notif.event.approved": "Approved {operation}",
   "notif.event.applied": "Deployed service changes",
-  "notif.event.appliedDetail": "Updated {n} public values",
+  "notif.event.appliedDetail": "Public values updated: {n}",
   "notif.event.destroyed": "Deleted a service",
   "notif.event.failed": "{operation} failed",
   "notif.event.failedDetail": "Error: {code}",

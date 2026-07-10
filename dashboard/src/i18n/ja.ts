@@ -102,6 +102,8 @@ export const ja = {
   "settings.manage.graph": "サービス間の依存関係の表示",
   "settings.manage.activity": "だれが何を変更したかの操作履歴",
   "settings.manage.workspace": "メンバー、キー、バックアップ、共有、ポリシー",
+  "settings.manage.backups": "復元ポイントの作成と復元",
+  "settings.manage.shares": "サービス間で共有する値の管理",
 
   // --- workspace switcher -------------------------------------------------------
   "workspace.label": "ワークスペース",
@@ -239,6 +241,7 @@ export const ja = {
   "install.doneTitle": "{name} を追加しました",
   "install.doneTitleGeneric": "追加しました",
   "install.doneSub": "デプロイ完了。すぐに使えます。",
+  "install.activationPending": "アプリの公開処理を仕上げています…",
   "install.open": "アプリを開く",
   "install.toApps": "アプリ一覧へ",
   "install.gateTitle": "確認が必要です",
@@ -408,6 +411,7 @@ export const ja = {
   "run.title.apply": "デプロイ",
   "run.title.destroy": "削除",
   "run.title.other": "実行",
+  "run.notFoundTitle": "この実行は見つかりませんでした",
   "run.summary.planning": "変更内容を確認しています…",
   "run.summary.queued": "実行を待っています…",
   "run.summary.waitingApproval":
@@ -422,6 +426,10 @@ export const ja = {
   "run.summary.applied":
     "デプロイを開始しました。反映までしばらくお待ちください。",
   "run.summary.applying": "デプロイを実行しています…",
+  "run.summary.finishing": "デプロイを仕上げています…",
+  "run.summary.activationPending": "アプリの公開処理を仕上げています…",
+  "run.summary.activationFailed":
+    "インフラのデプロイ後のアプリ公開に失敗しました。",
   "run.summary.applySucceeded": "デプロイが完了しました。",
   "run.summary.failed": "{operation}に失敗しました。",
   "run.summary.failedHint": "下の診断とログで原因を確認できます。",
