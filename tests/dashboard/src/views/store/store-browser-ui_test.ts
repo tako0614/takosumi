@@ -45,7 +45,7 @@ describe("StoreBrowser install UI", () => {
     expect(storeBrowserSource).not.toContain("showKindFilters");
     expect(storeBrowserSource).not.toContain("localListings");
     expect(storeBrowserSource).toContain(
-      'install: { ja: "入手", en: "Get" }',
+      'install: { ja: "追加", en: "Add" }',
     );
     expect(storeBrowserSource).toContain('name="storeSource"');
     expect(storeBrowserSource).toContain("l.seenOn.includes(activeStore())");

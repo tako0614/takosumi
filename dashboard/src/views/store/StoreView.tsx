@@ -1,6 +1,6 @@
 /**
  * ストア — the primary discovery tab. Wraps the shared StoreBrowser with the
- * decentralized Takosumi store(s). [入手] hands the listing to the one install
+ * decentralized Takosumi store(s). [追加] hands the listing to the one install
  * flow (`/new?…&auto=1`), which auto-starts when nothing needs the user's
  * input; listings that install with zero typing carry a readiness badge
  * derived from the listing + the workspace's provider connections
