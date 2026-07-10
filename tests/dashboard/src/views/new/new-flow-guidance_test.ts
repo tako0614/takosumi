@@ -215,12 +215,15 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain("tcsHandoffSettled()");
   });
 
-  test("required store inputs (domain / password / initial setup) are never folded away", () => {
-    // .well-known/tcs.json required inputs must render on the visible sheet
-    // even when marked secret/advanced — only OPTIONAL extras fold into
-    // 詳細設定. Raw generic API phrases must not surface as 詳細 either.
+  test("install-contract inputs (domain / password / initial setup) are never folded away", () => {
+    // Required inputs and an optional secret projected as `initial_secret`
+    // must render on the visible setup sheet. Unprojected optional secrets
+    // remain available under advanced settings.
     expect(newAppViewSource).toContain(
-      "(!field.required && (field.advanced === true || field.secret === true))",
+      "installExperienceInitialSecret(entry.installExperience)?.variable",
+    );
+    expect(newAppViewSource).toContain(
+      "!isInitialSecretStoreInput(entry, field)",
     );
     expect(newAppViewSource).toContain(
       "/^(internal error|invalid request|not found)$/iu",
