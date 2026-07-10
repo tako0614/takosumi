@@ -63,7 +63,7 @@ import {
   listProviderConnections,
   listSources,
   getCapsuleUsageSummary,
-  planCapsule,
+  planCapsuleUpdate,
   patchInstallConfig,
   putCapsuleProviderConnectionSet,
   setCapsuleAutoUpdate,
@@ -268,14 +268,14 @@ function Inner() {
 
   // --- actions ---------------------------------------------------------------
   const plan = createAction(async () => {
-    const envelope = await planCapsule(capsuleId());
+    const envelope = await planCapsuleUpdate(capsuleId());
     const runId = extractRunId(envelope);
     if (runId) navigate(`/runs/${runId}`);
   });
   // 1-tap update: same plan run, but the run screen shows the App-Store-style
   // progress and auto-continues a clean plan to apply (?auto=update).
   const update = createAction(async () => {
-    const envelope = await planCapsule(capsuleId());
+    const envelope = await planCapsuleUpdate(capsuleId());
     const runId = extractRunId(envelope);
     if (runId) navigate(`/runs/${runId}?auto=update`);
   });

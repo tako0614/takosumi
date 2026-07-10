@@ -17,6 +17,7 @@ import type {
   PatchSourceRequest,
   Source,
   SourceResponse,
+  SourceSyncIntent,
   SourceSyncRun,
 } from "takosumi-contract/sources";
 import type {
@@ -74,7 +75,7 @@ export type EnqueueSourceSync = (dispatch: {
 
 export type ReadCapsuleSourceFiles = (
   snapshot: SourceSnapshot,
-  options?: { readonly modulePath?: string },
+  options?: { readonly modulePath?: string; readonly runId?: string },
 ) => Promise<readonly CapsuleSourceFile[]>;
 
 export interface SourcesServiceDependencies {
@@ -293,11 +294,15 @@ export class SourcesService {
    */
   async createSync(
     sourceId: string,
-    options: { readonly dedupe?: boolean } = {},
+    options: {
+      readonly dedupe?: boolean;
+      readonly intent?: SourceSyncIntent;
+    } = {},
   ): Promise<CreateSourceSyncResponse> {
     const stored = await this.#requireSource(sourceId);
+    const intent = options.intent ?? "observe";
     if (options.dedupe) {
-      const existing = await this.#activeSyncRun(sourceId);
+      const existing = await this.#activeSyncRun(sourceId, intent);
       if (existing) {
         if (existing.status === "queued") {
           await this.#enqueue({
@@ -311,7 +316,7 @@ export class SourcesService {
         if (shouldReplaceStaleRunningSyncRun(existing, this.#now().getTime())) {
           const replaced = await this.#failStaleSyncRun(existing);
           if (!replaced) {
-            const current = await this.#activeSyncRun(sourceId);
+            const current = await this.#activeSyncRun(sourceId, intent);
             return { run: current ?? existing };
           }
           // Fall through and create a fresh run. A per-run owner Durable Object
@@ -340,6 +345,7 @@ export class SourcesService {
       ref: stored.defaultRef,
       path: stored.defaultPath,
       archiveObjectKey,
+      intent,
       status: "queued",
       createdAt: nowIso,
       updatedAt: nowIso,
@@ -456,6 +462,7 @@ export class SourcesService {
       await this.#compatibilityAnalysisOrUnsupportedReport(
         snapshot,
         input.modulePath,
+        runId,
         async (files) =>
           await this.#compatibilityAnalyzer.analyze({
             ...(input.sourceId ? { sourceId: input.sourceId } : {}),
@@ -496,7 +503,7 @@ export class SourcesService {
     await this.#store.putCapsuleCompatibilityReport(report);
     const succeededRun: Run = {
       ...runningRun,
-      status: "succeeded",
+      status: analysisAttempt.diagnosticMessage ? "failed" : "succeeded",
       compatibilityReportId: report.id,
       ...(analysisAttempt.diagnosticMessage
         ? { errorCode: analysisAttempt.diagnosticMessage }
@@ -510,6 +517,7 @@ export class SourcesService {
   async #compatibilityAnalysisOrUnsupportedReport(
     snapshot: SourceSnapshot,
     modulePath: string | undefined,
+    runId: string,
     analyze: (
       files: readonly CapsuleSourceFile[],
     ) => Promise<CapsuleCompatibilityAnalysis>,
@@ -518,10 +526,10 @@ export class SourcesService {
     readonly diagnosticMessage?: string;
   }> {
     try {
-      const files = await this.#readCapsuleSourceFilesCached(
-        snapshot,
-        modulePath ? { modulePath } : undefined,
-      );
+      const files = await this.#readCapsuleSourceFilesCached(snapshot, {
+        runId,
+        ...(modulePath ? { modulePath } : {}),
+      });
       return {
         analysis: await analyze(
           files.filter(
@@ -825,20 +833,26 @@ export class SourcesService {
    */
   readCapsuleSourceFiles(
     sourceSnapshot: SourceSnapshot,
-    options?: { readonly modulePath?: string },
+    options?: { readonly modulePath?: string; readonly runId?: string },
   ): Promise<readonly CapsuleSourceFile[]> {
     return this.#readCapsuleSourceFilesCached(sourceSnapshot, options);
   }
 
   #readCapsuleSourceFilesCached(
     sourceSnapshot: SourceSnapshot,
-    options?: { readonly modulePath?: string },
+    options?: { readonly modulePath?: string; readonly runId?: string },
   ): Promise<readonly CapsuleSourceFile[]> {
     const modulePath = modulePathWithinSnapshotArchive(
       sourceSnapshot,
       options?.modulePath,
     );
-    const normalizedOptions = modulePath ? { modulePath } : undefined;
+    const normalizedOptions =
+      modulePath || options?.runId
+        ? {
+            ...(modulePath ? { modulePath } : {}),
+            ...(options?.runId ? { runId: options.runId } : {}),
+          }
+        : undefined;
     const key = `${sourceSnapshot.id}\0${modulePath ?? ""}`;
     const existing = this.#sourceFilesCache.get(key);
     if (existing) return existing;
@@ -930,10 +944,15 @@ export class SourcesService {
     return timingSafeHexEquals(presentedHash, stored.hookSecretHash);
   }
 
-  async #activeSyncRun(sourceId: string): Promise<SourceSyncRun | undefined> {
+  async #activeSyncRun(
+    sourceId: string,
+    intent: SourceSyncIntent,
+  ): Promise<SourceSyncRun | undefined> {
     const runs = await this.#store.listSourceSyncRuns(sourceId);
     return runs.find(
-      (run) => run.status === "queued" || run.status === "running",
+      (run) =>
+        (run.status === "queued" || run.status === "running") &&
+        (run.intent ?? "observe") === intent,
     );
   }
 

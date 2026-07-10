@@ -281,6 +281,27 @@ test("createSync dedupe returns and re-enqueues the existing queued run", async 
   ]);
 });
 
+test("createSync does not dedupe manual-plan refresh into an observe sync", async () => {
+  const { service } = makeService();
+  const { source } = await service.createSource({
+    spaceId: "space_1",
+    name: "a",
+    url: "https://github.com/a/b",
+  });
+  const observe = await service.createSync(source.id, {
+    dedupe: true,
+    intent: "observe",
+  });
+  const manual = await service.createSync(source.id, {
+    dedupe: true,
+    intent: "manual_plan",
+  });
+
+  expect(observe.run.id).not.toBe(manual.run.id);
+  expect(observe.run.intent).toBe("observe");
+  expect(manual.run.intent).toBe("manual_plan");
+});
+
 test("createSync dedupe does not re-enqueue a fresh running run", async () => {
   const dispatched: unknown[] = [];
   const { store, service } = makeService({
@@ -1010,7 +1031,7 @@ test("createCompatibilityCheck returns an unsupported report when analysis fails
     spaceId: "space_1",
     sourceId: source.id,
     type: "compatibility_check",
-    status: "succeeded",
+    status: "failed",
     sourceSnapshotId: run.snapshotId,
     compatibilityReportId: "caprep_test00000005",
     createdBy: "system",
@@ -1074,7 +1095,7 @@ output "url" {
     modulePath: "deploy/opentofu",
   });
 
-  expect(observedOptions).toEqual([undefined]);
+  expect(observedOptions).toEqual([{ runId: "ccr_test00000004" }]);
   expect(report.level).toBe("ready");
   expect(report.findings).toEqual([]);
 });
@@ -1148,7 +1169,9 @@ output "url" {
     installConfigId: "cfg-git-takos",
   });
 
-  expect(observedOptions).toEqual([{ modulePath: "deploy/opentofu" }]);
+  expect(observedOptions).toEqual([
+    { modulePath: "deploy/opentofu", runId: "ccr_test00000004" },
+  ]);
   expect(report.level).toBe("ready");
   expect(report.findings).toEqual([]);
 });

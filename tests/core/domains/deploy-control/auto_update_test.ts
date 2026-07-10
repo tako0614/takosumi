@@ -242,3 +242,22 @@ test("without the opt-in a stale capsule stays stale and no auto plan is created
   const planRuns = await planRunsOf(controller, store);
   expect(planRuns.some((run) => run.autoApplyRequested === true)).toBe(false);
 });
+
+test("manual-plan source sync never races an enabled auto-update policy", async () => {
+  const { store, controller, runner, initialPlanCalls } =
+    await buildActiveCapsule({ autoUpdate: true });
+
+  const { run } = await controller.createSourceSync("src_a", {
+    intent: "manual_plan",
+  });
+  await controller.runQueuedSourceSync(run.id);
+
+  const capsule = await store.getInstallation("inst_a");
+  expect(capsule?.status).toBe("stale");
+  expect(capsule?.autoUpdateAttemptSourceSnapshotId).toBeUndefined();
+  expect(runner.planCalls).toBe(initialPlanCalls);
+  const planRuns = await planRunsOf(controller, store);
+  expect(
+    planRuns.some((candidate) => candidate.autoApplyRequested === true),
+  ).toBe(false);
+});

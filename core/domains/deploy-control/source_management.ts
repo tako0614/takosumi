@@ -19,6 +19,7 @@ import type {
   Source,
   SourceResponse,
   SourceSnapshot,
+  SourceSyncIntent,
   SourceSyncRun,
 } from "takosumi-contract/sources";
 import type {
@@ -66,7 +67,10 @@ export class SourceManagement {
 
   async createSourceSync(
     sourceId: string,
-    options: { readonly dedupe?: boolean } = {},
+    options: {
+      readonly dedupe?: boolean;
+      readonly intent?: SourceSyncIntent;
+    } = {},
   ): Promise<CreateSourceSyncResponse> {
     return await this.#require().createSync(sourceId, options);
   }

@@ -6924,7 +6924,10 @@ test("Sources: GET requires workspaceId, POST + sync return 201", async () => {
   });
   expect(syncResp?.status).toEqual(201);
   expect(operations.calls.createSourceSync?.[0]).toEqual("src_x");
-  expect(operations.calls.createSourceSync?.[1]).toEqual({ dedupe: true });
+  expect(operations.calls.createSourceSync?.[1]).toEqual({
+    dedupe: true,
+    intent: "observe",
+  });
 
   const snapshots = request("GET", "/api/v1/sources/src_x/snapshots", {
     cookie,
@@ -7023,6 +7026,41 @@ test("Sources: GET requires workspaceId, POST + sync return 201", async () => {
   });
   expect(reportResp?.status).toEqual(200);
   expect(operations.calls.getCompatibilityReport?.[0]).toEqual("caprep_1");
+});
+
+test("Sources: manual plan sync intent is explicit and validated", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+
+  const manual = request("POST", "/api/v1/sources/src_x/sync", {
+    cookie,
+    body: { intent: "manual_plan" },
+  });
+  const manualResponse = await handleControlRoute({
+    request: manual.request,
+    url: manual.url,
+    store,
+    operations,
+  });
+  expect(manualResponse?.status).toEqual(201);
+  expect(operations.calls.createSourceSync).toEqual([
+    "src_x",
+    { dedupe: true, intent: "manual_plan" },
+  ]);
+
+  const invalid = request("POST", "/api/v1/sources/src_x/sync", {
+    cookie,
+    body: { intent: "auto_apply" },
+  });
+  const invalidResponse = await handleControlRoute({
+    request: invalid.request,
+    url: invalid.url,
+    store,
+    operations,
+  });
+  expect(invalidResponse?.status).toEqual(400);
+  expect(operations.calls.createSourceSync).toHaveLength(2);
 });
 
 test("Sources: legacy spaceId-only Source can sync, snapshot, and authorize reports", async () => {

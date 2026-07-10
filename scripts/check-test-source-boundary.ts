@@ -9,6 +9,10 @@ const IMPORT_RE =
   /\b(?:import|export)\s+(?:[^'"]*?\s+from\s*)?["']([^"']+)["']|\bimport\s*\(\s*["']([^"']+)["']\s*\)/g;
 
 const IGNORED_DIRS = new Set([
+  // Local agent tooling may place full Git worktrees and skill caches here.
+  // They are not part of this checkout's product source boundary.
+  ".claude",
+  ".codex",
   ".git",
   ".turbo",
   ".vitepress",

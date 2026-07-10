@@ -177,6 +177,24 @@ RunGroup flow creates a reviewable plan, and apply follows the normal Run
 approval path. Takosumi does not choose or fetch application artifacts outside
 the OpenTofu module.
 
+An explicit update review first syncs the Source, then pins the immutable
+`SourceSnapshot` produced by that request into compatibility checking and the
+plan. A client must not accept an older pre-existing snapshot as the result of a
+new sync request. The session API supports an explicit intent:
+
+```http
+POST /api/v1/sources/{sourceId}/sync
+Content-Type: application/json
+
+{ "intent": "manual_plan" }
+```
+
+`observe` (the default) is for webhook and scheduled observation and may
+evaluate Capsule auto-update when the Capsule opted in. `manual_plan` prepares
+a user-reviewed plan and does not independently start another auto-update
+plan/apply. Continue only after the returned SourceSyncRun is `succeeded` and
+its `sourceSnapshotId` is present in the Source snapshot list.
+
 ## Resource Shape API
 
 The Resource Shape API is the typed Resource object API used by `takosumi_*`
