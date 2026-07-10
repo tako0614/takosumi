@@ -1967,6 +1967,7 @@ function sourceSchemas(): Record<string, Record<string, unknown>> {
         ref: { type: "string" },
         path: { type: "string" },
         archiveObjectKey: { type: "string" },
+        intent: { enum: ["observe", "manual_plan"] },
         status: { enum: ["queued", "running", "succeeded", "failed"] },
         createdAt: { type: "string", format: "date-time" },
         updatedAt: { type: "string", format: "date-time" },

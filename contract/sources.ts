@@ -138,6 +138,13 @@ export interface SourceSyncRun {
   readonly path: string;
   /** Precomputed archive object key the runner uploads the archive to. */
   readonly archiveObjectKey: string;
+  /**
+   * Why this sync was requested. `observe` is the default for webhook and
+   * scheduled reconciliation. `manual_plan` refreshes an immutable snapshot
+   * for an explicit user-reviewed plan and must not independently start the
+   * Capsule auto-update flow. Missing pre-v1 values mean `observe`.
+   */
+  readonly intent?: SourceSyncIntent;
   readonly status: SourceSyncRunStatus;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -162,6 +169,8 @@ export interface SourceSyncRun {
 }
 
 export type SourceSyncRunStatus = "queued" | "running" | "succeeded" | "failed";
+
+export type SourceSyncIntent = "observe" | "manual_plan";
 
 export interface SourceSyncPhaseTiming {
   readonly phase: string;

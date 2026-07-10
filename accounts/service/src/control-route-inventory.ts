@@ -301,7 +301,8 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
     {
       method: "POST",
       path: "/api/v1/sources/{sourceId}/sync",
-      summary: "Create a Source sync Run",
+      summary:
+        "Create a Source sync Run (observe by default; manual_plan for an explicit reviewed update)",
       auth: "account-session",
     },
     {

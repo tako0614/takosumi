@@ -36,6 +36,7 @@ import type {
   PatchSourceRequest,
   SourceResponse,
   SourceSnapshot,
+  SourceSyncIntent,
 } from "takosumi-contract/sources";
 import type {
   DeployResponse,
@@ -531,7 +532,10 @@ export interface ControlPlaneOperations {
   patchSource(id: string, patch: PatchSourceRequest): Promise<SourceResponse>;
   createSourceSync(
     sourceId: string,
-    options?: { readonly dedupe?: boolean },
+    options?: {
+      readonly dedupe?: boolean;
+      readonly intent?: SourceSyncIntent;
+    },
   ): Promise<unknown>;
   listSourceSnapshots(
     sourceId: string,

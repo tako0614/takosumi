@@ -198,6 +198,23 @@ commit を `SourceSnapshot` として保存します。active Capsule がその 
 apply は通常の Run approval に従います。Takosumi が OpenTofu の外で app artifact
 を決めたり取得したりはしません。
 
+明示的な更新確認では、先に Source を同期し、その要求が生成した immutable
+`SourceSnapshot` を compatibility check と plan に固定します。既存の古い snapshot を
+「最新」として流用してはいけません。session API では次の intent を使えます。
+
+```http
+POST /api/v1/sources/{sourceId}/sync
+Content-Type: application/json
+
+{ "intent": "manual_plan" }
+```
+
+`observe` (省略時) は webhook / scheduler の観測用で、Capsule が opt-in
+していれば auto-update を評価できます。`manual_plan` はユーザーが確認する plan
+のための同期で、その sync 自体から別の auto-update plan/apply を開始しません。
+クライアントは返された SourceSyncRun が `succeeded` になり、その Run の
+`sourceSnapshotId` が一覧に現れてから compatibility check と plan を続けます。
+
 ## Resource Shape API
 
 Resource Shape API は `takosumi_*` provider resources、CLI、dashboard、Kubernetes

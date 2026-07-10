@@ -1847,11 +1847,18 @@ export async function createSource(input: {
 /** Kick a `source_sync` run. Returns the opaque run envelope. */
 export async function syncSource(
   sourceId: string,
-  options: { readonly signal?: AbortSignal } = {},
+  options: {
+    readonly signal?: AbortSignal;
+    readonly intent?: "observe" | "manual_plan";
+  } = {},
 ): Promise<unknown> {
   return await controlFetch<unknown>(
     `${BASE}/sources/${encodeURIComponent(sourceId)}/sync`,
-    { method: "POST", signal: options.signal },
+    {
+      method: "POST",
+      signal: options.signal,
+      body: options.intent ? { intent: options.intent } : {},
+    },
   );
 }
 
@@ -1887,14 +1894,6 @@ export async function waitForLatestSourceSnapshot(
   let lastSnapshots: readonly SourceSnapshot[] = [];
   while (Date.now() < deadline) {
     throwIfAborted(options.signal);
-    lastSnapshots = await listSourceSnapshots(sourceId, {
-      signal: options.signal,
-    });
-    const latest = [...lastSnapshots].sort((a, b) =>
-      b.fetchedAt.localeCompare(a.fetchedAt),
-    )[0];
-    if (latest) return latest;
-
     let run: Run | undefined;
     if (options.runId) {
       try {
@@ -1918,6 +1917,26 @@ export async function waitForLatestSourceSnapshot(
           snapshots: lastSnapshots,
         });
       }
+    }
+
+    lastSnapshots = await listSourceSnapshots(sourceId, {
+      signal: options.signal,
+    });
+    if (options.runId) {
+      // Do not accept a pre-existing snapshot while this requested sync is
+      // queued/running. Update plans must pin the exact immutable snapshot
+      // produced by the requested SourceSyncRun.
+      if (run?.status === "succeeded" && run.sourceSnapshotId) {
+        const exact = lastSnapshots.find(
+          (snapshot) => snapshot.id === run.sourceSnapshotId,
+        );
+        if (exact) return exact;
+      }
+    } else {
+      const latest = [...lastSnapshots].sort((a, b) =>
+        b.fetchedAt.localeCompare(a.fetchedAt),
+      )[0];
+      if (latest) return latest;
     }
 
     options.onProgress?.({
@@ -2000,6 +2019,51 @@ export async function planCapsule(
   } finally {
     if (timeout) clearTimeout(timeout);
   }
+}
+
+/**
+ * Refreshes a Git-backed Capsule and creates an update plan pinned to the
+ * exact SourceSnapshot produced by that manual refresh. The sync intent keeps
+ * an enabled auto-update policy from racing this explicit review flow.
+ */
+export async function planCapsuleUpdate(
+  capsuleId: string,
+  options: { readonly timeoutMs?: number } = {},
+): Promise<unknown> {
+  const capsule = await getCapsule(capsuleId);
+  if (!capsule.sourceId) return await planCapsule(capsuleId, options);
+
+  const syncEnvelope = await syncSource(capsule.sourceId, {
+    intent: "manual_plan",
+  });
+  const sourceSyncRunId = extractRunId(syncEnvelope);
+  if (!sourceSyncRunId) {
+    throw new ControlApiError(
+      500,
+      "invalid_source_sync_response",
+      "Source sync did not return a Run id.",
+      syncEnvelope,
+    );
+  }
+  const snapshot = await waitForLatestSourceSnapshot(capsule.sourceId, {
+    runId: sourceSyncRunId,
+  });
+  const compatibility = await controlFetch<{
+    readonly report: { readonly id: string };
+  }>(
+    `${BASE}/sources/${encodeURIComponent(capsule.sourceId)}/compatibility-check`,
+    {
+      method: "POST",
+      body: {
+        sourceSnapshotId: snapshot.id,
+        capsuleId,
+      },
+    },
+  );
+  return await planCapsule(capsuleId, {
+    ...options,
+    compatibilityReportId: compatibility.report.id,
+  });
 }
 
 export async function destroyPlanCapsule(capsuleId: string): Promise<unknown> {

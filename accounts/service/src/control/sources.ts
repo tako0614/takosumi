@@ -214,6 +214,18 @@ export async function handleSources(
     if (segments.length === 3 && segments[2] === "sync") {
       const sourceId = decodeURIComponent(segments[1] ?? "");
       if (method !== "POST") return methodNotAllowed("POST");
+      const body = await readOptionalJsonObject(request);
+      if (body === null) {
+        return errorJson("invalid_json", "invalid json body", 400);
+      }
+      const intent = body.intent ?? "observe";
+      if (intent !== "observe" && intent !== "manual_plan") {
+        return errorJson(
+          "invalid_request",
+          "intent must be observe or manual_plan",
+          400,
+        );
+      }
       const { source } = await operations.getSource(sourceId);
       const workspaceId = sourceWorkspaceId(source);
       if (!workspaceId) return sourceWorkspaceIdentityMissing();
@@ -225,7 +237,10 @@ export async function handleSources(
       });
       if (!auth.ok) return auth.response;
       return jsonStatus(
-        await operations.createSourceSync(sourceId, { dedupe: true }),
+        await operations.createSourceSync(sourceId, {
+          dedupe: true,
+          intent,
+        }),
         201,
       );
     }

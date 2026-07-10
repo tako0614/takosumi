@@ -130,9 +130,15 @@ source ref. `Source.autoSync` may prepare a newer immutable source snapshot.
 When the resolved Git commit differs from the SourceSnapshot currently applied
 by an active Capsule that tracks the Source, Takosumi marks that Capsule
 `stale`. The existing Workspace update / RunGroup flow can then create update
-plans in dependency order. Takosumi still does not apply Git changes silently;
-apply remains a reviewed Run unless an explicit operator policy adds a separate
-auto-apply gate.
+plans in dependency order. Apply remains reviewed by default. A Capsule may
+explicitly opt into auto-update; only a clean non-destructive plan may continue
+to apply automatically, while destructive changes always stop for review.
+
+An explicit user update creates a SourceSyncRun with `manual_plan` intent,
+waits for that Run's exact immutable SourceSnapshot, checks compatibility for
+that snapshot, and pins the resulting report into the plan. This sync may mark
+the Capsule stale, but it must not independently start a competing auto-update
+plan/apply. Plan/apply remain ordinary OpenTofu Runs.
 
 Takosumi does not decide app artifact semantics. If a module needs an image
 reference, release tag, object key, URL, or digest, the module declares a normal
