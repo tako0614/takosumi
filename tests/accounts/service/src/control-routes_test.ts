@@ -119,6 +119,31 @@ function seedLedgerWorkspace(
   });
 }
 
+function seedExistingApplyProjection(
+  store: InMemoryAccountsStore,
+  input: {
+    accountId: string;
+    workspaceId?: string;
+    createdBySubject?: string;
+  },
+): void {
+  store.saveAppCapsule({
+    capsuleId: "inst_upload",
+    accountId: input.accountId,
+    workspaceId: input.workspaceId ?? "space_a",
+    appId: "app",
+    sourceGitUrl: "https://github.com/example/app",
+    sourceRef: "main",
+    sourceCommit: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    planDigest: `sha256:${"d".repeat(64)}`,
+    mode: "self-hosted",
+    status: "ready",
+    createdBySubject: input.createdBySubject ?? "tsub_ctrl",
+    createdAt: 1,
+    updatedAt: 1,
+  });
+}
+
 /** A spy-able fake facade. Records the last call args for assertions. */
 type ControlPlaneOperationsOverride = Partial<
   Omit<ControlPlaneOperations, "spaces">
@@ -471,6 +496,10 @@ function fakeOperations(
         fetchedByRunId: "upload",
         fetchedAt: "2026-01-01T00:00:00Z",
       };
+    },
+    readSourceSnapshotFiles: async (id, options) => {
+      record("readSourceSnapshotFiles", id, options);
+      return [];
     },
     deployUpload: async (req) => {
       record("deployUpload", req);
@@ -3806,7 +3835,7 @@ test("POST /api/v1/workspaces/:id/capsules stores runnerId and outputAllowlist i
   expect(createCall.installConfigId).toEqual(config.id);
 });
 
-test("POST /api/v1/workspaces/:id/capsules carries Store presentation metadata without Store-owned setup", async () => {
+test("POST /api/v1/workspaces/:id/capsules fails closed when repo-owned Store metadata is unavailable", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
@@ -3899,65 +3928,45 @@ test("POST /api/v1/workspaces/:id/capsules carries Store presentation metadata w
     operations,
   });
 
-  expect(response?.status).toEqual(201);
-  const config = operations.calls.putInstallConfig?.[0] as {
-    id: string;
-    workspaceId: string;
-    internal?: unknown;
-    store?: {
-      templateId?: string;
-      source?: { git?: string; ref?: string; path?: string };
-      iconUrl?: string;
-      inputs?: Array<{ name: string }>;
-      installExperience?: unknown;
-    };
-    outputAllowlist: Record<string, unknown>;
-  };
-  expect(config.id.startsWith("icfg_")).toEqual(true);
-  expect(config.workspaceId).toEqual("space_a");
-  expect(config.internal).toEqual({ reason: "per_install_overrides" });
-  expect(config.store?.templateId).toEqual("yurucommu");
-  expect(config.store?.source).toEqual({
-    git: "https://github.com/tako0614/yurucommu.git",
-    path: ".",
+  expect(response?.status).toEqual(409);
+  expect(await response!.json()).toMatchObject({
+    error: { code: "repo_metadata_unavailable" },
   });
-  expect(config.store?.inputs).toEqual([]);
-  expect(config.store?.iconUrl).toEqual("https://example.test/icon.svg");
-  expect(config.store?.installExperience).toBeUndefined();
-  expect(config.outputAllowlist).toEqual({
-    launch_url: { from: "launch_url", type: "url" },
-    url: { from: "url", type: "url" },
-    public_url: { from: "public_url", type: "url" },
-    api_url: { from: "api_url", type: "url" },
-    app_deployment: { from: "app_deployment", type: "json" },
-    service_exports: { from: "service_exports", type: "json" },
-    worker_name: { from: "worker_name", type: "string" },
-  });
-  const createCall = operations.calls.createCapsule?.[0] as {
-    installConfigId: string;
-  };
-  expect(createCall.installConfigId).toEqual(config.id);
+  expect(operations.calls.putInstallConfig).toBeUndefined();
+  expect(operations.calls.createCapsule).toBeUndefined();
 });
 
 test("POST /api/v1/workspaces/:id/capsules hydrates thin Store listings from repo-owned presentation metadata", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
-  const calls: string[] = [];
-  globalThis.fetch = (async (input: RequestInfo | URL) => {
-    calls.push(String(input));
-    return new Response(
-      JSON.stringify({
-        content: btoa(
-          JSON.stringify({
-            schemaVersion: "tcs.repo/v1",
-            modulePath: ".",
-            name: { ja: "Takos Git", en: "Takos Git" },
-          }),
-        ),
-      }),
-      { headers: { "content-type": "application/json" } },
-    );
-  }) as typeof fetch;
+  const inspections: unknown[][] = [];
+  const repositoryMetadata = {
+    schemaVersion: "tcs.repo/v1",
+    modulePath: ".",
+    name: { ja: "Takos Git", en: "Takos Git" },
+    inputs: [
+      {
+        name: "public_subdomain",
+        type: "string",
+        format: "subdomain",
+        required: true,
+        defaultValue: "service-name",
+        label: { ja: "公開URLの名前", en: "Public URL name" },
+      },
+    ],
+    installExperience: {
+      projections: [
+        {
+          kind: "public_endpoint",
+          variables: {
+            subdomain: "public_subdomain",
+            url: "public_url",
+          },
+          baseDomain: "app.takos.jp",
+        },
+      ],
+    },
+  };
   const operations = fakeOperations({
     getSource: async (id) => ({
       source: {
@@ -3975,6 +3984,15 @@ test("POST /api/v1/workspaces/:id/capsules hydrates thin Store listings from rep
         ReturnType<ControlPlaneOperations["getSource"]>
       >["source"],
     }),
+    readSourceSnapshotFiles: async (id, options) => {
+      inspections.push([id, options]);
+      return [
+        {
+          path: ".well-known/tcs.json",
+          text: JSON.stringify(repositoryMetadata),
+        },
+      ];
+    },
   });
   const { request: req, url } = request(
     "POST",
@@ -4015,9 +4033,7 @@ test("POST /api/v1/workspaces/:id/capsules hydrates thin Store listings from rep
   });
 
   expect(response?.status).toEqual(201);
-  expect(calls).toEqual([
-    "https://api.github.com/repos/tako0614/takos-git/contents/.well-known%2Ftcs.json?ref=cd0a7522b2b88ae7ed2b3419aff7c91b10819bb7",
-  ]);
+  expect(inspections).toEqual([["snap_1", undefined]]);
   const config = operations.calls.putInstallConfig?.[0] as {
     variableMapping: Record<string, unknown>;
     store?: {
@@ -4027,13 +4043,30 @@ test("POST /api/v1/workspaces/:id/capsules hydrates thin Store listings from rep
     };
     outputAllowlist: Record<string, unknown>;
   };
-  expect(config.store?.inputs).toEqual([]);
+  expect(config.store?.inputs).toEqual([
+    expect.objectContaining({
+      name: "public_subdomain",
+      required: true,
+      format: "subdomain",
+    }),
+  ]);
   expect(config.store?.source).toEqual({
     git: "https://github.com/tako0614/takos-git.git",
     path: ".",
   });
-  expect(config.store?.installExperience).toBeUndefined();
-  expect(config.variableMapping).toEqual({});
+  expect(config.store?.installExperience).toEqual({
+    projections: [
+      {
+        kind: "public_endpoint",
+        variables: {
+          subdomain: "public_subdomain",
+          url: "public_url",
+        },
+        baseDomain: "app.takos.jp",
+      },
+    ],
+  });
+  expect(config.variableMapping).toEqual({ public_subdomain: "git" });
   expect(config.outputAllowlist).toEqual({
     launch_url: { from: "launch_url", type: "url" },
     url: { from: "url", type: "url" },
@@ -4109,7 +4142,18 @@ test("POST /api/v1/workspaces/:id/capsules rejects retired install experience fi
 test("POST /api/v1/workspaces/:id/capsules ignores Store-owned OpenTofu input defaults", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
-  const operations = fakeOperations();
+  const operations = fakeOperations({
+    readSourceSnapshotFiles: async () => [
+      {
+        path: ".well-known/tcs.json",
+        text: JSON.stringify({
+          schemaVersion: "tcs.repo/v1",
+          modulePath: "deploy/opentofu",
+          inputs: [],
+        }),
+      },
+    ],
+  });
   const imageMap = Object.fromEntries(
     Array.from({ length: 80 }, (_, index) => [
       `service_${index}`,
@@ -8480,6 +8524,146 @@ test("POST /api/v1/runs/:id/apply applies a succeeded plan for an owned Workspac
   expect(applyArg.expected.resolvedProviderEnvBindingsDigest).toEqual(
     `sha256:${"f".repeat(64)}`,
   );
+});
+
+test("POST /api/v1/runs/:id/apply repairs only the missing Workspace for an existing projection", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie, subject } = seedSession(store);
+  store.saveLedgerAccount({
+    accountId: "acct_existing",
+    legalOwnerSubject: subject,
+    createdAt: 1,
+    updatedAt: 1,
+  });
+  seedExistingApplyProjection(store, { accountId: "acct_existing" });
+  const accountBefore = store.findLedgerAccount("acct_existing");
+  const projectionBefore = store.findAppCapsule("inst_upload");
+  const operations = fakeOperations();
+  const { request: req, url } = request("POST", "/api/v1/runs/plan_1/apply", {
+    cookie,
+  });
+
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+
+  expect(response?.status).toEqual(201);
+  expect(store.findLedgerAccount("acct_existing")).toEqual(accountBefore);
+  expect(store.findWorkspace("space_a")).toMatchObject({
+    workspaceId: "space_a",
+    accountId: "acct_existing",
+  });
+  expect(store.findAppCapsule("inst_upload")).toEqual(projectionBefore);
+});
+
+test("POST /api/v1/runs/:id/apply repairs only the missing account for an existing projection", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie, subject } = seedSession(store);
+  store.saveWorkspace({
+    workspaceId: "space_a",
+    accountId: "acct_existing",
+    kind: "org",
+    displayName: "Existing Workspace",
+    createdAt: 1,
+    updatedAt: 1,
+  });
+  seedExistingApplyProjection(store, { accountId: "acct_existing" });
+  const workspaceBefore = store.findWorkspace("space_a");
+  const projectionBefore = store.findAppCapsule("inst_upload");
+  const operations = fakeOperations();
+  const { request: req, url } = request("POST", "/api/v1/runs/plan_1/apply", {
+    cookie,
+  });
+
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+
+  expect(response?.status).toEqual(201);
+  expect(store.findLedgerAccount("acct_existing")).toMatchObject({
+    accountId: "acct_existing",
+    legalOwnerSubject: subject,
+  });
+  expect(store.findWorkspace("space_a")).toEqual(workspaceBefore);
+  expect(store.findAppCapsule("inst_upload")).toEqual(projectionBefore);
+});
+
+test("POST /api/v1/runs/:id/apply rejects an existing projection account owned by another subject", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const now = Date.now();
+  store.saveLedgerAccount({
+    accountId: "acct_existing",
+    legalOwnerSubject: "tsub_foreign",
+    createdAt: now,
+    updatedAt: now,
+  });
+  seedExistingApplyProjection(store, { accountId: "acct_existing" });
+  const projectionBefore = store.findAppCapsule("inst_upload");
+  const operations = fakeOperations();
+  const { request: req, url } = request("POST", "/api/v1/runs/plan_1/apply", {
+    cookie,
+  });
+
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+
+  expect(response?.status).toEqual(409);
+  expect(await response!.json()).toMatchObject({
+    error: {
+      code: "failed_precondition",
+      details: { reason: "projection_account_owner_conflict" },
+    },
+  });
+  expect(store.findLedgerAccount("acct_existing")?.legalOwnerSubject).toEqual(
+    "tsub_foreign",
+  );
+  expect(store.findWorkspace("space_a")).toBeUndefined();
+  expect(store.findAppCapsule("inst_upload")).toEqual(projectionBefore);
+});
+
+test("POST /api/v1/runs/:id/apply rejects a Workspace owned by another projection account", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  seedLedgerWorkspace(store, {
+    subject: "tsub_foreign",
+    accountId: "acct_foreign",
+    workspaceId: "space_a",
+  });
+  seedExistingApplyProjection(store, { accountId: "acct_existing" });
+  const projectionBefore = store.findAppCapsule("inst_upload");
+  const operations = fakeOperations();
+  const { request: req, url } = request("POST", "/api/v1/runs/plan_1/apply", {
+    cookie,
+  });
+
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+
+  expect(response?.status).toEqual(409);
+  expect(await response!.json()).toMatchObject({
+    error: {
+      code: "failed_precondition",
+      details: { reason: "projection_workspace_account_conflict" },
+    },
+  });
+  expect(store.findLedgerAccount("acct_existing")).toBeUndefined();
+  expect(store.findWorkspace("space_a")?.accountId).toEqual("acct_foreign");
+  expect(store.findAppCapsule("inst_upload")).toEqual(projectionBefore);
 });
 
 test("POST /api/v1/runs/:id/apply projects installation and deployment handles", async () => {

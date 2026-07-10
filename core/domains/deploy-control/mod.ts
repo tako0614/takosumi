@@ -1657,6 +1657,26 @@ export class OpenTofuDeploymentController {
   }
 
   /**
+   * Reads bounded public files from an immutable SourceSnapshot through the
+   * Runner boundary. This is an in-process control-plane operation used for
+   * repository-owned presentation metadata; it never reads a forge API or the
+   * mutable branch directly.
+   */
+  async readSourceSnapshotFiles(
+    id: string,
+    options?: { readonly modulePath?: string },
+  ): Promise<readonly { readonly path: string; readonly text: string }[]> {
+    if (!this.#sourcesService) {
+      throw new OpenTofuControllerError(
+        "not_implemented",
+        "SourceSnapshot file inspection is not configured",
+      );
+    }
+    const snapshot = await this.#sources.getSourceSnapshot(id);
+    return await this.#sourcesService.readCapsuleSourceFiles(snapshot, options);
+  }
+
+  /**
    * Records an upload-origin SourceSnapshot. The archive bytes are written to
    * R2_SOURCE by the upload route before this call; this persists the ledger row
    * for the internal upload-compat pipeline.
