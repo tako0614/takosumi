@@ -125,6 +125,8 @@ export const en: Record<keyof typeof ja, string> = {
 
   // --- auth -----------------------------------------------------------------
   "auth.signIn": "Sign in",
+  "legal.langLabel": "Language",
+  "legal.policiesNav": "Takosumi Cloud policies",
   "auth.signInSub": "Use your Google account to continue.",
   "auth.signInCloud": "Takosumi Cloud",
   "auth.signInSubCloud": "Sign in with your Google account.",
@@ -989,7 +991,7 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.genericEnv.providerRequired": "Enter a provider source.",
   "conn.genericEnv.nameRequired": "Rows with a value need a value name.",
   "conn.genericEnv.invalidName":
-    "Use an uppercase env name like SNOWFLAKE_PASSWORD.",
+    "“{name}” isn’t a valid env name. Use an uppercase env name like SNOWFLAKE_PASSWORD.",
   "conn.genericEnv.reservedName":
     "“{name}” is reserved for the runner. Use a provider-specific env name.",
   "conn.genericEnv.duplicateName": "“{name}” is already added.",
