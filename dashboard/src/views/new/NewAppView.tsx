@@ -858,6 +858,17 @@ function Inner() {
   };
   const serviceNameInputValue = () =>
     slugInputValue(resourcePrefix() || defaultProjectName());
+  // Preview the FINAL managed hostname (workspace-prefixed + base domain) the
+  // deploy will use, so the workspace prefix is not a surprise. Empty until
+  // the workspace handle and a base domain are known.
+  const managedHostPreview = (): string => {
+    const endpoint = installExperiencePublicEndpoint(
+      installExperienceForCurrentSource(),
+    );
+    const baseDomain = managedBaseDomain(endpoint?.baseDomain);
+    const label = managedServiceLabel(workspaceHandle(), serviceNameInputValue());
+    return label && baseDomain ? `${label}.${baseDomain}` : "";
+  };
   const useSuggestedServiceName = () => {
     const entry = selectedServiceEntry();
     const publicEndpointField = entry
@@ -2825,6 +2836,13 @@ function Inner() {
                         autocomplete="off"
                         spellcheck={false}
                       />
+                      <Show when={managedHostPreview()}>
+                        {(host) => (
+                          <p class="wb-note">
+                            {t("new.hostPreview", { host: host() })}
+                          </p>
+                        )}
+                      </Show>
                     </FormField>
                   </Show>
                   <section class="wb-stack">

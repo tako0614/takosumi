@@ -647,7 +647,7 @@ export const ja = {
   "new.sourceAccess.tokenPlaceholder": "読み取り専用 token",
   "new.sourceAccess.saveToken": "アクセス情報を保存",
   "new.sourceAccess.tokenBody":
-    "token は書き込み専用の取得元接続として保存され、このワークスペースの取得元確認にだけ使われます。",
+    "保存後は表示できない形で安全に保管され、このワークスペースの取得元確認にだけ使われます。",
   "new.sourceAccess.errorTokenRequired": "Access token を入力してください。",
   "new.sourceAccess.errorSaveToken":
     "確認する前に、非公開リンクの token を保存してください。",
@@ -660,6 +660,7 @@ export const ja = {
   "new.sourceAccess.defaultDisplayName": "{name} 取得元アクセス",
   "new.name": "サービス名",
   "new.vars.projectName": "サービスID",
+  "new.hostPreview": "公開URL: {host}",
   "new.advanced.title": "詳細設定",
   "new.env.title": "環境変数",
   "new.env.body":
@@ -821,6 +822,10 @@ export const ja = {
   "workspaceSettings.general.archiveConfirm":
     "このワークスペースを通常の一覧から外します。あとから管理用APIで確認できます。",
   "workspaceSettings.general.archived": "ワークスペースをアーカイブしました。",
+  "workspaceSettings.general.notFound":
+    "このワークスペースは見つかりませんでした。切り替えるか、下のアーカイブ済みから復元してください。",
+  "workspaceSettings.general.archivedTitle": "アーカイブ済みのワークスペース",
+  "workspaceSettings.general.unarchive": "復元",
   "workspaceSettings.general.archiveLastError":
     "最後のワークスペースはアーカイブできません。",
   "workspaceSettings.general.nameRequired": "表示名を入力してください。",

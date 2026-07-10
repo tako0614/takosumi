@@ -8,10 +8,18 @@ import {
   createMemo,
   createResource,
   createSignal,
+  For,
+  Match,
   Show,
+  Switch,
 } from "solid-js";
-import { listWorkspaces, updateWorkspace } from "../../../lib/control-api.ts";
+import {
+  listWorkspaces,
+  listWorkspacesIncludingArchived,
+  updateWorkspace,
+} from "../../../lib/control-api.ts";
 import { setCurrentWorkspaceId } from "../../../lib/workspace-state.ts";
+import { useConfirmDialog } from "../../../lib/confirm-dialog.ts";
 import { formatDateTime, t } from "../../../i18n/index.ts";
 import {
   Button,
@@ -25,7 +33,14 @@ import {
 } from "../../../components/ui/index.ts";
 
 export default function GeneralTab(props: { readonly workspaceId: string }) {
+  const { confirm } = useConfirmDialog();
   const [workspaces, { refetch }] = createResource(listWorkspaces);
+  const [archivedList, { refetch: refetchArchived }] = createResource(
+    () => listWorkspacesIncludingArchived().catch(() => []),
+  );
+  const archivedWorkspaces = createMemo(() =>
+    (archivedList() ?? []).filter((w) => Boolean(w.archivedAt)),
+  );
   const workspace = createMemo(() =>
     (workspaces() ?? []).find((item) => item.id === props.workspaceId),
   );
@@ -76,19 +91,20 @@ export default function GeneralTab(props: { readonly workspaceId: string }) {
       setSaveError(t("workspaceSettings.general.archiveLastError"));
       return;
     }
-    if (
-      typeof window !== "undefined" &&
-      !window.confirm(t("workspaceSettings.general.archiveConfirm"))
-    ) {
-      return;
-    }
+    const ok = await confirm({
+      title: t("workspaceSettings.general.archive"),
+      message: t("workspaceSettings.general.archiveConfirm"),
+      confirmText: t("workspaceSettings.general.archive"),
+      danger: true,
+    });
+    if (!ok) return;
     setArchiving(true);
     setSaveError(null);
     setSaveMessage(null);
     try {
       await updateWorkspace(current.id, { archived: true });
       setCurrentWorkspaceId("");
-      await refetch();
+      await Promise.all([refetch(), refetchArchived()]);
       if (typeof window !== "undefined") {
         window.dispatchEvent(new Event("takosumi:workspaces-changed"));
       }
@@ -100,13 +116,35 @@ export default function GeneralTab(props: { readonly workspaceId: string }) {
     }
   };
 
+  const unarchive = async (id: string) => {
+    try {
+      await updateWorkspace(id, { archived: false });
+      await Promise.all([refetch(), refetchArchived()]);
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
   return (
     <Card>
       <CardHeader title={t("workspaceSettings.tab.general")} />
-      <Show
-        when={workspace()}
-        fallback={<p class="muted">{t("common.loading")}</p>}
+      <Switch
+        fallback={
+          <p class="muted">
+            {workspaces.error
+              ? t("common.fetchFailed", {
+                  message: String(
+                    (workspaces.error as { message?: string }).message ??
+                      workspaces.error,
+                  ),
+                })
+              : workspaces.loading
+                ? t("common.loading")
+                : t("workspaceSettings.general.notFound")}
+          </p>
+        }
       >
+        <Match when={workspace()}>
         {(current) => (
           <>
             <KVList
@@ -174,6 +212,31 @@ export default function GeneralTab(props: { readonly workspaceId: string }) {
             </CardSection>
           </>
         )}
+        </Match>
+      </Switch>
+      <Show when={archivedWorkspaces().length > 0}>
+        <CardSection>
+          <h3 class="tg-card-title">
+            {t("workspaceSettings.general.archivedTitle")}
+          </h3>
+          <ul class="wc-archived-list">
+            <For each={archivedWorkspaces()}>
+              {(w) => (
+                <li class="wc-archived-row">
+                  <span>@{w.handle}</span>
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    type="button"
+                    onClick={() => void unarchive(w.id)}
+                  >
+                    {t("workspaceSettings.general.unarchive")}
+                  </Button>
+                </li>
+              )}
+            </For>
+          </ul>
+        </CardSection>
       </Show>
     </Card>
   );

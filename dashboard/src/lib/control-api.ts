@@ -264,6 +264,8 @@ export interface Workspace {
   readonly billingAccountId?: string;
   readonly billingSettings?: BillingSettings;
   readonly policy?: PolicyConfig;
+  /** Set when the workspace is archived (restore via updateWorkspace). */
+  readonly archivedAt?: string;
   readonly createdAt: string;
   readonly updatedAt: string;
 }

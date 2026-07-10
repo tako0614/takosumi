@@ -1761,3 +1761,19 @@ button.tg-tab {
   background: color-mix(in srgb, var(--tg-success) 10%, transparent);
   font-size: var(--tg-fs-sm);
 }
+
+/* Archived-workspace restore list (workspace general tab). */
+.wc-archived-list {
+  list-style: none;
+  margin: var(--tg-s-2) 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--tg-s-2);
+}
+.wc-archived-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--tg-s-3);
+}
