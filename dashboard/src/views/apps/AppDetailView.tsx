@@ -414,7 +414,7 @@ function Inner() {
                 {(message) => <Toast tone="error">{message()}</Toast>}
               </Show>
 
-              <Tabs items={tabItems()} aria-label="Service sections" />
+              <Tabs items={tabItems()} aria-label={t("app.capsuleSub")} />
 
               <div class="wa-stack">
                 <Switch>

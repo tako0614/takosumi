@@ -320,18 +320,11 @@ function Inner() {
               when={visibleCapsules().length > 0}
               fallback={<WorkspaceStartPanel />}
             >
-              <Switch>
-                <Match when={appTiles().length === 0}>
-                  <AppsEmptyPanel />
-                </Match>
-                <Match when={appTiles().length > 0}>
-                  <AppLauncher
-                    tiles={appTiles()}
-                    openDetail={openDetail}
-                    kindFor={kindForCapsule}
-                  />
-                </Match>
-              </Switch>
+              <AppLauncher
+                tiles={appTiles()}
+                openDetail={openDetail}
+                kindFor={kindForCapsule}
+              />
             </Show>
           </Match>
         </Switch>
@@ -602,24 +595,3 @@ function WorkspaceStartPanel() {
   );
 }
 
-/** Services exist but none declare an app surface — point to the list / add. */
-function AppsEmptyPanel() {
-  return (
-    <section class="av-start" aria-label={t("apps.empty.aria")}>
-      <div class="av-start-copy">
-        <span class="av-start-kicker">{t("apps.empty.kicker")}</span>
-        <h2 class="av-start-title">{t("apps.empty.title")}</h2>
-        <p class="av-start-sub">{t("apps.empty.body")}</p>
-      </div>
-      <div class="av-start-actions">
-        <a href="/store" class="av-start-action">
-          <Sparkles size={18} aria-hidden="true" />
-          <span>{t("apps.add")}</span>
-        </a>
-        <a href="/services" class="av-start-secondary">
-          <span>{t("apps.empty.viewServices")}</span>
-        </a>
-      </div>
-    </section>
-  );
-}
