@@ -491,7 +491,10 @@ describe("/new flow guidance", () => {
     expect(newAppViewSource).toContain('t("new.storeInput.title")');
     expect(newAppViewSource).toContain('t("new.storeInput.subtitle")');
     expect(newAppViewSource).not.toContain('t("new.storeInput.body")');
-    expect(newAppViewSource).toContain('<FormField label={t("new.name")}>');
+    // The service-name field carries live inline validation (error prop +
+    // invalid input state) instead of the old bare label-only FormField.
+    expect(newAppViewSource).toContain('label={t("new.name")}');
+    expect(newAppViewSource).toContain("error={serviceNameFieldError()}");
     expect(newAppViewSource).toContain("name={`storeInput:${field.name}`}");
     expect(newAppViewSource).toContain("clearSelectedStoreEntry");
     expect(newAppViewSource).toContain("defaultGitInstallConfig()?.id");
@@ -657,6 +660,94 @@ describe("/new flow guidance", () => {
     for (const [, value] of progressEntries) {
       expect(value).not.toMatch(forbiddenRawTerms);
     }
+  });
+
+  test("store-card picks show busy state, surface errors in discovery, and drop stale responses", () => {
+    // Hydrating a picked card fetches remote install metadata (can take
+    // seconds) — the discovery section must show progress and stay retryable.
+    expect(newAppViewSource).toContain(
+      "const [storePickBusy, setStorePickBusy]",
+    );
+    expect(newAppViewSource).toContain("let storePickToken = 0;");
+    expect(newAppViewSource).toContain("const token = ++storePickToken;");
+    expect(newAppViewSource).toContain("if (token !== storePickToken) return;");
+    expect(newAppViewSource).toContain('t("new.pick.checking")');
+    expect(newAppViewSource).toContain(
+      'class="wb-status-panel av-pick-status"',
+    );
+    // Errors from a failed pick render INSIDE the discovery section (the
+    // chosen-source error slot is not mounted there) with a retry affordance.
+    expect(newAppViewSource).toContain("setFailedStorePick(listing)");
+    expect(newAppViewSource).toContain("pickStoreListing(listing())");
+    expect(newAppViewSource).toContain(
+      'class="wb-action-callout av-pick-error"',
+    );
+    expect(appViewsCssSource).toContain(".av-store-pick-scope.is-picking");
+    expect(ja["new.pick.checking"]).toContain("確認しています");
+    expect(en["new.pick.checking"].toLowerCase()).toContain("checking");
+  });
+
+  test("a chosen source can go back to the picker without leaving /new", () => {
+    expect(newAppViewSource).toContain("const returnToDiscovery = () =>");
+    expect(newAppViewSource).toContain("if (busy()) return;");
+    expect(newAppViewSource).toContain('class="av-add-flow-back"');
+    expect(newAppViewSource).toContain('t("new.flow.back")');
+    expect(newAppViewSource).toContain("onClick={returnToDiscovery}");
+    expect(ja["new.flow.back"]).toBe("選び直す");
+    expect(en["new.flow.back"]).toBe("Choose a different app");
+  });
+
+  test("install failures expose a support request id and demote the stale check card", () => {
+    // control-api's error class exposes the envelope requestId; the failure
+    // alert appends it as a muted line (code/requestId only — never raw
+    // server message text beyond the existing safe-message filter).
+    expect(controlApiSource).toContain("get requestId()");
+    expect(newAppViewSource).toContain(
+      "setErrorRequestId(apiError?.requestId ?? null)",
+    );
+    expect(newAppViewSource).toContain(
+      't("new.error.requestId", { id: id() })',
+    );
+    expect(ja["new.error.requestId"]).toContain("{id}");
+    expect(en["new.error.requestId"]).toContain("{id}");
+    // A failed submit must not keep asserting このまま追加できます above the
+    // failure alert: the check-result display is demoted until re-checked.
+    expect(newAppViewSource).toContain("setStaleCheckResult(true)");
+    expect(newAppViewSource).toContain(
+      "<Show when={!staleCheckResult() && compatibility()}>",
+    );
+  });
+
+  test("failed source-token verification cleans up the just-created connection", () => {
+    expect(newAppViewSource).toContain(
+      "await revokeConnection(connection.id).catch(() => {})",
+    );
+  });
+
+  test("duplicate-service staleness check inside the catch cannot throw unhandled", () => {
+    expect(newAppViewSource).toContain("if (!isCurrentFlow(flow)) return;");
+  });
+
+  test("the main public-name field previews the resulting URL", () => {
+    expect(newAppViewSource).toContain("const storeFieldHostPreview = (");
+    expect(newAppViewSource).toContain("storeFieldHostPreview(");
+    // The advanced サービスID preview stays (same computation, both places).
+    expect(newAppViewSource).toContain("<Show when={managedHostPreview()}>");
+    // Advanced name fields carry one-line explanations.
+    expect(newAppViewSource).toContain(
+      "advancedStoreFieldHint(entry(), field)",
+    );
+    expect(newAppViewSource).toContain('t("new.advanced.serviceIdHint")');
+    expect(ja["new.advanced.serviceIdHint"]).toContain("内部名");
+    expect(en["new.advanced.customUrlHint"].toLowerCase()).toContain("url");
+  });
+
+  test("the chosen listing is not rendered twice on wide screens", () => {
+    // Wide screens keep the right-rail 追加内容 summary and hide the top
+    // banner duplicate; the ≤720px layout hides the rail card instead.
+    expect(appViewsCssSource).toMatch(
+      /@media \(min-width: 721px\) \{\s*\.av-add-flow-header \{\s*display: none;/u,
+    );
   });
 
   test("uses neutral compatibility summaries for unknown backend diagnostics", () => {

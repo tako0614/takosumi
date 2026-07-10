@@ -635,6 +635,8 @@ export const en: Record<keyof typeof ja, string> = {
   "new.selection.subtitle": "Check it first. Deploy happens after review.",
   "new.flow.selected": "Selected",
   "new.flow.manual": "Manual add",
+  "new.flow.back": "Choose a different app",
+  "new.pick.checking": "Checking the selected service…",
   "new.summary.aria": "Add summary",
   "new.summary.provider": "Runs on",
   "new.storeInput.title": "Service setup",
@@ -692,6 +694,10 @@ export const en: Record<keyof typeof ja, string> = {
   "new.vars.projectName": "Service ID",
   "new.hostPreview": "Public URL: {host}",
   "new.advanced.title": "Advanced settings",
+  "new.advanced.customUrlHint":
+    "A full URL used instead of the default public URL.",
+  "new.advanced.routePatternHint": "Advanced: set the route pattern directly.",
+  "new.advanced.serviceIdHint": "Internal name. Also the default for the URL.",
   "new.env.title": "Environment variables",
   "new.env.body":
     "Use this only for runtime environment variables the app can store in plain text. Pass private values through connected accounts.",
@@ -817,6 +823,8 @@ export const en: Record<keyof typeof ja, string> = {
     "The service could not be added. Check the details and try again.",
   "new.error.genericWithDetails":
     "The service could not be added. Details: {message}",
+  "new.error.requestId":
+    "If this keeps happening, contact support with this ID: {id}",
   "new.error.invalidHostname":
     "This public name is too long or has characters that cannot be used. Try a shorter name.",
   "new.error.connectionRequired":
