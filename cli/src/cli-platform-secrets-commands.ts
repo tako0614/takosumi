@@ -152,6 +152,11 @@ const BASE_SECRET_MANIFEST: readonly SecretManifestEntry[] = [
     generator: () => generateBase64UrlSecret(32),
   },
   {
+    name: "TAKOSUMI_MANAGED_AGENT_START_TOKEN",
+    secretClass: "rotate_safe_generated",
+    generator: () => generateBase64UrlSecret(48),
+  },
+  {
     name: "TAKOSUMI_ACCOUNTS_UPSTREAM_GOOGLE_CLIENT_SECRET",
     secretClass: "manual_external",
   },

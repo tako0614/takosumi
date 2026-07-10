@@ -9519,6 +9519,7 @@ test("platform-secrets apply generates missing safe secrets and pushes value fil
       "TAKOSUMI_ACCOUNTS_PRIVACY_OPERATIONS_TOKEN",
       "TAKOSUMI_CONNECTION_OAUTH_STATE_SECRET",
       "TAKOSUMI_DEPLOY_CONTROL_TOKEN",
+      "TAKOSUMI_MANAGED_AGENT_START_TOKEN",
       "TAKOSUMI_SECRET_STORE_PASSPHRASE",
     ]);
     for (const command of commands) {
@@ -9549,7 +9550,7 @@ test("platform-secrets apply generates missing safe secrets and pushes value fil
     ).toEqual(0o600);
     const output = stdout.concat(stderr).join("\n");
     expect(output).toContain("Generated: TAKOSUMI_DEPLOY_CONTROL_TOKEN");
-    expect(output).toContain("Pushed 5 platform secret(s)");
+    expect(output).toContain("Pushed 6 platform secret(s)");
     expect(output).not.toContain("protected-key");
     expect(output).not.toContain(generated.trim());
   } finally {
@@ -9594,6 +9595,7 @@ test("platform-secrets apply pushes optional metrics scrape token when present",
       "TAKOSUMI_ACCOUNTS_PRIVACY_OPERATIONS_TOKEN",
       "TAKOSUMI_CONNECTION_OAUTH_STATE_SECRET",
       "TAKOSUMI_DEPLOY_CONTROL_TOKEN",
+      "TAKOSUMI_MANAGED_AGENT_START_TOKEN",
       "TAKOSUMI_METRICS_SCRAPE_TOKEN",
       "TAKOSUMI_SECRET_STORE_PASSPHRASE",
     ]);
@@ -9601,7 +9603,7 @@ test("platform-secrets apply pushes optional metrics scrape token when present",
       "metrics-token",
     );
     const output = stdout.concat(stderr).join("\n");
-    expect(output).toContain("Pushed 6 platform secret(s)");
+    expect(output).toContain("Pushed 7 platform secret(s)");
     expect(output).not.toContain("metrics-token");
   } finally {
     await removePath(dir, { recursive: true });
@@ -9742,7 +9744,7 @@ test("platform-secrets apply pushes Cloud extension confidential client secret w
       "cloud-extension-client-secret",
     );
     const output = stdout.concat(stderr).join("\n");
-    expect(output).toContain("Pushed 6 platform secret(s)");
+    expect(output).toContain("Pushed 7 platform secret(s)");
     expect(output).not.toContain("cloud-extension-client-secret");
   } finally {
     await removePath(dir, { recursive: true });
@@ -9792,6 +9794,7 @@ test("platform-secrets apply can explicitly initialize missing protected secrets
       "TAKOSUMI_ACCOUNT_SESSION_HASH_SALT",
       "TAKOSUMI_CONNECTION_OAUTH_STATE_SECRET",
       "TAKOSUMI_DEPLOY_CONTROL_TOKEN",
+      "TAKOSUMI_MANAGED_AGENT_START_TOKEN",
       "TAKOSUMI_SECRET_STORE_PASSPHRASE",
     ]);
     const privateJwkRaw = await readFile(
@@ -9812,7 +9815,7 @@ test("platform-secrets apply can explicitly initialize missing protected secrets
     }
     const output = stdout.join("\n");
     expect(output).toContain("Generated: TAKOSUMI_ACCOUNTS_ES256_PRIVATE_JWK");
-    expect(output).toContain("Pushed 11 platform secret(s)");
+    expect(output).toContain("Pushed 12 platform secret(s)");
     expect(output).not.toContain(privateJwk.d);
   } finally {
     await removePath(dir, { recursive: true });
@@ -9857,7 +9860,7 @@ test("platform-secrets apply local-only initializes the vault without wrangler",
     expect(
       await pathExists(pathJoin(dir, "TAKOSUMI_DEPLOY_CONTROL_TOKEN")),
     ).toEqual(true);
-    expect(stdout.join("\n")).toContain("Initialized local vault with 11");
+    expect(stdout.join("\n")).toContain("Initialized local vault with 12");
   } finally {
     await removePath(dir, { recursive: true });
     await removePath(config);
