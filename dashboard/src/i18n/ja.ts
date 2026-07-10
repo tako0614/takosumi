@@ -433,6 +433,8 @@ export const ja = {
   "run.summary.activationFailed":
     "インフラのデプロイ後のアプリ公開に失敗しました。",
   "run.summary.applySucceeded": "デプロイが完了しました。",
+  "run.summary.removing": "削除しています…",
+  "run.summary.removed": "削除が完了しました。",
   "run.summary.failed": "{operation}に失敗しました。",
   "run.summary.failedHint": "下の診断とログで原因を確認できます。",
   "runError.sourceSyncFailed":

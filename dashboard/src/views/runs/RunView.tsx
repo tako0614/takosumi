@@ -1342,8 +1342,12 @@ function Inner() {
     }
     const name = appName();
     if (r.type === "apply" || r.type === "destroy_apply") {
+      const isRemoval = r.type === "destroy_apply";
       if (r.status === "queued" || r.status === "running") {
-        return { kind: "progress", text: t("run.summary.applying") };
+        return {
+          kind: "progress",
+          text: t(isRemoval ? "run.summary.removing" : "run.summary.applying"),
+        };
       }
       if (r.status === "succeeded") {
         if (r.type === "apply") {
@@ -1365,7 +1369,12 @@ function Inner() {
             };
           }
         }
-        return { kind: "ok", text: t("run.summary.applySucceeded") };
+        return {
+          kind: "ok",
+          text: t(
+            isRemoval ? "run.summary.removed" : "run.summary.applySucceeded",
+          ),
+        };
       }
       if (r.status === "failed") {
         if (isCreditsRequiredRun(r, diagnosticRows())) {
@@ -1585,9 +1594,9 @@ function Inner() {
   const pageTitle = () => {
     const r = run.latest;
     if (!r) return t("run.title.other");
-    if (r.type === "apply" || r.type === "destroy_apply")
-      return t("run.title.apply");
-    if (r.type === "destroy_plan") return t("run.title.destroy");
+    if (r.type === "apply") return t("run.title.apply");
+    if (r.type === "destroy_apply" || r.type === "destroy_plan")
+      return t("run.title.destroy");
     if (r.type === "plan") return t("run.title.plan");
     return t("run.title.other");
   };
