@@ -58,6 +58,7 @@ import {
 } from "../../lib/cloud-resources.ts";
 import {
   formatDateTime,
+  intlLocale,
   locale,
   type MessageKey,
   t,
@@ -1190,7 +1191,7 @@ function usageKindUnitLabel(kind: string): string {
 
 function formatUsageMonth(startIso: string): string {
   const date = new Date(startIso);
-  return new Intl.DateTimeFormat(locale() === "ja" ? "ja-JP" : "en-US", {
+  return new Intl.DateTimeFormat(intlLocale(), {
     year: "numeric",
     month: "long",
     timeZone: "UTC",

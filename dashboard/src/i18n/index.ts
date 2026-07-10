@@ -78,6 +78,12 @@ export function setDocumentTitle(page: string): void {
 
 const INTL_LOCALE: Record<Locale, string> = { ja: "ja-JP", en: "en-US" };
 
+/** BCP-47 tag for the active locale — the single Intl mapping for view-local
+ * formatters (adding a locale must not require hunting per-view copies). */
+export function intlLocale(): string {
+  return INTL_LOCALE[locale()];
+}
+
 /** Absolute date+time for the active locale; falls back to the raw value. */
 export function formatDateTime(iso: string | undefined): string {
   if (!iso) return "—";
