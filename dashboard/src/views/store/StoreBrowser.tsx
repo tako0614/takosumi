@@ -43,9 +43,21 @@ const STR = {
   allStores: { ja: "すべてのストア", en: "All stores" },
   loadMore: { ja: "もっと読み込む", en: "Load more" },
   none: { ja: "該当するサービスがありません", en: "No matching services" },
+  noneUnfetched: {
+    ja: "読み込み済みの範囲には該当がありません。続きを読み込むか、Enter でストア全体を検索できます。",
+    en: "No matches in what's loaded yet. Load more, or press Enter to search the whole store.",
+  },
   loadFailed: {
     ja: "ストアに接続できませんでした。",
     en: "The store could not be reached.",
+  },
+  partialOutage: {
+    ja: "一部のストアに接続できませんでした。表示が不完全な可能性があります。",
+    en: "Some stores could not be reached; results may be incomplete.",
+  },
+  invalidServer: {
+    ja: "http(s):// で始まる URL を入力してください。",
+    en: "Enter a URL that starts with http(s)://.",
   },
   retry: { ja: "再試行", en: "Retry" },
   sortLabel: { ja: "並び順", en: "Sort" },
@@ -166,6 +178,7 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
   );
   const [showServers, setShowServers] = createSignal(false);
   const [serverDraft, setServerDraft] = createSignal("");
+  const [serverError, setServerError] = createSignal(false);
   const showSourceControls = () => props.showSourceControls ?? true;
   const showSortControl = () => props.showSortControl ?? true;
 
@@ -227,7 +240,12 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
     e.preventDefault();
     if (addTcsServer(serverDraft())) {
       setServerDraft("");
+      setServerError(false);
       void rebuild();
+    } else {
+      // Rejected input previously did nothing at all (type="url" misses
+      // e.g. ftp://) — say why the server was not added.
+      setServerError(true);
     }
   };
   const onRemoveServer = (base: string) => {
@@ -402,15 +420,45 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
               name="storeServerUrl"
               type="url"
               value={serverDraft()}
-              onInput={(e) => setServerDraft(e.currentTarget.value)}
+              onInput={(e) => {
+                setServerDraft(e.currentTarget.value);
+                setServerError(false);
+              }}
               placeholder={s("serverPlaceholder", props.locale)}
               aria-label={s("serverPlaceholder", props.locale)}
+              aria-invalid={serverError() ? "true" : undefined}
             />
             <button type="submit" class="tcs-btn tcs-sm">
               {s("addServer", props.locale)}
             </button>
           </form>
+          <Show when={serverError()}>
+            <p class="tcs-err" role="alert">
+              {s("invalidServer", props.locale)}
+            </p>
+          </Show>
         </div>
+      </Show>
+
+      {/* One unreachable store among several silently dropped its listings
+          (the only hint was a dot inside the collapsed Advanced panel). */}
+      <Show
+        when={
+          !agg().loading &&
+          agg().status.some((st) => st.ok) &&
+          agg().status.some((st) => !st.ok)
+        }
+      >
+        <p class="tcs-partial" role="status">
+          {s("partialOutage", props.locale)}{" "}
+          <button
+            type="button"
+            class="tcs-btn tcs-sm"
+            onClick={() => void rebuild()}
+          >
+            {s("retry", props.locale)}
+          </button>
+        </p>
       </Show>
 
       <Show
@@ -425,7 +473,15 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
             fallback={
               <Show
                 when={agg().loading}
-                fallback={<p class="tcs-empty">{s("none", props.locale)}</p>}
+                fallback={
+                  <p class="tcs-empty">
+                    {/* With unfetched pages left, a flat "no matches" is a
+                        lie — the match may simply not be loaded yet. */}
+                    {agg().done
+                      ? s("none", props.locale)
+                      : s("noneUnfetched", props.locale)}
+                  </p>
+                }
               >
                 <div class="tcs-grid" aria-hidden="true">
                   <For each={[0, 1, 2, 3, 4, 5]}>

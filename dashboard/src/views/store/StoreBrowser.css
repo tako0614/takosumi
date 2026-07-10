@@ -282,6 +282,19 @@
   text-align: center;
   padding: 40px 0;
 }
+.tcs-partial {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border: 1px solid
+    color-mix(in srgb, var(--tg-warn, #b26a09) 36%, var(--c-border));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--tg-warn, #b26a09) 8%, var(--c-panel));
+  color: var(--c-fg);
+  font-size: 0.86rem;
+}
 .tcs-loadmore {
   display: flex;
   justify-content: center;
