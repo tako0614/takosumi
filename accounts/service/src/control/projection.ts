@@ -76,10 +76,7 @@ import type {
   ProviderResolution,
   PublicProviderResolution,
 } from "takosumi-contract/provider-resolution";
-import type {
-  OutputShare,
-  OutputShareEntry,
-} from "takosumi-contract/outputs";
+import type { OutputShare, OutputShareEntry } from "takosumi-contract/outputs";
 import type { PublicDeployment } from "takosumi-contract/deployments";
 import type {
   BackupRecord,
@@ -201,9 +198,7 @@ export async function syncDeployControlProjectionStatusFromRun(input: {
   }
   const requestedStatus = projectionStatusFromRun(input.run);
   if (requestedStatus === "installing") return;
-  const installation = await input.store.findAppCapsule(
-    input.run.capsuleId,
-  );
+  const installation = await input.store.findAppCapsule(input.run.capsuleId);
   if (!installation) return;
   await saveProjectionStatusChange({
     store: input.store,
@@ -234,20 +229,20 @@ async function upsertDeployControlCapsuleProjection(input: {
   });
   if (!source) return undefined;
   const existing = await input.store.findAppCapsule(input.installation.id);
+  const now = Date.now();
+  const ledgerScope = await ensureProjectionLedgerScope({
+    operations: input.operations,
+    store: input.store,
+    sessionSubject: input.sessionSubject,
+    workspaceId: input.installation.workspaceId,
+    preferredAccountId: existing?.accountId,
+    now,
+  });
+  if (ledgerScope instanceof Response) return ledgerScope;
+  const accountId = ledgerScope;
   if (existing?.status === "ready" && input.requestedStatus === "installing") {
     return undefined;
   }
-  const now = Date.now();
-  const accountId =
-    existing?.accountId ??
-    (await ensureProjectionLedgerScope({
-      operations: input.operations,
-      store: input.store,
-      sessionSubject: input.sessionSubject,
-      workspaceId: input.installation.workspaceId,
-      now,
-    }));
-  if (!accountId) return undefined;
   const status = nextProjectionStatus(existing?.status, input.requestedStatus);
   const mode = existing?.mode ?? input.projectionMode ?? "self-hosted";
   let runtimeBindingId = existing?.runtimeBindingId;
@@ -391,39 +386,70 @@ async function ensureProjectionLedgerScope(input: {
   readonly store: AccountsStore;
   readonly sessionSubject: TakosumiSubject;
   readonly workspaceId: string;
+  readonly preferredAccountId?: string;
   readonly now: number;
-}): Promise<string | undefined> {
+}): Promise<string | Response> {
   const existingWorkspace = await input.store.findWorkspace(input.workspaceId);
-  if (existingWorkspace) {
-    const existingAccount = await input.store.findLedgerAccount(
-      existingWorkspace.accountId,
+  if (
+    existingWorkspace &&
+    input.preferredAccountId !== undefined &&
+    existingWorkspace.accountId !== input.preferredAccountId
+  ) {
+    return projectionLedgerScopeConflict(
+      "projection_workspace_account_conflict",
+      "The Capsule projection Workspace belongs to another account.",
     );
-    if (
-      existingAccount &&
-      existingAccount.legalOwnerSubject !== input.sessionSubject
-    ) {
-      return undefined;
-    }
-    if (!existingAccount) {
+  }
+
+  const accountId =
+    input.preferredAccountId ??
+    existingWorkspace?.accountId ??
+    (await projectionAccountIdForSubject(input.sessionSubject));
+  const existingAccount = await input.store.findLedgerAccount(accountId);
+  if (
+    existingAccount &&
+    existingAccount.legalOwnerSubject !== input.sessionSubject
+  ) {
+    return projectionLedgerScopeConflict(
+      "projection_account_owner_conflict",
+      "The Capsule projection account belongs to another owner.",
+    );
+  }
+  if (!existingAccount) {
+    try {
       await input.store.saveLedgerAccount({
-        accountId: existingWorkspace.accountId,
+        accountId,
         legalOwnerSubject: input.sessionSubject,
         createdAt: input.now,
         updatedAt: input.now,
       });
+    } catch (error) {
+      const confirmedAccount = await input.store.findLedgerAccount(accountId);
+      if (
+        confirmedAccount &&
+        confirmedAccount.legalOwnerSubject !== input.sessionSubject
+      ) {
+        return projectionLedgerScopeConflict(
+          "projection_account_owner_conflict",
+          "The Capsule projection account belongs to another owner.",
+        );
+      }
+      throw error;
     }
-    return existingWorkspace.accountId;
+    const confirmedAccount = await input.store.findLedgerAccount(accountId);
+    if (
+      !confirmedAccount ||
+      confirmedAccount.legalOwnerSubject !== input.sessionSubject
+    ) {
+      return projectionLedgerScopeConflict(
+        "projection_account_owner_conflict",
+        "The Capsule projection account could not be claimed by this owner.",
+      );
+    }
   }
-  const accountId = await projectionAccountIdForSubject(input.sessionSubject);
-  const existingAccount = await input.store.findLedgerAccount(accountId);
-  if (!existingAccount) {
-    await input.store.saveLedgerAccount({
-      accountId,
-      legalOwnerSubject: input.sessionSubject,
-      createdAt: input.now,
-      updatedAt: input.now,
-    });
-  }
+
+  if (existingWorkspace) return accountId;
+
   const space = await input.operations.spaces
     .getWorkspace(input.workspaceId)
     .catch(() => undefined);
@@ -436,7 +462,29 @@ async function ensureProjectionLedgerScope(input: {
     updatedAt: input.now,
   });
   const confirmedWorkspace = await input.store.findWorkspace(input.workspaceId);
-  return confirmedWorkspace?.accountId === accountId ? accountId : undefined;
+  if (confirmedWorkspace?.accountId !== accountId) {
+    return projectionLedgerScopeConflict(
+      "projection_workspace_account_conflict",
+      "The Capsule projection Workspace belongs to another account.",
+    );
+  }
+  return accountId;
+}
+
+function projectionLedgerScopeConflict(
+  reason:
+    | "projection_account_owner_conflict"
+    | "projection_workspace_account_conflict",
+  message: string,
+): Response {
+  return errorJson(
+    "failed_precondition" satisfies DeployControlErrorCode,
+    message,
+    409,
+    undefined,
+    {},
+    { reason },
+  );
 }
 
 async function projectionSourceFromPlanRun(input: {

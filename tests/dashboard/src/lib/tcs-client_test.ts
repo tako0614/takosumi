@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import {
   fetchTcsListing,
   fetchTcsListingsPage,
+  hydrateRequiredTcsListingWithRepoMetadata,
   hydrateTcsListingWithRepoMetadata,
   type TcsListing,
 } from "../../../../dashboard/src/lib/tcs-client.ts";
@@ -148,6 +149,15 @@ describe("TCS repo metadata", () => {
 
     const base = listing();
     await expect(hydrateTcsListingWithRepoMetadata(base)).resolves.toBe(base);
+  });
+
+  test("fails closed when a Store install cannot load repo metadata", async () => {
+    globalThis.fetch = (async () =>
+      new Response(null, { status: 404 })) as typeof fetch;
+
+    await expect(
+      hydrateRequiredTcsListingWithRepoMetadata(listing()),
+    ).rejects.toThrow("repository install metadata is unavailable");
   });
 
   test("falls back to raw metadata when the GitHub Contents API is rate limited", async () => {
