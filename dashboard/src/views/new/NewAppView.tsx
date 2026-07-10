@@ -287,8 +287,15 @@ function Inner() {
   // ストア[追加]: `?auto=1` asks this flow to start the single install action
   // itself once prerequisites settle (workspace, install config, store
   // hydration). Blockers still stop it — auto never bypasses a review.
+  //
+  // Auto-start is gated on a genuine store handoff (tcsBase/tcsListing). The
+  // in-app store CTA always carries one; an EXTERNAL link (`/install?git=…` or a
+  // hand-crafted `/new?git=…&auto=1`) carries only a raw git URL, and those must
+  // stay pre-fill only — never silently register + deploy an attacker-chosen
+  // repo into the user's workspace without an explicit Add click.
   const autoInstallRequested =
-    new URLSearchParams(initialSearch).get("auto") === "1";
+    new URLSearchParams(initialSearch).get("auto") === "1" &&
+    initialTcsHandoff !== null;
   const initialInstallPrefill =
     typeof location === "undefined"
       ? undefined

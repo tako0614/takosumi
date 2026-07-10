@@ -605,26 +605,22 @@ function UsageByResourceCard(props: {
         skeletonRows={4}
       />
       <Show when={props.usageError && props.rows.length > 0}>
-        {(error) => (
-          <CardSection>
-            <Toast tone="error">
-              {t("cloudResources.usage.error", {
-                message: errorMessage(error()),
-              })}
-            </Toast>
-          </CardSection>
-        )}
+        <CardSection>
+          <Toast tone="error">
+            {t("cloudResources.usage.error", {
+              message: errorMessage(props.usageError),
+            })}
+          </Toast>
+        </CardSection>
       </Show>
       <Show when={props.inventoryError && props.rows.length > 0}>
-        {(error) => (
-          <CardSection>
-            <Toast tone="error">
-              {t("cloudResources.inventory.error", {
-                message: errorMessage(error()),
-              })}
-            </Toast>
-          </CardSection>
-        )}
+        <CardSection>
+          <Toast tone="error">
+            {t("cloudResources.inventory.error", {
+              message: errorMessage(props.inventoryError),
+            })}
+          </Toast>
+        </CardSection>
       </Show>
     </Card>
   );

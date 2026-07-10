@@ -290,6 +290,7 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
             value={searchInput()}
             onInput={(e) => setSearchValue(e.currentTarget.value)}
             placeholder={s("search", props.locale)}
+            aria-label={s("search", props.locale)}
           />
         </form>
         <Show when={showSortControl()}>
@@ -371,6 +372,7 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
               value={serverDraft()}
               onInput={(e) => setServerDraft(e.currentTarget.value)}
               placeholder={s("serverPlaceholder", props.locale)}
+              aria-label={s("serverPlaceholder", props.locale)}
             />
             <button type="submit" class="tcs-btn tcs-sm">
               {s("addServer", props.locale)}
