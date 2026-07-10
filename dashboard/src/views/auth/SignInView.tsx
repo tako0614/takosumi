@@ -75,6 +75,34 @@ const THEME_ICON: Record<ThemePreference, () => JSX.Element> = {
   dark: () => <Moon size={16} aria-hidden="true" />,
 };
 
+// Cloud single-provider auto-start is convenient but must not become an
+// inescapable redirect loop when the OAuth round-trip fails or the session
+// cookie doesn't persist. We record one auto-start attempt per browser session
+// (survives the full-page OAuth redirect via sessionStorage) and refuse to
+// auto-start again until a real sign-in clears it.
+const OAUTH_AUTOSTART_KEY = "takosumi.oauth-autostart-attempted";
+function autoStartAlreadyAttempted(): boolean {
+  try {
+    return sessionStorage.getItem(OAUTH_AUTOSTART_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+function markAutoStartAttempted(): void {
+  try {
+    sessionStorage.setItem(OAUTH_AUTOSTART_KEY, "1");
+  } catch {
+    // sessionStorage unavailable — manual=1 on the retry link is the fallback.
+  }
+}
+function clearAutoStartAttempt(): void {
+  try {
+    sessionStorage.removeItem(OAUTH_AUTOSTART_KEY);
+  } catch {
+    // ignore
+  }
+}
+
 export function SignInPanel() {
   const [params] = useSearchParams<{
     return?: string;
@@ -130,6 +158,11 @@ export function SignInPanel() {
   const shouldAutoStart = (): boolean => {
     if (!isTakosumiCloudRuntime()) return false;
     if (params.manual === "1") return false;
+    // A prior auto-start this browser session that never landed us signed in
+    // (OAuth failure, or a session cookie that didn't persist so AuthGuard
+    // bounced us back here) must not silently re-fire — that is an inescapable
+    // redirect loop. Fall back to the manual provider buttons instead.
+    if (autoStartAlreadyAttempted()) return false;
     if (!providersLoaded() || providersLoadFailed()) return false;
     const ids = enabledProviders();
     return ids.length === 1 && ids[0] === "google";
@@ -138,6 +171,7 @@ export function SignInPanel() {
   createEffect(() => {
     if (autoStarted() || !shouldAutoStart()) return;
     setAutoStarted(true);
+    markAutoStartAttempted();
     select("google");
   });
 
@@ -356,6 +390,9 @@ export function SignInCallbackView() {
         // navigating; otherwise the next route's AuthGuard runs before the
         // /me roundtrip resolves and bounces back to /sign-in.
         await refreshSession();
+        // Signed in for real — release the auto-start breaker so a later
+        // sign-out → sign-in in this same tab session auto-starts once again.
+        clearAutoStartAttempt();
         if (requiresDocumentNavigation(returnTo)) {
           location.assign(returnTo);
           return;
@@ -364,10 +401,13 @@ export function SignInCallbackView() {
       })
       .catch((err: Error) => {
         const returnTo = rpc.auth.recallOAuthReturnTo();
+        // manual=1 suppresses auto-start so the retry link lands on the manual
+        // provider buttons instead of instantly bouncing back into the failed
+        // provider (belt-and-suspenders with the sessionStorage breaker).
         setRetryHref(
           returnTo === "/"
-            ? "/sign-in"
-            : `/sign-in?return=${encodeURIComponent(returnTo)}`,
+            ? "/sign-in?manual=1"
+            : `/sign-in?return=${encodeURIComponent(returnTo)}&manual=1`,
         );
         setError(signInErrorMessage(err));
       });

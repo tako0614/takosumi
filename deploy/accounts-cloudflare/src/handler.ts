@@ -270,7 +270,7 @@ export function createCloudflareWorker(
         if (isDashboardAssetPath(url.pathname)) {
           return dashboardAssetResponse(assetResponse, request.method);
         }
-        return assetResponse;
+        return withDashboardDocumentCsp(assetResponse);
       }
       if (url.pathname === TAKOSUMI_ACCOUNTS_AUTH_PROVIDERS_PATH) {
         if (request.method !== "GET") {
@@ -1708,6 +1708,32 @@ function isDashboardAssetPath(pathname: string): boolean {
     pathname.startsWith("/assets/") ||
     pathname.startsWith("/opentofu/providers/")
   );
+}
+
+const DASHBOARD_CSP =
+  "default-src 'self'; " +
+  "script-src 'self'; " +
+  "style-src 'self' 'unsafe-inline'; " +
+  "img-src 'self' data: https:; " +
+  "font-src 'self' data:; " +
+  "connect-src 'self' https:; " +
+  "object-src 'none'; " +
+  "base-uri 'self'; " +
+  "frame-ancestors 'none'; " +
+  "form-action 'self'";
+
+/** Attach a Content-Security-Policy to the SPA HTML document so a
+ * javascript:/data: href or injected inline script fails closed. */
+function withDashboardDocumentCsp(response: Response): Response {
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!contentType.toLowerCase().includes("text/html")) return response;
+  const headers = new Headers(response.headers);
+  headers.set("content-security-policy", DASHBOARD_CSP);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
 }
 
 function dashboardAssetResponse(response: Response, method: string): Response {

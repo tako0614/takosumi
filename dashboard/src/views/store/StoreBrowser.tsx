@@ -77,8 +77,16 @@ function s(key: keyof typeof STR, locale: TcsLocale): string {
 function pick(t: { ja: string; en: string }, locale: TcsLocale): string {
   return (locale === "ja" ? t.ja : t.en) || t.en || t.ja;
 }
-function repoUrl(git: string): string {
-  return git.replace(/\.git$/i, "");
+function repoUrl(git: string): string | undefined {
+  const stripped = git.replace(/\.git$/i, "").trim();
+  try {
+    const url = new URL(stripped);
+    return url.protocol === "https:" || url.protocol === "http:"
+      ? url.toString()
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 function listingSearchText(listing: TcsListing, locale: TcsLocale): string {
   return [
@@ -541,14 +549,25 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
                       )}
                     </Show>
                   </dl>
-                  <a
-                    class="tcs-link"
-                    href={repoUrl(listing().source.git)}
-                    target="_blank"
-                    rel="noreferrer noopener"
+                  <Show
+                    when={repoUrl(listing().source.git)}
+                    fallback={
+                      <span class="tcs-mono tcs-break">
+                        {listing().source.git}
+                      </span>
+                    }
                   >
-                    {s("openRepo", props.locale)} ↗
-                  </a>
+                    {(href) => (
+                      <a
+                        class="tcs-link"
+                        href={href()}
+                        target="_blank"
+                        rel="noreferrer noopener"
+                      >
+                        {s("openRepo", props.locale)} ↗
+                      </a>
+                    )}
+                  </Show>
                 </section>
               </details>
             </aside>

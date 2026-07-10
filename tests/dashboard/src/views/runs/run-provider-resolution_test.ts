@@ -264,4 +264,28 @@ describe("Run review ProviderConnection evidence", () => {
       ),
     );
   });
+
+  test("waits for release activation before presenting a successful apply as ready", () => {
+    expect(runViewSource).toContain("deploymentReadinessAfterApply");
+    expect(runViewSource).toContain("completedRunReadiness");
+    expect(runViewSource).toContain('readiness === "activation_pending"');
+    expect(runViewSource).toContain(
+      'if (readiness === "activation_failed") return { phase: "error" };',
+    );
+    expect(runViewSource).toContain(
+      'if (readiness === "ready") return { phase: "done" };',
+    );
+    expect(runViewSource).toContain(
+      'if (readiness === "ready" || readiness === "activation_failed") return;',
+    );
+    expect(runViewSource).toContain("refetchDeployments()");
+    expect(runViewSource).toContain("refetchActivity()");
+    expect(runViewSource).toContain('t("run.summary.activationPending")');
+    expect(runViewSource).toContain('t("run.summary.activationFailed")');
+    expect(runViewSource).toContain('t("install.activationPending")');
+    expect(en["run.summary.activationPending"]).toContain("activation");
+    expect(ja["run.summary.activationPending"]).toContain("公開処理");
+    expect(en["run.summary.activationFailed"]).toContain("failed");
+    expect(ja["run.summary.activationFailed"]).toContain("失敗");
+  });
 });

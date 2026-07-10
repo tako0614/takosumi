@@ -117,7 +117,7 @@ function Inner() {
                     {(layer, i) => (
                       <div class="wb-graph-layer">
                         <div class="wb-graph-layer-label">
-                          {t("graph.layer", { n: i() })}
+                          {t("graph.layer", { n: i() + 1 })}
                           <span
                             class="wb-graph-layer-rule"
                             aria-hidden="true"
