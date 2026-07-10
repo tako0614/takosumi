@@ -134,7 +134,7 @@
   cursor: pointer;
 }
 .legal-lang button.active {
-  background: var(--tg-accent);
+  background: var(--tg-accent-emphasis);
   color: var(--tg-on-accent);
 }
 .legal-sign-in {
@@ -507,9 +507,9 @@
   gap: var(--tg-s-2);
   min-height: 40px;
   padding: 0 var(--tg-s-4);
-  border: 1px solid var(--tg-accent);
+  border: 1px solid var(--tg-accent-emphasis);
   border-radius: var(--tg-r-md);
-  background: var(--tg-accent);
+  background: var(--tg-accent-emphasis);
   color: var(--tg-accent-fg);
   -webkit-text-fill-color: var(--tg-accent-fg);
   font-weight: 700;
@@ -542,8 +542,8 @@
     background 120ms ease;
 }
 .av-start-action:hover {
-  border-color: var(--tg-accent-strong);
-  background: var(--tg-accent-strong);
+  border-color: var(--tg-accent-emphasis-hover);
+  background: var(--tg-accent-emphasis-hover);
   color: var(--tg-accent-fg);
   -webkit-text-fill-color: var(--tg-accent-fg);
 }
@@ -725,11 +725,16 @@
   font-size: var(--tg-fs-xs);
   cursor: pointer;
 }
-.av-tile-manage:hover,
+.av-tile-manage:hover {
+  background: var(--tg-bg-subtle);
+  color: var(--tg-fg);
+}
 .av-tile-manage:focus-visible {
   background: var(--tg-bg-subtle);
   color: var(--tg-fg);
-  outline: none;
+  /* A bg shade alone (~1.4:1) is not a visible focus indicator. */
+  outline: 2px solid var(--tg-accent);
+  outline-offset: 2px;
 }
 .av-tile-skel {
   width: 100%;

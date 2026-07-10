@@ -22,7 +22,10 @@
   --tg-bg-hi: #26262a;
   --tg-fg: #f5f5f6;
   --tg-fg-muted: #a1a1a8;
-  --tg-fg-subtle: #6c6c74;
+  /* #6c6c74 failed WCAG AA (3.3–3.8:1) on the dark grounds for field hints,
+     table headers, KV labels and placeholders; lightened to clear 4.5:1 on
+     every dark surface (4.97:1 on --tg-bg-subtle, the worst case). */
+  --tg-fg-subtle: #8a8a93;
   --tg-line: #262629;
   --tg-line-strong: #37373d;
   --tg-code-bg: #1c1c1f;
@@ -36,6 +39,11 @@
   --tg-accent-fg: #ffffff;
   --tg-accent-soft: #2a1210;
   --tg-accent-text: #ff8b83;
+  /* Filled-control surface: #f5483d + white text was 3.57:1 (below AA).
+     Emphasis is the darker fill for solid accent controls so --tg-accent-fg
+     clears 4.5:1; --tg-accent stays the text/border/glow red on dark. */
+  --tg-accent-emphasis: #d63a2f;
+  --tg-accent-emphasis-hover: #c93025;
 
   --tg-grad-from: #ffffff;
   --tg-grad-mid: #ff6154;
@@ -46,6 +54,8 @@
   --tg-warn: #e0a53a;
   --tg-danger: #f85149;
   --tg-danger-fg: #ffffff;
+  /* Solid danger fills (count badge etc.): #f85149 + white was 3.35:1. */
+  --tg-danger-emphasis: #d63a2f;
 
   /* Kind-tinted monogram fallback (undeclared-icon apps). Muted, distinct by
      kind so a list of them never reads as "the same box". */
@@ -82,7 +92,7 @@
   --tg-tile-shadow-hover:
     inset 0 0 0 1px var(--tg-line-strong), 0 8px 20px -10px rgba(0, 0, 0, 0.6);
   --tg-card-inset: inset 0 1px 0 rgba(255, 255, 255, 0.03);
-  --tg-accent-grad: var(--tg-accent);
+  --tg-accent-grad: var(--tg-accent-emphasis);
   --tg-accent-btn-shadow: none;
   --tg-active-grad: var(--tg-bg-hi);
   --tg-active-ring: none;
@@ -178,6 +188,9 @@
   --tg-accent-fg: #ffffff;
   --tg-accent-soft: #fdecea;
   --tg-accent-text: #c42f24;
+  /* Filled-control surface: #e0362a + white text was 4.44:1 (just below AA). */
+  --tg-accent-emphasis: #d32f24;
+  --tg-accent-emphasis-hover: #c42f24;
 
   --tg-grad-from: #18181b;
   --tg-grad-mid: #e0362a;
@@ -188,6 +201,7 @@
   --tg-warn: #b26a09;
   --tg-danger: #d22c22;
   --tg-danger-fg: #ffffff;
+  --tg-danger-emphasis: #d22c22;
 
   --tg-k-worker-bg: #e7edf5;
   --tg-k-worker-fg: #3f5a78;
@@ -216,7 +230,7 @@
     inset 0 0 0 1px var(--tg-line-strong),
     0 8px 20px -10px rgba(16, 24, 40, 0.14);
   --tg-card-inset: inset 0 1px 0 rgba(255, 255, 255, 0.6);
-  --tg-accent-grad: var(--tg-accent);
+  --tg-accent-grad: var(--tg-accent-emphasis);
   --tg-accent-btn-shadow: none;
   --tg-active-grad: var(--tg-bg-hi);
   --tg-active-ring: none;

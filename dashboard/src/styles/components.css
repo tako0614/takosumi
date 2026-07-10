@@ -88,7 +88,8 @@
 .tg-btn-primary:hover:not(:disabled) {
   color: var(--tg-accent-fg);
   -webkit-text-fill-color: var(--tg-accent-fg);
-  filter: brightness(1.06);
+  /* Darken (not brighten) on hover so the white label keeps AA contrast. */
+  background: var(--tg-accent-emphasis-hover);
   transform: translateY(-1px);
   box-shadow: var(--tg-accent-btn-shadow), var(--tg-shadow-card-hover);
 }
@@ -115,14 +116,17 @@
   background: color-mix(in srgb, var(--tg-fg) 6%, transparent);
 }
 .tg-btn-danger {
-  background: var(--tg-danger);
-  color: var(--tg-danger-fg);
-  border-color: var(--tg-danger);
+  /* Outline, not filled: destructive actions must not share the filled-red
+     look of the primary CTA (保存 / 追加 vs 削除 were indistinguishable). */
+  background: transparent;
+  color: var(--tg-danger);
+  border-color: color-mix(in srgb, var(--tg-danger) 55%, var(--tg-line-strong));
   box-shadow: var(--tg-shadow-xs);
 }
 .tg-btn-danger:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--tg-danger) 88%, var(--tg-bg-elev));
-  color: var(--tg-danger-fg);
+  background: color-mix(in srgb, var(--tg-danger) 12%, transparent);
+  color: var(--tg-danger);
+  border-color: var(--tg-danger);
   transform: translateY(-1px);
   box-shadow: var(--tg-shadow-card-hover);
 }
@@ -712,7 +716,7 @@
 }
 .btn-primary:hover:not(:disabled) {
   color: var(--tg-accent-fg);
-  filter: brightness(1.06);
+  background: var(--tg-accent-emphasis-hover);
 }
 .btn-secondary {
   background: transparent;
@@ -725,9 +729,11 @@
   background: var(--tg-bg-subtle);
 }
 .btn-danger {
-  background: var(--tg-danger);
-  color: var(--tg-danger-fg);
-  border: 1px solid var(--tg-danger);
+  /* Outline treatment — see .tg-btn-danger. */
+  background: transparent;
+  color: var(--tg-danger);
+  border: 1px solid
+    color-mix(in srgb, var(--tg-danger) 55%, var(--tg-line-strong));
   padding: 0.6em 1.2em;
   border-radius: var(--tg-r-md);
   font-weight: 600;
@@ -735,15 +741,16 @@
   display: inline-flex;
   align-items: center;
   gap: var(--tg-s-2);
-  box-shadow: 0 8px 24px color-mix(in srgb, var(--tg-danger) 26%, transparent);
+  box-shadow: var(--tg-shadow-xs);
   transition:
     background 120ms ease,
     transform 120ms ease;
 }
 .btn-danger:hover:not(:disabled) {
   transform: translateY(-1px);
-  background: color-mix(in srgb, var(--tg-danger) 88%, var(--tg-bg-elev));
-  color: var(--tg-danger-fg);
+  background: color-mix(in srgb, var(--tg-danger) 12%, transparent);
+  color: var(--tg-danger);
+  border-color: var(--tg-danger);
 }
 .btn-danger:disabled {
   opacity: 0.5;

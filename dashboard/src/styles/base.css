@@ -112,7 +112,7 @@ main {
   top: -56px;
   z-index: var(--tg-z-skip);
   padding: var(--tg-s-2) var(--tg-s-4);
-  background: var(--tg-accent);
+  background: var(--tg-accent-emphasis);
   color: var(--tg-accent-fg);
   border-radius: var(--tg-r-md);
   font-size: var(--tg-fs-sm);
