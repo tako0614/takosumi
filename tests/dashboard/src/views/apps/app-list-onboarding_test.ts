@@ -131,6 +131,7 @@ describe("AppListView app launcher", () => {
     expect(appViewsCssSource).toContain(".av-tile-actions");
     expect(appViewsCssSource).toContain(".av-tile-manage");
     expect(appViewsCssSource).toContain(".av-tile-dot");
+    expect(appViewsCssSource).toContain(".av-tile-state");
     expect(appViewsCssSource).toContain(".av-tile-image");
     expect(appViewsCssSource).toContain(".av-tile-emoji");
     expect(appViewsCssSource).not.toContain(".av-service-grid");
@@ -139,7 +140,7 @@ describe("AppListView app launcher", () => {
 
   test("opens the surface URL when present, else the service screen", () => {
     expect(appListSource).toContain("function AppTileView");
-    expect(appListSource).toContain("when={surface().url}");
+    expect(appListSource).toContain("when={openUrl()}");
     expect(appListSource).toContain("appSurfacesFromOutputs");
     expect(appListSource).toContain('target="_blank"');
     expect(appListSource).toContain("props.openDetail(tile.inst)");
@@ -151,5 +152,32 @@ describe("AppListView app launcher", () => {
     expect(appListSource).toContain("av-tile-dot");
     expect(appListSource).toContain('t("apps.needsAttention")');
     expect(appListSource).toContain('class="sr-only"');
+  });
+
+  test("never-deployed installs do not link to their planned (dead) URL", () => {
+    // Only a service with a current StateVersion may render an external link;
+    // otherwise the tile is the button variant that opens the service screen.
+    expect(appListSource).toContain("deployedCapsuleIds");
+    expect(appListSource).toContain("const openUrl");
+    expect(appListSource).toMatch(
+      /props\.tile\.deployed \? surface\(\)\.url : undefined/,
+    );
+    expect(appListSource).not.toContain("when={surface().url}");
+    // The stuck/failed state is visible on the tile itself.
+    expect(appListSource).toContain('class="av-tile-state"');
+    expect(appListSource).toContain("when={!props.tile.deployed}");
+    expect(appListSource).toContain("capsuleStatusLabel");
+    expect(appListSource).toContain("effectiveCapsuleStatus(props.tile.inst)");
+  });
+
+  test("a failed supplemental full-list fetch is surfaced, not silent truncation", () => {
+    expect(appListSource).toContain("fullCapsules.error");
+    expect(appListSource).toContain("fullStateVersions.error");
+    expect(appListSource).toContain("fullInstallConfigs.error");
+    expect(appListSource).toContain("retryFullFetch");
+    expect(appListSource).toContain('t("apps.listIncomplete")');
+    expect(appListSource).toContain('t("common.retry")');
+    expect(en["apps.listIncomplete"]).toBeTruthy();
+    expect(ja["apps.listIncomplete"]).toBeTruthy();
   });
 });

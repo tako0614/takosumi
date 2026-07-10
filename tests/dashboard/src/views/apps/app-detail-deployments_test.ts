@@ -7,6 +7,8 @@
  */
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { en } from "../../../../../dashboard/src/i18n/en.ts";
+import { ja } from "../../../../../dashboard/src/i18n/ja.ts";
 
 const source = readFileSync(
   new URL(
@@ -62,11 +64,13 @@ describe("Installation detail deployment surface", () => {
     expect(source).not.toContain('t("app.deploys.backupCreated", { id:');
   });
 
-  test("keeps technical source details out of the default overview while showing deletion in settings and tabs", () => {
+  test("keeps technical source details out of the default overview; deletion lives on the 削除 tab only", () => {
     expect(source).toContain("function OverviewTab");
     expect(source).toContain("function SettingsTab");
-    expect(source).toContain('t("app.settings.removeTitle")');
-    expect(source).toContain('t("app.settings.removeCta")');
+    // ONE delete flow: no duplicate delete section at the bottom of settings —
+    // the tab strip and the header button both route to the danger tab.
+    expect(source).not.toContain('t("app.settings.removeTitle")');
+    expect(source).not.toContain('t("app.settings.removeCta")');
     expect(source).toContain(
       '{ href: `${base}/settings`, label: t("app.tab.settings") }',
     );
@@ -84,9 +88,24 @@ describe("Installation detail deployment surface", () => {
     expect(source).toMatch(
       /<summary>\{t\("app\.settings\.supportDetails"\)\}<\/summary>[\s\S]*<summary>\{t\("app\.source\.title"\)\}<\/summary>/,
     );
-    expect(source.indexOf('t("app.settings.removeTitle")')).toBeGreaterThan(
-      source.indexOf('t("app.settings.supportDetails")'),
+  });
+
+  test("the header 削除 button navigates to the danger tab; only the danger tab confirms", () => {
+    // Header: a link into the plan-first danger flow, not a duplicate modal.
+    expect(source).toContain(
+      "href={`/services/${encodeURIComponent(capsuleId())}/danger`}",
     );
+    expect(source).toContain(
+      'inst().status !== "destroyed" && tab() !== "danger"',
+    );
+    // Exactly one confirm entry point remains (the danger tab CTA).
+    expect(source.match(/void confirmDestroy\(\)/g)).toHaveLength(1);
+    // The destroy confirm names the service like every other destructive confirm.
+    expect(source).toContain(
+      't("app.danger.destroyBody", { name: serviceLabel() })',
+    );
+    expect(ja["app.danger.destroyBody"]).toContain("{name}");
+    expect(en["app.danger.destroyBody"]).toContain("{name}");
   });
 
   test("keeps provider binding editing behind advanced service settings", () => {
@@ -130,7 +149,7 @@ describe("Installation detail deployment surface", () => {
 
   test("sets a route-specific title instead of leaking the previous add-service title", () => {
     expect(source).toContain('<Page title={t("app.capsuleSub")}');
-    expect(source).toContain("setDocumentTitle(inst.name)");
+    expect(source).toContain("setDocumentTitle(displayName() ?? inst.name)");
   });
 
   test("reads the Deployment ledger through the session client fn", () => {
@@ -149,7 +168,7 @@ describe("Installation detail deployment surface", () => {
       /createResource\(\s*settingsWorkspaceId,\s*listProviderConnections,\s*\)/,
     );
     expect(source).toMatch(
-      /createResource\(\s*settingsInstallConfigId,\s*getInstallConfig,\s*\)/,
+      /createResource\(\s*installConfigId,\s*getInstallConfig,\s*\)/,
     );
   });
 
@@ -202,5 +221,60 @@ describe("Installation detail deployment surface", () => {
     expect(source).toContain('t("app.outputs.deletedSubtitle")');
     expect(source).toContain("openable={props.serviceOpenable}");
     expect(source).toContain("props.openable !== false");
+  });
+
+  test("公開リンク copy is one state machine: deleted / preparing / deployed are mutually exclusive", () => {
+    // Driven by the actual capsule status, not by openability: a preparing
+    // service must never read as deleted.
+    expect(source).toContain('destroyed={inst().status === "destroyed"}');
+    expect(source).toMatch(
+      /props\.destroyed\s*\?\s*t\("app\.outputs\.deletedSubtitle"\)/,
+    );
+    expect(source).not.toMatch(
+      /props\.serviceOpenable\s*\?\s*t\("app\.outputs\.subtitle"\)\s*:\s*t\("app\.outputs\.deletedSubtitle"\)/,
+    );
+    // Body: never deployed → "デプロイ後に表示されます。"; deployed or deleted
+    // with no link → "公開リンクがありません。".
+    expect(source).toMatch(/props\.hasDeployment \|\| props\.destroyed/);
+  });
+
+  test("a never-successfully-applied service shows the setup-incomplete guidance strip", () => {
+    expect(source).toContain('class="av-setup-incomplete"');
+    expect(source).toContain('t("app.setupIncomplete.body")');
+    expect(source).toContain('t("app.setupIncomplete.review")');
+    expect(source).toContain('t("app.setupIncomplete.delete")');
+    expect(source).toContain(
+      'inst().status !== "destroyed" && !currentStateVersionId()',
+    );
+    expect(source).toContain(
+      "href={`/services/${encodeURIComponent(capsuleId())}/deploys`}",
+    );
+    expect(ja["app.setupIncomplete.body"]).toBeTruthy();
+    expect(en["app.setupIncomplete.body"]).toBeTruthy();
+  });
+
+  test("the header leads with the store display name; instance name is a muted secondary", () => {
+    expect(source).toContain("capsuleDisplayName");
+    expect(source).toContain("{displayName() ?? inst().name}");
+    expect(source).toContain('class="av-title-instance"');
+    expect(source).toContain("displayName() !== inst().name");
+  });
+
+  test("listing-declared settings show localized labels with read-only keys; free-form rows stay advanced", () => {
+    // A store input's key renders as muted mono text, not an editable textbox,
+    // and the value field carries the localized store label.
+    expect(source).toContain('class="av-config-key"');
+    expect(source).toMatch(/when=\{!row\(\)\.storeField\}/);
+    expect(source).toContain(
+      'label={row().storeField ? row().label : t("app.config.value")}',
+    );
+    // Free-form key+value rows never surface in the primary list.
+    expect(source).toContain("row.storeField && (!row.advanced");
+    // The clear/remove button names its variable for screen readers.
+    expect(source).toContain('t("app.config.resetAria", { name: row().name })');
+    expect(source).toContain('t("app.config.removeAria"');
+    // 自動ログイン is projection-derived and not settable here — an unset value
+    // is omitted instead of rendering a dead 未設定 row.
+    expect(source).not.toContain('t("app.config.oidcOff")');
   });
 });

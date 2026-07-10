@@ -53,10 +53,12 @@ import {
   type AppSurface,
   appSurfacesFromOutputs,
   appSurfaceFromInstallConfigStore,
+  effectiveCapsuleStatus,
   isUrlString,
   isVisibleServiceCapsule,
   needsAttention,
 } from "../../lib/capsules-ui.ts";
+import { capsuleStatusLabel } from "../../lib/labels.ts";
 import { locale, t } from "../../i18n/index.ts";
 import { Button, Toast } from "../../components/ui/index.ts";
 import { createAction } from "../account/lib/action.tsx";
@@ -66,6 +68,13 @@ interface AppTile {
   readonly inst: Capsule;
   readonly surface: AppSurface;
   readonly key: string;
+  /**
+   * True only when the service has actually deployed (a current StateVersion
+   * exists). A never-deployed / half-failed install still gets a tile, but its
+   * planned URL from the install config must not render as a live link — it
+   * would 404. The tile falls back to opening the service screen instead.
+   */
+  readonly deployed: boolean;
 }
 
 export default function AppListView() {
@@ -186,15 +195,31 @@ function Inner() {
   const fullProjectionWorkspaceId = createMemo(() =>
     overview()?.nextCapsuleCursor ? workspaceId() : undefined,
   );
-  const [fullCapsules] = createResource(fullProjectionWorkspaceId, (id) =>
-    listCapsulesCached(id, { includeDestroyed: false }),
+  const [fullCapsules, { refetch: refetchFullCapsules }] = createResource(
+    fullProjectionWorkspaceId,
+    (id) => listCapsulesCached(id, { includeDestroyed: false }),
   );
-  const [fullStateVersions] = createResource(fullProjectionWorkspaceId, (id) =>
-    listCurrentStateVersionsCached(id, { includeDestroyed: false }),
+  const [fullStateVersions, { refetch: refetchFullStateVersions }] =
+    createResource(fullProjectionWorkspaceId, (id) =>
+      listCurrentStateVersionsCached(id, { includeDestroyed: false }),
+    );
+  const [fullInstallConfigs, { refetch: refetchFullInstallConfigs }] =
+    createResource(fullProjectionWorkspaceId, (id) =>
+      listInstallConfigsCached(id),
+    );
+  // The supplemental full-list fetches can fail independently of the overview;
+  // without surfacing it the launcher silently truncates to the first page.
+  const fullFetchError = createMemo(
+    () =>
+      (fullCapsules.error ??
+        fullStateVersions.error ??
+        fullInstallConfigs.error) as ControlApiError | undefined,
   );
-  const [fullInstallConfigs] = createResource(fullProjectionWorkspaceId, (id) =>
-    listInstallConfigsCached(id),
-  );
+  const retryFullFetch = () => {
+    if (fullCapsules.error) void refetchFullCapsules();
+    if (fullStateVersions.error) void refetchFullStateVersions();
+    if (fullInstallConfigs.error) void refetchFullInstallConfigs();
+  };
   const capsules = createMemo(() =>
     mergeById(overview()?.capsules ?? [], fullCapsules() ?? []),
   );
@@ -207,6 +232,15 @@ function Inner() {
       fullStateVersions() ?? [],
     ),
   );
+  // Services that have actually deployed at least once (a current StateVersion
+  // exists). Everything else is still installing / failed before first apply.
+  const deployedCapsuleIds = createMemo(() => {
+    const ids = new Set<string>();
+    for (const deployment of currentStateVersions() ?? []) {
+      ids.add(deployment.capsuleId ?? deployment.installationId);
+    }
+    return ids;
+  });
 
   // Map each Capsule to a type-specific icon via its install config's
   // store kind (site / storage / worker) — the fallback when a surface
@@ -259,6 +293,7 @@ function Inner() {
     const tiles: AppTile[] = [];
     for (const inst of visibleCapsules()) {
       const surfaces = map.get(inst.id);
+      const deployed = deployedCapsuleIds().has(inst.id);
       if (!surfaces) {
         // Every installed service gets a tile — one concept, not アプリ vs
         // サービス. Without a declared surface the tile has no launch URL, so
@@ -268,11 +303,12 @@ function Inner() {
           inst,
           surface: fallback ?? { name: inst.name },
           key: `${inst.id}:store`,
+          deployed,
         });
         continue;
       }
       surfaces.forEach((surface, i) =>
-        tiles.push({ inst, surface, key: `${inst.id}:${i}` }),
+        tiles.push({ inst, surface, key: `${inst.id}:${i}`, deployed }),
       );
     }
     return tiles.sort(compareAppTiles);
@@ -325,6 +361,19 @@ function Inner() {
             </Toast>
           </Match>
           <Match when={overview()}>
+            <Show when={fullFetchError()}>
+              <Toast tone="error">
+                {t("apps.listIncomplete")}
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  type="button"
+                  onClick={retryFullFetch}
+                >
+                  {t("common.retry")}
+                </Button>
+              </Toast>
+            </Show>
             <Show
               when={visibleCapsules().length > 0}
               fallback={<WorkspaceStartPanel />}
@@ -458,9 +507,11 @@ function AppLauncher(props: {
 /**
  * One surface tile. The face is the declared image, else a declared emoji icon,
  * else the app's initials on a kind-tinted monogram tile — so undeclared apps
- * stay distinct rather than reading as identical boxes. A live surface URL
- * renders an anchor (new tab); otherwise a button opens the service screen.
- * Needs-attention shows as a corner dot (+ screen-reader text).
+ * stay distinct rather than reading as identical boxes. A live surface URL on a
+ * DEPLOYED service renders an anchor (new tab); otherwise a button opens the
+ * service screen — a never-deployed install's planned URL is a dead link.
+ * Needs-attention shows as a corner dot (+ screen-reader text); a
+ * never-deployed service shows its status (準備中 / エラー) under the name.
  */
 function AppTileView(props: {
   readonly tile: AppTile;
@@ -470,6 +521,7 @@ function AppTileView(props: {
   const surface = () => props.tile.surface;
   const attention = () => needsAttention(props.tile.inst);
   const name = () => surface().name ?? props.tile.inst.name;
+  const openUrl = () => (props.tile.deployed ? surface().url : undefined);
   const imageSrc = () => {
     if (surface().image) return surface().image;
     const icon = surface().icon;
@@ -540,6 +592,11 @@ function AppTileView(props: {
         </Show>
       </span>
       <span class="av-tile-name">{name()}</span>
+      <Show when={!props.tile.deployed}>
+        <span class="av-tile-state">
+          {capsuleStatusLabel(effectiveCapsuleStatus(props.tile.inst))}
+        </span>
+      </Show>
       <Show when={attention()}>
         <span class="sr-only">{t("apps.needsAttention")}</span>
       </Show>
@@ -552,7 +609,7 @@ function AppTileView(props: {
   return (
     <span class="av-tile-wrap">
       <Show
-        when={surface().url}
+        when={openUrl()}
         fallback={
           <button type="button" class="av-tile" onClick={props.onOpenDetail}>
             {body()}

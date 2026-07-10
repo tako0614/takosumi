@@ -64,8 +64,9 @@ function Inner() {
   const fullListWorkspaceId = createMemo(() =>
     overview()?.nextCapsuleCursor ? workspaceId() : undefined,
   );
-  const [fullCapsules] = createResource(fullListWorkspaceId, (id) =>
-    listCapsulesCached(id, { includeDestroyed: false }),
+  const [fullCapsules, { refetch: refetchFullCapsules }] = createResource(
+    fullListWorkspaceId,
+    (id) => listCapsulesCached(id, { includeDestroyed: false }),
   );
   const capsules = createMemo(() => {
     const base = overview()?.capsules ?? [];
@@ -131,6 +132,21 @@ function Inner() {
             </Toast>
           </Match>
           <Match when={overview()}>
+            {/* The supplemental full-list fetch failing must not silently
+                truncate the list to the overview's first page. */}
+            <Show when={fullCapsules.error}>
+              <Toast tone="error">
+                {t("services.listIncomplete")}
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  type="button"
+                  onClick={() => void refetchFullCapsules()}
+                >
+                  {t("common.retry")}
+                </Button>
+              </Toast>
+            </Show>
             <Show when={visible().length > 0} fallback={<ServicesEmpty />}>
               <ul class="av-service-rows">
                 <For each={visible()}>
