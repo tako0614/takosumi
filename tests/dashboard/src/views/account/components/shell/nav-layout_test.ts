@@ -122,6 +122,31 @@ describe("dashboard shell navigation layout", () => {
     );
   });
 
+  test("Workspace backups/shares are reachable via the manage catalog (not the settings tab strip)", () => {
+    // These tabs are deliberately kept out of the normal settings tab strip
+    // (see space-settings-user-noise_test) but must still be reachable — the
+    // manage catalog is their home.
+    for (const href of [
+      '"/advanced/workspace/backups"',
+      '"/advanced/workspace/shares"',
+    ]) {
+      expect(navSource).toContain(`href: ${href}`);
+    }
+  });
+
+  test("Cloud-only manage entries are runtime-gated off Cloud", () => {
+    // The /cloud entry renders an "unavailable" dead-end on self-host/Takos, so
+    // the manage catalog gates it behind the Cloud runtime.
+    const cloudEntry = navSource.slice(
+      navSource.indexOf('href: "/cloud"'),
+      navSource.indexOf('href: "/cloud"') + 200,
+    );
+    expect(cloudEntry).toContain("cloudOnly: true");
+    const manageSource = read("views/settings/ManageView.tsx");
+    expect(manageSource).toContain("isTakosumiCloudRuntime");
+    expect(manageSource).toContain("dest.cloudOnly");
+  });
+
   test("the store is a first-class tab (no /store → /new bounce)", () => {
     expect(indexSource).toContain('<Route path="/store" component={StoreView} />');
     expect(indexSource).not.toContain(
