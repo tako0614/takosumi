@@ -129,7 +129,7 @@ export const ja = {
   "auth.signInCloud": "Takosumi Cloud",
   "auth.signInSubCloud": "Google アカウントでサインインします。",
   "auth.signInCloudPreview":
-    "GAまでは招待済みGoogleアカウントのみ利用できます。",
+    "現在は招待されたGoogleアカウントのみ利用できます。",
   "auth.continueWith": "{provider} で続ける",
   "auth.notConfigured": "現在利用できません",
   "auth.providerChecking": "利用可否を確認中です",
@@ -659,7 +659,7 @@ export const ja = {
   "new.advanced.title": "詳細設定",
   "new.env.title": "環境変数",
   "new.env.body":
-    "アプリが公開してよい実行時の環境変数を求める場合だけ使います。秘密値は接続済みアカウントや Secret から渡してください。",
+    "アプリが公開してよい実行時の環境変数を求める場合だけ使います。秘密の値は接続済みアカウントから渡してください。",
   "new.env.name": "環境変数名",
   "new.env.value": "値",
   "new.env.add": "環境変数を追加",
@@ -667,7 +667,7 @@ export const ja = {
   "new.env.errorNameRequired":
     "環境変数名を入力するか、空の行を削除してください。",
   "new.env.errorUnsafeName":
-    "「{name}」は平文の環境変数として渡せません。秘密値は接続済みアカウントや Secret から渡してください。",
+    "「{name}」は平文の環境変数として渡せません。秘密の値は接続済みアカウントから渡してください。",
   "new.env.errorUnsafeValue":
     "「{name}」の値が長すぎるか、使えない文字を含んでいます。",
   "new.env.errorDuplicate": "環境変数「{name}」が重複しています。",
