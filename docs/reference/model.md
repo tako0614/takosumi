@@ -58,6 +58,10 @@ reviewable update plan. It still does not silently apply changes: every
 infrastructure update goes through Plan / Apply as a Run unless an explicit
 operator policy adds a separate auto-apply gate.
 
+手動更新は `manual_plan` intent の SourceSyncRun を使い、その Run が生成した
+exact SourceSnapshot を plan に固定します。この intent の sync は Capsule を
+`stale` にできますが、同時に別の auto-update plan/apply を開始しません。
+
 Provider resolution has two OSS outcomes:
 
 ```text

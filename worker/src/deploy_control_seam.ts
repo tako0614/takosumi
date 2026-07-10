@@ -45,11 +45,15 @@ function deployControlServiceOptions(env: CloudflareWorkerEnv): {
 export function createRunOwnerDeployControlService(
   env: CloudflareWorkerEnv,
 ): Promise<CreatedTakosumiService> {
-  return createWorkerServiceApp(env, "takosumi-api", {
-    ...deployControlServiceOptions(env),
-    enqueueRun: async () => {},
-    enqueueSourceSync: async () => {},
-  });
+  // Source sync can create an auto-update Plan, and a completed auto-update
+  // Plan can create an Apply. Those are distinct ledger Runs and must be
+  // scheduled through their own RunOwner objects. The standard worker-service
+  // enqueuer wiring does that; no-op enqueuers strand follow-up Runs as queued.
+  return createWorkerServiceApp(
+    env,
+    "takosumi-api",
+    deployControlServiceOptions(env),
+  );
 }
 
 /**

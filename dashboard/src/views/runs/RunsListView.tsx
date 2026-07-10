@@ -321,11 +321,6 @@ function rowsFromRuns(
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
-function rowAriaTitle(row: RunHistoryRow): string {
-  const title = titleForRow(row);
-  return row.serviceName ? `${title} — ${row.serviceName}` : title;
-}
-
 function titleForRow(row: RunHistoryRow): string {
   if (row.status === "failed") {
     return t("runList.failed", { operation: operationLabel(row.operation) });

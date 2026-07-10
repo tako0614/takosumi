@@ -978,7 +978,12 @@ export async function createTakosumiService(
       ? {
           readCapsuleSourceFiles: (snapshot, fileOptions) =>
             options.opentofuRunner!.readCapsuleSourceFiles!({
-              runId: `compatibility_${snapshot.id}`,
+              // Separate compatibility requests may inspect the same immutable
+              // snapshot concurrently from different service isolates. The
+              // ledger Run id keeps their runner workspaces independent.
+              runId:
+                fileOptions?.runId ??
+                `source_files_${crypto.randomUUID().replaceAll("-", "")}`,
               sourceSnapshot: snapshot,
               ...(fileOptions?.modulePath
                 ? { modulePath: fileOptions.modulePath }

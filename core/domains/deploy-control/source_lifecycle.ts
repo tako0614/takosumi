@@ -375,10 +375,12 @@ export class SourceLifecycleService {
       });
       // Auto-update hook: the controller decides (autoUpdate opt-in +
       // one-attempt-per-snapshot backoff) and enqueues the update plan.
-      await this.#onCapsuleStaleForNewSnapshot?.({
-        capsule,
-        snapshot: input.snapshot,
-      });
+      if (input.running.intent !== "manual_plan") {
+        await this.#onCapsuleStaleForNewSnapshot?.({
+          capsule,
+          snapshot: input.snapshot,
+        });
+      }
     }
   }
 

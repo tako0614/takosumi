@@ -94,6 +94,7 @@ import type {
   Source,
   SourceResponse,
   SourceSnapshot,
+  SourceSyncIntent,
   SourceSyncPhaseTiming,
   SourceSyncRun,
 } from "takosumi-contract/sources";
@@ -1640,7 +1641,10 @@ export class OpenTofuDeploymentController {
 
   async createSourceSync(
     sourceId: string,
-    options: { readonly dedupe?: boolean } = {},
+    options: {
+      readonly dedupe?: boolean;
+      readonly intent?: SourceSyncIntent;
+    } = {},
   ): Promise<CreateSourceSyncResponse> {
     return await this.#sources.createSourceSync(sourceId, options);
   }

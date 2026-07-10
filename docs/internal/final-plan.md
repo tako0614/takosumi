@@ -226,6 +226,13 @@ Store nodes are switchable. Changing the selected store changes listing
 discovery and presentation metadata only; it must not change how Takosumi
 resolves refs, creates SourceSnapshots, or runs OpenTofu.
 
+An explicit Capsule update resolves the Git ref through a SourceSyncRun, waits
+for the exact immutable SourceSnapshot produced by that Run, checks that
+snapshot, and pins it into the OpenTofu plan. A manual review sync must not race
+the user with a second auto-update plan/apply. Scheduled/webhook observation may
+evaluate an explicitly enabled Capsule auto-update policy; only a clean,
+non-destructive plan can continue automatically.
+
 A repository may publish `.well-known/tcs.json` as an optional repo-owned
 presentation document for Store indexers. It is not a Takosumi manifest and is
 not required for direct Git installs. It can contain display text, icon URL,

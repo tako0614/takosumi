@@ -15,3 +15,5 @@ node_modules/
 .env.smoke
 tmp/
 app-docs/.vitepress/dist/
+.claude/worktrees/
+.codex/worktrees/
