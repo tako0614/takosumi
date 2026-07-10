@@ -107,6 +107,10 @@ export { CoordinationObject, OpenTofuRunOwnerObject, OpenTofuRunnerObject };
 // object on the platform worker, so the key type is their common object shape.
 type PlatformEnv = CloudflareWorkerEnv | DeployControlEnv;
 
+export interface PlatformExecutionContext {
+  waitUntil(promise: Promise<unknown>): void;
+}
+
 const seams = new WeakMap<
   object,
   ReturnType<typeof createInProcessDeployControlSeam>
@@ -148,7 +152,11 @@ const accountsWorker = createCloudflareWorker({
 const runQueueConsumer = createDeployControlQueueConsumer();
 
 export default {
-  async fetch(request: Request, env: CloudflareWorkerEnv): Promise<Response> {
+  async fetch(
+    request: Request,
+    env: CloudflareWorkerEnv,
+    context?: PlatformExecutionContext,
+  ): Promise<Response> {
     const metricsResponse = await handlePlatformMetricsRequest(request, env);
     if (metricsResponse) return metricsResponse;
     const url = new URL(request.url);
@@ -234,7 +242,10 @@ export default {
       await accountsWorker.fetch(request, env),
     );
     if (isOidcMetricPath(url.pathname)) {
-      await recordPlatformOidcMetric(request, url, env, accountsResponse);
+      await schedulePlatformSideEffect(
+        recordPlatformOidcMetric(request, url, env, accountsResponse),
+        context,
+      );
     }
     return accountsResponse;
   },
@@ -258,6 +269,17 @@ export default {
     }
   },
 };
+
+export async function schedulePlatformSideEffect(
+  task: Promise<unknown>,
+  context?: PlatformExecutionContext,
+): Promise<void> {
+  if (context) {
+    context.waitUntil(task);
+    return;
+  }
+  await task;
+}
 
 function platformDiscoveryOptions(
   origin: string,
@@ -3178,7 +3200,12 @@ async function verifyPlatformCloudExtensionManagedProviderRunToken(
   const verified = await verifyManagedProviderRunToken(token, {
     secret,
     ...(route
-      ? { expectedProviderBaseUrl: platformCloudExtensionRouteBaseUrl(request, route) }
+      ? {
+          expectedProviderBaseUrl: platformCloudExtensionRouteBaseUrl(
+            request,
+            route,
+          ),
+        }
       : {}),
   });
   if (!verified.ok) return { authenticated: false };
