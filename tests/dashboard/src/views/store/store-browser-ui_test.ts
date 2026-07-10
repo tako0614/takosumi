@@ -81,4 +81,15 @@ describe("StoreBrowser install UI", () => {
     expect(storeViewSource).not.toContain("onInstall=");
     expect(storeViewSource).toContain("<StoreBrowser");
   });
+
+  test("keeps install readiness out of the discovery feed", () => {
+    expect(storeViewSource).toContain("repository-owned metadata");
+    expect(storeViewSource).toContain("nothing about build or deploy duration");
+    expect(storeViewSource).not.toContain("store-owned");
+    expect(storeViewSource).not.toContain("deriveInstallReadiness");
+    expect(storeViewSource).not.toContain("listingBadge");
+    expect(storeBrowserSource).not.toContain("listingBadge");
+    expect(storeBrowserSource).not.toContain("すぐに使える");
+    expect(storeBrowserCss).not.toContain("tcs-ready-badge");
+  });
 });

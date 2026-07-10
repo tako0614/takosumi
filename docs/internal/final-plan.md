@@ -229,10 +229,12 @@ resolves refs, creates SourceSnapshots, or runs OpenTofu.
 A repository may publish `.well-known/tcs.json` as an optional repo-owned
 presentation document for Store indexers. It is not a Takosumi manifest and is
 not required for direct Git installs. It can contain display text, icon URL,
-`modulePath`, setup inputs, `installExperience`, and output allowlist hints. It
-must not contain `git`, `source`, `ref`, `commit`, `resolvedCommit`, or
-`installConfigId`; those belong to the Store listing service and the Git
-Source / Run flow. Do not use source comments as the metadata schema.
+`modulePath`, setup inputs, and `installExperience`. It must not contain `git`,
+`source`, `ref`, `commit`, `resolvedCommit`, `installConfigId`, or output
+allowlists; those belong to the Store listing service, the Git Source / Run
+flow, and service-side output policy respectively. Public values come from the
+module's typed OpenTofu outputs after that policy is applied. Do not use source
+comments as the metadata schema.
 
 ```json
 {
