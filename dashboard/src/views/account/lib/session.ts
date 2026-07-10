@@ -206,10 +206,16 @@ export function clearSession(): void {
   setCurrentWorkspaceId("");
   notify(null);
   if (typeof fetch !== "undefined") {
-    fetch(SESSION_ME_PATH, {
-      method: "DELETE",
-      credentials: "include",
-    }).catch(() => undefined);
+    // keepalive: the caller navigates to /sign-in right after this, which
+    // would otherwise abort the revocation and leave the cookie valid
+    // server-side while the user believes they signed out. Retry once.
+    const revoke = () =>
+      fetch(SESSION_ME_PATH, {
+        method: "DELETE",
+        credentials: "include",
+        keepalive: true,
+      });
+    revoke().catch(() => revoke().catch(() => undefined));
   }
 }
 
