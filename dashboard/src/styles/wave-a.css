@@ -494,6 +494,9 @@
   border: 1px solid var(--tg-line);
   border-radius: var(--tg-r-sm);
   background: var(--tg-bg-elev);
+  /* Long ids (run/source hashes) must wrap, not clip. */
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 .wa-meta-chip code {
   color: var(--tg-fg);

@@ -501,6 +501,7 @@ function Inner() {
                       source={source()}
                       installConfig={installConfig()}
                       installConfigLoading={installConfig.loading}
+                      sourceLoading={sources.loading}
                       providerConnections={profile()?.bindings}
                       availableProviderConnections={providerConnections() ?? []}
                       capsuleId={capsuleId()}
@@ -1374,6 +1375,7 @@ function SettingsTab(props: {
     | undefined;
   readonly installConfig: InstallConfig | undefined;
   readonly installConfigLoading: boolean;
+  readonly sourceLoading: boolean;
   readonly providerConnections: CapsuleProviderConnectionBindings | undefined;
   readonly availableProviderConnections: readonly ProviderConnection[];
   readonly capsuleId: string;
@@ -1759,7 +1761,13 @@ function SettingsTab(props: {
             <summary>{t("app.source.title")}</summary>
             <Show
               when={props.source}
-              fallback={<p class="muted">{t("app.source.loading")}</p>}
+              fallback={
+                <p class="muted">
+                  {props.sourceLoading
+                    ? t("app.source.loading")
+                    : t("app.source.unavailable")}
+                </p>
+              }
             >
               {(src) => (
                 <KVList
@@ -1839,6 +1847,9 @@ function VariableRows(props: {
                   : row().helper
               }
               required={row().required}
+              // A boolean row renders a self-labeling Checkbox (its own
+              // <label>); wrap it in a group, not another <label>.
+              as={row().type === "boolean" ? "group" : "label"}
             >
               <ConfigVariableInput row={row()} onChange={props.onChange} />
             </FormField>
