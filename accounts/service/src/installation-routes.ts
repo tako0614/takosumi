@@ -14,7 +14,10 @@ import {
   serializeCapsuleEvent,
 } from "./installation-helpers.ts";
 import { errorJson, json } from "./http-helpers.ts";
-import { requireAccountsBearer } from "./account-session.ts";
+import {
+  bearerWorkspaceAllows,
+  requireAccountsBearer,
+} from "./account-session.ts";
 import type { DeployControlFacadeOptions } from "./deploy-control-facade.ts";
 import { saveProjectionStatusChange } from "./control/projection.ts";
 import { activatedHttpDomainProjectionFromCoreOutputs } from "./installation-lifecycle-shared.ts";
@@ -156,6 +159,9 @@ export async function handleListAppCapsules(input: {
   }
   const space = await input.store.findWorkspace(workspaceId);
   if (!space) return errorJson("space_not_found", "space not found", 404);
+  if (!bearerWorkspaceAllows(bearer.auth, workspaceId)) {
+    return errorJson("space_not_found", "space not found", 404);
+  }
   if (
     !(await subjectCanAccessAccount(
       input.store,
@@ -250,6 +256,9 @@ export async function handleGetAppCapsule(input: {
   const installation = await input.store.findAppCapsule(input.capsuleId);
   if (!installation)
     return errorJson("installation_not_found", "installation not found", 404);
+  if (!bearerWorkspaceAllows(bearer.auth, installation.workspaceId)) {
+    return errorJson("installation_not_found", "installation not found", 404);
+  }
   if (
     !(await subjectCanAccessCapsule(
       input.store,
@@ -306,6 +315,9 @@ export async function handleListCapsuleServices(input: {
   if (!bearer.ok) return bearer.response;
   const installation = await input.store.findAppCapsule(input.capsuleId);
   if (!installation) {
+    return errorJson("installation_not_found", "installation not found", 404);
+  }
+  if (!bearerWorkspaceAllows(bearer.auth, installation.workspaceId)) {
     return errorJson("installation_not_found", "installation not found", 404);
   }
   if (
@@ -504,6 +516,9 @@ export async function handleListCapsuleEvents(input: {
   const installation = await input.store.findAppCapsule(input.capsuleId);
   if (!installation)
     return errorJson("installation_not_found", "installation not found", 404);
+  if (!bearerWorkspaceAllows(bearer.auth, installation.workspaceId)) {
+    return errorJson("installation_not_found", "installation not found", 404);
+  }
   if (
     !(await subjectCanAccessAccount(
       input.store,

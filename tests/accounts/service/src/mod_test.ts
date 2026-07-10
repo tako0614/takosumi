@@ -5437,6 +5437,65 @@ test("accounts handler requires account-session ownership for installation reads
   expect(ownerList.status).toEqual(200);
   expect((await ownerList.json()).installations.length).toEqual(1);
 
+  store.saveAccessToken("takat_capsule_read", {
+    clientId: "takos-runtime",
+    subject: "pairwise-takos-subject",
+    takosumiSubject: "tsub_tenant_owner",
+    capsuleId: "inst_tenant_read",
+    appId: "takos",
+    workspaceId: "space_tenant_read",
+    role: "client",
+    scope: "openid capsules:read",
+    expiresAt: Date.now() + 60_000,
+  });
+  const delegatedList = await handler(
+    new Request(
+      "https://accounts.example.test/v1/capsule-projections?space_id=space_tenant_read",
+      { headers: { authorization: "Bearer takat_capsule_read" } },
+    ),
+  );
+  expect(delegatedList.status).toEqual(200);
+  expect((await delegatedList.json()).installations.length).toEqual(1);
+
+  seedOwnedWorkspace(
+    store,
+    "tsub_tenant_owner",
+    "acct_tenant_other_workspace",
+    "space_other",
+  );
+  const delegatedCrossWorkspace = await handler(
+    new Request(
+      "https://accounts.example.test/v1/capsule-projections?space_id=space_other",
+      { headers: { authorization: "Bearer takat_capsule_read" } },
+    ),
+  );
+  expect(delegatedCrossWorkspace.status).toEqual(404);
+  expect((await delegatedCrossWorkspace.json()).error.code).toEqual(
+    "space_not_found",
+  );
+
+  store.saveAccessToken("takat_profile_only", {
+    clientId: "takos-runtime",
+    subject: "pairwise-takos-subject",
+    takosumiSubject: "tsub_tenant_owner",
+    capsuleId: "inst_tenant_read",
+    appId: "takos",
+    workspaceId: "space_tenant_read",
+    role: "client",
+    scope: "openid profile",
+    expiresAt: Date.now() + 60_000,
+  });
+  const insufficientScope = await handler(
+    new Request(
+      "https://accounts.example.test/v1/capsule-projections?space_id=space_tenant_read",
+      { headers: { authorization: "Bearer takat_profile_only" } },
+    ),
+  );
+  expect(insufficientScope.status).toEqual(403);
+  expect((await insufficientScope.json()).error.code).toEqual(
+    "insufficient_scope",
+  );
+
   const crossList = await handler(
     new Request(
       "https://accounts.example.test/v1/capsule-projections?space_id=space_tenant_read",
@@ -5507,6 +5566,41 @@ test("raw accounts handler requires account bearer for installation writes", asy
   );
   expect(createResponse.status).toEqual(503);
   expect((await createResponse.json()).error.code).toEqual(
+    "deploy_control_required",
+  );
+
+  seedOwnedWorkspace(
+    store,
+    "tsub_auth_owner",
+    "acct_auth_write",
+    "space_auth_write",
+  );
+  store.saveAccessToken("takat_capsule_write", {
+    clientId: "takos-runtime",
+    subject: "pairwise-auth-owner",
+    takosumiSubject: "tsub_auth_owner",
+    capsuleId: "inst_parent_takos",
+    appId: "takos",
+    workspaceId: "space_auth_write",
+    role: "client",
+    scope: "openid capsules:read capsules:write",
+    expiresAt: now + 60_000,
+  });
+  const delegatedCreateBody = { ...createBody } as Record<string, unknown>;
+  delete delegatedCreateBody.accountId;
+  delete delegatedCreateBody.createdBySubject;
+  const delegatedCreate = await handler(
+    new Request("https://accounts.example.test/v1/capsule-projections", {
+      method: "POST",
+      headers: {
+        authorization: "Bearer takat_capsule_write",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(delegatedCreateBody),
+    }),
+  );
+  expect(delegatedCreate.status).toEqual(503);
+  expect((await delegatedCreate.json()).error.code).toEqual(
     "deploy_control_required",
   );
 

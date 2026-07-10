@@ -230,7 +230,8 @@ initial_secret projection:
 oidc_client projection:
   optional OIDC client variable mapping. Takosumi Accounts can mint client
   metadata into the mapped variables without the app defining Takosumi-specific
-  manifest files.
+  manifest files. It may declare OAuth scopes; `openid` is required, scopes are
+  de-duplicated non-empty tokens, and secret-bearing material is not projected.
 
 artifact projection:
   optional artifact URL / SHA-256 variable mapping. The values stay ordinary

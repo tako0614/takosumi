@@ -1149,6 +1149,8 @@ export function createAccountsHandler(
           bindingMaterializer: options.bindingMaterializer,
           sharedCellRuntime: options.sharedCellRuntime,
           authenticatedSubject: createAccess.auth.subject,
+          authorizedAccountId: createAccess.accountId,
+          authorizedWorkspaceId: createAccess.workspaceId,
         });
       }
       if (request.method === "GET") {

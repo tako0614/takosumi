@@ -302,6 +302,13 @@ POST /v1/identity/federation/kubernetes
 Operator / Cloud は Enterprise SSO、SCIM、商用 audit export などを追加できますが、
 workload identity の core contract は標準 Takosumi 側にあります。
 
+Capsule-projected public OIDC client は `installExperience.oidc_client.scopes`
+で必要なscopeを宣言できます。`openid` は必須です。Accountsが発行する
+`capsules:read` / `capsules:write` access token は単一Workspaceに束縛され、
+Capsule projection APIはscopeとWorkspaceを両方検証します。`offline_access` を
+許可したclientはrefresh tokenを受け取れますが、token materialはconsumer側の
+secret storeに暗号化保存し、OpenTofu stateやOutputに保存しません。
+
 ## Compatibility API
 
 Compatibility API は標準 protocol / API の facade であり、独立した
