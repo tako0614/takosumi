@@ -397,10 +397,33 @@ async function cachedAccountsHandler(
   const cache = identityOnly ? identityHandlers : handlers;
   let handler = cache.get(env);
   if (!handler) {
-    handler = buildAccountsHandler(env, options, identityOnly);
+    handler = observeAccountsHandlerInitialization(
+      buildAccountsHandler(env, options, identityOnly),
+      identityOnly ? "identity" : "control",
+    );
     cache.set(env, handler);
   }
   return await handler;
+}
+
+async function observeAccountsHandlerInitialization(
+  handler: Promise<AccountsHandler>,
+  mode: "identity" | "control",
+): Promise<AccountsHandler> {
+  const timer = setTimeout(() => {
+    console.warn(
+      JSON.stringify({
+        event: "accounts_handler_initialization_slow",
+        mode,
+        thresholdMs: 2_000,
+      }),
+    );
+  }, 2_000);
+  try {
+    return await handler;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function usesIdentityOnlyAccountsHandler(pathname: string): boolean {
