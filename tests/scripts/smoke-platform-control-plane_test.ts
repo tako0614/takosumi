@@ -8,7 +8,23 @@ import {
   isSelectableGenericCapsuleInstallConfig,
   resolveOptions,
   shouldMarkPendingSmokeInstallationError,
+  smokeSourceCompatibilityCheckBody,
 } from "../../scripts/smoke-platform-control-plane.ts";
+
+test("platform smoke binds compatibility checks to the current Capsule", () => {
+  const body = smokeSourceCompatibilityCheckBody({
+    sourceSnapshotId: "snap_1",
+    capsuleId: "cap_1",
+    modulePath: "deploy/opentofu",
+  });
+
+  expect(body).toEqual({
+    sourceSnapshotId: "snap_1",
+    capsuleId: "cap_1",
+    modulePath: "deploy/opentofu",
+  });
+  expect(body).not.toHaveProperty("installationId");
+});
 
 test("platform control-plane smoke dry-run is redacted and complete", async () => {
   const options = await resolveOptions(
