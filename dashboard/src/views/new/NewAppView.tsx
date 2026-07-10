@@ -1911,6 +1911,26 @@ function Inner() {
     if (!sourceGitUrl()) return;
     if (!selectedInstallConfigId()) return;
     autoInstallAttempted = true;
+    // Strip `auto=1` from THIS history entry before firing. Otherwise, after
+    // the install navigates to the run, a browser Back to /new remounts a fresh
+    // component whose per-instance flag is reset and re-fires the whole install
+    // (a duplicate Source + sync). A fresh store [追加] pushes a new entry with
+    // auto=1, so legitimate re-installs are unaffected.
+    if (typeof window !== "undefined") {
+      try {
+        const url = new URL(window.location.href);
+        if (url.searchParams.has("auto")) {
+          url.searchParams.delete("auto");
+          window.history.replaceState(
+            window.history.state,
+            "",
+            url.pathname + url.search + url.hash,
+          );
+        }
+      } catch {
+        // history/URL unavailable — the per-instance flag still guards this mount.
+      }
+    }
     void submitInstall();
   });
   const findExistingCapsule = async (
