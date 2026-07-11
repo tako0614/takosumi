@@ -90,10 +90,11 @@ const GRANT_SPECS: readonly GrantSpec[] = [
     signingKeyOutput: "service_grant_signing_key",
     audience: "source.git.smart_http",
     evidenceProvider: "source.git.smart_http",
-    // The consumer's repos live under its own installation id namespace.
-    prefix: (_ws, inst) => inst,
-    // Read-only clone/fetch for P1 (push is deferred).
-    verbs: () => ["r"],
+    // Git repositories are Workspace assets. Consumers receive a token scoped
+    // to the Workspace namespace, with read/write verbs derived explicitly
+    // from the requested repos:* scopes.
+    prefix: (ws) => ws,
+    verbs: (binding) => gitVerbsFromScopes(binding.grantRequest.scopes),
     env: (grant) => ({
       TF_VAR_git_access_token: grant.token,
       TF_VAR_git_repo_prefix: grant.prefix,
@@ -137,8 +138,9 @@ export class ServiceGrantBroker {
 
   /**
    * Returns the merged `TF_VAR_*` env for every scoped-token capability this
-   * consumer run consumes, or `undefined` when it consumes none / nothing
-   * resolves. Never throws (fail-open).
+   * consumer run consumes, or `undefined` when the run declares no supported
+   * binding. A declared binding fails closed when its producer or signing
+   * authority cannot be resolved.
    */
   async mintServiceGrantEnv(
     planRun: PlanRun,
@@ -369,6 +371,24 @@ function serviceVerbsFromScopes(
     verbs.add("r");
     verbs.add("l");
   }
+  return [...verbs];
+}
+
+function gitVerbsFromScopes(
+  scopes: readonly string[],
+): readonly ServiceCredentialVerb[] {
+  const verbs = new Set<ServiceCredentialVerb>();
+  for (const scope of scopes) {
+    if (scope === "repos:read") {
+      verbs.add("r");
+    } else if (scope === "repos:write") {
+      // Push clients also need upload-pack for clone/fetch and negotiation.
+      verbs.add("r");
+      verbs.add("w");
+    }
+  }
+  // A consumer that omits scopes receives the least-privileged useful grant.
+  if (verbs.size === 0) verbs.add("r");
   return [...verbs];
 }
 
