@@ -5261,6 +5261,23 @@ existing rows classified from the Workspace handle and attributed to ownerUserId
         .run();
     },
   },
+  {
+    version: 24,
+    name: "d1_opentofu_public_host_legacy_grandfather",
+    checksumSource: `
+pre-owner-slot public host reservations are grandfathered as scoped
+only reservations created after this migration can consume vanity slots
+`,
+    async apply(db) {
+      await db
+        .prepare(
+          `update public_host_reservations
+           set allocation_kind = 'scoped'
+           where allocation_kind != 'scoped'`,
+        )
+        .run();
+    },
+  },
 ] as const satisfies readonly D1OpenTofuSchemaMigration[];
 
 /**
