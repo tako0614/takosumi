@@ -154,6 +154,86 @@ test("output allowlist projection accepts app_deployment service projection with
   ]);
 });
 
+test("output allowlist projection accepts declarative secret references without publishing values", () => {
+  const value = {
+    name: "takos-git",
+    version: "0.3.0",
+    compute: { web: { kind: "worker" } },
+    secrets: {
+      published_mcp_auth_token: {
+        type: "secret",
+        bind: "PUBLISHED_MCP_AUTH_TOKEN",
+        to: ["web"],
+        generate: true,
+      },
+    },
+    publish: [
+      {
+        name: "takos-git-mcp",
+        publisher: "web",
+        type: "protocol.mcp.server",
+        auth: {
+          bearer: { secretRef: "PUBLISHED_MCP_AUTH_TOKEN" },
+        },
+      },
+    ],
+  };
+  expect(
+    projectOutputAllowlistSpaceOutputs(
+      {
+        app_deployment: {
+          from: "app_deployment",
+          type: "json",
+          required: true,
+        },
+      },
+      { app_deployment: { sensitive: false, value } },
+    ),
+  ).toEqual({ app_deployment: value });
+});
+
+test("output allowlist projection accepts service auth contracts but rejects auth material", () => {
+  const safe = [
+    {
+      name: "source.git.smart_http",
+      capabilities: ["source.git.smart_http", "protocol.http.api"],
+      endpoints: [
+        {
+          name: "smart-http",
+          protocol: "https",
+          url: "https://git.example.test/git",
+        },
+      ],
+      auth: [{ scheme: "bearer", scopes: ["repos:read", "repos:write"] }],
+      metadata: { title: "Git Smart HTTP" },
+      visibility: "space",
+    },
+  ];
+  const allowlist = {
+    service_exports: {
+      from: "service_exports",
+      type: "json",
+      required: true,
+    },
+  } as const;
+  expect(
+    projectOutputAllowlistSpaceOutputs(allowlist, {
+      service_exports: { sensitive: false, value: safe },
+    }),
+  ).toEqual({ service_exports: safe });
+
+  const unsafe = structuredClone(safe) as Array<Record<string, unknown>>;
+  unsafe[0]!.metadata = { api_token: "sk-live-do-not-project" };
+  expect(() =>
+    projectOutputAllowlistSpaceOutputs(allowlist, {
+      service_exports: {
+        sensitive: false,
+        value: unsafe as never,
+      },
+    }),
+  ).toThrow("cannot be projected");
+});
+
 test("output allowlist projection still rejects app_deployment values with concrete secret material", () => {
   const outputs = {
     app_deployment: {

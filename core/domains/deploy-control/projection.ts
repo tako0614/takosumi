@@ -369,6 +369,9 @@ function isPublishableDeploymentOutputValue(
     if (name === "app_deployment" && kind === "json") {
       return !containsUnsafeAppDeploymentDescriptorValue(value);
     }
+    if (name === "service_exports" && kind === "json") {
+      return !containsUnsafeServiceExportsDescriptorValue(value);
+    }
     return !containsSecretLikeJsonValue(value);
   }
   if (containsSecretLikeString(value) || redactString(value) !== value) {
@@ -405,6 +408,9 @@ function containsSecretLikeAppDeploymentDescriptorValue(
     inspected += 1;
     if (inspected > 1_000) return true;
     if (typeof current === "string") {
+      if (isSafeAppDeploymentSecretDescriptorString(path, current)) {
+        continue;
+      }
       if (
         containsSecretLikeString(current) ||
         redactString(current) !== current
@@ -422,6 +428,10 @@ function containsSecretLikeAppDeploymentDescriptorValue(
     }
     for (const [key, nested] of Object.entries(current)) {
       if (isDeclarativeConsumeEnvProjection(path, key, nested)) continue;
+      if (isSafeAppDeploymentSecretDescriptorKey(path, key, nested)) {
+        stack.push({ value: nested, path: [...path, key] });
+        continue;
+      }
       if (SECRET_QUERY_RE.test(key) || SECRET_OUTPUT_NAME_RE.test(key)) {
         return true;
       }
@@ -429,6 +439,174 @@ function containsSecretLikeAppDeploymentDescriptorValue(
     }
   }
   return false;
+}
+
+function isSafeAppDeploymentSecretDescriptorKey(
+  path: readonly string[],
+  key: string,
+  value: JsonValue,
+): boolean {
+  if (path.length === 0 && key === "secrets") {
+    return value !== null && typeof value === "object" && !Array.isArray(value);
+  }
+  if (
+    path.length === 1 &&
+    path[0] === "secrets" &&
+    /^[a-z][a-z0-9_]{0,127}$/u.test(key)
+  ) {
+    return value !== null && typeof value === "object" && !Array.isArray(value);
+  }
+  if (
+    path.length === 2 &&
+    path[0] === "publish" &&
+    /^\d+$/u.test(path[1] ?? "") &&
+    key === "auth"
+  ) {
+    return value !== null && typeof value === "object" && !Array.isArray(value);
+  }
+  if (
+    path.length === 3 &&
+    path[0] === "publish" &&
+    /^\d+$/u.test(path[1] ?? "") &&
+    path[2] === "auth" &&
+    key === "bearer"
+  ) {
+    return value !== null && typeof value === "object" && !Array.isArray(value);
+  }
+  if (
+    path.length === 4 &&
+    path[0] === "publish" &&
+    /^\d+$/u.test(path[1] ?? "") &&
+    path[2] === "auth" &&
+    path[3] === "bearer" &&
+    key === "secretRef"
+  ) {
+    return typeof value === "string" && isSafeSecretReference(value);
+  }
+  return false;
+}
+
+function isSafeAppDeploymentSecretDescriptorString(
+  path: readonly string[],
+  value: string,
+): boolean {
+  if (
+    path.length === 3 &&
+    path[0] === "secrets" &&
+    path[2] === "type"
+  ) {
+    return value === "secret";
+  }
+  if (
+    path.length === 3 &&
+    path[0] === "secrets" &&
+    path[2] === "bind"
+  ) {
+    return isSafeSecretReference(value);
+  }
+  return (
+    path.length === 5 &&
+    path[0] === "publish" &&
+    /^\d+$/u.test(path[1] ?? "") &&
+    path[2] === "auth" &&
+    path[3] === "bearer" &&
+    path[4] === "secretRef" &&
+    isSafeSecretReference(value)
+  );
+}
+
+function isSafeSecretReference(value: string): boolean {
+  return /^[A-Z_][A-Z0-9_]{0,127}$/u.test(value);
+}
+
+function containsUnsafeServiceExportsDescriptorValue(value: JsonValue): boolean {
+  if (!Array.isArray(value)) return true;
+  const allowedExportKeys = new Set([
+    "name",
+    "capabilities",
+    "visibility",
+    "endpoints",
+    "auth",
+    "labels",
+    "metadata",
+  ]);
+  const allowedAuthKeys = new Set(["scheme", "audience", "scopes", "metadata"]);
+  const allowedSchemes = new Set(["none", "bearer", "oidc", "signed_webhook"]);
+  for (const entry of value) {
+    if (!isJsonObjectValue(entry)) return true;
+    if (Object.keys(entry).some((key) => !allowedExportKeys.has(key))) return true;
+    if (typeof entry.name !== "string" || entry.name.length === 0) return true;
+    if (
+      !Array.isArray(entry.capabilities) ||
+      entry.capabilities.some(
+        (capability) =>
+          typeof capability !== "string" ||
+          !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u.test(capability),
+      )
+    ) {
+      return true;
+    }
+    if (
+      entry.visibility !== undefined &&
+      !["private", "space", "public", "shared"].includes(
+        String(entry.visibility),
+      )
+    ) {
+      return true;
+    }
+    if (entry.endpoints !== undefined) {
+      if (!Array.isArray(entry.endpoints)) return true;
+      if (entry.endpoints.some((endpoint) => containsSecretLikeJsonValue(endpoint))) {
+        return true;
+      }
+    }
+    if (entry.auth !== undefined) {
+      if (!Array.isArray(entry.auth)) return true;
+      for (const auth of entry.auth) {
+        if (!isJsonObjectValue(auth)) return true;
+        if (Object.keys(auth).some((key) => !allowedAuthKeys.has(key))) return true;
+        if (typeof auth.scheme !== "string" || !allowedSchemes.has(auth.scheme)) {
+          return true;
+        }
+        for (const field of ["audience", "scopes"] as const) {
+          const values = auth[field];
+          if (
+            values !== undefined &&
+            (!Array.isArray(values) ||
+              values.some(
+                (item) =>
+                  typeof item !== "string" ||
+                  !/^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$/u.test(item),
+              ))
+          ) {
+            return true;
+          }
+        }
+        if (
+          auth.metadata !== undefined &&
+          containsSecretLikeJsonValue(auth.metadata)
+        ) {
+          return true;
+        }
+      }
+    }
+    if (entry.labels !== undefined && containsSecretLikeJsonValue(entry.labels)) {
+      return true;
+    }
+    if (
+      entry.metadata !== undefined &&
+      containsSecretLikeJsonValue(entry.metadata)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isJsonObjectValue(
+  value: JsonValue,
+): value is Readonly<Record<string, JsonValue>> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 function isDeclarativeConsumeEnvProjection(
