@@ -4078,6 +4078,102 @@ test("POST /api/v1/workspaces/:id/capsules hydrates thin Store listings from rep
   });
 });
 
+test("POST /api/v1/workspaces/:id/capsules hydrates direct Git installs and provisions OIDC server-side", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations({
+    readSourceSnapshotFiles: async () => [
+      {
+        path: ".well-known/tcs.json",
+        text: JSON.stringify({
+          schemaVersion: "tcs.repo/v1",
+          modulePath: ".",
+          surface: "service",
+          kind: "worker",
+          provider: "cloudflare",
+          suggestedName: "community",
+          badge: { ja: "追加候補", en: "Installable" },
+          name: { ja: "コミュニティ", en: "Community" },
+          description: {
+            ja: "コミュニティを公開します。",
+            en: "Hosts a community.",
+          },
+          inputs: [
+            {
+              name: "project_name",
+              type: "string",
+              required: true,
+              defaultValue: "service-name",
+              label: { ja: "サービス名", en: "Service name" },
+            },
+          ],
+          installExperience: {
+            projections: [
+              {
+                kind: "public_endpoint",
+                variables: { url: "app_url" },
+              },
+              {
+                kind: "oidc_client",
+                variables: {
+                  issuerUrl: "oidc_issuer_url",
+                  clientId: "oidc_client_id",
+                },
+                callbackPath: "/oauth/callback",
+              },
+            ],
+          },
+        }),
+      },
+    ],
+  });
+  const { request: req, url } = request(
+    "POST",
+    "/api/v1/workspaces/space_a/capsules",
+    {
+      cookie,
+      body: {
+        name: "community",
+        environment: "production",
+        sourceId: "src_x",
+        installConfigId: "cfg_x",
+        vars: { app_url: "https://community.example.test" },
+      },
+    },
+  );
+
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+    issuer: ORIGIN,
+  });
+
+  expect(response?.status).toEqual(201);
+  const client = await store.findOidcClientForCapsule("inst_new");
+  expect(client?.redirectUris).toEqual([
+    "https://community.example.test/oauth/callback",
+  ]);
+  const config = operations.calls.putInstallConfig?.[0] as {
+    variableMapping: Record<string, unknown>;
+    store?: {
+      order?: number;
+      source?: { git?: string; path?: string };
+      installExperience?: unknown;
+    };
+  };
+  expect(config.store?.order).toEqual(1000);
+  expect(config.store?.source).toEqual({
+    git: "https://example.test/r.git",
+    path: ".",
+  });
+  expect(config.store?.installExperience).toBeDefined();
+  expect(config.variableMapping.project_name).toEqual("community");
+  expect(config.variableMapping.oidc_issuer_url).toEqual(ORIGIN);
+  expect(config.variableMapping.oidc_client_id).toEqual(client?.clientId);
+});
+
 test("POST /api/v1/workspaces/:id/capsules rejects retired install experience fields", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
@@ -5342,21 +5438,6 @@ test("POST /api/v1/capsules/:id/plan reconciles existing Takosumi Accounts OIDC 
       },
       outputAllowlist: {},
       policy: {},
-      store: {
-        source: {
-          git: "https://github.com/tako0614/takos.git",
-          path: "deploy/opentofu",
-        },
-        order: 1,
-        surface: "service",
-        kind: "worker",
-        provider: "cloudflare",
-        suggestedName: "takos",
-        badge: { ja: "追加候補", en: "Installable" },
-        name: { ja: "Takos", en: "Takos" },
-        description: { ja: "Takos", en: "Takos" },
-        inputs: [],
-      },
       createdAt: "2026-01-01T00:00:00Z",
       updatedAt: "2026-01-01T00:00:00Z",
     };
@@ -5382,6 +5463,13 @@ test("POST /api/v1/capsules/:id/plan reconciles existing Takosumi Accounts OIDC 
   const repositoryMetadataText = JSON.stringify({
     schemaVersion: "tcs.repo/v1",
     modulePath: "deploy/opentofu",
+    surface: "service",
+    kind: "worker",
+    provider: "cloudflare",
+    suggestedName: "takos",
+    badge: { ja: "追加候補", en: "Installable" },
+    name: { ja: "Takos", en: "Takos" },
+    description: { ja: "Takos", en: "Takos" },
     inputs: [],
     installExperience: {
       projections: [
@@ -5475,7 +5563,12 @@ test("POST /api/v1/capsules/:id/plan reconciles existing Takosumi Accounts OIDC 
   expect(operations.calls.readSourceSnapshotFiles).toBeUndefined();
   const config = operations.calls.putInstallConfig?.[0] as {
     variableMapping: Record<string, unknown>;
+    store?: { source?: { git?: string; path?: string } };
   };
+  expect(config.store?.source).toEqual({
+    git: "https://github.com/tako0614/takos.git",
+    path: "deploy/opentofu",
+  });
   expect(config.variableMapping.takosumi_accounts_client_id).toEqual(
     "toc_existing_takos",
   );

@@ -32,20 +32,10 @@ export interface RepoOwnedStoreHydrationResult {
 export async function hydrateRepoOwnedStoreConfig(
   input: RepoOwnedStoreHydrationInput,
 ): Promise<RepoOwnedStoreHydrationResult> {
-  if (!input.storeMetadata?.source) return input;
-  const {
-    inputs: _inputs,
-    installExperience: _installExperience,
-    ...baseStore
-  } = input.storeMetadata;
-  const scrubbedStoreMetadata =
-    installConfigStoreValue({
-      ...baseStore,
-      inputs: [],
-    }) ?? input.storeMetadata;
+  const listingBacked = input.storeMetadata?.source !== undefined;
   const inspectionModulePath =
     input.modulePath ??
-    modulePathValue(input.storeMetadata.source?.path) ??
+    modulePathValue(input.storeMetadata?.source?.path) ??
     undefined;
   const metadata = await readRepoOwnedTcsMetadata({
     operations: input.operations,
@@ -53,8 +43,14 @@ export async function hydrateRepoOwnedStoreConfig(
     modulePath: inspectionModulePath,
   });
   if (!metadata) {
+    if (
+      !listingBacked &&
+      !repositoryMetadataWasDeclared(input.sourceSnapshot)
+    ) {
+      return input;
+    }
     return {
-      storeMetadata: scrubbedStoreMetadata,
+      storeMetadata: scrubbedStoreMetadata(input.storeMetadata),
       outputAllowlist: undefined,
       modulePath: input.modulePath,
       metadataUnavailable: true,
@@ -63,28 +59,22 @@ export async function hydrateRepoOwnedStoreConfig(
 
   const modulePath =
     input.modulePath ?? modulePathValue(metadata.modulePath) ?? undefined;
-  const storePatch: Record<string, unknown> = {
-    inputs: Array.isArray(metadata.inputs) ? metadata.inputs : [],
-    ...(metadata.installExperience !== undefined
-      ? { installExperience: metadata.installExperience }
-      : {}),
-  };
-  storePatch.source = {
-    ...input.storeMetadata.source,
-    git: input.source.url,
-    path:
-      modulePath !== undefined
-        ? modulePath === ""
-          ? "."
-          : modulePath
-        : input.storeMetadata.source.path || ".",
-  };
-  const mergedStore = installConfigStoreValue({
-    ...baseStore,
-    ...storePatch,
+  const mergedStore = repoOwnedStoreMetadata({
+    metadata,
+    listing: input.storeMetadata,
+    source: input.source,
+    modulePath,
   });
+  if (!mergedStore) {
+    return {
+      storeMetadata: scrubbedStoreMetadata(input.storeMetadata),
+      outputAllowlist: undefined,
+      modulePath: input.modulePath,
+      metadataUnavailable: true,
+    };
+  }
   return {
-    storeMetadata: mergedStore ?? input.storeMetadata,
+    storeMetadata: mergedStore,
     outputAllowlist: undefined,
     modulePath,
   };
@@ -119,7 +109,7 @@ export async function refreshRepoOwnedInstallConfigForCapsule(input: {
   readonly capsule: Capsule;
   readonly installConfig: InstallConfig;
 }): Promise<InstallConfig> {
-  if (!input.installConfig.store?.source || !input.capsule.sourceId) {
+  if (!input.capsule.sourceId) {
     return input.installConfig;
   }
   const { source } = await input.operations.getSource(input.capsule.sourceId);
@@ -135,12 +125,13 @@ export async function refreshRepoOwnedInstallConfigForCapsule(input: {
     outputAllowlist: input.installConfig.outputAllowlist,
     modulePath: input.installConfig.modulePath,
   });
-  if (hydrated.metadataUnavailable || !hydrated.storeMetadata) {
+  if (hydrated.metadataUnavailable) {
     throw new OpenTofuControllerError(
       "failed_precondition",
       "repo_metadata_unavailable: repository install metadata could not be loaded from the latest Git SourceSnapshot; sync the Source and retry",
     );
   }
+  if (!hydrated.storeMetadata) return input.installConfig;
   const nextModulePath = hydrated.modulePath ?? input.installConfig.modulePath;
   if (
     JSON.stringify(hydrated.storeMetadata) ===
@@ -154,6 +145,64 @@ export async function refreshRepoOwnedInstallConfigForCapsule(input: {
     store: hydrated.storeMetadata,
     ...(nextModulePath === undefined ? {} : { modulePath: nextModulePath }),
     updatedAt: new Date().toISOString(),
+  });
+}
+
+function repositoryMetadataWasDeclared(
+  snapshot: SourceSnapshot | undefined,
+): boolean {
+  const observation = snapshot?.repositoryInstallMetadata;
+  return observation !== undefined && observation.status !== "absent";
+}
+
+function scrubbedStoreMetadata(
+  store: InstallConfig["store"] | undefined,
+): InstallConfig["store"] | undefined {
+  if (!store) return undefined;
+  const {
+    inputs: _inputs,
+    installExperience: _installExperience,
+    ...baseStore
+  } = store;
+  return installConfigStoreValue({
+    ...baseStore,
+    inputs: [],
+  });
+}
+
+function repoOwnedStoreMetadata(input: {
+  readonly metadata: Record<string, unknown>;
+  readonly listing: InstallConfig["store"] | undefined;
+  readonly source: Source;
+  readonly modulePath: string | undefined;
+}): InstallConfig["store"] | undefined {
+  const {
+    inputs: _listingInputs,
+    installExperience: _listingInstallExperience,
+    source: _listingSource,
+    ...listingBase
+  } = input.listing ?? {};
+  const path =
+    input.modulePath !== undefined
+      ? input.modulePath === ""
+        ? "."
+        : input.modulePath
+      : input.source.defaultPath || ".";
+  return installConfigStoreValue({
+    ...listingBase,
+    ...input.metadata,
+    order:
+      typeof input.metadata.order === "number"
+        ? input.metadata.order
+        : (input.listing?.order ?? 1000),
+    source: {
+      git: input.source.url,
+      path,
+    },
+    inputs: Array.isArray(input.metadata.inputs) ? input.metadata.inputs : [],
+    ...(input.metadata.installExperience !== undefined
+      ? { installExperience: input.metadata.installExperience }
+      : {}),
   });
 }
 
