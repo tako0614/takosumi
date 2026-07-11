@@ -443,6 +443,22 @@ GET /compat/cloudflare/client/v4/accounts/{accountId}/r2/buckets
 GET /compat/cloudflare/client/v4/accounts/{accountId}/d1/database
 ```
 
+Supported D1 database data and maintenance routes:
+
+```http
+POST /compat/cloudflare/client/v4/accounts/{accountId}/d1/database/{databaseId}/query
+POST /compat/cloudflare/client/v4/accounts/{accountId}/d1/database/{databaseId}/raw
+POST /compat/cloudflare/client/v4/accounts/{accountId}/d1/database/{databaseId}/import
+POST /compat/cloudflare/client/v4/accounts/{accountId}/d1/database/{databaseId}/export
+```
+
+`import` accepts the `init` / `ingest` / `poll` protocol used by
+`wrangler d1 execute --remote --file ...` and maps the tenant-visible database
+id to the selected SQLDatabase manager's backend id. `query`, `raw`, `import`,
+and `export` all pass through the same owner-account credit guard and usage
+ledger. D1 subpaths not listed here are outside the compatibility scope and
+return `501`.
+
 Initial target scope:
 
 - Workers scripts
