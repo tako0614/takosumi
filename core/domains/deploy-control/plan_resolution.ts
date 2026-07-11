@@ -54,6 +54,7 @@ import { canonicalProviderAddress } from "./provider_policy.ts";
 import { OpenTofuControllerError, requireNonEmptyString } from "./errors.ts";
 import { normalizeProviders } from "./validation.ts";
 import { sameProviderFamily } from "takosumi-contract/provider-env-rules";
+import { normalizeManagedPublicBaseDomain } from "./managed_public_domains.ts";
 
 /**
  * Install-type wiring for an installation-driven template plan (§13). Carried
@@ -80,6 +81,8 @@ export interface InstallTypePlanContext {
    * invent module input schema for arbitrary OpenTofu Capsules.
    */
   readonly providerInputDefaults: Readonly<Record<string, JsonValue>>;
+  /** Public namespace advertised by the selected managed target, if any. */
+  readonly managedPublicBaseDomain?: string;
   /**
    * True when a legacy/Cloud-only resolver row attempted to use gateway
    * materialization. OSS Takosumi fails closed instead of rewriting provider
@@ -161,6 +164,7 @@ export class PlanResolutionService {
     );
     const providerEnvBindings = providerEnvBindingsFromResolved(resolved);
     const providerInputDefaults = providerInputDefaultsFromResolved(resolved);
+    const managedPublicBaseDomain = managedPublicBaseDomainFromResolved(resolved);
     const usesCloudOnlyGatewayMaterialization = resolved.some(
       (entry) => (entry.materialization as string) === "gateway",
     );
@@ -171,6 +175,7 @@ export class PlanResolutionService {
       providerEnvBindings,
       requiredProvidersFromBindings: requiredProvidersFromResolved(resolved),
       providerInputDefaults,
+      ...(managedPublicBaseDomain ? { managedPublicBaseDomain } : {}),
       usesCloudOnlyGatewayMaterialization,
     };
   }
@@ -271,6 +276,27 @@ export class PlanResolutionService {
       ),
     };
   }
+}
+
+function managedPublicBaseDomainFromResolved(
+  resolved: readonly ResolvedInstallationProviderEnvBinding[],
+): string | undefined {
+  const domains = new Set<string>();
+  for (const entry of resolved) {
+    if (!sameProviderFamily(entry.provider, "cloudflare")) continue;
+    if (entry.connection?.scopeHints?.managedProvider !== true) continue;
+    const domain = normalizeManagedPublicBaseDomain(
+      entry.connection.scopeHints.managedPublicBaseDomain,
+    );
+    if (domain) domains.add(domain);
+  }
+  if (domains.size > 1) {
+    throw new OpenTofuControllerError(
+      "failed_precondition",
+      "managed Cloudflare Provider Connections disagree on the public base domain",
+    );
+  }
+  return domains.values().next().value as string | undefined;
 }
 
 export function providerEnvBindingsFromResolved(

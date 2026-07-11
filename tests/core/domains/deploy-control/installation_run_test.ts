@@ -984,7 +984,7 @@ test("requested scalar Cloudflare Capsule inputs can be filled from provider sco
   expect(mainTf).not.toContain("fixture-provider-token");
 });
 
-test("managed Cloudflare Capsule inputs derive app.takos.jp launch defaults server-side", async () => {
+test("managed Cloudflare Capsule inputs use the selected target public namespace", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   const runner = recordingRunner();
   const seeded = await seedInstallationModel(store, {
@@ -1028,6 +1028,7 @@ test("managed Cloudflare Capsule inputs derive app.takos.jp launch defaults serv
     scopeHints: {
       managedProvider: true,
       providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      managedPublicBaseDomain: "app-staging.takos.jp",
       accountId: "ts_acc_takosumi_cloud",
       zoneId: "zone_takosumi_cloud",
     },
@@ -1061,11 +1062,11 @@ test("managed Cloudflare Capsule inputs derive app.takos.jp launch defaults serv
   const mainTf = runner.planJobs[0]!.generatedRoot!.files["main.tf"]!;
   expect(mainTf).toContain('worker_name = "space-test-yuru-managed-app"');
   expect(mainTf).toContain(
-    'app_url = "https://space-test-yuru-managed-app.app.takos.jp"',
+    'app_url = "https://space-test-yuru-managed-app.app-staging.takos.jp"',
   );
   expect(mainTf).toContain('cloudflare_route_zone_id = "zone_takosumi_cloud"');
   expect(mainTf).toContain(
-    'cloudflare_route_pattern = "space-test-yuru-managed-app.app.takos.jp/*"',
+    'cloudflare_route_pattern = "space-test-yuru-managed-app.app-staging.takos.jp/*"',
   );
   expect(mainTf).toContain("enable_cloudflare_resources = true");
   expect(mainTf).toContain("enable_cloudflare_worker_script = true");

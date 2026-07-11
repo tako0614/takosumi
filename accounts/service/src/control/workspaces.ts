@@ -313,6 +313,7 @@ export async function handleWorkspaces(
           ctx.issuer,
           ctx.session.subject,
           workspaceId,
+          ctx.managedPublicBaseDomain,
         );
       }
       return methodNotAllowed("GET, POST");
@@ -1163,6 +1164,7 @@ async function createCapsule(
   issuer: string | undefined,
   sessionSubject: string,
   workspaceId: string,
+  managedPublicBaseDomain?: string,
 ): Promise<Response> {
   const body = await readJsonObject(request);
   if (!body) return errorJson("invalid_request", "invalid request", 400);
@@ -1341,6 +1343,9 @@ async function createCapsule(
         issuer,
         capsule: installation,
         installConfig: resolvedInstallConfig,
+        ...(managedPublicBaseDomain
+          ? { managedPublicBaseDomain }
+          : {}),
       });
     } catch (error) {
       // Compensate: never leave a half-created capsule behind when the OIDC

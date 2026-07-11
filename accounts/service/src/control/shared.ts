@@ -139,6 +139,7 @@ export interface ControlDispatchContext {
   readonly operations: ControlPlaneOperations;
   readonly store: AccountsStore;
   readonly issuer?: string;
+  readonly managedPublicBaseDomain?: string;
   readonly session: { readonly subject: string };
   readonly sharedCellRuntime?: SharedCellRuntimeAllocator;
   readonly publicBillingPlans?: readonly Record<string, unknown>[];

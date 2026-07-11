@@ -567,6 +567,9 @@ async function seedCloudManagedProviderConnections(input: {
   const virtualZoneId = stringEnvValue(
     input.env.TAKOSUMI_CLOUDFLARE_VIRTUAL_ZONE_ID,
   );
+  const managedPublicBaseDomain = stringEnvValue(
+    input.env.TAKOSUMI_MANAGED_PUBLIC_BASE_DOMAIN,
+  );
   const now = new Date();
   const seedVault = new StaticSecretConnectionVault({
     store: input.store,
@@ -586,6 +589,7 @@ async function seedCloudManagedProviderConnections(input: {
       managedProvider: true,
       managedProviderProfile: CLOUD_MANAGED_CLOUDFLARE_COMPAT_PROFILE,
       providerBaseUrl,
+      ...(managedPublicBaseDomain ? { managedPublicBaseDomain } : {}),
     },
     values: { CLOUDFLARE_API_TOKEN: apiToken },
   });

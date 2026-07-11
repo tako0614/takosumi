@@ -73,6 +73,15 @@ test("node-postgres platform readiness defaults closed", () => {
   expect(config.platformAccess.status).toBe("closed");
 });
 
+test("node-postgres preserves the operator managed public base domain", () => {
+  const config = parseEnv({
+    TAKOSUMI_ACCOUNTS_DATABASE_URL: BASE_ENV.TAKOSUMI_ACCOUNTS_DATABASE_URL,
+    TAKOSUMI_MANAGED_PUBLIC_BASE_DOMAIN: "app-staging.takos.example",
+  });
+
+  expect(config.managedPublicBaseDomain).toBe("app-staging.takos.example");
+});
+
 test("node-postgres treats subject secret without upstream providers as disabled upstream OAuth", () => {
   const config = parseEnv({
     TAKOSUMI_ACCOUNTS_DATABASE_URL: BASE_ENV.TAKOSUMI_ACCOUNTS_DATABASE_URL,

@@ -230,7 +230,11 @@ public_endpoint projection:
   <subdomain>.<managed-base-domain> from this mapping, but the module still
   receives plain variables. Takosumi Cloud uses app.takos.jp as its managed base
   domain; other operators can use their own managed base domain under the same
-  contract. Managed-base hostnames are broadly available and protected by
+  contract. The repository projection is a portable default; when a managed
+  Target is selected, its Provider Connection may advertise
+  managedPublicBaseDomain and that value wins for generated URL/route inputs,
+  hostname reservations, and OIDC callbacks. This lets staging and production
+  use separate namespaces without rewriting Git metadata. Managed-base hostnames are broadly available and protected by
   uniqueness / reserved-name / abuse controls. Arbitrary user-owned custom
   domains are passed through to the selected provider/adapter path; managed
   providers may require ownership verification, certificate provisioning,

@@ -147,6 +147,12 @@ export interface ConnectionScopeHints {
    */
   readonly providerBaseUrl?: string;
   readonly managedProviderProfile?: string;
+  /**
+   * Public hostname namespace owned by this managed target. A hosted operator
+   * may use a different namespace per environment without rewriting repository
+   * install metadata (for example app-staging.takos.jp in staging).
+   */
+  readonly managedPublicBaseDomain?: string;
   readonly cloudflareTokenVending?: CloudflareTokenVendingConfig;
   readonly repoUrl?: string;
   readonly username?: string;

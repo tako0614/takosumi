@@ -51,6 +51,7 @@ export interface CloudflareWorkerEnv {
   readonly TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_BASE_URL?: string;
   readonly TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_TTL_MS?: string;
   readonly TAKOSUMI_ACCOUNTS_ISSUER?: string;
+  readonly TAKOSUMI_MANAGED_PUBLIC_BASE_DOMAIN?: string;
   readonly TAKOSUMI_ACCOUNTS_SUBJECT?: string;
   readonly TAKOSUMI_ACCOUNTS_CLIENTS?: string;
   readonly TAKOSUMI_ACCOUNTS_CLIENT_ID?: string;
@@ -484,6 +485,9 @@ async function buildAccountsHandler(
   const controlPlaneOperations = identityOnly
     ? undefined
     : await options.controlPlaneOperations?.(env);
+  const managedPublicBaseDomain = optionalString(
+    env.TAKOSUMI_MANAGED_PUBLIC_BASE_DOMAIN,
+  );
   const commonOptions = {
     issuer,
     clients,
@@ -494,6 +498,7 @@ async function buildAccountsHandler(
     platformAccess: parsePlatformAccess(env),
     deployControl: parseDeployControl(env, deployControlOperations),
     ...(controlPlaneOperations ? { controlPlaneOperations } : {}),
+    ...(managedPublicBaseDomain ? { managedPublicBaseDomain } : {}),
     publicBillingPlans: parsePublicBillingPlans(env),
     billingCheckout: parseStripeBillingCheckout(env, options.stripeFetch),
     billingWebhook: parseStripeBillingWebhook(env),

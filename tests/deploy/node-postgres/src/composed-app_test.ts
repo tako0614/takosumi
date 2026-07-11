@@ -44,6 +44,7 @@ function testConfig(): NodeAccountsServerConfig {
     bindHost: "127.0.0.1",
     port: 8787,
     issuer: "http://localhost:8787",
+    managedPublicBaseDomain: undefined,
     databaseUrl: "postgres://unused",
     clients: undefined,
     platformAccess: { status: "closed" },
