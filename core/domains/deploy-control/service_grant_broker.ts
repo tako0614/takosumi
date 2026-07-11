@@ -2,33 +2,34 @@
  * Scoped-token grant broker — the bind-time issuer behind a `storage.object`
  * (object store) or `source.git.smart_http` (git) consume.
  *
- * When a CONSUMER installation runs, for each scoped-token capability it consumes
- * this: reads the consumer's LATEST OutputSnapshot service bindings, finds the
+ * When a CONSUMER Capsule plans, for each scoped-token capability it consumes
+ * this reads the current plan's allowlisted output projection (falling back to
+ * the latest Output for updates), finds the
  * PRODUCER installation in the same workspace that publishes that capability
  * (fail-closed on ambiguity), decrypts the producer's sealed signing key,
- * mints a `takstor_` scoped token bounded to the consumer's own prefix + verbs,
+ * mints a `tksvc_` scoped credential bounded to the consumer's prefix + verbs,
  * and returns the `TF_VAR_*` env to inject.
  *
- * The consumer's `consume` is an OpenTofu OUTPUT, so it is read from the
- * consumer's previous OutputSnapshot; a grant activates on the run AFTER the
- * consume is first declared (the binding is optional/inert until injected).
+ * The first plan exposes the declarative `consume`; the controller then mints a
+ * grant and produces the final saved plan with that credential. There is no
+ * post-apply or second-run activation lag.
  *
  * PRODUCER TRUST: installable Capsules are arbitrary Git, so producer selection
  * is based on the exported publication/capability surface and workspace
  * uniqueness. A lone exporter is accepted; multiple exporters fail CLOSED.
  *
- * FAIL-OPEN: never blocks a consumer apply — a decrypt failure, another app's
- * malformed output, or a store error yields "no grant". The returned env rides
- * the dispatch-only credential channel (never persisted, never logged).
+ * A declared scoped consume is required and therefore fails closed when no
+ * unique producer or signing authority can satisfy it. The returned env rides
+ * the dispatch-only credential channel (never persisted or logged separately;
+ * OpenTofu seals it inside the reviewed plan artifact).
  */
 
 import type { PlanRun } from "@takosumi/internal/deploy-control-api";
 import type { JsonValue } from "../../../contract/types.ts";
 import {
-  mintStorageAccessToken,
-  type StorageTokenVerb,
-  storageVerbsFromScopes,
-} from "../../shared/storage_access_tokens.ts";
+  mintServiceScopedCredential,
+  type ServiceCredentialVerb,
+} from "../../shared/service_scoped_credentials.ts";
 import { projectServicesFromOutputs } from "../output-projection/service-projection.ts";
 import type {
   ProjectedServiceBinding,
@@ -57,7 +58,7 @@ interface GrantSpec {
   /** Verbs granted, derived from the consumer binding. */
   readonly verbs: (
     binding: ProjectedServiceBinding,
-  ) => readonly StorageTokenVerb[];
+  ) => readonly ServiceCredentialVerb[];
   /** TF_VAR env the grant injects into the consumer run. */
   readonly env: (grant: {
     url?: string;
@@ -75,7 +76,7 @@ const GRANT_SPECS: readonly GrantSpec[] = [
     audience: "storage.object",
     evidenceProvider: "storage.object",
     prefix: (ws, inst) => `${ws}/${inst}/`,
-    verbs: (binding) => storageVerbsFromScopes(binding.grantRequest.scopes),
+    verbs: (binding) => serviceVerbsFromScopes(binding.grantRequest.scopes),
     env: (grant) => ({
       TF_VAR_object_storage_access_token: grant.token,
       TF_VAR_object_storage_key_prefix: grant.prefix,
@@ -143,8 +144,9 @@ export class ServiceGrantBroker {
     planRun: PlanRun,
     phase: "plan" | "apply" | "destroy",
     auditRunId: string,
+    consumerOutputs?: Readonly<Record<string, JsonValue>>,
   ): Promise<Record<string, string> | undefined> {
-    if (phase === "destroy") return undefined;
+    if (phase !== "plan") return undefined;
     const workspaceId = planRun.workspaceId ?? planRun.spaceId;
     const consumerInstallationId =
       planRun.installationContext?.installationId ?? planRun.installationId;
@@ -156,26 +158,20 @@ export class ServiceGrantBroker {
 
     const consumerBindings = await this.#consumerBindings(
       consumerInstallationId,
+      consumerOutputs,
     );
     if (consumerBindings.length === 0) return undefined;
 
     let env: Record<string, string> | undefined;
     for (const spec of GRANT_SPECS) {
-      try {
-        const specEnv = await this.#mintForSpec(
-          spec,
-          consumerBindings,
-          { workspaceId, consumerInstallationId },
-          phase,
-          auditRunId,
-        );
-        if (specEnv) env = { ...(env ?? {}), ...specEnv };
-      } catch (error) {
-        this.#skip("grant_resolution_error", {
-          publication: spec.publication,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
+      const specEnv = await this.#mintForSpec(
+        spec,
+        consumerBindings,
+        { workspaceId, consumerInstallationId },
+        phase,
+        auditRunId,
+      );
+      if (specEnv) env = { ...(env ?? {}), ...specEnv };
     }
     return env;
   }
@@ -197,9 +193,17 @@ export class ServiceGrantBroker {
       ctx.workspaceId,
       ctx.consumerInstallationId,
     );
-    if (!producer) return undefined;
+    if (!producer) {
+      throw new Error(
+        `required service ${spec.publication} has no unique producer in this Workspace`,
+      );
+    }
 
-    if (!this.#sensitiveOutputResolver) return undefined;
+    if (!this.#sensitiveOutputResolver) {
+      throw new Error(
+        `required service ${spec.publication} signing authority is unavailable`,
+      );
+    }
     const signingKey = await this.#sensitiveOutputResolver.resolve({
       outputSnapshot: producer.output,
       outputName: spec.signingKeyOutput,
@@ -212,19 +216,17 @@ export class ServiceGrantBroker {
       typeof signingKey.value !== "string" ||
       signingKey.value.length === 0
     ) {
-      this.#skip("producer_signing_key_unresolved", {
-        publication: spec.publication,
-        producerInstallationId: producer.installationId,
-      });
-      return undefined;
+      throw new Error(
+        `required service ${spec.publication} producer signing authority could not be resolved`,
+      );
     }
 
     const prefix = spec.prefix(ctx.workspaceId, ctx.consumerInstallationId);
     if (!prefix) return undefined;
-    const minted = await mintStorageAccessToken({
+    const minted = await mintServiceScopedCredential({
       signingKey: signingKey.value,
       workspaceId: ctx.workspaceId,
-      installationId: ctx.consumerInstallationId,
+      capsuleId: ctx.consumerInstallationId,
       prefix,
       verbs: spec.verbs(binding),
       audience: spec.audience,
@@ -237,12 +239,11 @@ export class ServiceGrantBroker {
       workspaceId: ctx.workspaceId,
       consumerInstallationId: ctx.consumerInstallationId,
       producerInstallationId: producer.installationId,
-      expiresAt: minted.expiresAt,
     });
 
     return spec.env({
       url: firstEndpointUrl(producer.export),
-      token: minted.token,
+      token: minted.credential,
       prefix,
       workspaceId: ctx.workspaceId,
     });
@@ -250,19 +251,17 @@ export class ServiceGrantBroker {
 
   async #consumerBindings(
     consumerInstallationId: string,
+    consumerOutputs?: Readonly<Record<string, JsonValue>>,
   ): Promise<readonly ProjectedServiceBinding[]> {
-    const output = await this.#store.getLatestOutputSnapshot(
-      consumerInstallationId,
-    );
-    if (!output) return [];
-    try {
-      return projectServicesFromOutputs(
-        output.workspaceOutputs as Readonly<Record<string, JsonValue>>,
-        { allowExtensionCapabilities: true },
-      ).serviceBindings;
-    } catch {
-      return [];
-    }
+    const outputs =
+      consumerOutputs ??
+      (await this.#store.getLatestOutputSnapshot(consumerInstallationId))
+        ?.workspaceOutputs;
+    if (!outputs) return [];
+    return projectServicesFromOutputs(
+      outputs as Readonly<Record<string, JsonValue>>,
+      { allowExtensionCapabilities: true },
+    ).serviceBindings;
   }
 
   async #findProducer(
@@ -314,7 +313,6 @@ export class ServiceGrantBroker {
       readonly workspaceId: string;
       readonly consumerInstallationId: string;
       readonly producerInstallationId: string;
-      readonly expiresAt: string;
     },
   ): Promise<void> {
     await this.#store.putCredentialMintEvent({
@@ -331,11 +329,10 @@ export class ServiceGrantBroker {
           provider: spec.evidenceProvider,
           delivery: "generated_root_variable",
           rootOnly: false,
-          temporary: true,
-          ttlEnforced: true,
-          expiresAt: input.expiresAt,
+          temporary: false,
+          ttlEnforced: false,
           secretValueStored: false,
-          issuer: "takosumi_service_scoped_token",
+          issuer: "takosumi_service_scoped_credential",
         },
       ],
       createdAt: new Date(this.#now()).toISOString(),
@@ -345,6 +342,28 @@ export class ServiceGrantBroker {
   #skip(reason: string, detail: Record<string, unknown>): void {
     this.#onSkip?.(reason, detail);
   }
+}
+
+function serviceVerbsFromScopes(
+  scopes: readonly string[],
+): readonly ServiceCredentialVerb[] {
+  const verbs = new Set<ServiceCredentialVerb>();
+  for (const scope of scopes) {
+    if (scope === "files:read") {
+      verbs.add("r");
+      verbs.add("l");
+    } else if (scope === "files:write") {
+      verbs.add("r");
+      verbs.add("w");
+      verbs.add("d");
+      verbs.add("l");
+    }
+  }
+  if (verbs.size === 0) {
+    verbs.add("r");
+    verbs.add("l");
+  }
+  return [...verbs];
 }
 
 function bindingMatches(

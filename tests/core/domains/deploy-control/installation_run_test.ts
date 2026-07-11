@@ -43,6 +43,7 @@ import {
 } from "../../../../core/adapters/vault/mod.ts";
 import { ActivityService } from "../../../../core/domains/activity/mod.ts";
 import { InMemoryObservabilitySink } from "../../../../core/domains/observability/mod.ts";
+import type { SensitiveOutputResolver } from "../../../../core/domains/output-shares/mod.ts";
 import type {
   Connection,
   Deployment,
@@ -546,6 +547,118 @@ async function seedRunnableInstallationModel(
   await seedProviderConnections(store, seeded.installation);
   return seeded;
 }
+
+test("a first Capsule plan discovers service consumes and saves a rebound plan with scoped credentials", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const appDeployment = {
+    name: "takos-office",
+    compute: {
+      web: {
+        kind: "worker",
+        consume: [
+          {
+            publication: "storage.object",
+            request: { scopes: ["files:read", "files:write"] },
+            inject: {
+              env: {
+                url: "OBJECT_STORAGE_API_URL",
+                token: "OBJECT_STORAGE_ACCESS_TOKEN",
+              },
+            },
+          },
+        ],
+      },
+    },
+  } as const;
+  const runner = recordingRunner({
+    plannedOutputs: {
+      app_deployment: { sensitive: false, value: appDeployment },
+    },
+  });
+  await seedRunnableInstallationModel(store, {
+    environment: "preview",
+    installConfig: {
+      outputAllowlist: {
+        app_deployment: { from: "app_deployment", type: "json" },
+      },
+    },
+  });
+  const producer = await seedInstallationModel(store, {
+    sourceId: "src_storage",
+    snapshotId: "snap_storage",
+    installConfigId: "cfg_storage",
+    installationId: "inst_storage",
+    name: "storage",
+    environment: "preview",
+  });
+  await store.putOutputSnapshot({
+    id: "out_storage",
+    workspaceId: producer.installation.workspaceId,
+    spaceId: producer.installation.spaceId,
+    capsuleId: producer.installation.id,
+    installationId: producer.installation.id,
+    stateGeneration: 1,
+    rawOutputArtifactKey: "outputs/storage.json.enc",
+    publicOutputs: {},
+    workspaceOutputs: {
+      service_exports: [
+        {
+          name: "storage.object",
+          capabilities: ["storage.object", "protocol.http.api"],
+          endpoints: [
+            {
+              name: "default",
+              protocol: "https",
+              url: "https://storage.example/o",
+            },
+          ],
+          visibility: "space",
+        },
+      ],
+    },
+    spaceOutputs: {
+      service_exports: [
+        {
+          name: "storage.object",
+          capabilities: ["storage.object", "protocol.http.api"],
+          endpoints: [
+            {
+              name: "default",
+              protocol: "https",
+              url: "https://storage.example/o",
+            },
+          ],
+          visibility: "space",
+        },
+      ],
+    },
+    outputDigest: "sha256:storage",
+    createdAt: "2026-06-06T00:00:00.000Z",
+  });
+  const sensitiveOutputResolver: SensitiveOutputResolver = {
+    resolve: async (input) =>
+      input.producerInstallationId === producer.installation.id &&
+      input.outputName === "service_grant_signing_key"
+        ? { value: "storage-signing-key-0123456789", sensitive: true }
+        : undefined,
+  };
+  const profile = multiProviderRunnerProfile();
+  const controller = controllerWith(store, runner, {
+    runnerProfiles: [profile],
+    defaultRunnerProfileId: profile.id,
+    sensitiveOutputResolver,
+  });
+
+  const { planRun } = await controller.createInstallationPlan("inst_fixture");
+
+  expect(planRun.status).toBe("succeeded");
+  expect(runner.planJobs).toHaveLength(2);
+  const rebound = runner.planJobs[1]!.credentials!;
+  const env = "env" in rebound ? rebound.env : rebound;
+  expect(env.TF_VAR_object_storage_api_url).toBe("https://storage.example/o");
+  expect(env.TF_VAR_object_storage_key_prefix).toBe("space_test/inst_fixture/");
+  expect(env.TF_VAR_object_storage_access_token).toMatch(/^tksvc_/);
+});
 
 test("installation plan dispatch carries sourceArchive + stateScope at the current generation", async () => {
   const { runner, controller } = await seededController();

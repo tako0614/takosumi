@@ -237,6 +237,38 @@ export function parseRequiredProviders(request: unknown): readonly string[] {
   return stringArray(providers);
 }
 
+export function parseOutputAllowlist(
+  request: unknown,
+):
+  | Readonly<
+      Record<string, { readonly from: string; readonly sensitive?: boolean }>
+    >
+  | undefined {
+  const value = recordField(request, "outputAllowlist");
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) {
+    throw new Error("outputAllowlist must be an object");
+  }
+  const out: Record<
+    string,
+    { readonly from: string; readonly sensitive?: boolean }
+  > = {};
+  for (const [name, entry] of Object.entries(value)) {
+    if (!/^[A-Za-z_][A-Za-z0-9_-]{0,127}$/u.test(name) || !isRecord(entry)) {
+      throw new Error(`outputAllowlist[${name}] is invalid`);
+    }
+    const from = stringField(entry, "from");
+    if (!from || !/^[A-Za-z_][A-Za-z0-9_-]{0,127}$/u.test(from)) {
+      throw new Error(`outputAllowlist[${name}].from is invalid`);
+    }
+    out[name] = {
+      from,
+      ...(recordField(entry, "sensitive") === true ? { sensitive: true } : {}),
+    };
+  }
+  return out;
+}
+
 export function parseProviderInstallationPolicy(
   request: unknown,
 ): { readonly requireMirror: boolean } | undefined {

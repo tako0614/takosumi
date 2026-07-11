@@ -107,6 +107,7 @@ test("output allowlist projection accepts app_deployment service projection with
                   env: {
                     issuerUrl: "TAKOSUMI_ACCOUNTS_ISSUER_URL",
                     clientId: "TAKOSUMI_ACCOUNTS_CLIENT_ID",
+                    token: "OBJECT_STORAGE_ACCESS_TOKEN",
                   },
                 },
               },

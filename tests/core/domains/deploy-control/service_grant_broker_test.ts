@@ -5,7 +5,7 @@ import type { CredentialMintEvent } from "takosumi-contract/security";
 import { ServiceGrantBroker } from "../../../../core/domains/deploy-control/service_grant_broker.ts";
 import type { OpenTofuDeploymentStore } from "../../../../core/domains/deploy-control/store.ts";
 import type { SensitiveOutputResolver } from "../../../../core/domains/output-shares/mod.ts";
-import { verifyStorageAccessToken } from "../../../../core/shared/storage_access_tokens.ts";
+import { verifyServiceScopedCredential } from "../../../../core/shared/service_scoped_credentials.ts";
 
 const WORKSPACE_ID = "space_00112233aabbccdd";
 const PRODUCER_ID = "inst_aaaaaaaaaaaaaaaa";
@@ -178,21 +178,23 @@ describe("ServiceGrantBroker", () => {
     const state = fullState();
     const env = await broker(state, SIGNING_KEY).mintServiceGrantEnv(
       makePlanRun(),
-      "apply",
+      "plan",
       "run_audit_1",
     );
     expect(env).toBeDefined();
-    expect(env!.TF_VAR_object_storage_api_url).toBe("https://storage.example/o");
+    expect(env!.TF_VAR_object_storage_api_url).toBe(
+      "https://storage.example/o",
+    );
     expect(env!.TF_VAR_object_storage_key_prefix).toBe(
       `${WORKSPACE_ID}/${CONSUMER_ID}/`,
     );
     expect(env!.TF_VAR_object_storage_workspace_id).toBe(WORKSPACE_ID);
 
     const token = env!.TF_VAR_object_storage_access_token!;
-    const verified = await verifyStorageAccessToken(
+    const verified = await verifyServiceScopedCredential(
       SIGNING_KEY,
       token,
-      Math.floor(NOW_MS / 1000) + 60,
+      "storage.object",
     );
     expect(verified.ok).toBe(true);
     if (verified.ok) {
@@ -203,8 +205,9 @@ describe("ServiceGrantBroker", () => {
 
     expect(state.mintEvents).toHaveLength(1);
     const evidence = state.mintEvents[0]!.providerCredentialEvidence![0]!;
-    expect(evidence.issuer).toBe("takosumi_service_scoped_token");
-    expect(evidence.temporary).toBe(true);
+    expect(evidence.issuer).toBe("takosumi_service_scoped_credential");
+    expect(evidence.temporary).toBe(false);
+    expect(evidence.ttlEnforced).toBe(false);
     expect(evidence.secretValueStored).toBe(false);
     expect(state.mintEvents[0]!.capsuleId).toBe(CONSUMER_ID);
   });
@@ -215,34 +218,36 @@ describe("ServiceGrantBroker", () => {
     });
     const env = await broker(state, SIGNING_KEY).mintServiceGrantEnv(
       makePlanRun(),
-      "apply",
+      "plan",
       "run_audit_2",
     );
     expect(env).toBeUndefined();
     expect(state.mintEvents).toHaveLength(0);
   });
 
-  test("skips (fail-open) when no producer is installed in the workspace", async () => {
+  test("fails closed when no producer is installed in the workspace", async () => {
     const state = fullState({
       installations: [{ id: CONSUMER_ID, workspaceId: WORKSPACE_ID }],
       outputs: { [CONSUMER_ID]: CONSUMER_OUTPUTS },
     });
-    const env = await broker(state, SIGNING_KEY).mintServiceGrantEnv(
-      makePlanRun(),
-      "apply",
-      "run_audit_3",
-    );
-    expect(env).toBeUndefined();
+    await expect(
+      broker(state, SIGNING_KEY).mintServiceGrantEnv(
+        makePlanRun(),
+        "plan",
+        "run_audit_3",
+      ),
+    ).rejects.toThrow(/no unique producer/);
   });
 
-  test("skips when the signing key can't be resolved", async () => {
+  test("fails closed when the signing key can't be resolved", async () => {
     const state = fullState();
-    const env = await broker(state, undefined).mintServiceGrantEnv(
-      makePlanRun(),
-      "apply",
-      "run_audit_4",
-    );
-    expect(env).toBeUndefined();
+    await expect(
+      broker(state, undefined).mintServiceGrantEnv(
+        makePlanRun(),
+        "plan",
+        "run_audit_4",
+      ),
+    ).rejects.toThrow(/signing authority/);
   });
 
   test("does not mint on destroy", async () => {
@@ -272,15 +277,15 @@ describe("ServiceGrantBroker", () => {
         [CONSUMER_ID]: CONSUMER_OUTPUTS,
       },
     });
-    const env = await brokerWith(
+    const env = brokerWith(
       state,
       keyedResolver({
         [PRODUCER_ID]: SIGNING_KEY,
         [IMPOSTOR_ID]: IMPOSTOR_KEY,
       }),
-    ).mintServiceGrantEnv(makePlanRun(), "apply", "run_audit_pin");
+    ).mintServiceGrantEnv(makePlanRun(), "plan", "run_audit_pin");
 
-    expect(env).toBeUndefined();
+    await expect(env).rejects.toThrow(/no unique producer/);
     expect(state.mintEvents).toHaveLength(0);
   });
 
@@ -297,30 +302,31 @@ describe("ServiceGrantBroker", () => {
         [CONSUMER_ID]: CONSUMER_OUTPUTS,
       },
     });
-    const env = await brokerWith(
+    const env = brokerWith(
       state,
       keyedResolver({
         [PRODUCER_ID]: SIGNING_KEY,
         [IMPOSTOR_ID]: IMPOSTOR_KEY,
       }),
-    ).mintServiceGrantEnv(makePlanRun(), "apply", "run_audit_ambig");
-    expect(env).toBeUndefined();
+    ).mintServiceGrantEnv(makePlanRun(), "plan", "run_audit_ambig");
+    await expect(env).rejects.toThrow(/no unique producer/);
     expect(state.mintEvents).toHaveLength(0);
   });
 
-  test("fails open (no throw) when the signing-key resolver errors", async () => {
+  test("fails closed when the signing-key resolver errors", async () => {
     const state = fullState();
     const throwing: SensitiveOutputResolver = {
       resolve: async () => {
         throw new Error("decrypt boom");
       },
     };
-    const env = await brokerWith(state, throwing).mintServiceGrantEnv(
-      makePlanRun(),
-      "apply",
-      "run_audit_throw",
-    );
-    expect(env).toBeUndefined();
+    await expect(
+      brokerWith(state, throwing).mintServiceGrantEnv(
+        makePlanRun(),
+        "plan",
+        "run_audit_throw",
+      ),
+    ).rejects.toThrow("decrypt boom");
   });
 
   test("mints a read-only clone grant for a source.git.smart_http consumer", async () => {
@@ -357,7 +363,10 @@ describe("ServiceGrantBroker", () => {
               web: {
                 kind: "worker",
                 consume: [
-                  { publication: "source.git.smart_http", request: { scopes: [] } },
+                  {
+                    publication: "source.git.smart_http",
+                    request: { scopes: [] },
+                  },
                 ],
               },
             },
@@ -368,7 +377,7 @@ describe("ServiceGrantBroker", () => {
     };
     const env = await broker(state, SIGNING_KEY).mintServiceGrantEnv(
       makePlanRun(),
-      "apply",
+      "plan",
       "run_git",
     );
     expect(env).toBeDefined();
@@ -386,7 +395,7 @@ describe("ServiceGrantBroker", () => {
 });
 
 function decodeTokenPayload(token: string): Record<string, unknown> {
-  const body = token.slice("takstor_".length).split(".")[0]!;
+  const body = token.slice("tksvc_".length).split(".")[0]!;
   const normalized = body.replace(/-/g, "+").replace(/_/g, "/");
   const padded = normalized.padEnd(
     normalized.length + ((4 - (normalized.length % 4)) % 4),
