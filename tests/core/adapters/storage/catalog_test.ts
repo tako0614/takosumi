@@ -78,6 +78,10 @@ const mirroredMigrationFiles: readonly {
     fileName: "20260430000065_capsules_active_name_unique.sql",
     migrationId: "deploy.capsules_active_name_unique",
   },
+  {
+    fileName: "20260430000067_install_config_store_key.sql",
+    migrationId: "deploy.install_config_store_key.normalize",
+  },
 ];
 
 test("migration catalog creates every declared storage table", () => {
