@@ -1,4 +1,4 @@
-import { createSignal, type JSX, onMount, Show } from "solid-js";
+import { createSignal, type JSX, onCleanup, onMount, Show } from "solid-js";
 import { CheckCircle2, XCircle } from "lucide-solid";
 
 type Tone = "success" | "error" | "neutral";
@@ -22,9 +22,14 @@ export default function Toast(props: Props): JSX.Element {
   // Live regions only announce text that changes INSIDE an already-mounted
   // region; call sites mount Toast conditionally (<Show>), which inserts the
   // region together with its content. Mount the region empty first and inject
-  // the content a microtask later so screen readers actually announce it.
+  // the content on a later task so screen readers actually announce it. A
+  // microtask can still coalesce with the mount in the same paint for some AT;
+  // a macrotask (setTimeout 0) guarantees a separate mutation.
   const [announce, setAnnounce] = createSignal(false);
-  onMount(() => queueMicrotask(() => setAnnounce(true)));
+  onMount(() => {
+    const id = setTimeout(() => setAnnounce(true), 0);
+    onCleanup(() => clearTimeout(id));
+  });
   return (
     <div
       class={`tg-toast ${TONE_CLASS[tone()]}`}

@@ -52,7 +52,7 @@ describe("Cloud resources view", () => {
     expect(en["cloudResources.keys.createdNotice"]).toContain("only once");
     expect(ja["cloudResources.keys.createdNotice"]).toContain("一度だけ");
     expect(en["cloudResources.keys.secretNotice"]).toContain("prefix");
-    expect(ja["cloudResources.keys.secretNotice"]).toContain("prefix");
+    expect(ja["cloudResources.keys.secretNotice"]).toContain("先頭部分");
     expect(en["cloudResources.usage.tableTitle"]).toBe(
       "Usage by resource type",
     );
@@ -238,16 +238,29 @@ describe("Cloud resources view", () => {
   });
 
   test("revoking another key does not destroy the once-only created-token display", () => {
-    // The created token is shown exactly once; clearing it must be gated on
-    // the revoked id matching the key it belongs to.
+    // The created token is shown exactly once. It is now hoisted into
+    // CloudApiKeysPanel (above the <Switch>) and threaded into ApiKeysCard via a
+    // createdToken prop + onCreated/onRevoked callbacks, so a sibling revoke's
+    // refetch can't unmount it, and clearing it is still gated on the revoked id
+    // matching the key it belongs to.
     expect(cloudResourcesViewSource).toContain(
       "const [createdTokenId, setCreatedTokenId]",
     );
+    // The child reports the newly created token + id up to the parent.
     expect(cloudResourcesViewSource).toContain(
-      "setCreatedTokenId(response.token_record.id);",
+      "props.onCreated(response.token, response.token_record.id);",
     );
     expect(cloudResourcesViewSource).toMatch(
-      /if \(createdTokenId\(\) === tokenId\) \{\s*setCreatedToken\(null\);\s*setCreatedTokenId\(null\);\s*\}/,
+      /onCreated=\{\(token, id\) => \{\s*setCreatedToken\(token\);\s*setCreatedTokenId\(id\);\s*\}\}/,
+    );
+    // Revoking clears the display only when the revoked id matches the shown token.
+    expect(cloudResourcesViewSource).toMatch(
+      /if \(createdTokenId\(\) === id\) \{\s*setCreatedToken\(null\);\s*setCreatedTokenId\(null\);\s*\}/,
+    );
+    // The first-load skeleton is gated so a post-create refetch (which flips
+    // keys.loading) can't unmount the panel and its once-only token.
+    expect(cloudResourcesViewSource).toContain(
+      "<Match when={keys.loading && !keys.latest}>",
     );
     // No unconditional clear remains in the revoke path.
     expect(cloudResourcesViewSource).not.toMatch(

@@ -20,6 +20,7 @@ import {
   updateWorkspace,
 } from "../../../lib/control-api.ts";
 import { useConfirmDialog } from "../../../lib/confirm-dialog.ts";
+import { friendlyError } from "../../../lib/error-copy.ts";
 import { formatDateTime, t } from "../../../i18n/index.ts";
 import {
   Button,
@@ -48,8 +49,13 @@ export default function GeneralTab(props: { readonly workspaceId: string }) {
   const archivedWorkspaces = createMemo(() =>
     (archivedList() ?? []).filter((w) => Boolean(w.archivedAt)),
   );
+  // An errored resource THROWS on read; route reads through this guarded
+  // accessor so the Switch below reaches its error fallback instead of crashing
+  // the <Match when={workspace()}> evaluation.
+  const activeWorkspaces = () =>
+    workspaces.error ? [] : (workspaces.latest ?? []);
   const workspace = createMemo(() =>
-    (workspaces() ?? []).find((item) => item.id === props.workspaceId),
+    activeWorkspaces().find((item) => item.id === props.workspaceId),
   );
   const [displayNameDraft, setDisplayNameDraft] = createSignal("");
   const [saving, setSaving] = createSignal(false);
@@ -79,6 +85,7 @@ export default function GeneralTab(props: { readonly workspaceId: string }) {
 
   const save = async (event: Event) => {
     event.preventDefault();
+    if (saving()) return;
     const current = workspace();
     if (!current) return;
     const displayName = displayNameDraft().trim();
@@ -97,16 +104,17 @@ export default function GeneralTab(props: { readonly workspaceId: string }) {
       window.dispatchEvent(new Event("takosumi:workspaces-changed"));
       setSaveMessage(t("workspaceSettings.general.saved"));
     } catch (err) {
-      setSaveError(err instanceof Error ? err.message : String(err));
+      setSaveError(friendlyError(err, t).message);
     } finally {
       setSaving(false);
     }
   };
 
   const archive = async () => {
+    if (archiving()) return;
     const current = workspace();
     if (!current) return;
-    if ((workspaces() ?? []).length <= 1) {
+    if (activeWorkspaces().length <= 1) {
       setSaveError(t("workspaceSettings.general.archiveLastError"));
       return;
     }
@@ -133,7 +141,7 @@ export default function GeneralTab(props: { readonly workspaceId: string }) {
         window.dispatchEvent(new Event("takosumi:workspaces-changed"));
       }
     } catch (err) {
-      setSaveError(err instanceof Error ? err.message : String(err));
+      setSaveError(friendlyError(err, t).message);
     } finally {
       setArchiving(false);
     }
@@ -154,7 +162,7 @@ export default function GeneralTab(props: { readonly workspaceId: string }) {
         window.dispatchEvent(new Event("takosumi:workspaces-changed"));
       }
     } catch (err) {
-      setSaveError(err instanceof Error ? err.message : String(err));
+      setSaveError(friendlyError(err, t).message);
     } finally {
       setUnarchivingId(null);
     }
@@ -176,18 +184,28 @@ export default function GeneralTab(props: { readonly workspaceId: string }) {
       </Show>
       <Switch
         fallback={
-          <p class="muted">
-            {workspaces.error
-              ? t("common.fetchFailed", {
-                  message: String(
-                    (workspaces.error as { message?: string }).message ??
-                      workspaces.error,
-                  ),
-                })
-              : workspaces.loading
-                ? t("common.loading")
-                : t("workspaceSettings.general.notFound")}
-          </p>
+          <Show
+            when={workspaces.error}
+            fallback={
+              <p class="muted">
+                {workspaces.loading
+                  ? t("common.loading")
+                  : t("workspaceSettings.general.notFound")}
+              </p>
+            }
+          >
+            <div class="tg-card-error">
+              <p class="muted">{friendlyError(workspaces.error, t).message}</p>
+              <Button
+                variant="secondary"
+                size="sm"
+                type="button"
+                onClick={() => void refetch()}
+              >
+                {t("common.retry")}
+              </Button>
+            </div>
+          </Show>
         }
       >
         <Match when={workspace()}>
@@ -236,8 +254,13 @@ export default function GeneralTab(props: { readonly workspaceId: string }) {
                         variant="danger"
                         type="button"
                         busy={archiving()}
-                        disabled={
-                          archiving() || (workspaces() ?? []).length <= 1
+                        disabled={archiving() || activeWorkspaces().length <= 1}
+                        // The disabled path is otherwise a dead end — surface
+                        // WHY the last workspace cannot be archived on hover.
+                        title={
+                          activeWorkspaces().length <= 1
+                            ? t("workspaceSettings.general.archiveLastError")
+                            : undefined
                         }
                         onClick={archive}
                       >
@@ -266,9 +289,9 @@ export default function GeneralTab(props: { readonly workspaceId: string }) {
       </Switch>
       <Show when={archivedWorkspaces().length > 0}>
         <CardSection>
-          <h3 class="tg-card-title">
+          <h2 class="tg-card-title">
             {t("workspaceSettings.general.archivedTitle")}
-          </h3>
+          </h2>
           <ul class="wc-archived-list">
             <For each={archivedWorkspaces()}>
               {(w) => (

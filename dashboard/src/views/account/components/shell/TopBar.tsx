@@ -5,12 +5,11 @@
  * where the sidebar is hidden) and carries the global notifications / account
  * affordances (the profile avatar opens account, activity, and preferences).
  * Adding an app is owned by the store tab (shared nav model in `nav.ts`).
- * The bell badge shows the SAME 要対応 count as /notifications: both derive
- * from the shared cross-Workspace feed snapshot in lib/notifications.ts
- * (refreshed on navigation, TTL-throttled), scoped to the CURRENT Workspace,
- * so the numbers can never disagree, the badge persists on views that fetch
- * nothing else, and a Workspace switch never leaves the previous Workspace's
- * count on the bell.
+ * The bell badge and the /notifications 要対応 banner derive the SAME count from
+ * the SAME shared cross-Workspace feed snapshot in lib/notifications.ts
+ * (refreshed on navigation, TTL-throttled) — scoped to the current Workspace —
+ * so the badge persists on views that fetch nothing else, agrees with the page,
+ * and a Workspace switch never leaves the previous count on the bell.
  */
 import { A, useLocation } from "@solidjs/router";
 import { createEffect, createMemo, Show } from "solid-js";

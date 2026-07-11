@@ -27,7 +27,7 @@ import {
   Show,
   Switch,
 } from "solid-js";
-import { useNavigate, useParams } from "@solidjs/router";
+import { useNavigate, useParams, useSearchParams } from "@solidjs/router";
 import { Activity, ExternalLink } from "lucide-solid";
 import Page from "../account/components/auth/Page.tsx";
 import {
@@ -52,6 +52,7 @@ import {
   type RunAuditEvent,
   type RunCostInfo,
   type RunDiagnostic,
+  type RunLogs,
   type RunPlanResource,
 } from "../../lib/control-api.ts";
 import { isTakosumiCloudRuntime } from "../../lib/deployment-brand.ts";
@@ -498,12 +499,24 @@ function DiagnosticRow(props: { diagnostic: RunDiagnostic }) {
       : accessIssue()
         ? accessIssueDiagnostic(accessIssue()!).detail
         : diagnosticDisplayText(props.diagnostic.detail);
+  // A RAW (unclassified) runner error keeps its own newlines — the .wa-diag-msg
+  // span flattens them into flowing prose. Render multi-line raw text in a
+  // <pre> (THEME's .wa-pre applies white-space: pre-wrap). Classified issues
+  // stay a tidy one-line span. (Provider-connection causes are already given a
+  // friendly short message + hint via the accessIssue classification above.)
+  const rawMultilineMessage = () =>
+    !creditsRequired() && !accessIssue() && /\n/u.test(message());
   return (
     <li class={`wa-diag wa-diag-${props.diagnostic.severity}`}>
       <span class="wa-diag-sev">
         {diagnosticSeverityLabel(props.diagnostic.severity)}
       </span>
-      <span class="wa-diag-msg">{message()}</span>
+      <Show
+        when={rawMultilineMessage()}
+        fallback={<span class="wa-diag-msg">{message()}</span>}
+      >
+        <pre class="wa-pre">{message()}</pre>
+      </Show>
       <Show when={detail()}>
         {(text) => <pre class="wa-pre">{text()}</pre>}
       </Show>
@@ -840,17 +853,21 @@ function Inner() {
   // ?auto=install (store install) and ?auto=update (1-tap update from the app
   // detail) share the same App-Store-style progress screen; update mode only
   // swaps the copy (更新中/更新しました instead of 追加中/追加しました).
-  const autoMode =
-    typeof location !== "undefined"
-      ? new URLSearchParams(location.search).get("auto")
-      : null;
-  const autoUpdateMode = autoMode === "update";
-  const autoInstall = autoMode === "install" || autoUpdateMode;
+  // Read ?auto REACTIVELY: this same component instance navigates run → run
+  // in place (plan → apply, retry → fresh plan), so a value captured once from
+  // location.search would leave stale install/update chrome on the next run.
+  const [searchParams] = useSearchParams();
+  const autoMode = (): string | null => {
+    const value = searchParams.auto;
+    return typeof value === "string" ? value : null;
+  };
+  const autoUpdateMode = () => autoMode() === "update";
+  const autoInstall = () => autoMode() === "install" || autoUpdateMode();
   const withAuto = (path: string) =>
-    autoInstall
+    autoInstall()
       ? path +
         (path.includes("?") ? "&" : "?") +
-        (autoUpdateMode ? "auto=update" : "auto=install")
+        (autoUpdateMode() ? "auto=update" : "auto=install")
       : path;
   const [forceConsole, setForceConsole] = createSignal(false);
 
@@ -859,6 +876,19 @@ function Inner() {
     getRun,
   );
   const [logs, { refetch: refetchLogs }] = createResource(runId, getRunLogs);
+  // Last-good logs snapshot. The resource accessor `logs()` THROWS when the
+  // resource is errored, and the SSE stream refetches logs on every run event
+  // (plus the 3s fallback poll) — so one transient 5xx mid-deploy would throw
+  // out of a derived memo and blank/freeze the whole console. Read `logData()`
+  // (never `logs()`) for derived values; a failed refetch keeps the last-good
+  // logs on screen instead of clearing them.
+  const [logsSnapshot, setLogsSnapshot] = createSignal<RunLogs | undefined>();
+  createEffect(() => {
+    if (logs.error) return;
+    const latest = logs.latest;
+    if (latest) setLogsSnapshot(latest);
+  });
+  const logData = (): RunLogs | undefined => logsSnapshot();
   const [cost] = createResource(runId, async (id) => {
     try {
       return await getRunCostInfo(id);
@@ -926,11 +956,13 @@ function Inner() {
       return "settling";
     }
     // A failed activity fetch must NOT strand readiness in "settling" forever
-    // (activity never retries). Fall back to computing readiness from the
-    // deployment alone — no activation event available reads as not-required.
+    // (activity never retries), nor throw out of this memo — reading an errored
+    // resource throws. Fall back to computing readiness from the deployment
+    // alone; a `takosumi_release` deployment then reads as activation-pending
+    // (never openable without confirmed activation), everything else as ready.
     return deploymentReadinessAfterApply(
       completedRunDeployment(),
-      activity() ?? [],
+      activity.error ? [] : (activity() ?? []),
       capsuleId() ?? undefined,
     );
   });
@@ -940,7 +972,7 @@ function Inner() {
     if (completedRunReadiness() !== "ready") return undefined;
     return launchUrlFromDeployment(
       completedRunDeployment(),
-      activity() ?? [],
+      activity.error ? [] : (activity() ?? []),
       capsuleId() ?? undefined,
     );
   });
@@ -1060,12 +1092,14 @@ function Inner() {
   });
 
   const inputs = createMemo(() =>
-    inputNamesFromLogs(logs()?.auditEvents ?? []),
+    inputNamesFromLogs(logData()?.auditEvents ?? []),
   );
-  const changes = createMemo(() => changesFromLogs(logs()?.auditEvents ?? []));
+  const changes = createMemo(() =>
+    changesFromLogs(logData()?.auditEvents ?? []),
+  );
   const planResources = createMemo(() => run.latest?.planResources ?? []);
   const changeCounts = createMemo(() =>
-    changeCountsForRun(run.latest, logs()?.auditEvents ?? []),
+    changeCountsForRun(run.latest, logData()?.auditEvents ?? []),
   );
   // `run.summary` is optional on the wire — when the backend recorded neither
   // a summary nor log-parsable change items, changeCounts() is an all-zero
@@ -1073,18 +1107,36 @@ function Inner() {
   // card must both distinguish "0 changes" from "unknown".
   const changeCountsKnown = createMemo(() => {
     if (run.error) return false;
-    return changeCountsKnownForRun(run.latest, logs()?.auditEvents ?? []);
+    return changeCountsKnownForRun(run.latest, logData()?.auditEvents ?? []);
+  });
+  // A destroy plan that reports 削除0 is not a recorded fact — a removal
+  // deletes resources by definition, so the backend simply did not record the
+  // counts. Treat all-zero destroy counts as UNKNOWN so the honest 記録なし
+  // shows instead of contradicting the destructive warning with 作成0/変更0/削除0.
+  const changeCountsTrustworthy = createMemo(() => {
+    if (!changeCountsKnown()) return false;
+    const r = run.latest;
+    if (
+      (r?.type === "destroy_plan" || r?.type === "destroy_apply") &&
+      changeCounts().delete === 0
+    ) {
+      return false;
+    }
+    return true;
   });
   const connections = createMemo(() =>
-    connectionNamesFromLogs(logs()?.auditEvents ?? []),
+    connectionNamesFromLogs(logData()?.auditEvents ?? []),
   );
   const providerConnectionsById = createMemo(
     () =>
+      // `.error` first: reading an errored resource throws, which would take the
+      // whole run view (and, via the root boundary, the shell) down. A failed
+      // connection list degrades to no name resolution, not a crash.
       new Map(
-        (providerConnectionsForRun() ?? []).map((connection) => [
-          connection.id,
-          connection,
-        ]),
+        (providerConnectionsForRun.error
+          ? []
+          : (providerConnectionsForRun() ?? [])
+        ).map((connection) => [connection.id, connection]),
       ),
   );
   const providerRows = createMemo(() =>
@@ -1093,7 +1145,7 @@ function Inner() {
   const providerRowsNeedingAttention = createMemo(() =>
     providerRows().filter(providerResolutionNeedsAttention),
   );
-  const diagnosticRows = createMemo(() => logs()?.diagnostics ?? []);
+  const diagnosticRows = createMemo(() => logData()?.diagnostics ?? []);
   const creditsRequired = createMemo(() => {
     const r = run.latest;
     return r ? isCreditsRequiredRun(r, diagnosticRows()) : false;
@@ -1162,12 +1214,34 @@ function Inner() {
     if (siblings === undefined) return false;
     return !awaitsDeployApproval(r, siblings);
   };
-  // Header badge status: while this screen still renders the デプロイを実行
-  // CTA for a succeeded review run, the run is waiting on that approval —
-  // present 承認待ち (warn) instead of a contradictory 成功, matching the
-  // notification wording. Reuses the exact deploy-CTA condition.
-  const displayStatus = (r: Run): Run["status"] =>
-    isDeployableRun(r) ? "waiting_approval" : r.status;
+  // The sibling ledger is still loading for a plan that COULD await deploy:
+  // isDeployableRun stays conservatively false until it resolves, so the deploy
+  // button is withheld — don't show a "ready to deploy" line during this
+  // window (a settled 確認中 progress line instead of ready-copy-with-no-button).
+  const deployApprovalResolving = (r: Run): boolean =>
+    isDeployApprovalCandidate(r) &&
+    !applied() &&
+    !siblingRuns.error &&
+    siblingRuns.latest === undefined;
+  // A succeeded review run whose policy did NOT pass: it never becomes
+  // deployable, so it must still offer a way forward (re-plan) instead of
+  // dead-ending on the "blocked" line.
+  const isPolicyBlockedReview = (r: Run): boolean =>
+    isReviewRun(r) && r.status === "succeeded" && r.policyStatus !== "pass";
+  // Header badge status: a succeeded review run still awaiting its deploy is
+  // already approved/passed — the remaining step is EXECUTION, so present
+  // 実行待ち (ready to run), not 承認待ち (which reads as "still needs approval"
+  // and mislabels the destructive-execute stage). Reuses the deploy-CTA
+  // condition so the list and detail can never disagree.
+  const displayStatus = (r: Run): Run["status"] | "ready_to_deploy" =>
+    isDeployableRun(r) ? "ready_to_deploy" : r.status;
+  // Deploy/destructive CTAs read the change counts; before the logs land those
+  // counts are an all-zero fallback, so requiresDestructiveConfirmation would
+  // briefly flip the plain "デプロイ" button to the destructive gate. Hold both
+  // as a skeleton until the counts are trustworthy (backend summary, or the
+  // log fetch has settled).
+  const deployCtaReady = (r: Run): boolean =>
+    runHasChangeSummary(r) || !logs.loading;
   // Fail-closed: when the counts are unknowable (no backend summary, nothing
   // parsed from the logs) a plan with deletes would read as 0 — require the
   // explicit destructive confirmation instead of silently applying.
@@ -1265,7 +1339,27 @@ function Inner() {
   };
   createEffect(() => {
     const r = run.latest;
-    if (!autoInstall || autoContinued() || applied() || deploy.busy() || !r) {
+    if (!autoInstall() || autoContinued() || applied() || deploy.busy() || !r) {
+      return;
+    }
+    // Revisited ?auto plan whose deploy approval a later apply already consumed
+    // (Back / fresh tab / a different session where the sessionStorage guard is
+    // absent): isDeployableRun is false, so neither the auto-apply nor the
+    // escape below would fire and the install screen would spin 追加中… forever.
+    // Drop to the honest console (it shows すでにデプロイ済み + a link to the app).
+    if (deployApprovalConsumed(r)) {
+      setForceConsole(true);
+      return;
+    }
+    // We already auto-applied this plan earlier this session and navigated on
+    // to the apply run. Landing back here (browser Back) must not strand the
+    // user on a never-advancing "追加中…" spinner — the guard blocks a re-apply
+    // but the install screen would still render progress. Drop to the real run
+    // console (deploy button OR the settled すでにデプロイ済み summary) so the
+    // screen is always actionable, deployable or not. Checked before the logs
+    // gate below because this path never auto-applies — it only escapes.
+    if (autoAppliedAlready()) {
+      setForceConsole(true);
       return;
     }
     // Destructive-gate inputs must be SETTLED before auto-continuing: with no
@@ -1274,17 +1368,6 @@ function Inner() {
     // the stale fetch would read a plan with deletes as 0 and auto-apply it.
     // logs.loading is reactive, so this effect re-runs once the fetch lands.
     if (!runHasChangeSummary(r) && logs.loading) return;
-    if (autoAppliedAlready()) {
-      // We already auto-applied this plan earlier this session and navigated on
-      // to the apply run. Landing back here (browser Back) must not strand the
-      // user on a never-advancing "追加中…" spinner — the guard blocks a re-apply
-      // but the install screen would still render progress/deploy. Drop to the
-      // real run console (deploy button + links) so the screen is actionable.
-      if (isDeployableRun(r) && !requiresDestructiveConfirmation(r)) {
-        setForceConsole(true);
-      }
-      return;
-    }
     if (isDeployableRun(r) && !requiresDestructiveConfirmation(r)) {
       // Never auto-apply past the billing/cost gate the manual deploy button
       // enforces — wait for the check, and stop on a blocked estimate (the
@@ -1367,9 +1450,13 @@ function Inner() {
     | { readonly phase: "error" }
     | { readonly phase: "done" };
   const installState = createMemo((): InstallState => {
-    // A dead run fetch or a failed apply-run creation must surface as an
-    // error, not an eternal spinner.
-    if (run.error || deploy.error()) return { phase: "error" };
+    // A dead run fetch (initial load only) or a failed apply-run creation must
+    // surface as an error, not an eternal spinner. A transient refetch error
+    // while a run is already on screen must NOT flip the install screen to the
+    // failure card — keep rendering from the last-good run below.
+    if ((run.error && !run.latest) || deploy.error()) {
+      return { phase: "error" };
+    }
     const r = run.latest;
     if (!r) return { phase: "progress", step: "fetch" };
     // Terminal non-success states (failed / cancelled / expired) must not spin
@@ -1398,6 +1485,11 @@ function Inner() {
     // review (plan) run
     if (r.status === "waiting_approval") return { phase: "gate" };
     if (r.status === "succeeded") {
+      // Already deployed (a later apply consumed this plan's approval) — never
+      // spin "deploy" progress on a terminal plan. The auto-continue effect
+      // also forces the console here; this gate keeps an escape button in the
+      // brief window before that fires.
+      if (deployApprovalConsumed(r)) return { phase: "gate" };
       // Clean plan auto-continues to apply; a gate (approval / destructive /
       // blocked cost estimate) stops for explicit review.
       return r.policyStatus === "pass" &&
@@ -1519,7 +1611,13 @@ function Inner() {
           return { kind: "action", text: t("run.summary.waitingApproval") };
         case "succeeded": {
           if (r.policyStatus !== "pass") {
-            return { kind: "danger", text: t("run.summary.blocked") };
+            // Not a dead end: the re-plan action renders alongside (see
+            // isPolicyBlockedReview) and this hint points at the next step.
+            return {
+              kind: "danger",
+              text: t("run.summary.blocked"),
+              sub: t("run.summary.blockedHint"),
+            };
           }
           // The sibling ledger says a later apply already consumed this
           // plan's approval (e.g. opened from history) — settle the summary
@@ -1527,12 +1625,23 @@ function Inner() {
           if (deployApprovalConsumed(r)) {
             return { kind: "ok", text: t("run.summary.alreadyApplied") };
           }
+          // Ledger still loading: the deploy button is withheld, so show a
+          // neutral 確認中 line instead of "ready to deploy" copy with no button.
+          if (deployApprovalResolving(r)) {
+            return { kind: "progress", text: t("run.summary.checkingDeploy") };
+          }
+          // Only show the create/update/delete sub when the counts are a
+          // recorded fact — a destroy reporting 削除0 (or a plan with no
+          // recorded summary) must not sit under the ready line contradicting
+          // it. Honest omission over a fake 作成0/変更0/削除0.
           const counts = changeCounts();
-          const sub = t("run.summary.readyChanges", {
-            create: counts.create,
-            update: counts.update,
-            delete: counts.delete,
-          });
+          const sub = changeCountsTrustworthy()
+            ? t("run.summary.readyChanges", {
+                create: counts.create,
+                update: counts.update,
+                delete: counts.delete,
+              })
+            : undefined;
           return r.type === "destroy_plan"
             ? {
                 kind: "danger",
@@ -1722,12 +1831,14 @@ function Inner() {
   const installLiveText = () => {
     const st = installState();
     if (st.phase === "done") {
-      return autoUpdateMode
+      return autoUpdateMode()
         ? t("update.doneTitleGeneric")
         : t("install.doneTitleGeneric");
     }
     if (st.phase === "error") {
-      return autoUpdateMode ? t("update.errorTitle") : t("install.errorTitle");
+      return autoUpdateMode()
+        ? t("update.errorTitle")
+        : t("install.errorTitle");
     }
     if (st.phase === "gate") return t("install.gateTitle");
     return installStepLabel(
@@ -1760,7 +1871,7 @@ function Inner() {
                 ✓
               </span>
               <h2>
-                {autoUpdateMode
+                {autoUpdateMode()
                   ? name
                     ? t("update.doneTitle", { name })
                     : t("update.doneTitleGeneric")
@@ -1769,7 +1880,7 @@ function Inner() {
                     : t("install.doneTitleGeneric")}
               </h2>
               <p>
-                {autoUpdateMode ? t("update.doneSub") : t("install.doneSub")}
+                {autoUpdateMode() ? t("update.doneSub") : t("install.doneSub")}
               </p>
               <div class="av-install-actions">
                 <Show when={completedRunLaunchUrl()}>
@@ -1811,7 +1922,7 @@ function Inner() {
                 !
               </span>
               <h2>
-                {autoUpdateMode
+                {autoUpdateMode()
                   ? t("update.errorTitle")
                   : t("install.errorTitle")}
               </h2>
@@ -1866,7 +1977,7 @@ function Inner() {
                 <div class="av-install-head-text">
                   <h2>
                     {name ??
-                      (autoUpdateMode
+                      (autoUpdateMode()
                         ? t("update.installingGeneric")
                         : t("install.installingGeneric"))}
                   </h2>
@@ -1898,6 +2009,15 @@ function Inner() {
                   ],
                 )}
               </p>
+              {/* Escape hatch: a long or wedged deploy must never be a dead
+                  end — drop to the full run console on demand. */}
+              <button
+                type="button"
+                class="tg-btn tg-btn-ghost tg-btn-sm av-install-detail"
+                onClick={() => setForceConsole(true)}
+              >
+                {t("install.errorCta")}
+              </button>
             </div>
           </Match>
         </Switch>
@@ -1907,7 +2027,7 @@ function Inner() {
 
   return (
     <>
-      <Show when={autoInstall && !forceConsole()} fallback={installConsole()}>
+      <Show when={autoInstall() && !forceConsole()} fallback={installConsole()}>
         {installScreen()}
       </Show>
     </>
@@ -1964,7 +2084,11 @@ function Inner() {
               <Skeleton variant="block" />
             </Card>
           </Match>
-          <Match when={run.error}>
+          {/* Load-failure EmptyState is for the INITIAL load only: a transient
+              5xx from the SSE-driven log refetch / 3s poll while a run is
+              already on screen must NOT replace the console — it falls through
+              to the content Match below (which shows a quiet refresh notice). */}
+          <Match when={run.error && !run.latest}>
             <Show
               when={isRunNotFound(run.error)}
               fallback={
@@ -1998,9 +2122,18 @@ function Inner() {
               />
             </Show>
           </Match>
-          <Match when={run()}>
+          {/* `run.latest`, never `run()`: the accessor throws on error, and a
+              transient error must keep the last-good run rendered here. */}
+          <Match when={run.latest}>
             {(r) => (
               <div class="wa-stack">
+                {/* Quiet inline notice when a refetch failed but we still have
+                    the last-good run — mirrors RunGroupView's refresh notice. */}
+                <Show when={run.error}>
+                  <p class="wa-notice" role="alert">
+                    {t("run.refreshFailed")}
+                  </p>
+                </Show>
                 {/* ===== summary layer ===== */}
                 <Card>
                   <Show when={summary()}>
@@ -2070,10 +2203,20 @@ function Inner() {
                       </Button>
                     </Show>
 
+                    {/* Deploy CTA counts aren't trustworthy until the logs
+                        land — hold the deploy / destructive gate as a skeleton
+                        so it doesn't flash the wrong button first. */}
+                    <Show
+                      when={isDeployableRun(r()) && !deployCtaReady(r())}
+                    >
+                      <Skeleton variant="row" count={1} />
+                    </Show>
+
                     <Show
                       when={
                         !applied() &&
                         isDeployableRun(r()) &&
+                        deployCtaReady(r()) &&
                         !requiresDestructiveConfirmation(r())
                       }
                     >
@@ -2096,9 +2239,10 @@ function Inner() {
 
                     <Show
                       when={
-                        r().status === "failed" &&
-                        (isReviewRun(r()) ||
-                          connectionVerificationRequired()) &&
+                        ((r().status === "failed" &&
+                          (isReviewRun(r()) ||
+                            connectionVerificationRequired())) ||
+                          isPolicyBlockedReview(r())) &&
                         r().capsuleId
                       }
                     >
@@ -2172,10 +2316,18 @@ function Inner() {
 
                   {/* destructive double-confirmation */}
                   <Show
-                    when={!applied() && requiresDestructiveConfirmation(r())}
+                    when={
+                      !applied() &&
+                      requiresDestructiveConfirmation(r()) &&
+                      deployCtaReady(r())
+                    }
                   >
                     <p class="wa-deploy-warn">{t("run.destructiveWarning")}</p>
                     <div class="wa-form-actions">
+                      {/* This control only navigates back — it does NOT cancel
+                          the plan (a succeeded plan can't be cancelled; its
+                          deploy approval is simply left unused). Name it for
+                          what it does so it doesn't imply an abort. */}
                       <Button
                         variant="secondary"
                         type="button"
@@ -2187,7 +2339,7 @@ function Inner() {
                             navigate(`/services/${encodeURIComponent(id)}`);
                         }}
                       >
-                        {t("run.stop")}
+                        {t("run.stopGoBack")}
                       </Button>
                       <Button
                         variant="danger"
@@ -2261,11 +2413,13 @@ function Inner() {
                     {/* Honest zero: a settled run with neither a backend
                         summary nor log-derived items must say "no record",
                         never 作成0/変更0/削除0 (live-verified false zeros on a
-                        real apply). While the log refetch is in flight the
-                        strip stays (the record may still arrive). */}
+                        real apply). A destroy reporting 削除0 is likewise not a
+                        fact (see changeCountsTrustworthy) — it must not sit next
+                        to the "既存リソースの削除が含まれます" warning. While the log
+                        refetch is in flight the strip stays (record may arrive). */}
                     <Show
                       when={
-                        changeCountsKnown() ||
+                        changeCountsTrustworthy() ||
                         !isTerminalRunStatus(r().status) ||
                         logs.loading
                       }
@@ -2377,15 +2531,12 @@ function Inner() {
                       </div>
                     </Show>
                     <Switch>
-                      <Match when={logs.loading}>
+                      {/* Prefer last-good diagnostics: only skeleton / show the
+                          fetch-failed line on the INITIAL load (no snapshot) —
+                          a transient refetch error must keep the diagnostics on
+                          screen, not swap them for an error line. */}
+                      <Match when={logs.loading && !logsSnapshot()}>
                         <Skeleton variant="row" count={2} />
-                      </Match>
-                      <Match when={logs.error}>
-                        <p class="wa-error">
-                          {t("common.fetchFailed", {
-                            message: (logs.error as ControlApiError).message,
-                          })}
-                        </p>
                       </Match>
                       <Match when={diagnosticRows().length > 0}>
                         <Show
@@ -2410,6 +2561,13 @@ function Inner() {
                             </For>
                           </ul>
                         </details>
+                      </Match>
+                      <Match when={logs.error && !logsSnapshot()}>
+                        <p class="wa-error">
+                          {t("common.fetchFailed", {
+                            message: (logs.error as ControlApiError).message,
+                          })}
+                        </p>
                       </Match>
                     </Switch>
                   </Card>
@@ -2459,16 +2617,16 @@ function Inner() {
                       <summary>
                         {t("run.audit.title")}{" "}
                         <Badge tone="muted">
-                          {(logs()?.auditEvents ?? []).length}
+                          {(logData()?.auditEvents ?? []).length}
                         </Badge>
                       </summary>
                       <Card>
                         <Show
-                          when={(logs()?.auditEvents ?? []).length > 0}
+                          when={(logData()?.auditEvents ?? []).length > 0}
                           fallback={<p class="muted">{t("run.audit.empty")}</p>}
                         >
                           <ul class="wa-audit">
-                            <For each={logs()?.auditEvents ?? []}>
+                            <For each={logData()?.auditEvents ?? []}>
                               {(event) => <AuditEventRow event={event} />}
                             </For>
                           </ul>

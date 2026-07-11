@@ -70,7 +70,11 @@ function Inner() {
   );
   const capsules = createMemo(() => {
     const base = overview()?.capsules ?? [];
-    const extra = fullCapsules() ?? [];
+    // `.error` first: reading an errored resource THROWS. A failed
+    // supplemental full-list fetch degrades to the overview's first page (the
+    // fullCapsules.error toast + retry handles surfacing it) instead of
+    // white-screening the list.
+    const extra = fullCapsules.error ? [] : (fullCapsules() ?? []);
     if (extra.length === 0) return base;
     const byId = new Map<string, Capsule>();
     for (const c of [...base, ...extra]) if (!byId.has(c.id)) byId.set(c.id, c);

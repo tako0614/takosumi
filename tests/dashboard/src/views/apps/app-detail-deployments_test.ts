@@ -111,7 +111,11 @@ describe("Installation detail deployment surface", () => {
     // plan (what will be removed) is visible.
     expect(source).toContain("onClick={() => void destroyPlan.run()}");
     expect(source).not.toContain("confirmDestroy");
-    expect(source).not.toContain("useConfirmDialog");
+    // useConfirmDialog now exists, but ONLY for the settings-tab unsaved-edits
+    // leave guard — never for delete. The destroy CTA creates the plan directly
+    // (asserted above); the sole confirm() dialog is the leaveConfirm guard.
+    expect(source).toContain('title: t("app.settings.leaveConfirm.title")');
+    expect(source.match(/await confirm\(/g)?.length).toBe(1);
     // The danger tab still names the service in its warning header.
     expect(source).toContain(
       't("app.danger.destroyBody", {\n                          name: serviceLabel(),\n                        })',
@@ -241,7 +245,7 @@ describe("Installation detail deployment surface", () => {
 
   test("gates public open actions on release activation evidence", () => {
     expect(source).toContain("releaseActivationStatusForDeployment");
-    expect(source).toContain("isDeploymentPubliclyOpenable");
+    expect(source).toContain("isDeploymentOpenable");
     expect(source).toContain("launchUrlFromDeployment");
     expect(source).toContain('t("app.outputs.activationPending")');
     expect(source).toContain('t("app.outputs.activationFailed")');
@@ -260,7 +264,7 @@ describe("Installation detail deployment surface", () => {
 
   test("a past deployment offers the restore action wired to the rollback fn", () => {
     expect(source).toContain('t("app.deploys.restore")');
-    expect(source).toContain('t("app.deploys.restoreMenu")');
+    expect(source).toContain('t("app.deploys.restoreDisclosure")');
     expect(source).toContain('class="wb-inline-details"');
     expect(source).toContain("createDeploymentRollbackPlan");
     // The button is hidden on the current deployment (no-op rollback).
@@ -309,8 +313,10 @@ describe("Installation detail deployment surface", () => {
 
   test("does not offer stale open links for deleted services", () => {
     expect(source).toContain("serviceOpenable");
-    expect(source).toContain('capsule()?.status !== "destroyed"');
-    expect(source).toContain("isDeploymentPubliclyOpenable");
+    // capsuleData() is the crash-safe last-good accessor (never throws on a
+    // failed refetch); the destroyed-status gate on openability is unchanged.
+    expect(source).toContain('capsuleData()?.status !== "destroyed"');
+    expect(source).toContain("isDeploymentOpenable");
     expect(source).toContain('t("app.outputs.deletedSubtitle")');
     expect(source).toContain("openable={props.serviceOpenable}");
     expect(source).toContain("props.openable !== false");

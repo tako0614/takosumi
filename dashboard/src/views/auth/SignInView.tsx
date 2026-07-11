@@ -259,8 +259,24 @@ export function SignInPanel() {
           </button>
         ))}
       </div>
+      {/* Persistent polite region: both notices below are conditionally
+          mounted, and a role=status inserted together with its text can go
+          unannounced. Announce whichever notice is active here, and leave the
+          visible boxes as plain (roleless) content. */}
+      <p class="sr-only" role="status" aria-live="polite">
+        <Show when={providersLoaded() && providersLoadFailed()}>
+          {t("auth.providersLoadFailedTitle")} {providersLoadFailedMessage()}
+        </Show>
+        <Show
+          when={
+            providersLoaded() && !providersLoadFailed() && !hasEnabledProvider()
+          }
+        >
+          {t("auth.noProvidersTitle")} {noProvidersMessage()}
+        </Show>
+      </p>
       <Show when={providersLoaded() && providersLoadFailed()}>
-        <div class="sign-in-notice sign-in-notice-warn" role="status">
+        <div class="sign-in-notice sign-in-notice-warn">
           <strong>{t("auth.providersLoadFailedTitle")}</strong>
           <span>{providersLoadFailedMessage()}</span>
           <button type="button" class="sign-in-retry" onClick={loadProviders}>
@@ -273,7 +289,7 @@ export function SignInPanel() {
           providersLoaded() && !providersLoadFailed() && !hasEnabledProvider()
         }
       >
-        <div class="sign-in-notice" role="status">
+        <div class="sign-in-notice">
           <strong>{t("auth.noProvidersTitle")}</strong>
           <span>{noProvidersMessage()}</span>
           <button type="button" class="sign-in-retry" onClick={loadProviders}>

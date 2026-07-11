@@ -26,6 +26,7 @@ import {
   createSignal,
   For,
   Index,
+  type JSX,
   onCleanup,
   onMount,
   Show,
@@ -129,6 +130,8 @@ import {
   type Tone,
 } from "../../components/ui/index.ts";
 import { createAction } from "../account/lib/action.tsx";
+import { useConfirmDialog } from "../../lib/confirm-dialog.ts";
+import { friendlyError } from "../../lib/error-copy.ts";
 
 import {
   type StepState,
@@ -256,6 +259,26 @@ function StorePickBusyStatus() {
   );
 }
 
+/**
+ * A polite live region that mounts EMPTY, then reveals its content a microtask
+ * later (same idiom as StorePickBusyStatus). A screen reader only announces
+ * text that changes INSIDE an already-mounted live region, so a region that
+ * mounts together with its content is silent — this fills after mount so the
+ * status is spoken.
+ */
+function AnnouncedStatus(props: {
+  readonly class?: string;
+  readonly children: JSX.Element;
+}) {
+  const [announce, setAnnounce] = createSignal(false);
+  onMount(() => queueMicrotask(() => setAnnounce(true)));
+  return (
+    <div class={props.class} role="status" aria-live="polite">
+      <Show when={announce()}>{props.children}</Show>
+    </div>
+  );
+}
+
 function StoreIcon(props: { readonly entry: StoreEntry }) {
   if (props.entry.iconUrl) {
     return <img src={props.entry.iconUrl} alt="" loading="lazy" />;
@@ -306,6 +329,7 @@ function NoWorkspaceStartPanel(props: {
 
 function Inner() {
   const navigate = useNavigate();
+  const { confirm } = useConfirmDialog();
 
   // External install link (client-handled): another site links
   // `/install?git=…` (or the packed `?source=git::…` form), the router
@@ -384,6 +408,10 @@ function Inner() {
       capsuleNameFromUrl(initialInstallPrefill.git))
     : "";
   const [name, setName] = createSignal(initialName);
+  // True only after the visitor edits the display-name field themselves — a
+  // store pick auto-fills setName() with the suggested name, which must not
+  // count as meaningful input for the 選び直す discard guard.
+  const [nameTouched, setNameTouched] = createSignal(false);
   const [resourcePrefix, setResourcePrefix] = createSignal("");
   const [resourcePrefixTouched, setResourcePrefixTouched] = createSignal(false);
   const [inputVariables, setInputVariables] = createSignal<
@@ -440,6 +468,11 @@ function Inner() {
   const [providerConnections, setProviderConnections] = createSignal<
     readonly ProviderConnection[] | null
   >(null);
+  // A transient 5xx while loading Provider Connections must not masquerade as
+  // "no connections" (which would show the false クラウド接続が必要です blocker).
+  // Track the fetch error so the panel can offer a retry instead.
+  const [providerConnectionsLoadError, setProviderConnectionsLoadError] =
+    createSignal<unknown>(null);
   let loadedWorkspaceId: string | null = null;
   let connectionsPromise: Promise<readonly Connection[]> | null = null;
   let providerConnectionsPromise: Promise<
@@ -451,6 +484,7 @@ function Inner() {
     providerConnectionsPromise = null;
     setConnections(null);
     setProviderConnections(null);
+    setProviderConnectionsLoadError(null);
   };
 
   const loadConnections = async (
@@ -491,8 +525,15 @@ function Inner() {
     }
     const request = listProviderConnections(current)
       .then((items) => {
-        if (workspaceId() === current) setProviderConnections(items);
+        if (workspaceId() === current) {
+          setProviderConnections(items);
+          setProviderConnectionsLoadError(null);
+        }
         return items;
+      })
+      .catch((err) => {
+        if (workspaceId() === current) setProviderConnectionsLoadError(err);
+        throw err;
       })
       .finally(() => {
         if (providerConnectionsPromise === request) {
@@ -1975,12 +2016,8 @@ function Inner() {
     resetCompatibility();
   };
 
-  // Back to the picker: clear the chosen source/store state so the discovery
-  // section mounts again. Guarded while an install is in flight — an
-  // accidental tap must not silently drop a running install (the control is
-  // also disabled then).
-  const returnToDiscovery = () => {
-    if (busy()) return;
+  // Clear the chosen source/store state so the discovery section mounts again.
+  const performReturnToDiscovery = () => {
     storePickToken += 1;
     setStorePickBusy(false);
     setFailedStorePick(null);
@@ -1994,6 +2031,7 @@ function Inner() {
     setPinnedFullRef(null);
     setPath(".");
     setName("");
+    setNameTouched(false);
     setResourcePrefix("");
     setResourcePrefixTouched(false);
     setInputVariables([]);
@@ -2014,6 +2052,38 @@ function Inner() {
     // The clicked 選び直す button unmounts with the flow section — move focus
     // to the discovery heading instead of letting it fall to <body>.
     queueMicrotask(() => discoveryHeading?.focus());
+  };
+  // Meaningful input = something a one-tap 選び直す would silently discard. A
+  // freshly-picked service carrying only auto-filled defaults is not meaningful,
+  // so it returns without a prompt.
+  const hasMeaningfulInstallInput = () =>
+    Boolean(
+      nameTouched() ||
+        resourcePrefixTouched() ||
+        linkDraft().trim() ||
+        inputVariables().some((row) => row.name.trim() || row.value.trim()) ||
+        envVariables().some((row) => row.name.trim() || row.value.trim()) ||
+        Object.keys(storeInputTouched()).length > 0,
+    );
+  // Back to the picker. Guarded while an install is in flight — an accidental
+  // tap must not silently drop a running install (the control is also disabled
+  // then) — and confirmed when the form holds meaningful input so one tap never
+  // wipes a filled setup without warning.
+  const returnToDiscovery = () => {
+    if (busy()) return;
+    if (!hasMeaningfulInstallInput()) {
+      performReturnToDiscovery();
+      return;
+    }
+    void confirm({
+      title: t("new.discard.title"),
+      message: t("new.discard.body"),
+      confirmText: t("new.discard.confirm"),
+      cancelText: t("common.cancel"),
+      danger: true,
+    }).then((ok) => {
+      if (ok) performReturnToDiscovery();
+    });
   };
 
   let initialTcsHandoffApplied = false;
@@ -2385,7 +2455,9 @@ function Inner() {
       if (!canContinue()) {
         setStepInstall("idle");
         setStepPlan("idle");
-        setError(null);
+        // A blocker surfaced only after the source synced (e.g. a connection
+        // choice is now required). Say why instead of ending 追加中… silently.
+        setError(proceedBlocker());
         return;
       }
       const providerConnectionsForRun = providerConnectionsPayload();
@@ -2578,10 +2650,10 @@ function Inner() {
 
   const sourceAccessFields = () => (
     <div class="wb-advanced-group">
-      <h4 class="wb-subhead">
+      <h3 class="wb-subhead">
         <KeyRound size={15} aria-hidden="true" />
         {t("new.sourceAccess.title")}
-      </h4>
+      </h3>
       <p class="wb-note">{t("new.sourceAccess.body")}</p>
       <FormField label={t("new.sourceAccess.mode")}>
         <Select
@@ -2690,7 +2762,7 @@ function Inner() {
 
   const sourceDetailFields = () => (
     <div class="wb-advanced-group">
-      <h4 class="wb-subhead">{t("new.git.advanced")}</h4>
+      <h3 class="wb-subhead">{t("new.git.advanced")}</h3>
       <div class="wb-form-row">
         <FormField label={t("new.git.ref")}>
           <Input
@@ -2896,6 +2968,7 @@ function Inner() {
                     id="new-service-link"
                     name="serviceLink"
                     type="text"
+                    aria-label={t("new.discovery.linkPlaceholder")}
                     value={linkDraft()}
                     onInput={(event) => setLinkDraft(event.currentTarget.value)}
                     placeholder={t("new.discovery.linkPlaceholder")}
@@ -2997,6 +3070,7 @@ function Inner() {
                             disabled={busy()}
                             onInput={(e) => {
                               setName(e.currentTarget.value);
+                              setNameTouched(true);
                               resetCompatibility();
                             }}
                             placeholder="photo-blog"
@@ -3007,13 +3081,13 @@ function Inner() {
                         <For each={visibleStoreInputs(entry())}>
                           {(field) => (
                             <FormField
-                              label={
-                                field.type === "boolean"
-                                  ? undefined
-                                  : field.label[locale()]
-                              }
+                              label={field.label[locale()]}
                               hint={field.helper?.[locale()]}
                               required={field.required}
+                              // A boolean field renders a self-labeling Checkbox
+                              // (its own <label>); wrap it in a group, not a
+                              // second <label>.
+                              as={field.type === "boolean" ? "group" : "label"}
                             >
                               <Show
                                 when={field.type === "boolean"}
@@ -3065,7 +3139,7 @@ function Inner() {
                                 <Checkbox
                                   id={`store-input-${entry().id}-${field.name}`}
                                   name={`storeInput:${field.name}`}
-                                  label={field.label[locale()]}
+                                  label={t("app.config.enabled")}
                                   disabled={busy()}
                                   checked={storeInputBooleanChecked(
                                     entry(),
@@ -3105,6 +3179,7 @@ function Inner() {
                       disabled={busy()}
                       onInput={(e) => {
                         setName(e.currentTarget.value);
+                        setNameTouched(true);
                         resetCompatibility();
                       }}
                       placeholder="photo-blog"
@@ -3119,7 +3194,11 @@ function Inner() {
                   open={
                     shouldOpenServiceAdvanced() ||
                     hasMissingAdvancedStoreInputs() ||
-                    sourceAccessMode() !== "public"
+                    sourceAccessMode() !== "public" ||
+                    // A hostname conflict flags the サービスID field invalid
+                    // in here; keep the disclosure open so the chosen 候補名 is
+                    // visible and the queued focus() lands on a shown input.
+                    appHostnameConflict()
                   }
                 >
                   <summary>{t("new.advanced.title")}</summary>
@@ -3135,13 +3214,15 @@ function Inner() {
                           <For each={advancedStoreInputs(entry())}>
                             {(field) => (
                               <FormField
-                                label={
-                                  field.type === "boolean"
-                                    ? undefined
-                                    : field.label[locale()]
-                                }
+                                label={field.label[locale()]}
                                 hint={advancedStoreFieldHint(entry(), field)}
                                 required={field.required}
+                                // A boolean field renders a self-labeling
+                                // Checkbox (its own <label>); wrap it in a
+                                // group, not a second <label>.
+                                as={
+                                  field.type === "boolean" ? "group" : "label"
+                                }
                               >
                                 <Show
                                   when={field.type === "boolean"}
@@ -3177,7 +3258,7 @@ function Inner() {
                                   <Checkbox
                                     id={`store-input-advanced-${entry().id}-${field.name}`}
                                     name={`storeInputAdvanced:${field.name}`}
-                                    label={field.label[locale()]}
+                                    label={t("app.config.enabled")}
                                     disabled={busy()}
                                     checked={storeInputBooleanChecked(
                                       entry(),
@@ -3395,7 +3476,7 @@ function Inner() {
                     (busy() && stepSync() === "running")
                   }
                 >
-                  <div class="wb-status-panel" role="status" aria-live="polite">
+                  <AnnouncedStatus class="wb-status-panel">
                     <strong>{t("new.progress.title")}</strong>
                     <p>
                       {sourceSyncSlow()
@@ -3414,7 +3495,7 @@ function Inner() {
                         </details>
                       )}
                     </Show>
-                  </div>
+                  </AnnouncedStatus>
                 </Show>
 
                 <Show when={!staleCheckResult() && compatibility()}>
@@ -3498,6 +3579,33 @@ function Inner() {
                     <div class="wb-compat-head">
                       <h3 class="tg-card-title">{t("new.providers.title")}</h3>
                     </div>
+                    <Show when={providerConnectionsLoadError()}>
+                      {(loadError) => {
+                        // A failed connections fetch must not read as "no
+                        // connections" — offer a retry, not the false
+                        // missing-account blocker.
+                        const friendly = () => friendlyError(loadError(), t);
+                        return (
+                          <div class="wb-action-callout" role="alert">
+                            <strong>{friendly().message}</strong>
+                            <Show when={friendly().detail}>
+                              {(detail) => <p class="muted">{detail()}</p>}
+                            </Show>
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              type="button"
+                              onClick={() =>
+                                void loadProviderConnections({ force: true })
+                              }
+                            >
+                              {t("common.retry")}
+                            </Button>
+                          </div>
+                        );
+                      }}
+                    </Show>
+                    <Show when={!providerConnectionsLoadError()}>
                     <div class="wb-provider-grid">
                       <For each={providerRowsRequiringChoice()}>
                         {(row, index) => {
@@ -3573,6 +3681,7 @@ function Inner() {
                         </Button>
                         <p class="muted">{t("new.providers.returnNote")}</p>
                       </div>
+                    </Show>
                     </Show>
                   </section>
                 </Show>
@@ -3667,7 +3776,7 @@ function Inner() {
                 </Show>
                 <Show when={existingCapsule()}>
                   {(capsule) => (
-                    <div class="wb-action-callout" role="status">
+                    <AnnouncedStatus class="wb-action-callout">
                       <strong>{t("new.existing.title")}</strong>
                       <p>
                         {t("new.existing.body", {
@@ -3682,7 +3791,7 @@ function Inner() {
                       >
                         {t("new.existing.open")}
                       </Button>
-                    </div>
+                    </AnnouncedStatus>
                   )}
                 </Show>
               </form>

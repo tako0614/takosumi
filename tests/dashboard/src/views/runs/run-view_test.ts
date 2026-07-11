@@ -13,11 +13,13 @@ const source = readFileSync(
 );
 
 describe("RunView", () => {
-  test("labels a succeeded review run awaiting its deploy 承認待ち, not 成功", () => {
-    // The header badge must agree with the deploy CTA it renders right below —
-    // reuse the exact isDeployableRun condition, present waiting_approval.
+  test("labels a succeeded review run awaiting its deploy 実行待ち, not 成功", () => {
+    // The header badge must agree with the deploy CTA it renders right below: a
+    // deployable succeeded plan reads 実行待ち (ready to run — the remaining
+    // step is execution), reserving 承認待ち for runs whose backend status
+    // genuinely still needs approval. Either way it must never claim 成功.
     expect(source).toMatch(
-      /const displayStatus = \(r: Run\): Run\["status"\] =>\s*\n?\s*isDeployableRun\(r\) \? "waiting_approval" : r\.status;/,
+      /const displayStatus = \(r: Run\): Run\["status"\] \| "ready_to_deploy" =>\s*\n?\s*isDeployableRun\(r\) \? "ready_to_deploy" : r\.status;/,
     );
     expect(source).toContain("status={displayStatus(r())}");
     // The raw status must no longer drive the header badge directly.

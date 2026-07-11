@@ -43,8 +43,12 @@ describe("AppListView app launcher", () => {
       "export function isVisibleServiceCapsule",
     );
     expect(installationsUiSource).toContain('inst.status !== "destroyed"');
-    // Launcher reads surface URLs ungated so the tile opens the app's link.
-    expect(appListSource).toContain("appSurfacesFromOutputs");
+    // Launcher derives surfaces through the release-activation-GATED helper:
+    // a not-yet-activated surface keeps its tile but drops the URL (falling back
+    // to the detail screen) instead of linking a dead address.
+    expect(appListSource).toContain(
+      "appSurfacesFromDeployment(deployment, [], inst.id)",
+    );
     expect(appListSource).toContain("getDashboardOverviewCached");
     expect(appListSource).toContain("listCapsulesCached");
     expect(appListSource).toContain("listCurrentStateVersionsCached");
@@ -137,7 +141,9 @@ describe("AppListView app launcher", () => {
   test("opens the surface URL when present, else the service screen", () => {
     expect(appListSource).toContain("function AppTileView");
     expect(appListSource).toContain("when={openUrl()}");
-    expect(appListSource).toContain("appSurfacesFromOutputs");
+    // Gated helper: openable → URL kept (tile opens the link); not openable →
+    // URL stripped so openUrl() is falsy and the tile opens the service screen.
+    expect(appListSource).toContain("appSurfacesFromDeployment");
     expect(appListSource).toContain('target="_blank"');
     expect(appListSource).toContain("props.openDetail(tile.inst)");
     expect(appListSource).toContain('class="av-tile-manage"');
