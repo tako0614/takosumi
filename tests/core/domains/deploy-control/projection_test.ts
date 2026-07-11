@@ -159,7 +159,7 @@ test("output allowlist projection accepts declarative secret references without 
     name: "takos-git",
     version: "0.3.0",
     compute: { web: { kind: "worker" } },
-    secrets: {
+    resources: {
       published_mcp_auth_token: {
         type: "secret",
         bind: "PUBLISHED_MCP_AUTH_TOKEN",
@@ -190,6 +190,32 @@ test("output allowlist projection accepts declarative secret references without 
       { app_deployment: { sensitive: false, value } },
     ),
   ).toEqual({ app_deployment: value });
+});
+
+test("output allowlist projection rejects secret resource descriptors carrying values", () => {
+  const value = {
+    name: "bad-app",
+    resources: {
+      api_token: {
+        type: "secret",
+        bind: "API_TOKEN",
+        to: ["web"],
+        value: "must-not-be-projected",
+      },
+    },
+  };
+  expect(() =>
+    projectOutputAllowlistSpaceOutputs(
+      {
+        app_deployment: {
+          from: "app_deployment",
+          type: "json",
+          required: true,
+        },
+      },
+      { app_deployment: { sensitive: false, value } },
+    ),
+  ).toThrow("cannot be projected");
 });
 
 test("output allowlist projection accepts service auth contracts but rejects auth material", () => {
