@@ -206,6 +206,37 @@ test("output allowlist projection drops optional empty generated output shims", 
   expect(projectOutputAllowlistPublicOutputs(allowlist, outputs)).toEqual([]);
 });
 
+test("output allowlist projection drops optional outputs removed by destroy", () => {
+  const outputs = {
+    launch_url: {
+      sensitive: false,
+      value: null,
+    },
+  };
+  const optional = {
+    launch_url: {
+      from: "launch_url",
+      type: "url",
+    },
+  } as const;
+
+  expect(projectOutputAllowlistSpaceOutputs(optional, outputs)).toEqual({});
+  expect(projectOutputAllowlistPublicOutputs(optional, outputs)).toEqual([]);
+
+  expect(() =>
+    projectOutputAllowlistSpaceOutputs(
+      {
+        launch_url: {
+          from: "launch_url",
+          type: "url",
+          required: true,
+        },
+      },
+      outputs,
+    ),
+  ).toThrow("does not match declared projection type url");
+});
+
 test("template public string outputs allow ordinary labels containing secret words", () => {
   const template = {
     id: "cloudflare-hello-worker",

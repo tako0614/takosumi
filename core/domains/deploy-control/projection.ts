@@ -163,7 +163,7 @@ export function projectOutputAllowlistSpaceOutputs(
       }
       continue;
     }
-    if (entry.value === "" && !spec.required) {
+    if ((entry.value === "" || entry.value === null) && !spec.required) {
       continue;
     }
     if (!outputValueMatchesType(entry.value, spec.type)) {
