@@ -273,6 +273,12 @@ export class ServiceGrantBroker {
     const exporters: ResolvedProducer[] = [];
     for (const installation of installations) {
       if (installation.id === consumerInstallationId) continue;
+      // Output is retained for audit after removal, but a retained snapshot is
+      // not a live service. Stale Capsules still have an active deployment and
+      // remain usable until their update is applied.
+      if (installation.status !== "active" && installation.status !== "stale") {
+        continue;
+      }
       const output = await this.#store.getLatestOutputSnapshot(installation.id);
       if (!output) continue;
       let serviceExports: readonly ProjectedServiceExport[];
