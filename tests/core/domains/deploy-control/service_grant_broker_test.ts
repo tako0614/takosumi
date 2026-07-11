@@ -78,6 +78,8 @@ interface FakeStoreState {
     id: string;
     workspaceId: string;
     installConfigId?: string;
+    status?:
+      "pending" | "active" | "stale" | "error" | "disabled" | "destroyed";
   }[];
   readonly outputs: Record<string, Record<string, unknown> | undefined>;
   readonly mintEvents: CredentialMintEvent[];
@@ -86,9 +88,12 @@ interface FakeStoreState {
 function makeStore(state: FakeStoreState): OpenTofuDeploymentStore {
   return {
     listInstallations: async (spaceId?: string) =>
-      state.installations.filter(
-        (i) => spaceId === undefined || i.workspaceId === spaceId,
-      ),
+      state.installations
+        .filter((i) => spaceId === undefined || i.workspaceId === spaceId)
+        .map((installation) => ({
+          ...installation,
+          status: installation.status ?? "active",
+        })),
     getLatestOutputSnapshot: async (installationId: string) => {
       const workspaceOutputs = state.outputs[installationId];
       if (!workspaceOutputs) return undefined;
@@ -311,6 +316,45 @@ describe("ServiceGrantBroker", () => {
     ).mintServiceGrantEnv(makePlanRun(), "plan", "run_audit_ambig");
     await expect(env).rejects.toThrow(/no unique producer/);
     expect(state.mintEvents).toHaveLength(0);
+  });
+
+  test("ignores destroyed producers even when their outputs are retained", async () => {
+    const state = fullState({
+      installations: [
+        {
+          id: PRODUCER_ID,
+          workspaceId: WORKSPACE_ID,
+          status: "active",
+        },
+        {
+          id: IMPOSTOR_ID,
+          workspaceId: WORKSPACE_ID,
+          status: "destroyed",
+        },
+        { id: CONSUMER_ID, workspaceId: WORKSPACE_ID, status: "pending" },
+      ],
+      outputs: {
+        [PRODUCER_ID]: PRODUCER_OUTPUTS,
+        [IMPOSTOR_ID]: IMPOSTOR_OUTPUTS,
+        [CONSUMER_ID]: CONSUMER_OUTPUTS,
+      },
+    });
+    const env = await brokerWith(
+      state,
+      keyedResolver({
+        [PRODUCER_ID]: SIGNING_KEY,
+        [IMPOSTOR_ID]: IMPOSTOR_KEY,
+      }),
+    ).mintServiceGrantEnv(makePlanRun(), "plan", "run_audit_destroyed");
+
+    const verified = await verifyServiceScopedCredential(
+      SIGNING_KEY,
+      env!.TF_VAR_object_storage_access_token!,
+      "storage.object",
+    );
+    expect(verified.ok).toBe(true);
+    expect(state.mintEvents).toHaveLength(1);
+    expect(state.mintEvents[0]!.providerEnvId).toBe(PRODUCER_ID);
   });
 
   test("fails closed when the signing-key resolver errors", async () => {
