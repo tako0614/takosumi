@@ -14,6 +14,7 @@ import type { AccountsStore, OidcClientRecord } from "../store.ts";
 import {
   isManagedPublicHost,
   managedPublicHostForWorkspace,
+  normalizeManagedPublicBaseDomain,
 } from "../../../../core/domains/deploy-control/managed_public_domains.ts";
 import { refreshRepoOwnedInstallConfigForCapsule } from "./repo-owned-install-config.ts";
 
@@ -41,6 +42,7 @@ export async function ensureTakosumiAccountsOidcForCapsule(input: {
   readonly issuer: string;
   readonly capsule: Capsule;
   readonly installConfig: InstallConfig;
+  readonly managedPublicBaseDomain?: string;
 }): Promise<void> {
   const oidcExperience = installOidcClientExperience(input.installConfig);
   if (!oidcExperience) {
@@ -55,6 +57,7 @@ export async function ensureTakosumiAccountsOidcForCapsule(input: {
       input.installConfig.store?.installExperience,
     ),
     workspace.handle,
+    input.managedPublicBaseDomain,
   );
   if (!redirectOrigin) return;
 
@@ -143,6 +146,7 @@ export async function ensureTakosumiAccountsOidcForExistingCapsule(input: {
   readonly store: AccountsStore;
   readonly issuer?: string;
   readonly capsule: Capsule;
+  readonly managedPublicBaseDomain?: string;
 }): Promise<void> {
   if (!input.issuer) return;
   const storedInstallConfig =
@@ -160,6 +164,9 @@ export async function ensureTakosumiAccountsOidcForExistingCapsule(input: {
     issuer: input.issuer,
     capsule: input.capsule,
     installConfig,
+    ...(input.managedPublicBaseDomain
+      ? { managedPublicBaseDomain: input.managedPublicBaseDomain }
+      : {}),
   });
 }
 
@@ -244,8 +251,12 @@ function appOriginFromInstallVariables(
   variables: InstallConfig["variableMapping"],
   publicEndpoint?: PublicEndpointProjection,
   workspaceHandle?: string,
+  managedPublicBaseDomain?: string,
 ): string | undefined {
-  const baseDomain = publicEndpointBaseDomain(publicEndpoint?.baseDomain);
+  const declaredBaseDomain = publicEndpointBaseDomain(publicEndpoint?.baseDomain);
+  const baseDomain =
+    normalizeManagedPublicBaseDomain(managedPublicBaseDomain) ??
+    declaredBaseDomain;
   const requestedSlug = firstMappedString(variables, [
     publicEndpoint?.subdomainVariable,
     "public_subdomain",
@@ -262,10 +273,13 @@ function appOriginFromInstallVariables(
     try {
       const url = new URL(appUrl);
       if (url.protocol !== "https:" || !url.hostname) continue;
-      if (isManagedPublicHost(url.hostname, baseDomain)) {
+      const matchedBaseDomain = [baseDomain, declaredBaseDomain].find(
+        (candidate) => isManagedPublicHost(url.hostname, candidate),
+      );
+      if (matchedBaseDomain) {
         const managedHost = managedPublicHostForWorkspace(
           workspaceHandle,
-          url.hostname.slice(0, -(baseDomain.length + 1)),
+          url.hostname.slice(0, -(matchedBaseDomain.length + 1)),
           baseDomain,
         );
         if (managedHost) return `https://${managedHost}`;

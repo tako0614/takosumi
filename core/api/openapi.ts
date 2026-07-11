@@ -1637,6 +1637,7 @@ function connectionSchemas(): Record<string, Record<string, unknown>> {
       properties: {
         accountId: { type: "string" },
         zoneId: { type: "string" },
+        managedPublicBaseDomain: { type: "string", format: "hostname" },
         cloudflareTokenVending: {
           type: "object",
           required: ["policies"],

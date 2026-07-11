@@ -410,9 +410,13 @@ test("provider-connection connection pool mints a pending managed-provider conne
     scopeHints: {
       managedProvider: true,
       providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      managedPublicBaseDomain: "app-staging.takos.jp",
     },
   });
   expect(operatorConn.status).toBe("pending");
+  expect(operatorConn.scopeHints?.managedPublicBaseDomain).toBe(
+    "app-staging.takos.jp",
+  );
 
   const bundle = await vault.mintForPhase({
     spaceId: "space_other",

@@ -285,6 +285,8 @@ export interface AccountsHandlerOptions {
    * respond 503 after the session gate.
    */
   controlPlaneOperations?: ControlPlaneOperations;
+  /** Operator-owned hostname namespace used for managed Capsule endpoints. */
+  managedPublicBaseDomain?: string;
   publicBillingPlans?: readonly Record<string, unknown>[];
   billingCheckout?: StripeBillingCheckoutOptions;
   billingWebhook?: StripeBillingWebhookOptions;
@@ -332,6 +334,7 @@ export interface EphemeralAccountsHandlerOptions {
   launchTokens?: EphemeralLaunchTokenOptions;
   deployControl?: DeployControlFacadeOptions;
   controlPlaneOperations?: ControlPlaneOperations;
+  managedPublicBaseDomain?: string;
   publicBillingPlans?: readonly Record<string, unknown>[];
   billingCheckout?: StripeBillingCheckoutOptions;
   billingWebhook?: StripeBillingWebhookOptions;
@@ -588,6 +591,9 @@ export async function createEphemeralAccountsHandler(
     passkeys: options.passkeys,
     deployControl: options.deployControl,
     controlPlaneOperations: options.controlPlaneOperations,
+    ...(options.managedPublicBaseDomain
+      ? { managedPublicBaseDomain: options.managedPublicBaseDomain }
+      : {}),
     publicBillingPlans: options.publicBillingPlans,
     billingCheckout: options.billingCheckout,
     runtimeServiceTokens: options.runtimeServiceTokens,
@@ -1354,6 +1360,9 @@ export function createAccountsHandler(
             store,
             issuer,
             operations: options.controlPlaneOperations,
+            ...(options.managedPublicBaseDomain
+              ? { managedPublicBaseDomain: options.managedPublicBaseDomain }
+              : {}),
             publicBillingPlans: options.publicBillingPlans,
             sharedCellRuntime: options.sharedCellRuntime,
           }),

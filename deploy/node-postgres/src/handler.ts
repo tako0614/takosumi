@@ -64,6 +64,7 @@ export interface NodeAccountsServerConfig {
   readonly bindHost: string;
   readonly port: number;
   readonly issuer: string;
+  readonly managedPublicBaseDomain: string | undefined;
   readonly databaseUrl: string;
   readonly clients: readonly OidcClientRegistration[] | undefined;
   readonly platformAccess: PlatformAccessPolicy;
@@ -92,6 +93,10 @@ export function parseEnv(
     bindHost: optional(env, "TAKOSUMI_ACCOUNTS_BIND_HOST") ?? "0.0.0.0",
     port: parseIntOr(env.PORT ?? env.TAKOSUMI_ACCOUNTS_PORT, 8787),
     issuer,
+    managedPublicBaseDomain: optional(
+      env,
+      "TAKOSUMI_MANAGED_PUBLIC_BASE_DOMAIN",
+    ),
     databaseUrl,
     clients: parseClients(env),
     platformAccess: parsePlatformAccess(env),
