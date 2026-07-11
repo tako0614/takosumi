@@ -41,6 +41,9 @@ export interface ServiceGrantMintPort {
     planRun: PlanRun,
     phase: "plan" | "apply" | "destroy",
     auditRunId: string,
+    consumerOutputs?: Readonly<
+      Record<string, import("takosumi-contract").JsonValue>
+    >,
   ): Promise<Record<string, string> | undefined>;
 }
 
@@ -58,6 +61,10 @@ export interface ResolveRunEnvironmentInput {
   readonly phase: "plan" | "apply" | "destroy";
   readonly auditRunId: string;
   readonly credentialContext?: "opentofu" | "release_command";
+  /** Safe, allowlisted output projection from the current OpenTofu plan. */
+  readonly plannedWorkspaceOutputs?: Readonly<
+    Record<string, import("takosumi-contract").JsonValue>
+  >;
 }
 
 export interface ResolvedRunEnvironment {
@@ -65,6 +72,17 @@ export interface ResolvedRunEnvironment {
   readonly providerResolutions: readonly ProviderResolution[];
   readonly runEnvironmentEvidenceDigest: string;
   readonly redactionProfileId: typeof RUN_ENV_REDACTION_PROFILE_ID;
+  /** Non-secret names of service connection values added to the runner env. */
+  readonly serviceGrantEnvNames: readonly string[];
+}
+
+export interface EnrichRunEnvironmentWithPlannedServiceGrantsInput {
+  readonly planRun: PlanRun;
+  readonly auditRunId: string;
+  readonly plannedWorkspaceOutputs: Readonly<
+    Record<string, import("takosumi-contract").JsonValue>
+  >;
+  readonly base: ResolvedRunEnvironment;
 }
 
 export class RunEnvironmentResolutionError extends Error {
@@ -126,20 +144,65 @@ export class RunEnvResolver {
     // scoped tokens for standard service consumes and merge their TF_VAR_* env
     // into the dispatch-only credential channel.
     const withServiceGrants =
-      this.#serviceGrant && input.credentialContext !== "release_command"
+      this.#serviceGrant &&
+      input.credentialContext !== "release_command" &&
+      input.phase === "plan"
         ? mergeServiceGrantEnvIntoCredentials(
             credentials,
             await this.#serviceGrant.mintServiceGrantEnv(
               input.planRun,
               input.phase,
               input.auditRunId,
+              input.plannedWorkspaceOutputs,
             ),
           )
         : credentials;
+    const serviceGrantEnvNames = serviceGrantEnvNamesFromCredentials(
+      credentials,
+      withServiceGrants,
+    );
     return await this.#buildRunEnvironmentEvidence(
       input,
       providerResolutions,
       withServiceGrants,
+      serviceGrantEnvNames,
+    );
+  }
+
+  /**
+   * Adds service credentials discovered from the current plan without minting
+   * provider credentials a second time. The controller calls this once between
+   * the discovery plan and the final saved plan.
+   */
+  async enrichRunEnvironmentWithPlannedServiceGrants(
+    input: EnrichRunEnvironmentWithPlannedServiceGrantsInput,
+  ): Promise<ResolvedRunEnvironment> {
+    if (!this.#serviceGrant) return input.base;
+    const env = await this.#serviceGrant.mintServiceGrantEnv(
+      input.planRun,
+      "plan",
+      input.auditRunId,
+      input.plannedWorkspaceOutputs,
+    );
+    const credentials = mergeServiceGrantEnvIntoCredentials(
+      input.base.credentials,
+      env,
+    );
+    const serviceGrantEnvNames = serviceGrantEnvNamesFromCredentials(
+      input.base.credentials,
+      credentials,
+    );
+    if (serviceGrantEnvNames.length === 0) return input.base;
+    return await this.#buildRunEnvironmentEvidence(
+      {
+        planRun: input.planRun,
+        phase: "plan",
+        auditRunId: input.auditRunId,
+        plannedWorkspaceOutputs: input.plannedWorkspaceOutputs,
+      },
+      input.base.providerResolutions,
+      credentials,
+      [...input.base.serviceGrantEnvNames, ...serviceGrantEnvNames],
     );
   }
 
@@ -147,6 +210,7 @@ export class RunEnvResolver {
     input: ResolveRunEnvironmentInput,
     providerResolutions: readonly ProviderResolution[],
     credentials: RunCredentials | undefined,
+    serviceGrantEnvNames: readonly string[] = [],
   ): Promise<ResolvedRunEnvironment> {
     const credentialEnvNames =
       credentialEnvNamesFromRunCredentials(credentials);
@@ -157,12 +221,14 @@ export class RunEnvResolver {
       providerResolutions,
       credentialEnvNames,
       redactionProfileId: RUN_ENV_REDACTION_PROFILE_ID,
+      serviceGrantEnvNames,
     });
     return {
       ...(credentials ? { credentials } : {}),
       providerResolutions,
       runEnvironmentEvidenceDigest,
       redactionProfileId: RUN_ENV_REDACTION_PROFILE_ID,
+      serviceGrantEnvNames,
     };
   }
 
@@ -261,6 +327,16 @@ function credentialEnvNamesFromRunCredentials(
     ].sort();
   }
   return Object.keys(credentials).sort();
+}
+
+function serviceGrantEnvNamesFromCredentials(
+  before: RunCredentials | undefined,
+  after: RunCredentials | undefined,
+): readonly string[] {
+  const beforeNames = new Set(credentialEnvNamesFromRunCredentials(before));
+  return credentialEnvNamesFromRunCredentials(after).filter(
+    (name) => !beforeNames.has(name),
+  );
 }
 
 function isStructuredRunCredentials(

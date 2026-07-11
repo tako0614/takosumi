@@ -72,6 +72,16 @@ function resolver(input: {
     auditRunId: string;
     context: "opentofu" | "release_command";
   }>;
+  readonly serviceGrant?: {
+    mintServiceGrantEnv(
+      planRun: PlanRun,
+      phase: "plan" | "apply" | "destroy",
+      auditRunId: string,
+      consumerOutputs?: Readonly<
+        Record<string, import("takosumi-contract").JsonValue>
+      >,
+    ): Promise<Record<string, string> | undefined>;
+  };
 }): RunEnvResolver {
   return new RunEnvResolver({
     credentials: {
@@ -85,6 +95,7 @@ function resolver(input: {
       },
     },
     resolveRunInstallationProviderEnvBindings: async () => input.resolved,
+    ...(input.serviceGrant ? { serviceGrant: input.serviceGrant } : {}),
   });
 }
 
@@ -148,6 +159,60 @@ test("RunEnvResolver resolves secret Provider Connections without hashing secret
   });
   expect(first.redactionProfileId).toBe(RUN_ENV_REDACTION_PROFILE_ID);
   expect(first.runEnvironmentEvidenceDigest).toMatch(/^sha256:/);
+});
+
+test("RunEnvResolver enriches a discovery plan without re-minting provider credentials", async () => {
+  let providerMintCount = 0;
+  const subject = resolver({
+    resolved: [
+      {
+        provider: "cloudflare",
+        materialization: "secret",
+        connection: connection(),
+      },
+    ],
+    credentials: () => {
+      providerMintCount += 1;
+      return { CLOUDFLARE_API_TOKEN: "provider-value" };
+    },
+    serviceGrant: {
+      mintServiceGrantEnv: async (_run, phase, _audit, outputs) =>
+        phase === "plan" && outputs?.app_deployment
+          ? {
+              TF_VAR_object_storage_access_token: "service-value",
+              TF_VAR_object_storage_api_url: "https://storage.example/o",
+            }
+          : undefined,
+    },
+  });
+
+  const base = await subject.resolveRunEnvironment({
+    planRun: planRun(),
+    phase: "plan",
+    auditRunId: "plan_1",
+  });
+  const enriched = await subject.enrichRunEnvironmentWithPlannedServiceGrants({
+    planRun: planRun(),
+    auditRunId: "plan_1",
+    plannedWorkspaceOutputs: {
+      app_deployment: { name: "office" },
+    },
+    base,
+  });
+
+  expect(providerMintCount).toBe(1);
+  expect(enriched.credentials).toEqual({
+    CLOUDFLARE_API_TOKEN: "provider-value",
+    TF_VAR_object_storage_access_token: "service-value",
+    TF_VAR_object_storage_api_url: "https://storage.example/o",
+  });
+  expect(enriched.serviceGrantEnvNames).toEqual([
+    "TF_VAR_object_storage_access_token",
+    "TF_VAR_object_storage_api_url",
+  ]);
+  expect(enriched.runEnvironmentEvidenceDigest).not.toBe(
+    base.runEnvironmentEvidenceDigest,
+  );
 });
 
 test("RunEnvResolver mints provider env for release command context", async () => {

@@ -507,6 +507,65 @@ export function summaryFromPlanJson(planJson: string): {
   return { add, change, destroy };
 }
 
+/**
+ * Returns only allowlisted, fully-known, non-sensitive root outputs from a
+ * reviewed OpenTofu plan. This is intentionally narrower than the encrypted
+ * plan JSON artifact: it exists so the controller can resolve declarative
+ * service connections before the final saved plan is produced.
+ */
+export function plannedOutputsFromPlanJson(
+  planJson: string,
+  outputAllowlist:
+    | Readonly<
+        Record<string, { readonly from: string; readonly sensitive?: boolean }>
+      >
+    | undefined,
+): JsonRecord | undefined {
+  if (!outputAllowlist || Object.keys(outputAllowlist).length === 0) {
+    return undefined;
+  }
+  const parsed = JSON.parse(planJson) as { readonly output_changes?: unknown };
+  if (!isRecord(parsed.output_changes)) return undefined;
+  const requested = new Set(
+    Object.values(outputAllowlist).flatMap((entry) =>
+      entry.sensitive === true ? [] : [entry.from],
+    ),
+  );
+  const outputs: JsonRecord = {};
+  for (const name of requested) {
+    const change = recordField(parsed.output_changes, name);
+    if (!change) continue;
+    const after = recordField(change, "after");
+    if (after === undefined) continue;
+    if (containsTrue(recordField(change, "after_unknown"))) continue;
+    if (containsTrue(recordField(change, "after_sensitive"))) continue;
+    if (!isJsonValue(after)) continue;
+    outputs[name] = { sensitive: false, value: after };
+  }
+  return Object.keys(outputs).length > 0 ? outputs : undefined;
+}
+
+function containsTrue(value: unknown): boolean {
+  if (value === true) return true;
+  if (Array.isArray(value)) return value.some(containsTrue);
+  if (!isRecord(value)) return false;
+  return Object.values(value).some(containsTrue);
+}
+
+function isJsonValue(value: unknown): boolean {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "boolean"
+  ) {
+    return true;
+  }
+  if (typeof value === "number") return Number.isFinite(value);
+  if (Array.isArray(value)) return value.every(isJsonValue);
+  if (!isRecord(value)) return false;
+  return Object.values(value).every(isJsonValue);
+}
+
 // Trimmed per-resource change list (address/type/actions only) extracted from
 // `tofu show -json tfplan`. Used by the plan-JSON policy on the service side.
 export function resourceChangesFromPlanJson(planJson: string): Array<{

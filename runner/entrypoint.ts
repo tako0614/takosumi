@@ -37,6 +37,7 @@ export {
   assertRunnerPolicyForRequest,
   requiredProviderSourcesFromTerraformText,
   resourceChangesFromPlanJson,
+  plannedOutputsFromPlanJson,
 } from "./lib/providers.ts";
 export { safeRunId } from "./lib/util.ts";
 export type { CommandContext } from "./lib/types.ts";
