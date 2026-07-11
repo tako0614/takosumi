@@ -5544,13 +5544,14 @@ test("POST /api/v1/capsules/:id/plan reconciles existing Takosumi Accounts OIDC 
     store,
     operations,
     issuer: ORIGIN,
+    managedPublicBaseDomain: "app-staging.takos.jp",
   });
 
   expect(response?.status).toEqual(201);
   const oidcClient = await store.findOidcClientForCapsule("inst_1");
   expect(oidcClient?.clientId).toEqual("toc_existing_takos");
   expect(oidcClient?.redirectUris).toEqual([
-    "https://shota-takos-new.app.takos.jp/auth/oidc/callback",
+    "https://shota-takos-new.app-staging.takos.jp/auth/oidc/callback",
   ]);
   expect(oidcClient?.allowedScopes).toEqual([
     "openid",
@@ -5573,7 +5574,7 @@ test("POST /api/v1/capsules/:id/plan reconciles existing Takosumi Accounts OIDC 
     "toc_existing_takos",
   );
   expect(config.variableMapping.takosumi_accounts_redirect_uri).toEqual(
-    "https://shota-takos-new.app.takos.jp/auth/oidc/callback",
+    "https://shota-takos-new.app-staging.takos.jp/auth/oidc/callback",
   );
   expect(operations.calls.createCapsulePlan?.[0]).toEqual({
     capsuleId: "inst_1",

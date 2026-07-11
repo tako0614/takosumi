@@ -1479,6 +1479,7 @@ function normalizeScope(
     managedProvider?: boolean;
     providerBaseUrl?: string;
     managedProviderProfile?: string;
+    managedPublicBaseDomain?: string;
     cloudflareTokenVending?: ConnectionScopeHints["cloudflareTokenVending"];
     username?: string;
     knownHostsEntry?: string;
@@ -1515,6 +1516,12 @@ function normalizeScope(
     scope.managedProviderProfile.length > 0
   ) {
     out.managedProviderProfile = scope.managedProviderProfile;
+  }
+  if (
+    typeof scope.managedPublicBaseDomain === "string" &&
+    scope.managedPublicBaseDomain.length > 0
+  ) {
+    out.managedPublicBaseDomain = scope.managedPublicBaseDomain;
   }
   const cloudflareTokenVending = normalizeCloudflareTokenVending(
     scope.cloudflareTokenVending,

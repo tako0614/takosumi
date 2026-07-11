@@ -132,6 +132,7 @@ import {
   managedPublicBaseDomainFromInstallConfig,
   managedPublicHostFromLabel,
   managedPublicLabelForWorkspace,
+  normalizeManagedPublicBaseDomain,
   normalizeManagedPublicBaseDomains,
   publicHostPolicyKind,
 } from "../managed_public_domains.ts";
@@ -485,6 +486,7 @@ function hostFromRoutePatternValue(value: unknown): string | undefined {
 function publicHostsFromInstallExperienceVariables(
   variables: Readonly<Record<string, unknown>>,
   installConfig: InstallConfig | undefined,
+  managedPublicBaseDomain?: string,
 ): readonly string[] {
   const endpoint = installExperiencePublicEndpoint(
     installConfig?.store?.installExperience,
@@ -492,7 +494,9 @@ function publicHostsFromInstallExperienceVariables(
   if (!endpoint) return [];
 
   const hosts = new Set<string>();
-  const baseDomain = managedPublicBaseDomainFromInstallConfig(installConfig);
+  const baseDomain =
+    normalizeManagedPublicBaseDomain(managedPublicBaseDomain) ??
+    managedPublicBaseDomainFromInstallConfig(installConfig);
   const subdomainVariable = nonEmptyStringValue(endpoint.subdomainVariable);
   if (subdomainVariable) {
     const host = managedPublicHostFromLabel(
@@ -564,6 +568,7 @@ function finalizeManagedCloudflarePublicHostVariables(input: {
   readonly workspaceHandle: string;
   readonly endpointVariables: ReadonlySet<string>;
   readonly providerInputDefaults: Readonly<Record<string, JsonValue>>;
+  readonly managedPublicBaseDomain?: string;
   readonly variables: Readonly<Record<string, JsonValue>>;
 }): Readonly<Record<string, JsonValue>> {
   if (!hasManagedCloudflareProviderDefaults(input.providerInputDefaults)) {
@@ -581,7 +586,10 @@ function finalizeManagedCloudflarePublicHostVariables(input: {
   const routePatternVariable = nonEmptyStringValue(
     endpoint.routePatternVariable,
   );
-  const baseDomain = managedPublicBaseDomainFromInstallConfig(
+  const baseDomain =
+    normalizeManagedPublicBaseDomain(input.managedPublicBaseDomain) ??
+    managedPublicBaseDomainFromInstallConfig(input.installConfig);
+  const declaredBaseDomain = managedPublicBaseDomainFromInstallConfig(
     input.installConfig,
   );
   const canSet = (name: string) =>
@@ -624,8 +632,11 @@ function finalizeManagedCloudflarePublicHostVariables(input: {
     : undefined;
   const explicitUrlUsesManagedBase =
     explicitUrlHost !== undefined &&
-    publicHostPolicyKindForBase(explicitUrlHost, baseDomain) ===
-      "managed_default_hostname";
+    [baseDomain, declaredBaseDomain].some(
+      (candidate) =>
+        publicHostPolicyKindForBase(explicitUrlHost, candidate) ===
+        "managed_default_hostname",
+    );
   if (
     urlVariable &&
     (!nonEmptyStringValue(input.explicit[urlVariable]) ||
@@ -638,10 +649,15 @@ function finalizeManagedCloudflarePublicHostVariables(input: {
     routePatternVariable &&
     canSet(routePatternVariable) &&
     (!nonEmptyStringValue(input.explicit[routePatternVariable]) ||
-      publicHostPolicyKindForBase(
-        hostFromRoutePatternValue(input.explicit[routePatternVariable]) ?? "",
-        baseDomain,
-      ) === "managed_default_hostname")
+      [baseDomain, declaredBaseDomain].some(
+        (candidate) =>
+          publicHostPolicyKindForBase(
+            hostFromRoutePatternValue(
+              input.explicit[routePatternVariable],
+            ) ?? "",
+            candidate,
+          ) === "managed_default_hostname",
+      ))
   ) {
     out[routePatternVariable] = `${host}/*`;
   }
@@ -1000,7 +1016,12 @@ export class RunEngine {
       operation !== "destroy" &&
       internal.driftCheck !== true
     ) {
-      await this.#reservePublicHostsForPlan(installation, variables, now);
+      await this.#reservePublicHostsForPlan(
+        installation,
+        variables,
+        now,
+        installTypePlan?.managedPublicBaseDomain,
+      );
     }
     const planRunId = this.#newId("plan");
     const sourceSnapshotId =
@@ -2090,6 +2111,12 @@ export class RunEngine {
       workspaceHandle: workspace.handle,
       endpointVariables: publicEndpointVariableNames(input.installConfig),
       providerInputDefaults: installTypePlan.providerInputDefaults,
+      ...(installTypePlan.managedPublicBaseDomain
+        ? {
+            managedPublicBaseDomain:
+              installTypePlan.managedPublicBaseDomain,
+          }
+        : {}),
       variables: normalizeVariables(
         mergeJsonVariableDefaults(
           installTypePlan.providerInputDefaults,
@@ -2135,6 +2162,7 @@ export class RunEngine {
     installation: Installation,
     variables: Readonly<Record<string, JsonValue>>,
     now: number,
+    managedPublicBaseDomain?: string,
   ): Promise<void> {
     const installConfig = await this.#store.getInstallConfig(
       installation.installConfigId,
@@ -2142,9 +2170,11 @@ export class RunEngine {
     const requestedHosts = publicHostsFromInstallExperienceVariables(
       variables,
       installConfig,
+      managedPublicBaseDomain,
     );
     const managedBaseDomains = normalizeManagedPublicBaseDomains([
-      managedPublicBaseDomainFromInstallConfig(installConfig),
+      normalizeManagedPublicBaseDomain(managedPublicBaseDomain) ??
+        managedPublicBaseDomainFromInstallConfig(installConfig),
     ]);
     // The Core can claim an operator-owned managed namespace immediately.
     // User-owned custom domains remain ordinary provider inputs until the

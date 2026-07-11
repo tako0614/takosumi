@@ -669,7 +669,8 @@ compatibility endpoint, not only to `EdgeWorker`:
 
 ```json
 {
-  "providerBaseUrl": "https://app.takosumi.com/compat/cloudflare/client/v4"
+  "providerBaseUrl": "https://app.takosumi.com/compat/cloudflare/client/v4",
+  "managedPublicBaseDomain": "app.takos.jp"
 }
 ```
 
@@ -680,6 +681,11 @@ generated-root secret variables. In Takosumi Cloud this means the Cloudflare
 provider can receive a Workspace-bound Takosumi personal access token or service
 token through the normal `CLOUDFLARE_API_TOKEN` env name while the provider block
 only contains the managed `base_url`.
+`managedPublicBaseDomain` is target capability metadata, not a module-specific
+rewrite: the control plane uses it consistently for generated endpoint inputs,
+hostname ownership, compatibility route state, and OIDC redirect registration.
+Repository `public_endpoint.baseDomain` remains the portable fallback when the
+selected target does not advertise one.
 
 From the user's perspective the entrypoint is still the normal OpenTofu
 provider or `takosumi_edge_worker`; behind that entrypoint the selected

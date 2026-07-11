@@ -235,6 +235,9 @@ export async function handleCapsules(
         store,
         issuer: ctx.issuer,
         capsule: installation,
+        ...(ctx.managedPublicBaseDomain
+          ? { managedPublicBaseDomain: ctx.managedPublicBaseDomain }
+          : {}),
       });
       const response = await operations.createCapsulePlan(
         capsuleId,

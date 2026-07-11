@@ -153,6 +153,8 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
   readonly CLOUDFLARE_API_TOKEN?: string;
   readonly TAKOSUMI_CLOUDFLARE_VIRTUAL_ACCOUNT_ID?: string;
   readonly TAKOSUMI_CLOUDFLARE_VIRTUAL_ZONE_ID?: string;
+  /** Public hostname namespace owned by the operator-managed target. */
+  readonly TAKOSUMI_MANAGED_PUBLIC_BASE_DOMAIN?: string;
 }
 
 export type OpenTofuRunAction =

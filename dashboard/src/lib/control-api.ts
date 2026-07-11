@@ -960,6 +960,7 @@ export interface ConnectionScopeHints {
   readonly managedProvider?: boolean;
   readonly providerBaseUrl?: string;
   readonly managedProviderProfile?: string;
+  readonly managedPublicBaseDomain?: string;
   readonly awsRegion?: string;
   readonly gcpProjectId?: string;
   readonly gcpServiceAccountEmail?: string;

@@ -155,6 +155,7 @@ interface ControlRouteContext {
   readonly store: AccountsStore;
   readonly operations?: ControlPlaneOperations;
   readonly issuer?: string;
+  readonly managedPublicBaseDomain?: string;
   readonly sharedCellRuntime?: SharedCellRuntimeAllocator;
   readonly publicBillingPlans?: readonly Record<string, unknown>[];
 }
@@ -221,6 +222,9 @@ export async function handleControlRoute(
           operations,
           store,
           ...(context.issuer ? { issuer: context.issuer } : {}),
+          ...(context.managedPublicBaseDomain
+            ? { managedPublicBaseDomain: context.managedPublicBaseDomain }
+            : {}),
           session: { subject: bearer.auth.subject },
           sharedCellRuntime: context.sharedCellRuntime,
           publicBillingPlans: context.publicBillingPlans,
@@ -269,6 +273,7 @@ interface DispatchInput {
   readonly operations: ControlPlaneOperations;
   readonly store: AccountsStore;
   readonly issuer?: string;
+  readonly managedPublicBaseDomain?: string;
   readonly session: { readonly subject: string };
   readonly sharedCellRuntime?: SharedCellRuntimeAllocator;
   readonly publicBillingPlans?: readonly Record<string, unknown>[];
@@ -290,6 +295,9 @@ async function dispatch(input: DispatchInput): Promise<Response> {
       operations: input.operations,
       store: input.store,
       ...(input.issuer ? { issuer: input.issuer } : {}),
+      ...(input.managedPublicBaseDomain
+        ? { managedPublicBaseDomain: input.managedPublicBaseDomain }
+        : {}),
       session: input.session,
       ...(input.sharedCellRuntime
         ? { sharedCellRuntime: input.sharedCellRuntime }

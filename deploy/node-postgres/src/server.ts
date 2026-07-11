@@ -280,10 +280,16 @@ async function buildAccountsHandler(
   const commonOptions = {
     issuer: config.issuer,
     store,
+    ...(config.managedPublicBaseDomain
+      ? { managedPublicBaseDomain: config.managedPublicBaseDomain }
+      : {}),
     ...(config.clients ? { clients: config.clients } : {}),
     platformAccess: config.platformAccess,
     ...(config.runtimeProjectionMaterialResolver
-      ? { runtimeProjectionMaterialResolver: config.runtimeProjectionMaterialResolver }
+      ? {
+          runtimeProjectionMaterialResolver:
+            config.runtimeProjectionMaterialResolver,
+        }
       : {}),
     ...(config.loginEmailAllowlist
       ? { loginEmailAllowlist: config.loginEmailAllowlist }
