@@ -4912,10 +4912,14 @@ test("accounts serve dry-run prints server plan", async () => {
     configured: false,
   });
   expect(
-    plan.runtimeProjectionMaterialResolver.paths.includes("takosumi.identity.oidc"),
+    plan.runtimeProjectionMaterialResolver.paths.includes(
+      "takosumi.identity.oidc",
+    ),
   ).toEqual(true);
   expect(
-    plan.runtimeProjectionMaterialResolver.paths.includes("takosumi.billing.usage"),
+    plan.runtimeProjectionMaterialResolver.paths.includes(
+      "takosumi.billing.usage",
+    ),
   ).toEqual(true);
   expect(plan.accountPlaneFacades).toEqual([
     "dashboard web/API",
@@ -6336,7 +6340,7 @@ test("accounts migrate dry-run prints ordered migration plan", async () => {
     driver: "postgres",
     source: "--database-url",
   });
-  expect(plan.migrations.length).toEqual(29);
+  expect(plan.migrations.length).toEqual(30);
   expect(plan.migrations[0].name).toEqual("001_app_installation_ledger.sql");
   expect(plan.migrations[16].name).toEqual(
     "017_drop_binding_grant_runtime_binding.sql",
@@ -6345,6 +6349,9 @@ test("accounts migrate dry-run prints ordered migration plan", async () => {
   expect(plan.migrations[24].name).toEqual("025_privacy_requests.sql");
   expect(plan.migrations[25].name).toEqual(
     "026_app_installation_source_path.sql",
+  );
+  expect(plan.migrations[29].name).toEqual(
+    "030_oidc_clients_drop_installation_fkey.sql",
   );
   expect(plan.migrations[0].checksum.startsWith("sha256:")).toEqual(true);
   expect(stdout.join("\n").includes("accounts:secret")).toEqual(false);

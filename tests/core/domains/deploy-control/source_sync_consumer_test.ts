@@ -38,7 +38,10 @@ class StubRunner {
     this.calls.push(job);
     await this.onSourceSync?.(job);
     if (this.fail) throw new Error("runner exploded");
-    return this.result;
+    return {
+      repositoryInstallMetadata: { status: "absent" },
+      ...this.result,
+    };
   }
 }
 
@@ -80,9 +83,7 @@ function build(
   return { store, vault, sourcesService, runner, controller };
 }
 
-function sourceSnapshot(
-  over: Partial<SourceSnapshot> = {},
-): SourceSnapshot {
+function sourceSnapshot(over: Partial<SourceSnapshot> = {}): SourceSnapshot {
   return {
     id: "snap_prev",
     origin: "git",
@@ -97,6 +98,7 @@ function sourceSnapshot(
       "spaces/space_1/sources/src_test00000001/snapshots/snap_prev/source.tar.zst",
     archiveDigest: "sha256:" + "b".repeat(64),
     archiveSizeBytes: 1024,
+    repositoryInstallMetadata: { status: "absent" },
     fetchedByRunId: "ssr_prev",
     fetchedAt: TEST_TIME,
     ...over,
@@ -296,6 +298,7 @@ test("source_sync consumer reuses an unchanged SourceSnapshot archive", async ()
     archiveObjectKey: previousArchiveKey,
     archiveDigest: previousDigest,
     archiveSizeBytes: 2048,
+    repositoryInstallMetadata: { status: "absent" },
     fetchedByRunId: "ssr_prev",
     fetchedAt: "1970-01-01T00:00:00.000Z",
   });
@@ -336,6 +339,46 @@ test("source_sync consumer reuses an unchanged SourceSnapshot archive", async ()
   expect(reused?.archiveSizeBytes).toBe(2048);
 });
 
+test("source_sync consumer does not reuse a snapshot that predates repository metadata observation", async () => {
+  const { store, sourcesService, runner, controller } = build();
+  const { source } = await sourcesService.createSource({
+    spaceId: "space_1",
+    name: "repo",
+    url: "https://github.com/acme/repo.git",
+  });
+  await store.putSourceSnapshot({
+    id: "snap_without_repository_metadata",
+    origin: "git",
+    workspaceId: "space_1",
+    spaceId: "space_1",
+    sourceId: source.id,
+    url: source.url,
+    ref: source.defaultRef,
+    resolvedCommit: runner.result.resolvedCommit,
+    path: source.defaultPath,
+    archiveObjectKey:
+      "spaces/space_1/sources/src_old/snapshots/snap_old/source.tar.zst",
+    archiveDigest: "sha256:" + "d".repeat(64),
+    archiveSizeBytes: 2048,
+    fetchedByRunId: "ssr_old",
+    fetchedAt: "1970-01-01T00:00:00.000Z",
+  });
+  runner.onSourceSync = async (job) => {
+    expect(job.reuseSnapshot).toBeUndefined();
+  };
+
+  const { run } = await controller.createSourceSync(source.id);
+  await controller.runQueuedSourceSync(run.id);
+
+  expect((await store.getSourceSyncRun(run.id))?.status).toBe("succeeded");
+  const snapshots = await store.listSourceSnapshots(source.id);
+  expect(snapshots).toHaveLength(2);
+  expect(snapshots.at(-1)?.repositoryInstallMetadata).toEqual({
+    status: "absent",
+  });
+  expect(snapshots.at(-1)?.archiveObjectKey).toBe(run.archiveObjectKey);
+});
+
 test("source_sync consumer reuses an unchanged public Git archive from a sibling Source in the same space", async () => {
   const { store, sourcesService, runner, controller } = build();
   const { source: firstSource } = await sourcesService.createSource({
@@ -364,6 +407,7 @@ test("source_sync consumer reuses an unchanged public Git archive from a sibling
     archiveObjectKey: previousArchiveKey,
     archiveDigest: previousDigest,
     archiveSizeBytes: 2048,
+    repositoryInstallMetadata: { status: "absent" },
     fetchedByRunId: "ssr_prev",
     fetchedAt: "1970-01-01T00:00:00.000Z",
   });
@@ -427,6 +471,7 @@ test("source_sync consumer fast-reuses a pinned commit SourceSnapshot without di
     archiveObjectKey: previousArchiveKey,
     archiveDigest: previousDigest,
     archiveSizeBytes: 2048,
+    repositoryInstallMetadata: { status: "absent" },
     fetchedByRunId: "ssr_prev",
     fetchedAt: "1970-01-01T00:00:00.000Z",
   });
@@ -565,6 +610,7 @@ test("source_sync consumer rejects a reused archive outside the requested snapsh
       "spaces/space_1/sources/src_prev/snapshots/snap_prev/source.tar.zst",
     archiveDigest: "sha256:" + "b".repeat(64),
     archiveSizeBytes: 2048,
+    repositoryInstallMetadata: { status: "absent" },
     fetchedByRunId: "ssr_prev",
     fetchedAt: "1970-01-01T00:00:00.000Z",
   });
