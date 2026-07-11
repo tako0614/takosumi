@@ -148,6 +148,13 @@ works without it. The file may describe `modulePath`, icon, visible inputs,
 `installExperience`, and output display hints, but it must not own `git`,
 `source`, `ref`, `commit`, `resolvedCommit`, or `installConfigId`.
 
+Git source sync records a bounded observation of this repository-root document
+on the immutable `SourceSnapshot`, separately from the selected OpenTofu module
+archive. This keeps a nested `modulePath` from hiding or drifting the setup and
+OIDC contract. A snapshot created without that observation is not reused by a
+new sync; Store-backed planning fails closed instead of continuing with stale
+presentation metadata.
+
 `installExperience` の `oidc_client` projection は、public OIDC client metadata
 (issuer、client id、redirect URI) に加えて必要な OAuth scope を宣言できます。
 `openid` は必須で、scope は重複のない non-empty token に限ります。client secret、access

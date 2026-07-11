@@ -91,6 +91,7 @@ import type {
   ListSourcesResponse,
   ListSourceSnapshotsResponse,
   PatchSourceRequest,
+  RepositoryInstallMetadataSnapshot,
   Source,
   SourceResponse,
   SourceSnapshot,
@@ -631,6 +632,8 @@ export interface OpenTofuSourceSyncResult {
   readonly resolvedCommit: string;
   readonly archiveDigest: string;
   readonly archiveSizeBytes: number;
+  /** Repository-root presentation metadata captured from the same Git commit. */
+  readonly repositoryInstallMetadata?: RepositoryInstallMetadataSnapshot;
   /** Existing archive object key when an unchanged ref reused a SourceSnapshot. */
   readonly archiveObjectKey?: string;
   readonly phaseTimings?: readonly SourceSyncPhaseTiming[];

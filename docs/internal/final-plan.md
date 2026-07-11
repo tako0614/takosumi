@@ -243,6 +243,13 @@ flow, and service-side output policy respectively. Public values come from the
 module's typed OpenTofu outputs after that policy is applied. Do not use source
 comments as the metadata schema.
 
+`source_sync` records a bounded observation of the repository-root document on
+the immutable `SourceSnapshot`, separately from the selected module archive.
+This preserves one Git/commit authority even when `Source.defaultPath` points at
+a nested OpenTofu module. Snapshots without a repository-metadata observation
+are not reusable; a Store-backed plan must fail closed rather than preserve
+stale inputs, endpoint projections, or OIDC scopes.
+
 ```json
 {
   "projections": [

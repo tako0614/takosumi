@@ -76,6 +76,21 @@ export interface Source {
 export type SourceSnapshotOrigin = "git" | "upload" | "artifact";
 
 /**
+ * Bounded observation of the optional repository-owned install presentation
+ * document at `.well-known/tcs.json` from the same Git commit as a
+ * {@link SourceSnapshot}. The selected OpenTofu module remains the executable
+ * archive; this observation only keeps repository-root presentation metadata
+ * immutable when the Source points at a nested module path.
+ */
+export type RepositoryInstallMetadataSnapshot =
+  | { readonly status: "absent" }
+  | { readonly status: "present"; readonly text: string }
+  | {
+      readonly status: "invalid";
+      readonly reason: "not_regular_file" | "too_large";
+    };
+
+/**
  * Immutable archive snapshot of a Capsule pinned to a content digest.
  *
  * For `origin: "git"` it is produced by a `source_sync` run in the Runner
@@ -116,6 +131,12 @@ export interface SourceSnapshot {
   readonly archiveObjectKey: string;
   readonly archiveDigest: string;
   readonly archiveSizeBytes: number;
+  /**
+   * Repository-root metadata observed during Git source sync. Missing only on
+   * snapshots created before this invariant was introduced; such snapshots are
+   * not reused by a new source sync.
+   */
+  readonly repositoryInstallMetadata?: RepositoryInstallMetadataSnapshot;
   readonly fetchedByRunId: string;
   readonly fetchedAt: string;
 }
@@ -192,8 +213,7 @@ export interface SourceSyncPhaseTiming {
  * and REQUIRES `scope.knownHostsEntry` (StrictHostKeyChecking=yes always).
  */
 export type SourceGitConnectionKind =
-  | "source_git_https_token"
-  | "source_git_ssh_key";
+  "source_git_https_token" | "source_git_ssh_key";
 
 export const SOURCE_GIT_CONNECTION_KINDS: readonly SourceGitConnectionKind[] = [
   "source_git_https_token",

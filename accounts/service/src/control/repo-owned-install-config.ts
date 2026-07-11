@@ -2,6 +2,7 @@ import type { Source, SourceSnapshot } from "takosumi-contract/sources";
 import type { Capsule, InstallConfig } from "takosumi-contract/install-configs";
 
 import type { ControlPlaneOperations } from "../control-operations.ts";
+import { OpenTofuControllerError } from "../../../../core/domains/deploy-control/errors.ts";
 import {
   installConfigStoreValue,
   isPlainJsonObject,
@@ -135,7 +136,10 @@ export async function refreshRepoOwnedInstallConfigForCapsule(input: {
     modulePath: input.installConfig.modulePath,
   });
   if (hydrated.metadataUnavailable || !hydrated.storeMetadata) {
-    return input.installConfig;
+    throw new OpenTofuControllerError(
+      "failed_precondition",
+      "repo_metadata_unavailable: repository install metadata could not be loaded from the latest Git SourceSnapshot; sync the Source and retry",
+    );
   }
   const nextModulePath = hydrated.modulePath ?? input.installConfig.modulePath;
   if (
@@ -159,6 +163,15 @@ async function readRepoOwnedTcsMetadata(input: {
   readonly modulePath?: string;
 }): Promise<Record<string, unknown> | undefined> {
   if (!input.sourceSnapshot) return undefined;
+  const captured = input.sourceSnapshot.repositoryInstallMetadata;
+  if (captured) {
+    if (captured.status !== "present") return undefined;
+    try {
+      return repoMetadataRecord(JSON.parse(captured.text));
+    } catch {
+      return undefined;
+    }
+  }
   try {
     const files = await input.operations.readSourceSnapshotFiles(
       input.sourceSnapshot.id,

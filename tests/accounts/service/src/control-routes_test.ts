@@ -5379,48 +5379,70 @@ test("POST /api/v1/capsules/:id/plan reconciles existing Takosumi Accounts OIDC 
       },
     };
   };
-  operations.readSourceSnapshotFiles = async (id, options) => {
-    operations.calls.readSourceSnapshotFiles = [id, options];
-    return [
-      {
-        path: ".well-known/tcs.json",
-        text: JSON.stringify({
-          schemaVersion: "tcs.repo/v1",
-          modulePath: "deploy/opentofu",
-          inputs: [],
-          installExperience: {
-            projections: [
-              {
-                kind: "public_endpoint",
-                variables: {
-                  subdomain: "public_subdomain",
-                  url: "public_url",
-                },
-                baseDomain: "app.takos.jp",
-              },
-              {
-                kind: "oidc_client",
-                variables: {
-                  issuerUrl: "takosumi_accounts_issuer_url",
-                  accountsUrl: "takosumi_accounts_url",
-                  clientId: "takosumi_accounts_client_id",
-                  redirectUri: "takosumi_accounts_redirect_uri",
-                },
-                callbackPath: "/auth/oidc/callback",
-                scopes: [
-                  "openid",
-                  "profile",
-                  "email",
-                  "offline_access",
-                  "capsules:read",
-                  "capsules:write",
-                ],
-              },
-            ],
+  const repositoryMetadataText = JSON.stringify({
+    schemaVersion: "tcs.repo/v1",
+    modulePath: "deploy/opentofu",
+    inputs: [],
+    installExperience: {
+      projections: [
+        {
+          kind: "public_endpoint",
+          variables: {
+            subdomain: "public_subdomain",
+            url: "public_url",
           },
-        }),
+          baseDomain: "app.takos.jp",
+        },
+        {
+          kind: "oidc_client",
+          variables: {
+            issuerUrl: "takosumi_accounts_issuer_url",
+            accountsUrl: "takosumi_accounts_url",
+            clientId: "takosumi_accounts_client_id",
+            redirectUri: "takosumi_accounts_redirect_uri",
+          },
+          callbackPath: "/auth/oidc/callback",
+          scopes: [
+            "openid",
+            "profile",
+            "email",
+            "offline_access",
+            "capsules:read",
+            "capsules:write",
+          ],
+        },
+      ],
+    },
+  });
+  operations.listSourceSnapshots = async (sourceId) => ({
+    snapshots: [
+      {
+        id: "snap_1",
+        origin: "git",
+        workspaceId: "space_a",
+        spaceId: "space_a",
+        sourceId,
+        url: "https://github.com/tako0614/takos.git",
+        ref: "main",
+        resolvedCommit: "a".repeat(40),
+        path: "deploy/opentofu",
+        archiveObjectKey:
+          "spaces/space_a/sources/src_x/snapshots/snap_1/source.tar.zst",
+        archiveDigest: `sha256:${"b".repeat(64)}`,
+        archiveSizeBytes: 123,
+        repositoryInstallMetadata: {
+          status: "present",
+          text: repositoryMetadataText,
+        },
+        fetchedByRunId: "ssr_1",
+        fetchedAt: "2026-01-01T00:00:00Z",
       },
-    ];
+    ],
+  });
+  operations.readSourceSnapshotFiles = async () => {
+    throw new Error(
+      "captured repository metadata must avoid runner inspection",
+    );
   };
 
   const { request: req, url } = request(
@@ -5450,10 +5472,7 @@ test("POST /api/v1/capsules/:id/plan reconciles existing Takosumi Accounts OIDC 
     "capsules:read",
     "capsules:write",
   ]);
-  expect(operations.calls.readSourceSnapshotFiles).toEqual([
-    "snap_1",
-    { modulePath: "deploy/opentofu" },
-  ]);
+  expect(operations.calls.readSourceSnapshotFiles).toBeUndefined();
   const config = operations.calls.putInstallConfig?.[0] as {
     variableMapping: Record<string, unknown>;
   };
@@ -5467,6 +5486,83 @@ test("POST /api/v1/capsules/:id/plan reconciles existing Takosumi Accounts OIDC 
     capsuleId: "inst_1",
     options: undefined,
   });
+});
+
+test("POST /api/v1/capsules/:id/plan refuses stale Store metadata when the latest Git snapshot has no repository contract", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  operations.installations.getInstallConfig = async (id) => ({
+    id,
+    name: "stale-store-config",
+    sourceKind: "generic_capsule",
+    installType: "opentofu_module",
+    trustLevel: "trusted",
+    variableMapping: { public_url: "https://shota-app.app.takos.jp" },
+    outputAllowlist: {},
+    policy: {},
+    store: {
+      source: {
+        git: "https://github.com/acme/app.git",
+        path: "deploy/opentofu",
+      },
+      order: 1,
+      surface: "service",
+      kind: "worker",
+      provider: "cloudflare",
+      suggestedName: "app",
+      badge: { ja: "追加候補", en: "Installable" },
+      name: { ja: "App", en: "App" },
+      description: { ja: "App", en: "App" },
+      inputs: [{ name: "stale_input", type: "string" }],
+    },
+    createdAt: "2026-01-01T00:00:00Z",
+    updatedAt: "2026-01-01T00:00:00Z",
+  });
+  operations.listSourceSnapshots = async (sourceId) => ({
+    snapshots: [
+      {
+        id: "snap_without_contract",
+        origin: "git",
+        workspaceId: "space_a",
+        spaceId: "space_a",
+        sourceId,
+        url: "https://github.com/acme/app.git",
+        ref: "main",
+        resolvedCommit: "a".repeat(40),
+        path: "deploy/opentofu",
+        archiveObjectKey:
+          "spaces/space_a/sources/src_x/snapshots/snap_without_contract/source.tar.zst",
+        archiveDigest: `sha256:${"b".repeat(64)}`,
+        archiveSizeBytes: 123,
+        repositoryInstallMetadata: { status: "absent" },
+        fetchedByRunId: "ssr_1",
+        fetchedAt: "2026-01-01T00:00:00Z",
+      },
+    ],
+  });
+
+  const { request: req, url } = request(
+    "POST",
+    "/api/v1/capsules/inst_1/plan",
+    { cookie },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+    issuer: ORIGIN,
+  });
+
+  expect(response?.status).toEqual(409);
+  expect(await response?.json()).toMatchObject({
+    error: {
+      code: "failed_precondition",
+      message: expect.stringContaining("repo_metadata_unavailable"),
+    },
+  });
+  expect(operations.calls.createCapsulePlan).toBeUndefined();
 });
 
 test("POST /api/v1/capsules/:id/plan forwards a preflight compatibility report hint", async () => {

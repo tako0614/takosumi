@@ -7,6 +7,7 @@
 import {
   chmod,
   cp,
+  lstat,
   mkdir,
   readFile,
   readdir,
@@ -26,6 +27,7 @@ import type {
 } from "./types.ts";
 import {
   RUN_ROOT,
+  CAPSULE_COMPATIBILITY_MAX_FILE_BYTES,
   DEFAULT_PREPARED_SOURCE_MAX_BYTES,
   DEFAULT_SOURCE_ARCHIVE_MAX_BYTES,
   SOURCE_CREDENTIAL_ENV_NAMES,
@@ -70,6 +72,9 @@ import {
   parseRunnerProfile,
   positiveIntegerLimitFromProfile,
 } from "./parsing.ts";
+import type { RepositoryInstallMetadataSnapshot } from "takosumi-contract/sources";
+
+const REPOSITORY_INSTALL_METADATA_PATH = ".well-known/tcs.json";
 
 export async function ensureSourceAvailable(
   source: OpenTofuModuleSource,
@@ -273,6 +278,10 @@ export async function runSourceSync(
         gitContext,
       ),
     );
+    const repositoryInstallMetadata = await timer.measure(
+      "source_repository_metadata",
+      () => readRepositoryInstallMetadata(workspace.sourceRoot),
+    );
     const subtree = await timer.measure("source_subtree", () =>
       resolveSourceSubtree(workspace.sourceRoot, source.path),
     );
@@ -304,6 +313,7 @@ export async function runSourceSync(
         resolvedCommit,
         archiveDigest,
         archiveSizeBytes: archiveBytes.byteLength,
+        repositoryInstallMetadata,
         sourceArchive: {
           kind: "runner-local",
           ref: `runner-local://${runId}/source-archive`,
@@ -317,6 +327,35 @@ export async function runSourceSync(
     );
   } finally {
     await shredCredentialDir(credentialDir);
+  }
+}
+
+/**
+ * Observes repository-root presentation metadata without making it part of
+ * the executable OpenTofu module archive. Symlinks and oversized documents are
+ * recorded as invalid so an ordinary Git Source can still sync while a
+ * Store-backed install fails closed with an actionable metadata error.
+ */
+export async function readRepositoryInstallMetadata(
+  repositoryRoot: string,
+): Promise<RepositoryInstallMetadataSnapshot> {
+  const metadataPath = join(repositoryRoot, REPOSITORY_INSTALL_METADATA_PATH);
+  try {
+    const info = await lstat(metadataPath);
+    if (!info.isFile()) {
+      return { status: "invalid", reason: "not_regular_file" };
+    }
+    if (info.size > CAPSULE_COMPATIBILITY_MAX_FILE_BYTES) {
+      return { status: "invalid", reason: "too_large" };
+    }
+    return { status: "present", text: await readFile(metadataPath, "utf8") };
+  } catch (error) {
+    const code =
+      typeof error === "object" && error !== null && "code" in error
+        ? String((error as { readonly code?: unknown }).code)
+        : "";
+    if (code === "ENOENT") return { status: "absent" };
+    throw error;
   }
 }
 
