@@ -4,6 +4,8 @@ import {
   fetchTcsListingsPage,
   hydrateRequiredTcsListingWithRepoMetadata,
   hydrateTcsListingWithRepoMetadata,
+  parseTcsRepoMetadata,
+  tcsListingFromRepoMetadata,
   type TcsListing,
 } from "../../../../dashboard/src/lib/tcs-client.ts";
 
@@ -38,6 +40,38 @@ afterEach(() => {
 });
 
 describe("TCS repo metadata", () => {
+  test("builds direct-Git setup metadata without a Store listing", () => {
+    const metadata = parseTcsRepoMetadata({
+      schemaVersion: "tcs.repo/v1",
+      id: "tako/example",
+      modulePath: "deploy/opentofu",
+      suggestedName: "example",
+      inputs: [
+        {
+          name: "public_subdomain",
+          format: "subdomain",
+          required: true,
+          label: text("Public slug"),
+        },
+      ],
+    });
+    expect(metadata).toBeDefined();
+
+    const direct = tcsListingFromRepoMetadata(
+      {
+        git: "https://github.com/tako0614/example.git",
+        ref: "v1.0.0",
+        path: ".",
+      },
+      metadata!,
+    );
+
+    expect(direct.id).toBe("tako/example");
+    expect(direct.source.path).toBe("deploy/opentofu");
+    expect(direct.suggestedName).toBe("example");
+    expect(direct.inputs?.[0]?.name).toBe("public_subdomain");
+  });
+
   test("strips deprecated setup fields from listing reads", async () => {
     const staleListing = listing({
       inputs: [
