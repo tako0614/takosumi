@@ -265,6 +265,12 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).toContain(
       "managedProviderConnectionForRow(fallbackRow)",
     );
+    expect(newAppViewSource).toContain(
+      "if (!managedStoreProviderForCurrentSource()) return;",
+    );
+    expect(newAppViewSource).toContain(
+      "void loadProviderConnections().catch(() => {});",
+    );
     expect(newAppViewSource).toContain("managedProviderVariableDefaults");
     expect(newAppViewSource).toContain("managedStoreProviderForCurrentSource");
     expect(newAppViewSource).toContain("managedProviderConnectionForRow");

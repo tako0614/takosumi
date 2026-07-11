@@ -1691,6 +1691,12 @@ function Inner() {
   const managedStoreProviderForCurrentSource = (): string | undefined =>
     selectedServiceEntry()?.provider ??
     storeListingForCurrentSource()?.provider;
+
+  createEffect(() => {
+    if (!managedStoreProviderForCurrentSource()) return;
+    void loadProviderConnections().catch(() => {});
+  });
+
   const rowCanUseManagedProviderFallback = (row: ProviderConnectionRow) => {
     const managedProvider = managedStoreProviderForCurrentSource();
     return (
