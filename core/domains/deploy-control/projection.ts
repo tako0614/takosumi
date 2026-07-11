@@ -408,7 +408,7 @@ function containsSecretLikeAppDeploymentDescriptorValue(
     inspected += 1;
     if (inspected > 1_000) return true;
     if (typeof current === "string") {
-      if (isSafeAppDeploymentSecretDescriptorString(path, current)) {
+      if (isSafeAppDeploymentAuthDescriptorString(path, current)) {
         continue;
       }
       if (
@@ -426,9 +426,23 @@ function containsSecretLikeAppDeploymentDescriptorValue(
       }
       continue;
     }
+    if (path.length === 1 && path[0] === "resources") {
+      for (const [name, descriptor] of Object.entries(current)) {
+        if (!/^[a-z][a-z0-9_]{0,127}$/u.test(name)) return true;
+        if (!isJsonObjectValue(descriptor)) return true;
+        if (descriptor.type === "secret") {
+          if (!isSafeAppDeploymentSecretResourceDescriptor(descriptor)) {
+            return true;
+          }
+          continue;
+        }
+        stack.push({ value: descriptor, path: [...path, name] });
+      }
+      continue;
+    }
     for (const [key, nested] of Object.entries(current)) {
       if (isDeclarativeConsumeEnvProjection(path, key, nested)) continue;
-      if (isSafeAppDeploymentSecretDescriptorKey(path, key, nested)) {
+      if (isSafeAppDeploymentAuthDescriptorKey(path, key, nested)) {
         stack.push({ value: nested, path: [...path, key] });
         continue;
       }
@@ -441,21 +455,34 @@ function containsSecretLikeAppDeploymentDescriptorValue(
   return false;
 }
 
-function isSafeAppDeploymentSecretDescriptorKey(
+function isSafeAppDeploymentSecretResourceDescriptor(
+  value: Readonly<Record<string, JsonValue>>,
+): boolean {
+  const allowedKeys = new Set(["type", "bind", "to", "generate"]);
+  if (Object.keys(value).some((key) => !allowedKeys.has(key))) return false;
+  if (value.type !== "secret") return false;
+  if (typeof value.bind !== "string" || !isSafeSecretReference(value.bind)) {
+    return false;
+  }
+  if (
+    !Array.isArray(value.to) ||
+    value.to.length === 0 ||
+    value.to.some(
+      (target) =>
+        typeof target !== "string" ||
+        !/^[a-z][a-z0-9_-]{0,127}$/u.test(target),
+    )
+  ) {
+    return false;
+  }
+  return value.generate === undefined || typeof value.generate === "boolean";
+}
+
+function isSafeAppDeploymentAuthDescriptorKey(
   path: readonly string[],
   key: string,
   value: JsonValue,
 ): boolean {
-  if (path.length === 0 && key === "secrets") {
-    return value !== null && typeof value === "object" && !Array.isArray(value);
-  }
-  if (
-    path.length === 1 &&
-    path[0] === "secrets" &&
-    /^[a-z][a-z0-9_]{0,127}$/u.test(key)
-  ) {
-    return value !== null && typeof value === "object" && !Array.isArray(value);
-  }
   if (
     path.length === 2 &&
     path[0] === "publish" &&
@@ -486,24 +513,10 @@ function isSafeAppDeploymentSecretDescriptorKey(
   return false;
 }
 
-function isSafeAppDeploymentSecretDescriptorString(
+function isSafeAppDeploymentAuthDescriptorString(
   path: readonly string[],
   value: string,
 ): boolean {
-  if (
-    path.length === 3 &&
-    path[0] === "secrets" &&
-    path[2] === "type"
-  ) {
-    return value === "secret";
-  }
-  if (
-    path.length === 3 &&
-    path[0] === "secrets" &&
-    path[2] === "bind"
-  ) {
-    return isSafeSecretReference(value);
-  }
   return (
     path.length === 5 &&
     path[0] === "publish" &&
