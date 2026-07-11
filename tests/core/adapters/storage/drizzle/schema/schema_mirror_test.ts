@@ -569,7 +569,7 @@ test("Worker D1 bootstrap records canonical schema migration ledger", async () =
   const rows = migrationRows.results ?? [];
   expect(rows.map((row) => row.version)).toEqual([
     1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
-    22, 23,
+    22, 23, 24,
   ]);
   expect(rows.map((row) => row.name)).toEqual([
     "d1_opentofu_connections_and_secret_blobs_shape",
@@ -595,6 +595,7 @@ test("Worker D1 bootstrap records canonical schema migration ledger", async () =
     "d1_opentofu_capsule_active_name_unique",
     "d1_opentofu_install_config_store_key",
     "d1_opentofu_public_host_owner_slots",
+    "d1_opentofu_public_host_legacy_grandfather",
   ]);
   for (const row of rows) {
     expect(row.checksum).toMatch(/^sha256:[0-9a-f]{64}$/);
@@ -604,10 +605,12 @@ test("Worker D1 bootstrap records canonical schema migration ledger", async () =
   }
 });
 
-test("Worker D1 owner-slot migration classifies legacy managed hostnames", async () => {
+test("Worker D1 owner-slot migrations grandfather legacy reservations", async () => {
   const db = new SqliteFakeD1();
   await ensureD1OpenTofuLedgerSchema(db);
-  await db.prepare(`delete from schema_migrations where version = 23`).run();
+  await db
+    .prepare(`delete from schema_migrations where version in (23, 24)`)
+    .run();
   await db.prepare(`drop table public_host_reservations`).run();
   await db
     .prepare(
@@ -685,7 +688,7 @@ test("Worker D1 owner-slot migration classifies legacy managed hostnames", async
     {
       hostname: "short-name.app.takos.jp",
       owner_user_id: "owner_same",
-      allocation_kind: "vanity",
+      allocation_kind: "scoped",
     },
   ]);
 });
@@ -1750,15 +1753,20 @@ test("Postgres public host reservation backfill prefers active Capsule outputs",
   }
 });
 
-test("Postgres owner-slot migration classifies legacy managed hostnames", async () => {
+test("Postgres owner-slot migrations grandfather legacy reservations", async () => {
   const create = postgresStorageMigrationStatements.find(
     (entry) => entry.id === "deploy.public_host_reservations.create",
   );
   const ownerSlots = postgresStorageMigrationStatements.find(
     (entry) => entry.id === "deploy.public_host_reservations.owner_slots",
   );
+  const grandfather = postgresStorageMigrationStatements.find(
+    (entry) =>
+      entry.id === "deploy.public_host_reservations.legacy_grandfather",
+  );
   expect(create).toBeDefined();
   expect(ownerSlots).toBeDefined();
+  expect(grandfather).toBeDefined();
 
   const db = new PGlite();
   try {
@@ -1784,6 +1792,12 @@ test("Postgres owner-slot migration classifies legacy managed hostnames", async 
     for (const statement of splitSqlStatements(ownerSlots!.sql)) {
       await db.exec(statement);
     }
+    for (const statement of splitSqlStatements(grandfather!.sql)) {
+      await db.exec(statement);
+    }
+    for (const statement of splitSqlStatements(grandfather!.sql)) {
+      await db.exec(statement);
+    }
     for (const statement of splitSqlStatements(ownerSlots!.sql)) {
       await db.exec(statement);
     }
@@ -1804,7 +1818,7 @@ test("Postgres owner-slot migration classifies legacy managed hostnames", async 
       {
         hostname: "short-name.app.takos.jp",
         owner_user_id: "owner_same",
-        allocation_kind: "vanity",
+        allocation_kind: "scoped",
       },
     ]);
   } finally {

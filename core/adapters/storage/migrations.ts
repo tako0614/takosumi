@@ -3594,4 +3594,14 @@ alter table takosumi_public_host_reservations
 alter table takosumi_public_host_reservations
   drop column if exists owner_user_id;`,
     },
+    {
+      id: "deploy.public_host_reservations.legacy_grandfather",
+      version: 69,
+      domain: "deploy",
+      description:
+        "Grandfather every reservation that predates owner-slot enforcement so legacy custom-domain rows and formerly unrestricted managed names do not consume newly introduced vanity quota.",
+      sql: `update takosumi_public_host_reservations
+set allocation_kind = 'scoped'
+where allocation_kind <> 'scoped';`,
+    },
   ]);
