@@ -1,9 +1,18 @@
 import type { InstallConfig } from "@takosumi/internal/deploy-control-api";
+import type { ManagedPublicHostnameMode } from "takosumi-contract/install-configs";
 import { installExperiencePublicEndpoint } from "takosumi-contract";
 
 export const DEFAULT_MANAGED_PUBLIC_BASE_DOMAIN = "app.takos.jp";
 
 export type PublicHostPolicyKind = "managed_default_hostname" | "custom_domain";
+
+export function managedPublicHostnameMode(
+  installConfig: InstallConfig | undefined,
+): ManagedPublicHostnameMode {
+  return installConfig?.managedPublicHostname?.mode === "vanity"
+    ? "vanity"
+    : "scoped";
+}
 
 export function managedPublicBaseDomainFromInstallConfig(
   installConfig: InstallConfig | undefined,
@@ -62,6 +71,12 @@ export function managedPublicLabelForWorkspace(
     ? requested
     : `${workspace}-${requested}`;
   return isManagedPublicHostLabel(label) ? label : undefined;
+}
+
+export function normalizeManagedPublicHostLabel(
+  value: unknown,
+): string | undefined {
+  return normalizeManagedPublicLabel(value);
 }
 
 export function managedPublicHostForWorkspace(

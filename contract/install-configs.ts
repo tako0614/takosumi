@@ -72,6 +72,55 @@ export interface SourceBuildConfig {
 }
 
 /**
+ * Allocation mode for one operator-managed public hostname.
+ *
+ * `scoped` is the default address whose DNS label is namespaced by the
+ * Workspace handle. `vanity` keeps the requested one-label name unchanged and
+ * consumes one owner-account vanity slot. User-owned custom domains remain
+ * ordinary `public_endpoint` URL/route variables and use the selected target's
+ * ownership-verification lifecycle.
+ */
+export type ManagedPublicHostnameMode = "scoped" | "vanity";
+
+export interface ManagedPublicHostnameAllocation {
+  readonly mode: ManagedPublicHostnameMode;
+}
+
+/**
+ * In-process operator request for claiming one managed public hostname.
+ * Identity is always resolved from the referenced Capsule and Workspace;
+ * callers never supply an owner account id.
+ */
+export interface ManagedPublicHostnameClaimRequest {
+  readonly workspaceId: string;
+  readonly capsuleId: string;
+  readonly requestedLabel: string;
+  readonly managedPublicBaseDomain: string;
+}
+
+/** Non-disclosing result returned to compatibility and managed-target adapters. */
+export type ManagedPublicHostnameClaimResult =
+  | {
+      readonly ok: true;
+      readonly hostname: string;
+      readonly mode: ManagedPublicHostnameMode;
+    }
+  | {
+      readonly ok: false;
+      readonly reason:
+        | "invalid_context"
+        | "invalid_label"
+        | "unavailable"
+        | "slot_limit_reached";
+      readonly limit?: number;
+    };
+
+/** Optional composition port exposed by an operator-hosted Takosumi process. */
+export type ManagedPublicHostnameClaimer = (
+  request: ManagedPublicHostnameClaimRequest,
+) => Promise<ManagedPublicHostnameClaimResult>;
+
+/**
  * Policy attached to an InstallConfig. Layered evaluation happens
  * service-side over the OpenTofu plan JSON; this record carries the per-config
  * allowlists and knobs. Extended by later policy layers (scope boundary,
@@ -271,6 +320,8 @@ export interface InstallConfig {
   readonly modulePath?: string;
   readonly normalization?: NormalizationConfig;
   readonly sourceBuild?: SourceBuildConfig;
+  /** Managed hostname allocation choice. Absent means `scoped`. */
+  readonly managedPublicHostname?: ManagedPublicHostnameAllocation;
   /**
    * Service-side runner preference for this Capsule. This is operator policy
    * selected at install/deploy time, not repo metadata.

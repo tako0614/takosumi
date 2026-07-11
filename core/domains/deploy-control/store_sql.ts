@@ -849,60 +849,109 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     input: ReservePublicHostInput,
   ): Promise<ReservePublicHostResult> {
     const hostname = input.hostname.toLowerCase();
-    const rows = await this.#client.query<Record<string, unknown>>(
-      `insert into takosumi_public_host_reservations (
-         hostname, workspace_id, installation_id, installation_name,
-         status, reserved_at, updated_at, released_at
-       )
-       values ($1, $2, $3, $4, 'reserved', $5, $5, null)
-       on conflict (hostname) do update
-       set workspace_id = excluded.workspace_id,
-           installation_id = excluded.installation_id,
-           installation_name = excluded.installation_name,
-           status = 'reserved',
-           reserved_at = case
-             when takosumi_public_host_reservations.installation_id = excluded.installation_id
-             then takosumi_public_host_reservations.reserved_at
-             else excluded.reserved_at
-           end,
-           updated_at = excluded.updated_at,
-           released_at = null
-       where takosumi_public_host_reservations.status = 'released'
-          or takosumi_public_host_reservations.installation_id = excluded.installation_id
-       returning hostname, workspace_id, installation_id, installation_name,
-                 status, reserved_at, updated_at, released_at`,
-      [
-        hostname,
-        input.workspaceId,
-        input.installationId,
-        input.installationName,
-        input.now,
-      ],
-    );
-    const won = rows.rows[0];
-    if (won) {
-      return {
-        reserved: true,
-        reservation: publicHostReservationFromRow(won),
-      };
+    const workspace = await this.getSpace(input.workspaceId);
+    if (!workspace) {
+      throw new Error("public host reservation workspace was not found");
     }
-    const existing = await this.#client.query<Record<string, unknown>>(
-      `select hostname, workspace_id, installation_id, installation_name,
-              status, reserved_at, updated_at, released_at
-       from takosumi_public_host_reservations
-       where hostname = $1`,
-      [hostname],
-    );
-    const reservation = publicHostReservationFromRow(existing.rows[0]);
-    return { reserved: false, reservation, reason: "already_reserved" };
+    const ownerUserId = workspace.ownerUserId;
+    const reserve = async (
+      client: SqlClient,
+    ): Promise<ReservePublicHostResult> => {
+      const rows = await client.query<Record<string, unknown>>(
+        `insert into takosumi_public_host_reservations (
+           hostname, owner_user_id, workspace_id, installation_id,
+           installation_name, allocation_kind, status,
+           reserved_at, updated_at, released_at
+         )
+         values ($1, $2, $3, $4, $5, $6, 'reserved', $7, $7, null)
+         on conflict (hostname) do update
+         set owner_user_id = excluded.owner_user_id,
+             workspace_id = excluded.workspace_id,
+             installation_id = excluded.installation_id,
+             installation_name = excluded.installation_name,
+             allocation_kind = excluded.allocation_kind,
+             status = 'reserved',
+             reserved_at = case
+               when takosumi_public_host_reservations.installation_id = excluded.installation_id
+               then takosumi_public_host_reservations.reserved_at
+               else excluded.reserved_at
+             end,
+             updated_at = excluded.updated_at,
+             released_at = null
+         where takosumi_public_host_reservations.status = 'released'
+            or takosumi_public_host_reservations.installation_id = excluded.installation_id
+         returning hostname, owner_user_id, workspace_id, installation_id,
+                   installation_name, allocation_kind, status,
+                   reserved_at, updated_at, released_at`,
+        [
+          hostname,
+          ownerUserId,
+          input.workspaceId,
+          input.installationId,
+          input.installationName,
+          input.allocationKind,
+          input.now,
+        ],
+      );
+      const won = rows.rows[0];
+      if (won) {
+        return {
+          reserved: true,
+          reservation: publicHostReservationFromRow(won),
+        };
+      }
+      const existing = await client.query<Record<string, unknown>>(
+        `select hostname, owner_user_id, workspace_id, installation_id,
+                installation_name, allocation_kind, status,
+                reserved_at, updated_at, released_at
+         from takosumi_public_host_reservations
+         where hostname = $1`,
+        [hostname],
+      );
+      const reservation = publicHostReservationFromRow(existing.rows[0]);
+      return { reserved: false, reservation, reason: "already_reserved" };
+    };
+
+    if (
+      input.allocationKind !== "vanity" ||
+      input.vanitySlotLimit === undefined
+    ) {
+      return await reserve(this.#client);
+    }
+
+    const limit = Math.max(0, Math.floor(input.vanitySlotLimit));
+    return await this.#client.transaction(async (transaction) => {
+      await transaction.query(
+        `select pg_advisory_xact_lock(hashtext($1::text))`,
+        [`takosumi:public-host-vanity:${ownerUserId}`],
+      );
+      const count = await transaction.query<{ count: string | number }>(
+        `select count(*) as count
+         from takosumi_public_host_reservations
+         where owner_user_id = $1
+           and allocation_kind = 'vanity'
+           and status = 'reserved'
+           and hostname <> $2`,
+        [ownerUserId, hostname],
+      );
+      if (Number(count.rows[0]?.count ?? 0) >= limit) {
+        return {
+          reserved: false,
+          reason: "owner_slot_limit_reached",
+          vanitySlotLimit: limit,
+        };
+      }
+      return await reserve(transaction);
+    });
   }
 
   async getPublicHostReservation(
     hostname: string,
   ): Promise<PublicHostReservation | undefined> {
     const rows = await this.#client.query<Record<string, unknown>>(
-      `select hostname, workspace_id, installation_id, installation_name,
-              status, reserved_at, updated_at, released_at
+      `select hostname, owner_user_id, workspace_id, installation_id,
+              installation_name, allocation_kind, status,
+              reserved_at, updated_at, released_at
        from takosumi_public_host_reservations
        where hostname = $1`,
       [hostname.toLowerCase()],
@@ -3617,9 +3666,11 @@ function publicHostReservationFromRow(
   }
   return {
     hostname: String(row.hostname),
+    ownerUserId: String(row.owner_user_id ?? row.workspace_id),
     workspaceId: String(row.workspace_id),
     installationId: String(row.installation_id),
     installationName: String(row.installation_name),
+    allocationKind: row.allocation_kind === "vanity" ? "vanity" : "scoped",
     status:
       row.status === "released" || row.status === "reserved"
         ? row.status

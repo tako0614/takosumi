@@ -58,6 +58,10 @@ import type {
   BillingEnforcement,
   QuotaPolicy,
 } from "takosumi-contract/billing";
+import type {
+  ManagedPublicHostnameClaimRequest,
+  ManagedPublicHostnameClaimResult,
+} from "takosumi-contract/install-configs";
 import type { InstallationCoordination } from "./domains/deploy-control/installation_lease.ts";
 import {
   type EnqueueSourceSync,
@@ -535,6 +539,8 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
    * plan-limit + resource-quota enforcement.
    */
   readonly quotaPolicy?: QuotaPolicy;
+  /** Operator policy for short managed hostnames; scoped names remain free. */
+  readonly managedVanityHostnameSlotsPerOwner?: number;
   /**
    * Internal compatibility seam for accounts-plane / CLI in-process callers.
    * Internet-facing platform hosts must leave this false so legacy `/v1/*`
@@ -553,6 +559,9 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
 export interface TakosumiOperations {
   /** The wired OpenTofu deployment controller. */
   readonly controller: OpenTofuDeploymentController;
+  claimManagedPublicHostname(
+    input: ManagedPublicHostnameClaimRequest,
+  ): Promise<ManagedPublicHostnameClaimResult>;
   /**
    * Spaces domain service (Core Specification §4): Space identity + handle
    * uniqueness over the same shared ledger.
@@ -1071,6 +1080,12 @@ export async function createTakosumiService(
       ? { billingEnforcement: options.billingEnforcement }
       : {}),
     ...(options.quotaPolicy ? { quotaPolicy: options.quotaPolicy } : {}),
+    ...(options.managedVanityHostnameSlotsPerOwner !== undefined
+      ? {
+          managedVanityHostnameSlotsPerOwner:
+            options.managedVanityHostnameSlotsPerOwner,
+        }
+      : {}),
     observability: context.adapters.observability,
     metricTags,
   });
@@ -1280,6 +1295,8 @@ export async function createTakosumiService(
   });
   const operations: TakosumiOperations = {
     controller: opentofuController,
+    claimManagedPublicHostname: (input) =>
+      opentofuController.claimManagedPublicHostname(input),
     spaces: spacesService,
     installations: installationsService,
     members,

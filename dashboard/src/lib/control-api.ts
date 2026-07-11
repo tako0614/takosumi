@@ -27,6 +27,7 @@ import type {
   Capsule as ContractCapsule,
   CapsuleProviderConnectionSet as ContractCapsuleProviderConnectionSet,
   JsonValue as ContractJsonValue,
+  ManagedPublicHostnameAllocation,
   OutputShare as ContractOutputShare,
   ProviderListing as ContractProviderListing,
   ProviderConnection as ContractProviderConnection,
@@ -122,6 +123,11 @@ export class ControlApiError extends Error {
       /^app_hostname_unavailable\b/u.test(this.message) ||
       /\balready claimed by Capsule\b.*\bWorkspace\b/iu.test(this.message)
     );
+  }
+
+  /** True when the owner has no remaining short managed-hostname slot. */
+  get isManagedPublicHostnameSlotLimitReached(): boolean {
+    return this.reason === "managed_public_hostname_slot_limit_reached";
   }
 }
 
@@ -526,6 +532,7 @@ export interface InstallConfig {
   readonly trustLevel: TrustLevel;
   readonly modulePath?: string;
   readonly sourceBuild?: SourceBuildConfig;
+  readonly managedPublicHostname?: ManagedPublicHostnameAllocation;
   readonly variableMapping: Readonly<Record<string, unknown>>;
   readonly outputAllowlist: Readonly<Record<string, OutputAllowlistEntry>>;
   readonly store?: {
@@ -1426,6 +1433,7 @@ export async function createCapsule(input: {
   readonly outputAllowlist?: Readonly<Record<string, OutputAllowlistEntry>>;
   readonly store?: NonNullable<InstallConfig["store"]>;
   readonly autoUpdate?: boolean;
+  readonly managedPublicHostname?: ManagedPublicHostnameAllocation;
 }): Promise<Capsule> {
   const body = await controlFetch<{
     capsule: Capsule;
@@ -1448,6 +1456,9 @@ export async function createCapsule(input: {
         : {}),
       ...(input.store ? { store: input.store } : {}),
       ...(input.autoUpdate === true ? { autoUpdate: true } : {}),
+      ...(input.managedPublicHostname
+        ? { managedPublicHostname: input.managedPublicHostname }
+        : {}),
     },
   });
   return body.capsule;

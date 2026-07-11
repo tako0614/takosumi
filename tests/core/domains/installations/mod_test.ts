@@ -259,6 +259,7 @@ test("abandonUnappliedCapsule closes the ledger row, releases public hosts, and 
     workspaceId: installation.workspaceId,
     installationId: installation.id,
     installationName: installation.name,
+    allocationKind: "scoped",
     now: "2026-06-06T00:00:00.000Z",
   });
   await store.putInstallationProviderEnvBindingSet({

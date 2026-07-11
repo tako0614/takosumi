@@ -13,7 +13,7 @@ Takosumi Cloud Resources =
   + SQLDatabase
   + Queue
   + AI Gateway
-  + routes / domains / secrets
+  + managed routes / URLs / secrets
   + USD credits / usage metering
   + OpenTofu deploys
 ```
@@ -33,7 +33,7 @@ Use these terms in landing pages and the main app UI:
 - Bindings
 - Routes
 - Default URL
-- Custom Domain
+- Custom Domain (Planned)
 - Secrets
 - KV
 - Object Storage
@@ -141,47 +141,56 @@ fixed.
 
 ## Domains And Routes
 
-Public HTTP resources can receive a Takosumi-managed default URL. Users can
-reserve a DNS-valid single-label hostname under an operator-managed public base
-domain on a first-come-first-served basis. The Takosumi Cloud default base
-domain is `app.takos.jp`.
+Public HTTP resources can receive a Takosumi-managed URL. The Takosumi Cloud
+default base domain is `app.takos.jp`. The current allocation modes are
+`scoped` and `vanity`.
 
 ```text
-https://my-app.app.takos.jp
+scoped: https://<workspace-handle>-<label>.app.takos.jp
+vanity: https://<label>.app.takos.jp
 ```
 
-This managed default hostname is a constrained namespace that does not require
-DNS ownership verification. Abuse policy, reserved names, and rate controls are
-operator policy, but normal app installs should be able to use it broadly.
-It is separate from custom-domain quota. Users choose only the single label in
-`<label>.<managed-base-domain>`, while the operator owns the base domain. For
-ordinary installs, Takosumi treats these names as broadly available except for
-global uniqueness, reserved labels, and abuse rate limits.
+`scoped` requires no DNS ownership verification and consumes no vanity slot.
+`vanity` reserves `<label>.<managed-base-domain>` on a first-come-first-served
+basis and consumes one finite slot owned by the Workspace's immutable owner
+account. Both modes are subject to global uniqueness through hostname
+reservation, reserved labels, and abuse policy.
 
-Custom domains are additional user-owned hostnames attached to the same route.
-They are separate from managed default hostnames and require DNS ownership
-verification, certificate provisioning, and plan/quota/abuse policy before
-runtime activation. Arbitrary apex or subdomain names are not accepted as a
-free namespace; they are verified domains attached to the owning account and
-constrained by plan and abuse policy. Dashboard and OpenTofu route lifecycle
-records carry:
+Cloudflare compatibility route and script-subdomain writes that create a
+hostname also require source Workspace and source Capsule context and pass
+through the same OSS hostname reservation authority. Cloud-side KV and Durable
+Object records hold routing and activation state only; they are not the source
+of truth for hostname ownership.
 
-| Field              | Meaning                                     |
-| ------------------ | ------------------------------------------- |
-| `default_hostname` | operator-managed one-label default hostname |
-| `custom_domains`   | verified or pending user-owned hostnames    |
-| `pattern`          | route pattern used by compatibility imports |
-| `target`           | EdgeWorker / ContainerService target        |
+The current Dashboard and OpenTofu route lifecycle carries:
 
-`default_hostname` is first-come-first-served. If no hostname is requested,
-Takosumi issues one as `<app-slug>-<short-id>.<managed-base-domain>`. Conflict
+| Field              | Status  | Meaning                                       |
+| ------------------ | ------- | --------------------------------------------- |
+| `default_hostname` | Current | scoped or owner-slot managed hostname         |
+| `pattern`          | Current | route pattern used by compatibility imports   |
+| `target`           | Current | EdgeWorker / ContainerService target          |
+| `custom_domains`   | Planned | user-owned verified-domain lifecycle (unused) |
+
+`scoped` reserves `<workspace-handle>-<label>.<managed-base-domain>`;
+`vanity` reserves `<label>.<managed-base-domain>`. Conflict and slot-limit
 errors do not reveal the claimant Workspace or Capsule name.
+Managed hostname reservations and vanity slots belong to the Capsule lifetime,
+not to an individual route record. A successful Capsule destroy releases the
+reservation. A Cloud-side route DELETE only removes routing or activation state;
+it does not release OSS hostname ownership.
+
+User-owned custom domains have a separate verified lifecycle, but DNS ownership
+verification and the certificate lifecycle are not implemented. A non-empty
+`custom_domains` request or a route pattern outside the managed base domain
+currently fails closed and is not stored as an active custom domain.
 
 In app install / Store flows, this value is passed to ordinary OpenTofu
 variables through the `installExperience` `public_endpoint` projection. For
-example, `subdomain` is the single label for the managed default hostname,
-`url` is a custom domain or managed URL, and `routePattern` is the route
-pattern used by compatibility imports. Takosumi does not infer meaning from
+example, `subdomain` is the label for a managed URL, `url` is a managed URL or
+an ordinary OpenTofu variable, and `routePattern` is the route pattern used by
+compatibility imports. A user-owned URL can still be passed to a BYOC provider,
+but Takosumi Cloud does not automatically activate it as a managed custom
+domain. Takosumi does not infer meaning from
 variable names such as `worker_name` or `app_url` by themselves. Only the
 store-declared projection and input `format` drive Dashboard input UX and
 hostname reservation.
@@ -205,6 +214,7 @@ resources. Unsupported Cloudflare products stay explicit.
 | Preview            | Dynamic Worker workflow support                                        |
 | Planned            | Containers                                                             |
 | Planned            | Durable Objects style stateful apps                                    |
+| Planned            | User-owned custom domains                                              |
 | Unsupported        | DNS, WAF, Zero Trust, Registrar, Cloudflare account IAM, Load Balancer |
 | Unsupported        | Email Routing                                                          |
 

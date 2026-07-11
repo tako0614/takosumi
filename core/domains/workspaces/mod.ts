@@ -13,19 +13,20 @@
  * the spine store's `*Space*` method names stay until the rename converges.)
  */
 
-import type { Workspace, WorkspaceType } from "takosumi-contract/workspaces";
+import {
+  WORKSPACE_HANDLE_PATTERN,
+  type Workspace,
+  type WorkspaceType,
+} from "takosumi-contract/workspaces";
 import {
   OpenTofuControllerError,
   requireNonEmptyString,
 } from "../deploy-control/errors.ts";
 import type { OpenTofuDeploymentStore } from "../deploy-control/store.ts";
 
-/**
- * Workspace handle grammar (spec §4): lowercase alnum start, then 1-38 of
- * `[a-z0-9-]`, for a total length of 2-39. Mirrors the GitHub-style owner
- * namespace shape so `@handle` stays a stable URL segment.
- */
-const WORKSPACE_HANDLE_PATTERN = /^[a-z0-9][a-z0-9-]{1,38}$/;
+// The handle grammar (spec §4: lowercase alnum start, then 1-38 of `[a-z0-9-]`,
+// 2-39 total) is defined once in the contract so the dashboard create form and
+// this service validate against the exact same pattern.
 
 export interface CreateWorkspaceRequest {
   readonly handle: string;

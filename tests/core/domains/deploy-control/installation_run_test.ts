@@ -635,6 +635,12 @@ test("a first Capsule plan discovers service consumes and saves a rebound plan w
     outputDigest: "sha256:storage",
     createdAt: "2026-06-06T00:00:00.000Z",
   });
+  await store.putInstallation({
+    ...producer.installation,
+    status: "active",
+    currentStateGeneration: 1,
+    currentOutputSnapshotId: "out_storage",
+  });
   const sensitiveOutputResolver: SensitiveOutputResolver = {
     resolve: async (input) =>
       input.producerInstallationId === producer.installation.id &&
@@ -1490,6 +1496,176 @@ test("managed Cloudflare Capsule canonicalizes an explicit managed-base URL into
   });
 });
 
+test("managed Cloudflare Capsule keeps an owner-slot vanity hostname unscoped", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner();
+  const seeded = await seedInstallationModel(store, {
+    name: "Vanity Public Host App",
+    environment: "preview",
+    installConfig: {
+      managedPublicHostname: { mode: "vanity" },
+      variableMapping: {
+        worker_name: "my-short-name",
+        app_url: null,
+        cloudflare_route_pattern: null,
+        cloudflare: {
+          account_id: null,
+          api_base_url: null,
+        },
+      },
+      store: {
+        order: 100,
+        surface: "service",
+        kind: "worker",
+        provider: "cloudflare",
+        suggestedName: "vanity-public-host",
+        badge: { ja: "追加候補", en: "Installable" },
+        name: { ja: "vanity", en: "vanity" },
+        description: { ja: "テスト", en: "Test" },
+        inputs: [],
+        installExperience: publicEndpointExperience({
+          subdomain: "worker_name",
+          url: "app_url",
+          routePattern: "cloudflare_route_pattern",
+          baseDomain: "apps.example.org",
+        }),
+      },
+    },
+  });
+  await putConnectionWithProviderEnv(store, {
+    ...cloudflareConnection(
+      "conn_cloudflare_vanity_host",
+      seeded.installation.spaceId,
+    ),
+    scopeHints: {
+      managedProvider: true,
+      providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      accountId: "ts_acc_takosumi_cloud",
+    },
+  });
+  await store.putInstallationProviderEnvBindingSet({
+    id: "profile_cloudflare_vanity_host",
+    spaceId: seeded.installation.spaceId,
+    installationId: seeded.installation.id,
+    environment: seeded.installation.environment,
+    bindings: [
+      {
+        provider: "cloudflare",
+        alias: "main",
+        connectionId: "conn_cloudflare_vanity_host",
+      },
+    ],
+    createdAt: "2026-06-06T00:00:00.000Z",
+    updatedAt: "2026-06-06T00:00:00.000Z",
+  });
+  const profile = multiProviderRunnerProfile();
+  const controller = controllerWith(store, runner, {
+    runnerProfiles: [profile],
+    defaultRunnerProfileId: profile.id,
+    managedVanityHostnameSlotsPerOwner: 1,
+  });
+
+  const { planRun } = await controller.createInstallationPlan(
+    seeded.installation.id,
+  );
+
+  expect(planRun.status).toEqual("succeeded");
+  const mainTf = runner.planJobs[0]!.generatedRoot!.files["main.tf"]!;
+  expect(mainTf).toContain('worker_name = "my-short-name"');
+  expect(mainTf).toContain(
+    'app_url = "https://my-short-name.apps.example.org"',
+  );
+  await expect(
+    store.getPublicHostReservation("my-short-name.apps.example.org"),
+  ).resolves.toMatchObject({
+    ownerUserId: seeded.space.ownerUserId,
+    installationId: seeded.installation.id,
+    allocationKind: "vanity",
+    status: "reserved",
+  });
+});
+
+test("managed public hostname composition claims use Capsule config and owner slots", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const first = await seedInstallationModel(store, {
+    spaceId: "space_claim_first",
+    sourceId: "src_claim_first",
+    snapshotId: "snap_claim_first",
+    installConfigId: "cfg_claim_first",
+    installationId: "inst_claim_first",
+    name: "First Vanity App",
+    environment: "preview",
+    installConfig: { managedPublicHostname: { mode: "vanity" } },
+  });
+  const second = await seedInstallationModel(store, {
+    spaceId: "space_claim_second",
+    sourceId: "src_claim_second",
+    snapshotId: "snap_claim_second",
+    installConfigId: "cfg_claim_second",
+    installationId: "inst_claim_second",
+    name: "Second Vanity App",
+    environment: "preview",
+    installConfig: { managedPublicHostname: { mode: "vanity" } },
+  });
+  const scoped = await seedInstallationModel(store, {
+    spaceId: "space_claim_scoped",
+    sourceId: "src_claim_scoped",
+    snapshotId: "snap_claim_scoped",
+    installConfigId: "cfg_claim_scoped",
+    installationId: "inst_claim_scoped",
+    name: "Scoped App",
+    environment: "preview",
+  });
+  const controller = controllerWith(store, recordingRunner(), {
+    managedVanityHostnameSlotsPerOwner: 1,
+  });
+
+  await expect(
+    controller.claimManagedPublicHostname({
+      workspaceId: first.space.id,
+      capsuleId: first.installation.id,
+      requestedLabel: "short-name",
+      managedPublicBaseDomain: "app.takos.jp",
+    }),
+  ).resolves.toEqual({
+    ok: true,
+    hostname: "short-name.app.takos.jp",
+    mode: "vanity",
+  });
+  await expect(
+    controller.claimManagedPublicHostname({
+      workspaceId: second.space.id,
+      capsuleId: second.installation.id,
+      requestedLabel: "another-name",
+      managedPublicBaseDomain: "app.takos.jp",
+    }),
+  ).resolves.toEqual({
+    ok: false,
+    reason: "slot_limit_reached",
+    limit: 1,
+  });
+  await expect(
+    controller.claimManagedPublicHostname({
+      workspaceId: scoped.space.id,
+      capsuleId: scoped.installation.id,
+      requestedLabel: "ordinary-name",
+      managedPublicBaseDomain: "app.takos.jp",
+    }),
+  ).resolves.toEqual({
+    ok: true,
+    hostname: "space-claim-scoped-ordinary-name.app.takos.jp",
+    mode: "scoped",
+  });
+  await expect(
+    controller.claimManagedPublicHostname({
+      workspaceId: second.space.id,
+      capsuleId: first.installation.id,
+      requestedLabel: "wrong-workspace",
+      managedPublicBaseDomain: "app.takos.jp",
+    }),
+  ).resolves.toEqual({ ok: false, reason: "invalid_context" });
+});
+
 test("managed Cloudflare app.takos.jp slugs are namespaced by Workspace handle", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   const runner = recordingRunner();
@@ -1641,7 +1817,7 @@ test("managed Cloudflare app.takos.jp slugs are namespaced by Workspace handle",
   ).resolves.toMatchObject({ installationId: second.installation.id });
 });
 
-test("managed Cloudflare app.takos.jp host claim prefers active Capsule over stale historical output", async () => {
+test("managed public hostname reservations remain authoritative over historical outputs", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   const runner = recordingRunner();
   const stale = await seedInstallationModel(store, {
@@ -1702,6 +1878,14 @@ test("managed Cloudflare app.takos.jp host claim prefers active Capsule over sta
     status: "active",
     currentStateGeneration: 1,
     currentOutputSnapshotId: "out_active",
+  });
+  await store.reservePublicHost({
+    hostname: "shared-app.app.takos.jp",
+    workspaceId: active.installation.spaceId,
+    installationId: active.installation.id,
+    installationName: active.installation.name,
+    allocationKind: "scoped",
+    now: "2026-06-06T00:02:00.000Z",
   });
 
   const challenger = await seedInstallationModel(store, {
@@ -1908,6 +2092,7 @@ test("Deployment read projection hides app.takos.jp URLs owned by another Capsul
     workspaceId: owner.installation.spaceId,
     installationId: owner.installation.id,
     installationName: owner.installation.name,
+    allocationKind: "scoped",
     now: "2026-06-06T00:00:00.000Z",
   });
   const deployment: Deployment = {
@@ -2102,7 +2287,7 @@ test("managed Cloudflare app.takos.jp host is atomically reserved within a Works
   ).rejects.toThrow("app_hostname_unavailable: already exists");
 });
 
-test("managed Cloudflare host claim skips corrupt historical Capsules", async () => {
+test("managed public hostname claims do not scan corrupt historical outputs", async () => {
   class CorruptHistoricalOutputStore extends InMemoryOpenTofuDeploymentStore {
     override getLatestOutputSnapshot(
       installationId: string,

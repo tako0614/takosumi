@@ -548,9 +548,11 @@ export const publicHostReservations = sqliteTable(
   names.publicHostReservations,
   {
     hostname: text("hostname").primaryKey(),
+    ownerUserId: text("owner_user_id").notNull(),
     workspaceId: text("workspace_id").notNull(),
     installationId: text("installation_id").notNull(),
     installationName: text("installation_name").notNull(),
+    allocationKind: text("allocation_kind").notNull(),
     status: text("status").notNull(),
     reservedAt: text("reserved_at").notNull(),
     updatedAt: text("updated_at").notNull(),
@@ -558,6 +560,11 @@ export const publicHostReservations = sqliteTable(
   },
   (table) => [
     index("public_host_reservations_workspace_idx").on(table.workspaceId),
+    index("public_host_reservations_owner_kind_idx").on(
+      table.ownerUserId,
+      table.allocationKind,
+      table.status,
+    ),
     index("public_host_reservations_installation_idx").on(table.installationId),
     index("public_host_reservations_status_idx").on(table.status),
   ],

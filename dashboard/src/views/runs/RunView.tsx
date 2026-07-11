@@ -321,6 +321,28 @@ function isCreditsRequiredRun(
   );
 }
 
+function isManagedHostnameSlotLimitText(value: string | undefined): boolean {
+  return Boolean(
+    value
+      ?.toLowerCase()
+      .includes("managed_public_hostname_slot_limit_reached"),
+  );
+}
+
+function isManagedHostnameSlotLimitRun(
+  run: Run,
+  diagnostics: readonly RunDiagnostic[],
+): boolean {
+  return (
+    run.errorCode === "managed_public_hostname_slot_limit_reached" ||
+    diagnostics.some(
+      (diagnostic) =>
+        isManagedHostnameSlotLimitText(diagnostic.message) ||
+        isManagedHostnameSlotLimitText(diagnostic.detail),
+    )
+  );
+}
+
 type AccessIssueKind =
   | "connection_verification"
   | "connection_setup"
@@ -485,18 +507,25 @@ function DiagnosticRow(props: { diagnostic: RunDiagnostic }) {
   const creditsRequired = () =>
     isCreditsRequiredText(props.diagnostic.message) ||
     isCreditsRequiredText(props.diagnostic.detail);
+  const hostnameSlotLimit = () =>
+    isManagedHostnameSlotLimitText(props.diagnostic.message) ||
+    isManagedHostnameSlotLimitText(props.diagnostic.detail);
   const accessIssue = () =>
     accessIssueFromText(props.diagnostic.message) ??
     accessIssueFromText(props.diagnostic.detail);
   const message = () =>
     creditsRequired()
       ? t("run.diagnostics.creditsRequiredShort")
+      : hostnameSlotLimit()
+        ? t("run.diagnostics.hostnameSlotLimitShort")
       : accessIssue()
         ? accessIssueDiagnostic(accessIssue()!).short
         : (diagnosticDisplayText(props.diagnostic.message) ?? "diagnostic");
   const detail = () =>
     creditsRequired()
       ? t("run.diagnostics.creditsRequiredDetail")
+      : hostnameSlotLimit()
+        ? t("run.diagnostics.hostnameSlotLimitDetail")
       : accessIssue()
         ? accessIssueDiagnostic(accessIssue()!).detail
         : diagnosticDisplayText(props.diagnostic.detail);
@@ -506,7 +535,10 @@ function DiagnosticRow(props: { diagnostic: RunDiagnostic }) {
   // stay a tidy one-line span. (Provider-connection causes are already given a
   // friendly short message + hint via the accessIssue classification above.)
   const rawMultilineMessage = () =>
-    !creditsRequired() && !accessIssue() && /\n/u.test(message());
+    !creditsRequired() &&
+    !hostnameSlotLimit() &&
+    !accessIssue() &&
+    /\n/u.test(message());
   return (
     <li class={`wa-diag wa-diag-${props.diagnostic.severity}`}>
       <span class="wa-diag-sev">
@@ -1573,6 +1605,13 @@ function Inner() {
         };
       }
       if (r.status === "failed") {
+        if (isManagedHostnameSlotLimitRun(r, diagnosticRows())) {
+          return {
+            kind: "action",
+            text: t("run.summary.hostnameSlotLimit"),
+            sub: t("run.summary.hostnameSlotLimitHint"),
+          };
+        }
         if (isCreditsRequiredRun(r, diagnosticRows())) {
           return {
             kind: "action",
@@ -1661,6 +1700,13 @@ function Inner() {
               };
         }
         case "failed":
+          if (isManagedHostnameSlotLimitRun(r, diagnosticRows())) {
+            return {
+              kind: "action",
+              text: t("run.summary.hostnameSlotLimit"),
+              sub: t("run.summary.hostnameSlotLimitHint"),
+            };
+          }
           if (isCreditsRequiredRun(r, diagnosticRows())) {
             return {
               kind: "action",

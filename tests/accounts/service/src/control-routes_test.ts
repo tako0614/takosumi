@@ -3742,6 +3742,44 @@ test("POST /api/v1/workspaces/:id/capsules stores per-install vars in a scoped I
   expect(createCall.installConfigId).toEqual(config.id);
 });
 
+test("POST /api/v1/workspaces/:id/capsules stores an owner-slot vanity hostname choice", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const { request: req, url } = request(
+    "POST",
+    "/api/v1/workspaces/space_a/capsules",
+    {
+      cookie,
+      body: {
+        name: "takos-vanity",
+        environment: "production",
+        sourceId: "src_x",
+        installConfigId: "cfg_x",
+        managedPublicHostname: { mode: "vanity" },
+      },
+    },
+  );
+
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+  });
+
+  expect(response?.status).toEqual(201);
+  const config = operations.calls.putInstallConfig?.[0] as {
+    id: string;
+    managedPublicHostname?: unknown;
+  };
+  expect(config.managedPublicHostname).toEqual({ mode: "vanity" });
+  const createCall = operations.calls.createCapsule?.[0] as {
+    installConfigId: string;
+  };
+  expect(createCall.installConfigId).toEqual(config.id);
+});
+
 test("POST /api/v1/workspaces/:id/capsules expands dotted per-install vars in a scoped InstallConfig", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
@@ -4540,6 +4578,87 @@ test("POST /api/v1/workspaces/:id/capsules derives the OIDC redirect from public
   expect(config.variableMapping.oidc_client_id).toEqual(oidcClient?.clientId);
   expect(config.variableMapping.oidc_redirect_uri).toEqual(
     "https://shota-community-a.apps.example.test/session/callback",
+  );
+});
+
+test("POST /api/v1/workspaces/:id/capsules keeps a vanity hostname in the OIDC redirect", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+  const { request: req, url } = request(
+    "POST",
+    "/api/v1/workspaces/space_a/capsules",
+    {
+      cookie,
+      body: {
+        name: "vanity-oidc-app",
+        environment: "production",
+        sourceId: "src_x",
+        installConfigId: "cfg_x",
+        managedPublicHostname: { mode: "vanity" },
+        vars: {
+          public_host_label: "community-a",
+          public_url: "https://shota-community-a.apps.example.test",
+        },
+        store: {
+          order: 121,
+          surface: "service",
+          kind: "worker",
+          provider: "generic",
+          suggestedName: "vanity-oidc-app",
+          badge: { ja: "追加候補", en: "Installable" },
+          name: { ja: "Vanity OIDC App", en: "Vanity OIDC App" },
+          description: {
+            ja: "短い公開 URL を使う OIDC アプリ",
+            en: "An OIDC app using a short public URL",
+          },
+          inputs: [],
+          installExperience: {
+            projections: [
+              {
+                kind: "public_endpoint",
+                variables: {
+                  subdomain: "public_host_label",
+                  url: "public_url",
+                },
+                baseDomain: "apps.example.test",
+              },
+              {
+                kind: "oidc_client",
+                variables: {
+                  issuerUrl: "oidc_issuer_url",
+                  clientId: "oidc_client_id",
+                  redirectUri: "oidc_redirect_uri",
+                },
+                callbackPath: "/session/callback",
+              },
+            ],
+          },
+        },
+      },
+    },
+  );
+  const response = await handleControlRoute({
+    request: req,
+    url,
+    store,
+    operations,
+    issuer: ORIGIN,
+  });
+
+  expect(response?.status).toEqual(201);
+  const oidcClient = await store.findOidcClientForCapsule("inst_new");
+  expect(oidcClient?.redirectUris).toEqual([
+    "https://community-a.apps.example.test/session/callback",
+  ]);
+  const config = operations.calls.putInstallConfig?.at(-1) as {
+    managedPublicHostname?: unknown;
+    variableMapping: Record<string, unknown>;
+  };
+  expect(config.managedPublicHostname).toEqual({ mode: "vanity" });
+  expect(config.variableMapping.public_host_label).toEqual("community-a");
+  expect(config.variableMapping.oidc_redirect_uri).toEqual(
+    "https://community-a.apps.example.test/session/callback",
   );
 });
 

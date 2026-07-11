@@ -17,6 +17,7 @@ import type {
 } from "takosumi-contract/capsules";
 import type {
   InstallConfig,
+  ManagedPublicHostnameAllocation,
   PublicInstallConfig,
 } from "takosumi-contract/install-configs";
 import type { JsonValue } from "takosumi-contract";
@@ -81,6 +82,7 @@ interface CreateInstallationRouteRequest extends Omit<
   readonly outputAllowlist?: InstallConfig["outputAllowlist"];
   readonly runnerId?: string;
   readonly vars?: Readonly<Record<string, JsonValue>>;
+  readonly managedPublicHostname?: ManagedPublicHostnameAllocation;
 }
 
 interface InstallationPlanRouteRequest {
@@ -449,15 +451,21 @@ export function mountDeployControlInstallationRoutes(
           modulePath: rawModulePath,
           vars: rawVars,
           runnerId: rawRunnerId,
+          managedPublicHostname: rawManagedPublicHostname,
           ...request
         } = body as Omit<
           CreateInstallationRouteRequest,
-          "outputAllowlist" | "modulePath" | "vars" | "runnerId"
+          | "outputAllowlist"
+          | "modulePath"
+          | "vars"
+          | "runnerId"
+          | "managedPublicHostname"
         > & {
           readonly outputAllowlist?: unknown;
           readonly modulePath?: unknown;
           readonly vars?: unknown;
           readonly runnerId?: unknown;
+          readonly managedPublicHostname?: unknown;
         };
         const outputAllowlist =
           rawOutputAllowlist === undefined
@@ -498,12 +506,25 @@ export function mountDeployControlInstallationRoutes(
         if (runnerProfileId) {
           ensureRunnerProfilePermission(principal, runnerProfileId);
         }
+        const managedPublicHostname = managedPublicHostnameValue(
+          rawManagedPublicHostname,
+        );
+        if (
+          rawManagedPublicHostname !== undefined &&
+          managedPublicHostname === undefined
+        ) {
+          throw new OpenTofuControllerError(
+            "invalid_argument",
+            "managedPublicHostname must be { mode: 'scoped' | 'vanity' }",
+          );
+        }
         const installConfigId =
           (normalizedVars !== undefined &&
             Object.keys(normalizedVars).length > 0) ||
           modulePath !== undefined ||
           runnerProfileId ||
-          outputAllowlist !== undefined
+          outputAllowlist !== undefined ||
+          managedPublicHostname !== undefined
             ? (
                 await createScopedInstallConfigForInstallation({
                   installations: installations!,
@@ -514,6 +535,7 @@ export function mountDeployControlInstallationRoutes(
                   vars: normalizedVars ?? {},
                   outputAllowlist,
                   runnerProfileId,
+                  managedPublicHostname,
                 })
               ).id
             : request.installConfigId;
@@ -865,6 +887,7 @@ async function createScopedInstallConfigForInstallation(input: {
   readonly vars: Readonly<Record<string, JsonValue>>;
   readonly outputAllowlist?: InstallConfig["outputAllowlist"];
   readonly runnerProfileId?: string;
+  readonly managedPublicHostname?: ManagedPublicHostnameAllocation;
 }): Promise<InstallConfig> {
   for (const [key, value] of Object.entries(input.vars)) {
     if (!isJsonValue(value)) {
@@ -900,11 +923,25 @@ async function createScopedInstallConfigForInstallation(input: {
     ...(input.modulePath ? { modulePath: input.modulePath } : {}),
     variableMapping: { ...baseConfig.variableMapping, ...input.vars },
     ...(input.runnerProfileId ? { runnerId: input.runnerProfileId } : {}),
+    ...(input.managedPublicHostname
+      ? { managedPublicHostname: input.managedPublicHostname }
+      : {}),
     outputAllowlist:
       input.outputAllowlist ?? scopedCloneOutputAllowlist(baseConfig),
     createdAt: now,
     updatedAt: now,
   });
+}
+
+function managedPublicHostnameValue(
+  value: unknown,
+): ManagedPublicHostnameAllocation | undefined {
+  if (value === undefined) return undefined;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const mode = (value as { readonly mode?: unknown }).mode;
+  return mode === "scoped" || mode === "vanity" ? { mode } : undefined;
 }
 
 function isSelectableInstallConfig(config: InstallConfig): boolean {

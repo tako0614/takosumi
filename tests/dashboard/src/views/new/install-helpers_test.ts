@@ -107,5 +107,15 @@ describe("store install metadata", () => {
         "app-staging.takos.jp",
       ),
     ).toBe("https://workspace-service.app-staging.takos.jp");
+    expect(
+      storeDefaultInputValue(
+        entry,
+        entry.inputs[0]!,
+        "workspace",
+        "service",
+        "app-staging.takos.jp",
+        "vanity",
+      ),
+    ).toBe("https://service.app-staging.takos.jp");
   });
 });

@@ -132,9 +132,11 @@ GET /__takosumi/cloud/extensions
 
 `takosumi` provider が使う Resource Shape API (`/v1/resources` /
 `/v1/target-pools` / `/v1/space-policies`) と Cloudflare-compatible import
-endpoint (`/compat/cloudflare/client/v4`) は、Capsule / app installation 登録がなくても使えます。
-ただし匿名では使えません。account session、personal access token、または service token
-で認証し、発生元 Workspace と所有ユーザーの課金アカウントを検証できる必要があります。
+endpoint (`/compat/cloudflare/client/v4`) は匿名では使えません。account session、
+personal access token、または service token で認証し、発生元 Workspace と所有ユーザーの
+課金アカウントを検証できる必要があります。managed hostname を作成する Workers route /
+script-subdomain write は例外なく、既存の source Workspace と source Capsule の context
+を両方必要とします。
 
 session / personal access token は `x-takosumi-cloud-billing-workspace-id` で
 発生元 Workspace を指定できます。platform はその token が Workspace を読めることを accounts
@@ -159,9 +161,10 @@ operator-installed `plugin` implementation に限ります。
 
 billable な write は転送前に所有ユーザーの account credits から precharge されます。Workspace context
 がない、token と Workspace が一致しない、または所有ユーザーの credits が足りない場合は fail closed
-し、Cloud endpoint / apply path へは進みません。Capsule / installation id は任意です。未指定の
-provider / compatibility API 使用量は、`installationId` なしの owner account usage event として
-記録され、発生元 Workspace は metadata に残ります。
+し、Cloud endpoint / apply path へは進みません。managed hostname を変更しない operation では
+Capsule context を省略でき、使用量は Capsule id なしの owner account usage event として記録できます。
+managed hostname を作る route / script-subdomain write は source Capsule context を省略できず、
+hostname policy / reservation の preflight を usage precharge より先に行います。
 
 ## S3-compatible Object Storage endpoint
 
@@ -427,7 +430,6 @@ D1 subpath は互換対象ではなく `501` を返します。
 - Workers routes
 - Workers script subdomain compatibility mapped to `*.app.takos.jp`
 - default `*.app.takos.jp` hostname per HTTP route
-- user-owned custom domains on HTTP routes
 - KV namespaces
 - R2 buckets
 - D1 databases
@@ -445,6 +447,10 @@ D1 subpath は互換対象ではなく `501` を返します。
 - email routing
 - Turnstile
 
+Planned:
+
+- user-owned custom domains (ownership verification / certificate lifecycle は未実装)
+
 Cloudflare billing API は互換対象外です。一方で Takosumi Cloud が提供する
 managed resources の使用量は Cloudflare billing API ではなく、上記の
 owner account usage ledger へ記録する必要があります。
@@ -455,10 +461,8 @@ Request:
 
 ```json
 {
-  "pattern": "my-app.app.takos.jp/*",
   "script": "api",
-  "app_subdomain": "my-app",
-  "custom_domains": ["api.example.com"]
+  "app_subdomain": "my-app"
 }
 ```
 
@@ -467,35 +471,53 @@ Response:
 ```json
 {
   "id": "route_xxx",
-  "pattern": "my-app.app.takos.jp/*",
+  "pattern": "my-workspace-my-app.app.takos.jp/*",
   "script": "api",
-  "default_hostname": "my-app.app.takos.jp",
-  "custom_domains": ["api.example.com"]
+  "default_hostname": "my-workspace-my-app.app.takos.jp"
 }
 ```
 
 `default_hostname` は即時利用可能な Takosumi managed URL です。
-`app_subdomain` / `default_hostname` / `hostname` で指定できます。指定しない場合は
-Takosumi が `<app-slug>-<short-id>.<managed-base-domain>` を発行します。
+`app_subdomain` / `default_hostname` / `hostname` は requested label / managed hostname
+を指定します。最終 hostname は source Capsule に保存された
+`managedPublicHostname.mode` で決まり、省略時は `scoped` です。
 Takosumi Cloud の既定 managed base domain は `app.takos.jp` です。operator は
 同じ contract で別の managed base domain を設定できます。
-managed namespace は first-come-first-served で、重複時は 409 を返します。
-409 response は claimant の Workspace / Capsule 名を公開しません。
-managed namespace は custom domain quota とは別枠です。`*.app.takos.jp`
-のような operator-owned base domain 配下の定型 hostname は、重複排他・禁止語・
-abuse rate limit で守り、通常のインストールでは広く使える前提にします。
-`custom_domains` はユーザー所有ドメインです。DNS ownership verification、
-certificate provisioning、runtime dispatch の有効化、plan/quota/abuse policy は
-Cloud runtime 側の責務です。
-任意の apex / subdomain は verified domain として owner account に紐づけ、
-plan/quota/abuse policy で数と利用を制限します。
-未検証 custom domain は runtime で有効化せず、default hostname は維持します。
+
+```text
+scoped:
+  <workspace-handle>-<label>.<managed-base-domain>
+  vanity slot を消費しない
+
+vanity:
+  <label>.<managed-base-domain>
+  immutable Workspace owner account の有限枠を1つ消費する
+```
+
+どちらも同じ OSS hostname reservation authority で first-come-first-served に
+予約します。重複時は 409、vanity 枠超過時は 429 を返し、response は claimant の
+Workspace / Capsule 名を公開しません。Cloud compatibility handler は source
+Workspace+Capsule context を authority に渡します。Cloud 側 KV / Durable Object は
+routing / activation state だけを持ち、hostname ownership の正本にはしません。
+
+managed hostname reservation と vanity slot は Capsule lifetime に属します。
+成功した Capsule destroy が reservation を解放します。compatibility route の
+DELETE は Cloud 側 routing / activation state を削除するだけで、OSS hostname
+ownership や vanity slot を解放しません。
+
+`custom_domains` は将来の verified-domain lifecycle 用に予約された **Planned** field
+です。DNS ownership verification と certificate lifecycle は未実装のため、現在は
+非空の `custom_domains`、`custom_domain`、または managed base domain 外の route
+pattern / hostname を含む要求を 501 で fail closed します。利用可能な custom domain
+として保存・有効化はしません。
 
 `cloudflare_workers_script_subdomain` 互換 route は、Cloudflare の
 `workers.dev` ではなく Takosumi managed `*.app.takos.jp` 公開名として保存されます。
 `POST /accounts/{accountId}/workers/scripts/{scriptName}/subdomain` with
 `{"enabled": true, "previews_enabled": false}` は
-`<script-slug>-<short-id>.app.takos.jp/*` の virtual Workers route を作成します。
+source Workspace+Capsule context と同じ OSS reservation authority を使い、Capsule の
+`managedPublicHostname.mode` に応じた scoped または vanity hostname の virtual
+Workers route を作成します。
 `previews_enabled: true` は初期 target 外です。
 
 ## OpenTofu provider usage

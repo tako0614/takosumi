@@ -287,6 +287,7 @@ export function capsuleDisplayName(
 export function appSurfaceFromInstallConfigStore(
   config: InstallConfig | undefined,
   language: "ja" | "en",
+  workspaceHandle?: string,
 ): AppSurface | undefined {
   const store = config?.store;
   if (!store || store.surface !== "service") return undefined;
@@ -298,8 +299,8 @@ export function appSurfaceFromInstallConfigStore(
     // named the variable(s), and we set that value at install (it survives in
     // the install config's variableMapping). Derive it so an app whose module
     // just forgot to output its URL is still openable from the tile.
-    ...(publicUrlFromInstallConfig(config)
-      ? { url: publicUrlFromInstallConfig(config) }
+    ...(publicUrlFromInstallConfig(config, workspaceHandle)
+      ? { url: publicUrlFromInstallConfig(config, workspaceHandle) }
       : {}),
   };
 }
@@ -314,6 +315,7 @@ export function appSurfaceFromInstallConfigStore(
  */
 export function publicUrlFromInstallConfig(
   config: InstallConfig | undefined,
+  workspaceHandle?: string,
 ): string | undefined {
   const vars = config?.variableMapping ?? {};
   const readVar = (name: string | undefined): string | undefined => {
@@ -328,10 +330,44 @@ export function publicUrlFromInstallConfig(
   );
   if (endpoint) {
     const explicitUrl = readVar(endpoint.urlVariable);
-    if (explicitUrl && isUrlString(explicitUrl)) return explicitUrl;
     const subdomain = readVar(endpoint.subdomainVariable);
     const baseDomain = endpoint.baseDomain?.trim().replace(/^\*\.|\.$/gu, "");
-    if (subdomain && baseDomain) return `https://${subdomain}.${baseDomain}`;
+    if (explicitUrl && isUrlString(explicitUrl)) {
+      const explicitUsesManagedBase = (() => {
+        if (!baseDomain) return false;
+        try {
+          return new URL(explicitUrl).hostname.endsWith(`.${baseDomain}`);
+        } catch {
+          return false;
+        }
+      })();
+      // The create form may have persisted its scoped preview before the plan
+      // canonicalized a selected vanity name. In that one case the subdomain
+      // variable is the authority; otherwise a complete URL is already the
+      // best fallback we have.
+      if (
+        config?.managedPublicHostname?.mode !== "vanity" ||
+        !explicitUsesManagedBase
+      ) {
+        return explicitUrl;
+      }
+    }
+    if (
+      subdomain &&
+      baseDomain
+    ) {
+      if (config?.managedPublicHostname?.mode === "vanity") {
+        return `https://${subdomain}.${baseDomain}`;
+      }
+      const workspace = managedHostnameLabel(workspaceHandle);
+      const requested = managedHostnameLabel(subdomain);
+      if (workspace && requested) {
+        const label = requested.startsWith(`${workspace}-`)
+          ? requested
+          : `${workspace}-${requested}`;
+        if (label.length <= 63) return `https://${label}.${baseDomain}`;
+      }
+    }
   }
   // Fallback: a full https URL was set under a standard variable name, even
   // without a projection. Only a complete URL — never guess a base domain.
@@ -340,6 +376,14 @@ export function publicUrlFromInstallConfig(
     if (value && isUrlString(value)) return value;
   }
   return undefined;
+}
+
+function managedHostnameLabel(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.trim().toLowerCase();
+  return /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u.test(normalized)
+    ? normalized
+    : undefined;
 }
 
 function nonEmptyString(value: unknown): string | undefined {

@@ -3554,4 +3554,44 @@ set config_json = case
 end
 where config_json ? 'catalog';`,
     },
+    {
+      id: "deploy.public_host_reservations.owner_slots",
+      version: 68,
+      domain: "deploy",
+      description:
+        "Attribute managed public-host reservations to the owning user and distinguish broadly available Workspace-scoped names from owner-quota vanity names.",
+      sql: `alter table takosumi_public_host_reservations
+  add column if not exists owner_user_id text;
+alter table takosumi_public_host_reservations
+  add column if not exists allocation_kind text not null default 'scoped';
+update takosumi_public_host_reservations r
+set owner_user_id = w.space_json ->> 'ownerUserId',
+    allocation_kind = case
+      when left(
+        split_part(r.hostname, '.', 1),
+        length(w.space_json ->> 'handle') + 1
+      ) = (w.space_json ->> 'handle') || '-'
+      then 'scoped'
+      else 'vanity'
+    end
+from takosumi_workspaces w
+where w.id = r.workspace_id
+  and r.owner_user_id is null;
+alter table takosumi_public_host_reservations
+  alter column owner_user_id set not null;
+alter table takosumi_public_host_reservations
+  drop constraint if exists takosumi_public_host_reservations_allocation_kind_check;
+alter table takosumi_public_host_reservations
+  add constraint takosumi_public_host_reservations_allocation_kind_check
+  check (allocation_kind in ('scoped','vanity'));
+create index if not exists takosumi_public_host_reservations_owner_kind_idx
+  on takosumi_public_host_reservations (owner_user_id, allocation_kind, status);`,
+      down: `drop index if exists takosumi_public_host_reservations_owner_kind_idx;
+alter table takosumi_public_host_reservations
+  drop constraint if exists takosumi_public_host_reservations_allocation_kind_check;
+alter table takosumi_public_host_reservations
+  drop column if exists allocation_kind;
+alter table takosumi_public_host_reservations
+  drop column if exists owner_user_id;`,
+    },
   ]);
