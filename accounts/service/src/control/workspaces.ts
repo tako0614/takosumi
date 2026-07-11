@@ -35,7 +35,6 @@ import type {
   ListSourcesResponse,
   PatchSourceRequest,
   SourceResponse,
-  SourceSnapshot,
 } from "takosumi-contract/sources";
 import type {
   DeployResponse,
@@ -181,6 +180,10 @@ import { appendLedgerEvent } from "../installation-ledger-events.ts";
 import { base64UrlEncodeBytes } from "../encoding.ts";
 import { canTransitionAppCapsuleStatus } from "../ledger.ts";
 import { ensureTakosumiAccountsOidcForCapsule } from "./capsule-oidc.ts";
+import {
+  hydrateRepoOwnedStoreConfig,
+  latestSourceSnapshotForSource,
+} from "./repo-owned-install-config.ts";
 
 function sourceWorkspaceId(
   source: Readonly<{ workspaceId?: string; spaceId?: string }>,
@@ -1355,134 +1358,6 @@ async function createCapsule(
     }
   }
   return jsonStatus({ capsule: publicCapsule(installation) }, 201);
-}
-
-interface RepoOwnedStoreHydrationInput {
-  readonly operations: ControlPlaneOperations;
-  readonly source: Source;
-  readonly sourceSnapshot: SourceSnapshot | undefined;
-  readonly storeMetadata: InstallConfig["store"] | undefined;
-  readonly outputAllowlist: InstallConfig["outputAllowlist"] | undefined;
-  readonly modulePath: string | undefined;
-}
-
-interface RepoOwnedStoreHydrationResult {
-  readonly storeMetadata: InstallConfig["store"] | undefined;
-  readonly outputAllowlist: InstallConfig["outputAllowlist"] | undefined;
-  readonly modulePath: string | undefined;
-  readonly metadataUnavailable?: boolean;
-}
-
-async function hydrateRepoOwnedStoreConfig(
-  input: RepoOwnedStoreHydrationInput,
-): Promise<RepoOwnedStoreHydrationResult> {
-  if (!input.storeMetadata?.source) return input;
-  const {
-    inputs: _inputs,
-    installExperience: _installExperience,
-    ...baseStore
-  } = input.storeMetadata;
-  const scrubbedStoreMetadata =
-    installConfigStoreValue({
-      ...baseStore,
-      inputs: [],
-    }) ?? input.storeMetadata;
-  const inspectionModulePath =
-    input.modulePath ??
-    modulePathValue(input.storeMetadata.source?.path) ??
-    undefined;
-  const metadata = await readRepoOwnedTcsMetadata({
-    operations: input.operations,
-    sourceSnapshot: input.sourceSnapshot,
-    modulePath: inspectionModulePath,
-  });
-  if (!metadata) {
-    return {
-      storeMetadata: scrubbedStoreMetadata,
-      outputAllowlist: undefined,
-      modulePath: input.modulePath,
-      metadataUnavailable: true,
-    };
-  }
-
-  const modulePath =
-    input.modulePath ?? modulePathValue(metadata.modulePath) ?? undefined;
-  const storePatch: Record<string, unknown> = {
-    inputs: Array.isArray(metadata.inputs) ? metadata.inputs : [],
-    ...(metadata.installExperience !== undefined
-      ? { installExperience: metadata.installExperience }
-      : {}),
-  };
-  storePatch.source = {
-    ...input.storeMetadata.source,
-    git: input.source.url,
-    path:
-      modulePath !== undefined
-        ? modulePath === ""
-          ? "."
-          : modulePath
-        : input.storeMetadata.source.path || ".",
-  };
-  const mergedStore = installConfigStoreValue({
-    ...baseStore,
-    ...storePatch,
-  });
-  return {
-    storeMetadata: mergedStore ?? input.storeMetadata,
-    outputAllowlist: undefined,
-    modulePath,
-  };
-}
-
-async function latestSourceSnapshotForSource(
-  operations: ControlPlaneOperations,
-  source: Source,
-): Promise<SourceSnapshot | undefined> {
-  try {
-    const { snapshots } = await operations.listSourceSnapshots(source.id);
-    return [...snapshots]
-      .filter(
-        (snapshot): snapshot is SourceSnapshot =>
-          snapshot.origin === "git" &&
-          snapshot.sourceId === source.id &&
-          Boolean(snapshot.resolvedCommit.trim()),
-      )
-      .sort((left, right) => right.fetchedAt.localeCompare(left.fetchedAt))[0];
-  } catch {
-    return undefined;
-  }
-}
-
-async function readRepoOwnedTcsMetadata(input: {
-  readonly operations: ControlPlaneOperations;
-  readonly sourceSnapshot: SourceSnapshot | undefined;
-  readonly modulePath?: string;
-}): Promise<Record<string, unknown> | undefined> {
-  if (!input.sourceSnapshot) return undefined;
-  try {
-    const files = await input.operations.readSourceSnapshotFiles(
-      input.sourceSnapshot.id,
-      input.modulePath ? { modulePath: input.modulePath } : undefined,
-    );
-    const metadataFile = files.find(
-      (file) => file.path === ".well-known/tcs.json",
-    );
-    return metadataFile
-      ? repoMetadataRecord(JSON.parse(metadataFile.text))
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function repoMetadataRecord(
-  value: unknown,
-): Record<string, unknown> | undefined {
-  if (!isPlainJsonObject(value)) return undefined;
-  const schemaVersion =
-    typeof value.schemaVersion === "string" ? value.schemaVersion.trim() : "";
-  if (schemaVersion && schemaVersion !== "tcs.repo/v1") return undefined;
-  return value;
 }
 
 function storeDefaultVariableMapping(

@@ -15,6 +15,7 @@ import {
   isManagedPublicHost,
   managedPublicHostForWorkspace,
 } from "../../../../core/domains/deploy-control/managed_public_domains.ts";
+import { refreshRepoOwnedInstallConfigForCapsule } from "./repo-owned-install-config.ts";
 
 type InstallExperience = NonNullable<
   InstallConfig["store"]
@@ -144,9 +145,15 @@ export async function ensureTakosumiAccountsOidcForExistingCapsule(input: {
   readonly capsule: Capsule;
 }): Promise<void> {
   if (!input.issuer) return;
-  const installConfig = await input.operations.installations.getInstallConfig(
-    input.capsule.installConfigId,
-  );
+  const storedInstallConfig =
+    await input.operations.installations.getInstallConfig(
+      input.capsule.installConfigId,
+    );
+  const installConfig = await refreshRepoOwnedInstallConfigForCapsule({
+    operations: input.operations,
+    capsule: input.capsule,
+    installConfig: storedInstallConfig,
+  });
   await ensureTakosumiAccountsOidcForCapsule({
     operations: input.operations,
     store: input.store,

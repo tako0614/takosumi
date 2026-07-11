@@ -5342,6 +5342,21 @@ test("POST /api/v1/capsules/:id/plan reconciles existing Takosumi Accounts OIDC 
       },
       outputAllowlist: {},
       policy: {},
+      store: {
+        source: {
+          git: "https://github.com/tako0614/takos.git",
+          path: "deploy/opentofu",
+        },
+        order: 1,
+        surface: "service",
+        kind: "worker",
+        provider: "cloudflare",
+        suggestedName: "takos",
+        badge: { ja: "追加候補", en: "Installable" },
+        name: { ja: "Takos", en: "Takos" },
+        description: { ja: "Takos", en: "Takos" },
+        inputs: [],
+      },
       createdAt: "2026-01-01T00:00:00Z",
       updatedAt: "2026-01-01T00:00:00Z",
     };
@@ -5364,6 +5379,49 @@ test("POST /api/v1/capsules/:id/plan reconciles existing Takosumi Accounts OIDC 
       },
     };
   };
+  operations.readSourceSnapshotFiles = async (id, options) => {
+    operations.calls.readSourceSnapshotFiles = [id, options];
+    return [
+      {
+        path: ".well-known/tcs.json",
+        text: JSON.stringify({
+          schemaVersion: "tcs.repo/v1",
+          modulePath: "deploy/opentofu",
+          inputs: [],
+          installExperience: {
+            projections: [
+              {
+                kind: "public_endpoint",
+                variables: {
+                  subdomain: "public_subdomain",
+                  url: "public_url",
+                },
+                baseDomain: "app.takos.jp",
+              },
+              {
+                kind: "oidc_client",
+                variables: {
+                  issuerUrl: "takosumi_accounts_issuer_url",
+                  accountsUrl: "takosumi_accounts_url",
+                  clientId: "takosumi_accounts_client_id",
+                  redirectUri: "takosumi_accounts_redirect_uri",
+                },
+                callbackPath: "/auth/oidc/callback",
+                scopes: [
+                  "openid",
+                  "profile",
+                  "email",
+                  "offline_access",
+                  "capsules:read",
+                  "capsules:write",
+                ],
+              },
+            ],
+          },
+        }),
+      },
+    ];
+  };
 
   const { request: req, url } = request(
     "POST",
@@ -5384,7 +5442,18 @@ test("POST /api/v1/capsules/:id/plan reconciles existing Takosumi Accounts OIDC 
   expect(oidcClient?.redirectUris).toEqual([
     "https://shota-takos-new.app.takos.jp/auth/oidc/callback",
   ]);
-  expect(oidcClient?.allowedScopes).toEqual(["openid", "profile", "email"]);
+  expect(oidcClient?.allowedScopes).toEqual([
+    "openid",
+    "profile",
+    "email",
+    "offline_access",
+    "capsules:read",
+    "capsules:write",
+  ]);
+  expect(operations.calls.readSourceSnapshotFiles).toEqual([
+    "snap_1",
+    { modulePath: "deploy/opentofu" },
+  ]);
   const config = operations.calls.putInstallConfig?.[0] as {
     variableMapping: Record<string, unknown>;
   };
