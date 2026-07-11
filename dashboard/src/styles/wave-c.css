@@ -258,7 +258,10 @@
   border-radius: var(--tg-r-md);
   font-size: var(--tg-fs-sm);
   font-weight: 600;
-  color: var(--tg-danger);
+  /* Danger text on its own danger-10% tint: raw --tg-danger measured 3.89:1 in
+     light (below AA). --tg-danger-text darkens it in light (5.01:1) and keeps
+     the dark red unchanged in dark (4.55:1 on the tint). */
+  color: var(--tg-danger-text);
   background: color-mix(in srgb, var(--tg-danger) 10%, transparent);
   border: 1px solid color-mix(in srgb, var(--tg-danger) 30%, transparent);
 }

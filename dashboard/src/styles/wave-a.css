@@ -128,10 +128,12 @@
   font-size: var(--tg-fs-base);
 }
 .wa-change-create strong {
-  color: var(--tg-success);
+  /* Bold count as text needs 4.5:1 — --tg-success failed on white (4.43:1); the
+     -text leaf clears it in both themes. */
+  color: var(--tg-success-text);
 }
 .wa-change-update strong {
-  color: var(--tg-accent);
+  color: var(--tg-accent-text);
 }
 .wa-change-delete strong {
   color: var(--tg-danger);
@@ -301,10 +303,15 @@
   color: var(--tg-danger);
 }
 .wa-diag-warning .wa-diag-sev {
-  color: var(--tg-accent);
+  color: var(--tg-accent-text);
 }
 .wa-diag-msg {
   font-size: var(--tg-fs-sm);
+  /* M24: OpenTofu diagnostic messages carry real newlines — preserve them so a
+     multi-line runner message keeps its structure instead of collapsing into
+     one flowing paragraph, and wrap long tokens instead of overflowing. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .wa-pre {
   grid-column: 1 / -1;
@@ -315,8 +322,11 @@
   border-radius: var(--tg-r-sm);
   font-size: var(--tg-fs-xs);
   overflow-x: auto;
+  /* M24: monospace runner output — keep newlines and wrap long unbroken tokens
+     (URLs / hashes) rather than forcing horizontal overflow. */
   white-space: pre-wrap;
   word-break: break-word;
+  overflow-wrap: anywhere;
 }
 
 /* --- Audit trail ------------------------------------------------------------ */

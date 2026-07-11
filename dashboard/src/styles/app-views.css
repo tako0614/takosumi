@@ -33,7 +33,7 @@
 .av-plan-price {
   font-size: var(--tg-fs-lg);
   font-weight: 700;
-  color: var(--tg-accent);
+  color: var(--tg-accent-text);
 }
 .av-plan-section {
   margin-top: var(--tg-s-4);
@@ -50,7 +50,7 @@
   font-size: var(--tg-fs-sm);
 }
 .av-billing-policy-links a {
-  color: var(--tg-accent);
+  color: var(--tg-accent-text);
   font-weight: 700;
   text-decoration: none;
 }
@@ -71,7 +71,8 @@
 
 /* ===== public Takosumi Cloud policy pages ===== */
 .legal-page {
-  min-height: 100vh;
+  min-height: 100vh; /* fallback for browsers without dvh */
+  min-height: 100dvh;
   padding: clamp(var(--tg-s-4), 4vw, var(--tg-s-8));
   background:
     radial-gradient(
@@ -201,7 +202,7 @@
   line-height: 1.8;
 }
 .legal-section a {
-  color: var(--tg-accent);
+  color: var(--tg-accent-text);
   font-weight: 800;
 }
 
@@ -961,6 +962,7 @@
   justify-content: space-between;
   gap: var(--tg-s-3);
   margin-bottom: var(--tg-s-4);
+  flex-wrap: wrap;
 }
 .av-list-toolbar-sub {
   min-width: 0;
@@ -1055,13 +1057,15 @@
   min-height: 32px;
   padding: 0 var(--tg-s-2);
   border-radius: var(--tg-r-full);
-  color: var(--tg-danger);
+  /* -text leaf so the label clears AA on the danger-10% hover tint (raw
+     --tg-danger measured 3.89:1 there in light). */
+  color: var(--tg-danger-text);
   font-size: var(--tg-fs-xs);
   white-space: nowrap;
 }
 .av-service-row-delete:hover {
   background: color-mix(in srgb, var(--tg-danger) 10%, transparent);
-  color: var(--tg-danger);
+  color: var(--tg-danger-text);
 }
 
 /* ===== recent runs strip (Installation detail / deploys) ===== */
@@ -1894,5 +1898,19 @@ button.tg-tab {
 @media (min-width: 721px) {
   .av-add-flow-header {
     display: none;
+  }
+}
+
+/* ===== Touch targets (WCAG 2.5.8 / M37) =====
+ * Coarse-pointer only: raise the sub-40px view-local controls to a comfortable
+ * tap size. Desktop (fine pointer) keeps the compact sizing. */
+@media (pointer: coarse) {
+  .av-tile-manage,
+  .av-service-row-delete,
+  .av-cloud-res-more,
+  .legal-lang button,
+  .legal-sign-in,
+  .legal-nav-link {
+    min-height: 40px;
   }
 }
