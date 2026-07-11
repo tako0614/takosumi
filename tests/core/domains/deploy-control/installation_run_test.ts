@@ -6070,7 +6070,25 @@ test("installation plan returns a typed source_sync_required 409 when no snapsho
 });
 
 test("installation destroy-plan completes and the unified Run is waiting_approval", async () => {
-  const { runner, controller } = await seededController();
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner({
+    plannedOutputs: {
+      launch_url: { sensitive: false, value: null },
+    },
+  });
+  await seedRunnableInstallationModel(store, {
+    environment: "preview",
+    installConfig: {
+      outputAllowlist: {
+        launch_url: { from: "launch_url", type: "url" },
+      },
+    },
+  });
+  const profile = multiProviderRunnerProfile();
+  const controller = controllerWith(store, runner, {
+    runnerProfiles: [profile],
+    defaultRunnerProfileId: profile.id,
+  });
 
   const { planRun } =
     await controller.createInstallationDestroyPlan("inst_fixture");
