@@ -63,6 +63,7 @@ interface GrantSpec {
     url?: string;
     token: string;
     prefix: string;
+    workspaceId: string;
   }) => Record<string, string>;
 }
 
@@ -78,6 +79,7 @@ const GRANT_SPECS: readonly GrantSpec[] = [
     env: (grant) => ({
       TF_VAR_object_storage_access_token: grant.token,
       TF_VAR_object_storage_key_prefix: grant.prefix,
+      TF_VAR_object_storage_workspace_id: grant.workspaceId,
       ...(grant.url ? { TF_VAR_object_storage_api_url: grant.url } : {}),
     }),
   },
@@ -242,6 +244,7 @@ export class ServiceGrantBroker {
       url: firstEndpointUrl(producer.export),
       token: minted.token,
       prefix,
+      workspaceId: ctx.workspaceId,
     });
   }
 

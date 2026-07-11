@@ -186,6 +186,7 @@ describe("ServiceGrantBroker", () => {
     expect(env!.TF_VAR_object_storage_key_prefix).toBe(
       `${WORKSPACE_ID}/${CONSUMER_ID}/`,
     );
+    expect(env!.TF_VAR_object_storage_workspace_id).toBe(WORKSPACE_ID);
 
     const token = env!.TF_VAR_object_storage_access_token!;
     const verified = await verifyStorageAccessToken(
