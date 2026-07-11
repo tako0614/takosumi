@@ -1305,7 +1305,14 @@ function Inner() {
       );
       if (connection) return connection;
     }
-    return undefined;
+    const managedProvider = managedStoreProviderForCurrentSource();
+    if (!managedProvider) return undefined;
+    const fallbackRow = providerRows().find((row) =>
+      sameProviderFamily(managedProvider, row.provider),
+    );
+    return fallbackRow
+      ? managedProviderConnectionForRow(fallbackRow)
+      : undefined;
   };
   const effectiveManagedBaseDomain = (declared?: string): string =>
     managedBaseDomain(
