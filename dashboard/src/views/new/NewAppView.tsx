@@ -100,15 +100,20 @@ import {
   type Connection,
   type ProviderConnection,
   type RunStatus,
+  type SourceSnapshot,
   type Workspace,
 } from "../../lib/control-api.ts";
 import { locale, t } from "../../i18n/index.ts";
 import { StoreBrowser } from "../store/StoreBrowser.tsx";
 import { buildNewQuery } from "../store/store-link.ts";
 import {
+  fetchTcsRepoMetadata,
   fetchTcsListing,
   hydrateRequiredTcsListingWithRepoMetadata,
+  parseTcsRepoMetadata,
+  tcsListingFromRepoMetadata,
   type TcsListing,
+  type TcsListingSource,
 } from "../../lib/tcs-client.ts";
 import {
   clearCapsuleListCache,
@@ -1939,6 +1944,96 @@ function Inner() {
   ): Promise<TcsListing> =>
     await hydrateRequiredTcsListingWithRepoMetadata(listing, signal);
 
+  const adoptRepoOwnedListing = (listing: TcsListing): boolean => {
+    if (selectedStoreListing()) return false;
+    setSelectedStoreListing(listing);
+    setStoreMetadataUnavailable(false);
+    const entry = storeEntryFromStoreListing(
+      listing,
+      defaultGitInstallConfig()?.id ?? DEFAULT_CAPSULE_INSTALL_CONFIG_ID,
+    );
+    const prefill = currentInstallPrefill();
+    setStoreInputValues((current) => {
+      const next: Record<string, string> = { ...current };
+      for (const field of entry.inputs) {
+        const value = prefill?.vars?.[field.name];
+        if (value === undefined) continue;
+        next[storeInputKey(entry.id, field.name)] =
+          installVariableDisplayValue(value);
+      }
+      return next;
+    });
+    const ownedNames = new Set(entry.inputs.map((field) => field.name));
+    setInputVariables((rows) =>
+      rows.filter((row) => !ownedNames.has(row.name.trim())),
+    );
+    const serviceNameVariable = storeServiceNameVariable(
+      storeMetadataFromStoreListing(listing),
+    );
+    const serviceName = serviceNameVariable
+      ? prefill?.vars?.[serviceNameVariable]
+      : undefined;
+    if (typeof serviceName === "string") {
+      const generated = serviceNameHintIsGenerated(serviceName);
+      setResourcePrefix(generated ? "" : serviceName);
+      setResourcePrefixTouched(!generated);
+    }
+    void loadConnections();
+    return true;
+  };
+
+  const listingFromSnapshot = (snapshot: SourceSnapshot): TcsListing | null => {
+    const observation = snapshot.repositoryInstallMetadata;
+    if (observation?.status !== "present") return null;
+    try {
+      const metadata = parseTcsRepoMetadata(JSON.parse(observation.text));
+      if (!metadata) return null;
+      const source: TcsListingSource = {
+        git: sourceGitUrl(),
+        ...(sourceRef() ? { ref: sourceRef() } : {}),
+        ...(snapshot.resolvedCommit
+          ? { resolvedCommit: snapshot.resolvedCommit }
+          : {}),
+        path: sourcePath(),
+      };
+      return tcsListingFromRepoMetadata(source, metadata);
+    } catch {
+      return null;
+    }
+  };
+
+  // A public direct-Git hand-off should show repository-owned setup fields
+  // before the visitor presses Add. This is a read-only best effort; private or
+  // non-GitHub sources are hydrated from the immutable SourceSnapshot after the
+  // explicit compatibility action instead.
+  let directRepoHydrationKey = "";
+  createEffect(() => {
+    if (selectedStoreListing() || sourceAccessMode() !== "public") return;
+    const source: TcsListingSource = {
+      git: sourceGitUrl(),
+      ...(sourceRef() ? { ref: sourceRef() } : {}),
+      path: sourcePath(),
+    };
+    if (!source.git) return;
+    const key = JSON.stringify(source);
+    if (key === directRepoHydrationKey) return;
+    directRepoHydrationKey = key;
+    void fetchTcsRepoMetadata(source)
+      .then((metadata) => {
+        if (
+          directRepoHydrationKey !== key ||
+          selectedStoreListing() ||
+          !metadata
+        ) {
+          return;
+        }
+        adoptRepoOwnedListing(tcsListingFromRepoMetadata(source, metadata));
+      })
+      .catch(() => {
+        // The SourceSnapshot path remains the forge-neutral authority.
+      });
+  });
+
   // Guard out-of-order picks: tapping card A then quickly card B must not let
   // A's slower metadata response overwrite B's form (same reqToken pattern as
   // StoreBrowser.rebuild()). Stale resolutions are dropped silently.
@@ -2178,9 +2273,15 @@ function Inner() {
       return;
     }
     if (!compatibility()) {
+      const setupWasVisible = selectedServiceEntry() !== null;
       await runCompatibilityCheck();
       // The check failed or could not resolve a result; its own error is shown.
       if (!compatibility()) return;
+      // A private or non-GitHub source may reveal its repository-owned setup
+      // contract only after SourceSnapshot sync. Never apply immediately with
+      // unseen domain/password inputs: render them and require one explicit
+      // confirmation click.
+      if (!setupWasVisible && selectedServiceEntry()) return;
     }
     await loadProviderConnections().catch(() => []);
     await settleProviderConnectionRows();
@@ -2243,6 +2344,15 @@ function Inner() {
     );
   };
 
+  const adoptSourceSnapshotMetadata = (
+    flow: FlowRun,
+    snapshot: SourceSnapshot,
+  ) => {
+    if (!isCurrentFlow(flow)) return;
+    const listing = listingFromSnapshot(snapshot);
+    if (listing) adoptRepoOwnedListing(listing);
+  };
+
   const runCompatibilityCheck = async () => {
     const validationError = validate();
     if (validationError) {
@@ -2277,6 +2387,8 @@ function Inner() {
         onSourceCreated: (sourceId) => {
           if (isCurrentFlow(flow)) recordCreatedSource(sourceId);
         },
+        onSourceSnapshot: (snapshot) =>
+          adoptSourceSnapshotMetadata(flow, snapshot),
         onSourceSyncProgress: (progress) => {
           if (!isCurrentFlow(flow)) return;
           if (progress.run?.status) {
@@ -2304,6 +2416,8 @@ function Inner() {
           onSourceCreated: (sourceId) => {
             if (isCurrentFlow(flow)) recordCreatedSource(sourceId);
           },
+          onSourceSnapshot: (snapshot) =>
+            adoptSourceSnapshotMetadata(flow, snapshot),
           onSourceSyncProgress: (progress) => {
             if (!isCurrentFlow(flow)) return;
             if (progress.run?.status) {

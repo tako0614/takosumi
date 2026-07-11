@@ -278,6 +278,17 @@ describe("/new flow guidance", () => {
     );
   });
 
+  test("direct Git hand-offs render repository-owned setup before apply", () => {
+    expect(newAppViewSource).toContain("fetchTcsRepoMetadata");
+    expect(newAppViewSource).toContain("listingFromSnapshot");
+    expect(newAppViewSource).toContain("repositoryInstallMetadata");
+    expect(newAppViewSource).toContain("adoptRepoOwnedListing");
+    expect(newAppViewSource).toContain(
+      "if (!setupWasVisible && selectedServiceEntry()) return",
+    );
+    expect(controlApiSource).toContain("onSourceSnapshot?.(snapshot)");
+  });
+
   test("store metadata is normalized before being sent to the control API", () => {
     expect(newAppViewSource).toContain("DEFAULT_STORE_BADGE");
     expect(newAppViewSource).toContain("nonEmptyStoreText(listing.badge)");
