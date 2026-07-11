@@ -332,7 +332,10 @@ slot from the immutable Workspace owner account. Both forms are
 first-come-first-served and conflict errors must not disclose the owning
 Workspace or Capsule. The reservation and vanity slot belong to the Capsule
 lifetime and are released only after a successful Capsule destroy, not when an
-individual runtime route is deleted. If it maps a `url` or
+individual runtime route is deleted. Reservations created before owner-slot
+enforcement are grandfathered as `scoped`; only an explicit post-migration
+`mode = "vanity"` claim consumes the new quota. This prevents retired
+custom-domain reservation rows from consuming vanity slots. If it maps a `url` or
 route-pattern variable that points outside the managed base domain, it is a
 custom/user-owned hostname and must go through domain ownership verification
 before runtime activation in managed target implementations. Generic
