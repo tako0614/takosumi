@@ -255,6 +255,10 @@
   line-height: 1.5;
   overflow-wrap: anywhere;
 }
+.wb-inline-details code {
+  /* Long inline ids / JSON detail must wrap, not force horizontal overflow. */
+  overflow-wrap: anywhere;
+}
 
 .wb-compat-head {
   display: flex;
@@ -262,6 +266,9 @@
   justify-content: space-between;
   gap: var(--tg-s-3);
   margin-bottom: var(--tg-s-2);
+  /* Narrow screens: let the summary + action wrap instead of squeezing. */
+  flex-wrap: wrap;
+  min-width: 0;
 }
 .wb-compat-summary {
   margin: 0;

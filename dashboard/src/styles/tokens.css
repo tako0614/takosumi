@@ -51,9 +51,17 @@
 
   --tg-info: #6ea8ff;
   --tg-success: #46c85a;
+  /* Bold success text (create counts). #46c85a already clears AA as text on
+     the dark grounds; a hair brighter reads better for bold numerals
+     (≥7.6:1 on every dark surface). */
+  --tg-success-text: #54d16a;
   --tg-warn: #e0a53a;
   --tg-danger: #f85149;
   --tg-danger-fg: #ffffff;
+  /* Danger text on danger-tinted strips (notif summary, delete-row hover).
+     Dark keeps the base danger red — it clears 4.5:1 on those tints; the light
+     palette darkens it instead (see below). */
+  --tg-danger-text: var(--tg-danger);
   /* Solid danger fills (count badge etc.): #f85149 + white was 3.35:1. */
   --tg-danger-emphasis: #d63a2f;
 
@@ -171,9 +179,14 @@
   --tg-bg-subtle: #f1f1f3;
   --tg-bg-hi: #e9e9ec;
   --tg-fg: #18181b;
-  --tg-fg-muted: #6e6e77;
+  /* Secondary text. #6e6e77 measured 4.48:1 on --tg-bg-subtle (below AA) and
+     sat almost level with --tg-fg-subtle; darkened to clear 4.5:1 on every
+     light surface (5.04:1 on --tg-bg-subtle, 4.69:1 on --tg-bg-hi) and to
+     re-open the secondary→tertiary hierarchy against --tg-fg-subtle. */
+  --tg-fg-muted: #66666f;
   /* #a0a0a9 failed WCAG AA (~2.3:1) on white/subtle for table headers, KV
-     labels and muted badges; darkened to clear 4.5:1. */
+     labels and muted badges; darkened to clear 4.5:1 (4.68:1 on --tg-bg-subtle)
+     while staying a step quieter than --tg-fg-muted. */
   --tg-fg-subtle: #6b6b74;
   --tg-line: #e6e6e9;
   --tg-line-strong: #d6d6db;
@@ -198,9 +211,17 @@
 
   --tg-info: #2563eb;
   --tg-success: #1a8a3c;
+  /* Bold success text: #1a8a3c measured 4.43:1 on white / 3.92:1 on
+     --tg-bg-subtle (below AA); this darker leaf clears 5.42:1 on white and
+     4.81:1 on --tg-bg-subtle. */
+  --tg-success-text: #177a35;
   --tg-warn: #b26a09;
   --tg-danger: #d22c22;
   --tg-danger-fg: #ffffff;
+  /* Danger text on danger-tinted strips (notif summary, delete-row hover):
+     raw #d22c22 measured 3.89:1 on the danger-10% tint; this darker red clears
+     5.01:1 on the tint and 6.57:1 on white. */
+  --tg-danger-text: #b02a20;
   --tg-danger-emphasis: #d22c22;
 
   --tg-k-worker-bg: #e7edf5;

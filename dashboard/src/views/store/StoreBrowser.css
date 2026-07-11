@@ -215,21 +215,26 @@
   height: 100%;
   object-fit: cover;
 }
+/* Card title is now an <h2> wrapping the open <button> (headings-outline fix);
+   the button carries the interaction, the h2 carries the type scale. */
+.tcs-card-title {
+  margin: 0 0 4px;
+  font-size: 1.02rem;
+  overflow-wrap: anywhere;
+}
 .tcs-card-open {
   background: none;
   border: 0;
   text-align: left;
   color: inherit;
+  font: inherit;
+  display: block;
+  width: 100%;
   padding: 0;
   cursor: pointer;
   min-width: 0;
 }
-.tcs-card-open h2 {
-  margin: 0 0 4px;
-  font-size: 1.02rem;
-  overflow-wrap: anywhere;
-}
-.tcs-card-open p {
+.tcs-card-desc {
   margin: 0;
   color: var(--c-muted);
   font-size: 0.86rem;
@@ -301,8 +306,9 @@
   margin-top: 20px;
 }
 .tcs-link {
-  /* Text red, not the emphasis fill: keeps AA contrast on the dark ground. */
-  color: var(--tg-accent, var(--c-accent));
+  /* AA-safe text-red leaf: raw --tg-accent measured 4.15:1 on the light ground
+     (below AA); --tg-accent-text clears 4.5:1 in both themes. */
+  color: var(--tg-accent-text, var(--c-accent));
   text-decoration: none;
   font-size: 0.86rem;
 }
@@ -412,6 +418,19 @@
   .tcs-detail {
     width: 100%;
     border-left: 0;
+  }
+}
+
+/* Touch targets (WCAG 2.5.8 / M37): coarse pointers get a ≥40px tap size on the
+   store's compact chips + small buttons; fine pointers keep the dense sizing. */
+@media (pointer: coarse) {
+  .tcs-btn.tcs-sm,
+  .tcs-chip {
+    min-height: 40px;
+  }
+  .tcs-chip {
+    display: inline-flex;
+    align-items: center;
   }
 }
 
