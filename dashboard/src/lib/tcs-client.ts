@@ -513,7 +513,9 @@ function repoInstallExperience(
   return { projections };
 }
 
-function repoMetadataFromJson(json: unknown): TcsRepoMetadata | undefined {
+export function parseTcsRepoMetadata(
+  json: unknown,
+): TcsRepoMetadata | undefined {
   if (!isRecord(json)) return undefined;
   const schemaVersion = text(json.schemaVersion);
   if (schemaVersion && schemaVersion !== "tcs.repo/v1") return undefined;
@@ -569,7 +571,7 @@ export async function fetchTcsRepoMetadata(
   });
   if (api.status === 404) return null;
   if (api.ok) {
-    const metadata = repoMetadataFromJson(
+    const metadata = parseTcsRepoMetadata(
       await readGithubContentsJsonResponse(api),
     );
     if (metadata) return metadata;
@@ -583,7 +585,7 @@ export async function fetchTcsRepoMetadata(
   });
   if (raw.status === 404) return null;
   if (!raw.ok) throw new Error(`repo metadata ${api.status}/${raw.status}`);
-  return repoMetadataFromJson(await raw.json()) ?? null;
+  return parseTcsRepoMetadata(await raw.json()) ?? null;
 }
 
 export function mergeTcsListingRepoMetadata(
@@ -616,6 +618,52 @@ export function mergeTcsListingRepoMetadata(
       ? { installExperience: metadata.installExperience }
       : {}),
   };
+}
+
+function repositorySuggestedName(source: TcsListingSource): string {
+  try {
+    const url = new URL(source.git);
+    const tail = url.pathname
+      .replace(/\/+$/u, "")
+      .replace(/\.git$/iu, "")
+      .split("/")
+      .filter(Boolean)
+      .at(-1);
+    if (tail) return tail.toLowerCase().replace(/[^a-z0-9-]+/gu, "-");
+  } catch {
+    // Fall through to the stable generic name for non-URL Git addresses.
+  }
+  return "opentofu-service";
+}
+
+/**
+ * Builds the same install-form listing shape directly from repository-owned
+ * metadata. Store nodes are discovery only, so a direct Git hand-off must be
+ * able to render the repository's setup contract without first finding a Store
+ * listing for it.
+ */
+export function tcsListingFromRepoMetadata(
+  source: TcsListingSource,
+  metadata: TcsRepoMetadata,
+): TcsListing {
+  const suggestedName =
+    metadata.suggestedName ?? repositorySuggestedName(source);
+  const fallbackName = { ja: suggestedName, en: suggestedName };
+  const base: TcsListing = {
+    id: metadata.id ?? `repo/${suggestedName}`,
+    source,
+    kind: metadata.kind ?? "app",
+    surface: metadata.surface ?? "service",
+    provider: metadata.provider ?? "opentofu",
+    category: metadata.category ?? "general",
+    suggestedName,
+    name: metadata.name ?? fallbackName,
+    description: metadata.description ?? fallbackName,
+    badge: metadata.badge ?? { ja: "Git", en: "Git" },
+    createdAt: "1970-01-01T00:00:00.000Z",
+    updatedAt: "1970-01-01T00:00:00.000Z",
+  };
+  return mergeTcsListingRepoMetadata(base, metadata);
 }
 
 export async function hydrateTcsListingWithRepoMetadata(

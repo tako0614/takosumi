@@ -880,6 +880,7 @@ export interface SourceSnapshot {
   readonly archiveObjectKey: string;
   readonly archiveDigest: string;
   readonly archiveSizeBytes: number;
+  readonly repositoryInstallMetadata?: ContractSourceSnapshot["repositoryInstallMetadata"];
   readonly fetchedByRunId: string;
   readonly fetchedAt: string;
 }
@@ -1589,6 +1590,7 @@ export async function checkCapsuleCompatibility(input: {
   readonly onSourceSyncProgress?: (
     progress: SourceSnapshotWaitProgress,
   ) => void;
+  readonly onSourceSnapshot?: (snapshot: SourceSnapshot) => void;
 }): Promise<CapsuleCompatibilityResult> {
   const sourceId =
     input.sourceId ??
@@ -1612,6 +1614,7 @@ export async function checkCapsuleCompatibility(input: {
     signal: input.signal,
     onProgress: input.onSourceSyncProgress,
   });
+  input.onSourceSnapshot?.(snapshot);
   const body = await controlFetch<{
     report: {
       readonly id: string;

@@ -247,9 +247,8 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).toContain(
       "const connectionId = defaultConnectionForRow(row)",
     );
-    expect(newAppViewSource).toContain(
-      "const options = () => providerConnectionsForRow(row)",
-    );
+    expect(newAppViewSource).toContain("const options = () =>");
+    expect(newAppViewSource).toContain("providerConnectionsForRow(row)");
     expect(newAppViewSource).toContain(
       "rootModuleVariables: result.rootModuleVariables",
     );
