@@ -260,7 +260,7 @@ describe("/new Provider Connections return context", () => {
     );
   });
 
-  test("/new uses a managed provider connection without fixing the preselected app.takos.jp URL client-side", () => {
+  test("/new uses a managed provider connection and its public namespace without hard-coded app behavior", () => {
     expect(newAppViewSource).toContain("selectedManagedProviderConnection");
     expect(newAppViewSource).toContain("managedProviderVariableDefaults");
     expect(newAppViewSource).toContain("managedStoreProviderForCurrentSource");
@@ -309,6 +309,8 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).not.toContain('setDefault("worker_name"');
     expect(newAppViewSource).not.toContain('setDefault("app_url"');
     expect(newAppViewSource).toContain("managedBaseDomain");
+    expect(newAppViewSource).toContain("effectiveManagedBaseDomain");
+    expect(newAppViewSource).toContain("managedPublicBaseDomain");
     expect(newAppViewSource).toContain(
       "const managedAppLabel = currentSubdomain",
     );

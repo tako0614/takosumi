@@ -477,6 +477,7 @@ function storeDefaultInputValue(
   field: StoreInputField,
   workspaceHandle: string | undefined,
   serviceSlug?: string,
+  managedPublicBaseDomain?: string,
 ): string {
   const base = slugInputValue(entry.suggestedName);
   const requestedServiceSlug = serviceSlug || base;
@@ -488,13 +489,16 @@ function storeDefaultInputValue(
   if (field.name === publicEndpoint?.subdomainVariable) {
     return requestedServiceSlug;
   }
-  if (field.name === publicEndpoint?.urlVariable && publicEndpoint.baseDomain) {
+  if (
+    field.name === publicEndpoint?.urlVariable &&
+    (managedPublicBaseDomain || publicEndpoint.baseDomain)
+  ) {
     // Normalize the base domain (strip a wildcard `*.` / trailing `.`) exactly
     // like every other consumer — otherwise a listing declaring
     // `*.app.takos.jp` yields `https://slug.*.app.takos.jp`, which fails URL
     // validation and blocks the install.
     return scopedServiceSlug
-      ? `https://${scopedServiceSlug}.${managedBaseDomain(publicEndpoint.baseDomain)}`
+      ? `https://${scopedServiceSlug}.${managedBaseDomain(managedPublicBaseDomain ?? publicEndpoint.baseDomain)}`
       : "";
   }
   switch (field.defaultValue) {
