@@ -151,6 +151,45 @@ function fullState(overrides: Partial<FakeStoreState> = {}): FakeStoreState {
   };
 }
 
+function gitConsumerState(scopes: readonly string[]): FakeStoreState {
+  const gitProducerId = "inst_dddddddddddddddd";
+  return {
+    installations: [
+      { id: gitProducerId, workspaceId: WORKSPACE_ID },
+      { id: CONSUMER_ID, workspaceId: WORKSPACE_ID },
+    ],
+    outputs: {
+      [gitProducerId]: {
+        service_exports: [{
+          name: "source.git.smart_http",
+          capabilities: ["source.git.smart_http", "protocol.http.api"],
+          endpoints: [{
+            name: "default",
+            protocol: "https",
+            url: "https://git.example/git",
+          }],
+          visibility: "space",
+        }],
+      },
+      [CONSUMER_ID]: {
+        app_deployment: {
+          name: "consumer",
+          compute: {
+            web: {
+              kind: "worker",
+              consume: [{
+                publication: "source.git.smart_http",
+                request: { scopes: [...scopes] },
+              }],
+            },
+          },
+        },
+      },
+    },
+    mintEvents: [],
+  };
+}
+
 function broker(state: FakeStoreState, signingKey: string | undefined) {
   return brokerWith(state, makeResolver(signingKey));
 }
@@ -426,15 +465,44 @@ describe("ServiceGrantBroker", () => {
     );
     expect(env).toBeDefined();
     expect(env!.TF_VAR_git_http_url).toBe("https://git.example/git");
-    expect(env!.TF_VAR_git_repo_prefix).toBe(CONSUMER_ID);
+    expect(env!.TF_VAR_git_repo_prefix).toBe(WORKSPACE_ID);
 
     const payload = decodeTokenPayload(env!.TF_VAR_git_access_token!);
     expect(payload.aud).toBe("source.git.smart_http");
-    expect(payload.pfx).toBe(CONSUMER_ID);
+    expect(payload.pfx).toBe(WORKSPACE_ID);
     expect(payload.cap).toEqual(["r"]);
     expect(state.mintEvents[0]!.providerCredentialEvidence![0]!.provider).toBe(
       "source.git.smart_http",
     );
+  });
+
+  test("mints read/write Git verbs only for repos:write", async () => {
+    const state = gitConsumerState(["repos:write"]);
+    const env = await broker(state, SIGNING_KEY).mintServiceGrantEnv(
+      makePlanRun(),
+      "plan",
+      "run_git_write",
+    );
+
+    expect(env).toBeDefined();
+    expect(env!.TF_VAR_git_repo_prefix).toBe(WORKSPACE_ID);
+    const payload = decodeTokenPayload(env!.TF_VAR_git_access_token!);
+    expect(payload.pfx).toBe(WORKSPACE_ID);
+    expect(payload.cap).toEqual(["r", "w"]);
+  });
+
+  test("maps repos:read to a read-only Workspace Git grant", async () => {
+    const state = gitConsumerState(["repos:read"]);
+    const env = await broker(state, SIGNING_KEY).mintServiceGrantEnv(
+      makePlanRun(),
+      "plan",
+      "run_git_read",
+    );
+
+    expect(env).toBeDefined();
+    const payload = decodeTokenPayload(env!.TF_VAR_git_access_token!);
+    expect(payload.pfx).toBe(WORKSPACE_ID);
+    expect(payload.cap).toEqual(["r"]);
   });
 });
 
