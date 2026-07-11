@@ -44,6 +44,12 @@ const RUN: Record<string, MessageKey> = {
   queued: "status.run.queued",
   running: "status.run.running",
   waiting_approval: "status.run.waiting_approval",
+  // Synthetic display status: a succeeded, policy-passed review run still
+  // awaiting its deploy is already approved — the remaining step is EXECUTION,
+  // so it reads 実行待ち (ready to run), never 承認待ち. Derived in the run views
+  // from the shared awaitsDeployApproval predicate; there is no such backend
+  // RunStatus.
+  ready_to_deploy: "status.run.ready_to_deploy",
   succeeded: "status.run.succeeded",
   failed: "status.run.failed",
   cancelled: "status.run.cancelled",
@@ -154,6 +160,7 @@ export function runTone(status: string | undefined): Tone {
     case "queued":
     case "running":
     case "waiting_approval":
+    case "ready_to_deploy":
       return "warn";
     case "failed":
     case "expired":

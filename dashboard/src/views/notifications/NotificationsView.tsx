@@ -21,6 +21,7 @@ import {
   notificationFeed,
   refreshNotificationFeed,
 } from "../../lib/notifications.ts";
+import { providerDescriptor } from "../account/lib/connections.ts";
 import { currentWorkspaceId } from "../../lib/workspace-state.ts";
 import { listCapsulesCached } from "../../lib/capsule-list.ts";
 import { runFailureHint } from "../../lib/run-errors.ts";
@@ -48,6 +49,16 @@ function metaNumber(
 ): number | undefined {
   const v = metadata[key];
   return typeof v === "number" && Number.isFinite(v) ? v : undefined;
+}
+
+/** Human provider name for a recorded provider id — the same descriptor label
+ * the Connections tab shows, so a connection line reads "Cloudflare", never the
+ * raw `cloudflare` token. Falls back to the raw id for unknown providers. */
+function connectionProviderLabel(
+  provider: string | undefined,
+): string | undefined {
+  if (!provider) return undefined;
+  return providerDescriptor(provider)?.label ?? provider;
 }
 
 /**
@@ -161,7 +172,7 @@ function describeEvent(
       };
     }
     case "connection.created": {
-      const provider = metaString(m, "provider");
+      const provider = connectionProviderLabel(metaString(m, "provider"));
       return {
         title: provider
           ? t("notif.event.connCreated", { provider })
@@ -169,7 +180,7 @@ function describeEvent(
       };
     }
     case "connection.revoked": {
-      const provider = metaString(m, "provider");
+      const provider = connectionProviderLabel(metaString(m, "provider"));
       return {
         title: provider
           ? t("notif.event.connRevoked", { provider })
@@ -203,7 +214,11 @@ function describeEvent(
   }
 }
 
-/** Links an activity event to the page for its target (run / run-group / app). */
+/** Links an activity event to the page for its target. Connection events
+ * (incl. the failure-styled `connection.revoked`) and output-share events
+ * (incl. the `output_share.created` approval request) would otherwise be
+ * dead-end 要対応 rows, so they route to the pages that act on them: the
+ * connections list and the workspace shares tab. */
 function eventHref(event: ActivityEvent): string | undefined {
   if (event.targetType === "run") {
     return `/runs/${encodeURIComponent(event.targetId)}`;
@@ -213,6 +228,12 @@ function eventHref(event: ActivityEvent): string | undefined {
   }
   if (event.targetType === "installation" || event.targetType === "capsule") {
     return `/services/${encodeURIComponent(event.targetId)}`;
+  }
+  if (event.targetType === "connection") {
+    return "/connections";
+  }
+  if (event.targetType === "output_share") {
+    return "/advanced/workspace/shares";
   }
   return undefined;
 }
@@ -320,15 +341,17 @@ export default function NotificationsView() {
         // Same feed snapshot the TopBar badge reads. The page revalidates in
         // the BACKGROUND (force refresh) but renders the existing shared
         // snapshot immediately — a bell click must not full-skeleton over
-        // entries the badge already counted. The 要対応 banner below counts
-        // through the SAME attentionCount derivation (scoped to the current
-        // Workspace, exactly like the badge), so the two can never disagree.
+        // entries the badge already counted. The 要対応 banner and the bell
+        // badge derive the SAME count from this feed (attentionCount, scoped to
+        // the current Workspace).
         const [refreshed] = createResource(() =>
           refreshNotificationFeed({ force: true }),
         );
         const feed = () => notificationFeed();
         // Service names for the recorded Capsule ids — best-effort, cached;
-        // lines render unnamed until (unless) the lookup resolves.
+        // lines render unnamed until (unless) the lookup resolves. Guard the
+        // errored-resource read (loadCapsuleNameIndex is allSettled so it
+        // should never reject, but a throw here would take the whole page down).
         const [capsuleNames] = createResource(
           () => feed(),
           (entries) => loadCapsuleNameIndex(entries),
@@ -336,7 +359,8 @@ export default function NotificationsView() {
         const serviceNameFor = (event: ActivityEvent): string | undefined => {
           const capsuleId = eventCapsuleId(event);
           if (!capsuleId) return undefined;
-          return capsuleNames()?.get(event.workspaceId)?.get(capsuleId);
+          const names = capsuleNames.error ? undefined : capsuleNames.latest;
+          return names?.get(event.workspaceId)?.get(capsuleId);
         };
         // Skeleton / error only before the FIRST snapshot exists; afterwards a
         // failed background refresh silently keeps the last-known entries

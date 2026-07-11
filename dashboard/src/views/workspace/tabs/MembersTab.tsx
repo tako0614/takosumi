@@ -19,7 +19,6 @@ import {
 } from "solid-js";
 import { ShieldCheck, Trash2, UserPlus, Users } from "lucide-solid";
 import {
-  type ControlApiError,
   type ControlWorkspaceRole,
   inviteMember,
   listMembers,
@@ -30,6 +29,7 @@ import {
 import type { SessionRecord } from "../../account/lib/session.ts";
 import { createAction } from "../../account/lib/action.tsx";
 import { useConfirmDialog } from "../../../lib/confirm-dialog.ts";
+import { friendlyError } from "../../../lib/error-copy.ts";
 import { locale, type MessageKey, t } from "../../../i18n/index.ts";
 import {
   Badge,
@@ -43,6 +43,7 @@ import {
   FormField,
   Input,
   Select,
+  Toast,
 } from "../../../components/ui/index.ts";
 
 const ROLE_KEY: Record<ControlWorkspaceRole, MessageKey> = {
@@ -106,10 +107,16 @@ export default function MembersTab(props: {
   );
   const callerSubject = () => props.session.subject;
 
+  // An errored resource THROWS on read; route every data read through this
+  // guarded accessor so a failed list falls through to the error EmptyState
+  // below instead of crashing the tab (mirrors RunsListView / RunGroupView).
+  const memberRows = (): readonly PublicWorkspaceMember[] =>
+    members.error ? [] : (members.latest ?? []);
+
   const caller = (): PublicWorkspaceMember | undefined => {
     const subject = callerSubject();
     if (!subject) return undefined;
-    return (members() ?? []).find((m) => m.accountId === subject);
+    return memberRows().find((m) => m.accountId === subject);
   };
   const callerRoles = (): readonly ControlWorkspaceRole[] =>
     caller()?.status === "active" ? (caller()?.roles ?? []) : [];
@@ -119,20 +126,25 @@ export default function MembersTab(props: {
   const callerIsOwner = () => callerRoles().includes("owner");
 
   const activeOwnerCount = () =>
-    (members() ?? []).filter(
+    memberRows().filter(
       (m) => m.status === "active" && m.roles.includes("owner"),
     ).length;
 
   const [inviteEmail, setInviteEmail] = createSignal("");
   const [inviteRole, setInviteRole] =
     createSignal<ControlWorkspaceRole>("viewer");
+  // The roster never carries an email/display name (opaque tsub_ subjects
+  // only), so confirm the invite by echoing the email the operator entered.
+  const [inviteSuccess, setInviteSuccess] = createSignal<string | null>(null);
   const invite = createAction(async () => {
     const email = inviteEmail().trim();
     if (!email) throw new Error(t("members.invite.emailRequired"));
+    setInviteSuccess(null);
     await inviteMember(props.workspaceId, {
       email,
       role: inviteRole(),
     });
+    setInviteSuccess(email);
     setInviteEmail("");
     setInviteRole("viewer");
     await refetch();
@@ -155,7 +167,8 @@ export default function MembersTab(props: {
       const ok = await confirm({
         title: t("members.roleChangeConfirmTitle"),
         message: t("members.roleChangeConfirmMessage", {
-          name: member.accountId,
+          // Never interpolate the full opaque tsub_ subject into copy.
+          name: shortSubject(member.accountId),
           role: t(ROLE_KEY[role]),
         }),
         confirmText: t("members.changeRole"),
@@ -183,7 +196,9 @@ export default function MembersTab(props: {
   const remove = createAction(async (member: PublicWorkspaceMember) => {
     const ok = await confirm({
       title: t("members.remove"),
-      message: t("members.removeConfirm", { account: member.accountId }),
+      message: t("members.removeConfirm", {
+        account: shortSubject(member.accountId),
+      }),
       confirmText: t("members.remove"),
       danger: true,
     });
@@ -249,8 +264,12 @@ export default function MembersTab(props: {
             >
               <div class="wb-members-actions">
                 <label class="wb-role-select">
-                  <ShieldCheck size={14} />
+                  {/* Decorative — the accessible name comes from aria-label. */}
+                  <ShieldCheck size={14} aria-hidden="true" />
                   <Select
+                    aria-label={t("members.roleSelectLabel", {
+                      name: shortSubject(member.accountId),
+                    })}
                     disabled={changeRole.busy() || isLastOwner(member)}
                     value={member.roles[0] ?? "member"}
                     onChange={(e) =>
@@ -357,6 +376,13 @@ export default function MembersTab(props: {
                 </p>
               )}
             </Show>
+            <Show when={inviteSuccess()}>
+              {(email) => (
+                <Toast tone="success">
+                  {t("members.invite.success", { email: email() })}
+                </Toast>
+              )}
+            </Show>
           </CardSection>
         </Card>
       </Show>
@@ -378,13 +404,22 @@ export default function MembersTab(props: {
 
       <Switch>
         <Match when={members.error}>
-          <EmptyState
-            icon={<Users size={28} />}
-            title={t("workspaceSettings.tab.members")}
-            message={t("common.fetchFailed", {
-              message: (members.error as ControlApiError).message,
-            })}
-          />
+          {(error) => (
+            <EmptyState
+              icon={<Users size={28} />}
+              title={t("workspaceSettings.tab.members")}
+              message={friendlyError(error(), t).message}
+              action={
+                <Button
+                  variant="secondary"
+                  type="button"
+                  onClick={() => void refetch()}
+                >
+                  {t("common.retry")}
+                </Button>
+              }
+            />
+          )}
         </Match>
         <Match when={!members.error}>
           <Show
@@ -401,14 +436,16 @@ export default function MembersTab(props: {
               columns={columns()}
               rows={members()}
               rowKey={(member) => member.accountId}
-              loading={members.loading}
+              // First-load skeleton only — refetch after invite / role change /
+              // remove keeps the roster rendered instead of flashing skeletons.
+              loading={members.loading && !members.latest}
               skeletonRows={3}
             />
           </Show>
         </Match>
       </Switch>
 
-      <Show when={members() && !canInvite()}>
+      <Show when={memberRows().length > 0 && !canInvite()}>
         <p class="wb-note">{t("members.viewerNote")}</p>
       </Show>
     </div>

@@ -87,6 +87,7 @@ export function ConfirmDialogRenderer() {
           >
             <Icons.AlertTriangle
               style={{ width: "1.25rem", height: "1.25rem" }}
+              aria-hidden="true"
             />
           </div>
           <h3 class="tg-confirm-title">{state().title}</h3>
@@ -111,7 +112,7 @@ export function ConfirmDialogRenderer() {
               }}
               onClick={() => handleConfirm()}
             >
-              {state().confirmText || "OK"}
+              {state().confirmText || t("common.ok")}
             </button>
           </div>
         </div>

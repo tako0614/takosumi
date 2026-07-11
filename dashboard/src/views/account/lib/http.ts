@@ -24,6 +24,13 @@ export class ApiError extends Error {
     readonly code: string | undefined,
     message: string,
     readonly body?: unknown,
+    /**
+     * True when `message` is only the bare `${status} ${statusText}` HTTP
+     * fallback — the server sent no usable description. Callers (see
+     * `lib/error-copy.ts` `friendlyError`) treat this as an opaque server
+     * failure and show generic reassuring copy instead of the raw status line.
+     */
+    readonly isHttpStatusFallback: boolean = false,
   ) {
     super(message);
     this.name = "ApiError";
@@ -87,6 +94,9 @@ export async function apiFetch<T>(
       code,
       desc ?? `${res.status} ${res.statusText}`,
       data,
+      // No server-provided description → the message is just the HTTP status
+      // line, which must never surface raw. Flag it as an opaque failure.
+      desc === undefined,
     );
   }
   return data as T;

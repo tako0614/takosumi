@@ -38,6 +38,7 @@ import { clearInstallConfigListCache } from "../../lib/install-config-list.ts";
 import { runCapsuleId } from "../../lib/run-approval.ts";
 import { operationLabel, runStatusLabel, runTone } from "../../lib/labels.ts";
 import { isTerminalRunStatus } from "../../lib/run-logs.ts";
+import { useConfirmDialog } from "../../lib/confirm-dialog.ts";
 import { t } from "../../i18n/index.ts";
 import PageHeader from "../../components/ui/PageHeader.tsx";
 import Button from "../../components/ui/Button.tsx";
@@ -160,6 +161,33 @@ function Inner() {
     clearLauncherCaches(snapshot()?.runGroup.workspaceId);
   });
 
+  // まとめて承認 executes every waiting member at once — unlike the single-run
+  // screen it had no confirmation. Enumerate what will run and gate behind an
+  // explicit (danger-styled when any member removes resources) confirm.
+  const { confirm } = useConfirmDialog();
+  const anyDestroyMember = createMemo(() =>
+    (snapshot()?.runs ?? []).some(
+      (r) => r.type === "destroy_plan" || r.type === "destroy_apply",
+    ),
+  );
+  const confirmApproveAll = async (): Promise<void> => {
+    const waiting = (snapshot()?.runs ?? []).filter(
+      (r) => r.status === "waiting_approval",
+    ).length;
+    const danger = anyDestroyMember();
+    const ok = await confirm({
+      title: t("runGroup.approveAllConfirm.title"),
+      message: danger
+        ? t("runGroup.approveAllConfirm.messageDanger", { n: waiting })
+        : t("runGroup.approveAllConfirm.message", { n: waiting }),
+      confirmText: t("runGroup.approveAll"),
+      cancelText: t("common.cancel"),
+      danger,
+    });
+    if (!ok) return;
+    await approveAll.run();
+  };
+
   return (
     <>
       <PageHeader
@@ -215,15 +243,17 @@ function Inner() {
               <div class="wa-stack">
                 {/* One polite line so member-status transitions are not
                     silent to assistive tech (the visible badges swap with no
-                    announcement). */}
-                <Show when={totalCount() > 0}>
-                  <p class="sr-only" role="status" aria-live="polite">
+                    announcement). Mount the region EMPTY and fill it once the
+                    snapshot lands so the first value announces as a change,
+                    not as pre-existing content the reader skips. */}
+                <p class="sr-only" role="status" aria-live="polite">
+                  <Show when={totalCount() > 0}>
                     {t("runGroup.progressStatus", {
                       done: doneCount(),
                       total: totalCount(),
                     })}
-                  </p>
-                </Show>
+                  </Show>
+                </p>
                 <Show when={group.error}>
                   <p class="wa-notice" role="alert">
                     {t("runGroup.refreshFailed")}
@@ -249,7 +279,7 @@ function Inner() {
                           variant="primary"
                           type="button"
                           busy={approveAll.busy()}
-                          onClick={() => void approveAll.run()}
+                          onClick={() => void confirmApproveAll()}
                         >
                           {approveAll.busy()
                             ? t("run.approving")

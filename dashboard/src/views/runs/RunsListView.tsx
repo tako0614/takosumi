@@ -46,9 +46,11 @@ const RUN_LIST_MAX_LIMIT = 500;
 interface RunHistoryRow {
   readonly runId: string;
   readonly status: RunStatus;
-  /** Row status shown to the user (`waiting_approval` while a succeeded
-   * review run still waits on its deploy approval). */
-  readonly displayStatus: RunStatus;
+  /** Row status shown to the user. A succeeded review run still awaiting its
+   * deploy is already approved/passed, so it reads the synthetic
+   * `ready_to_deploy` (実行待ち) rather than the backend `waiting_approval`
+   * (承認待ち) — the remaining step is execution, not approval. */
+  readonly displayStatus: RunStatus | "ready_to_deploy";
   readonly operation: string;
   readonly capsuleId?: string;
   readonly serviceName?: string;
@@ -232,6 +234,11 @@ function RunHistoryRowView(props: { readonly row: RunHistoryRow }) {
     props.row.serviceName
       ? `${titleForRow(props.row)} — ${props.row.serviceName}`
       : titleForRow(props.row);
+  // Both the real waiting_approval status and the synthetic ready_to_deploy
+  // (実行待ち) open the run to review + deploy, so both get 確認する.
+  const reviewable = () =>
+    props.row.displayStatus === "waiting_approval" ||
+    props.row.displayStatus === "ready_to_deploy";
   return (
     <li class="av-run-history-row">
       <div class="av-run-history-main">
@@ -253,15 +260,11 @@ function RunHistoryRowView(props: { readonly row: RunHistoryRow }) {
         size="sm"
         href={`/runs/${encodeURIComponent(props.row.runId)}`}
         aria-label={t(
-          props.row.displayStatus === "waiting_approval"
-            ? "runList.reviewAria"
-            : "runList.openAria",
+          reviewable() ? "runList.reviewAria" : "runList.openAria",
           { title: rowAriaTitle() },
         )}
       >
-        {props.row.displayStatus === "waiting_approval"
-          ? t("runList.review")
-          : t("runList.open")}
+        {reviewable() ? t("runList.review") : t("runList.open")}
       </Button>
     </li>
   );
@@ -296,7 +299,7 @@ function rowsFromRuns(
         runId: run.id,
         status: run.status,
         displayStatus: awaitsDeployApproval(run, runs)
-          ? "waiting_approval"
+          ? "ready_to_deploy"
           : run.status,
         operation: run.type,
         ...(capsuleId ? { capsuleId } : {}),

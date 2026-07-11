@@ -69,33 +69,45 @@ const MODE_KEY: Record<string, MessageKey> = {
 const USAGE_LEDGER_PAGE_SIZE = 25;
 
 export default function BillingTab(props: { readonly workspaceId: string }) {
-  const [billing] = createResource(
+  const [billing, { refetch: refetchBilling }] = createResource(
     () => props.workspaceId,
     getWorkspaceBilling,
   );
   const cloudBilling = createMemo(() => isTakosumiCloudRuntime());
-  const [plans] = createResource(
+  const [plans, { refetch: refetchPlans }] = createResource(
     () => (cloudBilling() ? "cloud" : undefined),
     listBillingPlans,
   );
-  const [stripeBilling] = createResource(
+  const [stripeBilling, { refetch: refetchStripe }] = createResource(
     () => (cloudBilling() ? "cloud" : undefined),
     () => rpc.billing.summary(),
   );
   const [usageRequested, setUsageRequested] = createSignal(false);
-  const [usagePage] = createResource(
+  const [usagePage, { refetch: refetchUsage }] = createResource(
     () => (usageRequested() ? props.workspaceId : undefined),
     (workspaceId) =>
       listWorkspaceUsagePage(workspaceId, { limit: USAGE_LEDGER_PAGE_SIZE }),
   );
 
-  const mode = createMemo(() => billing()?.settings?.mode);
-  const balance = createMemo(() => billing()?.balance);
+  // Errored-resource accessors THROW when read, so every derived value must
+  // short-circuit on `.error` before calling `billing()` / `plans()` /
+  // `stripeBilling()` — otherwise a failed fetch crashes the whole tab.
+  const mode = createMemo(() =>
+    billing.error ? undefined : billing()?.settings?.mode,
+  );
+  const balance = createMemo(() =>
+    billing.error ? undefined : billing()?.balance,
+  );
   const subscriptions = createMemo(() =>
-    (plans() ?? []).filter((plan) => plan.kind === "subscription"),
+    (plans.error ? [] : (plans() ?? [])).filter(
+      (plan) => plan.kind === "subscription",
+    ),
   );
   const currentSubscription = createMemo(() =>
-    subscriptionView(stripeBilling(), billing()),
+    subscriptionView(
+      stripeBilling.error ? undefined : stripeBilling(),
+      billing.error ? undefined : billing(),
+    ),
   );
   const hasBillingCatalog = createMemo(() => subscriptions().length > 0);
   const canStartCheckout = createMemo(
@@ -104,14 +116,16 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
   const canOpenPortal = createMemo(
     () =>
       cloudBilling() &&
-      (stripeBilling()?.configured === true ||
+      ((!stripeBilling.error && stripeBilling()?.configured === true) ||
         currentSubscription() !== null ||
         (mode() !== undefined && mode() !== "disabled")),
   );
   const billingSubtitle = createMemo(() => {
     if (billing.loading) return t("billing.loading");
-    if (billing.error)
-      return t("billing.error", { message: errorMessage(billing.error) });
+    // The full error (with a retry) is rendered once in the card body below;
+    // the subtitle stays a neutral status label so the same message is not
+    // duplicated in the header and the body.
+    if (billing.error) return t("billing.status.unavailable");
     const currentMode = mode() ?? "disabled";
     if (cloudBilling() && balanceAvailableUsdMicros(balance()) > 0) {
       return t("billing.mode.cloudCredits");
@@ -254,6 +268,11 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
         </Button>
       </div>
       <p class="muted">{t("billing.subscription.manageHint")}</p>
+      {/* The portal error belongs beside its trigger button (in the
+          subscription card), not stranded in the balance card above. */}
+      <Show when={portalError()}>
+        {(m) => <Toast tone="error">{m()}</Toast>}
+      </Show>
     </Show>
   );
 
@@ -364,9 +383,10 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
           </Match>
           <Match when={billing.error}>
             {(error) => (
-              <Toast tone="error">
-                {t("billing.error", { message: errorMessage(error()) })}
-              </Toast>
+              <ErrorRetry
+                message={t("billing.error", { message: errorMessage(error()) })}
+                onRetry={() => void refetchBilling()}
+              />
             )}
           </Match>
           <Match when={billing()}>
@@ -417,9 +437,6 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
             </Show>
           </Match>
         </Switch>
-        <Show when={portalError()}>
-          {(m) => <Toast tone="error">{m()}</Toast>}
-        </Show>
       </Card>
 
       <Show when={cloudBilling()}>
@@ -440,11 +457,12 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
               )}
             </Match>
             <Match when={stripeBilling.error && !currentSubscription()}>
-              <Toast tone="error">
-                {t("billing.subscription.error", {
+              <ErrorRetry
+                message={t("billing.subscription.error", {
                   message: errorMessage(stripeBilling.error),
                 })}
-              </Toast>
+                onRetry={() => void refetchStripe()}
+              />
             </Match>
             <Match when={currentSubscription()}>
               {(subscription) => (
@@ -510,11 +528,12 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
             </Match>
             <Match when={plans.error}>
               {(error) => (
-                <Toast tone="error">
-                  {t("billing.plans.error", {
+                <ErrorRetry
+                  message={t("billing.plans.error", {
                     message: errorMessage(error()),
                   })}
-                </Toast>
+                  onRetry={() => void refetchPlans()}
+                />
               )}
             </Match>
             <Match when={plans()}>
@@ -546,11 +565,12 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
             </Match>
             <Match when={stripeBilling.error}>
               {(error) => (
-                <Toast tone="error">
-                  {t("billing.invoices.error", {
+                <ErrorRetry
+                  message={t("billing.invoices.error", {
                     message: errorMessage(error()),
                   })}
-                </Toast>
+                  onRetry={() => void refetchStripe()}
+                />
               )}
             </Match>
             <Match when={stripeBilling()}>
@@ -591,11 +611,12 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
                 </Match>
                 <Match when={usagePage.error}>
                   {(error) => (
-                    <Toast tone="error">
-                      {t("billing.usage.error", {
+                    <ErrorRetry
+                      message={t("billing.usage.error", {
                         message: errorMessage(error()),
                       })}
-                    </Toast>
+                      onRetry={() => void refetchUsage()}
+                    />
                   )}
                 </Match>
                 <Match when={usagePage()}>
@@ -620,6 +641,27 @@ export default function BillingTab(props: { readonly workspaceId: string }) {
           </div>
         </details>
       </Card>
+    </div>
+  );
+}
+
+function ErrorRetry(props: {
+  readonly message: string;
+  readonly onRetry: () => void;
+}) {
+  return (
+    <div class="wc-stack-sm">
+      <Toast tone="error">{props.message}</Toast>
+      <div class="wc-form-actions">
+        <Button
+          variant="secondary"
+          size="sm"
+          type="button"
+          onClick={props.onRetry}
+        >
+          {t("common.retry")}
+        </Button>
+      </div>
     </div>
   );
 }

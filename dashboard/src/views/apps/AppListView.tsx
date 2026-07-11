@@ -51,7 +51,7 @@ import {
 } from "../../lib/control-api.ts";
 import {
   type AppSurface,
-  appSurfacesFromOutputs,
+  appSurfacesFromDeployment,
   appSurfaceFromInstallConfigStore,
   effectiveCapsuleStatus,
   isUrlString,
@@ -125,7 +125,10 @@ const CURATED_APP_ICONS: readonly (readonly [RegExp, CuratedAppIcon])[] = [
   [/takos[-_\s]?office/i, { emoji: "📄" }],
   [/takos[-_\s]?computer/i, { emoji: "🖥️" }],
   [/road[-_\s]?to[-_\s]?me/i, { emoji: "🎯" }],
-  [/takos/i, { image: "/tako.png" }],
+  // Anchored so only the official Takos app (name starting "takos" at a word
+  // boundary) gets the logo — NOT "takosumi" or any name merely containing
+  // "takos". The more specific first-party marks above are matched first.
+  [/^takos\b/i, { image: "/tako.png" }],
 ];
 function curatedAppIcon(name: string): CuratedAppIcon | undefined {
   for (const [pattern, icon] of CURATED_APP_ICONS) {
@@ -220,8 +223,14 @@ function Inner() {
     if (fullStateVersions.error) void refetchFullStateVersions();
     if (fullInstallConfigs.error) void refetchFullInstallConfigs();
   };
+  // `.error` first: reading an errored resource THROWS. A failed supplemental
+  // full-list fetch must degrade to the overview's first page (with the
+  // fullFetchError toast + retry) rather than white-screening the launcher.
   const capsules = createMemo(() =>
-    mergeById(overview()?.capsules ?? [], fullCapsules() ?? []),
+    mergeById(
+      overview()?.capsules ?? [],
+      fullCapsules.error ? [] : (fullCapsules() ?? []),
+    ),
   );
   const visibleCapsules = createMemo(() =>
     (capsules() ?? []).filter(isVisibleServiceCapsule),
@@ -229,7 +238,7 @@ function Inner() {
   const currentStateVersions = createMemo(() =>
     mergeById(
       overview()?.currentStateVersions ?? [],
-      fullStateVersions() ?? [],
+      fullStateVersions.error ? [] : (fullStateVersions() ?? []),
     ),
   );
   // Services that have actually deployed at least once (a current StateVersion
@@ -246,7 +255,10 @@ function Inner() {
   // store kind (site / storage / worker) — the fallback when a surface
   // declares no image or icon of its own.
   const installConfigs = createMemo(() =>
-    mergeById(overview()?.installConfigs ?? [], fullInstallConfigs() ?? []),
+    mergeById(
+      overview()?.installConfigs ?? [],
+      fullInstallConfigs.error ? [] : (fullInstallConfigs() ?? []),
+    ),
   );
   const configById = createMemo(() => {
     const map = new Map<string, InstallConfig>();
@@ -271,11 +283,14 @@ function Inner() {
     for (const inst of visibleCapsules()) {
       const deployment = deployments.get(inst.id);
       if (!deployment) continue;
-      // Read the surface URLs straight from the deployment outputs (ungated):
-      // tapping an app tile goes to the app's own link, not the management
-      // screen, even before release activation. The post-deploy "Open app"
-      // button keeps its own activation gate.
-      const surfaces = appSurfacesFromOutputs(deployment.outputsPublic);
+      // Gate the tile's launch URL on release activation, matching the detail
+      // screen and the post-deploy "アプリを開く" button: a live-looking tile
+      // that 404s during/after activation disagrees with those surfaces. The
+      // launcher has no activity feed, so gating relies on the deployment's own
+      // takosumi_release output; a not-yet-activated surface keeps its tile but
+      // drops the URL (falls back to the detail screen) rather than linking a
+      // dead address.
+      const surfaces = appSurfacesFromDeployment(deployment, [], inst.id);
       if (surfaces.length > 0) map.set(inst.id, surfaces);
     }
     return map;
@@ -630,7 +645,13 @@ function AppTileView(props: {
         )}
       </Show>
       <span class="av-tile-actions">
-        <a class="av-tile-manage" href={detailHref()}>
+        {/* Every tile repeats the same visible "管理"; the accessible name
+            says which app it manages (WCAG 2.4.4). */}
+        <a
+          class="av-tile-manage"
+          href={detailHref()}
+          aria-label={t("apps.manageAria", { name: name() })}
+        >
           <Settings2 size={13} aria-hidden="true" />
           <span>{t("apps.manage")}</span>
         </a>

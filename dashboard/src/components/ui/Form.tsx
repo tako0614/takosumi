@@ -25,6 +25,10 @@ interface FieldProps {
 /** Field wrapper: label (+required marker) + control + hint/error. */
 export function FormField(props: FieldProps): JSX.Element {
   const errorId = createUniqueId();
+  // Names the role="group" wrapper from its own visible label (a bare
+  // role="group" is announced without a name). Self-contained: any caller that
+  // passes `label` + as="group" gets the accessible name for free.
+  const labelId = createUniqueId();
   // The control arrives as already-rendered caller JSX, so required/error
   // semantics are applied to the resolved DOM node instead of via props (the
   // visual `*` marker and error span alone expose nothing to AT).
@@ -55,7 +59,7 @@ export function FormField(props: FieldProps): JSX.Element {
   const body = (
     <>
       <Show when={props.label}>
-        <span class="tg-field-label">
+        <span class="tg-field-label" id={labelId}>
           {props.label}
           <Show when={props.required}>
             <span class="tg-field-required" aria-hidden="true">
@@ -76,7 +80,11 @@ export function FormField(props: FieldProps): JSX.Element {
     </>
   );
   return props.as === "group" ? (
-    <div class={`tg-field ${props.class ?? ""}`} role="group">
+    <div
+      class={`tg-field ${props.class ?? ""}`}
+      role="group"
+      aria-labelledby={props.label ? labelId : undefined}
+    >
       {body}
     </div>
   ) : (

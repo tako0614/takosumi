@@ -148,6 +148,16 @@ export default function BackupsTab(props: { readonly workspaceId: string }) {
               message={t("common.fetchFailed", {
                 message: (backups.error as ControlApiError).message,
               })}
+              action={
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  type="button"
+                  onClick={() => void refetch()}
+                >
+                  {t("common.retry")}
+                </Button>
+              }
             />
           </Match>
           <Match when={!backups.error}>
@@ -176,7 +186,7 @@ export default function BackupsTab(props: { readonly workspaceId: string }) {
                 columns={columns}
                 rows={backups()}
                 rowKey={(backup) => backup.id}
-                loading={backups.loading}
+                loading={backups.loading && !backups.latest}
                 skeletonRows={3}
               />
             </Show>

@@ -67,6 +67,7 @@ import {
   formatBillingNumber,
   formatUsdMicros,
 } from "../../lib/billing-format.ts";
+import { friendlyError } from "../../lib/error-copy.ts";
 import {
   Badge,
   Button,
@@ -228,24 +229,40 @@ export function CloudResourcesPanel(props: {
         }
       >
         <Switch>
-          <Match when={snapshot.loading}>
+          {/* First-load only: a manual 更新 refetch keeps `.latest`, so the
+              body (and its expandedGroups / scroll) stays mounted instead of
+              flashing back to a skeleton. */}
+          <Match when={snapshot.loading && !snapshot.latest}>
             <CloudResourcesLoading />
           </Match>
           <Match when={snapshot.error}>
-            <Toast tone="error">
-              {t("cloudResources.error", {
-                message: errorMessage(snapshot.error),
-              })}
-            </Toast>
+            <div class="av-cloud-stack">
+              <Toast tone="error">
+                {t("cloudResources.error", {
+                  message: errorMessage(snapshot.error),
+                })}
+              </Toast>
+              <div>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  type="button"
+                  icon={<RefreshCw size={16} />}
+                  onClick={() => void refetchSnapshot()}
+                >
+                  {t("common.retry")}
+                </Button>
+              </div>
+            </div>
           </Match>
           <Match when={snapshot()}>
             {(loaded) => (
               <CloudResourceBody
                 snapshot={loaded()}
-                inventory={inventory()}
+                inventory={inventory.error ? undefined : inventory()}
                 inventoryLoading={inventory.loading}
                 inventoryError={inventory.error}
-                usage={usage()}
+                usage={usage.error ? undefined : usage()}
                 usageLoading={usage.loading}
                 usageError={usage.error}
                 context={cloudContext()}
@@ -269,8 +286,13 @@ export function CloudApiKeysPanel(props: { readonly showHeader?: boolean }) {
   );
   const [copied, setCopied] = createSignal<string | null>(null);
   const [copyFailed, setCopyFailed] = createSignal(false);
+  // The created API-key token is shown exactly ONCE (unrecoverable secret).
+  // Hoisting it above the <Switch> means a post-create refetch — which flips
+  // keys.loading and could unmount the card — cannot destroy it.
+  const [createdToken, setCreatedToken] = createSignal<string | null>(null);
+  const [createdTokenId, setCreatedTokenId] = createSignal<string | null>(null);
   const tokens = createMemo(() => {
-    const result = keys();
+    const result = keys.error ? undefined : keys();
     return result?.ok ? activeCloudApiTokens(result.data) : [];
   });
   const copyText = async (key: string, value: string) => {
@@ -306,9 +328,52 @@ export function CloudApiKeysPanel(props: { readonly showHeader?: boolean }) {
           />
         }
       >
+        {/* Once-only created token — rendered ABOVE the <Switch>, in the parent,
+            so a create-triggered refetch that ERRORS (flipping to the error
+            branch) can never unmount the only place this unrecoverable secret is
+            shown. Owned by the parent signal; cleared on revoke of the same id. */}
+        <Show when={createdToken()}>
+          {(token) => (
+            <Card>
+              <CardSection>
+                <p class="muted">{t("cloudResources.keys.createdNotice")}</p>
+                <CopyValueRow
+                  label={t("cloudResources.keys.created")}
+                  value={token()}
+                  copyKey="created-token"
+                  copied={copied()}
+                  copyText={copyText}
+                />
+              </CardSection>
+            </Card>
+          )}
+        </Show>
+
         <Switch>
-          <Match when={keys.loading}>
+          {/* First-load only: a post-create refetch keeps `.latest`, so the
+              card stays mounted. */}
+          <Match when={keys.loading && !keys.latest}>
             <CloudResourcesLoading />
+          </Match>
+          <Match when={keys.error}>
+            <div class="av-cloud-stack">
+              <Toast tone="error">
+                {t("cloudResources.keys.error", {
+                  message: errorMessage(keys.error),
+                })}
+              </Toast>
+              <div>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  type="button"
+                  icon={<RefreshCw size={16} />}
+                  onClick={() => void refetch()}
+                >
+                  {t("common.retry")}
+                </Button>
+              </div>
+            </div>
           </Match>
           <Match when={keys()}>
             {(loaded) => (
@@ -325,6 +390,16 @@ export function CloudApiKeysPanel(props: { readonly showHeader?: boolean }) {
                   copyText={copyText}
                   refetch={() => void refetch()}
                   result={loaded()}
+                  onCreated={(token, id) => {
+                    setCreatedToken(token);
+                    setCreatedTokenId(id);
+                  }}
+                  onRevoked={(id) => {
+                    if (createdTokenId() === id) {
+                      setCreatedToken(null);
+                      setCreatedTokenId(null);
+                    }
+                  }}
                 />
               </div>
             )}
@@ -662,15 +737,17 @@ function ApiKeysCard(props: {
   readonly copyText: (key: string, value: string) => Promise<void>;
   readonly refetch: () => void;
   readonly result: CloudResourceResult<readonly TakosumiAccountsPatMetadata[]>;
+  // The once-only created token is owned AND rendered by the parent (above the
+  // Switch), so it survives a refetch that could unmount this card. This card
+  // only reports create/revoke back up; revoking a DIFFERENT key must not clear
+  // the shown token, so the parent decides via onRevoked whether it still applies.
+  readonly onCreated: (token: string, id: string) => void;
+  readonly onRevoked: (id: string) => void;
 }): JSX.Element {
   const { confirm } = useConfirmDialog();
   const [name, setName] = createSignal(t("cloudResources.keys.defaultName"));
   const [busy, setBusy] = createSignal(false);
   const [revokeBusy, setRevokeBusy] = createSignal<string | null>(null);
-  const [createdToken, setCreatedToken] = createSignal<string | null>(null);
-  // Which key the once-only token above belongs to: revoking a DIFFERENT key
-  // must not destroy the just-created key's single display of its secret.
-  const [createdTokenId, setCreatedTokenId] = createSignal<string | null>(null);
   const [error, setError] = createSignal<string | null>(null);
 
   const createKey = async () => {
@@ -683,8 +760,7 @@ function ApiKeysCard(props: {
     setError(null);
     try {
       const response = await createCloudApiKey({ name: keyName });
-      setCreatedToken(response.token);
-      setCreatedTokenId(response.token_record.id);
+      props.onCreated(response.token, response.token_record.id);
       props.refetch();
     } catch (err) {
       setError(errorMessage(err));
@@ -706,10 +782,7 @@ function ApiKeysCard(props: {
     setError(null);
     try {
       await revokeCloudApiKey(tokenId);
-      if (createdTokenId() === tokenId) {
-        setCreatedToken(null);
-        setCreatedTokenId(null);
-      }
+      props.onRevoked(tokenId);
       props.refetch();
     } catch (err) {
       setError(errorMessage(err));
@@ -748,20 +821,6 @@ function ApiKeysCard(props: {
           {t("cloudResources.keys.create")}
         </Button>
       </div>
-      <Show when={createdToken()}>
-        {(token) => (
-          <CardSection>
-            <p class="muted">{t("cloudResources.keys.createdNotice")}</p>
-            <CopyValueRow
-              label={t("cloudResources.keys.created")}
-              value={token()}
-              copyKey="created-token"
-              copied={props.copied}
-              copyText={props.copyText}
-            />
-          </CardSection>
-        )}
-      </Show>
       <Show when={error()}>
         {(message) => <Toast tone="error">{message()}</Toast>}
       </Show>
@@ -1314,7 +1373,9 @@ function ResultNotice<T>(props: {
 }
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  // Route every error display through the shared copy helper so raw internals
+  // (stack fragments, `[object Object]`, transport noise) never reach the UI.
+  return friendlyError(error, t).message;
 }
 
 function workerScriptName(script: Readonly<Record<string, unknown>>): string {

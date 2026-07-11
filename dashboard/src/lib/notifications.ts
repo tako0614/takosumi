@@ -81,12 +81,12 @@ let sharedFeedInflight: Promise<readonly FeedEntry[]> | undefined;
 /** Reactive last-loaded cross-Workspace feed (`undefined` before first load). */
 export const notificationFeed = sharedFeed;
 
-/** The single 要対応 derivation: failures over a feed. Both the TopBar bell
- * badge and the /notifications banner MUST count through this. The count is
- * scoped to the CURRENT Workspace when `workspaceId` is given — the feed
- * itself stays cross-Workspace (the page labels other Workspaces' entries),
- * but the badge must not keep showing the previous Workspace's failures after
- * a switch. An empty/absent `workspaceId` counts every Workspace. */
+/** Total failures currently in the feed for a Workspace — the count both the
+ * TopBar bell badge and the /notifications page's 要対応 banner show, from one
+ * shared derivation. The count is scoped to the CURRENT Workspace when
+ * `workspaceId` is given — the feed itself stays cross-Workspace (the page
+ * labels other Workspaces' entries). An empty/absent `workspaceId` counts every
+ * Workspace. */
 export function attentionCount(
   entries: readonly FeedEntry[] | undefined,
   workspaceId?: string,
