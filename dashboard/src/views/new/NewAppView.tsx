@@ -617,6 +617,7 @@ function Inner() {
         field,
         workspaceHandle(),
         defaultProjectName(),
+        effectiveManagedBaseDomain(storePublicEndpoint(entry)?.baseDomain),
       )
     );
   };
@@ -640,7 +641,7 @@ function Inner() {
         [key]: value,
       };
       const endpoint = storePublicEndpoint(entry);
-      const baseDomain = managedBaseDomain(endpoint?.baseDomain);
+      const baseDomain = effectiveManagedBaseDomain(endpoint?.baseDomain);
       const setUntouched = (name: string | undefined, nextValue: string) => {
         const variable = name?.trim();
         if (!variable) return;
@@ -734,14 +735,16 @@ function Inner() {
       ) {
         return t("new.storeInput.errorSubdomain", {
           label: field.label[locale()],
-          baseDomain: managedBaseDomain(publicEndpoint?.baseDomain),
+          baseDomain: effectiveManagedBaseDomain(publicEndpoint?.baseDomain),
         });
       }
       if (
         value &&
         (field.format === "url" || field.name === publicEndpoint?.urlVariable)
       ) {
-        const baseDomain = managedBaseDomain(publicEndpoint?.baseDomain);
+        const baseDomain = effectiveManagedBaseDomain(
+          publicEndpoint?.baseDomain,
+        );
         const host = publicEndpointHost(value);
         if (
           !host ||
@@ -996,7 +999,7 @@ function Inner() {
     const endpoint = installExperiencePublicEndpoint(
       installExperienceForCurrentSource(),
     );
-    const baseDomain = managedBaseDomain(endpoint?.baseDomain);
+    const baseDomain = effectiveManagedBaseDomain(endpoint?.baseDomain);
     const label = managedServiceLabel(
       workspaceHandle(),
       serviceNameInputValue(),
@@ -1042,7 +1045,7 @@ function Inner() {
     const label = storeInputValue(entry, field).trim().toLowerCase();
     if (!label || !isManagedSubdomainLabel(label)) return "";
     const managedLabel = managedServiceLabel(workspaceHandle(), label);
-    const baseDomain = managedBaseDomain(endpoint.baseDomain);
+    const baseDomain = effectiveManagedBaseDomain(endpoint.baseDomain);
     return managedLabel && baseDomain ? `${managedLabel}.${baseDomain}` : "";
   };
   // One-line explanations for the advanced 独自URL / route pattern fields when
@@ -1304,6 +1307,11 @@ function Inner() {
     }
     return undefined;
   };
+  const effectiveManagedBaseDomain = (declared?: string): string =>
+    managedBaseDomain(
+      selectedManagedProviderConnection()?.scopeHints
+        ?.managedPublicBaseDomain ?? declared,
+    );
   const managedProviderVariableDefaults = (
     current: Readonly<Record<string, JsonValue>>,
   ): Record<string, JsonValue> => {
@@ -1345,7 +1353,9 @@ function Inner() {
         const urlVariable = publicEndpoint.urlVariable?.trim();
         const routePatternVariable =
           publicEndpoint.routePatternVariable?.trim();
-        const publicBaseDomain = managedBaseDomain(publicEndpoint.baseDomain);
+        const publicBaseDomain = effectiveManagedBaseDomain(
+          publicEndpoint.baseDomain,
+        );
         const currentSubdomain =
           subdomainVariable && typeof current[subdomainVariable] === "string"
             ? current[subdomainVariable].trim()
