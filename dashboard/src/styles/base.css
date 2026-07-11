@@ -36,7 +36,10 @@ a {
   transition: color 120ms ease;
 }
 a:hover {
-  color: var(--tg-accent);
+  /* Text-red variant: raw --tg-accent measured 4.44:1 (white) / 4.15:1 (bg) in
+     light and failed AA on --tg-bg-hi in dark. --tg-accent-text clears 4.5:1 in
+     both themes. */
+  color: var(--tg-accent-text);
 }
 
 /* --tg-accent + white measured 3.57:1 dark / 4.44:1 light; the emphasis fill
@@ -95,7 +98,7 @@ main {
   color: var(--tg-fg-muted);
 }
 .link {
-  color: var(--tg-accent);
+  color: var(--tg-accent-text);
 }
 .link:hover {
   text-decoration: underline;

@@ -117,15 +117,17 @@
 }
 .tg-btn-danger {
   /* Outline, not filled: destructive actions must not share the filled-red
-     look of the primary CTA (保存 / 追加 vs 削除 were indistinguishable). */
+     look of the primary CTA (保存 / 追加 vs 削除 were indistinguishable). Label
+     uses --tg-danger-text (AA-safe on the transparent + hover-tint grounds),
+     while the border keeps the vivid --tg-danger. */
   background: transparent;
-  color: var(--tg-danger);
+  color: var(--tg-danger-text);
   border-color: color-mix(in srgb, var(--tg-danger) 55%, var(--tg-line-strong));
   box-shadow: var(--tg-shadow-xs);
 }
 .tg-btn-danger:hover:not(:disabled) {
   background: color-mix(in srgb, var(--tg-danger) 12%, transparent);
-  color: var(--tg-danger);
+  color: var(--tg-danger-text);
   border-color: var(--tg-danger);
   transform: translateY(-1px);
   box-shadow: var(--tg-shadow-card-hover);
@@ -206,6 +208,16 @@
   font-size: var(--tg-fs-lg);
   font-weight: 700;
   letter-spacing: 0;
+  margin: 0;
+}
+/* In-card load-failure: message + a retry control, stacked. */
+.tg-card-error {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--tg-s-3);
+}
+.tg-card-error p {
   margin: 0;
 }
 .tg-card-subtitle {
@@ -539,7 +551,9 @@
   color: var(--tg-fg);
 }
 .tg-tab.active {
-  color: var(--tg-accent);
+  /* Text uses the AA-safe red leaf; the 2px underline keeps the vivid --tg-accent
+     (a border only needs 3:1). */
+  color: var(--tg-accent-text);
   border-bottom-color: var(--tg-accent);
 }
 
@@ -570,8 +584,9 @@
   }
 
   .tg-page-actions .tg-btn {
-    min-height: 32px;
-    padding: 0.42em 0.75em;
+    /* Do NOT shrink below the base 38px here — 32px failed the 40px touch
+       minimum. The coarse-pointer block below enforces ≥44px on touch. */
+    padding: 0.42em 0.9em;
   }
 
   /* Segmented control, but as a single scrollable row: on a phone the settings
@@ -729,9 +744,9 @@
   background: var(--tg-bg-subtle);
 }
 .btn-danger {
-  /* Outline treatment — see .tg-btn-danger. */
+  /* Outline treatment — see .tg-btn-danger (label uses AA-safe danger-text). */
   background: transparent;
-  color: var(--tg-danger);
+  color: var(--tg-danger-text);
   border: 1px solid
     color-mix(in srgb, var(--tg-danger) 55%, var(--tg-line-strong));
   padding: 0.6em 1.2em;
@@ -749,7 +764,7 @@
 .btn-danger:hover:not(:disabled) {
   transform: translateY(-1px);
   background: color-mix(in srgb, var(--tg-danger) 12%, transparent);
-  color: var(--tg-danger);
+  color: var(--tg-danger-text);
   border-color: var(--tg-danger);
 }
 .btn-danger:disabled {
@@ -803,7 +818,7 @@
 .account-nav a:hover {
   border-color: var(--tg-accent);
   transform: translateY(-1px);
-  color: var(--tg-accent);
+  color: var(--tg-accent-text);
 }
 /* ----- Detail nav (tabs) ----- */
 .detail-nav {
@@ -875,4 +890,18 @@
   justify-content: center;
   gap: 0.75rem;
   margin-top: 0.25rem;
+}
+
+/* ----- Touch targets (WCAG 2.5.8 / M37) -----
+ * On coarse pointers (touch), raise the shared small controls to a comfortable
+ * minimum — 40px for controls with a label, 44px for icon-only — without
+ * changing the compact desktop (fine-pointer) sizing. Each owned CSS file adds
+ * the same block for its own view-local controls. */
+@media (pointer: coarse) {
+  .tg-btn-sm {
+    min-height: 40px;
+  }
+  .tg-page-actions .tg-btn {
+    min-height: 44px;
+  }
 }

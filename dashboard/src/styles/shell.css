@@ -20,7 +20,9 @@
   transition: color 120ms ease;
 }
 .app-shell a:hover {
-  color: var(--tg-accent);
+  /* AA-safe red leaf (raw --tg-accent fails AA as small text in light and on
+     --tg-bg-hi in dark). */
+  color: var(--tg-accent-text);
 }
 .app-shell-main {
   display: flex;
@@ -325,9 +327,28 @@
   font-size: var(--tg-fs-sm);
 }
 .topbar-workspace-error {
-  color: var(--tg-danger);
+  display: flex;
+  align-items: center;
+  gap: var(--tg-s-2);
+  flex-wrap: wrap;
+  color: var(--tg-danger-text);
   font-size: var(--tg-fs-xs);
   margin: 0;
+}
+.topbar-workspace-retry {
+  flex: none;
+  background: none;
+  border: 1px solid var(--tg-line-strong);
+  border-radius: var(--tg-r-full);
+  color: var(--tg-fg);
+  font-size: var(--tg-fs-xs);
+  padding: 2px var(--tg-s-2);
+  min-height: 28px;
+  cursor: pointer;
+}
+.topbar-workspace-retry:hover {
+  background: var(--tg-bg-subtle);
+  border-color: var(--tg-line-strong);
 }
 .topbar-workspace-settings {
   display: flex;
@@ -501,6 +522,28 @@
   color: var(--tg-fg);
   border-color: var(--tg-accent);
   background: color-mix(in srgb, var(--tg-accent) 18%, transparent);
+}
+
+/* ===== Touch targets (WCAG 2.5.8 / M37) =====
+ * Coarse-pointer only: enlarge the chrome's compact icon buttons + toggles to a
+ * comfortable tap size. Desktop (fine pointer) keeps the dense sizing. */
+@media (pointer: coarse) {
+  .topbar-icon-btn {
+    width: 44px;
+    height: 44px;
+  }
+  /* Keep the 32px avatar as the visual; grow only the hit area to 44px. */
+  .topbar-user {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .user-menu-lang-btn {
+    min-height: 40px;
+    padding: 4px 12px;
+  }
 }
 /* ===== Mobile bottom tabs ===== */
 .mobile-tabs {
