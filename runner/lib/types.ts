@@ -123,6 +123,20 @@ export interface PlanResponseOptions {
   readonly operation: OpenTofuOperation;
   readonly commandContext: CommandContext;
   readonly requiredProviders: readonly string[];
+  /**
+   * Explicit output projection requested by the control plane. The runner uses
+   * only the `from` and `sensitive` fields to return fully-known, non-sensitive
+   * planned outputs; arbitrary plan values never cross the runner boundary.
+   */
+  readonly outputAllowlist?: Readonly<
+    Record<
+      string,
+      {
+        readonly from: string;
+        readonly sensitive?: boolean;
+      }
+    >
+  >;
   readonly providerInstallationPolicy?: {
     readonly requireMirror: boolean;
   };

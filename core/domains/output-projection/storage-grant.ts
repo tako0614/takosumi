@@ -14,17 +14,15 @@
  */
 
 import {
-  mintStorageAccessToken,
-  STORAGE_ACCESS_TOKEN_AUDIENCE,
-  type StorageTokenVerb,
-  storageVerbsFromScopes,
-} from "../../shared/storage_access_tokens.ts";
+  mintServiceScopedCredential,
+  type ServiceCredentialVerb,
+} from "../../shared/service_scoped_credentials.ts";
 import type {
   ProjectedServiceBinding,
   ProjectedServiceExport,
 } from "./service-projection.ts";
 
-export const STORAGE_OBJECT_PUBLICATION = STORAGE_ACCESS_TOKEN_AUDIENCE;
+export const STORAGE_OBJECT_PUBLICATION = "storage.object";
 
 const DEFAULT_URL_ENV = "OBJECT_STORAGE_API_URL";
 const DEFAULT_TOKEN_ENV = "OBJECT_STORAGE_ACCESS_TOKEN";
@@ -38,15 +36,13 @@ export interface StorageGrantPlan {
   /** Key prefix the minted token is confined to. */
   readonly prefix: string;
   /** Verbs derived from the consumer's requested scopes. */
-  readonly verbs: readonly StorageTokenVerb[];
+  readonly verbs: readonly ServiceCredentialVerb[];
   /** Consumer env var that receives the API URL. */
   readonly urlEnvVar: string;
   /** Consumer env var that receives the minted token. */
   readonly tokenEnvVar: string;
   /** Consumer env var that receives the key prefix. */
   readonly prefixEnvVar: string;
-  /** Optional TTL override requested by the binding. */
-  readonly ttlSeconds?: number;
 }
 
 export interface IssuedStorageGrant extends StorageGrantPlan {
@@ -54,8 +50,6 @@ export interface IssuedStorageGrant extends StorageGrantPlan {
   readonly token: string;
   /** Env var name -> value, ready to inject into the consumer run. */
   readonly injectEnv: Readonly<Record<string, string>>;
-  /** Token expiry (ISO). */
-  readonly expiresAt: string;
 }
 
 export interface StorageGrantContext {
@@ -100,13 +94,10 @@ export function planStorageObjectGrants(
       publication: STORAGE_OBJECT_PUBLICATION,
       ...(apiUrl ? { apiUrl } : {}),
       prefix,
-      verbs: storageVerbsFromScopes(binding.grantRequest.scopes),
+      verbs: serviceVerbsFromScopes(binding.grantRequest.scopes),
       urlEnvVar: injectEnvNames.url ?? DEFAULT_URL_ENV,
       tokenEnvVar: injectEnvNames.token ?? DEFAULT_TOKEN_ENV,
       prefixEnvVar: injectEnvNames.prefix ?? DEFAULT_PREFIX_ENV,
-      ...(binding.grantRequest.ttlSeconds
-        ? { ttlSeconds: binding.grantRequest.ttlSeconds }
-        : {}),
     });
   }
   return plans;
@@ -129,28 +120,49 @@ export async function issueStorageObjectGrants(
   );
   const issued: IssuedStorageGrant[] = [];
   for (const plan of plans) {
-    const minted = await mintStorageAccessToken({
+    const minted = await mintServiceScopedCredential({
       signingKey: producer.signingKey,
       workspaceId: context.workspaceId,
-      installationId: context.consumerInstallationId,
+      capsuleId: context.consumerInstallationId,
       prefix: plan.prefix,
       verbs: plan.verbs,
-      ...(plan.ttlSeconds ? { ttlSeconds: plan.ttlSeconds } : {}),
+      audience: STORAGE_OBJECT_PUBLICATION,
       ...(options.now ? { now: options.now } : {}),
     });
     const injectEnv: Record<string, string> = {
-      [plan.tokenEnvVar]: minted.token,
+      [plan.tokenEnvVar]: minted.credential,
       [plan.prefixEnvVar]: plan.prefix,
     };
     if (plan.apiUrl) injectEnv[plan.urlEnvVar] = plan.apiUrl;
     issued.push({
       ...plan,
-      token: minted.token,
+      token: minted.credential,
       injectEnv,
-      expiresAt: minted.expiresAt,
     });
   }
   return issued;
+}
+
+function serviceVerbsFromScopes(
+  scopes: readonly string[],
+): readonly ServiceCredentialVerb[] {
+  const verbs = new Set<ServiceCredentialVerb>();
+  for (const scope of scopes) {
+    if (scope === "files:read") {
+      verbs.add("r");
+      verbs.add("l");
+    } else if (scope === "files:write") {
+      verbs.add("r");
+      verbs.add("w");
+      verbs.add("d");
+      verbs.add("l");
+    }
+  }
+  if (verbs.size === 0) {
+    verbs.add("r");
+    verbs.add("l");
+  }
+  return [...verbs];
 }
 
 function selectsStoragePublication(binding: ProjectedServiceBinding): boolean {

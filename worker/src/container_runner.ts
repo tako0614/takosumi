@@ -72,6 +72,7 @@ export class CloudflareContainerOpenTofuRunner
       planDigest,
     );
     const planResourceChanges = planResourceChangesFromContainerResult(result);
+    const plannedOutputs = plannedOutputsFromContainerResult(result);
     return {
       planDigest,
       planArtifact,
@@ -106,6 +107,7 @@ export class CloudflareContainerOpenTofuRunner
           }
         : {}),
       ...(planResourceChanges ? { planResourceChanges } : {}),
+      ...(plannedOutputs ? { plannedOutputs } : {}),
       diagnostics: diagnosticsFromContainerResult(result),
     };
   }
@@ -771,6 +773,39 @@ function planResourceChangesFromContainerResult(
     ];
   });
   return rows.length > 0 ? rows : undefined;
+}
+
+function plannedOutputsFromContainerResult(
+  result: Record<string, unknown>,
+): OpenTofuPlanResult["plannedOutputs"] | undefined {
+  const value = recordFromRecord(result, "plannedOutputs");
+  if (!value) return undefined;
+  const outputs: Record<
+    string,
+    { sensitive: false; value: import("takosumi-contract").JsonValue }
+  > = {};
+  for (const [name, entry] of Object.entries(value)) {
+    if (!isRecord(entry) || entry.sensitive !== false) continue;
+    if (!isJsonValue(entry.value)) continue;
+    outputs[name] = { sensitive: false, value: entry.value };
+  }
+  return Object.keys(outputs).length > 0 ? outputs : undefined;
+}
+
+function isJsonValue(
+  value: unknown,
+): value is import("takosumi-contract").JsonValue {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "boolean"
+  ) {
+    return true;
+  }
+  if (typeof value === "number") return Number.isFinite(value);
+  if (Array.isArray(value)) return value.every(isJsonValue);
+  if (!isRecord(value)) return false;
+  return Object.values(value).every(isJsonValue);
 }
 
 function redactRunnerDiagnosticText(text: string): string {

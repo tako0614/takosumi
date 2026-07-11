@@ -396,10 +396,12 @@ function containsUnsafeAppDeploymentDescriptorValue(value: JsonValue): boolean {
 function containsSecretLikeAppDeploymentDescriptorValue(
   value: JsonValue,
 ): boolean {
-  const stack: JsonValue[] = [value];
+  const stack: Array<{ value: JsonValue; path: readonly string[] }> = [
+    { value, path: [] },
+  ];
   let inspected = 0;
   while (stack.length > 0) {
-    const current = stack.pop()!;
+    const { value: current, path } = stack.pop()!;
     inspected += 1;
     if (inspected > 1_000) return true;
     if (typeof current === "string") {
@@ -413,17 +415,37 @@ function containsSecretLikeAppDeploymentDescriptorValue(
     }
     if (current === null || typeof current !== "object") continue;
     if (Array.isArray(current)) {
-      for (const item of current) stack.push(item);
+      for (const [index, item] of current.entries()) {
+        stack.push({ value: item, path: [...path, String(index)] });
+      }
       continue;
     }
     for (const [key, nested] of Object.entries(current)) {
+      if (isDeclarativeConsumeEnvProjection(path, key, nested)) continue;
       if (SECRET_QUERY_RE.test(key) || SECRET_OUTPUT_NAME_RE.test(key)) {
         return true;
       }
-      stack.push(nested);
+      stack.push({ value: nested, path: [...path, key] });
     }
   }
   return false;
+}
+
+function isDeclarativeConsumeEnvProjection(
+  path: readonly string[],
+  key: string,
+  value: JsonValue,
+): boolean {
+  if (typeof value !== "string") return false;
+  if (!/^[a-z][a-z0-9_]{0,63}$/u.test(key)) return false;
+  if (!/^[A-Z_][A-Z0-9_]{0,127}$/u.test(value)) return false;
+  const tail = path.slice(-3);
+  return (
+    tail.length === 3 &&
+    /^\d+$/u.test(tail[0] ?? "") &&
+    tail[1] === "inject" &&
+    tail[2] === "env"
+  );
 }
 
 function containsSecretLikeJsonValue(value: JsonValue): boolean {

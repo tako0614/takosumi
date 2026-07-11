@@ -151,7 +151,10 @@ import {
   usdMicrosToLegacyCredits,
 } from "takosumi-contract/billing";
 import type { DriftService } from "../drift_service.ts";
-import type { RunEnvResolver } from "../run_env_resolver.ts";
+import type {
+  ResolvedRunEnvironment,
+  RunEnvResolver,
+} from "../run_env_resolver.ts";
 import type { ResolvedDependencies } from "../dependency_resolution.ts";
 import type { DependencyResolutionService } from "../dependency_resolution.ts";
 import type { RunVerificationService } from "../run_verification.ts";
@@ -244,6 +247,16 @@ function isRetryableRunnerRequeueError(error: unknown): boolean {
 
 const RUNNER_INFRASTRUCTURE_RETRY_LIMIT = 1;
 const PLAN_CREATION_STAGE_TIMEOUT_MS = 25_000;
+
+const SERVICE_CONNECTION_VARIABLES = [
+  { name: "object_storage_api_url" },
+  { name: "object_storage_access_token", sensitive: true },
+  { name: "object_storage_key_prefix" },
+  { name: "object_storage_workspace_id" },
+  { name: "git_http_url" },
+  { name: "git_access_token", sensitive: true },
+  { name: "git_repo_prefix" },
+] as const;
 
 async function planCreationStage<T>(
   stage: string,
@@ -2288,12 +2301,20 @@ export class RunEngine {
             sourceSnapshot,
           )
         : undefined);
+    const declaredInputs = new Set(
+      compatibilityReport?.rootModuleVariables ??
+        (moduleFiles ? collectRootModuleVariableNames(moduleFiles) : []),
+    );
+    const injectedVariables = SERVICE_CONNECTION_VARIABLES.filter((entry) =>
+      declaredInputs.has(entry.name),
+    );
     return {
       generatedRoot: {
         ...generateGenericCapsuleRoot({
           requiredProviders,
           inputs: normalizeVariables(request.variables),
           outputAllowlist: context.outputAllowlist,
+          ...(injectedVariables.length > 0 ? { injectedVariables } : {}),
           ...(context.providerEnvBindings.length > 0
             ? { providerEnvBindings: context.providerEnvBindings }
             : {}),
@@ -3125,7 +3146,7 @@ export class RunEngine {
         claim.leaseToken,
         profile,
         variables,
-        runEnvironment.credentials,
+        runEnvironment,
         dispatch,
       );
     } catch (error) {
@@ -4755,10 +4776,12 @@ export class RunEngine {
     leaseToken: string,
     profile: RunnerProfile,
     variables: Readonly<Record<string, JsonValue>>,
-    credentials: RunCredentials | undefined,
+    runEnvironment: ResolvedRunEnvironment,
     dispatch: RunTemplateDispatch,
   ): Promise<PlanRun> {
     try {
+      let effectiveRunning = running;
+      let effectiveRunEnvironment = runEnvironment;
       // A plan restores against the CURRENT generation
       // (`baseStateGeneration`). Empty for runs without installation context.
       const envDispatch = await this.#verification.installationDispatch(
@@ -4771,52 +4794,88 @@ export class RunEngine {
           ? { requireMirror: true }
           : undefined;
       const runner = this.#runnerForProfile(profile);
-      const result = await this.#withRunRenewal(
+      const dispatchPlan = (environment: ResolvedRunEnvironment) =>
+        runner.plan({
+          planRun: effectiveRunning,
+          runnerProfile: profile,
+          variables,
+          ...(providerInstallationPolicy ? { providerInstallationPolicy } : {}),
+          // Generated-root dispatch (§7): built-in modules and generic Capsules
+          // use the same generated-root/moduleFiles shape. Empty only for the
+          // lower-level raw `/internal/v1/plan-runs` compatibility path.
+          ...(dispatch.generatedRoot
+            ? { generatedRoot: dispatch.generatedRoot }
+            : {}),
+          ...(dispatch.sourceBuild
+            ? { sourceBuild: dispatch.sourceBuild }
+            : {}),
+          ...(dispatch.outputAllowlist
+            ? { outputAllowlist: dispatch.outputAllowlist }
+            : {}),
+          // M2 env dispatch (state scope + source archive). Absent without env ctx.
+          ...(envDispatch.stateScope
+            ? { stateScope: envDispatch.stateScope }
+            : {}),
+          ...(envDispatch.sourceArchive
+            ? { sourceArchive: envDispatch.sourceArchive }
+            : {}),
+          // remote_state dependency states materialized into /work/deps (spec §15).
+          ...(envDispatch.depStates
+            ? { depStates: envDispatch.depStates }
+            : {}),
+          // Dispatch-only: the minted env never lands on the persisted run.
+          ...(environment.credentials
+            ? { credentials: environment.credentials }
+            : {}),
+        });
+      let result = await this.#withRunRenewal(
         "plan",
-        running,
+        effectiveRunning,
         leaseToken,
         undefined,
-        () =>
-          runner.plan({
-            planRun: running,
-            runnerProfile: profile,
-            variables,
-            ...(providerInstallationPolicy
-              ? { providerInstallationPolicy }
-              : {}),
-            // Generated-root dispatch (§7): built-in modules and generic Capsules
-            // use the same generated-root/moduleFiles shape. Empty only for the
-            // lower-level raw `/internal/v1/plan-runs` compatibility path.
-            ...(dispatch.generatedRoot
-              ? { generatedRoot: dispatch.generatedRoot }
-              : {}),
-            ...(dispatch.sourceBuild
-              ? { sourceBuild: dispatch.sourceBuild }
-              : {}),
-            // M2 env dispatch (state scope + source archive). Absent without env ctx.
-            ...(envDispatch.stateScope
-              ? { stateScope: envDispatch.stateScope }
-              : {}),
-            ...(envDispatch.sourceArchive
-              ? { sourceArchive: envDispatch.sourceArchive }
-              : {}),
-            // remote_state dependency states materialized into /work/deps (spec §15).
-            ...(envDispatch.depStates
-              ? { depStates: envDispatch.depStates }
-              : {}),
-            // Dispatch-only: the minted env never lands on the persisted run.
-            ...(credentials ? { credentials } : {}),
-          }),
+        () => dispatchPlan(effectiveRunEnvironment),
       );
+      if (dispatch.outputAllowlist && result.plannedOutputs) {
+        const plannedWorkspaceOutputs = projectOutputAllowlistSpaceOutputs(
+          dispatch.outputAllowlist,
+          result.plannedOutputs,
+        );
+        const enriched =
+          await this.#runEnv.enrichRunEnvironmentWithPlannedServiceGrants({
+            planRun: effectiveRunning,
+            auditRunId: effectiveRunning.id,
+            plannedWorkspaceOutputs,
+            base: effectiveRunEnvironment,
+          });
+        if (
+          enriched.serviceGrantEnvNames.some(
+            (name) =>
+              !effectiveRunEnvironment.serviceGrantEnvNames.includes(name),
+          )
+        ) {
+          effectiveRunEnvironment = enriched;
+          effectiveRunning = withRunEnvironmentEvidence(
+            effectiveRunning,
+            enriched,
+          );
+          result = await this.#withRunRenewal(
+            "plan",
+            effectiveRunning,
+            leaseToken,
+            undefined,
+            () => dispatchPlan(effectiveRunEnvironment),
+          );
+        }
+      }
       const now = this.#now();
       const verdict = await this.#evaluatePlanCompletion({
-        running,
+        running: effectiveRunning,
         profile,
         result,
         now,
       });
       const completed = this.#buildCompletedPlanRun({
-        running,
+        running: effectiveRunning,
         result,
         verdict,
         now,
@@ -4839,7 +4898,7 @@ export class RunEngine {
         spaceId: updated.workspaceId ?? updated.spaceId,
         runId: updated.id,
         installationId: updated.installationId,
-        startedAt: running.startedAt,
+        startedAt: effectiveRunning.startedAt,
         finishedAt: now,
       });
       await this.#recordDeployOperationMetric({

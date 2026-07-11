@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { verifyStorageAccessToken } from "../../../../core/shared/storage_access_tokens.ts";
+import { verifyServiceScopedCredential } from "../../../../core/shared/service_scoped_credentials.ts";
 import { projectServicesFromOutputs } from "../../../../core/domains/output-projection/service-projection.ts";
 import {
   issueStorageObjectGrants,
@@ -104,10 +104,10 @@ describe("storage.object grant resolution", () => {
 
     const token = grant.injectEnv.OBJECT_STORAGE_ACCESS_TOKEN!;
     // The producer Worker verifies with the same key + format.
-    const verified = await verifyStorageAccessToken(
+    const verified = await verifyServiceScopedCredential(
       SIGNING_KEY,
       token,
-      1_700_000_100,
+      "storage.object",
     );
     expect(verified.ok).toBe(true);
     if (verified.ok) {

@@ -126,6 +126,11 @@ export interface GenerateGenericCapsuleRootInput {
   readonly inputs: Readonly<Record<string, JsonValue>>;
   readonly outputAllowlist: Readonly<Record<string, OutputAllowlistEntry>>;
   readonly providerEnvBindings?: ReadonlyArray<RootInstallationProviderEnvBinding>;
+  /** Runtime/service connection values delivered through `TF_VAR_*`. */
+  readonly injectedVariables?: ReadonlyArray<{
+    readonly name: string;
+    readonly sensitive?: boolean;
+  }>;
 }
 
 const GENERIC_CONTROL_OUTPUTS = ["takosumi_release"] as const;
@@ -186,7 +191,11 @@ export function generateGenericCapsuleRoot(
   return {
     files: {
       "versions.tf": renderProviderVersionsTf(input.requiredProviders),
-      "main.tf": renderGenericMainTf(input.inputs, providerEnvBindings),
+      "main.tf": renderGenericMainTf(
+        input.inputs,
+        providerEnvBindings,
+        input.injectedVariables ?? [],
+      ),
       "outputs.tf": renderGenericOutputsTf(input.outputAllowlist),
     },
   };
@@ -369,9 +378,29 @@ function renderOutputsTf(template: TemplateDefinition): string {
 function renderGenericMainTf(
   inputs: Readonly<Record<string, JsonValue>>,
   providerEnvBindings: ReadonlyArray<RootInstallationProviderEnvBinding>,
+  injectedVariables: ReadonlyArray<{
+    readonly name: string;
+    readonly sensitive?: boolean;
+  }>,
 ): string {
   const sections: string[] = [];
   appendProviderSections(sections, providerEnvBindings);
+
+  const injected = injectedVariables.filter(
+    (entry) => !Object.prototype.hasOwnProperty.call(inputs, entry.name),
+  );
+  for (const entry of injected) {
+    assertIdentifier(entry.name, "rootgen: injected variable name");
+    sections.push(
+      [
+        `variable ${hclString(entry.name)} {`,
+        "  type      = string",
+        '  default   = ""',
+        ...(entry.sensitive === true ? ["  sensitive = true"] : []),
+        "}",
+      ].join("\n"),
+    );
+  }
 
   const moduleLines = [
     'module "app" {',
@@ -381,6 +410,9 @@ function renderGenericMainTf(
   for (const name of Object.keys(inputs).sort()) {
     assertIdentifier(name, "rootgen: input name");
     moduleLines.push(`  ${name} = ${hclJsonLiteral(inputs[name]!)}`);
+  }
+  for (const entry of injected) {
+    moduleLines.push(`  ${entry.name} = var.${entry.name}`);
   }
   moduleLines.push("}", "");
   sections.push(moduleLines.join("\n"));

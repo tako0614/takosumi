@@ -489,6 +489,28 @@ test("generateGenericCapsuleRoot wraps arbitrary capsule inputs and outputs", ()
   expect(files["outputs.tf"]).not.toContain('output "app_deployment"');
 });
 
+test("generateGenericCapsuleRoot passes declared service connection variables to the child", () => {
+  const { files } = generateGenericCapsuleRoot({
+    requiredProviders: [],
+    inputs: {},
+    outputAllowlist: {},
+    injectedVariables: [
+      { name: "object_storage_api_url" },
+      { name: "object_storage_access_token", sensitive: true },
+    ],
+  });
+  expect(files["main.tf"]).toContain(
+    'variable "object_storage_access_token" {',
+  );
+  expect(files["main.tf"]).toContain("  sensitive = true");
+  expect(files["main.tf"]).toContain(
+    "  object_storage_access_token = var.object_storage_access_token",
+  );
+  expect(files["main.tf"]).toContain(
+    "  object_storage_api_url = var.object_storage_api_url",
+  );
+});
+
 test("generateGenericCapsuleRoot marks sensitive output allowlist entries", () => {
   const { files } = generateGenericCapsuleRoot({
     requiredProviders: [],
@@ -506,7 +528,7 @@ test("generateGenericCapsuleRoot marks sensitive output allowlist entries", () =
   expect(files["outputs.tf"]).toContain(
     [
       'output "service_grant_signing_key" {',
-      "  value = try(module.app.service_grant_signing_key, \"\")",
+      '  value = try(module.app.service_grant_signing_key, "")',
       "  sensitive = true",
       "}",
     ].join("\n"),
@@ -514,7 +536,7 @@ test("generateGenericCapsuleRoot marks sensitive output allowlist entries", () =
   expect(files["outputs.tf"]).toContain(
     [
       'output "launch_url" {',
-      "  value = try(module.app.launch_url, \"\")",
+      '  value = try(module.app.launch_url, "")',
       "}",
     ].join("\n"),
   );

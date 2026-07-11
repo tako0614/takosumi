@@ -4,6 +4,7 @@ import {
   buildPhaseEnv,
   parseGeneratedRoot,
   parseSourceBuild,
+  plannedOutputsFromPlanJson,
   resourceChangesFromPlanJson,
 } from "../../../runner/entrypoint.ts";
 import { PROVIDER_CREDENTIAL_ENV_RULES } from "takosumi-contract/provider-env-rules";
@@ -213,4 +214,55 @@ test("resourceChangesFromPlanJson trims values and keeps sanitized scope metadat
     { address: "random_pet.name", type: "random_pet", actions: ["no-op"] },
   ]);
   expect(resourceChangesFromPlanJson(JSON.stringify({}))).toEqual([]);
+});
+
+test("plannedOutputsFromPlanJson returns only allowlisted known non-sensitive outputs", () => {
+  const planJson = JSON.stringify({
+    output_changes: {
+      app_deployment: {
+        after: {
+          name: "office",
+          compute: {
+            web: {
+              consume: [{ publication: "storage.object" }],
+            },
+          },
+        },
+        after_unknown: false,
+        after_sensitive: false,
+      },
+      unknown: {
+        after: { url: "https://unknown.example" },
+        after_unknown: { url: true },
+        after_sensitive: false,
+      },
+      secret: {
+        after: "must-not-cross-runner-boundary",
+        after_unknown: false,
+        after_sensitive: true,
+      },
+      not_requested: {
+        after: "hidden",
+        after_unknown: false,
+        after_sensitive: false,
+      },
+    },
+  });
+  expect(
+    plannedOutputsFromPlanJson(planJson, {
+      app_deployment: { from: "app_deployment" },
+      unknown: { from: "unknown" },
+      secret: { from: "secret", sensitive: true },
+    }),
+  ).toEqual({
+    app_deployment: {
+      sensitive: false,
+      value: {
+        name: "office",
+        compute: {
+          web: { consume: [{ publication: "storage.object" }] },
+        },
+      },
+    },
+  });
 });

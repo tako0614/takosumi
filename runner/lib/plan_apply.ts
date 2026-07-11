@@ -71,6 +71,7 @@ import {
   parseRunnerProfile,
   parseRequiredProviders,
   parseProviderInstallationPolicy,
+  parseOutputAllowlist,
   parsePlanArtifact,
   verifyPlanArtifact,
 } from "./parsing.ts";
@@ -85,6 +86,7 @@ import {
   withProviderPluginCacheInitLock,
   summaryFromPlanJson,
   resourceChangesFromPlanJson,
+  plannedOutputsFromPlanJson,
 } from "./providers.ts";
 import { runSourceBuild } from "./source_build.ts";
 
@@ -113,6 +115,7 @@ export async function runGeneratedRootPlan(
   const source = parseSource(request);
   const sourceBuild = parseSourceBuild(request);
   const runnerProfile = parseRunnerProfile(request);
+  const outputAllowlist = parseOutputAllowlist(request);
   const commandContext = commandContextFromRequest(request, runnerProfile);
 
   const workspace = await prepareGeneratedRootWorkspace(runId);
@@ -183,6 +186,7 @@ export async function runGeneratedRootPlan(
         operation,
         commandContext: preparedCredentials.context,
         requiredProviders,
+        ...(outputAllowlist ? { outputAllowlist } : {}),
         ...(parseProviderInstallationPolicy(request)
           ? {
               providerInstallationPolicy:
@@ -279,6 +283,9 @@ export async function initPlanAndBuildResponse(
     requiredProviders,
     strictMirrorInit?.attestation,
   );
+  const plannedOutputs = planJson
+    ? plannedOutputsFromPlanJson(planJson, options.outputAllowlist)
+    : undefined;
   return withPhaseTimings(
     {
       runId,
@@ -299,6 +306,7 @@ export async function initPlanAndBuildResponse(
       ...(planJson
         ? { planResourceChanges: resourceChangesFromPlanJson(planJson) }
         : {}),
+      ...(plannedOutputs ? { plannedOutputs } : {}),
       ...(planJsonArtifact
         ? {
             planJsonArtifact: {

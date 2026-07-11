@@ -408,6 +408,8 @@ export interface OpenTofuPlanResult {
    * destructive (delete/replace) changes. Absent for non-template runs.
    */
   readonly planResourceChanges?: readonly PlanResourceChange[];
+  /** Fully-known, non-sensitive values selected by the explicit output allowlist. */
+  readonly plannedOutputs?: OpenTofuOutputEnvelope;
 }
 
 export interface ProviderInstallationEvidence {
