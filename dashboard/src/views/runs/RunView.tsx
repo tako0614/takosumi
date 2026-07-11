@@ -44,6 +44,7 @@ import {
   listDeployments,
   listProviderConnections,
   listRuns,
+  destroyPlanCapsule,
   openRunStream,
   planCapsuleUpdate,
   type ProviderConnection,
@@ -1386,11 +1387,12 @@ function Inner() {
   const retryPlan = createAction(async () => {
     const instId = run.latest?.capsuleId;
     if (!instId) return;
-    // planCapsuleUpdate, not plain planCapsule: retrying after a repo-side
-    // fix must sync the Source and pin the NEW snapshot (sync → snapshot →
-    // compatibility → plan), or the retry would re-plan the same broken
-    // contents forever. Non-Git capsules fall through to a plain plan inside.
-    const envelope = await planCapsuleUpdate(instId);
+    // Preserve the requested operation. A failed destroy must be retried as a
+    // destroy, while an ordinary plan retry syncs and pins the latest source.
+    const envelope =
+      run.latest?.type === "destroy_plan"
+        ? await destroyPlanCapsule(instId)
+        : await planCapsuleUpdate(instId);
     const newRunId = extractRunId(envelope);
     if (newRunId) {
       navigate(

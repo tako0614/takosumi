@@ -86,6 +86,11 @@ describe("RunView", () => {
     expect(source).not.toMatch(/await planCapsule\(/);
   });
 
+  test("destroy retry preserves the destroy operation", () => {
+    expect(source).toContain('run.latest?.type === "destroy_plan"');
+    expect(source).toContain("await destroyPlanCapsule(instId)");
+  });
+
   test("terminal applies clear the install-config list cache with the rest", () => {
     expect(source).toContain("clearInstallConfigListCache(workspaceId)");
   });
