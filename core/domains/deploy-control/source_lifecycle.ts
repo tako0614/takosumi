@@ -265,6 +265,17 @@ export class SourceLifecycleService {
       result,
       reuseSnapshot,
     );
+    const repositoryInstallMetadata =
+      result.repositoryInstallMetadata ??
+      (reuseSnapshot && archiveObjectKey === reuseSnapshot.archiveObjectKey
+        ? reuseSnapshot.repositoryInstallMetadata
+        : undefined);
+    if (!repositoryInstallMetadata) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "source_sync did not observe repository install metadata",
+      );
+    }
     const snapshot: SourceSnapshot = {
       id: snapshotId,
       origin: "git",
@@ -278,6 +289,7 @@ export class SourceLifecycleService {
       archiveObjectKey,
       archiveDigest: result.archiveDigest,
       archiveSizeBytes: result.archiveSizeBytes,
+      repositoryInstallMetadata,
       fetchedByRunId: running.id,
       fetchedAt: finishedAtIso,
     };
@@ -414,7 +426,10 @@ export class SourceLifecycleService {
     const snapshots = await this.#store.listSourceSnapshots(running.sourceId);
     for (let index = snapshots.length - 1; index >= 0; index -= 1) {
       const snapshot = snapshots[index]!;
-      if (sourceSnapshotMatchesRun(snapshot, running)) {
+      if (
+        sourceSnapshotMatchesRun(snapshot, running) &&
+        snapshot.repositoryInstallMetadata !== undefined
+      ) {
         return snapshot;
       }
     }
@@ -434,7 +449,11 @@ export class SourceLifecycleService {
       siblingSources.map((source) => source.id),
     );
     const reusable = siblingSnapshots
-      .filter((snapshot) => sourceSnapshotMatchesRun(snapshot, running))
+      .filter(
+        (snapshot) =>
+          sourceSnapshotMatchesRun(snapshot, running) &&
+          snapshot.repositoryInstallMetadata !== undefined,
+      )
       .sort((a, b) => compareIso(a.fetchedAt, b.fetchedAt));
     return reusable.at(-1);
   }

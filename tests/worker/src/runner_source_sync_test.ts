@@ -1,4 +1,4 @@
-import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "bun:test";
@@ -13,6 +13,7 @@ import {
 import { RUN_ROOT } from "../../../runner/lib/constants.ts";
 import {
   resolveSourceCommit,
+  readRepositoryInstallMetadata,
   runSourceSync,
   shallowCloneAtCommit,
 } from "../../../runner/lib/source_sync.ts";
@@ -390,6 +391,37 @@ test("runSourceSync reuses an unchanged snapshot without cloning or archiving", 
     await expect(stat(join(root, "source"))).rejects.toThrow();
   } finally {
     globalThis.fetch = previousFetch;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("readRepositoryInstallMetadata captures repository-root metadata independently of a nested module", async () => {
+  const root = await mkdtemp(join(tmpdir(), "takosumi-repo-metadata-"));
+  try {
+    await mkdir(join(root, ".well-known"), { recursive: true });
+    await mkdir(join(root, "deploy", "opentofu"), { recursive: true });
+    const text = JSON.stringify({
+      schemaVersion: "tcs.repo/v1",
+      modulePath: "deploy/opentofu",
+    });
+    await writeFile(join(root, ".well-known", "tcs.json"), text);
+
+    await expect(readRepositoryInstallMetadata(root)).resolves.toEqual({
+      status: "present",
+      text,
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("readRepositoryInstallMetadata records an absent optional document", async () => {
+  const root = await mkdtemp(join(tmpdir(), "takosumi-repo-metadata-"));
+  try {
+    await expect(readRepositoryInstallMetadata(root)).resolves.toEqual({
+      status: "absent",
+    });
+  } finally {
     await rm(root, { recursive: true, force: true });
   }
 });

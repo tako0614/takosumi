@@ -170,6 +170,13 @@ flow, and service-side output policy respectively. Public values come from the
 module's typed OpenTofu outputs after that policy is applied. Do not use source
 comments as the metadata schema.
 
+For a Git Source, `source_sync` MUST record a bounded observation of the
+repository-root document on the same immutable `SourceSnapshot`, separately
+from the selected OpenTofu module archive. A snapshot with no such observation
+MUST NOT be reused by a later source sync. Store-backed plan reconciliation MUST
+fail closed when the latest snapshot reports missing or invalid repository
+metadata; it MUST NOT retain an older Store or per-Capsule copy.
+
 The OpenTofu module still owns its variable names. `installExperience` maps
 standard install concepts to those module variables:
 

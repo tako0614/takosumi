@@ -46,6 +46,7 @@ class FullStubRunner implements OpenTofuRunner {
     resolvedCommit: "def456abc7890123def456abc7890123def456ab",
     archiveDigest: "sha256:" + "c".repeat(64),
     archiveSizeBytes: 2048,
+    repositoryInstallMetadata: { status: "absent" },
   };
   planCalls = 0;
 

@@ -129,6 +129,10 @@ test("container runner returns sanitized source sync phase timings", async () =>
         digest: `sha256:${"b".repeat(64)}`,
         sizeBytes: 2048,
       },
+      repositoryInstallMetadata: {
+        status: "present",
+        text: '{"schemaVersion":"tcs.repo/v1"}',
+      },
       phaseTimings: [
         {
           phase: "source_ref_resolve",
@@ -167,6 +171,10 @@ test("container runner returns sanitized source sync phase timings", async () =>
       durationMs: 40,
     },
   ]);
+  expect(result.repositoryInstallMetadata).toEqual({
+    status: "present",
+    text: '{"schemaVersion":"tcs.repo/v1"}',
+  });
 });
 
 test("container runner records active run and startup metrics", async () => {

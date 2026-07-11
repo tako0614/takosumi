@@ -150,6 +150,13 @@ must be unique, non-empty tokens. Client secrets, access tokens, and refresh
 tokens are never projected through repository metadata, OpenTofu variables,
 state, or Outputs.
 
+Git source sync records a bounded observation of this repository-root document
+on the immutable `SourceSnapshot`, separately from the selected OpenTofu module
+archive. This keeps a nested `modulePath` from hiding or drifting the setup and
+OIDC contract. A snapshot created without that observation is not reused by a
+new sync; Store-backed planning fails closed instead of continuing with stale
+presentation metadata.
+
 Takosumi can reuse SourceSnapshots, provider mirrors, provider plugin caches,
 runner capacity controls, package caches, and clear progress phases. The default
 fast path is a Git CI/release artifact consumed and SHA-256-verified by the

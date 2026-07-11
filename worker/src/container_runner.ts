@@ -265,6 +265,8 @@ export class CloudflareContainerOpenTofuRunner
     const archiveObjectKey =
       stringFromRecord(result, "archiveObjectKey") ??
       (archive ? stringFromRecord(archive, "archiveObjectKey") : undefined);
+    const repositoryInstallMetadata =
+      repositoryInstallMetadataFromContainerResult(result);
     if (!resolvedCommit || !archiveDigest || archiveSizeBytes === undefined) {
       throw new Error(
         `OpenTofu runner source_sync ${job.runId} returned an incomplete result`,
@@ -275,6 +277,7 @@ export class CloudflareContainerOpenTofuRunner
       resolvedCommit,
       archiveDigest,
       archiveSizeBytes,
+      ...(repositoryInstallMetadata ? { repositoryInstallMetadata } : {}),
       ...(archiveObjectKey ? { archiveObjectKey } : {}),
       ...(phaseTimings ? { phaseTimings } : {}),
     };
@@ -634,6 +637,26 @@ function runnerFailureDetail(
   return trimmed.length > 0 ? trimmed.slice(0, 500) : undefined;
 }
 
+function repositoryInstallMetadataFromContainerResult(
+  result: Record<string, unknown>,
+): OpenTofuSourceSyncResult["repositoryInstallMetadata"] | undefined {
+  const value = recordFromRecord(result, "repositoryInstallMetadata");
+  if (!value) return undefined;
+  const status = stringFromRecord(value, "status");
+  if (status === "absent") return { status };
+  if (status === "present") {
+    const text = stringFromRecord(value, "text");
+    return text === undefined ? undefined : { status, text };
+  }
+  if (status === "invalid") {
+    const reason = stringFromRecord(value, "reason");
+    if (reason === "not_regular_file" || reason === "too_large") {
+      return { status, reason };
+    }
+  }
+  return undefined;
+}
+
 function tailText(text: string, maxLength: number): string {
   if (text.length <= maxLength) return text;
   return `...${text.slice(text.length - maxLength)}`;
@@ -666,9 +689,10 @@ function diagnosticsFromContainerResult(
 function phaseTimingDetailFromContainerResult(
   result: Record<string, unknown>,
 ): string | undefined {
-  const timings = phaseTimingsFromContainerResult(result)?.map(
-    (entry) => `${entry.phase}=${Math.round(entry.durationMs)}ms`,
-  ) ?? [];
+  const timings =
+    phaseTimingsFromContainerResult(result)?.map(
+      (entry) => `${entry.phase}=${Math.round(entry.durationMs)}ms`,
+    ) ?? [];
   return timings.length > 0 ? timings.join(", ") : undefined;
 }
 
