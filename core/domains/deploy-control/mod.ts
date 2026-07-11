@@ -67,6 +67,10 @@ import { computeProviderListings } from "./provider_listing.ts";
 import type { ConnectionVault } from "../../adapters/vault/mod.ts";
 import type { OutputAllowlistEntry } from "takosumi-contract/install-configs";
 import type {
+  ManagedPublicHostnameClaimRequest,
+  ManagedPublicHostnameClaimResult,
+} from "takosumi-contract/install-configs";
+import type {
   BillingAccount,
   BillingMode,
   BillingPlan,
@@ -834,6 +838,12 @@ export interface OpenTofuDeploymentControllerDependencies {
   readonly billingEnforcement?: BillingEnforcement;
   /** Seam B plan-quota port. Omitted ⇒ OSS no-op (no plan limits). */
   readonly quotaPolicy?: QuotaPolicy;
+  /**
+   * Optional owner-account limit for short, unscoped names under the
+   * operator-managed public base domain. Omitted means unlimited; Workspace-
+   * scoped managed hostnames never consume this allowance.
+   */
+  readonly managedVanityHostnameSlotsPerOwner?: number;
 }
 
 export interface DeployControlActorContext {
@@ -1235,6 +1245,14 @@ export class OpenTofuDeploymentController {
       deployments: this.#deployments,
       runSerialized: <T>(key: string, work: () => Promise<T>): Promise<T> =>
         this.#runSerialized(key, work),
+      ...(dependencies.managedVanityHostnameSlotsPerOwner !== undefined
+        ? {
+            managedVanityHostnameSlotsPerOwner: Math.max(
+              0,
+              Math.floor(dependencies.managedVanityHostnameSlotsPerOwner),
+            ),
+          }
+        : {}),
     });
   }
 
@@ -1347,6 +1365,12 @@ export class OpenTofuDeploymentController {
       context,
       internal,
     );
+  }
+
+  claimManagedPublicHostname(
+    input: ManagedPublicHostnameClaimRequest,
+  ): Promise<ManagedPublicHostnameClaimResult> {
+    return this.#runEngine.claimManagedPublicHostname(input);
   }
 
   createInstallationDestroyPlan(

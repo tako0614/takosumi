@@ -105,6 +105,7 @@ export async function createWorkerServiceApp(
     readonly releaseActivator?: ReleaseActivator;
     readonly enqueueRun?: EnqueueRun;
     readonly enqueueSourceSync?: EnqueueSourceSync;
+    readonly managedVanityHostnameSlotsPerOwner?: number;
   } = {},
 ): Promise<CreatedTakosumiService> {
   const runtimeEnv = cloudflareRuntimeEnv(env, role);
@@ -251,6 +252,12 @@ export async function createWorkerServiceApp(
     ...(sensitiveOutputResolver ? { sensitiveOutputResolver } : {}),
     ...(dependencyValueSealer ? { dependencyValueSealer } : {}),
     ...(releaseActivator ? { releaseActivator } : {}),
+    ...(options.managedVanityHostnameSlotsPerOwner !== undefined
+      ? {
+          managedVanityHostnameSlotsPerOwner:
+            options.managedVanityHostnameSlotsPerOwner,
+        }
+      : {}),
   });
 }
 

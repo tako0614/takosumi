@@ -574,9 +574,11 @@ export const publicHostReservations = pgTable(
   names.publicHostReservations,
   {
     hostname: text("hostname").primaryKey(),
+    ownerUserId: text("owner_user_id").notNull(),
     workspaceId: text("workspace_id").notNull(),
     installationId: text("installation_id").notNull(),
     installationName: text("installation_name").notNull(),
+    allocationKind: text("allocation_kind").notNull(),
     status: text("status").notNull(),
     reservedAt: text("reserved_at").notNull(),
     updatedAt: text("updated_at").notNull(),
@@ -585,6 +587,11 @@ export const publicHostReservations = pgTable(
   (table) => [
     index("takosumi_public_host_reservations_workspace_idx").on(
       table.workspaceId,
+    ),
+    index("takosumi_public_host_reservations_owner_kind_idx").on(
+      table.ownerUserId,
+      table.allocationKind,
+      table.status,
     ),
     index("takosumi_public_host_reservations_installation_idx").on(
       table.installationId,

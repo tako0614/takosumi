@@ -83,6 +83,7 @@ export interface ComposedAppInput {
   readonly writeSourceArchive?: CreateTakosumiServiceArg["writeSourceArchive"];
   readonly runnerProfiles?: CreateTakosumiServiceArg["runnerProfiles"];
   readonly defaultRunnerProfileId?: CreateTakosumiServiceArg["defaultRunnerProfileId"];
+  readonly managedVanityHostnameSlotsPerOwner?: CreateTakosumiServiceArg["managedVanityHostnameSlotsPerOwner"];
   /**
    * Native adapter implementation bindings (Docker Compose / systemd / etc.) attached to the
    * embedded Takosumi service. The reference Bun profile ships none by default; the
@@ -143,6 +144,12 @@ export async function buildComposedApp(
     ...(input.runnerProfiles ? { runnerProfiles: input.runnerProfiles } : {}),
     ...(input.defaultRunnerProfileId
       ? { defaultRunnerProfileId: input.defaultRunnerProfileId }
+      : {}),
+    ...(input.managedVanityHostnameSlotsPerOwner !== undefined
+      ? {
+          managedVanityHostnameSlotsPerOwner:
+            input.managedVanityHostnameSlotsPerOwner,
+        }
       : {}),
     secretCrypto,
   });

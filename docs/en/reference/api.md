@@ -152,6 +152,30 @@ GET    /v1/audit-events
 A Run is one ledger entry with a `plan`, `apply`, `destroy`, `refresh`, or
 `output` operation. Plan / Apply / Destroy are not separate ledgers.
 
+When repository `public_endpoint` metadata projects a managed hostname, Capsule
+creation may choose its allocation mode. The default is `scoped`:
+
+```json
+{
+  "managedPublicHostname": { "mode": "vanity" }
+}
+```
+
+`scoped` produces
+`<workspace-handle>-<label>.<managed-base-domain>` without consuming a vanity
+slot. `vanity` keeps `<label>.<managed-base-domain>` and consumes one finite
+slot owned by the Workspace's immutable owner account. Both modes reserve the
+hostname first-come-first-served.
+
+Managed hostname reservations and vanity slots belong to the Capsule lifetime.
+A successful Capsule destroy releases them; deleting an individual route does
+not. User-owned custom domains use a separate verified-domain lifecycle rather
+than this mode. In Takosumi Cloud that verification and certificate lifecycle is
+not implemented, so the feature is Planned and requests against Cloud-managed
+routes fail closed. This does not prevent an ordinary OpenTofu URL/route variable
+from being passed to a BYOC provider. The setting selects control-plane
+allocation policy; it does not bypass or replace the OpenTofu variables.
+
 A Run stores:
 
 ```text
@@ -342,6 +366,13 @@ matrix instead of pretending full vendor compatibility. If a sufficient
 universal provider, protocol, or standard surface appears later, prefer that
 surface for new work. Keep the Takosumi shape only where it still adds import
 continuity, migration, managed-target placement, policy, or metering value.
+
+Compatibility route or script-subdomain writes that create a managed hostname
+must include source Workspace and source Capsule context and use the same OSS
+hostname reservation authority as Capsule Runs. Cloud-extension KV or Durable
+Object routing and activation records are not the source of truth for hostname
+ownership. A route-level DELETE removes only that state and does not release a
+reservation owned by the Capsule lifetime.
 
 Takosumi Cloud-specific endpoint examples live in
 [Cloud endpoints](https://app.takosumi.com/docs/en/endpoints).

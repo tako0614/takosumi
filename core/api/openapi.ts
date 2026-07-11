@@ -2809,6 +2809,14 @@ function spaceSchemas(): Record<string, Record<string, unknown>> {
           },
         },
         vars: { type: "object", additionalProperties: true },
+        managedPublicHostname: {
+          type: "object",
+          required: ["mode"],
+          properties: {
+            mode: { enum: ["scoped", "vanity"] },
+          },
+          additionalProperties: false,
+        },
       },
       additionalProperties: false,
     },

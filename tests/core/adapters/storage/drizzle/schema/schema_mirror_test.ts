@@ -452,9 +452,11 @@ test("D1 Drizzle schema mirrors critical live D1 tables", () => {
   );
   expect(columnsOf(d1Schema.publicHostReservations)).toEqual([
     pk("hostname"),
+    nn("owner_user_id"),
     nn("workspace_id"),
     nn("installation_id"),
     nn("installation_name"),
+    nn("allocation_kind"),
     nn("status"),
     nn("reserved_at"),
     nn("updated_at"),
@@ -567,7 +569,7 @@ test("Worker D1 bootstrap records canonical schema migration ledger", async () =
   const rows = migrationRows.results ?? [];
   expect(rows.map((row) => row.version)).toEqual([
     1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
-    22,
+    22, 23,
   ]);
   expect(rows.map((row) => row.name)).toEqual([
     "d1_opentofu_connections_and_secret_blobs_shape",
@@ -592,6 +594,7 @@ test("Worker D1 bootstrap records canonical schema migration ledger", async () =
     "d1_opentofu_public_host_reservations_backfill",
     "d1_opentofu_capsule_active_name_unique",
     "d1_opentofu_install_config_store_key",
+    "d1_opentofu_public_host_owner_slots",
   ]);
   for (const row of rows) {
     expect(row.checksum).toMatch(/^sha256:[0-9a-f]{64}$/);
@@ -599,6 +602,92 @@ test("Worker D1 bootstrap records canonical schema migration ledger", async () =
       /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/,
     );
   }
+});
+
+test("Worker D1 owner-slot migration classifies legacy managed hostnames", async () => {
+  const db = new SqliteFakeD1();
+  await ensureD1OpenTofuLedgerSchema(db);
+  await db.prepare(`delete from schema_migrations where version = 23`).run();
+  await db.prepare(`drop table public_host_reservations`).run();
+  await db
+    .prepare(
+      `create table public_host_reservations (
+        hostname text primary key,
+        workspace_id text not null,
+        installation_id text not null,
+        installation_name text not null,
+        status text not null,
+        reserved_at text not null,
+        updated_at text not null,
+        released_at text
+      )`,
+    )
+    .run();
+  await db
+    .prepare(
+      `insert into workspaces (id, handle, record_json, created_at, updated_at)
+       values (?, ?, ?, ?, ?), (?, ?, ?, ?, ?)`,
+    )
+    .bind(
+      "workspace_alpha",
+      "alpha",
+      JSON.stringify({
+        id: "workspace_alpha",
+        handle: "alpha",
+        ownerUserId: "owner_same",
+      }),
+      "2026-07-11T00:00:00.000Z",
+      "2026-07-11T00:00:00.000Z",
+      "workspace_beta",
+      "beta",
+      JSON.stringify({
+        id: "workspace_beta",
+        handle: "beta",
+        ownerUserId: "owner_same",
+      }),
+      "2026-07-11T00:00:00.000Z",
+      "2026-07-11T00:00:00.000Z",
+    )
+    .run();
+  await db
+    .prepare(
+      `insert into public_host_reservations (
+         hostname, workspace_id, installation_id, installation_name,
+         status, reserved_at, updated_at, released_at
+       ) values
+         ('alpha-app.app.takos.jp', 'workspace_alpha', 'capsule_scoped', 'scoped',
+          'reserved', '2026-07-11T00:00:00.000Z', '2026-07-11T00:00:00.000Z', null),
+         ('short-name.app.takos.jp', 'workspace_beta', 'capsule_vanity', 'vanity',
+          'reserved', '2026-07-11T00:00:00.000Z', '2026-07-11T00:00:00.000Z', null)`,
+    )
+    .run();
+
+  await ensureD1OpenTofuLedgerSchema(db);
+  await ensureD1OpenTofuLedgerSchema(db);
+
+  const rows = await db
+    .prepare(
+      `select hostname, owner_user_id, allocation_kind
+       from public_host_reservations
+       order by hostname`,
+    )
+    .all<{
+      hostname: string;
+      owner_user_id: string;
+      allocation_kind: string;
+    }>();
+  expect(rows.results).toEqual([
+    {
+      hostname: "alpha-app.app.takos.jp",
+      owner_user_id: "owner_same",
+      allocation_kind: "scoped",
+    },
+    {
+      hostname: "short-name.app.takos.jp",
+      owner_user_id: "owner_same",
+      allocation_kind: "vanity",
+    },
+  ]);
 });
 
 test("Worker D1 bootstrap rejects unknown schema migration ledger rows", async () => {
@@ -1247,9 +1336,11 @@ test("Postgres Drizzle schema mirrors critical migration catalog tables", () => 
   );
   expect(columnsOf(postgresSchema.publicHostReservations)).toEqual([
     pk("hostname"),
+    nn("owner_user_id"),
     nn("workspace_id"),
     nn("installation_id"),
     nn("installation_name"),
+    nn("allocation_kind"),
     nn("status"),
     nn("reserved_at"),
     nn("updated_at"),
@@ -1654,6 +1745,68 @@ test("Postgres public host reservation backfill prefers active Capsule outputs",
        where hostname = 'preview.workers.dev'`,
     );
     expect(preview.rows[0]?.n).toBe(0);
+  } finally {
+    await db.close();
+  }
+});
+
+test("Postgres owner-slot migration classifies legacy managed hostnames", async () => {
+  const create = postgresStorageMigrationStatements.find(
+    (entry) => entry.id === "deploy.public_host_reservations.create",
+  );
+  const ownerSlots = postgresStorageMigrationStatements.find(
+    (entry) => entry.id === "deploy.public_host_reservations.owner_slots",
+  );
+  expect(create).toBeDefined();
+  expect(ownerSlots).toBeDefined();
+
+  const db = new PGlite();
+  try {
+    await db.exec(`create table takosumi_workspaces (
+      id text primary key,
+      space_json jsonb not null
+    )`);
+    for (const statement of splitSqlStatements(create!.sql)) {
+      await db.exec(statement);
+    }
+    await db.exec(`insert into takosumi_workspaces values
+      ('workspace_alpha', '{"handle":"alpha","ownerUserId":"owner_same"}'),
+      ('workspace_beta', '{"handle":"beta","ownerUserId":"owner_same"}')`);
+    await db.exec(`insert into takosumi_public_host_reservations (
+      hostname, workspace_id, installation_id, installation_name,
+      status, reserved_at, updated_at, released_at
+    ) values
+      ('alpha-app.app.takos.jp', 'workspace_alpha', 'capsule_scoped', 'scoped',
+       'reserved', '2026-07-11T00:00:00.000Z', '2026-07-11T00:00:00.000Z', null),
+      ('short-name.app.takos.jp', 'workspace_beta', 'capsule_vanity', 'vanity',
+       'reserved', '2026-07-11T00:00:00.000Z', '2026-07-11T00:00:00.000Z', null)`);
+
+    for (const statement of splitSqlStatements(ownerSlots!.sql)) {
+      await db.exec(statement);
+    }
+    for (const statement of splitSqlStatements(ownerSlots!.sql)) {
+      await db.exec(statement);
+    }
+
+    const rows = await db.query<{
+      hostname: string;
+      owner_user_id: string;
+      allocation_kind: string;
+    }>(`select hostname, owner_user_id, allocation_kind
+        from takosumi_public_host_reservations
+        order by hostname`);
+    expect(rows.rows).toEqual([
+      {
+        hostname: "alpha-app.app.takos.jp",
+        owner_user_id: "owner_same",
+        allocation_kind: "scoped",
+      },
+      {
+        hostname: "short-name.app.takos.jp",
+        owner_user_id: "owner_same",
+        allocation_kind: "vanity",
+      },
+    ]);
   } finally {
     await db.close();
   }

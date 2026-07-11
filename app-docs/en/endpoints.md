@@ -150,11 +150,12 @@ hosted-origin hostname dispatch registry.
 
 The Resource Shape API used by the `takosumi` provider (`/v1/resources`,
 `/v1/target-pools`, and `/v1/space-policies`) and the Cloudflare-compatible
-import endpoint (`/compat/cloudflare/client/v4`) can be used without creating a
-Capsule / app installation first. They are not anonymous endpoints. A request
-must authenticate with an account session, personal access token, or service
-token, and the source Workspace plus owning user's billing account must be
-verified.
+import endpoint (`/compat/cloudflare/client/v4`) are not anonymous endpoints. A
+request must authenticate with an account session, personal access token, or
+service token, and the source Workspace plus owning user's billing account must
+be verified. Workers route and script-subdomain writes that create a managed
+hostname additionally require both an existing source Workspace and source
+Capsule context.
 
 Sessions and personal access tokens may select the source Workspace with
 `x-takosumi-cloud-billing-workspace-id`. The platform verifies that the token
@@ -181,10 +182,11 @@ continue to use the user's normal Cloudflare ProviderConnection.
 Billable writes are precharged against the owning user's account credits before forwarding. If
 the Workspace context is missing, the token does not match the Workspace, or the
 owning user has insufficient credits, the request fails closed and is not
-forwarded to the Cloud endpoint / apply path. Capsule / installation ids are
-optional. When omitted, provider / compatibility API usage is recorded as a
-owner account usage event without `installationId`, with source Workspace
-metadata preserved.
+forwarded to the Cloud endpoint / apply path. Operations that do not mutate a
+managed hostname may omit Capsule context and record an owner-account usage
+event without a Capsule id. Route and script-subdomain writes that create a
+managed hostname cannot omit source Capsule context, and hostname policy and
+reservation preflight runs before usage precharge.
 
 ## S3-compatible Object Storage endpoint
 
@@ -465,7 +467,6 @@ Initial target scope:
 - Workers routes
 - Workers script subdomain compatibility mapped to `*.app.takos.jp`
 - default `*.app.takos.jp` hostname per HTTP route
-- user-owned custom domains on HTTP routes
 - KV namespaces
 - R2 buckets
 - D1 databases
@@ -483,6 +484,11 @@ Not in the initial target:
 - email routing
 - Turnstile
 
+Planned:
+
+- user-owned custom domains (ownership verification and certificate lifecycle
+  are not implemented)
+
 Cloudflare billing API compatibility is out of scope. Takosumi Cloud managed
 resource usage must be recorded through the owner account usage ledger above, not by
 proxying Cloudflare's billing API.
@@ -493,10 +499,8 @@ Request:
 
 ```json
 {
-  "pattern": "my-app.app.takos.jp/*",
   "script": "api",
-  "app_subdomain": "my-app",
-  "custom_domains": ["api.example.com"]
+  "app_subdomain": "my-app"
 }
 ```
 
@@ -505,37 +509,54 @@ Response:
 ```json
 {
   "id": "route_xxx",
-  "pattern": "my-app.app.takos.jp/*",
+  "pattern": "my-workspace-my-app.app.takos.jp/*",
   "script": "api",
-  "default_hostname": "my-app.app.takos.jp",
-  "custom_domains": ["api.example.com"]
+  "default_hostname": "my-workspace-my-app.app.takos.jp"
 }
 ```
 
 `default_hostname` is the immediately usable Takosumi-managed URL. It can be
-requested with `app_subdomain`, `default_hostname`, or `hostname`. If omitted,
-Takosumi issues `<app-slug>-<short-id>.<managed-base-domain>`. The Takosumi
-Cloud default managed base domain is `app.takos.jp`; operators can configure a
-different managed base domain under the same contract. The managed namespace is
-first-come-first-served; duplicate reservations return 409. 409 responses do
-not reveal the claimant Workspace or Capsule name.
-The managed namespace is separate from custom-domain quota. Operator-owned
-base-domain hostnames such as `*.app.takos.jp` are protected by global
-uniqueness, reserved labels, and abuse rate limits, but ordinary installs
-should be able to use them broadly.
-`custom_domains` are user-owned domains. DNS ownership verification,
-certificate provisioning, runtime dispatch activation, and plan/quota/abuse
-policy are Cloud runtime responsibilities. Arbitrary apex or subdomain names
-are attached to the owning account as verified domains and constrained by plan
-and abuse policy. Unverified custom domains are not activated for runtime
-dispatch, and the default hostname remains available.
+requested with `app_subdomain`, `default_hostname`, or `hostname`; these values
+provide a requested label or managed hostname. The final hostname is determined
+by the source Capsule's stored `managedPublicHostname.mode`, whose default is
+`scoped`. The Takosumi Cloud default managed base domain is `app.takos.jp`;
+operators can configure another managed base domain under the same contract.
+
+```text
+scoped:
+  <workspace-handle>-<label>.<managed-base-domain>
+  consumes no vanity slot
+
+vanity:
+  <label>.<managed-base-domain>
+  consumes one finite slot owned by the immutable Workspace owner account
+```
+
+Both modes are reserved first-come-first-served through the same OSS hostname
+reservation authority. A duplicate returns 409, a vanity slot limit returns
+429, and neither response discloses the claimant Workspace or Capsule. The
+Cloud compatibility handler passes source Workspace+Capsule context to that
+authority. Cloud-side KV and Durable Object records hold routing and activation
+state only; they are not the source of truth for hostname ownership.
+
+Managed hostname reservations and vanity slots belong to the Capsule lifetime.
+A successful Capsule destroy releases the reservation. Deleting a compatibility
+route only removes Cloud-side routing or activation state; it does not release
+OSS hostname ownership or a vanity slot.
+
+`custom_domains` is a **Planned** field reserved for a future verified-domain
+lifecycle. DNS ownership verification and the certificate lifecycle are not
+implemented. A request containing non-empty `custom_domains`, `custom_domain`,
+or a route pattern or hostname outside the managed base domain currently fails
+closed with 501 and is not stored or activated as a usable custom domain.
 
 The `cloudflare_workers_script_subdomain` compatibility route is stored as a
 Takosumi-managed `*.app.takos.jp` public name, not as a Cloudflare
 `workers.dev` hostname. `POST /accounts/{accountId}/workers/scripts/{scriptName}/subdomain`
-with `{"enabled": true, "previews_enabled": false}` creates a virtual Workers
-route at `<script-slug>-<short-id>.app.takos.jp/*`. `previews_enabled: true` is
-outside the initial target scope.
+with `{"enabled": true, "previews_enabled": false}` uses source
+Workspace+Capsule context and the same OSS reservation authority to create a
+virtual Workers route with the Capsule's scoped or vanity hostname.
+`previews_enabled: true` is outside the initial target scope.
 
 ## OpenTofu provider usage
 

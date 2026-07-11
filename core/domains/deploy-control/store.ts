@@ -252,12 +252,15 @@ export interface CommitAppliedDeploymentResult {
 }
 
 export type PublicHostReservationStatus = "reserved" | "released";
+export type ManagedPublicHostnameReservationKind = "scoped" | "vanity";
 
 export interface PublicHostReservation {
   readonly hostname: string;
+  readonly ownerUserId: string;
   readonly workspaceId: string;
   readonly installationId: string;
   readonly installationName: string;
+  readonly allocationKind: ManagedPublicHostnameReservationKind;
   readonly status: PublicHostReservationStatus;
   readonly reservedAt: string;
   readonly updatedAt: string;
@@ -269,6 +272,9 @@ export interface ReservePublicHostInput {
   readonly workspaceId: string;
   readonly installationId: string;
   readonly installationName: string;
+  readonly allocationKind: ManagedPublicHostnameReservationKind;
+  /** Omitted means the operator does not limit owner vanity slots. */
+  readonly vanitySlotLimit?: number;
   readonly now: string;
 }
 
@@ -279,8 +285,13 @@ export type ReservePublicHostResult =
     }
   | {
       readonly reserved: false;
-      readonly reservation: PublicHostReservation;
       readonly reason: "already_reserved";
+      readonly reservation: PublicHostReservation;
+    }
+  | {
+      readonly reserved: false;
+      readonly reason: "owner_slot_limit_reached";
+      readonly vanitySlotLimit: number;
     };
 
 /** Fields a controller may patch on an Installation row. */
@@ -1375,27 +1386,57 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     return pageSorted(visibleRows, params);
   }
 
-  reservePublicHost(
+  async reservePublicHost(
     input: ReservePublicHostInput,
   ): Promise<ReservePublicHostResult> {
     const hostname = input.hostname.toLowerCase();
+    const workspace = this.#spaces.get(input.workspaceId);
+    if (!workspace) {
+      throw new Error("public host reservation workspace was not found");
+    }
+    const ownerUserId = workspace.ownerUserId;
     const existing = this.#publicHostReservations.get(hostname);
     if (
       existing &&
       existing.status === "reserved" &&
       existing.installationId !== input.installationId
     ) {
-      return Promise.resolve({
+      return {
         reserved: false,
         reservation: existing,
         reason: "already_reserved",
-      });
+      };
+    }
+    if (
+      input.allocationKind === "vanity" &&
+      input.vanitySlotLimit !== undefined
+    ) {
+      const occupiedHostnames = new Set(
+        [...this.#publicHostReservations.values()]
+          .filter(
+            (reservation) =>
+              reservation.status === "reserved" &&
+              reservation.ownerUserId === ownerUserId &&
+              reservation.allocationKind === "vanity" &&
+              reservation.hostname !== hostname,
+          )
+          .map((reservation) => reservation.hostname),
+      );
+      if (occupiedHostnames.size >= input.vanitySlotLimit) {
+        return {
+          reserved: false,
+          reason: "owner_slot_limit_reached",
+          vanitySlotLimit: input.vanitySlotLimit,
+        };
+      }
     }
     const reservation: PublicHostReservation = {
       hostname,
+      ownerUserId,
       workspaceId: input.workspaceId,
       installationId: input.installationId,
       installationName: input.installationName,
+      allocationKind: input.allocationKind,
       status: "reserved",
       reservedAt:
         existing?.installationId === input.installationId
@@ -1404,7 +1445,7 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
       updatedAt: input.now,
     };
     this.#publicHostReservations.set(hostname, reservation);
-    return Promise.resolve({ reserved: true, reservation });
+    return { reserved: true, reservation };
   }
 
   getPublicHostReservation(

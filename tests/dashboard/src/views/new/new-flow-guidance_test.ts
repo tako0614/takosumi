@@ -526,6 +526,14 @@ describe("/new flow guidance", () => {
   test("service setup defaults managed domains without app-specific branches", () => {
     expect(newAppViewSource).toContain("serviceNameInputValue");
     expect(newAppViewSource).toContain("managedServiceLabel");
+    expect(newAppViewSource).toContain("managedPublicHostnameMode");
+    expect(newAppViewSource).toContain(
+      "selectedManagedProviderConnection() ||",
+    );
+    expect(newAppViewSource).toContain(
+      't("new.hostname.mode.vanity")',
+    );
+    expect(newAppViewSource).toContain("managedPublicHostname:");
     // Managed-host derivation lives server-side (9f2912c9); the old client
     // helpers hardcoding app.takos.jp are gone for good.
     expect(newAppViewSource).not.toContain("standardManagedHost");

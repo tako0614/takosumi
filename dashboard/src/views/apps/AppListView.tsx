@@ -299,6 +299,7 @@ function Inner() {
     return appSurfaceFromInstallConfigStore(
       configById().get(inst.installConfigId),
       locale(),
+      overview()?.workspace?.handle,
     );
   };
 

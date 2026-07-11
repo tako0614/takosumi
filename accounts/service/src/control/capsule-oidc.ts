@@ -13,6 +13,7 @@ import type { ControlPlaneOperations } from "../control-operations.ts";
 import type { AccountsStore, OidcClientRecord } from "../store.ts";
 import {
   isManagedPublicHost,
+  managedPublicHostFromLabel,
   managedPublicHostForWorkspace,
   normalizeManagedPublicBaseDomain,
 } from "../../../../core/domains/deploy-control/managed_public_domains.ts";
@@ -58,6 +59,7 @@ export async function ensureTakosumiAccountsOidcForCapsule(input: {
     ),
     workspace.handle,
     input.managedPublicBaseDomain,
+    input.installConfig.managedPublicHostname?.mode ?? "scoped",
   );
   if (!redirectOrigin) return;
 
@@ -252,6 +254,7 @@ function appOriginFromInstallVariables(
   publicEndpoint?: PublicEndpointProjection,
   workspaceHandle?: string,
   managedPublicBaseDomain?: string,
+  managedPublicHostnameMode: "scoped" | "vanity" = "scoped",
 ): string | undefined {
   const declaredBaseDomain = publicEndpointBaseDomain(publicEndpoint?.baseDomain);
   const baseDomain =
@@ -277,11 +280,18 @@ function appOriginFromInstallVariables(
         (candidate) => isManagedPublicHost(url.hostname, candidate),
       );
       if (matchedBaseDomain) {
-        const managedHost = managedPublicHostForWorkspace(
-          workspaceHandle,
-          url.hostname.slice(0, -(matchedBaseDomain.length + 1)),
-          baseDomain,
-        );
+        const requestedLabel =
+          managedPublicHostnameMode === "vanity" && requestedSlug
+            ? requestedSlug
+            : url.hostname.slice(0, -(matchedBaseDomain.length + 1));
+        const managedHost =
+          managedPublicHostnameMode === "vanity"
+            ? managedPublicHostFromLabel(requestedLabel, baseDomain)
+            : managedPublicHostForWorkspace(
+                workspaceHandle,
+                requestedLabel,
+                baseDomain,
+              );
         if (managedHost) return `https://${managedHost}`;
       }
       return url.origin;
@@ -289,11 +299,14 @@ function appOriginFromInstallVariables(
       continue;
     }
   }
-  const managedHost = managedPublicHostForWorkspace(
-    workspaceHandle,
-    requestedSlug,
-    baseDomain,
-  );
+  const managedHost =
+    managedPublicHostnameMode === "vanity"
+      ? managedPublicHostFromLabel(requestedSlug, baseDomain)
+      : managedPublicHostForWorkspace(
+          workspaceHandle,
+          requestedSlug,
+          baseDomain,
+        );
   return managedHost ? `https://${managedHost}` : undefined;
 }
 

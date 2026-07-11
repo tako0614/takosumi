@@ -143,6 +143,21 @@ describe("Run review ProviderConnection evidence", () => {
     expect(ja["run.diagnostics.creditsRequired"]).toContain("クレジット");
   });
 
+  test("classifies short managed-hostname quota failures as a URL action", () => {
+    expect(runViewSource).toContain(
+      "function isManagedHostnameSlotLimitRun",
+    );
+    expect(runViewSource).toContain(
+      'run.errorCode === "managed_public_hostname_slot_limit_reached"',
+    );
+    expect(runViewSource).toContain('t("run.summary.hostnameSlotLimit")');
+    expect(runViewSource).toContain(
+      't("run.diagnostics.hostnameSlotLimitShort")',
+    );
+    expect(en["run.summary.hostnameSlotLimit"]).toContain("short URL");
+    expect(ja["run.summary.hostnameSlotLimit"]).toContain("短いURL");
+  });
+
   test("classifies stale connected-account verification failures as a re-review action", () => {
     expect(runViewSource).toContain("function accessIssueForRun");
     expect(runViewSource).toContain("credential_mint_failed");

@@ -48,6 +48,7 @@ import {
   installExperiencePublicEndpoint,
   installExperienceServiceNameVariable,
   type JsonValue,
+  type ManagedPublicHostnameMode,
 } from "takosumi-contract";
 import { isCredentialFreeUtilityProvider } from "takosumi-contract/provider-env-rules";
 import Page from "../account/components/auth/Page.tsx";
@@ -419,6 +420,8 @@ function Inner() {
   const [nameTouched, setNameTouched] = createSignal(false);
   const [resourcePrefix, setResourcePrefix] = createSignal("");
   const [resourcePrefixTouched, setResourcePrefixTouched] = createSignal(false);
+  const [managedPublicHostnameMode, setManagedPublicHostnameMode] =
+    createSignal<ManagedPublicHostnameMode>("scoped");
   const [inputVariables, setInputVariables] = createSignal<
     readonly InputVariableRow[]
   >(inputVariableRowsFromPrefill(initialInstallPrefill?.vars));
@@ -618,6 +621,7 @@ function Inner() {
         workspaceHandle(),
         defaultProjectName(),
         effectiveManagedBaseDomain(storePublicEndpoint(entry)?.baseDomain),
+        managedPublicHostnameMode(),
       )
     );
   };
@@ -653,7 +657,7 @@ function Inner() {
       if (field.name === endpoint?.subdomainVariable) {
         const label = value.trim().toLowerCase();
         if (isManagedSubdomainLabel(label)) {
-          const managedLabel = managedServiceLabel(workspaceHandle(), label);
+          const managedLabel = managedHostnameLabel(label);
           const host = `${managedLabel}.${baseDomain}`;
           setUntouched(endpoint.urlVariable, `https://${host}`);
           setUntouched(endpoint.routePatternVariable, `${host}/*`);
@@ -992,6 +996,17 @@ function Inner() {
   };
   const serviceNameInputValue = () =>
     slugInputValue(resourcePrefix() || defaultProjectName());
+  const managedHostnameLabel = (requested: string): string =>
+    managedPublicHostnameMode() === "vanity"
+      ? slugInputValue(requested)
+      : managedServiceLabel(workspaceHandle(), requested);
+  const supportsManagedPublicHostnameChoice = () =>
+    Boolean(
+      installExperiencePublicEndpoint(installExperienceForCurrentSource())
+        ?.subdomainVariable &&
+        (selectedManagedProviderConnection() ||
+          hasManagedCloudflareProviderFallback()),
+    );
   // Preview the FINAL managed hostname (workspace-prefixed + base domain) the
   // deploy will use, so the workspace prefix is not a surprise. Empty until
   // the workspace handle and a base domain are known.
@@ -1000,10 +1015,7 @@ function Inner() {
       installExperienceForCurrentSource(),
     );
     const baseDomain = effectiveManagedBaseDomain(endpoint?.baseDomain);
-    const label = managedServiceLabel(
-      workspaceHandle(),
-      serviceNameInputValue(),
-    );
+    const label = managedHostnameLabel(serviceNameInputValue());
     return label && baseDomain ? `${label}.${baseDomain}` : "";
   };
   const useSuggestedServiceName = () => {
@@ -1044,7 +1056,7 @@ function Inner() {
     if (field.name !== endpoint.subdomainVariable) return "";
     const label = storeInputValue(entry, field).trim().toLowerCase();
     if (!label || !isManagedSubdomainLabel(label)) return "";
-    const managedLabel = managedServiceLabel(workspaceHandle(), label);
+    const managedLabel = managedHostnameLabel(label);
     const baseDomain = effectiveManagedBaseDomain(endpoint.baseDomain);
     return managedLabel && baseDomain ? `${managedLabel}.${baseDomain}` : "";
   };
@@ -1374,7 +1386,7 @@ function Inner() {
             ? current[urlVariable].trim()
             : "";
         const managedAppLabel = currentSubdomain
-          ? managedServiceLabel(workspaceHandle(), currentSubdomain)
+          ? managedHostnameLabel(currentSubdomain)
           : "";
         const managedAppHost = managedAppLabel
           ? `${managedAppLabel}.${publicBaseDomain}`
@@ -2535,6 +2547,9 @@ function Inner() {
       compatibilityReportId: compatibility()?.reportId,
       vars: installVariables(),
       store: storeMetadataForRun(),
+      managedPublicHostname: supportsManagedPublicHostnameChoice()
+        ? { mode: managedPublicHostnameMode() }
+        : undefined,
       sourceId: createdSourceId(),
       capsuleId: createdCapsuleId(),
       syncDone: stepSync() === "done",
@@ -2630,6 +2645,9 @@ function Inner() {
             : {}),
           ...(flowInput.vars ? { vars: flowInput.vars } : {}),
           ...(flowInput.store ? { store: flowInput.store } : {}),
+          ...(flowInput.managedPublicHostname
+            ? { managedPublicHostname: flowInput.managedPublicHostname }
+            : {}),
           // Store installs opt into auto-update by default (app feel): new
           // source versions re-plan and auto-apply when clean. Link/Git
           // installs stay manual.
@@ -3185,6 +3203,34 @@ function Inner() {
               >
                 <Show when={!usingSelectedService()}>
                   {activeInstallPrefill() ? prefilledLinkReview() : gitFields()}
+                </Show>
+
+                <Show when={supportsManagedPublicHostnameChoice()}>
+                  <FormField
+                    label={t("new.hostname.mode.label")}
+                    hint={t("new.hostname.mode.hint")}
+                  >
+                    <Select
+                      id="new-managed-public-hostname-mode"
+                      name="managedPublicHostnameMode"
+                      value={managedPublicHostnameMode()}
+                      disabled={busy()}
+                      onChange={(event) => {
+                        setManagedPublicHostnameMode(
+                          event.currentTarget
+                            .value as ManagedPublicHostnameMode,
+                        );
+                        resetCompatibility();
+                      }}
+                    >
+                      <option value="scoped">
+                        {t("new.hostname.mode.scoped")}
+                      </option>
+                      <option value="vanity">
+                        {t("new.hostname.mode.vanity")}
+                      </option>
+                    </Select>
+                  </FormField>
                 </Show>
 
                 <Show when={selectedServiceEntry()}>

@@ -122,6 +122,13 @@ export const ja = {
   "workspace.create.nameLabel": "ワークスペース名",
   "workspace.create.namePlaceholder": "新しいワークスペース",
   "workspace.create.nameRequired": "ワークスペース名を入力してください。",
+  "workspace.create.idLabel": "ワークスペースID",
+  "workspace.create.idPlaceholder": "my-workspace",
+  "workspace.create.idHelp":
+    "英小文字・数字・ハイフン（2〜39文字）。空欄なら自動生成します。",
+  "workspace.create.idInvalid":
+    "IDは英小文字・数字・ハイフンで2〜39文字にしてください（先頭のハイフン不可）。",
+  "workspace.create.idTaken": "そのIDはすでに使われています。",
   "workspace.create.failed": "ワークスペースを作成できませんでした — {message}",
 
   // --- auth -----------------------------------------------------------------
@@ -290,7 +297,8 @@ export const ja = {
   "app.notFound": "サービスが見つかりません",
   "app.backToList": "一覧へ",
   "app.loadFailedTitle": "サービスを読み込めませんでした",
-  "app.refreshFailed": "最新の状態を取得できませんでした。表示は最後に取得した内容です。",
+  "app.refreshFailed":
+    "最新の状態を取得できませんでした。表示は最後に取得した内容です。",
   "app.notFoundMessage": "削除されたか、リンクが違う可能性があります。",
   "app.outputs.title": "公開リンク",
   "app.outputs.subtitle": "開ける画面やアドレスがある場合に表示します。",
@@ -465,6 +473,9 @@ export const ja = {
   "run.summary.creditsRequired": "クレジットが必要です。",
   "run.summary.creditsRequiredHint":
     "アカウントにクレジットを追加してから、もう一度デプロイしてください。",
+  "run.summary.hostnameSlotLimit": "短いURLの空き枠がありません。",
+  "run.summary.hostnameSlotLimitHint":
+    "通常URLを使うか、既存の短いURLを解放してからもう一度実行してください。",
   "run.summary.connectionVerificationRequired":
     "接続済みアカウントの確認が必要です。",
   "run.summary.connectionVerificationHint":
@@ -581,6 +592,10 @@ export const ja = {
   "run.diagnostics.creditsRequiredShort": "クレジット残高が不足しています。",
   "run.diagnostics.creditsRequiredDetail":
     "お支払い画面でクレジットを追加してから、もう一度デプロイしてください。",
+  "run.diagnostics.hostnameSlotLimitShort":
+    "短いURLの空き枠がありません。",
+  "run.diagnostics.hostnameSlotLimitDetail":
+    "通常URLを使うか、既存の短いURLを解放してからもう一度実行してください。",
   "run.diagnostics.connectionVerificationRequired":
     "接続済みアカウントへのアクセス準備中に停止しました。接続が利用可能になっている場合は、もう一度変更を確認してからデプロイしてください。",
   "run.diagnostics.connectionVerificationShort":
@@ -699,6 +714,11 @@ export const ja = {
   "new.name": "サービス名",
   "new.vars.projectName": "サービスID",
   "new.hostPreview": "公開URL: {host}",
+  "new.hostname.mode.label": "URLの種類",
+  "new.hostname.mode.hint":
+    "通常URLはワークスペースごとに使えます。短いURLはアカウントのURL枠を1つ使います。",
+  "new.hostname.mode.scoped": "通常URL",
+  "new.hostname.mode.vanity": "短いURL枠を使う",
   "new.advanced.title": "詳細設定",
   "new.advanced.customUrlHint": "既定の公開URLの代わりに使う完全なURLです。",
   "new.advanced.routePatternHint":
@@ -834,6 +854,8 @@ export const ja = {
   "new.error.appHostnameUnavailable":
     "この公開URL名は既に使われています。別の名前にして、もう一度お試しください。",
   "new.hostnameConflict.title": "別の公開URL名にしてください",
+  "new.error.managedHostnameSlotLimit":
+    "短いURLの空き枠がありません。通常URLを使うか、既存の短いURLを解放してください。",
   "new.hostnameConflict.body":
     "公開URLに使う名前を変えてから、もう一度追加してください。",
   "new.hostnameConflict.suggest": "候補名を使う",
@@ -924,7 +946,8 @@ export const ja = {
   "conn.oauth.failed": "接続に失敗しました。もう一度お試しください。",
   "conn.oauth.error.missingCode":
     "認証の応答が不完全でした。もう一度お試しください。",
-  "conn.oauth.error.forbidden": "このワークスペースに接続する権限がありません。",
+  "conn.oauth.error.forbidden":
+    "このワークスペースに接続する権限がありません。",
   "conn.oauth.error.oauthFailed":
     "プロバイダーとの認証に失敗しました。時間をおいてもう一度お試しください。",
   "conn.oauth.errorCode": "エラーコード: {code}",
@@ -1044,7 +1067,8 @@ export const ja = {
   "conn.remove.confirmTitle": "接続済みアカウントを削除",
   "conn.remove.confirmMessage":
     "本当に {name} を削除しますか？保存されたアクセス値も削除され、取り消せません。",
-  "conn.remove.bindingWarning": "この接続を使うサービスのデプロイは失敗します。",
+  "conn.remove.bindingWarning":
+    "この接続を使うサービスのデプロイは失敗します。",
 
   // --- backups -----------------------------------------------------------------
   "backups.subtitle": "復元に使う保存ポイントを管理します。",
@@ -1085,7 +1109,8 @@ export const ja = {
   "shares.error.outputsRequired":
     "共有する値の名前を 1 つ以上入力してください。",
   "shares.error.reasonRequired": "機微な値を共有する理由を入力してください。",
-  "shares.error.toWorkspaceRequired": "共有先ワークスペースを選択してください。",
+  "shares.error.toWorkspaceRequired":
+    "共有先ワークスペースを選択してください。",
   "shares.error.producerRequired": "共有元サービスを選択してください。",
   "shares.col.direction": "方向",
   "shares.col.capsule": "サービス",

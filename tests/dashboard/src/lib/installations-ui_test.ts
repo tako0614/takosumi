@@ -116,6 +116,51 @@ describe("appSurfacesFromOutputs", () => {
         updatedAt: "2026-07-05T00:00:00.000Z",
       } as never,
       "ja",
+      "photos",
+    );
+    expect(surface?.url).toBe("https://photos-photo-blog.app.takos.jp");
+  });
+
+  test("keeps a vanity-slot launch URL free of the Workspace prefix", () => {
+    const surface = appSurfaceFromInstallConfigStore(
+      {
+        id: "cfg_vanity",
+        name: "app",
+        sourceKind: "first_party_capsule",
+        trustLevel: "official",
+        managedPublicHostname: { mode: "vanity" },
+        variableMapping: {
+          public_subdomain: "photo-blog",
+          public_url: "https://photos-photo-blog.app.takos.jp",
+        },
+        store: {
+          order: 1,
+          surface: "service",
+          kind: "worker",
+          provider: "cloudflare",
+          suggestedName: "app",
+          badge: { ja: "追加候補", en: "Installable" },
+          name: { ja: "App", en: "App" },
+          description: { ja: "アプリ", en: "App" },
+          inputs: [],
+          installExperience: {
+            projections: [
+              {
+                kind: "public_endpoint",
+                variables: {
+                  subdomain: "public_subdomain",
+                  url: "public_url",
+                },
+                baseDomain: "app.takos.jp",
+              },
+            ],
+          },
+        },
+        createdAt: "2026-07-05T00:00:00.000Z",
+        updatedAt: "2026-07-05T00:00:00.000Z",
+      } as never,
+      "ja",
+      "photos",
     );
     expect(surface?.url).toBe("https://photo-blog.app.takos.jp");
   });
