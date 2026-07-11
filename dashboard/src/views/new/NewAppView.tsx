@@ -1298,21 +1298,23 @@ function Inner() {
   const selectedManagedProviderConnection = ():
     ProviderConnection | undefined => {
     for (const row of providerRows()) {
-      const connection = providerConnectionsForProvider(row.provider).find(
-        (candidate) =>
-          candidate.id === row.connectionId &&
-          candidate.scopeHints?.managedProvider === true,
+      if (!row.connectionId) continue;
+      const selected = providerConnectionsForProvider(row.provider).find(
+        (candidate) => candidate.id === row.connectionId,
       );
-      if (connection) return connection;
+      if (selected) {
+        return selected.scopeHints?.managedProvider === true
+          ? selected
+          : undefined;
+      }
     }
     const managedProvider = managedStoreProviderForCurrentSource();
     if (!managedProvider) return undefined;
-    const fallbackRow = providerRows().find((row) =>
-      sameProviderFamily(managedProvider, row.provider),
+    return readyProviderConnections().find(
+      (candidate) =>
+        candidate.scopeHints?.managedProvider === true &&
+        sameProviderFamily(managedProvider, candidate.providerSource),
     );
-    return fallbackRow
-      ? managedProviderConnectionForRow(fallbackRow)
-      : undefined;
   };
   const effectiveManagedBaseDomain = (declared?: string): string =>
     managedBaseDomain(
