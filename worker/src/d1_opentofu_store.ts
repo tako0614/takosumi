@@ -5067,6 +5067,35 @@ create partial active unique index on space/name/environment where status != des
         .run();
     },
   },
+  {
+    version: 22,
+    name: "d1_opentofu_install_config_store_key",
+    checksumSource: `
+install_configs.config_json top-level catalog key renamed to store
+existing store value wins when both keys are present
+catalog key removed after convergence
+`,
+    async apply(db) {
+      await db
+        .prepare(
+          `update install_configs
+           set record_json = case
+             when json_type(record_json, '$.store') is not null
+               then json_remove(record_json, '$.catalog')
+             else json_remove(
+               json_set(
+                 record_json,
+                 '$.store',
+                 json_extract(record_json, '$.catalog')
+               ),
+               '$.catalog'
+             )
+           end
+           where json_type(record_json, '$.catalog') is not null`,
+        )
+        .run();
+    },
+  },
 ] as const satisfies readonly D1OpenTofuSchemaMigration[];
 
 /**
