@@ -406,6 +406,21 @@ GET /compat/cloudflare/client/v4/accounts/{accountId}/r2/buckets
 GET /compat/cloudflare/client/v4/accounts/{accountId}/d1/database
 ```
 
+D1 database の対応する data / maintenance route:
+
+```http
+POST /compat/cloudflare/client/v4/accounts/{accountId}/d1/database/{databaseId}/query
+POST /compat/cloudflare/client/v4/accounts/{accountId}/d1/database/{databaseId}/raw
+POST /compat/cloudflare/client/v4/accounts/{accountId}/d1/database/{databaseId}/import
+POST /compat/cloudflare/client/v4/accounts/{accountId}/d1/database/{databaseId}/export
+```
+
+`import` は `wrangler d1 execute --remote --file ...` が使う
+`init` / `ingest` / `poll` protocol をそのまま受け付け、tenant 内の public database id を
+選択済み SQLDatabase manager の backend id へ写像します。`query` / `raw` / `import` /
+`export` は同じ owner-account credit guard と usage ledger を通ります。この一覧にない
+D1 subpath は互換対象ではなく `501` を返します。
+
 初期 target は Workers 系 subset に限定します。
 
 - Workers scripts
