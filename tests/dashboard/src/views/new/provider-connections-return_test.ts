@@ -262,9 +262,8 @@ describe("/new Provider Connections return context", () => {
 
   test("/new uses a managed provider connection and its public namespace without hard-coded app behavior", () => {
     expect(newAppViewSource).toContain("selectedManagedProviderConnection");
-    expect(newAppViewSource).toContain(
-      "managedProviderConnectionForRow(fallbackRow)",
-    );
+    expect(newAppViewSource).toContain("return readyProviderConnections().find(");
+    expect(newAppViewSource).toContain("if (!row.connectionId) continue;");
     expect(newAppViewSource).toContain(
       "if (!managedStoreProviderForCurrentSource()) return;",
     );
