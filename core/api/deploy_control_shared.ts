@@ -238,6 +238,7 @@ export const ALLOWED_KEYS: Record<
     "runnerId",
     "outputAllowlist",
     "vars",
+    "managedPublicHostname",
   ]),
   installationPatch: new Set(["status"]),
   installationPlan: new Set(["runnerId", "compatibilityReportId"]),

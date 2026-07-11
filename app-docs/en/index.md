@@ -33,7 +33,6 @@ Takosumi Cloud Resources =
 
 - host apps, APIs, and services
 - use a default `*.app.takos.jp` URL immediately
-- attach user-owned custom domains
 - configure secrets and environment variables
 - use KV / Object Storage / Database / Queue / AI as bindings
 - deploy from a Git URL through OpenTofu/Terraform
@@ -91,47 +90,33 @@ Takosumi Cloud resources are exposed to apps and services as bindings.
 
 ## Domains
 
-Every public HTTP resource can receive a Takosumi-managed default URL. Users
-can pick a DNS-valid single-label hostname under an operator-managed public
-base domain on a first-come-first-served basis. The Takosumi Cloud default base
-domain is `app.takos.jp`. If no hostname is requested, Takosumi issues a safe
-generated hostname.
+Public HTTP resources can currently receive a managed URL under an
+operator-owned base domain. The Takosumi Cloud default base domain is
+`app.takos.jp`. There are two allocation modes: `scoped` and `vanity`.
 
 ```text
-User-chosen:
-  https://my-app.app.takos.jp
-  https://blog.app.takos.jp
+scoped:
+  https://<workspace-handle>-<label>.app.takos.jp
+  consumes no vanity slot
 
-Auto-issued fallback:
-  https://<app-slug>-<short-id>.app.takos.jp
+vanity:
+  https://<label>.app.takos.jp
+  consumes one finite slot owned by the Workspace's immutable owner account
 ```
 
 Use this URL for previews, first deploys, and apps that do not have external DNS
-yet. This managed namespace does not require DNS ownership verification. To use
-a user-owned domain, add a custom domain and complete DNS ownership
-verification, certificate provisioning, and plan/quota/abuse policy. The custom
-domain then points at the same route.
-Managed namespaces such as `*.app.takos.jp` are separate from custom-domain
-quota and should be broadly available for ordinary app installs. The controls
-are DNS-valid single-label names, global uniqueness, reserved labels, and abuse
-policy.
+yet. Neither mode requires DNS ownership verification. `scoped` consumes no
+vanity slot. `vanity` is first-come-first-served and requires a DNS-valid single
+label, global uniqueness, an available owner-account slot, reserved-label
+checks, and abuse policy. Conflict and slot-limit errors do not disclose the
+claimant Workspace or Capsule.
+The reservation and vanity slot belong to the Capsule lifetime and are released
+by a successful Capsule destroy, not by deleting an individual route.
 
-```text
-Default URL:
-  my-app.app.takos.jp
-
-Custom domains:
-  app.example.com
-  www.example.com
-```
-
-The managed namespace is first-come-first-served. A duplicate hostname
-reservation fails, platform-reserved names are unavailable, and claimant
-Workspace/Capsule names are not exposed. Arbitrary apex or subdomain names are
-verified domains attached to the owning account and constrained by plan/quota
-and abuse policy. The default URL remains available when a custom domain is
-pending, expired, or disabled. This keeps inspection and removal possible even
-during DNS mistakes or domain transfers.
+User-owned custom domains are **Planned**. DNS ownership verification and the
+certificate lifecycle are not implemented yet, so a request that supplies a
+custom domain to a Cloud-managed route fails closed and is not activated as a
+usable route.
 
 ## Service Rollout
 
@@ -161,6 +146,7 @@ Initial rollout:
 | Durable Workflow | Preview            |
 | Containers       | Planned            |
 | Stateful apps    | Planned            |
+| Custom Domains   | Planned            |
 
 ## Billing and Spend Guard
 
@@ -198,6 +184,7 @@ compatibility. AI Gateway is a separate OpenAI-compatible profile.
 | Production Preview | KV namespace, R2 bucket / Object Storage, D1 database / App Database   |
 | Preview            | Queue, Durable Workflow, Dynamic Worker workflow support               |
 | Planned            | Containers, Durable Objects style stateful apps                        |
+| Planned            | User-owned custom domains                                              |
 | Unsupported        | DNS, WAF, Zero Trust, Registrar, Cloudflare account IAM, Load Balancer |
 | Unsupported        | Email Routing                                                          |
 

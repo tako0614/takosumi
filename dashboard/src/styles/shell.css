@@ -25,6 +25,7 @@
   color: var(--tg-accent-text);
 }
 .app-shell-main {
+  position: relative;
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -36,6 +37,66 @@
   max-width: var(--tg-content-max);
   width: 100%;
   margin: 0 auto;
+  transition: opacity 160ms ease;
+}
+/* Route-transition feedback. A slow lazy-route load (notably the heavy /new
+   screen) keeps the previous page on screen while the URL + header title already
+   change; this bar + a gentle fade make it read as "loading", not "frozen". */
+.route-progress {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 120ms ease;
+  z-index: var(--tg-z-popover);
+}
+.route-progress.active {
+  opacity: 1;
+}
+.route-progress::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 45%;
+  border-radius: 0 2px 2px 0;
+  background: var(--tg-accent);
+  animation: route-progress-slide 1.1s ease-in-out infinite;
+}
+@keyframes route-progress-slide {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(320%);
+  }
+}
+.app-shell-content.routing {
+  opacity: 0.5;
+}
+/* Fallback for a direct/first load of a lazy route (no previous page to keep
+   visible during the transition). */
+.route-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40vh;
+  color: var(--tg-fg-subtle);
+}
+@media (prefers-reduced-motion: reduce) {
+  .route-progress::before {
+    animation: none;
+    width: 100%;
+    opacity: 0.7;
+  }
+  .app-shell-content {
+    transition: none;
+  }
 }
 
 /* ===== Sidebar (primary nav) ===== */
@@ -350,23 +411,63 @@
   background: var(--tg-bg-subtle);
   border-color: var(--tg-line-strong);
 }
+/* Shared by the settings <a> and the "create workspace" <button>. The button
+ * needs its native chrome reset, or the UA paints a grey fill + outset bevel
+ * border over the flat popover (the create action looked mis-coloured). */
 .topbar-workspace-settings {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 100%;
   display: flex;
   align-items: center;
   gap: var(--tg-s-2);
   margin-top: var(--tg-s-1);
   padding: var(--tg-s-2);
+  border: 0;
   border-top: 1px solid var(--tg-line);
   border-radius: 0 0 var(--tg-r-md) var(--tg-r-md);
+  background: transparent;
   color: var(--tg-fg-muted);
+  font-family: var(--tg-font-body);
   font-size: var(--tg-fs-sm);
   font-weight: 600;
+  text-align: left;
   text-decoration: none;
-  transition: color 120ms ease;
+  cursor: pointer;
+  transition:
+    color 120ms ease,
+    background 120ms ease;
 }
 .topbar-workspace-settings:hover {
   background: var(--tg-bg-subtle);
   color: var(--tg-fg);
+}
+/* Inline create form: the Workspace ID (`@handle`) row + its hint line. */
+.topbar-workspace-handle {
+  display: flex;
+  align-items: center;
+  gap: var(--tg-s-1);
+}
+.topbar-workspace-handle-at {
+  flex: none;
+  color: var(--tg-fg-subtle);
+  font-family: var(--tg-font-mono);
+  font-size: var(--tg-fs-sm);
+  font-weight: 650;
+}
+.topbar-workspace-handle .tg-input {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--tg-font-mono);
+}
+.topbar-workspace-hint {
+  margin: -2px 0 0;
+  color: var(--tg-fg-subtle);
+  font-size: var(--tg-fs-xs);
+  line-height: 1.4;
+}
+.topbar-workspace-hint.invalid {
+  color: var(--tg-danger-text);
 }
 /* ===== Bell badge ===== */
 .topbar-bell {

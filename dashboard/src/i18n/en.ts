@@ -116,6 +116,13 @@ export const en: Record<keyof typeof ja, string> = {
   "workspace.create.nameLabel": "Workspace name",
   "workspace.create.namePlaceholder": "New workspace",
   "workspace.create.nameRequired": "Enter a workspace name.",
+  "workspace.create.idLabel": "Workspace ID",
+  "workspace.create.idPlaceholder": "my-workspace",
+  "workspace.create.idHelp":
+    "Lowercase letters, numbers, and hyphens (2–39). Auto-generated if left blank.",
+  "workspace.create.idInvalid":
+    "Use 2–39 lowercase letters, numbers, or hyphens (no leading hyphen).",
+  "workspace.create.idTaken": "That ID is already taken.",
   "workspace.create.failed": "Could not create the workspace — {message}",
 
   // --- auth -----------------------------------------------------------------
@@ -459,6 +466,9 @@ export const en: Record<keyof typeof ja, string> = {
   "run.summary.creditsRequired": "Credits are required.",
   "run.summary.creditsRequiredHint":
     "Add credits to your account, then run the deploy again.",
+  "run.summary.hostnameSlotLimit": "No short URL slots are available.",
+  "run.summary.hostnameSlotLimitHint":
+    "Use a standard URL or release an existing short URL, then run again.",
   "run.summary.connectionVerificationRequired":
     "Connected account check is needed.",
   "run.summary.connectionVerificationHint":
@@ -576,6 +586,10 @@ export const en: Record<keyof typeof ja, string> = {
     "The owner account does not have enough credits.",
   "run.diagnostics.creditsRequiredDetail":
     "Add credits from billing, then run the deploy again.",
+  "run.diagnostics.hostnameSlotLimitShort":
+    "No short URL slots are available.",
+  "run.diagnostics.hostnameSlotLimitDetail":
+    "Use a standard URL or release an existing short URL, then run again.",
   "run.diagnostics.connectionVerificationRequired":
     "This run stopped while preparing access to a connected account. If the connection is now ready, review the changes again before deploying.",
   "run.diagnostics.connectionVerificationShort":
@@ -693,6 +707,11 @@ export const en: Record<keyof typeof ja, string> = {
   "new.name": "Service name",
   "new.vars.projectName": "Service ID",
   "new.hostPreview": "Public URL: {host}",
+  "new.hostname.mode.label": "URL type",
+  "new.hostname.mode.hint":
+    "Standard URLs are available per Workspace. A short URL consumes one account URL slot.",
+  "new.hostname.mode.scoped": "Standard URL",
+  "new.hostname.mode.vanity": "Use a short URL slot",
   "new.advanced.title": "Advanced settings",
   "new.advanced.customUrlHint":
     "A full URL used instead of the default public URL.",
@@ -830,6 +849,8 @@ export const en: Record<keyof typeof ja, string> = {
   "new.error.appHostnameUnavailable":
     "That public URL name is already in use. Choose another name and try again.",
   "new.hostnameConflict.title": "Choose another public URL name",
+  "new.error.managedHostnameSlotLimit":
+    "No short URL slots are available. Use a standard URL or release an existing short URL.",
   "new.hostnameConflict.body":
     "Use a different name for the public URL, then add the service again.",
   "new.hostnameConflict.suggest": "Use suggested name",

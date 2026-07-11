@@ -788,17 +788,38 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
   ): Promise<ReservePublicHostResult> {
     await this.#ensureSchema();
     const hostname = input.hostname.toLowerCase();
+    const workspace = await this.getSpace(input.workspaceId);
+    if (!workspace) {
+      throw new Error("public host reservation workspace was not found");
+    }
+    const ownerUserId = workspace.ownerUserId;
+    const vanitySlotLimit =
+      input.allocationKind === "vanity" && input.vanitySlotLimit !== undefined
+        ? Math.max(0, Math.floor(input.vanitySlotLimit))
+        : -1;
     await this.db
       .prepare(
         `insert into public_host_reservations (
-           hostname, workspace_id, installation_id, installation_name,
-           status, reserved_at, updated_at, released_at
+           hostname, owner_user_id, workspace_id, installation_id,
+           installation_name, allocation_kind, status,
+           reserved_at, updated_at, released_at
          )
-         values (?, ?, ?, ?, 'reserved', ?, ?, null)
+         select ?, ?, ?, ?, ?, ?, 'reserved', ?, ?, null
+         where ? < 0
+            or (
+              select count(*)
+              from public_host_reservations
+              where owner_user_id = ?
+                and allocation_kind = 'vanity'
+                and status = 'reserved'
+                and hostname != ?
+            ) < ?
          on conflict(hostname) do update
-         set workspace_id = excluded.workspace_id,
+         set owner_user_id = excluded.owner_user_id,
+             workspace_id = excluded.workspace_id,
              installation_id = excluded.installation_id,
              installation_name = excluded.installation_name,
+             allocation_kind = excluded.allocation_kind,
              status = 'reserved',
              reserved_at = case
                when public_host_reservations.installation_id = excluded.installation_id
@@ -812,26 +833,41 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
       )
       .bind(
         hostname,
+        ownerUserId,
         input.workspaceId,
         input.installationId,
         input.installationName,
+        input.allocationKind,
         input.now,
         input.now,
+        vanitySlotLimit,
+        ownerUserId,
+        hostname,
+        vanitySlotLimit,
       )
       .run();
     const reservation = await this.db
       .prepare(
-        `select hostname, workspace_id, installation_id, installation_name,
-                status, reserved_at, updated_at, released_at
+        `select hostname, owner_user_id, workspace_id, installation_id,
+                installation_name, allocation_kind, status,
+                reserved_at, updated_at, released_at
          from public_host_reservations
          where hostname = ?`,
       )
       .bind(hostname)
       .first<Record<string, unknown>>();
+    if (!reservation) {
+      return {
+        reserved: false,
+        reason: "owner_slot_limit_reached",
+        vanitySlotLimit: Math.max(0, vanitySlotLimit),
+      };
+    }
     const normalized = publicHostReservationFromD1Row(reservation);
     if (
       normalized.status === "reserved" &&
-      normalized.installationId === input.installationId
+      normalized.installationId === input.installationId &&
+      normalized.allocationKind === input.allocationKind
     ) {
       return { reserved: true, reservation: normalized };
     }
@@ -848,8 +884,9 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     await this.#ensureSchema();
     const row = await this.db
       .prepare(
-        `select hostname, workspace_id, installation_id, installation_name,
-                status, reserved_at, updated_at, released_at
+        `select hostname, owner_user_id, workspace_id, installation_id,
+                installation_name, allocation_kind, status,
+                reserved_at, updated_at, released_at
          from public_host_reservations
          where hostname = ?`,
       )
@@ -4069,9 +4106,11 @@ export async function ensureD1OpenTofuLedgerSchema(
       on credit_reservations (status)`,
     `create table if not exists public_host_reservations (
       hostname text primary key,
+      owner_user_id text not null,
       workspace_id text not null,
       installation_id text not null,
       installation_name text not null,
+      allocation_kind text not null,
       status text not null,
       reserved_at text not null,
       updated_at text not null,
@@ -4079,6 +4118,8 @@ export async function ensureD1OpenTofuLedgerSchema(
     )`,
     `create index if not exists public_host_reservations_workspace_idx
       on public_host_reservations (workspace_id)`,
+    `create index if not exists public_host_reservations_owner_kind_idx
+      on public_host_reservations (owner_user_id, allocation_kind, status)`,
     `create index if not exists public_host_reservations_installation_idx
       on public_host_reservations (installation_id)`,
     `create index if not exists public_host_reservations_status_idx
@@ -5096,6 +5137,130 @@ catalog key removed after convergence
         .run();
     },
   },
+  {
+    version: 23,
+    name: "d1_opentofu_public_host_owner_slots",
+    checksumSource: `
+public_host_reservations.owner_user_id owner account attribution
+public_host_reservations.allocation_kind scoped or vanity
+existing rows classified from the Workspace handle and attributed to ownerUserId
+`,
+    async apply(db) {
+      await ensureD1Column(
+        db,
+        "public_host_reservations",
+        "owner_user_id",
+        "text",
+      );
+      await ensureD1Column(
+        db,
+        "public_host_reservations",
+        "allocation_kind",
+        "text not null default 'scoped'",
+      );
+      await db
+        .prepare(
+          `update public_host_reservations
+           set owner_user_id = (
+                 select json_extract(workspaces.record_json, '$.ownerUserId')
+                 from workspaces
+                 where workspaces.id = public_host_reservations.workspace_id
+               ),
+               allocation_kind = case
+                 when exists (
+                   select 1
+                   from workspaces
+                   where workspaces.id = public_host_reservations.workspace_id
+                     and substr(
+                       public_host_reservations.hostname,
+                       1,
+                       length(json_extract(workspaces.record_json, '$.handle')) + 1
+                     ) = json_extract(workspaces.record_json, '$.handle') || '-'
+                 ) then 'scoped'
+                 else 'vanity'
+               end
+           where owner_user_id is null or owner_user_id = ''`,
+        )
+        .run();
+      const orphaned = await db
+        .prepare(
+          `select count(*) as count
+           from public_host_reservations
+           where owner_user_id is null or owner_user_id = ''`,
+        )
+        .first<{ count: number | string }>();
+      if (Number(orphaned?.count ?? 0) > 0) {
+        throw new Error(
+          "public host owner-slot migration found a reservation without a Workspace owner",
+        );
+      }
+      await db
+        .prepare(`drop table if exists public_host_reservations__owner_slots`)
+        .run();
+      await db
+        .prepare(
+          `create table public_host_reservations__owner_slots (
+            hostname text primary key,
+            owner_user_id text not null,
+            workspace_id text not null,
+            installation_id text not null,
+            installation_name text not null,
+            allocation_kind text not null
+              check (allocation_kind in ('scoped','vanity')),
+            status text not null
+              check (status in ('reserved','released')),
+            reserved_at text not null,
+            updated_at text not null,
+            released_at text
+          )`,
+        )
+        .run();
+      await db
+        .prepare(
+          `insert into public_host_reservations__owner_slots (
+             hostname, owner_user_id, workspace_id, installation_id,
+             installation_name, allocation_kind, status,
+             reserved_at, updated_at, released_at
+           )
+           select hostname, owner_user_id, workspace_id, installation_id,
+                  installation_name, allocation_kind, status,
+                  reserved_at, updated_at, released_at
+           from public_host_reservations`,
+        )
+        .run();
+      await db.prepare(`drop table public_host_reservations`).run();
+      await db
+        .prepare(
+          `alter table public_host_reservations__owner_slots
+           rename to public_host_reservations`,
+        )
+        .run();
+      await db
+        .prepare(
+          `create index if not exists public_host_reservations_workspace_idx
+           on public_host_reservations (workspace_id)`,
+        )
+        .run();
+      await db
+        .prepare(
+          `create index if not exists public_host_reservations_installation_idx
+           on public_host_reservations (installation_id)`,
+        )
+        .run();
+      await db
+        .prepare(
+          `create index if not exists public_host_reservations_status_idx
+           on public_host_reservations (status)`,
+        )
+        .run();
+      await db
+        .prepare(
+          `create index if not exists public_host_reservations_owner_kind_idx
+           on public_host_reservations (owner_user_id, allocation_kind, status)`,
+        )
+        .run();
+    },
+  },
 ] as const satisfies readonly D1OpenTofuSchemaMigration[];
 
 /**
@@ -6061,9 +6226,11 @@ function publicHostReservationFromD1Row(
   }
   return {
     hostname: String(row.hostname),
+    ownerUserId: String(row.owner_user_id ?? row.workspace_id),
     workspaceId: String(row.workspace_id),
     installationId: String(row.installation_id),
     installationName: String(row.installation_name),
+    allocationKind: row.allocation_kind === "vanity" ? "vanity" : "scoped",
     status:
       row.status === "released" || row.status === "reserved"
         ? row.status

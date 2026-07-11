@@ -273,6 +273,9 @@ function addFlowErrorMessage(apiError: ControlApiError | undefined): string {
   if (apiError?.isAppHostnameUnavailable) {
     return t("new.error.appHostnameUnavailable");
   }
+  if (apiError?.isManagedPublicHostnameSlotLimitReached) {
+    return t("new.error.managedHostnameSlotLimit");
+  }
   if (apiError?.isDuplicateService) {
     return t("new.error.alreadyExistsGeneric");
   }
@@ -478,6 +481,7 @@ function storeDefaultInputValue(
   workspaceHandle: string | undefined,
   serviceSlug?: string,
   managedPublicBaseDomain?: string,
+  managedPublicHostnameMode: "scoped" | "vanity" = "scoped",
 ): string {
   const base = slugInputValue(entry.suggestedName);
   const requestedServiceSlug = serviceSlug || base;
@@ -497,8 +501,12 @@ function storeDefaultInputValue(
     // like every other consumer — otherwise a listing declaring
     // `*.app.takos.jp` yields `https://slug.*.app.takos.jp`, which fails URL
     // validation and blocks the install.
-    return scopedServiceSlug
-      ? `https://${scopedServiceSlug}.${managedBaseDomain(managedPublicBaseDomain ?? publicEndpoint.baseDomain)}`
+    const publicServiceSlug =
+      managedPublicHostnameMode === "vanity"
+        ? requestedServiceSlug
+        : scopedServiceSlug;
+    return publicServiceSlug
+      ? `https://${publicServiceSlug}.${managedBaseDomain(managedPublicBaseDomain ?? publicEndpoint.baseDomain)}`
       : "";
   }
   switch (field.defaultValue) {

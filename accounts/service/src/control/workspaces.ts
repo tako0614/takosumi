@@ -51,6 +51,7 @@ import type {
   CapsuleProviderEnvBindingSet,
   InstallConfig,
   InstallConfigStoreInput,
+  ManagedPublicHostnameAllocation,
   Capsule,
   OutputAllowlistEntry,
   PolicyConfig,
@@ -1178,6 +1179,9 @@ async function createCapsule(
   const storeMetadata = installConfigStoreValue(body.store);
   const modulePath = modulePathValue(body.modulePath);
   const sourceBuild = sourceBuildValue(body.sourceBuild);
+  const managedPublicHostname = managedPublicHostnameValue(
+    body.managedPublicHostname,
+  );
   if (body.modulePath !== undefined && modulePath === undefined) {
     return errorJson(
       "invalid_request",
@@ -1196,6 +1200,16 @@ async function createCapsule(
     return errorJson(
       "invalid_request",
       "outputAllowlist must be an object of { from, type, required? } entries",
+      400,
+    );
+  }
+  if (
+    body.managedPublicHostname !== undefined &&
+    managedPublicHostname === undefined
+  ) {
+    return errorJson(
+      "invalid_request",
+      "managedPublicHostname must be { mode: 'scoped' | 'vanity' }",
       400,
     );
   }
@@ -1297,7 +1311,8 @@ async function createCapsule(
     resolvedOutputAllowlist !== undefined ||
     resolvedStoreMetadata !== undefined ||
     resolvedModulePath !== undefined ||
-    sourceBuild !== undefined
+    sourceBuild !== undefined ||
+    managedPublicHostname !== undefined
   ) {
     const now = new Date().toISOString();
     const { modulePath: _baseModulePath, ...baseConfigWithoutModulePath } =
@@ -1319,6 +1334,7 @@ async function createCapsule(
       ...(runnerProfileId ? { runnerId: runnerProfileId } : {}),
       ...(resolvedModulePath ? { modulePath: resolvedModulePath } : {}),
       ...(sourceBuild ? { sourceBuild } : {}),
+      ...(managedPublicHostname ? { managedPublicHostname } : {}),
       outputAllowlist:
         resolvedOutputAllowlist ?? scopedCloneOutputAllowlist(baseConfig),
       createdAt: now,
@@ -1363,6 +1379,16 @@ async function createCapsule(
     }
   }
   return jsonStatus({ capsule: publicCapsule(installation) }, 201);
+}
+
+function managedPublicHostnameValue(
+  value: unknown,
+): ManagedPublicHostnameAllocation | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) return undefined;
+  return value.mode === "scoped" || value.mode === "vanity"
+    ? { mode: value.mode }
+    : undefined;
 }
 
 function storeDefaultVariableMapping(

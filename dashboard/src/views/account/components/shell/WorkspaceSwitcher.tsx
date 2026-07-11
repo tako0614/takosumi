@@ -20,7 +20,12 @@ import {
   For,
   onCleanup,
   Show,
+  untrack,
 } from "solid-js";
+import {
+  isValidWorkspaceHandle,
+  slugifyWorkspaceHandle,
+} from "takosumi-contract";
 import {
   type ControlApiError,
   createWorkspace,
@@ -60,7 +65,7 @@ function newWorkspaceHandle(): string {
 }
 
 export default function WorkspaceSwitcher(props: Props = {}) {
-  const [workspaces, { refetch }] = createResource(() =>
+  const [workspaces, { mutate, refetch }] = createResource(() =>
     listWorkspacesCached({ selectedWorkspaceId: currentWorkspaceId() }),
   );
   const [switcherOpen, setSwitcherOpen] = createSignal(false);
@@ -92,9 +97,16 @@ export default function WorkspaceSwitcher(props: Props = {}) {
   // Reconcile persisted Workspace selection after sign-in. A browser can keep
   // the previous user's localStorage value, so never keep an id that is absent
   // from the loaded Workspace list.
+  //
+  // `currentWorkspaceId` is read UNTRACKED: this reconciliation must fire when a
+  // freshly loaded list arrives, NOT every time the selection changes. Tracking
+  // it made creating a Workspace flap — `setCurrentWorkspaceId(new)` re-ran this
+  // against the still-stale list (new id absent), which reset the selection back
+  // to the first Workspace before the refetch could land the new one.
   const onLoaded = (list: readonly Workspace[]) => {
-    const next = selectAvailableWorkspaceId(currentWorkspaceId(), list);
-    if (next !== currentWorkspaceId()) {
+    const current = untrack(currentWorkspaceId);
+    const next = selectAvailableWorkspaceId(current, list);
+    if (next !== current) {
       setCurrentWorkspaceId(next);
     }
     if (!next) setSwitcherOpen(false);
@@ -157,23 +169,66 @@ export default function WorkspaceSwitcher(props: Props = {}) {
   };
 
   // ----- inline workspace creation ------------------------------------------
-  // A minimal name-only form inside the menu popover: the handle is generated
-  // (same as the /new flow) and everything else is editable later in settings.
+  // Name + Workspace ID (the `@handle`) inside the menu popover. The id is the
+  // user-chosen, globally unique identifier: it defaults to a slug of the name
+  // but stays editable, and if left blank we fall back to a generated handle so
+  // a non-ASCII name (which slugifies to nothing) still creates instantly.
   const [createOpen, setCreateOpen] = createSignal(false);
   const [createName, setCreateName] = createSignal("");
+  const [createHandle, setCreateHandle] = createSignal("");
+  // Once the id is edited by hand we stop mirroring the name into it.
+  const [handleEdited, setHandleEdited] = createSignal(false);
   let createInputRef: HTMLInputElement | undefined;
+
+  const onNameInput = (value: string) => {
+    setCreateName(value);
+    if (!handleEdited()) setCreateHandle(slugifyWorkspaceHandle(value));
+  };
+  const onHandleInput = (value: string) => {
+    setHandleEdited(true);
+    setCreateHandle(value);
+  };
+  // Invalid only when non-empty and malformed — an empty id is allowed (a
+  // handle is then generated), so it must not paint the field red.
+  const handleInvalid = createMemo(() => {
+    const handle = createHandle().trim();
+    return handle.length > 0 && !isValidWorkspaceHandle(handle);
+  });
+  const resetCreateForm = () => {
+    setCreateName("");
+    setCreateHandle("");
+    setHandleEdited(false);
+  };
+
   const create = createAction(async () => {
     const displayName = createName().trim();
     if (!displayName) throw new Error(t("workspace.create.nameRequired"));
+    const typedHandle = createHandle().trim();
+    if (typedHandle && !isValidWorkspaceHandle(typedHandle)) {
+      throw new Error(t("workspace.create.idInvalid"));
+    }
+    // Instant feedback for the common clash before the round-trip; the service
+    // remains the authority on uniqueness across every Workspace.
+    if (
+      typedHandle &&
+      loadedWorkspaces().some((workspace) => workspace.handle === typedHandle)
+    ) {
+      throw new Error(t("workspace.create.idTaken"));
+    }
+    const handle = typedHandle || newWorkspaceHandle();
     const workspace = await createWorkspace({
-      handle: newWorkspaceHandle(),
+      handle,
       displayName,
       type: "personal",
     });
     clearWorkspaceListCache();
+    // Reflect the new Workspace in this switcher immediately (the refetch below
+    // replaces it with the canonical list); selecting it before the list settles
+    // is now safe because the reconcile effect reads the selection untracked.
+    mutate((prev) => [...(prev ?? []), workspace]);
     setCurrentWorkspaceId(workspace.id);
     window.dispatchEvent(new Event("takosumi:workspaces-changed"));
-    setCreateName("");
+    resetCreateForm();
     setCreateOpen(false);
     setSwitcherOpen(false);
     triggerRef?.focus();
@@ -184,6 +239,14 @@ export default function WorkspaceSwitcher(props: Props = {}) {
   // half-open create form.
   createEffect(() => {
     if (!switcherOpen()) setCreateOpen(false);
+  });
+  // Whenever the create form is closed (cancel, success, or dismissing the
+  // popover) drop its inputs and any error so it always reopens clean.
+  createEffect(() => {
+    if (!createOpen()) {
+      resetCreateForm();
+      create.clearError();
+    }
   });
   createEffect(() => {
     if (createOpen()) queueMicrotask(() => createInputRef?.focus());
@@ -388,13 +451,53 @@ export default function WorkspaceSwitcher(props: Props = {}) {
                       type="text"
                       value={createName()}
                       onInput={(event) =>
-                        setCreateName(event.currentTarget.value)
+                        onNameInput(event.currentTarget.value)
                       }
                       placeholder={t("workspace.create.namePlaceholder")}
                       autocomplete="off"
                       spellcheck={false}
                       ref={createInputRef}
                     />
+                    <label
+                      class="tg-field-label"
+                      for={`${switcherId()}-create-id`}
+                    >
+                      {t("workspace.create.idLabel")}
+                    </label>
+                    <div class="topbar-workspace-handle">
+                      <span
+                        class="topbar-workspace-handle-at"
+                        aria-hidden="true"
+                      >
+                        @
+                      </span>
+                      <input
+                        id={`${switcherId()}-create-id`}
+                        class="tg-input"
+                        classList={{ "tg-input-invalid": handleInvalid() }}
+                        type="text"
+                        inputmode="url"
+                        value={createHandle()}
+                        onInput={(event) =>
+                          onHandleInput(event.currentTarget.value)
+                        }
+                        placeholder={t("workspace.create.idPlaceholder")}
+                        autocomplete="off"
+                        autocapitalize="none"
+                        spellcheck={false}
+                        aria-invalid={handleInvalid()}
+                        aria-describedby={`${switcherId()}-create-id-help`}
+                      />
+                    </div>
+                    <p
+                      id={`${switcherId()}-create-id-help`}
+                      class="topbar-workspace-hint"
+                      classList={{ invalid: handleInvalid() }}
+                    >
+                      {handleInvalid()
+                        ? t("workspace.create.idInvalid")
+                        : t("workspace.create.idHelp")}
+                    </p>
                     <div style={{ display: "flex", gap: "8px" }}>
                       <Button
                         variant="primary"
@@ -410,11 +513,7 @@ export default function WorkspaceSwitcher(props: Props = {}) {
                         variant="ghost"
                         size="sm"
                         type="button"
-                        onClick={() => {
-                          setCreateOpen(false);
-                          setCreateName("");
-                          create.clearError();
-                        }}
+                        onClick={() => setCreateOpen(false)}
                       >
                         {t("common.cancel")}
                       </Button>

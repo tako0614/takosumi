@@ -325,15 +325,24 @@ the app repository a normal OpenTofu module.
 
 `public_endpoint` is a UX projection, not a hard-coded app rule. If it maps a
 `subdomain` variable, Takosumi may reserve
-`<label>.<managed-base-domain>` under the operator-managed public namespace.
-This managed default hostname is first-come-first-served and conflict errors
-must not disclose the owning Workspace or Capsule. If it maps a `url` or
+`<workspace-handle>-<label>.<managed-base-domain>` as the broadly available
+scoped default. An explicit `managedPublicHostname.mode = "vanity"` keeps the
+requested `<label>.<managed-base-domain>` unchanged and consumes one hostname
+slot from the immutable Workspace owner account. Both forms are
+first-come-first-served and conflict errors must not disclose the owning
+Workspace or Capsule. The reservation and vanity slot belong to the Capsule
+lifetime and are released only after a successful Capsule destroy, not when an
+individual runtime route is deleted. If it maps a `url` or
 route-pattern variable that points outside the managed base domain, it is a
 custom/user-owned hostname and must go through domain ownership verification
 before runtime activation in managed target implementations. Generic
 ProviderConnection / non-managed providers may still receive these values as
 ordinary OpenTofu variables; Takosumi should not reject the module merely
 because it chooses to use its own provider-side routing.
+Takosumi Cloud does not yet implement that verification or certificate
+lifecycle. User-owned custom domains are therefore Planned, and non-empty
+custom-domain requests against Cloud-managed routes must fail closed before
+routing or activation state is written.
 
 Subdomain, password, and app-specific env are not universal Takosumi
 requirements. A Capsule that does not need a public endpoint should not show a
@@ -686,6 +695,15 @@ rewrite: the control plane uses it consistently for generated endpoint inputs,
 hostname ownership, compatibility route state, and OIDC redirect registration.
 Repository `public_endpoint.baseDomain` remains the portable fallback when the
 selected target does not advertise one.
+
+Managed hostname ownership has exactly one authority: the OSS control-plane
+hostname reservation store. A compatibility route or script-subdomain write
+that creates a managed hostname must provide source Workspace and source
+Capsule context and call the same authority used by Capsule Runs. Cloud-side KV
+or Durable Object records hold routing and activation state only; they must not
+become a second ownership ledger. A Cloud route DELETE removes only that state.
+The reservation remains attached to the Capsule lifetime until a successful
+Capsule destroy releases it.
 
 From the user's perspective the entrypoint is still the normal OpenTofu
 provider or `takosumi_edge_worker`; behind that entrypoint the selected
@@ -1235,23 +1253,30 @@ Queue
 AI Gateway
 Durable Workflow
 Credits
-Custom Domains
+Custom Domains (Planned)
 *.app.takos.jp names
 ```
 
-The managed public hostname contract is one-label DNS names under an
+The managed public hostname contract has two one-label forms under an
 operator-managed public base domain. Takosumi Cloud's base domain is
-`app.takos.jp`, but the control-plane contract is
-`<label>.<managed-base-domain>` from the `public_endpoint` projection.
-Managed names are first-come-first-served and broadly available for ordinary
-installs. Arbitrary user-owned custom domains are a separate lifecycle and must
+`app.takos.jp`. The default scoped form is
+`<workspace-handle>-<label>.<managed-base-domain>` and does not consume a
+vanity slot. The optional vanity form is `<label>.<managed-base-domain>` and
+consumes one finite slot owned by the immutable Workspace owner account. Names
+are first-come-first-served.
+Arbitrary user-owned custom domains are a separate lifecycle and must
 pass ownership verification, certificate provisioning, plan/quota, and abuse
-policy before runtime activation.
+policy before runtime activation. That lifecycle is not implemented today, so
+all user-owned custom-domain activation is Planned and non-empty requests fail
+closed.
 This is a hard product boundary: operator-owned managed hostnames such as
-`<label>.app.takos.jp` are treated as a broad default namespace, not as scarce
-custom-domain quota. The scarce surface is arbitrary user-owned hostnames.
-Those require verified ownership, account attribution, plan/quota controls, and
-abuse policy before activation.
+`<workspace-handle>-<label>.app.takos.jp` are the broad default namespace.
+Vanity operator-owned names use a finite owner slot, while arbitrary user-owned
+hostnames require verified ownership, account attribution, separate plan/quota
+controls, and abuse policy before activation.
+Managed hostname reservations and vanity slots belong to the Capsule lifetime;
+a successful Capsule destroy releases them. Deleting a Cloud routing record
+does not release OSS hostname ownership.
 
 Implementation can use Cloudflare primitives such as Workers for Platforms,
 Dynamic Workers, R2, D1, KV, Queues, Workflows, Containers, and AI Gateway.
@@ -1276,7 +1301,7 @@ Preview:
 
 Planned:
   Database extensions
-  custom domains beyond basic routing
+  custom domains (verified ownership and certificate lifecycle)
 
 Unsupported:
   DNS full management
@@ -1288,15 +1313,27 @@ Unsupported:
   Email Routing
 ```
 
-Takosumi Cloud should support:
+Current managed hostname support:
 
 ```text
-custom user domains
-first-come names under the operator managed public base domain
+Workspace-scoped names under the operator managed public base domain
+owner-slot vanity names under the same base domain
 ```
 
-Route ownership, certificate issuance, abuse policy, and name reservation live
-in the Operator/Cloud layer.
+Planned custom-domain support:
+
+```text
+user-owned apex and subdomains
+verified ownership
+certificate issuance and renewal
+plan/quota/abuse policy
+```
+
+The OSS hostname reservation authority is the source of truth for managed name
+ownership. Operator/Cloud configures the managed base domain, vanity-slot
+limits, reserved labels, and abuse policy. Cloud KV / Durable Object state is
+only routing / activation state. The separate verified custom-domain and
+certificate lifecycle will live in the Operator/Cloud layer when implemented.
 
 ## 12. Billing Boundary
 

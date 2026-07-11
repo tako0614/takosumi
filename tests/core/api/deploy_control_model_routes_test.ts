@@ -241,6 +241,38 @@ test("model e2e: create Installation with vars clones a Space-scoped InstallConf
   });
 });
 
+test("model e2e: create Capsule stores the managed vanity-hostname choice in its scoped config", async () => {
+  const { app, operations } = await service();
+  const spaceId = await createSpace(app, "vanity-host");
+  const sourceId = await createSource(app, spaceId);
+  const installConfigId = await seedInstallConfig(operations, spaceId);
+
+  const createRes = await app.request(
+    `/internal/v1/workspaces/${spaceId}/capsules`,
+    {
+      method: "POST",
+      headers: headers({ "content-type": "application/json" }),
+      body: JSON.stringify({
+        name: "takos",
+        environment: "production",
+        sourceId,
+        installConfigId,
+        managedPublicHostname: { mode: "vanity" },
+      }),
+    },
+  );
+
+  expect(createRes.status).toBe(201);
+  const capsule = (await createRes.json()).capsule as {
+    installConfigId: string;
+  };
+  expect(capsule.installConfigId).not.toBe(installConfigId);
+  const config = await operations.installations.getInstallConfig(
+    capsule.installConfigId,
+  );
+  expect(config.managedPublicHostname).toEqual({ mode: "vanity" });
+});
+
 test("model e2e: create Installation expands dotted vars into object inputs", async () => {
   const { app, operations } = await service();
   const spaceId = await createSpace(app, "dotted-vars");

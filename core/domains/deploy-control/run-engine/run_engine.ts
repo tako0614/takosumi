@@ -41,7 +41,12 @@ import type {
   Dependency,
   DependencySnapshot,
 } from "takosumi-contract/dependencies";
-import type { OutputAllowlistEntry } from "takosumi-contract/install-configs";
+import type {
+  ManagedPublicHostnameClaimRequest,
+  ManagedPublicHostnameClaimResult,
+  ManagedPublicHostnameMode,
+  OutputAllowlistEntry,
+} from "takosumi-contract/install-configs";
 import type { Output as OutputSnapshot } from "takosumi-contract/outputs";
 import type { Run } from "takosumi-contract/runs";
 import type {
@@ -131,7 +136,9 @@ import {
 import {
   managedPublicBaseDomainFromInstallConfig,
   managedPublicHostFromLabel,
+  managedPublicHostnameMode,
   managedPublicLabelForWorkspace,
+  normalizeManagedPublicHostLabel,
   normalizeManagedPublicBaseDomain,
   normalizeManagedPublicBaseDomains,
   publicHostPolicyKind,
@@ -443,12 +450,6 @@ function looksSensitiveOutputName(name: string): boolean {
 }
 
 const MANAGED_WORKER_NAME_RE = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/u;
-const PUBLIC_URL_OUTPUT_KEYS = [
-  "url",
-  "launch_url",
-  "app_url",
-  "public_url",
-] as const;
 
 function nonEmptyStringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
@@ -523,32 +524,6 @@ function publicHostsFromInstallExperienceVariables(
   return [...hosts].sort();
 }
 
-function publicHostsFromOutput(
-  outputs: Readonly<Record<string, unknown>>,
-): readonly string[] {
-  const hosts = new Set<string>();
-  for (const key of PUBLIC_URL_OUTPUT_KEYS) {
-    const host = hostFromHttpsUrlValue(outputs[key]);
-    if (host) hosts.add(host);
-  }
-  const appDeployment = outputs.app_deployment;
-  if (isJsonRecordValue(appDeployment)) {
-    for (const key of PUBLIC_URL_OUTPUT_KEYS) {
-      const host = hostFromHttpsUrlValue(appDeployment[key]);
-      if (host) hosts.add(host);
-    }
-  }
-  const apps = outputs.apps;
-  if (Array.isArray(apps)) {
-    for (const app of apps) {
-      if (!isJsonRecordValue(app)) continue;
-      const host = hostFromHttpsUrlValue(app.url);
-      if (host) hosts.add(host);
-    }
-  }
-  return [...hosts].sort();
-}
-
 function hasManagedCloudflareProviderDefaults(
   defaults: Readonly<Record<string, JsonValue>>,
 ): boolean {
@@ -610,18 +585,21 @@ function finalizeManagedCloudflarePublicHostVariables(input: {
   if (!requestedSlug) {
     return out;
   }
-  if (!requestedSlugWasExplicit) {
+  const hostnameMode = managedPublicHostnameMode(input.installConfig);
+  if (!requestedSlugWasExplicit && hostnameMode === "scoped") {
     const maxSlugLength = Math.max(1, 62 - input.workspaceHandle.length);
     requestedSlug = requestedSlug.slice(0, maxSlugLength).replace(/-+$/gu, "");
   }
-  const publicLabel = managedPublicLabelForWorkspace(
-    input.workspaceHandle,
-    requestedSlug,
-  );
+  const publicLabel =
+    hostnameMode === "vanity"
+      ? normalizeManagedPublicHostLabel(requestedSlug)
+      : managedPublicLabelForWorkspace(input.workspaceHandle, requestedSlug);
   if (!publicLabel || !validManagedWorkerName(publicLabel)) {
     throw new OpenTofuControllerError(
       "invalid_argument",
-      "public hostname slug is invalid or too long for this Workspace handle",
+      hostnameMode === "vanity"
+        ? "public hostname label is invalid or too long"
+        : "public hostname slug is invalid or too long for this Workspace handle",
       { reason: "invalid_app_hostname" },
     );
   }
@@ -691,35 +669,6 @@ function publicHostUnavailableMessage(): string {
   return "app_hostname_unavailable: already exists";
 }
 
-function installationHasClaimablePublicState(
-  installation: Installation,
-): boolean {
-  return Boolean(
-    installation.currentDeploymentId ||
-    installation.currentStateVersionId ||
-    installation.currentStateGeneration > 0 ||
-    installation.status === "active" ||
-    installation.status === "stale",
-  );
-}
-
-function publicHostClaimPriority(installation: Installation): number {
-  switch (installation.status) {
-    case "active":
-      return 400;
-    case "stale":
-      return 300;
-    case "error":
-      return installation.currentStateGeneration > 0 ? 200 : 0;
-    case "pending":
-      return installation.currentStateGeneration > 0 ? 100 : 0;
-    case "disabled":
-      return 50;
-    case "destroyed":
-      return 0;
-  }
-}
-
 function workspaceOutputsWithReleaseDescriptor(
   workspaceOutputs: Readonly<Record<string, JsonValue>>,
   outputs: OpenTofuApplyResult["outputs"],
@@ -763,6 +712,7 @@ export interface RunEngineDependencies {
   readonly sourceLifecycle: SourceLifecycleService;
   readonly deployments: DeploymentQuery;
   readonly runSerialized: RunSerialized;
+  readonly managedVanityHostnameSlotsPerOwner?: number;
 }
 
 export class RunEngine {
@@ -795,6 +745,7 @@ export class RunEngine {
   readonly #sourceLifecycle: SourceLifecycleService;
   readonly #deployments: DeploymentQuery;
   readonly #runSerialized: RunSerialized;
+  readonly #managedVanityHostnameSlotsPerOwner?: number;
   #connectionsService?: ConnectionsService;
 
   constructor(deps: RunEngineDependencies) {
@@ -830,6 +781,8 @@ export class RunEngine {
     this.#sourceLifecycle = deps.sourceLifecycle;
     this.#deployments = deps.deployments;
     this.#runSerialized = deps.runSerialized;
+    this.#managedVanityHostnameSlotsPerOwner =
+      deps.managedVanityHostnameSlotsPerOwner;
   }
 
   // ---- public bridges: invoked by controller-side collaborator callbacks ----
@@ -1203,6 +1156,53 @@ export class RunEngine {
       context,
       internal,
     );
+  }
+
+  async claimManagedPublicHostname(
+    input: ManagedPublicHostnameClaimRequest,
+  ): Promise<ManagedPublicHostnameClaimResult> {
+    const installation = await this.#store.getInstallation(input.capsuleId);
+    const workspaceId = installation?.workspaceId ?? installation?.spaceId;
+    if (
+      !installation ||
+      installation.status === "destroyed" ||
+      workspaceId !== input.workspaceId
+    ) {
+      return { ok: false, reason: "invalid_context" };
+    }
+    const [workspace, installConfig] = await Promise.all([
+      this.#store.getSpace(workspaceId),
+      this.#store.getInstallConfig(installation.installConfigId),
+    ]);
+    if (!workspace || !installConfig) {
+      return { ok: false, reason: "invalid_context" };
+    }
+    const baseDomain = normalizeManagedPublicBaseDomain(
+      input.managedPublicBaseDomain,
+    );
+    const requestedLabel = normalizeManagedPublicHostLabel(
+      input.requestedLabel,
+    );
+    const mode = managedPublicHostnameMode(installConfig);
+    const publicLabel =
+      mode === "vanity"
+        ? requestedLabel
+        : managedPublicLabelForWorkspace(workspace.handle, requestedLabel);
+    if (!baseDomain || !publicLabel || !validManagedWorkerName(publicLabel)) {
+      return { ok: false, reason: "invalid_label" };
+    }
+    const hostname = `${publicLabel}.${baseDomain}`;
+    const reserved = await this.#reserveManagedPublicHost({
+      hostname,
+      installation,
+      workspaceId,
+      mode,
+      now: this.#now(),
+    });
+    if (reserved.ok) {
+      return { ok: true, hostname, mode };
+    }
+    return reserved;
   }
 
   /**
@@ -2186,34 +2186,76 @@ export class RunEngine {
         "managed_default_hostname",
     );
     if (claimableHosts.length === 0) return;
-    const claims = await this.#publicHostClaims();
-    for (const host of claimableHosts) {
-      const claim = claims.get(host);
-      if (!claim || claim.installationId === installation.id) continue;
+    const workspaceId = installation.workspaceId ?? installation.spaceId;
+    const workspace = await this.#store.getSpace(workspaceId);
+    if (!workspace) {
       throw new OpenTofuControllerError(
         "failed_precondition",
-        publicHostUnavailableMessage(),
-        { reason: "app_hostname_unavailable" },
+        "Workspace for public hostname reservation was not found",
       );
     }
-    const workspaceId = installation.workspaceId ?? installation.spaceId;
-    const nowIso = new Date(now).toISOString();
+    const allocationKind = managedPublicHostnameMode(installConfig);
     for (const host of claimableHosts) {
-      const result = await this.#store.reservePublicHost({
+      const result = await this.#reserveManagedPublicHost({
         hostname: host,
         workspaceId,
-        installationId: installation.id,
-        installationName: installation.name,
-        now: nowIso,
+        installation,
+        mode: allocationKind,
+        now,
       });
-      if (result.reserved) continue;
-      const reservation = result.reservation;
+      if (result.ok) continue;
+      if (result.reason === "slot_limit_reached") {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          "managed_public_hostname_slot_limit_reached: no short URL slots are available",
+          {
+            reason: "managed_public_hostname_slot_limit_reached",
+            ...(result.limit !== undefined ? { limit: result.limit } : {}),
+          },
+        );
+      }
       throw new OpenTofuControllerError(
         "failed_precondition",
         publicHostUnavailableMessage(),
         { reason: "app_hostname_unavailable" },
       );
     }
+  }
+
+  async #reserveManagedPublicHost(input: {
+    readonly hostname: string;
+    readonly workspaceId: string;
+    readonly installation: Installation;
+    readonly mode: ManagedPublicHostnameMode;
+    readonly now: number;
+  }): Promise<
+    | { readonly ok: true }
+    | {
+        readonly ok: false;
+        readonly reason: "unavailable" | "slot_limit_reached";
+        readonly limit?: number;
+      }
+  > {
+    const result = await this.#store.reservePublicHost({
+      hostname: input.hostname,
+      workspaceId: input.workspaceId,
+      installationId: input.installation.id,
+      installationName: input.installation.name,
+      allocationKind: input.mode,
+      ...(input.mode === "vanity" &&
+      this.#managedVanityHostnameSlotsPerOwner !== undefined
+        ? { vanitySlotLimit: this.#managedVanityHostnameSlotsPerOwner }
+        : {}),
+      now: new Date(input.now).toISOString(),
+    });
+    if (result.reserved) return { ok: true };
+    return result.reason === "owner_slot_limit_reached"
+      ? {
+          ok: false,
+          reason: "slot_limit_reached",
+          limit: result.vanitySlotLimit,
+        }
+      : { ok: false, reason: "unavailable" };
   }
 
   async #releasePublicHostsForInstallation(
@@ -2231,87 +2273,6 @@ export class RunEngine {
         error,
       });
     }
-  }
-
-  async #publicHostClaims(): Promise<
-    ReadonlyMap<
-      string,
-      {
-        readonly installationId: string;
-        readonly installationName: string;
-        readonly workspaceId: string;
-        readonly priority: number;
-      }
-    >
-  > {
-    const claims = new Map<
-      string,
-      {
-        readonly installationId: string;
-        readonly installationName: string;
-        readonly workspaceId: string;
-        readonly priority: number;
-      }
-    >();
-    const installations = await this.#store.listInstallations();
-    for (const installation of installations) {
-      if (installation.status === "destroyed") continue;
-      if (!installationHasClaimablePublicState(installation)) continue;
-      let hosts: readonly string[];
-      try {
-        hosts = await this.#publicHostsForInstallation(installation);
-      } catch (error) {
-        log.warn("deploy_control.public_host_claim_skipped", {
-          installationId: installation.id,
-          workspaceId: installation.workspaceId ?? installation.spaceId,
-          error,
-        });
-        continue;
-      }
-      for (const host of hosts) {
-        const candidate = {
-          installationId: installation.id,
-          installationName: installation.name,
-          workspaceId: installation.workspaceId ?? installation.spaceId,
-          priority: publicHostClaimPriority(installation),
-        };
-        const current = claims.get(host);
-        if (current && current.priority >= candidate.priority) continue;
-        claims.set(host, candidate);
-      }
-    }
-    return claims;
-  }
-
-  async #publicHostsForInstallation(
-    installation: Installation,
-  ): Promise<readonly string[]> {
-    const hosts = new Set<string>();
-    const installConfig = await this.#store.getInstallConfig(
-      installation.installConfigId,
-    );
-    if (installConfig) {
-      for (const host of publicHostsFromInstallExperienceVariables(
-        normalizeVariables(installConfig.variableMapping),
-        installConfig,
-      )) {
-        hosts.add(host);
-      }
-    }
-    const outputSnapshot = await this.#store.getLatestOutputSnapshot(
-      installation.id,
-    );
-    if (outputSnapshot) {
-      for (const host of publicHostsFromOutput(outputSnapshot.publicOutputs)) {
-        hosts.add(host);
-      }
-      for (const host of publicHostsFromOutput(
-        outputSnapshot.workspaceOutputs,
-      )) {
-        hosts.add(host);
-      }
-    }
-    return [...hosts].sort();
   }
 
   async #genericRootDispatchForRequest(

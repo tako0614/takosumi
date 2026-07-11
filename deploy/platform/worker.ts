@@ -47,6 +47,10 @@ import {
   TAKOSUMI_WELL_KNOWN_PATH,
 } from "takosumi-contract/api-surface";
 import type { ActorContext } from "takosumi-contract";
+import type {
+  ManagedPublicHostnameClaimRequest,
+  ManagedPublicHostnameClaimResult,
+} from "takosumi-contract/install-configs";
 import {
   encodeActorContext,
   TAKOSUMI_INTERNAL_ACTOR_HEADER,
@@ -135,6 +139,20 @@ async function takosumiOperationsFor(
   env: PlatformEnv,
 ): Promise<TakosumiOperations> {
   return await deployControlSeam(env).operations();
+}
+
+/**
+ * Composition-root bridge used by hosted operator extensions. It keeps
+ * managed-hostname ownership in the OSS controller without exposing an
+ * internal HTTP route or allowing an extension to reach into core modules.
+ */
+export async function claimPlatformManagedPublicHostname(
+  input: ManagedPublicHostnameClaimRequest,
+  env: object,
+): Promise<ManagedPublicHostnameClaimResult> {
+  return await (
+    await takosumiOperationsFor(env as PlatformEnv)
+  ).claimManagedPublicHostname(input);
 }
 
 const accountsWorker = createCloudflareWorker({

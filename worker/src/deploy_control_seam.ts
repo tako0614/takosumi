@@ -30,7 +30,11 @@ export function createDeployControlService(
 function deployControlServiceOptions(env: CloudflareWorkerEnv): {
   readonly runnerProfiles: readonly RunnerProfile[];
   readonly defaultRunnerProfileId?: string;
+  readonly managedVanityHostnameSlotsPerOwner?: number;
 } {
+  const managedVanityHostnameSlotsPerOwner = nonNegativeInteger(
+    env.TAKOSUMI_MANAGED_VANITY_HOST_SLOTS_PER_OWNER,
+  );
   return {
     runnerProfiles: resolveEnabledRunnerProfilesFromEnv(env),
     ...(typeof env.TAKOSUMI_DEFAULT_RUNNER_PROFILE_ID === "string" &&
@@ -39,7 +43,18 @@ function deployControlServiceOptions(env: CloudflareWorkerEnv): {
           defaultRunnerProfileId: env.TAKOSUMI_DEFAULT_RUNNER_PROFILE_ID.trim(),
         }
       : {}),
+    ...(managedVanityHostnameSlotsPerOwner !== undefined
+      ? { managedVanityHostnameSlotsPerOwner }
+      : {}),
   };
+}
+
+function nonNegativeInteger(value: unknown): number | undefined {
+  if (typeof value !== "string" || !/^\d+$/u.test(value.trim())) {
+    return undefined;
+  }
+  const parsed = Number(value.trim());
+  return Number.isSafeInteger(parsed) ? parsed : undefined;
 }
 
 export function createRunOwnerDeployControlService(
