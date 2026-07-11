@@ -85,20 +85,43 @@ export default function SharesTab(props: { readonly workspaceId: string }) {
   const [sensitiveReason, setSensitiveReason] = createSignal("");
   const [formError, setFormError] = createSignal<string | null>(null);
 
+  // Errored-resource accessors THROW when read, so the supplemental
+  // workspaces / capsules resources (which have no error UI of their own) must
+  // be guarded with `.error` before `workspaces()` / `capsules()` is called.
+  const otherWorkspaces = createMemo(() =>
+    (workspaces.error ? [] : (workspaces() ?? [])).filter(
+      (s) => s.id !== workspaceId(),
+    ),
+  );
+  const producerCapsules = createMemo(() =>
+    capsules.error ? [] : (capsules() ?? []),
+  );
+
   const workspaceName = createMemo(() => {
     const map = new Map<string, string>();
-    for (const s of workspaces() ?? []) map.set(s.id, `@${s.handle}`);
+    for (const s of workspaces.error ? [] : (workspaces() ?? []))
+      map.set(s.id, `@${s.handle}`);
     return map;
   });
 
   const capsuleName = createMemo(() => {
     const map = new Map<string, string>();
-    for (const inst of capsules() ?? []) map.set(inst.id, inst.name);
+    for (const inst of producerCapsules()) map.set(inst.id, inst.name);
     return map;
   });
 
   const create = createAction(async () => {
     setFormError(null);
+    // Validate the selects before POST so a missing target/source is a clear
+    // localized field error, not a raw backend rejection.
+    if (!toWorkspaceId().trim()) {
+      setFormError(t("shares.error.toWorkspaceRequired"));
+      return;
+    }
+    if (!producerCapsuleId().trim()) {
+      setFormError(t("shares.error.producerRequired"));
+      return;
+    }
     const entries = normalizeOutputDrafts(outputs());
     if (entries.length === 0) {
       setFormError(t("shares.error.outputsRequired"));
@@ -311,11 +334,7 @@ export default function SharesTab(props: { readonly workspaceId: string }) {
                     <option value="">
                       {t("shares.create.selectPlaceholder")}
                     </option>
-                    <For
-                      each={(workspaces() ?? []).filter(
-                        (s) => s.id !== workspaceId(),
-                      )}
-                    >
+                    <For each={otherWorkspaces()}>
                       {(workspace) => (
                         <option value={workspace.id}>
                           @{workspace.handle} — {workspace.displayName}
@@ -323,6 +342,20 @@ export default function SharesTab(props: { readonly workspaceId: string }) {
                       )}
                     </For>
                   </Select>
+                  <Show when={workspaces.error}>
+                    <p class="wb-error" role="alert">
+                      {t("shares.create.workspacesError")}
+                    </p>
+                  </Show>
+                  <Show
+                    when={
+                      !workspaces.error &&
+                      !workspaces.loading &&
+                      otherWorkspaces().length === 0
+                    }
+                  >
+                    <p class="muted">{t("shares.create.workspacesEmpty")}</p>
+                  </Show>
                 </FormField>
                 <FormField label={t("shares.create.producer")}>
                   <Select
@@ -334,7 +367,7 @@ export default function SharesTab(props: { readonly workspaceId: string }) {
                     <option value="">
                       {t("shares.create.selectPlaceholder")}
                     </option>
-                    <For each={capsules() ?? []}>
+                    <For each={producerCapsules()}>
                       {(inst) => (
                         <option value={inst.id}>
                           {inst.name} ({inst.environment})
@@ -342,6 +375,20 @@ export default function SharesTab(props: { readonly workspaceId: string }) {
                       )}
                     </For>
                   </Select>
+                  <Show when={capsules.error}>
+                    <p class="wb-error" role="alert">
+                      {t("shares.create.capsulesError")}
+                    </p>
+                  </Show>
+                  <Show
+                    when={
+                      !capsules.error &&
+                      !capsules.loading &&
+                      producerCapsules().length === 0
+                    }
+                  >
+                    <p class="muted">{t("shares.create.capsulesEmpty")}</p>
+                  </Show>
                 </FormField>
               </div>
 
@@ -473,6 +520,16 @@ export default function SharesTab(props: { readonly workspaceId: string }) {
               message={t("common.fetchFailed", {
                 message: (shares.error as ControlApiError).message,
               })}
+              action={
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  type="button"
+                  onClick={() => void refetch()}
+                >
+                  {t("common.retry")}
+                </Button>
+              }
             />
           </Match>
           <Match when={!shares.error}>
@@ -490,7 +547,7 @@ export default function SharesTab(props: { readonly workspaceId: string }) {
                 columns={columns}
                 rows={shares()}
                 rowKey={(share) => share.id}
-                loading={shares.loading}
+                loading={shares.loading && !shares.latest}
                 skeletonRows={3}
               />
             </Show>

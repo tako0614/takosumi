@@ -511,7 +511,7 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).toContain("INSTALLATION_NAME_PATTERN");
     expect(newAppViewSource).toContain('"new.error.nameInvalid"');
     expect(en["new.error.nameInvalid"]).toContain("lowercase");
-    expect(ja["new.error.nameInvalid"]).toContain("半角小文字");
+    expect(ja["new.error.nameInvalid"]).toContain("半角英小文字");
   });
 
   test("duplicate installation errors use typed details before message fallback", () => {

@@ -34,6 +34,7 @@ import {
   providerConnectionTone,
 } from "../../../lib/labels.ts";
 import { useConfirmDialog } from "../../../lib/confirm-dialog.ts";
+import { friendlyError } from "../../../lib/error-copy.ts";
 import {
   INSTALL_RETURN_QUERY_PARAM,
   installReturnContext,
@@ -43,7 +44,6 @@ import {
 } from "../../../lib/install-return-context.ts";
 import {
   type Connection,
-  type ControlApiError,
   type ProviderConnection,
   createConnection,
   listProviderConnections,
@@ -88,6 +88,25 @@ function providerConnectionProviderLabel(
   );
 }
 
+/**
+ * Maps a known Cloudflare-OAuth callback failure code (`missing_code` /
+ * `oauth_failed` / `forbidden`, per the account-plane redirect) to a localized
+ * hint. Unknown codes fall back to the generic sentence; the raw code always
+ * rides along in a folded detail area so support can still see it.
+ */
+function oauthErrorHint(code: string): string | null {
+  switch (code) {
+    case "missing_code":
+      return t("conn.oauth.error.missingCode");
+    case "forbidden":
+      return t("conn.oauth.error.forbidden");
+    case "oauth_failed":
+      return t("conn.oauth.error.oauthFailed");
+    default:
+      return null;
+  }
+}
+
 export default function ConnectionsTab(props: {
   readonly workspaceId: string;
 }) {
@@ -107,7 +126,12 @@ export default function ConnectionsTab(props: {
   const [createFormOpen, setCreateFormOpen] = createSignal(
     Boolean(installReturn),
   );
-  const hasProviderConnections = () => (providerConnections() ?? []).length > 0;
+  // An errored resource THROWS on read; every data read goes through this
+  // guarded accessor so a failed list surfaces the error toast below instead
+  // of crashing the tab (mirrors RunsListView / RunGroupView).
+  const providerConnectionRows = (): readonly ProviderConnection[] =>
+    providerConnections.error ? [] : (providerConnections.latest ?? []);
+  const hasProviderConnections = () => providerConnectionRows().length > 0;
   const shouldShowCreateForm = () => createFormOpen();
 
   const refreshConnections = async () => {
@@ -229,6 +253,10 @@ export default function ConnectionsTab(props: {
   const [oauthNotice, setOauthNotice] = createSignal<
     { kind: "ok" } | { kind: "error"; code: string } | null
   >(null);
+  const oauthErrorCode = (): string => {
+    const notice = oauthNotice();
+    return notice && notice.kind === "error" ? notice.code : "";
+  };
   if (typeof window !== "undefined") {
     const params = new URLSearchParams(window.location.search);
     if (params.get("connected")) {
@@ -427,8 +455,13 @@ export default function ConnectionsTab(props: {
         if (isLastCreated) setLastCreatedVerifiedHint(true);
       }
     } catch (e) {
+      // Raw server / exception text (English internals, HTTP status) never
+      // becomes the headline — friendlyError localizes it and the raw text
+      // rides along as folded detail only.
+      const friendly = friendlyError(e, t);
       setTestError(id, {
-        message: e instanceof Error ? e.message : String(e),
+        message: friendly.message,
+        detail: friendly.detail,
       });
     } finally {
       setTestBusy(id, false);
@@ -455,7 +488,7 @@ export default function ConnectionsTab(props: {
   });
 
   const providerConnectionForConnectionId = (connectionId: string | null) =>
-    (providerConnections() ?? []).find(
+    providerConnectionRows().find(
       (connection) => connection.id === connectionId,
     );
   const lastCreatedProviderConnection = () =>
@@ -468,11 +501,17 @@ export default function ConnectionsTab(props: {
   const confirmRemoveProviderConnection = async (
     connection: ProviderConnection,
   ) => {
+    // Same name fallback as the list row: never a raw conn_… id, and an
+    // empty-string displayName must not slip through `??` and render 「」.
+    const name =
+      connection.displayName || providerConnectionProviderLabel(connection);
     const ok = await confirm({
       title: t("conn.remove.confirmTitle"),
-      message: t("conn.remove.confirmMessage", {
-        name: connection.displayName ?? connection.id,
-      }),
+      // Warn that live Capsules' ProviderBindings referencing this connection
+      // will fail their next Run (provider_connection_setup_required).
+      message: `${t("conn.remove.confirmMessage", { name })} ${t(
+        "conn.remove.bindingWarning",
+      )}`,
       confirmText: t("common.delete"),
       danger: true,
     });
@@ -482,7 +521,7 @@ export default function ConnectionsTab(props: {
 
   const providerConnectionList = () => (
     <ul class="wc-conn-list">
-      <For each={providerConnections() ?? []}>
+      <For each={providerConnectionRows()}>
         {(connection) => (
           <li class="wc-conn-row">
             <div class="wc-conn-head">
@@ -534,7 +573,10 @@ export default function ConnectionsTab(props: {
                   {failure().message}
                   <Show when={failure().detail}>
                     {(detail) => (
-                      <span class="wc-conn-test-detail">{detail()}</span>
+                      <details class="wc-conn-test-detail">
+                        <summary>{t("common.details")}</summary>
+                        {detail()}
+                      </details>
                     )}
                   </Show>
                 </Toast>
@@ -556,7 +598,21 @@ export default function ConnectionsTab(props: {
               <Toast tone="success">{t("conn.oauth.connected")}</Toast>
             </Match>
             <Match when={notice().kind === "error"}>
-              <Toast tone="error">{t("conn.oauth.failed")}</Toast>
+              <Toast tone="error">
+                <span class="wc-inline-feedback">
+                  <span>
+                    {oauthErrorHint(oauthErrorCode()) ?? t("conn.oauth.failed")}
+                  </span>
+                  <Show when={oauthErrorCode()}>
+                    {(code) => (
+                      <details class="wc-conn-test-detail">
+                        <summary>{t("common.details")}</summary>
+                        {t("conn.oauth.errorCode", { code: code() })}
+                      </details>
+                    )}
+                  </Show>
+                </span>
+              </Toast>
             </Match>
           </Switch>
         )}
@@ -654,7 +710,7 @@ export default function ConnectionsTab(props: {
         )}
       </Show>
 
-      <Show when={(providerConnections() ?? []).length > 0}>
+      <Show when={providerConnectionRows().length > 0}>
         <div class="wc-stack-sm">
           <Show when={!createFormOpen()}>
             <div class="wc-card-action-row">
@@ -698,11 +754,24 @@ export default function ConnectionsTab(props: {
         />
       </Show>
       <Show when={providerConnections.error}>
-        <Toast tone="error">
-          {t("common.fetchFailed", {
-            message: (providerConnections.error as ControlApiError).message,
-          })}
-        </Toast>
+        {(error) => {
+          const friendly = friendlyError(error(), t);
+          return (
+            <Toast tone="error">
+              <span class="wc-inline-feedback">
+                <span>{friendly.message}</span>
+                <Show when={friendly.detail}>
+                  {(detail) => (
+                    <details class="wc-conn-test-detail">
+                      <summary>{t("common.details")}</summary>
+                      {detail()}
+                    </details>
+                  )}
+                </Show>
+              </span>
+            </Toast>
+          );
+        }}
       </Show>
 
       {/* ----- register form ----- */}
@@ -1108,7 +1177,9 @@ export default function ConnectionsTab(props: {
         </Card>
       </Show>
 
-      <Show when={providerConnections.loading}>
+      {/* First-load skeleton only — refetch after create/test/revoke keeps the
+          list rendered instead of flashing two skeleton cards each time. */}
+      <Show when={providerConnections.loading && !providerConnections.latest}>
         <Skeleton variant="card" count={2} />
       </Show>
     </div>

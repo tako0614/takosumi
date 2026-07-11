@@ -64,7 +64,14 @@ export default function WorkspaceSwitcher(props: Props = {}) {
     listWorkspacesCached({ selectedWorkspaceId: currentWorkspaceId() }),
   );
   const [switcherOpen, setSwitcherOpen] = createSignal(false);
-  const loadedWorkspaces = createMemo(() => workspaces() ?? []);
+  // Reading an errored createResource THROWS. This switcher is mounted in BOTH
+  // the sidebar and the topbar, so an unguarded read would take the whole
+  // chrome down on every page when the workspace list fails (and its written
+  // error UI below would never render). Guard on `.error` and fall back to the
+  // last-known list — mirrors RunsListView / ActivityView.
+  const loadedWorkspaces = createMemo(() =>
+    workspaces.error ? [] : (workspaces.latest ?? []),
+  );
   const selectedWorkspaceId = createMemo(() =>
     selectAvailableWorkspaceId(currentWorkspaceId(), loadedWorkspaces()),
   );
@@ -248,11 +255,15 @@ export default function WorkspaceSwitcher(props: Props = {}) {
         <Show
           when={!workspaces.loading && loadedWorkspaces().length > 0}
           fallback={
-            <span class="topbar-workspace-empty">
-              {workspaces.loading
-                ? t("workspace.loading")
-                : t("workspace.none")}
-            </span>
+            // On error, suppress the "no workspaces" text — the error line
+            // below states what actually happened instead of implying empty.
+            <Show when={!workspaces.error}>
+              <span class="topbar-workspace-empty">
+                {workspaces.loading
+                  ? t("workspace.loading")
+                  : t("workspace.none")}
+              </span>
+            </Show>
           }
         >
           <div class="topbar-workspace-picker">
@@ -277,14 +288,22 @@ export default function WorkspaceSwitcher(props: Props = {}) {
                 {selectedWorkspaceName()}
               </span>
               <Show when={loadedWorkspaces().length > 1}>
-                <ChevronsUpDown class="topbar-workspace-caret" size={15} />
+                <ChevronsUpDown
+                  class="topbar-workspace-caret"
+                  size={15}
+                  aria-hidden="true"
+                />
               </Show>
             </button>
             <Show when={switcherOpen()}>
               <div
                 class="topbar-workspace-menu"
                 id={switcherId()}
-                role="menu"
+                // The inline create <form> is invalid content for role="menu"
+                // (menus allow only menuitem-family children); while it is open
+                // present the popover as a dialog instead. The menu's roving
+                // model already stands down inside the create form.
+                role={createOpen() ? "dialog" : "menu"}
                 aria-labelledby={`${switcherId()}-label`}
                 ref={menuRef}
                 onKeyDown={onMenuKeyDown}
@@ -319,7 +338,11 @@ export default function WorkspaceSwitcher(props: Props = {}) {
                             {workspaceName(workspace)}
                           </span>
                           <Show when={workspace.id === selectedWorkspaceId()}>
-                            <Check class="topbar-workspace-check" size={16} />
+                            <Check
+                              class="topbar-workspace-check"
+                              size={16}
+                              aria-hidden="true"
+                            />
                           </Show>
                         </button>
                       </li>
@@ -335,7 +358,7 @@ export default function WorkspaceSwitcher(props: Props = {}) {
                       class="topbar-workspace-settings"
                       onClick={() => setCreateOpen(true)}
                     >
-                      <Plus size={15} />
+                      <Plus size={15} aria-hidden="true" />
                       <span>{t("workspace.start.create")}</span>
                     </button>
                   }
@@ -413,7 +436,7 @@ export default function WorkspaceSwitcher(props: Props = {}) {
                   role="menuitem"
                   onClick={() => setSwitcherOpen(false)}
                 >
-                  <Settings size={15} />
+                  <Settings size={15} aria-hidden="true" />
                   <span>{t("workspace.settings")}</span>
                 </A>
               </div>
@@ -423,11 +446,20 @@ export default function WorkspaceSwitcher(props: Props = {}) {
       </div>
 
       <Show when={workspaces.error}>
-        <span class="topbar-workspace-error" role="alert">
-          {t("workspace.loadFailed", {
-            message: (workspaces.error as ControlApiError).message,
-          })}
-        </span>
+        <div class="topbar-workspace-error" role="alert">
+          <span>
+            {t("workspace.loadFailed", {
+              message: (workspaces.error as ControlApiError).message,
+            })}
+          </span>
+          <button
+            type="button"
+            class="topbar-workspace-retry"
+            onClick={() => void refetch()}
+          >
+            {t("common.retry")}
+          </button>
+        </div>
       </Show>
     </div>
   );

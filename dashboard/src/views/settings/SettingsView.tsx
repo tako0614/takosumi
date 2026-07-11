@@ -14,7 +14,14 @@ import {
   UserCircle2,
   Wrench,
 } from "lucide-solid";
-import { createMemo, createResource, Show, type JSX } from "solid-js";
+import {
+  createMemo,
+  createResource,
+  Match,
+  Show,
+  Switch,
+  type JSX,
+} from "solid-js";
 import Page from "../account/components/auth/Page.tsx";
 import PageHeader from "../../components/ui/PageHeader.tsx";
 import { Badge, Button, Card } from "../../components/ui/index.ts";
@@ -71,7 +78,7 @@ function LinkRow(props: { readonly link: SettingsLink }): JSX.Element {
 /** Live plan & payment strip. Hidden on self-host with billing disabled and
  * no subscription — there is nothing to pay there. */
 function BillingSummary(): JSX.Element {
-  const [billing] = createResource(
+  const [billing, { refetch: refetchBilling }] = createResource(
     () => currentWorkspaceId() || undefined,
     getWorkspaceBilling,
   );
@@ -94,13 +101,19 @@ function BillingSummary(): JSX.Element {
     const status = subscription()?.status;
     return status !== undefined && NEEDS_ATTENTION_STATUSES.has(status);
   };
-  const visible = createMemo(
-    () =>
-      billing() !== undefined &&
+  // A failed getWorkspaceBilling must not crash the whole /settings hub (a
+  // primary nav tab): guard `billing.error` BEFORE reading `billing()`, whose
+  // accessor THROWS while the resource is errored.
+  const visible = createMemo(() => {
+    if (billing.error) return false;
+    const data = billing();
+    return (
+      data !== undefined &&
       (isTakosumiCloudRuntime() ||
-        (billing()?.settings?.mode ?? "disabled") !== "disabled" ||
-        subscription() !== undefined),
-  );
+        (data.settings?.mode ?? "disabled") !== "disabled" ||
+        data.subscription !== undefined)
+    );
+  });
   const statusLabel = () => {
     const status = subscription()?.status;
     if (!status) return t("billing.balance.ready");
@@ -108,9 +121,34 @@ function BillingSummary(): JSX.Element {
     return t(key) === key ? status : t(key);
   };
   return (
-    <Show when={visible()}>
-      <Card class="settings-billing-summary">
-        <div class="settings-billing-row">
+    <Switch>
+      <Match when={billing.error}>
+        <Card class="settings-billing-summary">
+          <div class="settings-billing-row">
+            <span class="settings-link-icon" aria-hidden="true">
+              <CreditCard size={20} />
+            </span>
+            <div class="settings-link-text">
+              <span class="settings-link-title">
+                {t("settings.billing.title")}
+              </span>
+              <span class="settings-link-desc">
+                {t("settings.billingSummary.error")}
+              </span>
+            </div>
+            <Button
+              variant="secondary"
+              type="button"
+              onClick={() => void refetchBilling()}
+            >
+              {t("common.retry")}
+            </Button>
+          </div>
+        </Card>
+      </Match>
+      <Match when={visible()}>
+        <Card class="settings-billing-summary">
+          <div class="settings-billing-row">
           <span class="settings-link-icon" aria-hidden="true">
             <CreditCard size={20} />
           </span>
@@ -142,8 +180,9 @@ function BillingSummary(): JSX.Element {
               : t("settings.billingSummary.manage")}
           </Button>
         </div>
-      </Card>
-    </Show>
+        </Card>
+      </Match>
+    </Switch>
   );
 }
 

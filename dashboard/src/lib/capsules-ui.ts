@@ -184,12 +184,18 @@ export function releaseActivationStatusForDeployment(
     ? releaseActivationActionStatus(event.action)
     : undefined;
   if (eventStatus) return eventStatus;
-  return Object.prototype.hasOwnProperty.call(
-    deployment.outputsPublic,
-    "takosumi_release",
-  )
-    ? "pending"
-    : "not_required";
+  if (
+    !Object.prototype.hasOwnProperty.call(
+      deployment.outputsPublic,
+      "takosumi_release",
+    )
+  ) {
+    return "not_required";
+  }
+  // A `takosumi_release` deployment stays non-openable (pending) until its
+  // matching activation reaches release_activation.succeeded — a release URL is
+  // never exposed on unconfirmed activation.
+  return "pending";
 }
 
 /**
@@ -214,7 +220,14 @@ export function deploymentReadinessAfterApply(
   }
 }
 
-export function isDeploymentPubliclyOpenable(
+/**
+ * Canonical "is this deployment's app surface openable right now" gate, shared
+ * by the launcher tile, the service detail, and RunView. A `takosumi_release`
+ * deployment is openable only once its activation reaches
+ * release_activation.succeeded; everything else opens when activation is
+ * not required.
+ */
+export function isDeploymentOpenable(
   deployment: LaunchableDeployment | undefined,
   events: readonly ActivityEvent[] = [],
   capsuleId?: string,
@@ -234,7 +247,7 @@ export function launchUrlFromDeployment(
   capsuleId?: string,
 ): string | undefined {
   if (!deployment) return undefined;
-  if (!isDeploymentPubliclyOpenable(deployment, events, capsuleId)) {
+  if (!isDeploymentOpenable(deployment, events, capsuleId)) {
     return undefined;
   }
   return launchUrlFromOutputs(deployment.outputsPublic);
@@ -514,9 +527,12 @@ export function appSurfacesFromDeployment(
   capsuleId?: string,
 ): AppSurface[] {
   const surfaces = appSurfacesFromOutputs(deployment.outputsPublic);
-  if (isDeploymentPubliclyOpenable(deployment, events, capsuleId)) {
+  if (isDeploymentOpenable(deployment, events, capsuleId)) {
     return surfaces;
   }
+  // Not openable yet (activation pending / failed): keep the tile but strip the
+  // live URL so it falls back to the service screen instead of a link that
+  // 404s — matching the detail + run gating.
   return surfaces.map((surface) => ({ ...surface, url: undefined }));
 }
 

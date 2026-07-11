@@ -9,6 +9,7 @@ import {
   useParams,
 } from "@solidjs/router";
 import { installStaleAssetReload } from "./lib/chunk-reload.ts";
+import ErrorBoundary from "./components/ErrorBoundary.tsx";
 import "./lib/theme.ts";
 
 // Web fonts referenced by the design tokens (`--tg-font-body` / `--tg-font-mono`).
@@ -284,4 +285,11 @@ function App() {
 
 const root = document.getElementById("root");
 if (!root) throw new Error("dashboard mount target #root not found");
-render(() => <App />, root);
+render(
+  () => (
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
+  ),
+  root,
+);

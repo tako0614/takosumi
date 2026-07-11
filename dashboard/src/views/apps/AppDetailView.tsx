@@ -25,7 +25,7 @@ import {
   Show,
   Switch,
 } from "solid-js";
-import { A, useNavigate, useParams } from "@solidjs/router";
+import { A, useBeforeLeave, useNavigate, useParams } from "@solidjs/router";
 import {
   Archive,
   ArrowLeft,
@@ -44,7 +44,7 @@ import Page from "../account/components/auth/Page.tsx";
 import {
   type BackupRecord,
   type ActivityEvent,
-  type ControlApiError,
+  ControlApiError,
   type InstallConfig,
   type CapsuleProviderConnectionBinding,
   type CapsuleProviderConnectionBindings,
@@ -85,7 +85,7 @@ import {
   type ConfigVariableRow,
   configRowsFromInstallConfig,
   effectiveCapsuleStatus,
-  isDeploymentPubliclyOpenable,
+  isDeploymentOpenable,
   isUrlString,
   launchUrlFromDeployment,
   publicLinkRowLabels,
@@ -119,6 +119,8 @@ import {
 import { clearCapsuleListCache } from "../../lib/capsule-list.ts";
 import { clearCurrentStateVersionCache } from "../../lib/current-state-versions.ts";
 import { clearDashboardOverviewCache } from "../../lib/dashboard-overview.ts";
+import { friendlyError } from "../../lib/error-copy.ts";
+import { useConfirmDialog } from "../../lib/confirm-dialog.ts";
 
 type TabId = "overview" | "deploys" | "settings" | "danger";
 
@@ -126,22 +128,49 @@ export default function AppDetailView() {
   return <Page title={t("app.capsuleSub")}>{() => <Inner />}</Page>;
 }
 
+/** True only when the capsule fetch failed because it genuinely does not exist
+ * — anything else (network, 5xx, auth hiccup) is transient and must offer a
+ * retry, not the "not found" empty state (mirrors RunView.isRunNotFound). */
+function isCapsuleNotFound(error: unknown): boolean {
+  return (
+    error instanceof ControlApiError &&
+    (error.status === 404 || error.code === "not_found")
+  );
+}
+
 function Inner() {
   const params = useParams();
   const navigate = useNavigate();
   const capsuleId = () => params.id ?? "";
-  const tab = (): TabId => {
-    const raw = params.tab;
-    return raw === "deploys" || raw === "settings" || raw === "danger"
-      ? raw
-      : "overview";
-  };
 
   const [capsule, { refetch: refetchCapsule }] = createResource(
     capsuleId,
     getCapsule,
   );
-  const workspaceId = () => capsule()?.workspaceId;
+  // Last-good capsule value that NEVER throws. Reading an errored resource
+  // (`capsuleData()`) throws, so a transient refetch failure — e.g. the GET that a
+  // config save or auto-update toggle triggers — would otherwise tear the whole
+  // view (and any unsaved settings edits) down. Every render-path read uses
+  // this; the Switch below shows the error EmptyState only on a FIRST-load
+  // failure (`!capsule.latest`) and otherwise keeps the last-good content with
+  // an inline refetch-failed notice.
+  const capsuleData = () => capsule.latest;
+  const tab = (): TabId => {
+    const raw = params.tab;
+    const resolved =
+      raw === "deploys" || raw === "settings" || raw === "danger"
+        ? raw
+        : "overview";
+    // A destroyed service has no delete action — the 削除 tab is hidden from
+    // the strip, so a direct /danger URL falls back to overview instead of
+    // rendering a dead 削除の確認 CTA. `.latest` never throws (unlike a read of
+    // an errored resource).
+    if (resolved === "danger" && capsule.latest?.status === "destroyed") {
+      return "overview";
+    }
+    return resolved;
+  };
+  const workspaceId = () => capsuleData()?.workspaceId;
   const settingsCapsuleId = () => (tab() === "settings" ? capsuleId() : null);
   const settingsWorkspaceId = () =>
     tab() === "settings" ? (workspaceId() ?? null) : null;
@@ -149,14 +178,14 @@ function Inner() {
   const graphWorkspaceId = () =>
     tab() === "overview" ? (workspaceId() ?? null) : null;
   const currentStateVersionId = () =>
-    capsule()?.currentStateVersionId ?? capsule()?.currentDeploymentId ?? null;
+    capsuleData()?.currentStateVersionId ?? capsuleData()?.currentDeploymentId ?? null;
   const [profile, { refetch: refetchProfile }] = createResource(
     settingsCapsuleId,
     getCapsuleProviderConnectionSet,
   );
   // Fetched on every tab (not just settings): the header shows the store
   // display name, which lives on the install config's store metadata.
-  const installConfigId = () => capsule()?.installConfigId ?? null;
+  const installConfigId = () => capsuleData()?.installConfigId ?? null;
   const [installConfig, { refetch: refetchInstallConfig }] = createResource(
     installConfigId,
     getInstallConfig,
@@ -187,19 +216,42 @@ function Inner() {
   const [activity] = createResource(activityWorkspaceId, (id) =>
     listActivity(id, 100),
   );
+  // Secondary-resource reads are guarded with `.error` first: reading an
+  // errored resource THROWS, and a transient failure of any of these
+  // supplemental fetches (activity / sources / graph / deployments / current
+  // state version) must degrade to its own inline/empty state — never
+  // white-screen the whole detail view. The primary `capsule` resource keeps
+  // the load/notFound handling in the outer Switch.
+  const activityEvents = createMemo(() =>
+    activity.error ? [] : (activity() ?? []),
+  );
+  const sourceList = () => (sources.error ? [] : (sources() ?? []));
+  const graphData = () => (graph.error ? undefined : graph());
+  const deploymentList = () =>
+    deployments.error ? [] : (deployments() ?? []);
+  const currentStateVersionValue = () =>
+    currentStateVersion.error ? undefined : currentStateVersion();
+  // Guarded settings-tab inputs: a failed secondary fetch degrades the
+  // field (config not-ready / no bindings) instead of crashing the tab.
+  const settingsInstallConfig = () =>
+    installConfig.error ? undefined : installConfig();
+  const settingsProfileBindings = () =>
+    profile.error ? undefined : profile()?.bindings;
+  const settingsProviderConnections = () =>
+    providerConnections.error ? [] : (providerConnections() ?? []);
 
   const source = createMemo(() =>
-    (sources() ?? []).find((item) => item.id === capsule()?.sourceId),
+    sourceList().find((item) => item.id === capsuleData()?.sourceId),
   );
   const producers = createMemo(() =>
-    dependencyRows(capsule(), graph(), "producer"),
+    dependencyRows(capsuleData(), graphData(), "producer"),
   );
   const consumers = createMemo(() =>
-    dependencyRows(capsule(), graph(), "consumer"),
+    dependencyRows(capsuleData(), graphData(), "consumer"),
   );
 
   createEffect(() => {
-    const inst = capsule();
+    const inst = capsuleData();
     if (inst) {
       setDocumentTitle(displayName() ?? inst.name);
       return;
@@ -210,16 +262,16 @@ function Inner() {
   });
 
   const deploymentHistory = createMemo(() =>
-    [...(deployments() ?? [])].sort((a, b) =>
+    [...deploymentList()].sort((a, b) =>
       b.createdAt.localeCompare(a.createdAt),
     ),
   );
   const currentDeployment = createMemo(() => {
-    const current = currentStateVersion();
+    const current = currentStateVersionValue();
     if (current) return current;
     const list = deploymentHistory();
     const currentId =
-      capsule()?.currentStateVersionId ?? capsule()?.currentDeploymentId;
+      capsuleData()?.currentStateVersionId ?? capsuleData()?.currentDeploymentId;
     return (
       (currentId && list.find((d) => d.id === currentId)) ||
       list[0] ||
@@ -238,26 +290,22 @@ function Inner() {
   const releaseActivationStatus = createMemo(() =>
     releaseActivationStatusForDeployment(
       currentDeployment(),
-      activity() ?? [],
+      activityEvents(),
       capsuleId(),
     ),
   );
   const serviceOpenable = createMemo(
     () =>
-      capsule()?.status !== "destroyed" &&
-      isDeploymentPubliclyOpenable(
-        currentDeployment(),
-        activity() ?? [],
-        capsuleId(),
-      ),
+      capsuleData()?.status !== "destroyed" &&
+      isDeploymentOpenable(currentDeployment(), activityEvents(), capsuleId()),
   );
   const launchUrl = createMemo(() =>
-    launchUrlFromDeployment(currentDeployment(), activity() ?? [], capsuleId()),
+    launchUrlFromDeployment(currentDeployment(), activityEvents(), capsuleId()),
   );
 
   /** Recent run/release events for THIS app (activity carries metadata.capsuleId). */
   const recentActivity = createMemo(() =>
-    (activity() ?? [])
+    activityEvents()
       .filter(
         (event) =>
           activityBelongsToCapsule(event, capsuleId()) &&
@@ -281,7 +329,7 @@ function Inner() {
     if (runId) navigate(`/runs/${runId}?auto=update`);
   });
   const autoUpdateToggle = createAction(async () => {
-    await setCapsuleAutoUpdate(capsuleId(), capsule()?.autoUpdate !== true);
+    await setCapsuleAutoUpdate(capsuleId(), capsuleData()?.autoUpdate !== true);
     await refetchCapsule();
   });
   // Per-app showback: rendered only when usage was actually recorded, so
@@ -290,7 +338,7 @@ function Inner() {
     getCapsuleUsageSummary(id).catch(() => undefined),
   );
   const destroyPlan = createAction(async () => {
-    const workspace = capsule()?.workspaceId;
+    const workspace = capsuleData()?.workspaceId;
     const envelope = await deleteCapsule(capsuleId());
     const runId = extractRunId(envelope);
     if (workspace) {
@@ -313,7 +361,7 @@ function Inner() {
     if (runId) navigate(`/runs/${runId}`);
   });
 
-  const serviceLabel = () => displayName() ?? capsule()?.name ?? "";
+  const serviceLabel = () => displayName() ?? capsuleData()?.name ?? "";
 
   const tabItems = () => {
     const base = `/services/${encodeURIComponent(capsuleId())}`;
@@ -322,7 +370,7 @@ function Inner() {
       { href: `${base}/deploys`, label: t("app.tab.deploys") },
       { href: `${base}/settings`, label: t("app.tab.settings") },
     ];
-    if (capsule()?.status !== "destroyed") {
+    if (capsuleData()?.status !== "destroyed") {
       items.push({ href: `${base}/danger`, label: t("app.tab.danger") });
     }
     return items;
@@ -331,29 +379,64 @@ function Inner() {
   return (
     <>
       <Switch>
-        <Match when={capsule.loading}>
+        {/* First load ONLY — every auto-update toggle and every config/profile
+            save refetches the capsule, and `resource.loading` is true during
+            those refetches too. Remounting the whole view for a skeleton on
+            each would evict focus and re-seed the settings editors, silently
+            discarding the sibling form's unsaved edits. Keep rendering
+            `.latest` during refetches (mirrors RunView). */}
+        <Match when={capsule.loading && !capsule.latest}>
           <Card>
             <Skeleton variant="block" />
           </Card>
         </Match>
-        <Match when={capsule.error}>
-          <EmptyState
-            title={t("app.notFound")}
-            message={(capsule.error as ControlApiError).message}
-            action={
-              <Button
-                variant="secondary"
-                href="/"
-                icon={<ArrowLeft size={16} />}
-              >
-                {t("app.backToList")}
-              </Button>
+        <Match when={capsule.error && !capsule.latest}>
+          {/* FIRST-load failure only. A failed REFETCH of an already-loaded
+              capsule keeps the last-good content (below) + an inline notice so
+              unsaved settings edits are never torn down. Split a genuine 404
+              (the service is gone) from a transient network / 5xx failure,
+              which must offer a retry rather than masquerading as "見つかりません". */}
+          <Show
+            when={isCapsuleNotFound(capsule.error)}
+            fallback={
+              <EmptyState
+                title={t("app.loadFailedTitle")}
+                message={friendlyError(capsule.error, t).message}
+                action={
+                  <Button
+                    variant="secondary"
+                    type="button"
+                    onClick={() => void refetchCapsule()}
+                  >
+                    {t("common.retry")}
+                  </Button>
+                }
+              />
             }
-          />
+          >
+            <EmptyState
+              title={t("app.notFound")}
+              message={t("app.notFoundMessage")}
+              action={
+                <Button
+                  variant="secondary"
+                  href="/"
+                  icon={<ArrowLeft size={16} />}
+                >
+                  {t("app.backToList")}
+                </Button>
+              }
+            />
+          </Show>
         </Match>
-        <Match when={capsule()}>
+        <Match when={capsuleData()}>
           {(inst) => (
             <>
+              {/* A background refetch failed but we still have last-good data:
+                  keep the screen (and unsaved edits) and just say so. */}
+              <Show when={capsule.error}>
+                <Toast tone="error">{t("app.refreshFailed")}</Toast>
+              </Show>
               <PageHeader
                 eyebrow={t("app.capsuleSub")}
                 title={
@@ -433,13 +516,18 @@ function Inner() {
                     {t("app.setupIncomplete.body")}
                   </p>
                   <div class="av-actions">
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      href={`/services/${encodeURIComponent(capsuleId())}/deploys`}
-                    >
-                      {t("app.setupIncomplete.review")}
-                    </Button>
+                    {/* Hide the 更新タブへ button when already on the 更新
+                        (deploys) tab — otherwise it is a self-link that goes
+                        nowhere. */}
+                    <Show when={tab() !== "deploys"}>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        href={`/services/${encodeURIComponent(capsuleId())}/deploys`}
+                      >
+                        {t("app.setupIncomplete.review")}
+                      </Button>
+                    </Show>
                     <Button
                       variant="danger"
                       size="sm"
@@ -533,11 +621,11 @@ function Inner() {
                     </Card>
                     <SettingsTab
                       source={source()}
-                      installConfig={installConfig()}
+                      installConfig={settingsInstallConfig()}
                       installConfigLoading={installConfig.loading}
                       sourceLoading={sources.loading}
-                      providerConnections={profile()?.bindings}
-                      availableProviderConnections={providerConnections() ?? []}
+                      providerConnections={settingsProfileBindings()}
+                      availableProviderConnections={settingsProviderConnections()}
                       capsuleId={capsuleId()}
                       deploysHref={`/services/${encodeURIComponent(capsuleId())}/deploys`}
                       onSaved={(scope) =>
@@ -611,6 +699,11 @@ function UsageAmount(props: { readonly micros: number }): JSX.Element {
       title={subCent() ? formatUsdMicros(props.micros) : undefined}
     >
       {subCent() ? t("app.usage.subCent") : formatUsdMicros(props.micros)}
+      {/* The exact sub-cent amount is otherwise title-only (unreachable to
+          screen readers) — expose it as off-screen text. */}
+      <Show when={subCent()}>
+        <span class="sr-only"> ({formatUsdMicros(props.micros)})</span>
+      </Show>
     </span>
   );
 }
@@ -693,7 +786,9 @@ function OverviewTab(props: {
         />
         <Switch>
           <Match when={props.outputsLoading}>
-            <p class="muted">{t("common.loading")}</p>
+            {/* Shape-matched placeholder (the links render as a KVList) rather
+                than a bare "読み込み中…" line that reflows on load. */}
+            <Skeleton variant="row" count={2} />
           </Match>
           <Match when={props.outputsError}>
             <p class="wa-error" role="alert">
@@ -913,7 +1008,8 @@ function DeploysTab(props: {
           <summary>{t("app.deploys.title")}</summary>
           <Switch>
             <Match when={props.loading}>
-              <p class="muted">{t("common.loading")}</p>
+              {/* Shape-matched rows rather than a bare "読み込み中…" line. */}
+              <Skeleton variant="row" count={3} />
             </Match>
             <Match when={props.error}>
               <p class="wa-error">
@@ -947,7 +1043,11 @@ function DeploysTab(props: {
                         </Show>
                         <Show when={!isCurrent()}>
                           <details class="wb-inline-details">
-                            <summary>{t("app.deploys.restoreMenu")}</summary>
+                            {/* Self-descriptive disclosure label: the bare
+                                "その他" hid the restore action entirely. */}
+                            <summary>
+                              {t("app.deploys.restoreDisclosure")}
+                            </summary>
                             <Button
                               variant="secondary"
                               size="sm"
@@ -1314,11 +1414,41 @@ function SettingsTab(props: {
   // the stale success note above the new error.
   const [configSavedNote, setConfigSavedNote] = createSignal(false);
   const [profileSavedNote, setProfileSavedNote] = createSignal(false);
+  // Provider-binding rows have no per-row dirty flag (unlike config rows), so
+  // track binding edits explicitly for the navigation-away guard below.
+  const [profileDirty, setProfileDirty] = createSignal(false);
+  const { confirm } = useConfirmDialog();
 
   createEffect(() => {
     const providerConnections = props.providerConnections;
     if (!providerConnections) return;
     setRows(providerConnections.map(providerConnectionToRow));
+    // Reseeding from a fresh fetch (initial load or post-save refetch) is the
+    // clean baseline — clear the dirty flag.
+    setProfileDirty(false);
+  });
+
+  // The settings tab holds unsaved edits in plain signals; navigating away
+  // (tab strip, header link, back) would silently discard them. Warn first,
+  // and only proceed if the user confirms (mirrors the destructive-confirm
+  // grammar used elsewhere).
+  const isDirty = () =>
+    profileDirty() ||
+    variableRows().some(
+      (row) => row.dirty || row.deleted === true || row.resetToDefault,
+    );
+  useBeforeLeave((event) => {
+    if (event.defaultPrevented || !isDirty()) return;
+    event.preventDefault();
+    void (async () => {
+      const proceed = await confirm({
+        title: t("app.settings.leaveConfirm.title"),
+        message: t("app.settings.leaveConfirm.body"),
+        confirmText: t("app.settings.leaveConfirm.confirm"),
+        cancelText: t("common.cancel"),
+      });
+      if (proceed) event.retry(true);
+    })();
   });
 
   // Seed ONLY from the install config. configRowsFromInstallConfig localizes
@@ -1339,10 +1469,12 @@ function SettingsTab(props: {
   const update = (
     index: number,
     patch: Partial<CapsuleProviderConnectionRow>,
-  ) =>
+  ) => {
+    setProfileDirty(true);
     setRows((prev) =>
       prev.map((row, i) => (i === index ? { ...row, ...patch } : row)),
     );
+  };
   // User edits mark the row dirty — buildConfigVariablePatch writes ONLY dirty
   // rows, so a no-edit save can never pin listing defaults / "" / false / null
   // over the module's own HCL defaults. Editing also cancels a pending リセット.
@@ -1619,11 +1751,12 @@ function SettingsTab(props: {
                             variant="ghost"
                             size="sm"
                             type="button"
-                            onClick={() =>
+                            onClick={() => {
+                              setProfileDirty(true);
                               setRows((prev) =>
                                 prev.filter((_, i) => i !== index),
-                              )
-                            }
+                              );
+                            }}
                           >
                             {t("app.bindings.remove")}
                           </Button>
@@ -1642,6 +1775,7 @@ function SettingsTab(props: {
                               placeholder={t(
                                 "app.bindings.providerPlaceholder",
                               )}
+                              aria-label={t("app.bindings.providerLabel")}
                             />
                             <Input
                               value={row().alias}
@@ -1651,6 +1785,7 @@ function SettingsTab(props: {
                                 })
                               }
                               placeholder={t("app.bindings.aliasPlaceholder")}
+                              aria-label={t("app.bindings.aliasLabel")}
                             />
                           </div>
                         </details>
@@ -1663,7 +1798,8 @@ function SettingsTab(props: {
                 <Button
                   variant="secondary"
                   type="button"
-                  onClick={() =>
+                  onClick={() => {
+                    setProfileDirty(true);
                     setRows((prev) => [
                       ...prev,
                       {
@@ -1671,8 +1807,8 @@ function SettingsTab(props: {
                         alias: "",
                         connectionId: "",
                       },
-                    ])
-                  }
+                    ]);
+                  }}
                 >
                   {t("app.bindings.add")}
                 </Button>

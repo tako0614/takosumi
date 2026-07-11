@@ -5,7 +5,7 @@ import {
   appSurfacesFromOutputs,
   deploymentReadinessAfterApply,
   effectiveCapsuleStatus,
-  isDeploymentPubliclyOpenable,
+  isDeploymentOpenable,
   launchUrlFromDeployment,
   needsAttention,
   outputLabel,
@@ -344,7 +344,7 @@ describe("release activation launch gating", () => {
     expect(deploymentReadinessAfterApply(deployment, [], "cap_1")).toBe(
       "activation_pending",
     );
-    expect(isDeploymentPubliclyOpenable(deployment, [], "cap_1")).toBe(false);
+    expect(isDeploymentOpenable(deployment, [], "cap_1")).toBe(false);
     expect(launchUrlFromDeployment(deployment, [], "cap_1")).toBeUndefined();
   });
 
@@ -356,7 +356,7 @@ describe("release activation launch gating", () => {
     expect(deploymentReadinessAfterApply(deployment, events, "cap_1")).toBe(
       "ready",
     );
-    expect(isDeploymentPubliclyOpenable(deployment, events, "cap_1")).toBe(
+    expect(isDeploymentOpenable(deployment, events, "cap_1")).toBe(
       true,
     );
     expect(launchUrlFromDeployment(deployment, events, "cap_1")).toBe(
@@ -372,7 +372,7 @@ describe("release activation launch gating", () => {
     expect(deploymentReadinessAfterApply(deployment, events, "cap_1")).toBe(
       "activation_failed",
     );
-    expect(isDeploymentPubliclyOpenable(deployment, events, "cap_1")).toBe(
+    expect(isDeploymentOpenable(deployment, events, "cap_1")).toBe(
       false,
     );
   });
@@ -407,7 +407,7 @@ describe("release activation launch gating", () => {
       ),
     ).toBe("pending");
     expect(
-      isDeploymentPubliclyOpenable(hiddenReleaseDeployment, events, "cap_1"),
+      isDeploymentOpenable(hiddenReleaseDeployment, events, "cap_1"),
     ).toBe(false);
     expect(
       launchUrlFromDeployment(hiddenReleaseDeployment, events, "cap_1"),

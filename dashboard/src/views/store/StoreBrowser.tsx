@@ -265,6 +265,15 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
 
   const storeChoices = createMemo(() => agg().status.map((st) => st.base));
 
+  // One reachable store plus one unreachable one = a silently-incomplete grid.
+  // Extracted so the visible notice and its persistent live region share it.
+  const partialOutage = createMemo(
+    () =>
+      !agg().loading &&
+      agg().status.some((st) => st.ok) &&
+      agg().status.some((st) => !st.ok),
+  );
+
   const listingForActiveStore = (
     listing: AggregatedTcsListing,
   ): AggregatedTcsListing => {
@@ -350,8 +359,14 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
               onChange={(e) => setActiveStore(e.currentTarget.value)}
             >
               <option value="">{s("allStores", props.locale)}</option>
-              <For each={storeChoices()}>
-                {(base) => <option value={base}>{base}</option>}
+              {/* Mask the default store as 既定のストア, exactly like the
+                  Store sources list — not its raw base URL. */}
+              <For each={agg().status}>
+                {(st) => (
+                  <option value={st.base}>
+                    {st.isDefault ? s("defaultStore", props.locale) : st.base}
+                  </option>
+                )}
               </For>
             </select>
           </label>
@@ -445,16 +460,19 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
         </div>
       </Show>
 
+      {/* Persistent polite region: the visible partial-outage notice below is
+          conditionally mounted, and a role=status inserted together with its
+          text can go unannounced — mount this empty and fill it instead. */}
+      <p class="sr-only" role="status" aria-live="polite">
+        <Show when={partialOutage()}>{s("partialOutage", props.locale)}</Show>
+      </p>
+
       {/* One unreachable store among several silently dropped its listings
-          (the only hint was a dot inside the collapsed Advanced panel). */}
-      <Show
-        when={
-          !agg().loading &&
-          agg().status.some((st) => st.ok) &&
-          agg().status.some((st) => !st.ok)
-        }
-      >
-        <p class="tcs-partial" role="status">
+          (the only hint was a dot inside the collapsed Advanced panel). The
+          announcement is handled by the persistent region above, so this
+          visible notice carries no role. */}
+      <Show when={partialOutage()}>
+        <p class="tcs-partial">
           {s("partialOutage", props.locale)}{" "}
           <button
             type="button"
@@ -516,14 +534,23 @@ export const StoreBrowser: Component<StoreBrowserProps> = (props) => {
                 <div class="tcs-card-top">
                   {listingIcon(listing, props.locale)}
                   <div class="tcs-card-main">
-                    <button
-                      type="button"
-                      class="tcs-card-open"
-                      onClick={() => setSelected(listing)}
-                    >
-                      <h2>{pick(listing.name, props.locale)}</h2>
-                      <p>{pick(listing.description, props.locale)}</p>
-                    </button>
+                    {/* Heading OUTSIDE the button: a button's descendants are
+                        presentational, so an <h2> nested in it vanishes from
+                        the document outline. The button (named by the title
+                        only) opens the detail drawer; the description is a
+                        sibling, not swallowed by the button. */}
+                    <h2 class="tcs-card-title">
+                      <button
+                        type="button"
+                        class="tcs-card-open"
+                        onClick={() => setSelected(listing)}
+                      >
+                        {pick(listing.name, props.locale)}
+                      </button>
+                    </h2>
+                    <p class="tcs-card-desc">
+                      {pick(listing.description, props.locale)}
+                    </p>
                   </div>
                 </div>
                 <Show when={listing.seenOn.length > 1}>

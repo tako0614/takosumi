@@ -57,18 +57,21 @@ describe("RunsListView", () => {
     expect(ja["runList.subtitle"]).not.toContain("台帳");
   });
 
-  test("presents a succeeded review run still waiting on its deploy as 承認待ち", () => {
+  test("presents a succeeded review run still waiting on its deploy as 実行待ち", () => {
     // The row must NOT claim 成功 while RunView would still render the deploy
-    // CTA for it — ONE shared predicate (lib/run-approval.ts) drives both.
+    // CTA for it — ONE shared predicate (lib/run-approval.ts) drives both. A
+    // deployable succeeded plan reads 実行待ち (ready_to_deploy); a genuine
+    // waiting_approval status still reads 承認待ち. Both are 確認する rows.
     expect(source).toContain(
       'import { awaitsDeployApproval, runCapsuleId } from "../../lib/run-approval.ts";',
     );
     expect(source).toMatch(
       /displayStatus:\s*awaitsDeployApproval\(run, runs\)/,
     );
-    expect(source).toContain('? "waiting_approval"');
+    expect(source).toContain('? "ready_to_deploy"');
     expect(source).toContain("status={props.row.displayStatus}");
     expect(source).toContain('props.row.displayStatus === "waiting_approval"');
+    expect(source).toContain('props.row.displayStatus === "ready_to_deploy"');
     // The semantics live in the shared lib now: policy must have passed, and
     // destroy_apply counts as the corresponding apply of a destroy_plan.
     expect(approvalLibSource).toContain('run.policyStatus === "pass"');

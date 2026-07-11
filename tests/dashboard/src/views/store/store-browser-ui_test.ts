@@ -24,15 +24,22 @@ describe("StoreBrowser install UI", () => {
     expect(storeBrowserSource).toContain('class="tcs-card-top"');
     expect(storeBrowserSource).toContain('class="tcs-card-main"');
     expect(storeBrowserSource).toContain('class="tcs-detail-title"');
-    // Card titles are h2: the page h1 (store title) is the only heading
-    // above them, so h3 would skip a level.
+    // Card titles are an <h2> WRAPPING the open <button> (headings-outline
+    // fix): the page h1 (store title) is the only heading above them, so the
+    // card heading stays h2 (h3 would skip a level), and the title text is not
+    // swallowed by the button's presentational subtree. The description is a
+    // sibling <p class="tcs-card-desc">, not nested inside the button.
+    expect(storeBrowserSource).toContain('<h2 class="tcs-card-title">');
+    expect(storeBrowserSource).toContain('class="tcs-card-open"');
+    expect(storeBrowserSource).toContain("{pick(listing.name, props.locale)}");
+    expect(storeBrowserSource).toContain('<p class="tcs-card-desc">');
     expect(storeBrowserSource).toContain(
-      "<h2>{pick(listing.name, props.locale)}</h2>",
+      "{pick(listing.description, props.locale)}",
     );
     expect(storeBrowserSource).not.toContain(
       "<h3>{pick(listing.name, props.locale)}</h3>",
     );
-    expect(storeBrowserCss).toContain(".tcs-card-open h2");
+    expect(storeBrowserCss).toContain(".tcs-card-title");
     expect(storeBrowserCss).not.toContain(".tcs-card-open h3");
     // Face is the repo's declared icon (full-bleed) with a monogram fallback —
     // not a per-kind glyph. Kind is not a browse facet anymore.

@@ -55,6 +55,14 @@ export class ControlApiError extends Error {
     readonly code: string | undefined,
     message: string,
     readonly body?: unknown,
+    /**
+     * True when `message` is only the bare `${status} ${statusText}` HTTP
+     * fallback — i.e. the server sent no usable description, so `message`
+     * carries no user-facing meaning. Callers (see `lib/error-copy.ts`
+     * `friendlyError`) treat this as an opaque server failure and show generic
+     * reassuring copy instead of leaking the raw status line.
+     */
+    readonly isHttpStatusFallback: boolean = false,
   ) {
     super(message);
     this.name = "ControlApiError";
@@ -193,6 +201,9 @@ async function controlFetch<T>(
       code,
       desc ?? `${res.status} ${res.statusText}`,
       data,
+      // No server-provided description → the message is just the HTTP status
+      // line, which must never surface raw. Flag it as an opaque failure.
+      desc === undefined,
     );
   }
   // 204 No Content (dependency delete) resolves to undefined.

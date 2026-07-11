@@ -21,6 +21,7 @@ export const en: Record<keyof typeof ja, string> = {
   "common.details": "Details",
   "common.fetchFailed": "Failed to load — {message}",
   "common.copy": "Copy",
+  "common.ok": "OK",
   "common.justNow": "just now",
   "common.minutesAgo": "{n}m ago",
   "common.hoursAgo": "{n}h ago",
@@ -77,12 +78,13 @@ export const en: Record<keyof typeof ja, string> = {
   "settings.billingSummary.noPlan": "No plan yet",
   "settings.billingSummary.manage": "Manage",
   "settings.billingSummary.fix": "Review payment",
+  "settings.billingSummary.error": "Couldn't load billing status.",
   "settings.manage.entry": "Management tools",
   "settings.manage.entryDesc":
     "Detailed screens for service internals, connections, and run history",
   "settings.manage.title": "Management tools",
   "settings.manage.subtitle":
-    "Screens that work directly with hosting internals. Everyday use never requires them.",
+    "Screens that work directly with hosting internals. You won't need these for everyday use.",
   "settings.manage.services": "Every service and its status",
   "settings.manage.connections": "Cloud account connections and keys",
   "settings.manage.cloud": "Cloud resource inventory and usage",
@@ -163,6 +165,13 @@ export const en: Record<keyof typeof ja, string> = {
   "notFound.message": "Check the URL — this page may have moved.",
   "notFound.goHome": "Go home",
 
+  // --- errors / error boundary ------------------------------------------
+  "error.generic": "Something went wrong. Please try again in a moment.",
+  "errorBoundary.title": "Something went wrong",
+  "errorBoundary.body":
+    "An unexpected error stopped this page from loading. Please reload the page.",
+  "errorBoundary.reload": "Reload",
+
   // --- status labels ----------------------------------------------------
   "status.capsule.pending": "Setting up",
   "status.capsule.needsAttention": "Needs attention",
@@ -180,6 +189,7 @@ export const en: Record<keyof typeof ja, string> = {
   "status.run.failed": "Failed",
   "status.run.cancelled": "Cancelled",
   "status.run.expired": "Expired",
+  "status.run.ready_to_deploy": "Ready to run",
   "status.policy.pass": "Pass",
   "status.policy.warn": "Warnings",
   "status.policy.deny": "Denied",
@@ -219,6 +229,7 @@ export const en: Record<keyof typeof ja, string> = {
   "apps.addShort": "Add",
   "apps.sectionYours": "Your apps",
   "apps.manage": "Manage",
+  "apps.manageAria": "Manage {name}",
   "install.installingGeneric": "Adding…",
   "install.wait": "This only takes a moment",
   "install.progressAria": "Install progress",
@@ -271,14 +282,18 @@ export const en: Record<keyof typeof ja, string> = {
   "app.tab.danger": "Delete",
   "app.notFound": "Service not found",
   "app.backToList": "Back to list",
+  "app.loadFailedTitle": "Couldn't load this service",
+  "app.refreshFailed":
+    "Couldn't fetch the latest state — showing the last loaded version.",
+  "app.notFoundMessage": "It may have been deleted, or the link may be wrong.",
   "app.outputs.title": "Public links",
   "app.outputs.subtitle": "Visible screens and addresses appear here.",
   "app.outputs.deletedSubtitle":
     "This service has been deleted. Previous addresses are shown as records only.",
   "app.outputs.activationPending":
-    "You can open this address after app activation finishes.",
+    "You can open this address after service activation finishes.",
   "app.outputs.activationFailed":
-    "App activation failed. Check recent updates for details.",
+    "Service activation failed. Check recent updates for details.",
   "app.outputs.empty": "Links appear after a deploy.",
   "app.outputs.loadError":
     "The public links could not be loaded. Reopen this page shortly.",
@@ -308,6 +323,7 @@ export const en: Record<keyof typeof ja, string> = {
   "app.deploys.empty": "No deploys yet.",
   "app.deploys.restoreMenu": "More",
   "app.deploys.restore": "Restore this state",
+  "app.deploys.restoreDisclosure": "Restore a previous version",
   "app.deploys.advancedActions": "Extra actions",
   "app.deploys.advancedActionsBody":
     "Use these only when you need a restore point or backup.",
@@ -316,7 +332,7 @@ export const en: Record<keyof typeof ja, string> = {
   "app.deploys.backupSupportRef": "Backup ID",
   "app.recentActivity.title": "Recent updates",
   "app.recentActivity.open": "Details",
-  "app.recentActivity.releaseActivation": "App activation",
+  "app.recentActivity.releaseActivation": "Service activation",
   "app.bindings.title": "Connected accounts",
   "app.bindings.subtitle":
     "External service access this service can use while publishing. Usually no change is needed.",
@@ -324,7 +340,9 @@ export const en: Record<keyof typeof ja, string> = {
   "app.bindings.editAdvanced": "Change connected account mapping",
   "app.bindings.add": "Add connected account",
   "app.bindings.providerPlaceholder": "Connection target",
+  "app.bindings.providerLabel": "Connection target",
   "app.bindings.aliasPlaceholder": "Target name (optional)",
+  "app.bindings.aliasLabel": "Target name",
   "app.bindings.selectConnection": "Select connected account",
   "app.bindings.technicalTarget": "Connection target details",
   "app.bindings.remove": "Remove",
@@ -364,6 +382,10 @@ export const en: Record<keyof typeof ja, string> = {
   "app.config.errorJson": "{name} must be valid JSON.",
   "app.settings.openCta": "Open settings",
   "app.settings.supportDetails": "Reference info",
+  "app.settings.leaveConfirm.title": "Discard your changes?",
+  "app.settings.leaveConfirm.body":
+    "You have unsaved settings changes. Leaving will discard them.",
+  "app.settings.leaveConfirm.confirm": "Discard and leave",
   "app.usage.title": "Estimated cost (total)",
   "app.usage.body": "The sum of this service's recorded usage.",
   "app.usage.subCent": "< $0.01",
@@ -392,6 +414,8 @@ export const en: Record<keyof typeof ja, string> = {
   "run.notFoundTitle": "This run was not found",
   "run.notFoundMessage": "It may have been deleted, or the link may be wrong.",
   "run.loadFailedTitle": "Couldn't load this run",
+  "run.refreshFailed":
+    "Couldn't fetch the latest status — showing the last loaded state.",
   "run.summary.planning": "Reviewing the changes…",
   "run.summary.queued": "Waiting to run…",
   "run.summary.waitingApproval":
@@ -409,9 +433,10 @@ export const en: Record<keyof typeof ja, string> = {
     "This change's deploy has already been run. See Activity for the result.",
   "run.summary.applying": "Deploying…",
   "run.summary.finishing": "Finishing the deployment…",
-  "run.summary.activationPending": "Finishing app activation…",
+  "run.summary.checkingDeploy": "Checking deploy readiness…",
+  "run.summary.activationPending": "Finishing service activation…",
   "run.summary.activationFailed":
-    "App activation failed after the infrastructure deploy completed.",
+    "Service activation failed after the infrastructure deploy completed.",
   "run.summary.applySucceeded": "Deploy complete.",
   "run.summary.removing": "Removing…",
   "run.summary.removed": "Removal complete.",
@@ -448,6 +473,8 @@ export const en: Record<keyof typeof ja, string> = {
   "run.summary.credentialServiceHint":
     "Takosumi could not prepare access to the connected account. Try again, or contact support if it continues.",
   "run.summary.blocked": "Blocked by policy.",
+  "run.summary.blockedHint":
+    "Review the policy settings, or re-check the changes after fixing them.",
   "run.summary.driftDone": "Drift check complete.",
   "run.summary.cancelled": "This run was cancelled.",
   "run.summary.expired": "This review has expired.",
@@ -467,8 +494,8 @@ export const en: Record<keyof typeof ja, string> = {
   "run.appHandoff.open": "Open in {app}",
   "run.destructiveWarning":
     "This change replaces or deletes existing resources. Running it may lose data.",
-  "run.destructiveConfirm": "Proceed, accepting the destructive changes",
-  "run.stop": "Cancel",
+  "run.destructiveConfirm": "Run destructive changes anyway",
+  "run.stopGoBack": "Go back",
   "run.cancel": "Cancel this run",
   "run.cancelConfirm.title": "Cancel this run?",
   "run.cancelConfirm.message":
@@ -595,6 +622,9 @@ export const en: Record<keyof typeof ja, string> = {
 
   // --- add flow (/new) -------------------------------------------------------
   "new.title": "Add service",
+  "new.discard.title": "Discard your entries?",
+  "new.discard.body": "The setup you entered for this service won't be saved.",
+  "new.discard.confirm": "Discard",
   "new.discovery.aria": "Find a service to add",
   "new.discovery.title": "Choose a service to add",
   "new.discovery.subtitle": "Pick a service to add.",
@@ -705,7 +735,7 @@ export const en: Record<keyof typeof ja, string> = {
   "new.vars.errorDuplicate": "“{name}” is listed more than once.",
   "new.deeplink.invalidTitle": "This install link cannot be used",
   "new.deeplink.invalidBody":
-    "The link is not a safe HTTPS link, or it includes information this browser cannot open. Choose an app or paste another link.",
+    "The link is not a safe HTTPS link, or it includes information this browser cannot open. Choose a service or paste another link.",
   "new.appHandoff.title": "Add a service for {app}",
   "new.appHandoff.body":
     "When the add completes here, the connection details return to the app automatically.",
@@ -834,7 +864,6 @@ export const en: Record<keyof typeof ja, string> = {
   "workspaceSettings.general.archive": "Archive workspace",
   "workspaceSettings.general.archiveConfirm":
     "This workspace will be hidden from the normal switcher. You can still inspect it through the admin API.",
-  "workspaceSettings.general.archived": "Workspace archived.",
   "workspaceSettings.general.archivedNamed": "Archived “{name}”.",
   "workspaceSettings.general.archivedHint":
     "You can restore it from the archived list below, or move to another workspace with the workspace switcher.",
@@ -861,12 +890,14 @@ export const en: Record<keyof typeof ja, string> = {
   "members.invite.role": "Role",
   "members.invite.cta": "Invite",
   "members.invite.emailRequired": "Enter an email address.",
+  "members.invite.success": "Invited {email}.",
   "members.col.member": "Member",
   "members.col.roles": "Roles",
   "members.col.status": "Status",
   "members.col.actions": "Actions",
   "members.you": "you",
   "members.changeRole": "Change role",
+  "members.roleSelectLabel": "Role for {name}",
   "members.roleChangeConfirmTitle": "Change role",
   "members.roleChangeConfirmMessage": "Change the role of {name} to “{role}”?",
   "members.lastOwnerDemote":
@@ -886,6 +917,13 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.expiresAt": "Expires: {date}",
   "conn.oauth.connected": "Connected to Cloudflare.",
   "conn.oauth.failed": "Connection failed. Please try again.",
+  "conn.oauth.error.missingCode":
+    "The authorization response was incomplete. Please try again.",
+  "conn.oauth.error.forbidden":
+    "You do not have permission to connect this workspace.",
+  "conn.oauth.error.oauthFailed":
+    "Authentication with the provider failed. Please wait a moment and try again.",
+  "conn.oauth.errorCode": "Error code: {code}",
   "conn.return.title": "Continue adding {name}",
   "conn.return.subtitle":
     "Save the connected account, then return to finish adding the service.",
@@ -968,10 +1006,6 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.byok.noBillingNote":
     "Connections that use your own key are never billed by Takosumi. Only resources Takosumi provides are billed.",
   "conn.byok.usePreset": "Use a guided preset instead",
-  "conn.byok.backToByok": "Connect any provider with your own key",
-  "conn.presets.body":
-    "Presets are optional setup shortcuts (not the list of supported providers). For a provider not listed, use “bring your own key”.",
-  "conn.presets.provider": "Preset (optional shortcut)",
   "conn.advanced.summary": "Enter access values",
   "conn.register": "Save connection",
   "conn.registering": "Saving...",
@@ -1002,6 +1036,8 @@ export const en: Record<keyof typeof ja, string> = {
   "conn.remove.confirmTitle": "Delete connected account",
   "conn.remove.confirmMessage":
     "Really delete {name}? Its saved access values are deleted too. This cannot be undone.",
+  "conn.remove.bindingWarning":
+    "Deployments that use this connection will fail.",
 
   // --- backups -----------------------------------------------------------------
   "backups.subtitle": "Manage restore points for this workspace.",
@@ -1023,6 +1059,11 @@ export const en: Record<keyof typeof ja, string> = {
   "shares.create.title": "Create a share",
   "shares.create.toWorkspace": "Target workspace",
   "shares.create.producer": "Source service",
+  "shares.create.workspacesError": "Couldn't load workspaces.",
+  "shares.create.workspacesEmpty":
+    "No other workspaces are available to share with.",
+  "shares.create.capsulesError": "Couldn't load services.",
+  "shares.create.capsulesEmpty": "No services are available to share from.",
   "shares.create.selectPlaceholder": "Select",
   "shares.create.outputs": "Shared values",
   "shares.create.addOutput": "Add shared value",
@@ -1035,6 +1076,8 @@ export const en: Record<keyof typeof ja, string> = {
   "shares.create.cta": "Create share",
   "shares.error.outputsRequired": "Enter at least one value name to share.",
   "shares.error.reasonRequired": "Enter a reason for sharing sensitive values.",
+  "shares.error.toWorkspaceRequired": "Select a target workspace.",
+  "shares.error.producerRequired": "Select a source service.",
   "shares.col.direction": "Direction",
   "shares.col.capsule": "Service",
   "shares.col.outputs": "Shared values",
@@ -1122,6 +1165,11 @@ export const en: Record<keyof typeof ja, string> = {
   "runGroup.subtitle":
     "Several service changes can be reviewed and approved together.",
   "runGroup.approveAll": "Approve all",
+  "runGroup.approveAllConfirm.title": "Approve all changes?",
+  "runGroup.approveAllConfirm.message":
+    "This runs the pending changes for {n} services together.",
+  "runGroup.approveAllConfirm.messageDanger":
+    "This runs the pending changes for {n} services together, including destructive changes that delete resources. This can't be undone.",
   "runGroup.members": "Services in this update",
   "runGroup.membersEmpty": "No services in this update.",
   "runGroup.openService": "Open service",
@@ -1202,6 +1250,7 @@ export const en: Record<keyof typeof ja, string> = {
     "Copy this key now. The full key is shown only once.",
   "cloudResources.keys.lastUsed": "Last used",
   "cloudResources.keys.empty": "No external API keys yet.",
+  "cloudResources.keys.error": "Couldn't load API keys: {message}",
   "cloudResources.keys.secretNotice":
     "Existing keys show their prefix only. Create a new key if you need a full key value again.",
   "cloudResources.keys.revoke": "Revoke",
@@ -1275,6 +1324,7 @@ export const en: Record<keyof typeof ja, string> = {
   "billing.loading": "Loading billing status...",
   "billing.error": "Could not load billing status: {message}",
   "billing.error.unknown": "Unknown error",
+  "billing.status.unavailable": "Currently unavailable.",
   "billing.balance.title": "Usage status",
   "billing.balance.availableUsd": "Available balance",
   "billing.balance.status": "Status",
