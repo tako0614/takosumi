@@ -3541,4 +3541,17 @@ drop table if exists service_graph_grants;
 drop table if exists service_graph_bindings;
 drop table if exists service_graph_exports;`,
     },
+    {
+      id: "deploy.install_config_store_key.normalize",
+      version: 67,
+      domain: "deploy",
+      description:
+        "Converge pre-v1 InstallConfig JSON onto the canonical store key and remove the retired catalog key without retaining a runtime compatibility branch.",
+      sql: `update takosumi_install_configs
+set config_json = case
+  when config_json ? 'store' then config_json - 'catalog'
+  else (config_json - 'catalog') || jsonb_build_object('store', config_json -> 'catalog')
+end
+where config_json ? 'catalog';`,
+    },
   ]);

@@ -59,6 +59,66 @@ test("ensureD1OpenTofuLedgerSchema is idempotent across reboots", async () => {
   expect(tables.has("capsules")).toBe(true);
 });
 
+test("install config metadata converges to the canonical store key", async () => {
+  const db = new SqliteFakeD1();
+  await db
+    .prepare(
+      `create table install_configs (
+        id text primary key,
+        space_id text,
+        install_type text not null,
+        trust_level text not null,
+        record_json text not null,
+        created_at text not null,
+        updated_at text not null
+      )`,
+    )
+    .run();
+  const retiredOnly = {
+    id: "icfg_retired_only",
+    name: "retired-only",
+    catalog: { inputs: [{ name: "public_subdomain" }] },
+  };
+  const both = {
+    id: "icfg_both",
+    name: "both",
+    catalog: { inputs: [{ name: "stale" }] },
+    store: { inputs: [{ name: "current" }] },
+  };
+  for (const config of [retiredOnly, both]) {
+    await db
+      .prepare(
+        `insert into install_configs
+          (id, space_id, install_type, trust_level, record_json, created_at, updated_at)
+         values (?, null, 'opentofu_module', 'trusted', ?, ?, ?)`,
+      )
+      .bind(
+        config.id,
+        JSON.stringify(config),
+        "2026-07-10T00:00:00.000Z",
+        "2026-07-10T00:00:00.000Z",
+      )
+      .run();
+  }
+
+  await ensureD1OpenTofuLedgerSchema(db);
+
+  const rows = await db
+    .prepare(`select id, record_json from install_configs order by id`)
+    .all<{ id: string; record_json: string }>();
+  const configs = new Map(
+    (rows.results ?? []).map((row) => [row.id, JSON.parse(row.record_json)]),
+  );
+  expect(configs.get("icfg_retired_only")).toMatchObject({
+    store: { inputs: [{ name: "public_subdomain" }] },
+  });
+  expect(configs.get("icfg_both")).toMatchObject({
+    store: { inputs: [{ name: "current" }] },
+  });
+  expect(configs.get("icfg_retired_only")).not.toHaveProperty("catalog");
+  expect(configs.get("icfg_both")).not.toHaveProperty("catalog");
+});
+
 test("connections is created exactly once (no duplicate ensure-DDL)", async () => {
   const db = new SqliteFakeD1();
   await ensureD1OpenTofuLedgerSchema(db);
