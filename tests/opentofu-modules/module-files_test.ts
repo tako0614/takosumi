@@ -19,6 +19,7 @@
  */
 
 import { test, expect } from "bun:test";
+import { readFileSync } from "node:fs";
 import { firstPartyModuleFilesByTemplateId } from "../../opentofu-modules/module-files.ts";
 import { cloudflareHelloWorkerTemplate } from "../../providers/cloudflare/modules/cloudflare-hello-worker/template.ts";
 import { cloudflareStaticSiteTemplate } from "../../providers/cloudflare/modules/cloudflare-static-site/template.ts";
@@ -68,6 +69,17 @@ test("the bundled-file map covers install templates and planner modules", () => 
 
 test("firstPartyModuleFilesByTemplateId is frozen and immutable", () => {
   expect(Object.isFrozen(firstPartyModuleFilesByTemplateId)).toBe(true);
+});
+
+test("EdgeWorker bundled HCL matches the checked-in OpenTofu module", () => {
+  const checkedIn = readFileSync(
+    new URL(
+      "../../providers/cloudflare/modules/cloudflare-worker-service/module/main.tf",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  expect(mainTfFor("cloudflare-worker-service").trim()).toBe(checkedIn.trim());
 });
 
 test("every template ships at least one non-empty main.tf", () => {

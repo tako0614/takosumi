@@ -501,10 +501,12 @@ function httpStatusForServiceError(
     case "unsupported_shape":
       return 400;
     case "target_pool_not_found":
+    case "connection_not_found":
     case "not_found":
       return 404;
     case "no_eligible_target":
     case "selected_target_missing":
+    case "connection_not_ready":
     case "delete_blocked":
       return 409;
     case "apply_failed":

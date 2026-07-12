@@ -103,6 +103,12 @@ variable "compatibilityDate" {
   default     = "2024-11-01"
 }
 
+variable "compatibilityFlags" {
+  type        = list(string)
+  description = "Workers runtime compatibility flags."
+  default     = []
+}
+
 variable "publicUrl" {
   type        = string
   description = "Optional public URL projected by a dispatcher/custom route after apply. Empty means this module only reports the Worker script name."
@@ -142,11 +148,12 @@ locals {
 # the fetch handler. Provider credentials are minted by Takosumi at dispatch via
 # CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID; no inline secrets here.
 resource "cloudflare_workers_script" "this" {
-  account_id         = var.accountId
-  script_name        = var.appName
-  content            = local.artifact_content
-  main_module        = "index.js"
-  compatibility_date = var.compatibilityDate
+  account_id          = var.accountId
+  script_name         = var.appName
+  content             = local.artifact_content
+  main_module         = "index.js"
+  compatibility_date  = var.compatibilityDate
+  compatibility_flags = var.compatibilityFlags
 
   lifecycle {
     precondition {
