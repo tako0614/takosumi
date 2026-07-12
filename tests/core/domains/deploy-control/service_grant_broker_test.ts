@@ -294,14 +294,26 @@ describe("ServiceGrantBroker", () => {
     ).rejects.toThrow(/signing authority/);
   });
 
-  test("does not mint on destroy", async () => {
+  test("does not mint during destroy phase or destroy plan", async () => {
     const state = fullState();
-    const env = await broker(state, SIGNING_KEY).mintServiceGrantEnv(
+    const destroyPhaseEnv = await broker(
+      state,
+      SIGNING_KEY,
+    ).mintServiceGrantEnv(
       makePlanRun(),
       "destroy",
       "run_audit_5",
     );
-    expect(env).toBeUndefined();
+    const destroyPlanEnv = await broker(
+      state,
+      SIGNING_KEY,
+    ).mintServiceGrantEnv(
+      { ...makePlanRun(), operation: "destroy" },
+      "plan",
+      "run_audit_6",
+    );
+    expect(destroyPhaseEnv).toBeUndefined();
+    expect(destroyPlanEnv).toBeUndefined();
   });
 
   test("fails closed instead of trusting nonselectable store ids when producers are ambiguous", async () => {
