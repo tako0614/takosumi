@@ -93,6 +93,7 @@ import type {
   AdapterPreviewResult,
   ResourceAdapter,
 } from "./adapter.ts";
+import type { ResourceShapePublicOutput } from "./planner.ts";
 
 // ---------------------------------------------------------------------------
 // OpentofuRunPort: the few run operations the adapter needs. Keeping this narrow
@@ -134,8 +135,8 @@ export interface OpentofuRunRequest {
   }[];
   /** Module variable values, already augmented (accountId/region) and JSON-coerced. */
   readonly inputs: Readonly<Record<string, JsonValue>>;
-  /** Public OpenTofu output names projected from the module (`tofu output -json`). */
-  readonly publicOutputs: readonly string[];
+  /** Typed public OpenTofu outputs projected from the module (`tofu output -json`). */
+  readonly publicOutputs: readonly ResourceShapePublicOutput[];
   readonly providerBinding: OpentofuProviderBinding;
   readonly actor: ActorContext;
 }
@@ -150,7 +151,7 @@ export interface OpentofuDestroyRequest {
     readonly text: string;
   }[];
   readonly inputs?: Readonly<Record<string, JsonValue>>;
-  readonly publicOutputs?: readonly string[];
+  readonly publicOutputs?: readonly ResourceShapePublicOutput[];
   readonly providerBinding: OpentofuProviderBinding;
   /** Native resources recorded for the Resource (audit / scope only). */
   readonly nativeResources: readonly NativeResourceRef[];
@@ -647,7 +648,9 @@ export class ControllerOpentofuRunPort implements OpentofuRunPort {
       current = (await this.#driver.getPlanRun(current.id)).planRun;
     }
     if (current.status !== "succeeded") {
-      throw new Error(`plan ${current.id} finished with status ${current.status}`);
+      throw new Error(
+        `plan ${current.id} finished with status ${current.status}`,
+      );
     }
     return current;
   }
@@ -702,7 +705,9 @@ export class ControllerOpentofuRunPort implements OpentofuRunPort {
       current = (await this.#driver.getPlanRun(current.id)).planRun;
     }
     if (current.status !== "succeeded") {
-      throw new Error(`plan ${current.id} finished with status ${current.status}`);
+      throw new Error(
+        `plan ${current.id} finished with status ${current.status}`,
+      );
     }
     return current;
   }
@@ -761,13 +766,13 @@ function providerBindingOptionsFor(
   return { baseUrl: baseUrl.trim() };
 }
 
-/** Project each public output name as an allowlist passthrough of the same name. */
+/** Project each typed public output as an allowlist passthrough of the same name. */
 export function outputAllowlistFromPublicOutputs(
-  publicOutputs: readonly string[],
+  publicOutputs: readonly ResourceShapePublicOutput[],
 ): Record<string, OutputAllowlistEntry> {
   const allowlist: Record<string, OutputAllowlistEntry> = {};
-  for (const name of publicOutputs) {
-    allowlist[name] = { from: name, type: "string" };
+  for (const output of publicOutputs) {
+    allowlist[output.name] = { from: output.name, type: output.type };
   }
   return allowlist;
 }
@@ -906,8 +911,11 @@ export class FakeOpentofuRunPort implements OpentofuRunPort {
     const override = this.#overrides.outputs?.[request.resourceId];
     if (override) return override;
     const outputs: JsonObject = {};
-    for (const name of request.publicOutputs) {
-      outputs[name] = `fake://${request.resourceId}/${name}`;
+    for (const output of request.publicOutputs) {
+      outputs[output.name] =
+        output.type === "json"
+          ? {}
+          : `fake://${request.resourceId}/${output.name}`;
     }
     return outputs;
   }

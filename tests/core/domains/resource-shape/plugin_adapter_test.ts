@@ -28,7 +28,10 @@ const plan: ResourceShapePlan = {
     { path: "main.tf", text: 'output "bucket_name" { value = "assets" }' },
   ],
   inputs: { bucketName: "assets", accountId: "ts_acc_takosumi_cloud" },
-  publicOutputs: ["bucket_name", "s3_endpoint"],
+  publicOutputs: [
+    { name: "bucket_name", type: "string" },
+    { name: "s3_endpoint", type: "url" },
+  ],
 };
 
 function applyInput(
