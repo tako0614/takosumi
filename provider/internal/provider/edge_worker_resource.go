@@ -23,7 +23,6 @@ var (
 	_ resource.Resource                = (*edgeWorkerResource)(nil)
 	_ resource.ResourceWithConfigure   = (*edgeWorkerResource)(nil)
 	_ resource.ResourceWithImportState = (*edgeWorkerResource)(nil)
-	_ resource.ResourceWithModifyPlan  = (*edgeWorkerResource)(nil)
 )
 
 type edgeWorkerResource struct {
@@ -249,24 +248,6 @@ func (r *edgeWorkerResource) ImportState(ctx context.Context, req resource.Impor
 		return
 	}
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("name"), req.ID)...)
-}
-
-func (r *edgeWorkerResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, _ *resource.ModifyPlanResponse) {
-	if r.data == nil || req.Plan.Raw.IsNull() {
-		return
-	}
-	var plan edgeWorkerModel
-	_ = req.Plan.Get(ctx, &plan)
-	if plan.Name.IsUnknown() || plan.ArtifactPath.IsUnknown() || plan.ArtifactURL.IsUnknown() || plan.ArtifactSHA256.IsUnknown() {
-		return
-	}
-	body, _, diags := plan.toResource(ctx, r.data.defaultSpace)
-	if diags.HasError() {
-		return
-	}
-	r.data.resourceShapeMutate.Lock()
-	defer r.data.resourceShapeMutate.Unlock()
-	_, _ = r.data.client.PreviewResource(ctx, body)
 }
 
 func (r *edgeWorkerResource) assertConfigured(diags *diag.Diagnostics) bool {

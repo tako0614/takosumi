@@ -23,7 +23,6 @@ var (
 	_ resource.Resource                = (*serviceShapeResource)(nil)
 	_ resource.ResourceWithConfigure   = (*serviceShapeResource)(nil)
 	_ resource.ResourceWithImportState = (*serviceShapeResource)(nil)
-	_ resource.ResourceWithModifyPlan  = (*serviceShapeResource)(nil)
 )
 
 type serviceShapeConfig struct {
@@ -565,26 +564,6 @@ func (r *serviceShapeResource) ImportState(ctx context.Context, req resource.Imp
 		return
 	}
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("name"), req.ID)...)
-}
-
-func (r *serviceShapeResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, _ *resource.ModifyPlanResponse) {
-	if r.data == nil || req.Plan.Raw.IsNull() {
-		return
-	}
-	plan, diags := r.modelFromPlan(ctx, req.Plan)
-	if diags.HasError() {
-		return
-	}
-	if plan.Name.IsUnknown() {
-		return
-	}
-	body, _, d := plan.toResource(ctx, r.data.defaultSpace, r.cfg.kind, r.cfg.spec)
-	if d.HasError() {
-		return
-	}
-	r.data.resourceShapeMutate.Lock()
-	defer r.data.resourceShapeMutate.Unlock()
-	_, _ = r.data.client.PreviewResource(ctx, body)
 }
 
 func (r *serviceShapeResource) modelFromPlan(ctx context.Context, plan tfsdk.Plan) (serviceShapeModel, diag.Diagnostics) {

@@ -15,6 +15,12 @@ import (
 	"github.com/takosjp/terraform-provider-takosumi/internal/client"
 )
 
+func TestEdgeWorkerPlanDoesNotStartRemotePreview(t *testing.T) {
+	if _, ok := NewEdgeWorkerResource().(frameworkresource.ResourceWithModifyPlan); ok {
+		t.Fatal("EdgeWorker must not start a discarded remote preview during OpenTofu planning")
+	}
+}
+
 func TestRefreshEdgeWorkerSpecClearsAbsentOptionalFields(t *testing.T) {
 	m := edgeWorkerModel{
 		Name:              types.StringValue("api"),
