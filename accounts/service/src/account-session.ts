@@ -13,6 +13,7 @@ import {
 // Shared PAT-activity predicate. Imported (not re-declared) so the activity
 // rule has a single owner and cannot drift between the two call sites.
 import { personalAccessTokenIsActive } from "./pat-routes.ts";
+import { findActiveAccessToken } from "./access-token-activity.ts";
 
 export const TAKOSUMI_ACCOUNTS_SESSION_ME_PATH = "/v1/account/session/me";
 
@@ -282,11 +283,11 @@ export async function requireAccountsBearer(input: {
     };
   }
   if (token.startsWith("takat_")) {
-    const record = await input.store.findAccessToken(token);
-    if (!record || record.expiresAt < Date.now() || !record.takosumiSubject) {
-      if (record?.expiresAt !== undefined && record.expiresAt < Date.now()) {
-        await input.store.deleteToken(token);
-      }
+    const record = await findActiveAccessToken({
+      store: input.store,
+      token,
+    });
+    if (!record?.takosumiSubject) {
       return { ok: false, response: bearerChallenge("invalid_token") };
     }
     if (!oauthAccessTokenHasScope(record.scope, input.scope)) {

@@ -44,6 +44,7 @@ import {
   stringValue,
 } from "./http-helpers.ts";
 import type { LaunchTokenOptions } from "./mod.ts";
+import { findActiveAccessToken } from "./access-token-activity.ts";
 
 /**
  * Internal launch-token issuer. Wave 6 removed
@@ -59,9 +60,7 @@ export async function handleIssueLaunchToken(input: {
   issuer: string;
   launchTokens: LaunchTokenOptions;
 }): Promise<Response> {
-  const installation = await input.store.findAppCapsule(
-    input.capsuleId,
-  );
+  const installation = await input.store.findAppCapsule(input.capsuleId);
   if (!installation)
     return errorJson("installation_not_found", "installation not found", 404);
   if (installation.status !== "ready") {
@@ -279,9 +278,11 @@ export async function requireCapsuleAccessTokenCapability(input: {
   if (!accessToken) {
     return { ok: false, response: bearerChallenge("invalid_token") };
   }
-  const record = await input.store.findAccessToken(accessToken);
-  if (!record || record.expiresAt < Date.now()) {
-    if (record) await input.store.deleteToken(accessToken);
+  const record = await findActiveAccessToken({
+    store: input.store,
+    token: accessToken,
+  });
+  if (!record) {
     return { ok: false, response: bearerChallenge("invalid_token") };
   }
   if (record.capsuleId !== input.capsuleId) {
