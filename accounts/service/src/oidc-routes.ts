@@ -28,6 +28,7 @@ import type {
 } from "./mod.ts";
 import { readEnvVar } from "./read-env.ts";
 import { requireAccountSession } from "./account-session.ts";
+import { findActiveAccessToken } from "./access-token-activity.ts";
 
 // OIDC token / code lifetimes. These have safe production defaults and are
 // operator-configurable via env (mirroring how passkey/session TTLs are
@@ -802,11 +803,10 @@ export async function handleUserInfo(input: {
   const accessToken = bearerToken(input.request.headers.get("authorization"));
   if (!accessToken) return bearerChallenge("invalid_token");
 
-  const record = await input.store.findAccessToken(accessToken);
-  if (record?.expiresAt !== undefined && record.expiresAt < Date.now()) {
-    await input.store.deleteToken(accessToken);
-    return bearerChallenge("invalid_token");
-  }
+  const record = await findActiveAccessToken({
+    store: input.store,
+    token: accessToken,
+  });
   if (record) {
     // Audience enforcement: the access token records the clientId it was
     // issued for. If the caller declared an expected audience, reject any
@@ -971,7 +971,10 @@ export async function handleIntrospect(input: {
   if (!token) return json({ active: false });
   const authenticatedClientId = auth.client?.clientId;
 
-  const accessRecord = await input.store.findAccessToken(token);
+  const accessRecord = await findActiveAccessToken({
+    store: input.store,
+    token,
+  });
   if (accessRecord) {
     // Only reveal token contents to the client that owns the token. In
     // degraded mode (no static clients wired) the delete-by-token behavior is kept.

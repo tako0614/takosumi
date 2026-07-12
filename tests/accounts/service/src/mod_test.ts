@@ -3635,6 +3635,126 @@ test("accounts handler rotates a Cloudflare Workers provider-compat runtime serv
   });
 });
 
+test("accounts handler invalidates runtime service tokens when a Capsule projection leaves ready", async () => {
+  const store = new InMemoryAccountsStore();
+  const handler = createAccountsHandler({
+    store,
+    clients: [
+      {
+        clientId: "takosumi-cloud-extensions",
+        redirectUris: ["https://app.takosumi.test/oauth/callback"],
+        clientSecret: "client-secret",
+      },
+    ],
+    runtimeServiceTokens: {
+      introspectionClientId: "takosumi-cloud-extensions",
+    },
+  });
+  const sessionId = seedAccountSession(store, "tsub_runtime_lifecycle_owner");
+  seedOwnedWorkspace(
+    store,
+    "tsub_runtime_lifecycle_owner",
+    "acct_runtime_lifecycle",
+    "space_runtime_lifecycle",
+  );
+  const now = Date.now();
+  const capsule = {
+    capsuleId: "inst_runtime_lifecycle",
+    accountId: "acct_runtime_lifecycle",
+    workspaceId: "space_runtime_lifecycle",
+    appId: "example.runtime.lifecycle",
+    sourceGitUrl: "https://github.com/example/runtime-lifecycle",
+    sourceRef: "main",
+    sourceCommit: "abc123",
+    planDigest: "sha256:runtime-lifecycle",
+    mode: "shared-cell" as const,
+    status: "ready" as const,
+    createdBySubject: "tsub_runtime_lifecycle_owner" as const,
+    createdAt: now,
+    updatedAt: now,
+  };
+  store.saveAppCapsule(capsule);
+  const path = `${testIssuer}${takosumiAccountsCapsuleServiceRotateTokenPath(
+    capsule.capsuleId,
+    TAKOSUMI_ACCOUNTS_PLATFORM_SERVICE_AI_GATEWAY,
+  )}`;
+  const mint = await handler(
+    new Request(path, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${sessionId}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ scopes: ["ai.chat"], ttlSeconds: 900 }),
+    }),
+  );
+  expect(mint.status).toEqual(200);
+  const minted = await mint.json();
+
+  store.saveAppCapsule({
+    ...capsule,
+    status: "exported",
+    updatedAt: now + 1,
+  });
+
+  const rotateAfterExport = await handler(
+    new Request(path, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${sessionId}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ scopes: ["ai.chat"], ttlSeconds: 900 }),
+    }),
+  );
+  expect(rotateAfterExport.status).toEqual(409);
+  expect(await rotateAfterExport.json()).toMatchObject({
+    error: { code: "state_conflict" },
+  });
+
+  const introspection = await handler(
+    new Request(`${testIssuer}/oauth/introspect`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        token: minted.token,
+        client_id: "takosumi-cloud-extensions",
+        client_secret: "client-secret",
+      }),
+    }),
+  );
+  expect(introspection.status).toEqual(200);
+  expect(await introspection.json()).toEqual({ active: false });
+
+  const userInfo = await handler(
+    new Request(`${testIssuer}/oauth/userinfo`, {
+      headers: { authorization: `Bearer ${minted.token}` },
+    }),
+  );
+  expect(userInfo.status).toEqual(401);
+  expect(await store.findAccessToken(minted.token)).toBeUndefined();
+
+  store.saveAccessToken("taksrv_malformed_runtime", {
+    clientId: "takosumi-cloud-extensions",
+    subject: "svc:takosumi.ai.gateway:missing",
+    role: "runtime",
+    scope: "ai.chat",
+    expiresAt: now + 900_000,
+  });
+  const malformedIntrospection = await handler(
+    new Request(`${testIssuer}/oauth/introspect`, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        token: "taksrv_malformed_runtime",
+        client_id: "takosumi-cloud-extensions",
+        client_secret: "client-secret",
+      }),
+    }),
+  );
+  expect(await malformedIntrospection.json()).toEqual({ active: false });
+});
+
 test("accounts handler constrains AI Gateway runtime service token rotation", async () => {
   const store = new InMemoryAccountsStore();
   const sessionId = seedAccountSession(store, "tsub_runtime_owner");

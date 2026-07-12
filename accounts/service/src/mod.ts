@@ -1452,6 +1452,13 @@ async function handleRotateRuntimeServiceToken(input: {
   if (!installation) {
     return errorJson("installation_not_found", "installation not found", 404);
   }
+  if (installation.status !== "ready") {
+    return errorJson(
+      "state_conflict",
+      "runtime service tokens can only be issued for ready Capsules",
+      409,
+    );
+  }
   const now = Date.now();
   const expiresAt = now + ttlSeconds * 1000;
   const token = generateRuntimeServiceToken();
