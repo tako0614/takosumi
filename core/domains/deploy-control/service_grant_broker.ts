@@ -148,7 +148,7 @@ export class ServiceGrantBroker {
     auditRunId: string,
     consumerOutputs?: Readonly<Record<string, JsonValue>>,
   ): Promise<Record<string, string> | undefined> {
-    if (phase !== "plan") return undefined;
+    if (phase !== "plan" || planRun.operation === "destroy") return undefined;
     const workspaceId = planRun.workspaceId ?? planRun.spaceId;
     const consumerInstallationId =
       planRun.installationContext?.installationId ?? planRun.installationId;
