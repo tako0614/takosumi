@@ -296,7 +296,7 @@ test("apply passes selected implementation plugin metadata to the adapter", asyn
   });
 });
 
-test("delete reuses selected implementation options from the TargetPool", async () => {
+test("apply and delete pass allowlisted provider transport without a plugin", async () => {
   const stores = createInMemoryResourceShapeStores();
   const adapter = new PluginSpyAdapter();
   const service = new ResourceShapeService({
@@ -317,7 +317,6 @@ test("delete reuses selected implementation options from the TargetPool", async 
           {
             shape: "EdgeWorker",
             implementation: "cloudflare_workers",
-            plugin: "cloud-managed",
             options: { providerBaseUrl: PROVIDER_COMPAT_BASE_URL },
             interfaces: {
               worker_fetch: "native",
@@ -345,14 +344,14 @@ test("delete reuses selected implementation options from the TargetPool", async 
   expect(adapter.applyInputs[0]?.implementationOptions).toEqual({
     providerBaseUrl: PROVIDER_COMPAT_BASE_URL,
   });
-  expect(adapter.applyInputs[0]?.implementationPlugin).toBe("cloud-managed");
+  expect(adapter.applyInputs[0]?.implementationPlugin).toBeUndefined();
 
   const deleted = await service.delete("space_1", "EdgeWorker", "api", ACTOR);
   expect(deleted.ok).toBe(true);
   expect(adapter.deleteInputs[0]?.implementationOptions).toEqual({
     providerBaseUrl: PROVIDER_COMPAT_BASE_URL,
   });
-  expect(adapter.deleteInputs[0]?.implementationPlugin).toBe("cloud-managed");
+  expect(adapter.deleteInputs[0]?.implementationPlugin).toBeUndefined();
   expect(adapter.deleteInputs[0]?.credentialRef).toBe(
     "conn_takosumi_cloud_edge",
   );
@@ -509,9 +508,9 @@ test("putTargetPool rejects malformed capability evidence and secret-like option
     now: () => NOW,
     allowedProviderBaseUrls: [PROVIDER_COMPAT_BASE_URL],
   });
-  const missingPlugin = await serviceWithAllowlist.putTargetPool(
+  const allowlistedProviderBaseUrl = await serviceWithAllowlist.putTargetPool(
     "space_1",
-    "missing-provider-base-url-plugin",
+    "allowlisted-provider-base-url",
     {
       targets: [
         {
@@ -530,12 +529,7 @@ test("putTargetPool rejects malformed capability evidence and secret-like option
       ],
     },
   );
-  expect(missingPlugin.ok).toBe(false);
-  if (!missingPlugin.ok) {
-    expect(missingPlugin.error.message).toContain(
-      "providerBaseUrl requires an operator-installed implementation plugin",
-    );
-  }
+  expect(allowlistedProviderBaseUrl.ok).toBe(true);
 });
 
 test("delete resolves native target from the non-default TargetPool that created the lock", async () => {
