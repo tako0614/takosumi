@@ -450,7 +450,7 @@ function runnerProfileForInput(
   now: number,
 ): RunnerProfile {
   return {
-    id: input.runnerProfileId ?? "cloudflare-default",
+    id: input.runnerProfileId ?? "opentofu-default",
     name: "Fixture Cloudflare Container runner",
     substrate: "cloudflare-containers",
     stateBackend: {

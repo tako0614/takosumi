@@ -9,7 +9,7 @@ runs. They are not public product vocabulary.
 - runner image
 - queue / worker binding
 - resource limits
-- provider allowlist seed
+- explicit provider deny policy
 - network egress policy
 - state/lock backend references
 - secret exposure policy
@@ -29,19 +29,16 @@ receives temporary run-scoped material after policy allows a Run to execute.
 
 ```json
 {
-  "id": "cloudflare-container",
+  "id": "opentofu-default",
   "substrate": "cloudflare-containers",
   "stateBackend": {
     "kind": "operator-managed",
-    "ref": "state://takosumi/cloudflare",
-    "lock": { "kind": "native", "ref": "lock://takosumi/cloudflare" }
+    "ref": "state://takosumi/opentofu-default",
+    "lock": { "kind": "operator", "ref": "lock://takosumi/opentofu-default" }
   },
-  "allowedProviders": [
-    "registry.opentofu.org/cloudflare/cloudflare",
-    "registry.opentofu.org/hashicorp/http",
-    "registry.opentofu.org/hashicorp/random",
-    "registry.opentofu.org/hashicorp/tls"
-  ],
+  "allowedProviders": ["*"],
+  "requireCredentialRefs": false,
+  "networkPolicy": { "mode": "operator-managed" },
   "resourceLimits": {
     "maxRunSeconds": 900,
     "maxSourceArchiveBytes": 104857600,
@@ -56,13 +53,17 @@ receives temporary run-scoped material after policy allows a Run to execute.
 }
 ```
 
-Provider-specific runner profiles may include credential-free utility providers
-such as `hashicorp/http`, `hashicorp/random`, and `hashicorp/tls`. These let a
-plain OpenTofu module fetch an explicit release artifact, create stable random
-suffixes, or generate TLS material without switching to the arbitrary
-`generic-opentofu-provider` profile. They do not receive ProviderConnection
-credential references; credentialed cloud providers still require explicit
-ProviderConnection / CredentialRecipe / ProviderBinding resolution.
+`opentofu-default` is provider-neutral. Every syntactically valid provider
+source uses this execution path; Takosumi does not maintain verified,
+unverified, guided, or generic provider execution tiers. Credential Recipes add
+setup convenience only. Provider packages use the configured cache or mirror
+when present and OpenTofu's normal registry installation path otherwise.
+
+An operator may define additional profiles for execution capabilities such as a
+private network, host agent, architecture, or compliance boundary. These
+profiles are selected explicitly and must not be named or selected by provider
+brand. An explicit deny policy or missing runtime capability can reject a Run;
+absence from a Takosumi recipe list cannot.
 
 ## Secret Exposure
 

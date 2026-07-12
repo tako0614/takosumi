@@ -10,7 +10,7 @@ import type {
   CapsuleProviderEnvBinding,
   ProviderConnection,
 } from "../../contract/connections.ts";
-import type { ProviderListing } from "../../contract/providers.ts";
+import type { CredentialRecipe } from "../../contract/credential-recipes.ts";
 import {
   isProviderDeliveryMode,
   isProviderResolutionStatus,
@@ -223,17 +223,20 @@ test("unified Provider Connection + binding shape uses concrete connection ids",
     alias: "main",
     connectionId: providerConnection.id,
   };
-  const listing: ProviderListing = {
+  const recipe: CredentialRecipe = {
     id: "cloudflare",
-    providerSource: "registry.opentofu.org/cloudflare/cloudflare",
     displayName: "Cloudflare",
-    recommendedEnvNames: ["CLOUDFLARE_API_TOKEN"],
+    providerRule: "cloudflare",
+    terraformSource: ["cloudflare/cloudflare"],
+    envNames: ["CLOUDFLARE_API_TOKEN"],
     requiredEnvGroups: [["CLOUDFLARE_API_TOKEN"]],
-    genericEnvSupported: true,
-    connectionKinds: ["cloudflare_api_token", "cloudflare_oauth"],
-    credentialRecipeIds: ["cloudflare", "generic-env"],
-    allowedResources: ["cloudflare_workers_script"],
-    allowedDataSources: [],
+    authModes: {
+      api_token: {
+        env: {
+          CLOUDFLARE_API_TOKEN: { from: "secret", name: "api_token" },
+        },
+      },
+    },
   };
   const bindings: readonly CapsuleProviderEnvBinding[] = [
     { provider: "cloudflare", alias: "main", connectionId: "conn_cf_other" },
@@ -245,7 +248,7 @@ test("unified Provider Connection + binding shape uses concrete connection ids",
   ];
   expect(binding.connectionId).toBe("conn_space_cf");
   expect(providerConnection.materialization).toBe("secret");
-  expect(listing.connectionKinds).toContain("cloudflare_api_token");
+  expect(recipe.authModes.api_token).toBeDefined();
   expect(bindings).toHaveLength(2);
 });
 

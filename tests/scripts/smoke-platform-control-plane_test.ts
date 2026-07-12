@@ -515,8 +515,8 @@ test("platform control-plane smoke defaults providerless OpenTofu mode to a keyl
   expect(result.capsuleModule).toBe("git-opentofu-capsule");
   expect(result.providerConnectionMode).toBe("none");
   expect(result.credentialPath).toBe("none");
-  expect(result.inputs.runnerProfileId).toBe("generic-opentofu-provider");
-  expect(options.runnerProfileId).toBe("generic-opentofu-provider");
+  expect(result.inputs.runnerProfileId).toBe("opentofu-default");
+  expect(options.runnerProfileId).toBe("opentofu-default");
   expect(result.inputs.cloudflareApiTokenSource).toBe("not_required");
   expect(result.inputs.cloudflareAccountIdSource).toBe("not_required");
   expect(options.vars).toEqual({

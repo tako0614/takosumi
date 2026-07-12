@@ -53,7 +53,6 @@ import type { ResolvedInstallationProviderEnvBinding } from "../connections/mod.
 import { canonicalProviderAddress } from "./provider_policy.ts";
 import { OpenTofuControllerError, requireNonEmptyString } from "./errors.ts";
 import { normalizeProviders } from "./validation.ts";
-import { sameProviderFamily } from "takosumi-contract/provider-env-rules";
 import { normalizeManagedPublicBaseDomain } from "./managed_public_domains.ts";
 
 /**
@@ -283,7 +282,6 @@ function managedPublicBaseDomainFromResolved(
 ): string | undefined {
   const domains = new Set<string>();
   for (const entry of resolved) {
-    if (!sameProviderFamily(entry.provider, "cloudflare")) continue;
     if (entry.connection?.scopeHints?.managedProvider !== true) continue;
     const domain = normalizeManagedPublicBaseDomain(
       entry.connection.scopeHints.managedPublicBaseDomain,
@@ -293,7 +291,7 @@ function managedPublicBaseDomainFromResolved(
   if (domains.size > 1) {
     throw new OpenTofuControllerError(
       "failed_precondition",
-      "managed Cloudflare Provider Connections disagree on the public base domain",
+      "managed Provider Connections disagree on the public base domain",
     );
   }
   return domains.values().next().value as string | undefined;
@@ -309,25 +307,17 @@ export function providerEnvBindingsFromResolved(
       entry.connection?.kind === "generic_env_provider"
         ? "provider_env"
         : "generated_root_variable";
-    const baseUrl = managedProviderBaseUrl(entry.connection);
+    const configuration = entry.connection?.scopeHints?.providerConfig;
     providers.push({
       provider,
       ...(entry.alias ? { alias: entry.alias } : {}),
       credentialDelivery,
-      ...(baseUrl ? { baseUrl } : {}),
+      ...(configuration && Object.keys(configuration).length > 0
+        ? { configuration }
+        : {}),
     });
   }
   return providers;
-}
-
-function managedProviderBaseUrl(
-  connection: ResolvedInstallationProviderEnvBinding["connection"] | undefined,
-): string | undefined {
-  if (!connection?.scopeHints?.managedProvider) return undefined;
-  const baseUrl = connection.scopeHints.providerBaseUrl;
-  return typeof baseUrl === "string" && baseUrl.trim()
-    ? baseUrl.trim()
-    : undefined;
 }
 
 function requiredProvidersFromResolved(
@@ -347,81 +337,35 @@ function providerInputDefaultsFromResolved(
   for (const entry of resolved) {
     const connection = entry.connection;
     if (!connection) continue;
-    if (sameProviderFamily(entry.provider, "cloudflare")) {
-      const accountId = nonEmptyString(connection.scopeHints?.accountId);
-      const managedBaseUrl = managedProviderBaseUrl(connection);
-      // Enable Cloudflare resources only when the module can actually receive
-      // an account (a scoped connection, or the managed proxy which injects
-      // it). Modules validate `cloudflare_account_id is required when
-      // enable_cloudflare_resources is true`, so blindly enabling for a
-      // generic BYO-env connection without scope hints guarantees a failed
-      // plan — those installs keep the module's own defaults.
-      if (accountId || managedBaseUrl) {
-        inputs.enable_cloudflare_resources = true;
-        inputs.enable_cloudflare_worker_script = true;
+    for (const [key, value] of Object.entries(
+      connection.scopeHints?.moduleInputDefaults ?? {},
+    )) {
+      const existing = inputs[key];
+      if (existing !== undefined && !sameJsonValue(existing, value)) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `provider module input default ${key} conflicts across Provider Connections`,
+        );
       }
-      if (accountId) {
-        inputs.cloudflare_account_id = accountId;
-        inputs.account_id = accountId;
-        mergeObjectInput(inputs, "cloudflare", { account_id: accountId });
-      }
-      const providerBaseUrl = managedBaseUrl;
-      if (providerBaseUrl) {
-        inputs.cloudflare_api_base_url = providerBaseUrl;
-        mergeObjectInput(inputs, "cloudflare", {
-          api_base_url: providerBaseUrl,
-        });
-        const zoneId = nonEmptyString(connection.scopeHints?.zoneId);
-        if (zoneId) {
-          inputs.cloudflare_route_zone_id = zoneId;
-        }
-      }
-      const workersSubdomain = nonEmptyString(
-        connection.scopeHints?.workersSubdomain,
-      );
-      if (workersSubdomain) {
-        inputs.cloudflare_workers_subdomain = workersSubdomain;
-        inputs.workersSubdomain = workersSubdomain;
-        mergeObjectInput(inputs, "cloudflare", {
-          workers_subdomain: workersSubdomain,
-        });
-      }
+      inputs[key] = value;
     }
   }
   return inputs;
 }
 
-function mergeObjectInput(
-  target: Record<string, JsonValue>,
-  key: string,
-  patch: Readonly<Record<string, JsonValue>>,
-): void {
-  const existing = target[key];
-  if (isJsonObject(existing)) {
-    target[key] = { ...existing, ...patch };
-    return;
+function sameJsonValue(left: JsonValue, right: JsonValue): boolean {
+  return canonicalJson(left) === canonicalJson(right);
+}
+
+function canonicalJson(value: JsonValue): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalJson).join(",")}]`;
   }
-  target[key] = { ...patch };
-}
-
-function nonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0
-    ? value.trim()
-    : undefined;
-}
-
-function isJsonObject(value: JsonValue | undefined): value is {
-  readonly [key: string]: JsonValue;
-} {
-  return (
-    value !== undefined &&
-    value !== null &&
-    typeof value === "object" &&
-    !Array.isArray(value)
-  );
-}
-
-function isJsonScalar(value: unknown): value is string | number | boolean {
-  const t = typeof value;
-  return t === "string" || t === "number" || t === "boolean";
+  if (value !== null && typeof value === "object") {
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key]!)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
 }

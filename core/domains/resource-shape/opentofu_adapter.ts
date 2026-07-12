@@ -746,7 +746,9 @@ function providerEnvBindingsFor(
       provider: binding.providerSource,
       ...(binding.alias ? { alias: binding.alias } : {}),
       ...(credentialDelivery ? { credentialDelivery } : {}),
-      ...(binding.baseUrl ? { baseUrl: binding.baseUrl } : {}),
+      ...(binding.baseUrl
+        ? { configuration: { base_url: binding.baseUrl } }
+        : {}),
     },
   ];
 }

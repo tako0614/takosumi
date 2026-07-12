@@ -1,21 +1,16 @@
 /**
- * Provider runtime registry — the single source of truth for per-provider data.
+ * Guided provider setup registry.
  *
- * The provider-agnostic control plane reads provider identity, connection kinds,
- * network policy, and runner config from here instead of inlining
- * per-provider literals (previously scattered across `runner_profiles.ts`,
- * `provider-env-rules.ts`, and generated-root wiring). Provider-specific
- * implementation code (credential mint/verify and OpenTofu capsule modules)
- * lives under `providers/<id>/` and is folded in here as each piece is
- * extracted.
+ * These records power Credential Recipe discovery and guided connection setup.
+ * They never determine whether an OpenTofu provider may execute.
  */
-import type { ConnectionKind } from "takosumi-contract/connections";
+import type { ProviderConnectionKind } from "takosumi-contract/connections";
 import {
   allowedEnvNamesForProvider,
   providerCredentialArgs,
   type ProviderCredentialArg,
 } from "takosumi-contract/provider-env-rules";
-import type { ProviderRuntime } from "./types.ts";
+import type { GuidedProviderSetup } from "./types.ts";
 
 const OPENTOFU = "registry.opentofu.org";
 
@@ -23,45 +18,28 @@ const OPENTOFU = "registry.opentofu.org";
  * Per-provider records WITHOUT the credential fields. The credential
  * (`credentialArgs` / `credentialEnvNames`) data is sourced from the
  * dependency-free `provider-env-rules` table (which the runner container also
- * reads) and folded into each {@link ProviderRuntime} below, so per-provider
+ * reads) and folded into each {@link GuidedProviderSetup} below, so per-provider
  * credential data keeps a single source. The registry imports `provider-env-rules`
  * rather than the reverse because that table must stay import-free to resolve in
  * the slim runner build.
  */
-type ProviderRuntimeBase = Omit<
-  ProviderRuntime,
+type GuidedProviderSetupBase = Omit<
+  GuidedProviderSetup,
   "credentialArgs" | "credentialEnvNames"
 >;
 
-const PROVIDER_RUNTIME_BASES: readonly ProviderRuntimeBase[] = [
+const GUIDED_PROVIDER_SETUP_BASES: readonly GuidedProviderSetupBase[] = [
   {
     id: "cloudflare",
     displayName: "Cloudflare",
     providerAddresses: [`${OPENTOFU}/cloudflare/cloudflare`],
     connectionKinds: ["cloudflare_api_token", "cloudflare_oauth"],
-    network: {
-      mode: "egress-allowlist",
-      allowedHosts: [OPENTOFU, "api.cloudflare.com"],
-    },
-    capsuleModuleIds: ["cloudflare-static-site"],
-    runnerProfileId: "cloudflare-default",
   },
   {
     id: "aws",
     displayName: "AWS",
     providerAddresses: [`${OPENTOFU}/hashicorp/aws`],
     connectionKinds: ["aws_assume_role"],
-    network: {
-      mode: "egress-allowlist",
-      allowedHosts: [
-        OPENTOFU,
-        "sts.amazonaws.com",
-        "iam.amazonaws.com",
-        "route53.amazonaws.com",
-      ],
-      allowedHostPatterns: ["*.amazonaws.com", "*.api.aws"],
-    },
-    runnerProfileId: "aws-provider-env-candidate",
   },
   {
     id: "gcp",
@@ -75,39 +53,12 @@ const PROVIDER_RUNTIME_BASES: readonly ProviderRuntimeBase[] = [
       "gcp_oauth_bootstrap",
       "gcp_service_account_impersonation",
     ],
-    network: {
-      mode: "egress-allowlist",
-      allowedHosts: [
-        OPENTOFU,
-        "oauth2.googleapis.com",
-        "cloudresourcemanager.googleapis.com",
-        "serviceusage.googleapis.com",
-        "iam.googleapis.com",
-      ],
-      allowedHostPatterns: ["*.googleapis.com"],
-    },
-    runnerProfileId: "gcp-provider-env-candidate",
   },
   {
     id: "azure",
     displayName: "Azure",
     providerAddresses: [`${OPENTOFU}/hashicorp/azurerm`],
     connectionKinds: ["generic_env_provider"],
-    network: {
-      mode: "egress-allowlist",
-      allowedHosts: [
-        OPENTOFU,
-        "login.microsoftonline.com",
-        "management.azure.com",
-        "graph.microsoft.com",
-      ],
-      allowedHostPatterns: [
-        "*.azure.com",
-        "*.windows.net",
-        "*.microsoftonline.com",
-      ],
-    },
-    runnerProfileId: "azure-provider-env-candidate",
   },
   {
     id: "kubernetes",
@@ -117,91 +68,48 @@ const PROVIDER_RUNTIME_BASES: readonly ProviderRuntimeBase[] = [
       `${OPENTOFU}/hashicorp/helm`,
     ],
     connectionKinds: ["generic_env_provider"],
-    network: {
-      mode: "operator-managed",
-      allowedHosts: [OPENTOFU, "kubernetes.default.svc"],
-      allowedHostPatterns: ["*.svc", "*.cluster.local"],
-    },
-    runnerProfileId: "kubernetes-provider-env-candidate",
   },
   {
     id: "github",
     displayName: "GitHub",
     providerAddresses: [`${OPENTOFU}/integrations/github`],
     connectionKinds: ["generic_env_provider"],
-    network: {
-      mode: "egress-allowlist",
-      allowedHosts: [OPENTOFU, "api.github.com", "uploads.github.com"],
-      allowedHostPatterns: ["*.githubusercontent.com"],
-    },
-    runnerProfileId: "github-provider-env-candidate",
   },
   {
     id: "digitalocean",
     displayName: "DigitalOcean",
     providerAddresses: [`${OPENTOFU}/digitalocean/digitalocean`],
     connectionKinds: ["generic_env_provider"],
-    network: {
-      mode: "egress-allowlist",
-      allowedHosts: [OPENTOFU, "api.digitalocean.com"],
-    },
-    runnerProfileId: "digitalocean-provider-env-candidate",
   },
   {
     id: "hcloud",
     displayName: "Hetzner Cloud",
     providerAddresses: [`${OPENTOFU}/hetznercloud/hcloud`],
     connectionKinds: ["generic_env_provider"],
-    network: {
-      mode: "egress-allowlist",
-      allowedHosts: [OPENTOFU, "api.hetzner.cloud"],
-    },
-    runnerProfileId: "hcloud-provider-env-candidate",
   },
   {
     id: "vultr",
     displayName: "Vultr",
     providerAddresses: [`${OPENTOFU}/vultr/vultr`],
     connectionKinds: ["generic_env_provider"],
-    network: {
-      mode: "egress-allowlist",
-      allowedHosts: [OPENTOFU, "api.vultr.com"],
-    },
-    runnerProfileId: "vultr-provider-env-candidate",
   },
   {
     id: "scaleway",
     displayName: "Scaleway",
     providerAddresses: [`${OPENTOFU}/scaleway/scaleway`],
     connectionKinds: ["generic_env_provider"],
-    network: {
-      mode: "egress-allowlist",
-      allowedHosts: [OPENTOFU, "api.scaleway.com"],
-      allowedHostPatterns: ["*.scaleway.com"],
-    },
-    runnerProfileId: "scaleway-provider-env-candidate",
   },
   {
     id: "openstack",
     displayName: "OpenStack",
     providerAddresses: [`${OPENTOFU}/terraform-provider-openstack/openstack`],
     connectionKinds: ["generic_env_provider"],
-    network: {
-      mode: "operator-managed",
-      allowedHosts: [OPENTOFU],
-    },
-    runnerProfileId: "openstack-provider-env-candidate",
   },
   {
     id: "docker",
     displayName: "Docker",
     providerAddresses: [`${OPENTOFU}/kreuzwerker/docker`],
     connectionKinds: ["generic_env_provider"],
-    network: {
-      mode: "operator-managed",
-      allowedHosts: [OPENTOFU],
-    },
-    runnerProfileId: "docker-custom-example",
   },
 ];
 
@@ -212,7 +120,7 @@ const PROVIDER_RUNTIME_BASES: readonly ProviderRuntimeBase[] = [
  * match). A provider whose address has no env-rule entry gets empty credential
  * data, preserving the credential-free behavior for providers without a mapping.
  */
-function resolveProviderCredentials(base: ProviderRuntimeBase): {
+function resolveProviderCredentials(base: GuidedProviderSetupBase): {
   credentialArgs: readonly ProviderCredentialArg[];
   credentialEnvNames: readonly string[];
 } {
@@ -223,15 +131,14 @@ function resolveProviderCredentials(base: ProviderRuntimeBase): {
   };
 }
 
-export const PROVIDER_RUNTIMES: readonly ProviderRuntime[] =
-  PROVIDER_RUNTIME_BASES.map((base) => ({
+export const GUIDED_PROVIDER_SETUPS: readonly GuidedProviderSetup[] =
+  GUIDED_PROVIDER_SETUP_BASES.map((base) => ({
     ...base,
     ...resolveProviderCredentials(base),
   }));
 
-const BY_ID = new Map(PROVIDER_RUNTIMES.map((p) => [p.id, p]));
-const BY_ADDRESS = new Map<string, ProviderRuntime>();
-for (const provider of PROVIDER_RUNTIMES) {
+const BY_ADDRESS = new Map<string, GuidedProviderSetup>();
+for (const provider of GUIDED_PROVIDER_SETUPS) {
   for (const address of provider.providerAddresses) {
     BY_ADDRESS.set(address, provider);
     // Also index the short `<namespace>/<name>` and bare local-name forms so a
@@ -243,21 +150,20 @@ for (const provider of PROVIDER_RUNTIMES) {
   }
 }
 
-const BY_CONNECTION_KIND = new Map<ConnectionKind, ProviderRuntime>();
-for (const provider of PROVIDER_RUNTIMES) {
+const BY_CONNECTION_KIND = new Map<
+  ProviderConnectionKind,
+  GuidedProviderSetup
+>();
+for (const provider of GUIDED_PROVIDER_SETUPS) {
   for (const kind of provider.connectionKinds) {
     if (!BY_CONNECTION_KIND.has(kind)) BY_CONNECTION_KIND.set(kind, provider);
   }
 }
 
-export function providerById(id: string): ProviderRuntime | undefined {
-  return BY_ID.get(id);
-}
-
-/** Resolve by OpenTofu provider address (fully-qualified, short, or local name). */
-export function providerForAddress(
+/** Resolve guided setup by provider address; absence never blocks execution. */
+export function guidedProviderSetupForAddress(
   address: string,
-): ProviderRuntime | undefined {
+): GuidedProviderSetup | undefined {
   return BY_ADDRESS.get(address) ?? BY_ADDRESS.get(address.split("/").pop()!);
 }
 
@@ -277,38 +183,8 @@ export function canonicalProviderAddress(source: string): string {
   return source;
 }
 
-export function providerForConnectionKind(
-  kind: ConnectionKind,
-): ProviderRuntime | undefined {
+export function guidedProviderSetupForConnectionKind(
+  kind: ProviderConnectionKind,
+): GuidedProviderSetup | undefined {
   return BY_CONNECTION_KIND.get(kind);
-}
-
-/**
- * Per-alias credential env-name -> OpenTofu provider-argument mapping for a
- * provider, resolved through the registry by OpenTofu provider address (fully
- * qualified, short, or local name) or provider id. An unknown provider yields an
- * empty list. This is the registry-facing view of the `provider-env-rules`
- * credential-arg table (the single source the registry records also fold in).
- */
-export function providerCredentialArgsFromRegistry(
-  provider: string,
-): readonly ProviderCredentialArg[] {
-  return (
-    providerForAddress(provider)?.credentialArgs ??
-    providerById(provider)?.credentialArgs ??
-    []
-  );
-}
-
-export function gatewayCoverageForProvider(_provider: string): readonly [] {
-  // Compatibility gateways are Takosumi Cloud-only. OSS Takosumi still exposes
-  // this legacy helper for migration compatibility, but the OSS registry never
-  // advertises gateway coverage.
-  return [];
-}
-
-export function supportedGatewayResourceTypesForProvider(
-  _provider: string,
-): readonly string[] {
-  return [];
 }

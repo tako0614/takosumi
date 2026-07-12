@@ -3,7 +3,7 @@ import { expect, test } from "bun:test";
 import { providerEnvBindingsFromResolved } from "../../../../core/domains/deploy-control/plan_resolution.ts";
 import type { ResolvedInstallationProviderEnvBinding } from "../../../../core/domains/connections/mod.ts";
 
-test("managed operator Provider Connection threads provider base_url into generated root binding", () => {
+test("managed Provider Connection threads generic provider configuration into root binding", () => {
   const resolved: readonly ResolvedInstallationProviderEnvBinding[] = [
     {
       provider: "registry.opentofu.org/cloudflare/cloudflare",
@@ -19,8 +19,9 @@ test("managed operator Provider Connection threads provider base_url into genera
         scopeHints: {
           managedProvider: true,
           managedProviderProfile: "compat.cloudflare.workers.v1",
-          providerBaseUrl:
-            "https://app.takosumi.com/compat/cloudflare/client/v4",
+          providerConfig: {
+            base_url: "https://app.takosumi.com/compat/cloudflare/client/v4",
+          },
           accountId: "ts_acc_takosumi_cloud",
         },
         createdAt: "2026-07-05T00:00:00.000Z",
@@ -34,7 +35,9 @@ test("managed operator Provider Connection threads provider base_url into genera
     {
       provider: "registry.opentofu.org/cloudflare/cloudflare",
       credentialDelivery: "generated_root_variable",
-      baseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      configuration: {
+        base_url: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      },
     },
   ]);
 });

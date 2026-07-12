@@ -191,7 +191,7 @@ test("deploy_control_internal_routes — scoped bearer enforces space and record
               actor: "acct_123",
               spaceIds: ["space_allowed"],
               operations: ["create"],
-              runnerProfileIds: ["cloudflare-default"],
+              runnerProfileIds: ["opentofu-default"],
             }
           : undefined,
     },
@@ -209,7 +209,7 @@ test("deploy_control_internal_routes — scoped bearer enforces space and record
       installationId: installation.id,
       operation: "create",
       source: { kind: "git", url: "https://github.com/example/app.git" },
-      runnerProfileId: "cloudflare-default",
+      runnerProfileId: "opentofu-default",
     }),
   });
   expect(denied.status).toEqual(403);
@@ -228,7 +228,7 @@ test("deploy_control_internal_routes — scoped bearer enforces space and record
       // `update`).
       operation: "create",
       source: { kind: "git", url: "https://github.com/example/app.git" },
-      runnerProfileId: "cloudflare-default",
+      runnerProfileId: "opentofu-default",
     }),
   });
   expect(allowed.status).toEqual(201);
@@ -290,7 +290,7 @@ test("deploy_control_internal_routes — scoped bearer defaults to deny when sco
     body: JSON.stringify({
       spaceId: "space_allowed",
       source: { kind: "git", url: "https://github.com/example/app.git" },
-      runnerProfileId: "cloudflare-default",
+      runnerProfileId: "opentofu-default",
     }),
   });
 
@@ -312,7 +312,7 @@ test("deploy_control_internal_routes — runner profile list is scoped", async (
               actor: "acct_123",
               spaceIds: ["space_allowed"],
               operations: ["create"],
-              runnerProfileIds: ["cloudflare-default"],
+              runnerProfileIds: ["opentofu-default"],
             }
           : undefined,
     },
@@ -327,7 +327,7 @@ test("deploy_control_internal_routes — runner profile list is scoped", async (
   const payload = await response.json();
   expect(
     payload.runnerProfiles.map((profile: { id: string }) => profile.id),
-  ).toEqual(["cloudflare-default"]);
+  ).toEqual(["opentofu-default"]);
 });
 
 // --- OutputShares scoped-principal permission tests (§18) ---------------------
@@ -385,7 +385,7 @@ async function outputShareApp() {
               actor: "acct_123",
               spaceIds: ["space_allowed"],
               operations: ["create"],
-              runnerProfileIds: ["cloudflare-default"],
+              runnerProfileIds: ["opentofu-default"],
             }
           : undefined,
     },

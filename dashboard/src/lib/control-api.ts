@@ -21,6 +21,7 @@ import type {
   ActivityEvent as ContractActivityEvent,
   BackupRecord as ContractBackupRecord,
   Connection as ContractConnection,
+  CredentialRecipe as ContractCredentialRecipe,
   CreditReservation as ContractCreditReservation,
   Dependency as ContractDependency,
   InstallConfig as ContractInstallConfig,
@@ -29,7 +30,6 @@ import type {
   JsonValue as ContractJsonValue,
   ManagedPublicHostnameAllocation,
   OutputShare as ContractOutputShare,
-  ProviderListing as ContractProviderListing,
   ProviderConnection as ContractProviderConnection,
   ProviderResolution as ContractProviderResolution,
   Run as ContractRun,
@@ -965,7 +965,8 @@ export interface ConnectionScopeHints {
   readonly zoneId?: string;
   readonly workersSubdomain?: string;
   readonly managedProvider?: boolean;
-  readonly providerBaseUrl?: string;
+  readonly providerConfig?: Readonly<Record<string, ContractJsonValue>>;
+  readonly moduleInputDefaults?: Readonly<Record<string, ContractJsonValue>>;
   readonly managedProviderProfile?: string;
   readonly managedPublicBaseDomain?: string;
   readonly awsRegion?: string;
@@ -1006,19 +1007,7 @@ export interface Connection {
 
 export type ProviderConnection = Connection;
 
-export interface ProviderListing {
-  readonly id: string;
-  readonly providerSource: string;
-  readonly displayName: string;
-  readonly recommendedEnvNames: readonly string[];
-  readonly requiredEnvGroups: readonly (readonly string[])[];
-  readonly genericEnvSupported: boolean;
-  readonly connectionKinds: readonly string[];
-  readonly credentialRecipeIds: readonly string[];
-  readonly allowedResources: readonly string[];
-  readonly allowedDataSources: readonly string[];
-  readonly docsUrl?: string;
-}
+export type CredentialRecipe = ContractCredentialRecipe;
 
 export type CapsuleCompatibilityLevel =
   "ready" | "auto_capsulized" | "needs_patch" | "unsupported";
@@ -1074,7 +1063,6 @@ type _ContractResponseAssignableToDashboardMirrors = [
   AssertAssignable<ActivityEvent, ContractActivityEvent>,
   AssertAssignable<Connection, ContractConnection>,
   AssertAssignable<ProviderConnection, ContractProviderConnection>,
-  AssertAssignable<ProviderListing, ContractProviderListing>,
   AssertAssignable<CreditReservation, ContractCreditReservation>,
   AssertAssignable<UsageEvent, ContractUsageEvent>,
   AssertAssignable<RunCostInfo, ContractRunCostInfo>,
@@ -2473,15 +2461,15 @@ export function isOAuthUnavailable(error: unknown): boolean {
   );
 }
 
-// --- Providers -------------------------------------------------------------
+// --- Credential Recipes ----------------------------------------------------
 
-export async function listProviderCatalogEntries(): Promise<
-  readonly ProviderListing[]
+export async function listCredentialRecipes(): Promise<
+  readonly CredentialRecipe[]
 > {
   const body = await controlFetch<{
-    providers?: readonly ProviderListing[];
-  }>(`${BASE}/providers`);
-  return body.providers ?? [];
+    recipes?: readonly CredentialRecipe[];
+  }>(`${BASE}/credential-recipes`);
+  return body.recipes ?? [];
 }
 
 // --- OutputShares ----------------------------------------------------------

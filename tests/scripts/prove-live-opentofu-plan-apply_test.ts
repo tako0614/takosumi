@@ -16,6 +16,11 @@ test.skipIf(!hasTofu)(
     expect(proof.evidence.outputCount).toBeGreaterThan(0);
     expect(proof.evidence.stateLockStatus).toBe("recorded");
     expect(proof.evidence.applyAuditEventCount).toBeGreaterThan(0);
+    expect(proof.evidence.providerSource).toBe(
+      "registry.opentofu.org/hashicorp/local",
+    );
+    expect(proof.evidence.destroyStatus).toBe("succeeded");
+    expect(proof.evidence.resourceRemoved).toBe(true);
   },
 );
 

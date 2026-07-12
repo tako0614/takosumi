@@ -264,8 +264,8 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
     },
     {
       method: "GET",
-      path: "/api/v1/providers",
-      summary: "List provider connection recipes and policy metadata",
+      path: "/api/v1/credential-recipes",
+      summary: "List optional guided Credential Recipes",
       auth: "account-session",
     },
     {

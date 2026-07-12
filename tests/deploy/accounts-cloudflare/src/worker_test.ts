@@ -1141,9 +1141,9 @@ const LOCAL_READINESS_ENV: Partial<CloudflareWorkerEnv> = {
     "git+https://github.com/tako0614/takosumi-private.git@0123456789abcdef0123456789abcdef01234567#evidence/restore-rehearsal.md",
   TAKOSUMI_RESTORE_REHEARSAL_EVIDENCE_DIGEST:
     "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-  TAKOSUMI_PROVIDER_REGISTRY_EVIDENCE_REF:
+  TAKOSUMI_CREDENTIAL_RECIPE_EVIDENCE_REF:
     "git+https://github.com/tako0614/takosumi-private.git@0123456789abcdef0123456789abcdef01234567#evidence/provider-connections.md",
-  TAKOSUMI_PROVIDER_REGISTRY_EVIDENCE_DIGEST:
+  TAKOSUMI_CREDENTIAL_RECIPE_EVIDENCE_DIGEST:
     "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
   TAKOSUMI_COST_ATTRIBUTION_EVIDENCE_REF:
     "git+https://github.com/tako0614/takosumi-private.git@0123456789abcdef0123456789abcdef01234567#evidence/cost-attribution.md",
@@ -1248,7 +1248,7 @@ test("platform-readiness 'open' refuses mutable production hardening refs", asyn
   const env = createEnv(d1, {
     TAKOSUMI_ACCOUNTS_ISSUER: "https://app.takosumi.com",
     ...LOCAL_READINESS_ENV,
-    TAKOSUMI_PROVIDER_REGISTRY_EVIDENCE_REF:
+    TAKOSUMI_CREDENTIAL_RECIPE_EVIDENCE_REF:
       "git+https://github.com/tako0614/takosumi-private.git#evidence/provider-connections.md",
   });
 
@@ -1264,7 +1264,7 @@ test("platform-readiness 'open' refuses mutable production hardening refs", asyn
   assert.equal(body.error, "worker_configuration_error");
   assert.match(
     body.error_description ?? "",
-    /TAKOSUMI_PROVIDER_REGISTRY_EVIDENCE_REF must be commit-pinned git\+ ref/,
+    /TAKOSUMI_CREDENTIAL_RECIPE_EVIDENCE_REF must be commit-pinned git\+ ref/,
   );
 });
 

@@ -238,8 +238,8 @@ services:
       - env/cloud.env
     environment:
       TAKOSUMI_LOCAL_OPENTOFU_RUNNER_URL: http://opentofu-runner:8080
-      TAKOSUMI_ENABLED_RUNNER_PROFILES: cloudflare-default,generic-opentofu-provider
-      TAKOSUMI_DEFAULT_RUNNER_PROFILE_ID: cloudflare-default
+      TAKOSUMI_ENABLED_RUNNER_PROFILES: opentofu-default
+      TAKOSUMI_DEFAULT_RUNNER_PROFILE_ID: opentofu-default
     volumes:
       - ../../../takosumi:/workspace
       - ../../../takosumi:/takosumi:ro

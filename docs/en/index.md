@@ -1,8 +1,10 @@
 # Takosumi software
 
-Takosumi is a Git-based OpenTofu control plane. It can run ordinary
+Takosumi is software that deploys and manages OpenTofu/Terraform modules from
+Git through a plan → review → apply flow. It can run ordinary
 OpenTofu/Terraform modules as-is, and it can resolve `takosumi_*` Resource
-Shapes to Targets and Adapters when that typed service form is useful.
+Shapes to Targets and Adapters when that typed service form is useful (see the
+[glossary](./reference/glossary.md) for one-line explanations of the terms).
 
 This page is for Takosumi software and Takosumi for Operator docs. The official
 hosted Takosumi Cloud service that we operate is documented separately at
@@ -124,7 +126,9 @@ The normal UI does not lead with internal model nouns.
 | History       | Who changed what and when                            |
 | Restore point | A state version you can recover from                 |
 
-Technical details are available in the [Model reference](./reference/model.md).
+One-line explanations of the other terms live in the
+[glossary](./reference/glossary.md); technical details are available in the
+[Model reference](./reference/model.md).
 Use the [App Handoff Protocol](./reference/app-handoff.md) when an external web,
 desktop, mobile, or CLI client needs to create a hosted service.
 

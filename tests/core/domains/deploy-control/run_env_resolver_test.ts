@@ -27,7 +27,7 @@ function planRun(over: Partial<PlanRun> = {}): PlanRun {
     },
     sourceDigest: "sha256:src",
     operation: "create",
-    runnerProfileId: "cloudflare-default",
+    runnerProfileId: "opentofu-default",
     installationContext: {
       spaceId: "space_1",
       installationId: "inst_1",
@@ -319,7 +319,7 @@ test("RunEnvResolver does not require Provider Connections for credential-free p
 
   const result = await subject.resolveRunEnvironment({
     planRun: planRun({
-      runnerProfileId: "generic-opentofu-provider",
+      runnerProfileId: "opentofu-default",
       requiredProviders: [NULL_PROVIDER],
     }),
     phase: "plan",

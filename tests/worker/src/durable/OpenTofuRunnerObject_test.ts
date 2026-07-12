@@ -816,7 +816,7 @@ test("OpenTofu runner Durable Object rejects plaintext-only R2 plan artifacts", 
 test("OpenTofu runner Durable Object restores and persists operator-managed state", async () => {
   const calls: string[] = [];
   const r2 = new FakeR2Bucket();
-  const stateBackendRef = "state://takosumi/cloudflare-default";
+  const stateBackendRef = "state://takosumi/opentofu-default";
   const stateKey = `${await testStateBackendPrefix(stateBackendRef)}/installations/inst_1/terraform.tfstate`;
   const crypto = StateArtifactCrypto.fromEnv({
     TAKOSUMI_SECRET_STORE_PASSPHRASE: TEST_PASSPHRASE,
@@ -883,7 +883,7 @@ test("OpenTofu runner Durable Object restores and persists operator-managed stat
             id: "plan_1",
             installationId: "inst_1",
             spaceId: "space_1",
-            runnerProfileId: "cloudflare-default",
+            runnerProfileId: "opentofu-default",
             source: {
               kind: "git",
               url: "https://github.com/example/app.git",
@@ -891,7 +891,7 @@ test("OpenTofu runner Durable Object restores and persists operator-managed stat
             },
           },
           runnerProfile: {
-            id: "cloudflare-default",
+            id: "opentofu-default",
             stateBackend: {
               kind: "operator-managed",
               ref: stateBackendRef,

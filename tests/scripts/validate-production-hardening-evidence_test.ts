@@ -17,25 +17,29 @@ test("production hardening evidence template carries every required check", () =
   expect(Object.keys(template.checks).sort()).toEqual([
     "containerSmoke",
     "costAttribution",
+    "credentialRecipes",
     "egressEnforcement",
     "platformControlPlaneSmoke",
-    "providerCatalog",
     "restoreRehearsal",
     "secretBoundary",
   ]);
   expect(
-    template.checks.providerCatalog.providers.map((item) => item.id),
+    template.checks.credentialRecipes.recipes.map((item) => item.id),
   ).toEqual(["aws", "cloudflare", "gcp", "github", "kubernetes"]);
   expect(
-    template.checks.providerCatalog.providers.every(
-      (item) =>
-        item.genericEnvSupported === true &&
-        item.connectionModes.includes("provider_connection"),
+    template.checks.credentialRecipes.recipes.every((item) =>
+      item.connectionModes.includes("provider_connection"),
     ),
   ).toBe(true);
+  expect(template.checks.credentialRecipes.genericEnvRecipeVerified).toBe(
+    true,
+  );
   expect(
-    template.checks.providerCatalog.cloudOnlyGatewayProjectionReturned,
-  ).toBe(false);
+    template.checks.credentialRecipes.unregisteredProviderExecutionVerified,
+  ).toBe(true);
+  expect(template.checks.credentialRecipes.recipePresenceUsedAsAdmission).toBe(
+    false,
+  );
   expect(template.checks.secretBoundary.leakTargetsChecked).toContain(
     "hardeningGatePayloads",
   );
@@ -55,7 +59,7 @@ test("production hardening evidence manifest emits hardening gate env", () => {
       "git+ssh://git@github.com/tako0614/takosumi-private.git@0123456789abcdef0123456789abcdef01234567#evidence/egress.md",
     TAKOSUMI_RESTORE_REHEARSAL_EVIDENCE_REF:
       "git+ssh://git@github.com/tako0614/takosumi-private.git@0123456789abcdef0123456789abcdef01234567#evidence/restore-rehearsal.md",
-    TAKOSUMI_PROVIDER_REGISTRY_EVIDENCE_REF:
+    TAKOSUMI_CREDENTIAL_RECIPE_EVIDENCE_REF:
       "git+ssh://git@github.com/tako0614/takosumi-private.git@0123456789abcdef0123456789abcdef01234567#evidence/provider-connections.md",
     TAKOSUMI_COST_ATTRIBUTION_EVIDENCE_REF:
       "git+ssh://git@github.com/tako0614/takosumi-private.git@0123456789abcdef0123456789abcdef01234567#evidence/cost-attribution.md",
@@ -129,13 +133,13 @@ test("production hardening evidence requires secret-boundary leak targets", () =
 
 test("production hardening evidence requires provider connection coverage", () => {
   const manifest = validManifest();
-  manifest.checks.providerCatalog.providers =
-    manifest.checks.providerCatalog.providers.filter(
+  manifest.checks.credentialRecipes.recipes =
+    manifest.checks.credentialRecipes.recipes.filter(
       (provider: { id: string }) => provider.id !== "kubernetes",
     );
 
   expect(() => validateProductionHardeningEvidence(manifest)).toThrow(
-    "providerCatalog.providers is missing kubernetes",
+    "credentialRecipes.recipes is missing kubernetes",
   );
 });
 
@@ -232,8 +236,8 @@ test("production hardening evidence file can update evidence digests", async () 
     expect(updated.checks.egressEnforcement.evidenceDigest).toBe(
       expectedDigests.egressEnforcement,
     );
-    expect(updated.checks.providerCatalog.evidenceDigest).toBe(
-      expectedDigests.providerCatalog,
+    expect(updated.checks.credentialRecipes.evidenceDigest).toBe(
+      expectedDigests.credentialRecipes,
     );
     expect(updated.checks.secretBoundary.evidenceDigest).toBe(
       expectedDigests.secretBoundary,
@@ -248,8 +252,8 @@ test("production hardening evidence digest update does not write invalid manifes
   try {
     const manifest = validManifest();
     await writeEvidenceFiles(tempDir, manifest);
-    manifest.checks.providerCatalog.providers =
-      manifest.checks.providerCatalog.providers.filter(
+    manifest.checks.credentialRecipes.recipes =
+      manifest.checks.credentialRecipes.recipes.filter(
         (provider: { id: string }) => provider.id !== "github",
       );
     manifest.checks.containerSmoke.evidenceDigest =
@@ -260,7 +264,7 @@ test("production hardening evidence digest update does not write invalid manifes
 
     await expect(
       updateProductionHardeningEvidenceDigestsFile(manifestPath),
-    ).rejects.toThrow("providerCatalog.providers is missing github");
+    ).rejects.toThrow("credentialRecipes.recipes is missing github");
     expect(await Bun.file(manifestPath).text()).toBe(original);
   } finally {
     await rm(tempDir, { recursive: true, force: true });
@@ -330,7 +334,7 @@ function validManifest(): any {
         live: true,
         summary:
           "OpenTofu runner boundary allowed the required provider API host and denied a blocked metadata source host.",
-        runnerProfileId: "cloudflare-default",
+        runnerProfileId: "opentofu-default",
         runnerBoundary: "cloudflare-container",
         networkPolicyConfigured: true,
         providerAllowProbe: {
@@ -368,42 +372,39 @@ function validManifest(): any {
         rtoMinutes: 30,
         rpoMinutes: 15,
       },
-      providerCatalog: {
+      credentialRecipes: {
         evidenceRef:
           "git+ssh://git@github.com/tako0614/takosumi-private.git@0123456789abcdef0123456789abcdef01234567#evidence/provider-connections.md",
         evidenceDigest:
           "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
         live: true,
         summary:
-          "Production Provider Connection evidence covers guided recipes plus generic env, with no Cloud-only provider endpoint or secret projection.",
-        providers: [
+          "Production Provider Connection evidence covers guided recipes and generic env while an unregistered provider uses the same OpenTofu execution path.",
+        recipes: [
           {
             id: "aws",
             connectionModes: ["provider_connection"],
-            genericEnvSupported: true,
           },
           {
             id: "cloudflare",
             connectionModes: ["provider_connection"],
-            genericEnvSupported: true,
           },
           {
             id: "gcp",
             connectionModes: ["provider_connection"],
-            genericEnvSupported: true,
           },
           {
             id: "github",
             connectionModes: ["provider_connection"],
-            genericEnvSupported: true,
           },
           {
             id: "kubernetes",
             connectionModes: ["provider_connection"],
-            genericEnvSupported: true,
           },
         ],
-        cloudOnlyGatewayProjectionReturned: false,
+        genericEnvRecipeVerified: true,
+        unregisteredProviderExecutionVerified: true,
+        recipePresenceUsedAsAdmission: false,
         secretValuesReturned: false,
       },
       costAttribution: {

@@ -24,7 +24,7 @@ The cloud worker's hosted Takosumi access policy (`takosumi/worker/src/handler.t
 | `TAKOSUMI_ACCOUNTS_PLATFORM_EVIDENCE_REF`                | commit-pinned `git+<repo>@<sha>#<path>` pointer to the evidence file                                       |
 | `TAKOSUMI_ACCOUNTS_PLATFORM_APPROVAL_REF`                | commit-pinned `git+<repo>@<sha>#<path>` pointer to the approval record                                     |
 | `TAKOSUMI_PRODUCTION_HARDENING_GATE`                     | `enforce` when hosted Takosumi access is open                                                              |
-| `TAKOSUMI_*_EVIDENCE_REF` / `TAKOSUMI_*_EVIDENCE_DIGEST` | commit-pinned local fixture refs for container, egress, provider catalog, and secret-boundary smoke checks |
+| `TAKOSUMI_*_EVIDENCE_REF` / `TAKOSUMI_*_EVIDENCE_DIGEST` | commit-pinned local fixture refs for container, egress, credential recipe, and secret-boundary smoke checks |
 
 In production these must be set to non-fixture values pulled from the operator's launch checklist and validated by the production-hardening evidence workflow. In local-substrate we want the same code path to be exercised end-to-end (so the gate logic itself is smoke-tested), but the refs can point at local fixture files because the local worker is never user-reachable (`prove-no-public-leak.sh` keeps it on the docker network only).
 

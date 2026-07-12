@@ -68,7 +68,8 @@ export type ResourceServiceErrorCode =
   | "invalid_delete_policy"
   | "invalid_target_pool"
   | "target_pool_not_found"
-  | "no_eligible_target"
+  | "policy_denied"
+  | "capability_missing"
   | "unsupported_shape"
   | "selected_target_missing"
   | "connection_not_found"
@@ -638,14 +639,14 @@ export class ResourceShapeService {
     } catch (error) {
       return {
         ok: false,
-        error: { code: "no_eligible_target", message: errorMessage(error) },
+        error: { code: "capability_missing", message: errorMessage(error) },
       };
     }
     if (plan.requiresAdapterPlugin && !output.selectedImplementationPlugin) {
       return {
         ok: false,
         error: {
-          code: "no_eligible_target",
+          code: "capability_missing",
           message:
             `${req.kind} implementation ${output.selectedImplementation} ` +
             "requires an installed adapter plugin; its planner module does not materialize a backend resource",

@@ -1,8 +1,8 @@
 # Takosumi Cloud Resources
 
-Takosumi Cloud is the official hosted Takosumi for Operator for managed app,
-service, and data resources on official targets. `EdgeWorker` is one of several
-service forms.
+Takosumi Cloud is the official hosted Takosumi for Operator, providing apps,
+services, and data resources on official managed targets. `EdgeWorker` is one of
+several service forms (runtime shapes for managed resources).
 
 ```text
 Takosumi Cloud Resources =
@@ -18,14 +18,14 @@ Takosumi Cloud Resources =
   + OpenTofu deploys
 ```
 
-The Cloudflare-compatible API is not the product identity. It is an import and
-deploy path for existing Terraform/OpenTofu manifests that already target
-Cloudflare Workers resources and should be imported into Takosumi Cloud
-`EdgeWorker` plus managed bindings.
+The Cloudflare-compatible API is not the product itself. It is an import path
+for existing Terraform/OpenTofu manifests that already target Cloudflare Workers
+resources and should be imported into Takosumi Cloud `EdgeWorker` plus managed
+bindings.
 
 ## Product Vocabulary
 
-Use these terms in landing pages and the main app UI:
+Use these terms in landing pages and the main app screen:
 
 - App / Service
 - Edge Worker
@@ -43,18 +43,18 @@ Use these terms in landing pages and the main app UI:
 - Durable Workflow
 
 Keep `compat.cloudflare.workers.v1` as the architecture and compatibility
-capability name. Use Takosumi Cloud resources / services as the main headline
-and UI language.
+docs capability name. Use Takosumi Cloud resources and services as the main
+heading and screen language.
 
 ## Runtime Architecture
 
-`EdgeWorker` is the service form for edge JavaScript / TypeScript apps.
-Takosumi Cloud can implement it with Cloudflare Workers for Platforms and a
+`EdgeWorker` is the service form for edge JavaScript / TypeScript apps. Takosumi
+Cloud can implement it with Cloudflare Workers for Platforms and a
 Takosumi-managed dispatch layer.
 
 That is a Cloud implementation detail. The Cloud resource model is not limited
 to `EdgeWorker`. OCI-image services are `ContainerService`, object storage is
-`ObjectBucket`, app databases are `SQLDatabase`, and durable workflows are a
+`ObjectBucket`, app databases are `SQLDatabase`, and persistent workflows are a
 separate shape.
 
 ```text
@@ -75,11 +75,13 @@ Every Cloud managed resource passes through the shared Cloud extension layer
 before a backend API is called. Whether the entrypoint is a
 Cloudflare-compatible OpenTofu provider, the `takosumi/takosumi` provider, a
 Compatibility API, or a Dashboard action, the request passes through auth,
-source Workspace context, owner billing context, Resource / NativeResource normalization, a common
-managed operation descriptor, selected-manager availability checks, usage /
-credit guard, and then the selected manager chooses the backend. When the
-entrypoint is a `takosumi_*` Resource Shape, TargetPool / Policy /
-ResolutionLock are also part of the path before manager dispatch.
+source Workspace context, owner billing context, Resource / NativeResource
+normalization, a common managed operation descriptor, selected-manager
+availability checks, usage / credit guard, and then the selected manager
+chooses the backend. The API entrypoint only determines the user-facing
+protocol; backend selection is the responsibility of the manager descriptor /
+dispatch plan. When the entrypoint is a `takosumi_*` Resource Shape, TargetPool
+/ Policy / ResolutionLock are also part of the path before manager dispatch.
 
 ```text
 OpenTofu provider via compat / takosumi provider via Resource Shape API / Compatibility API / Dashboard action
@@ -96,20 +98,25 @@ OpenTofu provider via compat / takosumi provider via Resource Shape API / Compat
 ```
 
 If a service form is known but its selected manager is not configured, the
-request fails before usage precharge and before any backend API call. It does
-not fall back to another compatibility path.
+request fails closed before usage precharge and before any backend API call.
+That is, if a backend such as ContainerService is not yet part of the official
+Cloud, credits are not deducted and no implicit fallback to another
+compatibility path occurs.
 
 The Cloudflare-compatible path is an import path into this pipeline. The current
 official manager for EdgeWorker uses a Workers for Platforms dispatch namespace,
-but the API contract is the service form: `EdgeWorker`, `ObjectBucket`,
-`KVStore`, `SQLDatabase`, `Queue`, and peers. WfP and Cloudflare primitives are
-not the public resource identity.
+but the API contract is fixed to service forms: `EdgeWorker`, `ObjectBucket`,
+`KVStore`, `SQLDatabase`, `Queue`, and peers. WfP and Cloudflare-specific names
+are not the public resource identity.
+
 The shared manager descriptor keeps three names separate: the stable Takosumi
-Cloud service family such as `takosumi.edge_worker`, the public usage family
-used by billing and compatibility meters such as `cloudflare.workers_script`,
+Cloud service family such as `takosumi.edge_worker`, the public usage-meter
+family used by billing and compatibility such as `cloudflare.workers_script`,
 and the replaceable backend manager such as a Workers for Platforms dispatch
 namespace. Changing the manager must not change the user-facing Resource Shape
-API or compatibility entrypoint.
+API or compatibility entrypoint. WfP is an implementation token, not a
+user-facing resource name or billing unit.
+
 For the same reason, Cloud's normalized resource kind is service-form-oriented,
 such as `object_bucket`, `sql_database`, and `durable_workflow`. Tokens such as
 `r2` and `d1` stay compatibility URL tokens or current backend prefixes; they
@@ -122,10 +129,10 @@ References:
 
 ## Delete And Cleanup
 
-Deletes of Takosumi Cloud managed resources are idempotent. A resource whose
-backend is already absent is treated as deleted, so the same destroy can be
-retried safely. Cleanup and destroy remain available after credits are
-exhausted.
+Deleting a Takosumi Cloud managed resource always produces the same result
+regardless of how many times it is run. A resource whose backend is already
+absent is treated as deleted, so the same destroy can be retried safely.
+Cleanup and destroy remain available after credits are exhausted.
 
 For resources such as Object Storage whose cleanup time depends on data volume,
 the delete is accepted before a background cleanup removes data in bounded
@@ -134,8 +141,8 @@ plane immediately, while its name remains unavailable until cleanup completes.
 Deletion is irreversible and stored data cannot be recovered.
 
 BYOC resources created through a user-owned ProviderConnection follow the
-underlying provider's delete and retention policies. If that provider rejects a
-delete because of a retention lock or dependent resource, Takosumi records the
+underlying provider's deletion and retention policies. If the provider rejects
+deletion because of a retention lock or dependent resource, Takosumi records the
 Run as failed instead of claiming success and allows a retry after the cause is
 fixed.
 
@@ -152,15 +159,15 @@ vanity: https://<label>.app.takos.jp
 
 `scoped` requires no DNS ownership verification and consumes no vanity slot.
 `vanity` reserves `<label>.<managed-base-domain>` on a first-come-first-served
-basis and consumes one finite slot owned by the Workspace's immutable owner
+basis and consumes one finite slot owned by the Workspace's unchangeable owner
 account. Both modes are subject to global uniqueness through hostname
 reservation, reserved labels, and abuse policy.
 
 Cloudflare compatibility route and script-subdomain writes that create a
 hostname also require source Workspace and source Capsule context and pass
 through the same OSS hostname reservation authority. Cloud-side KV and Durable
-Object records hold routing and activation state only; they are not the source
-of truth for hostname ownership.
+Object records hold routing and activation state only; they do not determine
+hostname ownership.
 
 The current Dashboard and OpenTofu route lifecycle carries:
 
@@ -176,15 +183,15 @@ The current Dashboard and OpenTofu route lifecycle carries:
 errors do not reveal the claimant Workspace or Capsule name.
 Managed hostname reservations and vanity slots belong to the Capsule lifetime,
 not to an individual route record. A successful Capsule destroy releases the
-reservation. A Cloud-side route DELETE only removes routing or activation state;
-it does not release OSS hostname ownership.
+reservation. A Cloud-side route DELETE only removes routing or activation state
+and does not release OSS hostname ownership.
 
 User-owned custom domains have a separate verified lifecycle, but DNS ownership
 verification and the certificate lifecycle are not implemented. A non-empty
 `custom_domains` request or a route pattern outside the managed base domain
 currently fails closed and is not stored as an active custom domain.
 
-In app install / Store flows, this value is passed to ordinary OpenTofu
+In app install and Store flows, this value is passed to ordinary OpenTofu
 variables through the `installExperience` `public_endpoint` projection. For
 example, `subdomain` is the label for a managed URL, `url` is a managed URL or
 an ordinary OpenTofu variable, and `routePattern` is the route pattern used by
@@ -246,7 +253,7 @@ Switching between real Cloudflare and Takosumi Cloud belongs in Provider
 Binding / Provider Connection. Do not put raw secrets in the manifest.
 
 On Takosumi Cloud, this import path can be used without creating an app
-installation first. It still requires an authenticated token and a billing
+installation first. It still requires an authenticated token and a billable
 source Workspace. Billable writes spend the owning user's account credits and
 are not forwarded to the compatibility endpoint when the owner account has
 insufficient balance.

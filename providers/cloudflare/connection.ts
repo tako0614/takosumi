@@ -1,16 +1,15 @@
 /**
  * Cloudflare connection credential driver façade.
  *
- * A thin, self-contained object the provider runtime registry
- * (`@takosumi/providers`) can call to mint/verify Cloudflare provider
+ * A thin, self-contained object the vault can call to mint/verify Cloudflare provider
  * credentials. It does NOT open sealed blobs or touch the secret-boundary
  * crypto — the vault opens the connection's sealed values in core and hands the
  * already-decrypted values in. The driver only talks to the Cloudflare API
  * (token-vending mint + token verify).
  *
  * `isProvider` mirrors the inline vault `isCloudflareProvider` predicate
- * (`providerEnvRule(provider)?.shortName === "cloudflare"`) so the registry can
- * route a connection to this driver without inlining the cloudflare literal.
+ * (`providerEnvRule(provider)?.shortName === "cloudflare"`) so the vault can
+ * route a connection to this driver without duplicating address matching.
  */
 import type { Connection } from "takosumi-contract/connections";
 import { providerEnvRule } from "takosumi-contract/provider-env-rules";
