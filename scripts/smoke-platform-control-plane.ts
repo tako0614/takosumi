@@ -146,6 +146,24 @@ type PublicUrlCheckResult = {
   readonly bodyIncludes: readonly string[];
   readonly bodyDigest: string;
 };
+type CapsuleFunctionalProbeResult = {
+  readonly kind: "takosumi.capsule-functional-probe@v1";
+  readonly status: "passed";
+  readonly product: string;
+  readonly checks: readonly {
+    readonly name: string;
+    readonly status: "passed";
+  }[];
+  readonly cleanupVerified?: boolean;
+};
+type CapsuleFunctionalProbeEvidence = {
+  readonly product: string;
+  readonly checkNames: readonly string[];
+  readonly cleanupVerified: boolean;
+  readonly resultDigest: string;
+  readonly scriptDigest: string;
+  readonly durationMs: number;
+};
 type SmokeStepTiming = {
   readonly step: string;
   readonly startedAt: string;
@@ -187,6 +205,9 @@ export interface PlatformControlPlaneSmokeOptions {
   readonly vars: Readonly<Record<string, JsonSmokeValue>>;
   readonly outputAllowlist: SmokeOutputAllowlist;
   readonly publicUrlChecks: readonly PublicUrlCheck[];
+  readonly functionalProbeScript?: string;
+  readonly functionalProbeScriptDigest?: string;
+  readonly functionalProbeEnvNames: readonly string[];
   readonly sourceGitUrl?: string;
   readonly sourceRef?: string;
   readonly sourcePath?: string;
@@ -247,6 +268,7 @@ export interface PlatformControlPlaneSmokeResult {
   readonly releaseActivation?: ReleaseActivationVerificationResult;
   readonly cloudflareResourcePreflight?: CloudflareResourcePreflightResult;
   readonly publicUrlChecks?: readonly PublicUrlCheckResult[];
+  readonly functionalProbe?: CapsuleFunctionalProbeEvidence;
   readonly capsuleGateStatus: SmokeCheckStatus;
   readonly policyStatus: SmokeCheckStatus;
   readonly workerUrl: string;
@@ -278,6 +300,8 @@ export interface PlatformControlPlaneSmokeResult {
     readonly varsDigest: string;
     readonly outputAllowlistNames: readonly string[];
     readonly publicUrlCheckNames: readonly string[];
+    readonly functionalProbeScriptDigest?: string;
+    readonly functionalProbeEnvNames: readonly string[];
     readonly capsuleDir?: string;
     readonly sourceGitUrlDigest?: string;
     readonly sourceRef?: string;
@@ -333,6 +357,8 @@ interface CliArgs {
   readonly outputAllowlistJsonFile?: string;
   readonly publicUrlChecksJson?: string;
   readonly publicUrlChecksJsonFile?: string;
+  readonly functionalProbeScript?: string;
+  readonly functionalProbeEnv?: string;
   readonly timeoutSeconds?: string;
   readonly deployTimeoutSeconds?: string;
   readonly pollIntervalMs?: string;
@@ -777,6 +803,31 @@ export async function resolveOptions(
     }),
     outputAllowlist,
   );
+  const functionalProbeScriptInput =
+    args.functionalProbeScript ?? env.TAKOSUMI_SMOKE_FUNCTIONAL_PROBE_SCRIPT;
+  const functionalProbeScript = functionalProbeScriptInput
+    ? resolve(functionalProbeScriptInput)
+    : undefined;
+  const functionalProbeScriptDigest = functionalProbeScript
+    ? sha256(await readFile(functionalProbeScript, "utf8"))
+    : undefined;
+  const functionalProbeEnvNames = parseFunctionalProbeEnvNames(
+    args.functionalProbeEnv ?? env.TAKOSUMI_SMOKE_FUNCTIONAL_PROBE_ENV,
+  );
+  if (functionalProbeEnvNames.length > 0 && !functionalProbeScript) {
+    throw new Error(
+      "--functional-probe-env requires --functional-probe-script",
+    );
+  }
+  if (!args.dryRun) {
+    for (const name of functionalProbeEnvNames) {
+      if (!env[name]) {
+        throw new Error(
+          `functional probe environment variable ${name} is not set`,
+        );
+      }
+    }
+  }
   const appName =
     args.appName ??
     stringRecordValue(explicitVars, "appName") ??
@@ -822,6 +873,9 @@ export async function resolveOptions(
     vars,
     outputAllowlist,
     publicUrlChecks,
+    ...(functionalProbeScript ? { functionalProbeScript } : {}),
+    ...(functionalProbeScriptDigest ? { functionalProbeScriptDigest } : {}),
+    functionalProbeEnvNames,
     ...(sourceGitUrl ? { sourceGitUrl } : {}),
     ...(sourceGitUrl ? { sourceRef } : {}),
     ...(sourceGitUrl ? { sourcePath } : {}),
@@ -953,6 +1007,19 @@ export function dryRunResult(
           })),
         }
       : {}),
+    ...(options.functionalProbeScript
+      ? {
+          functionalProbe: {
+            product: options.appName,
+            checkNames: ["dry-run"],
+            cleanupVerified: true,
+            resultDigest: `sha256:${"0".repeat(64)}`,
+            scriptDigest:
+              options.functionalProbeScriptDigest ?? `sha256:${"0".repeat(64)}`,
+            durationMs: 0,
+          },
+        }
+      : {}),
     ...(options.requireReleaseActivation
       ? {
           releaseActivation: {
@@ -1071,6 +1138,7 @@ export async function runPlatformControlPlaneSmoke(
   let deploymentLedger: DeploymentLedgerVerificationResult | undefined;
   let releaseActivation: ReleaseActivationVerificationResult | undefined;
   let publicUrlChecks: readonly PublicUrlCheckResult[] | undefined;
+  let functionalProbe: CapsuleFunctionalProbeEvidence | undefined;
   let capsuleGateStatus: SmokeCheckStatus = "not_reached";
   let policyStatus: SmokeCheckStatus = "not_reached";
   let timedOutRunId: string | undefined;
@@ -1209,6 +1277,14 @@ export async function runPlatformControlPlaneSmoke(
       );
       completeStep("publicUrlVerified");
     }
+    if (options.functionalProbeScript) {
+      beginStep("functionalProbe");
+      functionalProbe = await runCapsuleFunctionalProbe(
+        options,
+        deploymentLedger.outputsPublic ?? {},
+      );
+      completeStep("functionalProbe");
+    }
     if (options.backupRestoreRehearsal) {
       beginStep("backupRestoreRehearsal");
       backupRestoreRehearsal = await runBackupRestoreRehearsal(options, {
@@ -1287,6 +1363,7 @@ export async function runPlatformControlPlaneSmoke(
       releaseActivation,
       cloudflareResourcePreflight,
       publicUrlChecks,
+      functionalProbe,
       capsuleGateStatus: "passed",
       policyStatus: policyStatus === "denied" ? failPolicy() : "passed",
       workerUrl: shouldVerifyCloudflareDeployment(options)
@@ -1411,6 +1488,7 @@ export async function runPlatformControlPlaneSmoke(
     releaseActivation,
     cloudflareResourcePreflight,
     publicUrlChecks,
+    functionalProbe,
     capsuleGateStatus,
     policyStatus,
     connectionRevoked,
@@ -1448,6 +1526,7 @@ function failedResult(
     readonly releaseActivation?: ReleaseActivationVerificationResult;
     readonly cloudflareResourcePreflight?: CloudflareResourcePreflightResult;
     readonly publicUrlChecks?: readonly PublicUrlCheckResult[];
+    readonly functionalProbe?: CapsuleFunctionalProbeEvidence;
     readonly capsuleGateStatus: SmokeCheckStatus;
     readonly policyStatus: SmokeCheckStatus;
     readonly connectionRevoked?: boolean;
@@ -1501,6 +1580,7 @@ function failedResult(
     releaseActivation: input.releaseActivation,
     cloudflareResourcePreflight: input.cloudflareResourcePreflight,
     publicUrlChecks: input.publicUrlChecks,
+    functionalProbe: input.functionalProbe,
     capsuleGateStatus: input.capsuleGateStatus,
     policyStatus: input.policyStatus,
     workerUrl:
@@ -3584,6 +3664,28 @@ function parsePositiveInteger(
   return Number(raw);
 }
 
+function parseFunctionalProbeEnvNames(
+  raw: string | undefined,
+): readonly string[] {
+  if (!raw?.trim()) return [];
+  const names = [
+    ...new Set(
+      raw
+        .split(",")
+        .map((value) => value.trim())
+        .filter(Boolean),
+    ),
+  ];
+  for (const name of names) {
+    if (!/^[A-Z][A-Z0-9_]*$/u.test(name)) {
+      throw new Error(
+        "--functional-probe-env must be a comma-separated list of uppercase environment variable names",
+      );
+    }
+  }
+  return names.sort();
+}
+
 function normalizeBaseUrl(value: string): string {
   const url = new URL(value);
   url.pathname = url.pathname.replace(/\/+$/g, "");
@@ -4040,6 +4142,8 @@ function publicInputSummary(options: PlatformControlPlaneSmokeOptions): {
   readonly varsDigest: string;
   readonly outputAllowlistNames: readonly string[];
   readonly publicUrlCheckNames: readonly string[];
+  readonly functionalProbeScriptDigest?: string;
+  readonly functionalProbeEnvNames: readonly string[];
   readonly capsuleDir?: string;
   readonly sourceGitUrlDigest?: string;
   readonly sourceRef?: string;
@@ -4066,6 +4170,10 @@ function publicInputSummary(options: PlatformControlPlaneSmokeOptions): {
     varsDigest: digestJson(options.vars),
     outputAllowlistNames: Object.keys(options.outputAllowlist).sort(),
     publicUrlCheckNames: options.publicUrlChecks.map((check) => check.name),
+    ...(options.functionalProbeScriptDigest
+      ? { functionalProbeScriptDigest: options.functionalProbeScriptDigest }
+      : {}),
+    functionalProbeEnvNames: options.functionalProbeEnvNames,
     ...(options.sourceGitUrl
       ? {
           sourceGitUrlDigest: sha256(options.sourceGitUrl),
@@ -4104,6 +4212,172 @@ function stableJson(value: unknown): string {
   return JSON.stringify(value);
 }
 
+async function runCapsuleFunctionalProbe(
+  options: PlatformControlPlaneSmokeOptions,
+  outputsPublic: Readonly<Record<string, unknown>>,
+): Promise<CapsuleFunctionalProbeEvidence> {
+  const script = options.functionalProbeScript;
+  if (!script) throw new Error("functional probe script is not configured");
+  const startedAtMs = Date.now();
+  const tempDir = await mkdtemp(resolve(tmpdir(), "takosumi-capsule-probe-"));
+  const outputsFile = resolve(tempDir, "outputs.json");
+  await writeFile(outputsFile, `${JSON.stringify(outputsPublic)}\n`, {
+    mode: 0o600,
+  });
+  const publicUrl = firstStringValue(outputsPublic, [
+    "url",
+    "public_url",
+    "launch_url",
+    "api_url",
+  ]);
+  const childEnv: NodeJS.ProcessEnv = {
+    PATH: process.env.PATH ?? "",
+    HOME: process.env.HOME ?? tempDir,
+    TMPDIR: tempDir,
+    TAKOSUMI_CAPSULE_OUTPUTS_FILE: outputsFile,
+    TAKOSUMI_CAPSULE_APP_NAME: options.appName,
+    TAKOSUMI_CAPSULE_SPACE_ID: options.space,
+    ...(publicUrl ? { TAKOSUMI_CAPSULE_PUBLIC_URL: publicUrl } : {}),
+  };
+  for (const name of options.functionalProbeEnvNames) {
+    const value = process.env[name];
+    if (!value) {
+      throw new Error(
+        `functional probe environment variable ${name} is not set`,
+      );
+    }
+    childEnv[name] = value;
+  }
+
+  try {
+    const child = spawn(process.execPath, [script], {
+      cwd: dirname(script),
+      env: childEnv,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    let outputBytes = 0;
+    let spawnError: Error | undefined;
+    let timedOut = false;
+    const collect = (target: Buffer[], chunk: Buffer): void => {
+      outputBytes += chunk.length;
+      if (outputBytes > 1024 * 1024) {
+        child.kill("SIGKILL");
+        return;
+      }
+      target.push(Buffer.from(chunk));
+    };
+    child.stdout.on("data", (chunk: Buffer) => collect(stdout, chunk));
+    child.stderr.on("data", (chunk: Buffer) => collect(stderr, chunk));
+    child.on("error", (error) => {
+      spawnError = error;
+    });
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGKILL");
+    }, options.deployTimeoutSeconds * 1000);
+    const exitCode = await new Promise<number>((resolveExit) => {
+      child.on("close", (code) => resolveExit(code ?? 1));
+    });
+    clearTimeout(timeout);
+    if (spawnError) throw spawnError;
+    if (timedOut) {
+      throw new Error(
+        `functional probe did not finish within ${options.deployTimeoutSeconds}s`,
+      );
+    }
+    if (outputBytes > 1024 * 1024) {
+      throw new Error("functional probe output exceeded 1 MiB");
+    }
+    if (exitCode !== 0) {
+      const detail = publicErrorMessage(
+        Buffer.concat(stderr).toString("utf8").trim(),
+      ).slice(0, 2_000);
+      throw new Error(
+        `functional probe exited with ${exitCode}${detail ? `: ${detail}` : ""}`,
+      );
+    }
+    const raw = Buffer.concat(stdout).toString("utf8").trim();
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new Error("functional probe stdout must be one JSON object");
+    }
+    const result = assertCapsuleFunctionalProbeResult(parsed);
+    return {
+      product: result.product,
+      checkNames: result.checks.map((check) => check.name),
+      cleanupVerified: true,
+      resultDigest: digestJson(result),
+      scriptDigest:
+        options.functionalProbeScriptDigest ??
+        sha256(await readFile(script, "utf8")),
+      durationMs: Math.max(0, Date.now() - startedAtMs),
+    };
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+function assertCapsuleFunctionalProbeResult(
+  value: unknown,
+): CapsuleFunctionalProbeResult {
+  if (!isRecord(value))
+    throw new Error("functional probe result must be an object");
+  if (value.kind !== "takosumi.capsule-functional-probe@v1") {
+    throw new Error("functional probe result kind is invalid");
+  }
+  if (value.status !== "passed") {
+    throw new Error("functional probe result did not pass");
+  }
+  if (typeof value.product !== "string" || !value.product.trim()) {
+    throw new Error("functional probe result product is required");
+  }
+  if (!Array.isArray(value.checks) || value.checks.length === 0) {
+    throw new Error("functional probe result requires at least one check");
+  }
+  const checks = value.checks.map((entry) => {
+    if (
+      !isRecord(entry) ||
+      typeof entry.name !== "string" ||
+      !entry.name.trim() ||
+      entry.status !== "passed"
+    ) {
+      throw new Error(
+        "functional probe checks must have a name and passed status",
+      );
+    }
+    return { name: entry.name.trim(), status: "passed" as const };
+  });
+  if (new Set(checks.map((check) => check.name)).size !== checks.length) {
+    throw new Error("functional probe check names must be unique");
+  }
+  if (value.cleanupVerified !== true) {
+    throw new Error("functional probe must verify cleanup of its test data");
+  }
+  return {
+    kind: "takosumi.capsule-functional-probe@v1",
+    status: "passed",
+    product: value.product.trim(),
+    checks,
+    cleanupVerified: true,
+  };
+}
+
+function firstStringValue(
+  value: Readonly<Record<string, unknown>>,
+  names: readonly string[],
+): string | undefined {
+  for (const name of names) {
+    const candidate = value[name];
+    if (typeof candidate === "string" && candidate.trim())
+      return candidate.trim();
+  }
+  return undefined;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -4118,6 +4392,9 @@ function requiredSteps(
     | "cloudflareResourcePreflight"
     | "verificationMode"
     | "requireReleaseActivation"
+    | "publicUrlChecks"
+    | "outputAllowlist"
+    | "functionalProbeScript"
   >,
 ): readonly string[] {
   const steps = [
@@ -4158,6 +4435,9 @@ function requiredSteps(
     options.publicUrlChecks.length > 0
   ) {
     steps.push("publicUrlVerified");
+  }
+  if (options?.functionalProbeScript) {
+    steps.push("functionalProbe");
   }
   if (options?.backupRestoreRehearsal) {
     steps.push("backupRestoreRehearsal");
@@ -4281,6 +4561,29 @@ async function runSelfTest(): Promise<void> {
       throw new Error(
         "self-test out-file leaked account session token file name",
       );
+    }
+    const probeScript = resolve(tempRoot, "probe.ts");
+    await writeFile(
+      probeScript,
+      `console.log(JSON.stringify({kind:"takosumi.capsule-functional-probe@v1",status:"passed",product:"self-test",checks:[{name:"round-trip",status:"passed"}],cleanupVerified:true}));\n`,
+    );
+    const probeEvidence = await runCapsuleFunctionalProbe(
+      {
+        ...options,
+        functionalProbeScript: probeScript,
+        functionalProbeScriptDigest: sha256(
+          await readFile(probeScript, "utf8"),
+        ),
+        functionalProbeEnvNames: [],
+      },
+      { url: "https://example.test" },
+    );
+    if (
+      probeEvidence.product !== "self-test" ||
+      probeEvidence.checkNames.join(",") !== "round-trip" ||
+      probeEvidence.cleanupVerified !== true
+    ) {
+      throw new Error("self-test functional probe evidence is invalid");
     }
   } finally {
     await rm(tempRoot, { recursive: true, force: true });
@@ -4949,6 +5252,8 @@ Options:
   --output-allowlist-json-file <path>             read output projection object from a JSON file
   --public-url-checks-json <json>                 optional array of {output,path,expectedStatus,bodyIncludes[]} checks against allowlisted public URL outputs
   --public-url-checks-json-file <path>            read public URL checks from a JSON file
+  --functional-probe-script <path>                run a local Bun probe after apply/public checks and before destroy; stdout must be takosumi.capsule-functional-probe@v1 JSON
+  --functional-probe-env <NAME,...>               explicitly forward only these environment variables to the functional probe
   --require-release-activation <any|pending|succeeded|failed|none>
                                                    require a release_activation Activity event for the apply Run; default none
   --timeout-seconds <n>                           default 600
