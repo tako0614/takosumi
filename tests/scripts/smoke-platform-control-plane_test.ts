@@ -521,7 +521,7 @@ test("platform control-plane smoke defaults providerless OpenTofu mode to a keyl
   expect(result.inputs.cloudflareAccountIdSource).toBe("not_required");
   expect(options.vars).toEqual({
     name: "takosumi-keyless-test",
-    base_url: "https://example.invalid/takosumi-keyless-test",
+    base_url: "https://takosumi-keyless-test.example.invalid",
   });
   expect(result.steps).toEqual([
     "providerConnectionNotRequired",
