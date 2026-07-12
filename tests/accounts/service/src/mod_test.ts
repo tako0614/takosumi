@@ -840,6 +840,7 @@ const testServiceGrantMaterialCapabilities = new Set<string>([
   "repos:read",
   "repos:write",
   "mcp:invoke",
+  "mcp:manage",
   "events:subscribe",
 ]);
 
