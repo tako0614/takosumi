@@ -123,7 +123,8 @@ test("personal access token workspace migration stores default source Workspace"
 
   expect(migration).toContain("ALTER TABLE accounts_v1.personal_access_tokens");
   expect(migration).toContain("ADD COLUMN IF NOT EXISTS space_id text");
-  expect(migration).toContain("REFERENCES accounts_v1.spaces");
+  expect(migration).toContain("REFERENCES installation_v1.spaces");
+  expect(migration).not.toContain("REFERENCES accounts_v1.spaces");
   expect(migration).toContain("personal_access_tokens_space_idx");
 });
 

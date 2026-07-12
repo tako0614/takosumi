@@ -49,6 +49,7 @@ const SERVICE_GRANT_MATERIAL_CAPABILITIES = [
   "repos:read",
   "repos:write",
   "mcp:invoke",
+  "mcp:manage",
   "events:subscribe",
 ] as const;
 
