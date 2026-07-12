@@ -4826,7 +4826,13 @@ export class RunEngine {
         undefined,
         () => dispatchPlan(effectiveRunEnvironment),
       );
-      if (dispatch.outputAllowlist && result.plannedOutputs) {
+      // Destroy plans intentionally null projected outputs and never mint new
+      // runtime grants from those values.
+      if (
+        running.operation !== "destroy" &&
+        dispatch.outputAllowlist &&
+        result.plannedOutputs
+      ) {
         const plannedWorkspaceOutputs = projectOutputAllowlistSpaceOutputs(
           dispatch.outputAllowlist,
           result.plannedOutputs,
