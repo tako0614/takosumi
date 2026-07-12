@@ -155,11 +155,13 @@ type CapsuleFunctionalProbeResult = {
     readonly status: "passed";
   }[];
   readonly cleanupVerified?: boolean;
+  readonly cleanupDelegatedToDestroy?: boolean;
 };
 type CapsuleFunctionalProbeEvidence = {
   readonly product: string;
   readonly checkNames: readonly string[];
   readonly cleanupVerified: boolean;
+  readonly cleanupMode: "probe" | "opentofu-destroy";
   readonly resultDigest: string;
   readonly scriptDigest: string;
   readonly durationMs: number;
@@ -1013,6 +1015,7 @@ export function dryRunResult(
             product: options.appName,
             checkNames: ["dry-run"],
             cleanupVerified: true,
+            cleanupMode: "probe" as const,
             resultDigest: `sha256:${"0".repeat(64)}`,
             scriptDigest:
               options.functionalProbeScriptDigest ?? `sha256:${"0".repeat(64)}`,
@@ -1310,6 +1313,7 @@ export async function runPlatformControlPlaneSmoke(
     runTimings.push(
       smokeRunTiming("destroy_apply", destroyResult.destroyApplyRun),
     );
+    functionalProbe = finalizeFunctionalProbeCleanup(functionalProbe);
     completeStep("destroy");
 
     if (connectionId && !options.keepConnection) {
@@ -1414,6 +1418,7 @@ export async function runPlatformControlPlaneSmoke(
         runTimings.push(
           smokeRunTiming("destroy_apply", destroyResult.destroyApplyRun),
         );
+        functionalProbe = finalizeFunctionalProbeCleanup(functionalProbe);
         completeStep("destroy");
         failureCleanup = {
           attempted: true,
@@ -4309,7 +4314,9 @@ async function runCapsuleFunctionalProbe(
     return {
       product: result.product,
       checkNames: result.checks.map((check) => check.name),
-      cleanupVerified: true,
+      cleanupVerified: result.cleanupVerified === true,
+      cleanupMode:
+        result.cleanupVerified === true ? "probe" : "opentofu-destroy",
       resultDigest: digestJson(result),
       scriptDigest:
         options.functionalProbeScriptDigest ??
@@ -4354,16 +4361,38 @@ function assertCapsuleFunctionalProbeResult(
   if (new Set(checks.map((check) => check.name)).size !== checks.length) {
     throw new Error("functional probe check names must be unique");
   }
-  if (value.cleanupVerified !== true) {
-    throw new Error("functional probe must verify cleanup of its test data");
+  if (
+    value.cleanupVerified !== true &&
+    value.cleanupDelegatedToDestroy !== true
+  ) {
+    throw new Error(
+      "functional probe must verify cleanup or delegate it to OpenTofu destroy",
+    );
+  }
+  if (
+    value.cleanupVerified === true &&
+    value.cleanupDelegatedToDestroy === true
+  ) {
+    throw new Error(
+      "functional probe cleanup cannot be both verified and delegated",
+    );
   }
   return {
     kind: "takosumi.capsule-functional-probe@v1",
     status: "passed",
     product: value.product.trim(),
     checks,
-    cleanupVerified: true,
+    ...(value.cleanupVerified === true
+      ? { cleanupVerified: true }
+      : { cleanupDelegatedToDestroy: true }),
   };
+}
+
+function finalizeFunctionalProbeCleanup(
+  evidence: CapsuleFunctionalProbeEvidence | undefined,
+): CapsuleFunctionalProbeEvidence | undefined {
+  if (!evidence || evidence.cleanupMode !== "opentofu-destroy") return evidence;
+  return { ...evidence, cleanupVerified: true };
 }
 
 function firstStringValue(
@@ -4581,9 +4610,34 @@ async function runSelfTest(): Promise<void> {
     if (
       probeEvidence.product !== "self-test" ||
       probeEvidence.checkNames.join(",") !== "round-trip" ||
-      probeEvidence.cleanupVerified !== true
+      probeEvidence.cleanupVerified !== true ||
+      probeEvidence.cleanupMode !== "probe"
     ) {
       throw new Error("self-test functional probe evidence is invalid");
+    }
+    const delegatedProbeScript = resolve(tempRoot, "delegated-probe.ts");
+    await writeFile(
+      delegatedProbeScript,
+      `console.log(JSON.stringify({kind:"takosumi.capsule-functional-probe@v1",status:"passed",product:"delegated-self-test",checks:[{name:"leave-data",status:"passed"}],cleanupDelegatedToDestroy:true}));\n`,
+    );
+    const delegatedProbe = await runCapsuleFunctionalProbe(
+      {
+        ...options,
+        functionalProbeScript: delegatedProbeScript,
+        functionalProbeScriptDigest: sha256(
+          await readFile(delegatedProbeScript, "utf8"),
+        ),
+        functionalProbeEnvNames: [],
+      },
+      { url: "https://example.test" },
+    );
+    const finalizedProbe = finalizeFunctionalProbeCleanup(delegatedProbe);
+    if (
+      delegatedProbe.cleanupVerified !== false ||
+      delegatedProbe.cleanupMode !== "opentofu-destroy" ||
+      finalizedProbe?.cleanupVerified !== true
+    ) {
+      throw new Error("self-test delegated cleanup evidence is invalid");
     }
   } finally {
     await rm(tempRoot, { recursive: true, force: true });
