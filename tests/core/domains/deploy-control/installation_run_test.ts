@@ -6265,7 +6265,11 @@ test("installation destroy-plan completes and the unified Run is waiting_approva
     environment: "preview",
     installConfig: {
       outputAllowlist: {
-        launch_url: { from: "launch_url", type: "url" },
+        launch_url: {
+          from: "launch_url",
+          type: "url",
+          required: true,
+        },
       },
     },
   });
