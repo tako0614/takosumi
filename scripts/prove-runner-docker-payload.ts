@@ -61,6 +61,12 @@ function planEnvelope(runId: string): unknown {
     requestedAt: new Date().toISOString(),
     request: {
       generatedRoot: generatedRoot(),
+      outputAllowlist: {
+        base_domain: { from: "base_domain" },
+        public_origin: { from: "public_origin" },
+        member_issuer: { from: "member_issuer" },
+        service_registry_url: { from: "service_registry_url" },
+      },
       planRun: { operation: "create", source: proofSource() },
     },
   };
