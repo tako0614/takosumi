@@ -871,10 +871,7 @@ function validateTargetPoolSpec(
         const optionError = validateImplementationOptions(
           impl.options,
           `TargetPool target[${index}].implementations[${implIndex}].options`,
-          {
-            allowedProviderBaseUrls,
-            plugin: typeof impl.plugin === "string" ? impl.plugin : undefined,
-          },
+          allowedProviderBaseUrls,
         );
         if (optionError) return optionError;
         const secret = findSecretLikeJson(
@@ -915,21 +912,13 @@ function invalidTargetPool(message: string): ResourceServiceError {
 function validateImplementationOptions(
   options: Readonly<Record<string, unknown>>,
   field: string,
-  context: {
-    readonly allowedProviderBaseUrls: ReadonlySet<string>;
-    readonly plugin: string | undefined;
-  },
+  allowedProviderBaseUrls: ReadonlySet<string>,
 ): ResourceServiceError | undefined {
   const providerBaseUrl = options.providerBaseUrl;
   if (providerBaseUrl === undefined) return undefined;
   if (typeof providerBaseUrl !== "string" || providerBaseUrl.trim() === "") {
     return invalidTargetPool(
       `${field}.providerBaseUrl must be a non-empty string`,
-    );
-  }
-  if (!context.plugin) {
-    return invalidTargetPool(
-      `${field}.providerBaseUrl requires an operator-installed implementation plugin`,
     );
   }
   let normalized: string;
@@ -946,7 +935,7 @@ function validateImplementationOptions(
       `${field}.providerBaseUrl must be an absolute URL`,
     );
   }
-  if (!context.allowedProviderBaseUrls.has(normalized)) {
+  if (!allowedProviderBaseUrls.has(normalized)) {
     return invalidTargetPool(
       `${field}.providerBaseUrl is not in the operator allowlist`,
     );
