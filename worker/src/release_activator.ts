@@ -157,6 +157,7 @@ export function createRunnerReleaseActivator(
       const operatorCommands = input.commands.filter(
         (command) => command.executor === "operator",
       );
+      const phase = releaseCommandPhaseLabel(input.commands);
       if (operatorCommands.length > 0) {
         const metadata: Readonly<Record<string, JsonValue>> = {
           commandCount: input.commands.length,
@@ -165,8 +166,7 @@ export function createRunnerReleaseActivator(
         return {
           status: "pending",
           kind: "takosumi.operator.release-activation@v1",
-          message:
-            "post-apply release commands require an operator release activator",
+          message: `${phase} release commands require an operator release activator`,
           metadata,
         };
       }
@@ -174,8 +174,7 @@ export function createRunnerReleaseActivator(
         return {
           status: "pending",
           kind: "takosumi.release-commands@v1",
-          message:
-            "post-apply release commands require a source snapshot archive",
+          message: `${phase} release commands require a source snapshot archive`,
         };
       }
       const workspaceId = releaseActivationWorkspaceId(input);
@@ -197,11 +196,20 @@ export function createRunnerReleaseActivator(
       return {
         status: "succeeded",
         kind: "takosumi.release-commands@v1",
-        message: `ran ${result.commandCount} post-apply release command(s)`,
+        message: `ran ${result.commandCount} ${phase} release command(s)`,
         metadata,
       };
     },
   };
+}
+
+function releaseCommandPhaseLabel(
+  commands: ReleaseActivationInput["commands"],
+): "post-apply" | "pre-destroy" | "mixed-phase" {
+  const phases = new Set(commands.map((command) => command.phase));
+  if (phases.size === 1 && phases.has("pre_destroy")) return "pre-destroy";
+  if (phases.size === 1 && phases.has("post_apply")) return "post-apply";
+  return "mixed-phase";
 }
 
 export function releaseActivatorFromEnv(
