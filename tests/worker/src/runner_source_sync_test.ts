@@ -241,6 +241,47 @@ test("resolveSourceCommit falls back from implicit main to remote HEAD", async (
   }
 });
 
+test("resolveSourceCommit peels an annotated tag to its commit", async () => {
+  const root = await mkdtemp(join(tmpdir(), "takosumi-source-sync-tag-"));
+  try {
+    git(root, ["init", "-b", "main", "repo"]);
+    const repo = join(root, "repo");
+    await writeFile(join(repo, "main.tf"), "terraform {}\n");
+    git(repo, ["add", "main.tf"]);
+    git(repo, [
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "user.name=Takosumi Test",
+      "commit",
+      "-m",
+      "initial",
+    ]);
+    git(repo, [
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "user.name=Takosumi Test",
+      "tag",
+      "-a",
+      "v1.0.0",
+      "-m",
+      "release",
+    ]);
+
+    const expectedCommit = git(repo, ["rev-parse", "v1.0.0^{}"]);
+    const tagObject = git(repo, ["rev-parse", "v1.0.0"]);
+    expect(tagObject).not.toBe(expectedCommit);
+
+    const source = { url: repo, ref: "v1.0.0", path: "." };
+    await expect(
+      resolveSourceCommit(source, { context: { env: commandEnv() } }),
+    ).resolves.toBe(expectedCommit);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // archive object key safety (R2_SOURCE key layout).
 // ---------------------------------------------------------------------------
