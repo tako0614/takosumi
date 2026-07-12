@@ -97,15 +97,8 @@ export interface RootInstallationProviderEnvBinding {
    * material and the generated provider block must stay credential-free.
    */
   readonly credentialDelivery?: "provider_env" | "generated_root_variable";
-  /**
-   * Optional provider API base URL. A composed operator can set this for a
-   * managed Cloudflare Workers provider compatibility profile so the Cloudflare
-   * provider uses an operator-owned `base_url` instead of api.cloudflare.com.
-   * Rendered as `base_url = "…"` in the provider block. A capsule cannot
-   * override it: the generated root passes providers in, so a capsule's own
-   * provider block fails tofu plan (fail-closed redirect).
-   */
-  readonly baseUrl?: string;
+  /** Non-secret provider-block arguments rendered as escaped HCL literals. */
+  readonly configuration?: Readonly<Record<string, JsonValue>>;
 }
 
 export interface GenerateInstallationRootInput {
@@ -341,8 +334,17 @@ function appendProviderSections(
       if (binding.alias) {
         aliasLines.push(`  alias = ${hclString(binding.alias)}`);
       }
-      if (binding.baseUrl) {
-        aliasLines.push(`  base_url = ${hclString(binding.baseUrl)}`);
+      for (const [name, value] of Object.entries(
+        binding.configuration ?? {},
+      ).sort(([left], [right]) => left.localeCompare(right))) {
+        assertIdentifier(name, "rootgen: provider configuration argument");
+        if (name === "alias" || credArgs.some((arg) => arg.arg === name)) {
+          throw new OpenTofuControllerError(
+            "invalid_argument",
+            `rootgen: provider configuration cannot override ${name}`,
+          );
+        }
+        aliasLines.push(`  ${name} = ${hclJsonLiteral(value)}`);
       }
       for (const credArg of credArgs) {
         const varName = aliasCredentialVarName(

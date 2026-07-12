@@ -39,9 +39,9 @@ import {
   mountDeployControlConnectionRoutes,
 } from "./deploy_control_connection_routes.ts";
 import {
-  DEPLOY_CONTROL_PROVIDER_ENDPOINTS,
-  mountDeployControlProviderRoutes,
-} from "./deploy_control_provider_routes.ts";
+  DEPLOY_CONTROL_CREDENTIAL_ENDPOINTS,
+  mountDeployControlCredentialRoutes,
+} from "./deploy_control_credential_routes.ts";
 import {
   DEPLOY_CONTROL_SOURCE_ENDPOINTS,
   mountDeployControlSourceRoutes,
@@ -110,7 +110,7 @@ export * from "./deploy_control_route_paths.ts";
 const DEPLOY_CONTROL_INTERNAL_ENDPOINTS_RICH: readonly DeployControlEndpoint[] =
   [
     ...DEPLOY_CONTROL_CONNECTION_ENDPOINTS,
-    ...DEPLOY_CONTROL_PROVIDER_ENDPOINTS,
+  ...DEPLOY_CONTROL_CREDENTIAL_ENDPOINTS,
     ...DEPLOY_CONTROL_SOURCE_ENDPOINTS,
     ...DEPLOY_CONTROL_DEPLOY_ENDPOINTS,
     ...DEPLOY_CONTROL_SPACE_ENDPOINTS,
@@ -150,7 +150,7 @@ export function mountDeployControlInternalRoutes(
     mountDeployControlLedgerRoutes(ctx);
   }
   mountDeployControlConnectionRoutes(ctx);
-  mountDeployControlProviderRoutes(ctx);
+  mountDeployControlCredentialRoutes(ctx);
   mountDeployControlSourceRoutes(ctx);
   mountDeployControlDeployRoutes(ctx);
   mountDeployControlSpaceRoutes(ctx);

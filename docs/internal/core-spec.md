@@ -352,11 +352,40 @@ material.
 
 Built-in recipes live under `recipes/providers/*.yaml`. The dependency-free
 runner projection is `contract/provider-env-rules.ts`; tests keep YAML,
-provider runtime registry, and runner/vault projection in sync.
+guided provider setup metadata, and runner/vault projection in sync.
 
 Generic env is a required escape hatch so arbitrary providers can run with
 explicit env/file declarations, runner policy, provider plugin policy, and
 egress policy.
+
+Credential Recipe discovery is metadata, not admission. The current API lists
+recipes at `credential-recipes`; it does not expose a provider catalog. Every
+valid provider source uses the `opentofu-default` runner unless the caller
+explicitly selects an operator-defined capability profile. Built-in profile
+selection never branches on provider address.
+
+Provider Connections may carry validated non-secret `providerConfig` and
+`moduleInputDefaults` maps. Root generation renders provider configuration and
+passes only module-declared defaults. Conflicting defaults fail before runner
+dispatch. Provider-specific input names are not encoded in core.
+
+The provider plugin cache and filesystem mirror are optimizations and optional
+supply-chain controls. Direct registry installation is allowed by default; an
+explicit policy may require mirror attestation. Dependency lockfile digest
+evidence remains required for provider-bearing Runs.
+
+Provider execution failures retain a stable machine code:
+
+```text
+provider_source_invalid
+provider_package_unavailable
+provider_platform_binary_unavailable
+provider_protocol_mismatch
+provider_policy_denied
+runner_capability_missing
+provider_checksum_mismatch
+opentofu_init_failed
+```
 
 If an industry-standard protocol, API, or OpenTofu provider already expresses
 the service cleanly, Takosumi should use that standard surface through the

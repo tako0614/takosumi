@@ -32,7 +32,7 @@ const DEFAULT_PROVIDERLESS_CAPSULE_DIR = resolve(
   TAKOSUMI_ROOT,
   "examples/opentofu-basic",
 );
-const DEFAULT_PROVIDERLESS_RUNNER_PROFILE_ID = "generic-opentofu-provider";
+const DEFAULT_PROVIDERLESS_RUNNER_PROFILE_ID = "opentofu-default";
 const DEFAULT_DEPLOY_TIMEOUT_SECONDS = 300;
 const API_PREFIX = "/api/v1";
 const NODE_HTTP_TRANSPORT_SCRIPT = String.raw`

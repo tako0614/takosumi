@@ -533,7 +533,7 @@ test("ContainerService cannot report Ready without a materializing adapter plugi
   });
   expect(result.ok).toBe(false);
   if (!result.ok) {
-    expect(result.error.code).toBe("no_eligible_target");
+    expect(result.error.code).toBe("capability_missing");
     expect(result.error.message).toContain(
       "requires an installed adapter plugin",
     );

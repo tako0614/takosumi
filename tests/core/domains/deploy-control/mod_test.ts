@@ -2,7 +2,6 @@ import { expect, test } from "bun:test";
 import type { OpenTofuRunner } from "../../../../core/domains/deploy-control/mod.ts";
 import {
   applyExpectedGuardFromPlanRun,
-  CREDENTIAL_FREE_UTILITY_PROVIDER_ADDRESSES,
   createDefaultRunnerProfiles,
   OpenTofuControllerError,
   OpenTofuDeploymentController,
@@ -26,12 +25,6 @@ const SOURCE = {
   url: "https://github.com/example/app.git",
   ref: "main",
 } as const;
-
-function expectedProviderProfileProviders(
-  providers: readonly string[],
-): readonly string[] {
-  return [...providers, ...CREDENTIAL_FREE_UTILITY_PROVIDER_ADDRESSES];
-}
 
 /**
  * Installation-first model setup (spec §5). Seeds Space + Source + Snapshot +
@@ -297,7 +290,7 @@ test("plan/apply records Installation, Deployment, and non-sensitive well-known 
   expect(applied.applyRun.stateBackend.kind).toEqual("operator-managed");
   expect(applied.applyRun.stateLock.status).toEqual("recorded");
   expect(applied.applyRun.stateLock.backendRef).toEqual(
-    "state://takosumi/cloudflare-default",
+    "state://takosumi/opentofu-default",
   );
   expect(applied.applyRun.outputs).toEqual([
     {
@@ -971,34 +964,47 @@ test("apply requires the full reviewed PlanRun guard", async () => {
   });
 });
 
-test("runner profile policy blocks unsupported providers before execution", async () => {
+test("default runner admits arbitrary valid provider sources", async () => {
+  let runnerCalled = false;
+  const awsProvider = "registry.opentofu.org/hashicorp/aws";
   const { store, request } = await seedUpdatableInstallation({
-    requiredProviders: ["registry.opentofu.org/hashicorp/aws"],
+    requiredProviders: [awsProvider],
   });
   const controller = new OpenTofuDeploymentController({
     vault: fakeProviderVault() as never,
     store,
     now: () => 30,
     newId: deterministicIds(),
-    runner: fakeRunner(),
-    // Only the Cloudflare surface is enabled — no profile admits AWS and there is
-    // no wildcard generic surface. Runner-profile auto-selection therefore finds
-    // no admitting profile, keeps the default, and policy blocks AWS before
-    // execution. (With an enabled AWS or wildcard surface, auto-selection would
-    // instead route the run there — that positive path is covered by
-    // runner_profile_autoselect_test.ts.)
-    runnerProfiles: createDefaultRunnerProfiles(30).filter(
-      (profile) => profile.id === "cloudflare-default",
-    ),
+    runner: {
+      plan: () => {
+        runnerCalled = true;
+        return Promise.resolve({
+          planDigest: PLAN_DIGEST,
+          planArtifact: testPlanArtifact("arbitrary-provider"),
+          providerLockDigest: LOCK_DIGEST,
+          requiredProviders: [awsProvider],
+          providerInstallation: [
+            {
+              provider: awsProvider,
+              mirrored: false,
+              installationMethod: "direct",
+              attested: false,
+            },
+          ],
+        });
+      },
+      apply: () => Promise.resolve({}),
+    },
   });
 
   const { planRun } = await controller.createPlanRun(request);
-  expect(planRun.status).toEqual("failed");
-  expect(planRun.policy.status).toEqual("blocked");
-  expect(planRun.policy.reasons[0]).toContain("not allowed");
+  expect(planRun.status).toEqual("succeeded");
+  expect(planRun.policy.status).toEqual("passed");
+  expect(planRun.runnerProfileId).toEqual("opentofu-default");
+  expect(runnerCalled).toEqual(true);
 });
 
-test("runner profile policy requires declared providers before execution", async () => {
+test("default runner records providers discovered during OpenTofu init", async () => {
   let runnerCalled = false;
   const { store, request } = await seedUpdatableInstallation({
     requiredProviders: [],
@@ -1014,6 +1020,7 @@ test("runner profile policy requires declared providers before execution", async
         return Promise.resolve({
           planDigest: PLAN_DIGEST,
           planArtifact: testPlanArtifact("observed-provider"),
+          providerLockDigest: LOCK_DIGEST,
           requiredProviders: ["registry.opentofu.org/hashicorp/aws"],
         });
       },
@@ -1023,29 +1030,11 @@ test("runner profile policy requires declared providers before execution", async
 
   const { planRun } = await controller.createPlanRun(request);
 
-  expect(planRun.status).toEqual("failed");
-  expect(runnerCalled).toEqual(false);
-  expect(planRun.requiredProviders).toEqual([]);
-  expect(planRun.policy.reasons.join("\n")).toContain(
-    "requires requiredProviders",
-  );
-  await expect(
-    controller.createApplyRun({
-      planRunId: planRun.id,
-      expected: {
-        planRunId: planRun.id,
-        runnerProfileId: planRun.runnerProfileId,
-        sourceDigest: planRun.sourceDigest,
-        variablesDigest: planRun.variablesDigest,
-        policyDecisionDigest: planRun.policyDecisionDigest,
-        planDigest: PLAN_DIGEST,
-        planArtifactDigest: PLAN_DIGEST,
-      },
-    }),
-  ).rejects.toMatchObject({
-    name: "OpenTofuControllerError",
-    code: "failed_precondition",
-  });
+  expect(planRun.status).toEqual("succeeded");
+  expect(runnerCalled).toEqual(true);
+  expect(planRun.requiredProviders).toEqual([
+    "registry.opentofu.org/hashicorp/aws",
+  ]);
 });
 
 test("runner profile policy blocks denied providers and missing credential refs", async () => {
@@ -1122,7 +1111,7 @@ test("generic runner allows optional provider declarations without Provider Conn
   let runnerCalled = false;
   const genericProfile = createDefaultRunnerProfiles()
     .map((profile) =>
-      profile.id === "generic-opentofu-provider"
+      profile.id === "opentofu-default"
         ? {
             ...profile,
             labels: {
@@ -1132,7 +1121,7 @@ test("generic runner allows optional provider declarations without Provider Conn
           }
         : profile,
     )
-    .find((profile) => profile.id === "generic-opentofu-provider");
+    .find((profile) => profile.id === "opentofu-default");
   if (!genericProfile) throw new Error("generic profile fixture missing");
   const { store, request } = await seedUpdatableInstallation({
     runnerProfileId: genericProfile.id,
@@ -1411,35 +1400,29 @@ test("plan policy composes Space policy ceiling with InstallConfig policy", asyn
   );
 });
 
-test("default Cloudflare runner is an OSS provider runner without Cloud-only hosting metadata", () => {
-  const cloudflare = createDefaultRunnerProfiles(123).find(
-    (profile) => profile.id === "cloudflare-default",
+test("default OpenTofu runner is provider-neutral and has no Cloud hosting metadata", () => {
+  const profile = createDefaultRunnerProfiles(123).find(
+    (profile) => profile.id === "opentofu-default",
   );
 
-  expect(cloudflare?.substrate).toEqual("cloudflare-containers");
-  expect(cloudflare?.cloudflareContainer?.queueName).toEqual("takosumi-runs");
-  expect(cloudflare?.resourceLimits).toEqual({
+  expect(profile?.substrate).toEqual("cloudflare-containers");
+  expect(profile?.cloudflareContainer?.queueName).toEqual("takosumi-runs");
+  expect(profile?.resourceLimits).toEqual({
     maxRunSeconds: 900,
     maxSourceArchiveBytes: 104857600,
     maxSourceDecompressedBytes: 1048576000,
     cpu: "1",
     memoryMb: 1024,
   });
-  expect(cloudflare?.cloudflareWorkersForPlatforms).toBeUndefined();
-  expect(cloudflare?.labels?.["takosumi.com/provider-runner"]).toEqual("true");
-  expect(cloudflare?.allowedProviders).toEqual(
-    expectedProviderProfileProviders([
-      "registry.opentofu.org/cloudflare/cloudflare",
-    ]),
+  expect(profile?.cloudflareWorkersForPlatforms).toBeUndefined();
+  expect(profile?.labels?.["takosumi.com/opentofu-runner"]).toEqual("true");
+  expect(profile?.labels?.["takosumi.com/provider-installation"]).toEqual(
+    "direct-allowed",
   );
-  expect(cloudflare?.credentialRefs).toEqual([
-    {
-      provider: "registry.opentofu.org/cloudflare/cloudflare",
-      ref: "secret://takosumi/cloudflare-default",
-      required: true,
-    },
-  ]);
-  expect(cloudflare?.secretExposurePolicy).toEqual({
+  expect(profile?.allowedProviders).toEqual(["*"]);
+  expect(profile?.credentialRefs).toBeUndefined();
+  expect(profile?.requireCredentialRefs).toEqual(false);
+  expect(profile?.secretExposurePolicy).toEqual({
     providerCredentials: "runner-only",
     tenantWorkerOperatorSecrets: "forbidden",
     redactLogs: true,
@@ -1447,180 +1430,37 @@ test("default Cloudflare runner is an OSS provider runner without Cloud-only hos
   });
 });
 
-test("default runner profile seeds cover provider-env targets and future/custom candidates", () => {
+test("default runner seed is one generic OpenTofu execution profile", () => {
   const profiles = createDefaultRunnerProfiles(123);
-  const byId = new Map(profiles.map((profile) => [profile.id, profile]));
+  expect(profiles.map((profile) => profile.id)).toEqual(["opentofu-default"]);
+  expect(profiles[0]?.allowedProviders).toEqual(["*"]);
+  expect(profiles[0]?.networkPolicy).toEqual({ mode: "operator-managed" });
+  expect(profiles[0]?.labels?.["takosumi.com/profile-state"]).toBeUndefined();
+});
 
-  expect(Array.from(byId.keys())).toEqual([
-    "cloudflare-default",
-    "aws-provider-env-candidate",
-    "gcp-provider-env-candidate",
-    "azure-provider-env-candidate",
-    "kubernetes-provider-env-candidate",
-    "github-provider-env-candidate",
-    "digitalocean-provider-env-candidate",
-    "hcloud-provider-env-candidate",
-    "vultr-provider-env-candidate",
-    "scaleway-provider-env-candidate",
-    "openstack-provider-env-candidate",
-    "docker-custom-example",
-    "generic-opentofu-provider",
+test("runner profile discovery exposes configured profiles, not retired persisted rows", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  await store.putRunnerProfile({
+    ...createDefaultRunnerProfiles(123)[0]!,
+    id: "cloudflare-default",
+    name: "Retired profile",
+  });
+  const controller = new OpenTofuDeploymentController({ store, now: () => 124 });
+
+  const listed = await controller.listRunnerProfiles();
+
+  expect(listed.runnerProfiles.map((profile) => profile.id)).toEqual([
+    "opentofu-default",
   ]);
-  expect(byId.get("azure-provider-env-candidate")?.allowedProviders).toEqual(
-    expectedProviderProfileProviders([
-      "registry.opentofu.org/hashicorp/azurerm",
-    ]),
-  );
-  expect(
-    byId.get("kubernetes-provider-env-candidate")?.allowedProviders,
-  ).toEqual(
-    expectedProviderProfileProviders([
-      "registry.opentofu.org/hashicorp/kubernetes",
-      "registry.opentofu.org/hashicorp/helm",
-    ]),
-  );
-  expect(byId.get("github-provider-env-candidate")?.allowedProviders).toEqual(
-    expectedProviderProfileProviders([
-      "registry.opentofu.org/integrations/github",
-    ]),
-  );
-  expect(
-    byId.get("digitalocean-provider-env-candidate")?.allowedProviders,
-  ).toEqual(
-    expectedProviderProfileProviders([
-      "registry.opentofu.org/digitalocean/digitalocean",
-    ]),
-  );
-  expect(byId.get("hcloud-provider-env-candidate")?.allowedProviders).toEqual(
-    expectedProviderProfileProviders([
-      "registry.opentofu.org/hetznercloud/hcloud",
-    ]),
-  );
-  expect(byId.get("vultr-provider-env-candidate")?.allowedProviders).toEqual(
-    expectedProviderProfileProviders(["registry.opentofu.org/vultr/vultr"]),
-  );
-  expect(byId.get("scaleway-provider-env-candidate")?.allowedProviders).toEqual(
-    expectedProviderProfileProviders([
-      "registry.opentofu.org/scaleway/scaleway",
-    ]),
-  );
-  expect(
-    byId.get("openstack-provider-env-candidate")?.allowedProviders,
-  ).toEqual(
-    expectedProviderProfileProviders([
-      "registry.opentofu.org/terraform-provider-openstack/openstack",
-    ]),
-  );
-  expect(byId.get("openstack-provider-env-candidate")?.substrate).toEqual(
-    "local",
-  );
-  expect(
-    byId.get("openstack-provider-env-candidate")?.cloudflareContainer,
-  ).toEqual(undefined);
-  expect(byId.get("docker-custom-example")?.substrate).toEqual("local");
-  expect(byId.get("docker-custom-example")?.cloudflareContainer).toEqual(
-    undefined,
-  );
-  expect(byId.get("generic-opentofu-provider")?.allowedProviders).toEqual([
-    "*",
-  ]);
-  expect(byId.get("generic-opentofu-provider")?.networkPolicy).toEqual({
-    mode: "operator-managed",
-  });
-  expect(byId.get("generic-opentofu-provider")?.requireCredentialRefs).toEqual(
-    false,
-  );
-  expect(
-    byId.get("generic-opentofu-provider")?.labels?.[
-      "takosumi.com/provider-surface"
-    ],
-  ).toEqual("generic");
-  expect(
-    byId.get("cloudflare-default")?.labels?.["takosumi.com/profile-state"],
-  ).toEqual(undefined);
-  for (const id of [
-    "aws-provider-env-candidate",
-    "gcp-provider-env-candidate",
-    "kubernetes-provider-env-candidate",
-    "github-provider-env-candidate",
-    "azure-provider-env-candidate",
-    "digitalocean-provider-env-candidate",
-    "hcloud-provider-env-candidate",
-    "vultr-provider-env-candidate",
-    "scaleway-provider-env-candidate",
-    "openstack-provider-env-candidate",
-    "docker-custom-example",
-    "generic-opentofu-provider",
-  ]) {
-    expect(byId.get(id)?.labels?.["takosumi.com/profile-state"]).toEqual(
-      "candidate",
-    );
-  }
 });
 
-test("default runner profile seeds record provider network policy patterns", () => {
-  const profiles = createDefaultRunnerProfiles(123);
-  const byId = new Map(profiles.map((profile) => [profile.id, profile]));
-
-  expect(
-    byId.get("aws-provider-env-candidate")?.networkPolicy?.allowedHostPatterns,
-  ).toContain("*.amazonaws.com");
-  expect(
-    byId.get("gcp-provider-env-candidate")?.networkPolicy?.allowedHostPatterns,
-  ).toContain("*.googleapis.com");
-  expect(
-    byId.get("azure-provider-env-candidate")?.networkPolicy?.allowedHosts,
-  ).toContain("management.azure.com");
-  expect(
-    byId.get("azure-provider-env-candidate")?.networkPolicy
-      ?.allowedHostPatterns,
-  ).toContain("*.microsoftonline.com");
-  expect(
-    byId.get("kubernetes-provider-env-candidate")?.networkPolicy?.mode,
-  ).toEqual("operator-managed");
-  expect(
-    byId.get("digitalocean-provider-env-candidate")?.networkPolicy
-      ?.allowedHosts,
-  ).toContain("api.digitalocean.com");
-  expect(
-    byId.get("hcloud-provider-env-candidate")?.networkPolicy?.allowedHosts,
-  ).toContain("api.hetzner.cloud");
-  expect(
-    byId.get("vultr-provider-env-candidate")?.networkPolicy?.allowedHosts,
-  ).toContain("api.vultr.com");
-  expect(
-    byId.get("scaleway-provider-env-candidate")?.networkPolicy
-      ?.allowedHostPatterns,
-  ).toContain("*.scaleway.com");
-  expect(
-    byId.get("openstack-provider-env-candidate")?.networkPolicy?.mode,
-  ).toEqual("operator-managed");
-});
-
-test("candidate runner profiles are blocked until operator validation enables them", async () => {
-  const { store, request } = await seedUpdatableInstallation({
-    requiredProviders: ["registry.opentofu.org/hashicorp/aws"],
-    runnerProfileId: "aws-provider-env-candidate",
-  });
-  const controller = new OpenTofuDeploymentController({
-    vault: fakeProviderVault() as never,
-    store,
-    now: () => 38,
-    newId: deterministicIds(),
-    runner: fakeRunner(),
-    defaultRunnerProfileId: "aws-provider-env-candidate",
-  });
-
-  const { planRun } = await controller.createPlanRun(request);
-
-  expect(planRun.status).toEqual("failed");
-  expect(planRun.policy.reasons.join("\n")).toContain("disabled candidate");
-});
-
-test("operator-enabled candidate runner profiles can pass provider policy", async () => {
-  const profile = createDefaultRunnerProfiles(123).find(
-    (candidate) => candidate.id === "aws-provider-env-candidate",
-  )!;
+test("operator-defined capability runner profiles remain explicitly selectable", async () => {
+  const profile: RunnerProfile = {
+    ...createDefaultRunnerProfiles(123)[0]!,
+    id: "private-network",
+    name: "Private network",
+    labels: { "takosumi.com/execution-capability": "private-network" },
+  };
   const { store, request } = await seedUpdatableInstallation({
     requiredProviders: ["registry.opentofu.org/hashicorp/aws"],
     runnerProfileId: profile.id,
@@ -1644,15 +1484,7 @@ test("operator-enabled candidate runner profiles can pass provider policy", asyn
         }),
       apply: () => Promise.resolve({}),
     },
-    runnerProfiles: [
-      {
-        ...profile,
-        labels: {
-          ...profile.labels,
-          "takosumi.com/profile-enabled": "true",
-        },
-      },
-    ],
+    runnerProfiles: [profile],
     defaultRunnerProfileId: profile.id,
   });
 
@@ -1660,6 +1492,7 @@ test("operator-enabled candidate runner profiles can pass provider policy", asyn
 
   expect(planRun.status).toEqual("succeeded");
   expect(planRun.policy.status).toEqual("passed");
+  expect(planRun.runnerProfileId).toEqual("private-network");
 });
 
 test("generic-env providers run on an ordinary runner profile when the provider is allowed", async () => {

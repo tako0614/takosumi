@@ -25,13 +25,13 @@ const ROWS = [
   },
   {
     axis: "引っ越し",
-    us: "同じコードで別 cloud へ",
+    us: "同じコードで別のクラウドへ",
     saas: "原則不可、エクスポートしても互換性なし",
     paas: "不可、ロックイン",
   },
   {
     axis: "拡張 / 自作",
-    us: "スターターや Git リンクで追加",
+    us: "テンプレートや Git リポジトリで追加",
     saas: "ベンダーが出した連携だけ",
     paas: "ベンダーの SDK の範囲内",
   },
@@ -44,22 +44,22 @@ export default function Comparison() {
       title="ほかの選択肢と、何が違うか。"
       lede={
         <>
-          便利な SaaS や PaaS と、自分で持つ Takosumi の違い。
-          <em class="em">データが誰のものか</em>という視点で並べています。
+          便利な SaaS や PaaS と、自分で持つ Takosumi を、
+          <em class="em">データが誰のものか</em>という視点で比べています。
         </>
       }
     >
       <div class="comparison">
         <table>
           <caption class="sr-only">
-            Takosumi と 典型的な SaaS / Vendor PaaS の比較
+            Takosumi と 典型的な SaaS / ベンダー PaaS の比較
           </caption>
           <thead>
             <tr>
               <th scope="col"></th>
               <th scope="col">Takosumi</th>
               <th scope="col">典型的な SaaS</th>
-              <th scope="col">Vendor PaaS</th>
+              <th scope="col">ベンダー PaaS</th>
             </tr>
           </thead>
           <tbody>

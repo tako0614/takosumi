@@ -18,10 +18,10 @@ import type { CapsuleProviderEnvBindings } from "./connections.ts";
 import type { ProviderCredentialMintEvidence } from "./security.ts";
 import { INTERNAL_V1_PREFIX } from "./api-surface.ts";
 export type {
-  ListProvidersResponse,
-  ProviderListingResponse,
-  ProviderListing,
-} from "./providers.ts";
+  CredentialRecipe,
+  CredentialRecipeResponse,
+  ListCredentialRecipesResponse,
+} from "./credential-recipes.ts";
 
 // ---------------------------------------------------------------------------
 // INTERNAL deploy-control seam paths. These `/internal/v1/*` routes are the
@@ -856,4 +856,7 @@ export interface ListDeploymentOutputsResponse {
 
 export * from "./connections.ts";
 export * from "./deploy-control-errors.ts";
-export { PROVIDER_PATH, PROVIDERS_PATH } from "./providers.ts";
+export {
+  CREDENTIAL_RECIPE_PATH,
+  CREDENTIAL_RECIPES_PATH,
+} from "./credential-recipes.ts";

@@ -300,7 +300,7 @@ test("generateInstallationRoot wires multiple aliases for one child provider", (
   );
 });
 
-test("generateInstallationRoot renders base_url in the provider block when set for a provider compatibility endpoint", () => {
+test("generateInstallationRoot renders generic provider configuration", () => {
   const baseUrl = "https://app.takosumi.com/compat/cloudflare/client/v4";
   const { files } = generateInstallationRoot({
     template: WORKER_TEMPLATE,
@@ -311,7 +311,11 @@ test("generateInstallationRoot renders base_url in the provider block when set f
     },
     installType: "opentofu_module",
     providerEnvBindings: [
-      { provider: "cloudflare/cloudflare", alias: "main", baseUrl },
+      {
+        provider: "cloudflare/cloudflare",
+        alias: "main",
+        configuration: { base_url: baseUrl },
+      },
     ],
   });
   const mainTf = files["main.tf"]!;
@@ -327,7 +331,7 @@ test("generateInstallationRoot renders base_url in the provider block when set f
   );
 });
 
-test("generateInstallationRoot omits base_url when the binding has none (self-host)", () => {
+test("generateInstallationRoot omits provider configuration when none is set", () => {
   const { files } = generateInstallationRoot({
     template: WORKER_TEMPLATE,
     inputs: {

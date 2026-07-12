@@ -38,6 +38,7 @@ import {
   runReviewedPlanApply,
   runCompatibilityCheck,
 } from "./plan_apply.ts";
+import { classifyOpenTofuFailure } from "./exec.ts";
 export async function handleRunnerRequest(request: Request): Promise<Response> {
   {
     const url = new URL(request.url);
@@ -159,14 +160,17 @@ export async function handleRunnerRequest(request: Request): Promise<Response> {
         status: result.exitCode === 0 ? 200 : 500,
       });
     } catch (error) {
+      const errorText = error instanceof Error ? error.message : String(error);
+      const errorCode = classifyOpenTofuFailure(errorText, "runtime");
       return Response.json(
         {
           runId,
           action,
           status: "failed",
           exitCode: 1,
+          ...(errorCode ? { errorCode } : {}),
           stderr: redactRunnerOutput(
-            error instanceof Error ? error.message : String(error),
+            errorText,
             requestRedactionValues,
           ),
         },

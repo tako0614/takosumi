@@ -31,13 +31,13 @@ export const PRICING_PLANS: readonly PricingPlan[] = [
     features: [
       {
         label:
-          "自分の環境で Takosumi を動かし、deploy の設定も実行記録も自分で持つ",
+          "自分の環境で Takosumi を動かし、デプロイの設定も実行記録も自分で持ちます",
       },
       {
-        label: "サーバー代はあなたが直接クラウドに払う (Takosumi には払わない)",
+        label: "サーバー代は、あなたがクラウドに直接払います (Takosumi には払いません)",
       },
-      { label: "課金画面も従量課金もなし。止める人も値上げする人もいない" },
-      { label: "すべてオープンソース。中身を読める・直せる・引っ越せる" },
+      { label: "課金画面も従量課金もありません。止める人も、値上げする人もいません" },
+      { label: "すべてオープンソース。中身を読めて、直せて、引っ越せます" },
     ],
     cta: { label: "セルフホストガイド", href: "/docs/" },
   },
@@ -54,7 +54,7 @@ export const PRICING_PLANS: readonly PricingPlan[] = [
         label: "使いすぎを防ぐため、上限や支払い設定に応じて実行前に止まります",
       },
       {
-        label: "料金表は Takosumi Cloud が決め、原価割れしない単価で運用します",
+        label: "料金は公開の料金表どおり。運用コストに見合う単価で提供します",
       },
     ],
     cta: { label: "Cloud を開く", href: "https://app.takosumi.com/" },

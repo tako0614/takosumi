@@ -46,7 +46,7 @@ import type {
   CreateSourceCompatibilityCheckRequest,
   PublicCapsuleCompatibilityReportResponse,
 } from "takosumi-contract/capsules";
-import type { ListProvidersResponse } from "takosumi-contract/providers";
+import type { ListCredentialRecipesResponse } from "takosumi-contract/credential-recipes";
 import { consoleErrorRedacted } from "../redacted-log.ts";
 import type { Workspace, WorkspaceType } from "takosumi-contract/workspaces";
 import type {
@@ -497,8 +497,8 @@ function isBindableProviderConnection(
     connection.workspaceId === undefined &&
     connection.spaceId === undefined &&
     connection.scopeHints?.managedProvider === true &&
-    typeof connection.scopeHints.providerBaseUrl === "string" &&
-    connection.scopeHints.providerBaseUrl.trim().length > 0
+    typeof connection.scopeHints.providerConfig?.base_url === "string" &&
+    connection.scopeHints.providerConfig.base_url.trim().length > 0
   );
 }
 

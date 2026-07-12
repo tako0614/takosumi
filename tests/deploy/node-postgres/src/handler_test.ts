@@ -30,9 +30,9 @@ const BASE_ENV = {
     "git+https://github.com/tako0614/takosumi-private.git@0123456789abcdef0123456789abcdef01234567#evidence/restore-rehearsal.md",
   TAKOSUMI_RESTORE_REHEARSAL_EVIDENCE_DIGEST:
     "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-  TAKOSUMI_PROVIDER_REGISTRY_EVIDENCE_REF:
+  TAKOSUMI_CREDENTIAL_RECIPE_EVIDENCE_REF:
     "git+https://github.com/tako0614/takosumi-private.git@0123456789abcdef0123456789abcdef01234567#evidence/provider-connections.md",
-  TAKOSUMI_PROVIDER_REGISTRY_EVIDENCE_DIGEST:
+  TAKOSUMI_CREDENTIAL_RECIPE_EVIDENCE_DIGEST:
     "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
   TAKOSUMI_COST_ATTRIBUTION_EVIDENCE_REF:
     "git+https://github.com/tako0614/takosumi-private.git@0123456789abcdef0123456789abcdef01234567#evidence/cost-attribution.md",

@@ -9,7 +9,7 @@ const REQUIRED_CHECKS = [
   "platformControlPlaneSmoke",
   "egressEnforcement",
   "restoreRehearsal",
-  "providerCatalog",
+  "credentialRecipes",
   "costAttribution",
   "secretBoundary",
 ] as const;
@@ -36,9 +36,9 @@ const EVIDENCE_ENV_BY_CHECK: Record<
     ref: "TAKOSUMI_RESTORE_REHEARSAL_EVIDENCE_REF",
     digest: "TAKOSUMI_RESTORE_REHEARSAL_EVIDENCE_DIGEST",
   },
-  providerCatalog: {
-    ref: "TAKOSUMI_PROVIDER_REGISTRY_EVIDENCE_REF",
-    digest: "TAKOSUMI_PROVIDER_REGISTRY_EVIDENCE_DIGEST",
+  credentialRecipes: {
+    ref: "TAKOSUMI_CREDENTIAL_RECIPE_EVIDENCE_REF",
+    digest: "TAKOSUMI_CREDENTIAL_RECIPE_EVIDENCE_DIGEST",
   },
   costAttribution: {
     ref: "TAKOSUMI_COST_ATTRIBUTION_EVIDENCE_REF",
@@ -155,9 +155,9 @@ export function verifyProductionHardeningGateResponse(
       response.checks.restoreRehearsal,
       manifestValidation.env,
     ),
-    providerCatalog: verifyGateCheck(
-      "providerCatalog",
-      response.checks.providerCatalog,
+    credentialRecipes: verifyGateCheck(
+      "credentialRecipes",
+      response.checks.credentialRecipes,
       manifestValidation.env,
     ),
     costAttribution: verifyGateCheck(
@@ -584,8 +584,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function defaultProductionHardeningPublicSummary(enforced: boolean): string {
   return enforced
-    ? "Pinned operator evidence for container smoke, platform control-plane smoke, egress enforcement, restore rehearsal, provider catalog, cost attribution, and secret-boundary hardening was validated and enforced by the platform gate."
-    : "Pinned operator evidence for container smoke, platform control-plane smoke, egress enforcement, restore rehearsal, provider catalog, cost attribution, and secret-boundary hardening was validated, but enforcement is not enabled.";
+    ? "Pinned operator evidence for container smoke, platform control-plane smoke, egress enforcement, restore rehearsal, credential recipes, cost attribution, and secret-boundary hardening was validated and enforced by the platform gate."
+    : "Pinned operator evidence for container smoke, platform control-plane smoke, egress enforcement, restore rehearsal, credential recipes, cost attribution, and secret-boundary hardening was validated, but enforcement is not enabled.";
 }
 
 function productionHardeningPublicSummaryErrors(value: string): string[] {

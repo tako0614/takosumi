@@ -1,5 +1,5 @@
 /**
- * Per-ConnectionKind verification drivers (`test()` mint gate).
+ * Per-ProviderConnectionKind verification drivers (`test()` mint gate).
  *
  * Background: the vault's `mint` paths refuse any Connection that is not
  * `verified`. Historically `test()` had ONE live driver branch keyed on cloud
@@ -31,7 +31,7 @@
  *                    probe. GCP OAuth / impersonation remain pending until real
  *                    live verifier and mint drivers are wired.
  */
-import type { Connection, ConnectionKind } from "takosumi-contract/connections";
+import type { Connection, ProviderConnectionKind } from "takosumi-contract/connections";
 import { sameProviderFamily } from "takosumi-contract/provider-env-rules";
 import { GIT_HTTPS_TOKEN_ENV } from "takosumi-contract/sources";
 
@@ -235,13 +235,13 @@ export const verifyGcpReserved: VerifyDriver = async () => ({
 });
 
 /**
- * Per-ConnectionKind verify driver registry. The vault routes `test()` through
+ * Per-ProviderConnectionKind verify driver registry. The vault routes `test()` through
  * `verifyDriverForKind` for kinds NOT already handled by the live
  * Cloudflare / AWS provider-id branches. A kind with no entry returns
  * `undefined`, and the vault keeps its existing `pending` "no verification
  * driver" fallback for it.
  */
-const VERIFY_DRIVERS: Partial<Record<ConnectionKind, VerifyDriver>> = {
+const VERIFY_DRIVERS: Partial<Record<ProviderConnectionKind, VerifyDriver>> = {
   source_git_https_token: verifyGitHttps,
   source_git_ssh_key: verifyGitSsh,
   generic_env_provider: verifyGenericEnvProvider,
@@ -252,7 +252,7 @@ const VERIFY_DRIVERS: Partial<Record<ConnectionKind, VerifyDriver>> = {
 
 /** Resolves the verify driver for a connection kind, or undefined. */
 export function verifyDriverForKind(
-  kind: ConnectionKind | undefined,
+  kind: ProviderConnectionKind | undefined,
 ): VerifyDriver | undefined {
   if (!kind) return undefined;
   return VERIFY_DRIVERS[kind];

@@ -149,6 +149,79 @@ test("register rejects unknown providers without a declared generic-env recipe",
   ]);
 });
 
+test("register rejects credential-shaped values in non-secret provider metadata before persistence", async () => {
+  const cases = [
+    {
+      scopeHints: {
+        providerConfig: { api_token: "must-not-be-public" },
+      },
+      path: "scopeHints.providerConfig.api_token",
+    },
+    {
+      scopeHints: {
+        providerConfig: {
+          request: { headers: { authorization: "Bearer must-not-be-public" } },
+        },
+      },
+      path: "scopeHints.providerConfig.request.headers.authorization",
+    },
+    {
+      scopeHints: {
+        moduleInputDefaults: { password: "must-not-be-public" },
+      },
+      path: "scopeHints.moduleInputDefaults.password",
+    },
+  ] as const;
+
+  for (const entry of cases) {
+    const { store, vault } = makeVault();
+    const error = await vault
+      .register({
+        spaceId: "space_1",
+        provider: "registry.opentofu.org/snowflake-labs/snowflake",
+        kind: "generic_env_provider",
+        values: { SNOWFLAKE_TOKEN: "sealed-secret" },
+        scopeHints: entry.scopeHints,
+      })
+      .catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(ConnectionVaultError);
+    expect((error as ConnectionVaultError).code).toBe("invalid_argument");
+    expect((error as ConnectionVaultError).message).toContain(entry.path);
+    expect(await store.listConnections("space_1")).toEqual([]);
+    expect(await store.getSecretBlob("conn_test000000000001")).toBeUndefined();
+  }
+});
+
+test("register keeps descriptive non-secret provider metadata", async () => {
+  const { vault } = makeVault();
+  const connection = await vault.register({
+    spaceId: "space_1",
+    provider: "registry.opentofu.org/hashicorp/local",
+    kind: "generic_env_provider",
+    values: { LOCAL_PROVIDER_MARKER: "sealed-secret" },
+    scopeHints: {
+      providerConfig: {
+        endpoint: "https://provider.example.test",
+        retry: { max_attempts: 3 },
+      },
+      moduleInputDefaults: {
+        secret_name: "app-credentials",
+        password_policy: "generated",
+      },
+    },
+  });
+
+  expect(connection.scopeHints?.providerConfig).toEqual({
+    endpoint: "https://provider.example.test",
+    retry: { max_attempts: 3 },
+  });
+  expect(connection.scopeHints?.moduleInputDefaults).toEqual({
+    secret_name: "app-credentials",
+    password_policy: "generated",
+  });
+});
+
 test("register rejects a hybrid { spaceId, scope: operator } privilege escalation", async () => {
   const { store, vault } = makeVault();
   // Operator-level provider compatibility coverage has NO owning Space, so a

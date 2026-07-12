@@ -12,31 +12,31 @@ export const AUDIENCES: readonly Audience[] = [
     name: "はじめての人",
     persona:
       "難しい運用を抱えずに、自分のサービスを 1 つホストしたい。",
-    exampleStack: "自分の static site / web service",
+    exampleStack: "自分の静的サイト / Web サービス",
     cta: { label: "Cloud を開く", href: "https://app.takosumi.com/" },
   },
   {
     name: "Indie hacker / 個人開発者",
     persona:
-      "自分のサービスをリンクから登録し、変更確認と接続履歴を残したまま好きな cloud や VM に出せる。",
-    exampleStack: "web + API + DB を 1 つの module set で",
+      "自分のサービスをリンクから登録して、変更の確認と接続の履歴を残したまま、好きなクラウドや VM に公開したい。",
+    exampleStack: "Web + API + DB をひとつの構成で",
     cta: {
-      label: "Quickstart",
+      label: "クイックスタート",
       href: "/docs/reference/deploy-control-api",
     },
   },
   {
     name: "小チーム / コミュニティ",
     persona:
-      "確認済みの変更と audit trail を付けて、チームの公開作業を共有する。",
-    exampleStack: "複数サービス + 共有接続 / policy",
+      "確認済みの変更と監査ログを残しながら、チームの公開作業を共有したい。",
+    exampleStack: "複数のサービス + 共有の接続・ポリシー",
     cta: { label: "Dashboard を開く", href: "https://app.takosumi.com/" },
   },
   {
     name: "学校 / 組織 / 公共",
     persona:
-      "private DC でも cloud でも、multi-tenant。監査 / 引っ越し / lock-in 回避が要る。",
-    exampleStack: "multi-tenant + 自前 IdP 連携 + audit ledger",
-    cta: { label: "Operator reference", href: "/docs/reference/operator" },
+      "自前のデータセンターでもクラウドでも、マルチテナントで運用したい。監査と、あとから引っ越せる自由も必要。",
+    exampleStack: "マルチテナント + 自前 IdP 連携 + 監査ログ",
+    cta: { label: "Operator 向けドキュメント", href: "/docs/reference/operator" },
   },
 ];

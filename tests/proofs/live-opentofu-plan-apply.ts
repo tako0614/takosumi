@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 
 import { createHash } from "node:crypto";
-import { cp, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, cp, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import type {
@@ -12,6 +12,7 @@ import {
   applyExpectedGuardFromPlanRun,
   OpenTofuDeploymentController,
   type OpenTofuApplyJob,
+  type OpenTofuDestroyJob,
   type OpenTofuPlanJob,
   type OpenTofuRunner,
 } from "../../core/domains/deploy-control/mod.ts";
@@ -33,6 +34,9 @@ export interface LiveOpenTofuPlanApplyProof {
     readonly outputCount: number;
     readonly stateLockStatus: string;
     readonly applyAuditEventCount: number;
+    readonly providerSource: string;
+    readonly destroyStatus: "succeeded";
+    readonly resourceRemoved: boolean;
   };
 }
 
@@ -101,6 +105,25 @@ export async function runLiveOpenTofuPlanApplyProof(options: {
     if (applied.applyRun.status !== "succeeded") {
       throw new Error(`ApplyRun failed: ${JSON.stringify(applied.applyRun.diagnostics ?? [])}`);
     }
+    const proofFile = `${workdir}/takosumi-provider-proof.txt`;
+    await access(proofFile);
+    const destroyPlan = await controller.createInstallationDestroyPlan(
+      seeded.installation.id,
+    );
+    await controller.approveRun(destroyPlan.planRun.id);
+    const destroyed = await controller.createApplyRun({
+      planRunId: destroyPlan.planRun.id,
+      expected: applyExpectedGuardFromPlanRun(destroyPlan.planRun),
+    });
+    if (destroyed.applyRun.status !== "succeeded") {
+      throw new Error(
+        `Destroy failed: ${JSON.stringify(destroyed.applyRun.diagnostics ?? [])}`,
+      );
+    }
+    const resourceRemoved = await access(proofFile).then(
+      () => false,
+      () => true,
+    );
     const proof: LiveOpenTofuPlanApplyProof = {
       kind: PROOF_KIND,
       status: "passed",
@@ -115,10 +138,16 @@ export async function runLiveOpenTofuPlanApplyProof(options: {
         outputCount: applied.applyRun.outputs?.length ?? 0,
         stateLockStatus: applied.applyRun.stateLock.status,
         applyAuditEventCount: applied.applyRun.auditEvents.length,
+        providerSource: "registry.opentofu.org/hashicorp/local",
+        destroyStatus: "succeeded",
+        resourceRemoved,
       },
     };
     if (proof.evidence.outputCount < 1) {
       throw new Error("live local OpenTofu proof did not record OutputSnapshot projection");
+    }
+    if (!proof.evidence.resourceRemoved) {
+      throw new Error("live local OpenTofu proof did not destroy the provider resource");
     }
     if (options.outputPath) {
       const outputPath = resolve(options.outputPath);
@@ -137,16 +166,20 @@ class LocalTofuRunner implements OpenTofuRunner {
     this.#workdir = workdir;
   }
 
-  async plan(_job: OpenTofuPlanJob) {
+  async plan(job: OpenTofuPlanJob) {
     await runTofu(["init", "-input=false", "-no-color"], this.#workdir);
     await runTofu([
       "plan",
+      ...(job.planRun.operation === "destroy" ? ["-destroy"] : []),
       "-input=false",
       "-no-color",
       "-out=tfplan",
     ], this.#workdir);
     const planJson = await runTofu(["show", "-json", "tfplan"], this.#workdir);
     const planDigest = digestBytes(new TextEncoder().encode(planJson));
+    const providerLockDigest = digestBytes(
+      await readFile(`${this.#workdir}/.terraform.lock.hcl`),
+    );
     return {
       planDigest,
       planArtifact: {
@@ -156,6 +189,9 @@ class LocalTofuRunner implements OpenTofuRunner {
         contentType: "application/vnd.opentofu.plan",
       },
       sourceCommit: digestJson({ kind: "local", path: this.#workdir }),
+      providerLockDigest,
+      requiredProviders: ["registry.opentofu.org/hashicorp/local"],
+      providerInstallation: [localProviderInstallationEvidence()],
       summary: summarizePlanJson(planJson),
     };
   }
@@ -165,8 +201,31 @@ class LocalTofuRunner implements OpenTofuRunner {
     const outputs = await runTofu(["output", "-json"], this.#workdir);
     return {
       outputs: parseOpenTofuOutputs(outputs) as OpenTofuOutputEnvelope,
+      stateDigest: digestBytes(
+        await readFile(`${this.#workdir}/terraform.tfstate`),
+      ),
+      providerInstallation: [localProviderInstallationEvidence()],
     };
   }
+
+  async destroy(_job: OpenTofuDestroyJob) {
+    await runTofu(["apply", "-input=false", "-no-color", "tfplan"], this.#workdir);
+    return {
+      stateDigest: digestBytes(
+        await readFile(`${this.#workdir}/terraform.tfstate`),
+      ),
+      providerInstallation: [localProviderInstallationEvidence()],
+    };
+  }
+}
+
+function localProviderInstallationEvidence() {
+  return {
+    provider: "registry.opentofu.org/hashicorp/local",
+    mirrored: false,
+    installationMethod: "direct" as const,
+    attested: false,
+  };
 }
 
 function summarizePlanJson(planJson: string) {
@@ -189,19 +248,20 @@ function summarizePlanJson(planJson: string) {
 
 function liveLocalRunnerProfile(now: number): RunnerProfile {
   return {
-    id: "live-local-proof",
-    name: "Live local proof",
+    id: "opentofu-default",
+    name: "OpenTofu default live proof",
     substrate: "local",
     tofuVersion: "operator-managed",
     stateBackend: {
       kind: "local",
-      ref: "state://fixture/live-local-proof",
-      lock: { kind: "operator", ref: "lock://fixture/live-local-proof" },
+      ref: "state://fixture/opentofu-default",
+      lock: { kind: "operator", ref: "lock://fixture/opentofu-default" },
     },
-    allowedProviders: [],
+    allowedProviders: ["*"],
+    requireCredentialRefs: false,
     sourcePolicy: { allowLocalSource: true },
     resourceLimits: { maxRunSeconds: 120, cpu: "1", memoryMb: 512 },
-    networkPolicy: { mode: "default-deny" },
+    networkPolicy: { mode: "operator-managed" },
     createdAt: now,
   };
 }

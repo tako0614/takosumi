@@ -69,7 +69,6 @@
       "takosumi-contract/install-configs": ["./contract/install-configs.ts"],
       "takosumi-contract/deploy": ["./contract/deploy.ts"],
       "takosumi-contract/capsules": ["./contract/capsules.ts"],
-      "takosumi-contract/provider-envs": ["./contract/provider-envs.ts"],
       "takosumi-contract/provider-resolution": [
         "./contract/provider-resolution.ts"
       ],
@@ -88,7 +87,9 @@
       "takosumi-contract/backups": ["./contract/backups.ts"],
       "takosumi-contract/billing": ["./contract/billing.ts"],
       "takosumi-contract/security": ["./contract/security.ts"],
-      "takosumi-contract/providers": ["./contract/providers.ts"],
+      "takosumi-contract/credential-recipes": [
+        "./contract/credential-recipes.ts"
+      ],
       "takosumi-contract/runtime-projection": ["./contract/runtime-projection.ts"],
       "takosumi-rootgen": ["./lib/rootgen/src/mod.ts"],
       "takosumi-graph": ["./lib/graph/src/mod.ts"],

@@ -35,15 +35,6 @@ export const CONNECTION_TEST_PATH = (id: string): string =>
 export const CONNECTION_REVOKE_PATH = (id: string): string =>
   `${INTERNAL_V1_PREFIX}/connections/${encodeURIComponent(id)}/revoke`;
 
-// Provider resolver (Provider Connection) listing seam. After the credential
-// model collapse a Provider Connection IS the stored credential record (the
-// former `ProviderEnv` resolver projection folded onto the Connection row), so
-// these read paths list/get the same unified rows used by the runner/vault.
-export const PROVIDER_ENVS_PATH =
-  `${INTERNAL_V1_PREFIX}/provider-envs` as const;
-export const PROVIDER_ENV_PATH = (id: string): string =>
-  `${INTERNAL_V1_PREFIX}/provider-envs/${encodeURIComponent(id)}`;
-
 export type ConnectionScopeKind = "operator" | "space";
 
 /**
@@ -54,9 +45,8 @@ export type ConnectionStatus =
   "pending" | "verified" | "revoked" | "expired" | "error";
 
 /**
- * Single collapsed Provider Connection kind axis. Replaces the former
- * `ConnectionAuthMethod` + `ConnectionKind` + `ConnectionCredentialDriver`
- * triple: the vault routes mint/verify drivers from this one value, and the
+ * Single Provider Connection kind axis. The vault routes mint/verify drivers
+ * from this one value, and the
  * `oauth` vs `secret` distinction is carried by the stored
  * {@link ProviderConnectionMaterialization}.
  */
@@ -75,9 +65,6 @@ export const PROVIDER_CONNECTION_KINDS = [
 ] as const;
 
 export type ProviderConnectionKind = (typeof PROVIDER_CONNECTION_KINDS)[number];
-
-/** @deprecated migration-debt alias for {@link ProviderConnectionKind}. */
-export type ConnectionKind = ProviderConnectionKind;
 
 export const PROVIDER_CONNECTION_MATERIALIZATIONS = [
   "oauth",
@@ -141,11 +128,18 @@ export interface ConnectionScopeHints {
    */
   readonly managedProvider?: boolean;
   /**
-   * Provider API base URL injected into the generated OpenTofu provider block
-   * for managed compatibility profiles, e.g.
-   * https://app.takosumi.com/compat/cloudflare/client/v4.
+   * Non-secret provider-block arguments supplied by this Connection. Keys are
+   * provider schema arguments (for example `base_url`); values are rendered as
+   * escaped HCL literals by the generated root. Credential-shaped fields are
+   * rejected by the vault; secrets belong in Connection values/files.
    */
-  readonly providerBaseUrl?: string;
+  readonly providerConfig?: Readonly<Record<string, JsonValue>>;
+  /**
+   * Optional non-secret defaults offered to child module variables. Takosumi
+   * only forwards keys the module actually declares, and explicit Capsule
+   * values always win. Credential-shaped fields are rejected by the vault.
+   */
+  readonly moduleInputDefaults?: Readonly<Record<string, JsonValue>>;
   readonly managedProviderProfile?: string;
   /**
    * Public hostname namespace owned by this managed target. A hosted operator

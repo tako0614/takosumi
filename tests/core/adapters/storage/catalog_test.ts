@@ -82,6 +82,10 @@ const mirroredMigrationFiles: readonly {
     fileName: "20260430000067_install_config_store_key.sql",
     migrationId: "deploy.install_config_store_key.normalize",
   },
+  {
+    fileName: "20260430000070_install_config_runner_profile.sql",
+    migrationId: "deploy.install_config_runner_profile.normalize",
+  },
 ];
 
 test("migration catalog creates every declared storage table", () => {

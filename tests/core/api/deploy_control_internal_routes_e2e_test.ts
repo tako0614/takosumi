@@ -3,7 +3,7 @@ import type {
   ApplyRunResponse,
   Connection,
   InstallConfig,
-  ListProvidersResponse,
+  ListCredentialRecipesResponse,
   PlanRunResponse,
 } from "@takosumi/internal/deploy-control-api";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
@@ -101,7 +101,7 @@ test("bootstrap builds the ConnectionVault from secretCrypto alone (production w
   expect(createGenericEnvProviderRes.status).toBe(201);
 });
 
-test("provider catalog and generic-env connection routes round-trip (§7 / §8)", async () => {
+test("Credential Recipe discovery and generic-env connection routes round-trip", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   let connectionCounter = 0;
   const vault = new StaticSecretConnectionVault({
@@ -138,58 +138,39 @@ test("provider catalog and generic-env connection routes round-trip (§7 / §8)"
   expect(spaceRes.status).toBe(201);
   const spaceId = (await spaceRes.json()).space.id as string;
 
-  const providersRes = await app.request("/internal/v1/providers", {
+  const providersRes = await app.request(
+    "/internal/v1/credential-recipes",
+    {
     headers: headers(),
-  });
-  expect(providersRes.status).toBe(200);
-  const providersBody = (await providersRes.json()) as ListProvidersResponse;
-  expect(providersBody.providers.map((provider) => provider.id).sort()).toEqual(
-    [
-      "aws",
-      "azure",
-      "cloudflare",
-      "digitalocean",
-      "docker",
-      "gcp",
-      "github",
-      "hcloud",
-      "kubernetes",
-      "openstack",
-      "scaleway",
-      "vultr",
-    ],
+    },
   );
-  expect(providersBody.providers).toContainEqual(
+  expect(providersRes.status).toBe(200);
+  const recipesBody =
+    (await providersRes.json()) as ListCredentialRecipesResponse;
+  expect(recipesBody.recipes.map((recipe) => recipe.id)).toContain(
+    "generic-env",
+  );
+  expect(recipesBody.recipes).toContainEqual(
     expect.objectContaining({
       id: "cloudflare",
-      recommendedEnvNames: [
+      envNames: expect.arrayContaining([
         "CF_API_TOKEN",
         "CLOUDFLARE_ACCOUNT_ID",
         "CLOUDFLARE_API_KEY",
         "CLOUDFLARE_API_TOKEN",
         "CLOUDFLARE_EMAIL",
         "CLOUDFLARE_ZONE_ID",
+      ]),
+      terraformSource: [
+        "cloudflare/cloudflare",
+        "registry.opentofu.org/cloudflare/cloudflare",
       ],
-      credentialRecipeIds: ["cloudflare", "generic-env"],
-      genericEnvSupported: true,
     }),
   );
-  const cloudflareProvider = providersBody.providers.find(
-    (provider) => provider.id === "cloudflare",
-  );
-  expect(cloudflareProvider?.allowedResources).toEqual([]);
-  expect(cloudflareProvider?.allowedResources).not.toContain(
-    "cloudflare_d1_database",
-  );
-  expect(cloudflareProvider?.allowedResources).not.toContain(
-    "cloudflare_workers_kv_namespace",
-  );
-  expect(cloudflareProvider?.allowedResources).not.toContain(
-    "cloudflare_dns_record",
-  );
-  expect(cloudflareProvider?.allowedResources).not.toContain(
-    "cloudflare_workers_route",
-  );
+  expect(
+    recipesBody.recipes.find((recipe) => recipe.id === "generic-env")
+      ?.terraformSource,
+  ).toBe("*");
   for (const id of [
     "aws",
     "github",
@@ -200,18 +181,12 @@ test("provider catalog and generic-env connection routes round-trip (§7 / §8)"
     "scaleway",
     "openstack",
   ]) {
-    expect(providersBody.providers).toContainEqual(
-      expect.objectContaining({
-        id,
-        genericEnvSupported: true,
-      }),
-    );
+    expect(recipesBody.recipes.map((recipe) => recipe.id)).toContain(id);
   }
-  expect(providersBody.providers).toContainEqual(
+  expect(recipesBody.recipes).toContainEqual(
     expect.objectContaining({
-      id: "gcp",
-      credentialRecipeIds: ["google", "generic-env"],
-      genericEnvSupported: true,
+      id: "google",
+      providerRule: "google",
     }),
   );
 

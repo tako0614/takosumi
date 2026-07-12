@@ -249,8 +249,6 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     );
   }
 
-  // -- Provider Catalog ------------------------------------------------------
-
   // -- Runs (PlanRun / ApplyRun / SourceSyncRun share the §27 `runs` table) ----
 
   async putPlanRun(run: PlanRun): Promise<PlanRun> {
@@ -5274,6 +5272,42 @@ only reservations created after this migration can consume vanity slots
           `update public_host_reservations
            set allocation_kind = 'scoped'
            where allocation_kind != 'scoped'`,
+        )
+        .run();
+    },
+  },
+  {
+    version: 25,
+    name: "d1_opentofu_install_config_runner_profile",
+    checksumSource: `
+current install_configs runnerId values converge from retired provider-specific profiles
+opentofu-default is the only built-in provider-neutral runner profile
+custom runner profiles and historical runs remain unchanged
+`,
+    async apply(db) {
+      await db
+        .prepare(
+          `update install_configs
+           set record_json = json_set(
+             record_json,
+             '$.runnerId',
+             'opentofu-default'
+           )
+           where json_extract(record_json, '$.runnerId') in (
+             'cloudflare-default',
+             'aws-provider-env-candidate',
+             'gcp-provider-env-candidate',
+             'azure-provider-env-candidate',
+             'kubernetes-provider-env-candidate',
+             'github-provider-env-candidate',
+             'digitalocean-provider-env-candidate',
+             'hcloud-provider-env-candidate',
+             'vultr-provider-env-candidate',
+             'scaleway-provider-env-candidate',
+             'openstack-provider-env-candidate',
+             'docker-custom-example',
+             'generic-opentofu-provider'
+           )`,
         )
         .run();
     },

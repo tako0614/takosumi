@@ -566,7 +566,7 @@ test("production hardening gates require platform opening evidence", () => {
   );
   expect(missing.checks.egressEnforcement.reason).toBe("missing_evidence_ref");
   expect(missing.checks.restoreRehearsal.reason).toBe("missing_evidence_ref");
-  expect(missing.checks.providerCatalog.reason).toBe("missing_evidence_ref");
+  expect(missing.checks.credentialRecipes.reason).toBe("missing_evidence_ref");
   expect(missing.checks.costAttribution.reason).toBe("missing_evidence_ref");
   expect(missing.checks.secretBoundary.reason).toBe("missing_evidence_ref");
 
@@ -586,9 +586,9 @@ test("production hardening gates require platform opening evidence", () => {
       "git+ssh://git@example.com/operator/proofs.git@0123456789abcdef0123456789abcdef01234567#restore.md",
     TAKOSUMI_RESTORE_REHEARSAL_EVIDENCE_DIGEST:
       "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-    TAKOSUMI_PROVIDER_REGISTRY_EVIDENCE_REF:
+    TAKOSUMI_CREDENTIAL_RECIPE_EVIDENCE_REF:
       "git+ssh://git@example.com/operator/proofs.git@0123456789abcdef0123456789abcdef01234567#providers.md",
-    TAKOSUMI_PROVIDER_REGISTRY_EVIDENCE_DIGEST:
+    TAKOSUMI_CREDENTIAL_RECIPE_EVIDENCE_DIGEST:
       "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     TAKOSUMI_COST_ATTRIBUTION_EVIDENCE_REF:
       "git+ssh://git@example.com/operator/proofs.git@0123456789abcdef0123456789abcdef01234567#cost-attribution.md",
@@ -632,9 +632,9 @@ test("production hardening gates require platform opening evidence", () => {
       "git+ssh://git@example.com/operator/proofs.git@0123456789abcdef0123456789abcdef01234567#restore.md",
     TAKOSUMI_RESTORE_REHEARSAL_EVIDENCE_DIGEST:
       "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-    TAKOSUMI_PROVIDER_REGISTRY_EVIDENCE_REF:
+    TAKOSUMI_CREDENTIAL_RECIPE_EVIDENCE_REF:
       "git+ssh://git@example.com/operator/proofs.git@0123456789abcdef0123456789abcdef01234567#providers.md",
-    TAKOSUMI_PROVIDER_REGISTRY_EVIDENCE_DIGEST:
+    TAKOSUMI_CREDENTIAL_RECIPE_EVIDENCE_DIGEST:
       "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     TAKOSUMI_COST_ATTRIBUTION_EVIDENCE_REF:
       "git+ssh://git@example.com/operator/proofs.git@0123456789abcdef0123456789abcdef01234567#cost-attribution.md",

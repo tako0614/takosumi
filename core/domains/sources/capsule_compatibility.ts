@@ -8,7 +8,6 @@ import type {
 } from "takosumi-contract/capsules";
 import type { PolicyConfig } from "takosumi-contract/install-configs";
 import type { SourceSnapshot } from "takosumi-contract/sources";
-import { providerById } from "@takosumi/providers";
 import { isCredentialFreeUtilityProvider } from "takosumi-contract/provider-env-rules";
 
 export interface CapsuleSourceFile {
@@ -44,26 +43,7 @@ export interface CapsuleCompatibilityAnalyzer {
   ): Promise<CapsuleCompatibilityAnalysis>;
 }
 
-// First-class Provider Connection recipe seed. This is deliberately not the
-// provider boundary: catalog entries give guided setup, while generic-env
-// Provider Connections let any normal OpenTofu provider source run when the
-// runner / mirror / egress policy permits it.
-function defaultGuidedProviderSources(): ReadonlySet<string> {
-  const seed = new Set<string>();
-  for (const id of ["cloudflare", "aws"]) {
-    for (const address of providerById(id)?.providerAddresses ?? []) {
-      seed.add(address);
-      seed.add(address.replace("registry.opentofu.org/", ""));
-    }
-  }
-  for (const helper of ["hashicorp/random", "hashicorp/tls"]) {
-    seed.add(`registry.opentofu.org/${helper}`);
-    seed.add(helper);
-  }
-  return seed;
-}
-
-const DEFAULT_GUIDED_PROVIDER_SOURCES = defaultGuidedProviderSources();
+const NO_DEFAULT_PROVIDER_ALLOWLIST = new Set<string>();
 
 // Default instance-wide resource-type allowlist (Core Specification §29 policy
 // layer "resource-type allowlist"). The managed Takosumi default deliberately
@@ -176,7 +156,6 @@ export function analyzeOpenTofuCapsuleFiles(
   }
 
   const providerAllowlist = allowedProviderSet(input.policy);
-  const explicitProviderAllowlist = explicitAllowedProviderSet(input.policy);
   const resourceAllowlist = allowedSet(
     DEFAULT_ALLOWED_RESOURCE_TYPES,
     input.policy?.allowedResourceTypes,
@@ -227,17 +206,13 @@ export function analyzeOpenTofuCapsuleFiles(
         suggestion:
           "Use a fully qualified OpenTofu provider source such as namespace/name or registry.opentofu.org/namespace/name.",
       });
-    } else if (
-      !isGuidedProviderSource(provider.source) &&
-      !isCredentialFreeUtilityProvider(provider.source) &&
-      !providerInSet(provider.source, explicitProviderAllowlist)
-    ) {
+    } else if (!isCredentialFreeUtilityProvider(provider.source)) {
       findings.push({
         severity: "info",
-        code: "generic_provider_connection_required",
-        message: `Provider ${provider.source} will use an explicit Provider Connection.`,
+        code: "provider_connection_may_be_required",
+        message: `Provider ${provider.source} may require a Provider Connection.`,
         suggestion:
-          "Create a Provider Connection with the env/file names documented by that OpenTofu provider.",
+          "If the provider needs credentials, bind a Provider Connection with the env/file names documented by the provider.",
       });
     }
   }
@@ -846,16 +821,6 @@ function providerInSet(
   return providers.has(source) || providers.has(normalized);
 }
 
-function isGuidedProviderSource(source: string): boolean {
-  const normalized = source.startsWith("registry.opentofu.org/")
-    ? source
-    : `registry.opentofu.org/${source}`;
-  return (
-    DEFAULT_GUIDED_PROVIDER_SOURCES.has(source) ||
-    DEFAULT_GUIDED_PROVIDER_SOURCES.has(normalized)
-  );
-}
-
 function isQualifiedProviderSource(source: string): boolean {
   const body = source.startsWith("registry.opentofu.org/")
     ? source.slice("registry.opentofu.org/".length)
@@ -886,25 +851,9 @@ function allowedSet(
 function allowedProviderSet(
   policy: PolicyConfig | undefined,
 ): ReadonlySet<string> {
-  if (policy?.allowedProviders === undefined)
-    return DEFAULT_GUIDED_PROVIDER_SOURCES;
-  const providers = new Set(DEFAULT_GUIDED_PROVIDER_SOURCES);
-  for (const provider of policy.allowedProviders) {
-    providers.add(provider);
-    providers.add(
-      provider.startsWith("registry.opentofu.org/")
-        ? provider
-        : `registry.opentofu.org/${provider}`,
-    );
-  }
-  return providers;
-}
-
-function explicitAllowedProviderSet(
-  policy: PolicyConfig | undefined,
-): ReadonlySet<string> {
+  if (policy?.allowedProviders === undefined) return NO_DEFAULT_PROVIDER_ALLOWLIST;
   const providers = new Set<string>();
-  for (const provider of policy?.allowedProviders ?? []) {
+  for (const provider of policy.allowedProviders) {
     providers.add(provider);
     providers.add(
       provider.startsWith("registry.opentofu.org/")
