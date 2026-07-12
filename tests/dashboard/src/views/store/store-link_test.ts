@@ -83,7 +83,7 @@ describe("store link handoff", () => {
             type: "json",
             label: text("Release images"),
             defaultValue:
-              '{"runtime":"registry.cloudflare.com/acc/takos-worker-runtime:0.10.0-abcdef","executor":"registry.cloudflare.com/acc/takos-agent-executor:0.10.0-abcdef"}',
+              '{"runtime":"registry.cloudflare.com/acc/takos-worker-runtime:0.10.0-abcdef","executor":"registry.cloudflare.com/acc/takos-agent:0.10.0-abcdef"}',
           },
         ],
       }),
