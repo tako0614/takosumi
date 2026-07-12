@@ -34,6 +34,12 @@ export interface ResourceShapePlan {
   }[];
   readonly inputs: Record<string, unknown>;
   readonly publicOutputs: readonly ResourceShapePublicOutput[];
+  /**
+   * Planner-only control modules describe typed inputs/outputs but do not
+   * materialize a backend resource. They must never reach Ready unless a
+   * selected adapter plugin performs the actual operation.
+   */
+  readonly requiresAdapterPlugin?: true;
 }
 
 export interface ResourceShapePublicOutput {
@@ -600,6 +606,10 @@ export function planEdgeWorker(
   if (artifactPath) inputs.artifactPath = artifactPath;
   if (artifactUrl) inputs.artifactUrl = artifactUrl;
   if (artifactSha256) inputs.artifactSha256 = artifactSha256;
+  if (spec.compatibilityDate) inputs.compatibilityDate = spec.compatibilityDate;
+  if (spec.compatibilityFlags && spec.compatibilityFlags.length > 0) {
+    inputs.compatibilityFlags = [...spec.compatibilityFlags];
+  }
   if (spec.connections && Object.keys(spec.connections).length > 0) {
     inputs.connections = normalizedConnectionsForPlan(spec.connections);
   }
@@ -733,6 +743,7 @@ export function planContainerService(
       { name: "url", type: "url" },
       { name: "connections", type: "json" },
     ],
+    requiresAdapterPlugin: true,
   };
 }
 
@@ -756,6 +767,7 @@ function planGenericServiceShape(
       targetType: target.type,
     },
     publicOutputs: [{ name: "resource_name", type: "string" }],
+    requiresAdapterPlugin: true,
   };
 }
 

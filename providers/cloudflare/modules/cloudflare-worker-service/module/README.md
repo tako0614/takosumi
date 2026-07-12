@@ -23,8 +23,8 @@ through the `cloudflare_workers_script` resource:
 - `main_module = "index.js"` selects module syntax (the uploaded module that
   exports the `fetch` handler). The retired build phase expected a single
   bundled `dist/index.js` whose default export is the fetch handler.
-- `script_name`, `account_id`, and `compatibility_date` are the remaining
-  required/important arguments.
+- `script_name`, `account_id`, `compatibility_date`, and
+  `compatibility_flags` carry the Worker runtime configuration.
 
 This module does not create a workers.dev subdomain. In the hosted Gateway path,
 namespace scripts are reached through the dispatcher; public ingress must be
@@ -49,9 +49,13 @@ and verifies.
 ## Inputs / outputs
 
 - Inputs: `appName` (string, required), `accountId` (string, required),
-  `artifactPath` or `artifactUrl` + `artifactSha256`, `publicUrl` (string,
-  optional).
-- Outputs: `worker_name`, `url`.
+  `artifactPath` or `artifactUrl` + `artifactSha256`, `compatibilityDate`,
+  `compatibilityFlags`, `connections`, and `publicUrl`.
+- Outputs: `worker_name`, `url`, `connections`.
+
+`connections` remains non-secret metadata in this OpenTofu module. A selected
+managed adapter receives control-plane-resolved connection evidence and owns
+the concrete runtime binding/grant materialization.
 
 `url` returns `publicUrl`, or an empty string when no dispatcher/custom-route
 projection is configured.

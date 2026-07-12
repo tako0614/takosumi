@@ -89,6 +89,55 @@ test("PUT /v1/resources/EdgeWorker/:name applies a first-class Worker shape", as
   expect(body.status.phase).toBe("Ready");
 });
 
+test("Resource Shape API returns 404 for an unresolved same-Space connection", async () => {
+  const { app, service } = await buildApp();
+  await service.putTargetPool("space_1", "default", {
+    targets: [
+      {
+        name: "cloudflare-main",
+        type: "cloudflare",
+        ref: "cf-acct",
+        priority: 100,
+        implementations: [
+          {
+            shape: "EdgeWorker",
+            implementation: "cloudflare_workers",
+            nativeResourceType: "cloudflare_workers_script",
+            interfaces: {
+              worker_fetch: "native",
+              resource_connection: "native",
+              runtime_binding: "native",
+              grant_read: "native",
+            },
+          },
+        ],
+      },
+    ],
+  });
+
+  const response = await app.request("/v1/resources/EdgeWorker/api", {
+    method: "PUT",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({
+      metadata: { space: "space_1" },
+      spec: {
+        name: "api",
+        source: { artifactPath: "/work/dist/worker.js" },
+        connections: {
+          ASSETS: {
+            resource: "tkrn:space_1:ObjectBucket:missing",
+            permissions: ["read"],
+            projection: "runtime_binding",
+          },
+        },
+      },
+    }),
+  });
+
+  expect(response.status).toBe(404);
+  expect((await response.json()).error.code).toBe("connection_not_found");
+});
+
 test("Resource Shape API requires bearer when a token is configured", async () => {
   const { app } = await buildApp({
     getResourceShapeBearerToken: () => "resource-token",
@@ -317,6 +366,7 @@ test("PUT /v1/resources/ContainerService/:name accepts admin-defined implementat
             shape: "ContainerService",
             implementation: "custom_container_runtime",
             nativeResourceType: "custom.container_service",
+            plugin: "custom-container-plugin",
             interfaces: {
               oci_container: "native",
               public_http: "native",

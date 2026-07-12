@@ -3,6 +3,7 @@ import type { ActorContext } from "takosumi-contract";
 import {
   type AdapterApplyInput,
   type AdapterDeleteInput,
+  type AdapterPreviewResult,
   createInMemoryResourceShapeStores,
   type AdapterApplyResult,
   ResourceShapeService,
@@ -29,8 +30,16 @@ function makeService() {
 }
 
 class PluginSpyAdapter extends StubResourceShapeAdapter {
+  previewInputs: AdapterApplyInput[] = [];
   applyInputs: AdapterApplyInput[] = [];
   deleteInputs: AdapterDeleteInput[] = [];
+
+  override async preview(
+    input: AdapterApplyInput,
+  ): Promise<AdapterPreviewResult> {
+    this.previewInputs.push(input);
+    return super.preview(input);
+  }
 
   override async apply(input: AdapterApplyInput): Promise<AdapterApplyResult> {
     this.applyInputs.push(input);
@@ -91,12 +100,40 @@ const POOL: TargetPoolSpec = {
       type: "cloudflare",
       ref: "cf-acct",
       priority: 80,
+      implementations: [
+        {
+          shape: "EdgeWorker",
+          implementation: "cloudflare_workers",
+          nativeResourceType: "cloudflare_workers_script",
+          interfaces: {
+            worker_fetch: "native",
+            workers_bindings: "native",
+            resource_connection: "native",
+            runtime_binding: "native",
+            grant_read: "native",
+            grant_write: "native",
+          },
+        },
+      ],
     },
     {
       name: "k8s-main",
       type: "kubernetes",
       ref: "cluster-prod",
       priority: 70,
+      implementations: [
+        {
+          shape: "ContainerService",
+          implementation: "kubernetes_deployment",
+          nativeResourceType: "kubernetes_deployment",
+          plugin: "kubernetes-container-plugin",
+          interfaces: {
+            oci_container: "native",
+            public_http: "shim",
+            env_projection: "native",
+          },
+        },
+      ],
     },
   ],
 };
@@ -167,6 +204,237 @@ test("apply resolves EdgeWorker as a first-class shape", async () => {
   expect(result.value.status?.resolution?.target).toBe("cloudflare-main");
 });
 
+test("EdgeWorker connections resolve Ready resources before preview and apply", async () => {
+  const stores = createInMemoryResourceShapeStores();
+  const adapter = new PluginSpyAdapter();
+  const service = new ResourceShapeService({
+    stores,
+    adapter,
+    now: () => NOW,
+  });
+  await seed(service);
+
+  const bucket = await service.apply(APPLY);
+  expect(bucket.ok).toBe(true);
+
+  const request = {
+    actor: ACTOR,
+    space: "space_1",
+    kind: "EdgeWorker" as const,
+    name: "api",
+    spec: {
+      name: "api",
+      source: { artifactPath: "/work/dist/worker.js" },
+      profiles: ["workers_bindings"],
+      connections: {
+        ASSETS: {
+          resource: "tkrn:space_1:ObjectBucket:assets",
+          permissions: ["read", "write"] as const,
+          projection: "runtime_binding" as const,
+        },
+      },
+    },
+  };
+
+  const preview = await service.preview(request);
+  expect(preview.ok).toBe(true);
+  const previewConnection =
+    adapter.previewInputs.at(-1)?.resolvedConnections?.ASSETS;
+  expect(previewConnection).toMatchObject({
+    resourceId: "tkrn:space_1:ObjectBucket:assets",
+    kind: "ObjectBucket",
+    permissions: ["read", "write"],
+    projection: "runtime_binding",
+    target: "cloudflare-main",
+  });
+  expect(previewConnection?.nativeResources).not.toHaveLength(0);
+  expect(typeof previewConnection?.outputs.bucket_name).toBe("string");
+
+  const applied = await service.apply(request);
+  expect(applied.ok).toBe(true);
+  expect(adapter.applyInputs.at(-1)?.resolvedConnections?.ASSETS).toEqual(
+    previewConnection,
+  );
+});
+
+test("connection references fail closed when missing, cross-Space, or not Ready", async () => {
+  const stores = createInMemoryResourceShapeStores();
+  const adapter = new PluginSpyAdapter();
+  const service = new ResourceShapeService({
+    stores,
+    adapter,
+    now: () => NOW,
+  });
+  await seed(service);
+
+  const edgeRequest = (resource: string) => ({
+    actor: ACTOR,
+    space: "space_1",
+    kind: "EdgeWorker" as const,
+    name: "api",
+    spec: {
+      name: "api",
+      source: { artifactPath: "/work/dist/worker.js" },
+      connections: {
+        ASSETS: {
+          resource,
+          permissions: ["read"] as const,
+          projection: "runtime_binding" as const,
+        },
+      },
+    },
+  });
+
+  const missing = await service.apply(
+    edgeRequest("tkrn:space_1:ObjectBucket:missing"),
+  );
+  expect(missing.ok).toBe(false);
+  if (!missing.ok) expect(missing.error.code).toBe("connection_not_found");
+  expect(adapter.applyInputs).toHaveLength(0);
+
+  await service.putTargetPool("space_2", "default", POOL);
+  await service.putSpacePolicy("space_2", "default", POLICY);
+  const crossSpaceBucket = await service.apply({
+    ...APPLY,
+    space: "space_2",
+  });
+  expect(crossSpaceBucket.ok).toBe(true);
+  const crossSpace = await service.apply(
+    edgeRequest("tkrn:space_2:ObjectBucket:assets"),
+  );
+  expect(crossSpace.ok).toBe(false);
+  if (!crossSpace.ok)
+    expect(crossSpace.error.code).toBe("connection_not_found");
+
+  await stores.resources.upsert({
+    id: "tkrn:space_1:ObjectBucket:pending",
+    spaceId: "space_1",
+    kind: "ObjectBucket",
+    name: "pending",
+    managedBy: "opentofu",
+    spec: { name: "pending" },
+    phase: "Applying",
+    generation: 1,
+    observedGeneration: 0,
+    createdAt: NOW,
+    updatedAt: NOW,
+  });
+  const pending = await service.apply(
+    edgeRequest("tkrn:space_1:ObjectBucket:pending"),
+  );
+  expect(pending.ok).toBe(false);
+  if (!pending.ok) expect(pending.error.code).toBe("connection_not_ready");
+});
+
+test("referenced resources cannot be deleted before their consumers", async () => {
+  const stores = createInMemoryResourceShapeStores();
+  const adapter = new PluginSpyAdapter();
+  const service = new ResourceShapeService({
+    stores,
+    adapter,
+    now: () => NOW,
+  });
+  await seed(service);
+
+  expect((await service.apply(APPLY)).ok).toBe(true);
+  expect(
+    (
+      await service.apply({
+        actor: ACTOR,
+        space: "space_1",
+        kind: "EdgeWorker",
+        name: "api",
+        spec: {
+          name: "api",
+          source: { artifactPath: "/work/dist/worker.js" },
+          connections: {
+            ASSETS: {
+              resource: "tkrn:space_1:ObjectBucket:assets",
+              permissions: ["read", "write"],
+              projection: "runtime_binding",
+            },
+          },
+        },
+      })
+    ).ok,
+  ).toBe(true);
+
+  const blocked = await service.delete(
+    "space_1",
+    "ObjectBucket",
+    "assets",
+    ACTOR,
+  );
+  expect(blocked.ok).toBe(false);
+  if (!blocked.ok) {
+    expect(blocked.error.code).toBe("delete_blocked");
+    expect(blocked.error.message).toContain("tkrn:space_1:EdgeWorker:api");
+  }
+  expect(adapter.deleteInputs).toHaveLength(0);
+
+  expect((await service.delete("space_1", "EdgeWorker", "api", ACTOR)).ok).toBe(
+    true,
+  );
+  expect(
+    (await service.delete("space_1", "ObjectBucket", "assets", ACTOR)).ok,
+  ).toBe(true);
+  expect(adapter.deleteInputs).toHaveLength(2);
+});
+
+test("Resource connections reject dependency cycles on update", async () => {
+  const { service } = makeService();
+  await seed(service);
+
+  const edgeRequest = (
+    name: string,
+    connection?: { name: string; resource: string },
+  ) => ({
+    actor: ACTOR,
+    space: "space_1",
+    kind: "EdgeWorker" as const,
+    name,
+    spec: {
+      name,
+      source: { artifactPath: `/work/dist/${name}.js` },
+      ...(connection
+        ? {
+            connections: {
+              [connection.name]: {
+                resource: connection.resource,
+                permissions: ["read"] as const,
+                projection: "runtime_binding" as const,
+              },
+            },
+          }
+        : {}),
+    },
+  });
+
+  expect((await service.apply(edgeRequest("first"))).ok).toBe(true);
+  expect(
+    (
+      await service.apply(
+        edgeRequest("second", {
+          name: "FIRST",
+          resource: "tkrn:space_1:EdgeWorker:first",
+        }),
+      )
+    ).ok,
+  ).toBe(true);
+
+  const cycle = await service.apply(
+    edgeRequest("first", {
+      name: "SECOND",
+      resource: "tkrn:space_1:EdgeWorker:second",
+    }),
+  );
+  expect(cycle.ok).toBe(false);
+  if (!cycle.ok) {
+    expect(cycle.error.code).toBe("invalid_connections");
+    expect(cycle.error.message).toContain("dependency cycle");
+  }
+});
+
 test("apply resolves Queue and SQLDatabase as concrete Cloudflare-backed shapes", async () => {
   const { service } = makeService();
   await seed(service);
@@ -212,6 +480,7 @@ test("apply resolves ContainerService with admin-declared implementation", async
             shape: "ContainerService",
             implementation: "custom_container_runtime",
             nativeResourceType: "custom.container_service",
+            plugin: "custom-container-plugin",
             interfaces: {
               oci_container: "native",
               public_http: "native",
@@ -243,6 +512,36 @@ test("apply resolves ContainerService with admin-declared implementation", async
   expect(result.value.status?.outputs?.service_name).toContain(
     "ContainerService:agent",
   );
+});
+
+test("ContainerService cannot report Ready without a materializing adapter plugin", async () => {
+  const stores = createInMemoryResourceShapeStores();
+  const adapter = new PluginSpyAdapter();
+  const service = new ResourceShapeService({
+    stores,
+    adapter,
+    now: () => NOW,
+  });
+  await seed(service);
+
+  const result = await service.apply({
+    actor: ACTOR,
+    space: "space_1",
+    kind: "ContainerService",
+    name: "agent",
+    spec: { name: "agent", image: "ghcr.io/example/agent:1.0.0" },
+  });
+  expect(result.ok).toBe(false);
+  if (!result.ok) {
+    expect(result.error.code).toBe("no_eligible_target");
+    expect(result.error.message).toContain(
+      "requires an installed adapter plugin",
+    );
+  }
+  expect(adapter.applyInputs).toHaveLength(0);
+  expect(
+    await stores.resources.get("tkrn:space_1:ContainerService:agent"),
+  ).toBe(undefined);
 });
 
 test("apply passes selected implementation plugin metadata to the adapter", async () => {
@@ -548,6 +847,18 @@ test("delete resolves native target from the non-default TargetPool that created
         ref: "native-prod",
         credentialRef: "conn_native",
         priority: 90,
+        implementations: [
+          {
+            shape: "ObjectBucket",
+            implementation: "takosumi_object_bucket",
+            nativeResourceType: "takosumi_object_bucket",
+            plugin: "native-object-store-plugin",
+            interfaces: {
+              object_store: "native",
+              s3_api: "native",
+            },
+          },
+        ],
       },
     ],
   });
@@ -581,7 +892,7 @@ test("delete resolves native target from the non-default TargetPool that created
   );
   expect(adapter.deleteInputs[0]?.plan?.inputs.resourceName).toBe("assets");
   expect(adapter.deleteInputs[0]?.nativeResources).toEqual([
-    { type: "takosumi.object_bucket", id: "assets" },
+    { type: "takosumi_object_bucket", id: "assets" },
   ]);
 });
 

@@ -871,6 +871,17 @@ connection contract carries only resource references, requested permissions,
 and projection kind; credentials and concrete binding materialization stay in
 Credential / ProviderConnection / adapter execution.
 
+Immediately before preview/apply, the control plane resolves each reference to
+a Resource that exists in the same Space, is Ready at its current generation,
+and has a ResolutionLock. The adapter receives only that Resource's kind,
+selected Target, NativeResource references, and public outputs. Missing,
+cross-Space, or not-Ready references fail before adapter/backend execution.
+Deletion is dependency ordered: a referenced Resource cannot be deleted while
+a desired consumer still points at it. This preserves the dependency semantics
+that ordinary OpenTofu references already express and prevents adapters from
+guessing resource names or credentials. Resource API applies also reject any
+update that would introduce a cycle into the desired connection graph.
+
 ```hcl
 resource "takosumi_edge_worker" "takos_worker" {
   name          = "takos-worker"
