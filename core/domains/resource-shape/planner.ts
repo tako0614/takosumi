@@ -13,6 +13,7 @@ import type {
   EdgeWorkerSpec,
   KVStoreSpec,
   ObjectBucketSpec,
+  OutputValueType,
   QueueSpec,
   ResourceConnectionPermission,
   ResourceConnectionSpec,
@@ -32,7 +33,12 @@ export interface ResourceShapePlan {
     readonly text: string;
   }[];
   readonly inputs: Record<string, unknown>;
-  readonly publicOutputs: readonly string[];
+  readonly publicOutputs: readonly ResourceShapePublicOutput[];
+}
+
+export interface ResourceShapePublicOutput {
+  readonly name: string;
+  readonly type: OutputValueType;
 }
 
 export type ParsedResourceSpec =
@@ -602,7 +608,11 @@ export function planEdgeWorker(
     templateId,
     moduleFiles,
     inputs,
-    publicOutputs: ["worker_name", "url", "connections"],
+    publicOutputs: [
+      { name: "worker_name", type: "string" },
+      { name: "url", type: "url" },
+      { name: "connections", type: "json" },
+    ],
   };
 }
 
@@ -625,7 +635,10 @@ export function planObjectBucket(
     templateId,
     moduleFiles,
     inputs: { bucketName: spec.name, accountId: target.ref ?? "" },
-    publicOutputs: ["bucket_name", "s3_endpoint"],
+    publicOutputs: [
+      { name: "bucket_name", type: "string" },
+      { name: "s3_endpoint", type: "url" },
+    ],
   };
 }
 
@@ -643,7 +656,10 @@ export function planKVStore(
     templateId,
     moduleFiles,
     inputs: { namespaceTitle: spec.name, accountId: target.ref ?? "" },
-    publicOutputs: ["namespace_id", "namespace_title"],
+    publicOutputs: [
+      { name: "namespace_id", type: "string" },
+      { name: "namespace_title", type: "string" },
+    ],
   };
 }
 
@@ -661,7 +677,7 @@ export function planQueue(
     templateId,
     moduleFiles,
     inputs: { queueName: spec.name, accountId: target.ref ?? "" },
-    publicOutputs: ["queue_name"],
+    publicOutputs: [{ name: "queue_name", type: "string" }],
   };
 }
 
@@ -679,7 +695,10 @@ export function planSQLDatabase(
     templateId,
     moduleFiles,
     inputs: { databaseName: spec.name, accountId: target.ref ?? "" },
-    publicOutputs: ["database_id", "database_name"],
+    publicOutputs: [
+      { name: "database_id", type: "string" },
+      { name: "database_name", type: "string" },
+    ],
   };
 }
 
@@ -709,7 +728,11 @@ export function planContainerService(
         ? normalizedConnectionsForPlan(spec.connections)
         : {},
     },
-    publicOutputs: ["service_name", "url", "connections"],
+    publicOutputs: [
+      { name: "service_name", type: "string" },
+      { name: "url", type: "url" },
+      { name: "connections", type: "json" },
+    ],
   };
 }
 
@@ -732,7 +755,7 @@ function planGenericServiceShape(
       targetName: target.name,
       targetType: target.type,
     },
-    publicOutputs: ["resource_name"],
+    publicOutputs: [{ name: "resource_name", type: "string" }],
   };
 }
 

@@ -101,8 +101,11 @@ export class StubResourceShapeAdapter implements ResourceAdapter {
 
   apply(input: AdapterApplyInput): Promise<AdapterApplyResult> {
     const outputs: JsonObject = {};
-    for (const name of input.plan.publicOutputs) {
-      outputs[name] = `stub://${input.target.name}/${input.resourceId}/${name}`;
+    for (const output of input.plan.publicOutputs) {
+      outputs[output.name] =
+        output.type === "json"
+          ? {}
+          : `stub://${input.target.name}/${input.resourceId}/${output.name}`;
     }
     return Promise.resolve({
       nativeResources: input.nativeResources ?? [],

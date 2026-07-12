@@ -187,7 +187,11 @@ test("planEdgeWorker maps cloudflare_workers to cloudflare-worker-service", () =
     accountId: "cf-account-123",
     artifactPath: "/work/dist/worker.js",
   });
-  expect(plan.publicOutputs).toEqual(["worker_name", "url", "connections"]);
+  expect(plan.publicOutputs).toEqual([
+    { name: "worker_name", type: "string" },
+    { name: "url", type: "url" },
+    { name: "connections", type: "json" },
+  ]);
   expect(plan.moduleFiles).toBe(
     firstPartyModuleFilesByTemplateId["cloudflare-worker-service"],
   );
@@ -414,5 +418,9 @@ test("planContainerService uses the generic container module for operator implem
       },
     },
   });
-  expect(plan.publicOutputs).toEqual(["service_name", "url", "connections"]);
+  expect(plan.publicOutputs).toEqual([
+    { name: "service_name", type: "string" },
+    { name: "url", type: "url" },
+    { name: "connections", type: "json" },
+  ]);
 });
