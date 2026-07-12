@@ -4475,7 +4475,7 @@ async function runSelfTest(): Promise<void> {
       sourcePath: ".",
       modulePath: "deploy/opentofu",
       varsJson:
-        '{"release_container_images":{"runtime":"registry.cloudflare.com/acc_123/takos-worker-runtime:0.10.0-test","executor":"registry.cloudflare.com/acc_123/takos-agent-executor:0.10.0-test"}}',
+        '{"release_container_images":{"runtime":"registry.cloudflare.com/acc_123/takos-worker-runtime:0.10.0-test","executor":"registry.cloudflare.com/acc_123/takos-agent:0.10.0-test"}}',
       verificationMode: "opentofu",
     },
     {},

@@ -2807,7 +2807,7 @@ test("generic Capsule setup variables are filtered to the declared OpenTofu modu
   const runner = recordingRunner();
   const releaseImages = {
     runtime: "registry.cloudflare.com/acc/takos-worker-runtime:0.10.0-abcdef",
-    executor: "registry.cloudflare.com/acc/takos-agent-executor:0.10.0-abcdef",
+    executor: "registry.cloudflare.com/acc/takos-agent:0.10.0-abcdef",
   };
   const seeded = await seedRunnableInstallationModel(store, {
     environment: "preview",
@@ -2863,7 +2863,7 @@ test("generic Capsule setup variables are filtered to the declared OpenTofu modu
   expect(planMainTf).toContain('project_name = "takos-release"');
   expect(planMainTf).not.toContain("release_container_images");
   expect(planMainTf).not.toContain("takos-worker-runtime:0.10.0-abcdef");
-  expect(planMainTf).not.toContain("takos-agent-executor:0.10.0-abcdef");
+  expect(planMainTf).not.toContain("takos-agent:0.10.0-abcdef");
   expect(planMainTf).not.toContain("takosumi_accounts_client_id");
   expect(planMainTf).not.toContain("takosumi_accounts_issuer_url");
   expect(planMainTf).not.toContain("takosumi_accounts_redirect_uri");
