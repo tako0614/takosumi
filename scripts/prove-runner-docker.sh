@@ -28,7 +28,7 @@ set -euo pipefail
 # --------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
-IMAGE_TAG="takosumi-runner-proof"
+IMAGE_TAG="${TAKOSUMI_RUNNER_PROOF_IMAGE:-takosumi-runner-proof}"
 CONTAINER_NAME="takosumi-runner-proof-$$"
 RUN_ID="proof-$(date +%s)-$$"
 PAYLOAD_TS="${SCRIPT_DIR}/prove-runner-docker-payload.ts"
@@ -58,25 +58,32 @@ require curl
 # --------------------------------------------------------------------------
 # 1) Build the image (context MUST be the repo root).
 # --------------------------------------------------------------------------
-echo "==================================================================="
-echo "STEP 1: docker build (context = repo root: ${REPO_ROOT})"
-echo "  This bakes an OpenTofu provider mirror; allow up to ~10 minutes."
-echo "==================================================================="
-BUILD_START="$(date +%s)"
-build_image() {
-  docker build \
-    -f "${REPO_ROOT}/runner/Dockerfile" \
-    -t "${IMAGE_TAG}" \
-    "${REPO_ROOT}"
-}
-if ! build_image; then
-  echo "WARN: docker build failed; retrying once (transient network on mirror layer)..." >&2
-  sleep 5
-  build_image || fail "docker build failed after retry"
+if [ "${TAKOSUMI_RUNNER_PROOF_SKIP_BUILD:-0}" = "1" ]; then
+  docker image inspect "${IMAGE_TAG}" >/dev/null 2>&1 \
+    || fail "prebuilt image not found: ${IMAGE_TAG}"
+  BUILD_SECONDS=0
+  echo "STEP 1: using prebuilt image ${IMAGE_TAG}"
+else
+  echo "==================================================================="
+  echo "STEP 1: docker build (context = repo root: ${REPO_ROOT})"
+  echo "  This bakes an OpenTofu provider mirror; allow up to ~10 minutes."
+  echo "==================================================================="
+  BUILD_START="$(date +%s)"
+  build_image() {
+    docker build \
+      -f "${REPO_ROOT}/runner/Dockerfile" \
+      -t "${IMAGE_TAG}" \
+      "${REPO_ROOT}"
+  }
+  if ! build_image; then
+    echo "WARN: docker build failed; retrying once (transient network on mirror layer)..." >&2
+    sleep 5
+    build_image || fail "docker build failed after retry"
+  fi
+  BUILD_END="$(date +%s)"
+  BUILD_SECONDS=$(( BUILD_END - BUILD_START ))
+  echo "docker build completed in ${BUILD_SECONDS}s"
 fi
-BUILD_END="$(date +%s)"
-BUILD_SECONDS=$(( BUILD_END - BUILD_START ))
-echo "docker build completed in ${BUILD_SECONDS}s"
 
 IMAGE_SIZE="$(docker image inspect "${IMAGE_TAG}" --format '{{.Size}}' 2>/dev/null || echo 0)"
 IMAGE_SIZE_HUMAN="$(awk -v b="${IMAGE_SIZE}" 'BEGIN{printf "%.2f MB", b/1024/1024}')"
@@ -89,7 +96,11 @@ echo "==================================================================="
 echo "STEP 2: run container detached"
 echo "==================================================================="
 # Let docker pick a free host port for container 8080.
-docker run -d --name "${CONTAINER_NAME}" -p 0:8080 "${IMAGE_TAG}" >/dev/null \
+DOCKER_RUN_ARGS=(-d --name "${CONTAINER_NAME}" -p 0:8080)
+if [ "${TAKOSUMI_RUNNER_PROOF_APPARMOR_UNCONFINED:-0}" = "1" ]; then
+  DOCKER_RUN_ARGS+=(--security-opt apparmor=unconfined)
+fi
+docker run "${DOCKER_RUN_ARGS[@]}" "${IMAGE_TAG}" >/dev/null \
   || fail "docker run failed"
 
 HOST_PORT="$(docker port "${CONTAINER_NAME}" 8080/tcp | head -n1 | sed 's/.*://')"
@@ -136,6 +147,7 @@ echo "${PLAN_RESPONSE}" | bun -e '
   console.log("  planDigest :", r.planDigest);
   console.log("  planArtifact.kind:", r.planArtifact && r.planArtifact.kind);
   console.log("  summary    :", JSON.stringify(r.summary));
+  console.log("  plannedOutputs:", JSON.stringify(r.plannedOutputs));
   if (r.status !== "succeeded") {
     console.log("  stderr     :", (r.stderr||"").slice(0,2000));
     console.log("  stdout     :", (r.stdout||"").slice(0,2000));
@@ -144,11 +156,23 @@ echo "${PLAN_RESPONSE}" | bun -e '
 
 PLAN_STATUS="$(echo "${PLAN_RESPONSE}" | bun -e 'console.log((JSON.parse(await Bun.stdin.text()).status)||"")')"
 PLAN_DIGEST="$(echo "${PLAN_RESPONSE}" | bun -e 'console.log((JSON.parse(await Bun.stdin.text()).planDigest)||"")')"
+PLANNED_OUTPUTS_OK="$(echo "${PLAN_RESPONSE}" | bun -e '
+  const r = JSON.parse(await Bun.stdin.text());
+  const o = r.plannedOutputs || {};
+  const val = (k) => o[k] && typeof o[k] === "object" ? o[k].value : o[k];
+  const expected = {
+    base_domain: "proof.example.com",
+    public_origin: "https://proof.example.com",
+    member_issuer: "https://proof.example.com/auth",
+    service_registry_url: "https://proof.example.com/.well-known/takosumi-services.json",
+  };
+  console.log(Object.entries(expected).every(([k, v]) => val(k) === v) ? "ok" : "no");
+')"
 
-if [ "${PLAN_STATUS}" = "succeeded" ] && [ -n "${PLAN_DIGEST}" ] && [ "${PLAN_DIGEST}" != "undefined" ]; then
-  echo "PLAN: PASS (status=succeeded, planDigest=${PLAN_DIGEST})"
+if [ "${PLAN_STATUS}" = "succeeded" ] && [ -n "${PLAN_DIGEST}" ] && [ "${PLAN_DIGEST}" != "undefined" ] && [ "${PLANNED_OUTPUTS_OK}" = "ok" ]; then
+  echo "PLAN: PASS (status=succeeded, planned outputs present, planDigest=${PLAN_DIGEST})"
 else
-  fail "plan did not succeed (status=${PLAN_STATUS}, planDigest=${PLAN_DIGEST})"
+  fail "plan contract failed (status=${PLAN_STATUS}, planDigest=${PLAN_DIGEST}, plannedOutputs=${PLANNED_OUTPUTS_OK})"
 fi
 
 # --------------------------------------------------------------------------
