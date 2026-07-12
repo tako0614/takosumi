@@ -89,7 +89,7 @@ The provider does:
 typed HCL schemas for Takosumi-owned shapes
 local validation
 Takosumi discovery and capability checks
-Resource API preview/apply/delete/status calls
+Resource API apply/delete/status calls
 status polling
 minimal OpenTofu state mapping
 ```
@@ -98,6 +98,13 @@ Resource API apply/delete calls may wait for server-side OpenTofu plan/apply or
 destroy work to finish. The provider HTTP client therefore uses a multi-minute
 timeout; backend execution still belongs to the Takosumi endpoint, not to the
 provider binary.
+
+The provider does not start a separate remote Resource API preview from
+OpenTofu `ModifyPlan`. Typed provider schemas produce the normal OpenTofu plan,
+and the Resource API apply path performs the authoritative server-side
+resolution, plan, and policy guard exactly once. `POST /v1/resources/preview`
+remains available to explicit API/console callers that request a backend-aware
+preview.
 
 The provider does not:
 

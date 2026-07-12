@@ -14,6 +14,21 @@ import (
 	"github.com/takosjp/terraform-provider-takosumi/internal/client"
 )
 
+func TestServiceShapePlansDoNotStartRemotePreviews(t *testing.T) {
+	resources := []frameworkresource.Resource{
+		NewObjectBucketResource(),
+		NewKVStoreResource(),
+		NewQueueResource(),
+		NewSQLDatabaseResource(),
+		NewContainerServiceResource(),
+	}
+	for _, candidate := range resources {
+		if _, ok := candidate.(frameworkresource.ResourceWithModifyPlan); ok {
+			t.Fatalf("%T must not start a discarded remote preview during OpenTofu planning", candidate)
+		}
+	}
+}
+
 func TestServiceShapeToResourceCarriesTargetPoolName(t *testing.T) {
 	model := serviceShapeModel{
 		Name:       types.StringValue("assets"),
