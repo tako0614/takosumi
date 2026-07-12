@@ -68,7 +68,12 @@ forms such as `takosumi_edge_worker`, `takosumi_sql_database`,
 `takosumi_container_service`. Consumer shapes use the typed `connections`
 attribute to declare non-secret resource references, requested permissions, and
 projection kind; the selected adapter owns concrete grant/binding
-materialization. The provider proof `bun run opentofu:takos-shape-provider-proof`
+materialization. Before adapter execution, the Takosumi endpoint resolves every
+reference to a Ready Resource in the same Space and supplies only its public
+outputs, selected Target, and NativeResource identifiers. Missing, cross-Space,
+or not-Ready references fail before backend calls, and referenced Resources
+cannot be deleted before their consumers. The provider proof
+`bun run opentofu:takos-shape-provider-proof`
 exercises that composition and intentionally avoids a `takosumi_takos`
 catch-all resource.
 

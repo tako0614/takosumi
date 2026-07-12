@@ -11,6 +11,7 @@ import type {
   Condition,
   JsonObject,
   NativeResourceRef,
+  ResourceConnectionSpec,
   ResolverOutput,
   ResourceManagedBy,
   ResourceObject,
@@ -33,11 +34,12 @@ import {
   type TargetPoolRecord,
 } from "./records.ts";
 import type { ResourceShapeStores } from "./stores.ts";
-import type { ResourceAdapter } from "./adapter.ts";
+import type { ResolvedResourceConnection, ResourceAdapter } from "./adapter.ts";
 import { DEFAULT_RESOURCE_SHAPE_CAPABILITIES, resolve } from "./resolver.ts";
 import {
   parseResourceSpec,
   planResourceShape,
+  type ParsedResourceSpec,
   type ResourceShapePlan,
 } from "./planner.ts";
 
@@ -69,6 +71,8 @@ export type ResourceServiceErrorCode =
   | "no_eligible_target"
   | "unsupported_shape"
   | "selected_target_missing"
+  | "connection_not_found"
+  | "connection_not_ready"
   | "not_found"
   | "delete_blocked"
   | "apply_failed"
@@ -216,13 +220,22 @@ export class ResourceShapeService {
   ): Promise<ServiceResult<PreviewResourceResult>> {
     const prepared = await this.#resolveAndPlan(req, undefined);
     if (!prepared.ok) return prepared;
-    const { resource, output, plan, entry } = prepared.value;
+    const { resource, output, plan, entry, parsed } = prepared.value;
+    const resolvedConnections = await this.#resolveConnections(
+      req.space,
+      output.resolutionLock.resourceId,
+      parsed,
+    );
+    if (!resolvedConnections.ok) return resolvedConnections;
     const adapterPreview = await this.#adapter.preview({
       resourceId: output.resolutionLock.resourceId,
       plan,
       target: entry,
       credentialRef: entry.credentialRef,
       nativeResources: output.nativeResourcePlan,
+      ...(Object.keys(resolvedConnections.value).length > 0
+        ? { resolvedConnections: resolvedConnections.value }
+        : {}),
       ...(output.selectedImplementationPlugin
         ? { implementationPlugin: output.selectedImplementationPlugin }
         : {}),
@@ -263,7 +276,13 @@ export class ResourceShapeService {
 
     const prepared = await this.#resolveAndPlan(req, existingLock);
     if (!prepared.ok) return prepared;
-    const { output, plan, entry } = prepared.value;
+    const { output, plan, entry, parsed } = prepared.value;
+    const resolvedConnections = await this.#resolveConnections(
+      req.space,
+      id,
+      parsed,
+    );
+    if (!resolvedConnections.ok) return resolvedConnections;
 
     const now = this.#now();
     const generation = (existing?.generation ?? 0) + 1;
@@ -310,6 +329,9 @@ export class ResourceShapeService {
         target: entry,
         credentialRef: entry.credentialRef,
         nativeResources: output.nativeResourcePlan,
+        ...(Object.keys(resolvedConnections.value).length > 0
+          ? { resolvedConnections: resolvedConnections.value }
+          : {}),
         ...(output.selectedImplementationPlugin
           ? { implementationPlugin: output.selectedImplementationPlugin }
           : {}),
@@ -408,6 +430,16 @@ export class ResourceShapeService {
     }
     if (record.phase === "Deleting") {
       return { ok: true, value: undefined };
+    }
+    const consumer = await this.#firstConnectionConsumer(space, id);
+    if (consumer) {
+      return {
+        ok: false,
+        error: {
+          code: "delete_blocked",
+          message: `resource ${id} is still referenced by ${consumer.id}`,
+        },
+      };
     }
     const lock = await this.#stores.locks.get(id);
     const entry = lock
@@ -518,6 +550,7 @@ export class ResourceShapeService {
       readonly output: ResolverOutput;
       readonly plan: ResourceShapePlan;
       readonly entry: TargetPoolEntry;
+      readonly parsed: ParsedResourceSpec;
     }>
   > {
     const specResult = parseResourceSpec(req.kind, req.spec);
@@ -608,8 +641,149 @@ export class ResourceShapeService {
         error: { code: "no_eligible_target", message: errorMessage(error) },
       };
     }
+    if (plan.requiresAdapterPlugin && !output.selectedImplementationPlugin) {
+      return {
+        ok: false,
+        error: {
+          code: "no_eligible_target",
+          message:
+            `${req.kind} implementation ${output.selectedImplementation} ` +
+            "requires an installed adapter plugin; its planner module does not materialize a backend resource",
+        },
+      };
+    }
 
-    return { ok: true, value: { resource, output, plan, entry } };
+    return { ok: true, value: { resource, output, plan, entry, parsed } };
+  }
+
+  async #resolveConnections(
+    space: SpaceId,
+    consumerResourceId: string,
+    parsed: ParsedResourceSpec,
+  ): Promise<
+    ServiceResult<Readonly<Record<string, ResolvedResourceConnection>>>
+  > {
+    const connections = connectionsForParsedResource(parsed);
+    if (!connections) return { ok: true, value: {} };
+
+    const resourcesById = new Map(
+      (await this.#stores.resources.listBySpace(space)).map((resource) => [
+        resource.id,
+        resource,
+      ]),
+    );
+    const resolved: Record<string, ResolvedResourceConnection> = {};
+    for (const name of Object.keys(connections).sort()) {
+      const connection = connections[name]!;
+      if (connection.resource === consumerResourceId) {
+        return {
+          ok: false,
+          error: {
+            code: "invalid_connections",
+            message: `spec.connections.${name}.resource cannot reference the consumer itself`,
+          },
+        };
+      }
+      const resource = resourcesById.get(connection.resource);
+      // Do not reveal whether a resource id belongs to another Space.
+      if (!resource) {
+        return {
+          ok: false,
+          error: {
+            code: "connection_not_found",
+            message: `spec.connections.${name}.resource was not found in space ${space}`,
+          },
+        };
+      }
+      if (
+        this.#connectionPathReaches(
+          resource.id,
+          consumerResourceId,
+          resourcesById,
+          new Set(),
+        )
+      ) {
+        return {
+          ok: false,
+          error: {
+            code: "invalid_connections",
+            message: `spec.connections.${name}.resource creates a dependency cycle`,
+          },
+        };
+      }
+      const lock = await this.#stores.locks.get(resource.id);
+      if (
+        resource.phase !== "Ready" ||
+        resource.observedGeneration !== resource.generation ||
+        !lock
+      ) {
+        return {
+          ok: false,
+          error: {
+            code: "connection_not_ready",
+            message: `spec.connections.${name}.resource is not Ready`,
+          },
+        };
+      }
+      resolved[name] = {
+        resourceId: resource.id,
+        kind: resource.kind,
+        permissions: connection.permissions,
+        projection: connection.projection,
+        target: lock.target,
+        nativeResources: lock.nativeResources ?? [],
+        outputs: resource.outputs ?? {},
+      };
+    }
+    return { ok: true, value: resolved };
+  }
+
+  #connectionPathReaches(
+    currentId: string,
+    targetId: string,
+    resourcesById: ReadonlyMap<string, ResourceShapeRecord>,
+    visited: Set<string>,
+  ): boolean {
+    if (currentId === targetId) return true;
+    if (visited.has(currentId)) return false;
+    visited.add(currentId);
+
+    const current = resourcesById.get(currentId);
+    if (!current) return false;
+    const parsed = parseResourceSpec(current.kind, current.spec);
+    if (!parsed.ok) return false;
+    const connections = connectionsForParsedResource(parsed.parsed);
+    if (!connections) return false;
+    return Object.values(connections).some((connection) =>
+      this.#connectionPathReaches(
+        connection.resource,
+        targetId,
+        resourcesById,
+        visited,
+      ),
+    );
+  }
+
+  async #firstConnectionConsumer(
+    space: SpaceId,
+    resourceId: string,
+  ): Promise<ResourceShapeRecord | undefined> {
+    const resources = await this.#stores.resources.listBySpace(space);
+    for (const candidate of resources) {
+      if (candidate.id === resourceId) continue;
+      const parsed = parseResourceSpec(candidate.kind, candidate.spec);
+      if (!parsed.ok) continue;
+      const connections = connectionsForParsedResource(parsed.parsed);
+      if (
+        connections &&
+        Object.values(connections).some(
+          (connection) => connection.resource === resourceId,
+        )
+      ) {
+        return candidate;
+      }
+    }
+    return undefined;
   }
 
   #buildResourceObject(req: ApplyResourceRequest): ResourceObject {
@@ -903,6 +1077,15 @@ function implementationDispatchOptionsFor(
     ...(matched.plugin ? { implementationPlugin: matched.plugin } : {}),
     ...(matched.options ? { implementationOptions: matched.options } : {}),
   };
+}
+
+function connectionsForParsedResource(
+  parsed: ParsedResourceSpec,
+): Readonly<Record<string, ResourceConnectionSpec>> | undefined {
+  if (parsed.kind === "EdgeWorker" || parsed.kind === "ContainerService") {
+    return parsed.spec.connections;
+  }
+  return undefined;
 }
 
 function invalidTargetPool(message: string): ResourceServiceError {

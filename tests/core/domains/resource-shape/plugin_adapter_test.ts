@@ -79,11 +79,28 @@ test("plugin adapter routes plugin-backed operations to the injected binding", a
     },
   );
 
+  const resolvedConnections = {
+    ASSETS: {
+      resourceId: "tkrn:space_1:ObjectBucket:assets",
+      kind: "ObjectBucket" as const,
+      permissions: ["read" as const],
+      projection: "runtime_binding" as const,
+      target: "cloudflare-main",
+      nativeResources: [{ type: "cloudflare_r2_bucket", id: "assets" }],
+      outputs: { bucket_name: "assets" },
+    },
+  };
   const preview = await adapter.preview(
-    applyInput({ implementationPlugin: "cloud-managed" }),
+    applyInput({
+      implementationPlugin: "cloud-managed",
+      resolvedConnections,
+    }),
   );
   const applied = await adapter.apply(
-    applyInput({ implementationPlugin: "cloud-managed" }),
+    applyInput({
+      implementationPlugin: "cloud-managed",
+      resolvedConnections,
+    }),
   );
   await adapter.delete(deleteInput({ implementationPlugin: "cloud-managed" }));
 
@@ -96,7 +113,10 @@ test("plugin adapter routes plugin-backed operations to the injected binding", a
   ]);
   expect(calls[0]?.body).toMatchObject({
     action: "preview",
-    input: { resourceId: "tkrn:space_1:ObjectBucket:assets" },
+    input: {
+      resourceId: "tkrn:space_1:ObjectBucket:assets",
+      resolvedConnections,
+    },
   });
 });
 

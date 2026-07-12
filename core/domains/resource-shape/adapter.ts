@@ -9,10 +9,29 @@ import type {
   ActorContext,
   JsonObject,
   NativeResourceRef,
+  ResourceConnectionPermission,
   ResourceDeletePolicy,
+  ResourceProjectionKind,
+  ResourceShapeKind,
   TargetPoolEntry,
 } from "takosumi-contract";
 import type { ResourceShapePlan } from "./planner.ts";
+
+/**
+ * A connection after the control plane has resolved and authorized its
+ * referenced Resource. Adapters receive only public Resource outputs and
+ * native identifiers; credential material remains in Credential /
+ * ProviderConnection handling.
+ */
+export interface ResolvedResourceConnection {
+  readonly resourceId: string;
+  readonly kind: ResourceShapeKind;
+  readonly permissions: readonly ResourceConnectionPermission[];
+  readonly projection: ResourceProjectionKind;
+  readonly target: string;
+  readonly nativeResources: readonly NativeResourceRef[];
+  readonly outputs: JsonObject;
+}
 
 /** Everything an adapter needs to preview/apply one resolved Resource Shape. */
 export interface AdapterApplyInput {
@@ -29,6 +48,14 @@ export interface AdapterApplyInput {
    * stub echoes it.
    */
   readonly nativeResources?: readonly NativeResourceRef[];
+  /**
+   * Resource references validated by the control plane immediately before
+   * adapter execution. The map key is the application-visible connection
+   * name, for example `ASSETS` or `DATABASE`.
+   */
+  readonly resolvedConnections?: Readonly<
+    Record<string, ResolvedResourceConnection>
+  >;
   /**
    * Optional operator-selected implementation plugin. The built-in opentofu
    * adapter may ignore it; plugin-aware adapters use this to dispatch the

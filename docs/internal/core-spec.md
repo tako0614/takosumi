@@ -497,6 +497,19 @@ capability evidence and adapters.
 a closed provider-side enum. Validation of support belongs to capability
 discovery, TargetPool policy, adapter evidence, and the Resolver.
 
+Resource `connections` are resolved by the control plane immediately before
+adapter preview/apply. A referenced resource must exist in the same Space, be
+`Ready` at its current generation, and have a ResolutionLock. The adapter
+receives the declared permissions/projection together with the referenced
+resource kind, selected Target, NativeResource references, and public outputs.
+It never receives ProviderConnection or Secret material through this payload.
+An adapter must fail closed when it cannot materialize the requested projection
+or when a runtime-native binding crosses incompatible Targets. A resource that
+is still referenced by another desired Resource cannot be deleted; consumers
+must be removed first, matching OpenTofu dependency order. The desired
+connection graph must remain acyclic; an apply that would introduce a cycle is
+rejected before adapter execution.
+
 ## Composite Products
 
 Composite products are represented by composing typed generic shapes. They do

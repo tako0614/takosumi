@@ -213,6 +213,8 @@ test("planEdgeWorker maps release artifact URL and digest to module inputs", () 
         artifactSha256:
           "1111111111111111111111111111111111111111111111111111111111111111",
       },
+      compatibilityDate: "2026-07-12",
+      compatibilityFlags: ["nodejs_compat"],
     },
     target,
   );
@@ -223,6 +225,8 @@ test("planEdgeWorker maps release artifact URL and digest to module inputs", () 
     artifactUrl: "https://example.com/releases/api-worker.js",
     artifactSha256:
       "1111111111111111111111111111111111111111111111111111111111111111",
+    compatibilityDate: "2026-07-12",
+    compatibilityFlags: ["nodejs_compat"],
   });
 });
 
@@ -400,6 +404,7 @@ test("planContainerService uses the generic container module for operator implem
     target,
   );
   expect(plan.templateId).toBe(CONTAINER_SERVICE_GENERIC_TEMPLATE_ID);
+  expect(plan.requiresAdapterPlugin).toBe(true);
   expect(plan.shape).toBe("ContainerService");
   expect(plan.inputs).toEqual({
     serviceName: "agent",
