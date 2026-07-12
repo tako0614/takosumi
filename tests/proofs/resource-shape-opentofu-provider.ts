@@ -302,9 +302,39 @@ export async function runResourceShapeOpenTofuProviderProof(
   }
 }
 
+export function validateLiveTargetTransport(
+  options: Pick<
+    LiveProofOptions,
+    "targetType" | "targetRef" | "targetProviderBaseUrl"
+  >,
+): void {
+  if (
+    options.targetType.trim().toLowerCase() !== "cloudflare" ||
+    !options.targetRef.trim().startsWith("ts_acc_")
+  ) {
+    return;
+  }
+  const baseUrl = options.targetProviderBaseUrl?.trim();
+  if (!baseUrl) {
+    throw new Error(
+      "a virtual Cloudflare target ref (ts_acc_*) requires --target-provider-base-url; refusing to send it to the real Cloudflare API",
+    );
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    throw new Error("--target-provider-base-url must be an absolute HTTPS URL");
+  }
+  if (parsed.protocol !== "https:") {
+    throw new Error("--target-provider-base-url must be an absolute HTTPS URL");
+  }
+}
+
 export async function runResourceShapeOpenTofuProviderLiveProof(
   options: LiveProofOptions,
 ): Promise<ResourceShapeOpenTofuProviderLiveProof> {
+  validateLiveTargetTransport(options);
   const temp = await mkdtemp(join(tmpdir(), "takosumi-provider-live-"));
   try {
     const providerDir = join(temp, "provider");
@@ -1461,10 +1491,7 @@ function containerServiceNames(count: number): readonly ("git" | "agent")[] {
 
 function containerImageForServiceName(
   serviceName: "git" | "agent",
-  options: Pick<
-    LiveProofOptions,
-    "containerImageGit" | "containerImageAgent"
-  >,
+  options: Pick<LiveProofOptions, "containerImageGit" | "containerImageAgent">,
 ): string | undefined {
   return serviceName === "git"
     ? options.containerImageGit
