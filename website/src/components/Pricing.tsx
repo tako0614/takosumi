@@ -48,8 +48,7 @@ export default function Pricing() {
       </div>
 
       <p class="plan-footnote">
-        表示価格は公開 pricing contract に基づきます。実際の課金開始前に
-        checkout とプラン内容を確認できます。
+        表示価格は、公開している料金表に基づきます。実際に課金が始まる前に、プランの内容と支払い内容を確認できます。
       </p>
     </Section>
   );

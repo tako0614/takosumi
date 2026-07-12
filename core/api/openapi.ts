@@ -496,7 +496,7 @@ function createSchemas(): Record<string, Record<string, unknown>> {
     ...runnerSchemas(),
     ...installationSchemas(),
     ...capsuleSchemas(),
-    ...providerCatalogSchemas(),
+    ...providerConnectionAndRecipeSchemas(),
     ...providerResolutionSchemas(),
     ...outputSchemas(),
     ...connectionSchemas(),
@@ -1420,45 +1420,87 @@ function providerResolutionSchemas(): Record<string, Record<string, unknown>> {
 }
 
 /**
- * Read-only Provider listing (computed) + the unified Provider Connection read
- * shapes, plus the compatibility-check request/response wrappers that bind to
- * the listing.
+ * Guided Credential Recipe discovery + unified Provider Connection reads.
  */
-function providerCatalogSchemas(): Record<string, Record<string, unknown>> {
+function providerConnectionAndRecipeSchemas(): Record<
+  string,
+  Record<string, unknown>
+> {
   return {
     ProviderConnectionKind: { enum: [...PROVIDER_CONNECTION_KINDS] },
-    ProviderListing: {
+    CredentialRecipeMaterial: {
       type: "object",
-      required: [
-        "id",
-        "providerSource",
-        "displayName",
-        "recommendedEnvNames",
-        "requiredEnvGroups",
-        "genericEnvSupported",
-        "connectionKinds",
-        "credentialRecipeIds",
-        "allowedResources",
-        "allowedDataSources",
+      required: ["from"],
+      properties: {
+        from: {
+          enum: ["secret", "value", "generated", "literal", "user_defined"],
+        },
+        name: { type: "string" },
+        value: { type: "string" },
+      },
+      additionalProperties: false,
+    },
+    CredentialRecipeFileMaterial: {
+      allOf: [
+        ref("CredentialRecipeMaterial"),
+        {
+          type: "object",
+          properties: {
+            envName: { type: "string" },
+            mode: { type: "integer" },
+          },
+        },
       ],
+    },
+    CredentialRecipeAuthMode: {
+      type: "object",
+      properties: {
+        env: {
+          type: "object",
+          additionalProperties: ref("CredentialRecipeMaterial"),
+        },
+        files: {
+          type: "object",
+          additionalProperties: ref("CredentialRecipeFileMaterial"),
+        },
+        preRun: {
+          type: "object",
+          required: ["type"],
+          properties: {
+            type: { type: "string" },
+            inputs: {
+              type: "object",
+              additionalProperties: ref("CredentialRecipeMaterial"),
+            },
+          },
+          additionalProperties: false,
+        },
+      },
+      additionalProperties: false,
+    },
+    CredentialRecipe: {
+      type: "object",
+      required: ["id", "displayName", "terraformSource", "authModes"],
       properties: {
         id: { type: "string" },
-        providerSource: { type: "string" },
         displayName: { type: "string" },
-        recommendedEnvNames: { type: "array", items: { type: "string" } },
+        providerRule: { type: "string" },
+        terraformSource: {
+          oneOf: [
+            { const: "*" },
+            { type: "array", items: { type: "string" } },
+          ],
+        },
+        envNames: { type: "array", items: { type: "string" } },
         requiredEnvGroups: {
           type: "array",
           items: { type: "array", items: { type: "string" } },
         },
-        genericEnvSupported: { type: "boolean" },
-        connectionKinds: {
-          type: "array",
-          items: ref("ProviderConnectionKind"),
+        declaredEnv: { type: "boolean" },
+        authModes: {
+          type: "object",
+          additionalProperties: ref("CredentialRecipeAuthMode"),
         },
-        credentialRecipeIds: { type: "array", items: { type: "string" } },
-        allowedResources: { type: "array", items: { type: "string" } },
-        allowedDataSources: { type: "array", items: { type: "string" } },
-        docsUrl: { type: "string" },
       },
       additionalProperties: false,
     },
@@ -1497,31 +1539,17 @@ function providerCatalogSchemas(): Record<string, Record<string, unknown>> {
       },
       additionalProperties: false,
     },
-    ProviderEnvResponse: {
+    CredentialRecipeResponse: {
       type: "object",
-      required: ["providerEnv"],
-      properties: { providerEnv: ref("ProviderConnection") },
+      required: ["recipe"],
+      properties: { recipe: ref("CredentialRecipe") },
       additionalProperties: false,
     },
-    ListProviderEnvsResponse: {
+    ListCredentialRecipesResponse: {
       type: "object",
-      required: ["providerEnvs"],
+      required: ["recipes"],
       properties: {
-        providerEnvs: { type: "array", items: ref("ProviderConnection") },
-      },
-      additionalProperties: false,
-    },
-    ProviderListingResponse: {
-      type: "object",
-      required: ["provider"],
-      properties: { provider: ref("ProviderListing") },
-      additionalProperties: false,
-    },
-    ListProvidersResponse: {
-      type: "object",
-      required: ["providers"],
-      properties: {
-        providers: { type: "array", items: ref("ProviderListing") },
+        recipes: { type: "array", items: ref("CredentialRecipe") },
       },
       additionalProperties: false,
     },

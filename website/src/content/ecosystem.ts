@@ -7,7 +7,7 @@ export interface Chip {
 // generic workloads so the "（例）" framing matches the chips; the Takos family
 // appears as a clearly-tagged representative subset, not the dominant majority.
 export const APPS: readonly Chip[] = [
-  { label: "あなたの module", hint: "Git URL" },
+  { label: "あなたのモジュール", hint: "Git URL" },
   { label: "web / API", hint: "http" },
   { label: "worker / cron", hint: "jobs" },
   { label: "静的サイト", hint: "docs" },
@@ -20,7 +20,7 @@ export const APPS: readonly Chip[] = [
 export const PROVIDERS: readonly Chip[] = [
   { label: "Cloudflare", hint: "接続して使う" },
   { label: "AWS", hint: "接続して使う" },
-  { label: "GCP", hint: "鍵を預けず実行時だけ注入" },
+  { label: "GCP", hint: "鍵を預けず、実行のときだけ渡す" },
   { label: "Kubernetes", hint: "既存 provider" },
   { label: "Custom Provider", hint: "generic env" },
 ];
@@ -28,10 +28,10 @@ export const PROVIDERS: readonly Chip[] = [
 export const SUBSTRATE = {
   label: "Takosumi",
   description:
-    "OpenTofu-native control plane。サービス、変更履歴、状態、出力を記録し、実際の resource は cloud、VM、cluster、管理サービス側に作る。",
+    "Git と OpenTofu を使うデプロイ基盤です。サービス・変更履歴・状態・出力を記録し、実際のリソースはクラウド・VM・クラスター・マネージドサービス側に作られます。",
 };
 
 export const ACCOUNTS = {
   label: "Takosumi Accounts",
-  description: "OIDC issuer + account / billing context",
+  description: "アカウント・ログイン (OIDC)・課金の管理",
 };

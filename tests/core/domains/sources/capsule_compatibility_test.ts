@@ -98,7 +98,15 @@ output "attachments_bucket" {
   expect(result.resources).toEqual([
     { type: "aws_s3_bucket", count: 1, allowed: true },
   ]);
-  expect(result.findings).toEqual([]);
+  expect(result.findings).toEqual([
+    {
+      severity: "info",
+      code: "provider_connection_may_be_required",
+      message: "Provider hashicorp/aws may require a Provider Connection.",
+      suggestion:
+        "If the provider needs credentials, bind a Provider Connection with the env/file names documented by the provider.",
+    },
+  ]);
 });
 
 test("treats provider-free output modules as runnable", () => {
@@ -374,7 +382,15 @@ output "public_url" {
   ]);
   expect(result.dataSources).toEqual([{ type: "external", allowed: true }]);
   expect(result.provisioners).toEqual([{ type: "local-exec", allowed: true }]);
-  expect(result.findings).toEqual([]);
+  expect(result.findings).toEqual([
+    {
+      severity: "info",
+      code: "provider_connection_may_be_required",
+      message: "Provider custom/provider may require a Provider Connection.",
+      suggestion:
+        "If the provider needs credentials, bind a Provider Connection with the env/file names documented by the provider.",
+    },
+  ]);
 });
 
 test("detects dependency lockfiles without downgrading reusable modules", () => {
@@ -817,10 +833,10 @@ output "id" {
   ).toBe(true);
 });
 
-test("admits arbitrary OpenTofu providers with generic env by default", () => {
-  // The catalog is not the provider boundary. Unknown-but-qualified provider
-  // sources can proceed to Provider Connection setup; runner mirror/egress and
-  // plan policy remain the enforcement layers.
+test("admits qualified OpenTofu providers through the standard path", () => {
+  // Every qualified provider source follows the same OpenTofu path. Providers
+  // that may need credentials receive an informational Provider Connection
+  // finding; runner mirror/egress and plan policy remain enforcement layers.
   const result = analyzeOpenTofuCapsuleFiles({
     sourceId: "src_test",
     sourceSnapshot: snapshot,
@@ -855,11 +871,16 @@ output "database_name" {
   expect(result.resources).toEqual([
     { type: "snowflake_database", count: 1, allowed: true },
   ]);
-  expect(
-    result.findings.some(
-      (finding) => finding.code === "generic_provider_connection_required",
-    ),
-  ).toBe(true);
+  expect(result.findings).toEqual([
+    {
+      severity: "info",
+      code: "provider_connection_may_be_required",
+      message:
+        "Provider snowflake-labs/snowflake may require a Provider Connection.",
+      suggestion:
+        "If the provider needs credentials, bind a Provider Connection with the env/file names documented by the provider.",
+    },
+  ]);
 });
 
 test("admits http data sources for explicit release artifact retrieval", () => {
@@ -900,7 +921,7 @@ output "worker_bundle_sha256" {
   expect(
     result.findings.some(
       (finding) =>
-        finding.code === "generic_provider_connection_required" &&
+        finding.code === "provider_connection_may_be_required" &&
         finding.message.includes("hashicorp/http"),
     ),
   ).toBe(false);

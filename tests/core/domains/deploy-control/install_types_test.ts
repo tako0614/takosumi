@@ -32,7 +32,7 @@ import type {
   Connection,
   InstallConfig,
 } from "@takosumi/internal/deploy-control-api";
-import type { InstallationProviderEnvBindings } from "takosumi-contract/provider-envs";
+import type { InstallationProviderEnvBindings } from "takosumi-contract/connections";
 import {
   FIXTURE_CLOUDFLARE_MIRROR_EVIDENCE,
   FIXTURE_CLOUDFLARE_PROVIDER,
@@ -329,6 +329,29 @@ test("core install plan generates a provider-free root and apply projects the 4 
 
   const latest = await store.getLatestStateSnapshot("inst_fixture", "preview");
   expect(latest?.generation).toEqual(1);
+});
+
+test("default OpenTofu profile does not require a Connection for a guided provider", async () => {
+  const { runner, controller } = await installTypeFixture({
+    installConfig: {
+      installType: "opentofu_module",
+      templateBinding: {
+        templateId: "cloudflare-worker-service",
+        templateVersion: "1.0.0",
+      },
+      variableMapping: { appName: "connection-free", accountId: "acct_123" },
+      policy: {},
+    },
+  });
+
+  const { planRun } = await controller.createInstallationPlan("inst_fixture");
+
+  expect(planRun.status).toEqual("succeeded");
+  expect(planRun.requiredProviders).toEqual([FIXTURE_CLOUDFLARE_PROVIDER]);
+  expect(runner.planJobs).toHaveLength(1);
+  const mainTf = runner.planJobs[0]!.generatedRoot!.files["main.tf"]!;
+  expect(mainTf).not.toContain('provider "cloudflare"');
+  expect(mainTf).not.toContain("providers = {");
 });
 
 test("opentofu_module install emits provider aliases from resolved provider env bindings", async () => {

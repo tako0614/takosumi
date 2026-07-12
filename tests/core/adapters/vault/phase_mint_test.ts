@@ -409,7 +409,7 @@ test("provider-connection connection pool mints a pending managed-provider conne
     values: { CLOUDFLARE_API_TOKEN: "operator-static-token" },
     scopeHints: {
       managedProvider: true,
-      providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      providerConfig: { base_url: "https://app.takosumi.com/compat/cloudflare/client/v4" },
       managedPublicBaseDomain: "app-staging.takos.jp",
     },
   });
@@ -956,7 +956,7 @@ test("mintForInstallationProviderEnvBindings uses managed-provider issuer before
       values: { CLOUDFLARE_API_TOKEN: "operator-static-token" },
       scopeHints: {
         managedProvider: true,
-        providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+        providerConfig: { base_url: "https://app.takosumi.com/compat/cloudflare/client/v4" },
       },
     }),
   );
@@ -1028,7 +1028,7 @@ test("mintForInstallationProviderEnvBindings mints a pending managed-provider co
     values: { CLOUDFLARE_API_TOKEN: "operator-static-token" },
     scopeHints: {
       managedProvider: true,
-      providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      providerConfig: { base_url: "https://app.takosumi.com/compat/cloudflare/client/v4" },
     },
   });
   expect(operatorConn.status).toBe("pending");
@@ -1079,7 +1079,7 @@ test("mintForInstallationProviderEnvBindings rejects managed-provider connection
       values: { CLOUDFLARE_API_TOKEN: "operator-static-token" },
       scopeHints: {
         managedProvider: true,
-        providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+        providerConfig: { base_url: "https://app.takosumi.com/compat/cloudflare/client/v4" },
       },
     }),
   );
@@ -1120,7 +1120,7 @@ test("mintForInstallationProviderEnvBindings rejects managed-provider connection
       values: { CLOUDFLARE_API_TOKEN: "operator-static-token" },
       scopeHints: {
         managedProvider: true,
-        providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+        providerConfig: { base_url: "https://app.takosumi.com/compat/cloudflare/client/v4" },
       },
     }),
   );

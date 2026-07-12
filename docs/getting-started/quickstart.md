@@ -15,9 +15,9 @@ Software としての動きを確認する場合は、まず OSS / local runner 
 
 ## OSS / local runner
 
-Takosumi OSS は既存 OpenTofu/Terraform provider をそのまま実行します。最短確認は
-Cloudflare API token などの provider credential を ProviderConnection に登録し、
-既存 provider の manifest を plan/apply する流れです。
+Takosumi OSS は既存の OpenTofu/Terraform provider をそのまま実行します。いちばん短い
+確認の流れは、Cloudflare API token などの認証情報を ProviderConnection に登録し、
+既存 provider の定義をそのまま plan / apply することです。
 
 ### Prerequisites
 
@@ -46,11 +46,11 @@ export AUTH="Authorization: Bearer dev-token"
 
 ### 2. Add a Git URL in `/new`
 
-標準 product flow は dashboard の `/new` です。外部リンク
-`/install?git=...&ref=...&path=...` は `/new` を prefill するだけで、server-side
-install は行いません。
+標準の流れは dashboard の `/new` です。外部リンク
+`/install?git=...&ref=...&path=...` は `/new` に値を入れておくだけで、サーバー側で
+勝手に install することはありません。
 
-ユーザーは次を明示確認します。
+ユーザーは次の項目を自分で確認して進みます。
 
 ```text
 Git URL
@@ -75,7 +75,8 @@ connections:
       account_id: xxxxx
 ```
 
-Run 時だけ `CLOUDFLARE_API_TOKEN` などの env/file が runner sandbox に注入されます。
+Run の実行中だけ、`CLOUDFLARE_API_TOKEN` などの環境変数やファイルが実行環境
+(runner sandbox) に渡されます。
 
 ### 4. Result
 
@@ -90,9 +91,8 @@ audit event
 ```
 
 この quickstart は OpenTofu Stack flow に絞っています。Compatibility API framework は
-OSS Takosumi の capability surface ですが、公式 managed target pool、Takosumi-owned
-native resource internals、enforced billing、support/SLA は Takosumi for Operator /
-Cloud の運用層です。
+OSS の機能ですが、公式の managed target pool、Takosumi 自社リソースの内部実装、
+強制課金、support / SLA は Takosumi for Operator / Cloud の運用側にあります。
 
 ## Hosted Cloud flow
 

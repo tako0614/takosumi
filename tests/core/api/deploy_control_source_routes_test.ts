@@ -418,7 +418,12 @@ output "attachments_bucket" {
   const checkedBody = await checked.json();
   expect(checkedBody.report).toMatchObject({
     level: "ready",
-    findings: [],
+    findings: [
+      {
+        code: "provider_connection_may_be_required",
+        severity: "info",
+      },
+    ],
     providers: [{ source: "hashicorp/aws", aliases: [], allowed: true }],
     resources: [{ type: "aws_s3_bucket", count: 1, allowed: true }],
   });

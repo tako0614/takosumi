@@ -183,7 +183,7 @@ CAPSULE_RESP=$(curl -sk "${CURL_TLS[@]}" -X POST \
   "sourceId": "$SOURCE_ID",
   "installConfigId": "$INSTALL_CONFIG_ID",
   "modulePath": "$SOURCE_PATH",
-  "runnerProfileId": "generic-opentofu-provider"
+  "runnerProfileId": "opentofu-default"
 }
 JSON
 )" \

@@ -125,7 +125,6 @@ const UUID_PATTERN =
 const ULID_PATTERN = /^[0-9A-HJKMNP-TV-Z]{26}$/;
 
 export const CONNECTION_ID_PATTERN = /^conn_[0-9a-zA-Z]{8,64}$/;
-export const PROVIDER_ENV_ID_PATTERN = /^(?:penv|conn)_[0-9a-zA-Z]{8,64}$/;
 export const SOURCE_ID_PATTERN = /^src_[0-9a-zA-Z]{8,64}$/;
 export const SPACE_ID_PATTERN = /^space_[0-9a-zA-Z]{8,64}$/;
 export const RUN_ID_PATTERN =

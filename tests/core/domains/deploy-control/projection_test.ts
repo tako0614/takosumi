@@ -436,6 +436,19 @@ test("compact error codes classify provider credential preparation failures", ()
   ).toBe("credential_service_unavailable");
 });
 
+test("compact error codes preserve concrete provider runtime failures", () => {
+  expect(
+    compactErrorCode(
+      "OpenTofu runner rejected plan run plan_123: 500 (provider_package_unavailable: registry lookup failed)",
+    ),
+  ).toBe("provider_package_unavailable");
+  expect(
+    compactErrorCode(
+      "OpenTofu runner rejected plan run plan_123: 500 (opentofu_init_failed: init exited 1)",
+    ),
+  ).toBe("opentofu_init_failed");
+});
+
 test("template public string outputs still reject concrete secret-shaped values", () => {
   const template = {
     id: "cloudflare-hello-worker",

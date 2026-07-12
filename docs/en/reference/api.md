@@ -111,7 +111,22 @@ model, such as S3-compatible storage, use that protocol's signature instead.
 ## OpenTofu Stack API
 
 The Stack API runs plain OpenTofu / Terraform modules from Git. Existing
-providers run as-is in this flow.
+providers run as-is in this flow. Takosumi runs plain OpenTofu stacks as-is;
+every valid provider source uses the same `opentofu-default` execution path.
+Known providers only receive Credential Recipe, guided setup, and cache/mirror
+conveniences. Recipe presence is not an admission tier.
+
+Built-in setup recipes are discovered through:
+
+```http
+GET /api/v1/credential-recipes
+```
+
+A provider without a recipe can run without a Connection or use an explicit
+generic env/file ProviderConnection according to that provider's own
+documentation. Non-secret `providerConfig` and `moduleInputDefaults` may carry
+endpoint, region, or ordinary module defaults; credential-shaped fields are
+rejected and secret values must use ProviderConnection values/files.
 
 Representative operations:
 

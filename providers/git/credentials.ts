@@ -1,8 +1,7 @@
 /**
  * Git source credential driver (source phase).
  *
- * This is the provider-specific implementation the provider runtime registry
- * (`@takosumi/providers`) refers to for the git "source" credential: it turns a
+ * The vault invokes this source-credential driver for git Connections. It turns a
  * git source connection's ALREADY-OPENED secret values plus its connection
  * context (kind + scope hints) into the runner-facing {@link MintResponse} — an
  * askpass script (HTTPS token) or the ssh key + pinned known_hosts files (SSH).

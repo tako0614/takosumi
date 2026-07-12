@@ -436,6 +436,39 @@ function cloudflareConnection(id: string, spaceId = "space_test"): Connection {
   };
 }
 
+function cloudflareModuleInputDefaults(input: {
+  readonly accountId: string;
+  readonly providerBaseUrl?: string;
+  readonly workersSubdomain?: string;
+  readonly zoneId?: string;
+}) {
+  return {
+    cloudflare_account_id: input.accountId,
+    account_id: input.accountId,
+    ...(input.providerBaseUrl
+      ? { cloudflare_api_base_url: input.providerBaseUrl }
+      : {}),
+    ...(input.workersSubdomain
+      ? {
+          cloudflare_workers_subdomain: input.workersSubdomain,
+          workersSubdomain: input.workersSubdomain,
+        }
+      : {}),
+    ...(input.zoneId ? { cloudflare_route_zone_id: input.zoneId } : {}),
+    cloudflare: {
+      account_id: input.accountId,
+      ...(input.providerBaseUrl
+        ? { api_base_url: input.providerBaseUrl }
+        : {}),
+      ...(input.workersSubdomain
+        ? { workers_subdomain: input.workersSubdomain }
+        : {}),
+    },
+    enable_cloudflare_resources: true,
+    enable_cloudflare_worker_script: true,
+  };
+}
+
 function countingProviderVault() {
   let mintCount = 0;
   const vault = {
@@ -774,7 +807,12 @@ test("installation plan does not invent Cloudflare Capsule inputs from scope hin
       "conn_cloudflare_scope",
       seeded.installation.spaceId,
     ),
-    scopeHints: { accountId: "acct_scope_123" },
+    scopeHints: {
+      accountId: "acct_scope_123",
+      moduleInputDefaults: cloudflareModuleInputDefaults({
+        accountId: "acct_scope_123",
+      }),
+    },
   });
   await store.putInstallationProviderEnvBindingSet({
     id: "profile_cloudflare_scope",
@@ -826,7 +864,12 @@ test("requested Cloudflare Capsule input can be filled from provider scope hints
       "conn_cloudflare_scope",
       seeded.installation.spaceId,
     ),
-    scopeHints: { accountId: "acct_scope_123" },
+    scopeHints: {
+      accountId: "acct_scope_123",
+      moduleInputDefaults: cloudflareModuleInputDefaults({
+        accountId: "acct_scope_123",
+      }),
+    },
   });
   await store.putInstallationProviderEnvBindingSet({
     id: "profile_cloudflare_scope",
@@ -878,7 +921,12 @@ test("dotted Cloudflare Capsule input merges with provider scope hints", async (
       "conn_cloudflare_scope",
       seeded.installation.spaceId,
     ),
-    scopeHints: { accountId: "acct_scope_123" },
+    scopeHints: {
+      accountId: "acct_scope_123",
+      moduleInputDefaults: cloudflareModuleInputDefaults({
+        accountId: "acct_scope_123",
+      }),
+    },
   });
   await store.putInstallationProviderEnvBindingSet({
     id: "profile_cloudflare_scope",
@@ -942,9 +990,17 @@ test("requested scalar Cloudflare Capsule inputs can be filled from provider sco
     ),
     scopeHints: {
       managedProvider: true,
-      providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      providerConfig: {
+        base_url: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      },
       accountId: "acct_scope_123",
       workersSubdomain: "team-workers",
+      moduleInputDefaults: cloudflareModuleInputDefaults({
+        accountId: "acct_scope_123",
+        providerBaseUrl:
+          "https://app.takosumi.com/compat/cloudflare/client/v4",
+        workersSubdomain: "team-workers",
+      }),
     },
   });
   await store.putInstallationProviderEnvBindingSet({
@@ -1033,10 +1089,18 @@ test("managed Cloudflare Capsule inputs use the selected target public namespace
     ),
     scopeHints: {
       managedProvider: true,
-      providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      providerConfig: {
+        base_url: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      },
       managedPublicBaseDomain: "app-staging.takos.jp",
       accountId: "ts_acc_takosumi_cloud",
       zoneId: "zone_takosumi_cloud",
+      moduleInputDefaults: cloudflareModuleInputDefaults({
+        accountId: "ts_acc_takosumi_cloud",
+        providerBaseUrl:
+          "https://app.takosumi.com/compat/cloudflare/client/v4",
+        zoneId: "zone_takosumi_cloud",
+      }),
     },
   });
   await store.putInstallationProviderEnvBindingSet({
@@ -1125,8 +1189,15 @@ test("managed Cloudflare Capsule explicit worker_name drives app.takos.jp URL de
     ),
     scopeHints: {
       managedProvider: true,
-      providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      providerConfig: {
+        base_url: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      },
       accountId: "ts_acc_takosumi_cloud",
+      moduleInputDefaults: cloudflareModuleInputDefaults({
+        accountId: "ts_acc_takosumi_cloud",
+        providerBaseUrl:
+          "https://app.takosumi.com/compat/cloudflare/client/v4",
+      }),
       zoneId: "zone_takosumi_cloud",
     },
   });
@@ -1208,7 +1279,7 @@ test("managed Cloudflare public endpoint defaults follow store metadata variable
     ),
     scopeHints: {
       managedProvider: true,
-      providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      providerConfig: { base_url: "https://app.takosumi.com/compat/cloudflare/client/v4" },
       accountId: "ts_acc_takosumi_cloud",
     },
   });
@@ -1294,10 +1365,17 @@ test("managed Cloudflare Capsule honors operator managed public base domain", as
     ),
     scopeHints: {
       managedProvider: true,
-      providerBaseUrl:
-        "https://operator.example.org/compat/cloudflare/client/v4",
+      providerConfig: {
+        base_url: "https://operator.example.org/compat/cloudflare/client/v4",
+      },
       accountId: "ts_acc_operator",
       zoneId: "zone_operator_apps",
+      moduleInputDefaults: cloudflareModuleInputDefaults({
+        accountId: "ts_acc_operator",
+        providerBaseUrl:
+          "https://operator.example.org/compat/cloudflare/client/v4",
+        zoneId: "zone_operator_apps",
+      }),
     },
   });
   await store.putInstallationProviderEnvBindingSet({
@@ -1377,8 +1455,15 @@ test("managed Cloudflare Capsule passes a custom public app_url to provider owne
     ),
     scopeHints: {
       managedProvider: true,
-      providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      providerConfig: {
+        base_url: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      },
       accountId: "ts_acc_takosumi_cloud",
+      moduleInputDefaults: cloudflareModuleInputDefaults({
+        accountId: "ts_acc_takosumi_cloud",
+        providerBaseUrl:
+          "https://app.takosumi.com/compat/cloudflare/client/v4",
+      }),
     },
   });
   await store.putInstallationProviderEnvBindingSet({
@@ -1455,7 +1540,7 @@ test("managed Cloudflare Capsule canonicalizes an explicit managed-base URL into
     ),
     scopeHints: {
       managedProvider: true,
-      providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      providerConfig: { base_url: "https://app.takosumi.com/compat/cloudflare/client/v4" },
       accountId: "ts_acc_takosumi_cloud",
     },
   });
@@ -1539,7 +1624,7 @@ test("managed Cloudflare Capsule keeps an owner-slot vanity hostname unscoped", 
     ),
     scopeHints: {
       managedProvider: true,
-      providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      providerConfig: { base_url: "https://app.takosumi.com/compat/cloudflare/client/v4" },
       accountId: "ts_acc_takosumi_cloud",
     },
   });
@@ -1711,7 +1796,7 @@ test("managed Cloudflare app.takos.jp slugs are namespaced by Workspace handle",
     ),
     scopeHints: {
       managedProvider: true,
-      providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      providerConfig: { base_url: "https://app.takosumi.com/compat/cloudflare/client/v4" },
       accountId: "ts_acc_takosumi_cloud",
     },
   });
@@ -1785,7 +1870,7 @@ test("managed Cloudflare app.takos.jp slugs are namespaced by Workspace handle",
     ),
     scopeHints: {
       managedProvider: true,
-      providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      providerConfig: { base_url: "https://app.takosumi.com/compat/cloudflare/client/v4" },
       accountId: "ts_acc_takosumi_cloud",
     },
   });
@@ -1930,7 +2015,7 @@ test("managed public hostname reservations remain authoritative over historical 
     ),
     scopeHints: {
       managedProvider: true,
-      providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      providerConfig: { base_url: "https://app.takosumi.com/compat/cloudflare/client/v4" },
       accountId: "ts_acc_takosumi_cloud",
     },
   });
@@ -1989,7 +2074,7 @@ test("managed Cloudflare host claim ignores unapplied pending Capsules", async (
     ),
     scopeHints: {
       managedProvider: true,
-      providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      providerConfig: { base_url: "https://app.takosumi.com/compat/cloudflare/client/v4" },
       accountId: "ts_acc_takosumi_cloud",
     },
   });
@@ -2034,7 +2119,7 @@ test("managed Cloudflare host claim ignores unapplied pending Capsules", async (
     ),
     scopeHints: {
       managedProvider: true,
-      providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      providerConfig: { base_url: "https://app.takosumi.com/compat/cloudflare/client/v4" },
       accountId: "ts_acc_takosumi_cloud",
     },
   });
@@ -2190,7 +2275,7 @@ test("managed Cloudflare app.takos.jp host is atomically reserved within a Works
     ),
     scopeHints: {
       managedProvider: true,
-      providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      providerConfig: { base_url: "https://app.takosumi.com/compat/cloudflare/client/v4" },
       accountId: "ts_acc_takosumi_cloud",
     },
   });
@@ -2262,7 +2347,7 @@ test("managed Cloudflare app.takos.jp host is atomically reserved within a Works
     ),
     scopeHints: {
       managedProvider: true,
-      providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      providerConfig: { base_url: "https://app.takosumi.com/compat/cloudflare/client/v4" },
       accountId: "ts_acc_takosumi_cloud",
     },
   });
@@ -2343,7 +2428,7 @@ test("managed public hostname claims do not scan corrupt historical outputs", as
     ),
     scopeHints: {
       managedProvider: true,
-      providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      providerConfig: { base_url: "https://app.takosumi.com/compat/cloudflare/client/v4" },
       accountId: "ts_acc_takosumi_cloud",
     },
   });
@@ -2410,7 +2495,7 @@ test("managed public hostname claims do not scan corrupt historical outputs", as
     ),
     scopeHints: {
       managedProvider: true,
-      providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      providerConfig: { base_url: "https://app.takosumi.com/compat/cloudflare/client/v4" },
       accountId: "ts_acc_takosumi_cloud",
     },
   });
@@ -2481,8 +2566,15 @@ test("managed Cloudflare store Capsule uses operator fallback without implicit p
     materialization: "secret",
     scopeHints: {
       managedProvider: true,
-      providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      providerConfig: {
+        base_url: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      },
       accountId: "ts_acc_takosumi_cloud",
+      moduleInputDefaults: cloudflareModuleInputDefaults({
+        accountId: "ts_acc_takosumi_cloud",
+        providerBaseUrl:
+          "https://app.takosumi.com/compat/cloudflare/client/v4",
+      }),
     },
   });
   const sourcesService = new SourcesService({
@@ -2580,7 +2672,12 @@ test("declared generic Capsule Cloudflare inputs and outputs are wired from sour
       "conn_cloudflare_scope",
       seeded.installation.spaceId,
     ),
-    scopeHints: { accountId: "acct_scope_123" },
+    scopeHints: {
+      accountId: "acct_scope_123",
+      moduleInputDefaults: cloudflareModuleInputDefaults({
+        accountId: "acct_scope_123",
+      }),
+    },
   });
   await store.putInstallationProviderEnvBindingSet({
     id: "profile_cloudflare_scope",
@@ -2765,7 +2862,7 @@ test("app_url stays an ordinary OpenTofu input without publicEndpoint mapping", 
     ),
     scopeHints: {
       managedProvider: true,
-      providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      providerConfig: { base_url: "https://app.takosumi.com/compat/cloudflare/client/v4" },
       accountId: "ts_acc_takosumi_cloud",
     },
   });
@@ -3401,6 +3498,10 @@ test("installation plan reuses a preflight CompatibilityReport hint without rech
     scopeHints: {
       accountId: "acct_scope_123",
       workersSubdomain: "team-workers",
+      moduleInputDefaults: cloudflareModuleInputDefaults({
+        accountId: "acct_scope_123",
+        workersSubdomain: "team-workers",
+      }),
     },
   });
   await store.putInstallationProviderEnvBindingSet({
@@ -3810,7 +3911,18 @@ test("installation plan records runnable CompatibilityReport in policy audit", a
 
 test("generic Capsule installation plan derives pre-init requiredProviders from CompatibilityReport providers", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
-  const runner = recordingRunner();
+  const awsProvider = "registry.opentofu.org/hashicorp/aws";
+  const runner = recordingRunner({
+    requiredProviders: [awsProvider],
+    providerInstallation: [
+      {
+        provider: awsProvider,
+        mirrored: false,
+        installationMethod: "direct",
+        attested: false,
+      },
+    ],
+  });
   const seeded = await seedRunnableInstallationModel(store, {
     environment: "preview",
   });
@@ -3822,7 +3934,7 @@ test("generic Capsule installation plan derives pre-init requiredProviders from 
     findings: [],
     providers: [
       {
-        source: "registry.opentofu.org/hashicorp/aws",
+        source: awsProvider,
         aliases: [],
         allowed: true,
       },
@@ -3841,12 +3953,8 @@ test("generic Capsule installation plan derives pre-init requiredProviders from 
 
   const { planRun } = await controller.createInstallationPlan("inst_fixture");
 
-  expect(planRun.requiredProviders).toEqual([
-    "registry.opentofu.org/cloudflare/cloudflare",
-  ]);
-  expect(runner.planJobs[0]?.planRun.requiredProviders).toEqual([
-    "registry.opentofu.org/cloudflare/cloudflare",
-  ]);
+  expect(planRun.requiredProviders).toEqual([awsProvider]);
+  expect(runner.planJobs[0]?.planRun.requiredProviders).toEqual([awsProvider]);
 });
 
 test("generic OpenTofu runner profile derives pre-init requiredProviders from ProviderBinding before dispatch", async () => {
@@ -3897,7 +4005,7 @@ test("generic OpenTofu runner profile derives pre-init requiredProviders from Pr
     updatedAt: "2026-06-07T00:00:00.000Z",
   });
   const genericProfile: RunnerProfile = {
-    id: "generic-opentofu-provider",
+    id: "opentofu-default",
     name: "Generic OpenTofu provider",
     substrate: "cloudflare-containers",
     allowedProviders: ["*"],
@@ -3967,14 +4075,14 @@ test("generic OpenTofu runner profile permits direct provider install by default
     updatedAt: "2026-06-07T00:00:00.000Z",
   });
   const genericProfile: RunnerProfile = {
-    id: "generic-opentofu-provider",
+    id: "opentofu-default",
     name: "Generic OpenTofu provider",
     substrate: "cloudflare-containers",
     allowedProviders: ["*"],
     stateBackend: { kind: "operator-managed", ref: "r2://state" },
     stateLock: { kind: "native" },
     networkPolicy: { mode: "operator-managed" },
-    labels: { "takosumi.com/provider-surface": "generic" },
+    labels: { "takosumi.com/opentofu-runner": "true" },
     secretExposure: {
       providerCredentials: "runner-only",
       tenantWorkerOperatorSecrets: "forbidden",
@@ -4047,7 +4155,7 @@ test("generic env ProviderBinding blocks low-level plan requests that omit requi
     updatedAt: "2026-06-07T00:00:00.000Z",
   });
   const genericProfile: RunnerProfile = {
-    id: "generic-opentofu-provider",
+    id: "opentofu-default",
     name: "Generic OpenTofu provider",
     substrate: "cloudflare-containers",
     allowedProviders: ["*"],
@@ -4082,7 +4190,7 @@ test("generic env ProviderBinding blocks low-level plan requests that omit requi
   expect(planRun.status).toEqual("failed");
   expect(planRun.policy.status).toEqual("blocked");
   expect(planRun.policy.reasons.join("\n")).toContain(
-    "generic-env provider bindings on runner profile generic-opentofu-provider require requiredProviders before OpenTofu init",
+    "generic-env provider bindings on runner profile opentofu-default require requiredProviders before OpenTofu init",
   );
   expect(runner.planJobs).toHaveLength(0);
 });
@@ -4431,7 +4539,7 @@ test("installation plan blocks when provider mirror evidence is required but mis
   });
 });
 
-test("installation plan requires provider mirror evidence by default when providers are used", async () => {
+test("installation plan permits direct provider installation by default", async () => {
   const store = new InMemoryOpenTofuDeploymentStore();
   const runner = recordingRunner({
     requiredProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
@@ -4442,13 +4550,9 @@ test("installation plan requires provider mirror evidence by default when provid
 
   const { planRun } = await controller.createInstallationPlan("inst_fixture");
 
-  expect(runner.planJobs[0]?.providerInstallationPolicy).toEqual({
-    requireMirror: true,
-  });
-  expect(planRun.status).toBe("failed");
-  expect(planRun.policy.reasons.join("\n")).toContain(
-    "provider installation attestation is required by policy",
-  );
+  expect(runner.planJobs[0]?.providerInstallationPolicy).toBeUndefined();
+  expect(planRun.status).toBe("succeeded");
+  expect(planRun.policy.reasons).toEqual([]);
 });
 
 test("installation plan enforces filesystem mirror evidence for every required provider", async () => {

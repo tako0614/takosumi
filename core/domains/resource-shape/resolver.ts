@@ -519,6 +519,7 @@ function selectTarget(
   const allowed = policy?.allowedTargets;
 
   const eligible: Selection[] = [];
+  let policyEligibleTargets = 0;
   for (const entry of input.targetPool.spec.targets) {
     // Deny wins; an entry matches a policy token by BOTH its type and name.
     if (
@@ -534,6 +535,7 @@ function selectTarget(
     ) {
       continue;
     }
+    policyEligibleTargets += 1;
     for (const candidate of targetImplementationsFor(
       input.resource.kind,
       entry,
@@ -564,11 +566,20 @@ function selectTarget(
   }
 
   if (eligible.length === 0) {
+    if (policyEligibleTargets === 0) {
+      return {
+        ok: false,
+        error: {
+          code: "policy_denied",
+          message: `SpacePolicy excludes every Target in the pool for ${input.resource.kind}`,
+        },
+      };
+    }
     return {
       ok: false,
       error: {
-        code: "no_eligible_target",
-        message: `no Target in the pool is allowed by policy and supports the required ${input.resource.kind} interfaces`,
+        code: "capability_missing",
+        message: `no policy-eligible Target supports the required ${input.resource.kind} interfaces and adapter capabilities`,
       },
     };
   }

@@ -62,7 +62,6 @@ import {
   evaluateQuotaPolicy,
   evaluateResourceAllowlist,
   evaluateScopeBoundary,
-  providerMatches,
 } from "takosumi-policy";
 import {
   generateGenericCapsuleRoot,
@@ -455,12 +454,6 @@ function nonEmptyStringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
-function isJsonRecordValue(
-  value: unknown,
-): value is Readonly<Record<string, JsonValue>> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
 function validManagedWorkerName(value: string): boolean {
   return MANAGED_WORKER_NAME_RE.test(value);
 }
@@ -524,31 +517,16 @@ function publicHostsFromInstallExperienceVariables(
   return [...hosts].sort();
 }
 
-function hasManagedCloudflareProviderDefaults(
-  defaults: Readonly<Record<string, JsonValue>>,
-): boolean {
-  if (nonEmptyStringValue(defaults.cloudflare_api_base_url)) return true;
-  const cloudflare = defaults.cloudflare;
-  return (
-    isJsonRecordValue(cloudflare) &&
-    nonEmptyStringValue(cloudflare.api_base_url) !== undefined
-  );
-}
-
-function finalizeManagedCloudflarePublicHostVariables(input: {
+function finalizeManagedPublicHostVariables(input: {
   readonly explicit: Readonly<Record<string, JsonValue>>;
   readonly installation: Installation;
   readonly installConfig: InstallConfig;
   readonly declaredInputs: DeclaredGenericCapsuleInputs;
   readonly workspaceHandle: string;
   readonly endpointVariables: ReadonlySet<string>;
-  readonly providerInputDefaults: Readonly<Record<string, JsonValue>>;
   readonly managedPublicBaseDomain?: string;
   readonly variables: Readonly<Record<string, JsonValue>>;
 }): Readonly<Record<string, JsonValue>> {
-  if (!hasManagedCloudflareProviderDefaults(input.providerInputDefaults)) {
-    return input.variables;
-  }
   const endpoint = installExperiencePublicEndpoint(
     input.installConfig.store?.installExperience,
   );
@@ -630,9 +608,8 @@ function finalizeManagedCloudflarePublicHostVariables(input: {
       [baseDomain, declaredBaseDomain].some(
         (candidate) =>
           publicHostPolicyKindForBase(
-            hostFromRoutePatternValue(
-              input.explicit[routePatternVariable],
-            ) ?? "",
+            hostFromRoutePatternValue(input.explicit[routePatternVariable]) ??
+              "",
             candidate,
           ) === "managed_default_hostname",
       ))
@@ -856,7 +833,7 @@ export class RunEngine {
     requireNonEmptyString(workspaceId, "workspaceId");
     const requestCapsuleId = request.capsuleId ?? request.installationId;
     validateSource(request.source);
-    let profile = await this.#requireRunnerProfile(
+    const profile = await this.#requireRunnerProfile(
       request.runnerProfileId ?? this.#defaultRunnerProfileId,
     );
     const operation =
@@ -891,7 +868,9 @@ export class RunEngine {
     // Cloud-only gateway materialization is rejected here; OSS Takosumi never
     // rewrites a provider base_url. The runner profile is ignored by this step
     // and by template resolution, so the Capsule's required providers are
-    // profile-independent and can drive runner-profile auto-selection below.
+    // profile-independent. Provider identity never selects an execution
+    // profile; callers may explicitly select an operator-defined capability
+    // profile when private-network or host access is required.
     const installTypePlan =
       await this.#planResolution.applyGatewayEndpointBaseUrl(
         internal.installTypePlan,
@@ -905,21 +884,6 @@ export class RunEngine {
     const declaredProviders = templatePlan
       ? normalizeProviders(templatePlan.requiredProviders)
       : normalizeProviders(request.requiredProviders ?? []);
-    // When the caller did not pin a runner profile, auto-select the enabled
-    // profile that admits the Capsule's required providers — preferring a
-    // specific match (so a Cloudflare Capsule keeps `cloudflare-default`) and
-    // falling back to the wildcard generic-provider surface. This is what lets a
-    // user's own-key (`generic_env_provider`) connection to an ARBITRARY
-    // provider run without the caller naming a profile. Only already-enabled,
-    // operator-curated profiles are candidates, so auto-selection never widens
-    // the operator's admitted provider surface — it only removes the manual
-    // "which runner profile?" step.
-    if (request.runnerProfileId === undefined) {
-      profile = this.#selectRunnerProfileForProviders(
-        profile,
-        declaredProviders,
-      );
-    }
     // Resource Shape adapters pass an internal generated root that fully
     // overrides the backing Capsule's nominal Source. Keep local source
     // rejection for user-supplied Capsule runs, but do not reject the internal
@@ -2002,11 +1966,18 @@ export class RunEngine {
       const requiredProviders = template.policy.allowedProviders.map(
         canonicalProviderAddress,
       );
+      const profile = await this.#requireRunnerProfile(
+        input.runnerProfileId ?? this.#defaultRunnerProfileId,
+      );
       const installTypePlan = await this.#planResolution.resolveInstallTypePlan(
         input.installation,
         input.installConfig,
         installType,
-        providerEnvResolutionProviders(requiredProviders, input.installConfig),
+        providerEnvResolutionProviders(
+          requiredProviders,
+          input.installConfig,
+          profile,
+        ),
       );
       return {
         request: {
@@ -2103,18 +2074,16 @@ export class RunEngine {
         "Workspace for Capsule public hostname resolution was not found",
       );
     }
-    const variables = finalizeManagedCloudflarePublicHostVariables({
+    const variables = finalizeManagedPublicHostVariables({
       explicit: explicitVariables,
       installation: input.installation,
       installConfig: input.installConfig,
       declaredInputs,
       workspaceHandle: workspace.handle,
       endpointVariables: publicEndpointVariableNames(input.installConfig),
-      providerInputDefaults: installTypePlan.providerInputDefaults,
       ...(installTypePlan.managedPublicBaseDomain
         ? {
-            managedPublicBaseDomain:
-              installTypePlan.managedPublicBaseDomain,
+            managedPublicBaseDomain: installTypePlan.managedPublicBaseDomain,
           }
         : {}),
       variables: normalizeVariables(
@@ -6888,51 +6857,6 @@ export class RunEngine {
     return profile;
   }
 
-  /**
-   * Auto-selects the runner profile for a plan whose caller did not pin one.
-   * Used only when `request.runnerProfileId` is absent, so an explicit choice is
-   * always respected.
-   *
-   * Candidates are the operator-curated enabled profiles only
-   * ({@link #runnerProfilesById}); auto-selection therefore never admits a
-   * provider the operator did not already enable a surface for — it just removes
-   * the "which runner profile?" step so a user's own-key connection to an
-   * arbitrary OpenTofu provider runs by default. Preference order:
-   *   1. keep the current (default) profile if it already admits every provider;
-   *   2. a specific (non-wildcard) enabled profile that admits every provider;
-   *   3. an enabled wildcard (`["*"]`) surface (the generic-provider profile)
-   *      that also admits every provider (its deny-list, if any, does not deny
-   *      them);
-   *   4. otherwise keep the current profile so policy blocks the run exactly as
-   *      before (the operator enabled no surface for these providers).
-   * Every candidate is admission-tested with {@link profileAdmitsAllProviders},
-   * which mirrors the §25 provider allow/deny evaluation, so a selected profile
-   * passes the provider-allowlist policy layer for these providers (given the
-   * operator-enabled profile set injected into {@link #runnerProfilesById}).
-   */
-  #selectRunnerProfileForProviders(
-    currentProfile: RunnerProfile,
-    declaredProviders: readonly string[],
-  ): RunnerProfile {
-    if (declaredProviders.length === 0) return currentProfile;
-    if (profileAdmitsAllProviders(currentProfile, declaredProviders)) {
-      return currentProfile;
-    }
-    const candidates = [...this.#runnerProfilesById.values()];
-    const specific = candidates.find(
-      (candidate) =>
-        !candidate.allowedProviders.includes("*") &&
-        profileAdmitsAllProviders(candidate, declaredProviders),
-    );
-    if (specific) return specific;
-    const wildcard = candidates.find(
-      (candidate) =>
-        candidate.allowedProviders.includes("*") &&
-        profileAdmitsAllProviders(candidate, declaredProviders),
-    );
-    return wildcard ?? currentProfile;
-  }
-
   async #requirePlanRun(id: string): Promise<PlanRun> {
     const planRun = await this.#store.getPlanRun(id);
     if (!planRun) {
@@ -6967,26 +6891,4 @@ export class RunEngine {
 
 function isGeneratedRootSourceSnapshot(snapshot: SourceSnapshot): boolean {
   return snapshot.url.startsWith("takosumi://generated-root/");
-}
-
-/**
- * True when `profile` admits every provider in `providers`. Mirrors the §25
- * provider allow/deny evaluation: a provider must be matched by an allow rule
- * (`"*"` wildcard or hierarchical {@link providerMatches}) AND not matched by any
- * deny rule (a denial overrides an allow). Keeping this aligned with
- * {@link evaluateProviderAllowlist} means an auto-selected profile passes the
- * provider-allowlist policy layer for the same providers.
- */
-function profileAdmitsAllProviders(
-  profile: RunnerProfile,
-  providers: readonly string[],
-): boolean {
-  const denied = profile.deniedProviders ?? [];
-  return providers.every(
-    (provider) =>
-      !denied.some((rule) => providerMatches(provider, rule)) &&
-      profile.allowedProviders.some(
-        (allowed) => allowed === "*" || providerMatches(provider, allowed),
-      ),
-  );
 }

@@ -1,19 +1,28 @@
 # Takosumi Cloud
 
-Takosumi Cloud is the official hosted Takosumi for Operator. It provides the
-Git-based OpenTofu control plane, managed targets, Cloud-operated managed
-service backends, billing / usage metering, and operator support as an
-official operation.
+Takosumi Cloud is the official Takosumi hosting we operate. Publish apps and
+APIs from Git at a `*.app.takos.jp` URL, straight from the browser. Attach
+managed resources — storage, databases, queues, AI — as you need them. Pricing
+is a plan plus what you use ([pricing](./pricing.md)).
 
 These docs cover the hosted Takosumi Cloud service served from
 `app.takosumi.com`. Portable Takosumi software and Takosumi for Operator docs
 live separately at [takosumi.com/docs](https://takosumi.com/docs/en/).
 
-Takosumi Cloud covers more than one service form. Add an app or service from Git,
-attach the resources it needs as bindings, and keep deploys and updates
-recorded through OpenTofu/Terraform. Edge JS runtime, Object Storage, KV,
-Database, Queue, AI, and Container are peer managed resources. Usage spends
-through the plan, limits, and payment-state spend guard.
+## What You Can Host
+
+- host apps, APIs, and services
+- use a default `*.app.takos.jp` URL immediately
+- configure secrets and environment variables
+- use KV / Object Storage / Database / Queue / AI as bindings
+- deploy from a Git URL through OpenTofu/Terraform
+- inspect usage, payment state, API keys, and resource inventory in the Dashboard
+
+## What It Is Made Of
+
+Takosumi Cloud is Takosumi the software (a Git-based deploy control plane that
+records plan → review → apply) with official managed targets, billing, and
+support on top.
 
 ```text
 Takosumi Cloud =
@@ -29,14 +38,10 @@ Takosumi Cloud Resources =
   + OpenTofu deploy path
 ```
 
-## What You Can Host
-
-- host apps, APIs, and services
-- use a default `*.app.takos.jp` URL immediately
-- configure secrets and environment variables
-- use KV / Object Storage / Database / Queue / AI as bindings
-- deploy from a Git URL through OpenTofu/Terraform
-- inspect usage, payment state, API keys, and resource inventory in the Dashboard
+Add an app or service from Git, attach the resources it needs as bindings, and
+deploys and updates are recorded. Edge JS runtime, Object Storage, KV,
+Database, Queue, AI, and Container are peer managed resources. Usage spends
+through the plan, limits, and payment-state spend guard.
 
 ## Runtime
 

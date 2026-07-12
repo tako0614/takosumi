@@ -11,7 +11,7 @@ import {
   providerEnvRule,
   requiredEnvGroupsForProvider,
 } from "../../contract/provider-env-rules.ts";
-import { PROVIDER_RUNTIMES } from "../../providers/registry.ts";
+import { GUIDED_PROVIDER_SETUPS } from "../../providers/registry.ts";
 
 const RECIPE_DIR = join(import.meta.dir, "../../recipes/providers");
 
@@ -119,18 +119,18 @@ test("generic-env recipe declares the arbitrary provider path without widening b
   ).toEqual(expect.arrayContaining(["TAKOSUMI_", "OPENTOFU_", "TF_"]));
 });
 
-test("provider runtime registry credential env names are backed by recipes", () => {
-  const recipeIdForProviderRuntime = new Map([
+test("guided provider setup credential env names are backed by recipes", () => {
+  const recipeIdForGuidedSetup = new Map([
     ["gcp", "google"],
     ["azure", "azurerm"],
   ]);
-  for (const runtime of PROVIDER_RUNTIMES) {
-    if (runtime.credentialEnvNames.length === 0) continue;
-    const recipeId = recipeIdForProviderRuntime.get(runtime.id) ?? runtime.id;
+  for (const setup of GUIDED_PROVIDER_SETUPS) {
+    if (setup.credentialEnvNames.length === 0) continue;
+    const recipeId = recipeIdForGuidedSetup.get(setup.id) ?? setup.id;
     const recipe = RECIPES_BY_ID.get(recipeId);
-    expect(recipe, `missing recipe for runtime ${runtime.id}`).toBeDefined();
+    expect(recipe, `missing recipe for setup ${setup.id}`).toBeDefined();
     expect(sorted(recipe!.env_names ?? [])).toEqual(
-      sorted(runtime.credentialEnvNames),
+      sorted(setup.credentialEnvNames),
     );
   }
 });

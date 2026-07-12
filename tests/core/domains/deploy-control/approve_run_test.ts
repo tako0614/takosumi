@@ -24,7 +24,7 @@ async function seedWaitingApprovalPlan(
     source: { kind: "git", url: "https://x/r.git", ref: "main", path: "." },
     sourceDigest: "sha256:src",
     operation: "update",
-    runnerProfileId: "cloudflare-default",
+    runnerProfileId: "opentofu-default",
     variablesDigest: "sha256:vars",
     requiredProviders: [],
     status: "succeeded",

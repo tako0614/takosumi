@@ -92,7 +92,7 @@ export type {
   PublicInstallConfig as InstallConfig,
   TrustLevel,
 } from "./install-configs.ts";
-export * from "./providers.ts";
+export * from "./credential-recipes.ts";
 export type {
   ArtifactRecord,
   PublicRun as Run,

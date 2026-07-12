@@ -209,7 +209,7 @@ test("local-substrate postgres profile runs OpenTofu through the mirrored runner
     "TAKOSUMI_LOCAL_OPENTOFU_RUNNER_URL: http://opentofu-runner:8080",
   );
   expect(cloudBlock).toContain(
-    "TAKOSUMI_DEFAULT_RUNNER_PROFILE_ID: cloudflare-default",
+    "TAKOSUMI_DEFAULT_RUNNER_PROFILE_ID: opentofu-default",
   );
 });
 

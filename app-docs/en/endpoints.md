@@ -1,19 +1,19 @@
 # Takosumi Cloud endpoints
 
 This page documents the endpoint families exposed by `app.takosumi.com` for
-Takosumi Cloud. Treat them separately from the portable Takosumi OSS /
-Takosumi for Operator API.
+Takosumi Cloud. These are treated separately from the portable Takosumi OSS /
+Takosumi for Operator APIs.
 
 Use [Takosumi Cloud](./index.md) and
-[Takosumi Cloud resources](./resources.md) as the public product docs. This
-page is the detailed reference for endpoints, usage, API keys, and compatibility
-routes.
+[Takosumi Cloud resources](./resources.md) for the official Cloud description.
+This page is the detailed reference for endpoints, usage, API keys, and
+compatibility routes.
 
 The app screen should show operational facts that people need day to day: API
 keys, connection health, this month's usage, balance, and current resource
 counts. The full endpoint contract, scope, and examples live in this document.
 
-## App and docs split
+## App screen and docs split
 
 `app.takosumi.com/cloud` is a screen focused on managing API keys and resources.
 
@@ -24,22 +24,23 @@ counts. The full endpoint contract, scope, and examples live in this document.
 - OpenTofu import endpoint base URL and current virtual account
 - Object Storage endpoint base URL and S3-compatible bucket configuration health
 
-Usage and billing live on Billing (`app.takosumi.com/billing`), not on the Cloud
-screen:
+Usage and billing live on the Billing screen (`app.takosumi.com/billing`), not
+on the Cloud screen:
 
 - this month's usage, Cloud resource usage, and available balance
-- usage history (the usage event ledger)
+- usage history (usage event records)
 
 Deleting a resource submits a delete action through the shared Cloud
 managed-resource operation boundary. Resources created through a
 Cloudflare-shaped import path can also be deleted through that compatible
-endpoint's DELETE. It requires a `write`-scoped session and only takes effect
-when the Cloud managed resource has been created. Unsupported endpoint families
-answer 501 fail-closed. DELETE cleanup is not a billable fallback operation, so
-a source Workspace whose owning account has run out of credit can still destroy
-or remove already-created managed resources. The app does not carry the full
-specification — provider compatibility scope, OpenTofu provider examples, usage
-event contracts, and secret-handling rules belong in docs.
+endpoint's DELETE. Deletion requires a `write`-scoped session and only takes
+effect when the Cloud managed resource has been created. Unsupported endpoint
+families answer 501 and fail closed. DELETE cleanup is not a billable fallback
+operation, so a source Workspace whose owning account has run out of credit can
+still destroy or remove already-created managed resources. The app screen does
+not carry the full specification — provider compatibility scope, OpenTofu
+provider examples, usage event contracts, and secret-handling rules belong in
+docs.
 
 ## Boundary
 
@@ -135,15 +136,15 @@ Example:
 }
 ```
 
-An extension with `configured: false` may appear in the UI, but runtime calls
-must fail closed.
+An extension with `configured: false` may appear in the screen, but runtime
+calls fail closed.
 This catalog lists only public endpoints and capabilities.
 `authMode: "handler"` is the catalog value for endpoint families that verify a
 standard protocol signature, such as S3 SigV4. In that mode, the request is
 authorized by the protocol signature rather than a platform session/PAT, and
 spoofable Takosumi context headers and cookies are stripped.
 Takosumi Cloud public HTTP traffic for `*.app.takos.jp` and
-`*.app-staging.takos.jp` is dispatched to the Cloud Edge Runtime by the same
+`*.app-staging.takos.jp` is dispatched to the Cloud runtime through the same
 hosted-origin hostname dispatch registry.
 
 ## API key / owner billing context
@@ -179,10 +180,10 @@ The generated provider block contains only `base_url`; the secret does not land
 in HCL, plan output, or state. Targets that deploy to a real Cloudflare account
 continue to use the user's normal Cloudflare ProviderConnection.
 
-Billable writes are precharged against the owning user's account credits before forwarding. If
-the Workspace context is missing, the token does not match the Workspace, or the
+Billable writes are precharged against the owning user's account credits before forwarding. If the
+Workspace context is missing, the token does not match the Workspace, or the
 owning user has insufficient credits, the request fails closed and is not
-forwarded to the Cloud endpoint / apply path. Operations that do not mutate a
+forwarded to the Cloud endpoint or apply path. Operations that do not mutate a
 managed hostname may omit Capsule context and record an owner-account usage
 event without a Capsule id. Route and script-subdomain writes that create a
 managed hostname cannot omit source Capsule context, and hostname policy and
@@ -529,7 +530,7 @@ scoped:
 
 vanity:
   <label>.<managed-base-domain>
-  consumes one finite slot owned by the immutable Workspace owner account
+  consumes one finite slot owned by the unchangeable Workspace owner account
 ```
 
 Both modes are reserved first-come-first-served through the same OSS hostname
@@ -537,12 +538,12 @@ reservation authority. A duplicate returns 409, a vanity slot limit returns
 429, and neither response discloses the claimant Workspace or Capsule. The
 Cloud compatibility handler passes source Workspace+Capsule context to that
 authority. Cloud-side KV and Durable Object records hold routing and activation
-state only; they are not the source of truth for hostname ownership.
+state only; they do not determine hostname ownership.
 
 Managed hostname reservations and vanity slots belong to the Capsule lifetime.
 A successful Capsule destroy releases the reservation. Deleting a compatibility
-route only removes Cloud-side routing or activation state; it does not release
-OSS hostname ownership or a vanity slot.
+route only removes Cloud-side routing or activation state and does not release
+OSS hostname ownership or vanity slots.
 
 `custom_domains` is a **Planned** field reserved for a future verified-domain
 lifecycle. DNS ownership verification and the certificate lifecycle are not
@@ -560,6 +561,12 @@ virtual Workers route with the Capsule's scoped or vanity hostname.
 
 ## OpenTofu provider usage
 
+Ordinary OpenTofu providers do not need registration in a provider catalog.
+They all execute through `opentofu-default`; a Credential Recipe only assists
+Connection setup. Providers without a recipe use a generic env/file Connection
+according to the provider's own documentation. Built-in recipes are available
+from `GET /api/v1/credential-recipes`.
+
 Example Cloudflare provider configuration:
 
 ```hcl
@@ -572,7 +579,8 @@ provider "cloudflare" {
 
 The goal is to let the same Cloudflare Workers-oriented manifest target either
 real Cloudflare or Takosumi Cloud. Switching belongs in Provider Binding /
-Provider Connection, not in raw secrets inside the manifest.
+Provider Connection, not in raw secrets inside the manifest. Do not put raw
+secrets in manifests.
 
 ## Cloud resources inventory
 
@@ -584,23 +592,23 @@ Compatibility API. It should show at least:
 - Database
 - Workers
 
-Inventory is for operational inspection. Lifecycle entrypoints can be the
+This inventory is for operational inspection. Lifecycle entrypoints can be the
 Compatibility API, a Cloudflare-compatible OpenTofu provider, the
 `takosumi/takosumi` Resource Shape API, or a Dashboard action. They normalize
 into the same Cloud managed-resource operation boundary. The `resource_shapes`
-capability means typed Resource Shape APIs are available; it does not mean a
+capability means typed Resource Shape APIs are available; it does not imply a
 separate managed-resource lifecycle.
 
 ## Security contract
 
-Cloud endpoints must:
+Cloud endpoints follow these rules:
 
-- never redisplay secret values after creation
-- keep secret-shaped values out of usage, catalog, status, and model metadata
-- have the platform worker verify API key / session validity and read/write scope
-- have the Cloud endpoint verify Workspace / account / virtual-account resource scope
-- fail closed for unsupported routes instead of pretending success
-- keep Cloud-only backends out of OSS Takosumi
+- Secret values are never redisplayed after creation
+- Secret-shaped values are kept out of usage, catalog, status, and model metadata
+- The platform worker verifies API key / session validity and read/write scope
+- Cloud endpoints verify Workspace / account / virtual-account resource scope
+- Unsupported routes fail closed instead of pretending success
+- Cloud-only backends are not introduced into OSS Takosumi
 
 ## Availability
 

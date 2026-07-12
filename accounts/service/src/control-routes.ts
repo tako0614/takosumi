@@ -42,7 +42,7 @@ import { handleWorkspaces } from "./control/workspaces.ts";
 import { handleCapsules } from "./control/capsules.ts";
 import { handleInstallConfigs } from "./control/install-configs.ts";
 import {
-  handleProviders,
+  handleCredentialRecipes,
   handleProviderConnections,
 } from "./control/providers.ts";
 import { handleDependencies } from "./control/dependencies.ts";
@@ -95,7 +95,7 @@ const RESOURCE_HANDLERS: Partial<Record<string, ControlResourceHandler>> = {
   spaces: handleWorkspaces,
   installations: handleCapsules,
   "install-configs": handleInstallConfigs,
-  providers: handleProviders,
+  "credential-recipes": handleCredentialRecipes,
   "provider-connections": handleProviderConnections,
   dependencies: handleDependencies,
   sources: handleSources,

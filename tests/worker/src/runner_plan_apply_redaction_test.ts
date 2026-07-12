@@ -83,7 +83,7 @@ test("runner allows provider-free generated roots under an allowed-provider prof
           requiredProviders: [],
         },
         runnerProfile: {
-          id: "cloudflare-default",
+          id: "opentofu-default",
           sourcePolicy: { allowLocalSource: true },
           allowedProviders: ["cloudflare/cloudflare"],
         },
@@ -152,7 +152,7 @@ test("runner rejects provider-using generated roots that omit requiredProviders"
           requiredProviders: [],
         },
         runnerProfile: {
-          id: "cloudflare-default",
+          id: "opentofu-default",
           sourcePolicy: { allowLocalSource: true },
           allowedProviders: ["cloudflare/cloudflare"],
         },
@@ -179,7 +179,7 @@ test("runner materializes generic provider credential files for plan and cleans 
           requiredProviders: ["registry.opentofu.org/example/envfile"],
         },
         runnerProfile: {
-          id: "generic-opentofu-provider",
+          id: "opentofu-default",
           sourcePolicy: { allowLocalSource: true },
           allowedProviders: ["*"],
         },
@@ -226,7 +226,7 @@ test("runner rematerializes generic provider credential files for apply and clea
           requiredProviders: ["registry.opentofu.org/example/envfile"],
         },
         runnerProfile: {
-          id: "generic-opentofu-provider",
+          id: "opentofu-default",
           sourcePolicy: { allowLocalSource: true },
           allowedProviders: ["*"],
         },
@@ -262,7 +262,7 @@ test("runner rematerializes generic provider credential files for apply and clea
           requiredProviders: ["registry.opentofu.org/example/envfile"],
         },
         runnerProfile: {
-          id: "generic-opentofu-provider",
+          id: "opentofu-default",
           sourcePolicy: { allowLocalSource: true },
           allowedProviders: ["*"],
         },
@@ -310,7 +310,7 @@ test("runner rematerializes generic provider credential files for destroy and cl
           requiredProviders: ["registry.opentofu.org/example/envfile"],
         },
         runnerProfile: {
-          id: "generic-opentofu-provider",
+          id: "opentofu-default",
           sourcePolicy: { allowLocalSource: true },
           allowedProviders: ["*"],
         },
@@ -346,7 +346,7 @@ test("runner rematerializes generic provider credential files for destroy and cl
           requiredProviders: ["registry.opentofu.org/example/envfile"],
         },
         runnerProfile: {
-          id: "generic-opentofu-provider",
+          id: "opentofu-default",
           sourcePolicy: { allowLocalSource: true },
           allowedProviders: ["*"],
         },

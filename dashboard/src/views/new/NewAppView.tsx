@@ -1004,8 +1004,7 @@ function Inner() {
     Boolean(
       installExperiencePublicEndpoint(installExperienceForCurrentSource())
         ?.subdomainVariable &&
-        (selectedManagedProviderConnection() ||
-          hasManagedCloudflareProviderFallback()),
+        (selectedManagedProviderConnection() || hasManagedProviderFallback()),
     );
   // Preview the FINAL managed hostname (workspace-prefixed + base domain) the
   // deploy will use, so the workspace prefix is not a surprise. Empty until
@@ -1337,7 +1336,7 @@ function Inner() {
     current: Readonly<Record<string, JsonValue>>,
   ): Record<string, JsonValue> => {
     const connection = selectedManagedProviderConnection();
-    if (!connection && !hasManagedCloudflareProviderFallback()) return {};
+    if (!connection) return {};
     const variables = new Set(compatibility()?.rootModuleVariables ?? []);
     if (variables.size === 0) return {};
     const defaults: Record<string, JsonValue> = {};
@@ -1349,27 +1348,12 @@ function Inner() {
     };
     const installExperience = installExperienceForCurrentSource();
     const publicEndpoint = installExperiencePublicEndpoint(installExperience);
-    if (
-      !connection ||
-      sameProviderFamily(connection.providerSource, "cloudflare")
-    ) {
-      // Enable Cloudflare resources only when an account id is actually
-      // known (a scoped connection, or the operator-managed fallback whose
-      // proxy injects it). A generic BYO-env connection without scope hints
-      // must leave the module's own defaults alone — modules validate
-      // `cloudflare_account_id is required when enable_cloudflare_resources
-      // is true`, so blindly enabling guarantees a failed plan.
-      const cloudflareAccountKnown =
-        Boolean(connection?.scopeHints?.accountId) ||
-        (!connection && hasManagedCloudflareProviderFallback());
-      if (cloudflareAccountKnown) {
-        setDefault("enable_cloudflare_resources", true);
-        setDefault("enable_cloudflare_worker_script", true);
-      }
-      setDefault("cloudflare_account_id", connection?.scopeHints?.accountId);
-      setDefault("account_id", connection?.scopeHints?.accountId);
-      setDefault("cloudflare_route_zone_id", connection?.scopeHints?.zoneId);
-      if (publicEndpoint) {
+    for (const [name, value] of Object.entries(
+      connection.scopeHints?.moduleInputDefaults ?? {},
+    )) {
+      setDefault(name, value);
+    }
+    if (publicEndpoint) {
         const subdomainVariable = publicEndpoint.subdomainVariable?.trim();
         const urlVariable = publicEndpoint.urlVariable?.trim();
         const routePatternVariable =
@@ -1402,13 +1386,6 @@ function Inner() {
             routePatternFromAppUrl(managedAppUrl) ?? `${managedAppHost}/*`,
           );
         }
-      }
-      if (
-        variables.has("enable_workers_dev_subdomain") &&
-        current.enable_workers_dev_subdomain === undefined
-      ) {
-        defaults.enable_workers_dev_subdomain = false;
-      }
     }
     return defaults;
   };
@@ -1645,8 +1622,8 @@ function Inner() {
     connection.status === "pending" &&
     connection.scope === "operator" &&
     connection.scopeHints?.managedProvider === true &&
-    typeof connection.scopeHints.providerBaseUrl === "string" &&
-    connection.scopeHints.providerBaseUrl.trim().length > 0;
+    typeof connection.scopeHints.providerConfig?.base_url === "string" &&
+    connection.scopeHints.providerConfig.base_url.trim().length > 0;
   const isReadyProviderConnection = (connection: ProviderConnection) =>
     connection.status === "verified" ||
     isUsableManagedProviderConnection(connection);
@@ -1716,14 +1693,13 @@ function Inner() {
     return (
       managedProvider !== undefined &&
       providerTail(managedProvider) === providerTail(row.provider) &&
-      providerTail(row.provider) === "cloudflare" &&
       // The fallback is real only when an operator-managed connection is
       // actually listed (Cloud). A self-host without one must show the
       // friendly connection callout instead of failing server-side.
       managedProviderConnectionForRow(row) !== undefined
     );
   };
-  const hasManagedCloudflareProviderFallback = () =>
+  const hasManagedProviderFallback = () =>
     providerRows().some(rowCanUseManagedProviderFallback);
   const rowHasManagedProviderDefault = (row: ProviderConnectionRow) => {
     const managedProvider = managedStoreProviderForCurrentSource();

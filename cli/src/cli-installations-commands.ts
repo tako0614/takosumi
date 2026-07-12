@@ -52,7 +52,7 @@ import {
 import type { CliIo } from "./cli-io.ts";
 import {
   canonicalProviderAddress,
-  providerForAddress,
+  guidedProviderSetupForAddress,
 } from "@takosumi/providers";
 
 const installationStatuses = [
@@ -787,7 +787,7 @@ function importApplyRequiredProviders(
 
 function importApplyRequiredProviderAddress(provider: string): string {
   return (
-    providerForAddress(provider)?.providerAddresses[0] ??
+    guidedProviderSetupForAddress(provider)?.providerAddresses[0] ??
     canonicalProviderAddress(provider)
   );
 }

@@ -722,20 +722,15 @@ test("GET /internal/v1/connections with no spaceId is denied for a scoped bearer
   expect((await response.json()).error.code).toBe("permission_denied");
 });
 
-test("internal provider resolver records are the Space's Provider Connections and never leak secrets", async () => {
-  // After the credential-model collapse there is no separate ProviderEnv write
-  // path: the Connection row IS the resolver record (`PUT /provider-envs/:id`
-  // was removed). The `/provider-envs` read paths list/get the unified Provider
-  // Connection rows, scoped to a Workspace, never echoing sealed material.
+test("canonical Connection list/get routes never leak secret material", async () => {
   const app = await makeApp();
 
-  // There is no global OSS resolver record: a scoped listing starts empty.
   const empty = await app.request(
-    `/internal/v1/provider-envs?spaceId=${SPACE_ID}`,
+    `/internal/v1/connections?spaceId=${SPACE_ID}`,
     { headers: HEADERS },
   );
   expect(empty.status).toBe(200);
-  expect((await empty.json()).providerEnvs).toHaveLength(0);
+  expect((await empty.json()).connections).toHaveLength(0);
 
   // Registering a Space connection creates the resolver record directly.
   const spaceCreated = await app.request(CF_PATH, {
@@ -749,50 +744,43 @@ test("internal provider resolver records are the Space's Provider Connections an
   expect(spaceCreated.status).toBe(201);
   const spaceConnection = (await spaceCreated.json()).connection;
 
-  // The scoped Provider Connection is now listed as the resolver record.
-  const listedSpaceEnv = await app.request(
-    `/internal/v1/provider-envs?spaceId=${SPACE_ID}`,
+  const listedConnections = await app.request(
+    `/internal/v1/connections?spaceId=${SPACE_ID}`,
     { headers: HEADERS },
   );
-  expect(listedSpaceEnv.status).toBe(200);
-  const listedSpaceEnvPayload = await listedSpaceEnv.json();
-  expect(listedSpaceEnvPayload.providerEnvs).toHaveLength(1);
-  expect(listedSpaceEnvPayload.providerEnvs[0]).toMatchObject({
+  expect(listedConnections.status).toBe(200);
+  const listedPayload = await listedConnections.json();
+  expect(listedPayload.connections).toHaveLength(1);
+  expect(listedPayload.connections[0]).toMatchObject({
     id: spaceConnection.id,
     spaceId: SPACE_ID,
     provider: "cloudflare",
     materialization: "secret",
   });
-  expect(JSON.stringify(listedSpaceEnvPayload)).not.toContain("secretRef");
-  expect(JSON.stringify(listedSpaceEnvPayload)).not.toContain(
+  expect(JSON.stringify(listedPayload)).not.toContain("secretRef");
+  expect(JSON.stringify(listedPayload)).not.toContain(
     "space-secret-token",
   );
 
   // And readable by id, still never echoing sealed material.
-  const readSpaceEnv = await app.request(
-    `/internal/v1/provider-envs/${spaceConnection.id}`,
+  const readConnection = await app.request(
+    `/internal/v1/connections/${spaceConnection.id}`,
     { headers: HEADERS },
   );
-  expect(readSpaceEnv.status).toBe(200);
-  const readSpaceEnvPayload = await readSpaceEnv.json();
-  expect(readSpaceEnvPayload.providerEnv).toMatchObject({
+  expect(readConnection.status).toBe(200);
+  const readPayload = await readConnection.json();
+  expect(readPayload.connection).toMatchObject({
     id: spaceConnection.id,
     spaceId: SPACE_ID,
     materialization: "secret",
   });
-  expect(JSON.stringify(readSpaceEnvPayload)).not.toContain("secretRef");
-  expect(JSON.stringify(readSpaceEnvPayload)).not.toContain(
+  expect(JSON.stringify(readPayload)).not.toContain("secretRef");
+  expect(JSON.stringify(readPayload)).not.toContain(
     "space-secret-token",
   );
 });
 
-test("operator-scoped provider resolver records are operator-gated", async () => {
-  // After the credential-model collapse "operator-backed" is no longer a
-  // separate secretRef-backed ProviderEnv (`PUT /provider-envs/:id` is removed);
-  // an operator-scoped CONNECTION is the operator credential. Its read access is
-  // operator-gated, and the Cloud-only bindability of operator-scoped credentials
-  // is gated by `allowOperatorBackedProviderEnvs` at run-time resolution (covered
-  // by the connections-domain resolver tests), not by a write route here.
+test("operator-scoped Connection reads are operator-gated", async () => {
   const app = await makeApp();
   const operatorConnectionResponse = await app.request(CF_PATH, {
     method: "POST",
@@ -812,7 +800,7 @@ test("operator-scoped provider resolver records are operator-gated", async () =>
 
   // A scoped (Space) bearer cannot read an operator-scoped resolver record.
   const scopedDenied = await app.request(
-    `/internal/v1/provider-envs/${operatorConnection.id}`,
+    `/internal/v1/connections/${operatorConnection.id}`,
     { headers: HEADERS },
   );
   expect(scopedDenied.status).toBe(403);
@@ -820,12 +808,12 @@ test("operator-scoped provider resolver records are operator-gated", async () =>
 
   // The unrestricted operator bearer can read it, still never echoing secrets.
   const operatorRead = await app.request(
-    `/internal/v1/provider-envs/${operatorConnection.id}`,
+    `/internal/v1/connections/${operatorConnection.id}`,
     { headers: { authorization: "Bearer operator-token" } },
   );
   expect(operatorRead.status).toBe(200);
   const operatorReadPayload = await operatorRead.json();
-  expect(operatorReadPayload.providerEnv).toMatchObject({
+  expect(operatorReadPayload.connection).toMatchObject({
     id: operatorConnection.id,
     scope: "operator",
     materialization: "secret",
