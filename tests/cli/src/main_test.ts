@@ -8604,18 +8604,6 @@ test("connections set-cloudflare-token reads token file and never prints the sec
     const request = new Request(input, init);
     const body = await request.clone().text();
     requests.push({ request, body });
-    if (request.url.endsWith("/internal/v1/provider-envs")) {
-      const payload = JSON.parse(body);
-      return Response.json({
-        operatorConnectionDefault: {
-          id: `ocd_${payload.provider}`,
-          provider: payload.provider,
-          connectionId: payload.connectionId,
-          createdAt: "2026-06-09T00:00:00.000Z",
-          updatedAt: "2026-06-09T00:00:00.000Z",
-        },
-      });
-    }
     return Response.json(
       {
         connection: {

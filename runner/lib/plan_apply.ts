@@ -47,6 +47,7 @@ import {
   readOpenTofuOutputsIn,
   runCommand,
   commandFailurePayload,
+  classifyOpenTofuFailure,
 } from "./exec.ts";
 import { assertSafeRelativePath } from "./policy.ts";
 import {
@@ -233,7 +234,7 @@ export async function initPlanAndBuildResponse(
   if (init.exitCode !== 0) {
     return withPhaseTimings(
       mergeBuildLog(
-        commandFailurePayload(runId, "plan", init, commandContext),
+        commandFailurePayload(runId, "plan", init, commandContext, "init"),
         options.buildLog,
       ),
       timer,
@@ -256,7 +257,7 @@ export async function initPlanAndBuildResponse(
   if (plan.exitCode !== 0) {
     return withPhaseTimings(
       mergeBuildLog(
-        commandFailurePayload(runId, "plan", plan, commandContext),
+        commandFailurePayload(runId, "plan", plan, commandContext, "plan"),
         options.buildLog,
       ),
       timer,
@@ -410,7 +411,7 @@ export async function runReviewedPlanApply(
     );
     if (init.exitCode !== 0) {
       return withPhaseTimings(
-        commandFailurePayload(runId, action, init, applyContext),
+        commandFailurePayload(runId, action, init, applyContext, "init"),
         timer,
       );
     }
@@ -447,6 +448,15 @@ export async function runReviewedPlanApply(
           [init.stderr, result.stderr].filter(Boolean).join("\n"),
           applyContext.redactionValues,
         ),
+        ...(result.exitCode === 0
+          ? {}
+          : {
+              errorCode:
+                classifyOpenTofuFailure(
+                  [result.stderr, result.stdout].filter(Boolean).join("\n"),
+                  "apply",
+                ) ?? "apply_failed",
+            }),
       },
       timer,
     );
@@ -590,7 +600,13 @@ export async function runCompatibilityCheck(
   );
   if (init.exitCode !== 0) {
     return withPhaseTimings(
-      commandFailurePayload(runId, "compatibility_check", init, commandContext),
+      commandFailurePayload(
+        runId,
+        "compatibility_check",
+        init,
+        commandContext,
+        "init",
+      ),
       timer,
     );
   }

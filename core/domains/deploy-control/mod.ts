@@ -60,10 +60,13 @@ import type {
 import type { Capsule, PublicCapsule } from "takosumi-contract/capsules";
 import type { ProviderCredentialMintEvidence } from "takosumi-contract/security";
 import type {
-  ListProvidersResponse,
-  ProviderListingResponse,
-} from "takosumi-contract/providers";
-import { computeProviderListings } from "./provider_listing.ts";
+  CredentialRecipeResponse,
+  ListCredentialRecipesResponse,
+} from "takosumi-contract/credential-recipes";
+import {
+  credentialRecipeById,
+  listBuiltInCredentialRecipes,
+} from "./credential_recipe_listing.ts";
 import type { ConnectionVault } from "../../adapters/vault/mod.ts";
 import type { OutputAllowlistEntry } from "takosumi-contract/install-configs";
 import type {
@@ -119,7 +122,10 @@ import {
   NOOP_ACTIVITY_RECORDER,
   type RecordActivityInput,
 } from "../activity/mod.ts";
-import { createDefaultRunnerProfiles } from "./runner_profiles.ts";
+import {
+  createDefaultRunnerProfiles,
+  DEFAULT_OPENTOFU_RUNNER_PROFILE_ID,
+} from "./runner_profiles.ts";
 import { evaluatePolicy } from "./policy.ts";
 import {
   normalizeProviders,
@@ -271,6 +277,7 @@ export {
 export {
   CREDENTIAL_FREE_UTILITY_PROVIDER_ADDRESSES,
   createDefaultRunnerProfiles,
+  DEFAULT_OPENTOFU_RUNNER_PROFILE_ID,
   parseEnabledRunnerProfileIds,
   resolveEnabledRunnerProfiles,
 } from "./runner_profiles.ts";
@@ -1058,6 +1065,7 @@ export class OpenTofuDeploymentController {
   readonly #defaultBillingSettings: BillingSettings;
   readonly #allowOperatorBackedProviderEnvs: boolean;
   readonly #seededProfiles: Promise<void>;
+  readonly #configuredRunnerProfileIds: ReadonlySet<string>;
   readonly #mutationChains = new Map<string, Promise<void>>();
   readonly #sources: SourceManagement;
   readonly #sourceLifecycle: SourceLifecycleService;
@@ -1104,7 +1112,7 @@ export class OpenTofuDeploymentController {
     this.#allowOperatorBackedProviderEnvs =
       dependencies.allowOperatorBackedProviderEnvs === true;
     this.#defaultRunnerProfileId =
-      dependencies.defaultRunnerProfileId ?? "cloudflare-default";
+      dependencies.defaultRunnerProfileId ?? DEFAULT_OPENTOFU_RUNNER_PROFILE_ID;
     this.#newId = dependencies.newId ?? newId;
     this.#now = dependencies.now ?? (() => Date.now());
     this.#sourceLifecycle = new SourceLifecycleService({
@@ -1213,6 +1221,9 @@ export class OpenTofuDeploymentController {
     });
     const runnerProfiles =
       dependencies.runnerProfiles ?? createDefaultRunnerProfiles(this.#now());
+    this.#configuredRunnerProfileIds = new Set(
+      runnerProfiles.map((profile) => profile.id),
+    );
     this.#seededProfiles = this.#seedRunnerProfiles(runnerProfiles);
     this.#runEngine = new RunEngine({
       store: this.#store,
@@ -1262,27 +1273,27 @@ export class OpenTofuDeploymentController {
 
   async listRunnerProfiles(): Promise<ListRunnerProfilesResponse> {
     await this.#seededProfiles;
-    return { runnerProfiles: await this.#store.listRunnerProfiles() };
+    return {
+      runnerProfiles: (await this.#store.listRunnerProfiles()).filter(
+        (profile) => this.#configuredRunnerProfileIds.has(profile.id),
+      ),
+    };
   }
 
-  listProviderCatalogEntries(): Promise<ListProvidersResponse> {
-    return Promise.resolve({ providers: computeProviderListings() });
+  listCredentialRecipes(): Promise<ListCredentialRecipesResponse> {
+    return Promise.resolve({ recipes: listBuiltInCredentialRecipes() });
   }
 
-  getProviderCatalogEntry(
-    providerId: string,
-  ): Promise<ProviderListingResponse> {
-    requireNonEmptyString(providerId, "providerId");
-    const provider = computeProviderListings().find(
-      (entry) => entry.id === providerId,
-    );
-    if (!provider) {
+  getCredentialRecipe(recipeId: string): Promise<CredentialRecipeResponse> {
+    requireNonEmptyString(recipeId, "recipeId");
+    const recipe = credentialRecipeById(recipeId);
+    if (!recipe) {
       throw new OpenTofuControllerError(
         "not_found",
-        `provider ${providerId} not found`,
+        `credential recipe ${recipeId} not found`,
       );
     }
-    return Promise.resolve({ provider });
+    return Promise.resolve({ recipe });
   }
 
   async getSpaceBilling(spaceId: string): Promise<{
@@ -2695,7 +2706,7 @@ function canonicalJson(value: unknown): string {
 export function defaultProviderMirrorRequiredForProfile(
   profile: RunnerProfile | undefined,
 ): boolean {
-  return profile?.labels?.["takosumi.com/provider-surface"] !== "generic";
+  return profile !== undefined && !profile.allowedProviders.includes("*");
 }
 
 export function auditEvent(

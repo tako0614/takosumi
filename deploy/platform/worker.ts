@@ -3469,7 +3469,7 @@ export interface ProductionHardeningGateResult {
     readonly platformControlPlaneSmoke: ProductionHardeningCheck;
     readonly egressEnforcement: ProductionHardeningCheck;
     readonly restoreRehearsal: ProductionHardeningCheck;
-    readonly providerCatalog: ProductionHardeningCheck;
+    readonly credentialRecipes: ProductionHardeningCheck;
     readonly costAttribution: ProductionHardeningCheck;
     readonly secretBoundary: ProductionHardeningCheck;
   };
@@ -3503,9 +3503,9 @@ export function evaluateProductionHardeningGates(
       env.TAKOSUMI_RESTORE_REHEARSAL_EVIDENCE_REF,
       env.TAKOSUMI_RESTORE_REHEARSAL_EVIDENCE_DIGEST,
     ),
-    providerCatalog: evidenceCheck(
-      env.TAKOSUMI_PROVIDER_REGISTRY_EVIDENCE_REF,
-      env.TAKOSUMI_PROVIDER_REGISTRY_EVIDENCE_DIGEST,
+    credentialRecipes: evidenceCheck(
+      env.TAKOSUMI_CREDENTIAL_RECIPE_EVIDENCE_REF,
+      env.TAKOSUMI_CREDENTIAL_RECIPE_EVIDENCE_DIGEST,
     ),
     costAttribution: evidenceCheck(
       env.TAKOSUMI_COST_ATTRIBUTION_EVIDENCE_REF,
@@ -3522,7 +3522,7 @@ export function evaluateProductionHardeningGates(
       checks.platformControlPlaneSmoke.ok &&
       checks.egressEnforcement.ok &&
       checks.restoreRehearsal.ok &&
-      checks.providerCatalog.ok &&
+      checks.credentialRecipes.ok &&
       checks.costAttribution.ok &&
       checks.secretBoundary.ok,
     enforced,

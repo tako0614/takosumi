@@ -8,12 +8,12 @@
 import type { Context } from "hono";
 import type {
   Connection,
-  ConnectionKind,
+  ProviderConnectionKind,
   ConnectionScopeHints,
   CreateConnectionFile,
   CreateConnectionRequest,
 } from "@takosumi/internal/deploy-control-api";
-import { providerForConnectionKind } from "@takosumi/providers";
+import { guidedProviderSetupForConnectionKind } from "@takosumi/providers";
 import { OpenTofuControllerError } from "../domains/deploy-control/mod.ts";
 import {
   authorizeDeployControl,
@@ -35,6 +35,7 @@ import {
 } from "./deploy_control_shared.ts";
 import {
   TAKOSUMI_CONNECTION_REVOKE_ROUTE,
+  TAKOSUMI_CONNECTION_ROUTE,
   TAKOSUMI_CONNECTION_TEST_ROUTE,
   TAKOSUMI_CONNECTIONS_AWS_ASSUME_ROLE_ROUTE,
   TAKOSUMI_CONNECTIONS_CLOUDFLARE_OAUTH_CALLBACK_ROUTE,
@@ -131,7 +132,7 @@ function rejectCredentialFilesForFixedProvider(
 function buildSourceConnectionRequest(
   body: ConnectionSubrouteBody,
   kind: Extract<
-    ConnectionKind,
+    ProviderConnectionKind,
     "source_git_https_token" | "source_git_ssh_key"
   >,
 ): CreateConnectionRequest {
@@ -164,11 +165,11 @@ function buildSourceConnectionRequest(
  * subroute never re-declares the provider string. The registry is statically
  * complete for the provider-backed kinds these subroutes use.
  */
-function providerIdentityForKind(kind: ConnectionKind): {
+function providerIdentityForKind(kind: ProviderConnectionKind): {
   readonly provider: string;
-  readonly kind: ConnectionKind;
+  readonly kind: ProviderConnectionKind;
 } {
-  const provider = providerForConnectionKind(kind);
+  const provider = guidedProviderSetupForConnectionKind(kind);
   if (!provider) {
     throw new OpenTofuControllerError(
       "not_implemented",
@@ -438,6 +439,18 @@ export const DEPLOY_CONTROL_CONNECTION_ENDPOINTS: readonly DeployControlEndpoint
       notImplementedMessage: "connections not wired",
     },
     {
+      method: "GET",
+      path: TAKOSUMI_CONNECTION_ROUTE,
+      summary: "Reads one Connection without exposing credential values.",
+      auth: "deploy-control-token",
+      operationId: "getConnection",
+      openapi: {
+        pathParams: ["connectionId"],
+        okSchema: "ConnectionResponse",
+      },
+      notImplementedMessage: "connections not wired",
+    },
+    {
       method: "POST",
       path: TAKOSUMI_CONNECTION_TEST_ROUTE,
       summary: "Verifies a Connection's stored credentials with the provider.",
@@ -663,6 +676,19 @@ export function mountDeployControlConnectionRoutes(
       return c.json(await controller.listConnections(spaceId, page.value), 200);
     });
   });
+
+  app.get(
+    TAKOSUMI_CONNECTION_ROUTE,
+    defineRoute({
+      ctx,
+      param: { param: "connectionId", pattern: CONNECTION_ID_PATTERN },
+      handler: async ({ c, principal, id }) => {
+        const connection = await controller.getConnection(id);
+        ensureConnectionPermission(principal, connection.spaceId);
+        return c.json({ connection }, 200);
+      },
+    }),
+  );
 
   app.post(
     TAKOSUMI_CONNECTION_TEST_ROUTE,

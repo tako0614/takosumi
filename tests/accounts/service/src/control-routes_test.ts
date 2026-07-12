@@ -991,22 +991,27 @@ function fakeOperations(
         },
       };
     },
-    listProviderCatalogEntries: async () => {
-      record("listProviderCatalogEntries");
+    listCredentialRecipes: async () => {
+      record("listCredentialRecipes");
       return {
-        providers: [
+        recipes: [
           {
             id: "cloudflare",
-            providerSource: "registry.opentofu.org/cloudflare/cloudflare",
             displayName: "Cloudflare",
-            recommendedEnvNames: ["CLOUDFLARE_API_TOKEN"],
-            helpers: ["cloudflare_api_token", "cloudflare_oauth"],
-            ownershipOptions: ["env"],
-            allowedResources: ["cloudflare_workers_script"],
-            allowedDataSources: [],
-            policyPackId: "policy_cloudflare",
-            createdAt: "2026-01-01T00:00:00Z",
-            updatedAt: "2026-01-01T00:00:00Z",
+            providerRule: "cloudflare",
+            terraformSource: ["cloudflare/cloudflare"],
+            envNames: ["CLOUDFLARE_API_TOKEN"],
+            requiredEnvGroups: [["CLOUDFLARE_API_TOKEN"]],
+            authModes: {
+              api_token: {
+                env: {
+                  CLOUDFLARE_API_TOKEN: {
+                    from: "secret",
+                    name: "api_token",
+                  },
+                },
+              },
+            },
           },
         ],
       };
@@ -2391,7 +2396,7 @@ test("anonymous control requests are 401 across the family", async () => {
     ["GET", "/api/v1/capsules/inst_1/dependencies"],
     ["GET", "/api/v1/capsule-configs"],
     ["GET", "/api/v1/capsule-configs/cfg_default"],
-    ["GET", "/api/v1/providers"],
+    ["GET", "/api/v1/credential-recipes"],
     ["GET", "/api/v1/sources/src_x"],
     ["POST", "/api/v1/sources/src_x/compatibility-check"],
     ["GET", "/api/v1/compatibility-reports/caprep_1"],
@@ -3399,8 +3404,10 @@ test("GET /api/v1/provider-connections returns the Workspace's provider connecti
           scopeHints: {
             managedProvider: true,
             managedProviderProfile: "compat.cloudflare.workers.v1",
-            providerBaseUrl:
-              "https://app.takosumi.com/compat/cloudflare/client/v4",
+            providerConfig: {
+              base_url:
+                "https://app.takosumi.com/compat/cloudflare/client/v4",
+            },
             accountId: "ts_acc_takosumi_cloud",
           },
           createdAt: "2026-01-01T00:00:00Z",
@@ -3833,7 +3840,7 @@ test("POST /api/v1/workspaces/:id/capsules stores runnerId and outputAllowlist i
         environment: "production",
         sourceId: "src_x",
         installConfigId: "cfg_x",
-        runnerId: "generic-opentofu-provider",
+        runnerId: "opentofu-default",
         outputAllowlist: {
           app_deployment: {
             from: "app_deployment",
@@ -3862,7 +3869,7 @@ test("POST /api/v1/workspaces/:id/capsules stores runnerId and outputAllowlist i
   expect(config.id.startsWith("icfg_")).toEqual(true);
   expect(config.workspaceId).toEqual("space_a");
   expect(config.internal).toEqual({ reason: "per_install_overrides" });
-  expect(config.runnerId).toEqual("generic-opentofu-provider");
+  expect(config.runnerId).toEqual("opentofu-default");
   expect(config.variableMapping).toEqual({});
   expect(config.outputAllowlist).toEqual({
     app_deployment: { from: "app_deployment", type: "json", required: true },
@@ -5278,8 +5285,10 @@ test("PUT /api/v1/capsules/:id/provider-connections accepts public managed opera
           scopeHints: {
             managedProvider: true,
             managedProviderProfile: "compat.cloudflare.workers.v1",
-            providerBaseUrl:
-              "https://app.takosumi.com/compat/cloudflare/client/v4",
+            providerConfig: {
+              base_url:
+                "https://app.takosumi.com/compat/cloudflare/client/v4",
+            },
             accountId: "ts_acc_takosumi_cloud",
           },
           createdAt: "2026-01-01T00:00:00Z",
@@ -6123,7 +6132,7 @@ test("POST /api/v1/capsules/:id/destroy-plan forwards runnerId to internal runne
     "/api/v1/capsules/inst_1/destroy-plan",
     {
       cookie,
-      body: { runnerId: "generic-opentofu-provider" },
+      body: { runnerId: "opentofu-default" },
     },
   );
   const response = await handleControlRoute({
@@ -6135,7 +6144,7 @@ test("POST /api/v1/capsules/:id/destroy-plan forwards runnerId to internal runne
   expect(response?.status).toEqual(201);
   expect(operations.calls.createCapsuleDestroyPlan?.[0]).toEqual({
     capsuleId: "inst_1",
-    options: { runnerProfileId: "generic-opentofu-provider" },
+    options: { runnerProfileId: "opentofu-default" },
   });
 });
 
@@ -6841,7 +6850,7 @@ test("GET /api/v1/capsule-configs merges official + scoped", async () => {
           sourceKind: "generic_capsule",
           installType: "opentofu_module",
           trustLevel: "trusted",
-          runnerProfileId: "generic-opentofu-provider",
+          runnerProfileId: "opentofu-default",
           variableMapping: { project_name: "leaked" },
           outputAllowlist: {},
           policy: {},
@@ -7521,12 +7530,12 @@ test("Sources: legacy spaceId-only Source can sync, snapshot, and authorize repo
   expect(reportResp?.status).toEqual(200);
 });
 
-test("Providers: store entries are public to session", async () => {
+test("Credential Recipes: built-in setup helpers are public to session", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);
   const operations = fakeOperations();
 
-  const providers = request("GET", "/api/v1/providers", { cookie });
+  const providers = request("GET", "/api/v1/credential-recipes", { cookie });
   const providersResp = await handleControlRoute({
     request: providers.request,
     url: providers.url,
@@ -7534,7 +7543,7 @@ test("Providers: store entries are public to session", async () => {
     operations,
   });
   expect(providersResp?.status).toEqual(200);
-  expect(operations.calls.listProviderCatalogEntries).toEqual([]);
+  expect(operations.calls.listCredentialRecipes).toEqual([]);
 });
 
 test("Runs: GET run, approve (session subject actor), logs, events, cancel", async () => {

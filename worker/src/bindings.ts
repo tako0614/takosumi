@@ -58,17 +58,15 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
   readonly TAKOSUMI_EXPOSE_INTERNAL_EDGE?: string;
   readonly LOCAL_SUBSTRATE_TEST_BED?: string;
   /**
-   * Operator-curated provider surface: CSV of runner profile ids the operator
-   * enables (e.g. `"cloudflare-default,aws-provider-env-candidate"`). Only listed ids appear in
-   * `/v1/runner-profiles` and policy evaluation, each with
-   * `takosumi.com/profile-enabled=true`. Unset/empty defaults to
-   * `"cloudflare-default"`.
+   * Operator-curated execution profiles. The built-in value is the
+   * provider-neutral `opentofu-default`; extra ids represent execution
+   * capabilities, not provider brands.
    */
   readonly TAKOSUMI_ENABLED_RUNNER_PROFILES?: string;
   /**
    * Optional default profile for generic Capsule plans when the public request
    * does not pass runnerProfileId. Must be one of the enabled runner profiles;
-   * omitted keeps the conservative Cloudflare default.
+   * omitted uses `opentofu-default`.
    */
   readonly TAKOSUMI_DEFAULT_RUNNER_PROFILE_ID?: string;
   /**
@@ -101,8 +99,8 @@ export interface CloudflareWorkerEnv extends Record<string, unknown> {
   readonly TAKOSUMI_CLOUDFLARE_CONTAINER_SMOKE_EVIDENCE_DIGEST?: string;
   readonly TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_REF?: string;
   readonly TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_DIGEST?: string;
-  readonly TAKOSUMI_PROVIDER_REGISTRY_EVIDENCE_REF?: string;
-  readonly TAKOSUMI_PROVIDER_REGISTRY_EVIDENCE_DIGEST?: string;
+  readonly TAKOSUMI_CREDENTIAL_RECIPE_EVIDENCE_REF?: string;
+  readonly TAKOSUMI_CREDENTIAL_RECIPE_EVIDENCE_DIGEST?: string;
   readonly TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_REF?: string;
   readonly TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_DIGEST?: string;
   /**

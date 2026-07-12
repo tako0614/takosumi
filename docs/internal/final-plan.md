@@ -1,6 +1,6 @@
 # Takosumi Final Plan
 
-Last updated: 2026-06-29
+Last updated: 2026-07-12
 
 This document is the authoritative Takosumi product direction.
 
@@ -196,6 +196,39 @@ audit
 approval
 policy
 ```
+
+Provider execution has one invariant:
+
+```text
+all valid provider sources
+  -> one provider-neutral OpenTofu execution path (`opentofu-default`)
+
+known provider
+  -> optional Credential Recipe, guided UI, and warm-cache convenience
+
+unknown provider
+  -> the same execution path, with explicit env/file ProviderConnection when
+     credentials are needed
+```
+
+There is no verified/unverified provider tier, provider-specific runner
+auto-selection, or Takosumi provider allowlist derived from recipe metadata.
+Provider installation uses a configured cache or mirror when available and the
+normal OpenTofu registry path otherwise. An operator may explicitly require a
+mirror, deny a provider source, or select a capability-specific runner profile,
+but those are policy/capability decisions rather than provider catalog status.
+
+Provider configuration and child-module defaults are connection data. A
+managed connection may declare non-secret `providerConfig` and
+`moduleInputDefaults`; core renders those generic maps after validating them.
+Core must not infer Cloudflare, AWS, or another provider's HCL arguments or
+module variable names.
+
+Credential Recipe discovery replaces provider catalog listing. A recipe says
+how to create temporary env/files and may be absent for a perfectly valid
+provider. Concrete failures use stable reasons such as invalid provider source,
+package unavailable, platform binary unavailable, protocol mismatch, policy
+denial, missing runner capability, checksum mismatch, or OpenTofu init failure.
 
 Deployable cloud resources are still OpenTofu resources when the selected
 provider can express them. For example, a Cloudflare Worker app should declare

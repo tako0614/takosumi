@@ -262,7 +262,9 @@ describe("/new Provider Connections return context", () => {
 
   test("/new uses a managed provider connection and its public namespace without hard-coded app behavior", () => {
     expect(newAppViewSource).toContain("selectedManagedProviderConnection");
-    expect(newAppViewSource).toContain("return readyProviderConnections().find(");
+    expect(newAppViewSource).toContain(
+      "return readyProviderConnections().find(",
+    );
     expect(newAppViewSource).toContain("if (!row.connectionId) continue;");
     expect(newAppViewSource).toContain(
       "if (!managedStoreProviderForCurrentSource()) return;",
@@ -274,7 +276,7 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).toContain("managedStoreProviderForCurrentSource");
     expect(newAppViewSource).toContain("managedProviderConnectionForRow");
     expect(newAppViewSource).toContain("rowCanUseManagedProviderFallback");
-    expect(newAppViewSource).toContain("hasManagedCloudflareProviderFallback");
+    expect(newAppViewSource).toContain("hasManagedProviderFallback");
     expect(newAppViewSource).toContain("rowHasManagedProviderDefault");
     expect(newAppViewSource).toContain(
       "const managed = managedProviderConnectionForRow(row)",
@@ -292,9 +294,7 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).toContain(
       ".filter((row) => row.connectionId.trim())",
     );
-    expect(newAppViewSource).toContain(
-      "if (!connection && !hasManagedCloudflareProviderFallback()) return {}",
-    );
+    expect(newAppViewSource).toContain("if (!connection) return {}");
     expect(newAppViewSource).toContain(
       "const isUsableManagedProviderConnection = (connection: ProviderConnection)",
     );
@@ -326,11 +326,8 @@ describe("/new Provider Connections return context", () => {
     expect(newAppViewSource).toContain("routePatternFromAppUrl");
     expect(newAppViewSource).toContain("const currentSubdomain =");
     expect(newAppViewSource).toContain("const currentAppUrl =");
-    expect(newAppViewSource).toContain('"enable_cloudflare_resources"');
-    expect(newAppViewSource).toContain('"enable_cloudflare_worker_script"');
     expect(newAppViewSource).toContain('"cloudflare_route_zone_id"');
-    expect(newAppViewSource).toContain('"enable_workers_dev_subdomain"');
-    expect(newAppViewSource).toContain("connection?.scopeHints?.zoneId");
+    expect(newAppViewSource).toContain("connection.scopeHints?.zoneId");
   });
 
   test("/new only asks for Provider Connections when the provider has credential env rules", () => {

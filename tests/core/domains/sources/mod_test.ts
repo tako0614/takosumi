@@ -636,7 +636,15 @@ output "public_url" {
     },
   ]);
   expect(report.level).toBe("ready");
-  expect(report.findings).toEqual([]);
+  expect(report.findings).toEqual([
+    {
+      severity: "info",
+      code: "provider_connection_may_be_required",
+      message: "Provider custom/provider may require a Provider Connection.",
+      suggestion:
+        "If the provider needs credentials, bind a Provider Connection with the env/file names documented by the provider.",
+    },
+  ]);
   expect(report.providers[0]).toMatchObject({ allowed: true });
   expect(report.resources.every((resource) => resource.allowed)).toBe(true);
   expect(report.dataSources).toEqual([{ type: "external", allowed: true }]);
@@ -893,11 +901,9 @@ test("createCompatibilityCheck rejects an installation for another source", asyn
 });
 
 // After the credential-model collapse the standalone Provider Catalog (and its
-// per-provider `ownershipOptions` enrichment) is removed: provider setup is
-// computed from the provider registry, and a Capsule's required providers are
-// discovered straight from its source HCL. This test now verifies that
-// discovery + the guided-vs-generic provider distinction the catalog used to
-// drive.
+// per-provider `ownershipOptions` enrichment) is removed. A Capsule's required
+// providers are discovered straight from its source HCL, and every qualified
+// source follows the same OpenTofu path. Credential needs are informational.
 test("createCompatibilityCheck discovers required providers from Capsule source", async () => {
   const { store, service } = makeService({
     readCapsuleSourceFiles: async () => [
@@ -960,28 +966,29 @@ output "public_url" {
   expect(providerBySource.get("vercel/vercel")?.allowed).toBe(true);
   expect(providerBySource.get("draft/provider")?.allowed).toBe(true);
 
-  // Guided providers (aws) need no explicit-connection nudge; unknown providers
-  // (vercel/draft) are flagged to wire an explicit Provider Connection.
-  const genericConnectionMessages = report.findings
-    .filter(
-      (finding) => finding.code === "generic_provider_connection_required",
-    )
-    .map((finding) => finding.message);
-  expect(
-    genericConnectionMessages.some((message) =>
-      message.includes("vercel/vercel"),
-    ),
-  ).toBe(true);
-  expect(
-    genericConnectionMessages.some((message) =>
-      message.includes("draft/provider"),
-    ),
-  ).toBe(true);
-  expect(
-    genericConnectionMessages.some((message) =>
-      message.includes("hashicorp/aws"),
-    ),
-  ).toBe(false);
+  expect(report.findings).toEqual([
+    {
+      severity: "info",
+      code: "provider_connection_may_be_required",
+      message: "Provider draft/provider may require a Provider Connection.",
+      suggestion:
+        "If the provider needs credentials, bind a Provider Connection with the env/file names documented by the provider.",
+    },
+    {
+      severity: "info",
+      code: "provider_connection_may_be_required",
+      message: "Provider hashicorp/aws may require a Provider Connection.",
+      suggestion:
+        "If the provider needs credentials, bind a Provider Connection with the env/file names documented by the provider.",
+    },
+    {
+      severity: "info",
+      code: "provider_connection_may_be_required",
+      message: "Provider vercel/vercel may require a Provider Connection.",
+      suggestion:
+        "If the provider needs credentials, bind a Provider Connection with the env/file names documented by the provider.",
+    },
+  ]);
 });
 
 test("createCompatibilityCheck returns an unsupported report when analysis fails", async () => {
@@ -1108,7 +1115,16 @@ output "url" {
 
   expect(observedOptions).toEqual([{ runId: "ccr_test00000004" }]);
   expect(report.level).toBe("ready");
-  expect(report.findings).toEqual([]);
+  expect(report.findings).toEqual([
+    {
+      severity: "info",
+      code: "provider_connection_may_be_required",
+      message:
+        "Provider cloudflare/cloudflare may require a Provider Connection.",
+      suggestion:
+        "If the provider needs credentials, bind a Provider Connection with the env/file names documented by the provider.",
+    },
+  ]);
 });
 
 test("createCompatibilityCheck defaults to supplied InstallConfig modulePath", async () => {
@@ -1184,5 +1200,14 @@ output "url" {
     { modulePath: "deploy/opentofu", runId: "ccr_test00000004" },
   ]);
   expect(report.level).toBe("ready");
-  expect(report.findings).toEqual([]);
+  expect(report.findings).toEqual([
+    {
+      severity: "info",
+      code: "provider_connection_may_be_required",
+      message:
+        "Provider cloudflare/cloudflare may require a Provider Connection.",
+      suggestion:
+        "If the provider needs credentials, bind a Provider Connection with the env/file names documented by the provider.",
+    },
+  ]);
 });

@@ -117,7 +117,7 @@ test("Cloud mode resolves a pending public managed operator connection", async (
       scopeHints: {
         managedProvider: true,
         managedProviderProfile: "compat.cloudflare.workers.v1",
-        providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+        providerConfig: { base_url: "https://app.takosumi.com/compat/cloudflare/client/v4" },
         accountId: "ts_acc_takosumi_cloud",
       },
     }),
@@ -158,7 +158,7 @@ test("binding digest ignores verification progress but detects connection replac
     scopeHints: {
       managedProvider: true,
       managedProviderProfile: "compat.cloudflare.workers.v1",
-      providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+      providerConfig: { base_url: "https://app.takosumi.com/compat/cloudflare/client/v4" },
       accountId: "ts_acc_takosumi_cloud",
     },
   });
@@ -212,7 +212,7 @@ test("provider connection listing exposes only public managed operator connectio
       scopeHints: {
         managedProvider: true,
         managedProviderProfile: "compat.cloudflare.workers.v1",
-        providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+        providerConfig: { base_url: "https://app.takosumi.com/compat/cloudflare/client/v4" },
         accountId: "ts_acc_takosumi_cloud",
       },
     }),
@@ -333,7 +333,7 @@ test("Cloud mode can satisfy required providers from a single public managed ope
       scopeHints: {
         managedProvider: true,
         managedProviderProfile: "compat.cloudflare.workers.v1",
-        providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+        providerConfig: { base_url: "https://app.takosumi.com/compat/cloudflare/client/v4" },
         accountId: "ts_acc_takosumi_cloud",
       },
     }),
@@ -381,7 +381,7 @@ test("Cloud mode can satisfy required providers from a pending public managed op
       scopeHints: {
         managedProvider: true,
         managedProviderProfile: "compat.cloudflare.workers.v1",
-        providerBaseUrl: "https://app.takosumi.com/compat/cloudflare/client/v4",
+        providerConfig: { base_url: "https://app.takosumi.com/compat/cloudflare/client/v4" },
         accountId: "ts_acc_takosumi_cloud",
       },
     }),
@@ -411,8 +411,9 @@ test("Cloud mode does not guess when multiple managed operator connections match
         scopeHints: {
           managedProvider: true,
           managedProviderProfile: "compat.cloudflare.workers.v1",
-          providerBaseUrl:
-            "https://app.takosumi.com/compat/cloudflare/client/v4",
+          providerConfig: {
+            base_url: "https://app.takosumi.com/compat/cloudflare/client/v4",
+            },
           accountId: `ts_acc_${id}`,
         },
       }),

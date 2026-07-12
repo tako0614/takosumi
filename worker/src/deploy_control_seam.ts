@@ -72,35 +72,25 @@ export function createRunOwnerDeployControlService(
 }
 
 /**
- * The operator-curated provider surface. `createDefaultRunnerProfiles` seeds
- * every reference profile (most as disabled candidates); the operator opts in via
- * `TAKOSUMI_ENABLED_RUNNER_PROFILES` (CSV). Only listed profiles are seeded into
- * the controller, each enabled, so `/v1/runner-profiles` and policy evaluation
- * never expose an unlisted provider. Unset/empty -> `["cloudflare-default"]`.
+ * The operator-curated execution surface. The built-in seed is one
+ * provider-neutral OpenTofu profile; additional configured profiles represent
+ * execution capabilities such as private-network or host-agent access, never a
+ * list of supported providers.
  */
 function resolveEnabledRunnerProfilesFromEnv(
   env: CloudflareWorkerEnv,
 ): readonly RunnerProfile[] {
-  const gatewayAccessOpen = env.TAKOSUMI_ACCOUNTS_PLATFORM_ACCESS === "open";
-  const hardeningEnforced =
-    env.TAKOSUMI_PRODUCTION_HARDENING_GATE === "enforce";
   return resolveEnabledRunnerProfiles(
     createDefaultRunnerProfiles(),
     env.TAKOSUMI_ENABLED_RUNNER_PROFILES,
     {
-      requireGatewayEgressEvidence: gatewayAccessOpen && hardeningEnforced,
+      requireGatewayEgressEvidence:
+        env.TAKOSUMI_ACCOUNTS_PLATFORM_ACCESS === "open" &&
+        env.TAKOSUMI_PRODUCTION_HARDENING_GATE === "enforce",
       egressEnforcementEvidenceRef:
         env.TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_REF,
       egressEnforcementEvidenceDigest:
         env.TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_DIGEST,
-      // Self-host (the operator IS the user) default-enables the wildcard
-      // generic-provider surface so "bring your own key -> any OpenTofu
-      // provider" runs out of the box. Open multi-tenant keeps the conservative
-      // default and opts the generic surface in explicitly (there is no
-      // Takosumi runner egress allowlist to protect co-tenants). Deployments
-      // that set TAKOSUMI_ENABLED_RUNNER_PROFILES (e.g. Takosumi Cloud) are
-      // unaffected — this default only applies when the env is unset.
-      defaultEnableGenericProvider: !gatewayAccessOpen,
     },
   );
 }

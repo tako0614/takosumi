@@ -18,7 +18,7 @@
 
 import type {
   Connection,
-  ConnectionKind,
+  ProviderConnectionKind,
   ConnectionScopeHints,
   CreateConnectionRequest,
 } from "@takosumi/internal/deploy-control-api";
@@ -41,7 +41,7 @@ import {
   sameProviderFamily,
 } from "takosumi-contract/provider-env-rules";
 import type { ProviderCredentialMintEvidence } from "takosumi-contract/security";
-import { providerForAddress } from "@takosumi/providers";
+import { guidedProviderSetupForAddress } from "@takosumi/providers";
 import { cloudflareCredentialDriver } from "@takosumi/providers/cloudflare/connection.ts";
 import { CloudflareCredentialError } from "@takosumi/providers/cloudflare/credentials.ts";
 import {
@@ -503,6 +503,13 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       );
     }
 
+    // Validate every non-secret field before sealing or persisting credential
+    // material. In particular, provider configuration and module defaults are
+    // public connection metadata and must never become an alternate secret
+    // transport around Credential Recipes.
+    const scopeHints = normalizeScope(input.scopeHints);
+    const now = this.#now();
+    const expiresAt = normalizeConnectionExpiresAt(input.expiresAt, now);
     const id = this.#newId();
     const cloudPartition = cloudFamilyForProvider(
       input.provider,
@@ -523,7 +530,6 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         provider: input.provider,
       }),
     );
-    const now = this.#now();
     const nowIso = now.toISOString();
     const connectionKind =
       input.kind ?? providerConnectionKindFor(input.provider);
@@ -539,7 +545,6 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     });
     await this.#store.putSecretBlob(blob);
 
-    const expiresAt = normalizeConnectionExpiresAt(input.expiresAt, now);
     const connection: Connection = {
       id,
       ...(workspaceId ? { workspaceId, spaceId: workspaceId } : {}),
@@ -550,9 +555,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       ...(input.displayName ? { displayName: input.displayName } : {}),
       status: "pending",
       materialization: input.materialization ?? "secret",
-      ...(normalizeScope(input.scopeHints)
-        ? { scopeHints: normalizeScope(input.scopeHints) }
-        : {}),
+      ...(scopeHints ? { scopeHints } : {}),
       envNames: [...envNames].sort(),
       ...(genericEnvRegistration &&
       genericEnvRegistration.fileEnvNames.length > 0
@@ -628,6 +631,8 @@ export class StaticSecretConnectionVault implements ConnectionVault {
       }
     }
 
+    const now = this.#now();
+    const expiresAt = normalizeConnectionExpiresAt(input.expiresAt, now);
     const id = this.#newId();
     const cloudPartition = "local-adapters" as CloudPartition;
     // A git connection stores `provider: kind`, so the AAD binds to `kind` to
@@ -642,7 +647,6 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         provider: kind,
       }),
     );
-    const now = this.#now();
     const nowIso = now.toISOString();
     const blob = makeStoredSecretBlob({
       connectionId: id,
@@ -656,7 +660,6 @@ export class StaticSecretConnectionVault implements ConnectionVault {
     });
     await this.#store.putSecretBlob(blob);
 
-    const expiresAt = normalizeConnectionExpiresAt(input.expiresAt, now);
     const connection: Connection = {
       id,
       ...(workspaceId ? { workspaceId, spaceId: workspaceId } : {}),
@@ -734,7 +737,7 @@ export class StaticSecretConnectionVault implements ConnectionVault {
         now: this.#now,
       });
     } else {
-      // Per-ConnectionKind verify driver (git_https smart-HTTP probe,
+      // Per-ProviderConnectionKind verify driver (git_https smart-HTTP probe,
       // generic_env_provider structural, git_ssh reserved-structural, GCP
       // reserved-pending). Git / generic-env can reach `verified`; GCP stays
       // pending until a real verify + mint driver is wired.
@@ -1427,11 +1430,11 @@ function reservedProviderMintDriverError(
 }
 
 function isAwsProvider(provider: string): boolean {
-  return providerForAddress(provider)?.id === "aws";
+  return guidedProviderSetupForAddress(provider)?.id === "aws";
 }
 
 function isCloudflareProvider(provider: string): boolean {
-  return providerForAddress(provider)?.id === "cloudflare";
+  return guidedProviderSetupForAddress(provider)?.id === "cloudflare";
 }
 
 function normalizeConnectionExpiresAt(
@@ -1477,7 +1480,8 @@ function normalizeScope(
     zoneId?: string;
     workersSubdomain?: string;
     managedProvider?: boolean;
-    providerBaseUrl?: string;
+    providerConfig?: ConnectionScopeHints["providerConfig"];
+    moduleInputDefaults?: ConnectionScopeHints["moduleInputDefaults"];
     managedProviderProfile?: string;
     managedPublicBaseDomain?: string;
     cloudflareTokenVending?: ConnectionScopeHints["cloudflareTokenVending"];
@@ -1505,12 +1509,16 @@ function normalizeScope(
   if (scope.managedProvider === true) {
     out.managedProvider = true;
   }
-  if (
-    typeof scope.providerBaseUrl === "string" &&
-    scope.providerBaseUrl.length > 0
-  ) {
-    out.providerBaseUrl = scope.providerBaseUrl;
-  }
+  const providerConfig = normalizeNonSecretJsonRecord(
+    scope.providerConfig,
+    "scopeHints.providerConfig",
+  );
+  if (providerConfig) out.providerConfig = providerConfig;
+  const moduleInputDefaults = normalizeNonSecretJsonRecord(
+    scope.moduleInputDefaults,
+    "scopeHints.moduleInputDefaults",
+  );
+  if (moduleInputDefaults) out.moduleInputDefaults = moduleInputDefaults;
   if (
     typeof scope.managedProviderProfile === "string" &&
     scope.managedProviderProfile.length > 0
@@ -1563,6 +1571,97 @@ function normalizeScope(
     out.templateId = scope.templateId;
   }
   return Object.keys(out).length > 0 ? out : undefined;
+}
+
+const SECRET_CONFIG_KEYS = new Set([
+  "access_key",
+  "access_token",
+  "accesskey",
+  "accesstoken",
+  "api_key",
+  "api_token",
+  "apikey",
+  "apitoken",
+  "authorization",
+  "bearer_token",
+  "bearertoken",
+  "client_secret",
+  "clientsecret",
+  "credential",
+  "credentials",
+  "password",
+  "passwd",
+  "private_key",
+  "privatekey",
+  "refresh_token",
+  "refreshtoken",
+  "secret",
+  "secret_key",
+  "secretkey",
+  "token",
+]);
+
+function normalizeNonSecretJsonRecord(
+  value: unknown,
+  fieldName: string,
+): Readonly<Record<string, import("takosumi-contract").JsonValue>> | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) {
+    throw new ConnectionVaultError(
+      "invalid_argument",
+      `${fieldName} must be a JSON object when provided`,
+    );
+  }
+  const out: Record<string, import("takosumi-contract").JsonValue> = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(key) || !isJsonValue(item)) {
+      throw new ConnectionVaultError(
+        "invalid_argument",
+        `${fieldName}.${key} must be a valid identifier with a JSON value`,
+      );
+    }
+    assertNonSecretJsonValue(item, `${fieldName}.${key}`, key);
+    out[key] = item;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function assertNonSecretJsonValue(
+  value: import("takosumi-contract").JsonValue,
+  path: string,
+  key: string,
+): void {
+  if (SECRET_CONFIG_KEYS.has(key.toLowerCase())) {
+    throw new ConnectionVaultError(
+      "invalid_argument",
+      `${path} is credential-shaped; store secret material in Provider Connection values/files and inject it through a Credential Recipe`,
+    );
+  }
+  if (Array.isArray(value)) {
+    for (const [index, item] of value.entries()) {
+      assertNonSecretJsonValue(item, `${path}[${index}]`, String(index));
+    }
+    return;
+  }
+  if (value === null || typeof value !== "object") return;
+  for (const [childKey, childValue] of Object.entries(value)) {
+    assertNonSecretJsonValue(childValue, `${path}.${childKey}`, childKey);
+  }
+}
+
+function isJsonValue(
+  value: unknown,
+): value is import("takosumi-contract").JsonValue {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "boolean"
+  ) {
+    return true;
+  }
+  if (typeof value === "number") return Number.isFinite(value);
+  if (Array.isArray(value)) return value.every(isJsonValue);
+  return isRecord(value) && Object.values(value).every(isJsonValue);
 }
 
 function normalizeCloudflareTokenVending(
@@ -1897,7 +1996,7 @@ function makeStoredSecretBlob(input: {
   readonly connectionId: string;
   readonly spaceId?: string;
   readonly provider: string;
-  readonly connectionKind?: ConnectionKind;
+  readonly connectionKind?: ProviderConnectionKind;
   readonly sealed: Uint8Array;
   readonly cloudPartition: CloudPartition;
   readonly createdAt: string;
@@ -1929,7 +2028,7 @@ function makeStoredSecretBlob(input: {
 
 function secretBlobKindFor(
   provider: string,
-  connectionKind?: ConnectionKind,
+  connectionKind?: ProviderConnectionKind,
 ): StoredSecretBlobKind {
   if (connectionKind === "source_git_https_token") return "source_https_token";
   if (connectionKind === "source_git_ssh_key") return "source_ssh_private_key";
@@ -1951,7 +2050,7 @@ function secretBlobKindFor(
   return "static_secret";
 }
 
-function providerConnectionKindFor(provider: string): ConnectionKind {
+function providerConnectionKindFor(provider: string): ProviderConnectionKind {
   if (provider === "cloudflare") return "cloudflare_api_token";
   if (provider === "aws") return "aws_assume_role";
   if (provider === "gcp" || provider === "google") {

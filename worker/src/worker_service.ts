@@ -269,7 +269,9 @@ function managedProviderCredentialIssuerFromEnv(
   return async (request) => {
     const { workspaceId, connection, phase } = request;
     if (connection.scopeHints?.managedProvider !== true) return undefined;
-    const providerBaseUrl = connection.scopeHints.providerBaseUrl?.trim();
+    const configuredBaseUrl = connection.scopeHints.providerConfig?.base_url;
+    const providerBaseUrl =
+      typeof configuredBaseUrl === "string" ? configuredBaseUrl.trim() : "";
     if (!providerBaseUrl) return undefined;
     const tokenArg = providerCredentialArgs(connection.provider).find(
       (arg) => arg.arg === "api_token" || arg.envName.endsWith("_API_TOKEN"),
@@ -595,7 +597,22 @@ async function seedCloudManagedProviderConnections(input: {
       ...(virtualZoneId ? { zoneId: virtualZoneId } : {}),
       managedProvider: true,
       managedProviderProfile: CLOUD_MANAGED_CLOUDFLARE_COMPAT_PROFILE,
-      providerBaseUrl,
+      providerConfig: { base_url: providerBaseUrl },
+      moduleInputDefaults: {
+        enable_cloudflare_resources: true,
+        enable_cloudflare_worker_script: true,
+        enable_workers_dev_subdomain: false,
+        cloudflare_account_id: virtualAccountId,
+        account_id: virtualAccountId,
+        cloudflare_api_base_url: providerBaseUrl,
+        cloudflare: {
+          account_id: virtualAccountId,
+          api_base_url: providerBaseUrl,
+        },
+        ...(virtualZoneId
+          ? { cloudflare_route_zone_id: virtualZoneId }
+          : {}),
+      },
       ...(managedPublicBaseDomain ? { managedPublicBaseDomain } : {}),
     },
     values: { CLOUDFLARE_API_TOKEN: apiToken },

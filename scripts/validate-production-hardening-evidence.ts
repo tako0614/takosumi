@@ -8,7 +8,7 @@ export const PRODUCTION_HARDENING_EVIDENCE_KIND =
 const DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/;
 const GIT_REF_PATTERN = /^git\+[^#]+#[^#]+$/;
 const GIT_COMMIT_PIN_PATTERN = /@[0-9a-f]{40,64}$/i;
-const REQUIRED_PROVIDER_CATALOG_IDS = [
+const REQUIRED_CREDENTIAL_RECIPE_IDS = [
   "aws",
   "cloudflare",
   "gcp",
@@ -54,7 +54,7 @@ export interface ProductionHardeningEvidenceManifest {
     readonly platformControlPlaneSmoke: PlatformControlPlaneSmokeEvidence;
     readonly egressEnforcement: EgressEnforcementEvidence;
     readonly restoreRehearsal: RestoreRehearsalEvidence;
-    readonly providerCatalog: ProviderCatalogEvidence;
+    readonly credentialRecipes: CredentialRecipeEvidence;
     readonly costAttribution: CostAttributionEvidence;
     readonly secretBoundary: SecretBoundaryEvidence;
   };
@@ -124,13 +124,14 @@ export interface RestoreRehearsalEvidence extends BaseEvidence {
   readonly rpoMinutes: number;
 }
 
-export interface ProviderCatalogEvidence extends BaseEvidence {
-  readonly providers: readonly {
+export interface CredentialRecipeEvidence extends BaseEvidence {
+  readonly recipes: readonly {
     readonly id: string;
     readonly connectionModes: readonly ["provider_connection"];
-    readonly genericEnvSupported: true;
   }[];
-  readonly cloudOnlyGatewayProjectionReturned: false;
+  readonly genericEnvRecipeVerified: true;
+  readonly unregisteredProviderExecutionVerified: true;
+  readonly recipePresenceUsedAsAdmission: false;
   readonly secretValuesReturned: false;
 }
 
@@ -227,7 +228,7 @@ export function productionHardeningEvidenceTemplate(): ProductionHardeningEviden
         live: true,
         summary:
           "OpenTofu runner boundary allowed the required provider API host and denied a blocked metadata source host.",
-        runnerProfileId: "cloudflare-default",
+        runnerProfileId: "opentofu-default",
         runnerBoundary: "cloudflare-container",
         networkPolicyConfigured: true,
         providerAllowProbe: {
@@ -263,40 +264,37 @@ export function productionHardeningEvidenceTemplate(): ProductionHardeningEviden
         rtoMinutes: 30,
         rpoMinutes: 15,
       },
-      providerCatalog: {
+      credentialRecipes: {
         evidenceRef: `${evidenceRefBase}#evidence/provider-connections.md`,
         evidenceDigest: "sha256:<64-lowercase-hex>",
         live: true,
         summary:
-          "Production Provider Connection evidence covers guided recipes plus generic env, with no Cloud-only provider endpoint or secret projection.",
-        providers: [
+          "Production Provider Connection evidence covers guided recipes and generic env while an unregistered provider uses the same OpenTofu execution path.",
+        recipes: [
           {
             id: "aws",
             connectionModes: ["provider_connection"],
-            genericEnvSupported: true,
           },
           {
             id: "cloudflare",
             connectionModes: ["provider_connection"],
-            genericEnvSupported: true,
           },
           {
             id: "gcp",
             connectionModes: ["provider_connection"],
-            genericEnvSupported: true,
           },
           {
             id: "github",
             connectionModes: ["provider_connection"],
-            genericEnvSupported: true,
           },
           {
             id: "kubernetes",
             connectionModes: ["provider_connection"],
-            genericEnvSupported: true,
           },
         ],
-        cloudOnlyGatewayProjectionReturned: false,
+        genericEnvRecipeVerified: true,
+        unregisteredProviderExecutionVerified: true,
+        recipePresenceUsedAsAdmission: false,
         secretValuesReturned: false,
       },
       costAttribution: {
@@ -373,7 +371,7 @@ export async function updateProductionHardeningEvidenceDigestsFile(
     "platformControlPlaneSmoke",
     "egressEnforcement",
     "restoreRehearsal",
-    "providerCatalog",
+    "credentialRecipes",
     "costAttribution",
     "secretBoundary",
   ] as const) {
@@ -435,10 +433,10 @@ function buildValidation(
         manifest.checks.restoreRehearsal.evidenceRef,
       TAKOSUMI_RESTORE_REHEARSAL_EVIDENCE_DIGEST:
         manifest.checks.restoreRehearsal.evidenceDigest,
-      TAKOSUMI_PROVIDER_REGISTRY_EVIDENCE_REF:
-        manifest.checks.providerCatalog.evidenceRef,
-      TAKOSUMI_PROVIDER_REGISTRY_EVIDENCE_DIGEST:
-        manifest.checks.providerCatalog.evidenceDigest,
+      TAKOSUMI_CREDENTIAL_RECIPE_EVIDENCE_REF:
+        manifest.checks.credentialRecipes.evidenceRef,
+      TAKOSUMI_CREDENTIAL_RECIPE_EVIDENCE_DIGEST:
+        manifest.checks.credentialRecipes.evidenceDigest,
       TAKOSUMI_COST_ATTRIBUTION_EVIDENCE_REF:
         manifest.checks.costAttribution.evidenceRef,
       TAKOSUMI_COST_ATTRIBUTION_EVIDENCE_DIGEST:
@@ -460,7 +458,7 @@ async function verifyEvidenceFileDigests(
     ["platformControlPlaneSmoke", manifest.checks.platformControlPlaneSmoke],
     ["egressEnforcement", manifest.checks.egressEnforcement],
     ["restoreRehearsal", manifest.checks.restoreRehearsal],
-    ["providerCatalog", manifest.checks.providerCatalog],
+    ["credentialRecipes", manifest.checks.credentialRecipes],
     ["costAttribution", manifest.checks.costAttribution],
     ["secretBoundary", manifest.checks.secretBoundary],
   ] as const) {
@@ -517,7 +515,7 @@ function readManifest(value: unknown): ProductionHardeningEvidenceManifest {
   );
   const egressEnforcement = readEgressEnforcement(checks.egressEnforcement);
   const restoreRehearsal = readRestoreRehearsal(checks.restoreRehearsal);
-  const providerCatalog = readProviderCatalog(checks.providerCatalog);
+  const credentialRecipes = readCredentialRecipes(checks.credentialRecipes);
   const costAttribution = readCostAttribution(checks.costAttribution);
   const secretBoundary = readSecretBoundary(checks.secretBoundary);
   return {
@@ -529,7 +527,7 @@ function readManifest(value: unknown): ProductionHardeningEvidenceManifest {
       platformControlPlaneSmoke,
       egressEnforcement,
       restoreRehearsal,
-      providerCatalog,
+      credentialRecipes,
       costAttribution,
       secretBoundary,
     },
@@ -768,53 +766,57 @@ function readRestoreRehearsal(value: unknown): RestoreRehearsalEvidence {
   };
 }
 
-function readProviderCatalog(value: unknown): ProviderCatalogEvidence {
-  const base = readBase(value, "providerCatalog");
-  const row = record(value, "providerCatalog evidence");
-  const providersRaw = array(row.providers, "providerCatalog.providers");
-  const providers = providersRaw.map((item, index) => {
-    const provider = record(item, `providerCatalog.providers[${index}]`);
-    if (!nonEmptyString(provider.id)) {
-      throw new Error(`providerCatalog.providers[${index}].id is required`);
+function readCredentialRecipes(value: unknown): CredentialRecipeEvidence {
+  const base = readBase(value, "credentialRecipes");
+  const row = record(value, "credentialRecipes evidence");
+  const recipesRaw = array(row.recipes, "credentialRecipes.recipes");
+  const recipes = recipesRaw.map((item, index) => {
+    const recipe = record(item, `credentialRecipes.recipes[${index}]`);
+    if (!nonEmptyString(recipe.id)) {
+      throw new Error(`credentialRecipes.recipes[${index}].id is required`);
     }
     const connectionModes = stringArray(
-      provider.connectionModes,
-      `providerCatalog.providers[${index}].connectionModes`,
+      recipe.connectionModes,
+      `credentialRecipes.recipes[${index}].connectionModes`,
     );
     requireSameMembers(
       connectionModes,
       ["provider_connection"],
-      `providerCatalog.providers[${index}].connectionModes`,
+      `credentialRecipes.recipes[${index}].connectionModes`,
     );
-    if (provider.genericEnvSupported !== true) {
-      throw new Error(
-        `providerCatalog.providers[${index}].genericEnvSupported must be true`,
-      );
-    }
     return {
-      id: provider.id,
+      id: recipe.id,
       connectionModes: ["provider_connection"] as const,
-      genericEnvSupported: true as const,
     };
   });
-  const providerIds = providers.map((provider) => provider.id);
-  for (const provider of REQUIRED_PROVIDER_CATALOG_IDS) {
-    if (!providerIds.includes(provider)) {
-      throw new Error(`providerCatalog.providers is missing ${provider}`);
+  const recipeIds = recipes.map((recipe) => recipe.id);
+  for (const recipe of REQUIRED_CREDENTIAL_RECIPE_IDS) {
+    if (!recipeIds.includes(recipe)) {
+      throw new Error(`credentialRecipes.recipes is missing ${recipe}`);
     }
   }
-  if (row.cloudOnlyGatewayProjectionReturned !== false) {
+  if (row.genericEnvRecipeVerified !== true) {
+    throw new Error("credentialRecipes.genericEnvRecipeVerified must be true");
+  }
+  if (row.unregisteredProviderExecutionVerified !== true) {
     throw new Error(
-      "providerCatalog.cloudOnlyGatewayProjectionReturned must be false",
+      "credentialRecipes.unregisteredProviderExecutionVerified must be true",
+    );
+  }
+  if (row.recipePresenceUsedAsAdmission !== false) {
+    throw new Error(
+      "credentialRecipes.recipePresenceUsedAsAdmission must be false",
     );
   }
   if (row.secretValuesReturned !== false) {
-    throw new Error("providerCatalog.secretValuesReturned must be false");
+    throw new Error("credentialRecipes.secretValuesReturned must be false");
   }
   return {
     ...base,
-    providers,
-    cloudOnlyGatewayProjectionReturned: false,
+    recipes,
+    genericEnvRecipeVerified: true,
+    unregisteredProviderExecutionVerified: true,
+    recipePresenceUsedAsAdmission: false,
     secretValuesReturned: false,
   };
 }

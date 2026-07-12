@@ -629,8 +629,8 @@ production で hosted Takosumi access を開く前に、real Cloudflare substrat
 | `TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_DIGEST`           | 上記証跡の `sha256:<64hex>`                                                                                                                                          |
 | `TAKOSUMI_RESTORE_REHEARSAL_EVIDENCE_REF`               | platform control-plane backup / restore rehearsal 証跡への commit-pinned `git+...@<commit>#path`                                                                     |
 | `TAKOSUMI_RESTORE_REHEARSAL_EVIDENCE_DIGEST`            | 上記証跡の `sha256:<64hex>`                                                                                                                                          |
-| `TAKOSUMI_PROVIDER_REGISTRY_EVIDENCE_REF`               | ProviderConnection policy / CredentialRecipe / generic-env / internal resolver evidence                                                                              |
-| `TAKOSUMI_PROVIDER_REGISTRY_EVIDENCE_DIGEST`            | 上記証跡の `sha256:<64hex>`                                                                                                                                          |
+| `TAKOSUMI_CREDENTIAL_RECIPE_EVIDENCE_REF`               | ProviderConnection policy / CredentialRecipe / generic-env / provider-neutral execution evidence                                                                      |
+| `TAKOSUMI_CREDENTIAL_RECIPE_EVIDENCE_DIGEST`            | 上記証跡の `sha256:<64hex>`                                                                                                                                          |
 | `TAKOSUMI_COST_ATTRIBUTION_EVIDENCE_REF`                | `takosumi/deploy/observability/grafana/takosumi-cost-attribution.json` provision / fresh sample evidence への commit-pinned `git+...@<commit>#path`                  |
 | `TAKOSUMI_COST_ATTRIBUTION_EVIDENCE_DIGEST`             | 上記証跡の `sha256:<64hex>`                                                                                                                                          |
 | `TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_REF`                 | provider credentials / control-plane tokens / state backend credentials が diagnostics、audit payload、Output、tenant Worker bindings に漏れないことの live evidence |
@@ -757,7 +757,7 @@ bun run production-hardening:gates -- \
 ```
 
 `containerSmoke.ok` / `platformControlPlaneSmoke.ok` / `egressEnforcement.ok` /
-`restoreRehearsal.ok` / `providerCatalog.ok` / `costAttribution.ok` /
+`restoreRehearsal.ok` / `credentialRecipes.ok` / `costAttribution.ok` /
 `secretBoundary.ok` がすべて `true` になるまで
 `TAKOSUMI_ACCOUNTS_PLATFORM_ACCESS = "open"` にしない。Container smoke は
 Miniflare / local Docker ではなく、deployed `OpenTofuRunnerObject` が Cloudflare Container を起動し、

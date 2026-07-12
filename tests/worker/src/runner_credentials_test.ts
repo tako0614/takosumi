@@ -6,7 +6,7 @@ import {
 
 // Runner profile that requires a cloudflare credential ref by env://.
 const CLOUDFLARE_PROFILE = {
-  id: "cloudflare-default",
+  id: "opentofu-default",
   allowedProviders: ["cloudflare/cloudflare"],
   credentialRefs: [
     {

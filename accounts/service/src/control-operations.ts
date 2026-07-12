@@ -47,7 +47,7 @@ import type {
   CreateSourceCompatibilityCheckRequest,
   PublicCapsuleCompatibilityReportResponse,
 } from "takosumi-contract/capsules";
-import type { ListProvidersResponse } from "takosumi-contract/providers";
+import type { ListCredentialRecipesResponse } from "takosumi-contract/credential-recipes";
 import type { Workspace, WorkspaceType } from "takosumi-contract/workspaces";
 import type {
   CapsuleProviderEnvBindingSet,
@@ -549,7 +549,7 @@ export interface ControlPlaneOperations {
     reportId: string,
   ): Promise<CapsuleCompatibilityReportResponse>;
   // --- Providers (§7 / §8) ---
-  listProviderCatalogEntries(): Promise<ListProvidersResponse>;
+  listCredentialRecipes(): Promise<ListCredentialRecipesResponse>;
   // --- Runner profiles (read; used by Provider Connection / Gateway views) ---
   listRunnerProfiles(): Promise<ListRunnerProfilesResponse>;
 }

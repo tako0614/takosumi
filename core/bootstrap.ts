@@ -164,7 +164,7 @@ import type {
   InvoiceUsageReconciliation,
   UsageEvent,
 } from "takosumi-contract/billing";
-import type { ListProvidersResponse } from "takosumi-contract/providers";
+import type { ListCredentialRecipesResponse } from "takosumi-contract/credential-recipes";
 import type { ActorContext, ResourceShapeKind } from "takosumi-contract";
 
 function resolveTakosumiDeploymentRecordStore(input: {
@@ -836,7 +836,7 @@ export interface TakosumiOperations {
   getCompatibilityReport(
     reportId: string,
   ): Promise<CapsuleCompatibilityReportResponse>;
-  listProviderCatalogEntries(): Promise<ListProvidersResponse>;
+  listCredentialRecipes(): Promise<ListCredentialRecipesResponse>;
   listSourceSnapshots(sourceId: string): Promise<ListSourceSnapshotsResponse>;
   getSourceSyncRun(id: string): Promise<SourceSyncRun>;
   createRestoreRun(
@@ -1504,8 +1504,8 @@ export async function createTakosumiService(
       opentofuController.createSourceCompatibilityCheck(sourceId, request),
     getCompatibilityReport: (reportId) =>
       opentofuController.getCompatibilityReport(reportId),
-    listProviderCatalogEntries: () =>
-      opentofuController.listProviderCatalogEntries(),
+    listCredentialRecipes: () =>
+      opentofuController.listCredentialRecipes(),
     listSourceSnapshots: (sourceId) =>
       opentofuController.listSourceSnapshots(sourceId),
     getSourceSyncRun: (id) => opentofuController.getSourceSyncRun(id),

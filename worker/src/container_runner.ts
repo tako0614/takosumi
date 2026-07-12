@@ -622,21 +622,31 @@ function runnerFailureDetail(
   payload: Record<string, unknown>,
   redactedText: string,
 ): string | undefined {
+  const errorCode = stringFromRecord(payload, "errorCode");
+  const withCode = (detail: string): string =>
+    errorCode ? `${errorCode}: ${detail}` : detail;
   const detail = stringFromRecord(payload, "detail");
-  if (detail) return redactRunnerDiagnosticText(detail);
+  if (detail) return withCode(redactRunnerDiagnosticText(detail));
   const error = stringFromRecord(payload, "error");
-  if (error) return redactRunnerDiagnosticText(error);
+  if (error) return withCode(redactRunnerDiagnosticText(error));
   const stderr = stringFromRecord(payload, "stderr");
   const stdout = stringFromRecord(payload, "stdout");
   if (stderr?.trim() && stdout?.trim()) {
-    return redactRunnerDiagnosticText(
-      `${stderr.trim()}\n\n--- runner stdout ---\n${tailText(stdout.trim(), 12000)}`,
+    return withCode(
+      redactRunnerDiagnosticText(
+        `${stderr.trim()}\n\n--- runner stdout ---\n${tailText(stdout.trim(), 12000)}`,
+      ),
     );
   }
-  if (stderr?.trim()) return redactRunnerDiagnosticText(stderr.trim());
-  if (stdout?.trim()) return redactRunnerDiagnosticText(stdout.trim());
+  if (stderr?.trim()) {
+    return withCode(redactRunnerDiagnosticText(stderr.trim()));
+  }
+  if (stdout?.trim()) {
+    return withCode(redactRunnerDiagnosticText(stdout.trim()));
+  }
   const trimmed = redactedText.trim();
-  return trimmed.length > 0 ? trimmed.slice(0, 500) : undefined;
+  if (trimmed.length > 0) return withCode(trimmed.slice(0, 500));
+  return errorCode ? `${errorCode}: runner failed` : undefined;
 }
 
 function repositoryInstallMetadataFromContainerResult(

@@ -30,8 +30,8 @@ test("production hardening gate verification matches live response to manifest e
   expect(result.environment).toBe("production");
   expect(result.generatedAt).toBe("2026-06-08T00:00:00.000Z");
   expect(result.manifestDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
-  expect(result.checks.providerCatalog.evidenceRef).toBe(
-    manifest.checks.providerCatalog.evidenceRef,
+  expect(result.checks.credentialRecipes.evidenceRef).toBe(
+    manifest.checks.credentialRecipes.evidenceRef,
   );
 });
 
@@ -409,10 +409,10 @@ function gateResponse(manifest: ReturnType<typeof validManifest>): any {
         evidenceRef: manifest.checks.restoreRehearsal.evidenceRef,
         evidenceDigest: manifest.checks.restoreRehearsal.evidenceDigest,
       },
-      providerCatalog: {
+      credentialRecipes: {
         ok: true,
-        evidenceRef: manifest.checks.providerCatalog.evidenceRef,
-        evidenceDigest: manifest.checks.providerCatalog.evidenceDigest,
+        evidenceRef: manifest.checks.credentialRecipes.evidenceRef,
+        evidenceDigest: manifest.checks.credentialRecipes.evidenceDigest,
       },
       costAttribution: {
         ok: true,
@@ -491,7 +491,7 @@ function validManifest(): any {
         live: true,
         summary:
           "OpenTofu runner boundary allowed the required provider API host and denied a blocked metadata source host.",
-        runnerProfileId: "cloudflare-default",
+        runnerProfileId: "opentofu-default",
         runnerBoundary: "cloudflare-container",
         networkPolicyConfigured: true,
         providerAllowProbe: {
@@ -529,42 +529,39 @@ function validManifest(): any {
         rtoMinutes: 30,
         rpoMinutes: 15,
       },
-      providerCatalog: {
+      credentialRecipes: {
         evidenceRef:
           "git+ssh://git@github.com/tako0614/takosumi-private.git@0123456789abcdef0123456789abcdef01234567#evidence/provider-connections.md",
         evidenceDigest:
           "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
         live: true,
         summary:
-          "Production Provider Connection evidence covers guided recipes plus generic env, with no Cloud-only provider endpoint or secret projection.",
-        providers: [
+          "Production Provider Connection evidence covers guided recipes and generic env while an unregistered provider uses the same OpenTofu execution path.",
+        recipes: [
           {
             id: "aws",
             connectionModes: ["provider_connection"],
-            genericEnvSupported: true,
           },
           {
             id: "cloudflare",
             connectionModes: ["provider_connection"],
-            genericEnvSupported: true,
           },
           {
             id: "gcp",
             connectionModes: ["provider_connection"],
-            genericEnvSupported: true,
           },
           {
             id: "github",
             connectionModes: ["provider_connection"],
-            genericEnvSupported: true,
           },
           {
             id: "kubernetes",
             connectionModes: ["provider_connection"],
-            genericEnvSupported: true,
           },
         ],
-        cloudOnlyGatewayProjectionReturned: false,
+        genericEnvRecipeVerified: true,
+        unregisteredProviderExecutionVerified: true,
+        recipePresenceUsedAsAdmission: false,
         secretValuesReturned: false,
       },
       costAttribution: {

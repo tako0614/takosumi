@@ -45,7 +45,7 @@ import type {
   CreateSourceCompatibilityCheckRequest,
   PublicCapsuleCompatibilityReportResponse,
 } from "takosumi-contract/capsules";
-import type { ListProvidersResponse } from "takosumi-contract/providers";
+import type { ListCredentialRecipesResponse } from "takosumi-contract/credential-recipes";
 import type { Workspace, WorkspaceType } from "takosumi-contract/workspaces";
 import type {
   CapsuleProviderEnvBindingSet,
@@ -802,14 +802,15 @@ export function connectionCredentialFiles(
 }
 
 /**
- * Extracts the non-secret connection scope hints the UI may pass. Only the
- * well-known string fields are forwarded.
+ * Extracts non-secret connection scope hints. Provider-block configuration and
+ * child-module defaults are generic JSON maps; no provider name is interpreted
+ * here.
  */
 export function connectionScopeHints(
   value: unknown,
 ): ConnectionScopeHints | undefined {
   if (!isPlainJsonObject(value)) return undefined;
-  const hints: Record<string, string> = {};
+  const hints: Record<string, unknown> = {};
   for (const key of [
     "accountId",
     "zoneId",
@@ -825,6 +826,10 @@ export function connectionScopeHints(
     const v = stringValue(value[key]);
     if (v) hints[key] = v;
   }
+  const providerConfig = jsonRecordValue(value.providerConfig);
+  if (providerConfig) hints.providerConfig = providerConfig;
+  const moduleInputDefaults = jsonRecordValue(value.moduleInputDefaults);
+  if (moduleInputDefaults) hints.moduleInputDefaults = moduleInputDefaults;
   return Object.keys(hints).length > 0
     ? (hints as ConnectionScopeHints)
     : undefined;

@@ -936,7 +936,7 @@ test("legacy apply without stateScope keeps using the R2_ARTIFACTS state path", 
   const calls: string[] = [];
   const artifacts = new FakeR2Bucket();
   const state = new FakeR2Bucket();
-  const stateBackendRef = "state://takosumi/cloudflare-default";
+  const stateBackendRef = "state://takosumi/opentofu-default";
   const legacyStateKey = `${await legacyBackendPrefix(stateBackendRef)}/installations/inst_1/terraform.tfstate`;
   const priorState = new TextEncoder().encode('{"serial":1}');
   const crypto = StateArtifactCrypto.fromEnv({
@@ -1003,7 +1003,7 @@ test("legacy apply without stateScope keeps using the R2_ARTIFACTS state path", 
             id: "plan_1",
             installationId: "inst_1",
             spaceId: "space_1",
-            runnerProfileId: "cloudflare-default",
+            runnerProfileId: "opentofu-default",
             source: {
               kind: "git",
               url: "https://github.com/example/app.git",
@@ -1011,7 +1011,7 @@ test("legacy apply without stateScope keeps using the R2_ARTIFACTS state path", 
             },
           },
           runnerProfile: {
-            id: "cloudflare-default",
+            id: "opentofu-default",
             stateBackend: { kind: "operator-managed", ref: stateBackendRef },
           },
           planArtifact: {
