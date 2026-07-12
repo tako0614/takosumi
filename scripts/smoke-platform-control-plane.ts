@@ -2996,6 +2996,7 @@ async function assertReleaseActivation(
   },
 ): Promise<ReleaseActivationVerificationResult> {
   const deadline = Date.now() + options.deployTimeoutSeconds * 1000;
+  let lastObservedStatus: ReleaseActivationStatus | undefined;
   while (Date.now() <= deadline) {
     const response = await requestJson<{
       readonly events?: readonly ActivityEventRecord[];
@@ -3004,13 +3005,34 @@ async function assertReleaseActivation(
       token: options.accountSessionToken,
       path: `${API_PREFIX}/workspaces/${encodeURIComponent(input.spaceId)}/activity?limit=50`,
     });
-    const event = (response.events ?? []).find((candidate) =>
+    const events = (response.events ?? []).filter((candidate) =>
       isReleaseActivationEvent(candidate, input),
     );
-    if (event) {
-      return releaseActivationVerificationResult(options, input, event);
+    for (const event of events) {
+      lastObservedStatus = releaseActivationStatusFromAction(event.action);
+      if (
+        options.requireReleaseActivation === "any" ||
+        lastObservedStatus === options.requireReleaseActivation
+      ) {
+        return releaseActivationVerificationResult(options, input, event);
+      }
+    }
+    const terminalMismatch = events.find(
+      (event) => releaseActivationStatusFromAction(event.action) !== "pending",
+    );
+    if (terminalMismatch) {
+      return releaseActivationVerificationResult(
+        options,
+        input,
+        terminalMismatch,
+      );
     }
     await sleep(options.pollIntervalMs);
+  }
+  if (lastObservedStatus) {
+    throw new Error(
+      `release activation for apply run ${input.applyRunId} remained ${lastObservedStatus}; expected ${options.requireReleaseActivation}`,
+    );
   }
   throw new Error(
     `apply run ${input.applyRunId} did not emit release_activation Activity for deployment ${input.deploymentId}`,
