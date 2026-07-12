@@ -479,7 +479,7 @@ export async function resolveSourceCommit(
     return source.ref.toLowerCase();
   }
   const result = await runCommand(
-    ["git", "ls-remote", "--", source.url, source.ref],
+    ["git", "ls-remote", "--", source.url, source.ref, `${source.ref}^{}`],
     { cwd: RUN_ROOT, context: git.context },
   );
   if (result.exitCode !== 0) {
