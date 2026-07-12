@@ -3824,7 +3824,7 @@ function defaultSmokeVars(input: {
   if (input.providerless) {
     return {
       name: input.appName,
-      base_url: `https://example.invalid/${input.appName}`,
+      base_url: `https://${input.appName}.example.invalid`,
     };
   }
   if (input.variableStyle === "legacy_cloudflare_worker_sample") {
@@ -4889,7 +4889,7 @@ async function runSelfTest(): Promise<void> {
     defaultProviderlessOptions.vars.name !==
       "takosumi-keyless-default-selftest" ||
     defaultProviderlessOptions.vars.base_url !==
-      "https://example.invalid/takosumi-keyless-default-selftest"
+      "https://takosumi-keyless-default-selftest.example.invalid"
   ) {
     throw new Error("providerless self-test did not default keyless vars");
   }
