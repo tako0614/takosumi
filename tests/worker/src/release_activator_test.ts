@@ -207,6 +207,32 @@ test("runner release activator runs opaque post-apply commands", async () => {
   });
 });
 
+test("runner release activator records pre-destroy phase truthfully", async () => {
+  const activator = createRunnerReleaseActivator({
+    release: async (job) => ({
+      status: "succeeded",
+      runId: job.runId,
+      commandCount: job.commands.length,
+    }),
+  });
+
+  const result = await activator!.activate(
+    fakeActivationInput([
+      {
+        id: "empty-storage",
+        phase: "pre_destroy",
+        command: ["bun", "scripts/cleanup.ts"],
+      },
+    ]),
+  );
+
+  expect(result).toMatchObject({
+    status: "succeeded",
+    kind: "takosumi.release-commands@v1",
+    message: "ran 1 pre-destroy release command(s)",
+  });
+});
+
 test("webhook release activator leaves runner commands pending without posting", async () => {
   let called = false;
   const activator = createWebhookReleaseActivator({
