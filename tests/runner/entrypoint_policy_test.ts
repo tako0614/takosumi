@@ -19,13 +19,13 @@ const REQUEST = {
 };
 
 const DEFAULT_STYLE_CLOUDFLARE_PROFILE = {
-  id: "cloudflare-default",
+  id: "opentofu-default",
   allowedProviders: ["cloudflare/cloudflare"],
   requireCredentialRefs: true,
   credentialRefs: [
     {
       provider: "cloudflare/cloudflare",
-      ref: "secret://takosumi/cloudflare-default",
+      ref: "secret://takosumi/opentofu-default",
       required: true,
     },
   ],
@@ -70,7 +70,7 @@ test("pre-init policy admits credential-free utility providers without utility s
         credentialRefs: [
           {
             provider: "registry.opentofu.org/cloudflare/cloudflare",
-            ref: "secret://takosumi/cloudflare-default",
+            ref: "secret://takosumi/opentofu-default",
             required: true,
           },
         ],
@@ -122,7 +122,7 @@ test("pre-init policy accepts declared-env provider credentials under real env n
         },
       },
       {
-        id: "generic-opentofu-provider",
+        id: "opentofu-default",
         allowedProviders: [provider],
         requireCredentialRefs: true,
         credentialRefs: [
@@ -176,7 +176,7 @@ test("pre-init policy ignores runner-reserved declared-env names", () => {
         },
       },
       {
-        id: "generic-opentofu-provider",
+        id: "opentofu-default",
         allowedProviders: [provider],
         requireCredentialRefs: true,
         credentialRefs: [

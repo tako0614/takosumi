@@ -164,7 +164,7 @@ CAPSULE_REQUEST=$(cat <<EOF
   "environment": "preview",
   "sourceId": "$SOURCE_ID",
   "installConfigId": "$INSTALL_CONFIG_ID",
-  "runnerId": "generic-opentofu-provider",
+  "runnerId": "opentofu-default",
   "vars": {
     "base_domain": "$APP_NAME.takosumi.test",
     "display_name": "CLI smoke"

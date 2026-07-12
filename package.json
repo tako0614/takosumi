@@ -16,7 +16,7 @@
     "mobile-kit"
   ],
   "scripts": {
-    "check": "bun run provider:assets && bun run test:provider && bun run check:test-source-boundary && tsc --noEmit && bun run check:dashboard && bun run test:dashboard-new-flow && bun run check:worker-types && bun run check:cloudflare-worker-build",
+    "check": "bun run credential-recipes:assets && bun run provider:assets && bun run test:provider && bun run check:test-source-boundary && tsc --noEmit && bun run check:dashboard && bun run test:dashboard-new-flow && bun run check:worker-types && bun run check:cloudflare-worker-build",
     "check:test-source-boundary": "bun scripts/check-test-source-boundary.ts",
     "check:dashboard": "(cd dashboard && bunx tsc --noEmit --pretty false -p tsconfig.json && bun run build) && bash scripts/build-app-docs.sh",
     "check:worker-types": "tsc --noEmit -p tsconfig.worker.json",
@@ -30,6 +30,8 @@
     "test:provider": "cd provider && go test ./...",
     "test:scripts": "bun test ./tests/scripts",
     "provider:assets": "bun scripts/build-provider-assets.mjs",
+    "credential-recipes:assets": "bun scripts/build-credential-recipe-assets.ts",
+    "credential-recipes:check": "bun scripts/build-credential-recipe-assets.ts --check",
     "operator:release-activator": "bun scripts/operator-release-activator.ts",
     "opentofu:output-snapshot-proof": "bun tests/proofs/opentofu-output-snapshot.ts",
     "opentofu:live-local-proof": "bun tests/proofs/live-opentofu-plan-apply.ts",

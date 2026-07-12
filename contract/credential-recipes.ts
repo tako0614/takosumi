@@ -48,3 +48,17 @@ export interface CredentialRecipe {
   readonly declaredEnv?: boolean;
   readonly authModes: Readonly<Record<string, CredentialRecipeAuthMode>>;
 }
+
+export interface CredentialRecipeResponse {
+  readonly recipe: CredentialRecipe;
+}
+
+export interface ListCredentialRecipesResponse {
+  readonly recipes: readonly CredentialRecipe[];
+}
+import { INTERNAL_V1_PREFIX } from "./api-surface.ts";
+
+export const CREDENTIAL_RECIPES_PATH =
+  `${INTERNAL_V1_PREFIX}/credential-recipes` as const;
+export const CREDENTIAL_RECIPE_PATH = (id: string): string =>
+  `${CREDENTIAL_RECIPES_PATH}/${encodeURIComponent(id)}`;

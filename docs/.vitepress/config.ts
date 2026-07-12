@@ -41,6 +41,7 @@ const jaSidebar: DefaultTheme.SidebarMulti = {
         { text: "CLI", link: "/reference/cli" },
         { text: "App Handoff", link: "/reference/app-handoff" },
         { text: "Docs contract", link: "/reference/docs-contract" },
+        { text: "用語集", link: "/reference/glossary" },
       ],
     },
     {
@@ -83,6 +84,7 @@ const enSidebar: DefaultTheme.SidebarMulti = {
         { text: "CLI", link: "/en/reference/cli" },
         { text: "App Handoff", link: "/en/reference/app-handoff" },
         { text: "Docs contract", link: "/en/reference/docs-contract" },
+        { text: "Glossary", link: "/en/reference/glossary" },
       ],
     },
   ],

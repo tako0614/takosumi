@@ -16,15 +16,15 @@ export const USE_CASES: readonly UseCase[] = [
   },
   {
     name: "Takos Office",
-    desc: "docs / slide / sheet",
-    note: "1 つの worker に統合された office suite",
+    desc: "文書・スライド・表計算",
+    note: "3 つのツールを 1 つのアプリにまとめたオフィススイート",
     href: "https://github.com/tako0614/takos-apps/tree/main/takos-office",
     cta: "リポジトリを見る",
   },
   {
     name: "takos-computer",
     desc: "AI サンドボックス環境",
-    note: "コンテナ化されたエージェント実行基盤",
+    note: "エージェントをコンテナで動かす実行環境",
     href: "https://github.com/tako0614/takos-apps/tree/main/takos-computer",
     cta: "リポジトリを見る",
   },

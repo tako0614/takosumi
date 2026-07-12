@@ -330,7 +330,7 @@ test("model e2e: create Installation with runnerId and outputAllowlist stores a 
         environment: "production",
         sourceId,
         installConfigId,
-        runnerId: "generic-opentofu-provider",
+        runnerId: "opentofu-default",
         outputAllowlist: {
           app_deployment: {
             from: "app_deployment",
@@ -354,7 +354,7 @@ test("model e2e: create Installation with runnerId and outputAllowlist stores a 
   );
   expect(config.spaceId).toBe(spaceId);
   expect(config.internal).toEqual({ reason: "per_install_overrides" });
-  expect(config.runnerId).toBe("generic-opentofu-provider");
+  expect(config.runnerId).toBe("opentofu-default");
   expect(config.variableMapping).toEqual({});
   expect(config.outputAllowlist).toEqual({
     app_deployment: { from: "app_deployment", type: "json", required: true },

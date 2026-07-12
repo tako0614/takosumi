@@ -180,13 +180,102 @@ export function commandFailurePayload(
     readonly stderr: string;
   },
   context?: CommandContext,
+  phase?: "init" | "plan" | "apply",
 ): JsonRecord {
+  const stderr = redactRunnerOutput(
+    result.stderr,
+    context?.redactionValues,
+  );
+  const stdout = redactRunnerOutput(
+    result.stdout,
+    context?.redactionValues,
+  );
+  const errorCode = classifyOpenTofuFailure(
+    [stderr, stdout].filter(Boolean).join("\n"),
+    phase,
+  );
   return {
     runId,
     action,
     status: "failed",
     exitCode: result.exitCode,
-    stdout: redactRunnerOutput(result.stdout, context?.redactionValues),
-    stderr: redactRunnerOutput(result.stderr, context?.redactionValues),
+    stdout,
+    stderr,
+    ...(errorCode ? { errorCode } : {}),
   };
+}
+
+export type OpenTofuFailureCode =
+  | "provider_source_invalid"
+  | "provider_package_unavailable"
+  | "provider_platform_binary_unavailable"
+  | "provider_protocol_mismatch"
+  | "provider_policy_denied"
+  | "runner_capability_missing"
+  | "provider_checksum_mismatch"
+  | "opentofu_init_failed";
+
+export function classifyOpenTofuFailure(
+  text: string,
+  phase?: "init" | "plan" | "apply" | "runtime",
+): OpenTofuFailureCode | undefined {
+  const normalized = text.toLowerCase();
+  if (
+    normalized.includes("is denied before opentofu init") ||
+    normalized.includes("is not allowed before opentofu init") ||
+    normalized.includes("provider is denied by policy")
+  ) {
+    return "provider_policy_denied";
+  }
+  if (
+    normalized.includes("invalid provider source") ||
+    normalized.includes("invalid provider address") ||
+    normalized.includes("invalid provider registry host") ||
+    normalized.includes("must have three slash-separated segments")
+  ) {
+    return "provider_source_invalid";
+  }
+  if (
+    normalized.includes("does not have a package available for your current platform") ||
+    normalized.includes("incompatible provider version") ||
+    normalized.includes("no available releases match the given constraints for this platform")
+  ) {
+    return "provider_platform_binary_unavailable";
+  }
+  if (
+    normalized.includes("incompatible api version with plugin") ||
+    normalized.includes("unrecognized remote plugin message") ||
+    normalized.includes("failed to instantiate provider") ||
+    normalized.includes("incompatible provider api")
+  ) {
+    return "provider_protocol_mismatch";
+  }
+  if (
+    normalized.includes("doesn't match the checksums") ||
+    normalized.includes("does not match the checksum") ||
+    normalized.includes("checksum list has no sha-256 hash") ||
+    normalized.includes("failed to verify provider package")
+  ) {
+    return "provider_checksum_mismatch";
+  }
+  if (
+    normalized.includes("failed to query available provider packages") ||
+    normalized.includes("could not retrieve the list of available versions") ||
+    (normalized.includes("provider registry") &&
+      normalized.includes("does not have a provider named")) ||
+    normalized.includes("provider package is not available")
+  ) {
+    return "provider_package_unavailable";
+  }
+  if (
+    normalized.includes("does not allow local source paths") ||
+    normalized.includes("runner capability") ||
+    normalized.includes("no runner is configured") ||
+    normalized.includes("runner profile") &&
+      normalized.includes("requires") &&
+      normalized.includes("capability")
+  ) {
+    return "runner_capability_missing";
+  }
+  return phase === "init" ? "opentofu_init_failed" : undefined;
 }

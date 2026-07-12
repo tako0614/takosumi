@@ -9,8 +9,8 @@ interface Stat {
 
 // Honest, verifiable facts only — no invented numbers (same rule as pricing.ts).
 const STATS: readonly Stat[] = [
-  { num: "¥0", label: "セルフホスト", note: "ソフトは無料。基盤費だけ" },
-  { num: "AGPL", label: "ライセンス", note: "全部公開・フォーク自由" },
+  { num: "¥0", label: "セルフホスト", note: "ソフトは無料。かかるのはインフラ費用だけ" },
+  { num: "AGPL", label: "ライセンス", note: "すべて公開・フォーク自由" },
   {
     num: "1",
     label: "箇所に集約",

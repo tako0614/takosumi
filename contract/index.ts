@@ -78,6 +78,7 @@ export {
   isReservedProviderEnvName,
 } from "./provider-env-rules.ts";
 export * from "./credential-recipes.ts";
+export * from "./credential-recipes.generated.ts";
 export * from "./dependencies.ts";
 export type {
   TakosumiApiErrorCode,
@@ -97,7 +98,6 @@ export type { StateVersion } from "./state-versions.ts";
 export * from "./backups.ts";
 export * from "./billing.ts";
 export * from "./security.ts";
-export * from "./providers.ts";
 // `RunStatus` from ./runs.ts is exported selectively: the internal `/v1`
 // compatibility seam owns a separate status union for its private execution
 // records. The public Run status union is reachable via the

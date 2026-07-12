@@ -19,23 +19,23 @@ import type {
 } from "./internal-deploy-control-api.ts";
 
 const runnerProfile = {
-  id: "cloudflare-default",
+  id: "opentofu-default",
   name: "Cloudflare default",
   substrate: "cloudflare-containers",
   tofuVersion: "1.10.0",
   stateBackend: {
     kind: "operator-managed",
-    ref: "state://takosumi/cloudflare-default",
+    ref: "state://takosumi/opentofu-default",
     lock: {
       kind: "operator",
-      ref: "lock://takosumi/cloudflare-default",
+      ref: "lock://takosumi/opentofu-default",
     },
   },
   allowedProviders: ["registry.opentofu.org/cloudflare/cloudflare"],
   credentialRefs: [
     {
       provider: "registry.opentofu.org/cloudflare/cloudflare",
-      ref: "secret://takosumi/cloudflare-default",
+      ref: "secret://takosumi/opentofu-default",
       required: true,
     },
   ],
@@ -233,8 +233,8 @@ const applyRun = {
   stateBackend: runnerProfile.stateBackend,
   stateLock: {
     status: "recorded",
-    backendRef: "state://takosumi/cloudflare-default",
-    lockRef: "lock://takosumi/cloudflare-default",
+    backendRef: "state://takosumi/opentofu-default",
+    lockRef: "lock://takosumi/opentofu-default",
     acquiredAt: 1716000000003,
     releasedAt: 1716000000005,
   },

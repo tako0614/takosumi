@@ -217,7 +217,7 @@ test("a create plan with NO installationId is covered by the plan:{planRunId} le
     source: { kind: "git", url: SOURCE.url, ref: SOURCE.ref },
     sourceDigest: "sha256:src",
     operation: "create",
-    runnerProfileId: "cloudflare-default",
+    runnerProfileId: "opentofu-default",
     variablesDigest: "sha256:vars",
     requiredProviders: [],
     status: "succeeded",

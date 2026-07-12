@@ -337,8 +337,8 @@ function isPublicManagedProviderConnection(connection: Connection): boolean {
     connection.scope === "operator" &&
     connection.spaceId === undefined &&
     connection.scopeHints?.managedProvider === true &&
-    typeof connection.scopeHints.providerBaseUrl === "string" &&
-    connection.scopeHints.providerBaseUrl.trim().length > 0
+    typeof connection.scopeHints.providerConfig?.base_url === "string" &&
+    connection.scopeHints.providerConfig.base_url.trim().length > 0
   );
 }
 

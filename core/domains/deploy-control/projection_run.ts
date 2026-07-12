@@ -341,7 +341,8 @@ function errorCodeFromPlan(planRun: PlanRun): string {
   const message = planRun.diagnostics?.find(
     (d) => d.severity === "error",
   )?.message;
-  return message ? compactErrorCode(message) : "plan_failed";
+  if (message) return compactErrorCode(message);
+  return planRun.policy.status === "blocked" ? "policy_denied" : "plan_failed";
 }
 
 function errorCodeFromApply(applyRun: ApplyRun): string {
@@ -371,6 +372,10 @@ export function compactErrorCode(message: string): string {
   if (isCredentialServiceUnavailableErrorMessage(message)) {
     return "credential_service_unavailable";
   }
+  const providerRuntimeCode = message.match(
+    /\b(provider_source_invalid|provider_package_unavailable|provider_platform_binary_unavailable|provider_protocol_mismatch|provider_policy_denied|runner_capability_missing|provider_checksum_mismatch|opentofu_init_failed):/,
+  );
+  if (providerRuntimeCode) return providerRuntimeCode[1]!;
   const match = message.match(/^([a-z][a-z0-9_]{2,63}):/);
   return match ? match[1] : "run_failed";
 }

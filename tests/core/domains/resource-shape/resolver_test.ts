@@ -209,14 +209,27 @@ test("a target whose implementation lacks a requested interface is excluded", ()
   expect(out.selectedTarget).toBe("cf-containers");
 });
 
-test("no eligible target returns a no_eligible_target error", () => {
+test("a policy-eligible target without the required implementation returns capability_missing", () => {
   const outcome = resolve(
     input({
       targetPool: targetPool([{ name: "aws-main", type: "aws", priority: 9 }]),
     }),
   );
   expect(outcome.ok).toBe(false);
-  if (!outcome.ok) expect(outcome.error.code).toBe("no_eligible_target");
+  if (!outcome.ok) expect(outcome.error.code).toBe("capability_missing");
+});
+
+test("a policy that excludes every target returns policy_denied", () => {
+  const outcome = resolve(
+    input({
+      targetPool: targetPool([
+        { name: "k8s-main", type: "kubernetes", priority: 9 },
+      ]),
+      spacePolicy: spacePolicy({ deniedTargets: ["kubernetes"] }),
+    }),
+  );
+  expect(outcome.ok).toBe(false);
+  if (!outcome.ok) expect(outcome.error.code).toBe("policy_denied");
 });
 
 test("resolve uses admin-declared implementation capabilities from TargetPool", () => {

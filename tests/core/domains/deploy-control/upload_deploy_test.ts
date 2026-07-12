@@ -408,13 +408,13 @@ test("deployUpload plans an artifact snapshot for an existing legacy Capsule", a
 
 test("deployUpload preflights explicit generic runner uploads before dispatch", async () => {
   const genericProfile: RunnerProfile = {
-    id: "generic-opentofu-provider",
+    id: "opentofu-default",
     name: "Generic OpenTofu provider",
     substrate: "cloudflare-containers",
     allowedProviders: ["*"],
     stateBackend: { kind: "operator-managed", ref: "r2://state" },
     networkPolicy: { mode: "operator-managed" },
-    labels: { "takosumi.com/provider-surface": "generic" },
+    labels: { "takosumi.com/opentofu-runner": "true" },
     createdAt: 1,
   };
   const { store, runner, sources, installations, controller } = await setup({
@@ -600,7 +600,7 @@ test("deployUpload queues providerless upload Capsules without Provider Connecti
   ]);
   expect(runner.planJobs).toHaveLength(0);
   expect(planRun?.requiredProviders).toEqual([]);
-  expect(planRun?.runnerProfileId).toBe("cloudflare-default");
+  expect(planRun?.runnerProfileId).toBe("opentofu-default");
   const installation = await store.getInstallation(result.installation.id);
   expect(installation?.compatibilityReportId).toBeUndefined();
   expect(planRun?.compatibilityReportId).toBeUndefined();
@@ -610,7 +610,7 @@ test("deployUpload can use an enabled generic profile for providerless upload Ca
   const enqueued: Parameters<EnqueueRun>[0][] = [];
   const genericProfile = createDefaultRunnerProfiles()
     .map((profile) =>
-      profile.id === "generic-opentofu-provider"
+      profile.id === "opentofu-default"
         ? {
             ...profile,
             labels: {
@@ -620,14 +620,14 @@ test("deployUpload can use an enabled generic profile for providerless upload Ca
           }
         : profile,
     )
-    .find((profile) => profile.id === "generic-opentofu-provider");
+    .find((profile) => profile.id === "opentofu-default");
   if (!genericProfile) throw new Error("generic profile fixture missing");
   const { store, runner, sources, installations, controller } = await setup({
     enqueueRun: async (dispatch) => {
       enqueued.push(dispatch);
     },
     runnerProfiles: [genericProfile],
-    defaultRunnerProfileId: "generic-opentofu-provider",
+    defaultRunnerProfileId: "opentofu-default",
     planResult: {
       requiredProviders: [],
       providerInstallation: [],
@@ -676,7 +676,7 @@ test("deployUpload can use an enabled generic profile for providerless upload Ca
   ]);
   expect(runner.planJobs).toHaveLength(0);
   expect(planRun?.requiredProviders).toEqual([]);
-  expect(planRun?.runnerProfileId).toBe("generic-opentofu-provider");
+  expect(planRun?.runnerProfileId).toBe("opentofu-default");
   const installation = await store.getInstallation(result.installation.id);
   expect(installation?.compatibilityReportId).toBeUndefined();
   expect(planRun?.compatibilityReportId).toBeUndefined();

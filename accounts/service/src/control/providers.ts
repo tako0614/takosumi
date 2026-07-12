@@ -1,7 +1,6 @@
 /**
- * Session-authed provider catalog (`/api/v1/providers`) and ProviderConnection
- * listing (`/api/v1/provider-connections`) control routes. Extracted from
- * `control-routes.ts` (P3 god-file split).
+ * Session-authed Credential Recipe discovery (`/api/v1/credential-recipes`)
+ * and ProviderConnection listing (`/api/v1/provider-connections`).
  */
 import type {
   ApplyExpectedGuard,
@@ -44,7 +43,7 @@ import type {
   CreateSourceCompatibilityCheckRequest,
   PublicCapsuleCompatibilityReportResponse,
 } from "takosumi-contract/capsules";
-import type { ListProvidersResponse } from "takosumi-contract/providers";
+import type { ListCredentialRecipesResponse } from "takosumi-contract/credential-recipes";
 import type { Workspace, WorkspaceType } from "takosumi-contract/workspaces";
 import type {
   CapsuleProviderEnvBindingSet,
@@ -175,16 +174,15 @@ import { appendLedgerEvent } from "../installation-ledger-events.ts";
 import { base64UrlEncodeBytes } from "../encoding.ts";
 import { canTransitionAppCapsuleStatus } from "../ledger.ts";
 
-export async function handleProviders(
+export async function handleCredentialRecipes(
   ctx: ControlDispatchContext,
   segments: readonly string[],
   method: string,
 ): Promise<Response | undefined> {
   const { request, url, operations, store } = ctx;
-  // /api/v1/providers
-  if (segments.length === 1 && segments[0] === "providers") {
+  if (segments.length === 1 && segments[0] === "credential-recipes") {
     if (method !== "GET") return methodNotAllowed("GET");
-    return json(await operations.listProviderCatalogEntries());
+    return json(await operations.listCredentialRecipes());
   }
   return undefined;
 }
@@ -256,7 +254,7 @@ function providerConnectionVisibleToWorkspace(
     connection.workspaceId === undefined &&
     connection.spaceId === undefined &&
     connection.scopeHints?.managedProvider === true &&
-    typeof connection.scopeHints.providerBaseUrl === "string" &&
-    connection.scopeHints.providerBaseUrl.trim().length > 0
+    typeof connection.scopeHints.providerConfig?.base_url === "string" &&
+    connection.scopeHints.providerConfig.base_url.trim().length > 0
   );
 }

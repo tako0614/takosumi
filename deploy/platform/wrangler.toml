@@ -162,7 +162,7 @@ TAKOSUMI_ACCOUNTS_EXPORT_DOWNLOAD_TTL_MS = "86400000"
 # Operator-curated provider surface. Cloudflare is the guided GA recipe; the
 # generic profile lets other OpenTofu providers run through explicit env/file
 # Provider Connections instead of adding provider-compatible Gateway APIs.
-TAKOSUMI_ENABLED_RUNNER_PROFILES = "cloudflare-default,generic-opentofu-provider"
+TAKOSUMI_ENABLED_RUNNER_PROFILES = "opentofu-default"
 # Optional post-apply release activation bridge. This generic webhook hands
 # already-filtered, non-sensitive apply evidence to an operator/Cloud
 # materializer that owns app publication (for example Worker/assets/container
@@ -200,7 +200,7 @@ TAKOSUMI_SCHEDULED_SOURCE_POLL_BATCH = "5"
 #   TAKOSUMI_PLATFORM_CONTROL_PLANE_SMOKE_EVIDENCE_REF / _DIGEST
 #   TAKOSUMI_EGRESS_ENFORCEMENT_EVIDENCE_REF / _DIGEST
 #   TAKOSUMI_RESTORE_REHEARSAL_EVIDENCE_REF / _DIGEST
-#   TAKOSUMI_PROVIDER_REGISTRY_EVIDENCE_REF / _DIGEST
+#   TAKOSUMI_CREDENTIAL_RECIPE_EVIDENCE_REF / _DIGEST
 #   TAKOSUMI_COST_ATTRIBUTION_EVIDENCE_REF / _DIGEST
 #   TAKOSUMI_SECRET_BOUNDARY_EVIDENCE_REF / _DIGEST
 # The internal `/internal/platform/hardening-gates` route is operator-bearer

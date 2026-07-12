@@ -26,7 +26,7 @@ Takosumi may process:
 - account identity and session metadata;
 - Workspace, Project, Capsule, Source, ProviderConnection, ProviderBinding,
   Run, StateVersion, Output, Runner, and AuditEvent records;
-- Git URLs, refs, commits, module paths, provider catalog decisions, plan/apply
+- Git URLs, refs, commits, module paths, Credential Recipe and Provider Connection decisions, plan/apply
   evidence, usage records, and dashboard events;
 - encrypted secrets and credential references needed to materialize temporary
   run-time env/file material;

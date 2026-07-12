@@ -24,12 +24,12 @@ plane, account plane, dashboard, CLI, runner env, and HTTP routes.
 - HTTP routes move `/spaces` → `/workspaces` and `/installations` →
   `/capsules`; runner env injects `TAKOSUMI_CAPSULE_ID` and
   `TAKOSUMI_STATE_VERSION_ID`. Production-hardening evidence env is
-  `TAKOSUMI_PROVIDER_REGISTRY_EVIDENCE_REF` / `_DIGEST`.
+  `TAKOSUMI_CREDENTIAL_RECIPE_EVIDENCE_REF` / `_DIGEST`.
 - The provider-credential cluster collapses to three concepts —
   `ProviderConnection`, `CredentialRecipe`, `ProviderBinding`. The Provider
   Catalog ownership axis and the `own_key` / `takos_provided` sentinels are
-  removed; a provider binds to an explicit ProviderConnection id, or is omitted
-  to fall through to the operator default connection.
+  removed; a provider binds to an explicit ProviderConnection id when it needs
+  injected credentials. Omission does not select an operator connection.
 - The Runtime Projection (ServiceExport / ServiceBinding / ServiceGrant) is removed
   from OSS; runtime service surfaces are projected from a Capsule's
   `tofu output -json` by the consuming product profile.

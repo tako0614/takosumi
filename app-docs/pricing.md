@@ -34,14 +34,14 @@ subscription:
 ```
 
 有料の作成・deploy・runtime・data-plane write/query/message/instance operation は
-実行前に spend guard を通ります。支払い設定、上限、内部 allowance、または利用可能な
-利用可能な枠が足りない場合、下流の Cloud endpoint / AI upstream / runtime dispatch /
-provider-compatible write へ進む前に fail closed します。
+実行前に spend guard を通ります。支払い設定、上限、内部 allowance のいずれかで
+利用できる枠が足りない場合、下流の Cloud endpoint / AI upstream / runtime dispatch /
+provider 互換 write へ進む前に安全側に停止します (fail closed)。
 
 ## Usage Prices
 
-Usage は内部的に `usdMicros` を正本として記録します。下の単価は従量課金の
-customer-facing rate です。
+使用量は内部的に `usdMicros` 単位で記録され、これが計算の基準になります。下の単価は
+従量課金でユーザーに適用される価格です。
 
 | Family               | Unit        | Customer price            |
 | -------------------- | ----------- | ------------------------- |
@@ -64,8 +64,8 @@ Dashboard の endpoint status で確認してください。
 
 ## Spend Guard
 
-Takosumi Cloud は billable write / deploy / runtime dispatch / data-plane operation
-を実行前に precharge / authorization します。
+Takosumi Cloud は、課金対象の write / deploy / runtime dispatch / data-plane operation
+を実行する前に、事前承認 (precharge) を行います。
 
 ```text
 allowed by plan / spending limit:
@@ -77,9 +77,9 @@ not allowed:
 ```
 
 支払い設定や上限の都合で利用できない場合は、Cloud endpoint、AI upstream、
-runtime dispatch、provider-compatible write へ進みません。成功した billable
-operation は owner account usage ledger に usage event として記録され、発生元 Workspace を attribution として残し、billing
-projection に反映されます。
+runtime dispatch、provider 互換 write へ進みません。成功した課金対象 operation は
+所有アカウントの使用履歴に usage event として記録され、発生元の Workspace も
+記録に残り、請求の集計に反映されます。
 
 Destroy / DELETE cleanup は例外です。上限到達で作成済み resource を消せなくなる
 状態を避けるため、cleanup は原則として追加 precharge なしで実行できるようにします。
@@ -106,4 +106,4 @@ Usage event、billing projection、catalog、status、model metadata に secret 
 - payment provider secret
 
 Cloud endpoint が usage を記録できない、価格が見つからない、Workspace context が
-不正、scope が不足、または支払い状態 / 上限が不足している場合は fail closed します。
+不正、scope が不足、または支払い状態 / 上限が足りない場合は、安全側に停止します。
