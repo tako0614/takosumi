@@ -1223,6 +1223,7 @@ export async function runPlatformControlPlaneSmoke(
       installationId,
       reason: "Layer-2 platform-control-plane smoke cleanup",
       verifyCloudflareWorkerGone: shouldVerifyCloudflareDeployment(options),
+      outputsPublic: deploymentLedger.outputsPublic,
     });
     destroyPlanRunId = destroyResult.destroyPlanRun.id;
     destroyApplyRunId = destroyResult.destroyApplyRun.id;
@@ -1289,7 +1290,7 @@ export async function runPlatformControlPlaneSmoke(
       capsuleGateStatus: "passed",
       policyStatus: policyStatus === "denied" ? failPolicy() : "passed",
       workerUrl: shouldVerifyCloudflareDeployment(options)
-        ? publicWorkerUrl(options)
+        ? publicDeploymentUrl(options, deploymentLedger.outputsPublic)
         : "",
       opentofuApplyVerified: options.verificationMode === "opentofu",
       deploymentVerified: shouldVerifyCloudflareDeployment(options),
@@ -1326,6 +1327,7 @@ export async function runPlatformControlPlaneSmoke(
           reason:
             "Layer-2 platform-control-plane smoke cleanup after verification failure",
           verifyCloudflareWorkerGone,
+          outputsPublic: deploymentLedger?.outputsPublic,
         });
         destroyPlanRunId = destroyResult.destroyPlanRun.id;
         destroyApplyRunId = destroyResult.destroyApplyRun.id;
@@ -1339,7 +1341,10 @@ export async function runPlatformControlPlaneSmoke(
         failureCleanup = {
           attempted: true,
           cloudflareWorkerGone: verifyCloudflareWorkerGone
-            ? await assertCloudflareWorkerGoneForCleanup(options)
+            ? await assertCloudflareWorkerGoneForCleanup(
+                options,
+                deploymentLedger?.outputsPublic,
+              )
             : false,
           installationMarkedError: false,
           destroyAttempted: true,
@@ -1352,6 +1357,7 @@ export async function runPlatformControlPlaneSmoke(
           "post-apply cleanup destroy failed; keeping ProviderConnection so the Capsule can be destroyed after the blocker is fixed";
         const fallbackCleanup = await cleanupAppliedSmokeFailure(options, {
           installationId,
+          outputsPublic: deploymentLedger?.outputsPublic,
         });
         failureCleanup = {
           ...fallbackCleanup,
@@ -1499,7 +1505,7 @@ function failedResult(
     policyStatus: input.policyStatus,
     workerUrl:
       options.verificationMode === "cloudflare-worker"
-        ? publicWorkerUrl(options)
+        ? publicDeploymentUrl(options, input.deploymentLedger?.outputsPublic)
         : "",
     opentofuApplyVerified: input.completedSteps.includes(
       "opentofuApplyVerified",
@@ -2181,6 +2187,7 @@ async function destroySmokeInstallation(
     readonly installationId: string;
     readonly reason: string;
     readonly verifyCloudflareWorkerGone: boolean;
+    readonly outputsPublic?: Readonly<Record<string, unknown>>;
   },
 ): Promise<{
   readonly destroyPlanRun: RunRecord;
@@ -2222,8 +2229,8 @@ async function destroySmokeInstallation(
   const completedDestroy = await pollRun(options, destroyApply.run.id);
   assertRunSucceeded(completedDestroy, "destroy apply");
   if (input.verifyCloudflareWorkerGone) {
-    await assertCloudflareWorkerGone(options);
-    await assertPublicWorkerUrlGone(options);
+    await assertCloudflareWorkerGone(options, input.outputsPublic);
+    await assertPublicWorkerUrlGone(options, input.outputsPublic);
   }
   return {
     destroyPlanRun: reviewedDestroyPlan,
@@ -2292,16 +2299,22 @@ async function cleanupAppliedSmokeFailure(
   options: PlatformControlPlaneSmokeOptions,
   input: {
     readonly installationId: string;
+    readonly outputsPublic?: Readonly<Record<string, unknown>>;
   },
 ): Promise<FailureCleanupResult> {
   let cloudflareWorkerGone = false;
   let installationMarkedError = false;
   let cleanupError: string | undefined;
   try {
-    const deleted = await cloudflareScriptRequest(options, "DELETE");
+    const workerName = cloudflareWorkerName(options, input.outputsPublic);
+    const deleted = await cloudflareScriptRequest(
+      options,
+      "DELETE",
+      workerName,
+    );
     cloudflareWorkerGone = deleted.status === 404 || deleted.ok;
     if (!cloudflareWorkerGone) {
-      await assertCloudflareWorkerGone(options);
+      await assertCloudflareWorkerGone(options, input.outputsPublic);
       cloudflareWorkerGone = true;
     }
   } catch (error) {
@@ -2333,11 +2346,17 @@ async function cleanupAppliedSmokeFailure(
 
 async function assertCloudflareWorkerGoneForCleanup(
   options: PlatformControlPlaneSmokeOptions,
+  outputsPublic?: Readonly<Record<string, unknown>>,
 ): Promise<boolean> {
   try {
-    const deleted = await cloudflareScriptRequest(options, "DELETE");
+    const workerName = cloudflareWorkerName(options, outputsPublic);
+    const deleted = await cloudflareScriptRequest(
+      options,
+      "DELETE",
+      workerName,
+    );
     if (deleted.status === 404 || deleted.ok) return true;
-    await assertCloudflareWorkerGone(options);
+    await assertCloudflareWorkerGone(options, outputsPublic);
     return true;
   } catch {
     return false;
@@ -2540,6 +2559,18 @@ function publicWorkerUrl(options: PlatformControlPlaneSmokeOptions): string {
   return publicWorkerUrlForName(options, options.appName);
 }
 
+function publicDeploymentUrl(
+  options: PlatformControlPlaneSmokeOptions,
+  outputsPublic?: Readonly<Record<string, unknown>>,
+): string {
+  const outputUrl = outputsPublic?.url;
+  if (typeof outputUrl === "string" && outputUrl.trim()) return outputUrl;
+  return publicWorkerUrlForName(
+    options,
+    cloudflareWorkerName(options, outputsPublic),
+  );
+}
+
 function publicWorkerUrlForName(
   options: PlatformControlPlaneSmokeOptions,
   workerName: string,
@@ -2551,9 +2582,18 @@ function cloudflareWorkerName(
   options: PlatformControlPlaneSmokeOptions,
   outputsPublic?: Readonly<Record<string, unknown>>,
 ): string {
-  const outputWorkerName = outputsPublic?.worker_name;
-  if (typeof outputWorkerName === "string" && outputWorkerName.trim()) {
-    return outputWorkerName;
+  for (const outputName of [
+    "cloudflare_worker_script_id",
+    "worker_name",
+    "service_runtime_resource_id",
+    "service_runtime_name",
+  ] as const) {
+    const value = outputsPublic?.[outputName];
+    if (typeof value === "string" && value.trim()) return value;
+  }
+  const configuredWorkerName = options.vars.worker_name;
+  if (typeof configuredWorkerName === "string" && configuredWorkerName.trim()) {
+    return configuredWorkerName;
   }
   return options.appName;
 }
@@ -2575,10 +2615,7 @@ async function assertPublicWorkerUrl(
   const url =
     typeof outputUrl === "string" && outputUrl.trim()
       ? outputUrl
-      : publicWorkerUrlForName(
-          options,
-          cloudflareWorkerName(options, outputsPublic),
-        );
+      : publicDeploymentUrl(options, outputsPublic);
   const deadline = Date.now() + 60_000;
   let lastStatus = 0;
   let lastBody = "";
@@ -2802,26 +2839,11 @@ async function assertDeploymentLedger(
   if (!isRecord(outputsPublic)) {
     throw new Error("state-version ledger did not expose outputsPublic");
   }
-  const workerName = outputsPublic.worker_name;
-  if (typeof workerName !== "string" || !workerName.trim()) {
-    throw new Error(
-      "deployment outputsPublic.worker_name was not a non-empty string",
-    );
-  }
-  const expectedWorkerUrl = publicWorkerUrlForName(options, workerName);
-  if (outputsPublic.url !== expectedWorkerUrl) {
-    throw new Error(
-      "deployment outputsPublic.url did not match public Worker URL",
-    );
+  const outputUrl = outputsPublic.url;
+  if (typeof outputUrl !== "string" || !outputUrl.trim()) {
+    throw new Error("deployment outputsPublic.url was not a non-empty string");
   }
   const publicOutputNames = Object.keys(outputsPublic).sort();
-  for (const required of ["url", "worker_name"]) {
-    if (!publicOutputNames.includes(required)) {
-      throw new Error(
-        `deployment outputsPublic did not include required output ${required}`,
-      );
-    }
-  }
   return {
     installationStatus: capsule.status,
     deploymentId,
@@ -3059,24 +3081,27 @@ function releaseActivationStatusFromAction(
 
 async function assertCloudflareWorkerGone(
   options: PlatformControlPlaneSmokeOptions,
+  outputsPublic?: Readonly<Record<string, unknown>>,
 ): Promise<void> {
+  const workerName = cloudflareWorkerName(options, outputsPublic);
   const deadline = Date.now() + 60_000;
   let lastStatus = 0;
   while (Date.now() <= deadline) {
-    const response = await cloudflareScriptRequest(options, "GET");
+    const response = await cloudflareScriptRequest(options, "GET", workerName);
     lastStatus = response.status;
     if (response.status === 404) return;
     await sleep(2_000);
   }
   throw new Error(
-    `Cloudflare Worker ${options.appName} still existed after destroy (last HTTP ${lastStatus})`,
+    `Cloudflare Worker ${workerName} still existed after destroy (last HTTP ${lastStatus})`,
   );
 }
 
 async function assertPublicWorkerUrlGone(
   options: PlatformControlPlaneSmokeOptions,
+  outputsPublic?: Readonly<Record<string, unknown>>,
 ): Promise<void> {
-  const url = publicWorkerUrl(options);
+  const url = publicDeploymentUrl(options, outputsPublic);
   const deadline = Date.now() + 120_000;
   let lastStatus = 0;
   let lastBody = "";
@@ -4413,6 +4438,35 @@ async function runSelfTest(): Promise<void> {
     )
   ) {
     throw new Error("self-test accepted a non-Takosumi hello page");
+  }
+  if (
+    cloudflareWorkerName(managedCompatOptions, {
+      service_runtime_name: "portable-storage-runtime",
+    }) !== "portable-storage-runtime"
+  ) {
+    throw new Error(
+      "self-test did not resolve a vendor-neutral runtime name output",
+    );
+  }
+  const configuredWorkerOptions: PlatformControlPlaneSmokeOptions = {
+    ...managedCompatOptions,
+    vars: {
+      ...managedCompatOptions.vars,
+      worker_name: "configured-worker-runtime",
+    },
+  };
+  if (
+    cloudflareWorkerName(configuredWorkerOptions) !==
+    "configured-worker-runtime"
+  ) {
+    throw new Error("self-test did not resolve configured worker_name input");
+  }
+  if (
+    publicDeploymentUrl(managedCompatOptions, {
+      url: "https://storage.example.test",
+    }) !== "https://storage.example.test"
+  ) {
+    throw new Error("self-test did not preserve a custom deployment URL");
   }
   const defaultProviderlessOptions = await resolveOptions(
     {
