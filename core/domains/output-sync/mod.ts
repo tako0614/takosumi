@@ -111,6 +111,18 @@ export class OutputSyncService {
     }
 
     if (state.outputRevision <= state.reconciledRevision) return { state };
+    const runnable = (await this.#store.listInstallations(workspaceId)).some(
+      (capsule) => capsule.status === "active" || capsule.status === "stale",
+    );
+    if (!runnable) {
+      state = await this.#casUpdate(workspaceId, (current) => ({
+        ...current,
+        reconciledRevision: current.outputRevision,
+        consecutivePasses: 0,
+        updatedAt: this.#now(),
+      }));
+      return { state };
+    }
     if (state.consecutivePasses >= MAX_CONVERGENCE_PASSES) {
       throw new OpenTofuControllerError(
         "failed_precondition",
@@ -191,11 +203,15 @@ export class OutputSyncService {
   ): Promise<WorkspaceOutputSyncState> {
     let state = await this.#state(workspaceId);
     if (!reconciliation) {
-      return await this.#casUpdate(workspaceId, (current) => ({
+      const cleared = await this.#casUpdate(workspaceId, (current) => ({
         ...current,
         activeRunGroupId: undefined,
         updatedAt: this.#now(),
       }));
+      return cleared.enabled &&
+        cleared.outputRevision > cleared.reconciledRevision
+        ? (await this.reconcile(workspaceId)).state
+        : cleared;
     }
     const status = reconciliation.runGroup.status;
     if (
