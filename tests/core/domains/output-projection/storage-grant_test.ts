@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { verifyServiceScopedCredential } from "../../../../core/shared/service_scoped_credentials.ts";
-import { projectServicesFromOutputs } from "../../../../core/domains/output-projection/service-projection.ts";
+import { projectServicesFromOutputs } from "takosumi-contract/output-projection";
 import {
   issueStorageObjectGrants,
   planStorageObjectGrants,

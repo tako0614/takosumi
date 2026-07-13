@@ -217,13 +217,26 @@ export async function handleWorkspaces(
   // /api/v1/workspaces/:workspaceId ; /api/v1/workspaces/:workspaceId/...
   if (segments[0] === "spaces" && segments.length >= 2) {
     const workspaceId = decodeURIComponent(segments[1] ?? "");
-    const auth = await requireWorkspaceAccess({
-      operations,
-      store,
-      workspaceId,
-      subject: ctx.session.subject,
-    });
-    if (!auth.ok) return auth.response;
+    const leaf = segments[2];
+    let canManageOutputSync = false;
+    if (leaf === "output-sync") {
+      const auth = await requireOutputSyncWorkspaceAccess({
+        operations,
+        store,
+        workspaceId,
+        subject: ctx.session.subject,
+      });
+      if (!auth.ok) return auth.response;
+      canManageOutputSync = auth.canManage;
+    } else {
+      const auth = await requireWorkspaceAccess({
+        operations,
+        store,
+        workspaceId,
+        subject: ctx.session.subject,
+      });
+      if (!auth.ok) return auth.response;
+    }
     if (segments.length === 2) {
       if (method === "GET")
         return json({
@@ -239,13 +252,17 @@ export async function handleWorkspaces(
         );
       return methodNotAllowed("GET, PATCH");
     }
-    const leaf = segments[2];
     if (leaf === "output-sync") {
       if (segments.length === 3) {
         if (method === "GET") {
           return json(await operations.outputSync.getStatus(workspaceId));
         }
         if (method === "PATCH") {
+          if (!canManageOutputSync) {
+            return memberForbidden(
+              "Only a Workspace owner or admin can change Output Sync settings.",
+            );
+          }
           const body = await readJsonObject(request);
           if (!body || typeof body.enabled !== "boolean") {
             return errorJson(
@@ -275,6 +292,11 @@ export async function handleWorkspaces(
       }
       if (segments.length === 4 && segments[3] === "reconcile") {
         if (method !== "POST") return methodNotAllowed("POST");
+        if (!canManageOutputSync) {
+          return memberForbidden(
+            "Only a Workspace owner or admin can reconcile Outputs.",
+          );
+        }
         const result = await operations.outputSync.reconcile(workspaceId);
         return json(
           {
@@ -703,6 +725,30 @@ const MEMBER_ROLES: readonly ControlWorkspaceRole[] = [
   "member",
   "viewer",
 ];
+
+type OutputSyncWorkspaceAccessResult =
+  | { readonly ok: true; readonly canManage: boolean }
+  | { readonly ok: false; readonly response: Response };
+
+async function requireOutputSyncWorkspaceAccess(input: {
+  readonly operations: ControlPlaneOperations;
+  readonly store: AccountsStore;
+  readonly workspaceId: string;
+  readonly subject: string;
+}): Promise<OutputSyncWorkspaceAccessResult> {
+  const namespaceAccess = await requireWorkspaceAccess(input);
+  if (namespaceAccess.ok) return { ok: true, canManage: true };
+  if (!input.operations.members) return namespaceAccess;
+
+  const member = (await input.operations.members.listMembers(input.workspaceId))
+    .find((candidate) => candidate.accountId === input.subject);
+  if (!member || member.status !== "active") return namespaceAccess;
+  return {
+    ok: true,
+    canManage:
+      member.roles.includes("owner") || member.roles.includes("admin"),
+  };
+}
 
 function controlRoleValue(value: unknown): ControlWorkspaceRole | undefined {
   return typeof value === "string" &&
