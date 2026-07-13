@@ -32,6 +32,7 @@ import type {
   SourceSyncRun,
 } from "takosumi-contract/sources";
 import type { Workspace as Space } from "takosumi-contract/workspaces";
+import type { WorkspaceOutputSyncState } from "takosumi-contract/output-sync";
 import type { InstallationProviderEnvBindingSet } from "takosumi-contract/connections";
 import type {
   OutputAllowlistEntry,
@@ -244,6 +245,8 @@ export class InstallationStateGenerationGuardConflict extends Error {
 
 export interface CommitAppliedDeploymentResult {
   readonly installation?: Installation;
+  /** Output Sync state after an atomic revision bump, when requested. */
+  readonly outputSyncState?: WorkspaceOutputSyncState;
   /**
    * The apply run no longer holds the expected lease fence. No commit writes were
    * applied; callers must treat this as a stale worker/no-op.
@@ -353,6 +356,15 @@ export interface CommitAppliedDeploymentInput {
   readonly supersededDeployment?: Deployment;
   readonly stateSnapshot: StateSnapshot;
   readonly outputSnapshot?: OutputSnapshot;
+  /**
+   * Takosumi-specific Output Sync extension update. When present, stores bump
+   * the Workspace revision in the same atomic unit. Disabled Workspaces still
+   * advance the revision so re-enabling can reconcile every missed change.
+   */
+  readonly outputSyncRevisionBump?: {
+    readonly workspaceId: string;
+    readonly updatedAt: string;
+  };
   readonly installationPatch: {
     readonly id: string;
     readonly patch: InstallationPatch;
@@ -383,6 +395,11 @@ export interface CommitRestoredStateResult {
    * writes were applied; callers must treat this as a stale worker/no-op.
    */
   readonly restoreRunLeaseLost?: true;
+}
+
+export interface WorkspaceCurrentOutputRecord {
+  readonly capsule: Installation;
+  readonly output: OutputSnapshot;
 }
 
 export interface CommitRestoredStateInput {
@@ -591,6 +608,25 @@ export interface OpenTofuDeploymentStore {
    * loading every tenant's Space and filtering in the route.
    */
   listSpacesByOwner(ownerUserId: string): Promise<readonly Space[]>;
+
+  // Takosumi-specific Output Sync extension state. This is intentionally
+  // separate from the OpenTofu Workspace/Output contracts.
+  putWorkspaceOutputSyncState(
+    state: WorkspaceOutputSyncState,
+  ): Promise<WorkspaceOutputSyncState>;
+  compareAndSetWorkspaceOutputSyncState(
+    expected: WorkspaceOutputSyncState | undefined,
+    next: WorkspaceOutputSyncState,
+  ): Promise<boolean>;
+  getWorkspaceOutputSyncState(
+    workspaceId: string,
+  ): Promise<WorkspaceOutputSyncState | undefined>;
+  listPendingWorkspaceOutputSyncStates(
+    limit: number,
+  ): Promise<readonly WorkspaceOutputSyncState[]>;
+  listCurrentOutputsByWorkspace(
+    workspaceId: string,
+  ): Promise<readonly WorkspaceCurrentOutputRecord[]>;
 
   // InstallConfig records (spec §11). `spaceId` absent = built-in shared config.
   putInstallConfig(config: InstallConfig): Promise<InstallConfig>;
@@ -1010,6 +1046,10 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
   readonly #sourceSyncRuns = new Map<string, SourceSyncRun>();
   readonly #backupRuns = new Map<string, Run>();
   readonly #spaces = new Map<string, Space>();
+  readonly #workspaceOutputSyncStates = new Map<
+    string,
+    WorkspaceOutputSyncState
+  >();
   readonly #installConfigs = new Map<string, InstallConfig>();
   readonly #installations = new Map<string, Installation>();
   readonly #publicHostReservations = new Map<string, PublicHostReservation>();
@@ -1293,6 +1333,67 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     );
   }
 
+  putWorkspaceOutputSyncState(
+    state: WorkspaceOutputSyncState,
+  ): Promise<WorkspaceOutputSyncState> {
+    this.#workspaceOutputSyncStates.set(state.workspaceId, state);
+    return Promise.resolve(state);
+  }
+
+  compareAndSetWorkspaceOutputSyncState(
+    expected: WorkspaceOutputSyncState | undefined,
+    next: WorkspaceOutputSyncState,
+  ): Promise<boolean> {
+    const current = this.#workspaceOutputSyncStates.get(next.workspaceId);
+    if (!sameWorkspaceOutputSyncState(current, expected))
+      return Promise.resolve(false);
+    this.#workspaceOutputSyncStates.set(next.workspaceId, next);
+    return Promise.resolve(true);
+  }
+
+  getWorkspaceOutputSyncState(
+    workspaceId: string,
+  ): Promise<WorkspaceOutputSyncState | undefined> {
+    return Promise.resolve(this.#workspaceOutputSyncStates.get(workspaceId));
+  }
+
+  listPendingWorkspaceOutputSyncStates(
+    limit: number,
+  ): Promise<readonly WorkspaceOutputSyncState[]> {
+    return Promise.resolve(
+      Array.from(this.#workspaceOutputSyncStates.values())
+        .filter(
+          (state) =>
+            state.enabled &&
+            (state.outputRevision > state.reconciledRevision ||
+              state.activeRunGroupId !== undefined),
+        )
+        .sort(
+          (a, b) =>
+            a.updatedAt.localeCompare(b.updatedAt) ||
+            a.workspaceId.localeCompare(b.workspaceId),
+        )
+        .slice(0, Math.max(0, limit)),
+    );
+  }
+
+  listCurrentOutputsByWorkspace(
+    workspaceId: string,
+  ): Promise<readonly WorkspaceCurrentOutputRecord[]> {
+    const records: WorkspaceCurrentOutputRecord[] = [];
+    for (const capsule of this.#installations.values()) {
+      if (capsule.workspaceId !== workspaceId) continue;
+      const outputId =
+        capsule.currentOutputId ?? capsule.currentOutputSnapshotId;
+      if (!outputId) continue;
+      const output = this.#outputSnapshots.get(outputId);
+      if (!output) continue;
+      records.push({ capsule, output });
+    }
+    records.sort((a, b) => a.capsule.id.localeCompare(b.capsule.id));
+    return Promise.resolve(records);
+  }
+
   putInstallConfig(config: InstallConfig): Promise<InstallConfig> {
     this.#installConfigs.set(config.id, config);
     return Promise.resolve(config);
@@ -1572,12 +1673,35 @@ export class InMemoryOpenTofuDeploymentStore implements OpenTofuDeploymentStore 
     if (input.planRunApplied) {
       this.#planRuns.set(input.planRunApplied.id, input.planRunApplied);
     }
+    let outputSyncState: WorkspaceOutputSyncState | undefined;
+    if (input.outputSyncRevisionBump) {
+      const current =
+        this.#workspaceOutputSyncStates.get(
+          input.outputSyncRevisionBump.workspaceId,
+        ) ??
+        defaultWorkspaceOutputSyncState(
+          input.outputSyncRevisionBump.workspaceId,
+          input.outputSyncRevisionBump.updatedAt,
+        );
+      outputSyncState = {
+        ...current,
+        outputRevision: current.outputRevision + 1,
+        updatedAt: input.outputSyncRevisionBump.updatedAt,
+      };
+      this.#workspaceOutputSyncStates.set(
+        outputSyncState.workspaceId,
+        outputSyncState,
+      );
+    }
     const updated = normalizeInstallation({
       ...existing,
       ...installationPatch.patch,
     });
     this.#installations.set(installationPatch.id, updated);
-    return Promise.resolve({ installation: updated });
+    return Promise.resolve({
+      installation: updated,
+      ...(outputSyncState ? { outputSyncState } : {}),
+    });
   }
 
   commitRestoredState(
@@ -2920,6 +3044,36 @@ function billingAutoRechargeAttemptCountedUsdMicros(
     return attempt.requestedUsdMicros;
   }
   return 0;
+}
+
+export function defaultWorkspaceOutputSyncState(
+  workspaceId: string,
+  updatedAt: string,
+): WorkspaceOutputSyncState {
+  return {
+    workspaceId,
+    enabled: true,
+    outputRevision: 0,
+    reconciledRevision: 0,
+    consecutivePasses: 0,
+    updatedAt,
+  };
+}
+
+function sameWorkspaceOutputSyncState(
+  left: WorkspaceOutputSyncState | undefined,
+  right: WorkspaceOutputSyncState | undefined,
+): boolean {
+  if (!left || !right) return left === right;
+  return (
+    left.workspaceId === right.workspaceId &&
+    left.enabled === right.enabled &&
+    left.outputRevision === right.outputRevision &&
+    left.reconciledRevision === right.reconciledRevision &&
+    left.activeRunGroupId === right.activeRunGroupId &&
+    left.consecutivePasses === right.consecutivePasses &&
+    left.updatedAt === right.updatedAt
+  );
 }
 
 function maybeWarnInMemoryStore(storeName: string): void {
