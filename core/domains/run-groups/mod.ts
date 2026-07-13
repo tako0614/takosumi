@@ -228,26 +228,14 @@ export class RunGroupsService {
     const memberIds = capsules.map((capsule) => capsule.id);
     const sourceSnapshotIds: Record<string, string> = {};
     for (const capsule of capsules) {
-      if (!capsule.currentDeploymentId) {
-        throw new OpenTofuControllerError(
-          "failed_precondition",
-          `output_sync_source_snapshot_missing: capsule ${capsule.id} has no applied state`,
-        );
-      }
-      const deployment = await this.#store.getDeployment(
-        capsule.currentDeploymentId,
-      );
-      if (
-        !deployment ||
-        deployment.installationId !== capsule.id ||
-        !deployment.sourceSnapshotId
-      ) {
+      const sourceSnapshotId = await this.#appliedSourceSnapshotId(capsule);
+      if (!sourceSnapshotId) {
         throw new OpenTofuControllerError(
           "failed_precondition",
           `output_sync_source_snapshot_missing: capsule ${capsule.id} has no applied SourceSnapshot`,
         );
       }
-      sourceSnapshotIds[capsule.id] = deployment.sourceSnapshotId;
+      sourceSnapshotIds[capsule.id] = sourceSnapshotId;
     }
     const memberSet = new Set(memberIds);
     const edges = (await this.#store.listDependenciesBySpace(workspaceId))
@@ -300,6 +288,42 @@ export class RunGroupsService {
       metadata: { targetRevision, pass, capsuleCount: memberIds.length },
     });
     return (await this.getRunGroup(group.id)) ?? { runGroup: group, runs: [] };
+  }
+
+  async #appliedSourceSnapshotId(
+    capsule: Awaited<
+      ReturnType<OpenTofuDeploymentStore["getInstallation"]>
+    >,
+  ): Promise<string | undefined> {
+    if (!capsule) return undefined;
+    const currentStateVersionId =
+      capsule.currentStateVersionId ?? capsule.currentDeploymentId;
+    if (!currentStateVersionId) return undefined;
+
+    const stateVersion = (await this.#store.listStateSnapshots(
+      capsule.id,
+      capsule.environment,
+    )).find((candidate) => candidate.id === currentStateVersionId);
+    if (stateVersion) {
+      const applyRun = await this.#store.getApplyRun(
+        stateVersion.createdByRunId,
+      );
+      const planRun = applyRun
+        ? await this.#store.getPlanRun(applyRun.planRunId)
+        : undefined;
+      if (
+        planRun?.sourceSnapshotId &&
+        (planRun.capsuleId ?? planRun.installationId) === capsule.id
+      ) {
+        return planRun.sourceSnapshotId;
+      }
+    }
+
+    // Pre-retirement rows may still carry the successful apply audit record.
+    const deployment = await this.#store.getDeployment(currentStateVersionId);
+    return deployment?.installationId === capsule.id
+      ? deployment.sourceSnapshotId
+      : undefined;
   }
 
   /** Advances one staged Output Sync group, and is safe to call repeatedly. */
