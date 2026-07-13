@@ -82,3 +82,25 @@ test("Output Sync CAS does not overwrite a concurrent revision bump", async () =
     (await store.getWorkspaceOutputSyncState("space_test"))?.outputRevision,
   ).toBe(3);
 });
+
+test("Output Sync converges an empty Workspace without creating a RunGroup", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  await store.putWorkspaceOutputSyncState({
+    workspaceId: "space_empty",
+    enabled: true,
+    outputRevision: 3,
+    reconciledRevision: 2,
+    consecutivePasses: 1,
+    updatedAt: "2026-07-13T00:00:00.000Z",
+  });
+  const controller = new OpenTofuDeploymentController({ store });
+  const service = new OutputSyncService({
+    store,
+    runGroups: new RunGroupsService({ store, controller }),
+    now: () => "2026-07-13T00:01:00.000Z",
+  });
+  const result = await service.reconcile("space_empty");
+  expect(result.reconciliation).toBeUndefined();
+  expect(result.state.reconciledRevision).toBe(3);
+  expect(result.state.consecutivePasses).toBe(0);
+});
