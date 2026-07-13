@@ -69,7 +69,6 @@ export class OutputSyncService {
       revision: state.outputRevision,
       outputs: records.map(({ capsule, output }) => ({
         capsuleId: capsule.id,
-        capsuleStatus: capsule.status,
         outputId: output.id,
         stateGeneration: output.stateGeneration,
         outputDigest: output.outputDigest,
@@ -103,7 +102,11 @@ export class OutputSyncService {
       const reconciliation = await this.#runGroups.advanceWorkspaceOutputSync(
         state.activeRunGroupId,
       );
-      state = await this.#finishOrContinue(state.workspaceId, reconciliation);
+      state = await this.#finishOrContinue(
+        state.workspaceId,
+        reconciliation,
+        state.activeRunGroupId,
+      );
       return {
         state,
         ...(reconciliation ? { reconciliation } : {}),
@@ -115,13 +118,21 @@ export class OutputSyncService {
       (capsule) => capsule.status === "active" || capsule.status === "stale",
     );
     if (!runnable) {
-      state = await this.#casUpdate(workspaceId, (current) => ({
-        ...current,
-        reconciledRevision: current.outputRevision,
+      const converged = {
+        ...state,
+        reconciledRevision: state.outputRevision,
         consecutivePasses: 0,
         updatedAt: this.#now(),
-      }));
-      return { state };
+      };
+      if (
+        await this.#store.compareAndSetWorkspaceOutputSyncState(
+          initialStored,
+          converged,
+        )
+      ) {
+        return { state: converged };
+      }
+      return await this.reconcile(workspaceId);
     }
     if (state.consecutivePasses >= MAX_CONVERGENCE_PASSES) {
       throw new OpenTofuControllerError(
@@ -165,7 +176,11 @@ export class OutputSyncService {
       (await this.#runGroups.advanceWorkspaceOutputSync(
         reconciliation.runGroup.id,
       )) ?? reconciliation;
-    state = await this.#finishOrContinue(workspaceId, reconciliation);
+    state = await this.#finishOrContinue(
+      workspaceId,
+      reconciliation,
+      reconciliation.runGroup.id,
+    );
     return { state, reconciliation };
   }
 
@@ -200,13 +215,18 @@ export class OutputSyncService {
   async #finishOrContinue(
     workspaceId: string,
     reconciliation: RunGroupWithRuns | undefined,
+    expectedRunGroupId: string | undefined,
   ): Promise<WorkspaceOutputSyncState> {
     let state = await this.#state(workspaceId);
     if (!reconciliation) {
       const cleared = await this.#casUpdate(workspaceId, (current) => ({
-        ...current,
-        activeRunGroupId: undefined,
-        updatedAt: this.#now(),
+        ...(current.activeRunGroupId === expectedRunGroupId
+          ? {
+              ...current,
+              activeRunGroupId: undefined,
+              updatedAt: this.#now(),
+            }
+          : current),
       }));
       return cleared.enabled &&
         cleared.outputRevision > cleared.reconciledRevision

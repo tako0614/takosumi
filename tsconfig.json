@@ -81,6 +81,9 @@
       "takosumi-contract/pagination": ["./contract/pagination.ts"],
       "takosumi-contract/outputs": ["./contract/outputs.ts"],
       "takosumi-contract/output-sync": ["./contract/output-sync.ts"],
+      "takosumi-contract/output-projection": [
+        "./contract/output-projection.ts"
+      ],
       "takosumi-contract/runs": ["./contract/runs.ts"],
       "takosumi-contract/state-versions": ["./contract/state-versions.ts"],
       "takosumi-contract/deployments": ["./contract/deployments.ts"],

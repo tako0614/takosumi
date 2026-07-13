@@ -259,7 +259,7 @@ import {
   type ResolvedDependencies,
 } from "./dependency_resolution.ts";
 import { RunVerificationService } from "./run_verification.ts";
-import { validateProjectedServiceExportsFromOutputSnapshot } from "../output-projection/mod.ts";
+import { validateProjectedServiceExportsFromOutputSnapshot } from "takosumi-contract/output-projection";
 import {
   type InstallTypePlanContext,
   PlanResolutionService,

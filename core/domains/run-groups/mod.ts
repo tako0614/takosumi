@@ -63,6 +63,8 @@ export interface WorkspaceOutputSyncGraph extends SpaceUpdateGraph {
   readonly targetRevision: number;
   readonly pass: number;
   readonly currentLayer: number;
+  /** Capsule id -> SourceSnapshot used by its currently applied state. */
+  readonly sourceSnapshotIds: Readonly<Record<string, string>>;
 }
 
 export interface RunGroupsServiceDependencies {
@@ -224,6 +226,29 @@ export class RunGroupsService {
       );
     }
     const memberIds = capsules.map((capsule) => capsule.id);
+    const sourceSnapshotIds: Record<string, string> = {};
+    for (const capsule of capsules) {
+      if (!capsule.currentDeploymentId) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `output_sync_source_snapshot_missing: capsule ${capsule.id} has no applied state`,
+        );
+      }
+      const deployment = await this.#store.getDeployment(
+        capsule.currentDeploymentId,
+      );
+      if (
+        !deployment ||
+        deployment.installationId !== capsule.id ||
+        !deployment.sourceSnapshotId
+      ) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `output_sync_source_snapshot_missing: capsule ${capsule.id} has no applied SourceSnapshot`,
+        );
+      }
+      sourceSnapshotIds[capsule.id] = deployment.sourceSnapshotId;
+    }
     const memberSet = new Set(memberIds);
     const edges = (await this.#store.listDependenciesBySpace(workspaceId))
       .map((edge) => ({
@@ -244,6 +269,7 @@ export class RunGroupsService {
       currentLayer: 0,
       order,
       runs: {},
+      sourceSnapshotIds,
     };
     let group: RunGroup = {
       id: runGroupId,
@@ -326,11 +352,29 @@ export class RunGroupsService {
         await this.#store.putRunGroup(failed);
         return await this.getRunGroup(id);
       }
-      if (
-        plan.status === "queued" ||
-        plan.status === "running" ||
-        plan.status === "waiting_approval"
-      ) {
+      const awaitsApproval =
+        plan.status === "waiting_approval" ||
+        (plan.status === "succeeded" &&
+          plan.requiresApproval === true &&
+          !plan.approval);
+      if (awaitsApproval) {
+        if (stored.status !== "waiting_approval") {
+          await this.#store.putRunGroup({
+            ...stored,
+            status: "waiting_approval",
+            graphJson: JSON.stringify(graph),
+          });
+        }
+        return await this.getRunGroup(id);
+      }
+      if (plan.status === "queued" || plan.status === "running") {
+        if (stored.status !== "running") {
+          await this.#store.putRunGroup({
+            ...stored,
+            status: "running",
+            graphJson: JSON.stringify(graph),
+          });
+        }
         return await this.getRunGroup(id);
       }
       if (
@@ -342,6 +386,13 @@ export class RunGroupsService {
         (run) => "planRunId" in run && run.planRunId === plan.id,
       );
       if (!apply || apply.status === "queued" || apply.status === "running") {
+        if (stored.status !== "running") {
+          await this.#store.putRunGroup({
+            ...stored,
+            status: "running",
+            graphJson: JSON.stringify(graph),
+          });
+        }
         return await this.getRunGroup(id);
       }
       if (apply.status !== "succeeded") {
@@ -393,12 +444,20 @@ export class RunGroupsService {
       (await this.#store.listRunsBySpace(workspaceId, { limit: 500 }));
     for (const capsuleId of graph.order[graph.currentLayer] ?? []) {
       if (runs[capsuleId]) continue;
+      const sourceSnapshotId = graph.sourceSnapshotIds[capsuleId];
+      if (!sourceSnapshotId) {
+        throw new OpenTofuControllerError(
+          "failed_precondition",
+          `output_sync_source_snapshot_missing: capsule ${capsuleId} has no pinned SourceSnapshot`,
+        );
+      }
       const existing = existingRuns.find(
         (run) =>
           "runGroupId" in run &&
           run.runGroupId === group.id &&
           "requiredProviders" in run &&
           (run.capsuleId ?? run.installationId) === capsuleId &&
+          run.sourceSnapshotId === sourceSnapshotId &&
           run.operation !== "destroy",
       );
       if (existing) {
@@ -408,7 +467,11 @@ export class RunGroupsService {
       const response = await this.#controller.createInstallationPlan(
         capsuleId,
         { actor: this.#actor ?? "system:output-sync" },
-        { runGroupId: group.id, autoApplyRequested: true },
+        {
+          runGroupId: group.id,
+          autoApplyRequested: true,
+          sourceSnapshotId,
+        },
       );
       runs[capsuleId] = response.planRun.id;
     }
@@ -745,6 +808,16 @@ function parseWorkspaceOutputSyncGraph(
   } catch {
     // The base parser already normalizes malformed JSON to an empty graph.
   }
+  const sourceSnapshotIds: Record<string, string> = {};
+  if (record.sourceSnapshotIds && typeof record.sourceSnapshotIds === "object") {
+    for (const [capsuleId, sourceSnapshotId] of Object.entries(
+      record.sourceSnapshotIds,
+    )) {
+      if (typeof sourceSnapshotId === "string" && sourceSnapshotId) {
+        sourceSnapshotIds[capsuleId] = sourceSnapshotId;
+      }
+    }
+  }
   return {
     ...base,
     mode: "workspace_output_sync",
@@ -753,5 +826,6 @@ function parseWorkspaceOutputSyncGraph(
     pass: typeof record.pass === "number" ? record.pass : 1,
     currentLayer:
       typeof record.currentLayer === "number" ? record.currentLayer : 0,
+    sourceSnapshotIds,
   };
 }

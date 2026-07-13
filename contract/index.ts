@@ -16,6 +16,7 @@ export * from "./sources.ts";
 export * from "./redaction.ts";
 export * from "./workspaces.ts";
 export * from "./output-sync.ts";
+export * from "./output-projection.ts";
 export type { CapsuleFullName } from "./workspaces.ts";
 export type { Project, PublicProject } from "./projects.ts";
 export type {

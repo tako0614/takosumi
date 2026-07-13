@@ -7849,6 +7849,75 @@ test("Output Sync: settings, ETag snapshot, and reconcile are Workspace-gated", 
   expect(operations.calls.reconcileOutputs).toEqual(["space_a"]);
 });
 
+test("Output Sync is member-readable and owner/admin-managed", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store, { subject: "tsub_member" });
+  const members: NonNullable<ControlPlaneOperations["members"]> = {
+    listMembers: async (workspaceId) => [{
+      id: "membership_member",
+      workspaceId,
+      accountId: "tsub_member",
+      roles: ["member"],
+      status: "active",
+      createdAt: "2026-07-13T00:00:00.000Z",
+      updatedAt: "2026-07-13T00:00:00.000Z",
+    }],
+    upsertMember: async () => {
+      throw new Error("not used");
+    },
+  };
+  const operations = fakeOperations({ members });
+
+  const status = request("GET", "/api/v1/workspaces/space_a/output-sync", {
+    cookie,
+  });
+  const statusResp = await handleControlRoute({
+    request: status.request,
+    url: status.url,
+    store,
+    operations,
+  });
+  expect(statusResp?.status).toBe(200);
+
+  const snapshot = request(
+    "GET",
+    "/api/v1/workspaces/space_a/output-sync/snapshot",
+    { cookie },
+  );
+  const snapshotResp = await handleControlRoute({
+    request: snapshot.request,
+    url: snapshot.url,
+    store,
+    operations,
+  });
+  expect(snapshotResp?.status).toBe(200);
+
+  const patch = request("PATCH", "/api/v1/workspaces/space_a/output-sync", {
+    cookie,
+    body: { enabled: false },
+  });
+  const patchResp = await handleControlRoute({
+    request: patch.request,
+    url: patch.url,
+    store,
+    operations,
+  });
+  expect(patchResp?.status).toBe(403);
+
+  const reconcile = request(
+    "POST",
+    "/api/v1/workspaces/space_a/output-sync/reconcile",
+    { cookie },
+  );
+  const reconcileResp = await handleControlRoute({
+    request: reconcile.request,
+    url: reconcile.url,
+    store,
+    operations,
+  });
+  expect(reconcileResp?.status).toBe(403);
+});
+
 test("Connections: requires workspaceId; provider-connections is Workspace-gated", async () => {
   const store = new InMemoryAccountsStore();
   const { cookie } = seedSession(store);

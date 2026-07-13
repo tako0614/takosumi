@@ -74,7 +74,7 @@ import {
   resolvedProviderEnvBindingsDigest,
   type ResolvedInstallationProviderEnvBinding,
 } from "../../connections/mod.ts";
-import { validateProjectedServiceExportsFromOutputSnapshot } from "../../output-projection/mod.ts";
+import { validateProjectedServiceExportsFromOutputSnapshot } from "takosumi-contract/output-projection";
 import type { ActivityRecorder } from "../../activity/mod.ts";
 import type { RecordActivityInput } from "../../activity/mod.ts";
 import type { SourcesService } from "../../sources/mod.ts";
