@@ -128,6 +128,7 @@ import {
   withDefaultProviderSupplyChainPolicy,
 } from "../provider_policy.ts";
 import {
+  defaultWorkspaceOutputSyncState,
   InstallationPatchGuardConflict,
   type OpenTofuDeploymentStore,
   type PlanRunInputs,
@@ -724,6 +725,7 @@ export class RunEngine {
   readonly #runSerialized: RunSerialized;
   readonly #managedVanityHostnameSlotsPerOwner?: number;
   #connectionsService?: ConnectionsService;
+  #terminalObserver?: (run: PlanRun | ApplyRun) => Promise<void>;
 
   constructor(deps: RunEngineDependencies) {
     this.#store = deps.store;
@@ -760,6 +762,24 @@ export class RunEngine {
     this.#runSerialized = deps.runSerialized;
     this.#managedVanityHostnameSlotsPerOwner =
       deps.managedVanityHostnameSlotsPerOwner;
+  }
+
+  setTerminalObserver(
+    observer: ((run: PlanRun | ApplyRun) => Promise<void>) | undefined,
+  ): void {
+    this.#terminalObserver = observer;
+  }
+
+  async #notifyTerminal(run: PlanRun | ApplyRun): Promise<void> {
+    if (!this.#terminalObserver) return;
+    try {
+      await this.#terminalObserver(run);
+    } catch (error) {
+      log.warn("service.deploy_control.terminal_observer_failed", {
+        runId: run.id,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   // ---- public bridges: invoked by controller-side collaborator callbacks ----
@@ -3606,6 +3626,13 @@ export class RunEngine {
     if (planRun.operation === "destroy") return;
     if (planRun.requiresApproval === true) return;
     if (planRun.appliedApplyRunId) return;
+    // A no-op plan already proves desired and observed state converge. Creating
+    // an apply would only spend runner time and cannot change Output Sync.
+    if (
+      planRun.planResourceChanges !== undefined &&
+      planRun.planResourceChanges.length === 0
+    )
+      return;
     try {
       await this.createApplyRun(
         {
@@ -4329,6 +4356,7 @@ export class RunEngine {
       run: terminal,
       clearLeaseToken: true,
     });
+    if (result.won) await this.#notifyTerminal(terminal);
     return {
       won: result.won,
       run: (result.won ? terminal : (result.run ?? terminal)) as R,
@@ -5551,6 +5579,7 @@ export class RunEngine {
         deployment,
         ...(supersededDeployment ? { supersededDeployment } : {}),
         outputSnapshot: projected.outputSnapshot,
+        previousOutputSnapshot: projected.previousOutputSnapshot,
         envDispatch,
         persistGeneration,
         nextStateGeneration: projected.nextStateGeneration,
@@ -5981,6 +6010,7 @@ export class RunEngine {
     readonly deployment: Deployment;
     readonly supersededDeployment?: Deployment;
     readonly outputSnapshot: OutputSnapshot;
+    readonly previousOutputSnapshot: OutputSnapshot | undefined;
     readonly envDispatch: RunInstallationDispatch;
     readonly persistGeneration: number;
     readonly nextStateGeneration: number;
@@ -5999,6 +6029,9 @@ export class RunEngine {
     readonly now: number;
   }): Promise<Installation | "lease_lost" | undefined> {
     const { planRun, installation, deployment, outputSnapshot, now } = input;
+    const outputChanged =
+      input.previousOutputSnapshot?.outputDigest !==
+      outputSnapshot.outputDigest;
     // StateSnapshot metadata aligned to the SAME generation written to R2_STATE
     // (persistGeneration); the DO wrote the encrypted object + current.json at
     // this key, only metadata enters the ledger. Built (not yet persisted) so it
@@ -6047,6 +6080,12 @@ export class RunEngine {
       );
       if (!persisted.won) return "lease_lost";
       await this.#store.putPlanRun(input.planRunApplied);
+      if (outputChanged) {
+        await this.#bumpWorkspaceOutputSyncRevision(
+          installation.workspaceId ?? installation.spaceId,
+          now,
+        );
+      }
       return patched;
     }
     const committed = await this.#store.commitAppliedDeployment({
@@ -6075,6 +6114,14 @@ export class RunEngine {
       applyRunTerminal: input.applyRunTerminal,
       planRunApplied: input.planRunApplied,
       applyRunLeaseToken: input.applyRunLeaseToken,
+      ...(outputChanged
+        ? {
+            outputSyncRevisionBump: {
+              workspaceId: installation.workspaceId ?? installation.spaceId,
+              updatedAt: new Date(now).toISOString(),
+            },
+          }
+        : {}),
     });
     if (committed.applyRunLeaseLost) return "lease_lost";
     return committed.installation;
@@ -6489,6 +6536,7 @@ export class RunEngine {
         outputCount: outputs.length,
       },
     });
+    await this.#notifyTerminal(completed);
     return {
       applyRun: completed,
       capsule: input.patched ?? installation,
@@ -6625,6 +6673,7 @@ export class RunEngine {
           status: "destroyed" as const,
           updatedAt: new Date(now).toISOString(),
           currentStateGeneration: nextStateGeneration,
+          currentOutputSnapshotId: undefined,
         },
         guard: {
           currentDeploymentId:
@@ -6684,6 +6733,14 @@ export class RunEngine {
           applyRunTerminal: completed,
           planRunApplied: appliedPlan,
           applyRunLeaseToken: leaseToken,
+          ...(installation.currentOutputSnapshotId
+            ? {
+                outputSyncRevisionBump: {
+                  workspaceId: installation.workspaceId ?? installation.spaceId,
+                  updatedAt: new Date(now).toISOString(),
+                },
+              }
+            : {}),
         });
         if (committed.applyRunLeaseLost) {
           return { applyRun: (await this.getApplyRun(running.id)).applyRun };
@@ -6710,6 +6767,12 @@ export class RunEngine {
           return { applyRun: persisted.run };
         }
         await this.#store.putPlanRun(appliedPlan);
+        if (installation.currentOutputSnapshotId) {
+          await this.#bumpWorkspaceOutputSyncRevision(
+            installation.workspaceId ?? installation.spaceId,
+            now,
+          );
+        }
       }
       await this.#recordRunnerMinuteUsage({
         spaceId: completed.workspaceId,
@@ -6747,6 +6810,7 @@ export class RunEngine {
           stateGeneration: nextStateGeneration,
         },
       });
+      await this.#notifyTerminal(completed);
       return {
         applyRun: completed,
         capsule: publicInstallation(patched ?? installation),
@@ -6870,6 +6934,21 @@ export class RunEngine {
 
   async #requireInstallation(id: string): Promise<Installation> {
     return await requireInstallation(this.#store, id);
+  }
+
+  async #bumpWorkspaceOutputSyncRevision(
+    workspaceId: string,
+    now: number,
+  ): Promise<void> {
+    const updatedAt = new Date(now).toISOString();
+    const current =
+      (await this.#store.getWorkspaceOutputSyncState(workspaceId)) ??
+      defaultWorkspaceOutputSyncState(workspaceId, updatedAt);
+    await this.#store.putWorkspaceOutputSyncState({
+      ...current,
+      outputRevision: current.outputRevision + 1,
+      updatedAt,
+    });
   }
 
   async #requireCurrentPlannedInstallation(

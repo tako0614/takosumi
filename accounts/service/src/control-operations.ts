@@ -102,6 +102,10 @@ import type {
   PublicRun,
 } from "takosumi-contract/runs";
 import type { JsonValue } from "takosumi-contract";
+import type {
+  WorkspaceOutputSyncSnapshot,
+  WorkspaceOutputSyncStatusResponse,
+} from "takosumi-contract/output-sync";
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 
 interface CapsuleListPageParams extends PageParams {
@@ -267,6 +271,18 @@ export interface ControlPlaneOperations {
     ): Promise<RunGroupWithRunsLike>;
     getRunGroup(id: string): Promise<RunGroupWithRunsLike | undefined>;
     approveRunGroup(id: string): Promise<RunGroupWithRunsLike | undefined>;
+  };
+  readonly outputSync: {
+    getStatus(workspaceId: string): Promise<WorkspaceOutputSyncStatusResponse>;
+    setEnabled(
+      workspaceId: string,
+      enabled: boolean,
+    ): Promise<WorkspaceOutputSyncStatusResponse>;
+    getSnapshot(workspaceId: string): Promise<WorkspaceOutputSyncSnapshot>;
+    reconcile(workspaceId: string): Promise<{
+      readonly state: WorkspaceOutputSyncStatusResponse["state"];
+      readonly reconciliation?: RunGroupWithRunsLike;
+    }>;
   };
   // --- Activity (§27 / §34) ---
   readonly activity: {

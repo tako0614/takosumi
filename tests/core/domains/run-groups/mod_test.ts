@@ -29,7 +29,10 @@ import {
   seedInstallationModel,
   seedProviderConnections,
 } from "../../../helpers/deploy-control/model_fixture.ts";
-import { computeGroupStatus, RunGroupsService } from "../../../../core/domains/run-groups/mod.ts";
+import {
+  computeGroupStatus,
+  RunGroupsService,
+} from "../../../../core/domains/run-groups/mod.ts";
 import type { Run } from "takosumi-contract/runs";
 
 const PLAN_DIGEST =
@@ -289,9 +292,11 @@ test("createSpaceUpdate maps a wedged (cyclic) dependency graph to failed_precon
 
   // The wedged DAG would make `topologicalLayers` throw a GraphCycleError; the
   // service must translate it into a typed failed_precondition (not a bare 500).
-  await expect(runGroups.createSpaceUpdate("space_test")).rejects.toMatchObject({
-    code: "failed_precondition",
-  });
+  await expect(runGroups.createSpaceUpdate("space_test")).rejects.toMatchObject(
+    {
+      code: "failed_precondition",
+    },
+  );
   await expect(runGroups.createSpaceUpdate("space_test")).rejects.toThrow(
     /dependency_cycle/,
   );
@@ -562,4 +567,69 @@ test("space_drift_check groups active installations into read-only drift_check r
     runs: Record<string, string>;
   };
   expect(Object.keys(graph.runs).sort()).toEqual(["inst_core", "inst_files"]);
+});
+
+test("workspace_output_sync plans and applies one dependency layer at a time", async () => {
+  const store = new InMemoryOpenTofuDeploymentStore();
+  const runner = recordingRunner(
+    new Map([
+      ["inst_core", "core.example.com"],
+      ["inst_files", "files.example.com"],
+      ["inst_talk", "talk.example.com"],
+    ]),
+  );
+  await seedChain(store, "production");
+  const controller = controllerWith(store, runner);
+  for (const id of ["inst_core", "inst_files", "inst_talk"]) {
+    const plan = await controller.createInstallationPlan(id);
+    await controller.approveRun(plan.planRun.id);
+    await controller.createApplyRun({
+      planRunId: plan.planRun.id,
+      expected: applyExpectedGuardFromPlanRun(plan.planRun),
+    });
+  }
+
+  const groups = new RunGroupsService({
+    store,
+    controller,
+    newId: () => "rg_output_sync",
+    now: () => "2026-06-06T03:00:00.000Z",
+  });
+  const created = await groups.createWorkspaceOutputSync(
+    "space_test",
+    7,
+    1,
+    "rg_output_sync",
+  );
+  expect(created.runGroup.type).toBe("workspace_output_sync");
+  let graph = JSON.parse(created.runGroup.graphJson) as {
+    currentLayer: number;
+    order: string[][];
+    runs: Record<string, string>;
+  };
+  expect(graph.order).toEqual([["inst_core"], ["inst_files"], ["inst_talk"]]);
+  expect(Object.keys(graph.runs)).toEqual(["inst_core"]);
+
+  await groups.approveRunGroup(created.runGroup.id);
+  let current = await groups.getRunGroup(created.runGroup.id);
+  graph = JSON.parse(current!.runGroup.graphJson);
+  expect(graph.currentLayer).toBe(1);
+  expect(Object.keys(graph.runs).sort()).toEqual(["inst_core", "inst_files"]);
+
+  await groups.approveRunGroup(created.runGroup.id);
+  current = await groups.getRunGroup(created.runGroup.id);
+  graph = JSON.parse(current!.runGroup.graphJson);
+  expect(graph.currentLayer).toBe(2);
+  expect(Object.keys(graph.runs).sort()).toEqual([
+    "inst_core",
+    "inst_files",
+    "inst_talk",
+  ]);
+
+  await groups.approveRunGroup(created.runGroup.id);
+  current = await groups.getRunGroup(created.runGroup.id);
+  expect(current!.runGroup.status).toBe("succeeded");
+  expect(
+    (await controller.getInstallation("inst_talk")).installation.status,
+  ).toBe("active");
 });

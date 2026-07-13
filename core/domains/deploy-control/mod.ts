@@ -1267,6 +1267,12 @@ export class OpenTofuDeploymentController {
     });
   }
 
+  setTerminalRunObserver(
+    observer: ((run: PlanRun | ApplyRun) => Promise<void>) | undefined,
+  ): void {
+    this.#runEngine.setTerminalObserver(observer);
+  }
+
   usesExternalRunQueue(): boolean {
     return this.#usesExternalRunQueue;
   }

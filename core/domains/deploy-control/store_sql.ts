@@ -47,6 +47,7 @@ import * as pgSchema from "../../adapters/storage/drizzle/schema/postgres.ts";
 import type { SourceSnapshot, SourceSyncRun } from "takosumi-contract/sources";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
 import type { Workspace as Space } from "takosumi-contract/workspaces";
+import type { WorkspaceOutputSyncState } from "takosumi-contract";
 import type { InstallationProviderEnvBindingSet } from "takosumi-contract/connections";
 import type {
   Dependency,
@@ -106,6 +107,7 @@ import type {
   SettleBillingAutoRechargeAttemptResult,
   TransitionRunInput,
   TransitionRunResult,
+  WorkspaceCurrentOutputRecord,
 } from "./store.ts";
 import {
   clampActivityLimit,
@@ -695,6 +697,133 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     return rows.map((row) => parseRow(row) as Space);
   }
 
+  // --- Workspace Output Sync ------------------------------------------------
+
+  async putWorkspaceOutputSyncState(
+    state: WorkspaceOutputSyncState,
+  ): Promise<WorkspaceOutputSyncState> {
+    const rows = await this.#db
+      .insert(pgSchema.workspaceOutputSync)
+      .values(workspaceOutputSyncValues(state))
+      .onConflictDoUpdate({
+        target: pgSchema.workspaceOutputSync.workspaceId,
+        set: workspaceOutputSyncValues(state),
+      })
+      .returning();
+    return workspaceOutputSyncStateFromPgRow(rows[0]);
+  }
+
+  async compareAndSetWorkspaceOutputSyncState(
+    expected: WorkspaceOutputSyncState | undefined,
+    next: WorkspaceOutputSyncState,
+  ): Promise<boolean> {
+    if (!expected) {
+      const rows = await this.#db
+        .insert(pgSchema.workspaceOutputSync)
+        .values(workspaceOutputSyncValues(next))
+        .onConflictDoNothing()
+        .returning({ workspaceId: pgSchema.workspaceOutputSync.workspaceId });
+      return rows.length === 1;
+    }
+    const rows = await this.#db
+      .update(pgSchema.workspaceOutputSync)
+      .set(workspaceOutputSyncValues(next))
+      .where(
+        and(
+          eq(pgSchema.workspaceOutputSync.workspaceId, expected.workspaceId),
+          eq(pgSchema.workspaceOutputSync.enabled, expected.enabled),
+          eq(
+            pgSchema.workspaceOutputSync.outputRevision,
+            expected.outputRevision,
+          ),
+          eq(
+            pgSchema.workspaceOutputSync.reconciledRevision,
+            expected.reconciledRevision,
+          ),
+          expected.activeRunGroupId === undefined
+            ? isNull(pgSchema.workspaceOutputSync.activeRunGroupId)
+            : eq(
+                pgSchema.workspaceOutputSync.activeRunGroupId,
+                expected.activeRunGroupId,
+              ),
+          eq(
+            pgSchema.workspaceOutputSync.consecutivePasses,
+            expected.consecutivePasses,
+          ),
+          eq(pgSchema.workspaceOutputSync.updatedAt, expected.updatedAt),
+        ),
+      )
+      .returning({ workspaceId: pgSchema.workspaceOutputSync.workspaceId });
+    return rows.length === 1;
+  }
+
+  async getWorkspaceOutputSyncState(
+    workspaceId: string,
+  ): Promise<WorkspaceOutputSyncState | undefined> {
+    const rows = await this.#db
+      .select()
+      .from(pgSchema.workspaceOutputSync)
+      .where(eq(pgSchema.workspaceOutputSync.workspaceId, workspaceId))
+      .limit(1);
+    const row = rows[0];
+    return row ? workspaceOutputSyncStateFromPgRow(row) : undefined;
+  }
+
+  async listPendingWorkspaceOutputSyncStates(
+    limit: number,
+  ): Promise<readonly WorkspaceOutputSyncState[]> {
+    const normalizedLimit = Math.max(0, Math.floor(limit));
+    if (normalizedLimit === 0) return [];
+    const rows = await this.#db
+      .select()
+      .from(pgSchema.workspaceOutputSync)
+      .where(
+        and(
+          eq(pgSchema.workspaceOutputSync.enabled, true),
+          or(
+            gt(
+              pgSchema.workspaceOutputSync.outputRevision,
+              pgSchema.workspaceOutputSync.reconciledRevision,
+            ),
+            sql`${pgSchema.workspaceOutputSync.activeRunGroupId} is not null`,
+          ),
+        ),
+      )
+      .orderBy(
+        asc(pgSchema.workspaceOutputSync.updatedAt),
+        asc(pgSchema.workspaceOutputSync.workspaceId),
+      )
+      .limit(normalizedLimit);
+    return rows.map(workspaceOutputSyncStateFromPgRow);
+  }
+
+  async listCurrentOutputsByWorkspace(
+    workspaceId: string,
+  ): Promise<readonly WorkspaceCurrentOutputRecord[]> {
+    const currentOutputId = sql<string>`COALESCE(
+      ${pgSchema.installations.installationJson} ->> 'currentOutputId',
+      ${pgSchema.installations.installationJson} ->> 'currentOutputSnapshotId'
+    )`;
+    const rows = await this.#db
+      .select({
+        capsule: pgSchema.installations.installationJson,
+        output: pgSchema.outputSnapshots.snapshotJson,
+      })
+      .from(pgSchema.installations)
+      .innerJoin(
+        pgSchema.outputSnapshots,
+        eq(pgSchema.outputSnapshots.id, currentOutputId),
+      )
+      .where(eq(pgSchema.installations.spaceId, workspaceId))
+      .orderBy(asc(pgSchema.installations.id));
+    return rows.map((row) => ({
+      capsule: normalizeInstallationRecord(
+        parseJson(row.capsule) as Installation,
+      ),
+      output: parseJson(row.output) as OutputSnapshot,
+    }));
+  }
+
   // --- install_configs (§11) ------------------------------------------------
 
   async putInstallConfig(config: InstallConfig): Promise<InstallConfig> {
@@ -1261,7 +1390,19 @@ export class SqlOpenTofuDeploymentStore implements OpenTofuDeploymentStore {
     const patched = normalizeOptionalInstallationRecord(
       parseRow(rows[0]) as Installation | undefined,
     );
-    if (patched) return { installation: patched };
+    if (patched) {
+      const outputSyncState = input.outputSyncRevisionBump
+        ? await pgBumpWorkspaceOutputSyncRevision(
+            db,
+            input.outputSyncRevisionBump.workspaceId,
+            input.outputSyncRevisionBump.updatedAt,
+          )
+        : undefined;
+      return {
+        installation: patched,
+        ...(outputSyncState ? { outputSyncState } : {}),
+      };
+    }
     const actual = await this.#getInstallationOn(db, installationPatch.id);
     if (!actual) return { installation: undefined };
     throw new InstallationPatchGuardConflict({
@@ -3448,6 +3589,37 @@ function installationValues(installation: Installation) {
   };
 }
 
+function workspaceOutputSyncValues(state: WorkspaceOutputSyncState) {
+  return {
+    workspaceId: state.workspaceId,
+    enabled: state.enabled,
+    outputRevision: state.outputRevision,
+    reconciledRevision: state.reconciledRevision,
+    activeRunGroupId: state.activeRunGroupId ?? null,
+    consecutivePasses: state.consecutivePasses,
+    updatedAt: state.updatedAt,
+  };
+}
+
+function workspaceOutputSyncStateFromPgRow(
+  row: typeof pgSchema.workspaceOutputSync.$inferSelect | undefined,
+): WorkspaceOutputSyncState {
+  if (!row) {
+    throw new Error("workspace output sync row was not returned");
+  }
+  return {
+    workspaceId: row.workspaceId,
+    enabled: row.enabled,
+    outputRevision: row.outputRevision,
+    reconciledRevision: row.reconciledRevision,
+    ...(row.activeRunGroupId === null
+      ? {}
+      : { activeRunGroupId: row.activeRunGroupId }),
+    consecutivePasses: row.consecutivePasses,
+    updatedAt: row.updatedAt,
+  };
+}
+
 function stripRunHeartbeat<R extends PlanRun | ApplyRun | SourceSyncRun | Run>(
   run: R,
 ): R {
@@ -3642,6 +3814,33 @@ async function pgUpsertOutputSnapshot(
         createdAt: snapshot.createdAt,
       },
     });
+}
+
+async function pgBumpWorkspaceOutputSyncRevision(
+  db: PgRemoteDatabase<typeof pgSchema>,
+  workspaceId: string,
+  updatedAt: string,
+): Promise<WorkspaceOutputSyncState> {
+  const rows = await db
+    .insert(pgSchema.workspaceOutputSync)
+    .values({
+      workspaceId,
+      enabled: true,
+      outputRevision: 1,
+      reconciledRevision: 0,
+      activeRunGroupId: null,
+      consecutivePasses: 0,
+      updatedAt,
+    })
+    .onConflictDoUpdate({
+      target: pgSchema.workspaceOutputSync.workspaceId,
+      set: {
+        outputRevision: sql`${pgSchema.workspaceOutputSync.outputRevision} + 1`,
+        updatedAt,
+      },
+    })
+    .returning();
+  return workspaceOutputSyncStateFromPgRow(rows[0]);
 }
 
 function selectedDriverColumns(query: string): readonly string[] {

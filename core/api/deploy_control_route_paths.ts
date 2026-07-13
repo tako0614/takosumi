@@ -149,6 +149,12 @@ export const TAKOSUMI_OUTPUT_SHARE_REVOKE_ROUTE =
   `${INTERNAL_V1_PREFIX}/output-shares/:shareId/revoke` as const;
 export const TAKOSUMI_WORKSPACE_PLAN_UPDATE_ROUTE =
   `${INTERNAL_V1_PREFIX}/workspaces/:workspaceId/plan-update` as const;
+export const TAKOSUMI_WORKSPACE_OUTPUT_SYNC_ROUTE =
+  `${INTERNAL_V1_PREFIX}/workspaces/:workspaceId/output-sync` as const;
+export const TAKOSUMI_WORKSPACE_OUTPUT_SYNC_SNAPSHOT_ROUTE =
+  `${INTERNAL_V1_PREFIX}/workspaces/:workspaceId/output-sync/snapshot` as const;
+export const TAKOSUMI_WORKSPACE_OUTPUT_SYNC_RECONCILE_ROUTE =
+  `${INTERNAL_V1_PREFIX}/workspaces/:workspaceId/output-sync/reconcile` as const;
 export const TAKOSUMI_WORKSPACE_DRIFT_CHECK_ROUTE =
   `${INTERNAL_V1_PREFIX}/workspaces/:workspaceId/drift-check` as const;
 export const TAKOSUMI_RUN_GROUP_ROUTE =

@@ -11,6 +11,7 @@ import {
   type DeployControlEndpoint,
   type DeployControlRouteContext,
   ensureSpacePermission,
+  readJsonBody,
   RUN_GROUP_ID_PATTERN,
   SPACE_ID_PATTERN,
 } from "./deploy_control_shared.ts";
@@ -19,6 +20,9 @@ import {
   TAKOSUMI_RUN_GROUP_ROUTE,
   TAKOSUMI_WORKSPACE_DRIFT_CHECK_ROUTE,
   TAKOSUMI_WORKSPACE_PLAN_UPDATE_ROUTE,
+  TAKOSUMI_WORKSPACE_OUTPUT_SYNC_RECONCILE_ROUTE,
+  TAKOSUMI_WORKSPACE_OUTPUT_SYNC_ROUTE,
+  TAKOSUMI_WORKSPACE_OUTPUT_SYNC_SNAPSHOT_ROUTE,
 } from "./deploy_control_route_paths.ts";
 
 const RUN_GROUP_ID_PARAM = {
@@ -28,6 +32,56 @@ const RUN_GROUP_ID_PARAM = {
 
 export const DEPLOY_CONTROL_RUN_GROUP_ENDPOINTS: readonly DeployControlEndpoint[] =
   [
+    {
+      method: "GET",
+      path: TAKOSUMI_WORKSPACE_OUTPUT_SYNC_ROUTE,
+      summary: "Reads Takosumi Workspace Output Sync settings and revision.",
+      auth: "deploy-control-token",
+      operationId: "getWorkspaceOutputSync",
+      openapi: {
+        pathParams: ["workspaceId"],
+        okSchema: "WorkspaceOutputSyncStatusResponse",
+      },
+      notImplementedMessage: "output sync not wired",
+    },
+    {
+      method: "PATCH",
+      path: TAKOSUMI_WORKSPACE_OUTPUT_SYNC_ROUTE,
+      summary: "Enables or disables Takosumi Workspace Output Sync.",
+      auth: "deploy-control-token",
+      operationId: "patchWorkspaceOutputSync",
+      openapi: {
+        pathParams: ["workspaceId"],
+        requestSchema: "PatchWorkspaceOutputSyncRequest",
+        okSchema: "WorkspaceOutputSyncStatusResponse",
+      },
+      notImplementedMessage: "output sync not wired",
+    },
+    {
+      method: "GET",
+      path: TAKOSUMI_WORKSPACE_OUTPUT_SYNC_SNAPSHOT_ROUTE,
+      summary: "Reads the current non-secret Workspace Output snapshot.",
+      auth: "deploy-control-token",
+      operationId: "getWorkspaceOutputSyncSnapshot",
+      openapi: {
+        pathParams: ["workspaceId"],
+        okSchema: "WorkspaceOutputSyncSnapshotResponse",
+      },
+      notImplementedMessage: "output sync not wired",
+    },
+    {
+      method: "POST",
+      path: TAKOSUMI_WORKSPACE_OUTPUT_SYNC_RECONCILE_ROUTE,
+      summary: "Starts or advances durable staged Workspace reconciliation.",
+      auth: "deploy-control-token",
+      operationId: "reconcileWorkspaceOutputs",
+      openapi: {
+        pathParams: ["workspaceId"],
+        okStatus: "202",
+        okSchema: "WorkspaceOutputSyncReconcileResponse",
+      },
+      notImplementedMessage: "output sync not wired",
+    },
     {
       method: "POST",
       path: TAKOSUMI_WORKSPACE_PLAN_UPDATE_ROUTE,
@@ -82,8 +136,82 @@ export function mountDeployControlRunGroupRoutes(
 ): void {
   const { app, dependencies } = ctx;
   const runGroupsService = dependencies.runGroupsService;
+  const outputSyncService = dependencies.outputSyncService;
   const requireRunGroups = (deps: typeof dependencies): string | undefined =>
     deps.runGroupsService ? undefined : "run groups not wired";
+  const requireOutputSync = (deps: typeof dependencies): string | undefined =>
+    deps.outputSyncService ? undefined : "output sync not wired";
+
+  app.get(
+    TAKOSUMI_WORKSPACE_OUTPUT_SYNC_ROUTE,
+    defineRoute({
+      ctx,
+      requireService: requireOutputSync,
+      param: { param: "workspaceId", pattern: SPACE_ID_PATTERN },
+      handler: async ({ c, principal, id }) => {
+        ensureSpacePermission(principal, id);
+        return c.json(await outputSyncService!.getStatus(id), 200);
+      },
+    }),
+  );
+
+  app.patch(
+    TAKOSUMI_WORKSPACE_OUTPUT_SYNC_ROUTE,
+    ctx.deployControlBodyLimit,
+    defineRoute({
+      ctx,
+      requireService: requireOutputSync,
+      param: { param: "workspaceId", pattern: SPACE_ID_PATTERN },
+      enforceBody: true,
+      handler: async ({ c, principal, id }) => {
+        ensureSpacePermission(principal, id);
+        const body = await readJsonBody<{ readonly enabled?: unknown }>(
+          c,
+          "outputSyncPatch",
+        );
+        if (typeof body.enabled !== "boolean") {
+          throw new OpenTofuControllerError(
+            "invalid_argument",
+            "enabled must be boolean",
+          );
+        }
+        return c.json(
+          await outputSyncService!.setEnabled(id, body.enabled),
+          200,
+        );
+      },
+    }),
+  );
+
+  app.get(
+    TAKOSUMI_WORKSPACE_OUTPUT_SYNC_SNAPSHOT_ROUTE,
+    defineRoute({
+      ctx,
+      requireService: requireOutputSync,
+      param: { param: "workspaceId", pattern: SPACE_ID_PATTERN },
+      handler: async ({ c, principal, id }) => {
+        ensureSpacePermission(principal, id);
+        const snapshot = await outputSyncService!.getSnapshot(id);
+        c.header("ETag", `\"takosumi-output-sync-${snapshot.revision}\"`);
+        c.header("Cache-Control", "private, no-cache");
+        return c.json({ snapshot }, 200);
+      },
+    }),
+  );
+
+  app.post(
+    TAKOSUMI_WORKSPACE_OUTPUT_SYNC_RECONCILE_ROUTE,
+    defineRoute({
+      ctx,
+      requireService: requireOutputSync,
+      param: { param: "workspaceId", pattern: SPACE_ID_PATTERN },
+      handler: async ({ c, principal, id }) => {
+        ensureSpacePermission(principal, id);
+        const result = await outputSyncService!.reconcile(id);
+        return c.json(result, result.reconciliation ? 202 : 200);
+      },
+    }),
+  );
 
   app.post(
     TAKOSUMI_WORKSPACE_PLAN_UPDATE_ROUTE,
