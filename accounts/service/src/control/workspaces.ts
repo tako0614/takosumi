@@ -101,6 +101,7 @@ import type {
   PublicRun,
 } from "takosumi-contract/runs";
 import type { JsonValue } from "takosumi-contract";
+import { TAKOSUMI_OUTPUT_SYNC_CAPABILITY } from "takosumi-contract/output-sync";
 import type { TakosumiSubject } from "@takosjp/takosumi-accounts-contract";
 import type {
   AppCapsuleMode,
@@ -239,6 +240,52 @@ export async function handleWorkspaces(
       return methodNotAllowed("GET, PATCH");
     }
     const leaf = segments[2];
+    if (leaf === "output-sync") {
+      if (segments.length === 3) {
+        if (method === "GET") {
+          return json(await operations.outputSync.getStatus(workspaceId));
+        }
+        if (method === "PATCH") {
+          const body = await readJsonObject(request);
+          if (!body || typeof body.enabled !== "boolean") {
+            return errorJson(
+              "invalid_argument",
+              "enabled must be boolean",
+              400,
+              request,
+            );
+          }
+          return json(
+            await operations.outputSync.setEnabled(workspaceId, body.enabled),
+          );
+        }
+        return methodNotAllowed("GET, PATCH");
+      }
+      if (segments.length === 4 && segments[3] === "snapshot") {
+        if (method !== "GET") return methodNotAllowed("GET");
+        const snapshot = await operations.outputSync.getSnapshot(workspaceId);
+        const etag = `\"takosumi-output-sync-${snapshot.revision}\"`;
+        if (request.headers.get("if-none-match") === etag) {
+          return new Response(null, { status: 304, headers: { etag } });
+        }
+        return json({ snapshot }, 200, {
+          etag,
+          "cache-control": "private, no-cache",
+        });
+      }
+      if (segments.length === 4 && segments[3] === "reconcile") {
+        if (method !== "POST") return methodNotAllowed("POST");
+        const result = await operations.outputSync.reconcile(workspaceId);
+        return json(
+          {
+            capability: TAKOSUMI_OUTPUT_SYNC_CAPABILITY,
+            ...result,
+          },
+          result.reconciliation ? 202 : 200,
+        );
+      }
+      return undefined;
+    }
     if (leaf === "members") {
       // /api/v1/workspaces/:workspaceId/members[/:subject]. The Workspace is already
       // resolved server-side and namespace-gated above; the member handlers add
@@ -1359,9 +1406,7 @@ async function createCapsule(
         issuer,
         capsule: installation,
         installConfig: resolvedInstallConfig,
-        ...(managedPublicBaseDomain
-          ? { managedPublicBaseDomain }
-          : {}),
+        ...(managedPublicBaseDomain ? { managedPublicBaseDomain } : {}),
       });
     } catch (error) {
       // Compensate: never leave a half-created capsule behind when the OIDC

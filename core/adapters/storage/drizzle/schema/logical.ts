@@ -1,6 +1,7 @@
 export const deployControlLogicalTables = [
   "runnerProfiles",
   "spaces",
+  "workspaceOutputSync",
   "projects",
   "sources",
   "sourceSnapshots",
@@ -50,6 +51,7 @@ export const deployControlD1TableNames = {
   // logical key (and the Drizzle export) stays `spaces` until convergence
   // (slice 7) renames the TS identifiers; only the physical name string moves.
   spaces: "workspaces",
+  workspaceOutputSync: "workspace_output_sync",
   projects: "projects",
   sources: "sources",
   sourceSnapshots: "source_snapshots",
@@ -92,6 +94,7 @@ export const deployControlPostgresTableNames = {
   // P4 17-noun rename: physical table `takosumi_spaces` -> `takosumi_workspaces`
   // (logical key / Drizzle export stays `spaces` until convergence).
   spaces: "takosumi_workspaces",
+  workspaceOutputSync: "takosumi_workspace_output_sync",
   projects: "takosumi_projects",
   sources: "takosumi_sources",
   sourceSnapshots: "takosumi_source_snapshots",

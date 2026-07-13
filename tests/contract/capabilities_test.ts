@@ -6,6 +6,7 @@ import {
   TAKOSUMI_API_VERSION,
 } from "../../contract/capabilities.ts";
 import { RESOURCE_SHAPE_KINDS } from "../../contract/resource-shape.ts";
+import { TAKOSUMI_OUTPUT_SYNC_CAPABILITY } from "../../contract/output-sync.ts";
 
 test("Takosumi discovery document exposes v1alpha1 endpoint metadata", () => {
   const document = createTakosumiWellKnownDocument({
@@ -18,6 +19,7 @@ test("Takosumi discovery document exposes v1alpha1 endpoint metadata", () => {
   assert.equal(document.features.resource_shapes, false);
   assert.equal(document.features.compat_framework, true);
   assert.equal(document.features.compat_s3, false);
+  assert.equal(document.features.output_sync, true);
   assert.equal(document.endpoints.api, "https://takosumi.example.com/api");
   assert.equal(
     document.endpoints.capabilities,
@@ -44,6 +46,7 @@ test("Takosumi product capabilities separate framework from enabled profiles", (
   assert.equal(capabilities.operator.runner_pools, false);
   assert.equal(capabilities.operator.managed_target_catalog, false);
   assert.equal(capabilities.commercial.payment_enforcement, false);
+  assert.deepEqual(capabilities.extensions, [TAKOSUMI_OUTPUT_SYNC_CAPABILITY]);
 });
 
 test("Takosumi adapter capabilities can carry operator-defined extension tokens", () => {

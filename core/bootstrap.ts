@@ -81,6 +81,7 @@ import type {
 import { StaticSecretConnectionVault } from "./adapters/vault/mod.ts";
 import type { SecretBoundaryCrypto } from "./adapters/secret-store/memory.ts";
 import { RunGroupsService } from "./domains/run-groups/mod.ts";
+import { OutputSyncService } from "./domains/output-sync/mod.ts";
 import { ActivityService } from "./domains/activity/mod.ts";
 import {
   createInMemoryResourceShapeStores,
@@ -617,6 +618,8 @@ export interface TakosumiOperations {
    * space_drift_check RunGroups over the same shared ledger + controller.
    */
   readonly runGroups: RunGroupsService;
+  /** Takosumi-specific, capability-advertised Workspace Output Sync extension. */
+  readonly outputSync: OutputSyncService;
   /**
    * Activity domain service (Core Specification §27 / §34): the Space-scoped
    * audit trail over the same shared ledger.
@@ -1098,6 +1101,13 @@ export async function createTakosumiService(
     controller: opentofuController,
     activity: activityService,
   });
+  const outputSyncService = new OutputSyncService({
+    store: sharedOpenTofuStore,
+    runGroups: runGroupsService,
+  });
+  opentofuController.setTerminalRunObserver((run) =>
+    outputSyncService.onRunTerminal(run),
+  );
   // Control-backups domain (Core Specification §33 / §26 R2_BACKUPS): exports a
   // Space's control ledger as a sealed bundle. The seal + object-storage seam is
   // host-injected (`backupArtifactStore`); when absent the service is disabled
@@ -1236,6 +1246,7 @@ export async function createTakosumiService(
       dependenciesService,
       outputSharesService,
       runGroupsService,
+      outputSyncService,
       activityService,
       backupsService,
       ...(options.writeSourceArchive
@@ -1306,6 +1317,7 @@ export async function createTakosumiService(
       dependenciesService.listByWorkspace(spaceId),
     outputShares: outputSharesService,
     runGroups: runGroupsService,
+    outputSync: outputSyncService,
     activity: activityService,
     getWorkspaceBilling: (spaceId) =>
       opentofuController.getSpaceBilling(spaceId),
@@ -1504,8 +1516,7 @@ export async function createTakosumiService(
       opentofuController.createSourceCompatibilityCheck(sourceId, request),
     getCompatibilityReport: (reportId) =>
       opentofuController.getCompatibilityReport(reportId),
-    listCredentialRecipes: () =>
-      opentofuController.listCredentialRecipes(),
+    listCredentialRecipes: () => opentofuController.listCredentialRecipes(),
     listSourceSnapshots: (sourceId) =>
       opentofuController.listSourceSnapshots(sourceId),
     getSourceSyncRun: (id) => opentofuController.getSourceSyncRun(id),

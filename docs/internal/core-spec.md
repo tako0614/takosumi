@@ -87,6 +87,36 @@ Compatibility API framework is core; official managed capacity is not.
 
 Plan / Apply / Destroy are guarded Run operations, not separate ledgers.
 
+#### Optional Output Sync
+
+The baseline Stack flow captures `tofu output -json` as `Output` together with
+the successful apply's `StateVersion`. Explicit Dependency wiring and
+`terraform_remote_state` work independently of any Takosumi extension.
+
+Output Sync is an optional Takosumi capability, not an OpenTofu standard. It is
+advertised as `takosumi.output-sync.v1`, defaults to enabled per Workspace, and
+can be disabled without changing baseline Output capture.
+
+When enabled, Output Sync provides a current Workspace Output snapshot,
+projects the optional Takosumi Output Convention values `service_exports` and
+`service_bindings`, and schedules Workspace reconcile when a captured Output
+changes. Reconcile remains subject to normal Run policy and approval.
+
+Projected Output contains only a connection contract: endpoint, capability,
+authentication scheme, scope, or grant reference. It must not contain tokens,
+passwords, or live application data. MCP, HTTP, S3, and other declared
+interfaces remain the runtime data plane.
+
+Reconcile pins the currently applied SourceSnapshot and evaluates all runnable
+(`active` / `stale`) Capsules in Dependency-DAG layers. A clean plan may
+auto-apply; destructive changes retain the normal approval gate. Later layers
+wait for prior-layer apply success, and at most five consecutive passes may
+follow Output changes before the extension reports non-convergence. Source ref
+updates remain a separate Source/Run operation.
+
+Output Sync has no public event-feed contract. Cross-Workspace projection or
+consumption requires an explicit `OutputShare` authorization record.
+
 ### Resource Shape Flow
 
 | Concept        | Meaning                                                       |
@@ -702,6 +732,11 @@ GET /v1/capabilities
 `/capabilities` remains the existing operator-gated route inventory endpoint.
 `/v1/capabilities` is the public product capability document.
 
+`takosumi.output-sync.v1` advertises the optional Output Sync API. Its absence
+means clients must use Capsule Output reads, explicit Dependency wiring, or
+ordinary OpenTofu mechanisms; clients must not infer Output Sync from edition
+or host identity.
+
 `/v1/capabilities.operator` describes operator operations that are available on
 the current host, such as multi-tenant Workspace management, runner pools,
 operator-scoped Connections, managed target catalog, DB-backed configuration,
@@ -747,6 +782,11 @@ Native resource state
 
 OpenTofu provider state for `takosumi_*` resources should hold Takosumi resource
 ids and outputs, not secret material or raw native provider internals.
+
+For the Stack flow, a successful apply captures `tofu output -json` as the
+current Capsule Output. Output Sync may project non-sensitive connection
+contracts from that capture, but it does not turn Output into a runtime state
+store.
 
 ## Billing And Usage Events
 

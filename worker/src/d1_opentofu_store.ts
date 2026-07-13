@@ -58,6 +58,7 @@ import type {
 } from "takosumi-contract/sources";
 import type { CapsuleCompatibilityReport } from "takosumi-contract/capsules";
 import type { Workspace as Space } from "takosumi-contract/workspaces";
+import type { WorkspaceOutputSyncState } from "takosumi-contract";
 import type { InstallationProviderEnvBindingSet } from "takosumi-contract/connections";
 import type {
   Dependency,
@@ -117,6 +118,7 @@ import type {
   SettleBillingAutoRechargeAttemptResult,
   TransitionRunInput,
   TransitionRunResult,
+  WorkspaceCurrentOutputRecord,
 } from "../../core/domains/deploy-control/store.ts";
 import {
   clampActivityLimit,
@@ -635,6 +637,133 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
     );
   }
 
+  // -- Workspace Output Sync -------------------------------------------------
+
+  async putWorkspaceOutputSyncState(
+    state: WorkspaceOutputSyncState,
+  ): Promise<WorkspaceOutputSyncState> {
+    await this.#drizzleUpsert(
+      schema.workspaceOutputSync,
+      workspaceOutputSyncValues(state),
+      workspaceOutputSyncValues(state),
+      schema.workspaceOutputSync.workspaceId,
+    );
+    return state;
+  }
+
+  async compareAndSetWorkspaceOutputSyncState(
+    expected: WorkspaceOutputSyncState | undefined,
+    next: WorkspaceOutputSyncState,
+  ): Promise<boolean> {
+    await this.#ensureSchema();
+    if (!expected) {
+      const result = await this.#orm
+        .insert(schema.workspaceOutputSync)
+        .values(workspaceOutputSyncValues(next))
+        .onConflictDoNothing()
+        .run();
+      return changes(result as D1Result) === 1;
+    }
+    const result = await this.#orm
+      .update(schema.workspaceOutputSync)
+      .set(workspaceOutputSyncValues(next))
+      .where(
+        and(
+          eq(schema.workspaceOutputSync.workspaceId, expected.workspaceId),
+          eq(schema.workspaceOutputSync.enabled, expected.enabled),
+          eq(
+            schema.workspaceOutputSync.outputRevision,
+            expected.outputRevision,
+          ),
+          eq(
+            schema.workspaceOutputSync.reconciledRevision,
+            expected.reconciledRevision,
+          ),
+          expected.activeRunGroupId === undefined
+            ? isNull(schema.workspaceOutputSync.activeRunGroupId)
+            : eq(
+                schema.workspaceOutputSync.activeRunGroupId,
+                expected.activeRunGroupId,
+              ),
+          eq(
+            schema.workspaceOutputSync.consecutivePasses,
+            expected.consecutivePasses,
+          ),
+          eq(schema.workspaceOutputSync.updatedAt, expected.updatedAt),
+        ),
+      )
+      .run();
+    return changes(result as D1Result) === 1;
+  }
+
+  async getWorkspaceOutputSyncState(
+    workspaceId: string,
+  ): Promise<WorkspaceOutputSyncState | undefined> {
+    await this.#ensureSchema();
+    const row = await this.#orm
+      .select()
+      .from(schema.workspaceOutputSync)
+      .where(eq(schema.workspaceOutputSync.workspaceId, workspaceId))
+      .get();
+    return row ? workspaceOutputSyncStateFromD1Row(row) : undefined;
+  }
+
+  async listPendingWorkspaceOutputSyncStates(
+    limit: number,
+  ): Promise<readonly WorkspaceOutputSyncState[]> {
+    const normalizedLimit = Math.max(0, Math.floor(limit));
+    if (normalizedLimit === 0) return [];
+    await this.#ensureSchema();
+    const rows = await this.#orm
+      .select()
+      .from(schema.workspaceOutputSync)
+      .where(
+        and(
+          eq(schema.workspaceOutputSync.enabled, true),
+          or(
+            gt(
+              schema.workspaceOutputSync.outputRevision,
+              schema.workspaceOutputSync.reconciledRevision,
+            ),
+            sql`${schema.workspaceOutputSync.activeRunGroupId} is not null`,
+          ),
+        ),
+      )
+      .orderBy(
+        asc(schema.workspaceOutputSync.updatedAt),
+        asc(schema.workspaceOutputSync.workspaceId),
+      )
+      .limit(normalizedLimit);
+    return rows.map(workspaceOutputSyncStateFromD1Row);
+  }
+
+  async listCurrentOutputsByWorkspace(
+    workspaceId: string,
+  ): Promise<readonly WorkspaceCurrentOutputRecord[]> {
+    await this.#ensureSchema();
+    const currentOutputId = sql<string>`COALESCE(
+      json_extract(${schema.installations.recordJson}, '$.currentOutputId'),
+      ${schema.installations.currentOutputSnapshotId},
+      json_extract(${schema.installations.recordJson}, '$.currentOutputSnapshotId')
+    )`;
+    const rows = await this.#orm
+      .select({
+        capsule: schema.installations.recordJson,
+        output: schema.outputSnapshots.recordJson,
+      })
+      .from(schema.installations)
+      .innerJoin(
+        schema.outputSnapshots,
+        eq(schema.outputSnapshots.id, currentOutputId),
+      )
+      .where(eq(schema.installations.spaceId, workspaceId))
+      .orderBy(asc(schema.installations.id));
+    return rows.map((row) => ({
+      capsule: normalizeInstallationRecord(row.capsule as Installation),
+      output: row.output as OutputSnapshot,
+    }));
+  }
+
   // -- InstallConfig ----------------------------------------------------------
 
   async putInstallConfig(config: InstallConfig): Promise<InstallConfig> {
@@ -1088,6 +1217,15 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
           updatedAt: updated.updatedAt,
         })
         .where(eq(schema.installations.id, updated.id)),
+      ...(input.outputSyncRevisionBump
+        ? [
+            d1BumpWorkspaceOutputSyncRevisionStmt(
+              this.#orm,
+              input.outputSyncRevisionBump.workspaceId,
+              input.outputSyncRevisionBump.updatedAt,
+            ),
+          ]
+        : []),
     ];
     // D1's atomic batch. The binding always exposes batch in production; when a
     // (test) binding omits it, fall back to the prior non-atomic sequence — the
@@ -1113,7 +1251,15 @@ export class CloudflareD1OpenTofuDeploymentStore implements OpenTofuDeploymentSt
         throw error;
       }
     }
-    return { installation: updated };
+    const outputSyncState = input.outputSyncRevisionBump
+      ? await this.getWorkspaceOutputSyncState(
+          input.outputSyncRevisionBump.workspaceId,
+        )
+      : undefined;
+    return {
+      installation: updated,
+      ...(outputSyncState ? { outputSyncState } : {}),
+    };
   }
 
   async commitRestoredState(
@@ -3532,6 +3678,31 @@ function d1UpsertOutputSnapshotStmt(
     .onConflictDoUpdate({ target: schema.outputSnapshots.id, set: values });
 }
 
+function d1BumpWorkspaceOutputSyncRevisionStmt(
+  orm: DrizzleD1Database<typeof schema>,
+  workspaceId: string,
+  updatedAt: string,
+) {
+  return orm
+    .insert(schema.workspaceOutputSync)
+    .values({
+      workspaceId,
+      enabled: true,
+      outputRevision: 1,
+      reconciledRevision: 0,
+      activeRunGroupId: null,
+      consecutivePasses: 0,
+      updatedAt,
+    })
+    .onConflictDoUpdate({
+      target: schema.workspaceOutputSync.workspaceId,
+      set: {
+        outputRevision: sql`${schema.workspaceOutputSync.outputRevision} + 1`,
+        updatedAt,
+      },
+    });
+}
+
 function stripRunHeartbeat<R extends PlanRun | ApplyRun | SourceSyncRun | Run>(
   run: R,
 ): R {
@@ -3636,6 +3807,34 @@ function changes(result: D1Result): number {
   return result.meta?.changes ?? 0;
 }
 
+function workspaceOutputSyncValues(state: WorkspaceOutputSyncState) {
+  return {
+    workspaceId: state.workspaceId,
+    enabled: state.enabled,
+    outputRevision: state.outputRevision,
+    reconciledRevision: state.reconciledRevision,
+    activeRunGroupId: state.activeRunGroupId ?? null,
+    consecutivePasses: state.consecutivePasses,
+    updatedAt: state.updatedAt,
+  };
+}
+
+function workspaceOutputSyncStateFromD1Row(
+  row: typeof schema.workspaceOutputSync.$inferSelect,
+): WorkspaceOutputSyncState {
+  return {
+    workspaceId: row.workspaceId,
+    enabled: row.enabled,
+    outputRevision: row.outputRevision,
+    reconciledRevision: row.reconciledRevision,
+    ...(row.activeRunGroupId === null
+      ? {}
+      : { activeRunGroupId: row.activeRunGroupId }),
+    consecutivePasses: row.consecutivePasses,
+    updatedAt: row.updatedAt,
+  };
+}
+
 /**
  * Lazily create the §27 control-plane tables. Idempotent (`IF NOT EXISTS`);
  * called once per store instance via the memoized init promise. Rich internal
@@ -3659,6 +3858,17 @@ export async function ensureD1OpenTofuLedgerSchema(
     )`,
     `create unique index if not exists workspaces_handle_unique
       on workspaces (handle)`,
+    `create table if not exists workspace_output_sync (
+      workspace_id text primary key,
+      enabled integer not null default 1,
+      output_revision integer not null default 0,
+      reconciled_revision integer not null default 0,
+      active_run_group_id text,
+      consecutive_passes integer not null default 0,
+      updated_at text not null
+    )`,
+    `create index if not exists workspace_output_sync_pending_idx
+      on workspace_output_sync (enabled, output_revision, reconciled_revision)`,
     `create table if not exists projects (
       id text primary key,
       workspace_id text not null,
@@ -5308,6 +5518,43 @@ custom runner profiles and historical runs remain unchanged
              'docker-custom-example',
              'generic-opentofu-provider'
            )`,
+        )
+        .run();
+    },
+  },
+  {
+    version: 26,
+    name: "d1_opentofu_workspace_output_sync",
+    checksumSource: `
+workspace_output_sync tracks Takosumi-specific Workspace reconciliation state
+existing Workspaces default enabled and start at revision 1 when a Capsule has a current Output
+OpenTofu outputs remain authoritative in the outputs table
+`,
+    async apply(db) {
+      await db
+        .prepare(
+          `insert into workspace_output_sync (
+             workspace_id, enabled, output_revision, reconciled_revision,
+             active_run_group_id, consecutive_passes, updated_at
+           )
+           select w.id,
+                  1,
+                  case when exists (
+                    select 1 from capsules c
+                    where c.space_id = w.id
+                      and coalesce(
+                        json_extract(c.record_json, '$.currentOutputId'),
+                        c.current_output_snapshot_id,
+                        json_extract(c.record_json, '$.currentOutputSnapshotId')
+                      ) is not null
+                  ) then 1 else 0 end,
+                  0,
+                  null,
+                  0,
+                  w.updated_at
+           from workspaces w
+           where true
+           on conflict(workspace_id) do nothing`,
         )
         .run();
     },
