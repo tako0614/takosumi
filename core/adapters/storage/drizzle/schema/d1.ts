@@ -30,6 +30,28 @@ export const spaces = sqliteTable(
   (table) => [uniqueIndex("workspaces_handle_unique").on(table.handle)],
 );
 
+// Takosumi-specific Output Sync extension state. OpenTofu Output records remain
+// authoritative; this row only tracks Workspace aggregation/reconciliation.
+export const workspaceOutputSync = sqliteTable(
+  names.workspaceOutputSync,
+  {
+    workspaceId: text("workspace_id").primaryKey(),
+    enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+    outputRevision: integer("output_revision").notNull().default(0),
+    reconciledRevision: integer("reconciled_revision").notNull().default(0),
+    activeRunGroupId: text("active_run_group_id"),
+    consecutivePasses: integer("consecutive_passes").notNull().default(0),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    index("workspace_output_sync_pending_idx").on(
+      table.enabled,
+      table.outputRevision,
+      table.reconciledRevision,
+    ),
+  ],
+);
+
 // P4 17-noun rename: NEW Workspace-owned Project grouping. Capsules live under a
 // Project (`capsules.project_id`); a default Project is backfilled per Workspace
 // so pre-Project Capsules keep a stable owner.

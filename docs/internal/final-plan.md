@@ -197,6 +197,42 @@ approval
 policy
 ```
 
+#### Optional Output Sync
+
+The plain Stack flow ends a successful apply by running `tofu output -json`
+and capturing the resulting `StateVersion` and `Output`. Explicit
+output-to-input dependencies and `terraform_remote_state` remain ordinary
+OpenTofu integration choices.
+
+`Output Sync` is a separate, Takosumi-specific optional feature. It is not an
+OpenTofu standard. Hosts advertise it as capability
+`takosumi.output-sync.v1`; it is enabled by default per Workspace and can be
+disabled without disabling Output capture or explicit dependencies.
+
+Output Sync adds three behaviors:
+
+```text
+Workspace-scoped current Output snapshot
+Takosumi Output Convention projection from service_exports / service_bindings
+automatic Workspace reconcile after a captured Output changes
+```
+
+Reconcile uses the currently applied SourceSnapshot; it does not update Git
+refs. It plans every runnable (`active` / `stale`) Capsule in dependency layers,
+allows same-layer parallelism, advances only after no-op or successful apply,
+and uses the normal destructive approval gate. New Output revisions trigger a
+bounded follow-up pass, with five consecutive passes as the convergence limit.
+
+The convention describes connection contracts such as endpoint, capability,
+authentication scheme, and grant reference. Tokens, passwords, and runtime
+data do not belong in projected Output. Runtime data remains live behind the
+declared MCP, HTTP, S3, or other service interface.
+
+Output Sync does not define a public event feed. Consumers read the current
+snapshot or request reconcile through the feature API. Sharing an Output with
+another Workspace requires an explicit `OutputShare`; Workspace membership
+alone never grants cross-Workspace access.
+
 Provider execution has one invariant:
 
 ```text

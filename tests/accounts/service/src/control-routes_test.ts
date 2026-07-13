@@ -380,6 +380,53 @@ function fakeOperations(
         return { runGroup: { id, workspaceId: "space_a" }, runs: [] };
       },
     },
+    outputSync: {
+      getStatus: async (workspaceId) => {
+        record("getOutputSyncStatus", workspaceId);
+        return {
+          capability: "takosumi.output-sync.v1",
+          state: {
+            workspaceId,
+            enabled: true,
+            outputRevision: 4,
+            reconciledRevision: 4,
+            consecutivePasses: 0,
+            updatedAt: "2026-07-13T00:00:00.000Z",
+          },
+        };
+      },
+      setEnabled: async (workspaceId, enabled) => {
+        record("setOutputSyncEnabled", workspaceId, enabled);
+        return {
+          capability: "takosumi.output-sync.v1",
+          state: {
+            workspaceId,
+            enabled,
+            outputRevision: 4,
+            reconciledRevision: 4,
+            consecutivePasses: 0,
+            updatedAt: "2026-07-13T00:00:00.000Z",
+          },
+        };
+      },
+      getSnapshot: async (workspaceId) => {
+        record("getOutputSyncSnapshot", workspaceId);
+        return { workspaceId, revision: 4, outputs: [] };
+      },
+      reconcile: async (workspaceId) => {
+        record("reconcileOutputs", workspaceId);
+        return {
+          state: {
+            workspaceId,
+            enabled: true,
+            outputRevision: 4,
+            reconciledRevision: 4,
+            consecutivePasses: 0,
+            updatedAt: "2026-07-13T00:00:00.000Z",
+          },
+        };
+      },
+    },
     activity: {
       record: async (event) => {
         record("activityRecord", event);
@@ -1031,10 +1078,15 @@ function fakeOperations(
 function request(
   method: string,
   path: string,
-  init: { authToken?: string; cookie?: string; body?: unknown } = {},
+  init: {
+    authToken?: string;
+    cookie?: string;
+    body?: unknown;
+    headers?: Record<string, string>;
+  } = {},
 ): { request: Request; url: URL } {
   const url = new URL(`${ORIGIN}${path}`);
-  const headers: Record<string, string> = {};
+  const headers: Record<string, string> = { ...(init.headers ?? {}) };
   if (init.authToken) headers.authorization = `Bearer ${init.authToken}`;
   if (init.cookie) headers.cookie = init.cookie;
   if (init.body !== undefined) headers["content-type"] = "application/json";
@@ -3405,8 +3457,7 @@ test("GET /api/v1/provider-connections returns the Workspace's provider connecti
             managedProvider: true,
             managedProviderProfile: "compat.cloudflare.workers.v1",
             providerConfig: {
-              base_url:
-                "https://app.takosumi.com/compat/cloudflare/client/v4",
+              base_url: "https://app.takosumi.com/compat/cloudflare/client/v4",
             },
             accountId: "ts_acc_takosumi_cloud",
           },
@@ -5286,8 +5337,7 @@ test("PUT /api/v1/capsules/:id/provider-connections accepts public managed opera
             managedProvider: true,
             managedProviderProfile: "compat.cloudflare.workers.v1",
             providerConfig: {
-              base_url:
-                "https://app.takosumi.com/compat/cloudflare/client/v4",
+              base_url: "https://app.takosumi.com/compat/cloudflare/client/v4",
             },
             accountId: "ts_acc_takosumi_cloud",
           },
@@ -7723,6 +7773,80 @@ test("RunGroups: plan-update, drift-check, get, approve", async () => {
     operations,
   });
   expect(approveResp?.status).toEqual(200);
+});
+
+test("Output Sync: settings, ETag snapshot, and reconcile are Workspace-gated", async () => {
+  const store = new InMemoryAccountsStore();
+  const { cookie } = seedSession(store);
+  const operations = fakeOperations();
+
+  const status = request("GET", "/api/v1/workspaces/space_a/output-sync", {
+    cookie,
+  });
+  const statusResp = await handleControlRoute({
+    request: status.request,
+    url: status.url,
+    store,
+    operations,
+  });
+  expect(statusResp?.status).toBe(200);
+
+  const patch = request("PATCH", "/api/v1/workspaces/space_a/output-sync", {
+    cookie,
+    body: { enabled: false },
+  });
+  const patchResp = await handleControlRoute({
+    request: patch.request,
+    url: patch.url,
+    store,
+    operations,
+  });
+  expect(patchResp?.status).toBe(200);
+  expect(operations.calls.setOutputSyncEnabled).toEqual(["space_a", false]);
+
+  const snapshot = request(
+    "GET",
+    "/api/v1/workspaces/space_a/output-sync/snapshot",
+    { cookie },
+  );
+  const snapshotResp = await handleControlRoute({
+    request: snapshot.request,
+    url: snapshot.url,
+    store,
+    operations,
+  });
+  expect(snapshotResp?.status).toBe(200);
+  expect(snapshotResp?.headers.get("etag")).toBe('"takosumi-output-sync-4"');
+  expect(await snapshotResp?.json()).toEqual({
+    snapshot: { workspaceId: "space_a", revision: 4, outputs: [] },
+  });
+
+  const cached = request(
+    "GET",
+    "/api/v1/workspaces/space_a/output-sync/snapshot",
+    { cookie, headers: { "if-none-match": '"takosumi-output-sync-4"' } },
+  );
+  const cachedResp = await handleControlRoute({
+    request: cached.request,
+    url: cached.url,
+    store,
+    operations,
+  });
+  expect(cachedResp?.status).toBe(304);
+
+  const reconcile = request(
+    "POST",
+    "/api/v1/workspaces/space_a/output-sync/reconcile",
+    { cookie },
+  );
+  const reconcileResp = await handleControlRoute({
+    request: reconcile.request,
+    url: reconcile.url,
+    store,
+    operations,
+  });
+  expect(reconcileResp?.status).toBe(200);
+  expect(operations.calls.reconcileOutputs).toEqual(["space_a"]);
 });
 
 test("Connections: requires workspaceId; provider-connections is Workspace-gated", async () => {

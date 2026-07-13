@@ -36,6 +36,7 @@ import {
   requireNonEmptyString,
 } from "../deploy-control/errors.ts";
 import type { OpenTofuDeploymentController } from "../deploy-control/mod.ts";
+import { applyExpectedGuardFromPlanRun } from "../deploy-control/mod.ts";
 import type { OpenTofuDeploymentStore } from "../deploy-control/store.ts";
 import {
   type ActivityRecorder,
@@ -52,6 +53,13 @@ export interface SpaceUpdateGraph {
   readonly order: readonly (readonly string[])[];
   /** Member installation id -> the plan Run id created for it. */
   readonly runs: Readonly<Record<string, string>>;
+}
+
+export interface WorkspaceOutputSyncGraph extends SpaceUpdateGraph {
+  readonly mode: "workspace_output_sync";
+  readonly targetRevision: number;
+  readonly pass: number;
+  readonly currentLayer: number;
 }
 
 export interface RunGroupsServiceDependencies {
@@ -192,6 +200,194 @@ export class RunGroupsService {
   }
 
   /**
+   * Starts a Takosumi Output Sync pass. Unlike the older space_update helper,
+   * only the first topological layer is planned now; later layers are created
+   * after the prior layer has either no changes or a successful apply.
+   */
+  async createWorkspaceOutputSync(
+    workspaceId: string,
+    targetRevision: number,
+    pass = 1,
+    requestedRunGroupId?: string,
+  ): Promise<RunGroupWithRuns> {
+    requireNonEmptyString(workspaceId, "workspaceId");
+    const capsules = (await this.#store.listInstallations(workspaceId)).filter(
+      (capsule) => capsule.status === "active" || capsule.status === "stale",
+    );
+    if (capsules.length === 0) {
+      throw new OpenTofuControllerError(
+        "failed_precondition",
+        "nothing_to_reconcile: no runnable capsules in this workspace",
+      );
+    }
+    const memberIds = capsules.map((capsule) => capsule.id);
+    const memberSet = new Set(memberIds);
+    const edges = (await this.#store.listDependenciesBySpace(workspaceId))
+      .map((edge) => ({
+        from: edge.producerInstallationId,
+        to: edge.consumerInstallationId,
+      }))
+      .filter((edge) => memberSet.has(edge.from) && memberSet.has(edge.to));
+    const order = topologicalLayersOrPrecondition(
+      memberIds,
+      edges,
+      workspaceId,
+    );
+    const runGroupId = requestedRunGroupId ?? this.#newId("rg");
+    let graph: WorkspaceOutputSyncGraph = {
+      mode: "workspace_output_sync",
+      targetRevision,
+      pass,
+      currentLayer: 0,
+      order,
+      runs: {},
+    };
+    let group: RunGroup = {
+      id: runGroupId,
+      workspaceId,
+      spaceId: workspaceId,
+      type: "workspace_output_sync",
+      status: "queued",
+      graphJson: JSON.stringify(graph),
+      createdAt: this.#now(),
+    };
+    // Persist the checkpoint before dispatching any member. A lost worker can
+    // recover this row and create the still-missing layer runs idempotently.
+    await this.#store.putRunGroup(group);
+    graph = await this.#startOutputSyncLayer(group, graph);
+    group = {
+      ...group,
+      status: "running",
+      graphJson: JSON.stringify(graph),
+    };
+    await this.#store.putRunGroup(group);
+    await this.#activity.record({
+      workspaceId,
+      spaceId: workspaceId,
+      ...(this.#actor ? { actorId: this.#actor } : {}),
+      action: "output_sync.started",
+      targetType: "run_group",
+      targetId: group.id,
+      metadata: { targetRevision, pass, capsuleCount: memberIds.length },
+    });
+    return (await this.getRunGroup(group.id)) ?? { runGroup: group, runs: [] };
+  }
+
+  /** Advances one staged Output Sync group, and is safe to call repeatedly. */
+  async advanceWorkspaceOutputSync(
+    id: string,
+  ): Promise<RunGroupWithRuns | undefined> {
+    const stored = await this.#store.getRunGroup(id);
+    if (!stored || stored.type !== "workspace_output_sync") return undefined;
+    if (stored.status === "failed" || stored.status === "cancelled") {
+      return await this.getRunGroup(id);
+    }
+    let graph = parseWorkspaceOutputSyncGraph(stored.graphJson);
+    const layer = graph.order[graph.currentLayer] ?? [];
+    if (layer.length === 0) {
+      const completed = {
+        ...stored,
+        status: "succeeded" as const,
+        finishedAt: this.#now(),
+      };
+      await this.#store.putRunGroup(completed);
+      return await this.getRunGroup(id);
+    }
+
+    const workspaceRuns = await this.#store.listRunsBySpace(
+      stored.workspaceId ?? stored.spaceId ?? "",
+      { limit: 500 },
+    );
+    for (const capsuleId of layer) {
+      const planId = graph.runs[capsuleId];
+      if (!planId) return await this.getRunGroup(id);
+      const plan = await this.#store.getPlanRun(planId);
+      if (!plan) return await this.getRunGroup(id);
+      if (plan.status === "failed" || plan.status === "cancelled") {
+        const failed = {
+          ...stored,
+          status:
+            plan.status === "failed"
+              ? ("failed" as const)
+              : ("cancelled" as const),
+          finishedAt: this.#now(),
+        };
+        await this.#store.putRunGroup(failed);
+        return await this.getRunGroup(id);
+      }
+      if (
+        plan.status === "queued" ||
+        plan.status === "running" ||
+        plan.status === "waiting_approval"
+      ) {
+        return await this.getRunGroup(id);
+      }
+      if (
+        plan.planResourceChanges !== undefined &&
+        plan.planResourceChanges.length === 0
+      )
+        continue;
+      const apply = workspaceRuns.find(
+        (run) => "planRunId" in run && run.planRunId === plan.id,
+      );
+      if (!apply || apply.status === "queued" || apply.status === "running") {
+        return await this.getRunGroup(id);
+      }
+      if (apply.status !== "succeeded") {
+        const failed = {
+          ...stored,
+          status:
+            apply.status === "cancelled"
+              ? ("cancelled" as const)
+              : ("failed" as const),
+          finishedAt: this.#now(),
+        };
+        await this.#store.putRunGroup(failed);
+        return await this.getRunGroup(id);
+      }
+    }
+
+    const nextLayer = graph.currentLayer + 1;
+    if (nextLayer >= graph.order.length) {
+      const completed = {
+        ...stored,
+        status: "succeeded" as const,
+        finishedAt: this.#now(),
+      };
+      await this.#store.putRunGroup(completed);
+      return await this.getRunGroup(id);
+    }
+    graph = { ...graph, currentLayer: nextLayer };
+    graph = await this.#startOutputSyncLayer(stored, graph);
+    await this.#store.putRunGroup({
+      ...stored,
+      status: "running",
+      graphJson: JSON.stringify(graph),
+    });
+    // Inline/local runners may have completed the newly-created layer before
+    // createInstallationPlan returned. Re-enter once so that terminal layer is
+    // not stranded waiting for the scheduled recovery scan.
+    return await this.advanceWorkspaceOutputSync(id);
+  }
+
+  async #startOutputSyncLayer(
+    group: RunGroup,
+    graph: WorkspaceOutputSyncGraph,
+  ): Promise<WorkspaceOutputSyncGraph> {
+    const runs = { ...graph.runs };
+    for (const capsuleId of graph.order[graph.currentLayer] ?? []) {
+      if (runs[capsuleId]) continue;
+      const response = await this.#controller.createInstallationPlan(
+        capsuleId,
+        { actor: this.#actor ?? "system:output-sync" },
+        { runGroupId: group.id, autoApplyRequested: true },
+      );
+      runs[capsuleId] = response.planRun.id;
+    }
+    return { ...graph, runs };
+  }
+
+  /**
    * Creates a `space_drift_check` RunGroup for one Space. Unlike
    * `space_update`, drift checks are read-only and independent, but recording
    * them as a RunGroup gives scheduled sweeps a single Space-scoped ledger row
@@ -302,7 +498,13 @@ export class RunGroupsService {
     const graph = parseSpaceUpdateGraph(stored.graphJson);
     const memberRuns = await this.#memberRuns(graph);
     return {
-      runGroup: { ...stored, status: computeGroupStatus(memberRuns) },
+      runGroup: {
+        ...stored,
+        status:
+          stored.type === "workspace_output_sync"
+            ? stored.status
+            : computeGroupStatus(memberRuns),
+      },
       runs: memberRuns,
     };
   }
@@ -324,6 +526,22 @@ export class RunGroupsService {
         run.id,
         this.#actor ? { approvedBy: this.#actor } : {},
       );
+      if (stored.type === "workspace_output_sync") {
+        const plan = await this.#store.getPlanRun(run.id);
+        if (plan && (plan.planResourceChanges?.length ?? 0) > 0) {
+          await this.#controller.createApplyRun(
+            {
+              planRunId: plan.id,
+              expected: applyExpectedGuardFromPlanRun(plan),
+              confirmDestructive: true,
+            },
+            { actor: this.#actor ?? "system:output-sync" },
+          );
+        }
+      }
+    }
+    if (stored.type === "workspace_output_sync") {
+      await this.advanceWorkspaceOutputSync(id);
     }
     return await this.getRunGroup(id);
   }
@@ -338,6 +556,10 @@ export class RunGroupsService {
         if (!runId) continue;
         try {
           runs.push(await this.#controller.getRun(runId));
+          const plan = await this.#store.getPlanRun(runId);
+          if (plan?.appliedApplyRunId) {
+            runs.push(await this.#controller.getRun(plan.appliedApplyRunId));
+          }
         } catch {
           // A member run the ledger no longer holds is skipped; the group status
           // is computed from the runs that remain.
@@ -480,4 +702,28 @@ function parseSpaceUpdateGraph(graphJson: string): SpaceUpdateGraph {
     }
   }
   return { order, runs };
+}
+
+function parseWorkspaceOutputSyncGraph(
+  graphJson: string,
+): WorkspaceOutputSyncGraph {
+  const base = parseSpaceUpdateGraph(graphJson);
+  let record: Record<string, unknown> = {};
+  try {
+    const parsed = JSON.parse(graphJson) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      record = parsed as Record<string, unknown>;
+    }
+  } catch {
+    // The base parser already normalizes malformed JSON to an empty graph.
+  }
+  return {
+    ...base,
+    mode: "workspace_output_sync",
+    targetRevision:
+      typeof record.targetRevision === "number" ? record.targetRevision : 0,
+    pass: typeof record.pass === "number" ? record.pass : 1,
+    currentLayer:
+      typeof record.currentLayer === "number" ? record.currentLayer : 0,
+  };
 }

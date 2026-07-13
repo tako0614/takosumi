@@ -3628,4 +3628,44 @@ where config_json ->> 'runnerId' in (
   'generic-opentofu-provider'
 );`,
     },
+    {
+      id: "deploy.workspace_output_sync.create",
+      version: 71,
+      domain: "deploy",
+      description:
+        "Create the Takosumi-specific Workspace Output Sync extension state without changing OpenTofu Output semantics. Existing Workspaces default enabled and receive revision 1 only when they already have a current Output.",
+      sql: `create table if not exists takosumi_workspace_output_sync (
+  workspace_id text primary key,
+  enabled boolean not null default true,
+  output_revision integer not null default 0,
+  reconciled_revision integer not null default 0,
+  active_run_group_id text,
+  consecutive_passes integer not null default 0,
+  updated_at text not null
+);
+create index if not exists takosumi_workspace_output_sync_pending_idx
+  on takosumi_workspace_output_sync (enabled, output_revision, reconciled_revision);
+insert into takosumi_workspace_output_sync (
+  workspace_id, enabled, output_revision, reconciled_revision,
+  active_run_group_id, consecutive_passes, updated_at
+)
+select w.id,
+       true,
+       case when exists (
+         select 1 from takosumi_capsules c
+         where c.space_id = w.id
+           and coalesce(
+             c.installation_json ->> 'currentOutputId',
+             c.installation_json ->> 'currentOutputSnapshotId'
+           ) is not null
+       ) then 1 else 0 end,
+       0,
+       null,
+       0,
+       w.updated_at
+from takosumi_workspaces w
+on conflict (workspace_id) do nothing;`,
+      down: `drop index if exists takosumi_workspace_output_sync_pending_idx;
+drop table if exists takosumi_workspace_output_sync;`,
+    },
   ]);

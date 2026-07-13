@@ -60,6 +60,30 @@ export const PUBLIC_SESSION_CONTROL_ENDPOINTS: readonly PublicSessionControlEndp
     },
     {
       method: "GET",
+      path: "/api/v1/workspaces/{workspaceId}/output-sync",
+      summary: "Read Workspace Output Sync settings and revision",
+      auth: "account-session",
+    },
+    {
+      method: "PATCH",
+      path: "/api/v1/workspaces/{workspaceId}/output-sync",
+      summary: "Enable or disable Workspace Output Sync",
+      auth: "account-session",
+    },
+    {
+      method: "GET",
+      path: "/api/v1/workspaces/{workspaceId}/output-sync/snapshot",
+      summary: "Read the current Workspace Output snapshot",
+      auth: "account-session",
+    },
+    {
+      method: "POST",
+      path: "/api/v1/workspaces/{workspaceId}/output-sync/reconcile",
+      summary: "Start or advance Workspace Output reconciliation",
+      auth: "account-session",
+    },
+    {
+      method: "GET",
       path: "/api/v1/workspaces/{workspaceId}/members",
       summary: "List Workspace members",
       auth: "account-session",
