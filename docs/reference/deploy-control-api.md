@@ -1,6 +1,6 @@
 # Deploy-Control API
 
-Last updated: 2026-06-19
+Last updated: 2026-07-13
 
 This API controls OpenTofu/Terraform execution in Takosumi OSS. It runs existing
 providers as-is. Public compatibility profiles are separate capability-versioned
@@ -57,6 +57,43 @@ GET    /outputs/:capsule_id
 POST   /secrets
 GET    /audit
 ```
+
+## Output Sync
+
+Output Sync は OpenTofu の標準機能ではなく、Takosumi 固有の任意機能です。
+実装されたホストは `takosumi.output-sync.v1` capability を公開します。Workspace
+ごとに既定で有効ですが、通常の Output capture や明示的な Dependency を止めずに
+無効化できます。
+
+公開APIは次の4つです。
+
+```text
+GET   /api/v1/workspaces/{workspaceId}/output-sync
+PATCH /api/v1/workspaces/{workspaceId}/output-sync
+GET   /api/v1/workspaces/{workspaceId}/output-sync/snapshot
+POST  /api/v1/workspaces/{workspaceId}/output-sync/reconcile
+```
+
+設定APIはWorkspaceの有効状態を読み書きします。snapshotは現在の非機密Outputを
+Workspace単位で返します。reconcileは通常のRun policyとapprovalに従って、
+Workspace内の対象Capsuleを再評価します。公開event feedは定義しません。
+
+reconcileは現在apply済みのSourceSnapshotを固定したまま、`active` / `stale`
+CapsuleをDependency DAGのlayer順にplanします。同じlayerは並列実行でき、前layerが
+no-opまたはapply成功した後だけ次layerを開始します。clean planは自動applyし、
+destructive planは通常のapprovalで停止します。Outputがさらに変化した場合は最大5回
+まで追従し、収束しない場合は明示的な失敗として止まります。Git refの更新はこの処理に
+混ぜません。
+
+`service_exports`と`service_bindings`は、通常のOpenTofu Output上で接続契約を
+表現する任意のTakosumi Output Conventionです。endpoint、capability、認証方式、
+scope、grant参照は含められますが、token、password、live dataは含めません。
+実データはMCP、HTTP、S3など宣言されたinterfaceから取得します。
+
+別WorkspaceのOutputをsnapshotまたはreconcileで利用するには、明示的な
+`OutputShare`が必要です。Output Syncが無効またはcapabilityが存在しない場合も、
+`tofu output -json`のcapture、Capsule Output API、明示的なDependency、
+`terraform_remote_state`は独立して利用できます。
 
 ## Provider Connections
 

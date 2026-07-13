@@ -405,3 +405,58 @@ test("plan-update rejects a malformed spaceId and run-group rejects a malformed 
   });
   expect(badGroup.status).toBe(400);
 });
+
+test("Output Sync internal routes expose settings, snapshot, and disabled gate", async () => {
+  const { app } = await createTakosumiService({
+    role: "takosumi-api",
+    runtimeEnv: {
+      TAKOSUMI_DEV_MODE: "1",
+      TAKOSUMI_DEPLOY_CONTROL_TOKEN: TOKEN,
+    },
+  });
+  const workspaceId = "space_output_sync_1";
+  const create = await app.request("/internal/v1/workspaces", {
+    method: "POST",
+    headers: headers({ "content-type": "application/json" }),
+    body: JSON.stringify({
+      handle: "output-sync",
+      displayName: "Output Sync",
+      type: "personal",
+      ownerUserId: "user_test",
+    }),
+  });
+  expect(create.status).toBe(201);
+  const actualWorkspaceId = (await create.json()).space.id as string;
+  expect(actualWorkspaceId).not.toBe(workspaceId);
+
+  const status = await app.request(
+    `/internal/v1/workspaces/${actualWorkspaceId}/output-sync`,
+    { headers: headers() },
+  );
+  expect(status.status).toBe(200);
+  expect((await status.json()).state.enabled).toBe(true);
+
+  const snapshot = await app.request(
+    `/internal/v1/workspaces/${actualWorkspaceId}/output-sync/snapshot`,
+    { headers: headers() },
+  );
+  expect(snapshot.status).toBe(200);
+  expect(snapshot.headers.get("etag")).toBe('"takosumi-output-sync-0"');
+
+  const disabled = await app.request(
+    `/internal/v1/workspaces/${actualWorkspaceId}/output-sync`,
+    {
+      method: "PATCH",
+      headers: headers({ "content-type": "application/json" }),
+      body: JSON.stringify({ enabled: false }),
+    },
+  );
+  expect(disabled.status).toBe(200);
+  expect((await disabled.json()).state.enabled).toBe(false);
+
+  const reconcile = await app.request(
+    `/internal/v1/workspaces/${actualWorkspaceId}/output-sync/reconcile`,
+    { method: "POST", headers: headers() },
+  );
+  expect(reconcile.status).toBe(409);
+});

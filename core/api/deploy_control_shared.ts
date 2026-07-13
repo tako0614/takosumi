@@ -36,6 +36,7 @@ import type { ConnectionsService } from "../domains/connections/mod.ts";
 import type { DependenciesService } from "../domains/dependencies/mod.ts";
 import type { OutputSharesService } from "../domains/output-shares/mod.ts";
 import type { RunGroupsService } from "../domains/run-groups/mod.ts";
+import type { OutputSyncService } from "../domains/output-sync/mod.ts";
 import type { ActivityService } from "../domains/activity/mod.ts";
 import type { BackupsService } from "../domains/backups/mod.ts";
 import {
@@ -228,6 +229,7 @@ export const ALLOWED_KEYS: Record<
     "billingAccountId",
   ]),
   spacePatch: new Set(["displayName"]),
+  outputSyncPatch: new Set(["enabled"]),
   installationCreate: new Set([
     "name",
     "environment",
@@ -307,6 +309,7 @@ export type DeployControlRouteName =
   | "artifactSnapshot"
   | "spaceCreate"
   | "spacePatch"
+  | "outputSyncPatch"
   | "installationCreate"
   | "installationPatch"
   | "installationPlan"
@@ -386,6 +389,8 @@ export interface DeployControlInternalRouteDependencies {
    * plan-update / run-group routes return 501 after successful auth.
    */
   readonly runGroupsService?: RunGroupsService;
+  /** Takosumi-specific Workspace Output Sync extension. */
+  readonly outputSyncService?: OutputSyncService;
   /**
    * Activity domain service (Core Specification §27 / §34). When unset, the
    * Activity listing route returns 501 after successful auth, and the connection

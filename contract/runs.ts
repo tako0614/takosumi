@@ -262,6 +262,7 @@ export interface RunCostResponse {
 
 export type RunGroupType =
   | "space_update"
+  | "workspace_output_sync"
   | "space_drift_check"
   | "installation_install"
   | "installation_update"

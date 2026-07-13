@@ -1,3 +1,5 @@
+import { TAKOSUMI_OUTPUT_SYNC_CAPABILITY } from "./output-sync.ts";
+
 export const TAKOSUMI_API_VERSION = "takosumi.dev/v1alpha1" as const;
 
 export type TakosumiEdition = "core" | "operator" | "cloud";
@@ -23,6 +25,8 @@ export interface TakosumiWellKnownFeatures {
   readonly compat_oci: boolean;
   readonly compat_cloudevents: boolean;
   readonly compat_provider_cloudflare_workers: boolean;
+  /** Takosumi-specific Workspace Output Sync extension availability. */
+  readonly output_sync: boolean;
 }
 
 export interface TakosumiWellKnownEndpoints {
@@ -41,6 +45,8 @@ export interface TakosumiProductCapabilities {
   readonly identity: TakosumiIdentityCapabilities;
   readonly operator: TakosumiOperatorCapabilities;
   readonly commercial: TakosumiCommercialCapabilities;
+  /** Versioned Takosumi extensions; these are not OpenTofu standards. */
+  readonly extensions: readonly string[];
 }
 
 export interface TakosumiResourceCapabilities {
@@ -168,6 +174,7 @@ export function createTakosumiWellKnownDocument(
       compat_cloudevents: capabilities.compat.cloudevents,
       compat_provider_cloudflare_workers:
         capabilities.compat.provider_cloudflare_workers,
+      output_sync: true,
     },
     endpoints: {
       api: `${trimTrailingSlash(options.origin)}/api`,
@@ -228,6 +235,7 @@ export function createTakosumiProductCapabilities(
         options.operatorTenants ?? operator.multi_tenant_workspaces,
       payment_enforcement: options.paymentEnforcement ?? false,
     },
+    extensions: [TAKOSUMI_OUTPUT_SYNC_CAPABILITY],
   };
 }
 

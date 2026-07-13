@@ -34,6 +34,28 @@ export const spaces = pgTable(
   ],
 );
 
+// Takosumi-specific Output Sync extension state. Kept separate from the
+// OpenTofu Workspace/Output model so disabling it never disables Output capture.
+export const workspaceOutputSync = pgTable(
+  names.workspaceOutputSync,
+  {
+    workspaceId: text("workspace_id").primaryKey(),
+    enabled: boolean("enabled").notNull().default(true),
+    outputRevision: integer("output_revision").notNull().default(0),
+    reconciledRevision: integer("reconciled_revision").notNull().default(0),
+    activeRunGroupId: text("active_run_group_id"),
+    consecutivePasses: integer("consecutive_passes").notNull().default(0),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    index("takosumi_workspace_output_sync_pending_idx").on(
+      table.enabled,
+      table.outputRevision,
+      table.reconciledRevision,
+    ),
+  ],
+);
+
 // P4 17-noun rename: NEW Workspace-owned Project grouping.
 export const projects = pgTable(
   names.projects,

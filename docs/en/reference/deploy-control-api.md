@@ -1,6 +1,6 @@
 # Deploy-Control API
 
-Last updated: 2026-06-19
+Last updated: 2026-07-13
 
 This API controls OpenTofu/Terraform execution in Takosumi OSS. It runs existing
 providers as-is. Public compatibility profiles are separate capability-versioned
@@ -57,6 +57,45 @@ GET    /outputs/:capsule_id
 POST   /secrets
 GET    /audit
 ```
+
+## Output Sync
+
+Output Sync is an optional Takosumi feature, not an OpenTofu standard. A host
+that implements it advertises capability `takosumi.output-sync.v1`. It is
+enabled by default per Workspace and can be disabled without disabling normal
+Output capture or explicit Dependencies.
+
+The public API consists of four routes:
+
+```text
+GET   /api/v1/workspaces/{workspaceId}/output-sync
+PATCH /api/v1/workspaces/{workspaceId}/output-sync
+GET   /api/v1/workspaces/{workspaceId}/output-sync/snapshot
+POST  /api/v1/workspaces/{workspaceId}/output-sync/reconcile
+```
+
+The settings API reads and changes the Workspace setting. The snapshot returns
+the current non-sensitive Outputs for the Workspace. Reconcile evaluates
+eligible Capsules under the normal Run policy and approval rules. Output Sync
+does not define a public event feed.
+
+Reconcile pins each Capsule to its currently applied SourceSnapshot and plans
+`active` / `stale` Capsules in Dependency-DAG layers. Members in one layer may
+run in parallel; the next layer starts only after the prior layer is a no-op or
+has applied successfully. Clean plans auto-apply, destructive plans stop at the
+normal approval gate, and follow-up Output changes are bounded to five
+convergence passes. Git ref updates are not mixed into this operation.
+
+`service_exports` and `service_bindings` are optional Takosumi Output
+Convention values carried by ordinary OpenTofu Outputs. They may describe an
+endpoint, capability, authentication scheme, scope, or grant reference, but
+must not contain tokens, passwords, or live data. Runtime data remains behind
+the declared MCP, HTTP, S3, or other interface.
+
+Using an Output across Workspace boundaries requires an explicit
+`OutputShare`. When Output Sync is disabled or unavailable, `tofu output -json`
+capture, the Capsule Output API, explicit Dependencies, and
+`terraform_remote_state` continue to work independently.
 
 ## Provider Connections
 

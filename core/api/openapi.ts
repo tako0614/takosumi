@@ -608,6 +608,7 @@ function processSchemas(): Record<string, Record<string, unknown>> {
         "compat_oci",
         "compat_cloudevents",
         "compat_provider_cloudflare_workers",
+        "output_sync",
       ],
       properties: {
         stacks: { type: "boolean" },
@@ -622,6 +623,7 @@ function processSchemas(): Record<string, Record<string, unknown>> {
         compat_oci: { type: "boolean" },
         compat_cloudevents: { type: "boolean" },
         compat_provider_cloudflare_workers: { type: "boolean" },
+        output_sync: { type: "boolean" },
       },
       additionalProperties: false,
     },
@@ -772,6 +774,7 @@ function processSchemas(): Record<string, Record<string, unknown>> {
         "identity",
         "operator",
         "commercial",
+        "extensions",
       ],
       properties: {
         apiVersion: { const: "takosumi.dev/v1alpha1" },
@@ -781,6 +784,7 @@ function processSchemas(): Record<string, Record<string, unknown>> {
         identity: ref("TakosumiIdentityCapabilities"),
         operator: ref("TakosumiOperatorCapabilities"),
         commercial: ref("TakosumiCommercialCapabilities"),
+        extensions: { type: "array", items: { type: "string" } },
       },
       additionalProperties: false,
     },
@@ -1486,10 +1490,7 @@ function providerConnectionAndRecipeSchemas(): Record<
         displayName: { type: "string" },
         providerRule: { type: "string" },
         terraformSource: {
-          oneOf: [
-            { const: "*" },
-            { type: "array", items: { type: "string" } },
-          ],
+          oneOf: [{ const: "*" }, { type: "array", items: { type: "string" } }],
         },
         envNames: { type: "array", items: { type: "string" } },
         requiredEnvGroups: {
@@ -3119,6 +3120,7 @@ function runSchemas(): Record<string, Record<string, unknown>> {
         type: {
           enum: [
             "space_update",
+            "workspace_output_sync",
             "space_drift_check",
             "installation_install",
             "installation_update",
@@ -3147,6 +3149,95 @@ function runSchemas(): Record<string, Record<string, unknown>> {
       properties: {
         runGroup: ref("RunGroup"),
         runs: { type: "array", items: ref("Run") },
+      },
+      additionalProperties: false,
+    },
+    PatchWorkspaceOutputSyncRequest: {
+      type: "object",
+      required: ["enabled"],
+      properties: { enabled: { type: "boolean" } },
+      additionalProperties: false,
+    },
+    WorkspaceOutputSyncState: {
+      type: "object",
+      required: [
+        "workspaceId",
+        "enabled",
+        "outputRevision",
+        "reconciledRevision",
+        "consecutivePasses",
+        "updatedAt",
+      ],
+      properties: {
+        workspaceId: { type: "string" },
+        enabled: { type: "boolean" },
+        outputRevision: { type: "integer", minimum: 0 },
+        reconciledRevision: { type: "integer", minimum: 0 },
+        activeRunGroupId: { type: "string" },
+        consecutivePasses: { type: "integer", minimum: 0, maximum: 5 },
+        updatedAt: { type: "string", format: "date-time" },
+      },
+      additionalProperties: false,
+    },
+    WorkspaceOutputSyncStatusResponse: {
+      type: "object",
+      required: ["capability", "state"],
+      properties: {
+        capability: { const: "takosumi.output-sync.v1" },
+        state: ref("WorkspaceOutputSyncState"),
+      },
+      additionalProperties: false,
+    },
+    WorkspaceOutputSyncSnapshotEntry: {
+      type: "object",
+      required: [
+        "capsuleId",
+        "capsuleStatus",
+        "outputId",
+        "stateGeneration",
+        "outputDigest",
+        "publicOutputs",
+        "workspaceOutputs",
+        "createdAt",
+      ],
+      properties: {
+        capsuleId: { type: "string" },
+        capsuleStatus: { type: "string" },
+        outputId: { type: "string" },
+        stateGeneration: { type: "integer", minimum: 0 },
+        outputDigest: { type: "string" },
+        publicOutputs: { type: "object", additionalProperties: true },
+        workspaceOutputs: { type: "object", additionalProperties: true },
+        createdAt: { type: "string", format: "date-time" },
+      },
+      additionalProperties: false,
+    },
+    WorkspaceOutputSyncSnapshotResponse: {
+      type: "object",
+      required: ["snapshot"],
+      properties: {
+        snapshot: {
+          type: "object",
+          required: ["workspaceId", "revision", "outputs"],
+          properties: {
+            workspaceId: { type: "string" },
+            revision: { type: "integer", minimum: 0 },
+            outputs: {
+              type: "array",
+              items: ref("WorkspaceOutputSyncSnapshotEntry"),
+            },
+          },
+          additionalProperties: false,
+        },
+      },
+      additionalProperties: false,
+    },
+    WorkspaceOutputSyncReconcileResponse: {
+      type: "object",
+      required: ["state"],
+      properties: {
+        state: ref("WorkspaceOutputSyncState"),
+        reconciliation: ref("RunGroupResponse"),
       },
       additionalProperties: false,
     },

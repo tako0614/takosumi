@@ -277,6 +277,7 @@ export default {
   async scheduled(_event: unknown, env: CloudflareWorkerEnv): Promise<void> {
     await runScheduledSourcePoll(env as unknown as DeployControlEnv);
     await runScheduledOpenTofuRunRepair(env as unknown as DeployControlEnv);
+    await runScheduledOutputSync(env as unknown as DeployControlEnv);
     if (autoPlanStaleCapsulesEnabled(env)) {
       await runScheduledStaleCapsuleAutoPlan(
         env as unknown as DeployControlEnv,
@@ -297,6 +298,11 @@ export async function schedulePlatformSideEffect(
     return;
   }
   await task;
+}
+
+async function runScheduledOutputSync(env: DeployControlEnv): Promise<void> {
+  const operations = await deployControlSeam(env).operations();
+  await operations.outputSync.reconcilePending(25);
 }
 
 function platformDiscoveryOptions(
