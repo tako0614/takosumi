@@ -37,7 +37,10 @@ import {
 } from "../deploy-control/errors.ts";
 import type { OpenTofuDeploymentController } from "../deploy-control/mod.ts";
 import { applyExpectedGuardFromPlanRun } from "../deploy-control/mod.ts";
-import type { OpenTofuDeploymentStore } from "../deploy-control/store.ts";
+import type {
+  OpenTofuDeploymentStore,
+  StoredRunRecord,
+} from "../deploy-control/store.ts";
 import {
   type ActivityRecorder,
   NOOP_ACTIVITY_RECORDER,
@@ -298,6 +301,14 @@ export class RunGroupsService {
       stored.workspaceId ?? stored.spaceId ?? "",
       { limit: 500 },
     );
+    if (layer.some((capsuleId) => !graph.runs[capsuleId])) {
+      graph = await this.#startOutputSyncLayer(stored, graph, workspaceRuns);
+      await this.#store.putRunGroup({
+        ...stored,
+        status: "running",
+        graphJson: JSON.stringify(graph),
+      });
+    }
     for (const capsuleId of layer) {
       const planId = graph.runs[capsuleId];
       if (!planId) return await this.getRunGroup(id);
@@ -373,10 +384,27 @@ export class RunGroupsService {
   async #startOutputSyncLayer(
     group: RunGroup,
     graph: WorkspaceOutputSyncGraph,
+    knownWorkspaceRuns?: readonly StoredRunRecord[],
   ): Promise<WorkspaceOutputSyncGraph> {
     const runs = { ...graph.runs };
+    const workspaceId = group.workspaceId ?? group.spaceId ?? "";
+    const existingRuns =
+      knownWorkspaceRuns ??
+      (await this.#store.listRunsBySpace(workspaceId, { limit: 500 }));
     for (const capsuleId of graph.order[graph.currentLayer] ?? []) {
       if (runs[capsuleId]) continue;
+      const existing = existingRuns.find(
+        (run) =>
+          "runGroupId" in run &&
+          run.runGroupId === group.id &&
+          "requiredProviders" in run &&
+          (run.capsuleId ?? run.installationId) === capsuleId &&
+          run.operation !== "destroy",
+      );
+      if (existing) {
+        runs[capsuleId] = existing.id;
+        continue;
+      }
       const response = await this.#controller.createInstallationPlan(
         capsuleId,
         { actor: this.#actor ?? "system:output-sync" },
