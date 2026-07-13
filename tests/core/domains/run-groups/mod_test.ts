@@ -425,7 +425,6 @@ test("space_update e2e: stale -> plan-update group (topo layers) -> approve -> a
       expected: applyExpectedGuardFromPlanRun(plan.planRun),
     });
   }
-
   // core re-applies with a CHANGED output -> files + talk go stale.
   const changed = new OpenTofuDeploymentController({
     store,
@@ -588,6 +587,18 @@ test("workspace_output_sync plans and applies one dependency layer at a time", a
       expected: applyExpectedGuardFromPlanRun(plan.planRun),
     });
   }
+  const appliedCore = await store.getInstallation("inst_core");
+  const appliedCoreDeployment = await store.getDeployment(
+    appliedCore!.currentDeploymentId!,
+  );
+  await store.putSourceSnapshot({
+    ...(await store.getSourceSnapshot("snap_core"))!,
+    id: "snap_core_newer",
+    resolvedCommit: "ffffffffffffffffffffffffffffffffffffffff",
+    archiveObjectKey:
+      "spaces/space_test/sources/src_core/snapshots/snap_core_newer/source.tar.zst",
+    fetchedAt: "2026-06-06T02:59:00.000Z",
+  });
 
   const groups = new RunGroupsService({
     store,
@@ -606,9 +617,19 @@ test("workspace_output_sync plans and applies one dependency layer at a time", a
     currentLayer: number;
     order: string[][];
     runs: Record<string, string>;
+    sourceSnapshotIds: Record<string, string>;
   };
   expect(graph.order).toEqual([["inst_core"], ["inst_files"], ["inst_talk"]]);
   expect(Object.keys(graph.runs)).toEqual(["inst_core"]);
+  expect(graph.sourceSnapshotIds).toEqual({
+    inst_core: appliedCoreDeployment!.sourceSnapshotId,
+    inst_files: "snap_files",
+    inst_talk: "snap_talk",
+  });
+  const firstPlan = await store.getPlanRun(graph.runs.inst_core!);
+  expect(firstPlan?.sourceSnapshotId).toBe(
+    appliedCoreDeployment!.sourceSnapshotId,
+  );
 
   // Crash-recovery window: the plan row exists but its id was not checkpointed
   // into graphJson. Recovery must rediscover it by runGroupId + Capsule rather
@@ -619,8 +640,11 @@ test("workspace_output_sync plans and applies one dependency layer at a time", a
     ...stored!,
     graphJson: JSON.stringify({ ...graph, runs: {} }),
   });
-  await groups.advanceWorkspaceOutputSync(created.runGroup.id);
+  const recovered = await groups.advanceWorkspaceOutputSync(
+    created.runGroup.id,
+  );
   expect(runner.planJobs.length).toBe(planCallsBeforeRecovery);
+  expect(recovered?.runGroup.status).toBe("waiting_approval");
 
   await groups.approveRunGroup(created.runGroup.id);
   let current = await groups.getRunGroup(created.runGroup.id);

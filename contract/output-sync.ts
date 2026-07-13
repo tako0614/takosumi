@@ -54,7 +54,6 @@ export interface WorkspaceOutputSyncStatusResponse {
 
 export interface WorkspaceOutputSyncSnapshotEntry {
   readonly capsuleId: string;
-  readonly capsuleStatus: string;
   readonly outputId: string;
   readonly stateGeneration: number;
   readonly outputDigest: string;

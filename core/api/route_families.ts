@@ -70,6 +70,8 @@ export interface ApiEndpointOpenApi {
   /** Response schema component name for the success status. */
   readonly okSchema: string;
   readonly okStatus?: "200" | "201" | "202" | "204";
+  /** Additional success statuses that return the same response schema. */
+  readonly alternateOkStatuses?: readonly ("200" | "201" | "202")[];
   /** Request body schema component name (`application/json`). */
   readonly requestSchema?: string;
   /** Explicit request body object (e.g. multipart upload). */
