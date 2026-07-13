@@ -591,6 +591,13 @@ test("workspace_output_sync plans and applies one dependency layer at a time", a
   const appliedCoreDeployment = await store.getDeployment(
     appliedCore!.currentDeploymentId!,
   );
+  const appliedCoreStateVersion = await store.getLatestStateSnapshot(
+    "inst_core",
+    "production",
+  );
+  await store.patchInstallation("inst_core", {
+    currentDeploymentId: appliedCoreStateVersion!.id,
+  });
   await store.putSourceSnapshot({
     ...(await store.getSourceSnapshot("snap_core"))!,
     id: "snap_core_newer",
