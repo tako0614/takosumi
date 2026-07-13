@@ -610,6 +610,18 @@ test("workspace_output_sync plans and applies one dependency layer at a time", a
   expect(graph.order).toEqual([["inst_core"], ["inst_files"], ["inst_talk"]]);
   expect(Object.keys(graph.runs)).toEqual(["inst_core"]);
 
+  // Crash-recovery window: the plan row exists but its id was not checkpointed
+  // into graphJson. Recovery must rediscover it by runGroupId + Capsule rather
+  // than enqueueing a duplicate plan.
+  const planCallsBeforeRecovery = runner.planJobs.length;
+  const stored = await store.getRunGroup(created.runGroup.id);
+  await store.putRunGroup({
+    ...stored!,
+    graphJson: JSON.stringify({ ...graph, runs: {} }),
+  });
+  await groups.advanceWorkspaceOutputSync(created.runGroup.id);
+  expect(runner.planJobs.length).toBe(planCallsBeforeRecovery);
+
   await groups.approveRunGroup(created.runGroup.id);
   let current = await groups.getRunGroup(created.runGroup.id);
   graph = JSON.parse(current!.runGroup.graphJson);
