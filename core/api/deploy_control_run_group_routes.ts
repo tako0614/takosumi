@@ -6,6 +6,7 @@
  */
 
 import { OpenTofuControllerError } from "../domains/deploy-control/mod.ts";
+import { TAKOSUMI_OUTPUT_SYNC_CAPABILITY } from "../../contract/output-sync.ts";
 import {
   defineRoute,
   type DeployControlEndpoint,
@@ -77,7 +78,7 @@ export const DEPLOY_CONTROL_RUN_GROUP_ENDPOINTS: readonly DeployControlEndpoint[
       operationId: "reconcileWorkspaceOutputs",
       openapi: {
         pathParams: ["workspaceId"],
-        okStatus: "202",
+        alternateOkStatuses: ["202"],
         okSchema: "WorkspaceOutputSyncReconcileResponse",
       },
       notImplementedMessage: "output sync not wired",
@@ -192,8 +193,12 @@ export function mountDeployControlRunGroupRoutes(
       handler: async ({ c, principal, id }) => {
         ensureSpacePermission(principal, id);
         const snapshot = await outputSyncService!.getSnapshot(id);
-        c.header("ETag", `\"takosumi-output-sync-${snapshot.revision}\"`);
+        const etag = `\"takosumi-output-sync-${snapshot.revision}\"`;
+        c.header("ETag", etag);
         c.header("Cache-Control", "private, no-cache");
+        if (c.req.header("If-None-Match") === etag) {
+          return c.body(null, 304);
+        }
         return c.json({ snapshot }, 200);
       },
     }),
@@ -208,7 +213,13 @@ export function mountDeployControlRunGroupRoutes(
       handler: async ({ c, principal, id }) => {
         ensureSpacePermission(principal, id);
         const result = await outputSyncService!.reconcile(id);
-        return c.json(result, result.reconciliation ? 202 : 200);
+        return c.json(
+          {
+            capability: TAKOSUMI_OUTPUT_SYNC_CAPABILITY,
+            ...result,
+          },
+          result.reconciliation ? 202 : 200,
+        );
       },
     }),
   );

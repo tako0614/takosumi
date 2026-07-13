@@ -442,6 +442,15 @@ test("Output Sync internal routes expose settings, snapshot, and disabled gate",
   );
   expect(snapshot.status).toBe(200);
   expect(snapshot.headers.get("etag")).toBe('"takosumi-output-sync-0"');
+  const cachedSnapshot = await app.request(
+    `/internal/v1/workspaces/${actualWorkspaceId}/output-sync/snapshot`,
+    {
+      headers: headers({
+        "if-none-match": '"takosumi-output-sync-0"',
+      }),
+    },
+  );
+  expect(cachedSnapshot.status).toBe(304);
 
   const disabled = await app.request(
     `/internal/v1/workspaces/${actualWorkspaceId}/output-sync`,

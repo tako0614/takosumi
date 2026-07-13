@@ -12,7 +12,7 @@
  * from Output and deliberately does not recreate a service ledger.
  */
 
-import type { JsonObject, JsonValue } from "../../../contract/types.ts";
+import type { JsonObject, JsonValue } from "./types.ts";
 
 /**
  * Well-known capability tokens a Capsule may project through `service_exports`
@@ -244,8 +244,63 @@ export function validateProjectedServiceExportsFromOutputSnapshot(
   options: { readonly allowExtensionCapabilities?: boolean } = {},
 ): void {
   const allow = options.allowExtensionCapabilities === true;
-  normalizeProjectedExports(outputs, allow);
-  normalizeProjectedBindings(outputs, allow);
+  const projection = {
+    serviceExports: normalizeProjectedExports(outputs, allow),
+    serviceBindings: normalizeProjectedBindings(outputs, allow),
+  };
+  assertProjectionContainsNoCredentials(projection, "projected services");
+}
+
+const CREDENTIAL_KEY_PATTERN =
+  /(?:^|[_-])(?:authorization|cookie|password|passwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|access[_-]?token|refresh[_-]?token|bearer[_-]?token|session[_-]?token|id[_-]?token)(?:$|[_-](?!endpoint|type|exchange)(?:.*))/iu;
+
+function assertProjectionContainsNoCredentials(
+  value: unknown,
+  path: string,
+): void {
+  if (Array.isArray(value)) {
+    value.forEach((entry, index) =>
+      assertProjectionContainsNoCredentials(entry, `${path}[${index}]`),
+    );
+    return;
+  }
+  if (value && typeof value === "object") {
+    for (const [key, entry] of Object.entries(value)) {
+      if (CREDENTIAL_KEY_PATTERN.test(toCredentialKey(key))) {
+        throw new TypeError(`${path}.${key} must not contain credential data`);
+      }
+      assertProjectionContainsNoCredentials(entry, `${path}.${key}`);
+    }
+    return;
+  }
+  if (typeof value === "string") {
+    assertUrlContainsNoCredentials(value, path);
+  }
+}
+
+function toCredentialKey(value: string): string {
+  return value
+    .replace(/([a-z0-9])([A-Z])/gu, "$1_$2")
+    .replace(/[^a-z0-9_-]+/giu, "_")
+    .toLowerCase();
+}
+
+function assertUrlContainsNoCredentials(value: string, path: string): void {
+  if (!/^[a-z][a-z0-9+.-]*:\/\//iu.test(value)) return;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return;
+  }
+  if (url.username || url.password) {
+    throw new TypeError(`${path} must not contain URL credentials`);
+  }
+  for (const key of url.searchParams.keys()) {
+    if (CREDENTIAL_KEY_PATTERN.test(toCredentialKey(key))) {
+      throw new TypeError(`${path} must not contain credential query parameters`);
+    }
+  }
 }
 
 function normalizeProjectedExports(
