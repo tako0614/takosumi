@@ -78,6 +78,8 @@ The settings API reads and changes the Workspace setting. The snapshot returns
 the current non-sensitive Outputs for the Workspace. Reconcile evaluates
 eligible Capsules under the normal Run policy and approval rules. Output Sync
 does not define a public event feed.
+Active members may read settings and snapshots. Only owners and admins may
+change settings or start reconciliation.
 
 Reconcile pins each Capsule to its currently applied SourceSnapshot and plans
 `active` / `stale` Capsules in Dependency-DAG layers. Members in one layer may
@@ -90,7 +92,8 @@ convergence passes. Git ref updates are not mixed into this operation.
 Convention values carried by ordinary OpenTofu Outputs. They may describe an
 endpoint, capability, authentication scheme, scope, or grant reference, but
 must not contain tokens, passwords, or live data. Runtime data remains behind
-the declared MCP, HTTP, S3, or other interface.
+the declared MCP, HTTP, S3, or other interface. Apply rejects credential-like
+metadata keys and URLs containing userinfo or credential query parameters.
 
 Using an Output across Workspace boundaries requires an explicit
 `OutputShare`. When Output Sync is disabled or unavailable, `tofu output -json`

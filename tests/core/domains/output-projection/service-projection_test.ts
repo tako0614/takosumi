@@ -3,7 +3,7 @@ import type { JsonValue } from "../../../../contract/types.ts";
 import {
   projectServicesFromOutputs,
   validateProjectedServiceExportsFromOutputSnapshot,
-} from "../../../../core/domains/output-projection/mod.ts";
+} from "takosumi-contract/output-projection";
 
 function outputs(value: Record<string, JsonValue>): Record<string, JsonValue> {
   return value;
@@ -127,6 +127,48 @@ test("rejects a malformed service_exports output", () => {
       outputs({ service_exports: [{ capabilities: ["protocol.mcp.server"] }] }),
     ),
   ).toThrow(/name is required/);
+});
+
+test("rejects credentials hidden in projected metadata and endpoint URLs", () => {
+  expect(() =>
+    validateProjectedServiceExportsFromOutputSnapshot(
+      outputs({
+        service_exports: [{
+          name: "storage",
+          capabilities: ["storage.object"],
+          metadata: { nested: { apiKey: "must-not-project" } },
+        }],
+      }),
+    ),
+  ).toThrow(/must not contain credential data/);
+
+  expect(() =>
+    validateProjectedServiceExportsFromOutputSnapshot(
+      outputs({
+        service_exports: [{
+          name: "database",
+          capabilities: ["storage.sql"],
+          endpoints: [{
+            url: "postgres://user:password@db.example.com/app",
+          }],
+        }],
+      }),
+    ),
+  ).toThrow(/must not contain URL credentials/);
+
+  expect(() =>
+    validateProjectedServiceExportsFromOutputSnapshot(
+      outputs({
+        service_exports: [{
+          name: "api",
+          capabilities: ["protocol.http.api"],
+          endpoints: [{
+            url: "https://api.example.com/v1?access_token=secret",
+          }],
+        }],
+      }),
+    ),
+  ).toThrow(/must not contain credential query parameters/);
 });
 
 test("rejects an extension capability unless explicitly enabled", () => {

@@ -7,8 +7,8 @@
  * signing key, this resolves what scoped token(s) to mint and which env vars to
  * inject into the consumer.
  *
- * This is the runtime-authority piece that `service-projection.ts` deliberately
- * omits: `service-projection.ts` is pure classification; here we actually decide
+ * This is the runtime-authority piece that the Output projection contract
+ * deliberately omits: projection is pure classification; here we actually decide
  * scope and mint credentials. Injection into the consumer run is done by the
  * caller (the deploy-control consumer-apply path) using the returned env map.
  */
@@ -20,7 +20,7 @@ import {
 import type {
   ProjectedServiceBinding,
   ProjectedServiceExport,
-} from "./service-projection.ts";
+} from "takosumi-contract/output-projection";
 
 export const STORAGE_OBJECT_PUBLICATION = "storage.object";
 

@@ -30,11 +30,11 @@ import {
   mintServiceScopedCredential,
   type ServiceCredentialVerb,
 } from "../../shared/service_scoped_credentials.ts";
-import { projectServicesFromOutputs } from "../output-projection/service-projection.ts";
+import { projectServicesFromOutputs } from "takosumi-contract/output-projection";
 import type {
   ProjectedServiceBinding,
   ProjectedServiceExport,
-} from "../output-projection/service-projection.ts";
+} from "takosumi-contract/output-projection";
 import type { SensitiveOutputResolver } from "../output-shares/mod.ts";
 import type { OpenTofuDeploymentStore } from "./store.ts";
 

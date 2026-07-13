@@ -282,6 +282,7 @@ function endpointOperation(
     auth: endpoint.auth,
     okSchema: endpoint.openapi.okSchema,
     okStatus: endpoint.openapi.okStatus,
+    alternateOkStatuses: endpoint.openapi.alternateOkStatuses,
     requestSchema: endpoint.openapi.requestSchema,
     requestBody: endpoint.openapi.requestBody,
     query: endpoint.openapi.query,
@@ -306,6 +307,7 @@ function operation(input: {
     | "metrics-scrape";
   readonly okSchema: string;
   readonly okStatus?: "200" | "201" | "202" | "204";
+  readonly alternateOkStatuses?: readonly ("200" | "201" | "202")[];
   readonly requestSchema?: string;
   readonly requestBody?: Record<string, unknown>;
   readonly query?: readonly string[];
@@ -330,6 +332,12 @@ function operation(input: {
         input.okStatus === "204"
           ? { description: "No content" }
           : jsonResponse(input.okSchema),
+      ...Object.fromEntries(
+        (input.alternateOkStatuses ?? []).map((status) => [
+          status,
+          jsonResponse(input.okSchema),
+        ]),
+      ),
       ...(input.auth === "none" ? {} : { "401": errorResponse() }),
       ...(input.auth === "internal-service" ? { "403": errorResponse() } : {}),
       ...(input.requestSchema || input.requestBody
@@ -3192,7 +3200,6 @@ function runSchemas(): Record<string, Record<string, unknown>> {
       type: "object",
       required: [
         "capsuleId",
-        "capsuleStatus",
         "outputId",
         "stateGeneration",
         "outputDigest",
@@ -3202,7 +3209,6 @@ function runSchemas(): Record<string, Record<string, unknown>> {
       ],
       properties: {
         capsuleId: { type: "string" },
-        capsuleStatus: { type: "string" },
         outputId: { type: "string" },
         stateGeneration: { type: "integer", minimum: 0 },
         outputDigest: { type: "string" },
@@ -3234,8 +3240,9 @@ function runSchemas(): Record<string, Record<string, unknown>> {
     },
     WorkspaceOutputSyncReconcileResponse: {
       type: "object",
-      required: ["state"],
+      required: ["capability", "state"],
       properties: {
+        capability: { const: "takosumi.output-sync.v1" },
         state: ref("WorkspaceOutputSyncState"),
         reconciliation: ref("RunGroupResponse"),
       },
