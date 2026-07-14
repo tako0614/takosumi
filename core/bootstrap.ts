@@ -174,6 +174,8 @@ import type {
 } from "takosumi-contract/credential-recipes";
 import type {
   ActorContext,
+  InterfaceProjectionSink,
+  InterfaceProjectionSnapshot,
   NativeResourceRef,
   ResourceObject,
   ResourceShapeKind,
@@ -198,6 +200,52 @@ function resolveOpenTofuStore(input: {
   return {
     ...(store ? { store } : {}),
     durable: store?.persistence === "durable",
+  };
+}
+
+function withCanonicalResourceProjectionEvidence(
+  sink: InterfaceProjectionSink,
+  stores: ResourceShapeStores,
+): InterfaceProjectionSink {
+  return {
+    async project(snapshot: InterfaceProjectionSnapshot): Promise<void> {
+      const owner = snapshot.interface.metadata.ownerRef;
+      if (owner.kind !== "Resource") {
+        await sink.project(snapshot);
+        return;
+      }
+
+      // The Resource record and ResolutionLock remain the authority. Re-read
+      // the record around the lock read so an Interface projector cannot pair
+      // a known-stale Resource generation with current native identity.
+      const before = await stores.resources.get(owner.id);
+      const lock = await stores.locks.get(owner.id);
+      const after = await stores.resources.get(owner.id);
+      if (
+        !before ||
+        !after ||
+        !lock ||
+        lock.resourceId !== owner.id ||
+        before.phase !== "Ready" ||
+        before.observedGeneration !== before.generation ||
+        after.phase !== before.phase ||
+        after.generation !== before.generation ||
+        after.observedGeneration !== before.observedGeneration ||
+        after.updatedAt !== before.updatedAt
+      ) {
+        await sink.project(snapshot);
+        return;
+      }
+
+      await sink.project({
+        ...snapshot,
+        ownerResource: {
+          id: owner.id,
+          generation: before.generation,
+          nativeResources: structuredClone(lock.nativeResources ?? []),
+        },
+      });
+    },
   };
 }
 
@@ -418,6 +466,8 @@ export interface CreateTakosumiServiceOptions extends AppContextOptions {
   readonly resourceShapeSchemaRegistry?: ResourceShapeSchemaRegistry;
   /** Durable Takosumi-managed runtime Interface declarations and bindings. */
   readonly interfaceStores?: InterfaceStores;
+  /** Recoverable host materialization of canonical Interface/Binding state. */
+  readonly interfaceProjectionSink?: InterfaceProjectionSink;
   /**
    * Explicit bridge from Resource Shape namespace ownership to the Stack Workspace
    * that may own Interfaces for that Resource. Without this mapping,
@@ -746,6 +796,7 @@ export interface TakosumiOperations {
     }): Promise<
       | {
           readonly resource: ResourceObject;
+          readonly resourceGeneration: number;
           readonly nativeResources: readonly NativeResourceRef[];
         }
       | undefined
@@ -1263,6 +1314,12 @@ export async function createTakosumiService(
       : createInMemoryInterfaceStores());
   const resolveResourceInterfaceWorkspace =
     options.resolveResourceInterfaceWorkspace;
+  const interfaceProjectionSink = options.interfaceProjectionSink
+    ? withCanonicalResourceProjectionEvidence(
+        options.interfaceProjectionSink,
+        resourceShapeStores,
+      )
+    : undefined;
   let interfaceService: InterfaceService;
   interfaceService = new InterfaceService({
     stores: interfaceStores,
@@ -1274,6 +1331,9 @@ export async function createTakosumiService(
         : {}),
     }),
     activity: activityService,
+    ...(interfaceProjectionSink
+      ? { projectionSink: interfaceProjectionSink }
+      : {}),
     ...(options.interfaceCredentialIssuer
       ? { credentialIssuer: options.interfaceCredentialIssuer }
       : {}),
@@ -1906,6 +1966,7 @@ export async function createTakosumiService(
               }
               return structuredClone({
                 resource: result.value,
+                resourceGeneration: record.generation,
                 nativeResources: lock.nativeResources ?? [],
               });
             },

@@ -1,3 +1,4 @@
+import type { NativeResourceRef } from "./resolution.ts";
 import type { Condition, JsonObject, JsonValue } from "./types.ts";
 import { TAKOSUMI_API_VERSION } from "./capabilities.ts";
 export { TAKOSUMI_INTERFACES_CAPABILITY } from "./capabilities.ts";
@@ -196,6 +197,37 @@ export interface InterfaceBinding {
   };
   readonly spec: InterfaceBindingSpec;
   readonly status: InterfaceBindingStatus;
+}
+
+/**
+ * Canonical snapshot delivered to an operator-owned runtime projector after an
+ * Interface or one of its Bindings changes. The Interface/Binding stores stay
+ * lifecycle authority; a sink may only materialize a recoverable routing or
+ * activation projection and must fence writes by the supplied generations.
+ */
+export interface InterfaceProjectionSnapshot {
+  readonly interface: Interface;
+  readonly bindings: readonly InterfaceBinding[];
+  /**
+   * Canonical Resource evidence attached by Core for a Resource-owned
+   * Interface. Hosts may cache this evidence, but must re-resolve the current
+   * Resource/Interface before serving runtime traffic.
+   */
+  readonly ownerResource?: {
+    readonly id: string;
+    readonly generation: number;
+    readonly nativeResources: readonly NativeResourceRef[];
+  };
+}
+
+/**
+ * Optional host projection port. Delivery is best-effort after the canonical
+ * write, so hosts must make `project` idempotent and run a bounded repair scan
+ * from the canonical Interface list. Projection failure never rolls back the
+ * Interface or turns the projection into a second lifecycle ledger.
+ */
+export interface InterfaceProjectionSink {
+  project(snapshot: InterfaceProjectionSnapshot): Promise<void>;
 }
 
 export interface CreateInterfaceRequest {

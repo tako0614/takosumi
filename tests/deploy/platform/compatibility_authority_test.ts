@@ -24,6 +24,7 @@ function resourceEvidence(
         observedGeneration: phase === "Ready" ? 1 : 0,
       },
     },
+    resourceGeneration: 1,
     nativeResources: [{ type: "bucket", id: "native-assets" }],
   };
 }

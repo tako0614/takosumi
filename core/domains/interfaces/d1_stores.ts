@@ -80,6 +80,23 @@ class D1InterfaceStore implements InterfaceStore {
     );
   }
 
+  async listProjectionPage(input: {
+    readonly cursor?: string;
+    readonly limit: number;
+  }): Promise<readonly Interface[]> {
+    const rows = await this.db
+      .prepare(
+        `select record_json from ${this.#table}
+         ${input.cursor ? "where id > ?" : ""}
+         order by id asc limit ?`,
+      )
+      .bind(...(input.cursor ? [input.cursor, input.limit] : [input.limit]))
+      .all<JsonRow>();
+    return (rows.results ?? []).map(
+      (row) => JSON.parse(row.record_json) as Interface,
+    );
+  }
+
   async compareAndSet(
     record: Interface,
     expected: InterfaceWriteGuard,
