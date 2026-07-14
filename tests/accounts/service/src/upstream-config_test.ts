@@ -45,7 +45,11 @@ test("upstream provider descriptors resolve arbitrary providers explicitly", () 
 test("provider identifiers never select a built-in adapter", () => {
   const options = upstreamOAuthOptionsFromEnvironment({
     [UPSTREAM_PROVIDER_DESCRIPTORS_ENV]: JSON.stringify([
-      { ...provider, providerId: "well-known-vendor", clientSecretEnv: undefined },
+      {
+        ...provider,
+        providerId: "well-known-vendor",
+        clientSecretEnv: undefined,
+      },
     ]),
     TAKOSUMI_ACCOUNTS_SUBJECT_SECRET: "subject-secret",
   });
@@ -53,6 +57,53 @@ test("provider identifiers never select a built-in adapter", () => {
   expect(options?.providers[0]?.provider.authorizationEndpoint).toBe(
     "https://id.example.test/oauth/authorize",
   );
+});
+
+test("public descriptor metadata is normalized and malformed values fail closed", () => {
+  const options = upstreamOAuthOptionsFromEnvironment({
+    [UPSTREAM_PROVIDER_DESCRIPTORS_ENV]: JSON.stringify([
+      { ...provider, protocol: "OIDC" },
+    ]),
+    TAKOSUMI_ACCOUNTS_SUBJECT_SECRET: "subject-secret",
+    COMPANY_SSO_CLIENT_SECRET: "client-secret",
+  });
+  expect(options?.providers[0]).toMatchObject({
+    providerId: "company-sso",
+    label: "Company SSO",
+    protocol: "oidc",
+  });
+
+  expect(() =>
+    upstreamOAuthOptionsFromEnvironment({
+      [UPSTREAM_PROVIDER_DESCRIPTORS_ENV]: JSON.stringify([
+        { ...provider, protocol: "oidc/private-detail" },
+      ]),
+      TAKOSUMI_ACCOUNTS_SUBJECT_SECRET: "subject-secret",
+      COMPANY_SSO_CLIENT_SECRET: "client-secret",
+    }),
+  ).toThrow("protocol must be a lowercase provider token");
+
+  expect(() =>
+    upstreamOAuthOptionsFromEnvironment({
+      [UPSTREAM_PROVIDER_DESCRIPTORS_ENV]: JSON.stringify([
+        { ...provider, label: "" },
+      ]),
+      TAKOSUMI_ACCOUNTS_SUBJECT_SECRET: "subject-secret",
+      COMPANY_SSO_CLIENT_SECRET: "client-secret",
+    }),
+  ).toThrow("label must be a non-empty string");
+});
+
+test("upstream descriptor cannot shadow the WebAuthn passkey provider", () => {
+  expect(() =>
+    upstreamOAuthOptionsFromEnvironment({
+      [UPSTREAM_PROVIDER_DESCRIPTORS_ENV]: JSON.stringify([
+        { ...provider, providerId: "passkey" },
+      ]),
+      TAKOSUMI_ACCOUNTS_SUBJECT_SECRET: "subject-secret",
+      COMPANY_SSO_CLIENT_SECRET: "client-secret",
+    }),
+  ).toThrow("providerId is reserved for the WebAuthn provider");
 });
 
 test("inline and unresolved upstream client secrets fail closed", () => {

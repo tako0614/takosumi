@@ -28,6 +28,9 @@ import {
 
 const upstreamOAuthStateCookie = "takosumi_oauth_state";
 const upstreamOAuthStateCookieMaxAgeSeconds = 10 * 60;
+const publicAuthProviderTokenPattern = /^[a-z][a-z0-9._-]{0,127}$/u;
+const passkeyAuthProviderId = "passkey";
+
 export function upstreamOAuthNotConfigured(): Response {
   return json(
     {
@@ -50,35 +53,95 @@ export function handleAuthProvidersRequest(input: {
   upstreamOAuth?: UpstreamOAuthOptions;
   passkeys?: PasskeyHttpOptions;
 }): Response {
+  try {
+    const providers = buildPublicAuthProviderDescriptors(input);
+    const body: TakosumiAccountsAuthProvidersResponse = { providers };
+    return json(body, 200, { "cache-control": "no-store" });
+  } catch {
+    // This endpoint is public. A malformed in-process registration must not
+    // be silently omitted (which can make a broken sign-in deployment look
+    // healthy), and its potentially sensitive runtime detail must not be
+    // reflected to an unauthenticated caller.
+    return authProviderConfigurationInvalidResponse();
+  }
+}
+
+/** Generic public failure used when host configuration cannot be projected. */
+export function authProviderConfigurationInvalidResponse(): Response {
+  return json(
+    {
+      error: "auth_provider_configuration_invalid",
+      error_description: "Sign-in provider configuration is invalid.",
+    },
+    503,
+    { "cache-control": "no-store" },
+  );
+}
+
+function buildPublicAuthProviderDescriptors(input: {
+  upstreamOAuth?: UpstreamOAuthOptions;
+  passkeys?: PasskeyHttpOptions;
+}): readonly TakosumiAccountsAuthProvider[] {
   const providers: TakosumiAccountsAuthProvider[] = [];
   const seen = new Set<string>();
   for (const registration of input.upstreamOAuth?.providers ?? []) {
-    const id = registration.providerId.trim();
-    if (
-      !id ||
-      seen.has(id) ||
-      !isUsableUpstreamProvider(registration.provider, id)
-    ) {
-      continue;
+    if (!registration || typeof registration !== "object") {
+      throw new TypeError(
+        "upstream auth provider registration must be an object",
+      );
     }
+    const id = normalizePublicAuthProviderToken(
+      registration.providerId,
+      "provider id",
+    );
+    if (id === passkeyAuthProviderId) {
+      throw new TypeError("passkey is reserved for the WebAuthn provider");
+    }
+    if (seen.has(id)) {
+      throw new TypeError("auth provider ids must be unique");
+    }
+    if (!isUsableUpstreamProvider(registration.provider, id)) {
+      throw new TypeError("upstream auth provider is not usable");
+    }
+    const label = normalizePublicAuthProviderLabel(registration.label);
+    const protocol = normalizePublicAuthProviderToken(
+      registration.protocol ?? "oidc",
+      "provider protocol",
+    );
     seen.add(id);
-    providers.push({
-      id,
-      enabled: true,
-      label: registration.label?.trim() || "Single sign-on",
-      protocol: registration.protocol?.trim() || "oidc",
-    });
+    providers.push({ id, enabled: true, label, protocol });
   }
   if (input.passkeys !== undefined) {
     providers.push({
-      id: "passkey",
+      id: passkeyAuthProviderId,
       enabled: true,
       label: "Passkey",
       protocol: "webauthn",
     });
   }
-  const body: TakosumiAccountsAuthProvidersResponse = { providers };
-  return json(body, 200, { "cache-control": "no-store" });
+  return providers;
+}
+
+function normalizePublicAuthProviderLabel(value: unknown): string {
+  if (value === undefined) return "Single sign-on";
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new TypeError("provider label must be a non-empty string");
+  }
+  return value.trim();
+}
+
+function normalizePublicAuthProviderToken(
+  value: unknown,
+  label: string,
+): string {
+  if (typeof value !== "string") {
+    throw new TypeError(`${label} must be a string`);
+  }
+  const normalized = value.trim().toLowerCase();
+  if (!publicAuthProviderTokenPattern.test(normalized)) {
+    throw new TypeError(`${label} must be a lowercase provider token`);
+  }
+  return normalized;
 }
 
 export function handleUpstreamAuthorizeRequest(input: {

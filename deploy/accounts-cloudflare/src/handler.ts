@@ -5,6 +5,7 @@ import {
 import {
   type AccountsHandler,
   type AccountsJsonWebKey,
+  authProviderConfigurationInvalidResponse,
   createAccountsHandler,
   createEphemeralAccountsHandler,
   type ControlPlaneOperations,
@@ -162,10 +163,17 @@ export function createCloudflareWorker<
             { status: 405, headers: { allow: "GET" } },
           );
         }
-        return handleAuthProvidersRequest({
-          upstreamOAuth: parseUpstreamOAuthForProviderList(env),
-          passkeys: parsePasskeysForProviderList(env),
-        });
+        try {
+          return handleAuthProvidersRequest({
+            upstreamOAuth: parseUpstreamOAuthForProviderList(env),
+            passkeys: parsePasskeysForProviderList(env),
+          });
+        } catch {
+          // Discovery is public and must not reveal which endpoint, binding,
+          // or secret reference made the operator configuration invalid.
+          console.warn("auth_provider_configuration_invalid");
+          return authProviderConfigurationInvalidResponse();
+        }
       }
       try {
         const handler = await cachedAccountsHandler(
@@ -191,7 +199,7 @@ export function createCloudflareWorker<
 function parseUpstreamOAuthForProviderList(
   env: CloudflareWorkerEnv,
 ): UpstreamOAuthOptions | undefined {
-  return parseUpstreamOAuthFailClosed(env);
+  return parseUpstreamOAuth(env);
 }
 
 function parseUpstreamOAuthFailClosed(
@@ -211,7 +219,7 @@ function parseUpstreamOAuthFailClosed(
 function parsePasskeysForProviderList(
   env: CloudflareWorkerEnv,
 ): PasskeyHttpOptions | undefined {
-  return parsePasskeysFailClosed(env);
+  return parsePasskeys(env);
 }
 
 function parsePasskeysFailClosed(

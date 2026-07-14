@@ -79,6 +79,107 @@ test("login allowlist and upstream discovery stay provider-neutral", () => {
   ).toBe(true);
 });
 
+test("Cloudflare auth discovery exposes the current Google, OIDC, and passkey contract", async () => {
+  const response = await createCloudflareWorker().fetch(
+    new Request("https://app.example.test/v1/auth/providers"),
+    env({
+      TAKOSUMI_ACCOUNTS_SUBJECT_SECRET: "subject-secret",
+      TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS: JSON.stringify([
+        {
+          providerId: "google",
+          label: "Google",
+          protocol: "oidc",
+          issuer: "https://accounts.google.example.test",
+          authorizationEndpoint:
+            "https://accounts.google.example.test/authorize",
+          tokenEndpoint: "https://accounts.google.example.test/token",
+          userInfoEndpoint: "https://accounts.google.example.test/userinfo",
+          clientId: "google-client-id",
+          clientSecretEnv: "GOOGLE_CLIENT_SECRET",
+          redirectUri: "https://app.example.test/sign-in/callback",
+        },
+        {
+          providerId: "company-oidc",
+          label: "Company SSO",
+          protocol: "OIDC",
+          issuer: "https://id.example.test",
+          authorizationEndpoint: "https://id.example.test/authorize",
+          tokenEndpoint: "https://id.example.test/token",
+          userInfoEndpoint: "https://id.example.test/userinfo",
+          clientId: "company-client-id",
+          redirectUri: "https://app.example.test/sign-in/callback",
+        },
+      ]),
+      GOOGLE_CLIENT_SECRET: "google-client-secret",
+      TAKOSUMI_ACCOUNTS_PASSKEY_RP_ID: "app.example.test",
+      TAKOSUMI_ACCOUNTS_PASSKEY_RP_NAME: "Takosumi",
+      TAKOSUMI_ACCOUNTS_PASSKEY_ORIGIN: "https://app.example.test",
+    }),
+  );
+  expect(response.status).toBe(200);
+  expect(response.headers.get("cache-control")).toBe("no-store");
+  const text = await response.text();
+  expect(JSON.parse(text)).toEqual({
+    providers: [
+      {
+        id: "google",
+        enabled: true,
+        label: "Google",
+        protocol: "oidc",
+      },
+      {
+        id: "company-oidc",
+        enabled: true,
+        label: "Company SSO",
+        protocol: "oidc",
+      },
+      {
+        id: "passkey",
+        enabled: true,
+        label: "Passkey",
+        protocol: "webauthn",
+      },
+    ],
+  });
+  expect(text).not.toContain("google-client-id");
+  expect(text).not.toContain("google-client-secret");
+  expect(text).not.toContain("accounts.google.example.test");
+  expect(text).not.toContain("sign-in/callback");
+});
+
+test("Cloudflare auth discovery rejects malformed config without leaking it", async () => {
+  const response = await createCloudflareWorker().fetch(
+    new Request("https://app.example.test/v1/auth/providers"),
+    env({
+      TAKOSUMI_ACCOUNTS_SUBJECT_SECRET: "subject-secret",
+      TAKOSUMI_ACCOUNTS_UPSTREAM_PROVIDERS: JSON.stringify([
+        {
+          providerId: "google",
+          label: "Google",
+          protocol: "oidc/private-provider-detail",
+          issuer: "https://private-idp.example.test",
+          authorizationEndpoint: "https://private-idp.example.test/authorize",
+          tokenEndpoint: "https://private-idp.example.test/token",
+          userInfoEndpoint: "https://private-idp.example.test/userinfo",
+          clientId: "private-client-id",
+          clientSecret: "must-never-be-returned",
+          redirectUri: "https://app.example.test/sign-in/callback",
+        },
+      ]),
+    }),
+  );
+  expect(response.status).toBe(503);
+  expect(response.headers.get("cache-control")).toBe("no-store");
+  const text = await response.text();
+  expect(JSON.parse(text)).toEqual({
+    error: "auth_provider_configuration_invalid",
+    error_description: "Sign-in provider configuration is invalid.",
+  });
+  expect(text).not.toContain("private-idp");
+  expect(text).not.toContain("private-client-id");
+  expect(text).not.toContain("must-never-be-returned");
+});
+
 test("Cloudflare config preserves a host-specific public mobile OIDC client", () => {
   const mobileClient = {
     clientId: "takos-mobile-host-example",
