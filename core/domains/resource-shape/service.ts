@@ -2868,13 +2868,12 @@ export class ResourceShapeService {
     const id = formatResourceShapeId(space, kind, name);
     const record = await this.#stores.resources.get(id);
     if (!record) {
-      if (!options.force) {
-        return await this.#retireResourceDeployment(space, kind, name);
-      }
-      return {
-        ok: false,
-        error: { code: "not_found", message: `resource ${id} not found` },
-      };
+      return await this.#retireResourceDeployment(
+        space,
+        kind,
+        name,
+        options.force ? "force_tombstone" : "canonical_delete",
+      );
     }
     if (options.force) {
       const lock = await this.#stores.locks.get(id);
@@ -2890,6 +2889,17 @@ export class ResourceShapeService {
         spaceId: space,
         resourceId: id,
       });
+      // A force tombstone proves only that the canonical ledger is being
+      // removed. It does not prove native backend absence. Require the host to
+      // retain its capacity record before deleting the last canonical row, so
+      // an absent-resource normal retry can never release it blindly.
+      const retained = await this.#retireResourceDeployment(
+        space,
+        kind,
+        name,
+        "force_tombstone",
+      );
+      if (!retained.ok) return retained;
       let removed;
       try {
         removed = await this.#stores.removeResource({
@@ -2898,15 +2908,47 @@ export class ResourceShapeService {
           expectedLock: lock ?? null,
         });
       } catch (error) {
-        return {
-          ok: false,
-          error: {
-            code: "delete_failed",
-            message: `resource ${id} force tombstone could not be finalized atomically: ${errorMessage(error)}`,
-          },
-        };
+        let current;
+        try {
+          current = await this.#stores.resources.get(id);
+        } catch (observationError) {
+          return {
+            ok: false,
+            error: {
+              code: "deployment_finalize_pending",
+              message: `resource ${id} force tombstone outcome is unknown; host capacity remains retained: ${errorMessage(observationError)}`,
+            },
+          };
+        }
+        if (!current) {
+          // The atomic delete committed and only its acknowledgement was lost.
+          // Keep the retained host capacity and finish the canonical lifecycle.
+          removed = { status: "removed" } as const;
+        } else {
+          const restored = await this.#retireResourceDeployment(
+            space,
+            kind,
+            name,
+            "force_tombstone_cancelled",
+          );
+          if (!restored.ok) return restored;
+          return {
+            ok: false,
+            error: {
+              code: "delete_failed",
+              message: `resource ${id} force tombstone could not be finalized atomically: ${errorMessage(error)}`,
+            },
+          };
+        }
       }
       if (removed.status === "conflict") {
+        const restored = await this.#retireResourceDeployment(
+          space,
+          kind,
+          name,
+          "force_tombstone_cancelled",
+        );
+        if (!restored.ok) return restored;
         return {
           ok: false,
           error: {
@@ -3001,7 +3043,12 @@ export class ResourceShapeService {
           importPending: true,
         },
       });
-      return await this.#retireResourceDeployment(space, kind, name);
+      return await this.#retireResourceDeployment(
+        space,
+        kind,
+        name,
+        "canonical_delete",
+      );
     }
     const consumer = await this.#firstConnectionConsumer(space, id);
     if (consumer) {
@@ -3016,7 +3063,12 @@ export class ResourceShapeService {
     const lock = await this.#stores.locks.get(id);
     if (!lock) {
       if (!(await this.#stores.resources.get(id))) {
-        return await this.#retireResourceDeployment(space, kind, name);
+        return await this.#retireResourceDeployment(
+          space,
+          kind,
+          name,
+          "canonical_delete",
+        );
       }
       return {
         ok: false,
@@ -3029,7 +3081,12 @@ export class ResourceShapeService {
     const entry = await this.#targetPoolEntryForLock(space, lock);
     if (!entry) {
       if (!(await this.#stores.resources.get(id))) {
-        return await this.#retireResourceDeployment(space, kind, name);
+        return await this.#retireResourceDeployment(
+          space,
+          kind,
+          name,
+          "canonical_delete",
+        );
       }
       return {
         ok: false,
@@ -3181,7 +3238,12 @@ export class ResourceShapeService {
         claimedRecord = deleteClaim.record;
       }
       if (deleteClaim.status === "not_found") {
-        return await this.#retireResourceDeployment(space, kind, name);
+        return await this.#retireResourceDeployment(
+          space,
+          kind,
+          name,
+          "canonical_delete",
+        );
       }
       if (deleteClaim.status === "conflict") {
         return {
@@ -3381,7 +3443,12 @@ export class ResourceShapeService {
       );
       if (failed.status === "not_found") {
         // A concurrent idempotent delete finalized the same canonical Resource.
-        return await this.#retireResourceDeployment(space, kind, name);
+        return await this.#retireResourceDeployment(
+          space,
+          kind,
+          name,
+          "canonical_delete",
+        );
       }
       if (failed.status === "conflict") {
         await this.#recordResourceEvent({
@@ -3505,7 +3572,12 @@ export class ResourceShapeService {
         metadata: successMetadata,
       });
     }
-    const retired = await this.#retireResourceDeployment(space, kind, name);
+    const retired = await this.#retireResourceDeployment(
+      space,
+      kind,
+      name,
+      "canonical_delete",
+    );
     if (!retired.ok) return retired;
     if (operationAuditPending) {
       return {
@@ -3525,6 +3597,10 @@ export class ResourceShapeService {
     space: SpaceId,
     kind: ResourceShapeKind,
     name: string,
+    reason:
+      | "canonical_delete"
+      | "force_tombstone"
+      | "force_tombstone_cancelled",
   ): Promise<ServiceResult<void>> {
     const resourceId = formatResourceShapeId(space, kind, name);
     try {
@@ -3533,6 +3609,7 @@ export class ResourceShapeService {
         resourceId,
         kind,
         name,
+        reason,
         now: this.#now(),
       });
       return { ok: true, value: undefined };
@@ -3542,7 +3619,11 @@ export class ResourceShapeService {
         error: {
           code: "deployment_finalize_pending",
           message:
-            `resource ${resourceId} is deleted but host lifecycle retirement is pending: ` +
+            (reason === "force_tombstone"
+              ? `resource ${resourceId} force-tombstone host retention is pending: `
+              : reason === "force_tombstone_cancelled"
+                ? `resource ${resourceId} force tombstone was cancelled but host capacity restore is pending: `
+                : `resource ${resourceId} is deleted but host lifecycle retirement is pending: `) +
             errorMessage(error),
         },
       };
