@@ -19,6 +19,10 @@ const admission: ResourceDeploymentAdmission = {
   async capture() {},
   async markSettlementPending() {},
   async release() {},
+  async admitImport() {
+    return { reasons: [] };
+  },
+  async retire() {},
 };
 
 describe("Resource deployment admission Worker composition", () => {
@@ -41,9 +45,10 @@ describe("Resource deployment admission Worker composition", () => {
           quote: admission.quote,
           reserve: admission.reserve,
           capture: admission.capture,
+          markSettlementPending: admission.markSettlementPending,
           release: admission.release,
         }),
       ),
-    ).toThrow("must implement quote(), reserve(), capture()");
+    ).toThrow("release(), admitImport(), and retire()");
   });
 });
