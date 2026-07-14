@@ -1,12 +1,13 @@
 # Model Reference
 
-Last updated: 2026-06-29
+Last updated: 2026-07-14
 
-Takosumi OSS has two public flows: run plain OpenTofu from Git, and resolve
-Takosumi Resource Shapes through TargetPools, policy, and Adapters. Compatibility
-APIs are additional capability-scoped surfaces alongside those flows. They are
-peer entrypoints, not provider-internal routes inside `takosumi/takosumi` or
-subordinate Resource Shape APIs.
+Takosumi OSS has two public authoring flows and one shared runtime interaction
+layer: run plain OpenTofu from Git, or deploy provider-neutral Takosumi Resource
+Shapes through `/v1/resources`, then expose either result through Interface and
+authorize consumers through InterfaceBinding. Control-plane compatibility
+profiles translate into the Deploy API; data-plane profiles resolve Ready
+canonical Resources.
 
 ## OpenTofu Stack Concepts
 
@@ -45,10 +46,27 @@ subordinate Resource Shape APIs.
 
 `Space` here is the Resource API namespace and policy scope.
 
+## Shared Runtime Interaction Concepts
+
+| Concept          | Meaning                                                                                                                |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Interface        | Versioned, non-secret runtime declaration owned by a Workspace, Capsule, or Resource                                   |
+| Interface input  | Explicit public value from `literal`, `capsule_output`, or `resource_output`, with optional JSON Pointer               |
+| InterfaceBinding | Authorization that grants a Principal, ServiceAccount, Capsule, or Resource specific permissions and a delivery method |
+| Principal        | Human/account identity consuming an Interface                                                                          |
+| ServiceAccount   | Non-human identity consuming an Interface                                                                              |
+
+OpenTofu Output remains an ordinary root-module return value. An Interface may
+explicitly map any eligible public Output name; the module does not publish a
+reserved Takosumi schema. Interface documents and resolved inputs never contain
+credentials. InterfaceBinding delivery is invocation-time authorization and is
+independent from ProviderBinding, which authorizes OpenTofu Runs.
+
 ## OpenTofu Provider Resolution
 
-Upload/prepared-source snapshots are internal/operator compatibility only. They
-are not a public Source kind and do not create new public Capsules.
+Source and Capsule authoring is Git-only. A SourceSnapshot is produced by
+`source_sync` for a registered Source; its immutable archive is runner transport,
+not a second source kind or a Capsule creation path.
 
 `Source.autoSync` enables scheduled Git-ref polling. It prepares newer immutable
 SourceSnapshots when the ref moves. If the resolved commit differs from the
@@ -97,22 +115,25 @@ provider_bindings:
 Takosumi injects the runtime env/files required by the selected
 ProviderConnection. The manifest should not contain secrets.
 
-Built-in Credential Recipes are guided setup shortcuts, not the provider
+Operator-installed Credential Recipes are guided setup shortcuts, not the provider
 boundary. Any provider can use a generic-env ProviderConnection when the user
 declares the provider source from `required_providers` and the explicit
 environment variables documented by that provider. Those declared env names
-must be upper-snake environment identifiers such as `SNOWFLAKE_PASSWORD`; they
+must be upper-snake environment identifiers such as `EXAMPLE_API_TOKEN`; they
 become the run-local CredentialRecipe, subject to runner policy, provider plugin
 policy, and egress policy. Runner/runtime-reserved env names are rejected.
 
 Using your own key is not gated by Takosumi. There is no provider allowlist and
 no operator approval: if you supply the credential, any OpenTofu/Terraform
 provider runs. A self-hosted Takosumi enables the wildcard runner surface by
-default, and the control plane auto-selects a runner profile that admits the
-Capsule's providers, so an arbitrary provider runs without naming a profile.
+default, and uses its explicitly configured default RunnerProfile unless the
+caller selects another operator-defined capability profile. Provider names and
+labels never select an executor.
 A ProviderConnection you supply with your own key is never metered or billed by
 Takosumi software. Self-hosted and OSS operator endpoints may record showback
-usage, but they do not enforce Takosumi Cloud payment. Takosumi Cloud bills only
+usage, but Takosumi OSS has no built-in price: measurements remain zero /
+`unrated` unless the operator injects a `ShowbackRater`. They do not enforce
+Takosumi Cloud payment. Takosumi Cloud bills only
 Takosumi-provided managed resources; its customer-facing contract lives in
 [Takosumi Cloud pricing](https://app.takosumi.com/docs/en/pricing).
 
@@ -122,6 +143,9 @@ Runner policy, provider allowlists, lockfile/mirror rules, resource limits, and
 network egress policy are internal control-plane safeguards. They decide where a
 Run may execute and which provider plugins/resources may be reached, but they
 are not public product nouns like ProviderConnection or ProviderBinding.
+RunnerProfile lifecycle and availability are typed fields. Its open
+`executorId` resolves only through the host-injected executor registry; labels
+are descriptive metadata and cannot enable, reserve, schedule, or route a Run.
 Operators may configure a runner-local OpenTofu provider plugin cache to speed
 direct provider installs. It stores provider binaries only; credentials and
 generated run files remain per-run. On Cloudflare Containers, the current
@@ -131,31 +155,41 @@ the portable speed mechanisms.
 
 The user-facing flow should feel like installing an app, but the model remains
 Git-native and OpenTofu-native. Creating a new service uses the same guided
-install flow as adding an app: choose a template or install link, configure the
-smallest visible inputs, review the plan, then deploy. Takosumi should not add a
+install flow as adding an app: choose a Git-backed listing or enter an install
+link, configure the smallest visible inputs, review the plan, then deploy.
+Takosumi should not add a
 separate low-level "create service" CRUD surface for ordinary users; the full
 service list can expose details after creation, while the add path stays
 install-like.
 
 The Store is only discovery and presentation. A Store node announces a Git
-repository/path, icon, description, and visible setup fields. It is not a
+repository/path, icon, and description. It is not a setup or
 release authority: branch, tag, commit, SourceSnapshot, and update policy stay
 in the Source / Run flow. Switching Store nodes changes the read source for
 listings and presentation metadata, not the Capsule execution model.
 
 Repositories may optionally publish `.well-known/tcs.json` presentation
-metadata. Its `installExperience` `oidc_client` projection may declare public
-OIDC client metadata and required OAuth scopes. `openid` is required and scopes
-must be unique, non-empty tokens. Client secrets, access tokens, and refresh
+metadata containing display text, icon, and `modulePath`. It must not declare
+`git`, `source`, refs/commits, `installConfigId`, variable presentation/defaults,
+`installExperience`, output allowlists, release artifacts, domain defaults, OIDC
+wiring, lifecycle actions, or Interface blueprints. Those declarations live in
+top-level, DB-owned InstallConfig fields such as `variablePresentation`,
+`installExperience`, and `interfaceBlueprints`. A DB-owned `installExperience`
+`oidc_client` projection may declare public OIDC client metadata (issuer, client
+id, redirect URI) plus required OAuth scopes; `openid` is mandatory and scopes
+must be non-empty, unique tokens. Client secrets, access tokens, and refresh
 tokens are never projected through repository metadata, OpenTofu variables,
 state, or Outputs.
 
+Every DB-owned `interfaceBlueprints` entry requires an explicit immutable
+`key`. Takosumi never substitutes its editable display `name` as the
+materialization identity.
+
 Git source sync records a bounded observation of this repository-root document
 on the immutable `SourceSnapshot`, separately from the selected OpenTofu module
-archive. This keeps a nested `modulePath` from hiding or drifting the setup and
-OIDC contract. A snapshot created without that observation is not reused by a
-new sync; Store-backed planning fails closed instead of continuing with stale
-presentation metadata.
+archive. The observation is display evidence only; its absence or invalidity
+does not block snapshot reuse or Store-backed planning and cannot mutate the
+stored InstallConfig.
 
 Takosumi can reuse SourceSnapshots, provider mirrors, provider plugin caches,
 runner capacity controls, package caches, and clear progress phases. The default
@@ -190,7 +224,7 @@ non-secret speed settings. This is not a cross-run source-sync cache.
 ## Resource Shape Resolution
 
 The Resource Shape flow starts from typed Resource objects and resolves them to
-Targets. Those objects can be submitted through the Resource API,
+Targets. Those objects can be submitted through the `/v1/resources` Deploy API,
 `takosumi_*` provider resources, CLI, dashboard, or Kubernetes CRDs:
 
 ```text
@@ -205,34 +239,32 @@ Users normally describe the shape they want, not the backend. Operators decide
 which Targets are available, which Adapters are enabled, and which policies
 control placement. Resolver decisions are recorded as ResolutionLocks and do
 not move without an explicit migration.
+TargetPool, Policy, and Adapter are operator/advanced surfaces; the default UX
+shows the service form, required inputs, price, preview, and deploy.
 
-Resource Shapes are not a replacement for every existing provider or standard
-surface. If an industry-standard protocol/API or adequate OpenTofu provider
-already expresses the service cleanly, use that surface through the OpenTofu
-Stack flow or a scoped compatibility profile. Compatibility profiles are peer
-entrypoints for standard tools/protocols, not fallback routes into
-`takosumi/takosumi`. S3-compatible object storage, OCI registry, Kubernetes
-CRDs, CloudEvents, OpenAI-compatible APIs, and scoped Cloudflare
-Workers-compatible import/deploy paths are examples of surfaces that should
-remain standard-facing.
+Resource Shapes do not replace existing providers for external infrastructure;
+use those providers through the plain Stack flow. Capacity sold and operated by
+Takosumi/operator is nevertheless defined as a provider-neutral Resource Shape,
+whether or not it exposes a standard protocol. Standard/compatible surfaces are
+control-plane translations or data planes for that Resource, not lifecycle
+authorities.
 
-Add a Takosumi shape when the service form is durable, no adequate standard
-surface exists, and Takosumi needs to own binding projection, resolution lock,
-policy, metering, import path, or managed target placement.
+`/v1/resources` is the sole authority for preview/apply/observe/refresh/import/
+delete and canonical Resource, ResolutionLock, NativeResource, Run, status,
+Output, and audit evidence. TargetPool, Policy, Adapter, and backend-manager
+selection are operator/advanced machinery behind that API.
 
-The inverse is also scoped: when a standard surface does not exist, Takosumi
-does not automatically create a catch-all provider. One-off gaps should stay in
-generic-env ProviderConnections and normal OpenTofu modules. A new
-`takosumi_*` resource is justified only for a repeated Takosumi-owned service
-form that needs a typed schema, planner, adapter, import/drift/state behavior,
-and capability evidence. A provider resource that does not map to either a
+The absence of a standard surface does not justify a catch-all provider.
+One-off gaps and external infrastructure stay in generic-env
+ProviderConnections and normal OpenTofu modules. A new `takosumi_*` schema is
+justified only for a repeated provider-neutral service form offered as managed
+capacity and backed by typed schema, planner, adapter, import/drift/state
+behavior, and capability evidence. A provider resource that does not map to either a
 Takosumi-owned service form or an operator/admin object has no reason to exist.
 
-This is not Takosumi-provider lock-in. If Takosumi defines a shape because no
-adequate universal provider or standard protocol exists, and that surface later
-appears, new designs should prefer the universal surface. The Takosumi shape can
-remain for import continuity, migration, managed-target placement, policy, or
-metering, but it is not mandatory.
+`takosumi/takosumi` is an optional typed Deploy API client, not the authority for
+shapes, service offerings, prices, backend selection, or lifecycle state. Direct
+API, CLI, dashboard, and compatibility clients can deploy the same service.
 
 Takos is a representative consumer of this rule. Takos should be described as
 the composition of generic Resource Shapes it actually needs, not as a
@@ -245,8 +277,11 @@ Takos distribution:
   KVStore           -> session/cache/state binding
   ObjectBucket      -> files and workspace objects
   Queue             -> agent jobs and product events
-  ContainerService  -> takos-git and takos-agent containers
+  ContainerService  -> takos-agent container
 ```
+
+The separately installed `takos-git` Capsule has its own generic service
+topology and is consumed by Takos through Interface/InterfaceBinding.
 
 Do not add `takosumi_takos` or an equivalent one-resource wrapper. If Takos
 later needs a service form that these generic shapes cannot express, add the
@@ -259,9 +294,15 @@ material and concrete runtime binding generation remain in Credential /
 ProviderConnection and adapter execution. The HCL surface is `connections =
 [...]`; `connection` is reserved by OpenTofu/Terraform.
 
-Adapters report capabilities and perform preview/apply/observe/delete work.
+Adapters report capabilities and perform preview/apply/import/observe/refresh/delete work.
 Initial adapter families can include OpenTofu, Cloudflare, AWS, Kubernetes, VM,
 and Takosumi-native adapters.
+
+The platform scheduler reuses that same read-only `observe` operation for
+`Ready` Resources at their current generation. A bounded durable lease prevents
+duplicate observation across isolates, and the scheduler never refreshes,
+applies, changes the ResolutionLock, or creates a separate Resource registry.
+One backend failure is isolated from the remaining due Resources.
 
 Extensible surfaces use capability tokens. For example, a
 `ContainerService` target can publish an operator-defined implementation plugin
@@ -301,17 +342,11 @@ compatibility, full Cloudflare API compatibility, an internal provider-specific
 model, or a reason to recreate standards that already work through existing
 providers.
 
-Takosumi exposes multiple first-class surfaces with no hierarchy between
-provider, standard protocol, and compatibility profile.
-`takosumi_*` Resource Shapes, S3-compatible APIs, CloudEvents-compatible APIs,
-Kubernetes CRDs, OpenAI-compatible APIs, and scoped Cloudflare-compatible APIs
-can all be valid Takosumi-managed features. A compatibility profile remains a
-feature in its own right when it is the best fit for existing tools. The
-`takosumi` provider exists for durable service forms that lack an adequate
-vendor-independent provider or protocol. Unsupported operations should fail
-closed instead of pretending full vendor compatibility; operators can then add
-another compatibility profile, a standard-provider path, or a typed Takosumi
-shape when the service form warrants it.
+Control-plane compatibility profiles translate requests into typed Resource
+desired state and call the Deploy API; they own no lifecycle rows or backend
+dispatch. Data-plane profiles resolve a Ready canonical Resource plus authorized
+Interface/NativeResource evidence. Unsupported operations fail closed instead
+of pretending full vendor compatibility.
 
 The public API boundary is documented in [Takosumi API](./api.md). Internal
 planning and conformance notes live outside the published docs surface.
@@ -332,3 +367,12 @@ official billing / SLA / support / abuse controls
 Takosumi for Operator can operate its own managed target catalog and commercial
 service. Takosumi Cloud is the official hosted operation with official managed
 capacity.
+
+Cloud sells versioned `ServiceOffering` records rated by a versioned
+`PriceCatalog`. Preview returns a `DeploymentQuote` bound to the Resource spec
+digest, resolution fingerprint, offering/catalog versions, SKU line items,
+currency, estimated total, expiry, and quote digest. Billable apply requires
+the quote id/digest, reserves before backend work, captures on success, and
+releases on failure or cancellation. Captured reservations and rated UsageEvents
+reconcile to payment-provider invoice lines. These are Cloud commercial records
+around the Resource lifecycle, not a revived `Deployment` ledger.
