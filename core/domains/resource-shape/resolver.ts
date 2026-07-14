@@ -100,7 +100,7 @@ function nativeResourcesFor(
   name: string,
 ): readonly NativeResourceRef[] {
   return descriptor.nativeResourceType
-    ? [{ type: descriptor.nativeResourceType, id: name }]
+    ? [{ type: descriptor.nativeResourceType, id: name, ownership: "planned" }]
     : [];
 }
 

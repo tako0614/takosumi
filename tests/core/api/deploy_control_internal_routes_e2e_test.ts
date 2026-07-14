@@ -18,7 +18,10 @@ import type {
   ReleaseActivator,
 } from "../../../core/domains/deploy-control/mod.ts";
 import { applyExpectedGuardFromPlanRun } from "../../../core/domains/deploy-control/mod.ts";
-import { InMemoryOpenTofuControlStore } from "../../../core/domains/deploy-control/store.ts";
+import {
+  InMemoryOpenTofuControlStore,
+  type ResourceOperationRun,
+} from "../../../core/domains/deploy-control/store.ts";
 import { fakeProviderVault } from "../../helpers/deploy-control/model_fixture.ts";
 import { StaticSecretConnectionVault } from "../../../core/adapters/vault/mod.ts";
 import { PartitionedSecretBoundaryCrypto } from "../../../core/adapters/secret-store/memory.ts";
@@ -49,6 +52,80 @@ async function readInternalPlanRun(
   expect(response.status).toEqual(200);
   return (await response.json()) as PlanRunResponse;
 }
+
+test("direct Resource Run route exposes exact operation but not recovery evidence", async () => {
+  const store = new InMemoryOpenTofuControlStore();
+  const initial: ResourceOperationRun = {
+    id: "run_resource_routesafe0001",
+    workspaceId: "space_resource_route",
+    subject: {
+      kind: "resource",
+      id: "tkrn:space_resource_route:ObjectBucket:assets",
+    },
+    resourceOperation: "apply",
+    resourceOperationKey: "sha256:resource-route-safe",
+    resourceOperationVersion: 1,
+    type: "apply",
+    status: "running",
+    createdBy: "account_resource_route",
+    createdAt: "2026-07-14T00:00:00.000Z",
+    startedAt: "2026-07-14T00:00:00.000Z",
+  };
+  await store.beginResourceOperationRun(initial);
+  await store.transitionResourceOperationRun({
+    id: initial.id,
+    operationKey: initial.resourceOperationKey,
+    expectedVersion: 1,
+    expectFrom: ["running"],
+    run: {
+      ...initial,
+      resourceOperationVersion: 2,
+      resourceOperationResult: {
+        summary: "provider result",
+        nativeResources: [{ type: "r2_bucket", id: "assets" }],
+        outputs: { internal_value: "must-not-project" },
+      },
+      resourceOperationAudit: {
+        status: "pending",
+        eventId: `act_${initial.id}`,
+        action: "resource.apply.succeeded",
+        metadata: { generation: 1 },
+        createdAt: "2026-07-14T00:00:01.000Z",
+      },
+    },
+  });
+  const { app } = await createTakosumiService({
+    role: "takosumi-api",
+    runtimeEnv: {
+      TAKOSUMI_DEV_MODE: "1",
+      TAKOSUMI_DEPLOY_CONTROL_TOKEN: TOKEN,
+    },
+    opentofuControlStore: store,
+    ...REFERENCE_CREDENTIAL_RECIPE_COMPOSITION,
+  });
+
+  const response = await app.request(`/internal/v1/runs/${initial.id}`, {
+    headers: headers(),
+  });
+  if (response.status !== 200) {
+    throw new Error(
+      `expected direct Resource Run route 200, got ${response.status}: ${await response.text()}`,
+    );
+  }
+  const body = (await response.json()) as { run: Record<string, unknown> };
+  expect(body.run).toMatchObject({
+    id: initial.id,
+    workspaceId: initial.workspaceId,
+    subject: initial.subject,
+    resourceOperation: "apply",
+    type: "apply",
+    status: "running",
+  });
+  expect(body.run.resourceOperationKey).toBeUndefined();
+  expect(body.run.resourceOperationVersion).toBeUndefined();
+  expect(body.run.resourceOperationResult).toBeUndefined();
+  expect(body.run.resourceOperationAudit).toBeUndefined();
+});
 
 test("bootstrap builds the ConnectionVault from secretCrypto alone (production worker wiring)", async () => {
   const store = new InMemoryOpenTofuControlStore();

@@ -4097,4 +4097,22 @@ alter table takosumi_resource_shapes
   drop column if exists observation_claimed_at,
   drop column if exists observation_lease_id;`,
     },
+    {
+      id: "deploy.resource_operation_run_kind.add",
+      version: 91,
+      domain: "deploy",
+      description:
+        "Allow Core-minted direct Resource adapter operations in the single Run ledger without conflating them with OpenTofu plan/apply rows.",
+      sql: `alter table takosumi_runs
+  drop constraint if exists takosumi_runs_kind_check;
+alter table takosumi_runs
+  add constraint takosumi_runs_kind_check
+  check (kind in ('source_sync','compatibility_check','plan','apply','destroy_plan','destroy_apply','drift_check','backup','restore','resource_operation'));`,
+      down: `delete from takosumi_runs where kind = 'resource_operation';
+alter table takosumi_runs
+  drop constraint if exists takosumi_runs_kind_check;
+alter table takosumi_runs
+  add constraint takosumi_runs_kind_check
+  check (kind in ('source_sync','compatibility_check','plan','apply','destroy_plan','destroy_apply','drift_check','backup','restore'));`,
+    },
   ]);

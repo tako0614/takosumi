@@ -14,8 +14,10 @@ The target public contract is centered on the final Takosumi model:
 - `CredentialRecipe` - provider-specific env/file/pre-run action definition for
   running an existing OpenTofu/Terraform provider as-is.
 - `ProviderBinding` - provider address or alias to ProviderConnection mapping.
-- `Secret` - encrypted backing material; secret values are write-only and
-  redacted from logs and public records.
+- `Secret` - encrypted Stack-flow backing material; secret values are
+  write-only and redacted from logs and public records. Current v1alpha1
+  material is sealed through ProviderConnection registration; it does not
+  publish a standalone Secret API or bundled `Secret` Resource Shape.
 - `Run` / `Plan` / `Apply` / `Destroy` - execution records for init, validate,
   plan, apply, destroy, refresh, and output flows.
 - `StateVersion` - persisted Capsule state generation.

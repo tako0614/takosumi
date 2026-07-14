@@ -96,11 +96,24 @@ test("plugin adapter routes plugin-backed operations to the injected binding", a
           if (request.url.endsWith("/delete"))
             return new Response(null, { status: 204 });
           if (request.url.endsWith("/observe")) {
-            return Response.json({ status: "current", summary: "in sync" });
+            return Response.json({
+              status: "current",
+              summary: "in sync",
+              runId: "plugin-must-not-own-run-id",
+              backendOperationId: "provider-observe-42",
+            });
           }
           return Response.json({
             summary: "managed",
-            nativeResources: [{ type: "cloudflare_r2_bucket", id: "assets" }],
+            runId: "plugin-must-not-own-run-id",
+            backendOperationId: "provider-operation-42",
+            nativeResources: [
+              {
+                type: "cloudflare_r2_bucket",
+                id: "assets",
+                ownership: "operator",
+              },
+            ],
             outputs: { bucket_name: "assets" },
           });
         },
@@ -129,6 +142,7 @@ test("plugin adapter routes plugin-backed operations to the injected binding", a
     applyInput({
       implementation: pluginDescriptor,
       resolvedConnections,
+      operationKey: "sha256:stable-apply-assets",
     }),
   );
   const imported = await adapter.importResource({
@@ -150,19 +164,42 @@ test("plugin adapter routes plugin-backed operations to the injected binding", a
       resolvedConnections,
     }),
   );
-  await adapter.delete(deleteInput({ implementation: pluginDescriptor }));
+  await adapter.delete(
+    deleteInput({
+      implementation: pluginDescriptor,
+      operationKey: "sha256:stable-delete-assets",
+    }),
+  );
 
   expect(preview.summary).toBe("managed");
+  expect(preview.nativeResources).toEqual([
+    {
+      type: "cloudflare_r2_bucket",
+      id: "assets",
+      ownership: "operator",
+    },
+  ]);
   expect(applied.outputs).toEqual({ bucket_name: "assets" });
+  expect(applied.nativeResources[0]?.ownership).toBe("operator");
+  expect("runId" in applied).toBe(false);
+  expect(applied.backendOperationId).toBe("provider-operation-42");
   expect(imported).toMatchObject({
     summary: "managed",
     outputs: { bucket_name: "assets" },
+    backendOperationId: "provider-operation-42",
   });
-  expect(observed).toEqual({ status: "current", summary: "in sync" });
+  expect("runId" in imported).toBe(false);
+  expect(observed).toEqual({
+    status: "current",
+    summary: "in sync",
+    backendOperationId: "provider-observe-42",
+  });
   expect(refreshed).toMatchObject({
     summary: "managed",
     outputs: { bucket_name: "assets" },
+    backendOperationId: "provider-operation-42",
   });
+  expect("runId" in refreshed).toBe(false);
   expect(calls.map((call) => call.url)).toEqual([
     "https://takosumi-resource-shape-plugin.local/cloud-managed/preview",
     "https://takosumi-resource-shape-plugin.local/cloud-managed/apply",
@@ -181,6 +218,14 @@ test("plugin adapter routes plugin-backed operations to the injected binding", a
       resourceId: "tkrn:space_1:ObjectBucket:assets",
       resolvedConnections,
     },
+  });
+  expect(calls[1]?.body).toMatchObject({
+    action: "apply",
+    input: { operationKey: "sha256:stable-apply-assets" },
+  });
+  expect(calls[5]?.body).toMatchObject({
+    action: "delete",
+    input: { operationKey: "sha256:stable-delete-assets" },
   });
 });
 
@@ -266,6 +311,66 @@ test("plugin adapter rejects malformed apply responses", async () => {
   await expect(
     adapter.apply(applyInput({ implementation: pluginDescriptor })),
   ).rejects.toThrow("apply response must include outputs");
+});
+
+test("plugin adapter rejects fake OpenTofu execution authority", async () => {
+  const adapter = new PluginResourceShapeAdapter(
+    new StubResourceShapeAdapter(),
+    {
+      "cloud-managed": {
+        fetch() {
+          return Response.json({
+            summary: "attempted state claim",
+            nativeResources: [
+              {
+                type: "cloudflare_r2_bucket",
+                id: "assets",
+                ownership: "operator",
+              },
+            ],
+            outputs: { bucket_name: "assets" },
+            execution: {
+              runId: "plugin-run",
+              stateRef: "plugin://fake-state",
+              stateGeneration: 999,
+            },
+          });
+        },
+      },
+    },
+  );
+
+  await expect(
+    adapter.apply(applyInput({ implementation: pluginDescriptor })),
+  ).rejects.toThrow("cannot claim an OpenTofu execution/state pointer");
+});
+
+test("plugin adapter rejects invalid or unresolved native ownership evidence", async () => {
+  for (const ownership of ["tenant", "planned"] as const) {
+    const adapter = new PluginResourceShapeAdapter(
+      new StubResourceShapeAdapter(),
+      {
+        "cloud-managed": {
+          fetch() {
+            return Response.json({
+              nativeResources: [
+                { type: "cloudflare_r2_bucket", id: "assets", ownership },
+              ],
+              outputs: { bucket_name: "assets" },
+            });
+          },
+        },
+      },
+    );
+
+    await expect(
+      adapter.apply(applyInput({ implementation: pluginDescriptor })),
+    ).rejects.toThrow(
+      ownership === "planned"
+        ? "cannot remain planned"
+        : "ownership is invalid",
+    );
+  }
 });
 
 test("plugin adapter rejects malformed observe responses", async () => {

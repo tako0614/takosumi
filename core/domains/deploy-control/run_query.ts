@@ -29,10 +29,12 @@ import type {
   RunEventsResponse,
   RunLogsResponse,
 } from "takosumi-contract/runs";
-import type {
-  OpenTofuControlStore,
-  RecoverableOpenTofuRunListOptions,
-  StoredRunRecord,
+import {
+  isResourceOperationRun,
+  type ResourceOperationRun,
+  type OpenTofuControlStore,
+  type RecoverableOpenTofuRunListOptions,
+  type StoredRunRecord,
 } from "./store.ts";
 import { OpenTofuControllerError, requireNonEmptyString } from "./errors.ts";
 import {
@@ -91,6 +93,9 @@ export class RunQueryService {
     }
     const sync = await this.#store.getSourceSyncRun(id);
     if (sync) return projectSourceSyncRun(sync);
+    const resourceOperation = await this.#store.getResourceOperationRun(id);
+    if (resourceOperation)
+      return projectResourceOperationRun(resourceOperation);
     const compatibilityCheck = await this.#store.getCompatibilityCheckRun(id);
     if (compatibilityCheck) return compatibilityCheck;
     const backupRun = await this.#store.getBackupRun(id);
@@ -132,6 +137,9 @@ export class RunQueryService {
       return projectApplyRun(row, plan ? this.capsuleProjection(plan) : {});
     }
     if (isStoredSourceSyncRun(row)) return projectSourceSyncRun(row);
+    if (isResourceOperationRun(row)) {
+      return projectResourceOperationRun(row);
+    }
     if (isPublicRunRecord(row)) return row;
     const _exhaustive: never = row;
     void _exhaustive;
@@ -217,6 +225,21 @@ export class RunQueryService {
     if (sync) {
       return {
         diagnostics: sourceSyncDiagnostics(sync),
+        auditEvents: [],
+      };
+    }
+    const resourceOperation = await this.#store.getResourceOperationRun(id);
+    if (resourceOperation) {
+      return {
+        diagnostics: resourceOperation.errorCode
+          ? [
+              {
+                severity: "error",
+                code: resourceOperation.errorCode,
+                message: resourceOperation.errorCode,
+              },
+            ]
+          : [],
         auditEvents: [],
       };
     }
@@ -333,6 +356,22 @@ function isStoredSourceSyncRun(row: StoredRunRecord): row is SourceSyncRun {
 
 function isPublicRunRecord(row: StoredRunRecord): row is Run {
   return typeof (row as Partial<Run>).type === "string";
+}
+
+function projectResourceOperationRun(run: ResourceOperationRun): Run {
+  return {
+    id: run.id,
+    workspaceId: run.workspaceId,
+    subject: run.subject,
+    resourceOperation: run.resourceOperation,
+    type: run.type,
+    status: run.status,
+    createdBy: run.createdBy,
+    createdAt: run.createdAt,
+    ...(run.startedAt !== undefined ? { startedAt: run.startedAt } : {}),
+    ...(run.finishedAt !== undefined ? { finishedAt: run.finishedAt } : {}),
+    ...(run.errorCode !== undefined ? { errorCode: run.errorCode } : {}),
+  };
 }
 
 function sourceSyncDiagnostics(sync: SourceSyncRun): readonly RunDiagnostic[] {

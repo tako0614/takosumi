@@ -41,6 +41,7 @@ Secrets / patching:
 
 State / migrations:
   resource-state-adoption.md
+  output-interface-migration.md
   online-db-migrations.md
 
 Incident / recovery / on-call:
