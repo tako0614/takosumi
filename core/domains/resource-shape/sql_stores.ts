@@ -42,6 +42,8 @@ import type {
   ResourceApplyBeginResult,
   ResourceApplyCommitInput,
   ResourceApplyCommitResult,
+  ResourceAtomicRemoveInput,
+  ResourceAtomicRemoveResult,
   ResourceCreateResult,
   ResourceDeleteClaimResult,
   ResourceObservationClaimInput,
@@ -53,8 +55,10 @@ import type {
 } from "./stores.ts";
 import {
   assertAbortInput,
+  assertAtomicRemoveInput,
   assertApplyPair,
   matchesApplyLock,
+  matchesExpectedLock,
   matchesVersion,
 } from "./stores.ts";
 
@@ -556,6 +560,7 @@ export function createSqlResourceShapeStores(
     beginApply: (input) => beginSqlApply(client, input),
     commitApply: (input) => commitSqlApply(client, input),
     abortApply: (input) => abortSqlApply(client, input),
+    removeResource: (input) => removeSqlResource(client, input),
   };
 }
 
@@ -693,6 +698,53 @@ async function abortSqlApply(
       );
     }
     return { status: "rolled_back" };
+  });
+}
+
+async function removeSqlResource(
+  client: SqlClient,
+  input: ResourceAtomicRemoveInput,
+): Promise<ResourceAtomicRemoveResult> {
+  assertAtomicRemoveInput(input);
+  return await client.transaction(async (transaction) => {
+    // Keep the same Resource -> ResolutionLock lock order as the other atomic
+    // lifecycle paths. The parent-row lock also fences a concurrent child lock
+    // insert through the database foreign-key check.
+    const current = await readSqlResource(transaction, input.resourceId, true);
+    const currentLock = await readSqlLock(transaction, input.resourceId, true);
+    if (!current && !currentLock) return { status: "not_found" };
+    if (
+      !current ||
+      !matchesVersion(current, input.expected) ||
+      !matchesExpectedLock(currentLock, input.expectedLock)
+    ) {
+      return {
+        status: "conflict",
+        ...(current ? { record: current } : {}),
+        ...(currentLock ? { lock: currentLock } : {}),
+      };
+    }
+
+    await transaction.query(
+      `delete from ${names.resolutionLocks} where resource_id = $1`,
+      [input.resourceId],
+    );
+    const removed = await transaction.query(
+      `delete from ${names.resourceShapes}
+       where id = $1 and generation = $2 and phase = $3 and updated_at = $4`,
+      [
+        input.resourceId,
+        input.expected.generation,
+        input.expected.phase,
+        input.expected.updatedAt,
+      ],
+    );
+    if (removed.rowCount !== 1) {
+      throw new Error(
+        `Resource ${input.resourceId} changed inside remove transaction`,
+      );
+    }
+    return { status: "removed" };
   });
 }
 
