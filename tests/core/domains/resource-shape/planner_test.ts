@@ -92,6 +92,45 @@ test("EdgeWorker parser rejects ambiguous and unverifiable artifacts", () => {
   if (!missingDigest.ok) {
     expect(missingDigest.error.message).toContain("artifactSha256");
   }
+
+  const ambiguousRef = parseEdgeWorkerSpec({
+    name: "api",
+    source: {
+      artifactUrl: "https://example.test/api.js",
+      artifactRef: "cloud-edge-worker-artifact:v1:abc",
+      artifactSha256: "1".repeat(64),
+    },
+  });
+  expect(ambiguousRef.ok).toBe(false);
+
+  const missingRefDigest = parseEdgeWorkerSpec({
+    name: "api",
+    source: { artifactRef: "cloud-edge-worker-artifact:v1:abc" },
+  });
+  expect(missingRefDigest.ok).toBe(false);
+  if (!missingRefDigest.ok) {
+    expect(missingRefDigest.error.message).toContain("artifactSha256");
+  }
+});
+
+test("EdgeWorker parser accepts an immutable host artifact reference", () => {
+  const parsed = parseEdgeWorkerSpec({
+    name: "api",
+    source: {
+      artifactRef: `cloud-edge-worker-artifact:v1:${"a".repeat(64)}`,
+      artifactSha256: `sha256:${"a".repeat(64)}`,
+    },
+  });
+  expect(parsed).toEqual({
+    ok: true,
+    spec: {
+      name: "api",
+      source: {
+        artifactRef: `cloud-edge-worker-artifact:v1:${"a".repeat(64)}`,
+        artifactSha256: `sha256:${"a".repeat(64)}`,
+      },
+    },
+  });
 });
 
 test("typed parser accepts only non-secret Resource references in connections", () => {

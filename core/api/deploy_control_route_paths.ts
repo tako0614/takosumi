@@ -144,3 +144,6 @@ export const TAKOSUMI_CAPSULE_BACKUPS_ROUTE =
 /** Operator-only, explicit migration from retired backing-Capsule state. */
 export const TAKOSUMI_WORKSPACE_RESOURCE_STATE_ADOPTION_ROUTE =
   `${INTERNAL_V1_PREFIX}/workspaces/:workspaceId/migrations/resource-state-adoption` as const;
+/** Operator-only migration from retired runtime Output conventions. */
+export const TAKOSUMI_WORKSPACE_OUTPUT_INTERFACE_MIGRATION_ROUTE =
+  `${INTERNAL_V1_PREFIX}/workspaces/:workspaceId/migrations/output-interfaces` as const;

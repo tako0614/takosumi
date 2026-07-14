@@ -74,6 +74,7 @@ import { RunGroupsService } from "./domains/run-groups/mod.ts";
 import { ActivityService } from "./domains/activity/mod.ts";
 import {
   createInMemoryResourceShapeStores,
+  formatResourceShapeId,
   LegacyResourceStateAdoptionService,
   ResourceShapeService,
   type ResourceAdapter,
@@ -88,6 +89,7 @@ import { createSqlResourceShapeStores } from "./domains/resource-shape/sql_store
 import {
   createInMemoryInterfaceStores,
   InterfaceService,
+  LegacyOutputInterfaceMigrationService,
   OutputBackedInterfaceInputResolver,
   resourceInterfaceWorkspaceInput,
   resourceLifecycleInterfaceWorkspaceInput,
@@ -170,7 +172,12 @@ import type {
   CredentialRecipe,
   ListCredentialRecipesResponse,
 } from "takosumi-contract/credential-recipes";
-import type { ActorContext, ResourceShapeKind } from "takosumi-contract";
+import type {
+  ActorContext,
+  NativeResourceRef,
+  ResourceObject,
+  ResourceShapeKind,
+} from "takosumi-contract";
 import { RESOURCE_SHAPE_KINDS } from "takosumi-contract";
 import { type CredentialRecipeDriverRegistry } from "@takosumi/providers";
 
@@ -714,6 +721,36 @@ export interface TakosumiOperations {
       attemptedAt: string,
     ): Promise<boolean>;
   };
+  /** Bounded restart recovery for direct Resource adapter Run/audit sagas. */
+  readonly resourceOperationRepair?: {
+    repair(options?: {
+      readonly workspaceId?: string;
+      readonly limit?: number;
+    }): Promise<{
+      readonly scanned: number;
+      readonly completed: number;
+      readonly auditsRepaired: number;
+      readonly pending: number;
+    }>;
+  };
+  /**
+   * Read-only compatibility-profile projection. It returns evidence only for a
+   * fully observed Ready Resource with a durable ResolutionLock; lifecycle
+   * mutation remains exclusively on the Resource Deploy API.
+   */
+  readonly resourceCompatibility?: {
+    resolveReadyResource(input: {
+      readonly space: string;
+      readonly kind: ResourceShapeKind;
+      readonly name: string;
+    }): Promise<
+      | {
+          readonly resource: ResourceObject;
+          readonly nativeResources: readonly NativeResourceRef[];
+        }
+      | undefined
+    >;
+  };
   /**
    * Activity domain service (Core Specification §27 / §34): the Workspace-scoped
    * audit trail over the same shared ledger.
@@ -1197,6 +1234,7 @@ export async function createTakosumiService(
         stores: resourceShapeStores,
         adapter: resourceShapeAdapter,
         activity: activityService,
+        operationRuns: sharedOpenTofuStore,
         ...(options.resourceDeploymentAdmission
           ? { deploymentAdmission: options.resourceDeploymentAdmission }
           : {}),
@@ -1463,6 +1501,12 @@ export async function createTakosumiService(
       }
     },
   });
+  const legacyOutputInterfaceMigrationService =
+    new LegacyOutputInterfaceMigrationService({
+      opentofu: sharedOpenTofuStore,
+      interfaces: interfaceService,
+      now: () => new Date().toISOString(),
+    });
   opentofuController.setInterfaceOutputSourcesResolver(
     async ({ workspaceId, capsuleId }) => {
       const names = new Set(
@@ -1764,6 +1808,7 @@ export async function createTakosumiService(
       activityService,
       backupsService,
       legacyResourceStateAdoptionService,
+      legacyOutputInterfaceMigrationService,
       ...(deployControlToken
         ? { getDeployControlToken: () => deployControlToken }
         : {}),
@@ -1823,6 +1868,58 @@ export async function createTakosumiService(
     interfaces: interfaceService,
     ...(resourceShapeService
       ? {
+          resourceCompatibility: {
+            resolveReadyResource: async (input: {
+              readonly space: string;
+              readonly kind: ResourceShapeKind;
+              readonly name: string;
+            }) => {
+              const resourceId = formatResourceShapeId(
+                input.space,
+                input.kind,
+                input.name,
+              );
+              const result = await resourceShapeService.get(
+                input.space,
+                input.kind,
+                input.name,
+              );
+              if (!result.ok || result.value.status?.phase !== "Ready") {
+                return undefined;
+              }
+              // Re-read the durable record and lock after projection. A
+              // concurrent update must not pair an older Ready projection with
+              // a newer ResolutionLock (or vice versa).
+              const [record, lock] = await Promise.all([
+                resourceShapeStores.resources.get(resourceId),
+                resourceShapeStores.locks.get(resourceId),
+              ]);
+              if (
+                !record ||
+                !lock ||
+                record.phase !== "Ready" ||
+                record.observedGeneration !== record.generation ||
+                result.value.status.observedGeneration !==
+                  record.observedGeneration
+              ) {
+                return undefined;
+              }
+              return structuredClone({
+                resource: result.value,
+                nativeResources: lock.nativeResources ?? [],
+              });
+            },
+          },
+        }
+      : {}),
+    ...(resourceShapeService
+      ? {
+          resourceOperationRepair: {
+            repair: (options?: {
+              readonly workspaceId?: string;
+              readonly limit?: number;
+            }) => resourceShapeService.repairResourceOperationRuns(options),
+          },
           resourceObservation: {
             claimCandidate: (input: ResourceObservationClaimInput) =>
               resourceShapeStores.resources.claimObservationCandidate(input),

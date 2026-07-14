@@ -782,6 +782,8 @@ function resourceShapeSchemas(): Record<string, Record<string, unknown>> {
               sku: { type: "string", minLength: 1 },
               skuVersion: { type: "string", minLength: 1 },
               description: { type: "string" },
+              taxTreatment: { type: "string", minLength: 1 },
+              invoiceDescription: { type: "string", minLength: 1 },
               chargeKind: {
                 enum: ["one_time", "recurring", "usage_estimate"],
               },
@@ -1460,6 +1462,159 @@ function interfaceSchemas(): Record<string, Record<string, unknown>> {
       },
       additionalProperties: false,
     },
+    LegacyOutputInterfaceMigrationCandidate: {
+      type: "object",
+      required: [
+        "capsuleId",
+        "capsuleUpdatedAt",
+        "installConfigId",
+        "installConfigUpdatedAt",
+        "outputId",
+        "outputDigest",
+        "outputNamesDigest",
+        "legacyConventionNames",
+        "availableOutputNames",
+        "mode",
+      ],
+      properties: {
+        capsuleId: { type: "string", minLength: 1 },
+        capsuleUpdatedAt: { type: "string", format: "date-time" },
+        installConfigId: { type: "string", minLength: 1 },
+        installConfigUpdatedAt: { type: "string", format: "date-time" },
+        outputId: { type: "string", minLength: 1 },
+        outputDigest: { type: "string", pattern: "^sha256:[0-9a-f]{64}$" },
+        outputNamesDigest: {
+          type: "string",
+          pattern: "^sha256:[0-9a-f]{64}$",
+        },
+        legacyConventionNames: {
+          type: "array",
+          uniqueItems: true,
+          items: {
+            enum: ["service_exports", "service_bindings", "app_deployment"],
+          },
+        },
+        availableOutputNames: {
+          type: "array",
+          uniqueItems: true,
+          items: { type: "string", minLength: 1 },
+        },
+        mode: {
+          enum: ["service_blueprints", "owner_selection_required"],
+        },
+        interfaceBlueprintsDigest: {
+          type: "string",
+          pattern: "^sha256:[0-9a-f]{64}$",
+        },
+      },
+      additionalProperties: false,
+    },
+    LegacyOutputInterfaceMigrationCompletion: {
+      type: "object",
+      required: ["capsuleId", "evidenceEventId", "interfaceIds"],
+      properties: {
+        capsuleId: { type: "string", minLength: 1 },
+        evidenceEventId: { type: "string", minLength: 1 },
+        interfaceIds: {
+          type: "array",
+          minItems: 1,
+          uniqueItems: true,
+          items: { type: "string", minLength: 1 },
+        },
+      },
+      additionalProperties: false,
+    },
+    LegacyOutputInterfaceMigrationIssue: {
+      type: "object",
+      required: ["capsuleId", "reason", "detail"],
+      properties: {
+        capsuleId: { type: "string", minLength: 1 },
+        reason: {
+          enum: [
+            "install_config_missing",
+            "current_output_missing",
+            "current_output_inconsistent",
+            "blueprint_retired",
+            "blueprint_output_missing",
+          ],
+        },
+        detail: { type: "string", minLength: 1 },
+        names: {
+          type: "array",
+          uniqueItems: true,
+          items: { type: "string", minLength: 1 },
+        },
+      },
+      additionalProperties: false,
+    },
+    LegacyOutputInterfaceMigrationReportResponse: {
+      type: "object",
+      required: ["workspaceId", "candidates", "completed", "issues"],
+      properties: {
+        workspaceId: { type: "string", minLength: 1 },
+        candidates: {
+          type: "array",
+          items: ref("LegacyOutputInterfaceMigrationCandidate"),
+        },
+        completed: {
+          type: "array",
+          items: ref("LegacyOutputInterfaceMigrationCompletion"),
+        },
+        issues: {
+          type: "array",
+          items: ref("LegacyOutputInterfaceMigrationIssue"),
+        },
+      },
+      additionalProperties: false,
+    },
+    LegacyOutputInterfaceManualSelection: {
+      type: "object",
+      required: [
+        "name",
+        "type",
+        "version",
+        "document",
+        "inputName",
+        "outputName",
+        "access",
+      ],
+      properties: {
+        name: { type: "string", minLength: 1 },
+        type: { type: "string", minLength: 1 },
+        version: { type: "string", minLength: 1 },
+        document: {},
+        inputName: { type: "string", minLength: 1 },
+        outputName: { type: "string", minLength: 1 },
+        pointer: { type: "string", pattern: "^(|/)" },
+        access: ref("InterfaceAccess"),
+      },
+      additionalProperties: false,
+    },
+    ConfirmLegacyOutputInterfaceMigrationRequest: {
+      type: "object",
+      required: ["candidate"],
+      properties: {
+        candidate: ref("LegacyOutputInterfaceMigrationCandidate"),
+        selection: ref("LegacyOutputInterfaceManualSelection"),
+      },
+      additionalProperties: false,
+    },
+    ConfirmLegacyOutputInterfaceMigrationResponse: {
+      type: "object",
+      required: ["capsuleId", "outputId", "interfaceIds", "evidenceEventId"],
+      properties: {
+        capsuleId: { type: "string", minLength: 1 },
+        outputId: { type: "string", minLength: 1 },
+        interfaceIds: {
+          type: "array",
+          minItems: 1,
+          uniqueItems: true,
+          items: { type: "string", minLength: 1 },
+        },
+        evidenceEventId: { type: "string", minLength: 1 },
+      },
+      additionalProperties: false,
+    },
   };
 }
 
@@ -1670,6 +1825,22 @@ function processSchemas(): Record<string, Record<string, unknown>> {
       },
       additionalProperties: { type: "boolean" },
     },
+    TakosumiCompatibilityProfileCapabilities: {
+      type: "object",
+      additionalProperties: {
+        type: "object",
+        required: ["planes"],
+        properties: {
+          planes: {
+            type: "array",
+            minItems: 1,
+            uniqueItems: true,
+            items: { enum: ["control", "data"] },
+          },
+        },
+        additionalProperties: false,
+      },
+    },
     TakosumiProductCapabilitiesResponse: {
       type: "object",
       required: [
@@ -1677,6 +1848,7 @@ function processSchemas(): Record<string, Record<string, unknown>> {
         "resources",
         "adapters",
         "compat",
+        "compatibilityProfiles",
         "identity",
         "operator",
         "extensions",
@@ -1686,6 +1858,7 @@ function processSchemas(): Record<string, Record<string, unknown>> {
         resources: ref("TakosumiResourceCapabilities"),
         adapters: ref("TakosumiAdapterCapabilities"),
         compat: ref("TakosumiCompatCapabilities"),
+        compatibilityProfiles: ref("TakosumiCompatibilityProfileCapabilities"),
         identity: ref("TakosumiIdentityCapabilities"),
         operator: ref("TakosumiOperatorCapabilities"),
         extensions: { type: "array", items: { type: "string" } },
@@ -3525,6 +3698,9 @@ function runSchemas(): Record<string, Record<string, unknown>> {
             id: { type: "string" },
           },
           additionalProperties: false,
+        },
+        resourceOperation: {
+          enum: ["preview", "apply", "import", "observe", "refresh", "delete"],
         },
         capsuleId: { type: "string" },
         environment: { type: "string" },

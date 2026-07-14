@@ -172,7 +172,11 @@ export interface InterfaceServiceOptions {
    * Without it, an arbitrary literal or Output URL is never token authority.
    */
   readonly oauth2ResourceAuthorizer?: InterfaceOAuth2ResourceAuthorizer;
-  /** Additional delivery types; `none` and standards-based `oauth2` are core. */
+  /**
+   * Additional host delivery types. `none` and standards-based `oauth2` are
+   * core. The exact v1alpha1 token `workload_token` is reserved by Core as a
+   * fail-closed future contract and cannot be replaced by a host handler.
+   */
   readonly bindingDeliveryHandlers?: InterfaceBindingDeliveryHandlerRegistry;
   readonly ownerExists?: (input: {
     readonly workspaceId: string;
@@ -2471,6 +2475,15 @@ function createBindingDeliveryHandlerRegistry(input: {
     }
     return { ready: true, reason: "Resolved" };
   });
+  // Final Plan v1alpha1 deliberately reserves this exact public token for a
+  // future ServiceAccount workload identity implementation. A generic host
+  // handler may add another namespaced delivery token, but it must not make
+  // `workload_token` Ready before the standard issuer/materializer contract
+  // exists.
+  handlers.set("workload_token", () => ({
+    ready: false,
+    reason: "UnsupportedDelivery",
+  }));
   for (const [type, handler] of Object.entries(input.additional ?? {})) {
     validateToken(type, "bindingDeliveryHandlers key");
     if (handlers.has(type)) {

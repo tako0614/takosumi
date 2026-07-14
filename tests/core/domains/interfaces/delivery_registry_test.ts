@@ -78,12 +78,28 @@ test("missing or throwing delivery handlers fail closed", async () => {
   });
 
   expect(missing.status.conditions?.[0]?.reason).toBe("UnsupportedDelivery");
-  expect(broken.status.conditions?.[0]?.reason).toBe(
-    "DeliveryHandlerFailed",
-  );
+  expect(broken.status.conditions?.[0]?.reason).toBe("DeliveryHandlerFailed");
 });
 
-test("standard delivery ids cannot be shadowed by host handlers", () => {
-  expect(() => service({ none: () => ({ ready: true, reason: "shadow" }) }))
-    .toThrow("delivery handler none is already registered");
+test("standard and reserved delivery ids cannot be shadowed by host handlers", () => {
+  for (const type of ["none", "oauth2", "workload_token"]) {
+    expect(() =>
+      service({ [type]: () => ({ ready: true, reason: "shadow" }) }),
+    ).toThrow(`delivery handler ${type} is already registered`);
+  }
+});
+
+test("reserved workload_token remains NotReady for a ServiceAccount", async () => {
+  const instance = service();
+  const iface = await literalInterface(instance);
+  const binding = await instance.createBinding(iface.metadata.id, {
+    subjectRef: { kind: "ServiceAccount", id: "runtime_1" },
+    permissions: ["invoke"],
+    delivery: { type: "workload_token" },
+  });
+
+  expect(binding.status).toMatchObject({
+    phase: "NotReady",
+    conditions: [{ reason: "UnsupportedDelivery" }],
+  });
 });

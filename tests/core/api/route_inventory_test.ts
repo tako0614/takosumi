@@ -74,6 +74,22 @@ test("Resource Shape OpenAPI publishes fail-closed TargetPool deletion", () => {
   );
 });
 
+test("public OpenAPI does not publish internal Resource Run recovery evidence", () => {
+  const openapi = createTakosumiOpenApiDocument(ALL_MOUNTED);
+  // The unified Run routes are host-internal and therefore filtered from this
+  // customer-safe process inventory. In particular, the internal CAS/result/
+  // outbox evidence must never become standalone public schemas.
+  assert.equal(openapi.components.schemas.Run, undefined);
+  assert.equal(
+    openapi.components.schemas.ResourceOperationResultEvidence,
+    undefined,
+  );
+  assert.equal(
+    openapi.components.schemas.ResourceOperationAuditEvidence,
+    undefined,
+  );
+});
+
 test("Resource Shape OpenAPI publishes bounded list pagination", () => {
   const openapi = createTakosumiOpenApiDocument(ALL_MOUNTED);
   for (const path of [

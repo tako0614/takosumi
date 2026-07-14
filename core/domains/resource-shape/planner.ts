@@ -1256,7 +1256,8 @@ function parseEdgeWorkerSource(value: unknown):
       ok: false,
       error: {
         code: "invalid_source",
-        message: "spec.source.artifactPath is required for EdgeWorker",
+        message:
+          "spec.source.artifactPath, spec.source.artifactUrl, or spec.source.artifactRef is required for EdgeWorker",
       },
     };
   }
@@ -1265,18 +1266,18 @@ function parseEdgeWorkerSource(value: unknown):
       ok: false,
       error: {
         code: "invalid_source",
-        message: "spec.runtime.source must be an object",
+        message: "spec.source must be an object",
       },
     };
   }
   const source = value as Record<string, unknown>;
-  if (source.artifactRef !== undefined || source.image !== undefined) {
+  if (source.image !== undefined) {
     return {
       ok: false,
       error: {
         code: "invalid_source",
         message:
-          "EdgeWorker currently supports source.artifactPath or source.artifactUrl only",
+          "EdgeWorker supports source.artifactPath, source.artifactUrl, or source.artifactRef only",
       },
     };
   }
@@ -1290,18 +1291,44 @@ function parseEdgeWorkerSource(value: unknown):
     source.artifactUrl.trim().length > 0
       ? source.artifactUrl
       : undefined;
-  if (artifactPath && artifactUrl) {
+  const artifactRef =
+    typeof source.artifactRef === "string" &&
+    source.artifactRef.trim().length > 0
+      ? source.artifactRef.trim()
+      : undefined;
+  const selectedSources = [artifactPath, artifactUrl, artifactRef].filter(
+    (candidate) => candidate !== undefined,
+  );
+  if (selectedSources.length > 1) {
     return {
       ok: false,
       error: {
         code: "invalid_source",
         message:
-          "spec.source must set only one of artifactPath or artifactUrl for EdgeWorker",
+          "spec.source must set only one of artifactPath, artifactUrl, or artifactRef for EdgeWorker",
       },
     };
   }
   if (artifactPath) {
     return { ok: true, value: { artifactPath } };
+  }
+  if (artifactRef) {
+    const artifactSha256 =
+      typeof source.artifactSha256 === "string" &&
+      source.artifactSha256.trim().length > 0
+        ? source.artifactSha256.trim()
+        : undefined;
+    if (!artifactSha256) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_source",
+          message:
+            "spec.source.artifactSha256 is required when artifactRef is set",
+        },
+      };
+    }
+    return { ok: true, value: { artifactRef, artifactSha256 } };
   }
   if (artifactUrl) {
     if (!artifactUrl.startsWith("https://")) {
@@ -1335,7 +1362,7 @@ function parseEdgeWorkerSource(value: unknown):
     error: {
       code: "invalid_source",
       message:
-        "spec.source.artifactPath or spec.source.artifactUrl must be a non-empty string",
+        "spec.source.artifactPath, spec.source.artifactUrl, or spec.source.artifactRef must be a non-empty string",
     },
   };
 }

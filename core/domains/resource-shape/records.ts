@@ -21,6 +21,7 @@ import type {
   TargetImplementationDescriptor,
   TargetPoolEntry,
 } from "takosumi-contract";
+import type { ResourceOperation } from "takosumi-contract/runs";
 import type { IsoTimestamp } from "../../shared/time.ts";
 import type { SpaceId } from "../../shared/ids.ts";
 
@@ -49,6 +50,13 @@ export interface ResourceShapeRecord {
   /** Latest successful OpenTofu execution owned by this Resource. */
   readonly execution?: ResourceShapeExecutionRecord;
   /**
+   * Core-minted direct-adapter Run currently fencing this lifecycle phase.
+   * Internal only: public Resource status remains phase/conditions based.
+   */
+  readonly pendingOperation?: ResourceShapePendingOperation;
+  /** Latest direct-adapter Run whose Resource projection was finalized. */
+  readonly lastOperationRunId?: string;
+  /**
    * Operator-confirmed, one-shot restore descriptor for state created by the
    * retired backing-Capsule implementation. This is never discovered at run
    * time: the migration report and confirmation service persist the exact
@@ -59,6 +67,12 @@ export interface ResourceShapeRecord {
   readonly labels?: Readonly<Record<string, string>>;
   readonly createdAt: IsoTimestamp;
   readonly updatedAt: IsoTimestamp;
+}
+
+export interface ResourceShapePendingOperation {
+  readonly runId: string;
+  readonly operation: ResourceOperation;
+  readonly operationKey: string;
 }
 
 export interface ResourceShapeExecutionRecord {
