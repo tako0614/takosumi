@@ -113,12 +113,20 @@ export interface ResourceDeploymentImportContext {
   readonly now: string;
 }
 
-/** Idempotent notification that a canonical Resource no longer exists. */
+/**
+ * Idempotent host notification for canonical retirement. A force tombstone
+ * does not prove backend absence and therefore must retain host capacity until
+ * a later explicit operator release supplies that proof.
+ */
 export interface ResourceDeploymentRetireContext {
   readonly space: string;
   readonly resourceId: string;
   readonly kind: ResourceShapeKind;
   readonly name: string;
+  readonly reason:
+    | "canonical_delete"
+    | "force_tombstone"
+    | "force_tombstone_cancelled";
   readonly now: string;
 }
 
@@ -183,9 +191,11 @@ export interface ResourceDeploymentAdmission {
     context: ResourceDeploymentImportContext,
   ): Promise<ResourceDeploymentAdmissionDecision>;
   /**
-   * Releases host-owned lifecycle capacity after normal canonical deletion.
-   * Implementations must be idempotent because an absent-resource delete
-   * retries this hook after a prior finalization failure.
+   * Finalizes host-owned lifecycle capacity after canonical retirement.
+   * Normal deletion may release capacity; a force tombstone must retain it
+   * until an explicit operator action proves the native backend is absent.
+   * Implementations must be idempotent because absent-resource retries repeat
+   * this hook after a prior finalization failure.
    */
   retire(context: ResourceDeploymentRetireContext): Promise<void>;
 }
