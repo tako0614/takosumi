@@ -18,6 +18,9 @@ import type { UsageRatingStatus } from "./billing.ts";
 export type ResourceDeploymentChargeKind =
   "one_time" | "recurring" | "usage_estimate";
 
+/** Immutable intent for one canonical Resource deployment generation. */
+export type ResourceDeploymentOperation = "create" | "update";
+
 /** One immutable, user-visible line in a deployment quote. */
 export interface ResourceDeploymentQuoteLineItem {
   readonly sku: string;
@@ -78,6 +81,7 @@ export interface ResourceDeploymentQuoteContext {
   readonly resourceId: string;
   readonly kind: ResourceShapeKind;
   readonly name: string;
+  readonly operation: ResourceDeploymentOperation;
   readonly spec: JsonObject;
   readonly selectedImplementation: string;
   readonly selectedTarget: string;
@@ -91,10 +95,35 @@ export interface ResourceDeploymentQuoteContext {
   readonly now: string;
 }
 
-export interface ResourceDeploymentReservationDecision {
+/** Generic host decision for lifecycle paths that do not use a quote. */
+export interface ResourceDeploymentAdmissionDecision {
   readonly reasons: readonly string[];
-  readonly reservationId?: string;
   readonly audit?: Readonly<Record<string, JsonValue>>;
+}
+
+/** Stable, non-secret input to a host's Resource import policy. */
+export interface ResourceDeploymentImportContext {
+  readonly space: string;
+  readonly resourceId: string;
+  readonly kind: ResourceShapeKind;
+  readonly name: string;
+  readonly spec: JsonObject;
+  readonly nativeId: string;
+  readonly actor: ActorContext;
+  readonly now: string;
+}
+
+/** Idempotent notification that a canonical Resource no longer exists. */
+export interface ResourceDeploymentRetireContext {
+  readonly space: string;
+  readonly resourceId: string;
+  readonly kind: ResourceShapeKind;
+  readonly name: string;
+  readonly now: string;
+}
+
+export interface ResourceDeploymentReservationDecision extends ResourceDeploymentAdmissionDecision {
+  readonly reservationId?: string;
 }
 
 export interface ResourceDeploymentReserveContext extends ResourceDeploymentQuoteContext {
@@ -146,6 +175,19 @@ export interface ResourceDeploymentAdmission {
     context: ResourceDeploymentSettlementPendingContext,
   ): Promise<void>;
   release(context: ResourceDeploymentReleaseContext): Promise<void>;
+  /**
+   * Authorizes adoption of an existing backend object. Hosts that cannot
+   * account for imported capacity deny here before adapter/backend I/O.
+   */
+  admitImport(
+    context: ResourceDeploymentImportContext,
+  ): Promise<ResourceDeploymentAdmissionDecision>;
+  /**
+   * Releases host-owned lifecycle capacity after normal canonical deletion.
+   * Implementations must be idempotent because an absent-resource delete
+   * retries this hook after a prior finalization failure.
+   */
+  retire(context: ResourceDeploymentRetireContext): Promise<void>;
 }
 
 export const NOOP_RESOURCE_DEPLOYMENT_ADMISSION: ResourceDeploymentAdmission = {
@@ -158,4 +200,8 @@ export const NOOP_RESOURCE_DEPLOYMENT_ADMISSION: ResourceDeploymentAdmission = {
   async capture(): Promise<void> {},
   async markSettlementPending(): Promise<void> {},
   async release(): Promise<void> {},
+  async admitImport(): Promise<ResourceDeploymentAdmissionDecision> {
+    return { reasons: [] };
+  },
+  async retire(): Promise<void> {},
 };
